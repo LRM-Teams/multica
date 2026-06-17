@@ -5,11 +5,13 @@ import { useQuery } from "@tanstack/react-query";
 import { Bot } from "lucide-react";
 import { agentTaskSnapshotOptions } from "@multica/core/agents/queries";
 import { agentListOptions } from "@multica/core/workspace/queries";
+import { useWorkspacePaths } from "@multica/core/paths";
 import type { AgentTask } from "@multica/core/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@multica/ui/components/ui/card";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
+import { AppLink } from "../../navigation";
 import { useT, useTimeAgo } from "../../i18n";
 
 const MAX_ITEMS = 8;
@@ -62,6 +64,7 @@ function taskTs(t: AgentTask): string {
 export function AgentStatusPanel({ wsId }: { wsId: string }) {
   const { t } = useT("overview");
   const timeAgo = useTimeAgo();
+  const p = useWorkspacePaths();
 
   const { data: tasks = [], isPending } = useQuery({
     ...agentTaskSnapshotOptions(wsId),
@@ -106,8 +109,8 @@ export function AgentStatusPanel({ wsId }: { wsId: string }) {
             const kind = kindOf(task.status);
             const style = KIND_STYLE[kind];
             const name = nameById.get(task.agent_id) ?? "Agent";
-            return (
-              <div key={task.id} className="flex gap-3">
+            const inner = (
+              <>
                 <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
                   <Bot className="size-3.5" />
                 </div>
@@ -126,6 +129,22 @@ export function AgentStatusPanel({ wsId }: { wsId: string }) {
                     <span className="shrink-0">{timeAgo(taskTs(task))}</span>
                   </span>
                 </div>
+              </>
+            );
+
+            // Chat / autopilot tasks have no linked issue (issue_id === "") —
+            // those rows stay non-clickable.
+            return task.issue_id ? (
+              <AppLink
+                key={task.id}
+                href={p.issueDetail(task.issue_id)}
+                className="-mx-3 flex gap-3 rounded-md px-3 py-1 transition-colors hover:bg-accent"
+              >
+                {inner}
+              </AppLink>
+            ) : (
+              <div key={task.id} className="flex gap-3">
+                {inner}
               </div>
             );
           })

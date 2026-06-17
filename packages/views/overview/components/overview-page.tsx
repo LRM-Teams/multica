@@ -26,13 +26,11 @@ export function OverviewPage() {
         <h1 className="text-sm font-medium">{t(($) => $.page.title)}</h1>
       </PageHeader>
 
-      <div className="flex-1 overflow-auto p-4 md:p-6">
-        <div className="mx-auto flex max-w-6xl flex-col gap-4">
-          <KpiCards wsId={wsId} />
-          <div className="grid gap-4 lg:grid-cols-2">
-            <MyTasksPanel wsId={wsId} />
-            <AgentStatusPanel wsId={wsId} />
-          </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 md:p-6">
+        <KpiCards wsId={wsId} />
+        <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-2">
+          <MyTasksPanel wsId={wsId} />
+          <AgentStatusPanel wsId={wsId} />
         </div>
       </div>
     </div>

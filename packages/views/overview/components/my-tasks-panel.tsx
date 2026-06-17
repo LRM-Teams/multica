@@ -13,7 +13,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { AppLink } from "../../navigation";
 import { useT, useTimeAgo } from "../../i18n";
 
-const MAX_ITEMS = 8;
+const MAX_ITEMS = 20;
 
 // Inbox types surfaced in the "tasks & messages for me" panel — assignments,
 // mentions, comments. Pending-approval items come from in_review issues below
@@ -89,11 +89,11 @@ export function MyTasksPanel({ wsId }: { wsId: string }) {
   const isPending = inboxPending || issuesPending;
 
   return (
-    <Card size="sm" className="min-h-0">
+    <Card size="sm" className="h-full min-h-0">
       <CardHeader>
         <CardTitle>{t(($) => $.my_tasks.title)}</CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col">
+      <CardContent className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {isPending ? (
           Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="my-2 h-9 w-full" />)
         ) : rows.length === 0 ? (

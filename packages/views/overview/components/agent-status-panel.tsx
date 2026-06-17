@@ -14,7 +14,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { AppLink } from "../../navigation";
 import { useT, useTimeAgo } from "../../i18n";
 
-const MAX_ITEMS = 8;
+const MAX_ITEMS = 20;
 
 type StatusKind = "running" | "waiting" | "done" | "failed" | "cancelled";
 
@@ -93,11 +93,11 @@ export function AgentStatusPanel({ wsId }: { wsId: string }) {
   }, [tasks]);
 
   return (
-    <Card size="sm" className="min-h-0">
+    <Card size="sm" className="h-full min-h-0">
       <CardHeader>
         <CardTitle>{t(($) => $.agent_status.title)}</CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
         {isPending ? (
           Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-10 w-full" />)
         ) : rows.length === 0 ? (

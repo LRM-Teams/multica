@@ -258,6 +258,27 @@ export function issueListOptions(wsId: string, sort?: IssueSortParam) {
   });
 }
 
+/**
+ * Per-status issue totals for dashboard counters. Shares {@link issueListOptions}'s
+ * cache key (same workspace, no sort) so it adds no extra fetch — it only applies
+ * a different `select` over the bucketed cache, reading the server-reported
+ * `total` per status (not the capped first page length). Cancelled is not
+ * fetched (see PAGINATED_STATUSES) and is therefore absent from the result.
+ */
+export function issueStatusCountsOptions(wsId: string) {
+  return queryOptions({
+    queryKey: issueKeys.listSorted(wsId),
+    queryFn: () => fetchFirstPages({}),
+    select: (data: ListIssuesCache): Partial<Record<IssueStatus, number>> => {
+      const counts: Partial<Record<IssueStatus, number>> = {};
+      for (const status of PAGINATED_STATUSES) {
+        counts[status] = data.byStatus[status]?.total ?? 0;
+      }
+      return counts;
+    },
+  });
+}
+
 export function issueAssigneeGroupsOptions(
   wsId: string,
   filter: AssigneeGroupedIssuesFilter,

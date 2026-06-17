@@ -13,15 +13,22 @@ const docsUrl = process.env.DOCS_URL || "http://localhost:4000";
 // Parse hostnames from CORS_ALLOWED_ORIGINS so that Next.js dev server
 // allows cross-origin HMR / webpack requests (e.g. from Tailscale IPs).
 const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
-  ? process.env.CORS_ALLOWED_ORIGINS.split(",")
-      .map((origin) => {
-        try {
-          return new URL(origin.trim()).host;
-        } catch {
-          return origin.trim();
-        }
-      })
-      .filter(Boolean)
+  ? Array.from(
+      new Set(
+        process.env.CORS_ALLOWED_ORIGINS.split(",")
+          .flatMap((origin) => {
+            const value = origin.trim();
+            if (!value) return [];
+            try {
+              const url = new URL(value);
+              return [url.hostname, url.host];
+            } catch {
+              return [value];
+            }
+          })
+          .filter(Boolean),
+      ),
+    )
   : undefined;
 
 const nextConfig: NextConfig = {

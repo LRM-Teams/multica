@@ -20,6 +20,7 @@ import enChat from "./en/chat.json";
 import enModals from "./en/modals.json";
 import enRuntimes from "./en/runtimes.json";
 import enLayout from "./en/layout.json";
+import enOverview from "./en/overview.json";
 import enUsage from "./en/usage.json";
 import enUi from "./en/ui.json";
 import enSquads from "./en/squads.json";
@@ -45,6 +46,7 @@ import zhHansChat from "./zh-Hans/chat.json";
 import zhHansModals from "./zh-Hans/modals.json";
 import zhHansRuntimes from "./zh-Hans/runtimes.json";
 import zhHansLayout from "./zh-Hans/layout.json";
+import zhHansOverview from "./zh-Hans/overview.json";
 import zhHansUsage from "./zh-Hans/usage.json";
 import zhHansUi from "./zh-Hans/ui.json";
 import zhHansSquads from "./zh-Hans/squads.json";
@@ -70,6 +72,7 @@ import koChat from "./ko/chat.json";
 import koModals from "./ko/modals.json";
 import koRuntimes from "./ko/runtimes.json";
 import koLayout from "./ko/layout.json";
+import koOverview from "./ko/overview.json";
 import koUsage from "./ko/usage.json";
 import koUi from "./ko/ui.json";
 import koSquads from "./ko/squads.json";
@@ -95,6 +98,7 @@ import jaChat from "./ja/chat.json";
 import jaModals from "./ja/modals.json";
 import jaRuntimes from "./ja/runtimes.json";
 import jaLayout from "./ja/layout.json";
+import jaOverview from "./ja/overview.json";
 import jaUsage from "./ja/usage.json";
 import jaUi from "./ja/ui.json";
 import jaSquads from "./ja/squads.json";
@@ -126,6 +130,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     modals: enModals,
     runtimes: enRuntimes,
     layout: enLayout,
+    "overview": enOverview,
     usage: enUsage,
     ui: enUi,
     squads: enSquads,
@@ -153,6 +158,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     modals: zhHansModals,
     runtimes: zhHansRuntimes,
     layout: zhHansLayout,
+    "overview": zhHansOverview,
     usage: zhHansUsage,
     ui: zhHansUi,
     squads: zhHansSquads,
@@ -180,6 +186,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     modals: koModals,
     runtimes: koRuntimes,
     layout: koLayout,
+    "overview": koOverview,
     usage: koUsage,
     ui: koUi,
     squads: koSquads,
@@ -207,6 +214,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     modals: jaModals,
     runtimes: jaRuntimes,
     layout: jaLayout,
+    "overview": jaOverview,
     usage: jaUsage,
     ui: jaUi,
     squads: jaSquads,

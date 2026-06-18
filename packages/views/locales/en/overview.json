@@ -8,7 +8,7 @@
     "tasks_done": "Tasks Done",
     "tasks_blocked_detail": "{{count}} blocked",
     "success_rate": "Success Rate",
-    "spend": "Spend (so far)",
+    "spend": "Spend",
     "budget_detail": "Daily budget: {{budget}}",
     "pending_approval": "Pending Approval",
     "longest_wait_detail": "Longest wait {{wait}}",

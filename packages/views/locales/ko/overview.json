@@ -8,7 +8,7 @@
     "tasks_done": "작업 완료",
     "tasks_blocked_detail": "{{count}}개 차단됨",
     "success_rate": "작업 성공률",
-    "spend": "비용 (현재까지)",
+    "spend": "비용",
     "budget_detail": "당일 예산: {{budget}}",
     "pending_approval": "승인 대기",
     "longest_wait_detail": "최장 대기 {{wait}}",

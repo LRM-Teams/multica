@@ -8,7 +8,7 @@
     "tasks_done": "任务完成",
     "tasks_blocked_detail": "{{count}}个任务被阻塞",
     "success_rate": "任务成功率",
-    "spend": "花销统计（截至目前）",
+    "spend": "花销统计",
     "budget_detail": "当日总预算：{{budget}}",
     "pending_approval": "待人工审批",
     "longest_wait_detail": "最长等待 {{wait}}",

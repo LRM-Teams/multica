@@ -8,7 +8,7 @@
     "tasks_done": "タスク完了",
     "tasks_blocked_detail": "{{count}}件ブロック中",
     "success_rate": "タスク成功率",
-    "spend": "コスト（現時点）",
+    "spend": "コスト",
     "budget_detail": "当日予算：{{budget}}",
     "pending_approval": "承認待ち",
     "longest_wait_detail": "最長待機 {{wait}}",

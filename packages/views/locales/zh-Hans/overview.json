@@ -6,7 +6,7 @@
     "active_agents": "活跃 Agent",
     "active_agents_detail": "{{idle}}个空闲，{{error}}个报错",
     "tasks_done": "任务完成",
-    "tasks_blocked_detail": "{{count}}个任务被阻塞",
+    "tasks_failed_detail": "{{count}}个失败",
     "success_rate": "任务成功率",
     "spend": "花销统计",
     "budget_detail": "当日总预算：{{budget}}",

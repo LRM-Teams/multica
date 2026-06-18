@@ -10,6 +10,7 @@ export type {
   AgentTaskFeedItem,
   AgentTaskFeedCursor,
   AgentTaskFeedPage,
+  AgentTaskStats,
   TaskFailureReason,
   AgentRuntime,
   RuntimeDevice,

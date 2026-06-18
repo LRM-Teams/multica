@@ -94,6 +94,15 @@ export interface AgentTaskFeedPage {
   next_cursor?: AgentTaskFeedCursor | null;
 }
 
+// Overview "tasks done" KPI — completed/failed/total counts over ALL agent
+// tasks in the workspace (issue, chat, and channel-reply tasks alike), so a
+// channel reply counts as a finished task, matching the agent activity feed.
+export interface AgentTaskStats {
+  completed: number;
+  failed: number;
+  total: number;
+}
+
 export interface AgentTask {
   id: string;
   agent_id: string;

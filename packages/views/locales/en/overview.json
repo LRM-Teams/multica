@@ -6,7 +6,7 @@
     "active_agents": "Active Agents",
     "active_agents_detail": "{{idle}} idle, {{error}} errored",
     "tasks_done": "Tasks Done",
-    "tasks_blocked_detail": "{{count}} blocked",
+    "tasks_failed_detail": "{{count}} failed",
     "success_rate": "Success Rate",
     "spend": "Spend",
     "budget_detail": "Daily budget: {{budget}}",

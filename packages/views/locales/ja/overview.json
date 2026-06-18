@@ -6,7 +6,7 @@
     "active_agents": "アクティブな Agent",
     "active_agents_detail": "{{idle}}個アイドル、{{error}}個エラー",
     "tasks_done": "タスク完了",
-    "tasks_blocked_detail": "{{count}}件ブロック中",
+    "tasks_failed_detail": "{{count}}件失敗",
     "success_rate": "タスク成功率",
     "spend": "コスト",
     "budget_detail": "当日予算：{{budget}}",

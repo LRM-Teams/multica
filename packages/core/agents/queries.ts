@@ -41,6 +41,18 @@ export const agentTaskFeedKeys = {
   list: (wsId: string) => [...agentTaskFeedKeys.all(wsId), "list"] as const,
 };
 
+// Workspace-wide completed/failed/total agent-task counts for the overview
+// "tasks done" KPI. Channel replies are completed chat tasks, so they're
+// counted here too — consistent with the agent activity feed.
+export function agentTaskStatsOptions(wsId: string) {
+  return queryOptions({
+    queryKey: ["workspaces", wsId, "agent-task-stats"] as const,
+    queryFn: () => api.getAgentTaskStats(),
+    enabled: !!wsId,
+    staleTime: 30 * 1000,
+  });
+}
+
 // Workspace-wide, cursor-paginated feed of terminal agent tasks (one row per
 // completed/failed/cancelled task), newest first. Infinite query — the overview
 // timeline fetches the next (older) page as the user scrolls.

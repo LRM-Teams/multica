@@ -124,6 +124,7 @@ import type {
   BillingCheckoutSessionStatus,
   CreateBillingPortalSessionResponse,
   AgentTaskFeedPage,
+  AgentTaskStats,
   IssueReviewStats,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
@@ -1316,6 +1317,11 @@ export class ApiClient {
   // Overview "pending human approval" KPI: in_review issue count + longest wait.
   async getIssueReviewStats(): Promise<IssueReviewStats> {
     return this.fetch(`/api/issues/review-stats`);
+  }
+
+  // Overview "tasks done" KPI: completed/failed/total agent-task counts.
+  async getAgentTaskStats(): Promise<AgentTaskStats> {
+    return this.fetch(`/api/agent-task-stats`);
   }
 
   // Workspace-wide, cursor-paginated feed of terminal agent tasks (one row per

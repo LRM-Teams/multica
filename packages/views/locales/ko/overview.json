@@ -6,7 +6,7 @@
     "active_agents": "활성 Agent",
     "active_agents_detail": "{{idle}}개 유휴, {{error}}개 오류",
     "tasks_done": "작업 완료",
-    "tasks_blocked_detail": "{{count}}개 차단됨",
+    "tasks_failed_detail": "{{count}}개 실패",
     "success_rate": "작업 성공률",
     "spend": "비용",
     "budget_detail": "당일 예산: {{budget}}",

@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { TrendingUp, TrendingDown } from "lucide-react";
 import { agentListOptions } from "@multica/core/workspace/queries";
+import { agentTaskStatsOptions } from "@multica/core/agents/queries";
 import { issueStatusCountsOptions, issueReviewStatsOptions } from "@multica/core/issues/queries";
 import { dashboardUsageDailyOptions } from "@multica/core/dashboard";
 import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
@@ -109,6 +110,10 @@ export function KpiCards({ wsId }: { wsId: string }) {
     ...issueReviewStatsOptions(wsId),
     enabled: !!wsId,
   });
+  const { data: taskStats, isPending: taskStatsPending } = useQuery({
+    ...agentTaskStatsOptions(wsId),
+    enabled: !!wsId,
+  });
 
   // Spend = today's cost, derived from the usage dashboard's daily series via
   // the same estimateCost pricing the Usage page uses. Two days are fetched so
@@ -130,13 +135,6 @@ export function KpiCards({ wsId }: { wsId: string }) {
   const done = counts?.done ?? 0;
   const blocked = counts?.blocked ?? 0;
   const inReview = counts?.in_review ?? 0;
-  const totalIssues =
-    (counts?.backlog ?? 0) +
-    (counts?.todo ?? 0) +
-    (counts?.in_progress ?? 0) +
-    (counts?.in_review ?? 0) +
-    done +
-    blocked;
   const successRate = done + blocked > 0 ? Math.round((done / (done + blocked)) * 100) : 0;
 
   const todayDate = todayIso(tz);
@@ -164,9 +162,11 @@ export function KpiCards({ wsId }: { wsId: string }) {
     {
       key: "tasks_done",
       label: t(($) => $.kpi.tasks_done),
-      value: `${done} / ${totalIssues}`,
-      detail: t(($) => $.kpi.tasks_blocked_detail, { count: blocked }),
-      loading: countsPending,
+      // Denominator is decided tasks (completed + failed) so it reconciles with
+      // the failed detail; queued/running/cancelled are excluded.
+      value: `${taskStats?.completed ?? 0} / ${(taskStats?.completed ?? 0) + (taskStats?.failed ?? 0)}`,
+      detail: t(($) => $.kpi.tasks_failed_detail, { count: taskStats?.failed ?? 0 }),
+      loading: taskStatsPending,
     },
     {
       key: "success_rate",

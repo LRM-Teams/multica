@@ -1745,6 +1745,10 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/stats`);
   }
 
+  async markChannelRead(channelId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/read`, { method: "POST" });
+  }
+
   async setChannelTyping(channelId: string, isTyping: boolean): Promise<void> {
     await this.fetch(`/api/channels/${channelId}/typing`, {
       method: "POST",

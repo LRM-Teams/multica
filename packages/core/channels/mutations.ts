@@ -25,6 +25,15 @@ export function useSendChannelMessage() {
   });
 }
 
+export function useMarkChannelRead() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (channelId: string) => api.markChannelRead(channelId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+  });
+}
+
 export function useSetChannelTyping() {
   return useMutation({
     mutationFn: ({ channelId, isTyping }: { channelId: string; isTyping: boolean }) => api.setChannelTyping(channelId, isTyping),

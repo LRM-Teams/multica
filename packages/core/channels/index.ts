@@ -6,4 +6,11 @@ export {
   channelAttachmentsOptions,
   channelStatsOptions,
 } from "./queries";
-export { useCreateChannel, useSendChannelMessage, useSetChannelTyping, useAddChannelMember, useRemoveChannelMember } from "./mutations";
+export {
+  useCreateChannel,
+  useSendChannelMessage,
+  useMarkChannelRead,
+  useSetChannelTyping,
+  useAddChannelMember,
+  useRemoveChannelMember,
+} from "./mutations";

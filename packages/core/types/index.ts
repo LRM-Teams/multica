@@ -176,6 +176,8 @@ export type {
 export type {
   Channel,
   ChannelMember,
+  ChannelMemberBrief,
+  ChannelLastMessage,
   ChannelMessage,
   ChannelStats,
   ChannelAuthorStat,

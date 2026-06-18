@@ -1,3 +1,16 @@
+export interface ChannelLastMessage {
+  author_type: "user" | "agent" | "lark" | "system";
+  author_name: string;
+  content: string;
+  created_at: string;
+}
+
+export interface ChannelMemberBrief {
+  member_type: "user" | "agent";
+  member_id: string;
+  name: string;
+}
+
 export interface Channel {
   id: string;
   workspace_id: string;
@@ -7,6 +20,10 @@ export interface Channel {
   created_by: string;
   created_at: string;
   updated_at: string;
+  /** List-only enrichments (absent on create/update/get responses). */
+  unread_count?: number;
+  last_message?: ChannelLastMessage | null;
+  members?: ChannelMemberBrief[];
 }
 
 export interface ChannelMember {

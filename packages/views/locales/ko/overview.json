@@ -28,7 +28,8 @@
       "done": "완료",
       "failed": "실패",
       "cancelled": "취소됨"
-    }
+    },
+    "fallback_task": "작업"
   },
   "priority": {
     "high": "높음",

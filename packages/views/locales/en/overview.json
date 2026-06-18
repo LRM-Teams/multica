@@ -28,7 +28,8 @@
       "done": "Done",
       "failed": "Failed",
       "cancelled": "Cancelled"
-    }
+    },
+    "fallback_task": "a task"
   },
   "priority": {
     "high": "High",

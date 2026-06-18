@@ -28,7 +28,8 @@
       "done": "完了",
       "failed": "失敗",
       "cancelled": "キャンセル"
-    }
+    },
+    "fallback_task": "タスク"
   },
   "priority": {
     "high": "高",

@@ -28,7 +28,8 @@
       "done": "完成",
       "failed": "失败",
       "cancelled": "已取消"
-    }
+    },
+    "fallback_task": "一项任务"
   },
   "priority": {
     "high": "高",

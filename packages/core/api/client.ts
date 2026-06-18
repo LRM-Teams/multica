@@ -122,6 +122,7 @@ import type {
   CreateBillingCheckoutSessionResponse,
   BillingCheckoutSessionStatus,
   CreateBillingPortalSessionResponse,
+  AgentTaskFeedPage,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type {
@@ -1308,6 +1309,23 @@ export class ApiClient {
   // Workspace is resolved server-side from the X-Workspace-Slug header.
   async getAgentTaskSnapshot(): Promise<AgentTask[]> {
     return this.fetch(`/api/agent-task-snapshot`);
+  }
+
+  // Workspace-wide, cursor-paginated feed of terminal agent tasks (one row per
+  // completed/failed/cancelled task), newest first. Powers the overview agent
+  // activity timeline. Workspace is resolved server-side from the header.
+  async listAgentTaskFeed(params: {
+    before?: { completed_at: string; id: string } | null;
+    limit?: number;
+  }): Promise<AgentTaskFeedPage> {
+    const qs = new URLSearchParams();
+    if (params.limit != null) qs.set("limit", String(params.limit));
+    if (params.before) {
+      qs.set("before_completed_at", params.before.completed_at);
+      qs.set("before_id", params.before.id);
+    }
+    const q = qs.toString();
+    return this.fetch(`/api/agent-tasks${q ? `?${q}` : ""}`);
   }
 
   // Per-agent daily activity for the last 30 days, anchored on

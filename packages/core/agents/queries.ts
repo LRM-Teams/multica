@@ -1,5 +1,6 @@
-import { queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
+import type { AgentTaskFeedCursor } from "../types";
 
 export const agentTaskSnapshotKeys = {
   all: (wsId: string) => ["workspaces", wsId, "agent-task-snapshot"] as const,
@@ -32,6 +33,26 @@ export function agentTaskSnapshotOptions(wsId: string) {
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
     refetchOnWindowFocus: true,
+  });
+}
+
+export const agentTaskFeedKeys = {
+  all: (wsId: string) => ["workspaces", wsId, "agent-task-feed"] as const,
+  list: (wsId: string) => [...agentTaskFeedKeys.all(wsId), "list"] as const,
+};
+
+// Workspace-wide, cursor-paginated feed of terminal agent tasks (one row per
+// completed/failed/cancelled task), newest first. Infinite query — the overview
+// timeline fetches the next (older) page as the user scrolls.
+export function agentTaskFeedOptions(wsId: string, limit = 30) {
+  return infiniteQueryOptions({
+    queryKey: agentTaskFeedKeys.list(wsId),
+    queryFn: ({ pageParam }) => api.listAgentTaskFeed({ before: pageParam, limit }),
+    initialPageParam: null as AgentTaskFeedCursor | null,
+    getNextPageParam: (lastPage) =>
+      lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined,
+    enabled: !!wsId,
+    staleTime: 30 * 1000,
   });
 }
 

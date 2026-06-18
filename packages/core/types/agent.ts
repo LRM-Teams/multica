@@ -62,6 +62,38 @@ export interface AgentRunCount {
   run_count: number;
 }
 
+// One terminal task in the workspace-wide agent activity feed (overview
+// timeline). Trimmed to display fields — the agent name is resolved client-side
+// from the cached agent list. `status` is one of completed/failed/cancelled.
+export interface AgentTaskFeedItem {
+  id: string;
+  agent_id: string;
+  issue_id: string;
+  // The linked issue's "PREFIX-N" identifier and title, resolved server-side.
+  // Absent for tasks with no linked issue (chat/autopilot-spawned). The title
+  // is the primary "what did this agent do" description in the timeline row.
+  issue_identifier?: string;
+  issue_title?: string;
+  // Title of the linked chat session — the "what" for chat-spawned tasks that
+  // have no issue. Empty session titles are omitted.
+  chat_title?: string;
+  status: AgentTask["status"];
+  completed_at: string | null;
+  trigger_summary?: string;
+}
+
+// Opaque composite cursor — the (completed_at, id) of the last returned row.
+export interface AgentTaskFeedCursor {
+  completed_at: string;
+  id: string;
+}
+
+export interface AgentTaskFeedPage {
+  tasks: AgentTaskFeedItem[];
+  has_more: boolean;
+  next_cursor?: AgentTaskFeedCursor | null;
+}
+
 export interface AgentTask {
   id: string;
   agent_id: string;

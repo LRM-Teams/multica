@@ -1628,6 +1628,29 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Empty chat prompt guard: a chat task whose resolved prompt has no text
+	// and no attachments has nothing for the agent to answer. This happens on
+	// channel sessions, where each @-mention enqueues its own task but the
+	// daemon assembles the prompt from the trailing run of unanswered user
+	// messages (trailingUserMessages) — so the first task to run consumes ALL
+	// pending mentions at once and every later task on the same (serialized)
+	// session finds the tail already capped by an assistant reply. Running the
+	// agent on that empty set produces a confused "I got an empty message"
+	// reply. Cancel it as a no-op instead; the EventTaskCancelled subscription
+	// (handleChannelChatStopped) clears the channel typing indicator. Safe for
+	// 1:1 chat too — a chat task with nothing to answer should never run.
+	if task.ChatSessionID.Valid && strings.TrimSpace(resp.ChatMessage) == "" && len(resp.ChatMessageAttachments) == 0 {
+		outcome = "skip_empty_chat"
+		slog.Info("task claim: empty chat prompt, cancelling redundant task",
+			"task_id", uuidToString(task.ID), "chat_session_id", uuidToString(task.ChatSessionID))
+		if _, cerr := h.TaskService.CancelTask(r.Context(), task.ID); cerr != nil {
+			slog.Error("task claim: cancel empty chat task failed",
+				"task_id", uuidToString(task.ID), "error", cerr)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"task": nil})
+		return
+	}
+
 	// Workspace-level Context (workspace.context DB column) — the per-workspace
 	// system prompt that workspace owners set in Settings → General. Inject it
 	// into the brief regardless of task kind (issue / chat / autopilot /

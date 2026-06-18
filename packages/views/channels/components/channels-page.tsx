@@ -49,7 +49,6 @@ import {
 } from "@multica/ui/components/ui/popover";
 import { cn } from "@multica/ui/lib/utils";
 import { ContentEditor, type ContentEditorRef } from "../../editor";
-import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
 import { agentColor } from "../../common/agent-color";
 import { initialsOf } from "../../common/initials";
@@ -461,13 +460,7 @@ export function ChannelsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <PageHeader className="h-auto min-h-12 px-5 py-2">
-        <div>
-          <h1 className="text-sm font-semibold">{t(($) => $.page.title)}</h1>
-          <p className="text-xs text-muted-foreground">{t(($) => $.page.subtitle)}</p>
-        </div>
-      </PageHeader>
-      <div className="grid min-h-0 flex-1 grid-cols-[280px_1fr] gap-0 border-t bg-background">
+      <div className="grid min-h-0 flex-1 grid-cols-[280px_1fr] gap-0 bg-background">
         <aside className="flex min-h-0 flex-col border-r bg-muted/20">
           <div className="flex items-center justify-between px-4 pb-1 pt-4">
             <h2 className="text-lg font-semibold">{t(($) => $.sidebar.heading)}</h2>

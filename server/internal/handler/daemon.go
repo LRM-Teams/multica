@@ -1217,51 +1217,35 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			var projectRepos []RepoData
 			if issue.ProjectID.Valid {
 				resp.ProjectID = uuidToString(issue.ProjectID)
 				if proj, err := h.Queries.GetProject(r.Context(), issue.ProjectID); err == nil {
 					resp.ProjectTitle = proj.Title
 				}
-				if rows := h.listProjectResourcesForProject(r.Context(), issue.ProjectID); len(rows) > 0 {
-					out := make([]ProjectResourceData, 0, len(rows))
-					for _, row := range rows {
-						label := ""
-						if row.Label.Valid {
-							label = row.Label.String
-						}
-						ref := json.RawMessage(row.ResourceRef)
-						if len(ref) == 0 {
-							ref = json.RawMessage("{}")
-						}
-						out = append(out, ProjectResourceData{
-							ID:           uuidToString(row.ID),
-							ResourceType: row.ResourceType,
-							ResourceRef:  ref,
-							Label:        label,
-						})
-						// Lift github_repo resources into the daemon's repo list
-						// so `multica repo checkout` and the meta-skill render
-						// them as the issue's repos.
-						if row.ResourceType == "github_repo" {
-							var payload struct {
-								URL string `json:"url"`
-							}
-							if json.Unmarshal(row.ResourceRef, &payload) == nil && payload.URL != "" {
-								projectRepos = append(projectRepos, RepoData{URL: payload.URL})
-							}
-						}
+				resources, projectRepos := h.mapProjectResources(r.Context(), issue.ProjectID)
+				if len(resources) > 0 {
+					resp.ProjectResources = resources
+					if len(projectRepos) > 0 {
+						resp.Repos = projectRepos
 					}
-					resp.ProjectResources = out
+				} else {
+					// Project has no resource yet → ask the daemon to provision a
+					// managed shared working directory, so this and every later
+					// task (issues + chat) under the project accumulate one
+					// codebase instead of throwaway per-task dirs.
+					resp.ProvisionManagedWorkdir = true
+					resp.ManagedWorkdirRelPath = managedWorkdirRelPath(resp.ProjectID)
 				}
 			}
 
-			if len(projectRepos) > 0 {
-				resp.Repos = projectRepos
-			} else if ws, err := h.Queries.GetWorkspace(r.Context(), issue.WorkspaceID); err == nil && ws.Repos != nil {
-				var repos []RepoData
-				if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
-					resp.Repos = repos
+			// Workspace-level repos are a last resort: only when the task has no
+			// project repos and isn't getting a managed project workdir.
+			if len(resp.Repos) == 0 && !resp.ProvisionManagedWorkdir {
+				if ws, err := h.Queries.GetWorkspace(r.Context(), issue.WorkspaceID); err == nil && ws.Repos != nil {
+					var repos []RepoData
+					if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
+						resp.Repos = repos
+					}
 				}
 			}
 		}
@@ -1370,10 +1354,43 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			resp.WorkspaceID = uuidToString(cs.WorkspaceID)
 			resp.ChatSessionID = uuidToString(cs.ID)
 			resp.ThreadName = cs.Title
-			if ws, err := h.Queries.GetWorkspace(r.Context(), cs.WorkspaceID); err == nil && ws.Repos != nil {
-				var repos []RepoData
-				if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
-					resp.Repos = repos
+			// Resolve the chat's bound project (the composer "current project").
+			// When set, the agent works in that project's directory exactly like
+			// an issue task does — so a group chat about a project sees the same
+			// code. When unset, the chat stays a general conversation backed by
+			// workspace-level repos.
+			// Resolve the effective project: a channel binding (when this chat
+			// session is a channel agent session) takes precedence over the
+			// session's own project_id, so the whole channel shares one project.
+			var chatProjectID pgtype.UUID
+			_ = h.DB.QueryRow(r.Context(), `
+				SELECT COALESCE(ch.project_id, cs.project_id)
+				FROM chat_session cs
+				LEFT JOIN channel_agent_session cas ON cas.chat_session_id = cs.id
+				LEFT JOIN channel ch ON ch.id = cas.channel_id
+				WHERE cs.id = $1`, cs.ID).Scan(&chatProjectID)
+			if chatProjectID.Valid {
+				resp.ProjectID = uuidToString(chatProjectID)
+				if proj, err := h.Queries.GetProject(r.Context(), chatProjectID); err == nil {
+					resp.ProjectTitle = proj.Title
+				}
+				resources, projectRepos := h.mapProjectResources(r.Context(), chatProjectID)
+				if len(resources) > 0 {
+					resp.ProjectResources = resources
+					if len(projectRepos) > 0 {
+						resp.Repos = projectRepos
+					}
+				} else {
+					resp.ProvisionManagedWorkdir = true
+					resp.ManagedWorkdirRelPath = managedWorkdirRelPath(resp.ProjectID)
+				}
+			}
+			if len(resp.Repos) == 0 && !resp.ProvisionManagedWorkdir {
+				if ws, err := h.Queries.GetWorkspace(r.Context(), cs.WorkspaceID); err == nil && ws.Repos != nil {
+					var repos []RepoData
+					if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
+						resp.Repos = repos
+					}
 				}
 			}
 			if !task.ForceFreshSession {

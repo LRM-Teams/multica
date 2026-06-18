@@ -4,19 +4,22 @@ import { useQuery } from "@tanstack/react-query";
 import { TrendingUp, TrendingDown } from "lucide-react";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { issueStatusCountsOptions } from "@multica/core/issues/queries";
+import { dashboardUsageDailyOptions } from "@multica/core/dashboard";
+import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
 import { cn } from "@multica/ui/lib/utils";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { useViewingTimezone } from "../../common/use-viewing-timezone";
+import { computeDailyTotals } from "../../dashboard/utils";
+import { todayIso, addDaysIso } from "../../runtimes/utils";
 import { useT } from "../../i18n";
-import { PlaceholderBadge } from "./placeholder-badge";
-import { MOCK_TRENDS, MOCK_SPEND, MOCK_BUDGET, MOCK_LONGEST_WAIT, type KpiTrend } from "../mock";
+import { MOCK_TRENDS, MOCK_LONGEST_WAIT, type KpiTrend } from "../mock";
 
 function KpiCard({
   label,
   value,
   detail,
   trend,
-  mock,
   loading,
   vsYesterday,
 }: {
@@ -24,17 +27,13 @@ function KpiCard({
   value: string;
   detail?: string;
   trend?: KpiTrend;
-  mock?: boolean;
   loading?: boolean;
   vsYesterday: string;
 }) {
   return (
     <Card size="sm">
       <CardContent className="flex flex-col gap-1">
-        <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-xs text-muted-foreground">{label}</span>
-          {mock ? <PlaceholderBadge /> : null}
-        </div>
+        <span className="truncate text-xs text-muted-foreground">{label}</span>
         {loading ? (
           <Skeleton className="h-8 w-16" />
         ) : (
@@ -63,10 +62,21 @@ function KpiCard({
   );
 }
 
+interface KpiCardData {
+  key: string;
+  label: string;
+  value: string;
+  detail?: string;
+  loading?: boolean;
+  trend?: KpiTrend;
+}
+
 /**
- * Five headline KPIs. Real: active-agent breakdown (agent list + status) and
- * task/approval counts (issue status totals). Mock: the spend card (no dollar
- * rollup) and the "vs yesterday" trend tags (no day-over-day series).
+ * Five headline KPIs. Real: active-agent breakdown (agent list + status),
+ * task/approval counts (issue status totals), and spend — today's cost derived
+ * from the usage dashboard's daily series (same estimateCost pricing as the
+ * Usage page) with a real vs-yesterday delta. Mock: the remaining "vs yesterday"
+ * trend tags (agents / success rate) and the pending-approval longest-wait.
  */
 export function KpiCards({ wsId }: { wsId: string }) {
   const { t } = useT("overview");
@@ -78,6 +88,17 @@ export function KpiCards({ wsId }: { wsId: string }) {
   });
   const { data: counts, isPending: countsPending } = useQuery({
     ...issueStatusCountsOptions(wsId),
+    enabled: !!wsId,
+  });
+
+  // Spend = today's cost, derived from the usage dashboard's daily series via
+  // the same estimateCost pricing the Usage page uses. Two days are fetched so
+  // the "vs yesterday" delta is real too.
+  const tz = useViewingTimezone();
+  // Subscribe so cost re-derives when the user edits custom model pricing.
+  useCustomPricingStore((s) => s.pricings);
+  const { data: usage = [], isPending: usagePending } = useQuery({
+    ...dashboardUsageDailyOptions(wsId, 2, null, tz),
     enabled: !!wsId,
   });
 
@@ -99,13 +120,27 @@ export function KpiCards({ wsId }: { wsId: string }) {
     blocked;
   const successRate = done + blocked > 0 ? Math.round((done / (done + blocked)) * 100) : 0;
 
-  const cards = [
+  const todayDate = todayIso(tz);
+  const yesterdayDate = addDaysIso(todayDate, -1);
+  const todaySpend = computeDailyTotals(usage.filter((u) => u.date === todayDate)).cost;
+  const yesterdaySpend = computeDailyTotals(usage.filter((u) => u.date === yesterdayDate)).cost;
+  const spendDelta = todaySpend - yesterdaySpend;
+  const spendTrend: KpiTrend | undefined =
+    usage.length > 0
+      ? {
+          delta: `${spendDelta >= 0 ? "+" : "-"}$${Math.abs(spendDelta).toFixed(2)}`,
+          dir: spendDelta >= 0 ? "up" : "down",
+        }
+      : undefined;
+
+  const cards: KpiCardData[] = [
     {
       key: "active_agents",
       label: t(($) => $.kpi.active_agents),
       value: `${working} / ${total}`,
       detail: t(($) => $.kpi.active_agents_detail, { idle, error: errored }),
       loading: agentsPending,
+      trend: MOCK_TRENDS.active_agents,
     },
     {
       key: "tasks_done",
@@ -119,13 +154,14 @@ export function KpiCards({ wsId }: { wsId: string }) {
       label: t(($) => $.kpi.success_rate),
       value: `${successRate}%`,
       loading: countsPending,
+      trend: MOCK_TRENDS.success_rate,
     },
     {
       key: "spend",
       label: t(($) => $.kpi.spend),
-      value: MOCK_SPEND,
-      detail: t(($) => $.kpi.budget_detail, { budget: MOCK_BUDGET }),
-      mock: true,
+      value: `$ ${todaySpend.toFixed(2)}`,
+      loading: usagePending,
+      trend: spendTrend,
     },
     {
       key: "pending_approval",
@@ -134,7 +170,7 @@ export function KpiCards({ wsId }: { wsId: string }) {
       detail: t(($) => $.kpi.longest_wait_detail, { wait: MOCK_LONGEST_WAIT }),
       loading: countsPending,
     },
-  ] as const;
+  ];
 
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
@@ -143,10 +179,9 @@ export function KpiCards({ wsId }: { wsId: string }) {
           key={c.key}
           label={c.label}
           value={c.value}
-          detail={"detail" in c ? c.detail : undefined}
-          trend={MOCK_TRENDS[c.key]}
-          mock={"mock" in c ? c.mock : undefined}
-          loading={"loading" in c ? c.loading : undefined}
+          detail={c.detail}
+          trend={c.trend}
+          loading={c.loading}
           vsYesterday={vsYesterday}
         />
       ))}

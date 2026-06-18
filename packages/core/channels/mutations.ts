@@ -16,7 +16,8 @@ export function useSendChannelMessage() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: ({ channelId, content }: { channelId: string; content: string }) => api.sendChannelMessage(channelId, content),
+    mutationFn: ({ channelId, content, attachmentIds }: { channelId: string; content: string; attachmentIds?: string[] }) =>
+      api.sendChannelMessage(channelId, content, attachmentIds),
     onSuccess: (msg) => {
       qc.invalidateQueries({ queryKey: channelKeys.messages(msg.channel_id) });
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });

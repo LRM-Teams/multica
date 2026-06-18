@@ -1567,13 +1567,14 @@ export class ApiClient {
   // File Upload & Attachments
   async uploadFile(
     file: File,
-    opts?: { issueId?: string; commentId?: string; chatSessionId?: string },
+    opts?: { issueId?: string; commentId?: string; chatSessionId?: string; channelId?: string },
   ): Promise<Attachment> {
     const formData = new FormData();
     formData.append("file", file);
     if (opts?.issueId) formData.append("issue_id", opts.issueId);
     if (opts?.commentId) formData.append("comment_id", opts.commentId);
     if (opts?.chatSessionId) formData.append("chat_session_id", opts.chatSessionId);
+    if (opts?.channelId) formData.append("channel_id", opts.channelId);
 
     const rid = createRequestId();
     const start = Date.now();
@@ -1720,10 +1721,18 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/messages`);
   }
 
-  async sendChannelMessage(channelId: string, content: string): Promise<ChannelMessage> {
+  async sendChannelMessage(
+    channelId: string,
+    content: string,
+    attachmentIds?: string[],
+  ): Promise<ChannelMessage> {
+    const body: { content: string; attachment_ids?: string[] } = { content };
+    if (attachmentIds && attachmentIds.length > 0) {
+      body.attachment_ids = attachmentIds;
+    }
     return this.fetch(`/api/channels/${channelId}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify(body),
     });
   }
 

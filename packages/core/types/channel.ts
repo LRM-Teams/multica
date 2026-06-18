@@ -26,6 +26,13 @@ export interface ChannelMessage {
   content: string;
   source: "multica" | "lark";
   external_message_id: string | null;
+  /**
+   * Attachments linked to this message via the attachment table's
+   * channel_message_id FK. Populated by ListChannelMessages. The bubble
+   * renders these as file/image cards; the markdown URL inline in `content`
+   * may carry an expiring signature, while this metadata is stable.
+   */
+  attachments?: import("./attachment").Attachment[];
   created_at: string;
 }
 

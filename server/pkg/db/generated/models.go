@@ -101,19 +101,21 @@ type AgentTaskQueue struct {
 }
 
 type Attachment struct {
-	ID            pgtype.UUID        `json:"id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	IssueID       pgtype.UUID        `json:"issue_id"`
-	CommentID     pgtype.UUID        `json:"comment_id"`
-	UploaderType  string             `json:"uploader_type"`
-	UploaderID    pgtype.UUID        `json:"uploader_id"`
-	Filename      string             `json:"filename"`
-	Url           string             `json:"url"`
-	ContentType   string             `json:"content_type"`
-	SizeBytes     int64              `json:"size_bytes"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	ChatSessionID pgtype.UUID        `json:"chat_session_id"`
-	ChatMessageID pgtype.UUID        `json:"chat_message_id"`
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	IssueID          pgtype.UUID        `json:"issue_id"`
+	CommentID        pgtype.UUID        `json:"comment_id"`
+	UploaderType     string             `json:"uploader_type"`
+	UploaderID       pgtype.UUID        `json:"uploader_id"`
+	Filename         string             `json:"filename"`
+	Url              string             `json:"url"`
+	ContentType      string             `json:"content_type"`
+	SizeBytes        int64              `json:"size_bytes"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	ChatSessionID    pgtype.UUID        `json:"chat_session_id"`
+	ChatMessageID    pgtype.UUID        `json:"chat_message_id"`
+	ChannelID        pgtype.UUID        `json:"channel_id"`
+	ChannelMessageID pgtype.UUID        `json:"channel_message_id"`
 }
 
 type Autopilot struct {
@@ -169,6 +171,47 @@ type AutopilotTrigger struct {
 	EventFilters   []byte             `json:"event_filters"`
 }
 
+type Channel struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Name        string             `json:"name"`
+	Description pgtype.Text        `json:"description"`
+	LarkChatID  pgtype.Text        `json:"lark_chat_id"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ChannelAgentSession struct {
+	ChannelID     pgtype.UUID        `json:"channel_id"`
+	AgentID       pgtype.UUID        `json:"agent_id"`
+	ChatSessionID pgtype.UUID        `json:"chat_session_id"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type ChannelMember struct {
+	ChannelID   pgtype.UUID        `json:"channel_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	MemberType  string             `json:"member_type"`
+	MemberID    pgtype.UUID        `json:"member_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type ChannelMessage struct {
+	ID                pgtype.UUID        `json:"id"`
+	ChannelID         pgtype.UUID        `json:"channel_id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	AuthorType        string             `json:"author_type"`
+	AuthorID          pgtype.UUID        `json:"author_id"`
+	AuthorName        string             `json:"author_name"`
+	Content           string             `json:"content"`
+	Source            string             `json:"source"`
+	ExternalMessageID pgtype.Text        `json:"external_message_id"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	ThreadID          pgtype.Text        `json:"thread_id"`
+	TriggerDepth      int32              `json:"trigger_depth"`
+}
+
 type ChatMessage struct {
 	ID            pgtype.UUID        `json:"id"`
 	ChatSessionID pgtype.UUID        `json:"chat_session_id"`
@@ -178,6 +221,8 @@ type ChatMessage struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	FailureReason pgtype.Text        `json:"failure_reason"`
 	ElapsedMs     pgtype.Int8        `json:"elapsed_ms"`
+	ThreadID      pgtype.Text        `json:"thread_id"`
+	TriggerDepth  int32              `json:"trigger_depth"`
 }
 
 type ChatSession struct {

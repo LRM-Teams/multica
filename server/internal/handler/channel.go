@@ -57,6 +57,9 @@ type ChannelMessageResponse struct {
 	ThreadID          *string `json:"thread_id,omitempty"`
 	TriggerDepth      int     `json:"trigger_depth"`
 	CreatedAt         string  `json:"created_at"`
+	// Attachments linked to this message via channel_message_id. The chat
+	// bubble renders file/image cards from these.
+	Attachments []AttachmentResponse `json:"attachments,omitempty"`
 }
 
 type CreateChannelRequest struct {
@@ -77,7 +80,8 @@ type AddChannelMemberRequest struct {
 }
 
 type SendChannelMessageRequest struct {
-	Content string `json:"content"`
+	Content       string   `json:"content"`
+	AttachmentIDs []string `json:"attachment_ids"`
 }
 
 type ChannelTypingRequest struct {
@@ -362,6 +366,14 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, msg)
 	}
+	messageIDs := make([]pgtype.UUID, len(out))
+	for i, m := range out {
+		messageIDs[i] = parseUUID(m.ID)
+	}
+	grouped := h.groupChannelMessageAttachments(r.Context(), workspaceID, messageIDs)
+	for i := range out {
+		out[i].Attachments = grouped[out[i].ID]
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -418,6 +430,13 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "content is too long")
 		return
 	}
+	// Pre-validate attachment ids early so invalid input returns 400 before
+	// any state mutation. The actual link runs after insert so we have a
+	// message_id to back-fill into the attachment rows.
+	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, req.AttachmentIDs, "attachment_ids")
+	if !ok {
+		return
+	}
 	ch, found := h.getChannel(r.Context(), workspaceID, channelID)
 	if !found {
 		writeError(w, http.StatusNotFound, "channel not found")
@@ -432,6 +451,23 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create channel message")
 		return
+	}
+	// Back-fill channel_message_id on attachments uploaded against this
+	// channel while composing. The query only touches rows where channel_id
+	// matches AND channel_message_id IS NULL, so it cannot rebind an
+	// attachment that already belongs to an earlier message.
+	if len(attachmentIDs) > 0 {
+		if err := h.Queries.LinkAttachmentsToChannelMessage(r.Context(), db.LinkAttachmentsToChannelMessageParams{
+			ChannelMessageID: parseUUID(msg.ID),
+			ChannelID:        channelID,
+			Column3:          attachmentIDs,
+		}); err != nil {
+			// Don't fail the send — the message is saved and the files remain
+			// on the channel (still downloadable).
+			slog.Warn("link channel attachments failed", "error", err, "message_id", msg.ID)
+		} else {
+			msg.Attachments = h.groupChannelMessageAttachments(r.Context(), workspaceID, []pgtype.UUID{parseUUID(msg.ID)})[msg.ID]
+		}
 	}
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
 	h.publish(protocol.EventChannelMessage, workspaceID, "member", userID, msg)

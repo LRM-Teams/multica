@@ -18,6 +18,7 @@ import { NodeViewWrapper } from "@tiptap/react";
 import type { NodeViewProps } from "@tiptap/react";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useNavigation } from "../../navigation";
+import { agentColor } from "../../common/agent-color";
 import { IssueChip } from "../../issues/components/issue-chip";
 import { ProjectChip } from "../../projects/components/project-chip";
 
@@ -40,9 +41,14 @@ export function MentionView({ node }: NodeViewProps) {
     );
   }
 
+  // Member / agent / squad / all → a colored identity pill so each actor is
+  // distinguishable at a glance (same palette as group-chat avatars).
+  const color = agentColor(id);
   return (
     <NodeViewWrapper as="span" className="inline">
-      <span className="mention">@{label ?? id}</span>
+      <span className="mention" style={{ color: color.fg, backgroundColor: color.bg }}>
+        @{label ?? id}
+      </span>
     </NodeViewWrapper>
   );
 }

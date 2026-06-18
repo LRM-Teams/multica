@@ -61,6 +61,12 @@ interface ActorAvatarProps {
    * and agents, while picker/menu controls keep their own click behavior.
    */
   profileLink?: boolean;
+  /**
+   * Per-actor identity color forwarded to the base avatar's fallback
+   * (monogram / bot icon). No effect when an avatar image renders. See
+   * `agentColor`. Used by multi-agent surfaces (mention picker, group chat).
+   */
+  tint?: { fg: string; bg: string };
 }
 
 const FOCUSABLE_ANCESTOR_SELECTOR =
@@ -77,6 +83,7 @@ export function ActorAvatar({
   showStatusDot,
   hoverCardVariant = "profile",
   profileLink,
+  tint,
 }: ActorAvatarProps) {
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
   const paths = useWorkspacePaths();
@@ -90,6 +97,7 @@ export function ActorAvatar({
       isSquad={actorType === "squad"}
       size={size}
       className={className}
+      tint={tint}
     />
   );
 

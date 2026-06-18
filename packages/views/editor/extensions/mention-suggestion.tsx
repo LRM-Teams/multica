@@ -27,6 +27,7 @@ import type {
 } from "@multica/core/types";
 import { ListTodo } from "lucide-react";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { agentColor } from "../../common/agent-color";
 import { StatusIcon } from "../../issues/components/status-icon";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { useT } from "../../i18n";
@@ -449,8 +450,9 @@ function MentionRow({
         actorId={item.id}
         size={20}
         showStatusDot
+        tint={agentColor(item.id)}
       />
-      <span className="truncate font-medium">
+      <span className="truncate font-medium" style={{ color: agentColor(item.id).fg }}>
         {item.type === "all" ? t(($) => $.mention.all_members) : item.label}
       </span>
       {item.type === "agent" && (

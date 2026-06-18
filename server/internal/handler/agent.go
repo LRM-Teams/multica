@@ -10,7 +10,9 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -1438,4 +1440,149 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// AgentTaskFeedItem is one terminal task in the workspace activity feed,
+// trimmed to the fields the overview timeline renders. The agent name is
+// resolved client-side from the cached agent list.
+type AgentTaskFeedItem struct {
+	ID              string  `json:"id"`
+	AgentID         string  `json:"agent_id"`
+	IssueID         string  `json:"issue_id"`
+	IssueIdentifier *string `json:"issue_identifier,omitempty"`
+	IssueTitle      *string `json:"issue_title,omitempty"`
+	ChatTitle       *string `json:"chat_title,omitempty"`
+	Status          string  `json:"status"`
+	CompletedAt     *string `json:"completed_at"`
+	TriggerSummary  *string `json:"trigger_summary,omitempty"`
+}
+
+// AgentTaskFeedCursor is the opaque composite cursor for the feed: the
+// (completed_at, id) of the last returned row. Passed back as
+// ?before_completed_at=&before_id= to fetch the next (older) page.
+type AgentTaskFeedCursor struct {
+	CompletedAt string `json:"completed_at"`
+	ID          string `json:"id"`
+}
+
+type AgentTaskFeedResponse struct {
+	Tasks      []AgentTaskFeedItem  `json:"tasks"`
+	HasMore    bool                 `json:"has_more"`
+	NextCursor *AgentTaskFeedCursor `json:"next_cursor,omitempty"`
+}
+
+// ListAgentTaskFeed returns a workspace-wide, cursor-paginated feed of terminal
+// agent tasks (completed / failed / cancelled), newest completion first. One
+// row per task — an agent that completed hundreds of tasks contributes hundreds
+// of rows; the client renders them with a virtualized infinite-scroll list.
+//
+// Hand-written raw query rather than sqlc: the feed is read-only, the projection
+// is a small fixed set of columns, and avoiding a new generated query keeps the
+// change self-contained.
+func (h *Handler) ListAgentTaskFeed(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
+		return
+	}
+
+	limit := 30
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = parsed
+	}
+
+	var beforeAt pgtype.Timestamptz
+	var beforeID pgtype.UUID
+	rawAt := r.URL.Query().Get("before_completed_at")
+	rawID := r.URL.Query().Get("before_id")
+	if rawAt != "" || rawID != "" {
+		if rawAt == "" || rawID == "" {
+			writeError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+		ts, err := time.Parse(time.RFC3339Nano, rawAt)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+		cid, ok := parseUUIDOrBadRequest(w, rawID, "before_id")
+		if !ok {
+			return
+		}
+		beforeAt = pgtype.Timestamptz{Time: ts, Valid: true}
+		beforeID = cid
+	}
+
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT atq.id, atq.agent_id, atq.issue_id, atq.status, atq.completed_at, atq.trigger_summary,
+		       i.title, (w.issue_prefix || '-' || i.number::text) AS issue_identifier,
+		       NULLIF(cs.title, '') AS chat_title
+		FROM agent_task_queue atq
+		JOIN agent a ON a.id = atq.agent_id
+		JOIN workspace w ON w.id = a.workspace_id
+		LEFT JOIN issue i ON i.id = atq.issue_id
+		LEFT JOIN chat_session cs ON cs.id = atq.chat_session_id
+		WHERE a.workspace_id = $1
+		  AND atq.status IN ('completed', 'failed', 'cancelled')
+		  AND atq.completed_at IS NOT NULL
+		  AND ($3::timestamptz IS NULL OR (atq.completed_at, atq.id) < ($3::timestamptz, $4::uuid))
+		ORDER BY atq.completed_at DESC, atq.id DESC
+		LIMIT $2`,
+		parseUUID(workspaceID), int32(limit+1), beforeAt, beforeID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list agent tasks")
+		return
+	}
+	defer rows.Close()
+
+	items := make([]AgentTaskFeedItem, 0, limit+1)
+	cursors := make([]AgentTaskFeedCursor, 0, limit+1)
+	for rows.Next() {
+		var (
+			id, agentID, issueID pgtype.UUID
+			status               string
+			completedAt          pgtype.Timestamptz
+			triggerSummary       pgtype.Text
+			issueTitle           pgtype.Text
+			issueIdentifier      pgtype.Text
+			chatTitle            pgtype.Text
+		)
+		if err := rows.Scan(&id, &agentID, &issueID, &status, &completedAt, &triggerSummary, &issueTitle, &issueIdentifier, &chatTitle); err != nil {
+			continue
+		}
+		items = append(items, AgentTaskFeedItem{
+			ID:              uuidToString(id),
+			AgentID:         uuidToString(agentID),
+			IssueID:         uuidToString(issueID),
+			IssueIdentifier: textToPtr(issueIdentifier),
+			IssueTitle:      textToPtr(issueTitle),
+			ChatTitle:       textToPtr(chatTitle),
+			Status:          status,
+			CompletedAt:     timestampToPtr(completedAt),
+			TriggerSummary:  textToPtr(triggerSummary),
+		})
+		cursors = append(cursors, AgentTaskFeedCursor{
+			CompletedAt: completedAt.Time.Format(time.RFC3339Nano),
+			ID:          uuidToString(id),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list agent tasks")
+		return
+	}
+
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+	var next *AgentTaskFeedCursor
+	if hasMore && limit > 0 {
+		next = &cursors[limit-1]
+	}
+
+	writeJSON(w, http.StatusOK, AgentTaskFeedResponse{Tasks: items, HasMore: hasMore, NextCursor: next})
 }

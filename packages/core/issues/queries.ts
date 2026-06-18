@@ -279,6 +279,17 @@ export function issueStatusCountsOptions(wsId: string) {
   });
 }
 
+// Overview "pending human approval" KPI — in_review count + longest wait,
+// computed server-side from activity_log status transitions.
+export function issueReviewStatsOptions(wsId: string) {
+  return queryOptions({
+    queryKey: [...issueKeys.all(wsId), "review-stats"] as const,
+    queryFn: () => api.getIssueReviewStats(),
+    enabled: !!wsId,
+    staleTime: 30 * 1000,
+  });
+}
+
 export function issueAssigneeGroupsOptions(
   wsId: string,
   filter: AssigneeGroupedIssuesFilter,

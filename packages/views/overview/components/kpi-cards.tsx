@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { TrendingUp, TrendingDown } from "lucide-react";
 import { agentListOptions } from "@multica/core/workspace/queries";
-import { issueStatusCountsOptions } from "@multica/core/issues/queries";
+import { issueStatusCountsOptions, issueReviewStatsOptions } from "@multica/core/issues/queries";
 import { dashboardUsageDailyOptions } from "@multica/core/dashboard";
 import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
 import { cn } from "@multica/ui/lib/utils";
@@ -13,7 +13,22 @@ import { useViewingTimezone } from "../../common/use-viewing-timezone";
 import { computeDailyTotals } from "../../dashboard/utils";
 import { todayIso, addDaysIso } from "../../runtimes/utils";
 import { useT } from "../../i18n";
-import { MOCK_TRENDS, MOCK_LONGEST_WAIT, type KpiTrend } from "../mock";
+import { MOCK_TRENDS, type KpiTrend } from "../mock";
+
+// Compact human duration for the longest-approval-wait detail: "42min" /
+// "3h 5min" / "2d 4h". Matches the terse unit style the design used.
+function formatWait(totalSeconds: number): string {
+  const mins = Math.floor(totalSeconds / 60);
+  if (mins < 60) return `${mins}min`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) {
+    const m = mins % 60;
+    return m > 0 ? `${hours}h ${m}min` : `${hours}h`;
+  }
+  const days = Math.floor(hours / 24);
+  const h = hours % 24;
+  return h > 0 ? `${days}d ${h}h` : `${days}d`;
+}
 
 function KpiCard({
   label,
@@ -88,6 +103,10 @@ export function KpiCards({ wsId }: { wsId: string }) {
   });
   const { data: counts, isPending: countsPending } = useQuery({
     ...issueStatusCountsOptions(wsId),
+    enabled: !!wsId,
+  });
+  const { data: reviewStats, isPending: reviewPending } = useQuery({
+    ...issueReviewStatsOptions(wsId),
     enabled: !!wsId,
   });
 
@@ -166,9 +185,14 @@ export function KpiCards({ wsId }: { wsId: string }) {
     {
       key: "pending_approval",
       label: t(($) => $.kpi.pending_approval),
-      value: `${inReview}`,
-      detail: t(($) => $.kpi.longest_wait_detail, { wait: MOCK_LONGEST_WAIT }),
-      loading: countsPending,
+      value: `${reviewStats?.count ?? inReview}`,
+      detail:
+        (reviewStats?.count ?? 0) > 0
+          ? t(($) => $.kpi.longest_wait_detail, {
+              wait: formatWait(reviewStats?.longest_wait_seconds ?? 0),
+            })
+          : undefined,
+      loading: reviewPending,
     },
   ];
 

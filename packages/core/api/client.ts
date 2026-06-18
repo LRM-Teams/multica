@@ -124,6 +124,7 @@ import type {
   BillingCheckoutSessionStatus,
   CreateBillingPortalSessionResponse,
   AgentTaskFeedPage,
+  IssueReviewStats,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type {
@@ -1310,6 +1311,11 @@ export class ApiClient {
   // Workspace is resolved server-side from the X-Workspace-Slug header.
   async getAgentTaskSnapshot(): Promise<AgentTask[]> {
     return this.fetch(`/api/agent-task-snapshot`);
+  }
+
+  // Overview "pending human approval" KPI: in_review issue count + longest wait.
+  async getIssueReviewStats(): Promise<IssueReviewStats> {
+    return this.fetch(`/api/issues/review-stats`);
   }
 
   // Workspace-wide, cursor-paginated feed of terminal agent tasks (one row per

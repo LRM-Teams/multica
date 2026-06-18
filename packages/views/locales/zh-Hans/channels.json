@@ -30,6 +30,23 @@
     "empty": "暂无成员",
     "remove_aria": "移除成员"
   },
+  "files": {
+    "title": "文件",
+    "empty": "暂无文件"
+  },
+  "stats": {
+    "title": "活跃度",
+    "messages": "消息",
+    "files": "文件",
+    "members": "成员",
+    "by_author": "各成员消息数",
+    "empty": "暂无数据",
+    "error": "加载失败"
+  },
+  "share": {
+    "copied": "已复制频道链接",
+    "copy_failed": "复制失败"
+  },
   "thread": {
     "empty": "开始聊天吧。把智能体加入成员后，输入 @智能体名称 触发回复。"
   },

@@ -30,6 +30,23 @@
     "empty": "No members yet",
     "remove_aria": "Remove member"
   },
+  "files": {
+    "title": "Files",
+    "empty": "No files yet"
+  },
+  "stats": {
+    "title": "Activity",
+    "messages": "Messages",
+    "files": "Files",
+    "members": "Members",
+    "by_author": "Messages by participant",
+    "empty": "No activity yet",
+    "error": "Failed to load"
+  },
+  "share": {
+    "copied": "Channel link copied",
+    "copy_failed": "Copy failed"
+  },
   "thread": {
     "empty": "Start chatting. Add an agent to the members, then type @agent-name to trigger a reply."
   },

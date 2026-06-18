@@ -30,6 +30,23 @@
     "empty": "멤버 없음",
     "remove_aria": "멤버 제거"
   },
+  "files": {
+    "title": "파일",
+    "empty": "파일 없음"
+  },
+  "stats": {
+    "title": "활동",
+    "messages": "메시지",
+    "files": "파일",
+    "members": "멤버",
+    "by_author": "참여자별 메시지 수",
+    "empty": "데이터 없음",
+    "error": "불러오기 실패"
+  },
+  "share": {
+    "copied": "채널 링크 복사됨",
+    "copy_failed": "복사 실패"
+  },
   "thread": {
     "empty": "채팅을 시작하세요. 멤버에 에이전트를 추가한 뒤 @에이전트이름 을 입력하면 답장합니다."
   },

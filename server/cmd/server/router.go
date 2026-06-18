@@ -517,6 +517,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/tasks/{taskId}/messages", h.ReportTaskMessages)
 		r.Get("/tasks/{taskId}/messages", h.ListTaskMessages)
 
+		r.Post("/projects/{projectId}/managed-workdir", h.RegisterManagedWorkdir)
+
 		r.Get("/issues/{issueId}/gc-check", h.GetIssueGCCheck)
 		r.Get("/chat-sessions/{sessionId}/gc-check", h.GetChatSessionGCCheck)
 		r.Get("/autopilot-runs/{runId}/gc-check", h.GetAutopilotRunGCCheck)
@@ -977,6 +979,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/lark/messages", h.ImportLarkChannelMessage)
 				r.Route("/{channelId}", func(r chi.Router) {
 					r.Patch("/", h.UpdateChannel)
+					r.Get("/project", h.GetChannelProject)
+					r.Put("/project", h.SetChannelProject)
 					r.Get("/members", h.ListChannelMembers)
 					r.Post("/members", h.AddChannelMember)
 					r.Delete("/members/{memberType}/{memberId}", h.RemoveChannelMember)

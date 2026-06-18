@@ -50,6 +50,12 @@ type Task struct {
 	ProjectID                string                `json:"project_id,omitempty"`                  // issue's project, when present
 	ProjectTitle             string                `json:"project_title,omitempty"`               // human-readable project title for context injection
 	ProjectResources         []ProjectResourceData `json:"project_resources,omitempty"`           // project-scoped resources to expose to the agent
+	// ProvisionManagedWorkdir / ManagedWorkdirRelPath: server asks the daemon to
+	// lazily create a managed shared working directory for this task's project
+	// (a project with no resource yet) at <WorkspacesRoot>/<rel>, run there, and
+	// self-register it so later tasks reuse it. Empty/false for old servers.
+	ProvisionManagedWorkdir  bool                  `json:"provision_managed_workdir,omitempty"`
+	ManagedWorkdirRelPath    string                `json:"managed_workdir_rel_path,omitempty"`
 	PriorSessionID           string                `json:"prior_session_id,omitempty"`            // Claude session ID from a previous task on this issue
 	PriorWorkDir             string                `json:"prior_work_dir,omitempty"`              // work_dir from a previous task on this issue
 	TriggerCommentID         string                `json:"trigger_comment_id,omitempty"`          // comment that triggered this task

@@ -2228,6 +2228,37 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		"reuse_workdir", task.PriorWorkDir != "",
 	)
 
+	// Managed project workdir: when the server flags a project that has no
+	// resource yet, lazily create the shared directory under WorkspacesRoot,
+	// self-register it as a managed local_directory resource (so later tasks
+	// reuse it), and inject a synthetic local_directory resource into THIS
+	// task — from here on it flows through the exact same lock / assignment /
+	// prepare path as any user-attached local_directory. Best-effort: a
+	// registration failure still lets this task run in the directory; the next
+	// claim simply re-provisions (idempotent server-side).
+	if task.ProvisionManagedWorkdir && task.ManagedWorkdirRelPath != "" && task.ProjectID != "" {
+		managedPath := filepath.Join(d.cfg.WorkspacesRoot, filepath.FromSlash(task.ManagedWorkdirRelPath))
+		if err := os.MkdirAll(managedPath, 0o755); err != nil {
+			taskLog.Error("provision managed workdir failed", "path", managedPath, "error", err)
+			if failErr := d.client.FailTask(ctx, task.ID, fmt.Sprintf("provision managed workdir: %v", err), "", "", "managed_workdir_error"); failErr != nil {
+				taskLog.Error("fail task after managed workdir error", "error", failErr)
+			}
+			return
+		}
+		ref, _ := json.Marshal(map[string]any{
+			"local_path": managedPath,
+			"daemon_id":  d.cfg.DaemonID,
+			"managed":    true,
+		})
+		task.ProjectResources = append(task.ProjectResources, ProjectResourceData{
+			ResourceType: localDirectoryResourceType,
+			ResourceRef:  ref,
+		})
+		if err := d.client.RegisterManagedWorkdir(ctx, task.ProjectID, managedPath, d.cfg.DaemonID); err != nil {
+			taskLog.Warn("register managed workdir failed (task still runs; next claim re-provisions)", "error", err)
+		}
+	}
+
 	// If the task targets a project_resource of type local_directory that
 	// is pinned to this daemon, acquire the path mutex before runner.run
 	// so the server-side state machine is dispatched →

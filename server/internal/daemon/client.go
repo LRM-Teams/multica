@@ -182,6 +182,16 @@ func (c *Client) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID, reas
 	}, nil)
 }
 
+// RegisterManagedWorkdir tells the server the daemon has provisioned a managed
+// shared working directory for a project, so it's recorded as a managed
+// local_directory resource and reused by later tasks. Idempotent server-side.
+func (c *Client) RegisterManagedWorkdir(ctx context.Context, projectID, localPath, daemonID string) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/projects/%s/managed-workdir", projectID), map[string]any{
+		"local_path": localPath,
+		"daemon_id":  daemonID,
+	}, nil)
+}
+
 func (c *Client) ReportProgress(ctx context.Context, taskID, summary string, step, total int) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/progress", taskID), map[string]any{
 		"summary": summary,

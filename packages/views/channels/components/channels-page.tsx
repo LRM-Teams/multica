@@ -9,19 +9,22 @@ import {
   Paperclip,
   PieChart,
   Plus,
+  Search,
   Send,
   Share2,
   Smartphone,
   UserRound,
   X,
 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  channelKeys,
   channelsOptions,
   channelMessagesOptions,
   channelMembersOptions,
   useAddChannelMember,
   useCreateChannel,
+  useMarkChannelRead,
   useRemoveChannelMember,
   useSendChannelMessage,
   useSetChannelTyping,
@@ -34,7 +37,7 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
-import type { Channel, ChannelMember, ChannelTypingPayload } from "@multica/core/types";
+import type { Channel, ChannelMember, ChannelMemberBrief, ChannelTypingPayload } from "@multica/core/types";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -51,7 +54,7 @@ import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
 import { agentColor } from "../../common/agent-color";
 import { initialsOf } from "../../common/initials";
-import { useT } from "../../i18n";
+import { useT, useTimeAgo } from "../../i18n";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
@@ -68,34 +71,47 @@ interface TypingActor {
 // color, humans as initials). The whole stack is the trigger that opens member
 // management — matching the Figma header where the roster doubles as the
 // add/remove entry point.
-function MemberStack({ members, max = 4 }: { members: ChannelMember[]; max?: number }) {
+function MemberStack({
+  members,
+  max = 4,
+  size = 28,
+  emptyHint = true,
+}: {
+  members: ChannelMemberBrief[];
+  max?: number;
+  size?: number;
+  emptyHint?: boolean;
+}) {
   const { t } = useT("channels");
   if (members.length === 0) {
-    return <span className="text-xs text-muted-foreground">{t(($) => $.members.empty)}</span>;
+    return emptyHint ? (
+      <span className="text-xs text-muted-foreground">{t(($) => $.members.empty)}</span>
+    ) : null;
   }
   const visible = members.slice(0, max);
   const overflow = members.length - visible.length;
+  const overlap = Math.round(size * 0.3);
   return (
     <span className="inline-flex items-center">
       {visible.map((m, i) => (
         <span
           key={`${m.member_type}:${m.member_id}`}
-          style={{ marginLeft: i === 0 ? 0 : -8 }}
+          style={{ marginLeft: i === 0 ? 0 : -overlap }}
           className="inline-flex rounded-full ring-2 ring-background"
         >
           <ActorAvatar
             name={m.name || (m.member_type === "agent" ? "Agent" : "Member")}
             initials={initialsOf(m.name || "?")}
             isAgent={m.member_type === "agent"}
-            size={28}
+            size={size}
             tint={m.member_type === "agent" ? agentColor(m.member_id) : undefined}
           />
         </span>
       ))}
       {overflow > 0 && (
         <span
-          style={{ marginLeft: -8 }}
-          className="inline-flex size-7 items-center justify-center rounded-full bg-muted text-[11px] font-medium text-muted-foreground ring-2 ring-background"
+          style={{ marginLeft: -overlap, width: size, height: size, fontSize: Math.max(9, Math.round(size * 0.36)) }}
+          className="inline-flex items-center justify-center rounded-full bg-muted font-medium text-muted-foreground ring-2 ring-background"
         >
           +{overflow}
         </span>
@@ -171,13 +187,18 @@ function MemberPill({ member, onRemove }: { member: ChannelMember; onRemove: () 
 
 export function ChannelsPage() {
   const { t } = useT("channels");
+  const timeAgo = useTimeAgo();
+  const qc = useQueryClient();
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
   const { searchParams, replace, getShareableUrl } = useNavigation();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const currentUserName = useAuthStore((s) => s.user?.name ?? null);
+  const { mutate: markChannelRead } = useMarkChannelRead();
   // Initialize from ?channel= so shared deep links open the right channel.
   const [activeId, setActiveId] = useState<string | null>(() => searchParams.get("channel"));
+  const [search, setSearch] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
   const editorRef = useRef<ContentEditorRef>(null);
   const [draftEmpty, setDraftEmpty] = useState(true);
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
@@ -234,6 +255,10 @@ export function ChannelsPage() {
     () => channelMembers.map((m) => m.name || (m.member_type === "agent" ? "Agent" : "成员")).join("，"),
     [channelMembers],
   );
+  const filteredChannels = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? channels.filter((c) => c.name.toLowerCase().includes(q)) : channels;
+  }, [channels, search]);
 
   useEffect(() => {
     if (!activeId && channels[0]) setActiveId(channels[0].id);
@@ -242,6 +267,12 @@ export function ChannelsPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [messages.length, active?.id, activeTypingActors.length]);
+
+  // Clear the unread badge when a channel becomes active (select / deep link /
+  // auto-select). `markChannelRead` (mutate) is referentially stable.
+  useEffect(() => {
+    if (active?.id) markChannelRead(active.id);
+  }, [active?.id, markChannelRead]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -259,6 +290,17 @@ export function ChannelsPage() {
     if (typingStopTimerRef.current) window.clearTimeout(typingStopTimerRef.current);
     if (typingPulseTimerRef.current) window.clearTimeout(typingPulseTimerRef.current);
   }, [active?.id]);
+
+  // New messages (from others / agents) refresh the list (unread + preview)
+  // and the open thread. Keep the active channel marked read while viewing it.
+  useWSEvent("channel:message", (payload) => {
+    const e = payload as { channel_id?: string };
+    qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    if (e.channel_id) {
+      qc.invalidateQueries({ queryKey: channelKeys.messages(e.channel_id) });
+      if (e.channel_id === active?.id) markChannelRead(active.id);
+    }
+  });
 
   useWSEvent("channel:typing", (payload) => {
     const event = payload as ChannelTypingPayload;
@@ -290,9 +332,10 @@ export function ChannelsPage() {
       { name, lark_chat_id: newLarkChatId.trim() || undefined },
       {
         onSuccess: (channel: Channel) => {
-          setActiveId(channel.id);
+          selectChannel(channel.id);
           setNewName("");
           setNewLarkChatId("");
+          setCreateOpen(false);
         },
       },
     );
@@ -426,58 +469,105 @@ export function ChannelsPage() {
       </PageHeader>
       <div className="grid min-h-0 flex-1 grid-cols-[280px_1fr] gap-0 border-t bg-background">
         <aside className="flex min-h-0 flex-col border-r bg-muted/20">
-          <div className="border-b p-3">
-            <div className="flex gap-2">
-              <Input
-                placeholder={t(($) => $.sidebar.name_placeholder)}
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleCreate();
-                }}
-              />
-              <Button
-                size="icon"
-                onClick={handleCreate}
-                disabled={createChannel.isPending}
+          <div className="flex items-center justify-between px-4 pb-1 pt-4">
+            <h2 className="text-lg font-semibold">{t(($) => $.sidebar.heading)}</h2>
+            <Popover open={createOpen} onOpenChange={setCreateOpen}>
+              <PopoverTrigger
+                className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent"
                 aria-label={t(($) => $.sidebar.create_aria)}
               >
                 <Plus className="size-4" />
-              </Button>
-            </div>
-            <Input
-              className="mt-2"
-              placeholder={t(($) => $.sidebar.lark_placeholder)}
-              value={newLarkChatId}
-              onChange={(e) => setNewLarkChatId(e.target.value)}
-            />
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-72 space-y-2">
+                <Input
+                  placeholder={t(($) => $.sidebar.name_placeholder)}
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleCreate();
+                  }}
+                />
+                <Input
+                  placeholder={t(($) => $.sidebar.lark_placeholder)}
+                  value={newLarkChatId}
+                  onChange={(e) => setNewLarkChatId(e.target.value)}
+                />
+                <Button className="w-full" onClick={handleCreate} disabled={createChannel.isPending}>
+                  {t(($) => $.sidebar.create_aria)}
+                </Button>
+              </PopoverContent>
+            </Popover>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          <div className="px-3 pb-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t(($) => $.sidebar.search)}
+                className="h-9 pl-8"
+              />
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+            <p className="px-2 pb-1 pt-1.5 text-xs font-medium text-muted-foreground">
+              {t(($) => $.sidebar.groups)}
+            </p>
             {isLoading ? (
               <div className="space-y-2 p-2">
-                <Skeleton className="h-10" />
-                <Skeleton className="h-10" />
+                <Skeleton className="h-12" />
+                <Skeleton className="h-12" />
               </div>
             ) : channels.length === 0 ? (
               <div className="p-3 text-sm text-muted-foreground">{t(($) => $.sidebar.empty)}</div>
             ) : (
-              channels.map((channel) => (
-                <button
-                  key={channel.id}
-                  type="button"
-                  onClick={() => selectChannel(channel.id)}
-                  className={cn(
-                    "mb-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                    active?.id === channel.id
-                      ? "bg-background shadow-sm"
-                      : "text-muted-foreground hover:bg-background/70 hover:text-foreground",
-                  )}
-                >
-                  <Hash className="size-4" />
-                  <span className="min-w-0 flex-1 truncate">{channel.name}</span>
-                  {channel.lark_chat_id && <Smartphone className="size-3.5 text-emerald-600" />}
-                </button>
-              ))
+              filteredChannels.map((channel) => {
+                const unread = channel.unread_count ?? 0;
+                const last = channel.last_message;
+                const preview = last ? `${last.author_name}: ${last.content}`.replace(/\s+/g, " ") : "";
+                return (
+                  <button
+                    key={channel.id}
+                    type="button"
+                    onClick={() => selectChannel(channel.id)}
+                    className={cn(
+                      "mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
+                      active?.id === channel.id ? "bg-primary/[0.08]" : "hover:bg-accent",
+                    )}
+                  >
+                    {channel.members && channel.members.length > 0 ? (
+                      <MemberStack members={channel.members} size={36} max={3} emptyHint={false} />
+                    ) : (
+                      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                        <Hash className="size-4" />
+                      </span>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-foreground">
+                          <span className="truncate">{channel.name}</span>
+                          {channel.lark_chat_id && (
+                            <Smartphone className="size-3 shrink-0 text-emerald-600" />
+                          )}
+                        </span>
+                        {last && (
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {timeAgo(last.created_at)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 flex items-center justify-between gap-2">
+                        <span className="truncate text-xs text-muted-foreground">{preview}</span>
+                        {unread > 0 && (
+                          <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                            {unread > 99 ? "99+" : unread}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })
             )}
           </div>
         </aside>

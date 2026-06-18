@@ -1593,3 +1593,38 @@ func (h *Handler) ListAgentTaskFeed(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, AgentTaskFeedResponse{Tasks: items, HasMore: hasMore, NextCursor: next})
 }
+
+// AgentTaskStatsResponse powers the overview "tasks done" KPI. Counts are over
+// ALL agent tasks in the workspace — issue tasks, chat tasks, and channel
+// replies alike — so a completed channel reply counts as a finished task,
+// matching the agent activity feed.
+type AgentTaskStatsResponse struct {
+	Completed int `json:"completed"`
+	Failed    int `json:"failed"`
+	Total     int `json:"total"`
+}
+
+// GetAgentTaskStats returns completed / failed / total agent-task counts for
+// the workspace.
+func (h *Handler) GetAgentTaskStats(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
+		return
+	}
+	var resp AgentTaskStatsResponse
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT
+			COUNT(*) FILTER (WHERE atq.status = 'completed'),
+			COUNT(*) FILTER (WHERE atq.status = 'failed'),
+			COUNT(*)
+		FROM agent_task_queue atq
+		JOIN agent a ON a.id = atq.agent_id
+		WHERE a.workspace_id = $1`,
+		parseUUID(workspaceID),
+	).Scan(&resp.Completed, &resp.Failed, &resp.Total)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to compute task stats")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}

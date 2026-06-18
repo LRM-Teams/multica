@@ -949,6 +949,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// every active task + each agent's most recent terminal task.
 			r.Get("/api/agent-task-snapshot", h.ListWorkspaceAgentTaskSnapshot)
 			r.Get("/api/agent-tasks", h.ListAgentTaskFeed)
+			r.Get("/api/agent-task-stats", h.GetAgentTaskStats)
 
 			// Workspace-wide daily agent activity (last 30d, anchored on
 			// completed_at). Backs the Agents-list sparkline (trailing 7d

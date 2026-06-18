@@ -184,5 +184,6 @@ export type {
   ChannelMessage,
   ChannelStats,
   ChannelAuthorStat,
+  ChannelActiveTask,
   ChannelTypingPayload,
 } from "./channel";

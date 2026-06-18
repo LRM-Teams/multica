@@ -67,6 +67,7 @@ import type {
   PendingChatTasksResponse,
   SendChatMessageResponse,
   Channel,
+  ChannelActiveTask,
   ChannelMember,
   ChannelMessage,
   ChannelStats,
@@ -1764,6 +1765,10 @@ export class ApiClient {
 
   async getChannelStats(channelId: string): Promise<ChannelStats> {
     return this.fetch(`/api/channels/${channelId}/stats`);
+  }
+
+  async listChannelActiveTasks(channelId: string): Promise<{ tasks: ChannelActiveTask[] }> {
+    return this.fetch(`/api/channels/${channelId}/active-tasks`);
   }
 
   async markChannelRead(channelId: string): Promise<void> {

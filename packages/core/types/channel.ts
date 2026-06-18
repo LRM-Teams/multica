@@ -67,6 +67,13 @@ export interface ChannelStats {
   by_author: ChannelAuthorStat[];
 }
 
+export interface ChannelActiveTask {
+  agent_id: string;
+  agent_name: string;
+  task_id: string;
+  status: string;
+}
+
 export interface ChannelTypingPayload {
   channel_id: string;
   actor_type: "user" | "agent" | "lark" | "system";

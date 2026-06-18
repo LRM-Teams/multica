@@ -7,6 +7,10 @@ export {
   channelStatsOptions,
 } from "./queries";
 export {
+  activeChannelTasksKeys,
+  activeChannelTasksOptions,
+} from "./active-tasks";
+export {
   channelProjectKeys,
   channelProjectOptions,
   useSetChannelProject,

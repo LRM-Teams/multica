@@ -42,18 +42,27 @@ export function useSetChannelTyping() {
 
 export function useAddChannelMember() {
   const qc = useQueryClient();
+  const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: ({ channelId, memberType, memberId }: { channelId: string; memberType: "user" | "agent"; memberId: string }) =>
       api.addChannelMember(channelId, { member_type: memberType, member_id: memberId }),
-    onSuccess: (_data, vars) => qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      // Refresh the list so the composite group avatar reflects the new roster.
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    },
   });
 }
 
 export function useRemoveChannelMember() {
   const qc = useQueryClient();
+  const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: ({ channelId, memberType, memberId }: { channelId: string; memberType: "user" | "agent"; memberId: string }) =>
       api.removeChannelMember(channelId, memberType, memberId),
-    onSuccess: (_data, vars) => qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    },
   });
 }

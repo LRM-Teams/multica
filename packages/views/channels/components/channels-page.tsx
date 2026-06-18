@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   FileText,
-  Hash,
   MessageCircle,
   Paperclip,
   PieChart,
@@ -58,6 +57,7 @@ import { useT, useTimeAgo } from "../../i18n";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
+import { ChannelGroupAvatar } from "./channel-group-avatar";
 
 interface TypingActor {
   key: string;
@@ -535,13 +535,7 @@ export function ChannelsPage() {
                       active?.id === channel.id ? "bg-primary/[0.08]" : "hover:bg-accent",
                     )}
                   >
-                    {channel.members && channel.members.length > 0 ? (
-                      <MemberStack members={channel.members} size={36} max={3} emptyHint={false} />
-                    ) : (
-                      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                        <Hash className="size-4" />
-                      </span>
-                    )}
+                    <ChannelGroupAvatar members={channel.members ?? []} size={40} />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
                         <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-foreground">
@@ -578,20 +572,22 @@ export function ChannelsPage() {
           ) : (
             <>
               <header className="flex items-center justify-between gap-3 border-b px-5 py-2.5">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 font-semibold">
-                    <Hash className="size-4 shrink-0" />
-                    <span className="truncate">{active.name}</span>
-                    {active.lark_chat_id && (
-                      <Badge variant="secondary" className="shrink-0">
-                        {t(($) => $.header.feishu)}
-                      </Badge>
-                    )}
+                <div className="flex min-w-0 items-center gap-3">
+                  <ChannelGroupAvatar members={channelMembers} size={40} />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 font-semibold">
+                      <span className="truncate">{active.name}</span>
+                      {active.lark_chat_id && (
+                        <Badge variant="secondary" className="shrink-0">
+                          {t(($) => $.header.feishu)}
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                      {t(($) => $.header.running)}
+                      {rosterSummary ? ` · ${rosterSummary}` : ""}
+                    </p>
                   </div>
-                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {t(($) => $.header.running)}
-                    {rosterSummary ? ` · ${rosterSummary}` : ""}
-                  </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-3">
                   <Popover>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, memo } from "react";
+import { useCallback, useMemo, memo } from "react";
 import { AppLink } from "../../navigation";
 import { useSortable, defaultAnimateLayoutChanges } from "@dnd-kit/sortable";
 import type { AnimateLayoutChanges } from "@dnd-kit/sortable";
@@ -12,6 +12,7 @@ import { CalendarClock, CalendarDays } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { agentColor } from "../../common/agent-color";
+import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { PRIORITY_CONFIG } from "@multica/core/issues/config";
 import { cn } from "@multica/ui/lib/utils";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
@@ -79,6 +80,26 @@ export const BoardCardContent = memo(function BoardCardContent({
   const project = issue.project_id ? projects.find((p) => p.id === issue.project_id) : undefined;
   const labels = issue.labels ?? [];
 
+  // Operational state strip: surface "who's running / who needs me / who's
+  // stuck / who's done" at a glance, the way an agent-driven board should.
+  // A live running task wins over the static status; otherwise derive from
+  // the issue status. Reuses the workspace-wide task snapshot the corner
+  // activity indicator already subscribes to (same cache key, deduped).
+  const { data: taskSnapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
+  const hasRunningAgent = useMemo(
+    () => taskSnapshot.some((tk) => tk.issue_id === issue.id && tk.status === "running"),
+    [taskSnapshot, issue.id],
+  );
+  const cardState: "running" | "attention" | "review" | "done" | null = hasRunningAgent
+    ? "running"
+    : issue.status === "blocked"
+      ? "attention"
+      : issue.status === "in_review"
+        ? "review"
+        : issue.status === "done"
+          ? "done"
+          : null;
+
   const updateIssueMutation = useUpdateIssue();
   const handleUpdate = useCallback(
     (updates: Partial<UpdateIssueRequest>) => {
@@ -108,7 +129,7 @@ export const BoardCardContent = memo(function BoardCardContent({
   const showLabels = storeProperties.labels && labels.length > 0;
 
   const showAssigneeName = showAssigneeSection && hasAssignee && !showStartDate && !showDueDate;
-  const showUpdatedHint = showAssigneeName && !showChildProgress;
+  const showUpdatedHint = showAssigneeName && !showChildProgress && !cardState;
   const { getActorName } = useActorName();
   const assigneeName =
     showAssigneeName && issue.assignee_type && issue.assignee_id
@@ -199,7 +220,13 @@ export const BoardCardContent = memo(function BoardCardContent({
   const showRightMeta = !!showStartDate || !!showDueDate || !!showChildProgress || showUpdatedHint;
 
   return (
-    <div className="rounded-lg border-[0.5px] border-border bg-card py-3 px-2.5 shadow-[0_3px_6px_-2px_rgba(0,0,0,0.02),0_1px_1px_0_rgba(0,0,0,0.04)] transition-colors group-hover/card:border-accent group-hover/card:bg-accent group-data-[popup-open]/card:border-accent group-data-[popup-open]/card:bg-accent">
+    <div
+      className={cn(
+        "rounded-lg border-[0.5px] border-border bg-card py-3 px-2.5 shadow-[0_3px_6px_-2px_rgba(0,0,0,0.02),0_1px_1px_0_rgba(0,0,0,0.04)] transition-colors group-hover/card:border-accent group-hover/card:bg-accent group-data-[popup-open]/card:border-accent group-data-[popup-open]/card:bg-accent",
+        cardState === "attention" && "border-destructive/30 bg-destructive/[0.03]",
+        cardState === "done" && "opacity-70",
+      )}
+    >
       {/* Row 1: priority + identifier (left), agent activity + assignee (right) */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
@@ -316,6 +343,52 @@ export const BoardCardContent = memo(function BoardCardContent({
                   {t(($) => $.card.updated_ago, { time: timeAgo(issue.updated_at) })}
                 </span>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Operational state strip: running shows an activity bar, the rest a
+          colored dot + label. Suppressed updated-hint above avoids redundancy. */}
+      {cardState && (
+        <div className="mt-2">
+          {cardState === "running" ? (
+            <div className="flex items-center gap-2">
+              <span className="h-1 flex-1 overflow-hidden rounded-full bg-warning/15">
+                <span className="block h-full w-1/3 animate-pulse rounded-full bg-warning" />
+              </span>
+              <span className="shrink-0 text-[11px] font-medium text-warning">
+                {t(($) => $.card.state.running)}
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 text-[11px] font-medium">
+              <span
+                className={cn(
+                  "size-1.5 shrink-0 rounded-full",
+                  cardState === "attention"
+                    ? "bg-destructive"
+                    : cardState === "review"
+                      ? "bg-success"
+                      : "bg-muted-foreground/50",
+                )}
+              />
+              <span
+                className={cn(
+                  "truncate",
+                  cardState === "attention"
+                    ? "text-destructive"
+                    : cardState === "review"
+                      ? "text-success"
+                      : "text-muted-foreground",
+                )}
+              >
+                {cardState === "attention"
+                  ? t(($) => $.card.state.attention)
+                  : cardState === "review"
+                    ? t(($) => $.card.state.review)
+                    : t(($) => $.card.state.done, { time: timeAgo(issue.updated_at) })}
+              </span>
             </div>
           )}
         </div>

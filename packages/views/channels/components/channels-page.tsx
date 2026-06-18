@@ -30,7 +30,9 @@ import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
 import { useFileUpload, type UploadResult } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useWorkspacePaths } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
+import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import type { Channel, ChannelMember, ChannelTypingPayload } from "@multica/core/types";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
@@ -46,10 +48,13 @@ import {
 import { cn } from "@multica/ui/lib/utils";
 import { ContentEditor, type ContentEditorRef } from "../../editor";
 import { PageHeader } from "../../layout/page-header";
+import { useNavigation } from "../../navigation";
 import { agentColor } from "../../common/agent-color";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n";
 import { ChannelMessageBubble } from "./channel-message-bubble";
+import { ChannelFilesPanel } from "./channel-files-panel";
+import { ChannelStatsPanel } from "./channel-stats-panel";
 
 interface TypingActor {
   key: string;
@@ -167,9 +172,12 @@ function MemberPill({ member, onRemove }: { member: ChannelMember; onRemove: () 
 export function ChannelsPage() {
   const { t } = useT("channels");
   const wsId = useWorkspaceId();
+  const wsPaths = useWorkspacePaths();
+  const { searchParams, replace, getShareableUrl } = useNavigation();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const currentUserName = useAuthStore((s) => s.user?.name ?? null);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  // Initialize from ?channel= so shared deep links open the right channel.
+  const [activeId, setActiveId] = useState<string | null>(() => searchParams.get("channel"));
   const editorRef = useRef<ContentEditorRef>(null);
   const [draftEmpty, setDraftEmpty] = useState(true);
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
@@ -288,6 +296,23 @@ export function ChannelsPage() {
         },
       },
     );
+  };
+
+  // Select a channel and reflect it in the URL so the address is shareable.
+  const selectChannel = (id: string) => {
+    setActiveId(id);
+    replace(`${wsPaths.channels()}?channel=${id}`);
+  };
+
+  const handleShare = async () => {
+    if (!active) return;
+    const url = getShareableUrl(`${wsPaths.channels()}?channel=${active.id}`);
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success(t(($) => $.share.copied));
+    } catch {
+      toast.error(t(($) => $.share.copy_failed));
+    }
   };
 
   const publishTyping = (isTyping: boolean) => {
@@ -440,7 +465,7 @@ export function ChannelsPage() {
                 <button
                   key={channel.id}
                   type="button"
-                  onClick={() => setActiveId(channel.id)}
+                  onClick={() => selectChannel(channel.id)}
                   className={cn(
                     "mb-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors",
                     active?.id === channel.id
@@ -561,15 +586,39 @@ export function ChannelsPage() {
                     </PopoverContent>
                   </Popover>
                   <div className="flex items-center gap-1 text-muted-foreground">
-                    <Button variant="ghost" size="icon" className="size-8" aria-label={t(($) => $.header.share_aria)} disabled>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8"
+                      aria-label={t(($) => $.header.share_aria)}
+                      onClick={handleShare}
+                    >
                       <Share2 className="size-4" />
                     </Button>
-                    <Button variant="ghost" size="icon" className="size-8" aria-label={t(($) => $.header.stats_aria)} disabled>
-                      <PieChart className="size-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="size-8" aria-label={t(($) => $.header.files_aria)} disabled>
-                      <FileText className="size-4" />
-                    </Button>
+                    <Popover>
+                      <PopoverTrigger
+                        className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
+                        aria-label={t(($) => $.header.stats_aria)}
+                      >
+                        <PieChart className="size-4" />
+                      </PopoverTrigger>
+                      <PopoverContent align="end" className="w-72">
+                        <p className="mb-3 text-sm font-medium">{t(($) => $.stats.title)}</p>
+                        <ChannelStatsPanel channelId={active.id} />
+                      </PopoverContent>
+                    </Popover>
+                    <Popover>
+                      <PopoverTrigger
+                        className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
+                        aria-label={t(($) => $.header.files_aria)}
+                      >
+                        <FileText className="size-4" />
+                      </PopoverTrigger>
+                      <PopoverContent align="end" className="w-80">
+                        <p className="mb-3 text-sm font-medium">{t(($) => $.files.title)}</p>
+                        <ChannelFilesPanel channelId={active.id} />
+                      </PopoverContent>
+                    </Popover>
                   </div>
                 </div>
               </header>

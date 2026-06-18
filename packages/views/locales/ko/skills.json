@@ -47,6 +47,9 @@
     "source_runtime_named": "{{name}}에서 가져옴",
     "source_runtime_provider": "{{provider}} 런타임에서 가져옴",
     "source_runtime_unknown": "런타임에서 가져옴",
+    "source_runtime_shared_named": "{{name}}에서 동기화됨",
+    "source_runtime_shared_provider": "{{provider}} 공유 폴더에서 동기화됨",
+    "source_runtime_shared_unknown": "공유 폴더에서 동기화됨",
     "source_clawhub": "ClawHub에서 가져옴",
     "source_skills_sh": "Skills.sh에서 가져옴",
     "source_github": "GitHub에서 가져옴"
@@ -69,6 +72,9 @@
       "origin_runtime_named": "로컬 런타임 · {{name}}",
       "origin_runtime_provider": "로컬 런타임 · {{provider}}",
       "origin_runtime_unknown": "로컬 런타임",
+      "origin_runtime_shared_named": "공유 폴더 · {{name}}",
+      "origin_runtime_shared_provider": "공유 폴더 · {{provider}}",
+      "origin_runtime_shared_unknown": "공유 폴더",
       "origin_clawhub": "가져옴 · ClawHub",
       "origin_skills_sh": "가져옴 · Skills.sh",
       "origin_github": "가져옴 · GitHub",
@@ -104,6 +110,7 @@
     },
     "origin_card": {
       "imported_runtime": "로컬 런타임에서 가져옴",
+      "imported_runtime_shared": "공유 런타임 폴더에서 동기화됨",
       "imported_clawhub": "ClawHub에서 가져옴",
       "imported_skills_sh": "Skills.sh에서 가져옴",
       "imported_github": "GitHub에서 가져옴",

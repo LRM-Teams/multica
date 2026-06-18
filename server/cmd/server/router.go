@@ -983,6 +983,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/messages", h.SendChannelMessage)
 					r.Get("/attachments", h.ListChannelAttachments)
 					r.Get("/stats", h.GetChannelStats)
+					r.Post("/read", h.MarkChannelRead)
 					r.Post("/typing", h.SetChannelTyping)
 				})
 			})

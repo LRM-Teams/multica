@@ -35,6 +35,23 @@ type ChannelResponse struct {
 	CreatedBy   string  `json:"created_by"`
 	CreatedAt   string  `json:"created_at"`
 	UpdatedAt   string  `json:"updated_at"`
+	// List-only enrichments (zero/omitted on create/update/get responses).
+	UnreadCount int                  `json:"unread_count"`
+	LastMessage *ChannelLastMessage  `json:"last_message,omitempty"`
+	Members     []ChannelMemberBrief `json:"members,omitempty"`
+}
+
+type ChannelLastMessage struct {
+	AuthorType string `json:"author_type"`
+	AuthorName string `json:"author_name"`
+	Content    string `json:"content"`
+	CreatedAt  string `json:"created_at"`
+}
+
+type ChannelMemberBrief struct {
+	MemberType string `json:"member_type"`
+	MemberID   string `json:"member_id"`
+	Name       string `json:"name"`
 }
 
 type ChannelMemberResponse struct {
@@ -110,27 +127,115 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceID := ctxWorkspaceID(r.Context())
+	uid := parseUUID(userID)
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT ch.id, ch.workspace_id, ch.name, ch.description, ch.lark_chat_id, ch.created_by, ch.created_at, ch.updated_at
+		SELECT ch.id, ch.workspace_id, ch.name, ch.description, ch.lark_chat_id, ch.created_by, ch.created_at, ch.updated_at,
+		       lm.author_type, lm.author_name, lm.content, lm.created_at,
+		       COALESCE(uc.cnt, 0)
 		FROM channel ch
-		JOIN channel_member cm ON cm.channel_id = ch.id
-		WHERE ch.workspace_id = $1 AND cm.member_type = 'user' AND cm.member_id = $2
-		ORDER BY ch.updated_at DESC, ch.created_at DESC`, parseUUID(workspaceID), parseUUID(userID))
+		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
+		LEFT JOIN LATERAL (
+			SELECT author_type, author_name, content, created_at
+			FROM channel_message m WHERE m.channel_id = ch.id
+			ORDER BY m.created_at DESC LIMIT 1
+		) lm ON true
+		LEFT JOIN channel_read cr ON cr.channel_id = ch.id AND cr.user_id = $2
+		LEFT JOIN LATERAL (
+			SELECT count(*) AS cnt FROM channel_message m
+			WHERE m.channel_id = ch.id
+			  AND m.created_at > COALESCE(cr.last_read_at, '-infinity'::timestamptz)
+			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
+		) uc ON true
+		WHERE ch.workspace_id = $1
+		ORDER BY ch.updated_at DESC, ch.created_at DESC`, parseUUID(workspaceID), uid)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channels")
 		return
 	}
 	defer rows.Close()
 	out := []ChannelResponse{}
+	channelIDs := []pgtype.UUID{}
 	for rows.Next() {
-		ch, err := scanChannel(rows)
-		if err != nil {
+		var id, wsID, createdBy pgtype.UUID
+		var name string
+		var desc, lark, lastType, lastName, lastContent pgtype.Text
+		var createdAt, updatedAt, lastAt pgtype.Timestamptz
+		var unread int
+		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt,
+			&lastType, &lastName, &lastContent, &lastAt, &unread); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channels")
 			return
 		}
+		ch := ChannelResponse{
+			ID: uuidToString(id), WorkspaceID: uuidToString(wsID), Name: name,
+			Description: textToPtr(desc), LarkChatID: textToPtr(lark), CreatedBy: uuidToString(createdBy),
+			CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt),
+			UnreadCount: unread, Members: []ChannelMemberBrief{},
+		}
+		if lastContent.Valid {
+			ch.LastMessage = &ChannelLastMessage{
+				AuthorType: lastType.String, AuthorName: lastName.String,
+				Content: lastContent.String, CreatedAt: timestampToString(lastAt),
+			}
+		}
 		out = append(out, ch)
+		channelIDs = append(channelIDs, id)
+	}
+	rows.Close()
+
+	// Second pass: members for the avatar stack, grouped by channel.
+	if len(channelIDs) > 0 {
+		memberRows, err := h.DB.Query(r.Context(), `
+			SELECT cm.channel_id, cm.member_type, cm.member_id, COALESCE(u.name, u.email, a.name, '')
+			FROM channel_member cm
+			LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
+			LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
+			WHERE cm.channel_id = ANY($1::uuid[]) AND cm.workspace_id = $2
+			ORDER BY cm.created_at ASC`, channelIDs, parseUUID(workspaceID))
+		if err == nil {
+			defer memberRows.Close()
+			grouped := map[string][]ChannelMemberBrief{}
+			for memberRows.Next() {
+				var chID, memberID pgtype.UUID
+				var memberType, memberName string
+				if err := memberRows.Scan(&chID, &memberType, &memberID, &memberName); err != nil {
+					continue
+				}
+				key := uuidToString(chID)
+				grouped[key] = append(grouped[key], ChannelMemberBrief{MemberType: memberType, MemberID: uuidToString(memberID), Name: memberName})
+			}
+			for i := range out {
+				if m := grouped[out[i].ID]; m != nil {
+					out[i].Members = m
+				}
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	_, err := h.DB.Exec(r.Context(), `
+		INSERT INTO channel_read (channel_id, user_id, last_read_at)
+		VALUES ($1, $2, now())
+		ON CONFLICT (channel_id, user_id) DO UPDATE SET last_read_at = now()`, channelID, parseUUID(userID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to mark channel read")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {

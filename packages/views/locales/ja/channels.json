@@ -58,6 +58,12 @@
     "pair": "{{a}}、{{b}} が入力中",
     "overflow": "{{a}}、{{b}} 他 {{count}} 人が入力中"
   },
+  "agent_status": {
+    "queued": "待機中",
+    "dispatched": "起動中",
+    "running": "考え中",
+    "waiting_local_directory": "ローカルディレクトリを待機中"
+  },
   "composer": {
     "placeholder": "必要なことを入力してください…  @エージェント名 で返信を促します。",
     "attach_aria": "添付",

@@ -17,6 +17,8 @@ import {
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  activeChannelTasksKeys,
+  activeChannelTasksOptions,
   channelKeys,
   channelsOptions,
   channelMessagesOptions,
@@ -38,8 +40,15 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
-import type { Channel, ChannelMember, ChannelMemberBrief, ChannelTypingPayload } from "@multica/core/types";
+import type {
+  Channel,
+  ChannelActiveTask,
+  ChannelMember,
+  ChannelMemberBrief,
+  ChannelTypingPayload,
+} from "@multica/core/types";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
+import { UnicodeSpinner } from "@multica/ui/components/common/unicode-spinner";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Badge } from "@multica/ui/components/ui/badge";
@@ -166,6 +175,45 @@ function TypingIndicator({ actors }: { actors: TypingActor[] }) {
   );
 }
 
+// Query-authoritative, per-agent working indicator. Unlike the transient typing
+// broadcast, this reflects the agent's recoverable task lifecycle stage. Unknown
+// statuses downgrade to the generic "thinking" label (enum-drift rule) rather
+// than rendering nothing.
+function AgentWorkingIndicator({ tasks }: { tasks: ChannelActiveTask[] }) {
+  const { t } = useT("channels");
+  if (tasks.length === 0) return null;
+  const labelFor = (status: string): string => {
+    switch (status) {
+      case "queued":
+        return t(($) => $.agent_status.queued);
+      case "dispatched":
+        return t(($) => $.agent_status.dispatched);
+      case "waiting_local_directory":
+        return t(($) => $.agent_status.waiting_local_directory);
+      case "running":
+        return t(($) => $.agent_status.running);
+      default:
+        return t(($) => $.agent_status.running);
+    }
+  };
+  return (
+    <div className="flex flex-col gap-1 px-2 py-1.5" aria-live="polite">
+      {tasks.map((task) => (
+        <div
+          key={task.agent_id}
+          className="flex items-center gap-2 text-xs text-muted-foreground"
+        >
+          <span className="flex h-7 items-center gap-1.5 rounded-full border bg-card px-3 shadow-sm">
+            <UnicodeSpinner className="text-muted-foreground/70" />
+            <span className="font-medium text-foreground">{task.agent_name}</span>
+            <span>{labelFor(task.status)}</span>
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MemberPill({ member, onRemove }: { member: ChannelMember; onRemove: () => void }) {
   const { t } = useT("channels");
   const isAgent = member.member_type === "agent";
@@ -223,6 +271,7 @@ export function ChannelsPage() {
   const { data: messages = [] } = useQuery(channelMessagesOptions(active?.id ?? ""));
   const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
+  const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
   const setChannelProject = useSetChannelProject(wsId, active?.id ?? "");
   const createChannel = useCreateChannel();
   const sendMessage = useSendChannelMessage();
@@ -251,8 +300,15 @@ export function ChannelsPage() {
     () => new Set(channelMembers.map((m) => m.member_id)),
     [channelMembers],
   );
+  // Agents surface their lifecycle stage via the query-driven working indicator
+  // (which shows "Thinking"/"Starting up" rather than a premature "typing"), so
+  // filter agent actors out of the typing render to avoid showing them twice.
+  // Human/member typing keeps using the transient broadcast.
   const activeTypingActors = useMemo(
-    () => Object.values(typingActors).filter((a) => a.channelId === active?.id),
+    () =>
+      Object.values(typingActors).filter(
+        (a) => a.channelId === active?.id && a.actorType !== "agent",
+      ),
     [active?.id, typingActors],
   );
   const rosterSummary = useMemo(
@@ -270,7 +326,7 @@ export function ChannelsPage() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [messages.length, active?.id, activeTypingActors.length]);
+  }, [messages.length, active?.id, activeTypingActors.length, activeTasks.length]);
 
   // Clear the unread badge when a channel becomes active (select / deep link /
   // auto-select). `markChannelRead` (mutate) is referentially stable.
@@ -302,6 +358,7 @@ export function ChannelsPage() {
     qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     if (e.channel_id) {
       qc.invalidateQueries({ queryKey: channelKeys.messages(e.channel_id) });
+      qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(e.channel_id) });
       if (e.channel_id === active?.id) markChannelRead(active.id);
     }
   });
@@ -309,6 +366,9 @@ export function ChannelsPage() {
   useWSEvent("channel:typing", (payload) => {
     const event = payload as ChannelTypingPayload;
     if (!event.channel_id || event.channel_id !== active?.id) return;
+    // A typing pulse from an agent often coincides with a task starting or
+    // ending — refresh the authoritative lifecycle view promptly.
+    qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(event.channel_id) });
     const actorKey = `${event.actor_type}:${event.actor_id ?? event.actor_name}`;
     if (event.actor_type === "user" && event.actor_id && event.actor_id === currentUserId) return;
     setTypingActors((current) => {
@@ -722,6 +782,7 @@ export function ChannelsPage() {
                     />
                   ))
                 )}
+                <AgentWorkingIndicator tasks={activeTasks} />
                 <TypingIndicator actors={activeTypingActors} />
                 <div ref={bottomRef} />
               </div>

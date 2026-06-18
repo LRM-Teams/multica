@@ -58,6 +58,12 @@
     "pair": "{{a}}、{{b}} 正在输入",
     "overflow": "{{a}}、{{b}} 等 {{count}} 人正在输入"
   },
+  "agent_status": {
+    "queued": "排队中",
+    "dispatched": "启动中",
+    "running": "思考中",
+    "waiting_local_directory": "等待本地目录释放"
+  },
   "composer": {
     "placeholder": "描述你需要什么帮助...  @ 智能体名称会触发它回复。",
     "attach_aria": "附件",

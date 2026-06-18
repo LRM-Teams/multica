@@ -58,6 +58,12 @@
     "pair": "{{a}} and {{b}} are typing",
     "overflow": "{{a}}, {{b}} and {{count}} people are typing"
   },
+  "agent_status": {
+    "queued": "Queued",
+    "dispatched": "Starting up",
+    "running": "Thinking",
+    "waiting_local_directory": "Waiting for local directory"
+  },
   "composer": {
     "placeholder": "Describe what you need…  @mention an agent to trigger its reply.",
     "attach_aria": "Attach",

@@ -58,6 +58,12 @@
     "pair": "{{a}}, {{b}} 님이 입력 중",
     "overflow": "{{a}}, {{b}} 외 {{count}}명이 입력 중"
   },
+  "agent_status": {
+    "queued": "대기 중",
+    "dispatched": "시작 중",
+    "running": "생각 중",
+    "waiting_local_directory": "로컬 디렉터리 대기 중"
+  },
   "composer": {
     "placeholder": "필요한 내용을 입력하세요…  @에이전트이름 으로 답장을 요청하세요.",
     "attach_aria": "첨부",

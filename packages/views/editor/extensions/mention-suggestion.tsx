@@ -506,6 +506,10 @@ function matchesMentionQuery(item: MentionItem, query: string): boolean {
 interface MentionSuggestionOptions {
   mode?: "default" | "context";
   getContextItems?: () => MentionItem[];
+  /** When it returns a set, member/agent/squad candidates are restricted to
+   *  those actor ids (e.g. a channel's members) and issues / @all are omitted.
+   *  Returns null/undefined to fall back to the full workspace. */
+  getAllowedActorIds?: () => ReadonlySet<string> | null | undefined;
 }
 
 export function createMentionSuggestion(
@@ -543,14 +547,20 @@ export function createMentionSuggestion(
       members.find((m) => m.user_id === userId)?.role ?? null;
 
     const q = query.toLowerCase();
+    // When set (e.g. a channel's members), candidates are scoped to these ids.
+    const allow = options.getAllowedActorIds?.();
 
     const allItem: MentionItem[] =
-      "all members".includes(q) || "all".includes(q)
+      !allow && ("all members".includes(q) || "all".includes(q))
         ? [{ id: "all", label: "All members", type: "all" as const }]
         : [];
 
     const memberItems: MentionItem[] = members
-      .filter((m) => m.name.toLowerCase().includes(q) || matchesPinyin(m.name, q))
+      .filter(
+        (m) =>
+          (m.name.toLowerCase().includes(q) || matchesPinyin(m.name, q)) &&
+          (!allow || allow.has(m.user_id)),
+      )
       .map((m) => ({
         id: m.user_id,
         label: m.name,
@@ -562,12 +572,18 @@ export function createMentionSuggestion(
         (a) =>
           !a.archived_at &&
           (a.name.toLowerCase().includes(q) || matchesPinyin(a.name, q)) &&
-          canAssignAgentToIssue(a, { userId, role: myRole }).allowed,
+          canAssignAgentToIssue(a, { userId, role: myRole }).allowed &&
+          (!allow || allow.has(a.id)),
       )
       .map((a) => ({ id: a.id, label: a.name, type: "agent" as const }));
 
     const squadItems: MentionItem[] = squads
-      .filter((s) => !s.archived_at && (s.name.toLowerCase().includes(q) || matchesPinyin(s.name, q)))
+      .filter(
+        (s) =>
+          !s.archived_at &&
+          (s.name.toLowerCase().includes(q) || matchesPinyin(s.name, q)) &&
+          (!allow || allow.has(s.id)),
+      )
       .map((s) => ({ id: s.id, label: s.name, type: "squad" as const }));
 
     // Members and agents share a single ranked list — recently mentioned
@@ -581,13 +597,15 @@ export function createMentionSuggestion(
 
     // Cached issues give an instant first paint; MentionList adds server
     // matches for done/cancelled and any other issues not in this cache.
-    const issueItems: MentionItem[] = cachedIssues
-      .filter(
-        (i) =>
-          i.identifier.toLowerCase().includes(q) ||
-          i.title.toLowerCase().includes(q),
-      )
-      .map(issueToMention);
+    const issueItems: MentionItem[] = allow
+      ? []
+      : cachedIssues
+          .filter(
+            (i) =>
+              i.identifier.toLowerCase().includes(q) ||
+              i.title.toLowerCase().includes(q),
+          )
+          .map(issueToMention);
 
     return [...allItem, ...userItems, ...issueItems];
   }

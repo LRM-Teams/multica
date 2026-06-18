@@ -107,6 +107,9 @@ interface ContentEditorProps {
   /** Chat can surface current/recent issue/project suggestions. Other editors use default mention behavior. */
   mentionMode?: "default" | "context";
   mentionContextItems?: MentionItem[];
+  /** Restrict the @ picker's member/agent candidates to these actor ids
+   *  (e.g. a channel's members). Omit for the full workspace. */
+  mentionAllowedActorIds?: ReadonlySet<string> | null;
   /** Enable the `/` command picker. Defaults false. */
   enableSlashCommands?: boolean;
   /**
@@ -160,6 +163,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       disableMentions = false,
       mentionMode = "default",
       mentionContextItems,
+      mentionAllowedActorIds,
       enableSlashCommands = false,
       slashCommandMode = "skill",
       attachments,
@@ -174,6 +178,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       ((file: File) => Promise<UploadResult | null>) | undefined
     >(undefined);
     const mentionContextItemsRef = useRef<MentionItem[]>(mentionContextItems ?? []);
+    const mentionAllowedActorIdsRef = useRef<ReadonlySet<string> | null>(mentionAllowedActorIds ?? null);
     const lastEmittedRef = useRef<string | null>(null);
 
     // In-session record of attachments freshly uploaded through this editor.
@@ -243,6 +248,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     onBlurRef.current = onBlur;
     onUploadFileRef.current = wrappedOnUploadFile;
     mentionContextItemsRef.current = mentionContextItems ?? [];
+    mentionAllowedActorIdsRef.current = mentionAllowedActorIds ?? null;
 
     const queryClient = useQueryClient();
 
@@ -292,6 +298,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         disableMentions,
         mentionMode,
         getMentionContextItems: () => mentionContextItemsRef.current,
+        getMentionAllowedActorIds: () => mentionAllowedActorIdsRef.current,
         enableSlashCommands,
         slashCommandMode,
       }),

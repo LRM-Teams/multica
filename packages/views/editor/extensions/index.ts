@@ -136,6 +136,9 @@ export interface EditorExtensionsOptions {
   /** Override @ behavior for chat context suggestions. */
   mentionMode?: "default" | "context";
   getMentionContextItems?: () => MentionItem[];
+  /** When it returns a set, the @ picker restricts member/agent candidates to
+   *  those actor ids (e.g. a channel's members). */
+  getMentionAllowedActorIds?: () => ReadonlySet<string> | null | undefined;
   /** When true, attach the `/` picker. Default false. */
   enableSlashCommands?: boolean;
   /**
@@ -203,7 +206,7 @@ export function createEditorExtensions(
       ...(options.disableMentions
         ? { suggestion: { allow: () => false } }
         : options.queryClient
-          ? { suggestion: createMentionSuggestion(options.queryClient, { mode: options.mentionMode, getContextItems: options.getMentionContextItems }) }
+          ? { suggestion: createMentionSuggestion(options.queryClient, { mode: options.mentionMode, getContextItems: options.getMentionContextItems, getAllowedActorIds: options.getMentionAllowedActorIds }) }
           : {}),
     }),
     SlashCommandExtension.configure({

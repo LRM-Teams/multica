@@ -62,7 +62,10 @@
     "placeholder": "필요한 내용을 입력하세요…  @에이전트이름 으로 답장을 요청하세요.",
     "attach_aria": "첨부",
     "mention_aria": "에이전트 멘션",
-    "send": "전송"
+    "send": "전송",
+    "project_label": "프로젝트",
+    "project_none": "프로젝트 없음",
+    "project_tooltip": "이 채널이 작업할 프로젝트 설정"
   },
   "message": {
     "agent_badge": "Agent",

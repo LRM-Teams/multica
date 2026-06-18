@@ -11,7 +11,10 @@
     "placeholder_default": "メッセージを入力…",
     "send_tooltip": "送信",
     "stop_tooltip": "停止",
-    "send_failed_toast": "メッセージを送信できませんでした"
+    "send_failed_toast": "メッセージを送信できませんでした",
+    "project_label": "プロジェクト",
+    "project_none": "プロジェクトなし",
+    "project_tooltip": "このチャットのプロジェクトを設定"
   },
   "message_list": {
     "show_details": "詳細を表示",

@@ -776,6 +776,9 @@ export function ChatWindow() {
         disabled={isSessionArchived}
         noAgent={noAgent}
         agentName={activeAgent?.name}
+        wsId={wsId}
+        sessionId={activeSessionId}
+        currentProjectId={currentSession?.project_id ?? null}
         leftAdornment={
           <AgentDropdown
             agents={availableAgents}

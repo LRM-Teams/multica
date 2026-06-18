@@ -62,7 +62,10 @@
     "placeholder": "Describe what you need…  @mention an agent to trigger its reply.",
     "attach_aria": "Attach",
     "mention_aria": "Mention an agent",
-    "send": "Send"
+    "send": "Send",
+    "project_label": "Project",
+    "project_none": "No project",
+    "project_tooltip": "Set the project this channel works in"
   },
   "message": {
     "agent_badge": "Agent",

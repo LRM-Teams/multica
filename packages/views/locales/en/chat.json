@@ -12,7 +12,10 @@
     "placeholder_default": "Start a message…",
     "send_tooltip": "Send",
     "stop_tooltip": "Stop",
-    "send_failed_toast": "Failed to send message"
+    "send_failed_toast": "Failed to send message",
+    "project_label": "Project",
+    "project_none": "No project",
+    "project_tooltip": "Set the project for this chat"
   },
   "message_list": {
     "show_details": "Show details",

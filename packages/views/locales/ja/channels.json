@@ -62,7 +62,10 @@
     "placeholder": "必要なことを入力してください…  @エージェント名 で返信を促します。",
     "attach_aria": "添付",
     "mention_aria": "エージェントをメンション",
-    "send": "送信"
+    "send": "送信",
+    "project_label": "プロジェクト",
+    "project_none": "プロジェクトなし",
+    "project_tooltip": "このチャンネルが作業するプロジェクトを設定"
   },
   "message": {
     "agent_badge": "Agent",

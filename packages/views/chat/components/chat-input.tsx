@@ -12,6 +12,8 @@ import {
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import { SubmitButton } from "@multica/ui/components/common/submit-button";
 import { useChatStore, DRAFT_NEW_SESSION } from "@multica/core/chat";
+import { useSetChatSessionProject } from "@multica/core/chat/mutations";
+import { ProjectPickerButton } from "../../common/project-picker-button";
 import { createLogger } from "@multica/core/logger";
 import { enterKey, formatShortcut, modKey } from "@multica/core/platform";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
@@ -44,6 +46,15 @@ interface ChatInputProps {
   leftAdornment?: ReactNode;
   /** Chat @ suggestions: current/recent issue/project entries. */
   contextItems?: MentionItem[];
+  /** Workspace id — scopes the project list query for the project picker. */
+  wsId: string;
+  /** Id of the active chat session, if any. Required to bind a project.
+   *  Null for a brand-new (not-yet-created) chat: the project picker is
+   *  hidden in that case since there's no session to attach the project to. */
+  sessionId?: string | null;
+  /** Project currently bound to the active session, if any. Drives the
+   *  project picker's selected value. */
+  currentProjectId?: string | null;
 }
 
 export function ChatInput({
@@ -58,6 +69,9 @@ export function ChatInput({
   agentName,
   leftAdornment,
   contextItems,
+  wsId,
+  sessionId,
+  currentProjectId,
 }: ChatInputProps) {
   const { t } = useT("chat");
   const editorRef = useRef<ContentEditorRef>(null);
@@ -299,6 +313,14 @@ export function ChatInput({
           </div>
         )}
         <div className="absolute bottom-1 right-1.5 flex items-center gap-1">
+          {sessionId && (
+            <ChatProjectPicker
+              wsId={wsId}
+              sessionId={sessionId}
+              currentProjectId={currentProjectId ?? null}
+              disabled={!!disabled || !!noAgent}
+            />
+          )}
           {uploadEnabled && (
             <FileUploadButton
               size="sm"
@@ -317,5 +339,38 @@ export function ChatInput({
         {uploadEnabled && isDragOver && <FileDropOverlay />}
       </div>
     </div>
+  );
+}
+
+/**
+ * Chat-side adapter around the shared ProjectPickerButton: owns the
+ * session-project mutation so the presentational button stays free of
+ * business logic. Only mounted when a session exists (gated by the caller),
+ * so the mutation/query hooks never run for brand-new, not-yet-created chats.
+ */
+function ChatProjectPicker({
+  wsId,
+  sessionId,
+  currentProjectId,
+  disabled,
+}: {
+  wsId: string;
+  sessionId: string;
+  currentProjectId: string | null;
+  disabled: boolean;
+}) {
+  const { t } = useT("chat");
+  const setProject = useSetChatSessionProject();
+
+  return (
+    <ProjectPickerButton
+      wsId={wsId}
+      value={currentProjectId}
+      onChange={(projectId) => setProject.mutate({ sessionId, projectId })}
+      disabled={disabled}
+      label={t(($) => $.input.project_label)}
+      noneLabel={t(($) => $.input.project_none)}
+      tooltip={t(($) => $.input.project_tooltip)}
+    />
   );
 }

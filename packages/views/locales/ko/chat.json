@@ -12,7 +12,10 @@
     "placeholder_default": "메시지 입력…",
     "send_tooltip": "보내기",
     "stop_tooltip": "중지",
-    "send_failed_toast": "메시지를 보내지 못했습니다"
+    "send_failed_toast": "메시지를 보내지 못했습니다",
+    "project_label": "프로젝트",
+    "project_none": "프로젝트 없음",
+    "project_tooltip": "이 채팅의 프로젝트 설정"
   },
   "message_list": {
     "show_details": "세부 정보 보기",

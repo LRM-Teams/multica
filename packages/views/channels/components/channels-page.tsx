@@ -21,6 +21,8 @@ import {
   channelsOptions,
   channelMessagesOptions,
   channelMembersOptions,
+  channelProjectOptions,
+  useSetChannelProject,
   useAddChannelMember,
   useCreateChannel,
   useMarkChannelRead,
@@ -51,6 +53,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { ContentEditor, type ContentEditorRef } from "../../editor";
 import { useNavigation } from "../../navigation";
 import { agentColor } from "../../common/agent-color";
+import { ProjectPickerButton } from "../../common/project-picker-button";
 import { initialsOf } from "../../common/initials";
 import { useT, useTimeAgo } from "../../i18n";
 import { ChannelMessageBubble } from "./channel-message-bubble";
@@ -219,6 +222,8 @@ export function ChannelsPage() {
   );
   const { data: messages = [] } = useQuery(channelMessagesOptions(active?.id ?? ""));
   const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
+  const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
+  const setChannelProject = useSetChannelProject(wsId, active?.id ?? "");
   const createChannel = useCreateChannel();
   const sendMessage = useSendChannelMessage();
   const setTyping = useSetChannelTyping();
@@ -757,6 +762,14 @@ export function ChannelsPage() {
                       >
                         <Paperclip className="size-4" />
                       </Button>
+                      <ProjectPickerButton
+                        wsId={wsId}
+                        value={channelProjectId || null}
+                        onChange={(projectId) => setChannelProject.mutate(projectId)}
+                        label={t(($) => $.composer.project_label)}
+                        noneLabel={t(($) => $.composer.project_none)}
+                        tooltip={t(($) => $.composer.project_tooltip)}
+                      />
                     </div>
                     <Button onClick={handleSend} disabled={draftEmpty || sendMessage.isPending} size="sm">
                       <Send className="size-4" /> {t(($) => $.composer.send)}

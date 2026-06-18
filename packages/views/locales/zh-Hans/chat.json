@@ -11,7 +11,10 @@
     "placeholder_default": "输入消息…",
     "send_tooltip": "发送",
     "stop_tooltip": "停止",
-    "send_failed_toast": "发送消息失败"
+    "send_failed_toast": "发送消息失败",
+    "project_label": "项目",
+    "project_none": "无项目",
+    "project_tooltip": "设置该聊天对应的项目"
   },
   "message_list": {
     "show_details": "查看详情",

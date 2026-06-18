@@ -377,6 +377,91 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+type ChannelAuthorStat struct {
+	AuthorType string  `json:"author_type"`
+	AuthorID   *string `json:"author_id"`
+	AuthorName string  `json:"author_name"`
+	Count      int     `json:"count"`
+}
+
+type ChannelStatsResponse struct {
+	TotalMessages int                 `json:"total_messages"`
+	FileCount     int                 `json:"file_count"`
+	MemberCount   int                 `json:"member_count"`
+	ByAuthor      []ChannelAuthorStat `json:"by_author"`
+}
+
+func (h *Handler) ListChannelAttachments(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	attachments, err := h.Queries.ListAttachmentsByChannel(r.Context(), db.ListAttachmentsByChannelParams{
+		ChannelID:   channelID,
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list channel attachments")
+		return
+	}
+	out := make([]AttachmentResponse, 0, len(attachments))
+	for _, a := range attachments {
+		out = append(out, h.attachmentToResponse(a))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) GetChannelStats(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	resp := ChannelStatsResponse{ByAuthor: []ChannelAuthorStat{}}
+	wsID := parseUUID(workspaceID)
+
+	_ = h.DB.QueryRow(r.Context(), `SELECT count(*) FROM channel_message WHERE channel_id = $1 AND workspace_id = $2`, channelID, wsID).Scan(&resp.TotalMessages)
+	_ = h.DB.QueryRow(r.Context(), `SELECT count(*) FROM attachment WHERE channel_id = $1 AND workspace_id = $2`, channelID, wsID).Scan(&resp.FileCount)
+	_ = h.DB.QueryRow(r.Context(), `SELECT count(*) FROM channel_member WHERE channel_id = $1 AND workspace_id = $2`, channelID, wsID).Scan(&resp.MemberCount)
+
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT author_type, author_id, author_name, count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND workspace_id = $2
+		GROUP BY author_type, author_id, author_name
+		ORDER BY count(*) DESC`, channelID, wsID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to compute channel stats")
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var stat ChannelAuthorStat
+		var authorID pgtype.UUID
+		if err := rows.Scan(&stat.AuthorType, &authorID, &stat.AuthorName, &stat.Count); err != nil {
+			continue
+		}
+		stat.AuthorID = uuidToPtr(authorID)
+		resp.ByAuthor = append(resp.ByAuthor, stat)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (h *Handler) SetChannelTyping(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {

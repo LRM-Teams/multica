@@ -95,6 +95,11 @@ SELECT * FROM attachment
 WHERE channel_message_id = ANY($1::uuid[]) AND workspace_id = $2
 ORDER BY created_at ASC;
 
+-- name: ListAttachmentsByChannel :many
+SELECT * FROM attachment
+WHERE channel_id = $1 AND workspace_id = $2
+ORDER BY created_at DESC;
+
 -- name: LinkAttachmentsToIssue :exec
 UPDATE attachment
 SET issue_id = $1

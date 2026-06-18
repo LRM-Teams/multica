@@ -282,6 +282,53 @@ func (q *Queries) ListAttachmentURLsByIssueOrComments(ctx context.Context, issue
 	return items, nil
 }
 
+const listAttachmentsByChannel = `-- name: ListAttachmentsByChannel :many
+SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id, channel_message_id FROM attachment
+WHERE channel_id = $1 AND workspace_id = $2
+ORDER BY created_at DESC
+`
+
+type ListAttachmentsByChannelParams struct {
+	ChannelID   pgtype.UUID `json:"channel_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListAttachmentsByChannel(ctx context.Context, arg ListAttachmentsByChannelParams) ([]Attachment, error) {
+	rows, err := q.db.Query(ctx, listAttachmentsByChannel, arg.ChannelID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Attachment{}
+	for rows.Next() {
+		var i Attachment
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.IssueID,
+			&i.CommentID,
+			&i.UploaderType,
+			&i.UploaderID,
+			&i.Filename,
+			&i.Url,
+			&i.ContentType,
+			&i.SizeBytes,
+			&i.CreatedAt,
+			&i.ChatSessionID,
+			&i.ChatMessageID,
+			&i.ChannelID,
+			&i.ChannelMessageID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAttachmentsByChannelMessageIDs = `-- name: ListAttachmentsByChannelMessageIDs :many
 SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at, chat_session_id, chat_message_id, channel_id, channel_message_id FROM attachment
 WHERE channel_message_id = ANY($1::uuid[]) AND workspace_id = $2

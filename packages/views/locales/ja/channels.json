@@ -1,0 +1,51 @@
+{
+  "page": {
+    "title": "グループチャット",
+    "subtitle": "人、エージェント、任意の Feishu グループのためのインスタントメッセージ空間。"
+  },
+  "sidebar": {
+    "name_placeholder": "チャンネル名",
+    "lark_placeholder": "任意の Feishu chat_id (oc_...)",
+    "create_aria": "チャンネルを作成",
+    "empty": "まだチャンネルがありません。"
+  },
+  "empty_state": {
+    "title": "グループチャットを作成",
+    "description": "グループチャットは Multica のインスタントメッセージ空間です。人とエージェントを追加し、エージェントを @メンションするとメンバーのように返信します。",
+    "cta": "新しいチャンネル"
+  },
+  "header": {
+    "running": "実行中",
+    "feishu": "Feishu",
+    "manage_members_aria": "メンバーを管理",
+    "share_aria": "共有",
+    "stats_aria": "統計",
+    "files_aria": "ファイル"
+  },
+  "members": {
+    "select_user": "メンバーを選択",
+    "select_agent": "エージェントを選択",
+    "join": "追加",
+    "title": "メンバー",
+    "empty": "メンバーがいません",
+    "remove_aria": "メンバーを削除"
+  },
+  "thread": {
+    "empty": "チャットを始めましょう。メンバーにエージェントを追加し、@エージェント名 を入力すると返信します。"
+  },
+  "typing": {
+    "single": "{{name}} が入力中",
+    "pair": "{{a}}、{{b}} が入力中",
+    "overflow": "{{a}}、{{b}} 他 {{count}} 人が入力中"
+  },
+  "composer": {
+    "placeholder": "必要なことを入力してください…  @エージェント名 で返信を促します。",
+    "attach_aria": "添付",
+    "mention_aria": "エージェントをメンション",
+    "send": "送信"
+  },
+  "message": {
+    "agent_badge": "Agent",
+    "feishu_badge": "Feishu"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "page": {
+    "title": "群聊",
+    "subtitle": "即时通讯空间：人类、智能体和可选的国内飞书群。"
+  },
+  "sidebar": {
+    "name_placeholder": "群聊名称",
+    "lark_placeholder": "可选飞书群 chat_id (oc_...)",
+    "create_aria": "新建群聊",
+    "empty": "还没有群聊。"
+  },
+  "empty_state": {
+    "title": "创建一个群聊",
+    "description": "群聊是 Multica 里的即时通讯空间。把人和智能体拉进来，发消息时 @ 智能体，它会像群成员一样回复。",
+    "cta": "新建群聊"
+  },
+  "header": {
+    "running": "运行中",
+    "feishu": "飞书",
+    "manage_members_aria": "管理成员",
+    "share_aria": "分享",
+    "stats_aria": "统计",
+    "files_aria": "文件"
+  },
+  "members": {
+    "select_user": "选择人类成员",
+    "select_agent": "选择智能体",
+    "join": "加入",
+    "title": "群成员",
+    "empty": "暂无成员",
+    "remove_aria": "移除成员"
+  },
+  "thread": {
+    "empty": "开始聊天吧。把智能体加入成员后，输入 @智能体名称 触发回复。"
+  },
+  "typing": {
+    "single": "{{name}} 正在输入",
+    "pair": "{{a}}、{{b}} 正在输入",
+    "overflow": "{{a}}、{{b}} 等 {{count}} 人正在输入"
+  },
+  "composer": {
+    "placeholder": "描述你需要什么帮助...  @ 智能体名称会触发它回复。",
+    "attach_aria": "附件",
+    "mention_aria": "提及智能体",
+    "send": "发送"
+  },
+  "message": {
+    "agent_badge": "Agent",
+    "feishu_badge": "飞书"
+  }
+}

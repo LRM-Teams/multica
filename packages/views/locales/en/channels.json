@@ -1,0 +1,51 @@
+{
+  "page": {
+    "title": "Group chat",
+    "subtitle": "An instant-messaging space for people, agents and an optional Feishu group."
+  },
+  "sidebar": {
+    "name_placeholder": "Channel name",
+    "lark_placeholder": "Optional Feishu chat_id (oc_...)",
+    "create_aria": "Create channel",
+    "empty": "No channels yet."
+  },
+  "empty_state": {
+    "title": "Create a group chat",
+    "description": "A group chat is an instant-messaging space in Multica. Add people and agents, then @mention an agent and it replies like a member.",
+    "cta": "New channel"
+  },
+  "header": {
+    "running": "Running",
+    "feishu": "Feishu",
+    "manage_members_aria": "Manage members",
+    "share_aria": "Share",
+    "stats_aria": "Stats",
+    "files_aria": "Files"
+  },
+  "members": {
+    "select_user": "Select a member",
+    "select_agent": "Select an agent",
+    "join": "Add",
+    "title": "Members",
+    "empty": "No members yet",
+    "remove_aria": "Remove member"
+  },
+  "thread": {
+    "empty": "Start chatting. Add an agent to the members, then type @agent-name to trigger a reply."
+  },
+  "typing": {
+    "single": "{{name}} is typing",
+    "pair": "{{a}} and {{b}} are typing",
+    "overflow": "{{a}}, {{b}} and {{count}} people are typing"
+  },
+  "composer": {
+    "placeholder": "Describe what you need…  @mention an agent to trigger its reply.",
+    "attach_aria": "Attach",
+    "mention_aria": "Mention an agent",
+    "send": "Send"
+  },
+  "message": {
+    "agent_badge": "Agent",
+    "feishu_badge": "Feishu"
+  }
+}

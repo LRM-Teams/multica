@@ -1,0 +1,51 @@
+{
+  "page": {
+    "title": "그룹 채팅",
+    "subtitle": "사람, 에이전트, 선택적 Feishu 그룹을 위한 실시간 메시지 공간."
+  },
+  "sidebar": {
+    "name_placeholder": "채널 이름",
+    "lark_placeholder": "선택 Feishu chat_id (oc_...)",
+    "create_aria": "채널 만들기",
+    "empty": "아직 채널이 없습니다."
+  },
+  "empty_state": {
+    "title": "그룹 채팅 만들기",
+    "description": "그룹 채팅은 Multica의 실시간 메시지 공간입니다. 사람과 에이전트를 추가한 뒤 에이전트를 @멘션하면 멤버처럼 답장합니다.",
+    "cta": "새 채널"
+  },
+  "header": {
+    "running": "실행 중",
+    "feishu": "Feishu",
+    "manage_members_aria": "멤버 관리",
+    "share_aria": "공유",
+    "stats_aria": "통계",
+    "files_aria": "파일"
+  },
+  "members": {
+    "select_user": "멤버 선택",
+    "select_agent": "에이전트 선택",
+    "join": "추가",
+    "title": "멤버",
+    "empty": "멤버 없음",
+    "remove_aria": "멤버 제거"
+  },
+  "thread": {
+    "empty": "채팅을 시작하세요. 멤버에 에이전트를 추가한 뒤 @에이전트이름 을 입력하면 답장합니다."
+  },
+  "typing": {
+    "single": "{{name}} 님이 입력 중",
+    "pair": "{{a}}, {{b}} 님이 입력 중",
+    "overflow": "{{a}}, {{b}} 외 {{count}}명이 입력 중"
+  },
+  "composer": {
+    "placeholder": "필요한 내용을 입력하세요…  @에이전트이름 으로 답장을 요청하세요.",
+    "attach_aria": "첨부",
+    "mention_aria": "에이전트 멘션",
+    "send": "전송"
+  },
+  "message": {
+    "agent_badge": "Agent",
+    "feishu_badge": "Feishu"
+  }
+}

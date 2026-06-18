@@ -9,6 +9,8 @@ import {
 import { useConfigStore } from "@multica/core/config";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
 import { useWorkspacePaths } from "@multica/core/paths";
+import { useActorName } from "@multica/core/workspace/hooks";
+import { agentColor } from "./agent-color";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
 import { AppLink } from "../navigation";
@@ -46,6 +48,30 @@ function ProjectMentionCard({ projectId }: { projectId: string }): React.ReactNo
   );
 }
 
+/**
+ * Member / agent / @all mention — a colored identity pill matching the editor
+ * composer's mention chips. The name is resolved from the workspace cache
+ * (same resolver as ActorAvatar) so renames reflect immediately.
+ */
+function ActorMention({ type, id }: { type: string; id: string }): React.JSX.Element {
+  const { getActorName } = useActorName();
+  const name = type === "all" ? "all" : getActorName(type, id);
+  const color = agentColor(id);
+  return (
+    <span
+      className="not-prose font-semibold"
+      style={{
+        color: color.fg,
+        backgroundColor: color.bg,
+        borderRadius: "0.3125rem",
+        padding: "0.0625rem 0.3125rem",
+      }}
+    >
+      @{name}
+    </span>
+  );
+}
+
 function defaultRenderMention({
   type,
   id,
@@ -59,7 +85,7 @@ function defaultRenderMention({
   if (type === "project") {
     return <ProjectMentionCard projectId={id} />;
   }
-  return null;
+  return <ActorMention type={type} id={id} />;
 }
 
 function renderImage({ src, alt }: { src: string; alt: string }): React.ReactNode {

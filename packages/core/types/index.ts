@@ -173,4 +173,11 @@ export type {
   CreateBillingPortalSessionResponse,
 } from "./billing";
 
-export type { Channel, ChannelMember, ChannelMessage, ChannelTypingPayload } from "./channel";
+export type {
+  Channel,
+  ChannelMember,
+  ChannelMessage,
+  ChannelStats,
+  ChannelAuthorStat,
+  ChannelTypingPayload,
+} from "./channel";

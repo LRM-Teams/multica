@@ -36,6 +36,20 @@ export interface ChannelMessage {
   created_at: string;
 }
 
+export interface ChannelAuthorStat {
+  author_type: "user" | "agent" | "lark" | "system";
+  author_id: string | null;
+  author_name: string;
+  count: number;
+}
+
+export interface ChannelStats {
+  total_messages: number;
+  file_count: number;
+  member_count: number;
+  by_author: ChannelAuthorStat[];
+}
+
 export interface ChannelTypingPayload {
   channel_id: string;
   actor_type: "user" | "agent" | "lark" | "system";

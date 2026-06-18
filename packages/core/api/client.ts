@@ -69,6 +69,7 @@ import type {
   Channel,
   ChannelMember,
   ChannelMessage,
+  ChannelStats,
   CancelTaskResponse,
   Project,
   CreateProjectRequest,
@@ -1734,6 +1735,14 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(body),
     });
+  }
+
+  async listChannelAttachments(channelId: string): Promise<Attachment[]> {
+    return this.fetch(`/api/channels/${channelId}/attachments`);
+  }
+
+  async getChannelStats(channelId: string): Promise<ChannelStats> {
+    return this.fetch(`/api/channels/${channelId}/stats`);
   }
 
   async setChannelTyping(channelId: string, isTyping: boolean): Promise<void> {

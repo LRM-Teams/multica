@@ -835,8 +835,10 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	fmt.Fprintf(&b, "You are participating in the Multica group chat #%s.\n", ch.Name)
 	b.WriteString("Only respond as yourself. Do not impersonate other agents or users.\n")
 	b.WriteString("Use the recent channel context below, but answer the current mention directly.\n")
-	b.WriteString("Only @ another agent when you explicitly need them to continue. Avoid unnecessary @ mentions.\n")
-	fmt.Fprintf(&b, "This channel run is limited to %d automatic agent turns; current trigger depth is %d.\n\n", channelRunTriggerLimit, trigger.TriggerDepth)
+	b.WriteString("This is a collaborative discussion — keep it going until the topic is actually resolved, not just one exchange. ")
+	b.WriteString("If the discussion is not finished (you need input, have a follow-up question, disagree, or want to push the topic forward), END your reply by @-mentioning the specific member(s) you want to continue with, using their exact names as listed below. You may @ several members at once. ")
+	b.WriteString("Only stop @-mentioning when you have reached a final conclusion and there is genuinely nothing left to discuss — a one-line acknowledgement is not a conclusion.\n")
+	fmt.Fprintf(&b, "To prevent runaway loops, this channel run is limited to %d automatic agent turns; current trigger depth is %d. As you near the limit, steer the discussion toward a concrete conclusion.\n\n", channelRunTriggerLimit, trigger.TriggerDepth)
 	if len(members) > 0 {
 		b.WriteString("Channel members:\n")
 		for _, member := range members {

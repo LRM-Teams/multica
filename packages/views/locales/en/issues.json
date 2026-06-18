@@ -394,7 +394,13 @@
   },
   "card": {
     "update_failed": "Failed to update issue",
-    "updated_ago": "Updated {{time}}"
+    "updated_ago": "Updated {{time}}",
+    "state": {
+      "running": "Working",
+      "attention": "Needs attention",
+      "review": "Awaiting review",
+      "done": "Done {{time}}"
+    }
   },
   "actions": {
     "status": "Status",

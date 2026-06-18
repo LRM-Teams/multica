@@ -393,7 +393,13 @@
   },
   "card": {
     "update_failed": "이슈를 업데이트하지 못했습니다",
-    "updated_ago": "{{time}} 수정됨"
+    "updated_ago": "{{time}} 수정됨",
+    "state": {
+      "running": "실행 중",
+      "attention": "조치 필요",
+      "review": "검토 대기",
+      "done": "완료 · {{time}}"
+    }
   },
   "actions": {
     "status": "상태",

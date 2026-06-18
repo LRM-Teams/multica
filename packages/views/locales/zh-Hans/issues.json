@@ -380,7 +380,13 @@
   },
   "card": {
     "update_failed": "更新 issue 失败",
-    "updated_ago": "更新于 {{time}}"
+    "updated_ago": "更新于 {{time}}",
+    "state": {
+      "running": "执行中",
+      "attention": "需介入",
+      "review": "待审核",
+      "done": "完成 · {{time}}"
+    }
   },
   "actions": {
     "status": "状态",

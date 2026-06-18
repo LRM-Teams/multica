@@ -375,7 +375,13 @@
   },
   "card": {
     "update_failed": "イシューを更新できませんでした",
-    "updated_ago": "{{time}} に更新"
+    "updated_ago": "{{time}} に更新",
+    "state": {
+      "running": "実行中",
+      "attention": "対応が必要",
+      "review": "レビュー待ち",
+      "done": "完了 · {{time}}"
+    }
   },
   "actions": {
     "status": "ステータス",

@@ -7,6 +7,11 @@ export {
   channelStatsOptions,
 } from "./queries";
 export {
+  channelProjectKeys,
+  channelProjectOptions,
+  useSetChannelProject,
+} from "./project";
+export {
   useCreateChannel,
   useSendChannelMessage,
   useMarkChannelRead,

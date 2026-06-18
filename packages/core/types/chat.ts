@@ -7,6 +7,11 @@ export interface ChatSession {
   creator_id: string;
   title: string;
   status: "active" | "archived";
+  /**
+   * The project this chat session is bound to, if any. When set, the agent
+   * works inside that project's directory. Null / absent means unbound.
+   */
+  project_id?: string | null;
   /** True when the session has any unread assistant replies. List-only. */
   has_unread: boolean;
   created_at: string;

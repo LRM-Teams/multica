@@ -1641,7 +1641,10 @@ export class ApiClient {
     await this.fetch(`/api/chat/sessions/${id}`, { method: "DELETE" });
   }
 
-  async updateChatSession(id: string, data: { title: string }): Promise<ChatSession> {
+  async updateChatSession(
+    id: string,
+    data: { title?: string; project_id?: string | null },
+  ): Promise<ChatSession> {
     return this.fetch(`/api/chat/sessions/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -1771,6 +1774,17 @@ export class ApiClient {
     await this.fetch(`/api/channels/${channelId}/typing`, {
       method: "POST",
       body: JSON.stringify({ is_typing: isTyping }),
+    });
+  }
+
+  async getChannelProject(channelId: string): Promise<{ project_id: string }> {
+    return this.fetch(`/api/channels/${channelId}/project`);
+  }
+
+  async setChannelProject(channelId: string, projectId: string | null): Promise<{ project_id: string }> {
+    return this.fetch(`/api/channels/${channelId}/project`, {
+      method: "PUT",
+      body: JSON.stringify({ project_id: projectId }),
     });
   }
 

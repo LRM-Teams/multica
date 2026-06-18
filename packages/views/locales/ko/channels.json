@@ -4,6 +4,9 @@
     "subtitle": "사람, 에이전트, 선택적 Feishu 그룹을 위한 실시간 메시지 공간."
   },
   "sidebar": {
+    "heading": "메시지",
+    "search": "대화 검색...",
+    "groups": "그룹",
     "name_placeholder": "채널 이름",
     "lark_placeholder": "선택 Feishu chat_id (oc_...)",
     "create_aria": "채널 만들기",

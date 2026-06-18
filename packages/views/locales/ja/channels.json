@@ -4,6 +4,9 @@
     "subtitle": "人、エージェント、任意の Feishu グループのためのインスタントメッセージ空間。"
   },
   "sidebar": {
+    "heading": "メッセージ",
+    "search": "会話を検索...",
+    "groups": "グループ",
     "name_placeholder": "チャンネル名",
     "lark_placeholder": "任意の Feishu chat_id (oc_...)",
     "create_aria": "チャンネルを作成",

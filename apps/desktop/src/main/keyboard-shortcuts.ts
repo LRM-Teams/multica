@@ -8,7 +8,6 @@ export type ShortcutInput = {
   key: string;
   control: boolean;
   meta: boolean;
-  shift: boolean;
 };
 
 // Subset of WebContents the zoom handler needs. Keeps the test mock tiny.
@@ -35,19 +34,11 @@ const ZOOM_MAX = 4.5;
  * Handling the shortcuts here gives identical behavior on every platform
  * and every layout.
  */
-/**
- * Result of handleAppShortcut:
- * - `false`: not handled, let Electron continue
- * - `true`: handled (preventDefault), no further action
- * - `"close-tab"`: Cmd/Ctrl+W intercepted — caller should send IPC to renderer
- */
-export type ShortcutResult = boolean | "close-tab";
-
 export function handleAppShortcut(
   input: ShortcutInput,
   webContents: ZoomTarget,
   platform: NodeJS.Platform = process.platform,
-): ShortcutResult {
+): boolean {
   if (input.type !== "keyDown") return false;
   const cmdOrCtrl = platform === "darwin" ? input.meta : input.control;
 
@@ -77,13 +68,6 @@ export function handleAppShortcut(
   if (input.key === "0") {
     webContents.setZoomLevel(0);
     return true;
-  }
-
-  // Cmd/Ctrl + W → close active tab (or window if last tab).
-  // Cmd/Ctrl + Shift + W is reserved for "close window" — do not intercept.
-  // Return a signal so the caller can send IPC to the renderer.
-  if (input.key.toLowerCase() === "w" && !input.shift) {
-    return "close-tab";
   }
 
   return false;

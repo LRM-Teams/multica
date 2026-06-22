@@ -401,7 +401,7 @@ function DetailHeader({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-auto">
               <DropdownMenuItem
-                variant="destructive"
+                className="text-destructive"
                 onClick={onArchive}
               >
                 <Trash2 className="h-3.5 w-3.5" />

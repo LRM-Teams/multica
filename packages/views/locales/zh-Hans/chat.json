@@ -14,8 +14,7 @@
     "send_failed_toast": "发送消息失败",
     "project_label": "项目",
     "project_none": "无项目",
-    "project_tooltip": "设置该聊天对应的项目",
-    "attachment_bind_failed_toast": "消息已发送，但文件未能附加。请稍后重试。"
+    "project_tooltip": "设置该聊天对应的项目"
   },
   "message_list": {
     "show_details": "查看详情",

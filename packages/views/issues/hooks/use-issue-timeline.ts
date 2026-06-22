@@ -56,7 +56,6 @@ function commentToTimelineEntry(c: Comment): TimelineEntry {
     resolved_at: c.resolved_at,
     resolved_by_type: c.resolved_by_type,
     resolved_by_id: c.resolved_by_id,
-    source_task_id: c.source_task_id,
   };
 }
 
@@ -259,31 +258,25 @@ export function useIssueTimeline(issueId: string, userId?: string) {
 
   // --- Mutation functions ---
 
-  // Returns true on success, false on failure. The composer keeps the user's
-  // text (editor locked + button spinning) until this settles and clears only
-  // on success — so a slow send no longer leaves the box full next to an
-  // already-posted comment, and a failed send keeps the draft.
   const submitComment = useCallback(
-    async (content: string, attachmentIds?: string[], suppressAgentIds?: string[]): Promise<boolean> => {
-      if (!content.trim() || !userId) return false;
+    async (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => {
+      if (!content.trim() || !userId) return;
       try {
         await createComment({ content, attachmentIds, suppressAgentIds });
-        return true;
       } catch (err) {
         toast.error(
           err instanceof Error && err.message
             ? err.message
             : t(($) => $.comment.send_failed),
         );
-        return false;
       }
     },
     [userId, createComment, t],
   );
 
   const submitReply = useCallback(
-    async (parentId: string, content: string, attachmentIds?: string[], suppressAgentIds?: string[]): Promise<boolean> => {
-      if (!content.trim() || !userId) return false;
+    async (parentId: string, content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => {
+      if (!content.trim() || !userId) return;
       try {
         await createComment({
           content,
@@ -292,23 +285,21 @@ export function useIssueTimeline(issueId: string, userId?: string) {
           attachmentIds,
           suppressAgentIds,
         });
-        return true;
       } catch (err) {
         toast.error(
           err instanceof Error && err.message
             ? err.message
             : t(($) => $.comment.send_reply_failed),
         );
-        return false;
       }
     },
     [userId, createComment, t],
   );
 
   const editComment = useCallback(
-    async (commentId: string, content: string, attachmentIds: string[], suppressAgentIds?: string[]) => {
+    async (commentId: string, content: string, attachmentIds: string[]) => {
       try {
-        await updateComment({ commentId, content, attachmentIds, suppressAgentIds });
+        await updateComment({ commentId, content, attachmentIds });
       } catch (err) {
         toast.error(
           err instanceof Error && err.message

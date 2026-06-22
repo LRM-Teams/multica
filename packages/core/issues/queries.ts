@@ -13,9 +13,6 @@ import { BOARD_STATUSES } from "./config";
 export interface IssueSortParam {
   sort_by?: ListIssuesParams["sort_by"];
   sort_direction?: ListIssuesParams["sort_direction"];
-  date_field?: ListIssuesParams["date_field"];
-  date_start?: ListIssuesParams["date_start"];
-  date_end?: ListIssuesParams["date_end"];
 }
 
 export const issueKeys = {

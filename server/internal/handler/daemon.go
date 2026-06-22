@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -181,11 +180,6 @@ type DaemonRegisterRequest struct {
 		Type    string `json:"type"`
 		Version string `json:"version"` // agent CLI version (claude/codex)
 		Status  string `json:"status"`
-		// ProfileID, when non-empty, marks this as an instance of a custom
-		// runtime_profile (MUL-3284). Empty = built-in runtime (legacy path).
-		// Type carries the protocol family for both built-in and custom rows
-		// so task routing (agent.New) is unchanged.
-		ProfileID string `json:"profile_id"`
 	} `json:"runtimes"`
 }
 
@@ -255,13 +249,6 @@ func workspaceReposResponse(workspaceID string, raw []byte, settingsRaw []byte) 
 	return resp
 }
 
-// normalizeProvider canonicalizes a provider string for storage: trimmed and
-// lowercased so client-side pricing lookups tolerate case drift. Returns "" for
-// a blank input.
-func normalizeProvider(s string) string {
-	return strings.ToLower(strings.TrimSpace(s))
-}
-
 func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	var req DaemonRegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -318,7 +305,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]AgentRuntimeResponse, 0, len(req.Runtimes))
 	for _, runtime := range req.Runtimes {
-		provider := normalizeProvider(runtime.Type)
+		provider := strings.TrimSpace(runtime.Type)
 		if provider == "" {
 			provider = "unknown"
 		}
@@ -345,125 +332,51 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			"launched_by": req.LaunchedBy,
 		})
 
-		var registered db.AgentRuntime
-		var inserted bool
-		isCustom := strings.TrimSpace(runtime.ProfileID) != ""
+		row, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
+			WorkspaceID: wsUUID,
+			DaemonID:    strToText(req.DaemonID),
+			Name:        name,
+			RuntimeMode: "local",
+			Provider:    provider,
+			Status:      status,
+			DeviceInfo:  deviceInfo,
+			Metadata:    metadata,
+			OwnerID:     ownerID,
+		})
+		if err != nil {
+			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeFailed(
+				uuidToString(ownerID),
+				req.WorkspaceID,
+				req.DaemonID,
+				provider,
+				"registration_failed",
+				"db_error",
+				true,
+			))
+			writeError(w, http.StatusInternalServerError, "failed to register runtime: "+err.Error())
+			return
+		}
 
-		if isCustom {
-			profileUUID, pok := parseUUIDOrBadRequest(w, strings.TrimSpace(runtime.ProfileID), "profile_id")
-			if !pok {
-				return
-			}
-			// The profile must exist in this workspace and be enabled. Trust
-			// the profile's stored protocol_family over the daemon-sent type so
-			// the provider used for task routing cannot drift from the profile.
-			profile, perr := h.Queries.GetRuntimeProfileForWorkspace(r.Context(), db.GetRuntimeProfileForWorkspaceParams{
-				ID:          profileUUID,
-				WorkspaceID: wsUUID,
-			})
-			if perr != nil {
-				writeError(w, http.StatusBadRequest, "unknown runtime profile: "+runtime.ProfileID)
-				return
-			}
-			if !profile.Enabled {
-				writeError(w, http.StatusConflict, "runtime profile is disabled: "+runtime.ProfileID)
-				return
-			}
-			provider = profile.ProtocolFamily
-
-			prow, err := h.Queries.UpsertAgentRuntimeWithProfile(r.Context(), db.UpsertAgentRuntimeWithProfileParams{
-				WorkspaceID: wsUUID,
-				DaemonID:    strToText(req.DaemonID),
-				Name:        name,
-				RuntimeMode: "local",
-				Provider:    provider,
-				Status:      status,
-				DeviceInfo:  deviceInfo,
-				Metadata:    metadata,
-				OwnerID:     ownerID,
-				ProfileID:   profileUUID,
-			})
-			if err != nil {
-				obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeFailed(
-					uuidToString(ownerID),
-					req.WorkspaceID,
-					req.DaemonID,
-					provider,
-					"registration_failed",
-					"db_error",
-					true,
-				))
-				writeError(w, http.StatusInternalServerError, "failed to register runtime: "+err.Error())
-				return
-			}
-			inserted = prow.Inserted
-			registered = db.AgentRuntime{
-				ID:             prow.ID,
-				WorkspaceID:    prow.WorkspaceID,
-				DaemonID:       prow.DaemonID,
-				Name:           prow.Name,
-				RuntimeMode:    prow.RuntimeMode,
-				Provider:       prow.Provider,
-				Status:         prow.Status,
-				DeviceInfo:     prow.DeviceInfo,
-				Metadata:       prow.Metadata,
-				LastSeenAt:     prow.LastSeenAt,
-				CreatedAt:      prow.CreatedAt,
-				UpdatedAt:      prow.UpdatedAt,
-				OwnerID:        prow.OwnerID,
-				LegacyDaemonID: prow.LegacyDaemonID,
-				Visibility:     prow.Visibility,
-				ProfileID:      prow.ProfileID,
-			}
-		} else {
-			row, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
-				WorkspaceID: wsUUID,
-				DaemonID:    strToText(req.DaemonID),
-				Name:        name,
-				RuntimeMode: "local",
-				Provider:    provider,
-				Status:      status,
-				DeviceInfo:  deviceInfo,
-				Metadata:    metadata,
-				OwnerID:     ownerID,
-			})
-			if err != nil {
-				obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeFailed(
-					uuidToString(ownerID),
-					req.WorkspaceID,
-					req.DaemonID,
-					provider,
-					"registration_failed",
-					"db_error",
-					true,
-				))
-				writeError(w, http.StatusInternalServerError, "failed to register runtime: "+err.Error())
-				return
-			}
-			inserted = row.Inserted
-			registered = db.AgentRuntime{
-				ID:             row.ID,
-				WorkspaceID:    row.WorkspaceID,
-				DaemonID:       row.DaemonID,
-				Name:           row.Name,
-				RuntimeMode:    row.RuntimeMode,
-				Provider:       row.Provider,
-				Status:         row.Status,
-				DeviceInfo:     row.DeviceInfo,
-				Metadata:       row.Metadata,
-				LastSeenAt:     row.LastSeenAt,
-				CreatedAt:      row.CreatedAt,
-				UpdatedAt:      row.UpdatedAt,
-				OwnerID:        row.OwnerID,
-				LegacyDaemonID: row.LegacyDaemonID,
-				Visibility:     row.Visibility,
-				ProfileID:      row.ProfileID,
-			}
+		registered := db.AgentRuntime{
+			ID:             row.ID,
+			WorkspaceID:    row.WorkspaceID,
+			DaemonID:       row.DaemonID,
+			Name:           row.Name,
+			RuntimeMode:    row.RuntimeMode,
+			Provider:       row.Provider,
+			Status:         row.Status,
+			DeviceInfo:     row.DeviceInfo,
+			Metadata:       row.Metadata,
+			LastSeenAt:     row.LastSeenAt,
+			CreatedAt:      row.CreatedAt,
+			UpdatedAt:      row.UpdatedAt,
+			OwnerID:        row.OwnerID,
+			LegacyDaemonID: row.LegacyDaemonID,
 		}
 
 		// Inserted is false for normal daemon reconnects/upserts, so
 		// runtime_ready is a first-ready-per-runtime-row signal.
-		if inserted {
+		if row.Inserted {
 			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeRegistered(
 				uuidToString(ownerID),
 				req.WorkspaceID,
@@ -490,15 +403,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		// (e.g. "host.local", "host", "host-staging"); for each match we
 		// reassign agents + tasks onto the new UUID-keyed row, then delete
 		// the stale row so there's only ever one runtime per machine.
-		//
-		// Only built-in runtimes participate: legacy rows predate custom
-		// profiles, so a profile-keyed instance never has a hostname-derived
-		// ancestor to merge, and mergeLegacyRuntimes scopes by provider alone
-		// (no profile_id), which could otherwise fold a built-in row into a
-		// custom one of the same provider.
-		if !isCustom {
-			h.mergeLegacyRuntimes(r, registered, provider, req.LegacyDaemonIDs)
-		}
+		h.mergeLegacyRuntimes(r, registered, provider, req.LegacyDaemonIDs)
 
 		resp = append(resp, runtimeToResponse(registered))
 	}
@@ -881,7 +786,7 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 		}
 		return nil, fmt.Errorf("get agent runtime: %w", err)
 	}
-	if !identity.AllowsWorkspace(uuidToString(rt.WorkspaceID)) {
+	if identity.WorkspaceID != "" && identity.WorkspaceID != uuidToString(rt.WorkspaceID) {
 		return nil, fmt.Errorf("runtime not in connection workspace")
 	}
 	ack, _, err := h.processHeartbeat(ctx, rt, supportsBatchImport)
@@ -1135,7 +1040,7 @@ func logHeartbeatEndpointSlow(runtimeID, outcome, authPath string, start time.Ti
 // logClaimEndpointSlow emits one structured log when the /tasks/claim endpoint
 // exceeds 500ms, splitting auth / claim / response-build phases so the prod
 // tail can be diagnosed without flooding logs at normal poll rates.
-func logClaimEndpointSlow(runtimeID, outcome string, start time.Time, authMs, claimMs, buildMs int64, payloadBytes, agentSkillCount, builtinSkillCount, skillPayloadBytes int) {
+func logClaimEndpointSlow(runtimeID, outcome string, start time.Time, authMs, claimMs, buildMs int64) {
 	totalMs := time.Since(start).Milliseconds()
 	if totalMs < 500 {
 		return
@@ -1147,10 +1052,6 @@ func logClaimEndpointSlow(runtimeID, outcome string, start time.Time, authMs, cl
 		"auth_ms", authMs,
 		"claim_ms", claimMs,
 		"build_ms", buildMs,
-		"payload_bytes", payloadBytes,
-		"agent_skill_count", agentSkillCount,
-		"builtin_skill_count", builtinSkillCount,
-		"skill_payload_bytes", skillPayloadBytes,
 	)
 }
 
@@ -1163,10 +1064,6 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	var (
 		outcome                  = "unauth"
 		authMs, claimMs, buildMs int64
-		payloadBytes             int
-		agentSkillCount          int
-		builtinSkillCount        int
-		skillPayloadBytes        int
 		buildStart               time.Time
 	)
 	defer func() {
@@ -1176,7 +1073,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		if !buildStart.IsZero() {
 			buildMs = time.Since(buildStart).Milliseconds()
 		}
-		logClaimEndpointSlow(runtimeID, outcome, start, authMs, claimMs, buildMs, payloadBytes, agentSkillCount, builtinSkillCount, skillPayloadBytes)
+		logClaimEndpointSlow(runtimeID, outcome, start, authMs, claimMs, buildMs)
 	}()
 
 	// Verify the caller owns this runtime's workspace. The runtime's
@@ -1202,7 +1099,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 
 	if task == nil {
 		slog.Debug("no task to claim", "runtime_id", runtimeID)
-		payloadBytes, _ = writeMeasuredJSON(w, http.StatusOK, map[string]any{"task": nil})
+		writeJSON(w, http.StatusOK, map[string]any{"task": nil})
 		outcome = "no_task"
 		return
 	}
@@ -1217,10 +1114,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		// names carry a "multica-" prefix so their on-disk slugs never collide
 		// with a user-authored workspace skill (see writeSkillFiles).
 		skills := h.TaskService.LoadAgentSkills(r.Context(), task.AgentID)
-		agentSkillCount = len(skills)
-		builtinSkills := h.TaskService.BuiltinSkills()
-		builtinSkillCount = len(builtinSkills)
-		skills = append(skills, builtinSkills...)
+		skills = append(skills, h.TaskService.BuiltinSkills()...)
 		var customEnv map[string]string
 		if agent.CustomEnv != nil {
 			if err := json.Unmarshal(agent.CustomEnv, &customEnv); err != nil {
@@ -1237,14 +1131,6 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		if agent.McpConfig != nil {
 			mcpConfig = json.RawMessage(agent.McpConfig)
 		}
-		// runtime_config is stored as JSONB and may legitimately be the
-		// empty object `{}` for agents that haven't opted into any
-		// provider-specific tuning. Forward only non-empty payloads so the
-		// daemon's per-provider decoders treat absent-or-empty identically.
-		var runtimeConfig json.RawMessage
-		if rc := bytes.TrimSpace(agent.RuntimeConfig); len(rc) > 0 && !bytes.Equal(rc, []byte("{}")) && !bytes.Equal(rc, []byte("null")) {
-			runtimeConfig = json.RawMessage(agent.RuntimeConfig)
-		}
 		resp.Agent = &TaskAgentData{
 			ID:            uuidToString(agent.ID),
 			Name:          agent.Name,
@@ -1255,7 +1141,6 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			McpConfig:     mcpConfig,
 			Model:         agent.Model.String,
 			ThinkingLevel: agent.ThinkingLevel.String,
-			RuntimeConfig: runtimeConfig,
 		}
 	}
 
@@ -1806,57 +1691,41 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	// process instead of its own credential, so any API call the agent
 	// makes — even one that strips X-Agent-ID / X-Task-ID headers — is
 	// recognized server-side as actor=agent, closing the lateral-movement
-	// path on owner-only endpoints (e.g. `/api/agents/{id}/env`). Runtime
-	// owner is required because task tokens are still bound to an owning user;
-	// without one, fail the claim explicitly instead of letting the daemon
-	// fall back to a member/owner credential. MUL-3292.
+	// path on owner-only endpoints (e.g. `/api/agents/{id}/env`). MUL-2600.
+	//
+	// Skip silently when the runtime has no owning user (cloud / system
+	// runtimes installed before this PR) — the response carries no
+	// `auth_token`, and the daemon falls back to its existing credential.
 	// Token expires after the queue/runtime upper bound (24h) so it survives
 	// long-running tasks but cannot outlive a forgotten one.
-	if !runtime.OwnerID.Valid {
-		outcome = "error_token"
-		slog.Error("task claim: runtime owner missing; cancelling task to avoid unscoped agent credentials",
-			"task_id", uuidToString(task.ID),
-			"runtime_id", runtimeID,
-			"workspace_id", runtimeWorkspaceID,
-		)
-		if _, cerr := h.TaskService.CancelTask(r.Context(), task.ID); cerr != nil {
-			slog.Error("task claim: cancel after missing runtime owner failed",
-				"task_id", uuidToString(task.ID), "error", cerr)
+	if runtime.OwnerID.Valid {
+		tokenStr, terr := auth.GenerateAgentTaskToken()
+		if terr != nil {
+			outcome = "error_token"
+			slog.Error("task claim: failed to generate agent task token",
+				"task_id", uuidToString(task.ID), "error", terr)
+			writeError(w, http.StatusInternalServerError, "failed to mint task token")
+			return
 		}
-		writeError(w, http.StatusInternalServerError, "runtime owner required to mint task token")
-		return
+		if _, terr := h.Queries.CreateTaskToken(r.Context(), db.CreateTaskTokenParams{
+			TokenHash:   auth.HashToken(tokenStr),
+			TaskID:      task.ID,
+			AgentID:     task.AgentID,
+			WorkspaceID: parseUUID(resp.WorkspaceID),
+			UserID:      runtime.OwnerID,
+			ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour), Valid: true},
+		}); terr != nil {
+			outcome = "error_token"
+			slog.Error("task claim: failed to persist agent task token",
+				"task_id", uuidToString(task.ID), "error", terr)
+			writeError(w, http.StatusInternalServerError, "failed to persist task token")
+			return
+		}
+		resp.AuthToken = tokenStr
 	}
-	tokenStr, terr := auth.GenerateAgentTaskToken()
-	if terr != nil {
-		outcome = "error_token"
-		slog.Error("task claim: failed to generate agent task token",
-			"task_id", uuidToString(task.ID), "error", terr)
-		writeError(w, http.StatusInternalServerError, "failed to mint task token")
-		return
-	}
-	if _, terr := h.Queries.CreateTaskToken(r.Context(), db.CreateTaskTokenParams{
-		TokenHash:   auth.HashToken(tokenStr),
-		TaskID:      task.ID,
-		AgentID:     task.AgentID,
-		WorkspaceID: parseUUID(resp.WorkspaceID),
-		UserID:      runtime.OwnerID,
-		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour), Valid: true},
-	}); terr != nil {
-		outcome = "error_token"
-		slog.Error("task claim: failed to persist agent task token",
-			"task_id", uuidToString(task.ID), "error", terr)
-		writeError(w, http.StatusInternalServerError, "failed to persist task token")
-		return
-	}
-	resp.AuthToken = tokenStr
 
 	slog.Info("task claimed by runtime", "task_id", uuidToString(task.ID), "runtime_id", runtimeID, "agent_id", uuidToString(task.AgentID), "prior_session", resp.PriorSessionID)
-	if resp.Agent != nil && len(resp.Agent.Skills) > 0 {
-		if skillPayload, err := json.Marshal(resp.Agent.Skills); err == nil {
-			skillPayloadBytes = len(skillPayload)
-		}
-	}
-	payloadBytes, _ = writeMeasuredJSON(w, http.StatusOK, map[string]any{"task": resp})
+	writeJSON(w, http.StatusOK, map[string]any{"task": resp})
 }
 
 // trailingUserMessages returns the run of user messages after the last
@@ -2118,29 +1987,10 @@ func (h *Handler) ReportTaskUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Provider is lowercased on write so client-side pricing lookups tolerate
-	// case drift. An empty provider (an older daemon that omits the field) is
-	// stamped from the task's runtime, so generic model ids like `auto` still
-	// resolve to a provider instead of landing as '' and pricing $0.
-	var runtimeProvider string
-	runtimeProviderLoaded := false
 	for _, u := range req.Usage {
-		provider := normalizeProvider(u.Provider)
-		if provider == "" {
-			if !runtimeProviderLoaded {
-				if rt, err := h.Queries.GetAgentRuntime(r.Context(), task.RuntimeID); err == nil {
-					runtimeProvider = normalizeProvider(rt.Provider)
-				} else {
-					slog.Warn("load runtime provider for usage backfill failed",
-						"task_id", taskID, "runtime_id", uuidToString(task.RuntimeID), "error", err)
-				}
-				runtimeProviderLoaded = true
-			}
-			provider = runtimeProvider
-		}
 		if err := h.Queries.UpsertTaskUsage(r.Context(), db.UpsertTaskUsageParams{
 			TaskID:           parseUUID(taskID),
-			Provider:         provider,
+			Provider:         u.Provider,
 			Model:            u.Model,
 			InputTokens:      u.InputTokens,
 			OutputTokens:     u.OutputTokens,
@@ -2150,7 +2000,7 @@ func (h *Handler) ReportTaskUsage(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("upsert task usage failed", "task_id", taskID, "model", u.Model, "error", err)
 			continue
 		}
-		h.TaskService.CaptureTaskUsage(r.Context(), task, provider, u.Model, u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens)
+		h.TaskService.CaptureTaskUsage(r.Context(), task, u.Provider, u.Model, u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -2564,10 +2414,9 @@ func (h *Handler) GetChatSessionGCCheck(w http.ResponseWriter, r *http.Request) 
 }
 
 // GetAutopilotRunGCCheck returns the status and completed_at of an autopilot
-// run for the daemon GC loop. The daemon decides purely on terminal status:
-// an autopilot run's workdir is never reused, so a terminal run is reclaimed on
-// sight while non-terminal status is a skip signal — completed_at is returned
-// for the API contract and diagnostics, not as a TTL anchor.
+// run for the daemon GC loop. autopilot_run has no updated_at column; the
+// daemon uses completed_at as the TTL anchor for terminal runs, and treats
+// non-terminal status as a skip signal regardless of timestamp.
 //
 // Workspace ownership is resolved via the parent autopilot row.
 func (h *Handler) GetAutopilotRunGCCheck(w http.ResponseWriter, r *http.Request) {

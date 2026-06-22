@@ -7,17 +7,7 @@
     "view_compact": "Compact",
     "view_comfortable": "Comfortable",
     "search_placeholder": "Search projects...",
-    "no_search_results": "No results match your search",
-    "view_table": "Table",
-    "view_cards": "Cards",
-    "row_menu": "Project actions",
-    "pin": "Pin to sidebar",
-    "unpin": "Unpin",
-    "delete": "Delete",
-    "no_matches": "No projects match",
-    "selected_one": "{{count}} selected",
-    "selected_other": "{{count}} selected",
-    "clear_selection": "Clear selection"
+    "no_search_results": "No results match your search"
   },
   "table": {
     "name": "Name",
@@ -25,8 +15,7 @@
     "status": "Status",
     "progress": "Progress",
     "lead": "Lead",
-    "created": "Created",
-    "issues": "Issues"
+    "created": "Created"
   },
   "status": {
     "planned": "Planned",
@@ -127,21 +116,5 @@
   },
   "chip": {
     "fallback_label": "Project"
-  },
-  "toolbar": {
-    "result_count_title": "Matching projects / all projects",
-    "filter_label": "Filter",
-    "filter_active_count_one": "{{count}} filter",
-    "filter_active_count_other": "{{count}} filters",
-    "clear_filters": "Clear filters",
-    "section_status": "Status",
-    "section_priority": "Priority",
-    "section_lead": "Lead",
-    "display": "Display",
-    "sort_by": "Sort by",
-    "direction_asc": "Ascending",
-    "direction_desc": "Descending",
-    "section_columns": "Columns",
-    "view": "View"
   }
 }

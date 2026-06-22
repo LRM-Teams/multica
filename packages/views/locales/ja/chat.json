@@ -14,8 +14,7 @@
     "send_failed_toast": "メッセージを送信できませんでした",
     "project_label": "プロジェクト",
     "project_none": "プロジェクトなし",
-    "project_tooltip": "このチャットのプロジェクトを設定",
-    "attachment_bind_failed_toast": "メッセージは送信されましたが、ファイルを添付できませんでした。しばらくしてからもう一度お試しください。"
+    "project_tooltip": "このチャットのプロジェクトを設定"
   },
   "message_list": {
     "show_details": "詳細を表示",

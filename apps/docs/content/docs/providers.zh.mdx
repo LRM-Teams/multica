@@ -15,9 +15,9 @@ Multica 内置支持 **12 款 AI 编程工具**。它们都实现了同一套接
 |---|---|---|---|---|---|
 | **Antigravity** | Google | ✅（`--conversation <id>`）| ❌ | `.agents/skills/` | 动态发现（`agy models`）|
 | **Claude Code** | Anthropic | ✅ | ✅ | `.claude/skills/` | 静态 + flag |
-| **Codex** | OpenAI | ✅ | ✅ | `$CODEX_HOME/skills/` | 静态 |
+| **Codex** | OpenAI | ⚠️ 代码存在但不可达 | ✅ | `$CODEX_HOME/skills/` | 静态 |
 | **Copilot** | GitHub | ✅ | ❌ | `.github/skills/` | 静态（账号权益决定）|
-| **Cursor** | Anysphere | ✅ | ✅ | `.cursor/skills/` | 动态发现 |
+| **Cursor** | Anysphere | ⚠️ 代码存在但不可用 | ❌ | `.cursor/skills/` | 动态发现 |
 | **Gemini** | Google | ❌ | ❌ | `.agent_context/skills/` | 静态 |
 | **Hermes** | Nous Research | ✅ | ✅ | `.agent_context/skills/` （fallback）| 动态发现 |
 | **Kimi** | Moonshot | ✅ | ✅ | `.kimi/skills/` | 动态发现 |
@@ -38,7 +38,7 @@ Anthropic 出品。**新用户首选**——功能最完整：会话恢复真用
 
 ### Codex
 
-OpenAI 出品。使用 JSON-RPC 2.0 协议，状态化更强，approve 机制更细（手动批准 `exec_command` 和 `patch_apply`）。MCP 配置会写入单次任务的 `$CODEX_HOME/config.toml`。**会话恢复可用**——Multica 通过 Codex app-server 的 `thread/resume` 续接；如果已保存的 thread 不存在或过期，会回退到新 thread，让任务继续执行。
+OpenAI 出品。使用 JSON-RPC 2.0 协议，状态化更强，approve 机制更细（手动批准 `exec_command` 和 `patch_apply`）。MCP 配置会写入单次任务的 `$CODEX_HOME/config.toml`。**会话恢复代码存在但当前不可达**——如果你需要 resume，选 Claude Code 或 ACP 系列。
 
 ### Copilot
 
@@ -46,7 +46,7 @@ GitHub 出品。模型路由走你的 GitHub 账号权益——工具自己不�
 
 ### Cursor
 
-Anysphere 出品，Cursor 编辑器的 CLI 对应物。**会话恢复可用**——当前 Cursor Agent 的 stream-json 事件会返回 `session_id`，Multica 会在下一次运行时通过 `--resume <id>` 传回去。MCP 配置会写入任务工作区的 `.cursor/mcp.json`，Cursor 的项目 approval 文件写在单次任务的 `CURSOR_DATA_DIR` 下，因此托管的 MCP server 不依赖用户全局 Cursor approvals。
+Anysphere 出品，Cursor 编辑器的 CLI 对应物。**会话恢复代码存在但实际不工作**——Cursor CLI 的事件流里不回传 session ID，所以你传的 resume 值永远无效。如果要 resume，选别的。
 
 ### Gemini
 
@@ -82,16 +82,17 @@ Inflection AI 出品，极简主义。**会话恢复机制特殊**——session 
 
 | 状态 | 工具 | 含义 |
 |---|---|---|
-| ✅ 真用 | Antigravity、Claude Code、Codex、Copilot、Cursor、Hermes、Kimi、Kiro CLI、OpenCode、OpenClaw、Pi | 传 resume id，会从上次上下文接着继续 |
+| ✅ 真用 | Antigravity、Claude Code、Copilot、Hermes、Kimi、Kiro CLI、OpenCode、OpenClaw、Pi | 传 resume id，会从上次上下文接着继续 |
+| ⚠️ 代码存在但不可达 | Codex、Cursor | 代码里有 resume 路径但实际走不到（Codex 静默回落、Cursor session id 不回传）—— **当作不支持** |
 | ❌ 无 | Gemini | CLI 无 resume 机制 |
 
 **对你的决策**：如果工作流需要智能体在多次任务之间保持上下文（失败重试、手动重跑、对话式迭代），只选 ✅ 那一行的工具。
 
 ## MCP 配置：按工具不同
 
-**12 款工具里有 8 款实际消费 `mcp_config`：Claude Code、Codex、Cursor、Hermes、Kimi、Kiro CLI、OpenCode、OpenClaw**。其他 4 款会接收这个字段但**忽略**——不报错、不警告，只是配置不生效。
+**12 款工具里有 7 款实际消费 `mcp_config`：Claude Code、Codex、Hermes、Kimi、Kiro CLI、OpenCode、OpenClaw**。其他 5 款会接收这个字段但**忽略**——不报错、不警告，只是配置不生效。
 
-各工具的接入方式不同：Claude Code 通过 `--mcp-config` 加 `--strict-mcp-config` 接收；Codex 会把 daemon 管理的 `mcp_servers` block 写入单次任务的 `$CODEX_HOME/config.toml`；Cursor 会写入 `.cursor/mcp.json`，并把项目 approval 写到单次任务的 `CURSOR_DATA_DIR`；Hermes、Kimi、Kiro CLI 通过 ACP `mcpServers` 接收；OpenCode 通过 `OPENCODE_CONFIG_CONTENT` 环境变量内联接收；OpenClaw 通过 Multica 的单次任务配置 wrapper 接收 `mcp.servers`。OpenCode 这条路径**不会**改写项目里的 `opencode.json`。
+各工具的接入方式不同：Claude Code 通过 `--mcp-config` 加 `--strict-mcp-config` 接收；Codex 会把 daemon 管理的 `mcp_servers` block 写入单次任务的 `$CODEX_HOME/config.toml`；Hermes、Kimi、Kiro CLI 通过 ACP `mcpServers` 接收；OpenCode 通过 `OPENCODE_CONFIG_CONTENT` 环境变量内联接收；OpenClaw 通过 Multica 的单次任务配置 wrapper 接收 `mcp.servers`。OpenCode 这条路径**不会**改写项目里的 `opencode.json`。
 
 <Callout type="warning">
 如果你在智能体配置里设置了 `mcp_config`，但选了矩阵 MCP 列没有标 ✅ 的工具，你的 MCP server 对这个智能体**没有效果**。MCP 集成是按工具实现的。

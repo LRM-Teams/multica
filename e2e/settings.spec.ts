@@ -1,18 +1,20 @@
 import { test, expect } from "@playwright/test";
-import { loginAsDefault, waitForPageText } from "./helpers";
+import { loginAsDefault, openWorkspaceMenu } from "./helpers";
 
 test.describe("Settings", () => {
   test("updating workspace name reflects in sidebar immediately", async ({
     page,
   }) => {
-    const workspaceSlug = await loginAsDefault(page);
+    await loginAsDefault(page);
 
     // Read the current workspace name from the sidebar
-    const sidebarName = page.getByRole("button", { name: /E2E Workspace/ }).first();
-    const originalName = (await sidebarName.innerText()).split("\n").pop()?.trim() ?? "E2E Workspace";
+    const sidebarName = page.locator("aside button").first();
+    const originalName = await sidebarName.innerText();
 
-    await page.goto(`/${workspaceSlug}/settings?tab=workspace`, { waitUntil: "domcontentloaded" });
-    await waitForPageText(page, "General");
+    // Navigate to settings
+    await openWorkspaceMenu(page);
+    await page.locator("text=Settings").click();
+    await page.waitForURL("**/settings");
 
     // Change workspace name
     const nameInput = page
@@ -25,16 +27,16 @@ test.describe("Settings", () => {
     // Save
     await page.locator("button", { hasText: "Save" }).click();
 
-    await expect(page.getByText("Workspace settings saved").first()).toBeVisible({ timeout: 5000 });
+    // Wait for "Saved!" confirmation
+    await expect(page.locator("text=Saved!")).toBeVisible({ timeout: 5000 });
 
     // Sidebar should reflect the new name WITHOUT page refresh
-    await expect(page.getByRole("button", { name: new RegExp(newName) }).first()).toBeVisible();
+    await expect(sidebarName).toContainText(newName);
 
     // Restore original name so other tests aren't affected
     await nameInput.clear();
     await nameInput.fill(originalName.trim());
     await page.locator("button", { hasText: "Save" }).click();
-    await expect(page.getByText("Workspace settings saved").first()).toBeVisible({ timeout: 5000 });
-    await expect(page.getByRole("button", { name: new RegExp(originalName) }).first()).toBeVisible();
+    await expect(page.locator("text=Saved!")).toBeVisible({ timeout: 5000 });
   });
 });

@@ -15,8 +15,7 @@
     "send_failed_toast": "메시지를 보내지 못했습니다",
     "project_label": "프로젝트",
     "project_none": "프로젝트 없음",
-    "project_tooltip": "이 채팅의 프로젝트 설정",
-    "attachment_bind_failed_toast": "메시지는 보냈지만 파일이 첨부되지 않았습니다. 잠시 후 다시 시도해 주세요."
+    "project_tooltip": "이 채팅의 프로젝트 설정"
   },
   "message_list": {
     "show_details": "세부 정보 보기",

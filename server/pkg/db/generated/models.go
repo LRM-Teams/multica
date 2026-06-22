@@ -62,7 +62,6 @@ type AgentRuntime struct {
 	OwnerID        pgtype.UUID        `json:"owner_id"`
 	LegacyDaemonID pgtype.Text        `json:"legacy_daemon_id"`
 	Visibility     string             `json:"visibility"`
-	ProfileID      pgtype.UUID        `json:"profile_id"`
 }
 
 type AgentSkill struct {
@@ -152,13 +151,6 @@ type AutopilotRun struct {
 	Result         []byte             `json:"result"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	SquadID        pgtype.UUID        `json:"squad_id"`
-}
-
-type AutopilotSubscriber struct {
-	AutopilotID pgtype.UUID        `json:"autopilot_id"`
-	UserType    string             `json:"user_type"`
-	UserID      pgtype.UUID        `json:"user_id"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type AutopilotTrigger struct {
@@ -262,7 +254,6 @@ type Comment struct {
 	ResolvedAt     pgtype.Timestamptz `json:"resolved_at"`
 	ResolvedByType pgtype.Text        `json:"resolved_by_type"`
 	ResolvedByID   pgtype.UUID        `json:"resolved_by_id"`
-	SourceTaskID   pgtype.UUID        `json:"source_task_id"`
 }
 
 type CommentReaction struct {
@@ -330,30 +321,6 @@ type GithubInstallation struct {
 	AccountAvatarUrl pgtype.Text        `json:"account_avatar_url"`
 	ConnectedByID    pgtype.UUID        `json:"connected_by_id"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
-}
-
-type GithubPendingCheckSuite struct {
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	InstallationID int64              `json:"installation_id"`
-	RepoOwner      string             `json:"repo_owner"`
-	RepoName       string             `json:"repo_name"`
-	PrNumber       int32              `json:"pr_number"`
-	SuiteID        int64              `json:"suite_id"`
-	HeadSha        string             `json:"head_sha"`
-	AppID          int64              `json:"app_id"`
-	Conclusion     pgtype.Text        `json:"conclusion"`
-	Status         string             `json:"status"`
-	SuiteUpdatedAt pgtype.Timestamptz `json:"suite_updated_at"`
-	ReceivedAt     pgtype.Timestamptz `json:"received_at"`
-}
-
-type GithubPendingInstallation struct {
-	InstallationID   int64              `json:"installation_id"`
-	AccountLogin     string             `json:"account_login"`
-	AccountType      string             `json:"account_type"`
-	AccountAvatarUrl pgtype.Text        `json:"account_avatar_url"`
-	ReceivedAt       pgtype.Timestamptz `json:"received_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
@@ -626,21 +593,6 @@ type ProjectResource struct {
 	Position     int32              `json:"position"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	CreatedBy    pgtype.UUID        `json:"created_by"`
-}
-
-type RuntimeProfile struct {
-	ID             pgtype.UUID        `json:"id"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	DisplayName    string             `json:"display_name"`
-	ProtocolFamily string             `json:"protocol_family"`
-	CommandName    string             `json:"command_name"`
-	Description    pgtype.Text        `json:"description"`
-	FixedArgs      []byte             `json:"fixed_args"`
-	Visibility     string             `json:"visibility"`
-	CreatedBy      pgtype.UUID        `json:"created_by"`
-	Enabled        bool               `json:"enabled"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Skill struct {

@@ -445,11 +445,7 @@ export function Markdown({
   return (
     <div className={cn('markdown-content break-words', className)}>
       <ReactMarkdown
-        remarkPlugins={[
-          [remarkMath, { singleDollarTextMath: false }],
-          remarkBreaks,
-          [remarkGfm, { singleTilde: false }],
-        ]}
+        remarkPlugins={[remarkMath, remarkBreaks, [remarkGfm, { singleTilde: false }]]}
         rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
         urlTransform={urlTransform}
         components={components}

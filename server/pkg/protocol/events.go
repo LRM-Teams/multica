@@ -116,11 +116,10 @@ const (
 	EventSquadDeleted = "squad:deleted"
 
 	// Daemon events
-	EventDaemonHeartbeat              = "daemon:heartbeat"
-	EventDaemonHeartbeatAck           = "daemon:heartbeat_ack"
-	EventDaemonRegister               = "daemon:register"
-	EventDaemonTaskAvailable          = "daemon:task_available"
-	EventDaemonRuntimeProfilesChanged = "daemon:runtime_profiles_changed"
+	EventDaemonHeartbeat     = "daemon:heartbeat"
+	EventDaemonHeartbeatAck  = "daemon:heartbeat_ack"
+	EventDaemonRegister      = "daemon:register"
+	EventDaemonTaskAvailable = "daemon:task_available"
 
 	// GitHub integration events
 	EventGitHubInstallationCreated = "github_installation:created"

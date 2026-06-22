@@ -44,7 +44,7 @@ describe("useSquadsViewStore", () => {
     expect(useSquadsViewStore.getState().scope).toBe("all");
   });
 
-  it("partialize persists view prefs (no actions) under the workspace-namespaced key", async () => {
+  it("partialize persists only scope under the workspace-namespaced key", async () => {
     setCurrentWorkspace("acme", "ws_a");
     await flush();
     useSquadsViewStore.getState().setScope("all");
@@ -52,14 +52,7 @@ describe("useSquadsViewStore", () => {
     const raw = localStorage.getItem("multica_squads_view:acme");
     expect(raw).not.toBeNull();
     const parsed = JSON.parse(raw as string);
-    expect(Object.keys(parsed.state).sort()).toEqual([
-      "filters",
-      "hiddenColumns",
-      "scope",
-      "sortDirection",
-      "sortField",
-    ]);
-    expect(parsed.state.scope).toBe("all");
+    expect(parsed.state).toEqual({ scope: "all" });
   });
 
   it("rehydrates a different saved scope on workspace switch", async () => {

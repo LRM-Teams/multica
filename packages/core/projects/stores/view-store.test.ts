@@ -44,7 +44,7 @@ describe("useProjectViewStore", () => {
     expect(useProjectViewStore.getState().viewMode).toBe("comfortable");
   });
 
-  it("partialize persists view prefs (no actions) under the workspace-namespaced key", async () => {
+  it("partialize persists only viewMode under the workspace-namespaced key", async () => {
     setCurrentWorkspace("acme", "ws_a");
     await flush();
     useProjectViewStore.getState().setViewMode("comfortable");
@@ -52,14 +52,7 @@ describe("useProjectViewStore", () => {
     const raw = localStorage.getItem("multica_projects_view:acme");
     expect(raw).not.toBeNull();
     const parsed = JSON.parse(raw as string);
-    expect(Object.keys(parsed.state).sort()).toEqual([
-      "filters",
-      "hiddenColumns",
-      "sortDirection",
-      "sortField",
-      "viewMode",
-    ]);
-    expect(parsed.state.viewMode).toBe("comfortable");
+    expect(parsed.state).toEqual({ viewMode: "comfortable" });
   });
 
   it("rehydrates a different saved viewMode on workspace switch", async () => {

@@ -614,6 +614,12 @@ export function createMentionSuggestion(
 
   return {
     pluginKey,
+    // Trigger the picker even when "@" directly follows another character
+    // (e.g. "hi@alice"). Tiptap's Suggestion defaults allowedPrefixes to
+    // [" "], which requires a space or node start before the trigger and made
+    // mid-word "@" type as plain text. null disables the prefix check, matching
+    // chat-composer expectations (Slack / Linear trigger "@" anywhere).
+    allowedPrefixes: null,
     items: ({ query }) => {
       if (options.mode === "context") {
         const normalizedQuery = query.trim();

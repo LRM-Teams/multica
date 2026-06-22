@@ -44,40 +44,58 @@ green before merge, so anything reaching `main` is already tested:
 > GitHub → repo **Settings → Branches → Add branch ruleset** for `main` →
 > require a pull request, and **Require status checks** → select the `CI` checks.
 
-### 2. Install the self-hosted runner on s89
+### 2. Self-hosted runner on s89 (already installed — recorded here for rebuild)
 
-Run as the existing `dev` user (already in the `docker` group). Get a token from
-**Settings → Actions → Runners → New self-hosted runner** (or
-`gh api -X POST repos/LRM-Teams/multica/actions/runners/registration-token`):
+The runner runs as a **dedicated low-privilege `gha` user** (never `dev` or root),
+pinned + hash-verified, reaching GitHub outbound through the proxy. These steps
+reproduce the install from scratch:
 
 ```bash
-ssh s89
-sudo -iu dev
+# --- dedicated user, docker access, least-privilege secret read ---
+sudo useradd -m -s /bin/bash gha
+sudo usermod -aG docker gha                     # needed for `docker compose`
+sudo setfacl -m u:gha:r /data/multica/.env      # read ONLY the prod secrets it needs
+
+# --- download a pinned, hash-verified runner (as gha, via the proxy) ---
+sudo -u gha env https_proxy=http://127.0.0.1:7893 http_proxy=http://127.0.0.1:7893 bash -s <<'EOF'
+set -euo pipefail
 mkdir -p ~/actions-runner && cd ~/actions-runner
-curl -o runner.tar.gz -L https://github.com/actions/runner/releases/latest/download/actions-runner-linux-x64.tar.gz
-tar xzf runner.tar.gz
-
-# Labels MUST include `s89` — deploy.yml targets `runs-on: [self-hosted, s89]`.
-./config.sh --url https://github.com/LRM-Teams/multica \
-  --token <REGISTRATION_TOKEN> --labels s89 --unattended
-```
-
-The runner must reach GitHub through the proxy. Make the proxy env available to
-the runner **service** before installing it (the runner reads `https_proxy`):
-
-```bash
-# ~/actions-runner/.env  (read by the runner at startup)
-cat > .env <<'EOF'
-https_proxy=http://127.0.0.1:7893
-http_proxy=http://127.0.0.1:7893
-no_proxy=localhost,127.0.0.1,::1,.tencentyun.com
+V=2.335.1
+curl -fsSL -o runner.tar.gz "https://github.com/actions/runner/releases/download/v${V}/actions-runner-linux-x64-${V}.tar.gz"
+echo "4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf  runner.tar.gz" | sha256sum -c -
+tar xzf runner.tar.gz && rm -f runner.tar.gz
 EOF
 
-sudo ./svc.sh install dev
-sudo ./svc.sh start
+# --- proxy for the SERVICE (systemd does NOT inherit shell env) ---
+sudo -u gha tee /home/gha/actions-runner/.env >/dev/null <<'EOF'
+https_proxy=http://127.0.0.1:7893
+http_proxy=http://127.0.0.1:7893
+no_proxy=localhost,127.0.0.1,::1,.tencentyun.com,.tencent.com
+EOF
+
+# --- .NET native deps: TencentOS (RHEL9-like) isn't detected by the bundled
+#     installdependencies.sh, so install them directly via dnf (Tencent mirror) ---
+sudo dnf install -y libicu krb5-libs zlib openssl-libs
+
+# --- register (token is single-use, ~1h TTL) ---
+TOKEN=$(gh api -X POST repos/LRM-Teams/multica/actions/runners/registration-token --jq .token)
+sudo -u gha env https_proxy=http://127.0.0.1:7893 http_proxy=http://127.0.0.1:7893 \
+  bash -c "cd ~/actions-runner && ./config.sh --url https://github.com/LRM-Teams/multica \
+           --token $TOKEN --name s89 --labels s89 --unattended --replace"
+
+# --- run as a boot-enabled systemd service, as gha ---
+sudo bash -c 'cd /home/gha/actions-runner && ./svc.sh install gha && ./svc.sh start'
 ```
 
-Verify it shows **Idle** under Settings → Actions → Runners.
+Verify it is `online` with the right labels:
+
+```bash
+gh api repos/LRM-Teams/multica/actions/runners \
+  --jq '.runners[] | {name,status,labels:[.labels[].name]}'
+# → {"name":"s89","status":"online","labels":["self-hosted","Linux","X64","s89"]}
+```
+
+The labels must include `s89` so `runs-on: [self-hosted, s89]` matches.
 
 ### 3. Point the server's `.env` at the fork images (recommended)
 
@@ -107,16 +125,22 @@ on the box**. For manual pulls on s89, log in once with a PAT
 - **Health:** the deploy fails loudly if `/readyz` doesn't pass within 60s, and
   dumps the last 80 lines of `multica-backend-1` logs.
 
-## Security note
+## Security
 
 A self-hosted runner executes whatever a triggered workflow tells it to, on a box
-that also runs production (and the `leagent` / `supabase` stacks). Keep the repo's
-Actions settings strict:
+that also runs production (plus the `leagent` / `supabase` stacks).
 
-- **Fork pull requests:** require approval to run workflows from outside
-  collaborators (Settings → Actions → General → *Fork pull request workflows*).
-  `deploy.yml` only triggers on `push` to `main` and `workflow_dispatch`, never on
-  `pull_request`, which keeps fork PRs off the runner — but the setting is the
-  real backstop.
-- Consider a dedicated low-privilege user for the runner if you later add
-  workflows that run untrusted code.
+- **The repo MUST stay private.** GitHub explicitly recommends against self-hosted
+  runners on public repos: a fork PR can change a workflow to
+  `runs-on: [self-hosted, s89]` and run arbitrary code on the box. The repo was made
+  **private** for exactly this reason — do not flip it back to public while the s89
+  runner is registered.
+- **Dedicated low-privilege user.** The runner runs as `gha` (not `dev`/root), with an
+  ACL granting read on only `/data/multica/.env`. Caveat: `gha` is in the `docker`
+  group, which is root-equivalent (a container can mount the host), so the user split
+  is isolation/hygiene — the real boundary is the private repo. For a hard boundary,
+  use rootless Docker or a dedicated runner host.
+- `deploy.yml` triggers only on `push` to `main` and `workflow_dispatch`, never
+  `pull_request`.
+- *Optional hardening:* ephemeral runners (`--ephemeral`, fresh per job) if you later
+  add workflows that run untrusted code.

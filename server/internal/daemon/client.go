@@ -347,6 +347,14 @@ func (c *Client) SyncAgentSharedSkills(ctx context.Context, runtimeID string, pa
 	return &result, nil
 }
 
+func (c *Client) SyncAgentMemories(ctx context.Context, runtimeID string, payload AgentMemorySyncPayload) (*SharedSkillSyncResult, error) {
+	var result SharedSkillSyncResult
+	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-memories/sync", runtimeID), payload, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // WorkspaceInfo holds minimal workspace metadata returned by the API.
 type WorkspaceInfo struct {
 	ID   string `json:"id"`

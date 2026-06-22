@@ -31,6 +31,25 @@ type AgentSharedSkillSyncRequest struct {
 	Agents []AgentSharedSkillSyncSet `json:"agents"`
 }
 
+type AgentMemorySyncRequest struct {
+	Agents []AgentMemorySyncSet `json:"agents"`
+}
+
+type AgentMemorySyncSet struct {
+	AgentID     string                     `json:"agent_id"`
+	Memories    []RuntimeAgentMemoryBundle `json:"memories"`
+	PresentKeys []string                   `json:"present_keys"`
+}
+
+type RuntimeAgentMemoryBundle struct {
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Content     string `json:"content"`
+	SourcePath  string `json:"source_path"`
+	Provider    string `json:"provider"`
+	ContentHash string `json:"content_hash,omitempty"`
+}
+
 type AgentSharedSkillSyncSet struct {
 	AgentID     string                     `json:"agent_id"`
 	Skills      []RuntimeSharedSkillBundle `json:"skills"`
@@ -71,6 +90,62 @@ type RuntimeSharedSkillSyncItemError struct {
 	Error string `json:"error"`
 }
 
+func (h *Handler) SyncAgentMemories(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	rt, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
+		return
+	}
+
+	var req AgentMemorySyncRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	resp := RuntimeSharedSkillSyncResponse{Status: "ok"}
+	for _, set := range req.Agents {
+		agent, ok := h.loadRuntimeBoundAgentForSync(r.Context(), &resp, rt, set.AgentID)
+		if !ok {
+			continue
+		}
+		for _, incoming := range set.Memories {
+			status, err := h.syncAgentMemory(r.Context(), rt, agent, incoming)
+			if err != nil {
+				if conflict := (*runtimeSharedSkillConflictError)(nil); errors.As(err, &conflict) {
+					resp.Conflicts = append(resp.Conflicts, conflict.Conflict)
+					continue
+				}
+				resp.Errors = append(resp.Errors, RuntimeSharedSkillSyncItemError{Key: incoming.Key, Name: incoming.Name, Error: err.Error()})
+				continue
+			}
+			switch status {
+			case "created":
+				resp.Created++
+			case "updated":
+				resp.Updated++
+			case "unchanged":
+				resp.Unchanged++
+			}
+		}
+		presentKeys := make(map[string]struct{}, len(set.PresentKeys))
+		for _, key := range set.PresentKeys {
+			key = strings.TrimSpace(key)
+			if key != "" {
+				presentKeys[key] = struct{}{}
+			}
+		}
+		deleted, err := h.deleteMissingAgentMemories(r.Context(), agent, presentKeys)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to delete removed agent memories: "+err.Error())
+			return
+		}
+		resp.Deleted += deleted
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (h *Handler) SyncAgentSharedSkills(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
 	rt, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
@@ -86,18 +161,8 @@ func (h *Handler) SyncAgentSharedSkills(w http.ResponseWriter, r *http.Request) 
 
 	resp := RuntimeSharedSkillSyncResponse{Status: "ok"}
 	for _, set := range req.Agents {
-		agentID, err := util.ParseUUID(strings.TrimSpace(set.AgentID))
-		if err != nil {
-			resp.Errors = append(resp.Errors, RuntimeSharedSkillSyncItemError{Key: set.AgentID, Error: "invalid agent_id"})
-			continue
-		}
-		agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: rt.WorkspaceID})
-		if err != nil {
-			resp.Errors = append(resp.Errors, RuntimeSharedSkillSyncItemError{Key: set.AgentID, Error: "agent not found"})
-			continue
-		}
-		if uuidToString(agent.RuntimeID) != uuidToString(rt.ID) {
-			resp.Errors = append(resp.Errors, RuntimeSharedSkillSyncItemError{Key: set.AgentID, Error: "agent is not bound to this runtime"})
+		agent, ok := h.loadRuntimeBoundAgentForSync(r.Context(), &resp, rt, set.AgentID)
+		if !ok {
 			continue
 		}
 		for _, incoming := range set.Skills {
@@ -135,6 +200,24 @@ func (h *Handler) SyncAgentSharedSkills(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) loadRuntimeBoundAgentForSync(ctx context.Context, resp *RuntimeSharedSkillSyncResponse, rt db.AgentRuntime, agentIDRaw string) (db.Agent, bool) {
+	agentID, err := util.ParseUUID(strings.TrimSpace(agentIDRaw))
+	if err != nil {
+		resp.Errors = append(resp.Errors, RuntimeSharedSkillSyncItemError{Key: agentIDRaw, Error: "invalid agent_id"})
+		return db.Agent{}, false
+	}
+	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: rt.WorkspaceID})
+	if err != nil {
+		resp.Errors = append(resp.Errors, RuntimeSharedSkillSyncItemError{Key: agentIDRaw, Error: "agent not found"})
+		return db.Agent{}, false
+	}
+	if uuidToString(agent.RuntimeID) != uuidToString(rt.ID) {
+		resp.Errors = append(resp.Errors, RuntimeSharedSkillSyncItemError{Key: agentIDRaw, Error: "agent is not bound to this runtime"})
+		return db.Agent{}, false
+	}
+	return agent, true
 }
 
 func (h *Handler) SyncRuntimeSharedSkills(w http.ResponseWriter, r *http.Request) {
@@ -423,6 +506,115 @@ func runtimeSharedSkillOrigin(raw []byte) *runtimeSharedSkillOriginInfo {
 		SyncKey:     strings.TrimSpace(config.Origin.SyncKey),
 		ContentHash: strings.TrimSpace(config.Origin.ContentHash),
 	}
+}
+
+func (h *Handler) syncAgentMemory(ctx context.Context, rt db.AgentRuntime, agent db.Agent, incoming RuntimeAgentMemoryBundle) (string, error) {
+	key := strings.TrimSpace(incoming.Key)
+	name := sanitizeNullBytes(strings.TrimSpace(incoming.Name))
+	if key == "" {
+		return "", fmt.Errorf("memory key is required")
+	}
+	if name == "" {
+		return "", fmt.Errorf("memory name is required")
+	}
+	hash := strings.TrimSpace(incoming.ContentHash)
+	if hash == "" {
+		hash = hashRuntimeSharedSkill(incoming.Content, nil)
+	}
+	config, err := json.Marshal(map[string]any{
+		"origin": map[string]any{
+			"type":         "agent_runtime_memory",
+			"runtime_id":   uuidToString(rt.ID),
+			"agent_id":     uuidToString(agent.ID),
+			"provider":     strings.TrimSpace(incoming.Provider),
+			"source_path":  strings.TrimSpace(incoming.SourcePath),
+			"sync_key":     key,
+			"content_hash": hash,
+			"synced_at":    time.Now().UTC().Format(time.RFC3339Nano),
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	existing, found, err := h.lookupAgentMemoryBySyncKey(ctx, agent.ID, key)
+	if err != nil {
+		return "", err
+	}
+	if found {
+		if existing.ContentHash == hash && existing.Name == name {
+			return "unchanged", nil
+		}
+		if name != existing.Name {
+			if byName, found, err := h.lookupAgentMemoryByName(ctx, agent.ID, name); err != nil {
+				return "", err
+			} else if found && uuidToString(byName.ID) != uuidToString(existing.ID) {
+				return "", &runtimeSharedSkillConflictError{Conflict: RuntimeSharedSkillSyncConflict{Key: key, Name: name, Skill: uuidToString(byName.ID), Reason: "cannot rename agent memory: target name is already taken"}}
+			}
+		}
+		update := db.UpdateAgentMemoryParams{ID: existing.ID, Content: pgtype.Text{String: sanitizeNullBytes(incoming.Content), Valid: true}, Config: config, ContentHash: pgtype.Text{String: hash, Valid: true}}
+		if trimmedName := sanitizeNullBytes(strings.TrimSpace(name)); trimmedName != "" && trimmedName != existing.Name {
+			update.Name = pgtype.Text{String: trimmedName, Valid: true}
+		}
+		if _, err := h.Queries.UpdateAgentMemory(ctx, update); err != nil {
+			return "", err
+		}
+		return "updated", nil
+	}
+
+	if byName, found, err := h.lookupAgentMemoryByName(ctx, agent.ID, name); err != nil {
+		return "", err
+	} else if found {
+		return "", &runtimeSharedSkillConflictError{Conflict: RuntimeSharedSkillSyncConflict{Key: key, Name: name, Skill: uuidToString(byName.ID), Reason: "an agent memory with this name already exists and is not managed by this sync key"}}
+	}
+	creator := pgtype.UUID{}
+	if rt.OwnerID.Valid {
+		creator = rt.OwnerID
+	}
+	if _, err := h.Queries.CreateAgentMemory(ctx, db.CreateAgentMemoryParams{WorkspaceID: rt.WorkspaceID, AgentID: agent.ID, Name: name, Content: sanitizeNullBytes(incoming.Content), Config: config, SyncKey: key, ContentHash: hash, CreatedBy: creator}); err != nil {
+		return "", err
+	}
+	return "created", nil
+}
+
+func (h *Handler) lookupAgentMemoryBySyncKey(ctx context.Context, agentID pgtype.UUID, syncKey string) (db.AgentMemory, bool, error) {
+	memory, err := h.Queries.GetAgentMemoryByAgentAndSyncKey(ctx, db.GetAgentMemoryByAgentAndSyncKeyParams{AgentID: agentID, SyncKey: syncKey})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.AgentMemory{}, false, nil
+		}
+		return db.AgentMemory{}, false, err
+	}
+	return memory, true, nil
+}
+
+func (h *Handler) lookupAgentMemoryByName(ctx context.Context, agentID pgtype.UUID, name string) (db.AgentMemory, bool, error) {
+	memory, err := h.Queries.GetAgentMemoryByAgentAndName(ctx, db.GetAgentMemoryByAgentAndNameParams{AgentID: agentID, Name: name})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.AgentMemory{}, false, nil
+		}
+		return db.AgentMemory{}, false, err
+	}
+	return memory, true, nil
+}
+
+func (h *Handler) deleteMissingAgentMemories(ctx context.Context, agent db.Agent, presentKeys map[string]struct{}) (int, error) {
+	memories, err := h.Queries.ListAgentMemoriesByAgent(ctx, agent.ID)
+	if err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for _, memory := range memories {
+		if _, ok := presentKeys[memory.SyncKey]; ok {
+			continue
+		}
+		if err := h.Queries.DeleteAgentMemory(ctx, db.DeleteAgentMemoryParams{ID: memory.ID, AgentID: agent.ID}); err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 type agentSharedSkillSyncResult struct {

@@ -157,3 +157,38 @@ ON CONFLICT (agent_shared_skill_id, path) DO UPDATE SET
     content = EXCLUDED.content,
     updated_at = now()
 RETURNING *;
+
+-- Agent memory CRUD
+
+-- name: ListAgentMemoriesByAgent :many
+SELECT * FROM agent_memory
+WHERE agent_id = $1
+ORDER BY name ASC;
+
+-- name: GetAgentMemoryByAgentAndSyncKey :one
+SELECT * FROM agent_memory
+WHERE agent_id = $1 AND sync_key = $2;
+
+-- name: GetAgentMemoryByAgentAndName :one
+SELECT * FROM agent_memory
+WHERE agent_id = $1 AND name = $2;
+
+-- name: CreateAgentMemory :one
+INSERT INTO agent_memory (
+    workspace_id, agent_id, name, content, config, sync_key, content_hash, created_by
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING *;
+
+-- name: UpdateAgentMemory :one
+UPDATE agent_memory SET
+    name = COALESCE(sqlc.narg('name'), name),
+    content = COALESCE(sqlc.narg('content'), content),
+    config = COALESCE(sqlc.narg('config'), config),
+    content_hash = COALESCE(sqlc.narg('content_hash'), content_hash),
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: DeleteAgentMemory :exec
+DELETE FROM agent_memory WHERE id = $1 AND agent_id = $2;

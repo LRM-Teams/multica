@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -105,7 +106,10 @@ func (d *Daemon) syncSharedSkillsForRuntime(ctx context.Context, rt Runtime) err
 			return err
 		}
 	}
-	return d.syncAgentSharedSkillsForRuntime(ctx, rt)
+	if err := d.syncAgentSharedSkillsForRuntime(ctx, rt); err != nil {
+		return err
+	}
+	return d.syncAgentMemoriesForRuntime(ctx, rt)
 }
 
 func (d *Daemon) syncWorkspaceSharedSkillsForRuntime(ctx context.Context, rt Runtime, scanRoot string) error {
@@ -310,6 +314,109 @@ func (d *Daemon) buildAgentSharedSkillBundleSet(rt Runtime, agentID, scanRoot st
 	}
 
 	return AgentSharedSkillBundleSet{AgentID: agentID, Skills: bundles, PresentKeys: presentKeys}, nil
+}
+
+func (d *Daemon) syncAgentMemoriesForRuntime(ctx context.Context, rt Runtime) error {
+	base, ok := agentSharedSkillScanBase(d.cfg, rt.Provider)
+	if !ok {
+		return nil
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			d.logger.Warn("agent memory root unavailable", "path", base, "provider", rt.Provider, "error", err)
+		}
+		return nil
+	}
+
+	payload := AgentMemorySyncPayload{Agents: make([]AgentMemoryBundleSet, 0, len(entries))}
+	for _, entry := range entries {
+		if !entry.IsDir() || isIgnoredLocalSkillEntry(entry.Name()) {
+			continue
+		}
+		agentID := entry.Name()
+		scanRoot := filepath.Join(base, agentID, "shared-cache", "memory")
+		set, err := d.buildAgentMemoryBundleSet(rt, agentID, scanRoot)
+		if err != nil {
+			d.logger.Warn("agent memory scan failed", "runtime_id", rt.ID, "agent_id", agentID, "path", scanRoot, "error", err)
+			continue
+		}
+		payload.Agents = append(payload.Agents, set)
+	}
+	if len(payload.Agents) == 0 {
+		return nil
+	}
+
+	result, err := d.client.SyncAgentMemories(ctx, rt.ID, payload)
+	if err != nil {
+		return err
+	}
+	d.logSharedSkillSyncResult(rt, "agent memories synced", result)
+	return nil
+}
+
+func (d *Daemon) buildAgentMemoryBundleSet(rt Runtime, agentID, scanRoot string) (AgentMemoryBundleSet, error) {
+	entries, err := os.ReadDir(scanRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return AgentMemoryBundleSet{AgentID: agentID}, nil
+		}
+		return AgentMemoryBundleSet{}, err
+	}
+
+	presentKeys := make([]string, 0, len(entries))
+	memories := make([]AgentMemoryBundle, 0, len(entries))
+	activeCacheKeys := make(map[string]struct{}, len(entries))
+
+	d.sharedSkillScanMu.Lock()
+	defer d.sharedSkillScanMu.Unlock()
+
+	for _, entry := range entries {
+		if entry.IsDir() || isIgnoredLocalSkillEntry(entry.Name()) || !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
+			continue
+		}
+		key, err := normalizeLocalSkillKey(entry.Name())
+		if err != nil {
+			continue
+		}
+		path := filepath.Join(scanRoot, entry.Name())
+		info, err := os.Stat(path)
+		if err != nil || info.Size() > maxLocalSkillFileSize {
+			continue
+		}
+		presentKeys = append(presentKeys, key)
+		fingerprint := info.ModTime().UTC().Format(time.RFC3339Nano) + "\x00" + info.Name() + "\x00" + strconv.FormatInt(info.Size(), 10)
+		cacheKey := scanRoot + "\x00" + key
+		activeCacheKeys[cacheKey] = struct{}{}
+		if d.sharedSkillScanCache[cacheKey] == fingerprint {
+			continue
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		d.sharedSkillScanCache[cacheKey] = fingerprint
+		memories = append(memories, AgentMemoryBundle{
+			Key:         key,
+			Name:        strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name())),
+			Content:     string(content),
+			SourcePath:  relativizeHomePath(path),
+			Provider:    rt.Provider,
+			ContentHash: sharedSkillHash(string(content), nil),
+		})
+	}
+
+	for cacheKey := range d.sharedSkillScanCache {
+		if !strings.HasPrefix(cacheKey, scanRoot+"\x00") {
+			continue
+		}
+		if _, active := activeCacheKeys[cacheKey]; !active {
+			delete(d.sharedSkillScanCache, cacheKey)
+		}
+	}
+	sort.Strings(presentKeys)
+	sort.Slice(memories, func(i, j int) bool { return memories[i].Key < memories[j].Key })
+	return AgentMemoryBundleSet{AgentID: agentID, Memories: memories, PresentKeys: presentKeys}, nil
 }
 
 func (d *Daemon) logSharedSkillSyncResult(rt Runtime, msg string, result *SharedSkillSyncResult) {

@@ -155,6 +155,16 @@ type SharedSkillSyncPayload struct {
 	PresentKeys []string            `json:"present_keys"`
 }
 
+type AgentSharedSkillSyncPayload struct {
+	Agents []AgentSharedSkillBundleSet `json:"agents"`
+}
+
+type AgentSharedSkillBundleSet struct {
+	AgentID     string              `json:"agent_id"`
+	Skills      []SharedSkillBundle `json:"skills"`
+	PresentKeys []string            `json:"present_keys"`
+}
+
 type SharedSkillBundle struct {
 	Key         string          `json:"key"`
 	Name        string          `json:"name"`

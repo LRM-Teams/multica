@@ -20,6 +20,15 @@ func TestSharedSkillScanRootUsesProviderDefault(t *testing.T) {
 		t.Fatalf("got %q want %q", root, want)
 	}
 
+	agentRoot, ok := agentSharedSkillScanBase(Config{}, "pi")
+	if !ok {
+		t.Fatal("expected pi agent shared root")
+	}
+	agentWant := filepath.Join(home, "multica_workspaces", "pi_demo_workspace", ".pi", "agents")
+	if agentRoot != agentWant {
+		t.Fatalf("got %q want %q", agentRoot, agentWant)
+	}
+
 	if _, ok := sharedSkillScanRoot(Config{}, "codex"); ok {
 		t.Fatal("expected codex to have no default shared root")
 	}

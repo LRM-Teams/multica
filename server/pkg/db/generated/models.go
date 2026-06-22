@@ -616,6 +616,31 @@ type SkillFile struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AgentSharedSkill struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Content     string             `json:"content"`
+	Config      []byte             `json:"config"`
+	SyncKey     string             `json:"sync_key"`
+	ContentHash string             `json:"content_hash"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentSharedSkillFile struct {
+	ID                 pgtype.UUID        `json:"id"`
+	AgentSharedSkillID pgtype.UUID        `json:"agent_shared_skill_id"`
+	AgentID            pgtype.UUID        `json:"agent_id"`
+	Path               string             `json:"path"`
+	Content            string             `json:"content"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Squad struct {
 	ID           pgtype.UUID        `json:"id"`
 	WorkspaceID  pgtype.UUID        `json:"workspace_id"`

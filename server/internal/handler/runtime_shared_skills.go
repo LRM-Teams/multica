@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -22,6 +23,16 @@ import (
 const sharedSkillOriginType = "runtime_shared"
 
 type RuntimeSharedSkillSyncRequest struct {
+	Skills      []RuntimeSharedSkillBundle `json:"skills"`
+	PresentKeys []string                   `json:"present_keys"`
+}
+
+type AgentSharedSkillSyncRequest struct {
+	Agents []AgentSharedSkillSyncSet `json:"agents"`
+}
+
+type AgentSharedSkillSyncSet struct {
+	AgentID     string                     `json:"agent_id"`
 	Skills      []RuntimeSharedSkillBundle `json:"skills"`
 	PresentKeys []string                   `json:"present_keys"`
 }
@@ -58,6 +69,72 @@ type RuntimeSharedSkillSyncItemError struct {
 	Key   string `json:"key"`
 	Name  string `json:"name,omitempty"`
 	Error string `json:"error"`
+}
+
+func (h *Handler) SyncAgentSharedSkills(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	rt, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
+		return
+	}
+
+	var req AgentSharedSkillSyncRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	resp := RuntimeSharedSkillSyncResponse{Status: "ok"}
+	for _, set := range req.Agents {
+		agentID, err := util.ParseUUID(strings.TrimSpace(set.AgentID))
+		if err != nil {
+			resp.Errors = append(resp.Errors, RuntimeSharedSkillSyncItemError{Key: set.AgentID, Error: "invalid agent_id"})
+			continue
+		}
+		agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: rt.WorkspaceID})
+		if err != nil {
+			resp.Errors = append(resp.Errors, RuntimeSharedSkillSyncItemError{Key: set.AgentID, Error: "agent not found"})
+			continue
+		}
+		if uuidToString(agent.RuntimeID) != uuidToString(rt.ID) {
+			resp.Errors = append(resp.Errors, RuntimeSharedSkillSyncItemError{Key: set.AgentID, Error: "agent is not bound to this runtime"})
+			continue
+		}
+		for _, incoming := range set.Skills {
+			result, err := h.syncAgentSharedSkill(r.Context(), rt, agent, incoming)
+			if err != nil {
+				if conflict := (*runtimeSharedSkillConflictError)(nil); errors.As(err, &conflict) {
+					resp.Conflicts = append(resp.Conflicts, conflict.Conflict)
+					continue
+				}
+				resp.Errors = append(resp.Errors, RuntimeSharedSkillSyncItemError{Key: incoming.Key, Name: incoming.Name, Error: err.Error()})
+				continue
+			}
+			switch result.Status {
+			case "created":
+				resp.Created++
+			case "updated":
+				resp.Updated++
+			case "unchanged":
+				resp.Unchanged++
+			}
+		}
+		presentKeys := make(map[string]struct{}, len(set.PresentKeys))
+		for _, key := range set.PresentKeys {
+			key = strings.TrimSpace(key)
+			if key != "" {
+				presentKeys[key] = struct{}{}
+			}
+		}
+		deleted, err := h.deleteMissingAgentSharedSkills(r.Context(), agent, presentKeys)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to delete removed agent shared skills: "+err.Error())
+			return
+		}
+		resp.Deleted += deleted
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) SyncRuntimeSharedSkills(w http.ResponseWriter, r *http.Request) {
@@ -346,6 +423,161 @@ func runtimeSharedSkillOrigin(raw []byte) *runtimeSharedSkillOriginInfo {
 		SyncKey:     strings.TrimSpace(config.Origin.SyncKey),
 		ContentHash: strings.TrimSpace(config.Origin.ContentHash),
 	}
+}
+
+type agentSharedSkillSyncResult struct {
+	Status string
+	Skill  db.AgentSharedSkill
+}
+
+func (h *Handler) syncAgentSharedSkill(ctx context.Context, rt db.AgentRuntime, agent db.Agent, incoming RuntimeSharedSkillBundle) (agentSharedSkillSyncResult, error) {
+	key := strings.TrimSpace(incoming.Key)
+	name := sanitizeNullBytes(strings.TrimSpace(incoming.Name))
+	if key == "" {
+		return agentSharedSkillSyncResult{}, fmt.Errorf("skill key is required")
+	}
+	if name == "" {
+		return agentSharedSkillSyncResult{}, fmt.Errorf("skill name is required")
+	}
+	if strings.TrimSpace(incoming.Content) == "" {
+		return agentSharedSkillSyncResult{}, fmt.Errorf("skill content is required")
+	}
+	files, err := validateSharedSkillFiles(incoming.Files)
+	if err != nil {
+		return agentSharedSkillSyncResult{}, err
+	}
+	hash := strings.TrimSpace(incoming.ContentHash)
+	if hash == "" {
+		hash = hashRuntimeSharedSkill(incoming.Content, files)
+	}
+	config, err := json.Marshal(map[string]any{
+		"origin": map[string]any{
+			"type":         "agent_shared_runtime",
+			"runtime_id":   uuidToString(rt.ID),
+			"agent_id":     uuidToString(agent.ID),
+			"provider":     strings.TrimSpace(incoming.Provider),
+			"source_path":  strings.TrimSpace(incoming.SourcePath),
+			"sync_key":     key,
+			"content_hash": hash,
+			"synced_at":    time.Now().UTC().Format(time.RFC3339Nano),
+		},
+	})
+	if err != nil {
+		return agentSharedSkillSyncResult{}, err
+	}
+
+	existing, found, err := h.lookupAgentSharedSkillBySyncKey(ctx, agent.ID, key)
+	if err != nil {
+		return agentSharedSkillSyncResult{}, err
+	}
+	if found {
+		if existing.ContentHash == hash && existing.Name == name {
+			return agentSharedSkillSyncResult{Status: "unchanged", Skill: existing}, nil
+		}
+		if name != existing.Name {
+			if byName, found, err := h.lookupAgentSharedSkillByName(ctx, agent.ID, name); err != nil {
+				return agentSharedSkillSyncResult{}, err
+			} else if found && uuidToString(byName.ID) != uuidToString(existing.ID) {
+				return agentSharedSkillSyncResult{}, &runtimeSharedSkillConflictError{Conflict: RuntimeSharedSkillSyncConflict{Key: key, Name: name, Skill: uuidToString(byName.ID), Reason: "cannot rename agent shared skill: target name is already taken"}}
+			}
+		}
+		updated, err := h.overwriteAgentSharedSkillWithFiles(ctx, existing, name, incoming.Description, incoming.Content, config, hash, files)
+		if err != nil {
+			return agentSharedSkillSyncResult{}, err
+		}
+		return agentSharedSkillSyncResult{Status: "updated", Skill: updated}, nil
+	}
+
+	if byName, found, err := h.lookupAgentSharedSkillByName(ctx, agent.ID, name); err != nil {
+		return agentSharedSkillSyncResult{}, err
+	} else if found {
+		return agentSharedSkillSyncResult{}, &runtimeSharedSkillConflictError{Conflict: RuntimeSharedSkillSyncConflict{Key: key, Name: name, Skill: uuidToString(byName.ID), Reason: "an agent shared skill with this name already exists and is not managed by this sync key"}}
+	}
+
+	creator := pgtype.UUID{}
+	if rt.OwnerID.Valid {
+		creator = rt.OwnerID
+	}
+	created, err := h.Queries.CreateAgentSharedSkill(ctx, db.CreateAgentSharedSkillParams{WorkspaceID: rt.WorkspaceID, AgentID: agent.ID, Name: name, Description: sanitizeNullBytes(incoming.Description), Content: sanitizeNullBytes(incoming.Content), Config: config, SyncKey: key, ContentHash: hash, CreatedBy: creator})
+	if err != nil {
+		if isUniqueViolation(err) {
+			return agentSharedSkillSyncResult{}, &runtimeSharedSkillConflictError{Conflict: RuntimeSharedSkillSyncConflict{Key: key, Name: name, Reason: "an agent shared skill with this name or sync key already exists"}}
+		}
+		return agentSharedSkillSyncResult{}, err
+	}
+	if _, err := h.overwriteAgentSharedSkillWithFiles(ctx, created, name, incoming.Description, incoming.Content, config, hash, files); err != nil {
+		return agentSharedSkillSyncResult{}, err
+	}
+	return agentSharedSkillSyncResult{Status: "created", Skill: created}, nil
+}
+
+func (h *Handler) lookupAgentSharedSkillBySyncKey(ctx context.Context, agentID pgtype.UUID, syncKey string) (db.AgentSharedSkill, bool, error) {
+	skill, err := h.Queries.GetAgentSharedSkillByAgentAndSyncKey(ctx, db.GetAgentSharedSkillByAgentAndSyncKeyParams{AgentID: agentID, SyncKey: syncKey})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.AgentSharedSkill{}, false, nil
+		}
+		return db.AgentSharedSkill{}, false, err
+	}
+	return skill, true, nil
+}
+
+func (h *Handler) lookupAgentSharedSkillByName(ctx context.Context, agentID pgtype.UUID, name string) (db.AgentSharedSkill, bool, error) {
+	skill, err := h.Queries.GetAgentSharedSkillByAgentAndName(ctx, db.GetAgentSharedSkillByAgentAndNameParams{AgentID: agentID, Name: name})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.AgentSharedSkill{}, false, nil
+		}
+		return db.AgentSharedSkill{}, false, err
+	}
+	return skill, true, nil
+}
+
+func (h *Handler) overwriteAgentSharedSkillWithFiles(ctx context.Context, existing db.AgentSharedSkill, name, description, content string, config []byte, hash string, files []CreateSkillFileRequest) (db.AgentSharedSkill, error) {
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return db.AgentSharedSkill{}, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.Queries.WithTx(tx)
+	update := db.UpdateAgentSharedSkillParams{ID: existing.ID, Description: pgtype.Text{String: sanitizeNullBytes(description), Valid: true}, Content: pgtype.Text{String: sanitizeNullBytes(content), Valid: true}, Config: config, ContentHash: pgtype.Text{String: hash, Valid: true}}
+	if trimmedName := sanitizeNullBytes(strings.TrimSpace(name)); trimmedName != "" && trimmedName != existing.Name {
+		update.Name = pgtype.Text{String: trimmedName, Valid: true}
+	}
+	updated, err := qtx.UpdateAgentSharedSkill(ctx, update)
+	if err != nil {
+		return db.AgentSharedSkill{}, err
+	}
+	if err := qtx.DeleteAgentSharedSkillFilesBySkill(ctx, updated.ID); err != nil {
+		return db.AgentSharedSkill{}, err
+	}
+	for _, f := range files {
+		if _, err := qtx.UpsertAgentSharedSkillFile(ctx, db.UpsertAgentSharedSkillFileParams{AgentSharedSkillID: updated.ID, AgentID: updated.AgentID, Path: sanitizeNullBytes(f.Path), Content: sanitizeNullBytes(f.Content)}); err != nil {
+			return db.AgentSharedSkill{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.AgentSharedSkill{}, err
+	}
+	return updated, nil
+}
+
+func (h *Handler) deleteMissingAgentSharedSkills(ctx context.Context, agent db.Agent, presentKeys map[string]struct{}) (int, error) {
+	skills, err := h.Queries.ListAgentSharedSkillsByAgent(ctx, agent.ID)
+	if err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for _, skill := range skills {
+		if _, ok := presentKeys[skill.SyncKey]; ok {
+			continue
+		}
+		if err := h.Queries.DeleteAgentSharedSkill(ctx, db.DeleteAgentSharedSkillParams{ID: skill.ID, AgentID: agent.ID}); err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 func hashRuntimeSharedSkill(content string, files []CreateSkillFileRequest) string {

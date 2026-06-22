@@ -1,0 +1,189 @@
+name: Deploy
+
+# Continuous deployment to s89 (Tencent Cloud, Beijing — behind the GFW).
+#
+# Why this shape: inbound SSH from GitHub-hosted runners into a mainland-China
+# box is the throttled/blocked direction across the Great Firewall, so we never
+# connect *into* s89. Instead:
+#
+#   1. Images build on GitHub-hosted runners (outside China), pushed to GHCR.
+#   2. A self-hosted runner *on s89* — which long-polls GitHub outbound through
+#      the box's existing proxy (127.0.0.1:7893) — pulls the images and
+#      restarts the stack locally. Outbound is the only reliable direction.
+#
+# Test gate: the CI workflow runs on every PR into `dev`. The team's workflow is
+# feature branch → PR → merge to `dev`, which builds images and deploys to s89.
+# `main` is left as the upstream-tracking branch and never deploys.
+#
+# One-time server + repo setup is documented in docs/deploy-s89.md.
+
+on:
+  # Deploy only when a PR is MERGED into `dev` (the team's integration branch).
+  # Direct pushes to dev do NOT deploy — the disciplined flow is
+  # feature branch → PR → merge to dev → deploy.
+  pull_request:
+    types: [closed]
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Existing image tag to (re)deploy for rollback, e.g. sha-abc1234. Leave blank to build the current commit."
+        required: false
+        default: ""
+
+# Never run two deploys at once; never cancel an in-flight one mid-restart.
+concurrency:
+  group: deploy-s89
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # Only build/deploy from the team fork — never upstream or other forks.
+    # On manual dispatch with an image_tag we skip building and redeploy that tag.
+    if: >-
+      github.repository_owner == 'LRM-Teams' &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.merged == true) ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag == ''))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.prep.outputs.tag }}
+      backend_image: ${{ steps.prep.outputs.backend_image }}
+      web_image: ${{ steps.prep.outputs.web_image }}
+    steps:
+      # On a merged PR, build the actual merge commit on `dev`; on manual
+      # dispatch, build whatever ref was dispatched.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.ref }}
+
+      # GHCR paths must be lowercase, but github.repository_owner preserves the
+      # org's display case (e.g. "LRM-Teams"). Lowercase it here. The tag is the
+      # short SHA of the checked-out commit — the real dev commit being deployed.
+      - name: Compute image refs + tag
+        id: prep
+        run: |
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          sha="$(git rev-parse --short=7 HEAD)"
+          {
+            echo "backend_image=ghcr.io/${owner_lc}/multica-backend"
+            echo "web_image=ghcr.io/${owner_lc}/multica-web"
+            echo "tag=sha-${sha}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # s89 is x86_64, so amd64-only — no QEMU, no multi-arch manifest merge.
+      - name: Build & push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.prep.outputs.backend_image }}:latest
+            ${{ steps.prep.outputs.backend_image }}:${{ steps.prep.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.prep.outputs.tag }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=deploy-backend
+          cache-to: type=gha,mode=max,scope=deploy-backend
+
+      - name: Build & push web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.web
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.prep.outputs.web_image }}:latest
+            ${{ steps.prep.outputs.web_image }}:${{ steps.prep.outputs.tag }}
+          build-args: |
+            REMOTE_API_URL=http://backend:8080
+            NEXT_PUBLIC_APP_VERSION=${{ steps.prep.outputs.tag }}
+          cache-from: type=gha,scope=deploy-web
+          cache-to: type=gha,mode=max,scope=deploy-web
+
+  deploy:
+    needs: build
+    # Run after a successful build (push / dispatch-without-tag), OR straight
+    # away on a dispatch that names an existing tag to roll back to.
+    if: >-
+      always() &&
+      github.repository_owner == 'LRM-Teams' &&
+      (needs.build.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != ''))
+    runs-on: [self-hosted, s89]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      DEPLOY_DIR: /data/multica
+      # The tag to deploy: a rollback input if given, otherwise the freshly built one.
+      IMAGE_TAG: >-
+        ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != '')
+            && github.event.inputs.image_tag
+            || needs.build.outputs.tag }}
+    steps:
+      # Pull only the compose file from the deployed commit, so the running
+      # topology always matches the repo. Secrets/config come from the server's
+      # own /data/multica/.env, which is never in git.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.ref }}
+          sparse-checkout: docker-compose.selfhost.yml
+          sparse-checkout-cone-mode: false
+
+      - name: Log in to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+      - name: Pull & restart backend + frontend
+        run: |
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
+          export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
+          export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
+          echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) on $(hostname)"
+          compose() {
+            docker compose \
+              --project-directory "${DEPLOY_DIR}" \
+              --env-file "${DEPLOY_DIR}/.env" \
+              -f "${GITHUB_WORKSPACE}/docker-compose.selfhost.yml" "$@"
+          }
+          # postgres + caddy are left running; only the app services roll.
+          # The backend container runs `migrate up` on start (entrypoint.sh).
+          compose pull backend frontend
+          compose up -d backend frontend
+
+      - name: Health check (/readyz)
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/readyz >/dev/null 2>&1; then
+              echo "Backend healthy after $((i * 2))s."
+              exit 0
+            fi
+            echo "waiting for backend readiness... ($i/30)"
+            sleep 2
+          done
+          echo "::error::Backend did not pass /readyz within 60s — deploy likely broken."
+          docker logs --tail 80 multica-backend-1 || true
+          exit 1

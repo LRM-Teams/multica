@@ -129,7 +129,7 @@ vi.mock("../../editor", () => ({
     <div data-testid="readonly-content">{content}</div>
   ),
   ContentEditor: forwardRef(function MockContentEditor(
-    { defaultValue, onUpdate, placeholder }: any,
+    { defaultValue, onUpdate, placeholder, flushPendingOnUnmount }: any,
     ref: any,
   ) {
     const valueRef = useRef(defaultValue || "");
@@ -150,6 +150,7 @@ vi.mock("../../editor", () => ({
         }}
         placeholder={placeholder}
         data-testid="rich-text-editor"
+        data-flush-on-unmount={flushPendingOnUnmount ? "true" : undefined}
       />
     );
   }),
@@ -207,6 +208,7 @@ const mockApiObj = vi.hoisted(() => ({
   unsubscribeFromIssue: vi.fn().mockResolvedValue(undefined),
   getActiveTasksForIssue: vi.fn().mockResolvedValue({ tasks: [] }),
   listTasksByIssue: vi.fn().mockResolvedValue([]),
+  rerunIssue: vi.fn(),
   listTaskMessages: vi.fn().mockResolvedValue([]),
   listChildIssues: vi.fn().mockResolvedValue({ issues: [] }),
   listIssues: vi.fn().mockResolvedValue({ issues: [], total: 0 }),
@@ -506,6 +508,7 @@ describe("IssueDetail (shared)", () => {
     mockApiObj.listIssues.mockResolvedValue({ issues: [], total: 0 });
     mockApiObj.getActiveTasksForIssue.mockResolvedValue({ tasks: [] });
     mockApiObj.listTasksByIssue.mockResolvedValue([]);
+    mockApiObj.rerunIssue.mockResolvedValue({ id: "task-rerun" });
     mockApiObj.listMembers.mockResolvedValue([
       { user_id: "user-1", name: "Test User", email: "test@test.com", role: "admin" },
     ]);
@@ -533,6 +536,19 @@ describe("IssueDetail (shared)", () => {
     });
 
     expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+  });
+
+  it("opts the description editor into the unmount flush", async () => {
+    // Closing the issue modal must save the description the user last saw —
+    // ContentEditor drops pending debounced updates on unmount by default
+    // (so cancelled comment drafts aren't resurrected), and only this
+    // explicit opt-in keeps a paste-then-close from losing the image
+    // markdown and its attachment_ids bind (MUL-3254). The flush behavior
+    // itself is covered in content-editor.test.tsx; this pins the wiring.
+    renderIssueDetail();
+
+    const description = await screen.findByDisplayValue("Add JWT auth to the backend");
+    expect(description).toHaveAttribute("data-flush-on-unmount", "true");
   });
 
   it("renders the issue title leaf as a link to the issue detail page", async () => {
@@ -763,6 +779,100 @@ describe("IssueDetail (shared)", () => {
     expect(screen.getByText("I can help with this")).toBeInTheDocument();
   });
 
+  it("reruns the source task from an agent failure comment", async () => {
+    mockApiObj.listTimeline.mockResolvedValue([
+      ...mockTimeline,
+      {
+        type: "comment",
+        id: "comment-failed-task",
+        actor_type: "agent",
+        actor_id: "agent-1",
+        content: "API Error: 500 Internal server error",
+        parent_id: null,
+        created_at: "2026-01-18T00:00:00Z",
+        updated_at: "2026-01-18T00:00:00Z",
+        comment_type: "system",
+        source_task_id: "task-failed",
+      },
+    ]);
+
+    renderIssueDetail();
+
+    await screen.findByText("API Error: 500 Internal server error");
+    fireEvent.click(screen.getByRole("button", { name: "Retry task" }));
+
+    await waitFor(() => {
+      expect(mockApiObj.rerunIssue).toHaveBeenCalledWith("issue-1", "task-failed");
+    });
+  });
+
+  it("does not show retry for child-done system comments", async () => {
+    mockApiObj.listTimeline.mockResolvedValue([
+      ...mockTimeline,
+      {
+        type: "comment",
+        id: "comment-child-done",
+        actor_type: "system",
+        actor_id: "00000000-0000-0000-0000-000000000000",
+        content: "Sub-issue MUL-123 is done.",
+        parent_id: null,
+        created_at: "2026-01-18T00:00:00Z",
+        updated_at: "2026-01-18T00:00:00Z",
+        comment_type: "system",
+      },
+    ]);
+
+    renderIssueDetail();
+
+    await screen.findByText("Sub-issue MUL-123 is done.");
+    expect(screen.queryByRole("button", { name: "Retry task" })).not.toBeInTheDocument();
+  });
+
+  it("does not show retry for successful agent task comments", async () => {
+    mockApiObj.listTimeline.mockResolvedValue([
+      ...mockTimeline,
+      {
+        type: "comment",
+        id: "comment-successful-task",
+        actor_type: "agent",
+        actor_id: "agent-1",
+        content: "Finished the requested work.",
+        parent_id: null,
+        created_at: "2026-01-18T00:00:00Z",
+        updated_at: "2026-01-18T00:00:00Z",
+        comment_type: "comment",
+        source_task_id: "task-success",
+      },
+    ]);
+
+    renderIssueDetail();
+
+    await screen.findByText("Finished the requested work.");
+    expect(screen.queryByRole("button", { name: "Retry task" })).not.toBeInTheDocument();
+  });
+
+  it("does not show retry for agent system comments without a source task", async () => {
+    mockApiObj.listTimeline.mockResolvedValue([
+      ...mockTimeline,
+      {
+        type: "comment",
+        id: "comment-agent-system",
+        actor_type: "agent",
+        actor_id: "agent-1",
+        content: "System coordination update.",
+        parent_id: null,
+        created_at: "2026-01-18T00:00:00Z",
+        updated_at: "2026-01-18T00:00:00Z",
+        comment_type: "system",
+      },
+    ]);
+
+    renderIssueDetail();
+
+    await screen.findByText("System coordination update.");
+    expect(screen.queryByRole("button", { name: "Retry task" })).not.toBeInTheDocument();
+  });
+
   it("collapses non-trailing activity blocks and expands the last one by default", async () => {
     // Timeline shape:
     //   [activities: status_changed, priority_changed] ← block A (older)
@@ -828,6 +938,26 @@ describe("IssueDetail (shared)", () => {
       expect(screen.getByText(/changed status/i)).toBeInTheDocument();
     });
     expect(screen.getByText(/changed priority/i)).toBeInTheDocument();
+  });
+
+  it("renders activity rows with unknown status values without crashing", async () => {
+    mockApiObj.listTimeline.mockResolvedValue([
+      {
+        type: "activity",
+        id: "act-unknown-status",
+        actor_type: "member",
+        actor_id: "user-1",
+        action: "status_changed",
+        details: { from: "todo", to: "mystery_status" },
+        created_at: "2026-01-18T00:00:00Z",
+      },
+    ] as TimelineEntry[]);
+
+    renderIssueDetail();
+
+    await waitFor(() => {
+      expect(screen.getByText(/from Todo to mystery_status/i)).toBeInTheDocument();
+    });
   });
 
   it("truncates the trailing activity block to the most recent 8 entries with a show-more toggle", async () => {

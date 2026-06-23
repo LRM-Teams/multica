@@ -5,6 +5,7 @@ import {
   Bot,
   FileText,
   MessageCircle,
+  MoreHorizontal,
   Paperclip,
   PieChart,
   Plus,
@@ -12,6 +13,7 @@ import {
   Send,
   Share2,
   Smartphone,
+  Trash2,
   UserRound,
   X,
 } from "lucide-react";
@@ -27,6 +29,7 @@ import {
   useSetChannelProject,
   useAddChannelMember,
   useCreateChannel,
+  useDeleteChannel,
   useMarkChannelRead,
   useRemoveChannelMember,
   useSendChannelMessage,
@@ -58,6 +61,22 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@multica/ui/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@multica/ui/components/ui/alert-dialog";
 import { cn } from "@multica/ui/lib/utils";
 import { ContentEditor, type ContentEditorRef } from "../../editor";
 import { useNavigation } from "../../navigation";
@@ -249,6 +268,7 @@ export function ChannelsPage() {
   const [activeId, setActiveId] = useState<string | null>(() => searchParams.get("channel"));
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Channel | null>(null);
   const editorRef = useRef<ContentEditorRef>(null);
   const [draftEmpty, setDraftEmpty] = useState(true);
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
@@ -274,6 +294,7 @@ export function ChannelsPage() {
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
   const setChannelProject = useSetChannelProject(wsId, active?.id ?? "");
   const createChannel = useCreateChannel();
+  const deleteChannel = useDeleteChannel();
   const sendMessage = useSendChannelMessage();
   const setTyping = useSetChannelTyping();
   const addMember = useAddChannelMember();
@@ -363,6 +384,14 @@ export function ChannelsPage() {
     }
   });
 
+  // Another client deleted a channel — drop it from the list. If it was the
+  // open one, `active` falls back to the first remaining channel via the memo.
+  useWSEvent("channel:deleted", (payload) => {
+    const e = payload as { id?: string };
+    qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    if (e.id && e.id === activeId) setActiveId(null);
+  });
+
   useWSEvent("channel:typing", (payload) => {
     const event = payload as ChannelTypingPayload;
     if (!event.channel_id || event.channel_id !== active?.id) return;
@@ -409,6 +438,21 @@ export function ChannelsPage() {
   const selectChannel = (id: string) => {
     setActiveId(id);
     replace(`${wsPaths.channels()}?channel=${id}`);
+  };
+
+  const handleDelete = () => {
+    const target = deleteTarget;
+    if (!target) return;
+    deleteChannel.mutate(target.id, {
+      onSuccess: () => {
+        toast.success(t(($) => $.delete_dialog.toast_success));
+        // If the open channel was the one removed, drop the selection so the
+        // `active` memo falls back to the first remaining channel.
+        if (target.id === activeId) setActiveId(null);
+        setDeleteTarget(null);
+      },
+      onError: () => toast.error(t(($) => $.delete_dialog.toast_failed)),
+    });
   };
 
   const handleShare = async () => {
@@ -584,40 +628,62 @@ export function ChannelsPage() {
                 const last = channel.last_message;
                 const preview = last ? `${last.author_name}: ${last.content}`.replace(/\s+/g, " ") : "";
                 return (
-                  <button
+                  <div
                     key={channel.id}
-                    type="button"
-                    onClick={() => selectChannel(channel.id)}
                     className={cn(
-                      "mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
+                      "group/row relative mb-0.5 rounded-lg transition-colors",
                       active?.id === channel.id ? "bg-primary/[0.08]" : "hover:bg-accent",
                     )}
                   >
-                    <ChannelGroupAvatar members={channel.members ?? []} size={40} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-foreground">
-                          <span className="truncate">{channel.name}</span>
-                          {channel.lark_chat_id && (
-                            <Smartphone className="size-3 shrink-0 text-emerald-600" />
+                    <button
+                      type="button"
+                      onClick={() => selectChannel(channel.id)}
+                      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
+                    >
+                      <ChannelGroupAvatar members={channel.members ?? []} size={40} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-foreground">
+                            <span className="truncate">{channel.name}</span>
+                            {channel.lark_chat_id && (
+                              <Smartphone className="size-3 shrink-0 text-emerald-600" />
+                            )}
+                          </span>
+                          {last && (
+                            <span className="shrink-0 text-[11px] text-muted-foreground">
+                              {timeAgo(last.created_at)}
+                            </span>
                           )}
-                        </span>
-                        {last && (
-                          <span className="shrink-0 text-[11px] text-muted-foreground">
-                            {timeAgo(last.created_at)}
-                          </span>
-                        )}
+                        </div>
+                        <div className="mt-0.5 flex items-center justify-between gap-2">
+                          <span className="truncate text-xs text-muted-foreground">{preview}</span>
+                          {unread > 0 && (
+                            <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                              {unread > 99 ? "99+" : unread}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <div className="mt-0.5 flex items-center justify-between gap-2">
-                        <span className="truncate text-xs text-muted-foreground">{preview}</span>
-                        {unread > 0 && (
-                          <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
-                            {unread > 99 ? "99+" : unread}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </button>
+                    </button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <button
+                            type="button"
+                            aria-label={t(($) => $.sidebar.menu_aria)}
+                            className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 data-[popup-open]:opacity-100"
+                          >
+                            <MoreHorizontal className="size-4" />
+                          </button>
+                        }
+                      />
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(channel)}>
+                          <Trash2 className="size-4" /> {t(($) => $.sidebar.delete)}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 );
               })
             )}
@@ -842,6 +908,32 @@ export function ChannelsPage() {
           )}
         </main>
       </div>
+
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t(($) => $.delete_dialog.title)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(($) => $.delete_dialog.description, { name: deleteTarget?.name ?? "" })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t(($) => $.delete_dialog.cancel)}</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={deleteChannel.isPending}
+            >
+              {t(($) => $.delete_dialog.confirm)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

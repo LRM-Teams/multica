@@ -121,6 +121,11 @@ const (
 	EventDaemonHeartbeatAck  = "daemon:heartbeat_ack"
 	EventDaemonRegister      = "daemon:register"
 	EventDaemonTaskAvailable = "daemon:task_available"
+	// Workdir file-tree RPC over the daemon wakeup socket: the server pushes a
+	// request, the daemon walks the project's local workdir and replies with a
+	// flat node list. Correlated by RequestID. See protocol.ListWorkdirFiles*.
+	EventDaemonListFilesRequest  = "daemon:list_files_request"
+	EventDaemonListFilesResponse = "daemon:list_files_response"
 
 	// GitHub integration events
 	EventGitHubInstallationCreated = "github_installation:created"

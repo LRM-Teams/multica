@@ -12,6 +12,15 @@ export function useCreateChannel() {
   });
 }
 
+export function useDeleteChannel() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (channelId: string) => api.deleteChannel(channelId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+  });
+}
+
 export function useSendChannelMessage() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();

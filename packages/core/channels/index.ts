@@ -17,6 +17,7 @@ export {
 } from "./project";
 export {
   useCreateChannel,
+  useDeleteChannel,
   useSendChannelMessage,
   useMarkChannelRead,
   useSetChannelTyping,

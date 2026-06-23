@@ -102,7 +102,7 @@ export function KpiCards({ wsId }: { wsId: string }) {
     ...agentListOptions(wsId),
     enabled: !!wsId,
   });
-  const { data: counts, isPending: countsPending } = useQuery({
+  const { data: counts } = useQuery({
     ...issueStatusCountsOptions(wsId),
     enabled: !!wsId,
   });
@@ -132,10 +132,18 @@ export function KpiCards({ wsId }: { wsId: string }) {
   const errored = live.filter((a) => a.status === "error").length;
   const working = live.filter((a) => a.status === "working").length;
 
-  const done = counts?.done ?? 0;
-  const blocked = counts?.blocked ?? 0;
   const inReview = counts?.in_review ?? 0;
-  const successRate = done + blocked > 0 ? Math.round((done / (done + blocked)) * 100) : 0;
+
+  // Task success rate mirrors the adjacent "tasks done" card: it's about agent
+  // TASKS (issue runs, comment runs, AND channel replies — whatever
+  // agentTaskStats counts), not issue resolution. Computing it from issue
+  // status counts read 0% in workspaces that only run group-chat tasks (no
+  // issues), even with every task completed. Denominator is decided tasks
+  // (completed + failed) so it reconciles with that card.
+  const tasksCompleted = taskStats?.completed ?? 0;
+  const tasksFailed = taskStats?.failed ?? 0;
+  const tasksDecided = tasksCompleted + tasksFailed;
+  const successRate = tasksDecided > 0 ? Math.round((tasksCompleted / tasksDecided) * 100) : 0;
 
   const todayDate = todayIso(tz);
   const yesterdayDate = addDaysIso(todayDate, -1);
@@ -164,15 +172,15 @@ export function KpiCards({ wsId }: { wsId: string }) {
       label: t(($) => $.kpi.tasks_done),
       // Denominator is decided tasks (completed + failed) so it reconciles with
       // the failed detail; queued/running/cancelled are excluded.
-      value: `${taskStats?.completed ?? 0} / ${(taskStats?.completed ?? 0) + (taskStats?.failed ?? 0)}`,
-      detail: t(($) => $.kpi.tasks_failed_detail, { count: taskStats?.failed ?? 0 }),
+      value: `${tasksCompleted} / ${tasksDecided}`,
+      detail: t(($) => $.kpi.tasks_failed_detail, { count: tasksFailed }),
       loading: taskStatsPending,
     },
     {
       key: "success_rate",
       label: t(($) => $.kpi.success_rate),
       value: `${successRate}%`,
-      loading: countsPending,
+      loading: taskStatsPending,
       trend: MOCK_TRENDS.success_rate,
     },
     {

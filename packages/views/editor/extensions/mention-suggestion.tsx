@@ -552,8 +552,14 @@ export function createMentionSuggestion(
     // When set (e.g. a channel's members), candidates are scoped to these ids.
     const allow = options.getAllowedActorIds?.();
 
+    // @all is offered in channel-scoped mode too (allow set): in a group chat
+    // it means "everyone in this channel", which the backend honors by
+    // triggering every agent member (contentMentionsAll). The stored label
+    // stays English ("All members") so the rendered "@all" text keeps matching
+    // the backend check regardless of UI locale; display is localized in the
+    // picker row and the mention chip.
     const allItem: MentionItem[] =
-      !allow && ("all members".includes(q) || "all".includes(q))
+      "all members".includes(q) || "all".includes(q)
         ? [{ id: "all", label: "All members", type: "all" as const }]
         : [];
 

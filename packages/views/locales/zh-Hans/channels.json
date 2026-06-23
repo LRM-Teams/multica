@@ -10,7 +10,17 @@
     "name_placeholder": "群聊名称",
     "lark_placeholder": "可选飞书群 chat_id (oc_...)",
     "create_aria": "新建群聊",
-    "empty": "还没有群聊。"
+    "empty": "还没有群聊。",
+    "menu_aria": "群组操作",
+    "delete": "删除群组"
+  },
+  "delete_dialog": {
+    "title": "删除这个群组？",
+    "description": "「{{name}}」及其所有消息将被永久删除，且无法恢复。",
+    "cancel": "取消",
+    "confirm": "删除",
+    "toast_success": "群组已删除",
+    "toast_failed": "删除群组失败"
   },
   "empty_state": {
     "title": "创建一个群聊",

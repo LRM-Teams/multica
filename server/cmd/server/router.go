@@ -983,6 +983,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/lark/messages", h.ImportLarkChannelMessage)
 				r.Route("/{channelId}", func(r chi.Router) {
 					r.Patch("/", h.UpdateChannel)
+					r.Delete("/", h.DeleteChannel)
 					r.Get("/project", h.GetChannelProject)
 					r.Put("/project", h.SetChannelProject)
 					r.Get("/active-tasks", h.ListChannelActiveTasks)

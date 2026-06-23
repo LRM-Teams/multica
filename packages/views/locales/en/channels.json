@@ -10,7 +10,17 @@
     "name_placeholder": "Channel name",
     "lark_placeholder": "Optional Feishu chat_id (oc_...)",
     "create_aria": "Create channel",
-    "empty": "No channels yet."
+    "empty": "No channels yet.",
+    "menu_aria": "Channel actions",
+    "delete": "Delete group"
+  },
+  "delete_dialog": {
+    "title": "Delete this group?",
+    "description": "\"{{name}}\" and all its messages will be permanently deleted. This can't be undone.",
+    "cancel": "Cancel",
+    "confirm": "Delete",
+    "toast_success": "Group deleted",
+    "toast_failed": "Failed to delete group"
   },
   "empty_state": {
     "title": "Create a group chat",

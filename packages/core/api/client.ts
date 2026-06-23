@@ -1737,6 +1737,10 @@ export class ApiClient {
     });
   }
 
+  async deleteChannel(channelId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}`, { method: "DELETE" });
+  }
+
   async listChannelMembers(channelId: string): Promise<ChannelMember[]> {
     return this.fetch(`/api/channels/${channelId}/members`);
   }

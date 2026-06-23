@@ -77,6 +77,7 @@ const (
 	EventChannelMessage     = "channel:message"
 	EventChannelTyping      = "channel:typing"
 	EventChannelUpdated     = "channel:updated"
+	EventChannelDeleted     = "channel:deleted"
 
 	// Project events
 	EventProjectCreated         = "project:created"

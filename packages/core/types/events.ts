@@ -61,6 +61,7 @@ export type WSEventType =
   | "channel:message"
   | "channel:typing"
   | "channel:updated"
+  | "channel:deleted"
   | "project:created"
   | "project:updated"
   | "project:deleted"
@@ -442,6 +443,7 @@ export interface WSEventPayloadMap {
   "channel:message": ChannelMessage;
   "channel:typing": ChannelTypingPayload;
   "channel:updated": unknown;
+  "channel:deleted": { id: string };
   "project:created": ProjectCreatedPayload;
   "project:updated": ProjectUpdatedPayload;
   "project:deleted": ProjectDeletedPayload;

@@ -10,7 +10,17 @@
     "name_placeholder": "チャンネル名",
     "lark_placeholder": "任意の Feishu chat_id (oc_...)",
     "create_aria": "チャンネルを作成",
-    "empty": "まだチャンネルがありません。"
+    "empty": "まだチャンネルがありません。",
+    "menu_aria": "チャンネル操作",
+    "delete": "グループを削除"
+  },
+  "delete_dialog": {
+    "title": "このグループを削除しますか？",
+    "description": "「{{name}}」とそのすべてのメッセージが完全に削除されます。元に戻せません。",
+    "cancel": "キャンセル",
+    "confirm": "削除",
+    "toast_success": "グループを削除しました",
+    "toast_failed": "グループの削除に失敗しました"
   },
   "empty_state": {
     "title": "グループチャットを作成",

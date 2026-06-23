@@ -2,6 +2,7 @@
 
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { cn } from "@multica/ui/lib/utils";
+import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
 import { MemoizedMarkdown } from "../../common/markdown";
 import { AttachmentList } from "../../issues/components/comment-card";
@@ -38,6 +39,7 @@ export function ChannelMessageBubble({
   ownName?: string;
 }) {
   const { t } = useT("channels");
+  const { getActorAvatarUrl } = useActorName();
   const isOwn =
     message.author_type === "user" &&
     message.author_id != null &&
@@ -47,6 +49,18 @@ export function ChannelMessageBubble({
   const tint = isAgent
     ? agentColor(message.author_id ?? message.author_name)
     : undefined;
+  // Resolve the avatar from the live members/agents cache (keyed by id) rather
+  // than a value snapshotted into the message — so a settings avatar change
+  // shows up here too. Falls back to the tinted/initials avatar when the author
+  // isn't a workspace member/agent (lark / system) or has no photo.
+  const avatarUrl =
+    message.author_id == null
+      ? null
+      : isAgent
+        ? getActorAvatarUrl("agent", message.author_id)
+        : message.author_type === "user"
+          ? getActorAvatarUrl("member", message.author_id)
+          : null;
   const displayName = isOwn ? ownName ?? message.author_name : message.author_name;
 
   return (
@@ -61,6 +75,7 @@ export function ChannelMessageBubble({
       <ActorAvatar
         name={message.author_name}
         initials={initialsOf(message.author_name)}
+        avatarUrl={avatarUrl ?? undefined}
         isAgent={isAgent}
         isSystem={message.author_type === "system"}
         size={28}

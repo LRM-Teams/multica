@@ -14,6 +14,12 @@ vi.mock("../../issues/components/comment-card", () => ({
   AttachmentList: () => null,
 }));
 
+// The bubble resolves the author's live avatar from the members/agents cache.
+// Stub it so these layout/identity tests don't need a QueryClient/workspace.
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({ getActorAvatarUrl: () => null }),
+}));
+
 vi.mock("../../i18n", () => ({
   useT: () => ({
     t: (selector: (resources: { message: { agent_badge: string; feishu_badge: string } }) => string) =>

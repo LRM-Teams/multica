@@ -1,7 +1,19 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@multica/core/api";
+import { I18nProvider } from "@multica/core/i18n/react";
+import enLayout from "../locales/en/layout.json";
 import { AppSidebar } from "./app-sidebar";
+
+const TEST_RESOURCES = { en: { layout: enLayout } };
+
+function renderSidebar() {
+  return render(
+    <I18nProvider locale="en" resources={TEST_RESOURCES}>
+      <AppSidebar />
+    </I18nProvider>,
+  );
+}
 
 const { detail, deletePin, pins } = vi.hoisted(() => ({
   detail: { current: { isPending: false, isError: false, data: null as unknown, error: null as unknown } },
@@ -147,19 +159,19 @@ describe("PinRow", () => {
 
   it("unpins missing details", async () => {
     detail.current = { isPending: false, isError: true, data: null, error: new ApiError("missing", 404, "Not Found") };
-    render(<AppSidebar />);
+    renderSidebar();
     await waitFor(() => expect(deletePin).toHaveBeenCalledTimes(1));
   });
 
   it("ignores non-404 errors", async () => {
     detail.current = { isPending: false, isError: true, data: null, error: new ApiError("error", 500, "Server Error") };
-    render(<AppSidebar />);
+    renderSidebar();
     await waitFor(() => expect(deletePin).not.toHaveBeenCalled());
   });
 
   it("renders loaded details", async () => {
     detail.current = { isPending: false, isError: false, data: { identifier: "MUL-123", title: "Keep this pin", status: "todo" }, error: null };
-    render(<AppSidebar />);
+    renderSidebar();
     expect(await screen.findByText("MUL-123 Keep this pin")).toBeInTheDocument();
   });
 });

@@ -96,6 +96,23 @@ export function agentRunCounts30dOptions(wsId: string) {
   });
 }
 
+export const agentMemoryKeys = {
+  all: (wsId: string) => ["workspaces", wsId, "agent-memories"] as const,
+  list: (wsId: string, agentId: string) =>
+    [...agentMemoryKeys.all(wsId), agentId] as const,
+};
+
+export function agentMemoryOptions(wsId: string, agentId: string) {
+  return queryOptions({
+    queryKey: agentMemoryKeys.list(wsId, agentId),
+    queryFn: () => api.listAgentMemories(agentId),
+    enabled: !!wsId && !!agentId,
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: true,
+  });
+}
+
 export const agentTasksKeys = {
   all: (wsId: string) => ["workspaces", wsId, "agent-tasks"] as const,
   detail: (wsId: string, agentId: string) =>

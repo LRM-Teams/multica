@@ -200,7 +200,8 @@
     "discard_dialog_title": "保存していない変更を破棄しますか？",
     "discard_dialog_description": "このタブに保存していない変更があります。今移動すると変更は破棄されます。",
     "discard_keep": "編集を続ける",
-    "discard_confirm": "変更を破棄"
+    "discard_confirm": "変更を破棄",
+    "memory": "Memory"
   },
   "create_dialog": {
     "title_create": "エージェントを作成",
@@ -366,6 +367,14 @@
       "started_prefix": "{{when}} に開始",
       "dispatched_prefix": "{{when}} にディスパッチ",
       "queued_prefix": "{{when}} に待機開始"
+    },
+    "memory": {
+      "intro": "このエージェントのランタイムから同期されたメモリです。Multica に保存されるため、エージェントが別のランタイムへ移動しても文脈を保持できます。",
+      "loading": "メモリを読み込み中…",
+      "empty_title": "同期済みメモリはありません",
+      "empty_hint": "このエージェントのランタイムにあるメモリファイルは、次回の同期後にここへ表示されます。",
+      "empty_content": "内容はありません",
+      "updated_at": "更新日時 {{value}}"
     }
   },
   "char_counter": {

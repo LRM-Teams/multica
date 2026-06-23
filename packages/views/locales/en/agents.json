@@ -213,7 +213,8 @@
     "discard_dialog_title": "Discard unsaved changes?",
     "discard_dialog_description": "You have unsaved changes in this tab. Leaving now will discard them.",
     "discard_keep": "Keep editing",
-    "discard_confirm": "Discard changes"
+    "discard_confirm": "Discard changes",
+    "memory": "Memory"
   },
   "create_dialog": {
     "title_create": "Create Agent",
@@ -384,6 +385,14 @@
       "started_prefix": "Started {{when}}",
       "dispatched_prefix": "Dispatched {{when}}",
       "queued_prefix": "Queued {{when}}"
+    },
+    "memory": {
+      "intro": "Runtime-synced memories for this agent. They are saved in Multica so the agent keeps context when it moves to another runtime.",
+      "loading": "Loading memories…",
+      "empty_title": "No memories synced",
+      "empty_hint": "Memory files from this agent runtime will appear here after the next sync.",
+      "empty_content": "No content",
+      "updated_at": "Updated {{value}}"
     }
   },
   "char_counter": {

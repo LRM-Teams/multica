@@ -158,7 +158,13 @@ function renderInput(props: Partial<React.ComponentProps<typeof ChatInput>> = {}
     );
   render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <ChatInput onSend={onSend} onUploadFile={onUploadFile} agentName="Multica" wsId="ws-1" {...props} />
+      <ChatInput
+        {...props}
+        onSend={onSend}
+        onUploadFile={onUploadFile}
+        agentName={props.agentName ?? "Multica"}
+        wsId={props.wsId ?? "ws-1"}
+      />
     </I18nProvider>,
   );
   return { onSend, onUploadFile };

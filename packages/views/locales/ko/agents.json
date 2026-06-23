@@ -213,7 +213,8 @@
     "discard_dialog_title": "저장하지 않은 변경사항을 버릴까요?",
     "discard_dialog_description": "이 탭에 저장하지 않은 변경사항이 있습니다. 지금 나가면 변경사항이 사라집니다.",
     "discard_keep": "계속 편집",
-    "discard_confirm": "변경사항 버리기"
+    "discard_confirm": "변경사항 버리기",
+    "memory": "Memory"
   },
   "create_dialog": {
     "title_create": "에이전트 만들기",
@@ -384,6 +385,14 @@
       "started_prefix": "{{when}} 시작됨",
       "dispatched_prefix": "{{when}} 디스패치됨",
       "queued_prefix": "{{when}} 대기 시작"
+    },
+    "memory": {
+      "intro": "이 에이전트의 런타임에서 동기화된 메모리입니다. Multica에 저장되므로 에이전트가 다른 런타임으로 이동해도 컨텍스트가 유지됩니다.",
+      "loading": "메모리를 불러오는 중…",
+      "empty_title": "동기화된 메모리가 없습니다",
+      "empty_hint": "이 에이전트 런타임의 메모리 파일은 다음 동기화 후 여기에 표시됩니다.",
+      "empty_content": "내용 없음",
+      "updated_at": "업데이트 {{value}}"
     }
   },
   "char_counter": {

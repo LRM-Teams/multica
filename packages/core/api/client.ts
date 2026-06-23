@@ -36,6 +36,7 @@ import type {
   User,
   Skill,
   SkillSummary,
+  AgentMemory,
   CreateSkillRequest,
   UpdateSkillRequest,
   SetAgentSkillsRequest,
@@ -1571,6 +1572,10 @@ export class ApiClient {
 
   async listAgentSkills(agentId: string): Promise<SkillSummary[]> {
     return this.fetch(`/api/agents/${agentId}/skills`);
+  }
+
+  async listAgentMemories(agentId: string): Promise<AgentMemory[]> {
+    return this.fetch(`/api/agents/${agentId}/memories`);
   }
 
   async setAgentSkills(agentId: string, data: SetAgentSkillsRequest): Promise<void> {

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   BookOpenText,
+  Brain,
   FileText,
   KeyRound,
   ListTodo,
@@ -29,6 +30,7 @@ import {
 import { ActivityTab } from "./tabs/activity-tab";
 import { InstructionsTab } from "./tabs/instructions-tab";
 import { SkillsTab } from "./tabs/skills-tab";
+import { MemoryTab } from "./tabs/memory-tab";
 import { EnvTab } from "./tabs/env-tab";
 import { CustomArgsTab } from "./tabs/custom-args-tab";
 import { McpConfigTab } from "./tabs/mcp-config-tab";
@@ -41,16 +43,18 @@ export type DetailTab =
   | "tasks"
   | "instructions"
   | "skills"
+  | "memory"
   | "env"
   | "custom_args"
   | "mcp_config"
   | "integrations";
 
-const TAB_LABEL_KEY: Record<DetailTab, "activity" | "tasks" | "instructions" | "skills" | "environment" | "custom_args" | "mcp_config" | "integrations"> = {
+const TAB_LABEL_KEY: Record<DetailTab, "activity" | "tasks" | "instructions" | "skills" | "memory" | "environment" | "custom_args" | "mcp_config" | "integrations"> = {
   activity: "activity",
   tasks: "tasks",
   instructions: "instructions",
   skills: "skills",
+  memory: "memory",
   env: "environment",
   custom_args: "custom_args",
   mcp_config: "mcp_config",
@@ -65,6 +69,7 @@ const detailTabs: {
   { id: "tasks", icon: ListTodo },
   { id: "instructions", icon: FileText },
   { id: "skills", icon: BookOpenText },
+  { id: "memory", icon: Brain },
   { id: "env", icon: KeyRound },
   { id: "custom_args", icon: Terminal },
   { id: "mcp_config", icon: Plug },
@@ -237,6 +242,11 @@ export function AgentOverviewPane({
         {effectiveTab === "skills" && (
           <TabContent>
             <SkillsTab agent={agent} />
+          </TabContent>
+        )}
+        {effectiveTab === "memory" && (
+          <TabContent>
+            <MemoryTab agent={agent} />
           </TabContent>
         )}
         {effectiveTab === "env" && (

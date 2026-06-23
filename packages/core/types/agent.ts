@@ -455,6 +455,20 @@ export interface SkillFile {
   updated_at: string;
 }
 
+export interface AgentMemory {
+  id: string;
+  workspace_id: string;
+  agent_id: string;
+  name: string;
+  content: string;
+  config: Record<string, unknown>;
+  sync_key: string;
+  content_hash: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CreateSkillRequest {
   name: string;
   description?: string;

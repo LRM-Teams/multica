@@ -1818,8 +1818,9 @@ func TestClaimTask_ProjectGithubReposOverrideWorkspaceRepos(t *testing.T) {
 	}
 }
 
-// When the issue's project has no github_repo resources, the claim handler
-// must fall back to workspace repos (the pre-override behavior).
+// When the issue has no project, the claim handler falls back to workspace
+// repos. (Project-bound issues with no github_repo resources instead get a
+// managed shared workdir — see TestClaimTask_IssueProjectProvisionsManagedWorkdir.)
 func TestClaimTask_ProjectWithoutRepos_FallsBackToWorkspaceRepos(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -1830,14 +1831,6 @@ func TestClaimTask_ProjectWithoutRepos_FallsBackToWorkspaceRepos(t *testing.T) {
 	setHandlerTestWorkspaceRepos(t, []map[string]string{
 		{"url": "https://github.com/example/workspace-fallback", "description": "ws"},
 	})
-
-	var projectID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id
-	`, testWorkspaceID, "Claim project without repos").Scan(&projectID); err != nil {
-		t.Fatalf("create project: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
 
 	var agentID, runtimeID string
 	if err := testPool.QueryRow(ctx,
@@ -1850,10 +1843,10 @@ func TestClaimTask_ProjectWithoutRepos_FallsBackToWorkspaceRepos(t *testing.T) {
 	var issueID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO issue (
-			workspace_id, project_id, title, status, priority, creator_id, creator_type, number, position
-		) VALUES ($1, $2, 'no project repos', 'todo', 'medium', $3, 'member', 88002, 0)
+			workspace_id, title, status, priority, creator_id, creator_type, number, position
+		) VALUES ($1, 'no project repos', 'todo', 'medium', $2, 'member', 88002, 0)
 		RETURNING id
-	`, testWorkspaceID, projectID, testUserID).Scan(&issueID); err != nil {
+	`, testWorkspaceID, testUserID).Scan(&issueID); err != nil {
 		t.Fatalf("create issue: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
@@ -2824,6 +2817,12 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 	`, agentID, runtimeID, skipSessionID); err != nil {
 		t.Fatalf("setup: create current-runtime chat task: %v", err)
 	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO chat_message (chat_session_id, role, content)
+		VALUES ($1, 'user', 'runtime guard skip chat message')
+	`, skipSessionID); err != nil {
+		t.Fatalf("setup: insert skip chat user message: %v", err)
+	}
 
 	task := claimTaskForRuntimeGuard(t, runtimeID, daemonID)
 	if task.PriorSessionID != "" {
@@ -2861,6 +2860,12 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 		VALUES ($1, $2, $3, 'queued', 0)
 	`, agentID, runtimeID, resumeSessionID); err != nil {
 		t.Fatalf("setup: create same-runtime chat task: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO chat_message (chat_session_id, role, content)
+		VALUES ($1, 'user', 'runtime guard resume chat message')
+	`, resumeSessionID); err != nil {
+		t.Fatalf("setup: insert resume chat user message: %v", err)
 	}
 
 	task = claimTaskForRuntimeGuard(t, runtimeID, daemonID)
@@ -3255,6 +3260,12 @@ func TestClaimTask_ChatForceFreshSessionSkipsPriorSession(t *testing.T) {
 	`, agentID, runtimeID, chatSessionID); err != nil {
 		t.Fatalf("setup: create force-fresh chat task: %v", err)
 	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO chat_message (chat_session_id, role, content)
+		VALUES ($1, 'user', 'force fresh chat message')
+	`, chatSessionID); err != nil {
+		t.Fatalf("setup: insert force-fresh chat user message: %v", err)
+	}
 
 	task := claimTaskForRuntimeGuard(t, runtimeID, daemonID)
 	if task.PriorSessionID != "" {
@@ -3309,6 +3320,12 @@ func TestClaimTask_ChatLegacyNullRuntimeFallsBackToTaskRow(t *testing.T) {
 		VALUES ($1, $2, $3, 'queued', 0)
 	`, agentID, runtimeID, legacySessionID); err != nil {
 		t.Fatalf("setup: create current chat task: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO chat_message (chat_session_id, role, content)
+		VALUES ($1, 'user', 'legacy fallback chat message')
+	`, legacySessionID); err != nil {
+		t.Fatalf("setup: insert legacy chat user message: %v", err)
 	}
 
 	task := claimTaskForRuntimeGuard(t, runtimeID, daemonID)

@@ -28,6 +28,7 @@ export type {
   SkillSummary,
   AgentSkillSummary,
   SkillFile,
+  AgentMemory,
   CreateSkillRequest,
   UpdateSkillRequest,
   SetAgentSkillsRequest,

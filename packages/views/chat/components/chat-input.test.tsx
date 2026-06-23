@@ -152,13 +152,20 @@ beforeEach(() => {
 function renderInput(props: Partial<React.ComponentProps<typeof ChatInput>> = {}) {
   const onSend = props.onSend ?? vi.fn();
   const onUploadFile =
-    props.onUploadFile ??
-    vi.fn(async (_file: File) =>
-      makeUpload({ id: "att-1", link: "https://cdn.example/att-1.png", filename: "img.png" }),
-    );
+    "onUploadFile" in props
+      ? props.onUploadFile
+      : vi.fn(async (_file: File) =>
+          makeUpload({ id: "att-1", link: "https://cdn.example/att-1.png", filename: "img.png" }),
+        );
   render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <ChatInput onSend={onSend} onUploadFile={onUploadFile} agentName="Multica" wsId="ws-1" {...props} />
+      <ChatInput
+        {...props}
+        onSend={onSend}
+        onUploadFile={onUploadFile}
+        agentName={props.agentName ?? "Multica"}
+        wsId={props.wsId ?? "ws-1"}
+      />
     </I18nProvider>,
   );
   return { onSend, onUploadFile };

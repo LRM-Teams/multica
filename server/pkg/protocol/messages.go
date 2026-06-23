@@ -23,6 +23,41 @@ type TaskAvailablePayload struct {
 	TaskID    string `json:"task_id,omitempty"`
 }
 
+// ListWorkdirFilesRequestPayload is pushed server→daemon to ask a specific
+// runtime's daemon to enumerate a project's local working directory. The
+// daemon replies with ListWorkdirFilesResponsePayload carrying the same
+// RequestID. RelPath is the workdir path relative to the daemon's workspace
+// root (the daemon joins it onto its own root — the server never sends an
+// absolute host path).
+type ListWorkdirFilesRequestPayload struct {
+	RequestID  string `json:"request_id"`
+	RuntimeID  string `json:"runtime_id"`
+	RelPath    string `json:"rel_path"`
+	MaxEntries int    `json:"max_entries,omitempty"`
+	MaxDepth   int    `json:"max_depth,omitempty"`
+}
+
+// WorkdirFileNode is one entry in a flat workdir listing. Path is relative to
+// the workdir root using forward slashes; the frontend rebuilds the tree from
+// the path segments. Size is bytes for files (0 for directories).
+type WorkdirFileNode struct {
+	Path  string `json:"path"`
+	IsDir bool   `json:"is_dir"`
+	Size  int64  `json:"size,omitempty"`
+}
+
+// ListWorkdirFilesResponsePayload is the daemon→server reply for a workdir
+// listing. Missing is true when the workdir does not exist on that daemon (a
+// normal case — the project may not have run there). Truncated is true when
+// the entry/depth caps were hit.
+type ListWorkdirFilesResponsePayload struct {
+	RequestID string            `json:"request_id"`
+	Nodes     []WorkdirFileNode `json:"nodes,omitempty"`
+	Missing   bool              `json:"missing,omitempty"`
+	Truncated bool              `json:"truncated,omitempty"`
+	Error     string            `json:"error,omitempty"`
+}
+
 // TaskProgressPayload is sent from daemon to server during task execution.
 type TaskProgressPayload struct {
 	TaskID  string `json:"task_id"`

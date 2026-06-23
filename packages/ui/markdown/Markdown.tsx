@@ -55,7 +55,7 @@ export interface MarkdownProps {
    * Custom renderer for mention links (e.g. mention://issue/UUID).
    * When not provided, mentions render as a simple styled span.
    */
-  renderMention?: (props: { type: string; id: string }) => React.ReactNode
+  renderMention?: (props: { type: string; id: string; label?: string }) => React.ReactNode
   /**
    * CDN hostname for file card detection (e.g. "multica-static.copilothub.ai").
    * When provided, enables file card preprocessing and rendering.
@@ -128,7 +128,7 @@ function createComponents(
   mode: RenderMode,
   onUrlClick?: (url: string) => void,
   onFileClick?: (path: string) => void,
-  renderMention?: (props: { type: string; id: string }) => React.ReactNode,
+  renderMention?: (props: { type: string; id: string; label?: string }) => React.ReactNode,
   renderImage?: (props: { src: string; alt: string }) => React.ReactNode,
   renderFileCard?: (props: { href: string; filename: string }) => React.ReactNode,
 ): Partial<Components> {
@@ -187,10 +187,19 @@ function createComponents(
           const id = mentionMatch[2]
 
           if (renderMention) {
+            // Pass the link text as a label so the renderer can fall back to
+            // the author's intended name when the id isn't resolvable (e.g. a
+            // user who left the workspace) instead of rendering "Unknown".
+            const label =
+              typeof children === 'string'
+                ? children
+                : Array.isArray(children)
+                  ? children.filter((c): c is string => typeof c === 'string').join('')
+                  : undefined
             // Let the custom renderer opt out for types it doesn't handle
             // by returning null/undefined — we then fall through to the
             // default styled span so nothing ever disappears silently.
-            const rendered = renderMention({ type, id })
+            const rendered = renderMention({ type, id, label })
             if (rendered) return <>{rendered}</>
           }
 

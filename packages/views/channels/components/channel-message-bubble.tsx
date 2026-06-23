@@ -111,7 +111,9 @@ export function ChannelMessageBubble({
         </div>
         <div
           className={cn(
-            "w-fit rounded-lg border px-3 py-2 text-sm leading-6",
+            // min-w-0 + break long tokens so a wide code span / URL wraps
+            // inside the bubble instead of forcing the column wider.
+            "w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg border px-3 py-2 text-sm leading-6",
             isOwn
               ? "border-border/60 bg-card"
               : "border-primary/20 bg-primary/[0.06]",

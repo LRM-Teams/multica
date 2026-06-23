@@ -690,7 +690,7 @@ export function ChannelsPage() {
           </div>
         </aside>
 
-        <main className="flex min-h-0 flex-col">
+        <main className="flex min-h-0 min-w-0 flex-col">
           {!active ? (
             <EmptyState onCreate={handleCreate} />
           ) : (
@@ -833,7 +833,7 @@ export function ChannelsPage() {
                 </div>
               </header>
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+              <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">
                 {messages.length === 0 ? (
                   <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                     {t(($) => $.thread.empty)}

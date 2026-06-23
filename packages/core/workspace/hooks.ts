@@ -12,27 +12,31 @@ export function useActorName() {
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: squads = [] } = useQuery(squadListOptions(wsId));
 
-  const getMemberName = useCallback((userId: string) => {
+  // Each resolver takes an optional fallback used when the id isn't in the
+  // workspace cache — e.g. a mention to someone who left the workspace, or an
+  // agent-authored mention whose link label is the only name we have. Falling
+  // back to that label beats rendering a bare "Unknown".
+  const getMemberName = useCallback((userId: string, fallback?: string) => {
     const m = members.find((m) => m.user_id === userId);
-    return m?.name ?? "Unknown";
+    return m?.name ?? fallback ?? "Unknown";
   }, [members]);
 
-  const getAgentName = useCallback((agentId: string) => {
+  const getAgentName = useCallback((agentId: string, fallback?: string) => {
     const a = agents.find((a) => a.id === agentId);
-    return a?.name ?? "Unknown Agent";
+    return a?.name ?? fallback ?? "Unknown Agent";
   }, [agents]);
 
-  const getSquadName = useCallback((squadId: string) => {
+  const getSquadName = useCallback((squadId: string, fallback?: string) => {
     const s = squads.find((s) => s.id === squadId);
-    return s?.name ?? "Unknown Squad";
+    return s?.name ?? fallback ?? "Unknown Squad";
   }, [squads]);
 
-  const getActorName = useCallback((type: string, id: string) => {
-    if (type === "member") return getMemberName(id);
-    if (type === "agent") return getAgentName(id);
-    if (type === "squad") return getSquadName(id);
+  const getActorName = useCallback((type: string, id: string, fallback?: string) => {
+    if (type === "member") return getMemberName(id, fallback);
+    if (type === "agent") return getAgentName(id, fallback);
+    if (type === "squad") return getSquadName(id, fallback);
     if (type === "system") return "Multica";
-    return "System";
+    return fallback ?? "System";
   }, [getAgentName, getMemberName, getSquadName]);
 
   const getActorInitials = useCallback((type: string, id: string) => {

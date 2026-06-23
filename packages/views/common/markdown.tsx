@@ -53,9 +53,20 @@ function ProjectMentionCard({ projectId }: { projectId: string }): React.ReactNo
  * composer's mention chips. The name is resolved from the workspace cache
  * (same resolver as ActorAvatar) so renames reflect immediately.
  */
-function ActorMention({ type, id }: { type: string; id: string }): React.JSX.Element {
+function ActorMention({
+  type,
+  id,
+  label,
+}: {
+  type: string;
+  id: string;
+  label?: string;
+}): React.JSX.Element {
   const { getActorName } = useActorName();
-  const name = type === "all" ? "all" : getActorName(type, id);
+  // The link text is usually "@Name"; strip the leading @ so we don't double
+  // it, and use it as the fallback when the id isn't in the workspace cache.
+  const fallback = label ? label.replace(/^@+/, "").trim() || undefined : undefined;
+  const name = type === "all" ? "all" : getActorName(type, id, fallback);
   const color = agentColor(id);
   return (
     <span
@@ -75,9 +86,11 @@ function ActorMention({ type, id }: { type: string; id: string }): React.JSX.Ele
 function defaultRenderMention({
   type,
   id,
+  label,
 }: {
   type: string;
   id: string;
+  label?: string;
 }): React.ReactNode {
   if (type === "issue") {
     return <IssueMentionCard issueId={id} />;
@@ -85,7 +98,7 @@ function defaultRenderMention({
   if (type === "project") {
     return <ProjectMentionCard projectId={id} />;
   }
-  return <ActorMention type={type} id={id} />;
+  return <ActorMention type={type} id={id} label={label} />;
 }
 
 function renderImage({ src, alt }: { src: string; alt: string }): React.ReactNode {

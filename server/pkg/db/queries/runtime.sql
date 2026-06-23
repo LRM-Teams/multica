@@ -3,6 +3,15 @@ SELECT * FROM agent_runtime
 WHERE workspace_id = $1
 ORDER BY created_at ASC;
 
+-- name: ListVisibleAgentRuntimes :many
+-- Privacy-scoped list: a member sees their own runtimes plus every public
+-- runtime; another member's private runtime is never returned. There is NO
+-- owner/admin override here — visibility is per-user even for workspace
+-- admins (the unscoped ListAgentRuntimes stays for internal callers).
+SELECT * FROM agent_runtime
+WHERE workspace_id = $1 AND (owner_id = $2 OR visibility = 'public')
+ORDER BY created_at ASC;
+
 -- name: GetAgentRuntime :one
 SELECT * FROM agent_runtime
 WHERE id = $1;

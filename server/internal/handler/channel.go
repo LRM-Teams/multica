@@ -328,6 +328,38 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ch)
 }
 
+func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	// FK ON DELETE CASCADE clears every dependent row (channel_member,
+	// channel_message, channel_agent_session, channel_read, and attachment
+	// rows scoped to this channel). The agents' chat_session rows are not
+	// channel-owned and intentionally survive, mirroring 1:1 chat.
+	tag, err := h.DB.Exec(r.Context(),
+		`DELETE FROM channel WHERE id = $1 AND workspace_id = $2`,
+		channelID, parseUUID(workspaceID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete channel")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	h.publish(protocol.EventChannelDeleted, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {

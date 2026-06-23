@@ -868,13 +868,22 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	b.WriteString("Only respond as yourself. Do not impersonate other agents or users.\n")
 	b.WriteString("Use the recent channel context below, but answer the current mention directly.\n")
 	b.WriteString("This is a collaborative discussion — keep it going until the topic is actually resolved, not just one exchange. ")
-	b.WriteString("If the discussion is not finished (you need input, have a follow-up question, disagree, or want to push the topic forward), END your reply by @-mentioning the specific member(s) you want to continue with, using their exact names as listed below. You may @ several members at once. ")
+	b.WriteString("If the discussion is not finished (you need input, have a follow-up question, disagree, or want to push the topic forward), END your reply by @-mentioning the specific member(s) you want to continue with, using their exact mention links as listed below. You may @ several members at once. ")
 	b.WriteString("Only stop @-mentioning when you have reached a final conclusion and there is genuinely nothing left to discuss — a one-line acknowledgement is not a conclusion.\n")
 	fmt.Fprintf(&b, "To prevent runaway loops, this channel run is limited to %d automatic agent turns; current trigger depth is %d. As you near the limit, steer the discussion toward a concrete conclusion.\n\n", channelRunTriggerLimit, trigger.TriggerDepth)
 	if len(members) > 0 {
-		b.WriteString("Channel members:\n")
+		// Give the exact mention link per member (humans included), not just a
+		// name. The model reliably linkifies agents because their links recur in
+		// channel history, but humans were getting bare "@name" text — which the
+		// UI can't colorize or route. Handing over the verbatim link makes every
+		// mention a real, colored, routable tag.
+		b.WriteString("Channel members — to @-mention one, copy its mention link verbatim (never write a bare @name):\n")
 		for _, member := range members {
-			fmt.Fprintf(&b, "- %s: %s\n", member.MemberType, member.Name)
+			mentionType := member.MemberType
+			if mentionType == "user" {
+				mentionType = "member"
+			}
+			fmt.Fprintf(&b, "- %s (%s): [@%s](mention://%s/%s)\n", member.Name, member.MemberType, member.Name, mentionType, member.MemberID)
 		}
 		b.WriteString("\n")
 	}

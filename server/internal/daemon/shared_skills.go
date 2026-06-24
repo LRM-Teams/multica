@@ -86,17 +86,20 @@ func sharedSkillScanRoot(cfg Config, provider string) (string, bool) {
 	}
 }
 
-func agentSharedSkillScanBase(cfg Config, provider string) (string, bool) {
-	home, err := os.UserHomeDir()
-	if err != nil {
+func agentSharedSkillScanBase(cfg Config, provider, workspaceID string) (string, bool) {
+	if strings.TrimSpace(workspaceID) == "" {
 		return "", false
 	}
 	switch provider {
 	case "pi":
-		return filepath.Join(home, "multica_workspaces", "pi_demo_workspace", ".pi", "agents"), true
+		return filepath.Join(cfg.WorkspacesRoot, workspaceID, ".pi", "agents"), true
 	default:
 		return "", false
 	}
+}
+
+func agentSharedSkillScanRoot(agentBase, agentID string) string {
+	return filepath.Join(agentBase, agentID, "sync_queue", "skill-candidates")
 }
 
 func (d *Daemon) syncSharedSkillsForRuntime(ctx context.Context, rt Runtime) error {
@@ -218,7 +221,7 @@ func (d *Daemon) syncWorkspaceSharedSkillsForRuntime(ctx context.Context, rt Run
 }
 
 func (d *Daemon) syncAgentSharedSkillsForRuntime(ctx context.Context, rt Runtime) error {
-	base, ok := agentSharedSkillScanBase(d.cfg, rt.Provider)
+	base, ok := agentSharedSkillScanBase(d.cfg, rt.Provider, rt.WorkspaceID)
 	if !ok {
 		return nil
 	}
@@ -236,7 +239,7 @@ func (d *Daemon) syncAgentSharedSkillsForRuntime(ctx context.Context, rt Runtime
 			continue
 		}
 		agentID := entry.Name()
-		scanRoot := filepath.Join(base, agentID, "shared-cache", "skills")
+		scanRoot := agentSharedSkillScanRoot(base, agentID)
 		set, err := d.buildAgentSharedSkillBundleSet(rt, agentID, scanRoot)
 		if err != nil {
 			d.logger.Warn("agent shared skill scan failed", "runtime_id", rt.ID, "agent_id", agentID, "path", scanRoot, "error", err)
@@ -317,7 +320,7 @@ func (d *Daemon) buildAgentSharedSkillBundleSet(rt Runtime, agentID, scanRoot st
 }
 
 func (d *Daemon) syncAgentMemoriesForRuntime(ctx context.Context, rt Runtime) error {
-	base, ok := agentSharedSkillScanBase(d.cfg, rt.Provider)
+	base, ok := agentSharedSkillScanBase(d.cfg, rt.Provider, rt.WorkspaceID)
 	if !ok {
 		return nil
 	}

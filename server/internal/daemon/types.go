@@ -10,10 +10,11 @@ type AgentEntry struct {
 
 // Runtime represents a registered daemon runtime.
 type Runtime struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Provider string `json:"provider"`
-	Status   string `json:"status"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	Name        string `json:"name"`
+	Provider    string `json:"provider"`
+	Status      string `json:"status"`
 }
 
 // RepoData holds repository information from the workspace.

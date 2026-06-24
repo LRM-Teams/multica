@@ -45,6 +45,56 @@ func (h *Handler) GetChannelProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"project_id": out})
 }
 
+// resolveProjectWorkdirRuntime finds the online runtime that hosts a project's
+// managed working directory.
+//
+// The managed workdir lives on whichever daemon provisioned it. On a shared /
+// cloud runtime that daemon is NOT owned by the viewer, so resolving "the
+// viewer's own runtime" (the old behavior) wrongly reports offline. We instead
+// resolve the daemon recorded on the project's managed local_directory resource
+// and look up its online runtime, falling back to the viewer's own daemon for
+// the single-user local model. Returns ok=false when no reachable online
+// runtime exists.
+func (h *Handler) resolveProjectWorkdirRuntime(ctx context.Context, workspaceID, userID, projectID string) (pgtype.UUID, bool) {
+	var runtimeID pgtype.UUID
+	if h.DaemonHub == nil {
+		return runtimeID, false
+	}
+	wsID := parseUUID(workspaceID)
+
+	// Primary: the daemon that registered the project's managed workdir. This
+	// is where the files actually are — including a shared/public runtime.
+	var daemonID string
+	_ = h.DB.QueryRow(ctx, `
+		SELECT resource_ref->>'daemon_id'
+		FROM project_resource
+		WHERE project_id = $1 AND resource_type = 'local_directory'
+		  AND COALESCE((resource_ref->>'managed')::boolean, false) = true
+		  AND resource_ref->>'daemon_id' IS NOT NULL
+		ORDER BY created_at DESC
+		LIMIT 1`, parseUUID(projectID)).Scan(&daemonID)
+	if daemonID != "" {
+		if err := h.DB.QueryRow(ctx, `
+			SELECT id FROM agent_runtime
+			WHERE workspace_id = $1 AND daemon_id = $2 AND status = 'online'
+			ORDER BY last_seen_at DESC NULLS LAST
+			LIMIT 1`, wsID, daemonID).Scan(&runtimeID); err == nil && runtimeID.Valid {
+			return runtimeID, true
+		}
+	}
+
+	// Fallback: the viewer's own online runtime (local single-daemon model,
+	// where each user keeps their own copy of the managed workdir).
+	if err := h.DB.QueryRow(ctx, `
+		SELECT id FROM agent_runtime
+		WHERE workspace_id = $1 AND owner_id = $2 AND status = 'online'
+		ORDER BY last_seen_at DESC NULLS LAST
+		LIMIT 1`, wsID, parseUUID(userID)).Scan(&runtimeID); err == nil && runtimeID.Valid {
+		return runtimeID, true
+	}
+	return runtimeID, false
+}
+
 // ChannelProjectFilesResponse is the file-tree listing for a channel's bound
 // project workdir. Status tells the frontend which empty/error state to show:
 //   ok | no_project | offline (no online daemon for the viewer) | missing
@@ -90,15 +140,10 @@ func (h *Handler) ListChannelProjectFiles(w http.ResponseWriter, r *http.Request
 	}
 	projectID := uuidToString(pid)
 
-	// Each daemon keeps its own copy of a managed workdir, so list the one on
-	// the viewer's own online runtime (most recently seen).
-	var runtimeID pgtype.UUID
-	err := h.DB.QueryRow(r.Context(), `
-		SELECT id FROM agent_runtime
-		WHERE workspace_id = $1 AND owner_id = $2 AND status = 'online'
-		ORDER BY last_seen_at DESC NULLS LAST
-		LIMIT 1`, parseUUID(workspaceID), parseUUID(userID)).Scan(&runtimeID)
-	if err != nil || !runtimeID.Valid || h.DaemonHub == nil {
+	// Resolve the runtime that actually hosts the managed workdir (the shared/
+	// cloud daemon on the server, the viewer's own daemon locally).
+	runtimeID, ok := h.resolveProjectWorkdirRuntime(r.Context(), workspaceID, userID, projectID)
+	if !ok {
 		reply("offline", nil, false, projectID)
 		return
 	}
@@ -173,13 +218,8 @@ func (h *Handler) GetChannelProjectFile(w http.ResponseWriter, r *http.Request) 
 	}
 	projectID := uuidToString(pid)
 
-	var runtimeID pgtype.UUID
-	err := h.DB.QueryRow(r.Context(), `
-		SELECT id FROM agent_runtime
-		WHERE workspace_id = $1 AND owner_id = $2 AND status = 'online'
-		ORDER BY last_seen_at DESC NULLS LAST
-		LIMIT 1`, parseUUID(workspaceID), parseUUID(userID)).Scan(&runtimeID)
-	if err != nil || !runtimeID.Valid || h.DaemonHub == nil {
+	runtimeID, ok := h.resolveProjectWorkdirRuntime(r.Context(), workspaceID, userID, projectID)
+	if !ok {
 		writeError(w, http.StatusServiceUnavailable, "runtime offline")
 		return
 	}

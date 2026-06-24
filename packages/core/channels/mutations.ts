@@ -63,6 +63,24 @@ export function useAddChannelMember() {
   });
 }
 
+export function useAddChannelMembers() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({
+      channelId,
+      members,
+    }: {
+      channelId: string;
+      members: { member_type: "user" | "agent"; member_id: string }[];
+    }) => api.addChannelMembers(channelId, members),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    },
+  });
+}
+
 export function useRemoveChannelMember() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();

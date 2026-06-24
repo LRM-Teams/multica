@@ -22,5 +22,6 @@ export {
   useMarkChannelRead,
   useSetChannelTyping,
   useAddChannelMember,
+  useAddChannelMembers,
   useRemoveChannelMember,
 } from "./mutations";

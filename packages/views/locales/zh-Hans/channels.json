@@ -41,7 +41,10 @@
     "join": "加入",
     "title": "群成员",
     "empty": "暂无成员",
-    "remove_aria": "移除成员"
+    "remove_aria": "移除成员",
+    "no_candidates": "没有可邀请的成员",
+    "invite": "邀请",
+    "invite_count": "邀请 ({{count}})"
   },
   "files": {
     "title": "文件",

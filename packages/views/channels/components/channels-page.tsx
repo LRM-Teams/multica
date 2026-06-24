@@ -27,7 +27,7 @@ import {
   channelMembersOptions,
   channelProjectOptions,
   useSetChannelProject,
-  useAddChannelMember,
+  useAddChannelMembers,
   useCreateChannel,
   useDeleteChannel,
   useMarkChannelRead,
@@ -53,6 +53,7 @@ import type {
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { UnicodeSpinner } from "@multica/ui/components/common/unicode-spinner";
 import { Button } from "@multica/ui/components/ui/button";
+import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Input } from "@multica/ui/components/ui/input";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -274,8 +275,8 @@ export function ChannelsPage() {
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
   const [newName, setNewName] = useState("");
   const [newLarkChatId, setNewLarkChatId] = useState("");
-  const [selectedMember, setSelectedMember] = useState("");
-  const [selectedAgent, setSelectedAgent] = useState("");
+  // Multi-select invite: keys are `${type}:${id}` so users and agents share one set.
+  const [selectedInvites, setSelectedInvites] = useState<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const typingStartedRef = useRef(false);
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -297,7 +298,7 @@ export function ChannelsPage() {
   const deleteChannel = useDeleteChannel();
   const sendMessage = useSendChannelMessage();
   const setTyping = useSetChannelTyping();
-  const addMember = useAddChannelMember();
+  const addMembers = useAddChannelMembers();
   const removeMember = useRemoveChannelMember();
   const { uploadWithToast } = useFileUpload(api);
   // Maps the URL the editor wrote into the markdown body → attachment row id,
@@ -560,11 +561,28 @@ export function ChannelsPage() {
     );
   };
 
-  const addSelected = (memberType: "user" | "agent", memberId: string) => {
-    if (!active || !memberId) return;
-    addMember.mutate({ channelId: active.id, memberType, memberId });
-    if (memberType === "user") setSelectedMember("");
-    else setSelectedAgent("");
+  const toggleInvite = (key: string) => {
+    setSelectedInvites((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const inviteSelected = () => {
+    if (!active || selectedInvites.size === 0) return;
+    const members = Array.from(selectedInvites).map((key) => {
+      const sep = key.indexOf(":");
+      return {
+        member_type: key.slice(0, sep) as "user" | "agent",
+        member_id: key.slice(sep + 1),
+      };
+    });
+    addMembers.mutate(
+      { channelId: active.id, members },
+      { onSuccess: () => setSelectedInvites(new Set()) },
+    );
   };
 
   return (
@@ -726,50 +744,66 @@ export function ChannelsPage() {
                     </PopoverTrigger>
                     <PopoverContent align="end" className="w-80 space-y-4">
                       <div className="space-y-2">
-                        <div className="flex gap-2">
-                          <select
-                            className="min-w-0 flex-1 rounded-md border bg-background px-2 text-sm"
-                            value={selectedMember}
-                            onChange={(e) => setSelectedMember(e.target.value)}
-                          >
-                            <option value="">{t(($) => $.members.select_user)}</option>
-                            {availableMembers.map((m) => (
-                              <option key={m.user_id} value={m.user_id}>
-                                {m.name || m.email}
-                              </option>
-                            ))}
-                          </select>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => addSelected("user", selectedMember)}
-                            disabled={!selectedMember}
-                          >
-                            {t(($) => $.members.join)}
-                          </Button>
-                        </div>
-                        <div className="flex gap-2">
-                          <select
-                            className="min-w-0 flex-1 rounded-md border bg-background px-2 text-sm"
-                            value={selectedAgent}
-                            onChange={(e) => setSelectedAgent(e.target.value)}
-                          >
-                            <option value="">{t(($) => $.members.select_agent)}</option>
-                            {availableAgents.map((a) => (
-                              <option key={a.id} value={a.id}>
-                                {a.name}
-                              </option>
-                            ))}
-                          </select>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => addSelected("agent", selectedAgent)}
-                            disabled={!selectedAgent}
-                          >
-                            {t(($) => $.members.join)}
-                          </Button>
-                        </div>
+                        {availableMembers.length === 0 && availableAgents.length === 0 ? (
+                          <p className="px-1 text-xs text-muted-foreground">
+                            {t(($) => $.members.no_candidates)}
+                          </p>
+                        ) : (
+                          <>
+                            <div className="max-h-56 space-y-0.5 overflow-y-auto">
+                              {availableMembers.length > 0 && (
+                                <p className="px-1 pt-1 text-[11px] font-medium text-muted-foreground">
+                                  {t(($) => $.members.select_user)}
+                                </p>
+                              )}
+                              {availableMembers.map((m) => {
+                                const key = `user:${m.user_id}`;
+                                return (
+                                  <label
+                                    key={key}
+                                    className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 hover:bg-accent"
+                                  >
+                                    <Checkbox
+                                      checked={selectedInvites.has(key)}
+                                      onCheckedChange={() => toggleInvite(key)}
+                                    />
+                                    <span className="truncate text-sm">{m.name || m.email}</span>
+                                  </label>
+                                );
+                              })}
+                              {availableAgents.length > 0 && (
+                                <p className="px-1 pt-1 text-[11px] font-medium text-muted-foreground">
+                                  {t(($) => $.members.select_agent)}
+                                </p>
+                              )}
+                              {availableAgents.map((a) => {
+                                const key = `agent:${a.id}`;
+                                return (
+                                  <label
+                                    key={key}
+                                    className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 hover:bg-accent"
+                                  >
+                                    <Checkbox
+                                      checked={selectedInvites.has(key)}
+                                      onCheckedChange={() => toggleInvite(key)}
+                                    />
+                                    <span className="truncate text-sm">{a.name}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                            <Button
+                              size="sm"
+                              className="w-full"
+                              onClick={inviteSelected}
+                              disabled={selectedInvites.size === 0 || addMembers.isPending}
+                            >
+                              {selectedInvites.size > 0
+                                ? t(($) => $.members.invite_count, { count: selectedInvites.size })
+                                : t(($) => $.members.invite)}
+                            </Button>
+                          </>
+                        )}
                       </div>
                       <div className="space-y-2">
                         <p className="text-xs font-medium text-muted-foreground">{t(($) => $.members.title)}</p>

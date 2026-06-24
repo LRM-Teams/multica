@@ -441,5 +441,33 @@
     "runtime_offline": "守护进程离线",
     "runtime_recovery": "守护进程已重启",
     "manual": "用户取消"
+  },
+  "dashboard": {
+    "all_agents": "全部智能体",
+    "edit_config": "编辑配置",
+    "delete": "删除",
+    "metric_tasks": "累计任务",
+    "metric_success": "成功率",
+    "metric_cost": "花销",
+    "metric_version": "进化版本",
+    "last_30d": "近30天",
+    "coming_soon": "即将上线",
+    "role_capabilities": "角色 & 能力声明",
+    "edit": "编辑",
+    "no_description": "暂无角色与能力描述",
+    "no_skills": "暂无能力",
+    "prompt_strategy": "当前 Prompt 策略",
+    "no_prompt": "暂无 Prompt 配置",
+    "exec_log": "执行日志",
+    "view_all": "查看全部",
+    "no_logs": "暂无执行记录",
+    "evolution": "自进化动态",
+    "evolution_placeholder": "自进化功能即将上线，将展示每次 Prompt / 配置迭代与成功率变化。",
+    "running_for": "进行中 · 已用时 {{min}}min",
+    "duration_min": "耗时 {{min}}min",
+    "task_fallback": "任务运行",
+    "empty_select": "选择左侧的一个智能体查看详情",
+    "delete_success": "已删除智能体",
+    "delete_failed": "删除智能体失败"
   }
 }

@@ -243,6 +243,11 @@ export function ChannelsPage() {
   const { mutate: markChannelRead } = useMarkChannelRead();
   // Initialize from ?channel= so shared deep links open the right channel.
   const [activeId, setActiveId] = useState<string | null>(() => searchParams.get("channel"));
+  // ?message= deep-links to a specific message (e.g. from an overview mention).
+  // We scroll to and briefly highlight it, then clear so it fades out.
+  const [highlightMessageId, setHighlightMessageId] = useState<string | null>(
+    () => searchParams.get("message"),
+  );
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Channel | null>(null);
@@ -350,8 +355,20 @@ export function ChannelsPage() {
   }, [activeId, channels]);
 
   useEffect(() => {
+    // Don't yank to the bottom while a deep-linked message is being focused.
+    if (highlightMessageId) return;
     bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [messages.length, active?.id, activeTypingActors.length, activeTasks.length]);
+  }, [messages.length, active?.id, activeTypingActors.length, activeTasks.length, highlightMessageId]);
+
+  // Scroll to and briefly highlight a deep-linked message once it has rendered.
+  useEffect(() => {
+    if (!highlightMessageId || messages.length === 0) return;
+    const el = document.getElementById(`message-${highlightMessageId}`);
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    const clear = setTimeout(() => setHighlightMessageId(null), 2500);
+    return () => clearTimeout(clear);
+  }, [highlightMessageId, messages]);
 
   // Clear the unread badge when a channel becomes active (select / deep link /
   // auto-select). `markChannelRead` (mutate) is referentially stable.
@@ -928,6 +945,7 @@ export function ChannelsPage() {
                       message={message}
                       currentUserId={currentUserId}
                       ownName={currentUserName ?? undefined}
+                      highlighted={message.id === highlightMessageId}
                     />
                   ))
                 )}

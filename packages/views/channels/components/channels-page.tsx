@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Bot,
   FileText,
   MessageCircle,
   MoreHorizontal,
@@ -14,7 +13,6 @@ import {
   Share2,
   Smartphone,
   Trash2,
-  UserRound,
   X,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -46,7 +44,6 @@ import { agentListOptions, memberListOptions } from "@multica/core/workspace/que
 import type {
   Channel,
   ChannelActiveTask,
-  ChannelMember,
   ChannelMemberBrief,
   ChannelTypingPayload,
 } from "@multica/core/types";
@@ -234,27 +231,6 @@ function AgentWorkingIndicator({ tasks }: { tasks: ChannelActiveTask[] }) {
   );
 }
 
-function MemberPill({ member, onRemove }: { member: ChannelMember; onRemove: () => void }) {
-  const { t } = useT("channels");
-  const isAgent = member.member_type === "agent";
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full border bg-background px-2 py-1 text-xs">
-      {isAgent ? <Bot className="size-3" /> : <UserRound className="size-3" />}
-      <span className="max-w-32 truncate">
-        {member.name || (isAgent ? t(($) => $.message.agent_badge) : t(($) => $.members.title))}
-      </span>
-      <button
-        type="button"
-        onClick={onRemove}
-        className="text-muted-foreground hover:text-foreground"
-        aria-label={t(($) => $.members.remove_aria)}
-      >
-        <X className="size-3" />
-      </button>
-    </span>
-  );
-}
-
 export function ChannelsPage() {
   const { t } = useT("channels");
   const timeAgo = useTimeAgo();
@@ -277,6 +253,8 @@ export function ChannelsPage() {
   const [newLarkChatId, setNewLarkChatId] = useState("");
   // Multi-select invite: keys are `${type}:${id}` so users and agents share one set.
   const [selectedInvites, setSelectedInvites] = useState<Set<string>>(new Set());
+  const [memberTab, setMemberTab] = useState<"invite" | "members">("invite");
+  const [memberQuery, setMemberQuery] = useState("");
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const typingStartedRef = useRef(false);
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -317,6 +295,31 @@ export function ChannelsPage() {
   );
   const availableMembers = workspaceMembers.filter((m) => !memberIds.has(m.user_id));
   const availableAgents = agents.filter((a) => !agentIds.has(a.id) && !a.archived_at);
+  // Flat, searchable candidate list (users + agents) for the invite tab.
+  const inviteCandidates = useMemo(() => {
+    const q = memberQuery.trim().toLowerCase();
+    const list = [
+      ...availableMembers.map((m) => ({
+        key: `user:${m.user_id}`,
+        type: "user" as const,
+        id: m.user_id,
+        name: m.name || m.email,
+      })),
+      ...availableAgents.map((a) => ({
+        key: `agent:${a.id}`,
+        type: "agent" as const,
+        id: a.id,
+        name: a.name,
+      })),
+    ];
+    return q ? list.filter((c) => c.name.toLowerCase().includes(q)) : list;
+  }, [availableMembers, availableAgents, memberQuery]);
+  const filteredMembers = useMemo(() => {
+    const q = memberQuery.trim().toLowerCase();
+    return q
+      ? channelMembers.filter((m) => (m.name || "").toLowerCase().includes(q))
+      : channelMembers;
+  }, [channelMembers, memberQuery]);
   // Scope the composer's @ picker to this channel's members only.
   const channelMemberIds = useMemo(
     () => new Set(channelMembers.map((m) => m.member_id)),
@@ -742,91 +745,137 @@ export function ChannelsPage() {
                         <Plus className="size-3.5" />
                       </span>
                     </PopoverTrigger>
-                    <PopoverContent align="end" className="w-80 space-y-4">
-                      <div className="space-y-2">
-                        {availableMembers.length === 0 && availableAgents.length === 0 ? (
-                          <p className="px-1 text-xs text-muted-foreground">
-                            {t(($) => $.members.no_candidates)}
-                          </p>
-                        ) : (
-                          <>
-                            <div className="max-h-56 space-y-0.5 overflow-y-auto">
-                              {availableMembers.length > 0 && (
-                                <p className="px-1 pt-1 text-[11px] font-medium text-muted-foreground">
-                                  {t(($) => $.members.select_user)}
-                                </p>
-                              )}
-                              {availableMembers.map((m) => {
-                                const key = `user:${m.user_id}`;
-                                return (
-                                  <label
-                                    key={key}
-                                    className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 hover:bg-accent"
-                                  >
-                                    <Checkbox
-                                      checked={selectedInvites.has(key)}
-                                      onCheckedChange={() => toggleInvite(key)}
-                                    />
-                                    <span className="truncate text-sm">{m.name || m.email}</span>
-                                  </label>
-                                );
-                              })}
-                              {availableAgents.length > 0 && (
-                                <p className="px-1 pt-1 text-[11px] font-medium text-muted-foreground">
-                                  {t(($) => $.members.select_agent)}
-                                </p>
-                              )}
-                              {availableAgents.map((a) => {
-                                const key = `agent:${a.id}`;
-                                return (
-                                  <label
-                                    key={key}
-                                    className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 hover:bg-accent"
-                                  >
-                                    <Checkbox
-                                      checked={selectedInvites.has(key)}
-                                      onCheckedChange={() => toggleInvite(key)}
-                                    />
-                                    <span className="truncate text-sm">{a.name}</span>
-                                  </label>
-                                );
-                              })}
-                            </div>
-                            <Button
-                              size="sm"
-                              className="w-full"
-                              onClick={inviteSelected}
-                              disabled={selectedInvites.size === 0 || addMembers.isPending}
-                            >
-                              {selectedInvites.size > 0
-                                ? t(($) => $.members.invite_count, { count: selectedInvites.size })
-                                : t(($) => $.members.invite)}
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                      <div className="space-y-2">
-                        <p className="text-xs font-medium text-muted-foreground">{t(($) => $.members.title)}</p>
-                        <div className="flex flex-wrap gap-2">
-                          {channelMembers.length === 0 ? (
-                            <span className="text-xs text-muted-foreground">{t(($) => $.members.empty)}</span>
-                          ) : (
-                            channelMembers.map((m) => (
-                              <MemberPill
-                                key={`${m.member_type}:${m.member_id}`}
-                                member={m}
-                                onRemove={() =>
-                                  removeMember.mutate({
-                                    channelId: active.id,
-                                    memberType: m.member_type,
-                                    memberId: m.member_id,
-                                  })
-                                }
-                              />
-                            ))
+                    <PopoverContent align="end" className="w-80 p-0">
+                      <div className="flex border-b">
+                        <button
+                          type="button"
+                          onClick={() => setMemberTab("invite")}
+                          className={cn(
+                            "flex-1 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
+                            memberTab === "invite"
+                              ? "border-primary text-foreground"
+                              : "border-transparent text-muted-foreground hover:text-foreground",
                           )}
+                        >
+                          {t(($) => $.members.tab_invite)}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMemberTab("members")}
+                          className={cn(
+                            "flex-1 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
+                            memberTab === "members"
+                              ? "border-primary text-foreground"
+                              : "border-transparent text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          {t(($) => $.members.tab_members)} · {channelMembers.length}
+                        </button>
+                      </div>
+                      <div className="p-2">
+                        <div className="relative">
+                          <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            value={memberQuery}
+                            onChange={(e) => setMemberQuery(e.target.value)}
+                            placeholder={t(($) => $.members.search)}
+                            className="h-8 pl-7"
+                          />
                         </div>
                       </div>
+                      {memberTab === "invite" ? (
+                        <>
+                          <div className="max-h-64 overflow-y-auto px-1.5 pb-1.5">
+                            {inviteCandidates.length === 0 ? (
+                              <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+                                {memberQuery
+                                  ? t(($) => $.members.no_results)
+                                  : t(($) => $.members.no_candidates)}
+                              </p>
+                            ) : (
+                              inviteCandidates.map((c) => (
+                                <label
+                                  key={c.key}
+                                  className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent"
+                                >
+                                  <Checkbox
+                                    checked={selectedInvites.has(c.key)}
+                                    onCheckedChange={() => toggleInvite(c.key)}
+                                  />
+                                  <ActorAvatar
+                                    name={c.name}
+                                    initials={initialsOf(c.name || "?")}
+                                    isAgent={c.type === "agent"}
+                                    size={26}
+                                    tint={c.type === "agent" ? agentColor(c.id) : undefined}
+                                  />
+                                  <span className="min-w-0 flex-1 truncate text-sm">{c.name}</span>
+                                </label>
+                              ))
+                            )}
+                          </div>
+                          {selectedInvites.size > 0 && (
+                            <div className="border-t p-2">
+                              <Button
+                                size="sm"
+                                className="w-full"
+                                onClick={inviteSelected}
+                                disabled={addMembers.isPending}
+                              >
+                                {t(($) => $.members.invite_count, { count: selectedInvites.size })}
+                              </Button>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="max-h-72 overflow-y-auto px-1.5 pb-2">
+                          {filteredMembers.length === 0 ? (
+                            <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+                              {channelMembers.length === 0
+                                ? t(($) => $.members.empty)
+                                : t(($) => $.members.no_results)}
+                            </p>
+                          ) : (
+                            filteredMembers.map((m) => {
+                              const isAgent = m.member_type === "agent";
+                              const name =
+                                m.name ||
+                                (isAgent
+                                  ? t(($) => $.message.agent_badge)
+                                  : t(($) => $.members.title));
+                              return (
+                                <div
+                                  key={`${m.member_type}:${m.member_id}`}
+                                  className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent"
+                                >
+                                  <ActorAvatar
+                                    name={name}
+                                    initials={initialsOf(m.name || "?")}
+                                    isAgent={isAgent}
+                                    size={26}
+                                    tint={isAgent ? agentColor(m.member_id) : undefined}
+                                  />
+                                  <span className="min-w-0 flex-1 truncate text-sm">{name}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      removeMember.mutate({
+                                        channelId: active.id,
+                                        memberType: m.member_type,
+                                        memberId: m.member_id,
+                                      })
+                                    }
+                                    aria-label={t(($) => $.members.remove_aria)}
+                                    className="rounded p-1 text-muted-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100"
+                                  >
+                                    <X className="size-3.5" />
+                                  </button>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      )}
                     </PopoverContent>
                   </Popover>
                   <div className="flex items-center gap-1 text-muted-foreground">

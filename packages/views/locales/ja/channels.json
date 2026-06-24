@@ -41,7 +41,10 @@
     "join": "追加",
     "title": "メンバー",
     "empty": "メンバーがいません",
-    "remove_aria": "メンバーを削除"
+    "remove_aria": "メンバーを削除",
+    "no_candidates": "招待できる相手がいません",
+    "invite": "招待",
+    "invite_count": "招待 ({{count}})"
   },
   "files": {
     "title": "ファイル",

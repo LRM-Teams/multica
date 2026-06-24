@@ -41,7 +41,10 @@
     "join": "Add",
     "title": "Members",
     "empty": "No members yet",
-    "remove_aria": "Remove member"
+    "remove_aria": "Remove member",
+    "no_candidates": "No one left to invite",
+    "invite": "Invite",
+    "invite_count": "Invite ({{count}})"
   },
   "files": {
     "title": "Files",

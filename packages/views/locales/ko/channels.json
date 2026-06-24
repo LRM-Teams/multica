@@ -41,7 +41,10 @@
     "join": "추가",
     "title": "멤버",
     "empty": "멤버 없음",
-    "remove_aria": "멤버 제거"
+    "remove_aria": "멤버 제거",
+    "no_candidates": "초대할 대상이 없습니다",
+    "invite": "초대",
+    "invite_count": "초대 ({{count}})"
   },
   "files": {
     "title": "파일",

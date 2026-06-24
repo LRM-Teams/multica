@@ -1750,6 +1750,16 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/members`);
   }
 
+  async addChannelMembers(
+    channelId: string,
+    members: { member_type: "user" | "agent"; member_id: string }[],
+  ): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/members/batch`, {
+      method: "POST",
+      body: JSON.stringify({ members }),
+    });
+  }
+
   async addChannelMember(channelId: string, data: { member_type: "user" | "agent"; member_id: string }): Promise<void> {
     await this.fetch(`/api/channels/${channelId}/members`, {
       method: "POST",

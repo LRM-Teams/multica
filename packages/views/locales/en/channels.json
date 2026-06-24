@@ -44,7 +44,11 @@
     "remove_aria": "Remove member",
     "no_candidates": "No one left to invite",
     "invite": "Invite",
-    "invite_count": "Invite ({{count}})"
+    "invite_count": "Invite ({{count}})",
+    "tab_invite": "Invite",
+    "tab_members": "Members",
+    "search": "Search…",
+    "no_results": "No matches"
   },
   "files": {
     "title": "Files",

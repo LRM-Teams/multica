@@ -44,7 +44,11 @@
     "remove_aria": "メンバーを削除",
     "no_candidates": "招待できる相手がいません",
     "invite": "招待",
-    "invite_count": "招待 ({{count}})"
+    "invite_count": "招待 ({{count}})",
+    "tab_invite": "招待",
+    "tab_members": "メンバー",
+    "search": "検索…",
+    "no_results": "一致する結果がありません"
   },
   "files": {
     "title": "ファイル",

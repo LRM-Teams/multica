@@ -1,6 +1,7 @@
 {
   "page": {
     "breadcrumb_title": "イシュー",
+    "new_issue": "新規イシュー",
     "breadcrumb_workspace_fallback": "ワークスペース",
     "empty_title": "まだイシューがありません",
     "empty_hint": "イシューを作成して始めましょう。",
@@ -23,6 +24,7 @@
     "none": "優先度なし"
   },
   "scope": {
+    "filter_prefix": "フィルター:",
     "all_label": "すべて",
     "all_description": "このワークスペースのすべてのイシュー",
     "members_label": "メンバー",

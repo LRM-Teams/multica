@@ -1,6 +1,7 @@
 {
   "page": {
     "breadcrumb_title": "Issues",
+    "new_issue": "New issue",
     "breadcrumb_workspace_fallback": "Workspace",
     "empty_title": "No issues yet",
     "empty_hint": "Create an issue to get started.",
@@ -23,6 +24,7 @@
     "none": "No priority"
   },
   "scope": {
+    "filter_prefix": "Filter:",
     "all_label": "All",
     "all_description": "All issues in this workspace",
     "members_label": "Members",

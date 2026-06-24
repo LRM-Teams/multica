@@ -23,6 +23,7 @@ import {
   Waves,
 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
+import { cn } from "@multica/ui/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -501,9 +502,12 @@ function LabelSubContent({
 export function IssuesHeader({
   scopedIssues,
   allowGantt = false,
+  hideViewToggle = false,
 }: {
   scopedIssues: Issue[];
   allowGantt?: boolean;
+  /** Board page hoists the view toggle into the title row. */
+  hideViewToggle?: boolean;
 }) {
   const { t } = useT("issues");
   const scope = useIssuesScopeStore((s) => s.scope);
@@ -540,8 +544,11 @@ export function IssuesHeader({
   return (
     <div className="h-12 shrink-0 overflow-x-auto px-4 [-webkit-overflow-scrolling:touch]">
       <div className="flex h-full w-max min-w-full items-center justify-between gap-2">
-        {/* Left: scope buttons */}
-        <div className="hidden shrink-0 items-center gap-1 md:flex">
+        {/* Left: filter label + scope pills */}
+        <div className="hidden shrink-0 items-center gap-1.5 md:flex">
+          <span className="mr-0.5 shrink-0 text-sm text-muted-foreground">
+            {t(($) => $.scope.filter_prefix)}
+          </span>
           {SCOPE_VALUES.map((s) => (
             <Tooltip key={s}>
               <TooltipTrigger
@@ -549,11 +556,12 @@ export function IssuesHeader({
                   <Button
                     variant="outline"
                     size="sm"
-                    className={
+                    className={cn(
+                      "h-7 rounded-full px-3 text-[13px] font-normal",
                       scope === s
-                        ? "bg-accent text-accent-foreground hover:bg-accent/80"
-                        : "text-muted-foreground"
-                    }
+                        ? "border-foreground/20 bg-muted text-foreground hover:bg-muted"
+                        : "border-transparent text-muted-foreground hover:bg-muted/60",
+                    )}
                     onClick={() => setScope(s)}
                   >
                     {t(($) => $.scope[SCOPE_LABEL_KEY[s]])}
@@ -600,7 +608,7 @@ export function IssuesHeader({
             onToggle={toggleAgentRunningFilter}
             scopedIssueIds={scopedIssueIds}
           />
-          <IssueDisplayControls scopedIssues={scopedIssues} allowGantt={allowGantt} />
+          <IssueDisplayControls scopedIssues={scopedIssues} allowGantt={allowGantt} hideViewToggle={hideViewToggle} />
         </div>
       </div>
     </div>
@@ -1062,77 +1070,88 @@ export function IssueDisplayControls({
           </PopoverContent>
         </Popover>
 
-        {/* View toggle. If a store has `viewMode === "gantt"` persisted but
-            this surface doesn't render Gantt, fall back to "list" so the
-            trigger icon matches what's actually on screen. */}
-        {!hideViewToggle && (
-          <DropdownMenu>
-            <Tooltip>
-              <DropdownMenuTrigger
-                render={
-                  <TooltipTrigger
-                    render={
-                      <Button variant="outline" size="sm" className={controlButtonClass}>
-                        {viewMode === "board" ? (
-                          <Columns3 className="size-3.5" />
-                        ) : viewMode === "swimlane" ? (
-                          <Waves className="size-3.5" />
-                        ) : viewMode === "gantt" && allowGantt ? (
-                          <ChartGantt className="size-3.5" />
-                        ) : (
-                          <List className="size-3.5" />
-                        )}
-                        <span className="hidden md:inline">
-                          {viewMode === "board"
-                            ? t(($) => $.view.board)
-                            : viewMode === "swimlane"
-                            ? t(($) => $.view.swimlane)
-                            : viewMode === "gantt" && allowGantt
-                            ? t(($) => $.view.gantt)
-                            : t(($) => $.view.list)}
-                        </span>
-                      </Button>
-                    }
-                  />
-                }
-              />
-              <TooltipContent side="bottom">
-                {viewMode === "board"
-                  ? t(($) => $.view.tooltip_board)
-                  : viewMode === "swimlane"
-                  ? t(($) => $.view.tooltip_swimlane)
-                  : viewMode === "gantt" && allowGantt
-                  ? t(($) => $.view.tooltip_gantt)
-                  : t(($) => $.view.tooltip_list)}
-              </TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent align="end" className="w-auto">
-              <DropdownMenuGroup>
-                <DropdownMenuLabel>{t(($) => $.view.section)}</DropdownMenuLabel>
-              </DropdownMenuGroup>
-              <DropdownMenuRadioGroup value={viewMode} onValueChange={(v) => act.setViewMode(v as ViewMode)}>
-                <DropdownMenuRadioItem value="board">
-                  <Columns3 />
-                  {t(($) => $.view.board)}
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="list">
-                  <List />
-                  {t(($) => $.view.list)}
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="swimlane">
-                  <Waves />
-                  {t(($) => $.view.swimlane)}
-                </DropdownMenuRadioItem>
-                {allowGantt && (
-                  <DropdownMenuRadioItem value="gantt">
-                    <ChartGantt />
-                    {t(($) => $.view.gantt)}
-                  </DropdownMenuRadioItem>
-                )}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+        {/* View toggle. Extracted to <ViewToggle> so the board page can hoist
+            it into the title row (hideViewToggle) while other surfaces keep it
+            inline with the display controls. */}
+        {!hideViewToggle && <ViewToggle allowGantt={allowGantt} />}
     </div>
+  );
+}
+
+// Standalone view-mode switch. If a store has `viewMode === "gantt"` persisted
+// but this surface doesn't render Gantt, the trigger falls back to "list" so
+// the icon matches what's actually on screen. Must render inside a
+// ViewStoreProvider.
+export function ViewToggle({ allowGantt = false }: { allowGantt?: boolean }) {
+  const { t } = useT("issues");
+  const viewMode = useViewStore((s) => s.viewMode);
+  const act = useViewStoreApi().getState();
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <DropdownMenuTrigger
+          render={
+            <TooltipTrigger
+              render={
+                <Button variant="outline" size="sm" className="h-8 w-8 gap-1 px-0 text-muted-foreground md:h-7 md:w-auto md:px-2.5">
+                  {viewMode === "board" ? (
+                    <Columns3 className="size-3.5" />
+                  ) : viewMode === "swimlane" ? (
+                    <Waves className="size-3.5" />
+                  ) : viewMode === "gantt" && allowGantt ? (
+                    <ChartGantt className="size-3.5" />
+                  ) : (
+                    <List className="size-3.5" />
+                  )}
+                  <span className="hidden md:inline">
+                    {viewMode === "board"
+                      ? t(($) => $.view.board)
+                      : viewMode === "swimlane"
+                      ? t(($) => $.view.swimlane)
+                      : viewMode === "gantt" && allowGantt
+                      ? t(($) => $.view.gantt)
+                      : t(($) => $.view.list)}
+                  </span>
+                </Button>
+              }
+            />
+          }
+        />
+        <TooltipContent side="bottom">
+          {viewMode === "board"
+            ? t(($) => $.view.tooltip_board)
+            : viewMode === "swimlane"
+            ? t(($) => $.view.tooltip_swimlane)
+            : viewMode === "gantt" && allowGantt
+            ? t(($) => $.view.tooltip_gantt)
+            : t(($) => $.view.tooltip_list)}
+        </TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end" className="w-auto">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>{t(($) => $.view.section)}</DropdownMenuLabel>
+        </DropdownMenuGroup>
+        <DropdownMenuRadioGroup value={viewMode} onValueChange={(v) => act.setViewMode(v as ViewMode)}>
+          <DropdownMenuRadioItem value="board">
+            <Columns3 />
+            {t(($) => $.view.board)}
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="list">
+            <List />
+            {t(($) => $.view.list)}
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="swimlane">
+            <Waves />
+            {t(($) => $.view.swimlane)}
+          </DropdownMenuRadioItem>
+          {allowGantt && (
+            <DropdownMenuRadioItem value="gantt">
+              <ChartGantt />
+              {t(($) => $.view.gantt)}
+            </DropdownMenuRadioItem>
+          )}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

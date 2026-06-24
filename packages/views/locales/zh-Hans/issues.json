@@ -1,6 +1,7 @@
 {
   "page": {
     "breadcrumb_title": "Issues",
+    "new_issue": "新建 Issue",
     "breadcrumb_workspace_fallback": "工作区",
     "empty_title": "还没有 issue",
     "empty_hint": "创建一个 issue 开始使用。",
@@ -23,6 +24,7 @@
     "none": "无优先级"
   },
   "scope": {
+    "filter_prefix": "筛选:",
     "all_label": "全部",
     "all_description": "工作区内的全部 issue",
     "members_label": "成员",

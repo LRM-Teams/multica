@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -778,6 +779,9 @@ func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Req
 }
 
 func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
+	// Notify mentioned humans regardless of the agent trigger limit — surfacing a
+	// mention to a person never feeds the automatic agent-reply loop.
+	h.notifyChannelMemberMentions(ctx, ch, trigger)
 	if trigger.TriggerDepth >= channelRunTriggerLimit {
 		slog.Warn("channel mention: trigger limit reached", "channel", ch.ID, "thread_id", ptrString(trigger.ThreadID), "depth", trigger.TriggerDepth)
 		return
@@ -808,6 +812,113 @@ func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelRespons
 			slog.Warn("channel mention: tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
 		}
 	}
+}
+
+// notifyChannelMemberMentions creates a "mentioned" inbox item for every human
+// channel member @-mentioned in a channel message (by an agent, another member,
+// or via @all), so the mention surfaces in the recipient's overview "for me"
+// list with a deep link back to the message. The message author is never
+// notified about their own mention.
+func (h *Handler) notifyChannelMemberMentions(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse) {
+	mentions := util.ParseMentions(msg.Content)
+	if len(mentions) == 0 {
+		return
+	}
+	members := h.channelHumanMemberIDs(ctx, ch.WorkspaceID, ch.ID)
+	if len(members) == 0 {
+		return
+	}
+
+	recipients := map[string]bool{}
+	for _, m := range mentions {
+		switch m.Type {
+		case "all":
+			for id := range members {
+				recipients[id] = true
+			}
+		case "member":
+			if members[m.ID] {
+				recipients[m.ID] = true
+			}
+		}
+	}
+	// Never notify the author about their own message.
+	if msg.AuthorID != nil {
+		delete(recipients, *msg.AuthorID)
+	}
+	if len(recipients) == 0 {
+		return
+	}
+
+	// inbox_item.actor_type is constrained to member|agent|system.
+	actorType := "system"
+	var actorID pgtype.UUID
+	switch msg.AuthorType {
+	case "user":
+		actorType = "member"
+		if msg.AuthorID != nil {
+			actorID = parseUUID(*msg.AuthorID)
+		}
+	case "agent":
+		actorType = "agent"
+		if msg.AuthorID != nil {
+			actorID = parseUUID(*msg.AuthorID)
+		}
+	}
+
+	details, _ := json.Marshal(map[string]string{
+		"channel_id":   ch.ID,
+		"channel_name": ch.Name,
+		"message_id":   msg.ID,
+		"actor_name":   msg.AuthorName,
+	})
+	body := strings.TrimSpace(msg.Content)
+	if runes := []rune(body); len(runes) > 280 {
+		body = string(runes[:280])
+	}
+	title := fmt.Sprintf("%s mentioned you in #%s", msg.AuthorName, ch.Name)
+
+	for id := range recipients {
+		item, err := h.Queries.CreateInboxItem(ctx, db.CreateInboxItemParams{
+			WorkspaceID:   parseUUID(ch.WorkspaceID),
+			RecipientType: "member",
+			RecipientID:   parseUUID(id),
+			Type:          "mentioned",
+			Severity:      "info",
+			Title:         title,
+			Body:          strToText(body),
+			ActorType:     strToText(actorType),
+			ActorID:       actorID,
+			Details:       details,
+		})
+		if err != nil {
+			slog.Warn("channel mention: inbox creation failed", "channel", ch.ID, "recipient", id, "error", err)
+			continue
+		}
+		h.publish(protocol.EventInboxNew, ch.WorkspaceID, actorType, uuidToString(actorID), map[string]any{"item": inboxToResponse(item)})
+	}
+}
+
+// channelHumanMemberIDs returns the set of human (user) member IDs in a channel.
+func (h *Handler) channelHumanMemberIDs(ctx context.Context, workspaceID, channelID string) map[string]bool {
+	rows, err := h.DB.Query(ctx, `
+		SELECT member_id
+		FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user'`,
+		parseUUID(channelID), parseUUID(workspaceID))
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		out[uuidToString(id)] = true
+	}
+	return out
 }
 
 func (h *Handler) publishChannelAgentTyping(ch ChannelResponse, agent db.Agent, isTyping bool) {

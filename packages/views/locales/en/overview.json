@@ -17,7 +17,8 @@
   "my_tasks": {
     "title": "Tasks & messages for me",
     "empty": "Nothing needs your attention",
-    "review_badge": "Review"
+    "review_badge": "Review",
+    "channel_mention": "{{actor}} mentioned you in #{{channel}}"
   },
   "agent_status": {
     "title": "My agents' activity",

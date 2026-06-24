@@ -32,11 +32,14 @@ export function ChannelMessageBubble({
   message,
   currentUserId,
   ownName,
+  highlighted = false,
 }: {
   message: ChannelMessage;
   currentUserId: string | null;
   /** Display name for the viewer's own messages. Defaults to the stored name. */
   ownName?: string;
+  /** Deep-link target: briefly ring-highlights the message, then fades. */
+  highlighted?: boolean;
 }) {
   const { t } = useT("channels");
   const { getActorAvatarUrl } = useActorName();
@@ -65,11 +68,13 @@ export function ChannelMessageBubble({
 
   return (
     <div
+      id={`message-${message.id}`}
       data-testid="message-bubble"
       data-own={isOwn}
       className={cn(
-        "group flex gap-2.5 px-2 py-2",
+        "group flex gap-2.5 rounded-lg px-2 py-2 transition-colors duration-1000",
         isOwn ? "flex-row-reverse" : "flex-row",
+        highlighted && "bg-primary/10 ring-2 ring-primary/40 duration-0",
       )}
     >
       <ActorAvatar

@@ -74,6 +74,40 @@ export interface ChannelActiveTask {
   status: string;
 }
 
+/** One entry in a project workdir listing; `path` is relative to the workdir
+ *  root (forward slashes). The tree is rebuilt client-side from these paths. */
+export interface ChannelProjectFile {
+  path: string;
+  is_dir: boolean;
+  size?: number;
+}
+
+export type ChannelProjectFilesStatus =
+  | "ok"
+  | "no_project"
+  | "offline"
+  | "missing"
+  | "error";
+
+export interface ChannelProjectFiles {
+  project_id: string;
+  status: ChannelProjectFilesStatus;
+  nodes: ChannelProjectFile[];
+  truncated: boolean;
+}
+
+/** A single project file's preview content (read from the daemon workdir). For
+ *  text, `content` is UTF-8 and `encoding` is empty; for media it's base64 with
+ *  `encoding` "base64" and `mime_type` set so the client can render it. */
+export interface ChannelProjectFileContent {
+  content: string;
+  encoding: string;
+  mime_type: string;
+  truncated: boolean;
+  too_large: boolean;
+  binary: boolean;
+}
+
 export interface ChannelTypingPayload {
   channel_id: string;
   actor_type: "user" | "agent" | "lark" | "system";

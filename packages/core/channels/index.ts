@@ -5,6 +5,7 @@ export {
   channelMembersOptions,
   channelAttachmentsOptions,
   channelStatsOptions,
+  channelProjectFilesOptions,
 } from "./queries";
 export {
   activeChannelTasksKeys,

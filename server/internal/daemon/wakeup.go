@@ -129,7 +129,7 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- d.readTaskWakeupMessages(conn, taskWakeups)
+		errCh <- d.readTaskWakeupMessages(conn, taskWakeups, writes)
 	}()
 
 	// Defer cleanup must shut goroutines down in this order:
@@ -259,7 +259,7 @@ func (d *Daemon) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatRespons
 	d.handleHeartbeatActions(ctx, ack.RuntimeID, ack)
 }
 
-func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<- taskWakeup) error {
+func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<- taskWakeup, writes chan<- []byte) error {
 	conn.SetReadLimit(64 * 1024)
 	for {
 		_, raw, err := conn.ReadMessage()
@@ -291,6 +291,20 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				continue
 			}
 			d.handleWSHeartbeatAck(context.Background(), &ack)
+		case protocol.EventDaemonListFilesRequest:
+			var req protocol.ListWorkdirFilesRequestPayload
+			if err := json.Unmarshal(msg.Payload, &req); err != nil {
+				d.logger.Debug("list files request invalid payload", "error", err)
+				continue
+			}
+			d.handleListFilesRequest(req, writes)
+		case protocol.EventDaemonReadFileRequest:
+			var req protocol.ReadWorkdirFileRequestPayload
+			if err := json.Unmarshal(msg.Payload, &req); err != nil {
+				d.logger.Debug("read file request invalid payload", "error", err)
+				continue
+			}
+			d.handleReadFileRequest(req, writes)
 		}
 	}
 }

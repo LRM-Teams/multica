@@ -126,6 +126,11 @@ const (
 	// flat node list. Correlated by RequestID. See protocol.ListWorkdirFiles*.
 	EventDaemonListFilesRequest  = "daemon:list_files_request"
 	EventDaemonListFilesResponse = "daemon:list_files_response"
+	// Workdir single-file read RPC (preview): server pushes a request, the
+	// daemon reads one file from the project workdir and replies with its
+	// text content. Correlated by RequestID. See protocol.ReadWorkdirFile*.
+	EventDaemonReadFileRequest  = "daemon:read_file_request"
+	EventDaemonReadFileResponse = "daemon:read_file_response"
 
 	// GitHub integration events
 	EventGitHubInstallationCreated = "github_installation:created"

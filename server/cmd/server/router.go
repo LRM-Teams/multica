@@ -987,6 +987,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/", h.DeleteChannel)
 					r.Get("/project", h.GetChannelProject)
 					r.Put("/project", h.SetChannelProject)
+					r.Get("/project-files", h.ListChannelProjectFiles)
+					r.Get("/project-files/content", h.GetChannelProjectFile)
 					r.Get("/active-tasks", h.ListChannelActiveTasks)
 					r.Get("/members", h.ListChannelMembers)
 					r.Post("/members", h.AddChannelMember)

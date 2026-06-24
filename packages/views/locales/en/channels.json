@@ -52,7 +52,17 @@
   },
   "files": {
     "title": "Files",
-    "empty": "No files yet"
+    "empty": "No files yet",
+    "no_project": "No project linked to this channel",
+    "offline": "Your runtime is offline — can't read project files",
+    "missing": "This project's folder isn't on your machine yet",
+    "error": "Failed to load files",
+    "truncated": "Showing a partial list (too many files)",
+    "preview_binary": "Binary file — can't preview",
+    "preview_truncated": "Large file — showing a partial preview",
+    "preview_error": "Failed to load file content",
+    "preview_empty": "(empty file)",
+    "preview_too_large": "File too large to preview"
   },
   "stats": {
     "title": "Activity",

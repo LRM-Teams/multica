@@ -188,4 +188,8 @@ export type {
   ChannelAuthorStat,
   ChannelActiveTask,
   ChannelTypingPayload,
+  ChannelProjectFile,
+  ChannelProjectFilesStatus,
+  ChannelProjectFiles,
+  ChannelProjectFileContent,
 } from "./channel";

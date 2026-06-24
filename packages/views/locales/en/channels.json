@@ -61,7 +61,8 @@
     "preview_binary": "Binary file — can't preview",
     "preview_truncated": "Large file — showing a partial preview",
     "preview_error": "Failed to load file content",
-    "preview_empty": "(empty file)"
+    "preview_empty": "(empty file)",
+    "preview_too_large": "File too large to preview"
   },
   "stats": {
     "title": "Activity",

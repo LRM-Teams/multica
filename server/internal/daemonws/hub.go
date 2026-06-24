@@ -452,10 +452,11 @@ func (c *client) readPump() {
 		c.conn.Close()
 	}()
 
-	// Heartbeats are tiny, but workdir file-tree responses can be large
-	// (capped at ~2000 nodes daemon-side); allow up to 1 MiB so a response
-	// frame isn't truncated into a read error.
-	c.conn.SetReadLimit(1 << 20)
+	// Heartbeats are tiny, but workdir responses can be large: a 2000-node
+	// file tree and especially base64-encoded media previews (capped ~6 MiB
+	// raw → ~8 MiB base64). Allow 10 MiB so a response frame isn't truncated
+	// into a read error.
+	c.conn.SetReadLimit(10 << 20)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))

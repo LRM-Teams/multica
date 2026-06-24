@@ -61,7 +61,8 @@
     "preview_binary": "바이너리 파일이라 미리볼 수 없습니다",
     "preview_truncated": "큰 파일이라 일부만 미리봅니다",
     "preview_error": "파일 내용을 불러오지 못했습니다",
-    "preview_empty": "(빈 파일)"
+    "preview_empty": "(빈 파일)",
+    "preview_too_large": "파일이 너무 커서 미리볼 수 없습니다"
   },
   "stats": {
     "title": "활동",

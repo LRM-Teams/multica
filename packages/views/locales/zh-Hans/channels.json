@@ -61,7 +61,8 @@
     "preview_binary": "二进制文件，无法预览",
     "preview_truncated": "文件较大，仅预览前一部分",
     "preview_error": "加载文件内容失败",
-    "preview_empty": "（空文件）"
+    "preview_empty": "（空文件）",
+    "preview_too_large": "文件过大，无法预览"
   },
   "stats": {
     "title": "活跃度",

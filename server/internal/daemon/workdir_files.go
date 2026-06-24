@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,7 +17,30 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-const defaultReadFileMaxBytes = 256 * 1024
+const (
+	defaultReadFileMaxBytes = 256 * 1024
+	// Media files (image/audio/video/pdf) are base64-encoded in the response,
+	// so keep the cap modest — the JSON frame is ~1.34× this.
+	mediaMaxBytes = 6 * 1024 * 1024
+)
+
+// mediaMimeByExt maps file extensions the preview renders directly (image /
+// audio / video / pdf) to their MIME type. Anything not here is treated as
+// text. SVG counts as an image so it renders rather than showing markup.
+var mediaMimeByExt = map[string]string{
+	".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+	".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+	".ico": "image/x-icon", ".svg": "image/svg+xml", ".avif": "image/avif",
+	".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+	".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
+	".m4a": "audio/mp4", ".flac": "audio/flac",
+	".pdf": "application/pdf",
+}
+
+// mediaMime returns the MIME type for a previewable media file, or "" for text.
+func mediaMime(path string) string {
+	return mediaMimeByExt[strings.ToLower(filepath.Ext(path))]
+}
 
 // sendDaemonFrame marshals payload into a typed Message and queues it on the
 // wakeup writer. Best-effort: drops after 5s if the writer is backed up.
@@ -62,6 +86,23 @@ func (d *Daemon) handleReadFileRequest(req protocol.ReadWorkdirFileRequestPayloa
 		info, statErr := os.Stat(target)
 		if statErr != nil || info.IsDir() {
 			resp.Missing = true
+			break
+		}
+		// Media files are returned base64 with a MIME type so the client can
+		// render them as image/audio/video/pdf directly.
+		if mime := mediaMime(target); mime != "" {
+			if info.Size() > int64(mediaMaxBytes) {
+				resp.TooLarge = true
+				break
+			}
+			raw, readErr := os.ReadFile(target)
+			if readErr != nil {
+				resp.Error = "failed to read file"
+				break
+			}
+			resp.MimeType = mime
+			resp.Encoding = "base64"
+			resp.Content = base64.StdEncoding.EncodeToString(raw)
 			break
 		}
 		f, openErr := os.Open(target)

@@ -61,7 +61,8 @@
     "preview_binary": "バイナリファイルのためプレビューできません",
     "preview_truncated": "大きいファイルのため一部のみプレビュー",
     "preview_error": "ファイル内容の読み込みに失敗しました",
-    "preview_empty": "（空のファイル）"
+    "preview_empty": "（空のファイル）",
+    "preview_too_large": "ファイルが大きすぎてプレビューできません"
   },
   "stats": {
     "title": "アクティビティ",

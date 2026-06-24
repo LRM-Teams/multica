@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { channelProjectFilesOptions } from "@multica/core/channels";
 import { api } from "@multica/core/api";
+import { CodeBlock } from "@multica/ui/markdown";
 import type { ChannelProjectFile } from "@multica/core/types";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import {
@@ -181,6 +182,14 @@ function TreeRow({
 }
 
 // Modal preview of one file's content. Fetches lazily when `path` is set.
+function CenteredNote({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex h-full items-center justify-center p-6 text-center text-xs text-muted-foreground">
+      {children}
+    </div>
+  );
+}
+
 function FilePreviewDialog({
   channelId,
   path,
@@ -197,33 +206,80 @@ function FilePreviewDialog({
     enabled: !!path,
   });
   const name = path ? path.slice(path.lastIndexOf("/") + 1) : "";
+  const lang = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "text";
+
+  // Media files arrive base64-encoded; decode into a blob object URL so
+  // <img>/<video>/<audio> can render them without an authenticated <img src>.
+  const blobUrl = useMemo(() => {
+    if (data?.encoding !== "base64" || !data.content) return null;
+    try {
+      const bytes = Uint8Array.from(atob(data.content), (c) => c.charCodeAt(0));
+      return URL.createObjectURL(new Blob([bytes], { type: data.mime_type || "application/octet-stream" }));
+    } catch {
+      return null;
+    }
+  }, [data?.encoding, data?.content, data?.mime_type]);
+  useEffect(() => () => {
+    if (blobUrl) URL.revokeObjectURL(blobUrl);
+  }, [blobUrl]);
+
+  const mime = data?.mime_type ?? "";
+  const renderBody = () => {
+    if (isPending) {
+      return (
+        <div className="space-y-1.5 p-4">
+          <Skeleton className="h-4" />
+          <Skeleton className="h-4" />
+          <Skeleton className="h-4 w-2/3" />
+        </div>
+      );
+    }
+    if (isError) return <CenteredNote>{t(($) => $.files.preview_error)}</CenteredNote>;
+    if (data?.too_large) return <CenteredNote>{t(($) => $.files.preview_too_large)}</CenteredNote>;
+    if (blobUrl && mime.startsWith("image/")) {
+      return (
+        <div className="flex h-full items-center justify-center p-4">
+          <img src={blobUrl} alt={name} className="max-h-full max-w-full object-contain" />
+        </div>
+      );
+    }
+    if (blobUrl && mime.startsWith("video/")) {
+      return (
+        <div className="flex h-full items-center justify-center p-4">
+          <video src={blobUrl} controls className="max-h-full max-w-full" />
+        </div>
+      );
+    }
+    if (blobUrl && mime.startsWith("audio/")) {
+      return (
+        <div className="flex h-full items-center justify-center p-4">
+          <audio src={blobUrl} controls className="w-full max-w-lg" />
+        </div>
+      );
+    }
+    if (blobUrl && mime === "application/pdf") {
+      return <iframe src={blobUrl} title={name} className="h-full w-full border-0" />;
+    }
+    if (data?.binary) return <CenteredNote>{t(($) => $.files.preview_binary)}</CenteredNote>;
+    if (!data?.content) return <CenteredNote>{t(($) => $.files.preview_empty)}</CenteredNote>;
+    // Text → syntax-highlighted code (shiki), like a VSCode file view.
+    return (
+      <div className="p-3">
+        <CodeBlock code={data.content} language={lang} mode="full" className="text-xs" />
+        {data.truncated && (
+          <p className="mt-2 text-[11px] text-muted-foreground">{t(($) => $.files.preview_truncated)}</p>
+        )}
+      </div>
+    );
+  };
 
   return (
     <Dialog open={!!path} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
+      <DialogContent className="flex h-[85vh] w-[92vw] max-w-5xl flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="shrink-0 border-b px-4 py-3">
           <DialogTitle className="truncate font-mono text-sm">{name}</DialogTitle>
         </DialogHeader>
-        {!path ? null : isPending ? (
-          <div className="space-y-1.5 py-2">
-            <Skeleton className="h-4" />
-            <Skeleton className="h-4" />
-            <Skeleton className="h-4 w-2/3" />
-          </div>
-        ) : isError ? (
-          <p className="py-6 text-center text-xs text-muted-foreground">{t(($) => $.files.preview_error)}</p>
-        ) : data?.binary ? (
-          <p className="py-6 text-center text-xs text-muted-foreground">{t(($) => $.files.preview_binary)}</p>
-        ) : (
-          <div className="max-h-[60vh] overflow-auto rounded-md border bg-muted/30">
-            <pre className="whitespace-pre p-3 text-xs leading-5">
-              <code>{data?.content || t(($) => $.files.preview_empty)}</code>
-            </pre>
-          </div>
-        )}
-        {data?.truncated && !data?.binary && (
-          <p className="text-[11px] text-muted-foreground">{t(($) => $.files.preview_truncated)}</p>
-        )}
+        <div className="min-h-0 flex-1 overflow-auto">{path ? renderBody() : null}</div>
       </DialogContent>
     </Dialog>
   );

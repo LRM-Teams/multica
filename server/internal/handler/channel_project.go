@@ -129,10 +129,16 @@ func (h *Handler) ListChannelProjectFiles(w http.ResponseWriter, r *http.Request
 	reply("ok", resp.Nodes, resp.Truncated, projectID)
 }
 
-// ChannelProjectFileContentResponse is a single file's preview content.
+// ChannelProjectFileContentResponse is a single file's preview content. For
+// text files Content is UTF-8 (encoding empty); for media (image/audio/video/
+// pdf) Content is base64 with Encoding "base64" and MimeType set so the client
+// renders it directly.
 type ChannelProjectFileContentResponse struct {
 	Content   string `json:"content"`
+	Encoding  string `json:"encoding"`
+	MimeType  string `json:"mime_type"`
 	Truncated bool   `json:"truncated"`
+	TooLarge  bool   `json:"too_large"`
 	Binary    bool   `json:"binary"`
 }
 
@@ -204,7 +210,10 @@ func (h *Handler) GetChannelProjectFile(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, http.StatusOK, ChannelProjectFileContentResponse{
 		Content:   resp.Content,
+		Encoding:  resp.Encoding,
+		MimeType:  resp.MimeType,
 		Truncated: resp.Truncated,
+		TooLarge:  resp.TooLarge,
 		Binary:    resp.Binary,
 	})
 }

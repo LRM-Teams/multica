@@ -1,13 +1,19 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // Channel ↔ project binding lives in its own file so it doesn't collide with
@@ -37,6 +43,170 @@ func (h *Handler) GetChannelProject(w http.ResponseWriter, r *http.Request) {
 		out = uuidToString(pid)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"project_id": out})
+}
+
+// ChannelProjectFilesResponse is the file-tree listing for a channel's bound
+// project workdir. Status tells the frontend which empty/error state to show:
+//   ok | no_project | offline (no online daemon for the viewer) | missing
+//   (the project workdir doesn't exist on that daemon yet) | error
+type ChannelProjectFilesResponse struct {
+	ProjectID string                     `json:"project_id"`
+	Status    string                     `json:"status"`
+	Nodes     []protocol.WorkdirFileNode `json:"nodes"`
+	Truncated bool                       `json:"truncated"`
+}
+
+// ListChannelProjectFiles returns the file tree of the channel's bound project
+// working directory. The workdir lives on a daemon machine, so this fans out a
+// list-files RPC to the requesting user's own online runtime (each daemon keeps
+// its own copy of a managed workdir) and returns whatever that daemon reports.
+func (h *Handler) ListChannelProjectFiles(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+
+	reply := func(status string, nodes []protocol.WorkdirFileNode, truncated bool, projectID string) {
+		if nodes == nil {
+			nodes = []protocol.WorkdirFileNode{}
+		}
+		writeJSON(w, http.StatusOK, ChannelProjectFilesResponse{ProjectID: projectID, Status: status, Nodes: nodes, Truncated: truncated})
+	}
+
+	var pid pgtype.UUID
+	_ = h.DB.QueryRow(r.Context(), `SELECT project_id FROM channel WHERE id = $1 AND workspace_id = $2`,
+		channelID, parseUUID(workspaceID)).Scan(&pid)
+	if !pid.Valid {
+		reply("no_project", nil, false, "")
+		return
+	}
+	projectID := uuidToString(pid)
+
+	// Each daemon keeps its own copy of a managed workdir, so list the one on
+	// the viewer's own online runtime (most recently seen).
+	var runtimeID pgtype.UUID
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT id FROM agent_runtime
+		WHERE workspace_id = $1 AND owner_id = $2 AND status = 'online'
+		ORDER BY last_seen_at DESC NULLS LAST
+		LIMIT 1`, parseUUID(workspaceID), parseUUID(userID)).Scan(&runtimeID)
+	if err != nil || !runtimeID.Valid || h.DaemonHub == nil {
+		reply("offline", nil, false, projectID)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	resp, err := h.DaemonHub.RequestWorkdirFiles(ctx, protocol.ListWorkdirFilesRequestPayload{
+		RequestID: uuid.NewString(),
+		RuntimeID: uuidToString(runtimeID),
+		RelPath:   managedWorkdirRelPath(projectID),
+	})
+	if err != nil {
+		if errors.Is(err, daemonws.ErrRuntimeOffline) {
+			reply("offline", nil, false, projectID)
+			return
+		}
+		reply("error", nil, false, projectID)
+		return
+	}
+	if resp.Missing {
+		reply("missing", nil, false, projectID)
+		return
+	}
+	if resp.Error != "" {
+		reply("error", nil, false, projectID)
+		return
+	}
+	reply("ok", resp.Nodes, resp.Truncated, projectID)
+}
+
+// ChannelProjectFileContentResponse is a single file's preview content.
+type ChannelProjectFileContentResponse struct {
+	Content   string `json:"content"`
+	Truncated bool   `json:"truncated"`
+	Binary    bool   `json:"binary"`
+}
+
+// GetChannelProjectFile streams one file's text content from the channel's
+// bound project workdir (on the viewer's online daemon) for preview. The
+// daemon confines `path` to the workdir, caps the size, and flags binary files.
+func (h *Handler) GetChannelProjectFile(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	filePath := strings.TrimSpace(r.URL.Query().Get("path"))
+	if filePath == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	var pid pgtype.UUID
+	_ = h.DB.QueryRow(r.Context(), `SELECT project_id FROM channel WHERE id = $1 AND workspace_id = $2`,
+		channelID, parseUUID(workspaceID)).Scan(&pid)
+	if !pid.Valid {
+		writeError(w, http.StatusNotFound, "channel has no project")
+		return
+	}
+	projectID := uuidToString(pid)
+
+	var runtimeID pgtype.UUID
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT id FROM agent_runtime
+		WHERE workspace_id = $1 AND owner_id = $2 AND status = 'online'
+		ORDER BY last_seen_at DESC NULLS LAST
+		LIMIT 1`, parseUUID(workspaceID), parseUUID(userID)).Scan(&runtimeID)
+	if err != nil || !runtimeID.Valid || h.DaemonHub == nil {
+		writeError(w, http.StatusServiceUnavailable, "runtime offline")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	resp, err := h.DaemonHub.RequestReadFile(ctx, protocol.ReadWorkdirFileRequestPayload{
+		RequestID: uuid.NewString(),
+		RuntimeID: uuidToString(runtimeID),
+		RelPath:   managedWorkdirRelPath(projectID),
+		FilePath:  filePath,
+	})
+	if err != nil {
+		if errors.Is(err, daemonws.ErrRuntimeOffline) {
+			writeError(w, http.StatusServiceUnavailable, "runtime offline")
+			return
+		}
+		writeError(w, http.StatusGatewayTimeout, "failed to read file")
+		return
+	}
+	if resp.Missing {
+		writeError(w, http.StatusNotFound, "file not found")
+		return
+	}
+	if resp.Error != "" {
+		writeError(w, http.StatusBadGateway, "failed to read file")
+		return
+	}
+	writeJSON(w, http.StatusOK, ChannelProjectFileContentResponse{
+		Content:   resp.Content,
+		Truncated: resp.Truncated,
+		Binary:    resp.Binary,
+	})
 }
 
 type setChannelProjectRequest struct {

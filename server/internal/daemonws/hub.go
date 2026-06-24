@@ -3,6 +3,7 @@ package daemonws
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -12,6 +13,10 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+// ErrRuntimeOffline is returned by request RPCs when no connected daemon is
+// watching the target runtime (the daemon is offline / not connected over WS).
+var ErrRuntimeOffline = errors.New("runtime offline")
 
 const (
 	writeWait  = 10 * time.Second
@@ -94,6 +99,12 @@ type Hub struct {
 
 	kindMu       sync.RWMutex
 	kindRecorder MessageKindRecorder
+
+	// In-flight server→daemon request/response RPCs, keyed by RequestID. A
+	// response frame from the daemon is routed (as raw JSON) to the waiting
+	// channel; the caller unmarshals into the response type it expects.
+	pendMu  sync.Mutex
+	pending map[string]chan json.RawMessage
 }
 
 func NewHub() *Hub {
@@ -108,7 +119,95 @@ func NewHub() *Hub {
 		},
 		clients:   make(map[*client]bool),
 		byRuntime: make(map[string]map[*client]bool),
+		pending:   make(map[string]chan json.RawMessage),
 	}
+}
+
+// requestDaemon pushes a request frame to the daemon watching runtimeID and
+// waits (bounded by ctx) for the response frame correlated by requestID. The
+// raw response payload is returned for the caller to unmarshal. Returns
+// ErrRuntimeOffline when no daemon is connected for that runtime.
+func (h *Hub) requestDaemon(ctx context.Context, runtimeID, requestID, msgType string, payload any) (json.RawMessage, error) {
+	if h == nil {
+		return nil, ErrRuntimeOffline
+	}
+	if requestID == "" || runtimeID == "" {
+		return nil, errors.New("request_id and runtime_id required")
+	}
+	ch := make(chan json.RawMessage, 1)
+	h.pendMu.Lock()
+	h.pending[requestID] = ch
+	h.pendMu.Unlock()
+	defer func() {
+		h.pendMu.Lock()
+		delete(h.pending, requestID)
+		h.pendMu.Unlock()
+	}()
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	frame, err := json.Marshal(protocol.Message{Type: msgType, Payload: body})
+	if err != nil {
+		return nil, err
+	}
+	// eventID "" disables dedup so the request is always delivered.
+	if delivered, _ := h.notifyFrame(runtimeID, frame, ""); !delivered {
+		return nil, ErrRuntimeOffline
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case raw := <-ch:
+		return raw, nil
+	}
+}
+
+// deliverResponse routes a daemon response (any RPC) to the waiting caller by
+// request id. No-op if the request already timed out.
+func (h *Hub) deliverResponse(requestID string, raw json.RawMessage) {
+	if h == nil || requestID == "" {
+		return
+	}
+	h.pendMu.Lock()
+	ch := h.pending[requestID]
+	h.pendMu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- raw:
+		default:
+		}
+	}
+}
+
+// RequestWorkdirFiles pushes a list-files request to req.RuntimeID's daemon and
+// waits for the correlated response. ErrRuntimeOffline if no daemon is connected.
+func (h *Hub) RequestWorkdirFiles(ctx context.Context, req protocol.ListWorkdirFilesRequestPayload) (*protocol.ListWorkdirFilesResponsePayload, error) {
+	raw, err := h.requestDaemon(ctx, req.RuntimeID, req.RequestID, protocol.EventDaemonListFilesRequest, req)
+	if err != nil {
+		return nil, err
+	}
+	var resp protocol.ListWorkdirFilesResponsePayload
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// RequestReadFile pushes a read-file request to req.RuntimeID's daemon and waits
+// for the correlated response. ErrRuntimeOffline if no daemon is connected.
+func (h *Hub) RequestReadFile(ctx context.Context, req protocol.ReadWorkdirFileRequestPayload) (*protocol.ReadWorkdirFileResponsePayload, error) {
+	raw, err := h.requestDaemon(ctx, req.RuntimeID, req.RequestID, protocol.EventDaemonReadFileRequest, req)
+	if err != nil {
+		return nil, err
+	}
+	var resp protocol.ReadWorkdirFileResponsePayload
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 // SetHeartbeatHandler installs the callback used for daemon:heartbeat frames.
@@ -353,7 +452,10 @@ func (c *client) readPump() {
 		c.conn.Close()
 	}()
 
-	c.conn.SetReadLimit(4096)
+	// Heartbeats are tiny, but workdir file-tree responses can be large
+	// (capped at ~2000 nodes daemon-side); allow up to 1 MiB so a response
+	// frame isn't truncated into a read error.
+	c.conn.SetReadLimit(1 << 20)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -391,6 +493,13 @@ func (c *client) handleFrame(raw []byte) {
 	switch msg.Type {
 	case protocol.EventDaemonHeartbeat:
 		c.handleHeartbeatFrame(msg.Payload)
+	case protocol.EventDaemonListFilesResponse, protocol.EventDaemonReadFileResponse:
+		var idOnly struct {
+			RequestID string `json:"request_id"`
+		}
+		if err := json.Unmarshal(msg.Payload, &idOnly); err == nil && idOnly.RequestID != "" {
+			c.hub.deliverResponse(idOnly.RequestID, msg.Payload)
+		}
 	default:
 		// Unknown app messages are intentionally ignored for forward
 		// compatibility with future daemon → server message types.

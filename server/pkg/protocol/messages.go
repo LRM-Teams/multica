@@ -58,6 +58,35 @@ type ListWorkdirFilesResponsePayload struct {
 	Error     string            `json:"error,omitempty"`
 }
 
+// ReadWorkdirFileRequestPayload is pushed server→daemon to read one file from a
+// project workdir for preview. RelPath is the workdir root (relative to
+// WorkspacesRoot); FilePath is the file relative to that root.
+type ReadWorkdirFileRequestPayload struct {
+	RequestID string `json:"request_id"`
+	RuntimeID string `json:"runtime_id"`
+	RelPath   string `json:"rel_path"`
+	FilePath  string `json:"file_path"`
+	MaxBytes  int    `json:"max_bytes,omitempty"`
+}
+
+// ReadWorkdirFileResponsePayload is the daemon→server reply for a file read.
+// For text files Content is UTF-8 and Encoding is empty/"utf8". For media files
+// (image/video/audio/pdf, by extension) Content is base64 and Encoding is
+// "base64" with MimeType set, so the client can render it directly. Binary is
+// set (no Content) for non-text files that aren't a known media type; TooLarge
+// when over the byte cap; Truncated when text was cut to the cap.
+type ReadWorkdirFileResponsePayload struct {
+	RequestID string `json:"request_id"`
+	Content   string `json:"content,omitempty"`
+	Encoding  string `json:"encoding,omitempty"`
+	MimeType  string `json:"mime_type,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+	TooLarge  bool   `json:"too_large,omitempty"`
+	Binary    bool   `json:"binary,omitempty"`
+	Missing   bool   `json:"missing,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
 // TaskProgressPayload is sent from daemon to server during task execution.
 type TaskProgressPayload struct {
 	TaskID  string `json:"task_id"`

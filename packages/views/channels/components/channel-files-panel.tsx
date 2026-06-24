@@ -275,7 +275,7 @@ function FilePreviewDialog({
 
   return (
     <Dialog open={!!path} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex h-[85vh] w-[92vw] max-w-5xl flex-col gap-0 overflow-hidden p-0">
+      <DialogContent className="flex h-[85vh] w-[92vw] max-w-[1400px] sm:max-w-[1400px] flex-col gap-0 overflow-hidden p-0">
         <DialogHeader className="shrink-0 border-b px-4 py-3">
           <DialogTitle className="truncate font-mono text-sm">{name}</DialogTitle>
         </DialogHeader>

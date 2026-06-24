@@ -17,7 +17,8 @@
   "my_tasks": {
     "title": "나와 관련된 작업 및 메시지",
     "empty": "처리할 항목이 없습니다",
-    "review_badge": "검토"
+    "review_badge": "검토",
+    "channel_mention": "{{actor}}님이 #{{channel}}에서 당신을 멘션했습니다"
   },
   "agent_status": {
     "title": "내 Agent 작업 상태",

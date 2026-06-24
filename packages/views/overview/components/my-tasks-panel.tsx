@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { inboxListOptions, deduplicateInboxItems } from "@multica/core/inbox/queries";
+import { useMarkInboxRead } from "@multica/core/inbox/mutations";
 import { issueListOptions } from "@multica/core/issues/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type { InboxItem } from "@multica/core/types";
@@ -40,16 +41,23 @@ function priorityFor(item: InboxItem): Priority {
   }
 }
 
-// One row in the merged list: either a pending-approval issue or an inbox item.
-// `issueId` is the navigation target (undefined for messages with no issue).
-type Row =
-  | { kind: "approval"; id: string; title: string; ts: string; issueId: string }
-  | { kind: "inbox"; id: string; title: string; ts: string; priority: Priority; issueId?: string };
+// One row in the merged list: an approval issue, an inbox/issue item, or a
+// channel mention. `href` is the navigation target; `inboxId` is set only for
+// channel mentions, which are marked read on click so the prompt disappears.
+type Row = {
+  id: string;
+  title: string;
+  ts: string;
+  badge: "approval" | Priority;
+  href?: string;
+  inboxId?: string;
+};
 
 export function MyTasksPanel({ wsId }: { wsId: string }) {
   const { t } = useT("overview");
   const timeAgo = useTimeAgo();
   const p = useWorkspacePaths();
+  const markRead = useMarkInboxRead();
 
   const { data: inbox = [], isPending: inboxPending } = useQuery({
     ...inboxListOptions(wsId),
@@ -65,26 +73,49 @@ export function MyTasksPanel({ wsId }: { wsId: string }) {
     const approvals: Row[] = issues
       .filter((i) => i.status === "in_review")
       .map((i) => ({
-        kind: "approval" as const,
         id: i.id,
         title: i.identifier ? `${i.identifier} ${i.title}` : i.title,
         ts: i.updated_at ?? i.created_at,
-        issueId: i.id,
+        badge: "approval" as const,
+        href: p.issueDetail(i.id),
       }));
 
     const inboxRows: Row[] = deduplicateInboxItems(inbox)
       .filter((i) => RELEVANT_TYPES.has(i.type))
-      .map((i) => ({
-        kind: "inbox" as const,
-        id: i.id,
-        title: i.title,
-        ts: i.created_at,
-        priority: priorityFor(i),
-        issueId: i.issue_id ?? undefined,
-      }));
+      .map((i): Row | null => {
+        const channelId = i.details?.channel_id;
+        if (channelId) {
+          // Channel mention: shown only until clicked. Click marks it read and
+          // routes to the channel, scrolling to the exact message.
+          if (i.read) return null;
+          const messageId = i.details?.message_id;
+          const href = `${p.channels()}?channel=${channelId}${
+            messageId ? `&message=${messageId}` : ""
+          }`;
+          return {
+            id: i.id,
+            title: t(($) => $.my_tasks.channel_mention, {
+              actor: i.details?.actor_name ?? "",
+              channel: i.details?.channel_name ?? "",
+            }),
+            ts: i.created_at,
+            badge: "mention",
+            href,
+            inboxId: i.id,
+          };
+        }
+        return {
+          id: i.id,
+          title: i.title,
+          ts: i.created_at,
+          badge: priorityFor(i),
+          href: i.issue_id ? p.issueDetail(i.issue_id) : undefined,
+        };
+      })
+      .filter((r): r is Row => r !== null);
 
     return [...approvals, ...inboxRows].slice(0, MAX_ITEMS);
-  }, [issues, inbox]);
+  }, [issues, inbox, p, t]);
 
   const isPending = inboxPending || issuesPending;
 
@@ -103,24 +134,24 @@ export function MyTasksPanel({ wsId }: { wsId: string }) {
         ) : (
           rows.map((row) => {
             const badge =
-              row.kind === "approval" ? (
+              row.badge === "approval" ? (
                 <Badge variant="outline" className="shrink-0 border-warning/40 text-warning">
                   {t(($) => $.my_tasks.review_badge)}
                 </Badge>
               ) : (
                 <Badge
                   variant={
-                    row.priority === "high"
+                    row.badge === "high"
                       ? "destructive"
-                      : row.priority === "low"
+                      : row.badge === "low"
                         ? "secondary"
-                        : row.priority === "mention"
+                        : row.badge === "mention"
                           ? "default"
                           : "outline"
                   }
-                  className={cn("shrink-0", row.priority === "medium" && "border-warning/40 text-warning")}
+                  className={cn("shrink-0", row.badge === "medium" && "border-warning/40 text-warning")}
                 >
-                  {t(($) => $.priority[row.priority])}
+                  {t(($) => $.priority[row.badge as Priority])}
                 </Badge>
               );
 
@@ -136,10 +167,11 @@ export function MyTasksPanel({ wsId }: { wsId: string }) {
 
             const rowClass = "flex items-start gap-2 border-b py-2.5 last:border-b-0";
 
-            return row.issueId ? (
+            return row.href ? (
               <AppLink
                 key={row.id}
-                href={p.issueDetail(row.issueId)}
+                href={row.href}
+                onClick={row.inboxId ? () => markRead.mutate(row.inboxId!) : undefined}
                 className={cn(rowClass, "-mx-3 rounded-md px-3 transition-colors hover:bg-accent")}
               >
                 {inner}

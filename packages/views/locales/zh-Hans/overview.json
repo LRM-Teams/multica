@@ -17,7 +17,8 @@
   "my_tasks": {
     "title": "与我相关的任务或消息",
     "empty": "暂无需要你处理的事项",
-    "review_badge": "待审"
+    "review_badge": "待审",
+    "channel_mention": "{{actor}} 在 #{{channel}} 中提到了你"
   },
   "agent_status": {
     "title": "我的 Agent 工作状态",

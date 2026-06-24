@@ -1,6 +1,7 @@
 {
   "page": {
     "breadcrumb_title": "이슈",
+    "new_issue": "새 이슈",
     "breadcrumb_workspace_fallback": "워크스페이스",
     "empty_title": "아직 이슈가 없습니다",
     "empty_hint": "이슈를 만들어 시작하세요.",
@@ -23,6 +24,7 @@
     "none": "우선순위 없음"
   },
   "scope": {
+    "filter_prefix": "필터:",
     "all_label": "전체",
     "all_description": "이 워크스페이스의 모든 이슈",
     "members_label": "멤버",

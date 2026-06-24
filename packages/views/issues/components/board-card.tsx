@@ -222,9 +222,9 @@ export const BoardCardContent = memo(function BoardCardContent({
   return (
     <div
       className={cn(
-        "rounded-lg border-[0.5px] border-border bg-card py-3 px-2.5 shadow-[0_3px_6px_-2px_rgba(0,0,0,0.02),0_1px_1px_0_rgba(0,0,0,0.04)] transition-colors group-hover/card:border-accent group-hover/card:bg-accent group-data-[popup-open]/card:border-accent group-data-[popup-open]/card:bg-accent",
+        "rounded-[10px] border border-border/60 bg-card px-3.5 py-3 shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-all group-hover/card:border-border group-hover/card:shadow-[0_4px_12px_-4px_rgba(0,0,0,0.10)] group-data-[popup-open]/card:border-border group-data-[popup-open]/card:shadow-[0_4px_12px_-4px_rgba(0,0,0,0.10)]",
         cardState === "attention" && "border-destructive/30 bg-destructive/[0.03]",
-        cardState === "done" && "opacity-70",
+        cardState === "done" && "border-transparent bg-muted/40 shadow-none",
       )}
     >
       {/* Row 1: priority + identifier (left), agent activity + assignee (right) */}
@@ -237,7 +237,7 @@ export const BoardCardContent = memo(function BoardCardContent({
       </div>
 
       {/* Row 2: Title */}
-      <p className="mt-1 text-sm font-medium leading-snug line-clamp-2">
+      <p className="mt-1.5 text-[15px] font-semibold leading-snug text-foreground line-clamp-2">
         {issue.title}
       </p>
 

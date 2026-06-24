@@ -7,28 +7,41 @@ import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import type { Issue, IssueAssigneeType, IssueStatus } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
+import { cn } from "@multica/ui/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
 } from "@multica/ui/components/ui/dropdown-menu";
-import { STATUS_CONFIG } from "@multica/core/issues/config";
 import { useModalStore } from "@multica/core/modals";
 import { useViewStoreApi } from "@multica/core/issues/stores/view-store-context";
-import { StatusHeading } from "./status-heading";
 import { DraggableBoardCard } from "./board-card";
 import type { ChildProgress } from "./list-row";
 import { useT } from "../../i18n";
 import { ActorAvatar } from "../../common/actor-avatar";
+
+// Board column status dot — a flat filled (or hollow) circle in the status
+// color, matching the kanban design. Kept board-local so the list/swimlane
+// StatusIcon (detailed progress glyph) is unaffected. Uses semantic color
+// tokens only (no hardcoded Tailwind colors).
+const BOARD_STATUS_DOT: Record<IssueStatus, string> = {
+  backlog: "border-[1.5px] border-muted-foreground/40",
+  todo: "border-[1.5px] border-muted-foreground/40",
+  in_progress: "bg-info",
+  in_review: "bg-warning",
+  done: "bg-success",
+  blocked: "bg-destructive",
+  cancelled: "bg-muted-foreground/40",
+};
 
 // Insertion-position prediction intentionally omitted. The server's
 // ORDER BY uses PostgreSQL's en_US.utf8 collation (glibc), which
 // cannot be faithfully replicated in JavaScript (ICU/V8). Showing an
 // inaccurate indicator is worse than showing none.
 
-export const BOARD_COL_WIDTH = 280;
-export const BOARD_CARD_WIDTH = BOARD_COL_WIDTH - 16 - 8; // col(280) - col p-2(16) - droppable p-1(8)
+export const BOARD_COL_WIDTH = 300;
+export const BOARD_CARD_WIDTH = BOARD_COL_WIDTH - 8; // col(300) - droppable p-1(8)
 
 export interface BoardColumnGroup {
   id: string;
@@ -61,7 +74,6 @@ export const BoardColumn = memo(function BoardColumn({
   sortLabel?: string | null;
 }) {
   const status = group.status;
-  const cfg = status ? STATUS_CONFIG[status] : null;
   const { setNodeRef, isOver } = useDroppable({ id: group.id });
   const viewStoreApi = useViewStoreApi();
   const { t } = useT("issues");
@@ -77,7 +89,7 @@ export const BoardColumn = memo(function BoardColumn({
   );
 
   return (
-    <div style={{ width: BOARD_COL_WIDTH }} className={`flex shrink-0 flex-col rounded-xl ${cfg?.columnBg ?? "bg-muted/40"} p-2`}>
+    <div style={{ width: BOARD_COL_WIDTH }} className="flex shrink-0 flex-col">
       <div className="mb-2 flex items-center justify-between px-1.5">
         <BoardGroupHeading group={group} count={totalCount ?? issueIds.length} />
 
@@ -158,6 +170,19 @@ export const BoardColumn = memo(function BoardColumn({
   );
 });
 
+function BoardStatusHeading({ status, count }: { status: IssueStatus; count: number }) {
+  const { t } = useT("issues");
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <span className={cn("size-2 shrink-0 rounded-full", BOARD_STATUS_DOT[status])} />
+      <span className="truncate text-sm font-semibold text-foreground">{t(($) => $.status[status])}</span>
+      <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
+        {count}
+      </span>
+    </div>
+  );
+}
+
 function BoardGroupHeading({
   group,
   count,
@@ -166,7 +191,7 @@ function BoardGroupHeading({
   count: number;
 }) {
   if (group.status) {
-    return <StatusHeading status={group.status} count={count} />;
+    return <BoardStatusHeading status={group.status} count={count} />;
   }
 
   const actorIcon =

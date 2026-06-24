@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useMemo } from "react";
 import { toast } from "sonner";
-import { ListTodo } from "lucide-react";
+import { ListTodo, Plus } from "lucide-react";
 import type { UpdateIssueRequest } from "@multica/core/types";
+import { Button } from "@multica/ui/components/ui/button";
+import { useModalStore } from "@multica/core/modals";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import { useIssueViewStore, useClearFiltersOnWorkspaceChange } from "@multica/core/issues/stores/view-store";
@@ -17,7 +19,7 @@ import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { useIssueSelectionStore } from "@multica/core/issues/stores/selection-store";
 import { PageHeader } from "../../layout/page-header";
-import { IssuesHeader } from "./issues-header";
+import { IssuesHeader, ViewToggle } from "./issues-header";
 import { BoardView } from "./board-view";
 import { ListView } from "./list-view";
 import { SwimLaneView } from "./swimlane-view";
@@ -210,13 +212,26 @@ export function IssuesPage() {
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <PageHeader className="gap-2">
-        <ListTodo className="h-4 w-4 text-muted-foreground" />
-        <h1 className="text-sm font-medium">{t(($) => $.page.breadcrumb_title)}</h1>
-      </PageHeader>
-
       <ViewStoreProvider store={useIssueViewStore}>
-        <IssuesHeader scopedIssues={headerIssues} />
+        <PageHeader className="justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <ListTodo className="h-[18px] w-[18px] text-foreground" />
+            <h1 className="text-base font-semibold">{t(($) => $.page.breadcrumb_title)}</h1>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <ViewToggle />
+            <Button
+              size="sm"
+              className="gap-1.5"
+              onClick={() => useModalStore.getState().open("create-issue")}
+            >
+              <Plus className="size-4" />
+              <span className="hidden sm:inline">{t(($) => $.page.new_issue)}</span>
+            </Button>
+          </div>
+        </PageHeader>
+
+        <IssuesHeader scopedIssues={headerIssues} hideViewToggle />
 
         {loading ? contentSkeleton : headerIssues.length === 0 ? (
           <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-2 text-muted-foreground">

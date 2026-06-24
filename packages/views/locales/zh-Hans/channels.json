@@ -52,7 +52,16 @@
   },
   "files": {
     "title": "文件",
-    "empty": "暂无文件"
+    "empty": "暂无文件",
+    "no_project": "本群未绑定项目",
+    "offline": "你的运行时离线，无法读取项目文件",
+    "missing": "这台机器上还没有该项目的工作目录",
+    "error": "加载文件失败",
+    "truncated": "文件较多，仅显示部分",
+    "preview_binary": "二进制文件，无法预览",
+    "preview_truncated": "文件较大，仅预览前一部分",
+    "preview_error": "加载文件内容失败",
+    "preview_empty": "（空文件）"
   },
   "stats": {
     "title": "活跃度",

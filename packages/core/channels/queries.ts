@@ -8,6 +8,7 @@ export const channelKeys = {
   members: (channelId: string) => ["channel-members", channelId] as const,
   attachments: (channelId: string) => ["channel-attachments", channelId] as const,
   stats: (channelId: string) => ["channel-stats", channelId] as const,
+  projectFiles: (channelId: string) => ["channel-project-files", channelId] as const,
 };
 
 export function channelsOptions(wsId: string) {
@@ -46,6 +47,14 @@ export function channelStatsOptions(channelId: string) {
   return queryOptions({
     queryKey: channelKeys.stats(channelId),
     queryFn: () => api.getChannelStats(channelId),
+    enabled: !!channelId,
+  });
+}
+
+export function channelProjectFilesOptions(channelId: string) {
+  return queryOptions({
+    queryKey: channelKeys.projectFiles(channelId),
+    queryFn: () => api.listChannelProjectFiles(channelId),
     enabled: !!channelId,
   });
 }

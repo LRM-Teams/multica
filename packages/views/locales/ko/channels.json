@@ -52,7 +52,16 @@
   },
   "files": {
     "title": "파일",
-    "empty": "파일 없음"
+    "empty": "파일 없음",
+    "no_project": "이 채널에 연결된 프로젝트가 없습니다",
+    "offline": "런타임이 오프라인이라 프로젝트 파일을 읽을 수 없습니다",
+    "missing": "이 컴퓨터에 아직 프로젝트 폴더가 없습니다",
+    "error": "파일을 불러오지 못했습니다",
+    "truncated": "파일이 많아 일부만 표시합니다",
+    "preview_binary": "바이너리 파일이라 미리볼 수 없습니다",
+    "preview_truncated": "큰 파일이라 일부만 미리봅니다",
+    "preview_error": "파일 내용을 불러오지 못했습니다",
+    "preview_empty": "(빈 파일)"
   },
   "stats": {
     "title": "활동",

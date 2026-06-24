@@ -72,6 +72,8 @@ import type {
   ChannelMember,
   ChannelMessage,
   ChannelStats,
+  ChannelProjectFiles,
+  ChannelProjectFileContent,
   CancelTaskResponse,
   Project,
   CreateProjectRequest,
@@ -1796,6 +1798,14 @@ export class ApiClient {
 
   async getChannelStats(channelId: string): Promise<ChannelStats> {
     return this.fetch(`/api/channels/${channelId}/stats`);
+  }
+
+  async listChannelProjectFiles(channelId: string): Promise<ChannelProjectFiles> {
+    return this.fetch(`/api/channels/${channelId}/project-files`);
+  }
+
+  async getChannelProjectFile(channelId: string, path: string): Promise<ChannelProjectFileContent> {
+    return this.fetch(`/api/channels/${channelId}/project-files/content?path=${encodeURIComponent(path)}`);
   }
 
   async listChannelActiveTasks(channelId: string): Promise<{ tasks: ChannelActiveTask[] }> {

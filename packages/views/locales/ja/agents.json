@@ -441,5 +441,33 @@
     "section_cloud": "クラウド",
     "agent_count_other": "エージェント {{count}} 件",
     "empty": "まだマシンがありません"
+  },
+  "dashboard": {
+    "all_agents": "すべてのエージェント",
+    "edit_config": "設定を編集",
+    "delete": "削除",
+    "metric_tasks": "累計タスク",
+    "metric_success": "成功率",
+    "metric_cost": "コスト",
+    "metric_version": "進化バージョン",
+    "last_30d": "過去30日",
+    "coming_soon": "近日公開",
+    "role_capabilities": "役割 & 能力",
+    "edit": "編集",
+    "no_description": "役割・能力の説明はまだありません",
+    "no_skills": "能力はまだありません",
+    "prompt_strategy": "現在のプロンプト戦略",
+    "no_prompt": "プロンプト未設定",
+    "exec_log": "実行ログ",
+    "view_all": "すべて表示",
+    "no_logs": "実行履歴はまだありません",
+    "evolution": "自己進化",
+    "evolution_placeholder": "自己進化機能は近日公開予定です。プロンプト/設定の各イテレーションと成功率の変化を表示します。",
+    "running_for": "進行中 · 経過 {{min}}min",
+    "duration_min": "{{min}}min",
+    "task_fallback": "タスク実行",
+    "empty_select": "左のエージェントを選択すると詳細が表示されます",
+    "delete_success": "エージェントを削除しました",
+    "delete_failed": "エージェントの削除に失敗しました"
   }
 }

@@ -33,7 +33,9 @@
     "manage_members_aria": "メンバーを管理",
     "share_aria": "共有",
     "stats_aria": "統計",
-    "files_aria": "ファイル"
+    "files_aria": "ファイル",
+    "back": "戻る",
+    "more_aria": "その他"
   },
   "members": {
     "select_user": "メンバーを選択",

@@ -4,6 +4,10 @@
     "unread_other": "未読のチャット {{count}}件",
     "default": "Multica に質問"
   },
+  "contacts": {
+    "title": "ダイレクトメッセージ",
+    "empty": "ダイレクトメッセージはまだありません"
+  },
   "input": {
     "placeholder_no_agent": "チャットを始めるにはエージェントを作成してください",
     "placeholder_archived": "このセッションはアーカイブされています",

@@ -5,6 +5,10 @@
     "unread_other": "읽지 않은 채팅 {{count}}개",
     "default": "Multica에 묻기"
   },
+  "contacts": {
+    "title": "다이렉트 메시지",
+    "empty": "아직 다이렉트 메시지가 없습니다"
+  },
   "input": {
     "placeholder_no_agent": "채팅을 시작하려면 에이전트를 만드세요",
     "placeholder_archived": "보관된 세션입니다",

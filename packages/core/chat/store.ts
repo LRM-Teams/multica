@@ -47,9 +47,11 @@ function writeDrafts(storage: StorageAdapter, key: string, drafts: Record<string
   }
 }
 
-export const CHAT_MIN_W = 360;
+// Two-pane IM layout: a ~208px agent-contact sidebar + the conversation pane.
+// Min/default widths account for the sidebar so the thread never gets squeezed.
+export const CHAT_MIN_W = 560;
 export const CHAT_MIN_H = 480;
-export const CHAT_DEFAULT_W = 380;
+export const CHAT_DEFAULT_W = 620;
 export const CHAT_DEFAULT_H = 600;
 
 /**

@@ -86,18 +86,13 @@ func (h *Handler) AgentDirectMessage(w http.ResponseWriter, r *http.Request) {
 		sessionID = session.ID
 	}
 
-	var taskID pgtype.UUID
-	if tid := r.Header.Get("X-Task-ID"); tid != "" {
-		if parsed, perr := util.ParseUUID(tid); perr == nil {
-			taskID = parsed
-		}
-	}
-
+	// Deliberately NOT linking the task: a DM is a plain conversational message,
+	// not a task-execution record. Linking task_id makes the chat UI render the
+	// agent's task timeline ("N steps") in place of the message text.
 	msg, err := h.Queries.CreateChatMessage(r.Context(), db.CreateChatMessageParams{
 		ChatSessionID: sessionID,
 		Role:          "assistant",
 		Content:       content,
-		TaskID:        taskID,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create dm message")
@@ -118,7 +113,6 @@ func (h *Handler) AgentDirectMessage(w http.ResponseWriter, r *http.Request) {
 		MessageID:     uuidToString(msg.ID),
 		Role:          "assistant",
 		Content:       content,
-		TaskID:        uuidToString(taskID),
 		CreatedAt:     timestampToString(msg.CreatedAt),
 	})
 

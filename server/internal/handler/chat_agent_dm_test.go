@@ -44,12 +44,12 @@ func TestAgentDirectMessage_CreatesDMForInitiator(t *testing.T) {
 	}
 
 	var role, content string
-	var unreadSet bool
+	var unreadSet, taskLinked bool
 	if err := testPool.QueryRow(ctx, `
-		SELECT cm.role, cm.content, cs.unread_since IS NOT NULL
+		SELECT cm.role, cm.content, cs.unread_since IS NOT NULL, cm.task_id IS NOT NULL
 		FROM chat_session cs JOIN chat_message cm ON cm.chat_session_id = cs.id
 		WHERE cs.agent_id=$1 AND cs.creator_id=$2
-		ORDER BY cm.created_at DESC LIMIT 1`, agentID, testUserID).Scan(&role, &content, &unreadSet); err != nil {
+		ORDER BY cm.created_at DESC LIMIT 1`, agentID, testUserID).Scan(&role, &content, &unreadSet, &taskLinked); err != nil {
 		t.Fatalf("DM session/message not created: %v", err)
 	}
 	if role != "assistant" {
@@ -57,6 +57,11 @@ func TestAgentDirectMessage_CreatesDMForInitiator(t *testing.T) {
 	}
 	if !unreadSet {
 		t.Fatalf("unread_since not stamped — recipient badge would not light up")
+	}
+	// A DM must NOT be linked to the task, or the chat UI renders the task
+	// timeline ("N steps") in place of the message text.
+	if taskLinked {
+		t.Fatalf("DM message is task-linked; it must be a plain conversational message")
 	}
 }
 

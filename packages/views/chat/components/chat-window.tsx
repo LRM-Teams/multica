@@ -192,7 +192,7 @@ export function ChatWindow() {
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
-  const { data: sessions = [] } = useQuery(chatSessionsOptions(wsId));
+  const { data: sessions = [], isSuccess: sessionsLoaded } = useQuery(chatSessionsOptions(wsId));
   const {
     data: rawMessagePages,
     isLoading: messagesLoading,
@@ -318,6 +318,22 @@ export function ChatWindow() {
     markRead.mutate(activeSessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- markRead ref stable
   }, [isOpen, activeSessionId, currentHasUnread]);
+
+  // Drop a persisted activeSessionId that isn't a real DM session — e.g. a
+  // channel-backed session selected before the DM panel excluded channels.
+  // Runs once per workspace, the first time its (DM-only) session list loads,
+  // so it can't race a freshly-created session into being cleared.
+  const reconciledWsRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessionsLoaded || reconciledWsRef.current === wsId) return;
+    reconciledWsRef.current = wsId;
+    if (activeSessionId && !sessions.some((s) => s.id === activeSessionId)) {
+      uiLogger.info("reconcile: clearing stale active session not in DM list", {
+        sessionId: activeSessionId,
+      });
+      setActiveSession(null);
+    }
+  }, [sessionsLoaded, wsId, sessions, activeSessionId, setActiveSession]);
 
   const { uploadWithToast } = useFileUpload(api);
 

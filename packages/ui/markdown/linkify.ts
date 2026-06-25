@@ -339,3 +339,46 @@ export function preprocessLinks(text: string): string {
 export function hasLinks(text: string): boolean {
   return linkify.pretest(text) || /[~/.]\/[\w]/.test(text)
 }
+
+/**
+ * Auto-link bare issue identifiers (e.g. "LRM-14") into issue mention links so
+ * they render as navigable issue chips. Scoped to a single workspace prefix
+ * (passed by the caller) so it can't false-positive on tokens like "UTF-8" or
+ * "COVID-19". Skips matches inside code spans / fenced blocks and inside
+ * existing markdown links (so `[LRM-14](...)` is never double-wrapped).
+ *
+ * It only rewrites text → `[ID](mention://issue/ID)`; whether the link
+ * actually resolves to a real issue (and therefore renders as a chip vs plain
+ * text) is decided at render time by IssueMentionCard. Empty prefix is a no-op.
+ */
+export function preprocessIssueRefs(text: string, prefix: string): string {
+  if (!prefix || !text) return text
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const re = new RegExp(`\\b${escaped}-\\d+\\b`, 'g')
+  if (!re.test(text)) return text
+  re.lastIndex = 0
+
+  const codeRanges = findCodeRanges(text)
+  const linkRanges = findMarkdownLinkRanges(text)
+
+  let result = ''
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = re.exec(text)) !== null) {
+    const start = match.index
+    const end = start + match[0].length
+    // Leave identifiers inside code or existing links untouched — they stay as
+    // whatever they already are.
+    if (
+      isInsideCode(start, codeRanges) ||
+      linkRanges.some((r) => start < r.end && r.start < end)
+    ) {
+      continue
+    }
+    result += text.slice(lastIndex, start)
+    result += `[${match[0]}](mention://issue/${match[0]})`
+    lastIndex = end
+  }
+  result += text.slice(lastIndex)
+  return result
+}

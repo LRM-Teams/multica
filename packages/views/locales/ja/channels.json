@@ -112,6 +112,7 @@
     "send_message": "メッセージを送信",
     "files": "ファイル",
     "thread_empty": "まだメッセージがありません。あいさつしてみましょう。",
-    "self_label": "あなた"
+    "self_label": "あなた",
+    "open_failed": "会話を開けませんでした"
   }
 }

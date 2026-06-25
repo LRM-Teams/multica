@@ -112,6 +112,7 @@
     "send_message": "메시지 보내기",
     "files": "파일",
     "thread_empty": "아직 메시지가 없습니다. 인사를 건네 보세요.",
-    "self_label": "나"
+    "self_label": "나",
+    "open_failed": "대화를 열 수 없습니다"
   }
 }

@@ -112,6 +112,7 @@
     "send_message": "发消息",
     "files": "文件",
     "thread_empty": "还没有消息，打个招呼吧。",
-    "self_label": "你"
+    "self_label": "你",
+    "open_failed": "无法打开会话"
   }
 }

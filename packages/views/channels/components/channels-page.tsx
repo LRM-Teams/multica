@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
+  Loader2,
   MessageCircle,
   MessageSquare,
   MoreHorizontal,
@@ -572,7 +573,10 @@ export function ChannelsPage() {
   const openDmWithMember = (member: ChannelMember) => {
     createOrFindDm.mutate(
       { peer_type: member.member_type, peer_id: member.member_id },
-      { onSuccess: (dm) => selectDm(dm) },
+      {
+        onSuccess: (dm) => selectDm(dm),
+        onError: () => toast.error(t(($) => $.dm.open_failed)),
+      },
     );
   };
 
@@ -1212,9 +1216,16 @@ export function ChannelsPage() {
 
   // DM detail pane — branches by source internally (dm_channel vs
   // legacy_session). Rendered in place of the group detail when a DM is active.
+  // When a `?dm=` deep link opens cold, `activeDmId` is set before the DM list
+  // resolves the row — show a brief spinner (design.md: spinner, not skeleton)
+  // instead of a blank pane during that window.
   const dmDetailPane = activeDm ? (
     <DmConversation key={`${activeDm.source}:${activeDm.id}`} dm={activeDm} onBack={mobileBackToList} />
-  ) : null;
+  ) : (
+    <div className="flex min-h-0 flex-1 items-center justify-center bg-background">
+      <Loader2 className="size-5 animate-spin text-muted-foreground" />
+    </div>
+  );
 
   // The detail surface: a selected DM wins over a group (selections are
   // mutually exclusive, but this also covers the deep-link-before-list-loads

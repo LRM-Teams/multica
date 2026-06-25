@@ -171,6 +171,11 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     [typingActors],
   );
 
+  // 1-on-1 DM: scope the composer's @-mention picker to the peer only. Without
+  // an allowlist the picker defaults to the whole workspace, which is wrong for
+  // a 1-on-1 (only the peer is reachable here).
+  const mentionAllowedActorIds = useMemo(() => new Set([dm.peer.id]), [dm.peer.id]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [messages.length, channelId, activeTypingActors.length, activeTasks.length]);
@@ -349,6 +354,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
               onUpdate={handleEditorUpdate}
               onSubmit={handleSend}
               onUploadFile={handleUpload}
+              mentionAllowedActorIds={mentionAllowedActorIds}
               submitOnEnter
               showBubbleMenu={false}
             />

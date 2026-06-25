@@ -112,6 +112,7 @@
     "send_message": "Send message",
     "files": "Files",
     "thread_empty": "No messages yet. Say hello.",
-    "self_label": "you"
+    "self_label": "you",
+    "open_failed": "Couldn't open conversation"
   }
 }

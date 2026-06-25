@@ -198,7 +198,18 @@ func (h *Handler) findUnboundLegacySession(ctx context.Context, workspaceID, use
 // concurrent request created the same DM between our find and insert, we detect
 // the empty RETURNING and re-find the existing channel instead of failing.
 func (h *Handler) createDMChannel(ctx context.Context, w http.ResponseWriter, workspaceID, creatorID, canonical string, members []dmMember) (ChannelResponse, bool) {
-	row := h.DB.QueryRow(ctx, `
+	// Channel + both members must be all-or-nothing: a partial write would leave
+	// a member-less dm channel that is invisible (listDMChannels' peer join drops
+	// it) AND unrecoverable (create-or-find returns it by name without back-filling
+	// members), so it must never be committed half-built.
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create direct message")
+		return ChannelResponse{}, false
+	}
+	defer tx.Rollback(ctx) // no-op once committed
+
+	row := tx.QueryRow(ctx, `
 		INSERT INTO channel (workspace_id, name, created_by, kind)
 		VALUES ($1, $2, $3, 'dm')
 		ON CONFLICT (workspace_id, name) DO NOTHING
@@ -206,6 +217,8 @@ func (h *Handler) createDMChannel(ctx context.Context, w http.ResponseWriter, wo
 		parseUUID(workspaceID), canonical, parseUUID(creatorID))
 	ch, err := scanChannel(row)
 	if err != nil {
+		// ON CONFLICT DO NOTHING returns no row when the DM already exists (race
+		// between find and insert) — abandon this tx and re-find the committed one.
 		if errorsIsNoRows(err) {
 			if existing, found := h.findDMChannel(ctx, workspaceID, canonical); found {
 				return existing, true
@@ -215,12 +228,17 @@ func (h *Handler) createDMChannel(ctx context.Context, w http.ResponseWriter, wo
 		return ChannelResponse{}, false
 	}
 	for _, m := range members {
-		if _, err := h.DB.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 			VALUES ($1, $2, $3, $4)
 			ON CONFLICT DO NOTHING`, parseUUID(ch.ID), parseUUID(workspaceID), m.memberType, m.memberID); err != nil {
-			slog.Warn("dm create: add member failed", "channel", ch.ID, "member", uuidToString(m.memberID), "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to create direct message")
+			return ChannelResponse{}, false
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create direct message")
+		return ChannelResponse{}, false
 	}
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", creatorID, ch)
 	return ch, true

@@ -33,7 +33,9 @@
     "manage_members_aria": "멤버 관리",
     "share_aria": "공유",
     "stats_aria": "통계",
-    "files_aria": "파일"
+    "files_aria": "파일",
+    "back": "뒤로",
+    "more_aria": "더 보기"
   },
   "members": {
     "select_user": "멤버 선택",

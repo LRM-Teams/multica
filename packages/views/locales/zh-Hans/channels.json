@@ -33,7 +33,9 @@
     "manage_members_aria": "管理成员",
     "share_aria": "分享",
     "stats_aria": "统计",
-    "files_aria": "文件"
+    "files_aria": "文件",
+    "back": "返回",
+    "more_aria": "更多"
   },
   "members": {
     "select_user": "选择人类成员",

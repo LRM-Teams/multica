@@ -33,7 +33,9 @@
     "manage_members_aria": "Manage members",
     "share_aria": "Share",
     "stats_aria": "Stats",
-    "files_aria": "Files"
+    "files_aria": "Files",
+    "back": "Back",
+    "more_aria": "More"
   },
   "members": {
     "select_user": "Select a member",

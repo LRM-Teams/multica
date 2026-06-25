@@ -469,6 +469,59 @@ export interface AgentMemory {
   updated_at: string;
 }
 
+export type GeneratedSkillDeliveryStatus =
+  | "pending"
+  | "delivered"
+  | "accepted"
+  | "ignored"
+  | "rejected"
+  | "failed";
+
+export interface GeneratedSkillDeliveryFile {
+  path: string;
+  content: string;
+  content_hash: string;
+  mime_type: string;
+}
+
+export interface GeneratedSkillDelivery {
+  id: string;
+  workspace_id: string;
+  unit_id: string;
+  version_id: string;
+  target_agent_id: string;
+  delivery_type: string;
+  status: GeneratedSkillDeliveryStatus;
+  reason: string;
+  matcher_score: number;
+  unit_type: string;
+  title: string;
+  canonical_summary: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  delivered_path?: string;
+  error?: string;
+  decided_at?: string | null;
+  delivered_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  files?: GeneratedSkillDeliveryFile[];
+}
+
+export interface ListGeneratedSkillDeliveriesResponse {
+  deliveries: GeneratedSkillDelivery[];
+}
+
+export interface DecideGeneratedSkillDeliveryRequest {
+  decision: "accepted" | "ignored" | "rejected";
+}
+
+export type EvolutionMemoryDelivery = GeneratedSkillDelivery;
+
+export interface ListEvolutionMemoryDeliveriesResponse {
+  deliveries: EvolutionMemoryDelivery[];
+}
+
 export interface CreateSkillRequest {
   name: string;
   description?: string;

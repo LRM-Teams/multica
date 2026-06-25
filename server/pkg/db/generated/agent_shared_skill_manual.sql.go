@@ -183,40 +183,6 @@ func (q *Queries) ListAgentSharedSkillsByAgent(ctx context.Context, agentID pgty
 	return items, nil
 }
 
-const listAgentSharedSkillFiles = `-- name: ListAgentSharedSkillFiles :many
-SELECT id, agent_shared_skill_id, agent_id, path, content, created_at, updated_at FROM agent_shared_skill_file
-WHERE agent_shared_skill_id = $1
-ORDER BY path ASC
-`
-
-func (q *Queries) ListAgentSharedSkillFiles(ctx context.Context, agentSharedSkillID pgtype.UUID) ([]AgentSharedSkillFile, error) {
-	rows, err := q.db.Query(ctx, listAgentSharedSkillFiles, agentSharedSkillID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []AgentSharedSkillFile{}
-	for rows.Next() {
-		var i AgentSharedSkillFile
-		if err := rows.Scan(
-			&i.ID,
-			&i.AgentSharedSkillID,
-			&i.AgentID,
-			&i.Path,
-			&i.Content,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const updateAgentSharedSkill = `-- name: UpdateAgentSharedSkill :one
 UPDATE agent_shared_skill SET
     name = COALESCE($2, name),

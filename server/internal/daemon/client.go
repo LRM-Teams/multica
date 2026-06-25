@@ -339,20 +339,29 @@ func (c *Client) SyncSharedSkills(ctx context.Context, runtimeID string, payload
 	return &result, nil
 }
 
-func (c *Client) SyncAgentSharedSkills(ctx context.Context, runtimeID string, payload AgentSharedSkillSyncPayload) (*SharedSkillSyncResult, error) {
+func (c *Client) SyncEvolutionSubmissions(ctx context.Context, runtimeID string, payload EvolutionSubmissionSyncPayload) (*SharedSkillSyncResult, error) {
 	var result SharedSkillSyncResult
-	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-shared-skills/sync", runtimeID), payload, &result); err != nil {
+	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/evolution/submissions", runtimeID), payload, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-func (c *Client) SyncAgentMemories(ctx context.Context, runtimeID string, payload AgentMemorySyncPayload) (*SharedSkillSyncResult, error) {
-	var result SharedSkillSyncResult
-	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-memories/sync", runtimeID), payload, &result); err != nil {
+func (c *Client) ListEvolutionDeliveries(ctx context.Context, runtimeID, agentID string) ([]EvolutionDelivery, error) {
+	var result EvolutionDeliveryListResponse
+	path := fmt.Sprintf("/api/daemon/runtimes/%s/evolution/deliveries?agent_id=%s", runtimeID, agentID)
+	if err := c.getJSON(ctx, path, &result); err != nil {
 		return nil, err
 	}
-	return &result, nil
+	return result.Deliveries, nil
+}
+
+func (c *Client) MarkEvolutionDeliveryDelivered(ctx context.Context, runtimeID, agentID, deliveryID, deliveredPath string) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/evolution/deliveries/%s/delivered?agent_id=%s", runtimeID, deliveryID, agentID), map[string]string{"delivered_path": deliveredPath}, nil)
+}
+
+func (c *Client) FailEvolutionDelivery(ctx context.Context, runtimeID, agentID, deliveryID, message string) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/evolution/deliveries/%s/failed?agent_id=%s", runtimeID, deliveryID, agentID), map[string]string{"error": message}, nil)
 }
 
 // WorkspaceInfo holds minimal workspace metadata returned by the API.

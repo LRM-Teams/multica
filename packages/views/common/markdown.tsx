@@ -8,7 +8,7 @@ import {
 } from "@multica/ui/markdown";
 import { useConfigStore } from "@multica/core/config";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
-import { useWorkspacePaths } from "@multica/core/paths";
+import { useWorkspacePaths, useCurrentWorkspace } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { agentColor } from "./agent-color";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
@@ -141,6 +141,10 @@ function renderFileCard({
  */
 export function Markdown(props: MarkdownProps): React.JSX.Element {
   const cdnDomain = useConfigStore((s) => s.cdnDomain);
+  // Auto-link bare issue identifiers (e.g. "MUL-123") to issue chips, scoped to
+  // the current workspace's prefix so it can't false-positive on tokens like
+  // "UTF-8". Empty/absent prefix disables it.
+  const issueRefPrefix = useCurrentWorkspace()?.issue_prefix || undefined;
   const { attachments, ...rest } = props;
   return (
     <AttachmentDownloadProvider attachments={attachments}>
@@ -149,6 +153,7 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
         renderImage={renderImage}
         renderFileCard={renderFileCard}
         cdnDomain={cdnDomain}
+        issueRefPrefix={issueRefPrefix}
         {...rest}
       />
     </AttachmentDownloadProvider>

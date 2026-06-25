@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   FileText,
   MessageCircle,
   MoreHorizontal,
@@ -13,6 +16,7 @@ import {
   Share2,
   Smartphone,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -59,6 +63,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+} from "@multica/ui/components/ui/drawer";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -241,6 +252,15 @@ export function ChannelsPage() {
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const currentUserName = useAuthStore((s) => s.user?.name ?? null);
   const { mutate: markChannelRead } = useMarkChannelRead();
+  const isMobile = useIsMobile();
+  // Mobile-only: the header's right-side actions collapse into a single "⋯"
+  // button that opens a bottom Drawer (vaul, with drag handle). `"menu"` shows
+  // the action list (Members / Share / Stats / Files); picking one swaps the
+  // Drawer body to that section. A header Popover can render off-screen on a
+  // narrow viewport, so the drawer is the reliable container. `null` = closed.
+  const [mobilePanel, setMobilePanel] = useState<
+    "menu" | "members" | "stats" | "files" | null
+  >(null);
   // Initialize from ?channel= so shared deep links open the right channel.
   const [activeId, setActiveId] = useState<string | null>(() => searchParams.get("channel"));
   // ?message= deep-links to a specific message (e.g. from an overview mention).
@@ -268,9 +288,16 @@ export function ChannelsPage() {
   const { data: channels = [], isLoading } = useQuery(channelsOptions(wsId));
   const { data: workspaceMembers = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  // Desktop auto-selects the first channel so the stream pane is never blank.
+  // Mobile is list-first: `active` resolves only from an explicit selection
+  // (click or ?channel= deep link), so the list shows until the user opens a
+  // channel and the Back button (which clears activeId) returns to it.
   const active = useMemo(
-    () => channels.find((c) => c.id === activeId) ?? channels[0] ?? null,
-    [channels, activeId],
+    () =>
+      isMobile
+        ? (channels.find((c) => c.id === activeId) ?? null)
+        : (channels.find((c) => c.id === activeId) ?? channels[0] ?? null),
+    [channels, activeId, isMobile],
   );
   const { data: messages = [] } = useQuery(channelMessagesOptions(active?.id ?? ""));
   const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
@@ -351,8 +378,19 @@ export function ChannelsPage() {
   }, [channels, search]);
 
   useEffect(() => {
+    // Mobile is list-first — don't auto-open a channel, or the list would never
+    // be reachable. Desktop keeps auto-selecting the first channel.
+    //
+    // `useIsMobile()` reports `false` on the very first render (its internal
+    // state is still `undefined`) even on a phone, so we can't trust it here on
+    // mount. Measure the viewport directly — effects are client-only, so
+    // `window` is always defined — to avoid auto-selecting (and thus forcing the
+    // detail view) before the breakpoint is known.
+    const onMobileViewport =
+      isMobile || (typeof window !== "undefined" && window.innerWidth < 768);
+    if (onMobileViewport) return;
     if (!activeId && channels[0]) setActiveId(channels[0].id);
-  }, [activeId, channels]);
+  }, [activeId, channels, isMobile]);
 
   useEffect(() => {
     // Don't yank to the bottom while a deep-linked message is being focused.
@@ -459,6 +497,15 @@ export function ChannelsPage() {
   const selectChannel = (id: string) => {
     setActiveId(id);
     replace(`${wsPaths.channels()}?channel=${id}`);
+  };
+
+  // Mobile-only: return from the channel detail to the list. Clears the
+  // selection (so `active` resolves to null and the list renders) and drops
+  // ?channel= from the URL.
+  const mobileBackToList = () => {
+    setActiveId(null);
+    setMobilePanel(null);
+    replace(wsPaths.channels());
   };
 
   const handleDelete = () => {
@@ -605,10 +652,155 @@ export function ChannelsPage() {
     );
   };
 
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="grid min-h-0 flex-1 grid-cols-[280px_1fr] gap-0 bg-background">
-        <aside className="flex min-h-0 flex-col border-r bg-muted/20">
+  // Member management body (invite / members tabs + search). Extracted so the
+  // SAME markup renders in the desktop header Popover and the mobile overflow
+  // Drawer — no logic or layout duplicated. Guarded on `active` so the member-
+  // remove handler always has a channel id.
+  const memberPanelBody = active ? (
+    <>
+      <div className="flex border-b">
+        <button
+          type="button"
+          onClick={() => setMemberTab("invite")}
+          className={cn(
+            "flex-1 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
+            memberTab === "invite"
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {t(($) => $.members.tab_invite)}
+        </button>
+        <button
+          type="button"
+          onClick={() => setMemberTab("members")}
+          className={cn(
+            "flex-1 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
+            memberTab === "members"
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {t(($) => $.members.tab_members)} · {channelMembers.length}
+        </button>
+      </div>
+      <div className="p-2">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={memberQuery}
+            onChange={(e) => setMemberQuery(e.target.value)}
+            placeholder={t(($) => $.members.search)}
+            className="h-8 pl-7"
+          />
+        </div>
+      </div>
+      {memberTab === "invite" ? (
+        <>
+          <div className="max-h-64 overflow-y-auto px-1.5 pb-1.5">
+            {inviteCandidates.length === 0 ? (
+              <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+                {memberQuery
+                  ? t(($) => $.members.no_results)
+                  : t(($) => $.members.no_candidates)}
+              </p>
+            ) : (
+              inviteCandidates.map((c) => (
+                <label
+                  key={c.key}
+                  className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent"
+                >
+                  <Checkbox
+                    checked={selectedInvites.has(c.key)}
+                    onCheckedChange={() => toggleInvite(c.key)}
+                  />
+                  <ActorAvatar
+                    name={c.name}
+                    initials={initialsOf(c.name || "?")}
+                    isAgent={c.type === "agent"}
+                    size={26}
+                    tint={c.type === "agent" ? agentColor(c.id) : undefined}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-sm">{c.name}</span>
+                </label>
+              ))
+            )}
+          </div>
+          {selectedInvites.size > 0 && (
+            <div className="border-t p-2">
+              <Button
+                size="sm"
+                className="w-full"
+                onClick={inviteSelected}
+                disabled={addMembers.isPending}
+              >
+                {t(($) => $.members.invite_count, { count: selectedInvites.size })}
+              </Button>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="max-h-72 overflow-y-auto px-1.5 pb-2">
+          {filteredMembers.length === 0 ? (
+            <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+              {channelMembers.length === 0
+                ? t(($) => $.members.empty)
+                : t(($) => $.members.no_results)}
+            </p>
+          ) : (
+            filteredMembers.map((m) => {
+              const isAgent = m.member_type === "agent";
+              const name =
+                m.name ||
+                (isAgent
+                  ? t(($) => $.message.agent_badge)
+                  : t(($) => $.members.title));
+              return (
+                <div
+                  key={`${m.member_type}:${m.member_id}`}
+                  className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent"
+                >
+                  <ActorAvatar
+                    name={name}
+                    initials={initialsOf(m.name || "?")}
+                    isAgent={isAgent}
+                    size={26}
+                    tint={isAgent ? agentColor(m.member_id) : undefined}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-sm">{name}</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      removeMember.mutate({
+                        channelId: active.id,
+                        memberType: m.member_type,
+                        memberId: m.member_id,
+                      })
+                    }
+                    aria-label={t(($) => $.members.remove_aria)}
+                    className="rounded p-1 text-muted-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </>
+  ) : null;
+
+  // Channel list pane. Full-width on mobile (list-first); a 280px sidebar on
+  // desktop. The `border-r` only makes sense beside the stream pane, so it's
+  // dropped on mobile where the list stands alone.
+  const listPane = (
+    <aside
+      className={cn(
+        "flex min-h-0 flex-col bg-muted/20",
+        isMobile ? "min-w-0" : "border-r",
+      )}
+    >
           <div className="flex items-center justify-between px-4 pb-1 pt-4">
             <h2 className="text-lg font-semibold">{t(($) => $.sidebar.heading)}</h2>
             <Popover open={createOpen} onOpenChange={setCreateOpen}>
@@ -726,15 +918,36 @@ export function ChannelsPage() {
               })
             )}
           </div>
-        </aside>
+    </aside>
+  );
 
+  // Channel detail pane: header + message stream + composer. On mobile it
+  // takes the full width and grows a Back button into the header so the user
+  // can return to the list.
+  const detailPane = (
         <main className="flex min-h-0 min-w-0 flex-col">
           {!active ? (
             <EmptyState onCreate={handleCreate} />
           ) : (
             <>
-              <header className="flex items-center justify-between gap-3 border-b px-5 py-2.5">
-                <div className="flex min-w-0 items-center gap-3">
+              <header
+                className={cn(
+                  "flex items-center justify-between gap-3 border-b py-2.5",
+                  isMobile ? "px-2" : "px-5",
+                )}
+              >
+                <div className={cn("flex min-w-0 items-center", isMobile ? "gap-2" : "gap-3")}>
+                  {isMobile && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-10 shrink-0 text-muted-foreground"
+                      aria-label={t(($) => $.header.back)}
+                      onClick={mobileBackToList}
+                    >
+                      <ArrowLeft className="size-5" />
+                    </Button>
+                  )}
                   <ChannelGroupAvatar members={channelMembers} size={40} />
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 font-semibold">
@@ -751,186 +964,72 @@ export function ChannelsPage() {
                     </p>
                   </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-3">
-                  <Popover>
-                    <PopoverTrigger
-                      className="flex items-center gap-1.5 rounded-full p-0.5 transition-colors hover:bg-accent"
-                      aria-label={t(($) => $.header.manage_members_aria)}
-                    >
-                      <MemberStack members={channelMembers} />
-                      <span className="flex size-7 items-center justify-center rounded-full border border-dashed text-muted-foreground">
-                        <Plus className="size-3.5" />
-                      </span>
-                    </PopoverTrigger>
-                    <PopoverContent align="end" className="w-80 p-0">
-                      <div className="flex border-b">
-                        <button
-                          type="button"
-                          onClick={() => setMemberTab("invite")}
-                          className={cn(
-                            "flex-1 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
-                            memberTab === "invite"
-                              ? "border-primary text-foreground"
-                              : "border-transparent text-muted-foreground hover:text-foreground",
-                          )}
-                        >
-                          {t(($) => $.members.tab_invite)}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setMemberTab("members")}
-                          className={cn(
-                            "flex-1 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
-                            memberTab === "members"
-                              ? "border-primary text-foreground"
-                              : "border-transparent text-muted-foreground hover:text-foreground",
-                          )}
-                        >
-                          {t(($) => $.members.tab_members)} · {channelMembers.length}
-                        </button>
-                      </div>
-                      <div className="p-2">
-                        <div className="relative">
-                          <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                          <Input
-                            value={memberQuery}
-                            onChange={(e) => setMemberQuery(e.target.value)}
-                            placeholder={t(($) => $.members.search)}
-                            className="h-8 pl-7"
-                          />
-                        </div>
-                      </div>
-                      {memberTab === "invite" ? (
-                        <>
-                          <div className="max-h-64 overflow-y-auto px-1.5 pb-1.5">
-                            {inviteCandidates.length === 0 ? (
-                              <p className="px-2 py-6 text-center text-xs text-muted-foreground">
-                                {memberQuery
-                                  ? t(($) => $.members.no_results)
-                                  : t(($) => $.members.no_candidates)}
-                              </p>
-                            ) : (
-                              inviteCandidates.map((c) => (
-                                <label
-                                  key={c.key}
-                                  className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent"
-                                >
-                                  <Checkbox
-                                    checked={selectedInvites.has(c.key)}
-                                    onCheckedChange={() => toggleInvite(c.key)}
-                                  />
-                                  <ActorAvatar
-                                    name={c.name}
-                                    initials={initialsOf(c.name || "?")}
-                                    isAgent={c.type === "agent"}
-                                    size={26}
-                                    tint={c.type === "agent" ? agentColor(c.id) : undefined}
-                                  />
-                                  <span className="min-w-0 flex-1 truncate text-sm">{c.name}</span>
-                                </label>
-                              ))
-                            )}
-                          </div>
-                          {selectedInvites.size > 0 && (
-                            <div className="border-t p-2">
-                              <Button
-                                size="sm"
-                                className="w-full"
-                                onClick={inviteSelected}
-                                disabled={addMembers.isPending}
-                              >
-                                {t(($) => $.members.invite_count, { count: selectedInvites.size })}
-                              </Button>
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <div className="max-h-72 overflow-y-auto px-1.5 pb-2">
-                          {filteredMembers.length === 0 ? (
-                            <p className="px-2 py-6 text-center text-xs text-muted-foreground">
-                              {channelMembers.length === 0
-                                ? t(($) => $.members.empty)
-                                : t(($) => $.members.no_results)}
-                            </p>
-                          ) : (
-                            filteredMembers.map((m) => {
-                              const isAgent = m.member_type === "agent";
-                              const name =
-                                m.name ||
-                                (isAgent
-                                  ? t(($) => $.message.agent_badge)
-                                  : t(($) => $.members.title));
-                              return (
-                                <div
-                                  key={`${m.member_type}:${m.member_id}`}
-                                  className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent"
-                                >
-                                  <ActorAvatar
-                                    name={name}
-                                    initials={initialsOf(m.name || "?")}
-                                    isAgent={isAgent}
-                                    size={26}
-                                    tint={isAgent ? agentColor(m.member_id) : undefined}
-                                  />
-                                  <span className="min-w-0 flex-1 truncate text-sm">{name}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      removeMember.mutate({
-                                        channelId: active.id,
-                                        memberType: m.member_type,
-                                        memberId: m.member_id,
-                                      })
-                                    }
-                                    aria-label={t(($) => $.members.remove_aria)}
-                                    className="rounded p-1 text-muted-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100"
-                                  >
-                                    <X className="size-3.5" />
-                                  </button>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      )}
-                    </PopoverContent>
-                  </Popover>
-                  <div className="flex items-center gap-1 text-muted-foreground">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8"
-                      aria-label={t(($) => $.header.share_aria)}
-                      onClick={handleShare}
-                    >
-                      <Share2 className="size-4" />
-                    </Button>
+                {isMobile ? (
+                  // Mobile: collapse members / share / stats / files into a
+                  // single "⋯" that opens the bottom Drawer's action menu.
+                  // size-10 keeps the tap target ≥44px.
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-10 shrink-0 text-muted-foreground"
+                    aria-label={t(($) => $.header.more_aria)}
+                    onClick={() => setMobilePanel("menu")}
+                  >
+                    <MoreHorizontal className="size-5" />
+                  </Button>
+                ) : (
+                  <div className="flex shrink-0 items-center gap-3">
                     <Popover>
                       <PopoverTrigger
-                        className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
-                        aria-label={t(($) => $.header.stats_aria)}
+                        className="flex items-center gap-1.5 rounded-full p-0.5 transition-colors hover:bg-accent"
+                        aria-label={t(($) => $.header.manage_members_aria)}
                       >
-                        <PieChart className="size-4" />
+                        <MemberStack members={channelMembers} />
+                        <span className="flex size-7 items-center justify-center rounded-full border border-dashed text-muted-foreground">
+                          <Plus className="size-3.5" />
+                        </span>
                       </PopoverTrigger>
-                      <PopoverContent align="end" className="w-72">
-                        <p className="mb-3 text-sm font-medium">{t(($) => $.stats.title)}</p>
-                        <ChannelStatsPanel channelId={active.id} />
+                      <PopoverContent align="end" className="w-80 p-0">
+                        {memberPanelBody}
                       </PopoverContent>
                     </Popover>
-                    <Popover>
-                      <PopoverTrigger
-                        className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
-                        aria-label={t(($) => $.header.files_aria)}
+                    <div className="flex items-center gap-1 text-muted-foreground">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8"
+                        aria-label={t(($) => $.header.share_aria)}
+                        onClick={handleShare}
                       >
-                        <FileText className="size-4" />
-                      </PopoverTrigger>
-                      <PopoverContent align="end" className="w-80">
-                        <p className="mb-3 text-sm font-medium">{t(($) => $.files.title)}</p>
-                        <ChannelFilesPanel channelId={active.id} />
-                      </PopoverContent>
-                    </Popover>
+                        <Share2 className="size-4" />
+                      </Button>
+                      <Popover>
+                        <PopoverTrigger
+                          className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
+                          aria-label={t(($) => $.header.stats_aria)}
+                        >
+                          <PieChart className="size-4" />
+                        </PopoverTrigger>
+                        <PopoverContent align="end" className="w-72">
+                          <p className="mb-3 text-sm font-medium">{t(($) => $.stats.title)}</p>
+                          <ChannelStatsPanel channelId={active.id} />
+                        </PopoverContent>
+                      </Popover>
+                      <Popover>
+                        <PopoverTrigger
+                          className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
+                          aria-label={t(($) => $.header.files_aria)}
+                        >
+                          <FileText className="size-4" />
+                        </PopoverTrigger>
+                        <PopoverContent align="end" className="w-80">
+                          <p className="mb-3 text-sm font-medium">{t(($) => $.files.title)}</p>
+                          <ChannelFilesPanel channelId={active.id} />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
                   </div>
-                </div>
+                )}
               </header>
 
               <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">
@@ -984,11 +1083,11 @@ export function ChannelsPage() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="size-8"
+                        className={cn(isMobile ? "size-10" : "size-8")}
                         aria-label={t(($) => $.composer.attach_aria)}
                         onClick={() => fileInputRef.current?.click()}
                       >
-                        <Paperclip className="size-4" />
+                        <Paperclip className={cn(isMobile ? "size-5" : "size-4")} />
                       </Button>
                       <ProjectPickerButton
                         wsId={wsId}
@@ -999,7 +1098,12 @@ export function ChannelsPage() {
                         tooltip={t(($) => $.composer.project_tooltip)}
                       />
                     </div>
-                    <Button onClick={handleSend} disabled={draftEmpty || sendMessage.isPending} size="sm">
+                    <Button
+                      onClick={handleSend}
+                      disabled={draftEmpty || sendMessage.isPending}
+                      size="sm"
+                      className={cn(isMobile && "min-h-10 px-4")}
+                    >
                       <Send className="size-4" /> {t(($) => $.composer.send)}
                     </Button>
                   </div>
@@ -1008,7 +1112,125 @@ export function ChannelsPage() {
             </>
           )}
         </main>
-      </div>
+  );
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {isMobile ? (
+        // Mobile: single full-width column — the list, or (when a channel is
+        // active) the detail with a Back button. Matches the inbox list↔detail
+        // pattern.
+        //
+        // Height is pinned to 100dvh (dynamic viewport height) rather than the
+        // app-shell's flex height so the soft keyboard shrinks the viewport and
+        // the composer stays above it: the message area is the flex child that
+        // compresses (`min-h-0 flex-1 overflow-y-auto`, inside detailPane) and
+        // the composer is the pinned last flex child (non-absolute). 100vh would
+        // include the keyboard's area and push the composer off-screen.
+        <div className="flex h-[100dvh] min-h-0 min-w-0 flex-col bg-background">
+          {active ? detailPane : listPane}
+        </div>
+      ) : (
+        <div className="grid min-h-0 flex-1 grid-cols-[280px_1fr] gap-0 bg-background">
+          {listPane}
+          {detailPane}
+        </div>
+      )}
+
+      {/* Mobile overflow drawer. One bottom Drawer (vaul, with drag handle)
+          behind the header "⋯": `"menu"` lists the actions (Members / Share /
+          Stats / Files); picking one swaps the body to that section.
+          Members/Stats/Files reuse the exact same component bodies as the
+          desktop popovers. */}
+      {isMobile && active && (
+        <Drawer
+          direction="bottom"
+          open={mobilePanel !== null}
+          onOpenChange={(open) => {
+            if (!open) setMobilePanel(null);
+          }}
+        >
+          <DrawerContent className="max-h-[85dvh] gap-0 overflow-y-auto p-0">
+            <DrawerHeader className="flex-row items-center gap-1 border-b py-3">
+              {mobilePanel !== "menu" && (
+                <button
+                  type="button"
+                  onClick={() => setMobilePanel("menu")}
+                  aria-label={t(($) => $.header.back)}
+                  className="-ml-1 flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent"
+                >
+                  <ChevronLeft className="size-5" />
+                </button>
+              )}
+              <DrawerTitle>
+                {mobilePanel === "members"
+                  ? t(($) => $.members.title)
+                  : mobilePanel === "stats"
+                    ? t(($) => $.stats.title)
+                    : mobilePanel === "files"
+                      ? t(($) => $.files.title)
+                      : active.name}
+              </DrawerTitle>
+            </DrawerHeader>
+
+            {mobilePanel === "menu" && (
+              <div className="flex flex-col py-1">
+                <button
+                  type="button"
+                  onClick={() => setMobilePanel("members")}
+                  className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
+                >
+                  <Users className="size-5 shrink-0 text-muted-foreground" />
+                  <span className="flex-1">{t(($) => $.header.manage_members_aria)}</span>
+                  <span className="text-xs text-muted-foreground">{channelMembers.length}</span>
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobilePanel(null);
+                    void handleShare();
+                  }}
+                  className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
+                >
+                  <Share2 className="size-5 shrink-0 text-muted-foreground" />
+                  <span className="flex-1">{t(($) => $.header.share_aria)}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobilePanel("stats")}
+                  className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
+                >
+                  <PieChart className="size-5 shrink-0 text-muted-foreground" />
+                  <span className="flex-1">{t(($) => $.stats.title)}</span>
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobilePanel("files")}
+                  className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
+                >
+                  <FileText className="size-5 shrink-0 text-muted-foreground" />
+                  <span className="flex-1">{t(($) => $.files.title)}</span>
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                </button>
+              </div>
+            )}
+
+            {mobilePanel === "members" && <div>{memberPanelBody}</div>}
+            {mobilePanel === "stats" && (
+              <div className="p-4">
+                <ChannelStatsPanel channelId={active.id} />
+              </div>
+            )}
+            {mobilePanel === "files" && (
+              <div className="p-4">
+                <ChannelFilesPanel channelId={active.id} />
+              </div>
+            )}
+          </DrawerContent>
+        </Drawer>
+      )}
 
       <AlertDialog
         open={deleteTarget !== null}

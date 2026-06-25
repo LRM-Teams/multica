@@ -10,7 +10,6 @@ import {
   Search,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import type { Agent, AgentRuntime, CreateAgentRequest } from "@multica/core/types";
 import {
   type AgentAvailability,
@@ -31,6 +30,10 @@ import {
   workspaceKeys,
 } from "@multica/core/workspace/queries";
 import { runtimeListOptions } from "@multica/core/runtimes";
+import {
+  dashboardUsageByAgentOptions,
+  dashboardAgentRunTimeOptions,
+} from "@multica/core/dashboard/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   DropdownMenu,
@@ -40,19 +43,19 @@ import {
 } from "@multica/ui/components/ui/dropdown-menu";
 import { Input } from "@multica/ui/components/ui/input";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
-import { DataTable } from "@multica/ui/components/ui/data-table";
 import { useNavigation } from "../../navigation";
 import { PageHeader } from "../../layout/page-header";
 import { availabilityConfig, availabilityOrder } from "../presence";
 import { CreateAgentDialog } from "./create-agent-dialog";
-import { type AgentRow, createAgentColumns } from "./agent-columns";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
-import {
-  buildRuntimeMachines,
-  type RuntimeMachine,
-} from "../../runtimes/components/runtime-machines";
+import { buildRuntimeMachines } from "../../runtimes/components/runtime-machines";
 import { RuntimeMachineFilterDropdown } from "./runtime-machine-filter-dropdown";
+import { AgentDetailOverview, type AgentMetric } from "./agent-detail-overview";
+import { ActorAvatar } from "../../common/actor-avatar";
+import { estimateCost } from "../../runtimes/utils";
+import { cn } from "@multica/ui/lib/utils";
+import { toast } from "sonner";
 
 // Filter axes:
 //
@@ -173,6 +176,28 @@ export function AgentsPage({
     for (const r of runCountsRaw) m.set(r.agent_id, r.run_count);
     return m;
   }, [runCountsRaw]);
+
+  // Per-agent dashboard metrics (last 30d), sliced in the viewer's tz so the
+  // day boundary matches the rest of the dashboard. Cost is summed across the
+  // agent's per-model usage rows via the shared pricing table; success rate is
+  // derived from terminal-task counts. Both feed the detail panel's stat cards.
+  const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
+  const { data: usageByAgent = [] } = useQuery(dashboardUsageByAgentOptions(wsId, 30, null, tz));
+  const { data: agentRunTime = [] } = useQuery(dashboardAgentRunTimeOptions(wsId, 30, null, tz));
+
+  const costByAgent = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of usageByAgent) m.set(r.agent_id, (m.get(r.agent_id) ?? 0) + estimateCost(r));
+    return m;
+  }, [usageByAgent]);
+
+  const successByAgent = useMemo(() => {
+    const m = new Map<string, number | null>();
+    for (const r of agentRunTime) {
+      m.set(r.agent_id, r.task_count > 0 ? ((r.task_count - r.failed_count) / r.task_count) * 100 : null);
+    }
+    return m;
+  }, [agentRunTime]);
 
   // Workspace role of the current user, used to gate row-level "manage"
   // operations (archive / cancel-tasks). Mirrors the back-end's
@@ -420,6 +445,46 @@ export function AgentsPage({
     return xs;
   }, [filteredAgents, sort, runCountsById, activityMap]);
 
+  // Master-detail selection. Falls back to the first visible agent whenever
+  // the chosen one drops out of the filtered list (filter/search change), so
+  // the detail pane is never blank while agents exist.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedAgent = useMemo(() => {
+    if (selectedId) {
+      const found = sortedAgents.find((a) => a.id === selectedId);
+      if (found) return found;
+    }
+    return sortedAgents[0] ?? null;
+  }, [selectedId, sortedAgents]);
+
+  const selectedMetric: AgentMetric | null = useMemo(() => {
+    if (!selectedAgent) return null;
+    return {
+      runCount: runCountsById.get(selectedAgent.id) ?? 0,
+      successRate: successByAgent.get(selectedAgent.id) ?? null,
+      cost: costByAgent.has(selectedAgent.id) ? costByAgent.get(selectedAgent.id)! : null,
+    };
+  }, [selectedAgent, runCountsById, successByAgent, costByAgent]);
+
+  const selectedCanManage = useMemo(() => {
+    if (!selectedAgent) return false;
+    const isOwner = !!currentUser?.id && selectedAgent.owner_id === currentUser.id;
+    return isWorkspaceAdmin || isOwner;
+  }, [selectedAgent, currentUser?.id, isWorkspaceAdmin]);
+
+  const handleArchiveSelected = useCallback(async () => {
+    if (!selectedAgent) return;
+    try {
+      await api.archiveAgent(selectedAgent.id);
+      toast.success(t(($) => $.dashboard.delete_success));
+      qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message ? err.message : t(($) => $.dashboard.delete_failed),
+      );
+    }
+  }, [selectedAgent, qc, wsId, t]);
+
   const archivedCount = useMemo(
     () => agents.filter((a) => !!a.archived_at).length,
     [agents],
@@ -455,62 +520,6 @@ export function AgentsPage({
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
     return agent;
   };
-
-  const handleDuplicate = useCallback((agent: Agent) => {
-    setDuplicateTemplate(agent);
-    setShowCreate(true);
-  }, []);
-
-  // Assemble per-row data once per render — agent + runtime + presence +
-  // activity + role flags. The columns reach into `row.original` and never
-  // pull their own queries, which keeps each cell a pure function.
-  const agentRows = useMemo<AgentRow[]>(() => {
-    return sortedAgents.map((agent) => {
-      const isOwner =
-        !!currentUser?.id && agent.owner_id === currentUser.id;
-      const canManage = isWorkspaceAdmin || isOwner;
-      const ownerIdToShow =
-        scope === "all" &&
-        agent.owner_id &&
-        agent.owner_id !== currentUser?.id
-          ? agent.owner_id
-          : null;
-      return {
-        agent,
-        runtime: runtimesById.get(agent.runtime_id) ?? null,
-        presence: presenceMap.get(agent.id) ?? null,
-        activity: activityMap.get(agent.id) ?? null,
-        runCount: runCountsById.get(agent.id) ?? 0,
-        ownerIdToShow,
-        isOwnedByMe: isOwner,
-        canManage,
-      };
-    });
-  }, [
-    sortedAgents,
-    currentUser,
-    isWorkspaceAdmin,
-    scope,
-    runtimesById,
-    presenceMap,
-    activityMap,
-    runCountsById,
-  ]);
-
-  const columns = useMemo(
-    () => createAgentColumns({ onDuplicate: handleDuplicate, t }),
-    [handleDuplicate, t],
-  );
-
-  const table = useReactTable({
-    data: agentRows,
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-    enableColumnResizing: true,
-    // Pin the kebab column right so it stays accessible during horizontal
-    // scroll — matches the pattern in Linear / Notion / GitHub.
-    initialState: { columnPinning: { right: ["actions"] } },
-  });
 
   // ---- Loading ----
   if (isLoading) {
@@ -553,66 +562,134 @@ export function AgentsPage({
         onCreate={() => setShowCreate(true)}
       />
 
-      <div className="flex flex-1 min-h-0 flex-col gap-4 p-6">
-        {showEmpty ? (
-          <div className="flex flex-1 items-center justify-center">
-            <EmptyState onCreate={() => setShowCreate(true)} />
-          </div>
-        ) : (
-          <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-lg border bg-background">
-            {view === "active" ? (
-              <>
-                <ActiveToolbarRow
-                  scope={scope}
-                  setScope={setScope}
-                  scopeCounts={scopeCounts}
-                  sort={sort}
-                  setSort={setSort}
-                  search={search}
-                  setSearch={setSearch}
-                  visibleCount={sortedAgents.length}
-                  totalCount={inScope.length}
-                  archivedCount={archivedCount}
-                  onShowArchived={() => setView("archived")}
-                  machines={machines}
-                  runtimeMachineId={runtimeMachineId}
-                  onRuntimeMachineChange={setRuntimeMachineId}
-                  agentCountByMachine={agentCountByMachine}
-                />
-                <AvailabilityFilterRow
-                  value={availabilityFilter}
-                  onChange={setAvailabilityFilter}
-                  counts={availabilityCounts}
-                  totalCount={inScopeOnMachine.length}
-                />
-              </>
-            ) : (
-              <ArchivedToolbarRow
-                onBack={() => setView("active")}
-                archivedCount={archivedCount}
-                sort={sort}
-                setSort={setSort}
-              />
-            )}
+      {showEmpty ? (
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState onCreate={() => setShowCreate(true)} />
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          {/* Left rail: header + compact filter toolbar + agent list */}
+          <div className="flex w-[340px] shrink-0 flex-col border-r">
+            <div className="flex h-12 shrink-0 items-center gap-2 px-4">
+              {view === "archived" ? (
+                <button
+                  type="button"
+                  onClick={() => setView("active")}
+                  className="inline-flex items-center gap-1 text-sm font-semibold transition-colors hover:text-foreground"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  {t(($) => $.archived.title)}
+                </button>
+              ) : (
+                <h2 className="text-sm font-semibold">{t(($) => $.dashboard.all_agents)}</h2>
+              )}
+              <span className="font-mono text-xs tabular-nums text-muted-foreground/60">
+                {view === "archived" ? archivedCount : inScope.length}
+              </span>
+              {view === "active" && archivedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setView("archived")}
+                  className="ml-auto text-xs text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {t(($) => $.page.show_archived, { count: archivedCount })}
+                </button>
+              )}
+            </div>
 
-            {sortedAgents.length === 0 ? (
-              <NoMatches
-                view={view}
-                search={search}
-                scope={scope}
-                runtimeMachineTitle={selectedMachine?.title ?? null}
-              />
-            ) : (
-              <DataTable
-                table={table}
-                onRowClick={(row) =>
-                  navigation.push(paths.agentDetail(row.original.agent.id))
-                }
-              />
-            )}
+            <div className="flex flex-col gap-2 border-y px-3 py-2">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={t(($) => $.page.search_placeholder)}
+                  className="h-8 w-full pl-8 text-sm"
+                />
+              </div>
+              {view === "active" && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <ScopeSegment scope={scope} setScope={setScope} counts={scopeCounts} />
+                  <div className="ml-auto flex items-center gap-1">
+                    <RuntimeMachineFilterDropdown
+                      machines={machines}
+                      value={runtimeMachineId}
+                      onChange={setRuntimeMachineId}
+                      agentCountByMachine={agentCountByMachine}
+                      totalAgentCount={inScope.length}
+                    />
+                    <SortDropdown sort={sort} setSort={setSort} />
+                  </div>
+                </div>
+              )}
+              {view === "archived" && (
+                <div className="flex justify-end">
+                  <SortDropdown sort={sort} setSort={setSort} />
+                </div>
+              )}
+              {view === "active" && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <AvailabilityChip
+                    active={availabilityFilter === "all"}
+                    onClick={() => setAvailabilityFilter("all")}
+                    label={t(($) => $.availability.all)}
+                    count={inScopeOnMachine.length}
+                  />
+                  {availabilityOrder.map((a) => (
+                    <AvailabilityChip
+                      key={a}
+                      active={availabilityFilter === a}
+                      onClick={() => setAvailabilityFilter(a)}
+                      label={t(($) => $.availability[a])}
+                      count={availabilityCounts[a]}
+                      dotClass={availabilityConfig[a].dotClass}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto py-1">
+              {sortedAgents.length === 0 ? (
+                <NoMatches
+                  view={view}
+                  search={search}
+                  scope={scope}
+                  runtimeMachineTitle={selectedMachine?.title ?? null}
+                />
+              ) : (
+                sortedAgents.map((agent) => (
+                  <AgentRailRow
+                    key={agent.id}
+                    agent={agent}
+                    availability={presenceMap.get(agent.id)?.availability ?? null}
+                    selected={selectedAgent?.id === agent.id}
+                    onClick={() => setSelectedId(agent.id)}
+                  />
+                ))
+              )}
+            </div>
           </div>
-        )}
-      </div>
+
+          {/* Detail */}
+          {selectedAgent && selectedMetric ? (
+            <AgentDetailOverview
+              key={selectedAgent.id}
+              agent={selectedAgent}
+              runtime={runtimesById.get(selectedAgent.runtime_id) ?? null}
+              availability={presenceMap.get(selectedAgent.id)?.availability ?? null}
+              metric={selectedMetric}
+              canManage={selectedCanManage}
+              onEdit={() => navigation.push(paths.agentDetail(selectedAgent.id))}
+              onDelete={handleArchiveSelected}
+            />
+          ) : (
+            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+              {t(($) => $.dashboard.empty_select)}
+            </div>
+          )}
+        </div>
+      )}
 
       {showCreate && (
         <CreateAgentDialog
@@ -706,82 +783,6 @@ function ListError({
         >
           {t(($) => $.page.try_again)}
         </Button>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Active view — Layer 1: scope segment + sort + search + archived link + live
-// ---------------------------------------------------------------------------
-
-function ActiveToolbarRow({
-  scope,
-  setScope,
-  scopeCounts,
-  sort,
-  setSort,
-  search,
-  setSearch,
-  visibleCount,
-  totalCount,
-  archivedCount,
-  onShowArchived,
-  machines,
-  runtimeMachineId,
-  onRuntimeMachineChange,
-  agentCountByMachine,
-}: {
-  scope: Scope;
-  setScope: (v: Scope) => void;
-  scopeCounts: { all: number; mine: number };
-  sort: SortKey;
-  setSort: (v: SortKey) => void;
-  search: string;
-  setSearch: (v: string) => void;
-  visibleCount: number;
-  totalCount: number;
-  archivedCount: number;
-  onShowArchived: () => void;
-  machines: RuntimeMachine[];
-  runtimeMachineId: string | null;
-  onRuntimeMachineChange: (id: string | null) => void;
-  agentCountByMachine: Map<string, number>;
-}) {
-  const { t } = useT("agents");
-  return (
-    <div className="flex h-12 shrink-0 items-center gap-3 border-b px-4">
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={t(($) => $.page.search_placeholder)}
-          className="h-8 w-64 pl-8 text-sm"
-        />
-      </div>
-      <ScopeSegment scope={scope} setScope={setScope} counts={scopeCounts} />
-      <div className="ml-auto flex items-center gap-3">
-        <RuntimeMachineFilterDropdown
-          machines={machines}
-          value={runtimeMachineId}
-          onChange={onRuntimeMachineChange}
-          agentCountByMachine={agentCountByMachine}
-          totalAgentCount={totalCount}
-        />
-        {archivedCount > 0 && (
-          <button
-            type="button"
-            onClick={onShowArchived}
-            className="text-xs text-muted-foreground transition-colors hover:text-foreground"
-          >
-            {t(($) => $.page.show_archived, { count: archivedCount })}
-          </button>
-        )}
-        <span className="font-mono text-xs tabular-nums text-muted-foreground/70">
-          {t(($) => $.page.of_total, { visible: visibleCount, total: totalCount })}
-        </span>
-        <SortDropdown sort={sort} setSort={setSort} />
       </div>
     </div>
   );
@@ -886,46 +887,9 @@ function SortDropdown({
 }
 
 // ---------------------------------------------------------------------------
-// Availability chip row — All / Online / Unstable / Offline. Only shown
-// in the Active view; archived agents have no presence.
+// Availability chip — All / Online / Unstable / Offline. Rendered inline in
+// the rail's compact toolbar.
 // ---------------------------------------------------------------------------
-
-function AvailabilityFilterRow({
-  value,
-  onChange,
-  counts,
-  totalCount,
-}: {
-  value: AvailabilityFilter;
-  onChange: (v: AvailabilityFilter) => void;
-  counts: Record<AgentAvailability, number>;
-  totalCount: number;
-}) {
-  const { t } = useT("agents");
-  return (
-    <div className="flex h-11 shrink-0 items-center gap-2 border-b px-4">
-      <AvailabilityChip
-        active={value === "all"}
-        onClick={() => onChange("all")}
-        label={t(($) => $.availability.all)}
-        count={totalCount}
-      />
-      {availabilityOrder.map((a) => {
-        const cfg = availabilityConfig[a];
-        return (
-          <AvailabilityChip
-            key={a}
-            active={value === a}
-            onClick={() => onChange(a)}
-            label={t(($) => $.availability[a])}
-            count={counts[a]}
-            dotClass={cfg.dotClass}
-          />
-        );
-      })}
-    </div>
-  );
-}
 
 function AvailabilityChip({
   active,
@@ -961,41 +925,54 @@ function AvailabilityChip({
 }
 
 // ---------------------------------------------------------------------------
-// Archived view — single toolbar row (back link + title + count + sort).
-// No presence chip row: presence is undefined for archived agents.
+// Agent rail row — avatar + name + role subtitle + status pill. Selected row
+// gets a left accent border (master-detail).
 // ---------------------------------------------------------------------------
 
-function ArchivedToolbarRow({
-  onBack,
-  archivedCount,
-  sort,
-  setSort,
+function AgentRailRow({
+  agent,
+  availability,
+  selected,
+  onClick,
 }: {
-  onBack: () => void;
-  archivedCount: number;
-  sort: SortKey;
-  setSort: (v: SortKey) => void;
+  agent: Agent;
+  availability: AgentAvailability | null;
+  selected: boolean;
+  onClick: () => void;
 }) {
   const { t } = useT("agents");
+  const cfg = availability ? availabilityConfig[availability] : null;
   return (
-    <div className="flex h-12 shrink-0 items-center gap-3 border-b px-4">
-      <button
-        type="button"
-        onClick={onBack}
-        className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <ArrowLeft className="h-3 w-3" />
-        {t(($) => $.archived.active_link)}
-      </button>
-      <span className="text-muted-foreground/40">/</span>
-      <span className="text-xs font-medium">{t(($) => $.archived.title)}</span>
-      <span className="font-mono text-xs tabular-nums text-muted-foreground/70">
-        {archivedCount}
-      </span>
-      <div className="ml-auto">
-        <SortDropdown sort={sort} setSort={setSort} />
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex w-full items-center gap-3 border-l-2 px-3 py-2.5 text-left transition-colors",
+        selected
+          ? "border-primary bg-accent"
+          : "border-transparent hover:bg-accent/50",
+      )}
+    >
+      <ActorAvatar
+        actorType="agent"
+        actorId={agent.id}
+        size={32}
+        showStatusDot
+        className="shrink-0"
+      />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-foreground">{agent.name}</p>
+        <p className="truncate text-xs text-muted-foreground">
+          {agent.description?.trim() || "—"}
+        </p>
       </div>
-    </div>
+      {cfg && (
+        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px]">
+          <span className={cn("size-1.5 rounded-full", cfg.dotClass)} />
+          <span className={cfg.textClass}>{t(($) => $.availability[availability!])}</span>
+        </span>
+      )}
+    </button>
   );
 }
 

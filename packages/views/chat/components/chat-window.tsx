@@ -47,6 +47,7 @@ import {
 import { useChatStore } from "@multica/core/chat";
 import { ChatMessageList, ChatMessageSkeleton } from "./chat-message-list";
 import { ChatInput } from "./chat-input";
+import { ChatContactList } from "./chat-contact-list";
 import { ChatResizeHandles } from "./chat-resize-handles";
 import { useChatContextItems } from "./use-chat-context-items";
 import { useChatResize } from "./use-chat-resize";
@@ -191,7 +192,7 @@ export function ChatWindow() {
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
-  const { data: sessions = [] } = useQuery(chatSessionsOptions(wsId));
+  const { data: sessions = [], isSuccess: sessionsLoaded } = useQuery(chatSessionsOptions(wsId));
   const {
     data: rawMessagePages,
     isLoading: messagesLoading,
@@ -317,6 +318,22 @@ export function ChatWindow() {
     markRead.mutate(activeSessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- markRead ref stable
   }, [isOpen, activeSessionId, currentHasUnread]);
+
+  // Drop a persisted activeSessionId that isn't a real DM session — e.g. a
+  // channel-backed session selected before the DM panel excluded channels.
+  // Runs once per workspace, the first time its (DM-only) session list loads,
+  // so it can't race a freshly-created session into being cleared.
+  const reconciledWsRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessionsLoaded || reconciledWsRef.current === wsId) return;
+    reconciledWsRef.current = wsId;
+    if (activeSessionId && !sessions.some((s) => s.id === activeSessionId)) {
+      uiLogger.info("reconcile: clearing stale active session not in DM list", {
+        sessionId: activeSessionId,
+      });
+      setActiveSession(null);
+    }
+  }, [sessionsLoaded, wsId, sessions, activeSessionId, setActiveSession]);
 
   const { uploadWithToast } = useFileUpload(api);
 
@@ -617,6 +634,17 @@ export function ChatWindow() {
     [activeAgent, setSelectedAgentId, setActiveSession],
   );
 
+  // Contact-list pick (left IM pane): switch agent AND open that agent's
+  // most-recent DM thread in one go.
+  const handleSelectContact = useCallback(
+    (agentId: string, sessionId: string) => {
+      uiLogger.info("selectContact", { toAgent: agentId, toSession: sessionId });
+      setSelectedAgentId(agentId);
+      setActiveSession(sessionId);
+    },
+    [setSelectedAgentId, setActiveSession],
+  );
+
   const handleMinimize = useCallback(() => {
     uiLogger.info("minimize (close)", {
       activeSessionId,
@@ -636,7 +664,7 @@ export function ChatWindow() {
 
   const isVisible = isOpen && (isExpanded || boundsReady);
 
-  const containerClass = "absolute bottom-2 right-2 z-50 flex flex-col rounded-xl ring-1 ring-foreground/10 bg-sidebar shadow-2xl overflow-hidden";
+  const containerClass = "absolute bottom-2 right-2 z-50 flex flex-row rounded-xl ring-1 ring-foreground/10 bg-sidebar shadow-2xl overflow-hidden";
   const containerStyle: React.CSSProperties = {
     transformOrigin: "bottom right",
     pointerEvents: isOpen ? "auto" : "none",
@@ -664,6 +692,15 @@ export function ChatWindow() {
       }}
     >
       <ChatResizeHandles onDragStart={startDrag} />
+      {/* Left IM pane: agent contacts (1:1 DM threads). */}
+      <ChatContactList
+        sessions={sessions}
+        agents={agents}
+        activeAgentId={activeAgent?.id ?? null}
+        onSelect={handleSelectContact}
+      />
+      {/* Right pane: the selected agent's thread. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {/* Header — ⊕ new + session dropdown | window tools */}
       <div className="flex items-center justify-between border-b px-4 py-2.5 gap-2">
         <div className="flex items-center gap-1 min-w-0">
@@ -789,6 +826,7 @@ export function ChatWindow() {
         }
         contextItems={contextItems}
       />
+      </div>
     </motion.div>
   );
 }

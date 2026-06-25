@@ -1,9 +1,33 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import type { Issue } from "@multica/core/types";
 import { issueListOptions, issueDetailOptions } from "@multica/core/issues/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { StatusIcon } from "./status-icon";
+
+/** True when `s` is a canonical UUID (an explicit mention) rather than a
+ *  human identifier like "MUL-123" (an auto-linked reference). */
+export function isIssueUuid(s: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+}
+
+/**
+ * Resolve an issue by UUID **or** human identifier ("MUL-123"). Looks in the
+ * first-page list cache first, then falls back to a detail fetch (the backend
+ * loader accepts either form). Returns undefined while loading or when the
+ * issue can't be resolved (deleted, other workspace, no permission).
+ */
+export function useResolvedIssue(key: string): Issue | undefined {
+  const wsId = useWorkspaceId();
+  const { data: issues = [] } = useQuery(issueListOptions(wsId));
+  const listIssue = issues.find((i) => i.id === key || i.identifier === key);
+  const { data: detailIssue } = useQuery({
+    ...issueDetailOptions(wsId, key),
+    enabled: !listIssue && !!key,
+  });
+  return listIssue ?? detailIssue;
+}
 
 /**
  * Compact, presentation-only representation of an issue —
@@ -31,17 +55,7 @@ const BASE_CLASS =
   "issue-mention inline-flex items-center gap-1.5 rounded-md border mx-0.5 px-2 py-0.5 text-xs max-w-72";
 
 export function IssueChip({ issueId, fallbackLabel, className }: IssueChipProps) {
-  const wsId = useWorkspaceId();
-  const { data: issues = [] } = useQuery(issueListOptions(wsId));
-  const listIssue = issues.find((i) => i.id === issueId);
-
-  // Fallback fetch for issues outside the first page of the list (e.g. Done).
-  const { data: detailIssue } = useQuery({
-    ...issueDetailOptions(wsId, issueId),
-    enabled: !listIssue,
-  });
-
-  const issue = listIssue ?? detailIssue;
+  const issue = useResolvedIssue(issueId);
   const cls = className ? `${BASE_CLASS} ${className}` : BASE_CLASS;
 
   if (!issue) {

@@ -5,6 +5,10 @@
     "unread_other": "{{count}} unread chats",
     "default": "Ask Multica"
   },
+  "contacts": {
+    "title": "Direct messages",
+    "empty": "No direct messages yet"
+  },
   "input": {
     "placeholder_no_agent": "Create an agent to start chatting",
     "placeholder_archived": "This session is archived",

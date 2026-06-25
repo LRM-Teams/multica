@@ -483,5 +483,33 @@
     "runtime_offline": "Daemon offline",
     "runtime_recovery": "Daemon restarted",
     "manual": "Cancelled by user"
+  },
+  "dashboard": {
+    "all_agents": "All agents",
+    "edit_config": "Edit config",
+    "delete": "Delete",
+    "metric_tasks": "Total tasks",
+    "metric_success": "Success rate",
+    "metric_cost": "Cost",
+    "metric_version": "Evolution",
+    "last_30d": "Last 30d",
+    "coming_soon": "Coming soon",
+    "role_capabilities": "Role & capabilities",
+    "edit": "Edit",
+    "no_description": "No role or capability description yet",
+    "no_skills": "No capabilities yet",
+    "prompt_strategy": "Current prompt strategy",
+    "no_prompt": "No prompt configured",
+    "exec_log": "Execution log",
+    "view_all": "View all",
+    "no_logs": "No runs yet",
+    "evolution": "Self-evolution",
+    "evolution_placeholder": "Self-evolution is coming soon — it will show each prompt / config iteration and its success-rate change.",
+    "running_for": "In progress · {{min}}min elapsed",
+    "duration_min": "{{min}}min",
+    "task_fallback": "Task run",
+    "empty_select": "Select an agent on the left to see details",
+    "delete_success": "Agent deleted",
+    "delete_failed": "Failed to delete agent"
   }
 }

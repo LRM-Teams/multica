@@ -483,5 +483,33 @@
     "runtime_offline": "데몬 오프라인",
     "runtime_recovery": "데몬 재시작됨",
     "manual": "사용자가 취소함"
+  },
+  "dashboard": {
+    "all_agents": "모든 에이전트",
+    "edit_config": "설정 편집",
+    "delete": "삭제",
+    "metric_tasks": "누적 작업",
+    "metric_success": "성공률",
+    "metric_cost": "비용",
+    "metric_version": "진화 버전",
+    "last_30d": "최근 30일",
+    "coming_soon": "곧 출시",
+    "role_capabilities": "역할 & 역량",
+    "edit": "편집",
+    "no_description": "아직 역할·역량 설명이 없습니다",
+    "no_skills": "아직 역량이 없습니다",
+    "prompt_strategy": "현재 프롬프트 전략",
+    "no_prompt": "프롬프트 미설정",
+    "exec_log": "실행 로그",
+    "view_all": "전체 보기",
+    "no_logs": "아직 실행 기록이 없습니다",
+    "evolution": "자가 진화",
+    "evolution_placeholder": "자가 진화 기능이 곧 출시됩니다. 각 프롬프트/설정 반복과 성공률 변화를 보여줍니다.",
+    "running_for": "진행 중 · {{min}}min 경과",
+    "duration_min": "{{min}}min",
+    "task_fallback": "작업 실행",
+    "empty_select": "왼쪽에서 에이전트를 선택하면 상세 정보가 표시됩니다",
+    "delete_success": "에이전트를 삭제했습니다",
+    "delete_failed": "에이전트 삭제에 실패했습니다"
   }
 }

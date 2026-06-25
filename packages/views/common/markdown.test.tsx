@@ -20,6 +20,9 @@ vi.mock("@multica/core/paths", async (importOriginal) => {
     ...actual,
     useWorkspaceSlug: () => "acme",
     useRequiredWorkspaceSlug: () => "acme",
+    // Avoid the real hook's useQuery (no QueryClient in this unit test). Null
+    // workspace → no issue-prefix → issue-ref auto-linking is a no-op here.
+    useCurrentWorkspace: () => null,
     useWorkspacePaths: () => ({
       ...actual.paths.workspace("acme"),
       projectDetail: (projectId: string) => `/projects/${projectId}`,

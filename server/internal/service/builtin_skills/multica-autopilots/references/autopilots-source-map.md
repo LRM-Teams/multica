@@ -7,3 +7,5 @@
 - `resolveAutopilotLeader` resolves squad-assigned autopilots to the squad leader.
 - `AgentReadiness` blocks archived/runtime-unready agents before enqueue.
 - `server/cmd/server/router.go` exposes authenticated `/api/autopilots` routes and unauthenticated webhook ingress `/api/webhooks/autopilots/{token}`.
+- `SyncRunFromTask` (`server/internal/service/autopilot.go`) syncs a `run_only` run to `completed`/`failed` from its task and publishes `EventAutopilotRunDone`.
+- `notifyCreatorOnAutopilotRunDone` (`server/cmd/server/autopilot_listeners.go`) subscribes to `EventAutopilotRunDone` and, on `completed` runs with non-empty output, writes an `autopilot_run_completed` inbox item to the creator (via `resolveAutopilotPausedRecipients`) carrying the run's final output as the body — so `run_only` results reach the creator without an issue. `create_issue` runs (empty task `Result`) are skipped; failures are left to the failure-rate auto-pause monitor.

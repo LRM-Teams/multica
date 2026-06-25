@@ -98,6 +98,44 @@ def run_stub(argv: list[str] | None = None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Multica-side public server (LLM + remote-shell enqueue)
+# ---------------------------------------------------------------------------
+
+
+def run_multica(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="db_bridge.run_multica")
+    parser.add_argument(
+        "--log-level", default="info", help="Logging level (default: info)."
+    )
+    args = parser.parse_args(argv)
+    _configure_logging(args.log_level)
+
+    # Local import keeps the multica server dependency graph out of the stub /
+    # executor entrypoints until the multica server is actually started.
+    from .config import MulticaConfig
+    from .multica_server import create_multica_app
+
+    try:
+        config = MulticaConfig.from_env()
+        app = create_multica_app(config)
+        logger.debug(
+            "starting multica server bind=%s:%d", config.bind_host, config.port
+        )
+        # Binds on config.bind_host (default 0.0.0.0) — MUST sit behind a
+        # reverse proxy / firewall; auth is static API keys only.
+        uvicorn.run(
+            app,
+            host=config.bind_host,
+            port=config.port,
+            log_level="warning",
+            access_log=False,
+        )
+    except Exception:
+        logger.exception("multica server crashed during startup or runtime")
+        raise
+
+
+# ---------------------------------------------------------------------------
 # Executor worker pool
 # ---------------------------------------------------------------------------
 

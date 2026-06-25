@@ -53,6 +53,7 @@ jobs:
       tag: ${{ steps.prep.outputs.tag }}
       backend_image: ${{ steps.prep.outputs.backend_image }}
       web_image: ${{ steps.prep.outputs.web_image }}
+      llm_bridge_image: ${{ steps.prep.outputs.llm_bridge_image }}
     steps:
       # On a merged PR, build the actual merge commit on `dev`; on manual
       # dispatch, build whatever ref was dispatched.
@@ -71,6 +72,7 @@ jobs:
           {
             echo "backend_image=ghcr.io/${owner_lc}/multica-backend"
             echo "web_image=ghcr.io/${owner_lc}/multica-web"
+            echo "llm_bridge_image=ghcr.io/${owner_lc}/multica-llm-bridge"
             echo "tag=sha-${sha}"
           } >> "$GITHUB_OUTPUT"
 
@@ -117,6 +119,22 @@ jobs:
           cache-from: type=gha,scope=deploy-web
           cache-to: type=gha,mode=max,scope=deploy-web
 
+      # The db_bridge multica server. Built from the db_bridge/ subdirectory
+      # (its Dockerfile COPYs relative to that context). Default CMD runs the
+      # stub; the compose service overrides it to run_multica.
+      - name: Build & push llm-bridge
+        uses: docker/build-push-action@v6
+        with:
+          context: db_bridge
+          file: db_bridge/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.prep.outputs.llm_bridge_image }}:latest
+            ${{ steps.prep.outputs.llm_bridge_image }}:${{ steps.prep.outputs.tag }}
+          cache-from: type=gha,scope=deploy-llm-bridge
+          cache-to: type=gha,mode=max,scope=deploy-llm-bridge
+
   deploy:
     needs: build
     # Run after a successful build (push / dispatch-without-tag), OR straight
@@ -160,8 +178,9 @@ jobs:
           owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
           export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
           export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
+          export MULTICA_LLM_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-llm-bridge"
           export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
-          echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) on $(hostname)"
+          echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web + llm-bridge) on $(hostname)"
           compose() {
             docker compose \
               --project-directory "${DEPLOY_DIR}" \
@@ -170,8 +189,8 @@ jobs:
           }
           # postgres + caddy are left running; only the app services roll.
           # The backend container runs `migrate up` on start (entrypoint.sh).
-          compose pull backend frontend
-          compose up -d backend frontend
+          compose pull backend frontend llm-bridge
+          compose up -d backend frontend llm-bridge
 
       - name: Health check (/readyz)
         run: |
@@ -187,3 +206,23 @@ jobs:
           echo "::error::Backend did not pass /readyz within 60s — deploy likely broken."
           docker logs --tail 80 multica-backend-1 || true
           exit 1
+
+      # Non-fatal: the bridge binds 127.0.0.1:${MULTICA_PORT:-9200}. A failure
+      # here warns but does not fail the deploy (the LLM bridge is auxiliary and
+      # may be intentionally unconfigured on some hosts).
+      - name: Health check (llm-bridge /healthz)
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          port="$(grep -E '^MULTICA_PORT=' "${DEPLOY_DIR}/.env" | tail -1 | cut -d= -f2)"
+          port="${port:-9200}"
+          for i in $(seq 1 15); do
+            if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
+              echo "llm-bridge healthy after $((i * 2))s."
+              exit 0
+            fi
+            echo "waiting for llm-bridge readiness... ($i/15)"
+            sleep 2
+          done
+          echo "::warning::llm-bridge did not pass /healthz within 30s."
+          docker logs --tail 80 multica-llm-bridge-1 || true

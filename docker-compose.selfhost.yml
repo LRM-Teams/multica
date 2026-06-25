@@ -121,6 +121,33 @@ services:
       HOSTNAME: "0.0.0.0"
     restart: unless-stopped
 
+  # db_bridge multica-side server: an internet-facing (behind the reverse proxy)
+  # OpenAI-compatible LLM endpoint + remote-shell enqueue API. It routes all work
+  # through the shared Supabase database to the AReaL host; it does not talk to
+  # the local postgres/backend. Auth is static API keys (set in .env). Bound to
+  # 127.0.0.1 only — front it with the same reverse proxy that terminates TLS.
+  llm-bridge:
+    image: ${MULTICA_LLM_BRIDGE_IMAGE:-ghcr.io/multica-ai/multica-llm-bridge}:${MULTICA_IMAGE_TAG:-latest}
+    command: ["python", "-m", "db_bridge.run_multica"]
+    ports:
+      - "127.0.0.1:${MULTICA_PORT:-9200}:${MULTICA_PORT:-9200}"
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      MULTICA_BRIDGE_USER_ID: ${MULTICA_BRIDGE_USER_ID:-}
+      MULTICA_LLM_API_KEYS: ${MULTICA_LLM_API_KEYS:-}
+      MULTICA_SHELL_API_KEYS: ${MULTICA_SHELL_API_KEYS:-}
+      MULTICA_BIND_HOST: "0.0.0.0"
+      MULTICA_PORT: ${MULTICA_PORT:-9200}
+      MULTICA_CHAT_TIMEOUT: ${MULTICA_CHAT_TIMEOUT:-180}
+      MULTICA_UPSTREAM_API_KEY: ${MULTICA_UPSTREAM_API_KEY:-}
+      MULTICA_SHELL_DEFAULT_TIMEOUT: ${MULTICA_SHELL_DEFAULT_TIMEOUT:-300}
+      MULTICA_SHELL_MAX_TIMEOUT: ${MULTICA_SHELL_MAX_TIMEOUT:-3600}
+      MULTICA_SHELL_DEFAULT_CWD: ${MULTICA_SHELL_DEFAULT_CWD:-}
+      BRIDGE_MAX_BODY_BYTES: ${BRIDGE_MAX_BODY_BYTES:-67108864}
+      BRIDGE_POLL_INTERVAL: ${BRIDGE_POLL_INTERVAL:-0.075}
+    restart: unless-stopped
+
 volumes:
   pgdata:
   backend_uploads:

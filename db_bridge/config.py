@@ -427,3 +427,148 @@ class RemoteShellConfig:
     def session_name(self, tmux_id: str) -> str:
         """Stable tmux session name for a remote shell terminal."""
         return f"{self.session_prefix}{tmux_id}"
+
+
+# ---------------------------------------------------------------------------
+# Multica-side server configuration (public internet host)
+# ---------------------------------------------------------------------------
+#
+# The multica server is the first *internet-exposed* bridge surface. It accepts
+# OpenAI-compatible LLM calls and remote-shell enqueue requests from untrusted
+# callers, authenticates them with static API keys, and parks the work in the
+# shared Supabase database for the AReaL-side executor / shell runner to drain.
+# multica cannot reach AReaL directly; every call is DB-routed.
+
+# Default LLM relay timeout mirrors the shared chat_completions channel so the
+# multica server waits as long as le-agent's gateway stub does by default.
+_CHAT_COMPLETIONS_DEFAULT_TIMEOUT: Final = _channels.CHANNELS_BY_NAME[
+    "chat_completions"
+].default_timeout_s
+
+# Identity + auth
+ENV_MULTICA_BRIDGE_USER_ID: Final = "MULTICA_BRIDGE_USER_ID"
+ENV_MULTICA_LLM_API_KEYS: Final = "MULTICA_LLM_API_KEYS"
+ENV_MULTICA_SHELL_API_KEYS: Final = "MULTICA_SHELL_API_KEYS"
+
+# Bind (kept behind the reverse proxy; compose maps 127.0.0.1:<port>)
+ENV_MULTICA_BIND_HOST: Final = "MULTICA_BIND_HOST"
+ENV_MULTICA_PORT: Final = "MULTICA_PORT"
+
+# LLM relay
+ENV_MULTICA_CHAT_TIMEOUT: Final = "MULTICA_CHAT_TIMEOUT"
+# Optional auth replayed to the real AReaL gateway. When unset, the inbound
+# multica API key is stripped and no Authorization is forwarded upstream.
+ENV_MULTICA_UPSTREAM_API_KEY: Final = "MULTICA_UPSTREAM_API_KEY"
+
+# Remote-shell enqueue
+ENV_MULTICA_SHELL_DEFAULT_TIMEOUT: Final = "MULTICA_SHELL_DEFAULT_TIMEOUT"
+ENV_MULTICA_SHELL_MAX_TIMEOUT: Final = "MULTICA_SHELL_MAX_TIMEOUT"
+ENV_MULTICA_SHELL_DEFAULT_CWD: Final = "MULTICA_SHELL_DEFAULT_CWD"
+
+_DEFAULT_MULTICA_BIND_HOST: Final = "0.0.0.0"  # noqa: S104 -- bound behind reverse proxy
+_DEFAULT_MULTICA_PORT: Final = 9200
+_DEFAULT_MULTICA_SHELL_DEFAULT_TIMEOUT: Final = 300
+_DEFAULT_MULTICA_SHELL_MAX_TIMEOUT: Final = 3600
+
+
+def _split_keys(raw: str | None) -> frozenset[str]:
+    """Parse a comma-separated key list into a set of trimmed, non-empty keys."""
+    if not raw:
+        return frozenset()
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+
+
+@dataclass(frozen=True, slots=True)
+class MulticaConfig:
+    """Resolved configuration for the multica-side public bridge server.
+
+    Shares the Supabase service-role credentials with the rest of the bridge but
+    is an independent process with its own auth and bind knobs. Static keys are
+    fail-closed: an empty key set rejects every request to that surface.
+    """
+
+    supabase_url: str
+    supabase_key: str
+    bridge_user_id: str
+    llm_api_keys: frozenset[str] = frozenset()
+    shell_api_keys: frozenset[str] = frozenset()
+    bind_host: str = _DEFAULT_MULTICA_BIND_HOST
+    port: int = _DEFAULT_MULTICA_PORT
+    chat_timeout_s: float = _CHAT_COMPLETIONS_DEFAULT_TIMEOUT
+    max_body_bytes: int = _DEFAULT_MAX_BODY_BYTES
+    upstream_api_key: str | None = None
+    shell_default_timeout_s: int = _DEFAULT_MULTICA_SHELL_DEFAULT_TIMEOUT
+    shell_max_timeout_s: int = _DEFAULT_MULTICA_SHELL_MAX_TIMEOUT
+    shell_default_cwd: str | None = None
+    poll_interval_s: float = _DEFAULT_POLL_INTERVAL
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> MulticaConfig:
+        src: Mapping[str, str] = os.environ if env is None else env
+
+        supabase_url = _get(src, ENV_SUPABASE_URL)
+        supabase_key = _get(src, ENV_SUPABASE_SERVICE_KEY)
+        if not supabase_url or not supabase_key:
+            raise RuntimeError(
+                f"{ENV_SUPABASE_URL} and {ENV_SUPABASE_SERVICE_KEY} must be set."
+            )
+
+        bridge_user_id = _env_uuid(src, ENV_MULTICA_BRIDGE_USER_ID)
+        if bridge_user_id is None:
+            raise RuntimeError(
+                f"{ENV_MULTICA_BRIDGE_USER_ID} must be set to a valid user UUID; "
+                "all multica traffic is enqueued under this single shared user."
+            )
+
+        port = _env_int(src, ENV_MULTICA_PORT, _DEFAULT_MULTICA_PORT)
+        chat_timeout_s = _env_float(
+            src, ENV_MULTICA_CHAT_TIMEOUT, _CHAT_COMPLETIONS_DEFAULT_TIMEOUT
+        )
+        max_body_bytes = _env_int(src, ENV_MAX_BODY_BYTES, _DEFAULT_MAX_BODY_BYTES)
+        shell_default_timeout_s = _env_int(
+            src,
+            ENV_MULTICA_SHELL_DEFAULT_TIMEOUT,
+            _DEFAULT_MULTICA_SHELL_DEFAULT_TIMEOUT,
+        )
+        shell_max_timeout_s = _env_int(
+            src, ENV_MULTICA_SHELL_MAX_TIMEOUT, _DEFAULT_MULTICA_SHELL_MAX_TIMEOUT
+        )
+        poll_interval_s = _env_float(src, ENV_POLL_INTERVAL, _DEFAULT_POLL_INTERVAL)
+
+        _require_positive(ENV_MULTICA_PORT, port)
+        _require_positive(ENV_MULTICA_CHAT_TIMEOUT, chat_timeout_s)
+        _require_positive(ENV_MAX_BODY_BYTES, max_body_bytes)
+        _require_positive(ENV_MULTICA_SHELL_DEFAULT_TIMEOUT, shell_default_timeout_s)
+        _require_positive(ENV_MULTICA_SHELL_MAX_TIMEOUT, shell_max_timeout_s)
+        _require_positive(ENV_POLL_INTERVAL, poll_interval_s)
+        if shell_default_timeout_s > shell_max_timeout_s:
+            raise ValueError(
+                f"{ENV_MULTICA_SHELL_DEFAULT_TIMEOUT} ({shell_default_timeout_s}) must "
+                f"not exceed {ENV_MULTICA_SHELL_MAX_TIMEOUT} ({shell_max_timeout_s})."
+            )
+
+        return cls(
+            supabase_url=supabase_url,
+            supabase_key=supabase_key,
+            bridge_user_id=bridge_user_id,
+            llm_api_keys=_split_keys(_get(src, ENV_MULTICA_LLM_API_KEYS)),
+            shell_api_keys=_split_keys(_get(src, ENV_MULTICA_SHELL_API_KEYS)),
+            bind_host=_get(src, ENV_MULTICA_BIND_HOST) or _DEFAULT_MULTICA_BIND_HOST,
+            port=port,
+            chat_timeout_s=chat_timeout_s,
+            max_body_bytes=max_body_bytes,
+            upstream_api_key=_get(src, ENV_MULTICA_UPSTREAM_API_KEY),
+            shell_default_timeout_s=shell_default_timeout_s,
+            shell_max_timeout_s=shell_max_timeout_s,
+            shell_default_cwd=_get(src, ENV_MULTICA_SHELL_DEFAULT_CWD),
+            poll_interval_s=poll_interval_s,
+        )
+
+    def resolve_shell_timeout(self, requested: int | None) -> int:
+        """Clamp a requested per-command timeout into ``[1, shell_max_timeout_s]``.
+
+        ``None`` or a non-positive request falls back to ``shell_default_timeout_s``.
+        """
+        if requested is None or requested <= 0:
+            return self.shell_default_timeout_s
+        return min(requested, self.shell_max_timeout_s)

@@ -280,6 +280,115 @@ LE_AGENT_API_URL=http://127.0.0.1:9101
 reads run status from the shared `agent_runs` / `tasks` tables (covering the
 dropped SSE stream).
 
+## Multica-side server (public internet, static-key auth)
+
+The **multica server** is a third bridge participant for the topology where
+`multica` runs on the public internet and `AReaL` runs on an intranet that can
+reach multica but **multica cannot reach AReaL**. Both still share one Supabase
+database, so every call is DB-routed exactly like the stub/executor channels —
+multica never connects to AReaL directly.
+
+Unlike the loopback stub servers (which bind `127.0.0.1` and trust their single
+local caller), the multica server is **internet-exposed**, so every route is
+authenticated with static API keys. It offers two surfaces in one process:
+
+- **LLM** — an OpenAI-compatible `POST /v1/chat/completions` (alias
+  `/chat/completions`). It reuses the existing `rpc_chat_completions` table:
+  the request is enqueued under a single fixed `MULTICA_BRIDGE_USER_ID`, the
+  **already-running AReaL executor** claims it and forwards it to the real
+  AReaL gateway (`BRIDGE_GATEWAY_UPSTREAM_URL`), and the response comes back
+  through the DB. Only models starting with `areal/` are accepted (others →
+  `400`); streaming (`stream: true`) is not supported (`400`).
+- **Remote shell** — `/shell/commands` endpoints that enqueue / inspect /
+  cancel rows in `areal_remote_commands`. The **existing AReaL shell runner**
+  (`run_shell_runner`) claims and executes them unchanged.
+
+```mermaid
+flowchart LR
+  C[external caller / multica] -->|"Bearer key
+POST /v1/chat/completions"| M[multica server]
+  C2[caller] -->|"Bearer key
+POST /shell/commands"| M
+  subgraph supa[Supabase shared]
+    T1[rpc_chat_completions]
+    T2[areal_remote_commands]
+  end
+  M -- insert+poll --> T1
+  M -- insert+poll --> T2
+  subgraph areal[AReaL intranet]
+    E[executor] --> GW[real AReaL gateway]
+    R[shell runner] --> TM[tmux]
+  end
+  T1 -- claim/complete --> E
+  T2 -- claim/complete --> R
+  M -- response --> C
+  M -- status --> C2
+```
+
+> **No AReaL-side changes.** The AReaL executor already claims
+> `rpc_chat_completions` rows for all users (its `BRIDGE_USER_ID` is unset), and
+> the AReaL shell runner already drains `areal_remote_commands`. Adding the
+> multica server requires no change to the executor, the runner, or `.env.areal`.
+
+> **Trust boundary.** `MULTICA_LLM_API_KEYS` and `MULTICA_SHELL_API_KEYS` are
+> **separate** key sets on purpose: the shell endpoint enqueues arbitrary code
+> that the AReaL runner executes on the trusted host. A shell key is effectively
+> remote code execution on the AReaL box. Treat it as highly sensitive, keep the
+> server behind a TLS reverse proxy, and use a **distinct**
+> `MULTICA_BRIDGE_USER_ID` from le-agent's so external traffic stays isolated in
+> the shared tables. Auth is fail-closed: an empty key set rejects everything.
+
+### Running it (multica host)
+
+Apply `schema.sql` once (idempotent), then copy `.env.multica.example` to
+`.env.multica`, set the keys, and run behind a reverse proxy:
+
+```bash
+cd db_bridge && set -a && source .env.multica && set +a
+uv run python -m db_bridge.run_multica
+```
+
+A `/healthz` endpoint returns `{"status": "ok", "service": "multica"}`.
+
+Example calls (through the proxy that fronts `MULTICA_PORT`):
+
+```bash
+# LLM (only areal/ models; no streaming)
+curl -sS https://multica.example.com/v1/chat/completions \
+  -H "Authorization: Bearer $MULTICA_LLM_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"areal/qwen3","messages":[{"role":"user","content":"hi"}]}'
+
+# Remote shell: enqueue → poll status → cancel
+curl -sS https://multica.example.com/shell/commands \
+  -H "Authorization: Bearer $MULTICA_SHELL_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"tmux_id":"debug-gpu","command":"nvidia-smi","timeout_seconds":120}'
+curl -sS https://multica.example.com/shell/commands/<id> \
+  -H "Authorization: Bearer $MULTICA_SHELL_KEY"
+curl -sS -X POST https://multica.example.com/shell/commands/<id>/cancel \
+  -H "Authorization: Bearer $MULTICA_SHELL_KEY"
+```
+
+### Configuration (multica server)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SUPABASE_URL` | — (required) | Shared Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | — (required) | Service-role key (RLS bypass) |
+| `MULTICA_BRIDGE_USER_ID` | — (required) | Fixed user UUID all multica traffic is enqueued under (use a distinct value from le-agent's) |
+| `MULTICA_LLM_API_KEYS` | — | Comma-separated static keys for the LLM endpoint (empty = reject all) |
+| `MULTICA_SHELL_API_KEYS` | — | Comma-separated static keys for the shell endpoint (empty = reject all) |
+| `MULTICA_BIND_HOST` | `0.0.0.0` | Bind address (keep behind a reverse proxy) |
+| `MULTICA_PORT` | `9200` | Bind port |
+| `MULTICA_CHAT_TIMEOUT` | `180` | Seconds to wait for the AReaL response before `504` |
+| `MULTICA_UPSTREAM_API_KEY` | — | Optional auth injected toward the real AReaL gateway; the inbound multica key is always stripped first |
+| `MULTICA_SHELL_DEFAULT_TIMEOUT` | `300` | Default per-command timeout (seconds) |
+| `MULTICA_SHELL_MAX_TIMEOUT` | `3600` | Upper bound a requested command timeout is clamped to |
+| `MULTICA_SHELL_DEFAULT_CWD` | — | Working directory when a command omits `cwd` |
+| `BRIDGE_MAX_BODY_BYTES` | `67108864` | Reject (413) request bodies larger than this |
+| `BRIDGE_POLL_INTERVAL` | `0.075` | DB poll interval while waiting for a response |
+
 ## Configuration (environment variables)
 
 | Variable | Default | Purpose |

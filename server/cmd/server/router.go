@@ -977,6 +977,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 			r.Get("/api/chat/pending-tasks", h.ListPendingChatTasks)
+			// Agent-initiated 1:1 DM to the human it's working for. Agent-only
+			// (resolveActor must be "agent"); human callers get 403.
+			r.Post("/api/chat/agent-dm", h.AgentDirectMessage)
 
 			r.Route("/api/channels", func(r chi.Router) {
 				r.Get("/", h.ListChannels)

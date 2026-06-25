@@ -293,3 +293,38 @@ func TestDMDispatch_SelfTriggerGuard(t *testing.T) {
 		t.Fatalf("self-trigger guard failed: agent's own message created %d sessions (want 0)", n)
 	}
 }
+
+// TestCreateDMChannel_RollsBackOnMemberFailure locks the all-or-nothing
+// transaction: if a channel_member insert fails (here, an invalid member_type
+// trips the CHECK), the whole createDMChannel must roll back so no member-less
+// dm channel survives. Guards against the helper silently regressing to a
+// non-transactional write that would leave an invisible, unrecoverable dead DM.
+func TestCreateDMChannel_RollsBackOnMemberFailure(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	cleanupDMArtifacts(t)
+	canonical := "dm:test-rollback:" + testUserID
+
+	rec := httptest.NewRecorder()
+	_, ok := testHandler.createDMChannel(ctx, rec, testWorkspaceID, testUserID, canonical, []dmMember{
+		{memberType: "user", memberID: parseUUID(testUserID)},
+		{memberType: "bogus", memberID: parseUUID(testUserID)}, // violates channel_member CHECK → insert fails
+	})
+	if ok {
+		t.Fatal("createDMChannel should return false when a member insert violates the CHECK constraint")
+	}
+	var channels int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel WHERE workspace_id=$1 AND name=$2`, testWorkspaceID, canonical).Scan(&channels); err != nil {
+		t.Fatalf("count channels: %v", err)
+	}
+	if channels != 0 {
+		t.Fatalf("transaction not rolled back: %d channel row(s) for %q survived (member-less dead DM)", channels, canonical)
+	}
+	var members int
+	testPool.QueryRow(ctx, `SELECT count(*) FROM channel_member cm JOIN channel ch ON ch.id=cm.channel_id WHERE ch.workspace_id=$1 AND ch.name=$2`, testWorkspaceID, canonical).Scan(&members)
+	if members != 0 {
+		t.Fatalf("transaction not rolled back: %d orphan member row(s) for %q survived", members, canonical)
+	}
+}

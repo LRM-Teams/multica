@@ -28,8 +28,19 @@ The chain is: trigger fires (`schedule`, `webhook`, or `manual`) -> `autopilot_r
 Execution modes:
 
 - `create_issue` creates a Multica issue, making the run visible as issue state.
-- `run_only` creates an agent task directly. No issue is created; any durable
-  report location has to come from other task context or instructions.
+- `run_only` creates an agent task directly. No issue is created.
+
+**Run output delivery.** When a `run_only` run completes, its final task output
+is automatically delivered to the autopilot **creator's inbox** (an
+`autopilot_run_completed` inbox item carrying the output as the body). So the
+creator always receives the result without you wiring a delivery path — the
+practical consequence is: **end a `run_only` run with a clean, self-contained
+final message** (the report itself), because that final output IS what the
+creator reads. Don't rely on "send a report to <person>" phrasing in the
+prompt; there is no direct user-DM channel, and the inbox delivery already
+covers the creator. If you need the result visible to people *other* than the
+creator, or tracked as work, prefer `create_issue` (or have the run post a
+comment / channel message itself).
 
 `issue-title-template` only supports `{{date}}`. Do not invent `{{trigger_id}}`, `{{branch}}`, or other variables.
 

@@ -865,6 +865,10 @@ export function useRealtimeSync(
       invalidateChatMessageQueries(qc, payload.chat_session_id);
       qc.invalidateQueries({ queryKey: chatKeys.pendingTask(payload.chat_session_id) });
       invalidatePendingAggregate();
+      // A new message can flip has_unread and reorder the session list — e.g.
+      // an agent-initiated DM arriving in a thread the user isn't viewing.
+      // Refresh the lists so the contact row / FAB badge update live.
+      invalidateSessionLists();
     });
 
     const unsubChatDone = ws.on("chat:done", (p) => {

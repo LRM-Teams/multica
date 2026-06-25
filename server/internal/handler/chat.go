@@ -121,6 +121,16 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 
 	status := r.URL.Query().Get("status")
 
+	// Exclude channel-backed sessions: a channel agent session reuses a
+	// chat_session (creator = the channel initiator, title "#channel"), so
+	// without this filter every channel the user is in would surface as a fake
+	// 1:1 DM. The chat panel is for genuine human↔agent DMs only.
+	channelBound, err := h.channelBoundChatSessionIDs(r.Context(), workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve chat sessions")
+		return
+	}
+
 	// Two call sites → two row types with identical shape. Collect into a
 	// common response slice via small per-branch loops.
 	var resp []ChatSessionResponse
@@ -136,6 +146,9 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 		resp = make([]ChatSessionResponse, 0, len(rows))
 		for _, s := range rows {
 			if _, ok := allowed[uuidToString(s.AgentID)]; !ok {
+				continue
+			}
+			if channelBound[uuidToString(s.ID)] {
 				continue
 			}
 			resp = append(resp, ChatSessionResponse{
@@ -164,6 +177,9 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 			if _, ok := allowed[uuidToString(s.AgentID)]; !ok {
 				continue
 			}
+			if channelBound[uuidToString(s.ID)] {
+				continue
+			}
 			resp = append(resp, ChatSessionResponse{
 				ID:          uuidToString(s.ID),
 				WorkspaceID: uuidToString(s.WorkspaceID),
@@ -179,6 +195,30 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	h.fillChatSessionProjects(r.Context(), resp)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// channelBoundChatSessionIDs returns the set of chat_session ids in a workspace
+// that back a channel agent session. These are NOT 1:1 DMs and must be hidden
+// from the chat/DM panel and from agent-DM session resolution.
+func (h *Handler) channelBoundChatSessionIDs(ctx context.Context, workspaceID string) (map[string]bool, error) {
+	rows, err := h.DB.Query(ctx, `
+		SELECT cas.chat_session_id
+		FROM channel_agent_session cas
+		JOIN channel ch ON ch.id = cas.channel_id
+		WHERE ch.workspace_id = $1`, parseUUID(workspaceID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[uuidToString(id)] = true
+	}
+	return out, rows.Err()
 }
 
 func (h *Handler) loadChatSessionForUser(w http.ResponseWriter, r *http.Request, userID, workspaceID, sessionID string) (db.ChatSession, bool) {

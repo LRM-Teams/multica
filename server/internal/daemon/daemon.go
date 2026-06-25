@@ -2678,15 +2678,23 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if task.Agent != nil {
 		agentID = task.Agent.ID
 		agentName = task.Agent.Name
-		skills = task.Agent.Skills
+		skills = append([]SkillData(nil), task.Agent.Skills...)
 		instructions = task.Agent.Instructions
 	}
 
+	var enabledPiSkills []SkillData
 	if provider == "pi" && task.WorkspaceID != "" && agentID != "" {
-		if err := ensurePiAgentRoot(piAgentRoot(d.cfg, task.WorkspaceID, agentID)); err != nil {
+		agentRoot := piAgentRoot(d.cfg, task.WorkspaceID, agentID)
+		if err := ensurePiAgentRoot(agentRoot); err != nil {
 			taskLog.Warn("pi agent root creation failed", "error", err)
+		} else {
+			enabledPiSkills, err = loadEnabledPiSkills(agentRoot)
+			if err != nil {
+				taskLog.Warn("pi enabled skill load failed", "error", err)
+			}
 		}
 	}
+	skills = mergeSkillsForEnv(skills, enabledPiSkills)
 
 	// Prepare isolated execution environment.
 	// Repos are passed as metadata only — the agent checks them out on demand
@@ -3775,6 +3783,39 @@ func convertSkillsForEnv(skills []SkillData) []execenv.SkillContextForEnv {
 		}
 	}
 	return result
+}
+
+func mergeSkillsForEnv(primary, secondary []SkillData) []SkillData {
+	if len(primary) == 0 && len(secondary) == 0 {
+		return nil
+	}
+	merged := make([]SkillData, 0, len(primary)+len(secondary))
+	seen := make(map[string]struct{}, len(primary)+len(secondary))
+	for _, skill := range primary {
+		name := strings.TrimSpace(skill.Name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, skill)
+	}
+	for _, skill := range secondary {
+		name := strings.TrimSpace(skill.Name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, skill)
+	}
+	return merged
 }
 
 // composeOpenclawIncludeRoots returns the value the daemon should set for

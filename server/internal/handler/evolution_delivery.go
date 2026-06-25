@@ -29,6 +29,12 @@ type EvolutionDeliveryResponse struct {
 	Content          string                       `json:"content"`
 	Metadata         json.RawMessage              `json:"metadata"`
 	Applies          json.RawMessage              `json:"applies"`
+	DeliveredPath    string                       `json:"delivered_path,omitempty"`
+	Error            string                       `json:"error,omitempty"`
+	DecidedAt        *string                      `json:"decided_at,omitempty"`
+	DeliveredAt      *string                      `json:"delivered_at,omitempty"`
+	CreatedAt        string                       `json:"created_at"`
+	UpdatedAt        string                       `json:"updated_at"`
 	Tags             []string                     `json:"tags,omitempty"`
 	Tools            []string                     `json:"tools,omitempty"`
 	TaskTypes        []string                     `json:"task_types,omitempty"`
@@ -145,6 +151,90 @@ func (h *Handler) DecideEvolutionDelivery(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"delivery": delivery})
 }
 
+func (h *Handler) ListAgentGeneratedSkillDeliveries(w http.ResponseWriter, r *http.Request) {
+	agent, ok := h.loadAgentForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	if !h.canManageAgent(w, r, agent) {
+		return
+	}
+	limit := int32(50)
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 100 {
+			limit = int32(parsed)
+		}
+	}
+	rows, err := h.Queries.ListGeneratedEvolutionSkillDeliveriesByAgent(r.Context(), db.ListGeneratedEvolutionSkillDeliveriesByAgentParams{WorkspaceID: agent.WorkspaceID, TargetAgentID: agent.ID, LimitCount: limit})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list generated skill deliveries")
+		return
+	}
+	items := make([]EvolutionDeliveryResponse, 0, len(rows))
+	for _, row := range rows {
+		files, err := h.Queries.ListSharedEvolutionUnitFiles(r.Context(), db.ListSharedEvolutionUnitFilesParams{WorkspaceID: agent.WorkspaceID, UnitID: row.UnitID, VersionID: row.VersionID})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list generated skill files")
+			return
+		}
+		items = append(items, evolutionDeliveryResponse(row, files))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deliveries": items})
+}
+
+func (h *Handler) DecideAgentGeneratedSkillDelivery(w http.ResponseWriter, r *http.Request) {
+	agent, ok := h.loadAgentForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	if !h.canManageAgent(w, r, agent) {
+		return
+	}
+	var req evolutionDeliveryStatusRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	decision := strings.TrimSpace(req.Decision)
+	if decision != "accepted" && decision != "ignored" && decision != "rejected" {
+		writeError(w, http.StatusBadRequest, "invalid decision")
+		return
+	}
+	deliveryID, ok := parseDeliveryIDOrBadRequest(w, chi.URLParam(r, "deliveryId"))
+	if !ok {
+		return
+	}
+	delivery, err := h.Queries.UpdateGeneratedEvolutionSkillDeliveryDecision(r.Context(), db.UpdateGeneratedEvolutionSkillDeliveryDecisionParams{ID: deliveryID, WorkspaceID: agent.WorkspaceID, TargetAgentID: agent.ID, Status: decision})
+	if err != nil {
+		writeDeliveryMutationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"delivery": delivery})
+}
+
+func (h *Handler) ListAgentEvolutionMemoryDeliveries(w http.ResponseWriter, r *http.Request) {
+	agent, ok := h.loadAgentForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	limit := int32(50)
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 100 {
+			limit = int32(parsed)
+		}
+	}
+	rows, err := h.Queries.ListEvolutionMemoryDeliveriesByAgent(r.Context(), db.ListEvolutionMemoryDeliveriesByAgentParams{WorkspaceID: agent.WorkspaceID, TargetAgentID: agent.ID, LimitCount: limit})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list evolution memories")
+		return
+	}
+	items := make([]EvolutionDeliveryResponse, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, evolutionDeliveryResponse(row, nil))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deliveries": items})
+}
+
 func evolutionDeliveryResponse(row db.ListPendingEvolutionDeliveriesByAgentRow, files []db.SharedEvolutionUnitFile) EvolutionDeliveryResponse {
 	outFiles := make([]EvolutionDeliveryFileReply, 0, len(files))
 	for _, file := range files {
@@ -166,6 +256,12 @@ func evolutionDeliveryResponse(row db.ListPendingEvolutionDeliveriesByAgentRow, 
 		Content:          row.Content,
 		Metadata:         json.RawMessage(row.Metadata),
 		Applies:          json.RawMessage(row.Applies),
+		DeliveredPath:    row.DeliveredPath,
+		Error:            row.Error,
+		DecidedAt:        timestampToPtr(row.DecidedAt),
+		DeliveredAt:      timestampToPtr(row.DeliveredAt),
+		CreatedAt:        timestampToString(row.CreatedAt),
+		UpdatedAt:        timestampToString(row.UpdatedAt),
 		Tags:             row.Tags,
 		Tools:            row.Tools,
 		TaskTypes:        row.TaskTypes,

@@ -339,7 +339,25 @@
       "add_dialog_confirm_one": "Add {{count}} skill",
       "add_dialog_confirm_other": "Add {{count}} skills",
       "add_dialog_cancel": "Cancel",
-      "add_failed_toast": "Failed to add skill"
+      "add_failed_toast": "Failed to add skill",
+      "generated_title": "Generated skills",
+      "generated_intro": "Skills this agent learned through the Pi evolution flow. Accept a generated skill to enable it locally for future Pi tasks.",
+      "generated_count": "{{count}} generated",
+      "generated_loading": "Loading generated skills…",
+      "generated_empty": "No generated skills yet.",
+      "generated_decision_failed_toast": "Failed to update generated skill decision",
+      "generated_accept_action": "Accept",
+      "generated_enabled_action": "Enabled",
+      "generated_ignore_action": "Ignore",
+      "generated_status_enabled": "Enabled",
+      "generated_status": {
+        "pending": "Pending",
+        "delivered": "Delivered",
+        "accepted": "Accepted",
+        "ignored": "Ignored",
+        "rejected": "Rejected",
+        "failed": "Failed"
+      }
     },
     "integrations": {
       "intro": "Connect this agent to external chat platforms so people can work with it where they already are.",
@@ -392,7 +410,19 @@
       "empty_title": "No memories synced",
       "empty_hint": "Memory files from this agent runtime will appear here after the next sync.",
       "empty_content": "No content",
-      "updated_at": "Updated {{value}}"
+      "updated_at": "Updated {{value}}",
+      "evolution_title": "Generated memories",
+      "evolution_intro": "Memory-like units delivered through the Pi evolution flow. They land in the local Pi inbox for review and reuse.",
+      "evolution_loading": "Loading generated memories…",
+      "evolution_empty": "No generated memories yet.",
+      "evolution_status": {
+        "pending": "Pending",
+        "delivered": "Delivered",
+        "accepted": "Accepted",
+        "ignored": "Ignored",
+        "rejected": "Rejected",
+        "failed": "Failed"
+      }
     }
   },
   "char_counter": {

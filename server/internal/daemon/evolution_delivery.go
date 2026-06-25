@@ -56,6 +56,14 @@ func (d *Daemon) syncEvolutionDeliveriesForRuntime(ctx context.Context, rt Runti
 				_ = d.client.FailEvolutionDelivery(ctx, rt.ID, agentID, delivery.ID, err.Error())
 				continue
 			}
+			if delivery.DeliveryType == "generated" && delivery.Status == "accepted" {
+				deliveredPath, err = d.enableGeneratedSkillDelivery(rt.WorkspaceID, agentID, delivery, deliveredPath)
+				if err != nil {
+					d.logger.Warn("generated skill enable failed", "runtime_id", rt.ID, "agent_id", agentID, "delivery_id", delivery.ID, "error", err)
+					_ = d.client.FailEvolutionDelivery(ctx, rt.ID, agentID, delivery.ID, err.Error())
+					continue
+				}
+			}
 			if err := d.client.MarkEvolutionDeliveryDelivered(ctx, rt.ID, agentID, delivery.ID, deliveredPath); err != nil {
 				return err
 			}
@@ -122,6 +130,58 @@ func writeGeneratedSkillDelivery(agentRoot string, delivery EvolutionDelivery) (
 		return "", err
 	}
 	return unitDir, nil
+}
+
+func (d *Daemon) enableGeneratedSkillDelivery(workspaceID, agentID string, delivery EvolutionDelivery, generatedDir string) (string, error) {
+	enabledRoot := filepath.Join(piAgentRoot(d.cfg, workspaceID, agentID), "skills", "enabled")
+	if err := os.MkdirAll(enabledRoot, 0o755); err != nil {
+		return "", err
+	}
+	enabledDir := filepath.Join(enabledRoot, safePathName(delivery.UnitID))
+	if err := os.RemoveAll(enabledDir); err != nil {
+		return "", err
+	}
+	if err := copyDir(generatedDir, enabledDir); err != nil {
+		return "", err
+	}
+	metadataPath := filepath.Join(enabledDir, ".multica-delivery.json")
+	metadata, err := json.MarshalIndent(map[string]any{
+		"delivery_id": delivery.ID,
+		"unit_id":     delivery.UnitID,
+		"version_id":  delivery.VersionID,
+		"enabled":     true,
+	}, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(metadataPath, metadata, 0o644); err != nil {
+		return "", err
+	}
+	return enabledDir, nil
+}
+
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return os.MkdirAll(dst, 0o755)
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode().Perm())
+	})
 }
 
 func writeMemoryInboxDelivery(agentRoot string, delivery EvolutionDelivery) (string, error) {

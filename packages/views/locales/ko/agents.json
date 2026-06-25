@@ -339,7 +339,25 @@
       "add_dialog_confirm_one": "스킬 {{count}}개 추가",
       "add_dialog_confirm_other": "스킬 {{count}}개 추가",
       "add_dialog_cancel": "취소",
-      "add_failed_toast": "스킬을 추가하지 못했습니다"
+      "add_failed_toast": "스킬을 추가하지 못했습니다",
+      "generated_title": "생성된 스킬",
+      "generated_intro": "이 에이전트가 Pi evolution 흐름에서 학습한 스킬입니다. 수락하면 로컬에서 활성화되어 이후 Pi 작업에 사용됩니다.",
+      "generated_count": "생성 {{count}}개",
+      "generated_loading": "생성된 스킬을 불러오는 중…",
+      "generated_empty": "아직 생성된 스킬이 없습니다.",
+      "generated_decision_failed_toast": "생성 스킬 결정을 업데이트하지 못했습니다",
+      "generated_accept_action": "수락",
+      "generated_enabled_action": "활성화됨",
+      "generated_ignore_action": "무시",
+      "generated_status_enabled": "활성화됨",
+      "generated_status": {
+        "pending": "대기 중",
+        "delivered": "전달됨",
+        "accepted": "수락됨",
+        "ignored": "무시됨",
+        "rejected": "거부됨",
+        "failed": "실패"
+      }
     },
     "integrations": {
       "intro": "이 에이전트를 외부 채팅 플랫폼에 연결해 팀원이 평소 사용하는 도구에서 바로 함께 작업할 수 있도록 합니다.",
@@ -392,7 +410,19 @@
       "empty_title": "동기화된 메모리가 없습니다",
       "empty_hint": "이 에이전트 런타임의 메모리 파일은 다음 동기화 후 여기에 표시됩니다.",
       "empty_content": "내용 없음",
-      "updated_at": "업데이트 {{value}}"
+      "updated_at": "업데이트 {{value}}",
+      "evolution_title": "생성된 메모리",
+      "evolution_intro": "Pi evolution 흐름으로 전달된 메모리 계열 유닛입니다. 로컬 Pi inbox에 들어가 검토와 재사용에 쓰입니다.",
+      "evolution_loading": "생성된 메모리를 불러오는 중…",
+      "evolution_empty": "아직 생성된 메모리가 없습니다.",
+      "evolution_status": {
+        "pending": "대기 중",
+        "delivered": "전달됨",
+        "accepted": "수락됨",
+        "ignored": "무시됨",
+        "rejected": "거부됨",
+        "failed": "실패"
+      }
     }
   },
   "char_counter": {

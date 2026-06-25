@@ -30,6 +30,7 @@ Curator / matcher
 Local Pi agent root
   inbox/memory/<unit_id>.md
   skills/generated/<unit_id>/
+  skills/enabled/<unit_id>/      after delivery decision = accepted
 ```
 
 It does not cover the global shared-skill scanner under `~/.pi/share/skills`, which syncs directly into workspace skills.
@@ -341,13 +342,13 @@ Important fields:
 
 ## Downflow Back To Pi
 
-The daemon has a Pi-only delivery loop. It polls pending deliveries through:
+The daemon has a Pi-only delivery loop. It polls deliveries through:
 
 ```http
 GET /api/daemon/runtimes/{runtimeId}/evolution/deliveries?agent_id=<agent_id>
 ```
 
-The server returns active pending deliveries plus shared unit metadata and files.
+The server returns active pending deliveries plus accepted generated skill deliveries that have not yet been enabled locally, together with shared unit metadata and files.
 
 ### Skill Delivery
 
@@ -363,7 +364,7 @@ It also writes metadata:
 <agent_root>/skills/generated/<unit_id>/.multica-delivery.json
 ```
 
-The metadata currently contains:
+The generated metadata contains:
 
 ```json
 {
@@ -374,7 +375,30 @@ The metadata currently contains:
 }
 ```
 
-Generated skills are therefore delivered but not automatically enabled.
+Generated skills are intentionally delivered inactive first. They become active only after the delivery decision is `accepted`.
+
+### Accepted Generated Skill Enablement
+
+When a skill delivery has `delivery_type == "generated"` and `status == "accepted"`, the daemon mirrors the generated bundle into:
+
+```text
+<agent_root>/skills/enabled/<unit_id>/
+```
+
+The enabled copy receives metadata with `enabled: true`:
+
+```json
+{
+  "delivery_id": "...",
+  "unit_id": "...",
+  "version_id": "...",
+  "enabled": true
+}
+```
+
+The original generated bundle remains in `skills/generated/<unit_id>/` with `enabled: false`, so `generated` is the inactive delivered archive and `enabled` is the local active set.
+
+On Pi task startup, the daemon scans `<agent_root>/skills/enabled/*/SKILL.md`, parses frontmatter, loads supporting files, and merges those skills into the task skill context. Database-assigned agent skills win when names collide.
 
 ### Memory Delivery
 
@@ -394,7 +418,7 @@ After local write succeeds, the daemon marks delivery as delivered:
 POST /api/daemon/runtimes/{runtimeId}/evolution/deliveries/{deliveryId}/delivered?agent_id=<agent_id>
 ```
 
-The server updates `evolution_unit_delivery.status` to `delivered` and records `delivered_path`.
+For pending deliveries, the server updates `evolution_unit_delivery.status` to `delivered` and records `delivered_path`. For accepted deliveries, the server preserves `status='accepted'` and updates `delivered_path` to the enabled skill directory, so the acceptance decision remains visible while repeated polling stops once the path points under `skills/enabled/`.
 
 If local write fails, the daemon calls:
 
@@ -454,17 +478,23 @@ The repository contains `agent_shared_skill` tables and sync handler code, but t
    GET /api/daemon/runtimes/{runtimeId}/evolution/deliveries
 
 7. Daemon writes local downflow:
-   skills/generated/<unit_id>/       for skills
+   skills/generated/<unit_id>/       for pending skills
    inbox/memory/<unit_id>.md         for memory-like units
 
-8. Daemon marks delivery state:
-   delivered / failed / accepted / ignored / rejected
+8. User/service records a delivery decision:
+   accepted / ignored / rejected
+
+9. Daemon enables accepted generated skills:
+   skills/enabled/<unit_id>/
+
+10. Daemon task startup injects enabled skills into the Pi task environment:
+   <task_workdir>/.pi/skills/<skill_name>/SKILL.md
 ```
 
 ## Current Limitations
 
 - Raw Pi memory files are not mirrored to the server; only explicit candidate JSONL entries are uploaded.
 - Matcher currently targets only the source agent, not all potentially relevant agents in the workspace.
-- Generated skills are delivered with `enabled: false`; there is no automatic enablement in this flow.
+- Generated skills are not enabled at initial delivery time; enablement requires an explicit `accepted` delivery decision.
 - `agent_memory` and `agent_shared_skill` tables exist, but the currently wired Pi sharing path uses the evolution tables.
 - Governance is deterministic MVP logic, not an LLM curator.

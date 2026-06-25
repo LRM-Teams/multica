@@ -131,6 +131,7 @@ import type {
   IssueReviewStats,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
+import type { DMItem, CreateOrFindDMBody } from "../dm/types";
 import type {
   CloudRuntimeNode,
   CreateCloudRuntimeNodeRequest,
@@ -1731,6 +1732,22 @@ export class ApiClient {
 
   async markChatSessionRead(sessionId: string): Promise<void> {
     await this.fetch(`/api/chat/sessions/${sessionId}/read`, { method: "POST" });
+  }
+
+  // ─── Direct messages (1-on-1) ─────────────────────────────────────────────
+  // The unified DM list unions kind='dm' channels with the caller's legacy
+  // chat_sessions; each item's `source` routes message read/send to either the
+  // channel stack or the chat stack. There is no dedicated DM-messages route.
+
+  async listDMs(): Promise<DMItem[]> {
+    return this.fetch("/api/dm");
+  }
+
+  async createOrFindDM(body: CreateOrFindDMBody): Promise<DMItem> {
+    return this.fetch("/api/dm", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   }
 
   async listChannels(): Promise<Channel[]> {

@@ -105,5 +105,13 @@
   "message": {
     "agent_badge": "Agent",
     "feishu_badge": "Feishu"
+  },
+  "dm": {
+    "heading": "ダイレクトメッセージ",
+    "empty": "ダイレクトメッセージはまだありません。",
+    "send_message": "メッセージを送信",
+    "files": "ファイル",
+    "thread_empty": "まだメッセージがありません。あいさつしてみましょう。",
+    "self_label": "あなた"
   }
 }

@@ -414,6 +414,7 @@
   "profile_card": {
     "unavailable": "에이전트를 사용할 수 없습니다",
     "detail_link": "자세히 →",
+    "send_message": "메시지 보내기",
     "runtime_label": "런타임",
     "skills_label": "스킬",
     "owner_label": "소유자",

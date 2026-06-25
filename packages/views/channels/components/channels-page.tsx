@@ -7,6 +7,7 @@ import {
   ChevronRight,
   FileText,
   MessageCircle,
+  MessageSquare,
   MoreHorizontal,
   Paperclip,
   PieChart,
@@ -38,6 +39,8 @@ import {
   useSetChannelTyping,
 } from "@multica/core/channels";
 import { useAuthStore } from "@multica/core/auth";
+import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
+import type { DMItem } from "@multica/core/dm";
 import { api } from "@multica/core/api";
 import { useFileUpload, type UploadResult } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -48,6 +51,7 @@ import { agentListOptions, memberListOptions } from "@multica/core/workspace/que
 import type {
   Channel,
   ChannelActiveTask,
+  ChannelMember,
   ChannelMemberBrief,
   ChannelTypingPayload,
 } from "@multica/core/types";
@@ -103,8 +107,10 @@ import { ChannelMessageBubble } from "./channel-message-bubble";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
+import { DmList } from "./dm-list";
+import { DmConversation } from "./dm-conversation";
 
-interface TypingActor {
+export interface TypingActor {
   key: string;
   channelId: string;
   actorName: string;
@@ -185,7 +191,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
   );
 }
 
-function TypingIndicator({ actors }: { actors: TypingActor[] }) {
+export function TypingIndicator({ actors }: { actors: TypingActor[] }) {
   const { t } = useT("channels");
   if (actors.length === 0) return null;
   const names = actors.map((a) => a.actorName);
@@ -213,7 +219,7 @@ function TypingIndicator({ actors }: { actors: TypingActor[] }) {
 // broadcast, this reflects the agent's recoverable task lifecycle stage. Unknown
 // statuses downgrade to the generic "thinking" label (enum-drift rule) rather
 // than rendering nothing.
-function AgentWorkingIndicator({ tasks }: { tasks: ChannelActiveTask[] }) {
+export function AgentWorkingIndicator({ tasks }: { tasks: ChannelActiveTask[] }) {
   const { t } = useT("channels");
   if (tasks.length === 0) return null;
   const labelFor = (status: string): string => {
@@ -272,6 +278,10 @@ export function ChannelsPage() {
   >(null);
   // Initialize from ?channel= so shared deep links open the right channel.
   const [activeId, setActiveId] = useState<string | null>(() => searchParams.get("channel"));
+  // Selected DM (Direct Messages region). Mutually exclusive with the group
+  // selection: opening a DM clears `activeId`, opening a group clears this.
+  // Seeded from ?dm= so create-or-find entry points can deep-link a DM open.
+  const [activeDmId, setActiveDmId] = useState<string | null>(() => searchParams.get("dm"));
   // ?message= deep-links to a specific message (e.g. from an overview mention).
   // We scroll to and briefly highlight it, then clear so it fades out.
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(
@@ -301,13 +311,22 @@ export function ChannelsPage() {
   // Mobile is list-first: `active` resolves only from an explicit selection
   // (click or ?channel= deep link), so the list shows until the user opens a
   // channel and the Back button (which clears activeId) returns to it.
-  const active = useMemo(
-    () =>
-      isMobile
-        ? (channels.find((c) => c.id === activeId) ?? null)
-        : (channels.find((c) => c.id === activeId) ?? channels[0] ?? null),
-    [channels, activeId, isMobile],
+  const { data: dms = [] } = useQuery(dmListOptions(wsId));
+  // Resolve the selected DM from the list. A DM selection takes priority over a
+  // group selection (the two are mutually exclusive via the select handlers),
+  // so when a DM is active we don't auto-resolve a group below.
+  const activeDm = useMemo(
+    () => (activeDmId ? dms.find((d) => d.id === activeDmId) ?? null : null),
+    [dms, activeDmId],
   );
+  // Desktop auto-selects the first channel only when nothing else is open —
+  // never override an active DM selection. Mobile is list-first (no auto-open).
+  const active = useMemo(() => {
+    if (activeDmId) return null;
+    return isMobile
+      ? (channels.find((c) => c.id === activeId) ?? null)
+      : (channels.find((c) => c.id === activeId) ?? channels[0] ?? null);
+  }, [channels, activeId, activeDmId, isMobile]);
   const { data: messages = [] } = useQuery(channelMessagesOptions(active?.id ?? ""));
   const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
@@ -319,6 +338,7 @@ export function ChannelsPage() {
   const setTyping = useSetChannelTyping();
   const addMembers = useAddChannelMembers();
   const removeMember = useRemoveChannelMember();
+  const createOrFindDm = useCreateOrFindDM();
   const { uploadWithToast } = useFileUpload(api);
   // Maps the URL the editor wrote into the markdown body → attachment row id,
   // so on send we bind only attachments still referenced in the content.
@@ -398,8 +418,10 @@ export function ChannelsPage() {
     const onMobileViewport =
       isMobile || (typeof window !== "undefined" && window.innerWidth < 768);
     if (onMobileViewport) return;
+    // Don't auto-open a group when a DM is the active selection.
+    if (activeDmId) return;
     if (!activeId && channels[0]) setActiveId(channels[0].id);
-  }, [activeId, channels, isMobile]);
+  }, [activeId, activeDmId, channels, isMobile]);
 
   useEffect(() => {
     // Don't yank to the bottom while a deep-linked message is being focused.
@@ -440,16 +462,42 @@ export function ChannelsPage() {
     if (typingPulseTimerRef.current) window.clearTimeout(typingPulseTimerRef.current);
   }, [active?.id]);
 
+  // Sync the DM selection from the `?dm=` deep link. The entry points outside
+  // this view (Cmd+K, agent hover card) push(`...?dm=ID`); when the user is
+  // already on the Messages page that's a same-route navigation that doesn't
+  // remount, so the `useState` initializer never re-runs. This reactively opens
+  // (or clears) the DM when the param changes. No loop: in-page `selectDm`
+  // updates state and replaces the URL to match, so param === state here.
+  const dmParam = searchParams.get("dm");
+  useEffect(() => {
+    if (dmParam === activeDmId) return;
+    if (dmParam) {
+      setActiveId(null);
+      setActiveDmId(dmParam);
+    } else {
+      setActiveDmId(null);
+    }
+  }, [dmParam, activeDmId]);
+
   // New messages (from others / agents) refresh the list (unread + preview)
   // and the open thread. Keep the active channel marked read while viewing it.
   useWSEvent("channel:message", (payload) => {
     const e = payload as { channel_id?: string };
     qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    // The DM list unions dm_channel items, so a channel message may change a DM
+    // row's preview / unread — refresh it too.
+    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
     if (e.channel_id) {
       qc.invalidateQueries({ queryKey: channelKeys.messages(e.channel_id) });
       qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(e.channel_id) });
       if (e.channel_id === active?.id) markChannelRead(active.id);
     }
+  });
+
+  // The DM list also unions legacy chat_sessions, so a chat message updates a
+  // DM row even though it isn't a channel event.
+  useWSEvent("chat:message", () => {
+    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });
 
   // Another client deleted a channel — drop it from the list. If it was the
@@ -503,16 +551,36 @@ export function ChannelsPage() {
   };
 
   // Select a channel and reflect it in the URL so the address is shareable.
+  // Clears any DM selection — the two regions are mutually exclusive.
   const selectChannel = (id: string) => {
+    setActiveDmId(null);
     setActiveId(id);
     replace(`${wsPaths.channels()}?channel=${id}`);
   };
 
-  // Mobile-only: return from the channel detail to the list. Clears the
-  // selection (so `active` resolves to null and the list renders) and drops
-  // ?channel= from the URL.
+  // Select a DM (from the DIRECT MESSAGES region). Clears the group selection
+  // and reflects the DM in the URL so it can be shared / deep-linked.
+  const selectDm = (dm: DMItem) => {
+    setActiveId(null);
+    setActiveDmId(dm.id);
+    replace(`${wsPaths.channels()}?dm=${dm.id}`);
+  };
+
+  // "Send message" entry point on a channel member row: create-or-find the DM
+  // with that member and open it in place (we're already on the Messages view,
+  // so no navigation round-trip is needed — selectDm switches the detail pane).
+  const openDmWithMember = (member: ChannelMember) => {
+    createOrFindDm.mutate(
+      { peer_type: member.member_type, peer_id: member.member_id },
+      { onSuccess: (dm) => selectDm(dm) },
+    );
+  };
+
+  // Mobile-only: return from the detail (group or DM) to the list. Clears both
+  // selections (so the list renders) and drops the deep-link param.
   const mobileBackToList = () => {
     setActiveId(null);
+    setActiveDmId(null);
     setMobilePanel(null);
     replace(wsPaths.channels());
   };
@@ -777,6 +845,20 @@ export function ChannelsPage() {
                     tint={isAgent ? agentColor(m.member_id) : undefined}
                   />
                   <span className="min-w-0 flex-1 truncate text-sm">{name}</span>
+                  {/* Send message: agents always, users except yourself (the
+                      backend rejects a self-DM). Create-or-find then open it. */}
+                  {(isAgent || m.member_id !== currentUserId) && (
+                    <button
+                      type="button"
+                      onClick={() => openDmWithMember(m)}
+                      disabled={createOrFindDm.isPending}
+                      aria-label={t(($) => $.dm.send_message)}
+                      title={t(($) => $.dm.send_message)}
+                      className="rounded p-1 text-muted-foreground opacity-0 transition hover:text-foreground group-hover:opacity-100 disabled:opacity-50"
+                    >
+                      <MessageSquare className="size-3.5" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() =>
@@ -851,7 +933,12 @@ export function ChannelsPage() {
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-            <p className="px-2 pb-1 pt-1.5 text-xs font-medium text-muted-foreground">
+            <DmList
+              activeId={activeDmId}
+              currentUserName={currentUserName}
+              onSelect={selectDm}
+            />
+            <p className="px-2 pb-1 pt-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.sidebar.groups)}
             </p>
             {isLoading ? (
@@ -1123,12 +1210,24 @@ export function ChannelsPage() {
         </main>
   );
 
+  // DM detail pane — branches by source internally (dm_channel vs
+  // legacy_session). Rendered in place of the group detail when a DM is active.
+  const dmDetailPane = activeDm ? (
+    <DmConversation key={`${activeDm.source}:${activeDm.id}`} dm={activeDm} onBack={mobileBackToList} />
+  ) : null;
+
+  // The detail surface: a selected DM wins over a group (selections are
+  // mutually exclusive, but this also covers the deep-link-before-list-loads
+  // window where `activeDmId` is set but the DM row hasn't resolved yet).
+  const detailSurface = activeDmId ? dmDetailPane : detailPane;
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       {isMobile ? (
-        // Mobile: single full-width column — the list, or (when a channel is
-        // active) the detail with a Back button. Matches the inbox list↔detail
-        // pattern.
+        // Mobile: single full-width column — the list, or (when a conversation
+        // is active) the detail with a Back button. Matches the inbox
+        // list↔detail pattern. DMs participate in the same switching via
+        // `activeDmId`.
         //
         // Height is pinned to 100dvh (dynamic viewport height) rather than the
         // app-shell's flex height so the soft keyboard shrinks the viewport and
@@ -1137,7 +1236,7 @@ export function ChannelsPage() {
         // the composer is the pinned last flex child (non-absolute). 100vh would
         // include the keyboard's area and push the composer off-screen.
         <div className="flex h-[100dvh] min-h-0 min-w-0 flex-col bg-background">
-          {active ? detailPane : listPane}
+          {active || activeDmId ? detailSurface : listPane}
         </div>
       ) : (
         <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
@@ -1146,7 +1245,7 @@ export function ChannelsPage() {
           </ResizablePanel>
           <ResizableHandle />
           <ResizablePanel id="detail" minSize="40%">
-          {detailPane}
+          {detailSurface}
           </ResizablePanel>
         </ResizablePanelGroup>
       )}

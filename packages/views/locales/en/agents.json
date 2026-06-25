@@ -414,6 +414,7 @@
   "profile_card": {
     "unavailable": "Agent unavailable",
     "detail_link": "Detail →",
+    "send_message": "Send message",
     "runtime_label": "Runtime",
     "skills_label": "Skills",
     "owner_label": "Owner",

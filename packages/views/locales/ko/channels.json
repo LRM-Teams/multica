@@ -105,5 +105,13 @@
   "message": {
     "agent_badge": "Agent",
     "feishu_badge": "Feishu"
+  },
+  "dm": {
+    "heading": "다이렉트 메시지",
+    "empty": "아직 다이렉트 메시지가 없습니다.",
+    "send_message": "메시지 보내기",
+    "files": "파일",
+    "thread_empty": "아직 메시지가 없습니다. 인사를 건네 보세요.",
+    "self_label": "나"
   }
 }

@@ -60,6 +60,69 @@ func TestAgentDirectMessage_CreatesDMForInitiator(t *testing.T) {
 	}
 }
 
+func TestListChatSessions_ExcludesChannelBackedSessions(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "DM Filter Bot", []byte("[]"))
+
+	// A genuine 1:1 DM session.
+	var dmSessionID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title)
+		VALUES ($1, $2, $3, 'dm') RETURNING id`, testWorkspaceID, agentID, testUserID).Scan(&dmSessionID); err != nil {
+		t.Fatalf("create dm session: %v", err)
+	}
+	// A channel-backed session for the same user/agent — must be hidden.
+	var channelID, chSessionID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel (workspace_id, name, created_by) VALUES ($1, 'dm-filter-chan', $2)
+		RETURNING id`, testWorkspaceID, testUserID).Scan(&channelID); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title)
+		VALUES ($1, $2, $3, '#dm-filter-chan') RETURNING id`, testWorkspaceID, agentID, testUserID).Scan(&chSessionID); err != nil {
+		t.Fatalf("create channel session: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_agent_session (channel_id, agent_id, chat_session_id)
+		VALUES ($1, $2, $3)`, channelID, agentID, chSessionID); err != nil {
+		t.Fatalf("link channel session: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM channel WHERE id=$1`, channelID)
+		testPool.Exec(context.Background(), `DELETE FROM chat_session WHERE id IN ($1,$2)`, dmSessionID, chSessionID)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/chat/sessions?status=all", nil)
+	req.Header.Set("X-User-ID", testUserID)
+	req = withChatTestWorkspaceCtx(t, req)
+	rec := httptest.NewRecorder()
+	testHandler.ListChatSessions(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var sessions []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &sessions); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, s := range sessions {
+		if id, ok := s["id"].(string); ok {
+			ids[id] = true
+		}
+	}
+	if !ids[dmSessionID] {
+		t.Fatalf("genuine DM session %s missing from the list", dmSessionID)
+	}
+	if ids[chSessionID] {
+		t.Fatalf("channel-backed session %s leaked into the DM list", chSessionID)
+	}
+}
+
 func TestAgentDirectMessage_RejectsHumanCaller(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

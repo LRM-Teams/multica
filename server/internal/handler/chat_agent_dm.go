@@ -64,9 +64,10 @@ func (h *Handler) AgentDirectMessage(w http.ResponseWriter, r *http.Request) {
 	// Find the most-recent active DM thread for (recipient, agent), or open one.
 	var sessionID pgtype.UUID
 	err := h.DB.QueryRow(r.Context(), `
-		SELECT id FROM chat_session
-		WHERE workspace_id = $1 AND agent_id = $2 AND creator_id = $3 AND status = 'active'
-		ORDER BY updated_at DESC LIMIT 1`, wsUUID, agentUUID, recipient).Scan(&sessionID)
+		SELECT cs.id FROM chat_session cs
+		WHERE cs.workspace_id = $1 AND cs.agent_id = $2 AND cs.creator_id = $3 AND cs.status = 'active'
+		  AND NOT EXISTS (SELECT 1 FROM channel_agent_session cas WHERE cas.chat_session_id = cs.id)
+		ORDER BY cs.updated_at DESC LIMIT 1`, wsUUID, agentUUID, recipient).Scan(&sessionID)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusInternalServerError, "failed to resolve dm session")

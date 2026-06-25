@@ -11,7 +11,7 @@ import { cn } from '@multica/ui/lib/utils'
 import { CODE_LIGATURE_CLASS } from '@multica/ui/lib/code-style'
 import { CodeBlock, InlineCode } from './CodeBlock'
 import { isAllowedFileCardHref, preprocessFileCards } from './file-cards'
-import { preprocessLinks } from './linkify'
+import { preprocessLinks, preprocessIssueRefs } from './linkify'
 import { preprocessMentionShortcodes } from './mentions'
 import 'katex/dist/katex.min.css'
 import './markdown.css'
@@ -75,6 +75,12 @@ export interface MarkdownProps {
    * the views-package `<Attachment>` component.
    */
   renderFileCard?: (props: { href: string; filename: string }) => React.ReactNode
+  /**
+   * Workspace issue prefix (e.g. "MUL"). When set, bare issue identifiers like
+   * "MUL-123" in the text are auto-linked into issue mention chips. Scoped to
+   * this single prefix to avoid false positives. Omit to disable auto-linking.
+   */
+  issueRefPrefix?: string
 }
 
 // Sanitization schema — extends GitHub defaults to allow code highlighting classes
@@ -433,22 +439,25 @@ export function Markdown({
   renderMention,
   renderImage,
   renderFileCard,
-  cdnDomain
+  cdnDomain,
+  issueRefPrefix
 }: MarkdownProps): React.JSX.Element {
   const components = React.useMemo(
     () => createComponents(mode, onUrlClick, onFileClick, renderMention, renderImage, renderFileCard),
     [mode, onUrlClick, onFileClick, renderMention, renderImage, renderFileCard]
   )
 
-  // Preprocess: convert mention shortcodes, raw URLs, and file cards to renderable content
+  // Preprocess: convert mention shortcodes, bare issue identifiers, raw URLs,
+  // and file cards to renderable content
   const processedContent = React.useMemo(
     () => {
       let result = preprocessMentionShortcodes(children)
+      if (issueRefPrefix) result = preprocessIssueRefs(result, issueRefPrefix)
       result = preprocessLinks(result)
       result = preprocessFileCards(result, cdnDomain ?? '')
       return result
     },
-    [children, cdnDomain]
+    [children, cdnDomain, issueRefPrefix]
   )
 
   return (

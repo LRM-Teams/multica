@@ -683,6 +683,12 @@ type EvolutionUnitSubmission struct {
 	Frameworks       []string           `json:"frameworks"`
 	Status           string             `json:"status"`
 	RejectReason     string             `json:"reject_reason"`
+	ReviewDecision   string             `json:"review_decision"`
+	ReviewConfidence pgtype.Float8      `json:"review_confidence"`
+	ReviewRiskLevel  string             `json:"review_risk_level"`
+	ReviewReason     string             `json:"review_reason"`
+	ReviewMetadata   []byte             `json:"review_metadata"`
+	ReviewedAt       pgtype.Timestamptz `json:"reviewed_at"`
 	PromotedUnitID   pgtype.UUID        `json:"promoted_unit_id"`
 	SourceCreatedAt  pgtype.Timestamptz `json:"source_created_at"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`

@@ -92,6 +92,40 @@ SET status = 'rejected', reject_reason = @reject_reason, updated_at = now()
 WHERE id = @id AND workspace_id = @workspace_id
 RETURNING *;
 
+-- name: RejectEvolutionSubmissionWithReview :one
+UPDATE evolution_unit_submission
+SET status = 'rejected',
+    reject_reason = @reject_reason,
+    review_decision = @review_decision,
+    review_confidence = @review_confidence,
+    review_risk_level = @review_risk_level,
+    review_reason = @review_reason,
+    review_metadata = @review_metadata,
+    reviewed_at = now(),
+    updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id
+RETURNING *;
+
+-- name: MarkEvolutionSubmissionNeedsReview :one
+UPDATE evolution_unit_submission
+SET status = 'needs_review',
+    review_decision = @review_decision,
+    review_confidence = @review_confidence,
+    review_risk_level = @review_risk_level,
+    review_reason = @review_reason,
+    review_metadata = @review_metadata,
+    reviewed_at = now(),
+    updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id
+RETURNING *;
+
+-- name: ListEvolutionSubmissionsForReview :many
+SELECT * FROM evolution_unit_submission
+WHERE workspace_id = @workspace_id
+  AND status = @status
+ORDER BY updated_at DESC
+LIMIT @limit_count;
+
 -- name: FindSharedEvolutionUnitByHash :one
 SELECT * FROM shared_evolution_unit
 WHERE workspace_id = @workspace_id

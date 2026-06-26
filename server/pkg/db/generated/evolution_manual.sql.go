@@ -50,7 +50,7 @@ ON CONFLICT (workspace_id, source_agent_id, local_unit_id) DO UPDATE SET
   frameworks = EXCLUDED.frameworks,
   source_created_at = EXCLUDED.source_created_at,
   updated_at = now()
-RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, promoted_unit_id, source_created_at, created_at, updated_at
+RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
 type UpsertEvolutionUnitSubmissionParams struct {
@@ -177,7 +177,7 @@ func (q *Queries) UpsertEvolutionSubmissionFile(ctx context.Context, arg UpsertE
 }
 
 const getEvolutionUnitSubmissionInWorkspace = `-- name: GetEvolutionUnitSubmissionInWorkspace :one
-SELECT id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, promoted_unit_id, source_created_at, created_at, updated_at FROM evolution_unit_submission
+SELECT id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at FROM evolution_unit_submission
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -192,7 +192,7 @@ func (q *Queries) GetEvolutionUnitSubmissionInWorkspace(ctx context.Context, arg
 }
 
 const listEvolutionUnitSubmissionsByWorkspace = `-- name: ListEvolutionUnitSubmissionsByWorkspace :many
-SELECT id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, promoted_unit_id, source_created_at, created_at, updated_at FROM evolution_unit_submission
+SELECT id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at FROM evolution_unit_submission
 WHERE workspace_id = $1
 ORDER BY created_at DESC
 LIMIT $2
@@ -250,7 +250,7 @@ func (q *Queries) ListActiveSharedEvolutionUnitsByWorkspace(ctx context.Context,
 }
 
 const listCandidateEvolutionSubmissions = `-- name: ListCandidateEvolutionSubmissions :many
-SELECT id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, promoted_unit_id, source_created_at, created_at, updated_at FROM evolution_unit_submission
+SELECT id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at FROM evolution_unit_submission
 WHERE workspace_id = $1 AND status = 'candidate'
 ORDER BY created_at ASC
 LIMIT $2
@@ -310,7 +310,7 @@ const rejectEvolutionSubmission = `-- name: RejectEvolutionSubmission :one
 UPDATE evolution_unit_submission
 SET status = 'rejected', reject_reason = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, promoted_unit_id, source_created_at, created_at, updated_at
+RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
 type RejectEvolutionSubmissionParams struct {
@@ -322,6 +322,97 @@ type RejectEvolutionSubmissionParams struct {
 func (q *Queries) RejectEvolutionSubmission(ctx context.Context, arg RejectEvolutionSubmissionParams) (EvolutionUnitSubmission, error) {
 	row := q.db.QueryRow(ctx, rejectEvolutionSubmission, arg.ID, arg.WorkspaceID, arg.RejectReason)
 	return scanEvolutionUnitSubmission(row)
+}
+
+const rejectEvolutionSubmissionWithReview = `-- name: RejectEvolutionSubmissionWithReview :one
+UPDATE evolution_unit_submission
+SET status = 'rejected',
+    reject_reason = $3,
+    review_decision = $4,
+    review_confidence = $5,
+    review_risk_level = $6,
+    review_reason = $7,
+    review_metadata = $8,
+    reviewed_at = now(),
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
+`
+
+type RejectEvolutionSubmissionWithReviewParams struct {
+	ID               pgtype.UUID   `json:"id"`
+	WorkspaceID      pgtype.UUID   `json:"workspace_id"`
+	RejectReason     string        `json:"reject_reason"`
+	ReviewDecision   string        `json:"review_decision"`
+	ReviewConfidence pgtype.Float8 `json:"review_confidence"`
+	ReviewRiskLevel  string        `json:"review_risk_level"`
+	ReviewReason     string        `json:"review_reason"`
+	ReviewMetadata   []byte        `json:"review_metadata"`
+}
+
+func (q *Queries) RejectEvolutionSubmissionWithReview(ctx context.Context, arg RejectEvolutionSubmissionWithReviewParams) (EvolutionUnitSubmission, error) {
+	row := q.db.QueryRow(ctx, rejectEvolutionSubmissionWithReview, arg.ID, arg.WorkspaceID, arg.RejectReason, arg.ReviewDecision, arg.ReviewConfidence, arg.ReviewRiskLevel, arg.ReviewReason, arg.ReviewMetadata)
+	return scanEvolutionUnitSubmission(row)
+}
+
+const markEvolutionSubmissionNeedsReview = `-- name: MarkEvolutionSubmissionNeedsReview :one
+UPDATE evolution_unit_submission
+SET status = 'needs_review',
+    review_decision = $3,
+    review_confidence = $4,
+    review_risk_level = $5,
+    review_reason = $6,
+    review_metadata = $7,
+    reviewed_at = now(),
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
+`
+
+type MarkEvolutionSubmissionNeedsReviewParams struct {
+	ID               pgtype.UUID   `json:"id"`
+	WorkspaceID      pgtype.UUID   `json:"workspace_id"`
+	ReviewDecision   string        `json:"review_decision"`
+	ReviewConfidence pgtype.Float8 `json:"review_confidence"`
+	ReviewRiskLevel  string        `json:"review_risk_level"`
+	ReviewReason     string        `json:"review_reason"`
+	ReviewMetadata   []byte        `json:"review_metadata"`
+}
+
+func (q *Queries) MarkEvolutionSubmissionNeedsReview(ctx context.Context, arg MarkEvolutionSubmissionNeedsReviewParams) (EvolutionUnitSubmission, error) {
+	row := q.db.QueryRow(ctx, markEvolutionSubmissionNeedsReview, arg.ID, arg.WorkspaceID, arg.ReviewDecision, arg.ReviewConfidence, arg.ReviewRiskLevel, arg.ReviewReason, arg.ReviewMetadata)
+	return scanEvolutionUnitSubmission(row)
+}
+
+const listEvolutionSubmissionsForReview = `-- name: ListEvolutionSubmissionsForReview :many
+SELECT id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at FROM evolution_unit_submission
+WHERE workspace_id = $1
+  AND status = $2
+ORDER BY updated_at DESC
+LIMIT $3
+`
+
+type ListEvolutionSubmissionsForReviewParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Status      string      `json:"status"`
+	LimitCount  int32       `json:"limit_count"`
+}
+
+func (q *Queries) ListEvolutionSubmissionsForReview(ctx context.Context, arg ListEvolutionSubmissionsForReviewParams) ([]EvolutionUnitSubmission, error) {
+	rows, err := q.db.Query(ctx, listEvolutionSubmissionsForReview, arg.WorkspaceID, arg.Status, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EvolutionUnitSubmission{}
+	for rows.Next() {
+		item, err := scanEvolutionUnitSubmission(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 const findSharedEvolutionUnitByHash = `-- name: FindSharedEvolutionUnitByHash :one
@@ -428,7 +519,7 @@ const markEvolutionSubmissionPromoted = `-- name: MarkEvolutionSubmissionPromote
 UPDATE evolution_unit_submission
 SET status = 'promoted', promoted_unit_id = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, promoted_unit_id, source_created_at, created_at, updated_at
+RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
 type MarkEvolutionSubmissionPromotedParams struct {
@@ -798,6 +889,12 @@ func scanEvolutionUnitSubmission(row pgx.Row) (EvolutionUnitSubmission, error) {
 		&i.Frameworks,
 		&i.Status,
 		&i.RejectReason,
+		&i.ReviewDecision,
+		&i.ReviewConfidence,
+		&i.ReviewRiskLevel,
+		&i.ReviewReason,
+		&i.ReviewMetadata,
+		&i.ReviewedAt,
 		&i.PromotedUnitID,
 		&i.SourceCreatedAt,
 		&i.CreatedAt,

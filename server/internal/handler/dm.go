@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -42,12 +43,14 @@ type DMPeer struct {
 // Unread is a count for dm_channel items and 0/1 for legacy_session items
 // (legacy sessions only track a per-session has-unread flag, not a count).
 type DMItem struct {
-	ID          string              `json:"id"` // dm channel id OR legacy chat_session id
-	Source      string              `json:"source"`
-	Peer        DMPeer              `json:"peer"`
-	LastMessage *ChannelLastMessage `json:"last_message,omitempty"`
-	Unread      int                 `json:"unread"`
-	UpdatedAt   string              `json:"updated_at"`
+	ID             string              `json:"id"` // dm channel id OR legacy chat_session id
+	Source         string              `json:"source"`
+	Peer           DMPeer              `json:"peer"`
+	LastMessage    *ChannelLastMessage `json:"last_message,omitempty"`
+	Unread         int                 `json:"unread"`
+	ManuallyUnread bool                `json:"manually_unread,omitempty"`
+	PinnedAt       *string             `json:"pinned_at,omitempty"`
+	UpdatedAt      string              `json:"updated_at"`
 }
 
 type CreateOrFindDirectMessageRequest struct {
@@ -113,6 +116,7 @@ func (h *Handler) createOrFindUserDM(w http.ResponseWriter, r *http.Request, wor
 
 	canonical := dmCanonicalName("user", userID, "user", uuidToString(peerID))
 	if ch, found := h.findDMChannel(r.Context(), workspaceID, canonical); found {
+		h.clearDMPeerHidden(r.Context(), workspaceID, userID, dmPeerRef{Type: "user", ID: peerID})
 		writeJSON(w, http.StatusOK, dmItemForChannel(ch, peer))
 		return
 	}
@@ -142,11 +146,13 @@ func (h *Handler) createOrFindAgentDM(w http.ResponseWriter, r *http.Request, wo
 	// ① existing dm channel wins.
 	canonical := dmCanonicalName("user", userID, "agent", uuidToString(agentID))
 	if ch, found := h.findDMChannel(r.Context(), workspaceID, canonical); found {
+		h.clearDMPeerHidden(r.Context(), workspaceID, userID, dmPeerRef{Type: "agent", ID: agentID})
 		writeJSON(w, http.StatusOK, dmItemForChannel(ch, peer))
 		return
 	}
 	// ② reuse an unbound legacy chat_session the caller owns with this agent.
 	if sessionID, updatedAt, found := h.findUnboundLegacySession(r.Context(), workspaceID, userID, agentID); found {
+		h.clearDMPeerHidden(r.Context(), workspaceID, userID, dmPeerRef{Type: "agent", ID: agentID})
 		writeJSON(w, http.StatusOK, DMItem{ID: uuidToString(sessionID), Source: dmSourceLegacy, Peer: peer, UpdatedAt: updatedAt})
 		return
 	}
@@ -252,6 +258,234 @@ func dmItemForChannel(ch ChannelResponse, peer DMPeer) DMItem {
 	return DMItem{ID: ch.ID, Source: dmSourceChannel, Peer: peer, UpdatedAt: ch.UpdatedAt}
 }
 
+type dmPeerRef struct {
+	Type string
+	ID   pgtype.UUID
+}
+
+func (h *Handler) resolveDMChannelPeerOnly(ctx context.Context, workspaceID, userID string, channelID pgtype.UUID) (dmPeerRef, bool) {
+	ch, found := h.getChannel(ctx, workspaceID, channelID)
+	if !found || ch.Kind != "dm" {
+		return dmPeerRef{}, false
+	}
+	if !h.channelUserIsMember(ctx, workspaceID, channelID, parseUUID(userID)) {
+		return dmPeerRef{}, false
+	}
+	var peer dmPeerRef
+	err := h.DB.QueryRow(ctx, `
+		SELECT member_type, member_id
+		FROM channel_member
+		WHERE channel_id = $1
+		  AND NOT (member_type = 'user' AND member_id = $2)
+		ORDER BY created_at ASC
+		LIMIT 1`, channelID, parseUUID(userID)).Scan(&peer.Type, &peer.ID)
+	return peer, err == nil
+}
+
+func (h *Handler) resolveDMChannelPeer(w http.ResponseWriter, ctx context.Context, workspaceID, userID string, channelID pgtype.UUID) (dmPeerRef, bool) {
+	ch, found := h.getChannel(ctx, workspaceID, channelID)
+	if !found || ch.Kind != "dm" {
+		writeError(w, http.StatusNotFound, "direct message not found")
+		return dmPeerRef{}, false
+	}
+	if !h.channelUserIsMember(ctx, workspaceID, channelID, parseUUID(userID)) {
+		writeError(w, http.StatusForbidden, "not a direct message member")
+		return dmPeerRef{}, false
+	}
+	peer, ok := h.resolveDMChannelPeerOnly(ctx, workspaceID, userID, channelID)
+	if !ok {
+		writeError(w, http.StatusNotFound, "direct message peer not found")
+		return dmPeerRef{}, false
+	}
+	return peer, true
+}
+
+func (h *Handler) resolveDMSessionPeer(w http.ResponseWriter, r *http.Request, userID, workspaceID, sessionID string) (db.ChatSession, dmPeerRef, bool) {
+	session, ok := h.gateChatSessionForUser(w, r, userID, workspaceID, sessionID)
+	if !ok {
+		return db.ChatSession{}, dmPeerRef{}, false
+	}
+	if session.Status != "active" {
+		writeError(w, http.StatusNotFound, "direct message not found")
+		return db.ChatSession{}, dmPeerRef{}, false
+	}
+	return session, dmPeerRef{Type: "agent", ID: session.AgentID}, true
+}
+
+func (h *Handler) setDMPeerPin(ctx context.Context, workspaceID, userID string, peer dmPeerRef, pinned bool) error {
+	if pinned {
+		_, err := h.DB.Exec(ctx, `
+			INSERT INTO dm_peer_state (workspace_id, user_id, peer_type, peer_id, pinned_at, updated_at)
+			VALUES ($1, $2, $3, $4, now(), now())
+			ON CONFLICT (workspace_id, user_id, peer_type, peer_id)
+			DO UPDATE SET pinned_at = now(), updated_at = now()`,
+			parseUUID(workspaceID), parseUUID(userID), peer.Type, peer.ID)
+		return err
+	}
+	_, err := h.DB.Exec(ctx, `
+		UPDATE dm_peer_state
+		SET pinned_at = NULL, updated_at = now()
+		WHERE workspace_id = $1 AND user_id = $2 AND peer_type = $3 AND peer_id = $4`,
+		parseUUID(workspaceID), parseUUID(userID), peer.Type, peer.ID)
+	return err
+}
+
+func (h *Handler) markDMPeerUnread(ctx context.Context, workspaceID, userID string, peer dmPeerRef) error {
+	_, err := h.DB.Exec(ctx, `
+		INSERT INTO dm_peer_state (workspace_id, user_id, peer_type, peer_id, manual_unread_at, updated_at)
+		VALUES ($1, $2, $3, $4, now(), now())
+		ON CONFLICT (workspace_id, user_id, peer_type, peer_id)
+		DO UPDATE SET manual_unread_at = now(), updated_at = now()`,
+		parseUUID(workspaceID), parseUUID(userID), peer.Type, peer.ID)
+	return err
+}
+
+func (h *Handler) closeDMPeer(ctx context.Context, workspaceID, userID string, peer dmPeerRef) error {
+	_, err := h.DB.Exec(ctx, `
+		INSERT INTO dm_peer_state (workspace_id, user_id, peer_type, peer_id, hidden_at, manual_unread_at, updated_at)
+		VALUES ($1, $2, $3, $4, now(), NULL, now())
+		ON CONFLICT (workspace_id, user_id, peer_type, peer_id)
+		DO UPDATE SET hidden_at = now(), manual_unread_at = NULL, updated_at = now()`,
+		parseUUID(workspaceID), parseUUID(userID), peer.Type, peer.ID)
+	return err
+}
+
+func (h *Handler) clearDMPeerHidden(ctx context.Context, workspaceID, userID string, peer dmPeerRef) {
+	if _, err := h.DB.Exec(ctx, `
+		UPDATE dm_peer_state
+		SET hidden_at = NULL, updated_at = now()
+		WHERE workspace_id = $1 AND user_id = $2 AND peer_type = $3 AND peer_id = $4 AND hidden_at IS NOT NULL`,
+		parseUUID(workspaceID), parseUUID(userID), peer.Type, peer.ID); err != nil {
+		slog.Warn("dm: clear hidden state failed", "workspace", workspaceID, "user", userID, "peer_type", peer.Type, "error", err)
+	}
+}
+
+func (h *Handler) clearDMPeerManualUnread(ctx context.Context, workspaceID, userID string, peer dmPeerRef) {
+	if _, err := h.DB.Exec(ctx, `
+		UPDATE dm_peer_state
+		SET manual_unread_at = NULL, updated_at = now()
+		WHERE workspace_id = $1 AND user_id = $2 AND peer_type = $3 AND peer_id = $4 AND manual_unread_at IS NOT NULL`,
+		parseUUID(workspaceID), parseUUID(userID), peer.Type, peer.ID); err != nil {
+		slog.Warn("dm: clear manual unread failed", "workspace", workspaceID, "user", userID, "peer_type", peer.Type, "error", err)
+	}
+}
+
+func (h *Handler) clearDMPeerManualUnreadForChannel(ctx context.Context, workspaceID, userID string, channelID pgtype.UUID) {
+	peer, ok := h.resolveDMChannelPeerOnly(ctx, workspaceID, userID, channelID)
+	if ok {
+		h.clearDMPeerManualUnread(ctx, workspaceID, userID, peer)
+	}
+}
+
+func (h *Handler) clearDMPeerHiddenForChatSession(ctx context.Context, workspaceID, userID string, agentID pgtype.UUID) {
+	h.clearDMPeerHidden(ctx, workspaceID, userID, dmPeerRef{Type: "agent", ID: agentID})
+}
+
+func (h *Handler) clearDMHiddenForChannelMembers(ctx context.Context, workspaceID string, channelID pgtype.UUID) {
+	if _, err := h.DB.Exec(ctx, `
+		WITH user_peers AS (
+			SELECT cm.member_id AS user_id, peer.member_type AS peer_type, peer.member_id AS peer_id
+			FROM channel_member cm
+			JOIN LATERAL (
+				SELECT member_type, member_id
+				FROM channel_member m2
+				WHERE m2.channel_id = cm.channel_id
+				  AND NOT (m2.member_type = 'user' AND m2.member_id = cm.member_id)
+				ORDER BY m2.created_at ASC
+				LIMIT 1
+			) peer ON true
+			WHERE cm.channel_id = $1 AND cm.workspace_id = $2 AND cm.member_type = 'user'
+		)
+		UPDATE dm_peer_state s
+		SET hidden_at = NULL, updated_at = now()
+		FROM user_peers p
+		WHERE s.workspace_id = $2
+		  AND s.user_id = p.user_id
+		  AND s.peer_type = p.peer_type
+		  AND s.peer_id = p.peer_id
+		  AND s.hidden_at IS NOT NULL`, channelID, parseUUID(workspaceID)); err != nil {
+		slog.Warn("dm: clear channel hidden state failed", "workspace", workspaceID, "channel", uuidToString(channelID), "error", err)
+	}
+}
+
+func (h *Handler) mutateDMChannelPeer(w http.ResponseWriter, r *http.Request, action func(context.Context, string, string, dmPeerRef) error) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	peer, ok := h.resolveDMChannelPeer(w, r.Context(), workspaceID, userID, channelID)
+	if !ok {
+		return
+	}
+	if err := action(r.Context(), workspaceID, userID, peer); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update direct message")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handler) mutateDMSessionPeer(w http.ResponseWriter, r *http.Request, action func(context.Context, string, string, dmPeerRef) error) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	_, peer, ok := h.resolveDMSessionPeer(w, r, userID, workspaceID, chi.URLParam(r, "sessionId"))
+	if !ok {
+		return
+	}
+	if err := action(r.Context(), workspaceID, userID, peer); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update direct message")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handler) PinDMChannel(w http.ResponseWriter, r *http.Request) {
+	h.mutateDMChannelPeer(w, r, func(ctx context.Context, workspaceID, userID string, peer dmPeerRef) error {
+		return h.setDMPeerPin(ctx, workspaceID, userID, peer, true)
+	})
+}
+
+func (h *Handler) UnpinDMChannel(w http.ResponseWriter, r *http.Request) {
+	h.mutateDMChannelPeer(w, r, func(ctx context.Context, workspaceID, userID string, peer dmPeerRef) error {
+		return h.setDMPeerPin(ctx, workspaceID, userID, peer, false)
+	})
+}
+
+func (h *Handler) MarkDMChannelUnread(w http.ResponseWriter, r *http.Request) {
+	h.mutateDMChannelPeer(w, r, h.markDMPeerUnread)
+}
+
+func (h *Handler) CloseDMChannel(w http.ResponseWriter, r *http.Request) {
+	h.mutateDMChannelPeer(w, r, h.closeDMPeer)
+}
+
+func (h *Handler) PinDMSession(w http.ResponseWriter, r *http.Request) {
+	h.mutateDMSessionPeer(w, r, func(ctx context.Context, workspaceID, userID string, peer dmPeerRef) error {
+		return h.setDMPeerPin(ctx, workspaceID, userID, peer, true)
+	})
+}
+
+func (h *Handler) UnpinDMSession(w http.ResponseWriter, r *http.Request) {
+	h.mutateDMSessionPeer(w, r, func(ctx context.Context, workspaceID, userID string, peer dmPeerRef) error {
+		return h.setDMPeerPin(ctx, workspaceID, userID, peer, false)
+	})
+}
+
+func (h *Handler) MarkDMSessionUnread(w http.ResponseWriter, r *http.Request) {
+	h.mutateDMSessionPeer(w, r, h.markDMPeerUnread)
+}
+
+func (h *Handler) CloseDMSession(w http.ResponseWriter, r *http.Request) {
+	h.mutateDMSessionPeer(w, r, h.closeDMPeer)
+}
+
 // ListDirectMessages (GET /api/dm) is the sole data source for the DM section.
 // It merges kind='dm' channels the caller is in with the caller's unbound
 // legacy chat_sessions, dedupes by peer (a peer never appears twice), filters
@@ -280,16 +514,16 @@ func (h *Handler) ListDirectMessages(w http.ResponseWriter, r *http.Request) {
 	items = append(items, h.listDMChannels(r.Context(), workspaceID, userID, allowed)...)
 	items = append(items, h.listLegacyDMSessions(r.Context(), workspaceID, userID, allowed)...)
 
-	// Dedupe by peer, keeping the most recently updated entry. Legacy-first
+	// Dedupe by peer, keeping pinned entries first and then the freshest row. Legacy-first
 	// create-or-find normally keeps a peer in exactly one source, but a DM
 	// channel and an old session for the same agent can coexist if the channel
-	// was created before this unification — show the fresher one.
+	// was created before this unification.
 	byPeer := map[string]int{}
 	deduped := []DMItem{}
 	for _, it := range items {
 		key := it.Peer.Type + ":" + it.Peer.ID
 		if idx, seen := byPeer[key]; seen {
-			if it.UpdatedAt > deduped[idx].UpdatedAt {
+			if preferDMItem(it, deduped[idx]) {
 				deduped[idx] = it
 			}
 			continue
@@ -297,7 +531,7 @@ func (h *Handler) ListDirectMessages(w http.ResponseWriter, r *http.Request) {
 		byPeer[key] = len(deduped)
 		deduped = append(deduped, it)
 	}
-	sort.SliceStable(deduped, func(i, j int) bool { return deduped[i].UpdatedAt > deduped[j].UpdatedAt })
+	sort.SliceStable(deduped, func(i, j int) bool { return preferDMItem(deduped[i], deduped[j]) })
 
 	limit, offset := dmPageParams(r)
 	total := len(deduped)
@@ -329,6 +563,24 @@ func dmPageParams(r *http.Request) (limit, offset int) {
 	return limit, offset
 }
 
+func preferDMItem(a, b DMItem) bool {
+	if a.PinnedAt != nil || b.PinnedAt != nil {
+		if a.PinnedAt == nil {
+			return false
+		}
+		if b.PinnedAt == nil {
+			return true
+		}
+		if *a.PinnedAt != *b.PinnedAt {
+			return *a.PinnedAt > *b.PinnedAt
+		}
+	}
+	if a.UpdatedAt != b.UpdatedAt {
+		return a.UpdatedAt > b.UpdatedAt
+	}
+	return a.Source < b.Source
+}
+
 // listDMChannels returns the caller's kind='dm' channels as DM items, resolving
 // the peer via a lateral that picks the single non-caller member, plus last
 // message and unread count (same accounting as ListChannels).
@@ -340,7 +592,8 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		       COALESCE(u.name, u.email, a.name, '') AS peer_name,
 		       a.avatar_url AS peer_avatar,
 		       lm.author_type, lm.author_name, lm.content, lm.created_at,
-		       COALESCE(uc.cnt, 0) AS unread
+		       COALESCE(uc.cnt, 0) AS unread,
+		       state.pinned_at, state.manual_unread_at
 		FROM channel ch
 		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
 		JOIN LATERAL (
@@ -364,7 +617,12 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 			  AND m.created_at > COALESCE(cr.last_read_at, '-infinity'::timestamptz)
 			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
 		) uc ON true
-		WHERE ch.workspace_id = $1 AND ch.kind = 'dm'
+		LEFT JOIN dm_peer_state state
+		  ON state.workspace_id = ch.workspace_id
+		 AND state.user_id = $2
+		 AND state.peer_type = peer.member_type
+		 AND state.peer_id = peer.member_id
+		WHERE ch.workspace_id = $1 AND ch.kind = 'dm' AND state.hidden_at IS NULL
 		ORDER BY ch.updated_at DESC`, parseUUID(workspaceID), uid)
 	if err != nil {
 		slog.Warn("list dm channels failed", "workspace", workspaceID, "error", err)
@@ -374,12 +632,12 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 	out := []DMItem{}
 	for rows.Next() {
 		var id, peerID pgtype.UUID
-		var updatedAt, lastAt pgtype.Timestamptz
+		var updatedAt, lastAt, pinnedAt, manualUnreadAt pgtype.Timestamptz
 		var peerType, peerName string
 		var peerAvatar, lastType, lastName, lastContent pgtype.Text
 		var unread int
 		if err := rows.Scan(&id, &updatedAt, &peerType, &peerID, &peerName, &peerAvatar,
-			&lastType, &lastName, &lastContent, &lastAt, &unread); err != nil {
+			&lastType, &lastName, &lastContent, &lastAt, &unread, &pinnedAt, &manualUnreadAt); err != nil {
 			continue
 		}
 		if peerType == "agent" {
@@ -388,11 +646,16 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 			}
 		}
 		item := DMItem{
-			ID:        uuidToString(id),
-			Source:    dmSourceChannel,
-			Peer:      DMPeer{Type: peerType, ID: uuidToString(peerID), Name: peerName, AvatarURL: textToPtr(peerAvatar)},
-			Unread:    unread,
-			UpdatedAt: timestampToString(updatedAt),
+			ID:             uuidToString(id),
+			Source:         dmSourceChannel,
+			Peer:           DMPeer{Type: peerType, ID: uuidToString(peerID), Name: peerName, AvatarURL: textToPtr(peerAvatar)},
+			Unread:         unread,
+			ManuallyUnread: manualUnreadAt.Valid,
+			PinnedAt:       timestampToPtr(pinnedAt),
+			UpdatedAt:      timestampToString(updatedAt),
+		}
+		if item.ManuallyUnread && item.Unread == 0 {
+			item.Unread = 1
 		}
 		if lastContent.Valid {
 			item.LastMessage = &ChannelLastMessage{
@@ -413,7 +676,8 @@ func (h *Handler) listLegacyDMSessions(ctx context.Context, workspaceID, userID 
 		SELECT cs.id, cs.agent_id, cs.updated_at,
 		       a.name, a.avatar_url,
 		       lm.role, lm.content, lm.created_at,
-		       (cs.unread_since IS NOT NULL)::bool AS has_unread
+		       (cs.unread_since IS NOT NULL)::bool AS has_unread,
+		       state.pinned_at, state.manual_unread_at
 		FROM chat_session cs
 		JOIN agent a ON a.id = cs.agent_id
 		LEFT JOIN LATERAL (
@@ -421,7 +685,13 @@ func (h *Handler) listLegacyDMSessions(ctx context.Context, workspaceID, userID 
 			FROM chat_message m WHERE m.chat_session_id = cs.id
 			ORDER BY m.created_at DESC LIMIT 1
 		) lm ON true
+		LEFT JOIN dm_peer_state state
+		  ON state.workspace_id = cs.workspace_id
+		 AND state.user_id = cs.creator_id
+		 AND state.peer_type = 'agent'
+		 AND state.peer_id = cs.agent_id
 		WHERE cs.workspace_id = $1 AND cs.creator_id = $2 AND cs.status = 'active'
+		  AND state.hidden_at IS NULL
 		  AND cs.id NOT IN (SELECT chat_session_id FROM channel_agent_session)
 		ORDER BY cs.updated_at DESC`, parseUUID(workspaceID), parseUUID(userID))
 	if err != nil {
@@ -432,27 +702,29 @@ func (h *Handler) listLegacyDMSessions(ctx context.Context, workspaceID, userID 
 	out := []DMItem{}
 	for rows.Next() {
 		var id, agentID pgtype.UUID
-		var updatedAt, lastAt pgtype.Timestamptz
+		var updatedAt, lastAt, pinnedAt, manualUnreadAt pgtype.Timestamptz
 		var agentName string
 		var agentAvatar, lastRole, lastContent pgtype.Text
 		var hasUnread bool
 		if err := rows.Scan(&id, &agentID, &updatedAt, &agentName, &agentAvatar,
-			&lastRole, &lastContent, &lastAt, &hasUnread); err != nil {
+			&lastRole, &lastContent, &lastAt, &hasUnread, &pinnedAt, &manualUnreadAt); err != nil {
 			continue
 		}
 		if _, okAgent := allowed[uuidToString(agentID)]; !okAgent {
 			continue
 		}
 		unread := 0
-		if hasUnread {
+		if hasUnread || manualUnreadAt.Valid {
 			unread = 1
 		}
 		item := DMItem{
-			ID:        uuidToString(id),
-			Source:    dmSourceLegacy,
-			Peer:      DMPeer{Type: "agent", ID: uuidToString(agentID), Name: agentName, AvatarURL: textToPtr(agentAvatar)},
-			Unread:    unread,
-			UpdatedAt: timestampToString(updatedAt),
+			ID:             uuidToString(id),
+			Source:         dmSourceLegacy,
+			Peer:           DMPeer{Type: "agent", ID: uuidToString(agentID), Name: agentName, AvatarURL: textToPtr(agentAvatar)},
+			Unread:         unread,
+			ManuallyUnread: manualUnreadAt.Valid,
+			PinnedAt:       timestampToPtr(pinnedAt),
+			UpdatedAt:      timestampToString(updatedAt),
 		}
 		if lastContent.Valid {
 			// chat_message has a role (user/assistant), not an author name —

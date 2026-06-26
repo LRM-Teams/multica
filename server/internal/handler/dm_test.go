@@ -52,6 +52,7 @@ func seedLegacySession(t *testing.T, agentID string) string {
 
 func cleanupDMArtifacts(t *testing.T) {
 	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM dm_peer_state WHERE workspace_id=$1 AND user_id=$2`, testWorkspaceID, testUserID)
 		testPool.Exec(context.Background(), `DELETE FROM channel WHERE workspace_id=$1 AND kind='dm'`, testWorkspaceID)
 		testPool.Exec(context.Background(), `DELETE FROM chat_session WHERE workspace_id=$1 AND creator_id=$2`, testWorkspaceID, testUserID)
 	})
@@ -213,6 +214,129 @@ func TestListDirectMessages_UnionAndDedup(t *testing.T) {
 	if count[agentC] != 1 {
 		t.Fatalf("agentC should be deduped to 1 entry, got %d", count[agentC])
 	}
+}
+
+func TestDMActionsApplyAtPeerLevelAcrossSources(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	cleanupDMArtifacts(t)
+	agentID := createHandlerTestAgent(t, "DM Peer State Bot", []byte("[]"))
+
+	rec, item := postCreateOrFindDM(t, "agent", agentID)
+	if rec.Code != http.StatusCreated || item.Source != dmSourceChannel {
+		t.Fatalf("seed dm channel: status=%d item=%+v", rec.Code, item)
+	}
+	channelID := item.ID
+	sessionID := seedLegacySession(t, agentID)
+
+	req := newRequest(http.MethodPut, "/api/dm/channels/"+channelID+"/pin", nil)
+	req = withChatTestWorkspaceCtx(t, req)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.PinDMChannel(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pin channel-backed DM: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = newRequest(http.MethodPost, "/api/dm/sessions/"+sessionID+"/unread", nil)
+	req = withChatTestWorkspaceCtx(t, req)
+	req = withURLParam(req, "sessionId", sessionID)
+	rec = httptest.NewRecorder()
+	testHandler.MarkDMSessionUnread(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mark legacy-backed DM unread: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	got := listDMItemsForTest(t)
+	var peer DMItem
+	var found bool
+	for _, it := range got {
+		if it.Peer.Type == "agent" && it.Peer.ID == agentID {
+			peer = it
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("peer missing after pin/unread; items=%+v", got)
+	}
+	if peer.PinnedAt == nil {
+		t.Fatalf("peer-level pin missing on listed source %+v", peer)
+	}
+	if !peer.ManuallyUnread || peer.Unread == 0 {
+		t.Fatalf("peer-level manual unread missing on listed source %+v", peer)
+	}
+
+	req = newRequest(http.MethodPost, "/api/channels/"+channelID+"/read", nil)
+	req = withChatTestWorkspaceCtx(t, req)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.MarkChannelRead(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mark channel read: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	got = listDMItemsForTest(t)
+	for _, it := range got {
+		if it.Peer.Type == "agent" && it.Peer.ID == agentID {
+			if it.ManuallyUnread {
+				t.Fatalf("channel read did not clear peer-level manual unread: %+v", it)
+			}
+			break
+		}
+	}
+
+	req = newRequest(http.MethodDelete, "/api/dm/channels/"+channelID, nil)
+	req = withChatTestWorkspaceCtx(t, req)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.CloseDMChannel(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("close channel-backed DM: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	got = listDMItemsForTest(t)
+	for _, it := range got {
+		if it.Peer.Type == "agent" && it.Peer.ID == agentID {
+			t.Fatalf("closed peer still visible through source %s: %+v", it.Source, it)
+		}
+	}
+
+	rec, item = postCreateOrFindDM(t, "agent", agentID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reopen hidden DM: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if item.ID != channelID {
+		t.Fatalf("reopen should return existing dm channel %s, got %+v", channelID, item)
+	}
+	got = listDMItemsForTest(t)
+	found = false
+	for _, it := range got {
+		if it.Peer.Type == "agent" && it.Peer.ID == agentID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("POST /api/dm did not unhide peer")
+	}
+}
+
+func listDMItemsForTest(t *testing.T) []DMItem {
+	t.Helper()
+	req := newRequest(http.MethodGet, "/api/dm", nil)
+	req = withChatTestWorkspaceCtx(t, req)
+	rec := httptest.NewRecorder()
+	testHandler.ListDirectMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list DMs: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var items []DMItem
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("decode DMs: %v body=%s", err, rec.Body.String())
+	}
+	return items
 }
 
 // TestSendChannelMessageDM_DispatchesAgent: a user message in an agent DM

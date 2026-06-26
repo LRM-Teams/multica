@@ -113,6 +113,7 @@ func (h *Handler) AgentDirectMessage(w http.ResponseWriter, r *http.Request) {
 	if err := h.Queries.TouchChatSession(r.Context(), sessionID); err != nil {
 		slog.Warn("dm: touch session failed", "session", uuidToString(sessionID), "error", err)
 	}
+	h.clearDMPeerHiddenForChatSession(r.Context(), workspaceID, uuidToString(recipient), agentUUID)
 
 	resolvedSessionID := uuidToString(sessionID)
 	h.publishChat(protocol.EventChatMessage, workspaceID, "agent", actorID, resolvedSessionID, protocol.ChatMessagePayload{

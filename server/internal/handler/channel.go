@@ -428,7 +428,7 @@ func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
 	if !h.validateChannelMemberTarget(w, r, workspaceID, req.MemberType, memberID) {
 		return
 	}
-	_, err := h.DB.Exec(r.Context(), `
+	tag, err := h.DB.Exec(r.Context(), `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT DO NOTHING`, channelID, parseUUID(workspaceID), req.MemberType, memberID)
@@ -437,6 +437,13 @@ func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
+	// When a NEW human joins, every agent member greets them with a sticker.
+	// Guarded on RowsAffected so a duplicate re-add never re-welcomes, and on
+	// member_type so adding an agent member (or the creator at channel creation,
+	// which never routes through here) stays silent.
+	if req.MemberType == "user" && tag.RowsAffected() > 0 {
+		h.dispatchChannelMemberWelcome(r.Context(), workspaceID, channelID, memberID, parseUUID(userID))
+	}
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
 
@@ -833,6 +840,68 @@ func (h *Handler) dispatchChannelAgentReply(ctx context.Context, ch ChannelRespo
 	if _, err := h.DB.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
 		slog.Warn("channel agent reply: tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
 	}
+}
+
+// dispatchChannelMemberWelcome makes every agent member of a channel post a
+// short, sticker-led welcome when a new human joins. Each welcome is an
+// independent one-off agent run on its own fresh thread, driven by a static
+// prompt (no channel history) that forbids @-mentions — so welcomes never react
+// to each other and never chain into the automatic agent-reply discussion loop.
+func (h *Handler) dispatchChannelMemberWelcome(ctx context.Context, workspaceID string, channelID, joinedUserID, initiatorUserID pgtype.UUID) {
+	agents := h.channelAgentMembers(ctx, workspaceID, uuidToString(channelID))
+	if len(agents) == 0 {
+		return
+	}
+	var channelName string
+	if err := h.DB.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, channelID).Scan(&channelName); err != nil {
+		slog.Warn("channel welcome: load channel name failed", "channel", uuidToString(channelID), "error", err)
+		return
+	}
+	ch := ChannelResponse{ID: uuidToString(channelID), WorkspaceID: workspaceID, Name: channelName}
+	joinedName := strings.TrimSpace(h.userName(ctx, joinedUserID))
+	if joinedName == "" {
+		joinedName = "新成员"
+	}
+	prompt := buildChannelWelcomePrompt(ch.Name, joinedName)
+	// Synthetic trigger: fresh thread (nil ThreadID) at depth 0, so each welcome
+	// is its own short run rather than a reply within an existing thread.
+	synthetic := ChannelMessageResponse{TriggerDepth: 0}
+	for _, agent := range agents {
+		h.publishChannelAgentTyping(ch, agent, true)
+		session, err := h.ensureChannelAgentSession(ctx, ch, agent.ID, initiatorUserID)
+		if err != nil {
+			slog.Warn("channel welcome: ensure session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+			continue
+		}
+		promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, synthetic)
+		if err != nil {
+			slog.Warn("channel welcome: create prompt failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+			continue
+		}
+		task, err := h.TaskService.EnqueueChatTask(ctx, session, initiatorUserID)
+		if err != nil {
+			slog.Warn("channel welcome: enqueue task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+			continue
+		}
+		if _, err := h.DB.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
+			slog.Warn("channel welcome: tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
+		}
+	}
+}
+
+// buildChannelWelcomePrompt is a self-contained one-off greeting prompt. Unlike
+// buildChannelMentionPrompt it includes NO channel history and explicitly bans
+// @-mentions and follow-up, so a wall of welcomes never turns into a loop.
+func buildChannelWelcomePrompt(channelName, joinedName string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "A new member just joined the Multica group chat #%s: %s.\n", channelName, joinedName)
+	b.WriteString("Greet them as yourself with a warm, friendly welcome.\n\n")
+	b.WriteString("Rules — follow all of them:\n")
+	b.WriteString("- Keep it to ONE short line, in the language the channel uses (Chinese if the member's name is Chinese).\n")
+	fmt.Fprintf(&b, "- Include exactly one sticker via the multica-stickers skill (e.g. :sticker:applause:, :sticker:hi:, :sticker:heart-hands:) — the sticker is the point of welcoming %s.\n", joinedName)
+	b.WriteString("- Do NOT @-mention anyone — not the new member, not other agents. This is a one-off greeting, not a discussion.\n")
+	b.WriteString("- Do not ask questions, assign work, or start a conversation. Just welcome them in one line and stop.\n")
+	return b.String()
 }
 
 // notifyChannelMemberMentions creates a "mentioned" inbox item for every human

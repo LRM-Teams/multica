@@ -163,6 +163,20 @@ SET status = 'promoted', promoted_unit_id = @promoted_unit_id, updated_at = now(
 WHERE id = @id AND workspace_id = @workspace_id
 RETURNING *;
 
+-- name: MarkEvolutionSubmissionPromotedWithReview :one
+UPDATE evolution_unit_submission
+SET status = 'promoted',
+    promoted_unit_id = @promoted_unit_id,
+    review_decision = @review_decision,
+    review_confidence = @review_confidence,
+    review_risk_level = @review_risk_level,
+    review_reason = @review_reason,
+    review_metadata = @review_metadata,
+    reviewed_at = now(),
+    updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id
+RETURNING *;
+
 -- name: UpsertSharedEvolutionUnitFile :one
 INSERT INTO shared_evolution_unit_file (
   workspace_id, unit_id, version_id, path, content, content_hash, mime_type, size_bytes

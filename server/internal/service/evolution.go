@@ -17,7 +17,9 @@ import (
 )
 
 type EvolutionService struct {
-	Queries *db.Queries
+	Queries       *db.Queries
+	Reviewer      EvolutionReviewer
+	ReviewEnabled bool
 }
 
 const (
@@ -39,7 +41,14 @@ type EvolutionCurateResult struct {
 }
 
 func NewEvolutionService(queries *db.Queries) *EvolutionService {
-	return &EvolutionService{Queries: queries}
+	return NewEvolutionServiceWithReviewer(queries, NoopEvolutionReviewer{}, false)
+}
+
+func NewEvolutionServiceWithReviewer(queries *db.Queries, reviewer EvolutionReviewer, enabled bool) *EvolutionService {
+	if reviewer == nil {
+		reviewer = NoopEvolutionReviewer{}
+	}
+	return &EvolutionService{Queries: queries, Reviewer: reviewer, ReviewEnabled: enabled}
 }
 
 type evolutionCurationStatus string
@@ -101,33 +110,61 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 		_, err := s.rejectSubmissionWithReview(ctx, submission, reason, "high")
 		return db.SharedEvolutionUnit{}, evolutionCurationRejected, err
 	}
-	if submission.Confidence != "high" || (submission.Sensitivity != "none" && submission.Sensitivity != "local_path") {
-		reason := needsReviewReason(submission)
-		_, err := s.markSubmissionNeedsReview(ctx, submission, reason)
-		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, err
-	}
-
-	dedupeHash := evolutionDedupeHash(submission)
-	if dedupeHash == "" {
+	if evolutionDedupeHash(submission) == "" {
 		_, err := s.rejectSubmissionWithReview(ctx, submission, "missing content hash", "medium")
 		return db.SharedEvolutionUnit{}, evolutionCurationRejected, err
 	}
+
+	if !s.ReviewEnabled {
+		if submission.Confidence != "high" || (submission.Sensitivity != "none" && submission.Sensitivity != "local_path") {
+			reason := needsReviewReason(submission)
+			_, err := s.markSubmissionNeedsReview(ctx, submission, reason)
+			return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, err
+		}
+		return s.promoteSubmission(ctx, submission, files, nil)
+	}
+
+	review, err := s.Reviewer.Review(ctx, evolutionReviewInput(submission, files))
+	if err != nil {
+		_, markErr := s.markSubmissionNeedsReviewForReviewerError(ctx, submission, err)
+		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, markErr
+	}
+	if reason := invalidEvolutionReviewResultReason(review); reason != "" {
+		_, markErr := s.markSubmissionNeedsReviewForInvalidReview(ctx, submission, review, reason)
+		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, markErr
+	}
+
+	switch review.Decision {
+	case EvolutionReviewReject:
+		_, err := s.rejectSubmissionWithReviewResult(ctx, submission, review)
+		return db.SharedEvolutionUnit{}, evolutionCurationRejected, err
+	case EvolutionReviewNeedsReview:
+		_, err := s.markSubmissionNeedsReviewWithResult(ctx, submission, review, reviewReason(review, "reviewer requested manual review"))
+		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, err
+	case EvolutionReviewPromote:
+		if review.RiskLevel != EvolutionReviewRiskLow {
+			_, err := s.markSubmissionNeedsReviewWithResult(ctx, submission, review, reviewReason(review, "reviewer promotion requires manual review due to risk level"))
+			return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, err
+		}
+		return s.promoteSubmission(ctx, submission, files, &review)
+	default:
+		_, err := s.markSubmissionNeedsReviewForInvalidReview(ctx, submission, review, "unknown review decision")
+		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, err
+	}
+}
+
+func (s *EvolutionService) promoteSubmission(ctx context.Context, submission db.EvolutionUnitSubmission, files []db.EvolutionUnitSubmissionFile, review *EvolutionReviewResult) (db.SharedEvolutionUnit, evolutionCurationStatus, error) {
+	dedupeHash := evolutionDedupeHash(submission)
 	existing, err := s.Queries.FindSharedEvolutionUnitByHash(ctx, db.FindSharedEvolutionUnitByHashParams{WorkspaceID: submission.WorkspaceID, UnitType: submission.UnitType, DedupeHash: dedupeHash})
 	if err == nil {
-		_, err = s.Queries.MarkEvolutionSubmissionPromoted(ctx, db.MarkEvolutionSubmissionPromotedParams{ID: submission.ID, WorkspaceID: submission.WorkspaceID, PromotedUnitID: existing.ID})
+		err = s.markSubmissionPromoted(ctx, submission, existing.ID, review)
 		return existing, evolutionCurationPromoted, err
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return db.SharedEvolutionUnit{}, evolutionCurationSkipped, err
 	}
 
-	metadata, _ := json.Marshal(map[string]any{
-		"dedupe_hash":     dedupeHash,
-		"content_hash":    submission.ContentHash,
-		"bundle_hash":     submission.BundleHash,
-		"source_agent_id": uuidString(submission.SourceAgentID),
-		"local_unit_id":   submission.LocalUnitID,
-	})
+	metadata := promotionMetadata(submission, dedupeHash, review)
 	unit, err := s.Queries.CreateSharedEvolutionUnit(ctx, db.CreateSharedEvolutionUnitParams{
 		WorkspaceID:      submission.WorkspaceID,
 		UnitType:         submission.UnitType,
@@ -173,8 +210,26 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 			return db.SharedEvolutionUnit{}, evolutionCurationSkipped, err
 		}
 	}
-	_, err = s.Queries.MarkEvolutionSubmissionPromoted(ctx, db.MarkEvolutionSubmissionPromotedParams{ID: submission.ID, WorkspaceID: submission.WorkspaceID, PromotedUnitID: unit.ID})
+	err = s.markSubmissionPromoted(ctx, submission, unit.ID, review)
 	return unit, evolutionCurationPromoted, err
+}
+
+func (s *EvolutionService) markSubmissionPromoted(ctx context.Context, submission db.EvolutionUnitSubmission, promotedUnitID pgtype.UUID, review *EvolutionReviewResult) error {
+	if review == nil {
+		_, err := s.Queries.MarkEvolutionSubmissionPromoted(ctx, db.MarkEvolutionSubmissionPromotedParams{ID: submission.ID, WorkspaceID: submission.WorkspaceID, PromotedUnitID: promotedUnitID})
+		return err
+	}
+	_, err := s.Queries.MarkEvolutionSubmissionPromotedWithReview(ctx, db.MarkEvolutionSubmissionPromotedWithReviewParams{
+		ID:               submission.ID,
+		WorkspaceID:      submission.WorkspaceID,
+		PromotedUnitID:   promotedUnitID,
+		ReviewDecision:   string(review.Decision),
+		ReviewConfidence: reviewConfidence(review.Confidence),
+		ReviewRiskLevel:  string(review.RiskLevel),
+		ReviewReason:     reviewReason(*review, "reviewer approved promotion"),
+		ReviewMetadata:   reviewerMetadata(*review),
+	})
+	return err
 }
 
 func (s *EvolutionService) rejectSubmissionWithReview(ctx context.Context, submission db.EvolutionUnitSubmission, reason, riskLevel string) (db.EvolutionUnitSubmission, error) {
@@ -183,10 +238,24 @@ func (s *EvolutionService) rejectSubmissionWithReview(ctx context.Context, submi
 		ID:              submission.ID,
 		WorkspaceID:     submission.WorkspaceID,
 		RejectReason:    reason,
-		ReviewDecision:  "reject",
+		ReviewDecision:  string(EvolutionReviewReject),
 		ReviewRiskLevel: riskLevel,
 		ReviewReason:    reason,
 		ReviewMetadata:  metadata,
+	})
+}
+
+func (s *EvolutionService) rejectSubmissionWithReviewResult(ctx context.Context, submission db.EvolutionUnitSubmission, review EvolutionReviewResult) (db.EvolutionUnitSubmission, error) {
+	reason := reviewReason(review, "reviewer rejected submission")
+	return s.Queries.RejectEvolutionSubmissionWithReview(ctx, db.RejectEvolutionSubmissionWithReviewParams{
+		ID:               submission.ID,
+		WorkspaceID:      submission.WorkspaceID,
+		RejectReason:     reason,
+		ReviewDecision:   string(EvolutionReviewReject),
+		ReviewConfidence: reviewConfidence(review.Confidence),
+		ReviewRiskLevel:  string(review.RiskLevel),
+		ReviewReason:     reason,
+		ReviewMetadata:   reviewerMetadata(review),
 	})
 }
 
@@ -195,10 +264,47 @@ func (s *EvolutionService) markSubmissionNeedsReview(ctx context.Context, submis
 	return s.Queries.MarkEvolutionSubmissionNeedsReview(ctx, db.MarkEvolutionSubmissionNeedsReviewParams{
 		ID:              submission.ID,
 		WorkspaceID:     submission.WorkspaceID,
-		ReviewDecision:  "needs_review",
-		ReviewRiskLevel: "medium",
+		ReviewDecision:  string(EvolutionReviewNeedsReview),
+		ReviewRiskLevel: string(EvolutionReviewRiskMedium),
 		ReviewReason:    reason,
 		ReviewMetadata:  metadata,
+	})
+}
+
+func (s *EvolutionService) markSubmissionNeedsReviewWithResult(ctx context.Context, submission db.EvolutionUnitSubmission, review EvolutionReviewResult, reason string) (db.EvolutionUnitSubmission, error) {
+	return s.Queries.MarkEvolutionSubmissionNeedsReview(ctx, db.MarkEvolutionSubmissionNeedsReviewParams{
+		ID:               submission.ID,
+		WorkspaceID:      submission.WorkspaceID,
+		ReviewDecision:   string(review.Decision),
+		ReviewConfidence: reviewConfidence(review.Confidence),
+		ReviewRiskLevel:  string(review.RiskLevel),
+		ReviewReason:     reason,
+		ReviewMetadata:   reviewerMetadata(review),
+	})
+}
+
+func (s *EvolutionService) markSubmissionNeedsReviewForReviewerError(ctx context.Context, submission db.EvolutionUnitSubmission, reviewErr error) (db.EvolutionUnitSubmission, error) {
+	metadata := reviewerFailureMetadata("reviewer_error", reviewErr.Error(), nil)
+	return s.Queries.MarkEvolutionSubmissionNeedsReview(ctx, db.MarkEvolutionSubmissionNeedsReviewParams{
+		ID:              submission.ID,
+		WorkspaceID:     submission.WorkspaceID,
+		ReviewDecision:  string(EvolutionReviewNeedsReview),
+		ReviewRiskLevel: string(EvolutionReviewRiskMedium),
+		ReviewReason:    "reviewer error",
+		ReviewMetadata:  metadata,
+	})
+}
+
+func (s *EvolutionService) markSubmissionNeedsReviewForInvalidReview(ctx context.Context, submission db.EvolutionUnitSubmission, review EvolutionReviewResult, reason string) (db.EvolutionUnitSubmission, error) {
+	metadata := reviewerFailureMetadata("invalid_review", reason, &review)
+	return s.Queries.MarkEvolutionSubmissionNeedsReview(ctx, db.MarkEvolutionSubmissionNeedsReviewParams{
+		ID:               submission.ID,
+		WorkspaceID:      submission.WorkspaceID,
+		ReviewDecision:   string(EvolutionReviewNeedsReview),
+		ReviewConfidence: reviewConfidence(review.Confidence),
+		ReviewRiskLevel:  string(EvolutionReviewRiskMedium),
+		ReviewReason:     reason,
+		ReviewMetadata:   metadata,
 	})
 }
 
@@ -212,6 +318,21 @@ func deterministicReviewMetadata(submission db.EvolutionUnitSubmission, outcome 
 	return metadata
 }
 
+func promotionMetadata(submission db.EvolutionUnitSubmission, dedupeHash string, review *EvolutionReviewResult) []byte {
+	metadata := map[string]any{
+		"dedupe_hash":     dedupeHash,
+		"content_hash":    submission.ContentHash,
+		"bundle_hash":     submission.BundleHash,
+		"source_agent_id": uuidString(submission.SourceAgentID),
+		"local_unit_id":   submission.LocalUnitID,
+	}
+	if review != nil {
+		metadata["review"] = reviewMetadataMap(*review)
+	}
+	encoded, _ := json.Marshal(metadata)
+	return encoded
+}
+
 func needsReviewReason(submission db.EvolutionUnitSubmission) string {
 	if submission.Confidence != "high" {
 		return "confidence requires review"
@@ -220,6 +341,105 @@ func needsReviewReason(submission db.EvolutionUnitSubmission) string {
 		return "sensitivity requires review"
 	}
 	return "manual review required"
+}
+
+func evolutionReviewInput(submission db.EvolutionUnitSubmission, files []db.EvolutionUnitSubmissionFile) EvolutionReviewInput {
+	reviewFiles := make([]EvolutionReviewFile, 0, len(files))
+	for _, file := range files {
+		reviewFiles = append(reviewFiles, EvolutionReviewFile{
+			Path:      file.Path,
+			Content:   file.Content,
+			MimeType:  file.MimeType,
+			SizeBytes: file.SizeBytes,
+		})
+	}
+	return EvolutionReviewInput{
+		WorkspaceID:    uuidString(submission.WorkspaceID),
+		SubmissionID:   uuidString(submission.ID),
+		UnitType:       submission.UnitType,
+		Title:          submission.Title,
+		Summary:        submission.Summary,
+		Content:        submission.Content,
+		Sensitivity:    submission.Sensitivity,
+		Confidence:     submission.Confidence,
+		SuggestedScope: submission.SuggestedScope,
+		Tags:           submission.Tags,
+		Tools:          submission.Tools,
+		TaskTypes:      submission.TaskTypes,
+		ProjectTypes:   submission.ProjectTypes,
+		Languages:      submission.Languages,
+		Frameworks:     submission.Frameworks,
+		Files:          reviewFiles,
+	}
+}
+
+func invalidEvolutionReviewResultReason(review EvolutionReviewResult) string {
+	switch review.Decision {
+	case EvolutionReviewPromote, EvolutionReviewNeedsReview, EvolutionReviewReject:
+	default:
+		return "unknown review decision"
+	}
+	switch review.RiskLevel {
+	case EvolutionReviewRiskLow, EvolutionReviewRiskMedium, EvolutionReviewRiskHigh:
+	default:
+		return "unknown review risk level"
+	}
+	if math.IsNaN(review.Confidence) || math.IsInf(review.Confidence, 0) || review.Confidence < 0 || review.Confidence > 1 {
+		return "invalid review confidence"
+	}
+	return ""
+}
+
+func reviewReason(review EvolutionReviewResult, fallback string) string {
+	if strings.TrimSpace(review.Rationale) != "" {
+		return strings.TrimSpace(review.Rationale)
+	}
+	return fallback
+}
+
+func reviewConfidence(value float64) pgtype.Float8 {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > 1 {
+		return pgtype.Float8{}
+	}
+	return pgtype.Float8{Float64: value, Valid: true}
+}
+
+func reviewerMetadata(review EvolutionReviewResult) []byte {
+	encoded, _ := json.Marshal(reviewMetadataMap(review))
+	return encoded
+}
+
+func reviewerFailureMetadata(kind, reason string, review *EvolutionReviewResult) []byte {
+	metadata := map[string]any{
+		"source": "evolution_reviewer",
+		"kind":   kind,
+		"reason": reason,
+	}
+	if review != nil {
+		metadata["review"] = reviewMetadataMap(*review)
+	}
+	encoded, _ := json.Marshal(metadata)
+	return encoded
+}
+
+func reviewMetadataMap(review EvolutionReviewResult) map[string]any {
+	metadata := map[string]any{
+		"source":               "evolution_reviewer",
+		"decision":             review.Decision,
+		"confidence":           review.Confidence,
+		"risk_level":           review.RiskLevel,
+		"title":                review.Title,
+		"summary":              review.Summary,
+		"suggested_tags":       review.SuggestedTags,
+		"suggested_task_types": review.SuggestedTaskTypes,
+		"suggested_scope":      review.SuggestedScope,
+		"risks":                review.Risks,
+		"rationale":            review.Rationale,
+	}
+	if review.Metadata != nil {
+		metadata["metadata"] = review.Metadata
+	}
+	return metadata
 }
 
 func (s *EvolutionService) matchSourceAgent(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) (bool, error) {

@@ -206,7 +206,8 @@ Important fields:
 - `bundle_ref` — source bundle path/reference.
 - `sensitivity`, `confidence`, `suggested_scope` — governance inputs.
 - `evidence`, `applies`, `tags`, `tools`, `task_types`, `project_types`, `languages`, `frameworks` — matching and audit metadata.
-- `status` — starts as `candidate`, may become `rejected` or `promoted`.
+- `status` — starts as `candidate`, may become `needs_review`, `rejected`, or `promoted`.
+- `review_decision`, `review_confidence`, `review_risk_level`, `review_reason`, `review_metadata`, `reviewed_at` — structured governance review metadata for submissions that require manual or future LLM-assisted review.
 - `promoted_unit_id` — points to `shared_evolution_unit` after promotion.
 
 ### `evolution_unit_submission_file`
@@ -249,6 +250,15 @@ A submission is rejected when:
 - `unit_type == "skill"` and `SKILL.md` does not contain frontmatter `name` and `description`.
 
 Rejected submissions remain in `evolution_unit_submission` with `status='rejected'` and a `reject_reason`.
+
+### Needs Review Rules
+
+A submission moves to `status='needs_review'` when deterministic hard checks pass but the governance confidence is not high enough for automatic promotion. The current deterministic triggers are:
+
+- `confidence != "high"`.
+- `sensitivity` is not `none` or `local_path`.
+
+The curator writes `review_decision='needs_review'`, `review_risk_level='medium'`, a human-readable `review_reason`, and deterministic review metadata. These rows are not promoted or delivered until a later review flow handles them.
 
 ### Promotion Rules
 

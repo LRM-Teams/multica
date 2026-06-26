@@ -31,15 +31,25 @@ const (
 )
 
 type EvolutionCurateResult struct {
-	Promoted int `json:"promoted"`
-	Rejected int `json:"rejected"`
-	Skipped  int `json:"skipped"`
-	Matched  int `json:"matched"`
+	Promoted    int `json:"promoted"`
+	Rejected    int `json:"rejected"`
+	NeedsReview int `json:"needs_review"`
+	Skipped     int `json:"skipped"`
+	Matched     int `json:"matched"`
 }
 
 func NewEvolutionService(queries *db.Queries) *EvolutionService {
 	return &EvolutionService{Queries: queries}
 }
+
+type evolutionCurationStatus string
+
+const (
+	evolutionCurationPromoted    evolutionCurationStatus = "promoted"
+	evolutionCurationRejected    evolutionCurationStatus = "rejected"
+	evolutionCurationNeedsReview evolutionCurationStatus = "needs_review"
+	evolutionCurationSkipped     evolutionCurationStatus = "skipped"
+)
 
 func (s *EvolutionService) CurateAndMatchWorkspace(ctx context.Context, workspaceID pgtype.UUID, limit int32) (EvolutionCurateResult, error) {
 	if limit <= 0 {
@@ -51,19 +61,26 @@ func (s *EvolutionService) CurateAndMatchWorkspace(ctx context.Context, workspac
 	}
 	result := EvolutionCurateResult{}
 	for _, submission := range submissions {
-		unit, promoted, rejected, err := s.curateSubmission(ctx, submission)
+		unit, status, err := s.curateSubmission(ctx, submission)
 		if err != nil {
 			return result, err
 		}
-		if rejected {
+		switch status {
+		case evolutionCurationRejected:
 			result.Rejected++
 			continue
-		}
-		if !promoted {
+		case evolutionCurationNeedsReview:
+			result.NeedsReview++
+			continue
+		case evolutionCurationSkipped:
+			result.Skipped++
+			continue
+		case evolutionCurationPromoted:
+			result.Promoted++
+		default:
 			result.Skipped++
 			continue
 		}
-		result.Promoted++
 		created, err := s.matchSourceAgent(ctx, submission, unit)
 		if err != nil {
 			return result, err
@@ -75,31 +92,33 @@ func (s *EvolutionService) CurateAndMatchWorkspace(ctx context.Context, workspac
 	return result, nil
 }
 
-func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.EvolutionUnitSubmission) (db.SharedEvolutionUnit, bool, bool, error) {
+func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.EvolutionUnitSubmission) (db.SharedEvolutionUnit, evolutionCurationStatus, error) {
 	files, err := s.Queries.ListEvolutionSubmissionFiles(ctx, db.ListEvolutionSubmissionFilesParams{WorkspaceID: submission.WorkspaceID, SubmissionID: submission.ID})
 	if err != nil {
-		return db.SharedEvolutionUnit{}, false, false, err
+		return db.SharedEvolutionUnit{}, evolutionCurationSkipped, err
 	}
 	if reason := rejectEvolutionSubmissionReason(submission, files); reason != "" {
-		_, err := s.Queries.RejectEvolutionSubmission(ctx, db.RejectEvolutionSubmissionParams{ID: submission.ID, WorkspaceID: submission.WorkspaceID, RejectReason: reason})
-		return db.SharedEvolutionUnit{}, false, true, err
+		_, err := s.rejectSubmissionWithReview(ctx, submission, reason, "high")
+		return db.SharedEvolutionUnit{}, evolutionCurationRejected, err
 	}
 	if submission.Confidence != "high" || (submission.Sensitivity != "none" && submission.Sensitivity != "local_path") {
-		return db.SharedEvolutionUnit{}, false, false, nil
+		reason := needsReviewReason(submission)
+		_, err := s.markSubmissionNeedsReview(ctx, submission, reason)
+		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, err
 	}
 
 	dedupeHash := evolutionDedupeHash(submission)
 	if dedupeHash == "" {
-		_, err := s.Queries.RejectEvolutionSubmission(ctx, db.RejectEvolutionSubmissionParams{ID: submission.ID, WorkspaceID: submission.WorkspaceID, RejectReason: "missing content hash"})
-		return db.SharedEvolutionUnit{}, false, true, err
+		_, err := s.rejectSubmissionWithReview(ctx, submission, "missing content hash", "medium")
+		return db.SharedEvolutionUnit{}, evolutionCurationRejected, err
 	}
 	existing, err := s.Queries.FindSharedEvolutionUnitByHash(ctx, db.FindSharedEvolutionUnitByHashParams{WorkspaceID: submission.WorkspaceID, UnitType: submission.UnitType, DedupeHash: dedupeHash})
 	if err == nil {
 		_, err = s.Queries.MarkEvolutionSubmissionPromoted(ctx, db.MarkEvolutionSubmissionPromotedParams{ID: submission.ID, WorkspaceID: submission.WorkspaceID, PromotedUnitID: existing.ID})
-		return existing, true, false, err
+		return existing, evolutionCurationPromoted, err
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return db.SharedEvolutionUnit{}, false, false, err
+		return db.SharedEvolutionUnit{}, evolutionCurationSkipped, err
 	}
 
 	metadata, _ := json.Marshal(map[string]any{
@@ -128,7 +147,7 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 		Score:            initialEvolutionScore(submission),
 	})
 	if err != nil {
-		return db.SharedEvolutionUnit{}, false, false, err
+		return db.SharedEvolutionUnit{}, evolutionCurationSkipped, err
 	}
 	version, err := s.Queries.CreateSharedEvolutionUnitVersion(ctx, db.CreateSharedEvolutionUnitVersionParams{
 		WorkspaceID:  submission.WorkspaceID,
@@ -142,20 +161,65 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 		ChangeReason: "initial promotion",
 	})
 	if err != nil {
-		return db.SharedEvolutionUnit{}, false, false, err
+		return db.SharedEvolutionUnit{}, evolutionCurationSkipped, err
 	}
 	unit, err = s.Queries.SetSharedEvolutionUnitCurrentVersion(ctx, db.SetSharedEvolutionUnitCurrentVersionParams{ID: unit.ID, WorkspaceID: submission.WorkspaceID, CurrentVersionID: version.ID})
 	if err != nil {
-		return db.SharedEvolutionUnit{}, false, false, err
+		return db.SharedEvolutionUnit{}, evolutionCurationSkipped, err
 	}
 	for _, file := range files {
 		_, err := s.Queries.UpsertSharedEvolutionUnitFile(ctx, db.UpsertSharedEvolutionUnitFileParams{WorkspaceID: submission.WorkspaceID, UnitID: unit.ID, VersionID: version.ID, Path: file.Path, Content: file.Content, ContentHash: file.ContentHash, MimeType: file.MimeType, SizeBytes: file.SizeBytes})
 		if err != nil {
-			return db.SharedEvolutionUnit{}, false, false, err
+			return db.SharedEvolutionUnit{}, evolutionCurationSkipped, err
 		}
 	}
 	_, err = s.Queries.MarkEvolutionSubmissionPromoted(ctx, db.MarkEvolutionSubmissionPromotedParams{ID: submission.ID, WorkspaceID: submission.WorkspaceID, PromotedUnitID: unit.ID})
-	return unit, true, false, err
+	return unit, evolutionCurationPromoted, err
+}
+
+func (s *EvolutionService) rejectSubmissionWithReview(ctx context.Context, submission db.EvolutionUnitSubmission, reason, riskLevel string) (db.EvolutionUnitSubmission, error) {
+	metadata := deterministicReviewMetadata(submission, "rejected")
+	return s.Queries.RejectEvolutionSubmissionWithReview(ctx, db.RejectEvolutionSubmissionWithReviewParams{
+		ID:              submission.ID,
+		WorkspaceID:     submission.WorkspaceID,
+		RejectReason:    reason,
+		ReviewDecision:  "reject",
+		ReviewRiskLevel: riskLevel,
+		ReviewReason:    reason,
+		ReviewMetadata:  metadata,
+	})
+}
+
+func (s *EvolutionService) markSubmissionNeedsReview(ctx context.Context, submission db.EvolutionUnitSubmission, reason string) (db.EvolutionUnitSubmission, error) {
+	metadata := deterministicReviewMetadata(submission, "needs_review")
+	return s.Queries.MarkEvolutionSubmissionNeedsReview(ctx, db.MarkEvolutionSubmissionNeedsReviewParams{
+		ID:              submission.ID,
+		WorkspaceID:     submission.WorkspaceID,
+		ReviewDecision:  "needs_review",
+		ReviewRiskLevel: "medium",
+		ReviewReason:    reason,
+		ReviewMetadata:  metadata,
+	})
+}
+
+func deterministicReviewMetadata(submission db.EvolutionUnitSubmission, outcome string) []byte {
+	metadata, _ := json.Marshal(map[string]any{
+		"source":      "deterministic_rules",
+		"outcome":     outcome,
+		"sensitivity": submission.Sensitivity,
+		"confidence":  submission.Confidence,
+	})
+	return metadata
+}
+
+func needsReviewReason(submission db.EvolutionUnitSubmission) string {
+	if submission.Confidence != "high" {
+		return "confidence requires review"
+	}
+	if submission.Sensitivity != "none" && submission.Sensitivity != "local_path" {
+		return "sensitivity requires review"
+	}
+	return "manual review required"
 }
 
 func (s *EvolutionService) matchSourceAgent(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) (bool, error) {

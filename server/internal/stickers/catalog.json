@@ -1308,6 +1308,104 @@
         "pay more",
         "money"
       ]
+    },
+    {
+      "id": "hi",
+      "name": "你在干嘛鸭",
+      "name_en": "Hi there",
+      "emotion": "greeting",
+      "file": "hi.jpg",
+      "tags": [
+        "你在干嘛鸭",
+        "你好",
+        "hi",
+        "在吗",
+        "嗨",
+        "hello",
+        "打招呼",
+        "greeting"
+      ]
+    },
+    {
+      "id": "got-it",
+      "name": "恍然大悟",
+      "name_en": "Got it",
+      "emotion": "acknowledge",
+      "file": "got-it.jpg",
+      "tags": [
+        "恍然大悟",
+        "收到",
+        "明白",
+        "懂了",
+        "了解",
+        "get it",
+        "understood",
+        "acknowledge"
+      ]
+    },
+    {
+      "id": "nod-yes",
+      "name": "忍不住点头",
+      "name_en": "Nodding yes",
+      "emotion": "agree",
+      "file": "nod-yes.gif",
+      "tags": [
+        "忍不住点头",
+        "同意",
+        "点头",
+        "收到",
+        "对",
+        "没问题",
+        "agree",
+        "yes",
+        "nod"
+      ]
+    },
+    {
+      "id": "thanks",
+      "name": "谢谢",
+      "name_en": "Thanks",
+      "emotion": "thanks",
+      "file": "thanks.jpg",
+      "tags": [
+        "谢谢",
+        "感谢",
+        "多谢",
+        "thanks",
+        "thank you"
+      ]
+    },
+    {
+      "id": "heart-hands",
+      "name": "比心",
+      "name_en": "Heart hands",
+      "emotion": "love",
+      "file": "heart-hands.jpg",
+      "tags": [
+        "比心",
+        "爱",
+        "喜欢",
+        "么么",
+        "love",
+        "heart"
+      ]
+    },
+    {
+      "id": "wow-nice",
+      "name": "绝赞",
+      "name_en": "Awesome",
+      "emotion": "praise",
+      "file": "wow-nice.jpg",
+      "tags": [
+        "绝赞",
+        "厉害",
+        "牛逼",
+        "赞",
+        "绝了",
+        "awesome",
+        "amazing",
+        "praise"
+      ]
     }
   ]
 }

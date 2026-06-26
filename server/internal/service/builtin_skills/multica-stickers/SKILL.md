@@ -1,62 +1,53 @@
 ---
 name: multica-stickers
-description: "Use when a chat, channel, or direct message would land better with a little emotion — a sticker to react, celebrate, agree, commiserate, or lighten the tone. Documents the `multica sticker search` command, which searches the embedded sticker library by mood or keyword (Chinese or English) and prints a token for each match. Drop a printed token — :sticker:<id>: — into the content of any message you send (a `multica dm`, a channel post, an issue comment) and it renders as the sticker for the human. Stickers are a garnish: at most one per message, only when it genuinely fits, never on routine status updates. Traced to server/cmd/multica/cmd_sticker.go, server/internal/stickers/, and the :sticker: token renderer in packages/views/common/markdown.tsx."
+description: "Send a sticker (表情包) instead of typing a short reply. When your whole reply would be a short social beat — hi/你好, ok/好的/没问题, 收到/明白, 谢谢, 赞/厉害/牛逼, 完美, 欢迎, 哈哈, 安排/这就办 — put a :sticker:<id>: token in your message and that IS the reply; do NOT also type the words. Tokens you can use right now with zero lookup: :sticker:hi: (你好), :sticker:ok: (好的/没问题), :sticker:got-it: (收到/明白), :sticker:nod-yes: (同意), :sticker:thumbs-up: (赞), :sticker:impressive: (厉害/牛逼), :sticker:perfect: (完美), :sticker:thanks: (谢谢), :sticker:applause: (鼓掌/恭喜), :sticker:on-it: (安排), :sticker:huaji: (哈哈). For anything else run `multica sticker search <mood>` ONCE — never read skill files, never run `multica sticker list`. Don't put stickers on substantive/technical messages. Traced to server/cmd/multica/cmd_sticker.go, server/internal/stickers/, and the :sticker: renderer in packages/views/common/markdown.tsx."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
 
 # Using stickers
 
-Stickers let you add a touch of human warmth or humour to a message — to react,
-celebrate a win, agree, say thanks, commiserate over a bug, or soften a "no".
-They are the cute/funny kind, like the stickers people send in chat apps.
+When your reply is just a short social beat — a greeting, an acknowledgement,
+praise, agreement, thanks — **send a sticker instead of typing it.** The sticker
+IS the reply; don't also type the words it already says (a `:sticker:got-it:`
+alone is the whole "收到", no extra text needed).
 
-Every claim below is pinned to source in
-`references/stickers-source-map.md`. If behavior ever differs from this
-document, the source map is where to re-check it.
+## Fast path — common replies (use these tokens directly, no command)
 
-## Find a sticker
+These ids are stable; use them straight from this table — do **not** look them up.
 
-    multica sticker search <keyword>
+| When you'd reply… | Send just this |
+| --- | --- |
+| 你好 / hi / 在吗 | `:sticker:hi:` |
+| 好的 / ok / 没问题 | `:sticker:ok:` |
+| 收到 / 明白 / 懂了 | `:sticker:got-it:` |
+| 同意 / 对 / 点头 | `:sticker:nod-yes:` |
+| 赞 / 点赞 | `:sticker:thumbs-up:` |
+| 厉害 / 牛逼 / 绝了 | `:sticker:impressive:` |
+| 完美 / 没毛病 | `:sticker:perfect:` |
+| 谢谢 | `:sticker:thanks:` |
+| 比心 / 爱了 | `:sticker:heart-hands:` |
+| 鼓掌 / 恭喜 | `:sticker:applause:` |
+| 安排 / 这就办 | `:sticker:on-it:` |
+| 哈哈 / 笑死 | `:sticker:huaji:` |
 
-Search by **mood or keyword, in Chinese or English**. The library is bundled
-into the CLI, so search is instant and works offline:
+Put the token into the message you send — e.g. `multica dm --message ":sticker:got-it:"`
+or a channel reply. That's it: no command, no file read.
 
-    multica sticker search 开心
+## Need something more specific?
+
+Run exactly **one** search (Chinese or English). Do not list the whole library,
+do not read any files:
+
+    multica sticker search 害怕
     multica sticker search celebrate
-    multica sticker search 谢谢
 
-Each match prints a **token**, a name, and a mood:
+It prints `:sticker:<id>:` tokens; pick one and put it in your message.
 
-    TOKEN                 NAME           MOOD
-    :sticker:tada:        撒花 / Tada      celebrate
-    :sticker:clap:        鼓掌 / Clap      celebrate
+## When to use it — and when not
 
-`multica sticker list` prints the whole library. If a search finds nothing, it
-lists the available moods so you can pick one.
-
-## Send a sticker — put the token in your message
-
-There is **no separate "send sticker" command**. You send a sticker by putting
-its token into the **content of a message you were already sending** — a
-`multica dm`, a channel message, or an issue comment. The frontend turns the
-token into the sticker image for the human.
-
-    multica dm --message "搞定了，已经上线 :sticker:tada:"
-
-    multica dm --message ":sticker:thumbs-up: 收到，这就去做"
-
-The token is `:sticker:<id>:` exactly as printed — `:sticker:tada:`,
-`:sticker:thumbs-up:`. An unknown id simply renders as nothing, so always use a
-token you got from `multica sticker search`.
-
-## Use them sparingly
-
-A sticker is a garnish, not a signature.
-
-- **At most one sticker per message**, and only when it genuinely fits the
-  moment — a finished task, a shared frustration, a friendly greeting.
-- **Never** decorate routine progress updates or task logs with stickers, and
-  never send a sticker on its own as a reply when words are what's needed.
-- When in doubt, leave it out. Overused stickers read as noise; a well-placed
-  one reads as warmth.
+- **Do** replace a short canned reply (hi / ok / 收到 / 谢谢 / 赞 / 厉害 / 安排)
+  with a single sticker. That's the main use.
+- **Don't** stick one on a substantive message that carries real information — a
+  status report, a code explanation, an actual answer. At most one sticker per
+  message, and never as filler on top of real content.

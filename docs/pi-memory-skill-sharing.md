@@ -241,9 +241,12 @@ This performs a deterministic MVP governance pass.
 A submission is rejected when:
 
 - `sensitivity == "secret"`.
-- content/payload/files contain obvious secret patterns, such as `BEGIN PRIVATE KEY`, `AKIA`, `xoxb-`, `ghp_`, `database_url=`, `npm_token`, or `sk-`.
 - content is empty and there are no files.
+- title, summary, content, payload, file count, individual file size, or total bundle size exceeds the deterministic governance limits.
+- file paths are unsafe, including absolute paths, traversal paths, duplicate normalized paths, `.env*`, private-key names, credential files, or auth/secret JSON files.
+- content/payload/files contain secret patterns, including private-key blocks, AWS keys, GitHub tokens, Slack tokens, OpenAI-style `sk-*` tokens, env-style secret assignments, credential-bearing database URLs, or high-entropy token-like strings.
 - `unit_type == "skill"` but no uploaded file has path `SKILL.md`.
+- `unit_type == "skill"` and `SKILL.md` does not contain frontmatter `name` and `description`.
 
 Rejected submissions remain in `evolution_unit_submission` with `status='rejected'` and a `reject_reason`.
 

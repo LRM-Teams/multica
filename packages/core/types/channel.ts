@@ -87,6 +87,7 @@ export type ChannelProjectFilesStatus =
   | "no_project"
   | "offline"
   | "missing"
+  | "github_unlinked"
   | "error";
 
 export interface ChannelProjectFiles {

@@ -140,7 +140,18 @@ func (h *Handler) ListChannelProjectFiles(w http.ResponseWriter, r *http.Request
 	}
 	projectID := uuidToString(pid)
 
-	// Resolve the runtime that actually hosts the managed workdir (the shared/
+	// GitHub-backed projects: read the file tree read-only from the bound repo
+	// via the workspace's GitHub App token. Decoupled from any runtime and from
+	// where agents execute, and automatic for every github_repo project.
+	if owner, repo, okGH := h.projectGitHubRepo(r.Context(), projectID); okGH {
+		ghCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		nodes, truncated, status := h.githubProjectFiles(ghCtx, parseUUID(workspaceID), owner, repo)
+		reply(status, nodes, truncated, projectID)
+		return
+	}
+
+	// Otherwise: resolve the runtime that hosts the managed workdir (the shared/
 	// cloud daemon on the server, the viewer's own daemon locally).
 	runtimeID, ok := h.resolveProjectWorkdirRuntime(r.Context(), workspaceID, userID, projectID)
 	if !ok {
@@ -217,6 +228,19 @@ func (h *Handler) GetChannelProjectFile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	projectID := uuidToString(pid)
+
+	// GitHub-backed projects: read the file content from the bound repo.
+	if owner, repo, okGH := h.projectGitHubRepo(r.Context(), projectID); okGH {
+		ghCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		out, found := h.githubProjectFileContent(ghCtx, parseUUID(workspaceID), owner, repo, filePath)
+		if !found {
+			writeError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
 
 	runtimeID, ok := h.resolveProjectWorkdirRuntime(r.Context(), workspaceID, userID, projectID)
 	if !ok {

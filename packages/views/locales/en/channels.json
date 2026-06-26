@@ -59,6 +59,7 @@
     "offline": "Your runtime is offline — can't read project files",
     "missing": "This project's folder isn't on your machine yet",
     "error": "Failed to load files",
+    "github_unlinked": "GitHub isn't connected — can't read repo files. Connect GitHub in workspace settings.",
     "truncated": "Showing a partial list (too many files)",
     "preview_binary": "Binary file — can't preview",
     "preview_truncated": "Large file — showing a partial preview",

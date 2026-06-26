@@ -59,6 +59,7 @@
     "offline": "你的运行时离线，无法读取项目文件",
     "missing": "这台机器上还没有该项目的工作目录",
     "error": "加载文件失败",
+    "github_unlinked": "未连接 GitHub，无法读取仓库文件。请在工作区设置里连接 GitHub。",
     "truncated": "文件较多，仅显示部分",
     "preview_binary": "二进制文件，无法预览",
     "preview_truncated": "文件较大，仅预览前一部分",

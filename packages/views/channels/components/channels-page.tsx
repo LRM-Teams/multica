@@ -350,10 +350,13 @@ export function ChannelsPage() {
   // never override an active DM selection. Mobile is list-first (no auto-open).
   const active = useMemo(() => {
     if (activeDmId) return null;
-    return isMobile
-      ? (channels.find((c) => c.id === activeId) ?? null)
-      : (channels.find((c) => c.id === activeId) ?? channels[0] ?? null);
-  }, [channels, activeId, activeDmId, isMobile]);
+    const explicit =
+      channels.find((c) => c.id === activeId) ??
+      archivedChannels.find((c) => c.id === activeId) ??
+      null;
+    return isMobile ? explicit : (explicit ?? channels[0] ?? null);
+  }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
+  const isActiveArchived = !!active?.archived_at;
   const { data: messages = [] } = useQuery(channelMessagesOptions(active?.id ?? ""));
   const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
@@ -1345,6 +1348,11 @@ export function ChannelsPage() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 font-semibold">
                       <span className="truncate">{active.name}</span>
+                      {isActiveArchived && (
+                        <Badge variant="secondary" className="shrink-0 uppercase tracking-wide">
+                          {t(($) => $.sidebar.archived_section)}
+                        </Badge>
+                      )}
                       {active.lark_chat_id && (
                         <Badge variant="secondary" className="shrink-0">
                           {t(($) => $.header.feishu)}
@@ -1440,62 +1448,96 @@ export function ChannelsPage() {
                 }
               />
 
-              <div className="px-4 pb-4">
-                <div className="rounded-xl border bg-card shadow-sm">
-                  <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
-                    <ContentEditor
-                      key={active.id}
-                      ref={editorRef}
-                      placeholder={t(($) => $.composer.placeholder)}
-                      onUpdate={handleEditorUpdate}
-                      onSubmit={handleSend}
-                      onUploadFile={handleUpload}
-                      submitOnEnter
-                      showBubbleMenu={false}
-                      mentionAllowedActorIds={channelMemberIds}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between px-2 pb-2">
-                    <div className="flex items-center gap-0.5 text-muted-foreground">
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        multiple
-                        className="hidden"
-                        onChange={(e) => {
-                          handlePickFiles(e.target.files);
-                          e.target.value = "";
-                        }}
-                      />
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className={cn(isMobile ? "size-10" : "size-8")}
-                        aria-label={t(($) => $.composer.attach_aria)}
-                        onClick={() => fileInputRef.current?.click()}
-                      >
-                        <Paperclip className={cn(isMobile ? "size-5" : "size-4")} />
-                      </Button>
-                      <ProjectPickerButton
-                        wsId={wsId}
-                        value={channelProjectId || null}
-                        onChange={(projectId) => setChannelProject.mutate(projectId)}
-                        label={t(($) => $.composer.project_label)}
-                        noneLabel={t(($) => $.composer.project_none)}
-                        tooltip={t(($) => $.composer.project_tooltip)}
+              {isActiveArchived ? (
+                <div className="flex items-center gap-2 border-t px-4 py-3 text-sm text-muted-foreground">
+                  <Archive className="size-4 shrink-0" />
+                  <span className="flex-1">{t(($) => $.archive_dialog.readonly_notice)}</span>
+                  {canArchive(active) ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleRestoreChannel(active.id)}
+                      disabled={restoreChannel.isPending}
+                    >
+                      <ArchiveRestore className="size-3.5" />
+                      {t(($) => $.sidebar.archived_restore)}
+                    </Button>
+                  ) : (
+                    <Tooltip>
+                      <TooltipTrigger>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          aria-disabled
+                          className="cursor-default opacity-50"
+                          onClick={() => toast.error(t(($) => $.sidebar.restore_permission))}
+                        >
+                          <ArchiveRestore className="size-3.5" />
+                          {t(($) => $.sidebar.archived_restore)}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t(($) => $.sidebar.restore_permission)}</TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
+              ) : (
+                <div className="px-4 pb-4">
+                  <div className="rounded-xl border bg-card shadow-sm">
+                    <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
+                      <ContentEditor
+                        key={active.id}
+                        ref={editorRef}
+                        placeholder={t(($) => $.composer.placeholder)}
+                        onUpdate={handleEditorUpdate}
+                        onSubmit={handleSend}
+                        onUploadFile={handleUpload}
+                        submitOnEnter
+                        showBubbleMenu={false}
+                        mentionAllowedActorIds={channelMemberIds}
                       />
                     </div>
-                    <Button
-                      onClick={handleSend}
-                      disabled={draftEmpty || sendMessage.isPending}
-                      size="sm"
-                      className={cn(isMobile && "min-h-10 px-4")}
-                    >
-                      <Send className="size-4" /> {t(($) => $.composer.send)}
-                    </Button>
+                    <div className="flex items-center justify-between px-2 pb-2">
+                      <div className="flex items-center gap-0.5 text-muted-foreground">
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          multiple
+                          className="hidden"
+                          onChange={(e) => {
+                            handlePickFiles(e.target.files);
+                            e.target.value = "";
+                          }}
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className={cn(isMobile ? "size-10" : "size-8")}
+                          aria-label={t(($) => $.composer.attach_aria)}
+                          onClick={() => fileInputRef.current?.click()}
+                        >
+                          <Paperclip className={cn(isMobile ? "size-5" : "size-4")} />
+                        </Button>
+                        <ProjectPickerButton
+                          wsId={wsId}
+                          value={channelProjectId || null}
+                          onChange={(projectId) => setChannelProject.mutate(projectId)}
+                          label={t(($) => $.composer.project_label)}
+                          noneLabel={t(($) => $.composer.project_none)}
+                          tooltip={t(($) => $.composer.project_tooltip)}
+                        />
+                      </div>
+                      <Button
+                        onClick={handleSend}
+                        disabled={draftEmpty || sendMessage.isPending}
+                        size="sm"
+                        className={cn(isMobile && "min-h-10 px-4")}
+                      >
+                        <Send className="size-4" /> {t(($) => $.composer.send)}
+                      </Button>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
             </>
           )}
         </main>

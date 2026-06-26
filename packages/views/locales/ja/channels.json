@@ -28,7 +28,8 @@
     "cancel": "キャンセル",
     "confirm": "アーカイブ",
     "error": "チャンネルのアーカイブに失敗しました",
-    "restore_error": "アーカイブ解除に失敗しました"
+    "restore_error": "アーカイブ解除に失敗しました",
+    "readonly_notice": "このチャンネルはアーカイブされています"
   },
   "delete_dialog": {
     "title": "このグループを削除しますか？",

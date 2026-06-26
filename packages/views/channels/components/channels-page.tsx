@@ -1075,12 +1075,14 @@ export function ChannelsPage() {
                         ) : (
                           <Tooltip>
                             <TooltipTrigger>
-                              <span>
-                                <ContextMenuItem disabled>
-                                  <Archive className="size-4" />
-                                  {t(($) => $.sidebar.archive)}
-                                </ContextMenuItem>
-                              </span>
+                              <ContextMenuItem
+                                aria-disabled
+                                onClick={() => toast.error(t(($) => $.sidebar.archive_permission))}
+                                className="opacity-50"
+                              >
+                                <Archive className="size-4" />
+                                {t(($) => $.sidebar.archive)}
+                              </ContextMenuItem>
                             </TooltipTrigger>
                             <TooltipContent side="right">
                               {t(($) => $.sidebar.archive_permission)}
@@ -1164,12 +1166,14 @@ export function ChannelsPage() {
                               ) : (
                                 <Tooltip>
                                   <TooltipTrigger>
-                                    <span>
-                                      <DropdownMenuItem disabled>
-                                        <Archive className="size-4" />
-                                        {t(($) => $.sidebar.archive)}
-                                      </DropdownMenuItem>
-                                    </span>
+                                    <DropdownMenuItem
+                                      aria-disabled
+                                      onClick={() => toast.error(t(($) => $.sidebar.archive_permission))}
+                                      className="opacity-50"
+                                    >
+                                      <Archive className="size-4" />
+                                      {t(($) => $.sidebar.archive)}
+                                    </DropdownMenuItem>
                                   </TooltipTrigger>
                                   <TooltipContent side="left">
                                     {t(($) => $.sidebar.archive_permission)}
@@ -1249,12 +1253,14 @@ export function ChannelsPage() {
                                 ) : (
                                   <Tooltip>
                                     <TooltipTrigger>
-                                      <span>
-                                        <DropdownMenuItem disabled>
-                                          <ArchiveRestore className="size-4" />
-                                          {t(($) => $.sidebar.archived_restore)}
-                                        </DropdownMenuItem>
-                                      </span>
+                                      <DropdownMenuItem
+                                        aria-disabled
+                                        onClick={() => toast.error(t(($) => $.sidebar.restore_permission))}
+                                        className="opacity-50"
+                                      >
+                                        <ArchiveRestore className="size-4" />
+                                        {t(($) => $.sidebar.archived_restore)}
+                                      </DropdownMenuItem>
                                     </TooltipTrigger>
                                     <TooltipContent side="left">
                                       {t(($) => $.sidebar.restore_permission)}
@@ -1273,12 +1279,14 @@ export function ChannelsPage() {
                             ) : (
                               <Tooltip>
                                 <TooltipTrigger>
-                                  <span>
-                                    <ContextMenuItem disabled>
-                                      <ArchiveRestore className="size-4" />
-                                      {t(($) => $.sidebar.archived_restore)}
-                                    </ContextMenuItem>
-                                  </span>
+                                  <ContextMenuItem
+                                    aria-disabled
+                                    onClick={() => toast.error(t(($) => $.sidebar.restore_permission))}
+                                    className="opacity-50"
+                                  >
+                                    <ArchiveRestore className="size-4" />
+                                    {t(($) => $.sidebar.archived_restore)}
+                                  </ContextMenuItem>
                                 </TooltipTrigger>
                                 <TooltipContent side="right">
                                   {t(($) => $.sidebar.restore_permission)}

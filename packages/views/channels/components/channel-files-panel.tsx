@@ -326,7 +326,9 @@ export function ChannelFilesPanel({ channelId }: { channelId: string }) {
           ? t(($) => $.files.offline)
           : status === "missing"
             ? t(($) => $.files.missing)
-            : t(($) => $.files.error);
+            : status === "github_unlinked"
+              ? t(($) => $.files.github_unlinked)
+              : t(($) => $.files.error);
     return <p className="py-6 text-center text-xs text-muted-foreground">{msg}</p>;
   }
 

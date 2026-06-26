@@ -32,6 +32,19 @@ export interface DMItem {
   last_message?: ChannelLastMessage;
   unread: number;
   updated_at: string;
+  /**
+   * Set when the conversation is pinned to the top of DIRECT MESSAGES. Backed by
+   * peer-level state (`dm_peer_state.pinned_at`) so pinning dedupes across a
+   * peer's dm_channel + legacy_session sources. Absent/undefined = not pinned.
+   */
+  pinned_at?: string;
+  /**
+   * True when the user manually marked the conversation unread (peer-level
+   * `dm_peer_state.manual_unread_at`). The server also bumps `unread` to at
+   * least 1 in this case so the existing unread pill renders; this flag lets
+   * the row distinguish a manual unread from real unread messages if needed.
+   */
+  manually_unread?: boolean;
 }
 
 /** Body for POST /api/dm — idempotent create-or-find of a 1-on-1 DM. */

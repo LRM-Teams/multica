@@ -119,6 +119,11 @@
     "files": "文件",
     "thread_empty": "还没有消息，打个招呼吧。",
     "self_label": "你",
-    "open_failed": "无法打开会话"
+    "open_failed": "无法打开会话",
+    "mark_unread": "标为未读",
+    "pin": "置顶",
+    "unpin": "取消置顶",
+    "close_chat": "关闭会话",
+    "action_failed": "操作失败，请重试"
   }
 }

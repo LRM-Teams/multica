@@ -238,6 +238,7 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to mark channel read")
 		return
 	}
+	h.clearDMPeerManualUnreadForChannel(r.Context(), workspaceID, userID, channelID)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -695,6 +696,9 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
+	if ch.Kind == "dm" {
+		h.clearDMHiddenForChannelMembers(r.Context(), workspaceID, channelID)
+	}
 	h.publish(protocol.EventChannelMessage, workspaceID, "member", userID, msg)
 	if ch.Kind == "dm" {
 		// 1-on-1 DM: the agent peer (if any) replies to every user message
@@ -1173,6 +1177,7 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 		return
 	}
 	_, _ = h.DB.Exec(context.Background(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
+	h.clearDMHiddenForChannelMembers(context.Background(), uuidToString(workspaceID), channelID)
 	h.publish(protocol.EventChannelMessage, uuidToString(workspaceID), "agent", uuidToString(agentID), msg)
 	ch, found := h.getChannel(context.Background(), uuidToString(workspaceID), channelID)
 	if found {

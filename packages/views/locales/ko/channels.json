@@ -119,6 +119,11 @@
     "files": "파일",
     "thread_empty": "아직 메시지가 없습니다. 인사를 건네 보세요.",
     "self_label": "나",
-    "open_failed": "대화를 열 수 없습니다"
+    "open_failed": "대화를 열 수 없습니다",
+    "mark_unread": "읽지 않음으로 표시",
+    "pin": "고정",
+    "unpin": "고정 해제",
+    "close_chat": "대화 닫기",
+    "action_failed": "작업에 실패했습니다. 다시 시도해 주세요"
   }
 }

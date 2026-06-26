@@ -119,6 +119,11 @@
     "files": "Files",
     "thread_empty": "No messages yet. Say hello.",
     "self_label": "you",
-    "open_failed": "Couldn't open conversation"
+    "open_failed": "Couldn't open conversation",
+    "mark_unread": "Mark as unread",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "close_chat": "Close chat",
+    "action_failed": "Action failed, please try again"
   }
 }

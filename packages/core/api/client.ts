@@ -1772,6 +1772,32 @@ export class ApiClient {
     });
   }
 
+  // DM conversation operations (pin / mark-unread / close). `source` routes to
+  // the channel-backed or legacy-session-backed endpoint; the backend persists
+  // them as peer-level state so an action on one source covers the peer's other
+  // source too. All return `{ ok: true }`; callers refetch `/api/dm`.
+  private dmOpsPath(source: DMItem["source"], id: string): string {
+    const seg = source === "dm_channel" ? "channels" : "sessions";
+    return `/api/dm/${seg}/${id}`;
+  }
+
+  async pinDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
+    return this.fetch(`${this.dmOpsPath(source, id)}/pin`, { method: "PUT" });
+  }
+
+  async unpinDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
+    return this.fetch(`${this.dmOpsPath(source, id)}/pin`, { method: "DELETE" });
+  }
+
+  async markDMUnread(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
+    return this.fetch(`${this.dmOpsPath(source, id)}/unread`, { method: "POST" });
+  }
+
+  /** Close Chat — soft-hides the conversation from the user's list (recoverable). */
+  async closeDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
+    return this.fetch(this.dmOpsPath(source, id), { method: "DELETE" });
+  }
+
   async listChannels(): Promise<Channel[]> {
     return this.fetch("/api/channels");
   }

@@ -1,15 +1,28 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2, Plus, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, Mail, Pin, PinOff, Plus, Search, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { dmListOptions } from "@multica/core/dm";
+import { toast } from "sonner";
+import {
+  dmListOptions,
+  useSetDMPinned,
+  useMarkDMUnread,
+  useCloseDM,
+} from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@multica/ui/components/ui/context-menu";
 import {
   Drawer,
   DrawerContent,
@@ -57,8 +70,28 @@ export function DmList({
   const [collapsed, setCollapsed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
+  const setPinned = useSetDMPinned();
+  const markUnread = useMarkDMUnread();
+  const closeDM = useCloseDM();
+
+  const onError = () => toast.error(t(($) => $.dm.action_failed));
+  const handleTogglePin = (dm: DMItem) =>
+    setPinned.mutate({ source: dm.source, id: dm.id, pinned: !dm.pinned_at }, { onError });
+  const handleMarkUnread = (dm: DMItem) =>
+    markUnread.mutate({ source: dm.source, id: dm.id }, { onError });
+  const handleClose = (dm: DMItem) =>
+    closeDM.mutate({ source: dm.source, id: dm.id }, { onError });
+
   const aggregateUnread = useMemo(
     () => dms.reduce((sum, dm) => sum + (dm.unread ?? 0), 0),
+    [dms],
+  );
+
+  // Pinned conversations float to the top of DIRECT MESSAGES; the server keeps
+  // each group recency-sorted, so a stable sort preserves that order within the
+  // pinned and unpinned groups.
+  const sortedDms = useMemo(
+    () => [...dms].sort((a, b) => (b.pinned_at ? 1 : 0) - (a.pinned_at ? 1 : 0)),
     [dms],
   );
 
@@ -109,7 +142,7 @@ export function DmList({
             </Button>
           </div>
         ) : (
-          dms.map((dm) => (
+          sortedDms.map((dm) => (
             <DmRow
               key={`${dm.source}:${dm.id}`}
               dm={dm}
@@ -117,6 +150,9 @@ export function DmList({
               currentUserName={currentUserName}
               timeAgo={timeAgo}
               onSelect={() => onSelect(dm)}
+              onTogglePin={() => handleTogglePin(dm)}
+              onMarkUnread={() => handleMarkUnread(dm)}
+              onClose={() => handleClose(dm)}
             />
           ))
         ))}
@@ -275,13 +311,23 @@ function DmRow({
   currentUserName,
   timeAgo,
   onSelect,
+  onTogglePin,
+  onMarkUnread,
+  onClose,
 }: {
   dm: DMItem;
   active: boolean;
   currentUserName: string | null;
   timeAgo: (dateStr: string) => string;
   onSelect: () => void;
+  /** Pin / unpin (toggles based on current pinned state). */
+  onTogglePin: () => void;
+  /** Mark the conversation manually unread. */
+  onMarkUnread: () => void;
+  /** Close Chat — soft-hide the conversation (recoverable). */
+  onClose: () => void;
 }) {
+  const { t } = useT("channels");
   const last = dm.last_message;
   const preview = last ? `${last.author_name}: ${last.content}`.replace(/\s+/g, " ") : "";
   // Surface mentions of the viewer at full foreground weight (no bold) so an
@@ -291,21 +337,24 @@ function DmRow({
     !!currentUserName &&
     last.content.toLowerCase().includes(`@${currentUserName.toLowerCase()}`);
   const unread = dm.unread ?? 0;
+  const pinned = !!dm.pinned_at;
   // peer.type "user" maps to the member-style avatar; agents get the presence
   // status dot. Both resolve name/avatar from the workspace queries.
   const actorType = dm.peer.type === "agent" ? "agent" : "member";
 
   return (
-    <div
-      className={cn(
-        "mb-0.5 rounded-lg transition-colors",
-        active ? "bg-primary/[0.08]" : "hover:bg-accent",
-      )}
-    >
-      <button
-        type="button"
-        onClick={onSelect}
-        className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left"
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <button
+            type="button"
+            onClick={onSelect}
+            className={cn(
+              "mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
+              active ? "bg-primary/[0.08]" : "hover:bg-accent",
+            )}
+          />
+        }
       >
         <ActorAvatar
           actorType={actorType}
@@ -316,8 +365,13 @@ function DmRow({
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
-            <span className="truncate text-sm font-medium text-foreground">
-              {dm.peer.name}
+            <span className="flex min-w-0 items-center gap-1">
+              {pinned && (
+                <Pin className="size-3 shrink-0 -rotate-45 fill-muted-foreground/70 text-muted-foreground/70" />
+              )}
+              <span className="truncate text-sm font-medium text-foreground">
+                {dm.peer.name}
+              </span>
             </span>
             {last && (
               <span className="shrink-0 text-[11px] text-muted-foreground">
@@ -341,7 +395,22 @@ function DmRow({
             )}
           </div>
         </div>
-      </button>
-    </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onClick={onMarkUnread}>
+          <Mail />
+          {t(($) => $.dm.mark_unread)}
+        </ContextMenuItem>
+        <ContextMenuItem onClick={onTogglePin}>
+          {pinned ? <PinOff /> : <Pin />}
+          {pinned ? t(($) => $.dm.unpin) : t(($) => $.dm.pin)}
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={onClose}>
+          <X />
+          {t(($) => $.dm.close_chat)}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

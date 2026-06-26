@@ -15,13 +15,18 @@ export interface Channel {
   id: string;
   workspace_id: string;
   name: string;
+  kind: "group" | "dm";
   description: string | null;
   lark_chat_id: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
+  archived_at?: string | null;
+  archived_by?: string | null;
   /** List-only enrichments (absent on create/update/get responses). */
   unread_count?: number;
+  manually_unread?: boolean;
+  pinned_at?: string | null;
   last_message?: ChannelLastMessage | null;
   members?: ChannelMemberBrief[];
 }

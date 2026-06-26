@@ -97,8 +97,9 @@ func (h *Handler) resolveProjectWorkdirRuntime(ctx context.Context, workspaceID,
 
 // ChannelProjectFilesResponse is the file-tree listing for a channel's bound
 // project workdir. Status tells the frontend which empty/error state to show:
-//   ok | no_project | offline (no online daemon for the viewer) | missing
-//   (the project workdir doesn't exist on that daemon yet) | error
+//
+//	ok | no_project | offline (no online daemon for the viewer) | missing
+//	(the project workdir doesn't exist on that daemon yet) | error
 type ChannelProjectFilesResponse struct {
 	ProjectID string                     `json:"project_id"`
 	Status    string                     `json:"status"`
@@ -299,6 +300,9 @@ func (h *Handler) SetChannelProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
 		return
 	}
 	var req setChannelProjectRequest

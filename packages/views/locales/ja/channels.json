@@ -141,6 +141,7 @@
     "pin": "ピン留め",
     "unpin": "ピン留めを解除",
     "close_chat": "チャットを閉じる",
-    "action_failed": "操作に失敗しました。もう一度お試しください"
+    "action_failed": "操作に失敗しました。もう一度お試しください",
+    "composer_placeholder": "{{name}} にメッセージ…"
   }
 }

@@ -170,11 +170,6 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     [typingActors],
   );
 
-  // 1-on-1 DM: scope the composer's @-mention picker to the peer only. Without
-  // an allowlist the picker defaults to the whole workspace, which is wrong for
-  // a 1-on-1 (only the peer is reachable here).
-  const mentionAllowedActorIds = useMemo(() => new Set([dm.peer.id]), [dm.peer.id]);
-
   // Bottom-stick on new messages and open-at-latest on switch are handled by
   // ChannelMessageList (react-virtuoso). No manual scrollIntoView needed.
 
@@ -342,11 +337,11 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
             <ContentEditor
               key={channelId}
               ref={editorRef}
-              placeholder={t(($) => $.composer.placeholder)}
+              placeholder={t(($) => $.dm.composer_placeholder, { name: dm.peer.name })}
               onUpdate={handleEditorUpdate}
               onSubmit={handleSend}
               onUploadFile={handleUpload}
-              mentionAllowedActorIds={mentionAllowedActorIds}
+              disableMentions
               submitOnEnter
               showBubbleMenu={false}
             />

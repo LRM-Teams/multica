@@ -1,102 +1,94 @@
-package stickers
+package stickers_test
 
 import (
-	"io/fs"
-	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/stickerimg"
+	"github.com/multica-ai/multica/server/internal/stickers"
 )
 
 func TestCatalogMatchesAssetsOneToOne(t *testing.T) {
-	entries, err := fs.ReadDir(fsys, "assets")
-	if err != nil {
-		t.Fatalf("read assets dir: %v", err)
+	assetFiles := make(map[string]bool)
+	for _, name := range stickerimg.Names() {
+		assetFiles[name] = true
 	}
-	assetIDs := make(map[string]bool)
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasSuffix(name, ".png") {
-			t.Errorf("non-png asset present: %s", name)
-			continue
-		}
-		assetIDs[strings.TrimSuffix(name, ".png")] = true
+	if len(assetFiles) == 0 {
+		t.Fatal("no embedded sticker images found")
 	}
 
-	catalogIDs := make(map[string]bool)
-	for _, s := range All() {
-		if catalogIDs[s.ID] {
+	catalogFiles := make(map[string]bool)
+	ids := make(map[string]bool)
+	for _, s := range stickers.All() {
+		if ids[s.ID] {
 			t.Errorf("duplicate catalog id: %s", s.ID)
 		}
-		catalogIDs[s.ID] = true
-		if !assetIDs[s.ID] {
-			t.Errorf("catalog id %q has no assets/%s.png", s.ID, s.ID)
+		ids[s.ID] = true
+		if s.File == "" || !assetFiles[s.File] {
+			t.Errorf("catalog id %q references missing asset %q", s.ID, s.File)
 		}
+		catalogFiles[s.File] = true
 		if s.Name == "" || s.Emotion == "" || len(s.Tags) == 0 {
 			t.Errorf("catalog id %q is missing name/emotion/tags", s.ID)
 		}
 	}
-	for id := range assetIDs {
-		if !catalogIDs[id] {
-			t.Errorf("asset %s.png has no catalog entry", id)
+	for f := range assetFiles {
+		if !catalogFiles[f] {
+			t.Errorf("asset %q has no catalog entry", f)
 		}
 	}
-	if len(catalogIDs) == 0 {
+	if len(ids) == 0 {
 		t.Fatal("catalog is empty")
 	}
 }
 
-func TestAssetKnownAndUnknown(t *testing.T) {
-	known := All()[0].ID
-	if data, ok := Asset(known); !ok || len(data) == 0 {
-		t.Errorf("Asset(%q) = ok %v, %d bytes; want ok with bytes", known, ok, len(data))
+func TestGet(t *testing.T) {
+	known := stickers.All()[0].ID
+	if _, ok := stickers.Get(known); !ok {
+		t.Errorf("Get(%q) = not found; want found", known)
 	}
-	// Unknown id and path-traversal attempts must return ok=false without a
-	// filesystem read.
-	for _, bad := range []string{"does-not-exist", "../catalog", "..%2fcatalog", ""} {
-		if _, ok := Asset(bad); ok {
-			t.Errorf("Asset(%q) = ok true; want false", bad)
-		}
+	if _, ok := stickers.Get("does-not-exist"); ok {
+		t.Error("Get(unknown) = found; want not found")
 	}
 }
 
 func TestSearchByMoodAndKeyword(t *testing.T) {
 	// Exact mood match leads the results.
-	happy := Search("happy")
-	if len(happy) == 0 || happy[0].Emotion != "happy" {
-		t.Errorf("Search(happy) should lead with an emotion=happy sticker, got %+v", happy)
+	praise := stickers.Search("praise")
+	if len(praise) == 0 || praise[0].Emotion != "praise" {
+		t.Errorf("Search(praise) should lead with an emotion=praise sticker, got %v", ids(praise))
 	}
 
 	// Chinese keyword in tags resolves.
-	if got := Search("撒花"); len(got) == 0 {
-		t.Error("Search(撒花) returned nothing; expected the tada sticker")
-	} else {
-		found := false
-		for _, s := range got {
-			if s.ID == "tada" {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("Search(撒花) missing tada; got %v", ids(got))
-		}
+	if !containsID(stickers.Search("鼓掌"), "applause") {
+		t.Errorf("Search(鼓掌) should include applause; got %v", ids(stickers.Search("鼓掌")))
 	}
 
 	// English keyword, case-insensitive.
-	if got := Search("CELEBRATE"); len(got) == 0 {
+	if len(stickers.Search("CELEBRATE")) == 0 {
 		t.Error("Search(CELEBRATE) returned nothing; expected celebrate-mood stickers")
 	}
 
 	// Empty query returns the whole catalog.
-	if len(Search("")) != len(All()) {
+	if len(stickers.Search("")) != len(stickers.All()) {
 		t.Error("Search(empty) should return the full catalog")
 	}
 
 	// Nonsense query returns nothing.
-	if got := Search("zzz-no-such-sticker-zzz"); len(got) != 0 {
+	if got := stickers.Search("zzz-no-such-sticker-zzz"); len(got) != 0 {
 		t.Errorf("Search(nonsense) = %v; want empty", ids(got))
 	}
 }
 
-func ids(list []Sticker) []string {
+func containsID(list []stickers.Sticker, id string) bool {
+	for _, s := range list {
+		if s.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func ids(list []stickers.Sticker) []string {
 	out := make([]string, len(list))
 	for i, s := range list {
 		out[i] = s.ID

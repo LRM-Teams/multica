@@ -2,8 +2,10 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/stickerimg"
 	"github.com/multica-ai/multica/server/internal/stickers"
 )
 
@@ -20,18 +22,35 @@ func (h *Handler) ListStickers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetStickerAsset serves one sticker image by id. Unknown ids 404 (Asset never
-// touches the filesystem for an id absent from the catalog, so the raw URL
-// param carries no path-traversal risk). Assets are immutable and content-
-// addressed by a stable id, so they're cached aggressively.
+// GetStickerAsset serves one sticker image by id. Unknown ids 404 (the lookup
+// goes through the catalog, and stickerimg.Read rejects anything outside the
+// embedded set, so the raw URL param carries no path-traversal risk). Assets
+// are immutable and content-addressed by a stable id, so they're cached
+// aggressively.
 func (h *Handler) GetStickerAsset(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	data, ok := stickers.Asset(id)
+	sticker, ok := stickers.Get(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "sticker not found")
 		return
 	}
-	w.Header().Set("Content-Type", "image/png")
+	data, ok := stickerimg.Read(sticker.File)
+	if !ok {
+		writeError(w, http.StatusNotFound, "sticker not found")
+		return
+	}
+	w.Header().Set("Content-Type", stickerContentType(sticker.File))
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Write(data)
+}
+
+func stickerContentType(file string) string {
+	switch {
+	case strings.HasSuffix(file, ".png"):
+		return "image/png"
+	case strings.HasSuffix(file, ".gif"):
+		return "image/gif"
+	default:
+		return "image/jpeg"
+	}
 }

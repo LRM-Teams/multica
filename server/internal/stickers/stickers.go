@@ -1,32 +1,36 @@
-// Package stickers embeds the platform sticker library (a curated set of
-// expressive images) into the server binary and exposes lookup + search over
-// it. Agents reference a sticker in chat/channel/DM content with the token
-// :sticker:<id>: ; the frontend resolves that token to GET /api/stickers/<id>.
+// Package stickers holds the platform sticker catalog (a curated set of
+// expressive images) and lookup + search over it. Agents reference a sticker in
+// chat/channel/DM content with the token :sticker:<id>: ; the frontend resolves
+// that token to GET /api/stickers/<id>.
 //
-// catalog.json is the single source of truth (id, bilingual name/tags,
-// emotion); assets/<id>.png holds the image for each catalog entry. The two are
-// kept 1:1 — a catalog entry without an asset (or vice versa) is a build-time
-// bug, surfaced by the package tests.
+// This package embeds only catalog.json (small) so it can be imported by the
+// CLI — which needs search but not the image bytes — without bloating that
+// binary. The image bytes live in the sibling stickerimg package, embedded
+// separately and imported only by the server. catalog.json is the source of
+// truth: each entry's File names an image in stickerimg/files, kept 1:1 (a
+// catalog entry without an asset, or vice versa, is a build-time bug surfaced
+// by the package tests).
 package stickers
 
 import (
-	"embed"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 )
 
-//go:embed catalog.json assets
-var fsys embed.FS
+//go:embed catalog.json
+var catalogJSON []byte
 
-// Sticker is one catalog entry. Tags mix Chinese and English so search works in
-// either language (agents and users both query in both).
+// Sticker is one catalog entry. Tags mix Chinese and English (the zh caption
+// plus an en gloss) so search works in either language.
 type Sticker struct {
 	ID      string   `json:"id"`
 	Name    string   `json:"name"`
 	NameEn  string   `json:"name_en"`
 	Emotion string   `json:"emotion"`
+	File    string   `json:"file"`
 	Tags    []string `json:"tags"`
 }
 
@@ -42,11 +46,7 @@ var (
 )
 
 func init() {
-	raw, err := fsys.ReadFile("catalog.json")
-	if err != nil {
-		panic(fmt.Sprintf("stickers: read catalog.json: %v", err))
-	}
-	if err := json.Unmarshal(raw, &catalog); err != nil {
+	if err := json.Unmarshal(catalogJSON, &catalog); err != nil {
 		panic(fmt.Sprintf("stickers: parse catalog.json: %v", err))
 	}
 	byID = make(map[string]Sticker, len(catalog.Stickers))
@@ -68,25 +68,11 @@ func Get(id string) (Sticker, bool) {
 	return s, ok
 }
 
-// Asset returns the PNG bytes for a known sticker id. Unknown ids return
-// ok=false (never a filesystem read), so the id can be passed straight from a
-// URL param without path-traversal risk.
-func Asset(id string) ([]byte, bool) {
-	if _, ok := byID[id]; !ok {
-		return nil, false
-	}
-	data, err := fsys.ReadFile("assets/" + id + ".png")
-	if err != nil {
-		return nil, false
-	}
-	return data, true
-}
-
 // Search returns catalog entries whose id, name, English name, emotion, or any
 // tag contains the (case-insensitive) query as a substring. Results keep
 // catalog order; an empty query returns the full catalog. Entries whose emotion
-// exactly equals the query are surfaced first so a mood query ("happy", "开心")
-// leads with the most on-point stickers.
+// exactly equals the query are surfaced first so a mood query ("praise",
+// "鼓掌") leads with the most on-point stickers.
 func Search(query string) []Sticker {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {

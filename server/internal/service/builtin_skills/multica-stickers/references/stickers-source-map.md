@@ -18,9 +18,9 @@ pointer.
 
 | Fact | Source |
 | --- | --- |
-| Catalog (id, bilingual name/tags, mood) is the source of truth | `server/internal/stickers/catalog.json` |
-| Images embedded into the binary, kept 1:1 with the catalog | `server/internal/stickers/assets/<id>.png`, embedded in `server/internal/stickers/stickers.go` |
-| Assets are Microsoft Fluent Emoji (MIT) | `server/internal/stickers/NOTICE` |
+| Catalog (id, bilingual name/tags, mood, file) is the source of truth; embeds only catalog.json so the CLI stays lean | `server/internal/stickers/catalog.json`, `server/internal/stickers/stickers.go` |
+| Image bytes embedded separately (server-only), served by filename, 1:1 with the catalog | `server/internal/stickerimg/files/`, `server/internal/stickerimg/stickerimg.go` (`Read`, `Names`) |
+| Assets are from getActivity/EmojiPackage (Apache-2.0) | `server/internal/stickerimg/NOTICE` |
 | Search matches id / name / english name / mood / tags, mood-exact first | `server/internal/stickers/stickers.go` (`Search`, `stickerMatches`) |
 
 ## Serving + rendering
@@ -37,6 +37,6 @@ pointer.
 | Case proven | Source |
 | --- | --- |
 | Catalog parses and is 1:1 with the embedded assets | `server/internal/stickers/stickers_test.go` |
-| `Asset` returns bytes for a known id and 404s an unknown / traversal id | `server/internal/stickers/stickers_test.go` |
+| `Read` returns bytes for a known file and rejects unknown / traversal names | `server/internal/stickerimg/stickerimg_test.go` |
 | `Search` matches by mood and keyword in zh + en | `server/internal/stickers/stickers_test.go` |
 | `:sticker:<id>:` token renders an image; unknown id renders nothing | `packages/views/common/markdown.test.tsx` |

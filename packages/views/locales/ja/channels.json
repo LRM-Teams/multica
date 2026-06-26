@@ -12,7 +12,23 @@
     "create_aria": "チャンネルを作成",
     "empty": "まだチャンネルがありません。",
     "menu_aria": "チャンネル操作",
-    "delete": "グループを削除"
+    "delete": "グループを削除",
+    "mark_unread": "未読にする",
+    "pin": "ピン留め",
+    "unpin": "ピン留め解除",
+    "archive": "アーカイブ",
+    "archived_section": "アーカイブ済み",
+    "archived_restore": "アーカイブ解除",
+    "archive_permission": "作成者、オーナー、または管理者のみアーカイブできます",
+    "restore_permission": "作成者、オーナー、または管理者のみアーカイブ解除できます"
+  },
+  "archive_dialog": {
+    "title": "このチャンネルをアーカイブしますか？",
+    "description": "「{{name}}」はサイドバーから非表示になります。すべての履歴は保持され、いつでも復元できます。",
+    "cancel": "キャンセル",
+    "confirm": "アーカイブ",
+    "error": "チャンネルのアーカイブに失敗しました",
+    "restore_error": "アーカイブ解除に失敗しました"
   },
   "delete_dialog": {
     "title": "このグループを削除しますか？",

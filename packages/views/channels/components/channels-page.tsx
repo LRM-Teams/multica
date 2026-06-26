@@ -892,7 +892,7 @@ export function ChannelsPage() {
   const listPane = (
     <aside
       className={cn(
-        "flex min-h-0 flex-col bg-muted/20",
+        "flex flex-1 min-h-0 flex-col bg-muted/20",
         isMobile ? "min-w-0" : "border-r",
       )}
     >
@@ -1025,7 +1025,7 @@ export function ChannelsPage() {
   // takes the full width and grows a Back button into the header so the user
   // can return to the list.
   const detailPane = (
-        <main className="flex min-h-0 min-w-0 flex-col">
+        <main className="flex flex-1 min-h-0 min-w-0 flex-col">
           {!active ? (
             <EmptyState onCreate={handleCreate} />
           ) : (
@@ -1251,11 +1251,11 @@ export function ChannelsPage() {
         </div>
       ) : (
         <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
-          <ResizablePanel id="list" defaultSize={280} minSize={240} maxSize={480} groupResizeBehavior="preserve-pixel-size">
+          <ResizablePanel id="list" defaultSize={280} minSize={240} maxSize={480} groupResizeBehavior="preserve-pixel-size" className="flex min-h-0 flex-col">
           {listPane}
           </ResizablePanel>
           <ResizableHandle />
-          <ResizablePanel id="detail" minSize="40%">
+          <ResizablePanel id="detail" minSize="40%" className="flex min-h-0 flex-col">
           {detailSurface}
           </ResizablePanel>
         </ResizablePanelGroup>

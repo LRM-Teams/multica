@@ -323,7 +323,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   };
 
   return (
-    <main className="flex min-h-0 min-w-0 flex-col">
+    <main className="flex flex-1 min-h-0 min-w-0 flex-col">
       <DmHeader dm={dm} onBack={onBack} filesChannelId={channelId} />
       <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">
         {messages.length === 0 ? (
@@ -477,7 +477,7 @@ function DmLegacyConversation({ dm, onBack }: { dm: DMItem; onBack: () => void }
   );
 
   return (
-    <main className="flex min-h-0 min-w-0 flex-col">
+    <main className="flex flex-1 min-h-0 min-w-0 flex-col">
       <DmHeader dm={dm} onBack={onBack} />
       <ChatMessageList
         key={sessionId}

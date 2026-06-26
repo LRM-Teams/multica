@@ -102,7 +102,7 @@ export function DmList({
         <button
           type="button"
           onClick={() => setCollapsed((c) => !c)}
-          className="flex flex-1 items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+          className="flex flex-1 items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
           aria-expanded={!collapsed}
         >
           {collapsed ? (
@@ -118,7 +118,11 @@ export function DmList({
           )}
         </button>
 
-        <NewDmPicker open={pickerOpen} onOpenChange={setPickerOpen} />
+        {/* Hide the compact "+" when the list is empty — the empty-state CTA
+            below is the sole entry point there, avoiding two visible triggers. */}
+        {(isLoading || dms.length > 0) && (
+          <NewDmPicker open={pickerOpen} onOpenChange={setPickerOpen} />
+        )}
       </div>
 
       {!collapsed &&

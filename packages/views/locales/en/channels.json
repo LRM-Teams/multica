@@ -6,13 +6,29 @@
   "sidebar": {
     "heading": "Messages",
     "search": "Search conversations...",
-    "groups": "Groups",
+    "groups": "Channels",
     "name_placeholder": "Channel name",
     "lark_placeholder": "Optional Feishu chat_id (oc_...)",
     "create_aria": "Create channel",
     "empty": "No channels yet.",
     "menu_aria": "Channel actions",
-    "delete": "Delete group"
+    "delete": "Delete group",
+    "mark_unread": "Mark as Unread",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "archive": "Archive",
+    "archived_section": "Archived",
+    "archived_restore": "Unarchive",
+    "archive_permission": "Only the creator, owner, or admin can archive",
+    "restore_permission": "Only the creator, owner, or admin can unarchive"
+  },
+  "archive_dialog": {
+    "title": "Archive this channel?",
+    "description": "\"{{name}}\" will be hidden from the sidebar. All history is preserved — you can restore it anytime.",
+    "cancel": "Cancel",
+    "confirm": "Archive",
+    "error": "Failed to archive channel",
+    "restore_error": "Failed to restore channel"
   },
   "delete_dialog": {
     "title": "Delete this group?",

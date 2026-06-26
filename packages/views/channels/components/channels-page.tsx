@@ -2,22 +2,27 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Archive,
+  ArchiveRestore,
   ArrowLeft,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   FileText,
   Loader2,
+  Mail,
   MessageCircle,
   MessageSquare,
   MoreHorizontal,
   Paperclip,
   PieChart,
+  Pin,
+  PinOff,
   Plus,
   Search,
   Send,
   Share2,
   Smartphone,
-  Trash2,
   Users,
   X,
 } from "lucide-react";
@@ -27,6 +32,7 @@ import {
   activeChannelTasksOptions,
   channelKeys,
   channelsOptions,
+  archivedChannelsOptions,
   channelMessagesOptions,
   channelMembersOptions,
   channelProjectOptions,
@@ -34,7 +40,11 @@ import {
   useAddChannelMembers,
   useCreateChannel,
   useDeleteChannel,
+  useArchiveChannel,
+  useRestoreChannel,
+  useSetChannelPin,
   useMarkChannelRead,
+  useMarkChannelUnread,
   useRemoveChannelMember,
   useSendChannelMessage,
   useSetChannelTyping,
@@ -82,11 +92,24 @@ import {
 } from "@multica/ui/components/ui/resizable";
 import { useDefaultLayout } from "react-resizable-panels";
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@multica/ui/components/ui/context-menu";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@multica/ui/components/ui/tooltip";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -290,7 +313,10 @@ export function ChannelsPage() {
   );
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [channelsCollapsed, setChannelsCollapsed] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Channel | null>(null);
+  const [archiveTarget, setArchiveTarget] = useState<Channel | null>(null);
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const editorRef = useRef<ContentEditorRef>(null);
   const [draftEmpty, setDraftEmpty] = useState(true);
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
@@ -305,6 +331,7 @@ export function ChannelsPage() {
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { data: channels = [], isLoading } = useQuery(channelsOptions(wsId));
+  const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
   const { data: workspaceMembers = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   // Desktop auto-selects the first channel so the stream pane is never blank.
@@ -334,6 +361,10 @@ export function ChannelsPage() {
   const setChannelProject = useSetChannelProject(wsId, active?.id ?? "");
   const createChannel = useCreateChannel();
   const deleteChannel = useDeleteChannel();
+  const archiveChannel = useArchiveChannel();
+  const restoreChannel = useRestoreChannel();
+  const setChannelPin = useSetChannelPin();
+  const markChannelUnread = useMarkChannelUnread();
   const sendMessage = useSendChannelMessage();
   const setTyping = useSetChannelTyping();
   const addMembers = useAddChannelMembers();
@@ -401,10 +432,33 @@ export function ChannelsPage() {
     () => channelMembers.map((m) => m.name || (m.member_type === "agent" ? "Agent" : "成员")).join("，"),
     [channelMembers],
   );
+  const sortedChannels = useMemo(
+    () => [...channels].sort((a, b) => (b.pinned_at ? 1 : 0) - (a.pinned_at ? 1 : 0)),
+    [channels],
+  );
   const filteredChannels = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return q ? channels.filter((c) => c.name.toLowerCase().includes(q)) : channels;
-  }, [channels, search]);
+    return q ? sortedChannels.filter((c) => c.name.toLowerCase().includes(q)) : sortedChannels;
+  }, [sortedChannels, search]);
+  const currentUserRole = useMemo(
+    () => workspaceMembers.find((m) => m.user_id === currentUserId)?.role ?? "member",
+    [workspaceMembers, currentUserId],
+  );
+  const canArchive = useCallback(
+    (channel: Channel) =>
+      channel.created_by === currentUserId ||
+      currentUserRole === "owner" ||
+      currentUserRole === "admin",
+    [currentUserId, currentUserRole],
+  );
+  const aggregateChannelUnread = useMemo(
+    () =>
+      channels.reduce(
+        (sum, c) => sum + (c.manually_unread ? Math.max(1, c.unread_count ?? 0) : (c.unread_count ?? 0)),
+        0,
+      ),
+    [channels],
+  );
 
   useEffect(() => {
     // Mobile is list-first — don't auto-open a channel, or the list would never
@@ -594,6 +648,37 @@ export function ChannelsPage() {
         setDeleteTarget(null);
       },
       onError: () => toast.error(t(($) => $.delete_dialog.toast_failed)),
+    });
+  };
+
+  const handleArchive = () => {
+    const target = archiveTarget;
+    if (!target) return;
+    archiveChannel.mutate(target.id, {
+      onSuccess: () => {
+        if (target.id === activeId) setActiveId(null);
+        setArchiveTarget(null);
+      },
+      onError: () => toast.error(t(($) => $.archive_dialog.error)),
+    });
+  };
+
+  const handleRestoreChannel = (channelId: string) => {
+    restoreChannel.mutate(channelId, {
+      onError: () => toast.error(t(($) => $.archive_dialog.restore_error)),
+    });
+  };
+
+  const handleToggleChannelPin = (channel: Channel) => {
+    setChannelPin.mutate(
+      { channelId: channel.id, pinned: !channel.pinned_at },
+      { onError: () => toast.error(t(($) => $.dm.action_failed)) },
+    );
+  };
+
+  const handleMarkChannelUnread = (channelId: string) => {
+    markChannelUnread.mutate(channelId, {
+      onError: () => toast.error(t(($) => $.dm.action_failed)),
     });
   };
 
@@ -889,34 +974,8 @@ export function ChannelsPage() {
         isMobile ? "min-w-0" : "border-r",
       )}
     >
-          <div className="flex items-center justify-between px-4 pb-1 pt-4">
+          <div className="flex items-center px-4 pb-1 pt-4">
             <h2 className="text-lg font-semibold">{t(($) => $.sidebar.heading)}</h2>
-            <Popover open={createOpen} onOpenChange={setCreateOpen}>
-              <PopoverTrigger
-                className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent"
-                aria-label={t(($) => $.sidebar.create_aria)}
-              >
-                <Plus className="size-4" />
-              </PopoverTrigger>
-              <PopoverContent align="end" className="w-72 space-y-2">
-                <Input
-                  placeholder={t(($) => $.sidebar.name_placeholder)}
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleCreate();
-                  }}
-                />
-                <Input
-                  placeholder={t(($) => $.sidebar.lark_placeholder)}
-                  value={newLarkChatId}
-                  onChange={(e) => setNewLarkChatId(e.target.value)}
-                />
-                <Button className="w-full" onClick={handleCreate} disabled={createChannel.isPending}>
-                  {t(($) => $.sidebar.create_aria)}
-                </Button>
-              </PopoverContent>
-            </Popover>
           </div>
           <div className="px-3 pb-2">
             <div className="relative">
@@ -935,81 +994,322 @@ export function ChannelsPage() {
               currentUserName={currentUserName}
               onSelect={selectDm}
             />
-            <p className="px-2 pb-1 pt-3 text-xs font-medium text-muted-foreground">
-              {t(($) => $.sidebar.groups)}
-            </p>
-            {isLoading ? (
-              <div className="space-y-2 p-2">
-                <Skeleton className="h-12" />
-                <Skeleton className="h-12" />
-              </div>
-            ) : channels.length === 0 ? (
-              <div className="p-3 text-sm text-muted-foreground">{t(($) => $.sidebar.empty)}</div>
-            ) : (
-              filteredChannels.map((channel) => {
-                const unread = channel.unread_count ?? 0;
-                const last = channel.last_message;
-                const preview = last ? `${last.author_name}: ${last.content}`.replace(/\s+/g, " ") : "";
-                return (
-                  <div
-                    key={channel.id}
-                    className={cn(
-                      "group/row relative mb-0.5 rounded-lg transition-colors",
-                      active?.id === channel.id ? "bg-primary/[0.08]" : "hover:bg-accent",
-                    )}
+            {/* CHANNELS section — collapsible, mirrors DIRECT MESSAGES layout */}
+            <div className="mt-1">
+              <div className="flex items-center gap-0.5 px-2 py-1.5">
+                <button
+                  type="button"
+                  onClick={() => setChannelsCollapsed((c) => !c)}
+                  className="flex flex-1 items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+                  aria-expanded={!channelsCollapsed}
+                >
+                  {channelsCollapsed ? (
+                    <ChevronRight className="size-3.5 shrink-0" />
+                  ) : (
+                    <ChevronDown className="size-3.5 shrink-0" />
+                  )}
+                  <span className="flex-1 text-left">{t(($) => $.sidebar.groups)}</span>
+                  {channelsCollapsed && aggregateChannelUnread > 0 && (
+                    <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                      {aggregateChannelUnread > 99 ? "99+" : aggregateChannelUnread}
+                    </span>
+                  )}
+                </button>
+                {/* Create channel "+" moved from top heading to here */}
+                <Popover open={createOpen} onOpenChange={setCreateOpen}>
+                  <PopoverTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label={t(($) => $.sidebar.create_aria)}
+                        className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      />
+                    }
                   >
-                    <button
-                      type="button"
-                      onClick={() => selectChannel(channel.id)}
-                      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
-                    >
-                      <ChannelGroupAvatar members={channel.members ?? []} size={40} />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-foreground">
-                            <span className="truncate">{channel.name}</span>
-                            {channel.lark_chat_id && (
-                              <Smartphone className="size-3 shrink-0 text-emerald-600" />
-                            )}
-                          </span>
-                          {last && (
-                            <span className="shrink-0 text-[11px] text-muted-foreground">
-                              {timeAgo(last.created_at)}
-                            </span>
-                          )}
-                        </div>
-                        <div className="mt-0.5 flex items-center justify-between gap-2">
-                          <span className="truncate text-xs text-muted-foreground">{preview}</span>
-                          {unread > 0 && (
-                            <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
-                              {unread > 99 ? "99+" : unread}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={
+                    <Plus className="size-4" />
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-72 space-y-2">
+                    <Input
+                      placeholder={t(($) => $.sidebar.name_placeholder)}
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleCreate();
+                      }}
+                    />
+                    <Input
+                      placeholder={t(($) => $.sidebar.lark_placeholder)}
+                      value={newLarkChatId}
+                      onChange={(e) => setNewLarkChatId(e.target.value)}
+                    />
+                    <Button className="w-full" onClick={handleCreate} disabled={createChannel.isPending}>
+                      {t(($) => $.sidebar.create_aria)}
+                    </Button>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              {!channelsCollapsed && (
+                isLoading ? (
+                  <div className="space-y-2 p-2">
+                    <Skeleton className="h-12" />
+                    <Skeleton className="h-12" />
+                  </div>
+                ) : channels.length === 0 ? (
+                  <div className="p-3 text-sm text-muted-foreground">{t(($) => $.sidebar.empty)}</div>
+                ) : (
+                  filteredChannels.map((channel) => {
+                    const displayUnread = channel.manually_unread
+                      ? Math.max(1, channel.unread_count ?? 0)
+                      : (channel.unread_count ?? 0);
+                    const last = channel.last_message;
+                    const preview = last ? `${last.author_name}: ${last.content}`.replace(/\s+/g, " ") : "";
+                    const pinned = !!channel.pinned_at;
+                    const archiveAllowed = canArchive(channel);
+                    const channelMenuItems = (
+                      <>
+                        <ContextMenuItem onClick={() => handleMarkChannelUnread(channel.id)}>
+                          <Mail className="size-4" />
+                          {t(($) => $.sidebar.mark_unread)}
+                        </ContextMenuItem>
+                        <ContextMenuItem onClick={() => handleToggleChannelPin(channel)}>
+                          {pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+                          {pinned ? t(($) => $.sidebar.unpin) : t(($) => $.sidebar.pin)}
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
+                        {archiveAllowed ? (
+                          <ContextMenuItem onClick={() => setArchiveTarget(channel)}>
+                            <Archive className="size-4" />
+                            {t(($) => $.sidebar.archive)}
+                          </ContextMenuItem>
+                        ) : (
+                          <Tooltip>
+                            <TooltipTrigger>
+                              <ContextMenuItem
+                                aria-disabled
+                                onClick={() => toast.error(t(($) => $.sidebar.archive_permission))}
+                                className="opacity-50"
+                              >
+                                <Archive className="size-4" />
+                                {t(($) => $.sidebar.archive)}
+                              </ContextMenuItem>
+                            </TooltipTrigger>
+                            <TooltipContent side="right">
+                              {t(($) => $.sidebar.archive_permission)}
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+                      </>
+                    );
+                    return (
+                      <ContextMenu key={channel.id}>
+                        <ContextMenuTrigger
+                          render={
+                            <div
+                              className={cn(
+                                "group/row relative mb-0.5 rounded-lg transition-colors",
+                                active?.id === channel.id ? "bg-primary/[0.08]" : "hover:bg-accent",
+                              )}
+                            />
+                          }
+                        >
                           <button
                             type="button"
-                            aria-label={t(($) => $.sidebar.menu_aria)}
-                            className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 data-[popup-open]:opacity-100"
+                            onClick={() => selectChannel(channel.id)}
+                            className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
                           >
-                            <MoreHorizontal className="size-4" />
+                            <ChannelGroupAvatar members={channel.members ?? []} size={40} />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-foreground">
+                                  {pinned && (
+                                    <Pin className="size-3 shrink-0 -rotate-45 fill-muted-foreground/70 text-muted-foreground/70" />
+                                  )}
+                                  <span className="truncate">{channel.name}</span>
+                                  {channel.lark_chat_id && (
+                                    <Smartphone className="size-3 shrink-0 text-emerald-600" />
+                                  )}
+                                </span>
+                                {last && (
+                                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                                    {timeAgo(last.created_at)}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="mt-0.5 flex items-center justify-between gap-2">
+                                <span className="truncate text-xs text-muted-foreground">{preview}</span>
+                                {displayUnread > 0 && (
+                                  <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                                    {displayUnread > 99 ? "99+" : displayUnread}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </button>
-                        }
-                      />
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(channel)}>
-                          <Trash2 className="size-4" /> {t(($) => $.sidebar.delete)}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                );
-              })
-            )}
+                          <DropdownMenu>
+                            <DropdownMenuTrigger
+                              render={
+                                <button
+                                  type="button"
+                                  aria-label={t(($) => $.sidebar.menu_aria)}
+                                  className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 data-[popup-open]:opacity-100"
+                                >
+                                  <MoreHorizontal className="size-4" />
+                                </button>
+                              }
+                            />
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => handleMarkChannelUnread(channel.id)}>
+                                <Mail className="size-4" />
+                                {t(($) => $.sidebar.mark_unread)}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleToggleChannelPin(channel)}>
+                                {pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+                                {pinned ? t(($) => $.sidebar.unpin) : t(($) => $.sidebar.pin)}
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              {archiveAllowed ? (
+                                <DropdownMenuItem onClick={() => setArchiveTarget(channel)}>
+                                  <Archive className="size-4" />
+                                  {t(($) => $.sidebar.archive)}
+                                </DropdownMenuItem>
+                              ) : (
+                                <Tooltip>
+                                  <TooltipTrigger>
+                                    <DropdownMenuItem
+                                      aria-disabled
+                                      onClick={() => toast.error(t(($) => $.sidebar.archive_permission))}
+                                      className="opacity-50"
+                                    >
+                                      <Archive className="size-4" />
+                                      {t(($) => $.sidebar.archive)}
+                                    </DropdownMenuItem>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="left">
+                                    {t(($) => $.sidebar.archive_permission)}
+                                  </TooltipContent>
+                                </Tooltip>
+                              )}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </ContextMenuTrigger>
+                        <ContextMenuContent>
+                          {channelMenuItems}
+                        </ContextMenuContent>
+                      </ContextMenu>
+                    );
+                  })
+                )
+              )}
+
+              {/* Archived (N) — only shown when there are archived channels */}
+              {archivedChannels.length > 0 && (
+                <div className="mt-1">
+                  <button
+                    type="button"
+                    onClick={() => setArchivedOpen((o) => !o)}
+                    className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    {archivedOpen ? (
+                      <ChevronDown className="size-3.5 shrink-0" />
+                    ) : (
+                      <ChevronRight className="size-3.5 shrink-0" />
+                    )}
+                    <Archive className="size-3 shrink-0" />
+                    <span className="flex-1 text-left">
+                      {t(($) => $.sidebar.archived_section)} ({archivedChannels.length})
+                    </span>
+                  </button>
+                  {archivedOpen &&
+                    archivedChannels.map((channel) => {
+                      const restoreAllowed = canArchive(channel);
+                      return (
+                        <ContextMenu key={channel.id}>
+                          <ContextMenuTrigger
+                            render={
+                              <div className="group/archived relative mb-0.5 rounded-lg transition-colors hover:bg-accent" />
+                            }
+                          >
+                            <button
+                              type="button"
+                              onClick={() => selectChannel(channel.id)}
+                              className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left opacity-60 hover:opacity-100"
+                            >
+                              <ChannelGroupAvatar members={channel.members ?? []} size={40} />
+                              <div className="min-w-0 flex-1">
+                                <span className="truncate text-sm font-medium text-muted-foreground">
+                                  {channel.name}
+                                </span>
+                              </div>
+                            </button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger
+                                render={
+                                  <button
+                                    type="button"
+                                    aria-label={t(($) => $.sidebar.menu_aria)}
+                                    className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/archived:opacity-100 data-[popup-open]:opacity-100"
+                                  >
+                                    <MoreHorizontal className="size-4" />
+                                  </button>
+                                }
+                              />
+                              <DropdownMenuContent align="end">
+                                {restoreAllowed ? (
+                                  <DropdownMenuItem onClick={() => handleRestoreChannel(channel.id)}>
+                                    <ArchiveRestore className="size-4" />
+                                    {t(($) => $.sidebar.archived_restore)}
+                                  </DropdownMenuItem>
+                                ) : (
+                                  <Tooltip>
+                                    <TooltipTrigger>
+                                      <DropdownMenuItem
+                                        aria-disabled
+                                        onClick={() => toast.error(t(($) => $.sidebar.restore_permission))}
+                                        className="opacity-50"
+                                      >
+                                        <ArchiveRestore className="size-4" />
+                                        {t(($) => $.sidebar.archived_restore)}
+                                      </DropdownMenuItem>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="left">
+                                      {t(($) => $.sidebar.restore_permission)}
+                                    </TooltipContent>
+                                  </Tooltip>
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </ContextMenuTrigger>
+                          <ContextMenuContent>
+                            {restoreAllowed ? (
+                              <ContextMenuItem onClick={() => handleRestoreChannel(channel.id)}>
+                                <ArchiveRestore className="size-4" />
+                                {t(($) => $.sidebar.archived_restore)}
+                              </ContextMenuItem>
+                            ) : (
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <ContextMenuItem
+                                    aria-disabled
+                                    onClick={() => toast.error(t(($) => $.sidebar.restore_permission))}
+                                    className="opacity-50"
+                                  >
+                                    <ArchiveRestore className="size-4" />
+                                    {t(($) => $.sidebar.archived_restore)}
+                                  </ContextMenuItem>
+                                </TooltipTrigger>
+                                <TooltipContent side="right">
+                                  {t(($) => $.sidebar.restore_permission)}
+                                </TooltipContent>
+                              </Tooltip>
+                            )}
+                          </ContextMenuContent>
+                        </ContextMenu>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
           </div>
     </aside>
   );
@@ -1364,6 +1664,31 @@ export function ChannelsPage() {
               disabled={deleteChannel.isPending}
             >
               {t(($) => $.delete_dialog.confirm)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={archiveTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setArchiveTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t(($) => $.archive_dialog.title)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(($) => $.archive_dialog.description, { name: archiveTarget?.name ?? "" })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t(($) => $.archive_dialog.cancel)}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleArchive}
+              disabled={archiveChannel.isPending}
+            >
+              {t(($) => $.archive_dialog.confirm)}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

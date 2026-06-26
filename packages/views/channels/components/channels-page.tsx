@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
+  ArchiveRestore,
   ArrowLeft,
   ChevronDown,
   ChevronLeft,
@@ -1242,7 +1243,7 @@ export function ChannelsPage() {
                               <DropdownMenuContent align="end">
                                 {restoreAllowed ? (
                                   <DropdownMenuItem onClick={() => handleRestoreChannel(channel.id)}>
-                                    <Archive className="size-4" />
+                                    <ArchiveRestore className="size-4" />
                                     {t(($) => $.sidebar.archived_restore)}
                                   </DropdownMenuItem>
                                 ) : (
@@ -1250,7 +1251,7 @@ export function ChannelsPage() {
                                     <TooltipTrigger>
                                       <span>
                                         <DropdownMenuItem disabled>
-                                          <Archive className="size-4" />
+                                          <ArchiveRestore className="size-4" />
                                           {t(($) => $.sidebar.archived_restore)}
                                         </DropdownMenuItem>
                                       </span>
@@ -1266,7 +1267,7 @@ export function ChannelsPage() {
                           <ContextMenuContent>
                             {restoreAllowed ? (
                               <ContextMenuItem onClick={() => handleRestoreChannel(channel.id)}>
-                                <Archive className="size-4" />
+                                <ArchiveRestore className="size-4" />
                                 {t(($) => $.sidebar.archived_restore)}
                               </ContextMenuItem>
                             ) : (
@@ -1274,7 +1275,7 @@ export function ChannelsPage() {
                                 <TooltipTrigger>
                                   <span>
                                     <ContextMenuItem disabled>
-                                      <Archive className="size-4" />
+                                      <ArchiveRestore className="size-4" />
                                       {t(($) => $.sidebar.archived_restore)}
                                     </ContextMenuItem>
                                   </span>

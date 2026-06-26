@@ -324,6 +324,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     <main className="flex flex-1 min-h-0 min-w-0 flex-col">
       <DmHeader dm={dm} onBack={onBack} filesChannelId={channelId} />
       <ChannelMessageList
+        key={channelId}
         messages={messages}
         currentUserId={currentUserId}
         ownName={currentUserName ?? undefined}

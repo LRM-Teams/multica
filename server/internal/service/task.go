@@ -1858,11 +1858,16 @@ func (s *TaskService) publishAgentStatus(agent db.Agent) {
 // LoadAgentSkills loads an agent's skills with their files for task execution.
 func (s *TaskService) LoadAgentSkills(ctx context.Context, agentID pgtype.UUID) []AgentSkillData {
 	skills, err := s.Queries.ListAgentSkills(ctx, agentID)
-	if err != nil || len(skills) == 0 {
+	if err != nil {
 		return nil
 	}
 
-	result := make([]AgentSkillData, 0, len(skills))
+	sharedSkills, err := s.Queries.ListAgentSharedSkillsByAgent(ctx, agentID)
+	if err != nil {
+		return nil
+	}
+
+	result := make([]AgentSkillData, 0, len(skills)+len(sharedSkills))
 	for _, sk := range skills {
 		data := AgentSkillData{
 			ID:          util.UUIDToString(sk.ID),
@@ -1871,6 +1876,19 @@ func (s *TaskService) LoadAgentSkills(ctx context.Context, agentID pgtype.UUID) 
 			Content:     sk.Content,
 		}
 		files, _ := s.Queries.ListSkillFiles(ctx, sk.ID)
+		for _, f := range files {
+			data.Files = append(data.Files, AgentSkillFileData{Path: f.Path, Content: f.Content})
+		}
+		result = append(result, data)
+	}
+	for _, sk := range sharedSkills {
+		data := AgentSkillData{
+			ID:          util.UUIDToString(sk.ID),
+			Name:        sk.Name,
+			Description: sk.Description,
+			Content:     sk.Content,
+		}
+		files, _ := s.Queries.ListAgentSharedSkillFiles(ctx, sk.ID)
 		for _, f := range files {
 			data.Files = append(data.Files, AgentSkillFileData{Path: f.Path, Content: f.Content})
 		}

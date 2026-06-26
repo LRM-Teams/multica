@@ -150,6 +150,11 @@ DELETE FROM agent_shared_skill WHERE id = $1 AND agent_id = $2;
 -- name: DeleteAgentSharedSkillFilesBySkill :exec
 DELETE FROM agent_shared_skill_file WHERE agent_shared_skill_id = $1;
 
+-- name: ListAgentSharedSkillFiles :many
+SELECT * FROM agent_shared_skill_file
+WHERE agent_shared_skill_id = $1
+ORDER BY path ASC;
+
 -- name: UpsertAgentSharedSkillFile :one
 INSERT INTO agent_shared_skill_file (agent_shared_skill_id, agent_id, path, content)
 VALUES ($1, $2, $3, $4)

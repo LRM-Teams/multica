@@ -21,16 +21,19 @@ func TestSharedSkillScanRootUsesProviderDefault(t *testing.T) {
 	}
 
 	workspaceRoot := filepath.Join(home, "multica_workspaces")
-	agentRoot := piAgentRoot(Config{WorkspacesRoot: workspaceRoot}, "workspace-1", "agent-1")
-	agentWant := filepath.Join(workspaceRoot, "workspace-1", ".pi", "agents", "agent-1")
+	agentRoot, ok := agentSharedSkillScanBase(Config{WorkspacesRoot: workspaceRoot}, "pi", "workspace-1")
+	if !ok {
+		t.Fatal("expected pi agent shared root")
+	}
+	agentWant := filepath.Join(workspaceRoot, "workspace-1", ".pi", "agents")
 	if agentRoot != agentWant {
 		t.Fatalf("got %q want %q", agentRoot, agentWant)
 	}
 
-	skillQueue := piAgentSkillCandidatesPath(agentRoot)
-	skillQueueWant := filepath.Join(agentWant, "sync_queue", "skill-candidates.jsonl")
-	if skillQueue != skillQueueWant {
-		t.Fatalf("got %q want %q", skillQueue, skillQueueWant)
+	scanRoot := agentSharedSkillScanRoot(agentRoot, "agent-1")
+	scanWant := filepath.Join(agentWant, "agent-1", "sync_queue", "skill-candidates")
+	if scanRoot != scanWant {
+		t.Fatalf("got %q want %q", scanRoot, scanWant)
 	}
 
 	if _, ok := sharedSkillScanRoot(Config{}, "codex"); ok {

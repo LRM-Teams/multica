@@ -71,6 +71,12 @@ import {
 } from "@multica/ui/components/ui/drawer";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from "@multica/ui/components/ui/resizable";
+import { useDefaultLayout } from "react-resizable-panels";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -253,6 +259,9 @@ export function ChannelsPage() {
   const currentUserName = useAuthStore((s) => s.user?.name ?? null);
   const { mutate: markChannelRead } = useMarkChannelRead();
   const isMobile = useIsMobile();
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: "multica_channels_layout",
+  });
   // Mobile-only: the header's right-side actions collapse into a single "⋯"
   // button that opens a bottom Drawer (vaul, with drag handle). `"menu"` shows
   // the action list (Members / Share / Stats / Files); picking one swaps the
@@ -1131,10 +1140,15 @@ export function ChannelsPage() {
           {active ? detailPane : listPane}
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-[280px_1fr] gap-0 bg-background">
+        <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
+          <ResizablePanel id="list" defaultSize={280} minSize={240} maxSize={480} groupResizeBehavior="preserve-pixel-size">
           {listPane}
+          </ResizablePanel>
+          <ResizableHandle />
+          <ResizablePanel id="detail" minSize="40%">
           {detailPane}
-        </div>
+          </ResizablePanel>
+        </ResizablePanelGroup>
       )}
 
       {/* Mobile overflow drawer. One bottom Drawer (vaul, with drag handle)

@@ -1,6 +1,7 @@
 export {
   channelKeys,
   channelsOptions,
+  archivedChannelsOptions,
   channelMessagesOptions,
   channelMembersOptions,
   channelAttachmentsOptions,
@@ -19,8 +20,12 @@ export {
 export {
   useCreateChannel,
   useDeleteChannel,
+  useArchiveChannel,
+  useRestoreChannel,
+  useSetChannelPin,
   useSendChannelMessage,
   useMarkChannelRead,
+  useMarkChannelUnread,
   useSetChannelTyping,
   useAddChannelMember,
   useAddChannelMembers,

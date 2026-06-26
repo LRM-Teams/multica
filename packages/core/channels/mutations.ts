@@ -21,6 +21,34 @@ export function useDeleteChannel() {
   });
 }
 
+export function useArchiveChannel() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (channelId: string) => api.archiveChannel(channelId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.all(wsId) }),
+  });
+}
+
+export function useRestoreChannel() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (channelId: string) => api.restoreChannel(channelId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.all(wsId) }),
+  });
+}
+
+export function useSetChannelPin() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ channelId, pinned }: { channelId: string; pinned: boolean }) =>
+      pinned ? api.pinChannel(channelId) : api.unpinChannel(channelId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+  });
+}
+
 export function useSendChannelMessage() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
@@ -39,6 +67,15 @@ export function useMarkChannelRead() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: (channelId: string) => api.markChannelRead(channelId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+  });
+}
+
+export function useMarkChannelUnread() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (channelId: string) => api.markChannelUnread(channelId),
     onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
   });
 }

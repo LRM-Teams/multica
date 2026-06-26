@@ -12,7 +12,23 @@
     "create_aria": "新建群聊",
     "empty": "还没有群聊。",
     "menu_aria": "群组操作",
-    "delete": "删除群组"
+    "delete": "删除群组",
+    "mark_unread": "标为未读",
+    "pin": "置顶",
+    "unpin": "取消置顶",
+    "archive": "归档",
+    "archived_section": "已归档",
+    "archived_restore": "取消归档",
+    "archive_permission": "只有创建者、所有者或管理员可归档",
+    "restore_permission": "只有创建者、所有者或管理员可取消归档"
+  },
+  "archive_dialog": {
+    "title": "归档此频道？",
+    "description": "「{{name}}」将从侧栏隐藏，所有历史记录保留，可随时恢复。",
+    "cancel": "取消",
+    "confirm": "归档",
+    "error": "归档频道失败",
+    "restore_error": "取消归档失败"
   },
   "delete_dialog": {
     "title": "删除这个群组？",

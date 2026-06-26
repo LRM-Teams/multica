@@ -104,7 +104,7 @@ import { agentColor } from "../../common/agent-color";
 import { ProjectPickerButton } from "../../common/project-picker-button";
 import { initialsOf } from "../../common/initials";
 import { useT, useTimeAgo } from "../../i18n";
-import { ChannelMessageBubble } from "./channel-message-bubble";
+import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
@@ -300,7 +300,6 @@ export function ChannelsPage() {
   const [selectedInvites, setSelectedInvites] = useState<Set<string>>(new Set());
   const [memberTab, setMemberTab] = useState<"invite" | "members">("invite");
   const [memberQuery, setMemberQuery] = useState("");
-  const bottomRef = useRef<HTMLDivElement | null>(null);
   const typingStartedRef = useRef(false);
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -424,21 +423,15 @@ export function ChannelsPage() {
     if (!activeId && channels[0]) setActiveId(channels[0].id);
   }, [activeId, activeDmId, channels, isMobile]);
 
-  useEffect(() => {
-    // Don't yank to the bottom while a deep-linked message is being focused.
-    if (highlightMessageId) return;
-    bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [messages.length, active?.id, activeTypingActors.length, activeTasks.length, highlightMessageId]);
-
-  // Scroll to and briefly highlight a deep-linked message once it has rendered.
+  // Bottom-stick on new messages and open-at-latest on switch are handled by
+  // ChannelMessageList (react-virtuoso followOutput + initialTopMostItemIndex).
+  // The deep-linked message is scrolled into view inside the virtualized list
+  // too; here we only clear the highlight after it has had time to flash.
   useEffect(() => {
     if (!highlightMessageId || messages.length === 0) return;
-    const el = document.getElementById(`message-${highlightMessageId}`);
-    if (!el) return;
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
     const clear = setTimeout(() => setHighlightMessageId(null), 2500);
     return () => clearTimeout(clear);
-  }, [highlightMessageId, messages]);
+  }, [highlightMessageId, messages.length]);
 
   // Clear the unread badge when a channel becomes active (select / deep link /
   // auto-select). `markChannelRead` (mutate) is referentially stable.
@@ -1132,26 +1125,20 @@ export function ChannelsPage() {
                 )}
               </header>
 
-              <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">
-                {messages.length === 0 ? (
-                  <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                    {t(($) => $.thread.empty)}
-                  </div>
-                ) : (
-                  messages.map((message) => (
-                    <ChannelMessageBubble
-                      key={message.id}
-                      message={message}
-                      currentUserId={currentUserId}
-                      ownName={currentUserName ?? undefined}
-                      highlighted={message.id === highlightMessageId}
-                    />
-                  ))
-                )}
-                <AgentWorkingIndicator tasks={activeTasks} />
-                <TypingIndicator actors={activeTypingActors} />
-                <div ref={bottomRef} />
-              </div>
+              <ChannelMessageList
+                key={active.id}
+                messages={messages}
+                currentUserId={currentUserId}
+                ownName={currentUserName ?? undefined}
+                highlightMessageId={highlightMessageId}
+                emptyLabel={t(($) => $.thread.empty)}
+                footer={
+                  <>
+                    <AgentWorkingIndicator tasks={activeTasks} />
+                    <TypingIndicator actors={activeTypingActors} />
+                  </>
+                }
+              />
 
               <div className="px-4 pb-4">
                 <div className="rounded-xl border bg-card shadow-sm">

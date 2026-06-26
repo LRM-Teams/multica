@@ -43,7 +43,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n";
 import { ChatMessageList } from "../../chat/components/chat-message-list";
 import { ChatInput } from "../../chat/components/chat-input";
-import { ChannelMessageBubble } from "./channel-message-bubble";
+import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import {
   AgentWorkingIndicator,
@@ -157,7 +157,6 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   const editorRef = useRef<ContentEditorRef>(null);
   const [draftEmpty, setDraftEmpty] = useState(true);
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
-  const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const uploadMapRef = useRef<Map<string, string>>(new Map());
   const typingStartedRef = useRef(false);
@@ -176,9 +175,8 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   // a 1-on-1 (only the peer is reachable here).
   const mentionAllowedActorIds = useMemo(() => new Set([dm.peer.id]), [dm.peer.id]);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [messages.length, channelId, activeTypingActors.length, activeTasks.length]);
+  // Bottom-stick on new messages and open-at-latest on switch are handled by
+  // ChannelMessageList (react-virtuoso). No manual scrollIntoView needed.
 
   // Mark read on open and keep it read while viewing.
   useEffect(() => {
@@ -325,25 +323,19 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   return (
     <main className="flex flex-1 min-h-0 min-w-0 flex-col">
       <DmHeader dm={dm} onBack={onBack} filesChannelId={channelId} />
-      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">
-        {messages.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            {t(($) => $.dm.thread_empty)}
-          </div>
-        ) : (
-          messages.map((message) => (
-            <ChannelMessageBubble
-              key={message.id}
-              message={message}
-              currentUserId={currentUserId}
-              ownName={currentUserName ?? undefined}
-            />
-          ))
-        )}
-        <AgentWorkingIndicator tasks={activeTasks} />
-        <TypingIndicator actors={activeTypingActors} />
-        <div ref={bottomRef} />
-      </div>
+      <ChannelMessageList
+        key={channelId}
+        messages={messages}
+        currentUserId={currentUserId}
+        ownName={currentUserName ?? undefined}
+        emptyLabel={t(($) => $.dm.thread_empty)}
+        footer={
+          <>
+            <AgentWorkingIndicator tasks={activeTasks} />
+            <TypingIndicator actors={activeTypingActors} />
+          </>
+        }
+      />
       <div className="px-4 pb-4">
         <div className="rounded-xl border bg-card shadow-sm">
           <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">

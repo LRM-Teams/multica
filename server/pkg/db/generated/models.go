@@ -403,6 +403,9 @@ type Issue struct {
 	FirstExecutedAt    pgtype.Timestamptz `json:"first_executed_at"`
 	StartDate          pgtype.Date        `json:"start_date"`
 	Metadata           []byte             `json:"metadata"`
+	ForkedFromIssueID  pgtype.UUID        `json:"forked_from_issue_id"`
+	ForkedAtSeq        pgtype.Int4        `json:"forked_at_seq"`
+	ForkedAtTaskID     pgtype.UUID        `json:"forked_at_task_id"`
 }
 
 type IssueDependency struct {

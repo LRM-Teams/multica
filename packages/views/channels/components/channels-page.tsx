@@ -432,10 +432,14 @@ export function ChannelsPage() {
     () => channelMembers.map((m) => m.name || (m.member_type === "agent" ? "Agent" : "成员")).join("，"),
     [channelMembers],
   );
+  const sortedChannels = useMemo(
+    () => [...channels].sort((a, b) => (b.pinned_at ? 1 : 0) - (a.pinned_at ? 1 : 0)),
+    [channels],
+  );
   const filteredChannels = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return q ? channels.filter((c) => c.name.toLowerCase().includes(q)) : channels;
-  }, [channels, search]);
+    return q ? sortedChannels.filter((c) => c.name.toLowerCase().includes(q)) : sortedChannels;
+  }, [sortedChannels, search]);
   const currentUserRole = useMemo(
     () => workspaceMembers.find((m) => m.user_id === currentUserId)?.role ?? "member",
     [workspaceMembers, currentUserId],
@@ -448,7 +452,11 @@ export function ChannelsPage() {
     [currentUserId, currentUserRole],
   );
   const aggregateChannelUnread = useMemo(
-    () => channels.reduce((sum, c) => sum + (c.unread_count ?? 0), 0),
+    () =>
+      channels.reduce(
+        (sum, c) => sum + (c.manually_unread ? Math.max(1, c.unread_count ?? 0) : (c.unread_count ?? 0)),
+        0,
+      ),
     [channels],
   );
 
@@ -1051,7 +1059,9 @@ export function ChannelsPage() {
                   <div className="p-3 text-sm text-muted-foreground">{t(($) => $.sidebar.empty)}</div>
                 ) : (
                   filteredChannels.map((channel) => {
-                    const displayUnread = channel.unread_count ?? 0;
+                    const displayUnread = channel.manually_unread
+                      ? Math.max(1, channel.unread_count ?? 0)
+                      : (channel.unread_count ?? 0);
                     const last = channel.last_message;
                     const preview = last ? `${last.author_name}: ${last.content}`.replace(/\s+/g, " ") : "";
                     const pinned = !!channel.pinned_at;

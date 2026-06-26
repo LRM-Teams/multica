@@ -475,6 +475,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r.Get("/api/config", h.GetConfig)
 	r.With(contactSalesRL).Post("/api/contact-sales", h.CreateContactSales)
 
+	// Sticker library — embedded, non-sensitive assets. Public + unauthenticated
+	// because the images are loaded by <img> tags (which can't send auth headers)
+	// and the catalog is global, not workspace-scoped.
+	r.Get("/api/stickers", h.ListStickers)
+	r.Get("/api/stickers/{id}", h.GetStickerAsset)
+
 	// Webhook ingress for autopilots. Outside the authenticated group on
 	// purpose: the bearer token in the URL path IS the credential. Workspace
 	// context is derived from the trigger row, never from request headers.

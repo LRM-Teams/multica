@@ -8,6 +8,12 @@ vi.mock("@multica/core/config", () => ({
     selector({ cdnDomain: "" }),
 }));
 
+vi.mock("@multica/core/api", () => ({
+  // Web shape: empty base URL (the Next.js rewrite proxies /api/* same-origin),
+  // so sticker srcs stay site-relative.
+  api: { getBaseUrl: () => "" },
+}));
+
 vi.mock("../issues/components/issue-mention-card", () => ({
   IssueMentionCard: ({ issueId }: { issueId: string }) => (
     <span data-testid="issue-mention-card">{issueId}</span>
@@ -91,5 +97,30 @@ describe("Markdown", () => {
 
     expect(screen.getByTestId("project-chip")).toHaveTextContent("project-123");
     expect(screen.getByRole("link")).toHaveAttribute("href", "/projects/project-123");
+  });
+
+  it("renders a :sticker:<id>: token as a sticker image", () => {
+    const { container } = render(<Markdown>{"nice work :sticker:tada:"}</Markdown>);
+
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img).toHaveAttribute("src", "/api/stickers/tada");
+    expect(img).toHaveAttribute("alt", "sticker:tada");
+    // Surrounding text is preserved (the token is a garnish, not a replacement).
+    expect(container.textContent).toContain("nice work");
+  });
+
+  it("renders sticker tokens with hyphenated ids", () => {
+    const { container } = render(<Markdown>{":sticker:thumbs-up:"}</Markdown>);
+
+    const img = container.querySelector("img");
+    expect(img).toHaveAttribute("src", "/api/stickers/thumbs-up");
+  });
+
+  it("does not treat a non-sticker word with colons as a sticker", () => {
+    const { container } = render(<Markdown>{"ratio is 3:4:5 here"}</Markdown>);
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toContain("3:4:5");
   });
 });

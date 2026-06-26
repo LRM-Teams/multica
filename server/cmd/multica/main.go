@@ -87,6 +87,7 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(dmCmd)
+	rootCmd.AddCommand(stickerCmd)
 
 	initHelp(rootCmd)
 }

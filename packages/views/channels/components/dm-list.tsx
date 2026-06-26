@@ -85,15 +85,7 @@ export function DmList({
           )}
         </button>
 
-        <NewDmPicker open={pickerOpen} onOpenChange={setPickerOpen}>
-          <button
-            type="button"
-            aria-label={t(($) => $.dm.new_aria)}
-            className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <Plus className="size-4" />
-          </button>
-        </NewDmPicker>
+        <NewDmPicker open={pickerOpen} onOpenChange={setPickerOpen} />
       </div>
 
       {!collapsed &&
@@ -139,21 +131,27 @@ export function DmList({
 function NewDmPicker({
   open,
   onOpenChange,
-  children,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  children: React.ReactNode;
 }) {
   const { t } = useT("channels");
   const isMobile = useIsMobile();
-
   const pickerBody = <DmPickerContent onClose={() => onOpenChange(false)} />;
+  const triggerCls =
+    "flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
 
   if (isMobile) {
     return (
       <>
-        <span onClick={() => onOpenChange(true)}>{children}</span>
+        <button
+          type="button"
+          aria-label={t(($) => $.dm.new_aria)}
+          onClick={() => onOpenChange(true)}
+          className={triggerCls}
+        >
+          <Plus className="size-4" />
+        </button>
         <Drawer open={open} onOpenChange={onOpenChange}>
           <DrawerContent className="px-4 pb-8">
             <DrawerHeader className="px-0 pb-3">
@@ -168,7 +166,11 @@ function NewDmPicker({
 
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
-      <PopoverTrigger asChild>{children}</PopoverTrigger>
+      <PopoverTrigger
+        render={<button type="button" aria-label={t(($) => $.dm.new_aria)} className={triggerCls} />}
+      >
+        <Plus className="size-4" />
+      </PopoverTrigger>
       <PopoverContent align="start" className="w-72 p-0">
         <div className="border-b px-3 py-2.5">
           <p className="text-sm font-medium">{t(($) => $.dm.new_title)}</p>

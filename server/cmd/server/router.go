@@ -981,6 +981,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// (resolveActor must be "agent"); human callers get 403.
 			r.Post("/api/chat/agent-dm", h.AgentDirectMessage)
 
+			// Unified 1-on-1 DM list (kind='dm' channels ∪ legacy unbound chat
+			// sessions) plus idempotent create-or-find. Sole data source for the
+			// DM section; group channels stay on /api/channels.
+			r.Get("/api/dm", h.ListDirectMessages)
+			r.Post("/api/dm", h.CreateOrFindDirectMessage)
+
 			r.Route("/api/channels", func(r chi.Router) {
 				r.Get("/", h.ListChannels)
 				r.Post("/", h.CreateChannel)

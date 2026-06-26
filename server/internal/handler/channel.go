@@ -31,6 +31,7 @@ type ChannelResponse struct {
 	ID          string  `json:"id"`
 	WorkspaceID string  `json:"workspace_id"`
 	Name        string  `json:"name"`
+	Kind        string  `json:"kind"`
 	Description *string `json:"description"`
 	LarkChatID  *string `json:"lark_chat_id"`
 	CreatedBy   string  `json:"created_by"`
@@ -130,7 +131,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	workspaceID := ctxWorkspaceID(r.Context())
 	uid := parseUUID(userID)
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT ch.id, ch.workspace_id, ch.name, ch.description, ch.lark_chat_id, ch.created_by, ch.created_at, ch.updated_at,
+		SELECT ch.id, ch.workspace_id, ch.name, ch.description, ch.lark_chat_id, ch.created_by, ch.created_at, ch.updated_at, ch.kind,
 		       lm.author_type, lm.author_name, lm.content, lm.created_at,
 		       COALESCE(uc.cnt, 0)
 		FROM channel ch
@@ -147,7 +148,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			  AND m.created_at > COALESCE(cr.last_read_at, '-infinity'::timestamptz)
 			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
 		) uc ON true
-		WHERE ch.workspace_id = $1
+		WHERE ch.workspace_id = $1 AND ch.kind = 'group'
 		ORDER BY ch.updated_at DESC, ch.created_at DESC`, parseUUID(workspaceID), uid)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channels")
@@ -162,7 +163,8 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		var desc, lark, lastType, lastName, lastContent pgtype.Text
 		var createdAt, updatedAt, lastAt pgtype.Timestamptz
 		var unread int
-		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt,
+		var kind string
+		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt, &kind,
 			&lastType, &lastName, &lastContent, &lastAt, &unread); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channels")
 			return
@@ -171,7 +173,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			ID: uuidToString(id), WorkspaceID: uuidToString(wsID), Name: name,
 			Description: textToPtr(desc), LarkChatID: textToPtr(lark), CreatedBy: uuidToString(createdBy),
 			CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt),
-			UnreadCount: unread, Members: []ChannelMemberBrief{},
+			Kind: kind, UnreadCount: unread, Members: []ChannelMemberBrief{},
 		}
 		if lastContent.Valid {
 			ch.LastMessage = &ChannelLastMessage{
@@ -264,7 +266,7 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 	row := h.DB.QueryRow(r.Context(), `
 		INSERT INTO channel (workspace_id, name, description, lark_chat_id, created_by)
 		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at`,
+		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind`,
 		parseUUID(workspaceID), name, desc, larkChatID, parseUUID(userID))
 	ch, err := scanChannel(row)
 	if err != nil {
@@ -314,7 +316,7 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 		UPDATE channel
 		SET name = COALESCE($3, name), description = COALESCE($4, description), lark_chat_id = COALESCE($5, lark_chat_id), updated_at = now()
 		WHERE id = $1 AND workspace_id = $2
-		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at`,
+		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind`,
 		channelID, parseUUID(workspaceID), name, trimTextPtr(req.Description), trimTextPtr(req.LarkChatID))
 	ch, err := scanChannel(row)
 	if err != nil {
@@ -694,7 +696,13 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
 	h.publish(protocol.EventChannelMessage, workspaceID, "member", userID, msg)
-	h.dispatchChannelMentions(r.Context(), ch, msg, parseUUID(userID))
+	if ch.Kind == "dm" {
+		// 1-on-1 DM: the agent peer (if any) replies to every user message
+		// without an @-mention. Human↔human DMs have no agent member → no-op.
+		h.dispatchDMAgentReply(r.Context(), ch, msg, parseUUID(userID))
+	} else {
+		h.dispatchChannelMentions(r.Context(), ch, msg, parseUUID(userID))
+	}
 	h.sendChannelMessageToFeishu(r.Context(), ch, authorName, content)
 	writeJSON(w, http.StatusCreated, msg)
 }
@@ -782,35 +790,48 @@ func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelRespons
 	// Notify mentioned humans regardless of the agent trigger limit — surfacing a
 	// mention to a person never feeds the automatic agent-reply loop.
 	h.notifyChannelMemberMentions(ctx, ch, trigger)
+	for _, agent := range h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content) {
+		h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
+	}
+}
+
+// dispatchChannelAgentReply runs one agent's reply to a triggering message:
+// ensure the channel<->agent chat session, persist the user-role prompt, enqueue
+// the agent task, and tag the prompt with the task. Shared by @-mention dispatch
+// (group channels) and DM auto-dispatch (1-on-1 channel whose peer is an agent).
+//
+// Two guards keep the agent-reply loop bounded and prevent self-conversation and
+// MUST be preserved for both callers:
+//   - trigger-depth limit: an agent reply that itself re-triggers stops at the limit.
+//   - self-trigger skip: an agent's own message never re-triggers that same agent
+//     (otherwise a 1-on-1 agent DM would loop on the agent's own replies forever).
+func (h *Handler) dispatchChannelAgentReply(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
 	if trigger.TriggerDepth >= channelRunTriggerLimit {
-		slog.Warn("channel mention: trigger limit reached", "channel", ch.ID, "thread_id", ptrString(trigger.ThreadID), "depth", trigger.TriggerDepth)
+		slog.Warn("channel agent reply: trigger limit reached", "channel", ch.ID, "thread_id", ptrString(trigger.ThreadID), "depth", trigger.TriggerDepth)
 		return
 	}
-	agents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content)
-	for _, agent := range agents {
-		if trigger.AuthorType == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == uuidToString(agent.ID) {
-			continue
-		}
-		h.publishChannelAgentTyping(ch, agent, true)
-		session, err := h.ensureChannelAgentSession(ctx, ch, agent.ID, initiatorUserID)
-		if err != nil {
-			slog.Warn("channel mention: ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-			continue
-		}
-		prompt := h.buildChannelMentionPrompt(ctx, ch, trigger)
-		promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, trigger)
-		if err != nil {
-			slog.Warn("channel mention: create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-			continue
-		}
-		task, err := h.TaskService.EnqueueChatTask(ctx, session, initiatorUserID)
-		if err != nil {
-			slog.Warn("channel mention: enqueue chat task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-			continue
-		}
-		if _, err := h.DB.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
-			slog.Warn("channel mention: tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
-		}
+	if trigger.AuthorType == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == uuidToString(agent.ID) {
+		return
+	}
+	h.publishChannelAgentTyping(ch, agent, true)
+	session, err := h.ensureChannelAgentSession(ctx, ch, agent.ID, initiatorUserID)
+	if err != nil {
+		slog.Warn("channel agent reply: ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	prompt := h.buildChannelMentionPrompt(ctx, ch, trigger)
+	promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, trigger)
+	if err != nil {
+		slog.Warn("channel agent reply: create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	task, err := h.TaskService.EnqueueChatTask(ctx, session, initiatorUserID)
+	if err != nil {
+		slog.Warn("channel agent reply: enqueue chat task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	if _, err := h.DB.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
+		slog.Warn("channel agent reply: tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
 	}
 }
 
@@ -1295,13 +1316,13 @@ func (h *Handler) requireChannelUserMember(w http.ResponseWriter, ctx context.Co
 }
 
 func (h *Handler) getChannel(ctx context.Context, workspaceID string, channelID pgtype.UUID) (ChannelResponse, bool) {
-	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at FROM channel WHERE id = $1 AND workspace_id = $2`, channelID, parseUUID(workspaceID))
+	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind FROM channel WHERE id = $1 AND workspace_id = $2`, channelID, parseUUID(workspaceID))
 	ch, err := scanChannel(row)
 	return ch, err == nil
 }
 
 func (h *Handler) getChannelByLarkChatID(ctx context.Context, workspaceID, larkChatID string) (ChannelResponse, bool) {
-	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at FROM channel WHERE workspace_id = $1 AND lark_chat_id = $2 LIMIT 1`, parseUUID(workspaceID), larkChatID)
+	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind FROM channel WHERE workspace_id = $1 AND lark_chat_id = $2 LIMIT 1`, parseUUID(workspaceID), larkChatID)
 	ch, err := scanChannel(row)
 	return ch, err == nil
 }
@@ -1334,10 +1355,11 @@ func scanChannel(row rowScanner) (ChannelResponse, error) {
 	var name string
 	var desc, lark pgtype.Text
 	var createdAt, updatedAt pgtype.Timestamptz
-	if err := row.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt); err != nil {
+	var kind string
+	if err := row.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt, &kind); err != nil {
 		return ChannelResponse{}, err
 	}
-	return ChannelResponse{ID: uuidToString(id), WorkspaceID: uuidToString(wsID), Name: name, Description: textToPtr(desc), LarkChatID: textToPtr(lark), CreatedBy: uuidToString(createdBy), CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt)}, nil
+	return ChannelResponse{ID: uuidToString(id), WorkspaceID: uuidToString(wsID), Name: name, Kind: kind, Description: textToPtr(desc), LarkChatID: textToPtr(lark), CreatedBy: uuidToString(createdBy), CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt)}, nil
 }
 
 func scanChannelMessage(row rowScanner) (ChannelMessageResponse, error) {

@@ -40,6 +40,87 @@ func useCloudRuntimeProxy(t *testing.T, proxy cloudRuntimeProxy) {
 	t.Cleanup(func() { testHandler.CloudRuntime = prevProxy })
 }
 
+// TestSnapshotCloudRuntimeSandboxProxiesToFleet verifies the snapshot endpoint
+// forwards to the Fleet path with the sandbox id interpolated and the user id
+// stamped.
+func TestSnapshotCloudRuntimeSandboxProxiesToFleet(t *testing.T) {
+	proxy := &fakeCloudRuntimeProxy{
+		enabled: true,
+		resp: &cloudruntime.Response{
+			StatusCode: http.StatusOK,
+			Body:       []byte(`{"snapshot_id":"snap-9"}`),
+		},
+	}
+	useCloudRuntimeProxy(t, proxy)
+
+	req := withURLParam(newRequest(http.MethodPost, "/api/cloud-runtime/sandboxes/sbx-1/snapshot", nil), "sandboxID", "sbx-1")
+	w := httptest.NewRecorder()
+	testHandler.SnapshotCloudRuntimeSandbox(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if !proxy.called {
+		t.Fatal("cloud runtime proxy was not called")
+	}
+	if proxy.req.Method != http.MethodPost || proxy.req.Path != "/api/v1/sandboxes/sbx-1/snapshot" {
+		t.Fatalf("proxied request = %s %s", proxy.req.Method, proxy.req.Path)
+	}
+	if proxy.req.UserID != testUserID {
+		t.Fatalf("proxied user id = %q", proxy.req.UserID)
+	}
+}
+
+// TestSnapshotCloudRuntimeSandboxRequiresID rejects an empty sandbox id before
+// touching the proxy.
+func TestSnapshotCloudRuntimeSandboxRequiresID(t *testing.T) {
+	proxy := &fakeCloudRuntimeProxy{enabled: true}
+	useCloudRuntimeProxy(t, proxy)
+
+	req := newRequest(http.MethodPost, "/api/cloud-runtime/sandboxes//snapshot", nil)
+	w := httptest.NewRecorder()
+	testHandler.SnapshotCloudRuntimeSandbox(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+	if proxy.called {
+		t.Fatal("proxy should not be called for an empty sandbox id")
+	}
+}
+
+// TestForkCloudRuntimeSandboxProxiesToFleet verifies the fork endpoint forwards
+// the body to the Fleet fork path.
+func TestForkCloudRuntimeSandboxProxiesToFleet(t *testing.T) {
+	proxy := &fakeCloudRuntimeProxy{
+		enabled: true,
+		resp: &cloudruntime.Response{
+			StatusCode: http.StatusOK,
+			Body:       []byte(`{"sandbox_id":"forked"}`),
+		},
+	}
+	useCloudRuntimeProxy(t, proxy)
+
+	req := newRequest(http.MethodPost, "/api/cloud-runtime/sandboxes/fork", map[string]any{
+		"snapshot_id": "snap-9",
+	})
+	w := httptest.NewRecorder()
+	testHandler.ForkCloudRuntimeSandbox(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if !proxy.called {
+		t.Fatal("cloud runtime proxy was not called")
+	}
+	if proxy.req.Method != http.MethodPost || proxy.req.Path != "/api/v1/sandboxes/fork" {
+		t.Fatalf("proxied request = %s %s", proxy.req.Method, proxy.req.Path)
+	}
+	if len(proxy.req.Body) == 0 {
+		t.Fatal("expected the fork request body to be forwarded")
+	}
+}
+
 // TestCreateCloudRuntimeNodeForwardsBody is the post-MUL-2671 happy
 // path for CreateCloudRuntimeNode: the handler no longer reads, asks
 // for, or auto-generates an mul_ PAT — Cloud now mints its own

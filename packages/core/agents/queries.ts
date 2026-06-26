@@ -113,40 +113,6 @@ export function agentMemoryOptions(wsId: string, agentId: string) {
   });
 }
 
-export const generatedSkillDeliveryKeys = {
-  all: (wsId: string) => ["workspaces", wsId, "generated-skill-deliveries"] as const,
-  list: (wsId: string, agentId: string) =>
-    [...generatedSkillDeliveryKeys.all(wsId), agentId] as const,
-};
-
-export function generatedSkillDeliveryOptions(wsId: string, agentId: string) {
-  return queryOptions({
-    queryKey: generatedSkillDeliveryKeys.list(wsId, agentId),
-    queryFn: () => api.listAgentGeneratedSkillDeliveries(agentId),
-    enabled: !!wsId && !!agentId,
-    staleTime: 15 * 1000,
-    gcTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: true,
-  });
-}
-
-export const evolutionMemoryDeliveryKeys = {
-  all: (wsId: string) => ["workspaces", wsId, "evolution-memory-deliveries"] as const,
-  list: (wsId: string, agentId: string) =>
-    [...evolutionMemoryDeliveryKeys.all(wsId), agentId] as const,
-};
-
-export function evolutionMemoryDeliveryOptions(wsId: string, agentId: string) {
-  return queryOptions({
-    queryKey: evolutionMemoryDeliveryKeys.list(wsId, agentId),
-    queryFn: () => api.listAgentEvolutionMemoryDeliveries(agentId),
-    enabled: !!wsId && !!agentId,
-    staleTime: 15 * 1000,
-    gcTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: true,
-  });
-}
-
 export const agentTasksKeys = {
   all: (wsId: string) => ["workspaces", wsId, "agent-tasks"] as const,
   detail: (wsId: string, agentId: string) =>

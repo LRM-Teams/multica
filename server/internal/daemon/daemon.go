@@ -665,7 +665,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.autoUpdateLoop(ctx)
 	go d.tokenRenewalLoop(ctx)
 	go d.sharedSkillsSyncLoop(ctx)
-	go d.evolutionDeliveryLoop(ctx)
 
 	// Preflight succeeded and the background loops are up: the daemon has
 	// registered its runtimes and can now claim and run tasks. Flip /health
@@ -673,7 +672,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// readiness wait blocks on, so success is reported only after startup
 	// actually completed, not merely because the health port came up.
 	d.ready.Store(true)
-	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, heartbeat, gc, auto-update, token-renewal, shared-skills, evolution-delivery); health now reporting ready")
+	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, heartbeat, gc, auto-update, token-renewal, shared-skills); health now reporting ready")
 	err = d.pollLoop(ctx, taskWakeups)
 	d.logger.Debug("daemon main loop returning", "error", err)
 	return err
@@ -2678,23 +2677,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if task.Agent != nil {
 		agentID = task.Agent.ID
 		agentName = task.Agent.Name
-		skills = append([]SkillData(nil), task.Agent.Skills...)
+		skills = task.Agent.Skills
 		instructions = task.Agent.Instructions
 	}
-
-	var enabledPiSkills []SkillData
-	if provider == "pi" && task.WorkspaceID != "" && agentID != "" {
-		agentRoot := piAgentRoot(d.cfg, task.WorkspaceID, agentID)
-		if err := ensurePiAgentRoot(agentRoot); err != nil {
-			taskLog.Warn("pi agent root creation failed", "error", err)
-		} else {
-			enabledPiSkills, err = loadEnabledPiSkills(agentRoot)
-			if err != nil {
-				taskLog.Warn("pi enabled skill load failed", "error", err)
-			}
-		}
-	}
-	skills = mergeSkillsForEnv(skills, enabledPiSkills)
 
 	// Prepare isolated execution environment.
 	// Repos are passed as metadata only — the agent checks them out on demand
@@ -2880,30 +2865,14 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentToken = d.client.Token()
 	}
 	agentEnv := map[string]string{
-		"MULTICA_TOKEN":           agentToken,
-		"MULTICA_SERVER_URL":      d.cfg.ServerBaseURL,
-		"MULTICA_DAEMON_PORT":     fmt.Sprintf("%d", d.cfg.HealthPort),
-		"MULTICA_WORKSPACE_ID":    task.WorkspaceID,
-		"MULTICA_AGENT_NAME":      agentName,
-		"MULTICA_AGENT_ID":        task.AgentID,
-		"MULTICA_TASK_ID":         task.ID,
-		"MULTICA_RUN_ID":          task.ID,
-		"MULTICA_WORKSPACES_ROOT": d.cfg.WorkspacesRoot,
-		"MULTICA_TASK_SLOT":       strconv.Itoa(slot),
-	}
-	if task.InitiatorType == "member" {
-		agentEnv["MULTICA_MEMBER_ID"] = task.InitiatorID
-	}
-	if provider == "pi" && task.WorkspaceID != "" && task.AgentID != "" {
-		agentRoot := piAgentRoot(d.cfg, task.WorkspaceID, task.AgentID)
-		agentEnv["PI_AGENT_ROOT"] = agentRoot
-		agentEnv["PI_MEMORY_DIR"] = filepath.Join(agentRoot, "memory")
-		agentEnv["PI_SKILL_DRAFTS_DIR"] = piAgentSkillDraftsDir(agentRoot)
-		agentEnv["PI_AGENT_INBOX_DIR"] = filepath.Join(agentRoot, "inbox")
-		agentEnv["PI_AGENT_SHARED_CACHE_DIR"] = filepath.Join(agentRoot, "shared-cache")
-		agentEnv["PI_AGENT_PROFILE_DIR"] = filepath.Join(agentRoot, "profile")
-		agentEnv["PI_AGENT_FEEDBACK_DIR"] = filepath.Join(agentRoot, "feedback")
-		agentEnv["PI_AGENT_SYNC_QUEUE_DIR"] = piAgentSyncQueueDir(agentRoot)
+		"MULTICA_TOKEN":        agentToken,
+		"MULTICA_SERVER_URL":   d.cfg.ServerBaseURL,
+		"MULTICA_DAEMON_PORT":  fmt.Sprintf("%d", d.cfg.HealthPort),
+		"MULTICA_WORKSPACE_ID": task.WorkspaceID,
+		"MULTICA_AGENT_NAME":   agentName,
+		"MULTICA_AGENT_ID":     task.AgentID,
+		"MULTICA_TASK_ID":      task.ID,
+		"MULTICA_TASK_SLOT":    strconv.Itoa(slot),
 	}
 	if task.AutopilotRunID != "" {
 		agentEnv["MULTICA_AUTOPILOT_RUN_ID"] = task.AutopilotRunID
@@ -3783,39 +3752,6 @@ func convertSkillsForEnv(skills []SkillData) []execenv.SkillContextForEnv {
 		}
 	}
 	return result
-}
-
-func mergeSkillsForEnv(primary, secondary []SkillData) []SkillData {
-	if len(primary) == 0 && len(secondary) == 0 {
-		return nil
-	}
-	merged := make([]SkillData, 0, len(primary)+len(secondary))
-	seen := make(map[string]struct{}, len(primary)+len(secondary))
-	for _, skill := range primary {
-		name := strings.TrimSpace(skill.Name)
-		if name == "" {
-			continue
-		}
-		key := strings.ToLower(name)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		merged = append(merged, skill)
-	}
-	for _, skill := range secondary {
-		name := strings.TrimSpace(skill.Name)
-		if name == "" {
-			continue
-		}
-		key := strings.ToLower(name)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		merged = append(merged, skill)
-	}
-	return merged
 }
 
 // composeOpenclawIncludeRoots returns the value the daemon should set for

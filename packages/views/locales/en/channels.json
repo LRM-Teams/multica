@@ -28,7 +28,8 @@
     "cancel": "Cancel",
     "confirm": "Archive",
     "error": "Failed to archive channel",
-    "restore_error": "Failed to restore channel"
+    "restore_error": "Failed to restore channel",
+    "readonly_notice": "This channel is archived"
   },
   "delete_dialog": {
     "title": "Delete this group?",

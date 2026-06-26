@@ -28,7 +28,8 @@
     "cancel": "取消",
     "confirm": "归档",
     "error": "归档频道失败",
-    "restore_error": "取消归档失败"
+    "restore_error": "取消归档失败",
+    "readonly_notice": "此频道已归档"
   },
   "delete_dialog": {
     "title": "删除这个群组？",

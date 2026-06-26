@@ -28,7 +28,8 @@
     "cancel": "취소",
     "confirm": "보관",
     "error": "채널 보관에 실패했습니다",
-    "restore_error": "보관 해제에 실패했습니다"
+    "restore_error": "보관 해제에 실패했습니다",
+    "readonly_notice": "이 채널은 보관되었습니다"
   },
   "delete_dialog": {
     "title": "이 그룹을 삭제할까요?",

@@ -13,8 +13,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/multica-ai/multica/server/internal/skill"
 )
 
 func (d *Daemon) sharedSkillsSyncLoop(ctx context.Context) {
@@ -407,51 +405,6 @@ func loadSkillDraftBundle(bundleDir string) ([]SkillFileData, string, error) {
 	files = append([]SkillFileData{{Path: "SKILL.md", Content: content}}, files...)
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, content, nil
-}
-
-func loadEnabledPiSkills(agentRoot string) ([]SkillData, error) {
-	enabledRoot := filepath.Join(agentRoot, "skills", "enabled")
-	summaries, _, err := listLocalSkillsFromRoot("pi", enabledRoot)
-	if err != nil {
-		return nil, err
-	}
-	if len(summaries) == 0 {
-		return nil, nil
-	}
-
-	skills := make([]SkillData, 0, len(summaries))
-	seen := make(map[string]struct{}, len(summaries))
-	for _, summary := range summaries {
-		bundle, _, err := loadLocalSkillBundleFromRoot("pi", enabledRoot, summary.Key)
-		if err != nil {
-			continue
-		}
-		name, description := skill.ParseSkillFrontmatter(bundle.Content)
-		if name == "" {
-			name = bundle.Name
-		}
-		if name == "" {
-			name = summary.Name
-		}
-		key := strings.ToLower(strings.TrimSpace(name))
-		if key == "" {
-			continue
-		}
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		files := make([]SkillFileData, len(bundle.Files))
-		copy(files, bundle.Files)
-		skills = append(skills, SkillData{
-			ID:          summary.Key,
-			Name:        name,
-			Description: description,
-			Content:     bundle.Content,
-			Files:       files,
-		})
-	}
-	return skills, nil
 }
 
 func jsonString(item map[string]json.RawMessage, key string) string {

@@ -511,16 +511,8 @@ FROM evolution_unit_delivery d
 JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
 WHERE d.workspace_id = $1
   AND d.target_agent_id = $2
+  AND d.status = 'pending'
   AND u.status = 'active'
-  AND (
-    d.status = 'pending'
-    OR (
-      d.status = 'accepted'
-      AND d.delivery_type = 'generated'
-      AND u.unit_type = 'skill'
-      AND (d.delivered_path IS NULL OR POSITION('/skills/enabled/' IN replace(d.delivered_path, chr(92), '/')) = 0)
-    )
-  )
 ORDER BY d.matcher_score DESC, d.created_at ASC
 LIMIT $3
 `
@@ -599,98 +591,9 @@ func (q *Queries) ListSharedEvolutionUnitFiles(ctx context.Context, arg ListShar
 	return items, rows.Err()
 }
 
-const listGeneratedEvolutionSkillDeliveriesByAgent = `-- name: ListGeneratedEvolutionSkillDeliveriesByAgent :many
-SELECT
-  d.id, d.workspace_id, d.unit_id, d.version_id, d.target_agent_id, d.delivery_type, d.status,
-  d.reason, d.matcher_score, d.matcher_details, d.delivered_path, d.error, d.decided_at, d.delivered_at, d.created_at, d.updated_at,
-  u.unit_type, u.title, u.canonical_summary, u.content, u.metadata, u.applies,
-  u.tags, u.tools, u.task_types, u.project_types, u.languages, u.frameworks
-FROM evolution_unit_delivery d
-JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
-WHERE d.workspace_id = $1
-  AND d.target_agent_id = $2
-  AND d.delivery_type = 'generated'
-  AND u.unit_type = 'skill'
-  AND u.status = 'active'
-ORDER BY d.updated_at DESC, d.created_at DESC
-LIMIT $3
-`
-
-type ListGeneratedEvolutionSkillDeliveriesByAgentParams = ListPendingEvolutionDeliveriesByAgentParams
-
-type ListGeneratedEvolutionSkillDeliveriesByAgentRow = ListPendingEvolutionDeliveriesByAgentRow
-
-func (q *Queries) ListGeneratedEvolutionSkillDeliveriesByAgent(ctx context.Context, arg ListGeneratedEvolutionSkillDeliveriesByAgentParams) ([]ListGeneratedEvolutionSkillDeliveriesByAgentRow, error) {
-	rows, err := q.db.Query(ctx, listGeneratedEvolutionSkillDeliveriesByAgent, arg.WorkspaceID, arg.TargetAgentID, arg.LimitCount)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListGeneratedEvolutionSkillDeliveriesByAgentRow{}
-	for rows.Next() {
-		var item ListGeneratedEvolutionSkillDeliveriesByAgentRow
-		err := rows.Scan(
-			&item.ID, &item.WorkspaceID, &item.UnitID, &item.VersionID, &item.TargetAgentID, &item.DeliveryType, &item.Status,
-			&item.Reason, &item.MatcherScore, &item.MatcherDetails, &item.DeliveredPath, &item.Error, &item.DecidedAt, &item.DeliveredAt, &item.CreatedAt, &item.UpdatedAt,
-			&item.UnitType, &item.Title, &item.CanonicalSummary, &item.Content, &item.Metadata, &item.Applies,
-			&item.Tags, &item.Tools, &item.TaskTypes, &item.ProjectTypes, &item.Languages, &item.Frameworks,
-		)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
-}
-
-const listEvolutionMemoryDeliveriesByAgent = `-- name: ListEvolutionMemoryDeliveriesByAgent :many
-SELECT
-  d.id, d.workspace_id, d.unit_id, d.version_id, d.target_agent_id, d.delivery_type, d.status,
-  d.reason, d.matcher_score, d.matcher_details, d.delivered_path, d.error, d.decided_at, d.delivered_at, d.created_at, d.updated_at,
-  u.unit_type, u.title, u.canonical_summary, u.content, u.metadata, u.applies,
-  u.tags, u.tools, u.task_types, u.project_types, u.languages, u.frameworks
-FROM evolution_unit_delivery d
-JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
-WHERE d.workspace_id = $1
-  AND d.target_agent_id = $2
-  AND d.delivery_type = 'inbox'
-  AND u.unit_type IN ('memory', 'preference', 'tool_pattern', 'workflow')
-  AND u.status = 'active'
-ORDER BY d.updated_at DESC, d.created_at DESC
-LIMIT $3
-`
-
-type ListEvolutionMemoryDeliveriesByAgentParams = ListPendingEvolutionDeliveriesByAgentParams
-
-type ListEvolutionMemoryDeliveriesByAgentRow = ListPendingEvolutionDeliveriesByAgentRow
-
-func (q *Queries) ListEvolutionMemoryDeliveriesByAgent(ctx context.Context, arg ListEvolutionMemoryDeliveriesByAgentParams) ([]ListEvolutionMemoryDeliveriesByAgentRow, error) {
-	rows, err := q.db.Query(ctx, listEvolutionMemoryDeliveriesByAgent, arg.WorkspaceID, arg.TargetAgentID, arg.LimitCount)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListEvolutionMemoryDeliveriesByAgentRow{}
-	for rows.Next() {
-		var item ListEvolutionMemoryDeliveriesByAgentRow
-		err := rows.Scan(
-			&item.ID, &item.WorkspaceID, &item.UnitID, &item.VersionID, &item.TargetAgentID, &item.DeliveryType, &item.Status,
-			&item.Reason, &item.MatcherScore, &item.MatcherDetails, &item.DeliveredPath, &item.Error, &item.DecidedAt, &item.DeliveredAt, &item.CreatedAt, &item.UpdatedAt,
-			&item.UnitType, &item.Title, &item.CanonicalSummary, &item.Content, &item.Metadata, &item.Applies,
-			&item.Tags, &item.Tools, &item.TaskTypes, &item.ProjectTypes, &item.Languages, &item.Frameworks,
-		)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
-}
-
 const markEvolutionDeliveryDelivered = `-- name: MarkEvolutionDeliveryDelivered :one
 UPDATE evolution_unit_delivery
-SET status = CASE WHEN status = 'accepted' THEN status ELSE 'delivered' END,
-    delivered_path = $4, delivered_at = now(), updated_at = now()
+SET status = 'delivered', delivered_path = $4, delivered_at = now(), updated_at = now()
 WHERE id = $1 AND workspace_id = $2 AND target_agent_id = $3
 RETURNING id, workspace_id, unit_id, version_id, target_agent_id, delivery_type, status, reason, matcher_score, matcher_details, delivered_path, error, decided_at, delivered_at, created_at, updated_at
 `
@@ -743,28 +646,6 @@ type UpdateEvolutionDeliveryDecisionParams struct {
 
 func (q *Queries) UpdateEvolutionDeliveryDecision(ctx context.Context, arg UpdateEvolutionDeliveryDecisionParams) (EvolutionUnitDelivery, error) {
 	row := q.db.QueryRow(ctx, updateEvolutionDeliveryDecision, arg.ID, arg.WorkspaceID, arg.TargetAgentID, arg.Status)
-	return scanEvolutionUnitDelivery(row)
-}
-
-const updateGeneratedEvolutionSkillDeliveryDecision = `-- name: UpdateGeneratedEvolutionSkillDeliveryDecision :one
-UPDATE evolution_unit_delivery d
-SET status = $4, decided_at = now(), updated_at = now()
-FROM shared_evolution_unit u
-WHERE d.id = $1
-  AND d.workspace_id = $2
-  AND d.target_agent_id = $3
-  AND d.unit_id = u.id
-  AND d.workspace_id = u.workspace_id
-  AND d.delivery_type = 'generated'
-  AND u.unit_type = 'skill'
-  AND $4 IN ('accepted', 'ignored', 'rejected')
-RETURNING d.id, d.workspace_id, d.unit_id, d.version_id, d.target_agent_id, d.delivery_type, d.status, d.reason, d.matcher_score, d.matcher_details, d.delivered_path, d.error, d.decided_at, d.delivered_at, d.created_at, d.updated_at
-`
-
-type UpdateGeneratedEvolutionSkillDeliveryDecisionParams = UpdateEvolutionDeliveryDecisionParams
-
-func (q *Queries) UpdateGeneratedEvolutionSkillDeliveryDecision(ctx context.Context, arg UpdateGeneratedEvolutionSkillDeliveryDecisionParams) (EvolutionUnitDelivery, error) {
-	row := q.db.QueryRow(ctx, updateGeneratedEvolutionSkillDeliveryDecision, arg.ID, arg.WorkspaceID, arg.TargetAgentID, arg.Status)
 	return scanEvolutionUnitDelivery(row)
 }
 

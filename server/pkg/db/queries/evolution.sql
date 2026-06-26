@@ -161,16 +161,8 @@ FROM evolution_unit_delivery d
 JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
 WHERE d.workspace_id = @workspace_id
   AND d.target_agent_id = @target_agent_id
+  AND d.status = 'pending'
   AND u.status = 'active'
-  AND (
-    d.status = 'pending'
-    OR (
-      d.status = 'accepted'
-      AND d.delivery_type = 'generated'
-      AND u.unit_type = 'skill'
-      AND (d.delivered_path IS NULL OR POSITION('/skills/enabled/' IN replace(d.delivered_path, chr(92), '/')) = 0)
-    )
-  )
 ORDER BY d.matcher_score DESC, d.created_at ASC
 LIMIT @limit_count;
 
@@ -179,40 +171,9 @@ SELECT * FROM shared_evolution_unit_file
 WHERE workspace_id = @workspace_id AND unit_id = @unit_id AND version_id = @version_id
 ORDER BY path ASC;
 
--- name: ListGeneratedEvolutionSkillDeliveriesByAgent :many
-SELECT
-  d.*,
-  u.unit_type, u.title, u.canonical_summary, u.content, u.metadata, u.applies,
-  u.tags, u.tools, u.task_types, u.project_types, u.languages, u.frameworks
-FROM evolution_unit_delivery d
-JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
-WHERE d.workspace_id = @workspace_id
-  AND d.target_agent_id = @target_agent_id
-  AND d.delivery_type = 'generated'
-  AND u.unit_type = 'skill'
-  AND u.status = 'active'
-ORDER BY d.updated_at DESC, d.created_at DESC
-LIMIT @limit_count;
-
--- name: ListEvolutionMemoryDeliveriesByAgent :many
-SELECT
-  d.*,
-  u.unit_type, u.title, u.canonical_summary, u.content, u.metadata, u.applies,
-  u.tags, u.tools, u.task_types, u.project_types, u.languages, u.frameworks
-FROM evolution_unit_delivery d
-JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
-WHERE d.workspace_id = @workspace_id
-  AND d.target_agent_id = @target_agent_id
-  AND d.delivery_type = 'inbox'
-  AND u.unit_type IN ('memory', 'preference', 'tool_pattern', 'workflow')
-  AND u.status = 'active'
-ORDER BY d.updated_at DESC, d.created_at DESC
-LIMIT @limit_count;
-
 -- name: MarkEvolutionDeliveryDelivered :one
 UPDATE evolution_unit_delivery
-SET status = CASE WHEN status = 'accepted' THEN status ELSE 'delivered' END,
-    delivered_path = @delivered_path, delivered_at = now(), updated_at = now()
+SET status = 'delivered', delivered_path = @delivered_path, delivered_at = now(), updated_at = now()
 WHERE id = @id AND workspace_id = @workspace_id AND target_agent_id = @target_agent_id
 RETURNING *;
 
@@ -228,17 +189,3 @@ SET status = @status, decided_at = now(), updated_at = now()
 WHERE id = @id AND workspace_id = @workspace_id AND target_agent_id = @target_agent_id
   AND @status IN ('accepted', 'ignored', 'rejected')
 RETURNING *;
-
--- name: UpdateGeneratedEvolutionSkillDeliveryDecision :one
-UPDATE evolution_unit_delivery d
-SET status = @status, decided_at = now(), updated_at = now()
-FROM shared_evolution_unit u
-WHERE d.id = @id
-  AND d.workspace_id = @workspace_id
-  AND d.target_agent_id = @target_agent_id
-  AND d.unit_id = u.id
-  AND d.workspace_id = u.workspace_id
-  AND d.delivery_type = 'generated'
-  AND u.unit_type = 'skill'
-  AND @status IN ('accepted', 'ignored', 'rejected')
-RETURNING d.*;

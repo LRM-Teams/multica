@@ -37,9 +37,6 @@ import type {
   Skill,
   SkillSummary,
   AgentMemory,
-  ListGeneratedSkillDeliveriesResponse,
-  DecideGeneratedSkillDeliveryRequest,
-  ListEvolutionMemoryDeliveriesResponse,
   CreateSkillRequest,
   UpdateSkillRequest,
   SetAgentSkillsRequest,
@@ -1581,25 +1578,6 @@ export class ApiClient {
 
   async listAgentMemories(agentId: string): Promise<AgentMemory[]> {
     return this.fetch(`/api/agents/${agentId}/memories`);
-  }
-
-  async listAgentGeneratedSkillDeliveries(agentId: string): Promise<ListGeneratedSkillDeliveriesResponse> {
-    return this.fetch(`/api/agents/${agentId}/generated-skills`);
-  }
-
-  async listAgentEvolutionMemoryDeliveries(agentId: string): Promise<ListEvolutionMemoryDeliveriesResponse> {
-    return this.fetch(`/api/agents/${agentId}/evolution-memories`);
-  }
-
-  async decideAgentGeneratedSkillDelivery(
-    agentId: string,
-    deliveryId: string,
-    data: DecideGeneratedSkillDeliveryRequest,
-  ): Promise<void> {
-    await this.fetch(`/api/agents/${agentId}/generated-skills/${deliveryId}/decision`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
   }
 
   async setAgentSkills(agentId: string, data: SetAgentSkillsRequest): Promise<void> {

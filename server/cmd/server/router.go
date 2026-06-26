@@ -859,9 +859,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/tasks", h.ListAgentTasks)
 					r.Get("/skills", h.ListAgentSkills)
 					r.Put("/skills", h.SetAgentSkills)
-					r.Get("/generated-skills", h.ListAgentGeneratedSkillDeliveries)
-					r.Post("/generated-skills/{deliveryId}/decision", h.DecideAgentGeneratedSkillDelivery)
-					r.Get("/evolution-memories", h.ListAgentEvolutionMemoryDeliveries)
 					r.Get("/memories", h.ListAgentMemories)
 					r.Post("/skills/add", h.AddAgentSkills)
 					// Dedicated env-management endpoint. Owner/admin only;

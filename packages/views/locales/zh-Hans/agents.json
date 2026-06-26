@@ -331,25 +331,7 @@
       "add_dialog_confirm_default": "添加",
       "add_dialog_confirm_other": "添加 {{count}} 个 skill",
       "add_dialog_cancel": "取消",
-      "add_failed_toast": "添加 skill 失败",
-      "generated_title": "生成的 skills",
-      "generated_intro": "这个智能体通过 Pi evolution 流程学到的 skills。接受后会在本地启用，并用于后续 Pi task。",
-      "generated_count": "{{count}} 个生成项",
-      "generated_loading": "正在加载生成的 skills…",
-      "generated_empty": "还没有生成的 skills。",
-      "generated_decision_failed_toast": "更新生成 skill 决策失败",
-      "generated_accept_action": "接受",
-      "generated_enabled_action": "已启用",
-      "generated_ignore_action": "忽略",
-      "generated_status_enabled": "已启用",
-      "generated_status": {
-        "pending": "待处理",
-        "delivered": "已送达",
-        "accepted": "已接受",
-        "ignored": "已忽略",
-        "rejected": "已拒绝",
-        "failed": "失败"
-      }
+      "add_failed_toast": "添加 skill 失败"
     },
     "integrations": {
       "intro": "把这个智能体连接到外部聊天平台，让大家在自己熟悉的工具里直接与它协作。",
@@ -400,19 +382,7 @@
       "empty_title": "暂无已同步记忆",
       "empty_hint": "该智能体运行时中的记忆文件会在下次同步后显示在这里。",
       "empty_content": "暂无内容",
-      "updated_at": "更新于 {{value}}",
-      "evolution_title": "生成的记忆",
-      "evolution_intro": "通过 Pi evolution 流程下发的记忆类单元，会进入本地 Pi inbox，供后续查看和复用。",
-      "evolution_loading": "正在加载生成的记忆…",
-      "evolution_empty": "还没有生成的记忆。",
-      "evolution_status": {
-        "pending": "待处理",
-        "delivered": "已送达",
-        "accepted": "已接受",
-        "ignored": "已忽略",
-        "rejected": "已拒绝",
-        "failed": "失败"
-      }
+      "updated_at": "更新于 {{value}}"
     }
   },
   "char_counter": {

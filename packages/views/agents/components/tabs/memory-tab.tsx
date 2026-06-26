@@ -3,11 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Brain, FileText } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  agentMemoryOptions,
-  evolutionMemoryDeliveryOptions,
-} from "@multica/core/agents/queries";
-import type { Agent, EvolutionMemoryDelivery } from "@multica/core/types";
+import { agentMemoryOptions } from "@multica/core/agents/queries";
+import type { Agent } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { Markdown } from "../../../common/markdown";
 import { useT } from "../../../i18n";
@@ -18,10 +15,6 @@ export function MemoryTab({ agent }: { agent: Agent }) {
   const { data: memories = [], isLoading } = useQuery(
     agentMemoryOptions(wsId, agent.id),
   );
-  const { data: evolutionResult, isLoading: evolutionLoading } = useQuery(
-    evolutionMemoryDeliveryOptions(wsId, agent.id),
-  );
-  const evolutionMemories = evolutionResult?.deliveries ?? [];
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -44,11 +37,6 @@ export function MemoryTab({ agent }: { agent: Agent }) {
       <p className="shrink-0 text-xs text-muted-foreground">
         {t(($) => $.tab_body.memory.intro)}
       </p>
-
-      <EvolutionMemorySection
-        memories={evolutionMemories}
-        loading={evolutionLoading}
-      />
 
       {isLoading ? (
         <div className="rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">
@@ -142,69 +130,4 @@ function formatMemoryTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
-}
-
-function EvolutionMemorySection({
-  memories,
-  loading,
-}: {
-  memories: EvolutionMemoryDelivery[];
-  loading: boolean;
-}) {
-  const { t } = useT("agents");
-  return (
-    <section className="shrink-0 space-y-2 rounded-lg border bg-muted/20 p-3">
-      <div>
-        <h3 className="text-sm font-medium">{t(($) => $.tab_body.memory.evolution_title)}</h3>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {t(($) => $.tab_body.memory.evolution_intro)}
-        </p>
-      </div>
-      {loading ? (
-        <div className="rounded-md border border-dashed bg-background/60 px-3 py-5 text-center text-xs text-muted-foreground">
-          {t(($) => $.tab_body.memory.evolution_loading)}
-        </div>
-      ) : memories.length === 0 ? (
-        <div className="rounded-md border border-dashed bg-background/60 px-3 py-5 text-center text-xs text-muted-foreground">
-          {t(($) => $.tab_body.memory.evolution_empty)}
-        </div>
-      ) : (
-        <ul className="space-y-1.5">
-          {memories.map((memory) => (
-            <li key={memory.id} className="rounded-md border bg-background px-3 py-2">
-              <div className="flex items-start gap-2.5">
-                <Brain className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <span className="truncate text-sm font-medium">{memory.title}</span>
-                    <span className="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">
-                      {t(($) => $.tab_body.memory.evolution_status[memory.status]) ?? memory.status}
-                    </span>
-                    <span className="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">
-                      {memory.unit_type}
-                    </span>
-                  </div>
-                  {memory.canonical_summary && (
-                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                      {memory.canonical_summary}
-                    </p>
-                  )}
-                  {memory.content && (
-                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground/90">
-                      {memory.content}
-                    </p>
-                  )}
-                  {memory.delivered_path && (
-                    <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground/80" title={memory.delivered_path}>
-                      {memory.delivered_path}
-                    </p>
-                  )}
-                </div>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
 }

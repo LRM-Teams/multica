@@ -6,7 +6,7 @@
   "sidebar": {
     "heading": "メッセージ",
     "search": "会話を検索...",
-    "groups": "グループ",
+    "groups": "チャンネル",
     "name_placeholder": "チャンネル名",
     "lark_placeholder": "任意の Feishu chat_id (oc_...)",
     "create_aria": "チャンネルを作成",

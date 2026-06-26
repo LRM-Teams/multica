@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   FileText,
@@ -290,6 +291,7 @@ export function ChannelsPage() {
   );
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [channelsCollapsed, setChannelsCollapsed] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Channel | null>(null);
   const editorRef = useRef<ContentEditorRef>(null);
   const [draftEmpty, setDraftEmpty] = useState(true);
@@ -405,6 +407,10 @@ export function ChannelsPage() {
     const q = search.trim().toLowerCase();
     return q ? channels.filter((c) => c.name.toLowerCase().includes(q)) : channels;
   }, [channels, search]);
+  const aggregateChannelUnread = useMemo(
+    () => channels.reduce((sum, c) => sum + (c.unread_count ?? 0), 0),
+    [channels],
+  );
 
   useEffect(() => {
     // Mobile is list-first — don't auto-open a channel, or the list would never
@@ -889,34 +895,8 @@ export function ChannelsPage() {
         isMobile ? "min-w-0" : "border-r",
       )}
     >
-          <div className="flex items-center justify-between px-4 pb-1 pt-4">
+          <div className="flex items-center px-4 pb-1 pt-4">
             <h2 className="text-lg font-semibold">{t(($) => $.sidebar.heading)}</h2>
-            <Popover open={createOpen} onOpenChange={setCreateOpen}>
-              <PopoverTrigger
-                className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent"
-                aria-label={t(($) => $.sidebar.create_aria)}
-              >
-                <Plus className="size-4" />
-              </PopoverTrigger>
-              <PopoverContent align="end" className="w-72 space-y-2">
-                <Input
-                  placeholder={t(($) => $.sidebar.name_placeholder)}
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleCreate();
-                  }}
-                />
-                <Input
-                  placeholder={t(($) => $.sidebar.lark_placeholder)}
-                  value={newLarkChatId}
-                  onChange={(e) => setNewLarkChatId(e.target.value)}
-                />
-                <Button className="w-full" onClick={handleCreate} disabled={createChannel.isPending}>
-                  {t(($) => $.sidebar.create_aria)}
-                </Button>
-              </PopoverContent>
-            </Popover>
           </div>
           <div className="px-3 pb-2">
             <div className="relative">
@@ -935,81 +915,136 @@ export function ChannelsPage() {
               currentUserName={currentUserName}
               onSelect={selectDm}
             />
-            <p className="px-2 pb-1 pt-3 text-xs font-medium text-muted-foreground">
-              {t(($) => $.sidebar.groups)}
-            </p>
-            {isLoading ? (
-              <div className="space-y-2 p-2">
-                <Skeleton className="h-12" />
-                <Skeleton className="h-12" />
-              </div>
-            ) : channels.length === 0 ? (
-              <div className="p-3 text-sm text-muted-foreground">{t(($) => $.sidebar.empty)}</div>
-            ) : (
-              filteredChannels.map((channel) => {
-                const unread = channel.unread_count ?? 0;
-                const last = channel.last_message;
-                const preview = last ? `${last.author_name}: ${last.content}`.replace(/\s+/g, " ") : "";
-                return (
-                  <div
-                    key={channel.id}
-                    className={cn(
-                      "group/row relative mb-0.5 rounded-lg transition-colors",
-                      active?.id === channel.id ? "bg-primary/[0.08]" : "hover:bg-accent",
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => selectChannel(channel.id)}
-                      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
-                    >
-                      <ChannelGroupAvatar members={channel.members ?? []} size={40} />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-foreground">
-                            <span className="truncate">{channel.name}</span>
-                            {channel.lark_chat_id && (
-                              <Smartphone className="size-3 shrink-0 text-emerald-600" />
-                            )}
-                          </span>
-                          {last && (
-                            <span className="shrink-0 text-[11px] text-muted-foreground">
-                              {timeAgo(last.created_at)}
-                            </span>
-                          )}
-                        </div>
-                        <div className="mt-0.5 flex items-center justify-between gap-2">
-                          <span className="truncate text-xs text-muted-foreground">{preview}</span>
-                          {unread > 0 && (
-                            <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
-                              {unread > 99 ? "99+" : unread}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={
-                          <button
-                            type="button"
-                            aria-label={t(($) => $.sidebar.menu_aria)}
-                            className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 data-[popup-open]:opacity-100"
-                          >
-                            <MoreHorizontal className="size-4" />
-                          </button>
-                        }
+            {/* CHANNELS section — collapsible, mirrors DIRECT MESSAGES layout */}
+            <div className="mt-1">
+              <div className="flex items-center gap-0.5 px-2 py-1.5">
+                <button
+                  type="button"
+                  onClick={() => setChannelsCollapsed((c) => !c)}
+                  className="flex flex-1 items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+                  aria-expanded={!channelsCollapsed}
+                >
+                  {channelsCollapsed ? (
+                    <ChevronRight className="size-3.5 shrink-0" />
+                  ) : (
+                    <ChevronDown className="size-3.5 shrink-0" />
+                  )}
+                  <span className="flex-1 text-left">{t(($) => $.sidebar.groups)}</span>
+                  {channelsCollapsed && aggregateChannelUnread > 0 && (
+                    <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                      {aggregateChannelUnread > 99 ? "99+" : aggregateChannelUnread}
+                    </span>
+                  )}
+                </button>
+                {/* Create channel "+" moved from top heading to here */}
+                <Popover open={createOpen} onOpenChange={setCreateOpen}>
+                  <PopoverTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label={t(($) => $.sidebar.create_aria)}
+                        className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                       />
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(channel)}>
-                          <Trash2 className="size-4" /> {t(($) => $.sidebar.delete)}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    }
+                  >
+                    <Plus className="size-4" />
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-72 space-y-2">
+                    <Input
+                      placeholder={t(($) => $.sidebar.name_placeholder)}
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleCreate();
+                      }}
+                    />
+                    <Input
+                      placeholder={t(($) => $.sidebar.lark_placeholder)}
+                      value={newLarkChatId}
+                      onChange={(e) => setNewLarkChatId(e.target.value)}
+                    />
+                    <Button className="w-full" onClick={handleCreate} disabled={createChannel.isPending}>
+                      {t(($) => $.sidebar.create_aria)}
+                    </Button>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              {!channelsCollapsed && (
+                isLoading ? (
+                  <div className="space-y-2 p-2">
+                    <Skeleton className="h-12" />
+                    <Skeleton className="h-12" />
                   </div>
-                );
-              })
-            )}
+                ) : channels.length === 0 ? (
+                  <div className="p-3 text-sm text-muted-foreground">{t(($) => $.sidebar.empty)}</div>
+                ) : (
+                  filteredChannels.map((channel) => {
+                    const unread = channel.unread_count ?? 0;
+                    const last = channel.last_message;
+                    const preview = last ? `${last.author_name}: ${last.content}`.replace(/\s+/g, " ") : "";
+                    return (
+                      <div
+                        key={channel.id}
+                        className={cn(
+                          "group/row relative mb-0.5 rounded-lg transition-colors",
+                          active?.id === channel.id ? "bg-primary/[0.08]" : "hover:bg-accent",
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => selectChannel(channel.id)}
+                          className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
+                        >
+                          <ChannelGroupAvatar members={channel.members ?? []} size={40} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-foreground">
+                                <span className="truncate">{channel.name}</span>
+                                {channel.lark_chat_id && (
+                                  <Smartphone className="size-3 shrink-0 text-emerald-600" />
+                                )}
+                              </span>
+                              {last && (
+                                <span className="shrink-0 text-[11px] text-muted-foreground">
+                                  {timeAgo(last.created_at)}
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-0.5 flex items-center justify-between gap-2">
+                              <span className="truncate text-xs text-muted-foreground">{preview}</span>
+                              {unread > 0 && (
+                                <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                                  {unread > 99 ? "99+" : unread}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            render={
+                              <button
+                                type="button"
+                                aria-label={t(($) => $.sidebar.menu_aria)}
+                                className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 data-[popup-open]:opacity-100"
+                              >
+                                <MoreHorizontal className="size-4" />
+                              </button>
+                            }
+                          />
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(channel)}>
+                              <Trash2 className="size-4" /> {t(($) => $.sidebar.delete)}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    );
+                  })
+                )
+              )}
+            </div>
           </div>
     </aside>
   );

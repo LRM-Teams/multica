@@ -2,6 +2,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import { channelKeys } from "./queries";
+import { dmKeys } from "../dm/queries";
+import type { DMItem } from "../dm/types";
 
 export function useCreateChannel() {
   const qc = useQueryClient();
@@ -39,7 +41,27 @@ export function useMarkChannelRead() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: (channelId: string) => api.markChannelRead(channelId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+    onMutate: async (channelId) => {
+      await qc.cancelQueries({ queryKey: dmKeys.list(wsId) });
+      const prevDms = qc.getQueryData<DMItem[]>(dmKeys.list(wsId));
+      qc.setQueryData<DMItem[]>(dmKeys.list(wsId), (old) =>
+        old?.map((dm) =>
+          dm.id === channelId && dm.source === "dm_channel"
+            ? { ...dm, unread: 0, manually_unread: false }
+            : dm,
+        ),
+      );
+      return { prevDms };
+    },
+    onError: (_err, _channelId, ctx) => {
+      if (ctx?.prevDms) qc.setQueryData(dmKeys.list(wsId), ctx.prevDms);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+      // DM channels (kind='dm') also clear manual_unread_at in dm_peer_state.
+      // Always invalidate dmKeys so the DM list badge stays in sync.
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+    },
   });
 }
 

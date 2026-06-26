@@ -109,6 +109,11 @@
   "dm": {
     "heading": "다이렉트 메시지",
     "empty": "아직 다이렉트 메시지가 없습니다.",
+    "empty_cta": "채팅 시작",
+    "new_aria": "새 다이렉트 메시지",
+    "new_title": "새 메시지",
+    "search_placeholder": "사람 또는 에이전트 검색…",
+    "no_results": "일치 없음",
     "send_message": "메시지 보내기",
     "files": "파일",
     "thread_empty": "아직 메시지가 없습니다. 인사를 건네 보세요.",

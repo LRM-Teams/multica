@@ -109,6 +109,11 @@
   "dm": {
     "heading": "私信",
     "empty": "还没有私信。",
+    "empty_cta": "开始私信",
+    "new_aria": "新建私信",
+    "new_title": "新建私信",
+    "search_placeholder": "搜索人或 agent…",
+    "no_results": "无匹配结果",
     "send_message": "发消息",
     "files": "文件",
     "thread_empty": "还没有消息，打个招呼吧。",

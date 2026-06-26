@@ -53,6 +53,7 @@ import { buildRuntimeMachines } from "../../runtimes/components/runtime-machines
 import { RuntimeMachineFilterDropdown } from "./runtime-machine-filter-dropdown";
 import { AgentDetailOverview, type AgentMetric } from "./agent-detail-overview";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { useOpenDM } from "../../common/use-open-dm";
 import { estimateCost } from "../../runtimes/utils";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
@@ -941,38 +942,54 @@ function AgentRailRow({
   onClick: () => void;
 }) {
   const { t } = useT("agents");
+  const { openDM, isPending: openingDM } = useOpenDM();
   const cfg = availability ? availabilityConfig[availability] : null;
   return (
-    <button
-      type="button"
-      onClick={onClick}
+    // Outer div (not a button) lets us nest two independent buttons:
+    // the avatar (→ open DM) and the content area (→ select in detail).
+    <div
       className={cn(
-        "flex w-full items-center gap-3 border-l-2 px-3 py-2.5 text-left transition-colors",
+        "flex w-full items-center gap-3 border-l-2 px-3 py-2.5 transition-colors",
         selected
           ? "border-primary bg-accent"
           : "border-transparent hover:bg-accent/50",
       )}
     >
-      <ActorAvatar
-        actorType="agent"
-        actorId={agent.id}
-        size={32}
-        showStatusDot
-        className="shrink-0"
-      />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-foreground">{agent.name}</p>
-        <p className="truncate text-xs text-muted-foreground">
-          {agent.description?.trim() || "—"}
-        </p>
-      </div>
-      {cfg && (
-        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px]">
-          <span className={cn("size-1.5 rounded-full", cfg.dotClass)} />
-          <span className={cfg.textClass}>{t(($) => $.availability[availability!])}</span>
-        </span>
-      )}
-    </button>
+      <button
+        type="button"
+        disabled={openingDM}
+        onClick={() => void openDM({ peer_type: "agent", peer_id: agent.id })}
+        title={t(($) => $.profile_card.send_message)}
+        aria-label={t(($) => $.profile_card.send_message)}
+        className="shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+      >
+        <ActorAvatar
+          actorType="agent"
+          actorId={agent.id}
+          size={32}
+          showStatusDot
+          profileLink={false}
+        />
+      </button>
+      <button
+        type="button"
+        onClick={onClick}
+        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+      >
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-foreground">{agent.name}</p>
+          <p className="truncate text-xs text-muted-foreground">
+            {agent.description?.trim() || "—"}
+          </p>
+        </div>
+        {cfg && (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px]">
+            <span className={cn("size-1.5 rounded-full", cfg.dotClass)} />
+            <span className={cfg.textClass}>{t(($) => $.availability[availability!])}</span>
+          </span>
+        )}
+      </button>
+    </div>
   );
 }
 

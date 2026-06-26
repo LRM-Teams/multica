@@ -177,9 +177,9 @@ func (h *Handler) syncEvolutionSubmission(ctx context.Context, rt db.AgentRuntim
 		return "", err
 	}
 	for _, file := range incoming.Files {
-		path, err := normalizeEvolutionFilePath(file.Path)
-		if err != nil {
-			return "", err
+		path := sanitizeNullBytes(strings.TrimSpace(file.Path))
+		if path == "" || strings.Contains(path, "..") || strings.HasPrefix(path, "/") {
+			return "", fmt.Errorf("invalid file path %q", file.Path)
 		}
 		content := sanitizeNullBytes(file.Content)
 		fileHash := strings.TrimSpace(file.ContentHash)
@@ -238,28 +238,6 @@ func normalizeEvolutionConfidence(v string) string {
 	default:
 		return "medium"
 	}
-}
-
-func normalizeEvolutionFilePath(raw string) (string, error) {
-	cleaned := strings.ReplaceAll(sanitizeNullBytes(strings.TrimSpace(raw)), "\\", "/")
-	if cleaned == "" || strings.HasPrefix(cleaned, "/") {
-		return "", fmt.Errorf("invalid file path %q", raw)
-	}
-	parts := strings.Split(cleaned, "/")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part == "" || part == "." {
-			continue
-		}
-		if part == ".." {
-			return "", fmt.Errorf("invalid file path %q", raw)
-		}
-		out = append(out, part)
-	}
-	if len(out) == 0 {
-		return "", fmt.Errorf("invalid file path %q", raw)
-	}
-	return strings.Join(out, "/"), nil
 }
 
 func jsonObjectOrEmpty(raw json.RawMessage) json.RawMessage {

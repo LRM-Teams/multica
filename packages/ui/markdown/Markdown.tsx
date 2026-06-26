@@ -13,6 +13,7 @@ import { CodeBlock, InlineCode } from './CodeBlock'
 import { isAllowedFileCardHref, preprocessFileCards } from './file-cards'
 import { preprocessLinks, preprocessIssueRefs } from './linkify'
 import { preprocessMentionShortcodes } from './mentions'
+import { preprocessStickers } from './stickers'
 import 'katex/dist/katex.min.css'
 import './markdown.css'
 
@@ -452,6 +453,7 @@ export function Markdown({
   const processedContent = React.useMemo(
     () => {
       let result = preprocessMentionShortcodes(children)
+      result = preprocessStickers(result)
       if (issueRefPrefix) result = preprocessIssueRefs(result, issueRefPrefix)
       result = preprocessLinks(result)
       result = preprocessFileCards(result, cdnDomain ?? '')

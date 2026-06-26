@@ -7,6 +7,7 @@ import {
   type RenderMode,
 } from "@multica/ui/markdown";
 import { useConfigStore } from "@multica/core/config";
+import { api } from "@multica/core/api";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
 import { useWorkspacePaths, useCurrentWorkspace } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
@@ -101,7 +102,48 @@ function defaultRenderMention({
   return <ActorMention type={type} id={id} label={label} />;
 }
 
+// A sticker token (:sticker:<id>:) is preprocessed into an image whose src is
+// the public sticker endpoint. Matching that exact shape lets us render it as a
+// lightweight inline sticker instead of the heavyweight attachment chrome.
+const STICKER_SRC = /^\/api\/stickers\/([a-z0-9-]+)$/;
+
+// absolutizeStickerURL pins the API base for surfaces whose document origin is
+// not the API host (Electron desktop). On web, getBaseUrl() is empty (the
+// Next.js rewrite proxies /api/*), so the site-relative path is left as-is. The
+// api singleton is a Proxy that yields undefined before init, hence optional
+// chaining.
+function absolutizeStickerURL(src: string): string {
+  const baseUrl = (api.getBaseUrl?.() ?? "").replace(/\/+$/, "");
+  return baseUrl ? `${baseUrl}${src}` : src;
+}
+
+/**
+ * Inline sticker. Sized like a chat sticker (not a full image), no lightbox or
+ * download chrome. A missing/unknown id 404s the endpoint, so on error we
+ * render nothing rather than a broken-image icon — the message text stays
+ * intact (graceful degradation per the API-compat rules).
+ */
+function StickerImage({ id, alt }: { id: string; alt: string }): React.ReactNode {
+  const [failed, setFailed] = React.useState(false);
+  if (failed) return null;
+  return (
+    <img
+      src={absolutizeStickerURL(`/api/stickers/${id}`)}
+      alt={alt || `:sticker:${id}:`}
+      className="not-prose my-1 inline-block select-none align-bottom"
+      style={{ width: "6.5rem", height: "6.5rem" }}
+      draggable={false}
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 function renderImage({ src, alt }: { src: string; alt: string }): React.ReactNode {
+  const stickerMatch = STICKER_SRC.exec(src);
+  if (stickerMatch?.[1]) {
+    return <StickerImage id={stickerMatch[1]} alt={alt} />;
+  }
   return (
     <AttachmentRenderer
       attachment={{

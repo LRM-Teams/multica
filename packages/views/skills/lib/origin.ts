@@ -7,18 +7,29 @@ import type { Skill, SkillSummary } from "@multica/core/types";
  * `{ type: "manual" }` for them to keep the consumer code uniform.
  */
 export type OriginInfo = {
-  type: "runtime_local" | "clawhub" | "skills_sh" | "github" | "manual";
+  type:
+    | "runtime_local"
+    | "runtime_shared"
+    | "clawhub"
+    | "skills_sh"
+    | "github"
+    | "manual";
   provider?: string;
   runtime_id?: string;
   source_path?: string;
   source_url?: string;
 };
 
+export function isRuntimeManagedOrigin(origin: OriginInfo): boolean {
+  return origin.type === "runtime_local" || origin.type === "runtime_shared";
+}
+
 export function readOrigin(skill: SkillSummary): OriginInfo {
   const raw = (skill.config?.origin ?? null) as
     | (OriginInfo & Record<string, unknown>)
     | null;
   if (raw?.type === "runtime_local") return raw;
+  if (raw?.type === "runtime_shared") return raw;
   if (raw?.type === "clawhub") return raw;
   if (raw?.type === "skills_sh") return raw;
   if (raw?.type === "github") return raw;

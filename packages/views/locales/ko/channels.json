@@ -1,0 +1,109 @@
+{
+  "page": {
+    "title": "그룹 채팅",
+    "subtitle": "사람, 에이전트, 선택적 Feishu 그룹을 위한 실시간 메시지 공간."
+  },
+  "sidebar": {
+    "heading": "메시지",
+    "search": "대화 검색...",
+    "groups": "그룹",
+    "name_placeholder": "채널 이름",
+    "lark_placeholder": "선택 Feishu chat_id (oc_...)",
+    "create_aria": "채널 만들기",
+    "empty": "아직 채널이 없습니다.",
+    "menu_aria": "채널 작업",
+    "delete": "그룹 삭제"
+  },
+  "delete_dialog": {
+    "title": "이 그룹을 삭제할까요?",
+    "description": "\"{{name}}\"과(와) 모든 메시지가 영구적으로 삭제됩니다. 되돌릴 수 없습니다.",
+    "cancel": "취소",
+    "confirm": "삭제",
+    "toast_success": "그룹을 삭제했습니다",
+    "toast_failed": "그룹 삭제에 실패했습니다"
+  },
+  "empty_state": {
+    "title": "그룹 채팅 만들기",
+    "description": "그룹 채팅은 Multica의 실시간 메시지 공간입니다. 사람과 에이전트를 추가한 뒤 에이전트를 @멘션하면 멤버처럼 답장합니다.",
+    "cta": "새 채널"
+  },
+  "header": {
+    "running": "실행 중",
+    "feishu": "Feishu",
+    "manage_members_aria": "멤버 관리",
+    "share_aria": "공유",
+    "stats_aria": "통계",
+    "files_aria": "파일",
+    "back": "뒤로",
+    "more_aria": "더 보기"
+  },
+  "members": {
+    "select_user": "멤버 선택",
+    "select_agent": "에이전트 선택",
+    "join": "추가",
+    "title": "멤버",
+    "empty": "멤버 없음",
+    "remove_aria": "멤버 제거",
+    "no_candidates": "초대할 대상이 없습니다",
+    "invite": "초대",
+    "invite_count": "초대 ({{count}})",
+    "tab_invite": "초대",
+    "tab_members": "멤버",
+    "search": "검색…",
+    "no_results": "일치하는 결과가 없습니다"
+  },
+  "files": {
+    "title": "파일",
+    "empty": "파일 없음",
+    "no_project": "이 채널에 연결된 프로젝트가 없습니다",
+    "offline": "런타임이 오프라인이라 프로젝트 파일을 읽을 수 없습니다",
+    "missing": "이 컴퓨터에 아직 프로젝트 폴더가 없습니다",
+    "error": "파일을 불러오지 못했습니다",
+    "truncated": "파일이 많아 일부만 표시합니다",
+    "preview_binary": "바이너리 파일이라 미리볼 수 없습니다",
+    "preview_truncated": "큰 파일이라 일부만 미리봅니다",
+    "preview_error": "파일 내용을 불러오지 못했습니다",
+    "preview_empty": "(빈 파일)",
+    "preview_too_large": "파일이 너무 커서 미리볼 수 없습니다"
+  },
+  "stats": {
+    "title": "활동",
+    "messages": "메시지",
+    "files": "파일",
+    "members": "멤버",
+    "by_author": "참여자별 메시지 수",
+    "empty": "데이터 없음",
+    "error": "불러오기 실패"
+  },
+  "share": {
+    "copied": "채널 링크 복사됨",
+    "copy_failed": "복사 실패"
+  },
+  "thread": {
+    "empty": "채팅을 시작하세요. 멤버에 에이전트를 추가한 뒤 @에이전트이름 을 입력하면 답장합니다."
+  },
+  "typing": {
+    "single": "{{name}} 님이 입력 중",
+    "pair": "{{a}}, {{b}} 님이 입력 중",
+    "overflow": "{{a}}, {{b}} 외 {{count}}명이 입력 중"
+  },
+  "agent_status": {
+    "queued": "대기 중",
+    "dispatched": "시작 중",
+    "running": "생각 중",
+    "waiting_local_directory": "로컬 디렉터리 대기 중"
+  },
+  "composer": {
+    "placeholder": "필요한 내용을 입력하세요…  @에이전트이름 으로 답장을 요청하세요.",
+    "attach_aria": "첨부",
+    "mention_aria": "에이전트 멘션",
+    "send": "전송",
+    "project_label": "프로젝트",
+    "project_none": "프로젝트 없음",
+    "project_tooltip": "이 채널이 작업할 프로젝트 설정"
+  },
+  "message": {
+    "agent_badge": "Agent",
+    "feishu_badge": "Feishu"
+  }
+}

@@ -18,11 +18,13 @@ function workspaceScoped(slug: string) {
   const ws = `/${encode(slug)}`;
   return {
     root: () => `${ws}/issues`,
+    overview: () => `${ws}/overview`,
     usage: () => `${ws}/usage`,
     issues: () => `${ws}/issues`,
     issueDetail: (id: string) => `${ws}/issues/${encode(id)}`,
     projects: () => `${ws}/projects`,
     projectDetail: (id: string) => `${ws}/projects/${encode(id)}`,
+    channels: () => `${ws}/channels`,
     autopilots: () => `${ws}/autopilots`,
     autopilotDetail: (id: string) => `${ws}/autopilots/${encode(id)}`,
     agents: () => `${ws}/agents`,

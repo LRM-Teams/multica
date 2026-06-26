@@ -13,9 +13,6 @@ import { BOARD_STATUSES } from "./config";
 export interface IssueSortParam {
   sort_by?: ListIssuesParams["sort_by"];
   sort_direction?: ListIssuesParams["sort_direction"];
-  date_field?: ListIssuesParams["date_field"];
-  date_start?: ListIssuesParams["date_start"];
-  date_end?: ListIssuesParams["date_end"];
 }
 
 export const issueKeys = {
@@ -258,6 +255,38 @@ export function issueListOptions(wsId: string, sort?: IssueSortParam) {
     queryFn: () => fetchFirstPages({}, sort),
     select: flattenIssueBuckets,
     placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Per-status issue totals for dashboard counters. Shares {@link issueListOptions}'s
+ * cache key (same workspace, no sort) so it adds no extra fetch — it only applies
+ * a different `select` over the bucketed cache, reading the server-reported
+ * `total` per status (not the capped first page length). Cancelled is not
+ * fetched (see PAGINATED_STATUSES) and is therefore absent from the result.
+ */
+export function issueStatusCountsOptions(wsId: string) {
+  return queryOptions({
+    queryKey: issueKeys.listSorted(wsId),
+    queryFn: () => fetchFirstPages({}),
+    select: (data: ListIssuesCache): Partial<Record<IssueStatus, number>> => {
+      const counts: Partial<Record<IssueStatus, number>> = {};
+      for (const status of PAGINATED_STATUSES) {
+        counts[status] = data.byStatus[status]?.total ?? 0;
+      }
+      return counts;
+    },
+  });
+}
+
+// Overview "pending human approval" KPI — in_review count + longest wait,
+// computed server-side from activity_log status transitions.
+export function issueReviewStatsOptions(wsId: string) {
+  return queryOptions({
+    queryKey: [...issueKeys.all(wsId), "review-stats"] as const,
+    queryFn: () => api.getIssueReviewStats(),
+    enabled: !!wsId,
+    staleTime: 30 * 1000,
   });
 }
 

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -120,6 +121,16 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 
 	status := r.URL.Query().Get("status")
 
+	// Exclude channel-backed sessions: a channel agent session reuses a
+	// chat_session (creator = the channel initiator, title "#channel"), so
+	// without this filter every channel the user is in would surface as a fake
+	// 1:1 DM. The chat panel is for genuine human↔agent DMs only.
+	channelBound, err := h.channelBoundChatSessionIDs(r.Context(), workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve chat sessions")
+		return
+	}
+
 	// Two call sites → two row types with identical shape. Collect into a
 	// common response slice via small per-branch loops.
 	var resp []ChatSessionResponse
@@ -135,6 +146,9 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 		resp = make([]ChatSessionResponse, 0, len(rows))
 		for _, s := range rows {
 			if _, ok := allowed[uuidToString(s.AgentID)]; !ok {
+				continue
+			}
+			if channelBound[uuidToString(s.ID)] {
 				continue
 			}
 			resp = append(resp, ChatSessionResponse{
@@ -163,6 +177,9 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 			if _, ok := allowed[uuidToString(s.AgentID)]; !ok {
 				continue
 			}
+			if channelBound[uuidToString(s.ID)] {
+				continue
+			}
 			resp = append(resp, ChatSessionResponse{
 				ID:          uuidToString(s.ID),
 				WorkspaceID: uuidToString(s.WorkspaceID),
@@ -176,7 +193,32 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	h.fillChatSessionProjects(r.Context(), resp)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// channelBoundChatSessionIDs returns the set of chat_session ids in a workspace
+// that back a channel agent session. These are NOT 1:1 DMs and must be hidden
+// from the chat/DM panel and from agent-DM session resolution.
+func (h *Handler) channelBoundChatSessionIDs(ctx context.Context, workspaceID string) (map[string]bool, error) {
+	rows, err := h.DB.Query(ctx, `
+		SELECT cas.chat_session_id
+		FROM channel_agent_session cas
+		JOIN channel ch ON ch.id = cas.channel_id
+		WHERE ch.workspace_id = $1`, parseUUID(workspaceID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[uuidToString(id)] = true
+	}
+	return out, rows.Err()
 }
 
 func (h *Handler) loadChatSessionForUser(w http.ResponseWriter, r *http.Request, userID, workspaceID, sessionID string) (db.ChatSession, bool) {
@@ -244,12 +286,17 @@ func (h *Handler) GetChatSession(w http.ResponseWriter, r *http.Request) {
 
 type UpdateChatSessionRequest struct {
 	Title *string `json:"title"`
+	// ProjectID binds (or clears) the chat's "current project". json.RawMessage
+	// so we can tell absent (nil — leave unchanged) from null/"" (clear) from a
+	// uuid (set). chat_session.project_id is a raw column the generated structs
+	// don't carry, so it's read/written via raw SQL here.
+	ProjectID json.RawMessage `json:"project_id"`
 }
 
-// UpdateChatSession updates user-editable fields on a chat session — today
-// just `title`, surfaced by the inline rename affordance in the session
-// dropdown. Title is the only field accepted: `status` is legacy + read-only,
-// agent/creator/workspace are immutable, the resume pointers
+// UpdateChatSession updates user-editable fields on a chat session: `title`
+// (inline rename) and `project_id` (the composer "current project" that scopes
+// the agent's working directory). `status` is legacy + read-only;
+// agent/creator/workspace are immutable; the resume pointers
 // (session_id / work_dir / runtime_id) are daemon-owned.
 func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
@@ -264,17 +311,8 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Title == nil {
-		writeError(w, http.StatusBadRequest, "title is required")
-		return
-	}
-	title := strings.TrimSpace(*req.Title)
-	if title == "" {
-		writeError(w, http.StatusBadRequest, "title is required")
-		return
-	}
-	if len([]rune(title)) > chatSessionTitleMaxLen {
-		writeError(w, http.StatusBadRequest, "title is too long")
+	if req.Title == nil && req.ProjectID == nil {
+		writeError(w, http.StatusBadRequest, "no updatable fields")
 		return
 	}
 
@@ -283,13 +321,58 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := h.Queries.UpdateChatSessionTitle(r.Context(), db.UpdateChatSessionTitleParams{
-		ID:    session.ID,
-		Title: title,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update chat session")
-		return
+	updated := session
+	if req.Title != nil {
+		title := strings.TrimSpace(*req.Title)
+		if title == "" {
+			writeError(w, http.StatusBadRequest, "title is required")
+			return
+		}
+		if len([]rune(title)) > chatSessionTitleMaxLen {
+			writeError(w, http.StatusBadRequest, "title is too long")
+			return
+		}
+		var err error
+		updated, err = h.Queries.UpdateChatSessionTitle(r.Context(), db.UpdateChatSessionTitleParams{
+			ID:    session.ID,
+			Title: title,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update chat session")
+			return
+		}
+	}
+
+	if req.ProjectID != nil {
+		var projectID pgtype.UUID // zero/invalid → clears the binding (NULL)
+		if string(req.ProjectID) != "null" {
+			var raw string
+			if err := json.Unmarshal(req.ProjectID, &raw); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid project_id")
+				return
+			}
+			if raw = strings.TrimSpace(raw); raw != "" {
+				pid, perr := util.ParseUUID(raw)
+				if perr != nil {
+					writeError(w, http.StatusBadRequest, "invalid project_id")
+					return
+				}
+				// The project must live in this workspace.
+				proj, gerr := h.Queries.GetProject(r.Context(), pid)
+				if gerr != nil || uuidToString(proj.WorkspaceID) != workspaceID {
+					writeError(w, http.StatusBadRequest, "project not found")
+					return
+				}
+				projectID = pid
+			}
+		}
+		if _, err := h.DB.Exec(r.Context(),
+			`UPDATE chat_session SET project_id = $2, updated_at = now() WHERE id = $1`,
+			session.ID, projectID,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update chat session")
+			return
+		}
 	}
 
 	resolvedSessionID := uuidToString(updated.ID)
@@ -299,7 +382,9 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:     timestampToString(updated.UpdatedAt),
 	})
 
-	writeJSON(w, http.StatusOK, chatSessionToResponse(updated))
+	resp := chatSessionToResponse(updated)
+	resp.ProjectID = h.chatSessionProjectID(r.Context(), session.ID)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // DeleteChatSession hard-deletes a chat session owned by the caller. The
@@ -386,16 +471,6 @@ type SendChatMessageRequest struct {
 type SendChatMessageResponse struct {
 	MessageID string `json:"message_id"`
 	TaskID    string `json:"task_id"`
-	// AttachmentIDs are the attachment rows actually bound to this message by
-	// the server. The client diffs these against the ids it requested so it
-	// can warn the user when an attachment silently failed to bind — no extra
-	// round-trip needed. No `omitempty`: a send that requested attachments but
-	// bound none must serialize `[]` (not be omitted), otherwise the client
-	// can't tell "all binds failed" from "older server without this field" and
-	// would silently skip the very warning this exists for. When no
-	// attachments were requested the value is nil → `null`, which the client's
-	// guard short-circuits on the requested-ids check.
-	AttachmentIDs []string `json:"attachment_ids"`
 	// CreatedAt anchors the chat StatusPill timer the instant the user
 	// hits send. Without it the front-end falls back to its local clock
 	// and the timer "snaps backwards" later when WS events deliver the
@@ -459,30 +534,19 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Back-fill chat_message_id on attachments the sender uploaded while
-	// composing. New clients upload workspace-scoped unattached rows and bind
-	// them here; older clients may still upload against the chat_session_id.
-	// The query accepts both shapes, but only for this workspace, this actor,
-	// and rows that are not already linked to an issue/comment/message.
-	var boundAttachmentIDs []string
+	// Back-fill chat_message_id on attachments that were uploaded against
+	// this session while the user was composing. The query only touches rows
+	// where chat_session_id matches AND chat_message_id IS NULL, so it cannot
+	// rebind an attachment that already belongs to an earlier message.
 	if len(attachmentIDs) > 0 {
-		actorType, actorID := h.resolveActor(r, userID, workspaceID)
-		bound, err := h.Queries.LinkAttachmentsToChatMessage(r.Context(), db.LinkAttachmentsToChatMessageParams{
+		if err := h.Queries.LinkAttachmentsToChatMessage(r.Context(), db.LinkAttachmentsToChatMessageParams{
 			ChatMessageID: msg.ID,
 			ChatSessionID: session.ID,
-			WorkspaceID:   session.WorkspaceID,
-			UploaderType:  actorType,
-			UploaderID:    parseUUID(actorID),
-			AttachmentIds: attachmentIDs,
-		})
-		if err != nil {
+			Column3:       attachmentIDs,
+		}); err != nil {
 			// Don't fail the send — the message content is already saved and
 			// the attachments remain on the session (still downloadable).
 			slog.Warn("link chat attachments failed", "error", err, "message_id", uuidToString(msg.ID))
-		}
-		boundAttachmentIDs = make([]string, 0, len(bound))
-		for _, id := range bound {
-			boundAttachmentIDs = append(boundAttachmentIDs, uuidToString(id))
 		}
 	}
 
@@ -537,10 +601,9 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, http.StatusCreated, SendChatMessageResponse{
-		MessageID:     uuidToString(msg.ID),
-		TaskID:        uuidToString(task.ID),
-		CreatedAt:     timestampToString(task.CreatedAt),
-		AttachmentIDs: boundAttachmentIDs,
+		MessageID: uuidToString(msg.ID),
+		TaskID:    uuidToString(task.ID),
+		CreatedAt: timestampToString(task.CreatedAt),
 	})
 }
 
@@ -736,11 +799,10 @@ type PendingChatTaskItem struct {
 }
 
 type CancelledChatMessageResponse struct {
-	ChatSessionID  string               `json:"chat_session_id"`
-	MessageID      string               `json:"message_id"`
-	Content        string               `json:"content"`
-	RestoreToInput bool                 `json:"restore_to_input"`
-	Attachments    []AttachmentResponse `json:"attachments,omitempty"`
+	ChatSessionID  string `json:"chat_session_id"`
+	MessageID      string `json:"message_id"`
+	Content        string `json:"content"`
+	RestoreToInput bool   `json:"restore_to_input"`
 }
 
 type CancelTaskByUserResponse struct {
@@ -937,16 +999,11 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 		AgentTaskResponse: taskToResponse(cancelled.Task, workspaceID),
 	}
 	if cancelled.CancelledChatMessage != nil {
-		attachments := make([]AttachmentResponse, 0, len(cancelled.CancelledChatMessage.Attachments))
-		for _, a := range cancelled.CancelledChatMessage.Attachments {
-			attachments = append(attachments, h.attachmentToResponse(a))
-		}
 		resp.CancelledChatMessage = &CancelledChatMessageResponse{
 			ChatSessionID:  cancelled.CancelledChatMessage.ChatSessionID,
 			MessageID:      cancelled.CancelledChatMessage.MessageID,
 			Content:        cancelled.CancelledChatMessage.Content,
 			RestoreToInput: cancelled.CancelledChatMessage.RestoreToInput,
-			Attachments:    attachments,
 		}
 	}
 
@@ -964,6 +1021,10 @@ type ChatSessionResponse struct {
 	CreatorID   string `json:"creator_id"`
 	Title       string `json:"title"`
 	Status      string `json:"status"`
+	// ProjectID is the chat's bound project (composer "current project"), or
+	// empty. Filled separately from chat_session.project_id, a column the
+	// generated ChatSession struct doesn't carry.
+	ProjectID string `json:"project_id,omitempty"`
 	// Only populated by list endpoints — single-session fetches return false.
 	HasUnread bool   `json:"has_unread"`
 	CreatedAt string `json:"created_at"`
@@ -1001,6 +1062,49 @@ func chatSessionToResponse(s db.ChatSession) ChatSessionResponse {
 		Status:      s.Status,
 		CreatedAt:   timestampToString(s.CreatedAt),
 		UpdatedAt:   timestampToString(s.UpdatedAt),
+	}
+}
+
+// chatSessionProjectID reads a single chat session's bound project_id (a column
+// the generated ChatSession struct doesn't carry). Empty when unbound or on
+// error.
+func (h *Handler) chatSessionProjectID(ctx context.Context, id pgtype.UUID) string {
+	var pid pgtype.UUID
+	if err := h.DB.QueryRow(ctx, `SELECT project_id FROM chat_session WHERE id = $1`, id).Scan(&pid); err == nil && pid.Valid {
+		return uuidToString(pid)
+	}
+	return ""
+}
+
+// fillChatSessionProjects sets ProjectID on each response from a single batched
+// read of chat_session.project_id. Best-effort: leaves ProjectID empty on error.
+func (h *Handler) fillChatSessionProjects(ctx context.Context, resp []ChatSessionResponse) {
+	if len(resp) == 0 {
+		return
+	}
+	ids := make([]pgtype.UUID, 0, len(resp))
+	for _, s := range resp {
+		ids = append(ids, parseUUID(s.ID))
+	}
+	rows, err := h.DB.Query(ctx, `SELECT id, project_id FROM chat_session WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	byID := make(map[string]string, len(resp))
+	for rows.Next() {
+		var id, pid pgtype.UUID
+		if err := rows.Scan(&id, &pid); err != nil {
+			continue
+		}
+		if pid.Valid {
+			byID[uuidToString(id)] = uuidToString(pid)
+		}
+	}
+	for i := range resp {
+		if pid, ok := byID[resp[i].ID]; ok {
+			resp[i].ProjectID = pid
+		}
 	}
 }
 

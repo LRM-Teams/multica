@@ -50,16 +50,17 @@ const (
 	// matching tool_result would otherwise run forever. This is the backstop for
 	// that stuck-tool case (MUL-3064). Set MULTICA_AGENT_TOOL_WATCHDOG=0 to
 	// disable, in which case an in-flight tool never force-stops the run.
-	DefaultAgentToolWatchdog       = 2 * time.Hour
-	DefaultRuntimeName             = "Local Agent"
-	DefaultWorkspaceSyncInterval   = 30 * time.Second
-	DefaultHealthPort              = 19514
-	DefaultMaxConcurrentTasks      = 20
-	DefaultGCInterval              = 1 * time.Hour
-	DefaultGCTTL                   = 24 * time.Hour // 1 day — AI-coding issues rarely stay open long
-	DefaultGCOrphanTTL             = 72 * time.Hour // 3 days — orphans with no meta (crashes, pre-GC leftovers)
-	DefaultGCArtifactTTL           = 12 * time.Hour // 12h — drop regenerable artifacts on completed but still-open issues
-	DefaultAutoUpdateCheckInterval = 6 * time.Hour  // how often the daemon polls GitHub for a newer CLI release
+	DefaultAgentToolWatchdog        = 2 * time.Hour
+	DefaultRuntimeName              = "Local Agent"
+	DefaultWorkspaceSyncInterval    = 30 * time.Second
+	DefaultHealthPort               = 19514
+	DefaultMaxConcurrentTasks       = 20
+	DefaultGCInterval               = 1 * time.Hour
+	DefaultGCTTL                    = 24 * time.Hour // 1 day — AI-coding issues rarely stay open long
+	DefaultGCOrphanTTL              = 72 * time.Hour // 3 days — orphans with no meta (crashes, pre-GC leftovers)
+	DefaultGCArtifactTTL            = 12 * time.Hour // 12h — drop regenerable artifacts on completed but still-open issues
+	DefaultAutoUpdateCheckInterval  = 6 * time.Hour  // how often the daemon polls GitHub for a newer CLI release
+	DefaultSharedSkillsSyncInterval = 60 * time.Second
 )
 
 // DefaultGCArtifactPatterns lists basename matches that the GC loop treats as
@@ -93,6 +94,8 @@ type Config struct {
 	GCArtifactPatterns             []string              // basename patterns whose subtrees are removed during artifact cleanup (default: node_modules, .next, .turbo)
 	AutoUpdateEnabled              bool                  // periodically check for a newer CLI release and self-update when idle (default: true on Multica Cloud, false on self-host)
 	AutoUpdateCheckInterval        time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
+	SharedSkillsDir                string                // optional global override; when empty each provider uses its own shared root
+	SharedSkillsSyncInterval       time.Duration         // how often to scan and sync SharedSkillsDir
 	PollInterval                   time.Duration
 	HeartbeatInterval              time.Duration
 	AgentTimeout                   time.Duration
@@ -102,14 +105,6 @@ type Config struct {
 	ClaudeArgs                     []string
 	CodexArgs                      []string
 	CodebuddyArgs                  []string
-
-	// ProfileCommandOverrides maps a custom runtime profile_id -> the absolute
-	// executable path to use for that profile on THIS machine (MUL-3284).
-	// Sourced from the local CLI config (cli.CLIConfig.ProfileCommandOverrides),
-	// written by `multica runtime profile set-path`. appendProfileRuntimes
-	// prefers a matching, executable override over resolving the profile's
-	// command_name on PATH. nil/empty means "always resolve via PATH".
-	ProfileCommandOverrides map[string]string
 }
 
 // Overrides allows CLI flags to override environment variables and defaults.
@@ -173,26 +168,11 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// file should not prevent daemon startup, since the daemon can still run
 	// purely from env-var configuration. We log a warning and proceed with
 	// no overrides.
-	var profileCommandOverrides map[string]string
 	if cliCfg, err := cli.LoadCLIConfigForProfile(overrides.Profile); err != nil {
 		slog.Warn("could not load CLI config for backend overrides; proceeding without",
 			"profile", overrides.Profile, "err", err)
-	} else {
-		if oc := openclawOverrideFrom(cliCfg); oc != nil {
-			applyOpenclawOverride(oc)
-		}
-		// Per-machine custom-runtime command path overrides (MUL-3284).
-		// Copy into our own map so later mutation of the loaded config can't
-		// alias daemon state, and so an empty map normalizes to nil.
-		if len(cliCfg.ProfileCommandOverrides) > 0 {
-			profileCommandOverrides = make(map[string]string, len(cliCfg.ProfileCommandOverrides))
-			for id, path := range cliCfg.ProfileCommandOverrides {
-				if id == "" || strings.TrimSpace(path) == "" {
-					continue
-				}
-				profileCommandOverrides[id] = path
-			}
-		}
+	} else if oc := openclawOverrideFrom(cliCfg); oc != nil {
+		applyOpenclawOverride(oc)
 	}
 
 	// Probe available agent CLIs. exec.LookPath is the primary path, but on
@@ -494,6 +474,13 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		autoUpdateInterval = overrides.AutoUpdateCheckInterval
 	}
 
+	// Empty means "resolve per provider" in shared_skills.go (pi → ~/.pi/share/skills).
+	sharedSkillsDir := strings.TrimSpace(os.Getenv("MULTICA_SHARED_SKILLS_DIR"))
+	sharedSkillsInterval, err := durationFromEnv("MULTICA_SHARED_SKILLS_SYNC_INTERVAL", DefaultSharedSkillsSyncInterval)
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		ServerBaseURL:                  serverBaseURL,
 		DaemonID:                       daemonID,
@@ -512,6 +499,8 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		GCArtifactPatterns:             gcArtifactPatterns,
 		AutoUpdateEnabled:              autoUpdateEnabled,
 		AutoUpdateCheckInterval:        autoUpdateInterval,
+		SharedSkillsDir:                sharedSkillsDir,
+		SharedSkillsSyncInterval:       sharedSkillsInterval,
 		HealthPort:                     healthPort,
 		MaxConcurrentTasks:             maxConcurrentTasks,
 		PollInterval:                   pollInterval,
@@ -523,7 +512,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		ClaudeArgs:                     claudeArgs,
 		CodexArgs:                      codexArgs,
 		CodebuddyArgs:                  codebuddyArgs,
-		ProfileCommandOverrides:        profileCommandOverrides,
 	}, nil
 }
 

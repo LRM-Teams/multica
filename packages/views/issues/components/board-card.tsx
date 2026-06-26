@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, memo } from "react";
+import { useCallback, useMemo, memo } from "react";
 import { AppLink } from "../../navigation";
 import { useSortable, defaultAnimateLayoutChanges } from "@dnd-kit/sortable";
 import type { AnimateLayoutChanges } from "@dnd-kit/sortable";
@@ -11,6 +11,10 @@ import { formatDateOnly, isPastDateOnly } from "@multica/core/issues/date";
 import { CalendarClock, CalendarDays } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { agentColor } from "../../common/agent-color";
+import { agentTaskSnapshotOptions } from "@multica/core/agents";
+import { PRIORITY_CONFIG } from "@multica/core/issues/config";
+import { cn } from "@multica/ui/lib/utils";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -76,6 +80,26 @@ export const BoardCardContent = memo(function BoardCardContent({
   const project = issue.project_id ? projects.find((p) => p.id === issue.project_id) : undefined;
   const labels = issue.labels ?? [];
 
+  // Operational state strip: surface "who's running / who needs me / who's
+  // stuck / who's done" at a glance, the way an agent-driven board should.
+  // A live running task wins over the static status; otherwise derive from
+  // the issue status. Reuses the workspace-wide task snapshot the corner
+  // activity indicator already subscribes to (same cache key, deduped).
+  const { data: taskSnapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
+  const hasRunningAgent = useMemo(
+    () => taskSnapshot.some((tk) => tk.issue_id === issue.id && tk.status === "running"),
+    [taskSnapshot, issue.id],
+  );
+  const cardState: "running" | "attention" | "review" | "done" | null = hasRunningAgent
+    ? "running"
+    : issue.status === "blocked"
+      ? "attention"
+      : issue.status === "in_review"
+        ? "review"
+        : issue.status === "done"
+          ? "done"
+          : null;
+
   const updateIssueMutation = useUpdateIssue();
   const handleUpdate = useCallback(
     (updates: Partial<UpdateIssueRequest>) => {
@@ -105,7 +129,7 @@ export const BoardCardContent = memo(function BoardCardContent({
   const showLabels = storeProperties.labels && labels.length > 0;
 
   const showAssigneeName = showAssigneeSection && hasAssignee && !showStartDate && !showDueDate;
-  const showUpdatedHint = showAssigneeName && !showChildProgress;
+  const showUpdatedHint = showAssigneeName && !showChildProgress && !cardState;
   const { getActorName } = useActorName();
   const assigneeName =
     showAssigneeName && issue.assignee_type && issue.assignee_id
@@ -113,6 +137,22 @@ export const BoardCardContent = memo(function BoardCardContent({
       : null;
 
   const priorityLabel = t(($) => $.priority[issue.priority]);
+  const priorityCfg = PRIORITY_CONFIG[issue.priority];
+  // Colored priority pill (icon + short label) for scannability. "none" stays
+  // a bare muted dash with no label so empty priority doesn't add noise.
+  const priorityPill = (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium leading-none",
+        issue.priority === "none"
+          ? "text-muted-foreground"
+          : `${priorityCfg.badgeBg} ${priorityCfg.badgeText}`,
+      )}
+    >
+      <PriorityIcon priority={issue.priority} inheritColor />
+      {issue.priority !== "none" && <span>{priorityLabel}</span>}
+    </span>
+  );
   const priorityIconNode = showPriority ? (
     editable ? (
       <PickerWrapper>
@@ -123,16 +163,16 @@ export const BoardCardContent = memo(function BoardCardContent({
             <button
               type="button"
               aria-label={priorityLabel}
-              className="inline-flex items-center justify-center rounded hover:bg-muted/60"
+              className="inline-flex items-center justify-center rounded hover:opacity-80"
             >
-              <PriorityIcon priority={issue.priority} />
+              {priorityPill}
             </button>
           }
         />
       </PickerWrapper>
     ) : (
       <span aria-label={priorityLabel} className="inline-flex items-center justify-center">
-        <PriorityIcon priority={issue.priority} />
+        {priorityPill}
       </span>
     )
   ) : null;
@@ -151,6 +191,7 @@ export const BoardCardContent = memo(function BoardCardContent({
         size={20}
         enableHoverCard
         className="shrink-0"
+        tint={issue.assignee_type === "agent" ? agentColor(issue.assignee_id!) : undefined}
       />
       {assigneeName && (
         <span className="min-w-0 truncate text-xs text-foreground">{assigneeName}</span>
@@ -179,7 +220,13 @@ export const BoardCardContent = memo(function BoardCardContent({
   const showRightMeta = !!showStartDate || !!showDueDate || !!showChildProgress || showUpdatedHint;
 
   return (
-    <div className="rounded-lg border-[0.5px] border-border bg-card py-3 px-2.5 shadow-[0_3px_6px_-2px_rgba(0,0,0,0.02),0_1px_1px_0_rgba(0,0,0,0.04)] transition-colors group-hover/card:border-accent group-hover/card:bg-accent group-data-[popup-open]/card:border-accent group-data-[popup-open]/card:bg-accent">
+    <div
+      className={cn(
+        "rounded-[10px] border border-border/60 bg-card px-3.5 py-3 shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-all group-hover/card:border-border group-hover/card:shadow-[0_4px_12px_-4px_rgba(0,0,0,0.10)] group-data-[popup-open]/card:border-border group-data-[popup-open]/card:shadow-[0_4px_12px_-4px_rgba(0,0,0,0.10)]",
+        cardState === "attention" && "border-destructive/30 bg-destructive/[0.03]",
+        cardState === "done" && "border-transparent bg-muted/40 shadow-none",
+      )}
+    >
       {/* Row 1: priority + identifier (left), agent activity + assignee (right) */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
@@ -190,7 +237,7 @@ export const BoardCardContent = memo(function BoardCardContent({
       </div>
 
       {/* Row 2: Title */}
-      <p className="mt-1 text-sm font-medium leading-snug line-clamp-2">
+      <p className="mt-1.5 text-[15px] font-semibold leading-snug text-foreground line-clamp-2">
         {issue.title}
       </p>
 
@@ -296,6 +343,52 @@ export const BoardCardContent = memo(function BoardCardContent({
                   {t(($) => $.card.updated_ago, { time: timeAgo(issue.updated_at) })}
                 </span>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Operational state strip: running shows an activity bar, the rest a
+          colored dot + label. Suppressed updated-hint above avoids redundancy. */}
+      {cardState && (
+        <div className="mt-2">
+          {cardState === "running" ? (
+            <div className="flex items-center gap-2">
+              <span className="h-1 flex-1 overflow-hidden rounded-full bg-warning/15">
+                <span className="block h-full w-1/3 animate-pulse rounded-full bg-warning" />
+              </span>
+              <span className="shrink-0 text-[11px] font-medium text-warning">
+                {t(($) => $.card.state.running)}
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 text-[11px] font-medium">
+              <span
+                className={cn(
+                  "size-1.5 shrink-0 rounded-full",
+                  cardState === "attention"
+                    ? "bg-destructive"
+                    : cardState === "review"
+                      ? "bg-success"
+                      : "bg-muted-foreground/50",
+                )}
+              />
+              <span
+                className={cn(
+                  "truncate",
+                  cardState === "attention"
+                    ? "text-destructive"
+                    : cardState === "review"
+                      ? "text-success"
+                      : "text-muted-foreground",
+                )}
+              >
+                {cardState === "attention"
+                  ? t(($) => $.card.state.attention)
+                  : cardState === "review"
+                    ? t(($) => $.card.state.review)
+                    : t(($) => $.card.state.done, { time: timeAgo(issue.updated_at) })}
+              </span>
             </div>
           )}
         </div>

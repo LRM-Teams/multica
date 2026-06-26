@@ -101,20 +101,6 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus, analytics
 	return r
 }
 
-func daemonJSONCompressor() func(http.Handler) http.Handler {
-	compress := chimw.Compress(5, "application/json")
-	return func(next http.Handler) http.Handler {
-		compressed := compress(next)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-				next.ServeHTTP(w, r)
-				return
-			}
-			compressed.ServeHTTP(w, r)
-		})
-	}
-}
-
 type RouterOptions struct {
 	HTTPMetrics     *obsmetrics.HTTPMetrics
 	BusinessMetrics *obsmetrics.BusinessMetrics
@@ -169,6 +155,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		AttachmentDownloadURLTTL: envDuration("ATTACHMENT_DOWNLOAD_URL_TTL", 30*time.Minute),
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
+	h.StartChannelBridge()
 	h.Metrics = opts.BusinessMetrics
 	h.TaskService.Metrics = opts.BusinessMetrics
 	h.IssueService.Metrics = opts.BusinessMetrics
@@ -182,9 +169,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	}
 	if opts.DaemonWakeup != nil {
 		h.TaskService.Wakeup = opts.DaemonWakeup
-		if notifier, ok := opts.DaemonWakeup.(handler.RuntimeProfileRefreshNotifier); ok {
-			h.DaemonProfileRefresh = notifier
-		}
 	}
 	if rdb != nil {
 		h.UpdateStore = handler.NewRedisUpdateStore(rdb)
@@ -508,14 +492,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// Daemon API routes (require daemon token or valid user token)
 	r.Route("/api/daemon", func(r chi.Router) {
 		r.Use(middleware.DaemonAuth(queries, patCache, daemonTokenCache, cloudPATVerifier))
-		r.Use(daemonJSONCompressor())
 
 		r.Post("/register", h.DaemonRegister)
 		r.Post("/deregister", h.DaemonDeregister)
 		r.Post("/heartbeat", h.DaemonHeartbeat)
 		r.Get("/ws", h.DaemonWebSocket)
 		r.Get("/workspaces/{workspaceId}/repos", h.GetDaemonWorkspaceRepos)
-		r.Get("/workspaces/{workspaceId}/runtime-profiles", h.DaemonListRuntimeProfiles)
 
 		r.Post("/runtimes/{runtimeId}/tasks/claim", h.ClaimTaskByRuntime)
 		r.Get("/runtimes/{runtimeId}/tasks/pending", h.ListPendingTasksByRuntime)
@@ -523,6 +505,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/{requestId}/result", h.ReportLocalSkillListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
+		r.Post("/runtimes/{runtimeId}/shared-skills/sync", h.SyncRuntimeSharedSkills)
+		r.Post("/runtimes/{runtimeId}/evolution/submissions", h.SyncEvolutionSubmissions)
+		r.Get("/runtimes/{runtimeId}/evolution/deliveries", h.ListEvolutionDeliveries)
+		r.Post("/runtimes/{runtimeId}/evolution/deliveries/{deliveryId}/delivered", h.MarkEvolutionDeliveryDelivered)
+		r.Post("/runtimes/{runtimeId}/evolution/deliveries/{deliveryId}/failed", h.FailEvolutionDelivery)
+		r.Post("/runtimes/{runtimeId}/evolution/deliveries/{deliveryId}/decision", h.DecideEvolutionDelivery)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
 		r.Post("/tasks/{taskId}/start", h.StartTask)
@@ -533,6 +521,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/tasks/{taskId}/usage", h.ReportTaskUsage)
 		r.Post("/tasks/{taskId}/messages", h.ReportTaskMessages)
 		r.Get("/tasks/{taskId}/messages", h.ListTaskMessages)
+
+		r.Post("/projects/{projectId}/managed-workdir", h.RegisterManagedWorkdir)
 
 		r.Get("/issues/{issueId}/gc-check", h.GetIssueGCCheck)
 		r.Get("/chat-sessions/{sessionId}/gc-check", h.GetChatSessionGCCheck)
@@ -594,11 +584,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// the handler strips the management handle and adds a
 					// can_manage hint so the UI can gate connect/disconnect.
 					r.Get("/github/installations", h.ListGitHubInstallations)
-					// Custom runtime profiles — listing/reading is member-visible
-					// (the Runtime page renders for everyone; create/edit/delete
-					// are admin-gated below).
-					r.Get("/runtime-profiles", h.ListRuntimeProfiles)
-					r.Get("/runtime-profiles/{profileId}", h.GetRuntimeProfile)
 				})
 				// Admin-level access
 				r.Group(func(r chi.Router) {
@@ -611,11 +596,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Delete("/", h.DeleteMember)
 					})
 					r.Delete("/invitations/{invitationId}", h.RevokeInvitation)
-					// Custom runtime profile mutations (admin-only).
-					r.Post("/runtime-profiles", h.CreateRuntimeProfile)
-					r.Patch("/runtime-profiles/{profileId}", h.UpdateRuntimeProfile)
-					r.Put("/runtime-profiles/{profileId}", h.UpdateRuntimeProfile)
-					r.Delete("/runtime-profiles/{profileId}", h.DeleteRuntimeProfile)
 				})
 				// Owner-only access
 				r.With(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner")).Delete("/", h.DeleteWorkspace)
@@ -721,6 +701,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Issues
 			r.Route("/api/issues", func(r chi.Router) {
 				r.Get("/search", h.SearchIssues)
+				r.Get("/review-stats", h.GetIssueReviewStats)
 				r.Get("/child-progress", h.ChildIssueProgress)
 				r.Get("/children", h.ListChildrenByParents)
 				r.Get("/grouped", h.ListGroupedIssues)
@@ -878,6 +859,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/tasks", h.ListAgentTasks)
 					r.Get("/skills", h.ListAgentSkills)
 					r.Put("/skills", h.SetAgentSkills)
+					r.Get("/generated-skills", h.ListAgentGeneratedSkillDeliveries)
+					r.Post("/generated-skills/{deliveryId}/decision", h.DecideAgentGeneratedSkillDelivery)
+					r.Get("/evolution-memories", h.ListAgentEvolutionMemoryDeliveries)
+					r.Get("/memories", h.ListAgentMemories)
 					r.Post("/skills/add", h.AddAgentSkills)
 					// Dedicated env-management endpoint. Owner/admin only;
 					// agent actors are denied. Every reveal / write is
@@ -972,6 +957,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Workspace-wide agent task snapshot for presence derivation:
 			// every active task + each agent's most recent terminal task.
 			r.Get("/api/agent-task-snapshot", h.ListWorkspaceAgentTaskSnapshot)
+			r.Get("/api/agent-tasks", h.ListAgentTaskFeed)
+			r.Get("/api/agent-task-stats", h.GetAgentTaskStats)
 
 			// Workspace-wide daily agent activity (last 30d, anchored on
 			// completed_at). Backs the Agents-list sparkline (trailing 7d
@@ -996,6 +983,34 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 			r.Get("/api/chat/pending-tasks", h.ListPendingChatTasks)
+			// Agent-initiated 1:1 DM to the human it's working for. Agent-only
+			// (resolveActor must be "agent"); human callers get 403.
+			r.Post("/api/chat/agent-dm", h.AgentDirectMessage)
+
+			r.Route("/api/channels", func(r chi.Router) {
+				r.Get("/", h.ListChannels)
+				r.Post("/", h.CreateChannel)
+				r.Post("/lark/messages", h.ImportLarkChannelMessage)
+				r.Route("/{channelId}", func(r chi.Router) {
+					r.Patch("/", h.UpdateChannel)
+					r.Delete("/", h.DeleteChannel)
+					r.Get("/project", h.GetChannelProject)
+					r.Put("/project", h.SetChannelProject)
+					r.Get("/project-files", h.ListChannelProjectFiles)
+					r.Get("/project-files/content", h.GetChannelProjectFile)
+					r.Get("/active-tasks", h.ListChannelActiveTasks)
+					r.Get("/members", h.ListChannelMembers)
+					r.Post("/members", h.AddChannelMember)
+					r.Post("/members/batch", h.AddChannelMembers)
+					r.Delete("/members/{memberType}/{memberId}", h.RemoveChannelMember)
+					r.Get("/messages", h.ListChannelMessages)
+					r.Post("/messages", h.SendChannelMessage)
+					r.Get("/attachments", h.ListChannelAttachments)
+					r.Get("/stats", h.GetChannelStats)
+					r.Post("/read", h.MarkChannelRead)
+					r.Post("/typing", h.SetChannelTyping)
+				})
+			})
 
 			// Inbox
 			r.Route("/api/inbox", func(r chi.Router) {

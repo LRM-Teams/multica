@@ -74,6 +74,10 @@ const (
 	EventChatSessionRead    = "chat:session_read"
 	EventChatSessionDeleted = "chat:session_deleted"
 	EventChatSessionUpdated = "chat:session_updated"
+	EventChannelMessage     = "channel:message"
+	EventChannelTyping      = "channel:typing"
+	EventChannelUpdated     = "channel:updated"
+	EventChannelDeleted     = "channel:deleted"
 
 	// Project events
 	EventProjectCreated         = "project:created"
@@ -113,11 +117,20 @@ const (
 	EventSquadDeleted = "squad:deleted"
 
 	// Daemon events
-	EventDaemonHeartbeat              = "daemon:heartbeat"
-	EventDaemonHeartbeatAck           = "daemon:heartbeat_ack"
-	EventDaemonRegister               = "daemon:register"
-	EventDaemonTaskAvailable          = "daemon:task_available"
-	EventDaemonRuntimeProfilesChanged = "daemon:runtime_profiles_changed"
+	EventDaemonHeartbeat     = "daemon:heartbeat"
+	EventDaemonHeartbeatAck  = "daemon:heartbeat_ack"
+	EventDaemonRegister      = "daemon:register"
+	EventDaemonTaskAvailable = "daemon:task_available"
+	// Workdir file-tree RPC over the daemon wakeup socket: the server pushes a
+	// request, the daemon walks the project's local workdir and replies with a
+	// flat node list. Correlated by RequestID. See protocol.ListWorkdirFiles*.
+	EventDaemonListFilesRequest  = "daemon:list_files_request"
+	EventDaemonListFilesResponse = "daemon:list_files_response"
+	// Workdir single-file read RPC (preview): server pushes a request, the
+	// daemon reads one file from the project workdir and replies with its
+	// text content. Correlated by RequestID. See protocol.ReadWorkdirFile*.
+	EventDaemonReadFileRequest  = "daemon:read_file_request"
+	EventDaemonReadFileResponse = "daemon:read_file_response"
 
 	// GitHub integration events
 	EventGitHubInstallationCreated = "github_installation:created"

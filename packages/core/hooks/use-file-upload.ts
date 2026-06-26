@@ -58,6 +58,7 @@ export interface UploadContext {
   issueId?: string;
   commentId?: string;
   chatSessionId?: string;
+  channelId?: string;
 }
 
 // pickMarkdownLink chooses the URL the editor will write into markdown.
@@ -98,6 +99,7 @@ export function useFileUpload(
           issueId: ctx?.issueId,
           commentId: ctx?.commentId,
           chatSessionId: ctx?.chatSessionId,
+          channelId: ctx?.channelId,
         });
         return { ...att, link: att.url, markdownLink: pickMarkdownLink(att) };
       } finally {

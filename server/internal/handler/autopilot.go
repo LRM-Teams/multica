@@ -45,25 +45,6 @@ type AutopilotResponse struct {
 	LastRunAt          *string `json:"last_run_at"`
 	CreatedAt          string  `json:"created_at"`
 	UpdatedAt          string  `json:"updated_at"`
-
-	// List-endpoint-only derived fields (absent on the detail/create/update
-	// responses and on older servers — clients must treat them as optional).
-	// Enabled triggers only; last_run_status is the most recent run's status.
-	TriggerKinds  []string `json:"trigger_kinds,omitempty"`
-	NextRunAt     *string  `json:"next_run_at,omitempty"`
-	LastRunStatus *string  `json:"last_run_status,omitempty"`
-
-	// Always non-nil (empty slice when no subscribers configured) so
-	// frontend optional-chain rules can treat the field as authoritative.
-	Subscribers []AutopilotSubscriberEntry `json:"subscribers"`
-}
-
-// user_type is restricted to "member" at the DB layer; the field is kept on
-// the wire so a future expansion to agents/squads is additive, not breaking.
-type AutopilotSubscriberEntry struct {
-	UserType  string `json:"user_type"`
-	UserID    string `json:"user_id"`
-	CreatedAt string `json:"created_at"`
 }
 
 type AutopilotTriggerResponse struct {
@@ -125,21 +106,13 @@ type AutopilotRunResponse struct {
 
 // ── Converters ──────────────────────────────────────────────────────────────
 
-func autopilotToResponse(a db.Autopilot, subscribers []db.AutopilotSubscriber) AutopilotResponse {
+func autopilotToResponse(a db.Autopilot) AutopilotResponse {
 	assigneeType := a.AssigneeType
 	if assigneeType == "" {
 		// Older rows pre-MUL-2429 may surface as "" against an out-of-date
 		// schema view; default to "agent" so the API contract stays
 		// non-null.
 		assigneeType = "agent"
-	}
-	subResp := make([]AutopilotSubscriberEntry, len(subscribers))
-	for i, s := range subscribers {
-		subResp[i] = AutopilotSubscriberEntry{
-			UserType:  s.UserType,
-			UserID:    uuidToString(s.UserID),
-			CreatedAt: timestampToString(s.CreatedAt),
-		}
 	}
 	return AutopilotResponse{
 		ID:                 uuidToString(a.ID),
@@ -157,7 +130,6 @@ func autopilotToResponse(a db.Autopilot, subscribers []db.AutopilotSubscriber) A
 		LastRunAt:          timestampToPtr(a.LastRunAt),
 		CreatedAt:          timestampToString(a.CreatedAt),
 		UpdatedAt:          timestampToString(a.UpdatedAt),
-		Subscribers:        subResp,
 	}
 }
 
@@ -270,11 +242,10 @@ type CreateAutopilotRequest struct {
 	ProjectID   *string `json:"project_id"`
 	// AssigneeType is optional and defaults to "agent" — preserves backward
 	// compatibility with desktop clients shipped before MUL-2429.
-	AssigneeType       *string           `json:"assignee_type"`
-	AssigneeID         string            `json:"assignee_id"`
-	ExecutionMode      string            `json:"execution_mode"`
-	IssueTitleTemplate *string           `json:"issue_title_template"`
-	Subscribers        []SubscriberInput `json:"subscribers"`
+	AssigneeType       *string `json:"assignee_type"`
+	AssigneeID         string  `json:"assignee_id"`
+	ExecutionMode      string  `json:"execution_mode"`
+	IssueTitleTemplate *string `json:"issue_title_template"`
 }
 
 type UpdateAutopilotRequest struct {
@@ -286,13 +257,6 @@ type UpdateAutopilotRequest struct {
 	Status             *string `json:"status"`
 	ExecutionMode      *string `json:"execution_mode"`
 	IssueTitleTemplate *string `json:"issue_title_template"`
-	// Wholesale replacement when present; omit to leave subscribers untouched.
-	Subscribers []SubscriberInput `json:"subscribers"`
-}
-
-type SubscriberInput struct {
-	UserType string `json:"user_type"`
-	UserID   string `json:"user_id"`
 }
 
 type CreateAutopilotTriggerRequest struct {
@@ -362,19 +326,8 @@ func (h *Handler) ListAutopilots(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := make([]AutopilotResponse, len(autopilots))
-	for i, row := range autopilots {
-		// Omit subscribers to avoid an N+1; GET /api/autopilots/{id} is
-		// the source of truth for the populated template.
-		r := autopilotToResponse(row.Autopilot, nil)
-		r.TriggerKinds = row.TriggerKinds
-		if row.NextRunAt.Valid {
-			r.NextRunAt = timestampToPtr(row.NextRunAt)
-		}
-		if row.LastRunStatus != "" {
-			s := row.LastRunStatus
-			r.LastRunStatus = &s
-		}
-		resp[i] = r
+	for i, a := range autopilots {
+		resp[i] = autopilotToResponse(a)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"autopilots": resp, "total": len(resp)})
 }
@@ -388,12 +341,7 @@ func (h *Handler) GetAutopilot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subs, err := h.Queries.ListAutopilotSubscribers(r.Context(), autopilot.ID)
-	if err != nil {
-		// Don't 500 the detail fetch over template metadata.
-		subs = nil
-	}
-	resp := autopilotToResponse(autopilot, subs)
+	resp := autopilotToResponse(autopilot)
 
 	// Include triggers.
 	triggers, err := h.Queries.ListAutopilotTriggers(r.Context(), autopilot.ID)
@@ -492,21 +440,7 @@ func (h *Handler) CreateAutopilot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate before insert so a bad payload doesn't half-create the row.
-	subscriberUUIDs, ok := h.validateAutopilotSubscribers(w, r, req.Subscribers, workspaceID)
-	if !ok {
-		return
-	}
-
-	tx, err := h.TxStarter.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create autopilot")
-		return
-	}
-	defer tx.Rollback(r.Context())
-	qtx := h.Queries.WithTx(tx)
-
-	autopilot, err := qtx.CreateAutopilot(r.Context(), db.CreateAutopilotParams{
+	autopilot, err := h.Queries.CreateAutopilot(r.Context(), db.CreateAutopilotParams{
 		WorkspaceID:        wsUUID,
 		Title:              req.Title,
 		AssigneeType:       assigneeType,
@@ -524,26 +458,7 @@ func (h *Handler) CreateAutopilot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, uid := range subscriberUUIDs {
-		if err := qtx.AddAutopilotSubscriber(r.Context(), db.AddAutopilotSubscriberParams{
-			AutopilotID: autopilot.ID,
-			UserType:    "member",
-			UserID:      uid,
-		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to add autopilot subscriber")
-			return
-		}
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create autopilot")
-		return
-	}
-	subs, err := h.Queries.ListAutopilotSubscribers(r.Context(), autopilot.ID)
-	if err != nil {
-		subs = nil
-	}
-
-	resp := autopilotToResponse(autopilot, subs)
+	resp := autopilotToResponse(autopilot)
 	h.publish(protocol.EventAutopilotCreated, workspaceID, "member", userID, map[string]any{"autopilot": resp})
 	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.AutopilotCreated(
 		userID,
@@ -553,46 +468,6 @@ func (h *Handler) CreateAutopilot(w http.ResponseWriter, r *http.Request) {
 		"manual",
 	))
 	writeJSON(w, http.StatusCreated, resp)
-}
-
-// Writes an HTTP error and returns ok=false on the first invalid entry.
-// Returns (nil, true) when raw is empty — caller distinguishes "leave alone"
-// from "replace with empty" via the raw-fields map, not this return.
-func (h *Handler) validateAutopilotSubscribers(
-	w http.ResponseWriter,
-	r *http.Request,
-	raw []SubscriberInput,
-	workspaceID string,
-) ([]pgtype.UUID, bool) {
-	if len(raw) == 0 {
-		return nil, true
-	}
-	out := make([]pgtype.UUID, 0, len(raw))
-	seen := make(map[string]bool, len(raw))
-	for i, entry := range raw {
-		if entry.UserType != "member" {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("subscribers[%d].user_type must be 'member'", i))
-			return nil, false
-		}
-		if entry.UserID == "" {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("subscribers[%d].user_id is required", i))
-			return nil, false
-		}
-		uid, ok := parseUUIDOrBadRequest(w, entry.UserID, fmt.Sprintf("subscribers[%d].user_id", i))
-		if !ok {
-			return nil, false
-		}
-		if seen[entry.UserID] {
-			continue
-		}
-		seen[entry.UserID] = true
-		if !h.isWorkspaceEntity(r.Context(), entry.UserType, entry.UserID, workspaceID) {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("subscribers[%d] is not a member of this workspace", i))
-			return nil, false
-		}
-		out = append(out, uid)
-	}
-	return out, true
 }
 
 func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
@@ -703,62 +578,13 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Subscribers are validated up-front (before any write) so a bad payload
-	// doesn't leave the autopilot row updated but the template stale.
-	var (
-		subscriberUUIDs    []pgtype.UUID
-		replaceSubscribers bool
-	)
-	if _, sent := rawFields["subscribers"]; sent {
-		replaceSubscribers = true
-		validated, vok := h.validateAutopilotSubscribers(w, r, req.Subscribers, workspaceID)
-		if !vok {
-			return
-		}
-		subscriberUUIDs = validated
-	}
-
-	tx, err := h.TxStarter.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update autopilot")
-		return
-	}
-	defer tx.Rollback(r.Context())
-	qtx := h.Queries.WithTx(tx)
-
-	autopilot, err := qtx.UpdateAutopilot(r.Context(), params)
+	autopilot, err := h.Queries.UpdateAutopilot(r.Context(), params)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update autopilot")
 		return
 	}
 
-	if replaceSubscribers {
-		if err := qtx.DeleteAutopilotSubscribersForAutopilot(r.Context(), autopilot.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to update subscribers")
-			return
-		}
-		for _, uid := range subscriberUUIDs {
-			if err := qtx.AddAutopilotSubscriber(r.Context(), db.AddAutopilotSubscriberParams{
-				AutopilotID: autopilot.ID,
-				UserType:    "member",
-				UserID:      uid,
-			}); err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to add autopilot subscriber")
-				return
-			}
-		}
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update autopilot")
-		return
-	}
-
-	subs, err := h.Queries.ListAutopilotSubscribers(r.Context(), autopilot.ID)
-	if err != nil {
-		subs = nil
-	}
-	resp := autopilotToResponse(autopilot, subs)
+	resp := autopilotToResponse(autopilot)
 	h.publish(protocol.EventAutopilotUpdated, workspaceID, "member", userID, map[string]any{"autopilot": resp})
 	writeJSON(w, http.StatusOK, resp)
 }

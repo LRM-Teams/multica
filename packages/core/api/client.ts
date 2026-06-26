@@ -24,9 +24,6 @@ import type {
   AgentActivityBucket,
   AgentRunCount,
   AgentRuntime,
-  RuntimeProfile,
-  CreateRuntimeProfileRequest,
-  UpdateRuntimeProfileRequest,
   InboxItem,
   IssueSubscriber,
   Comment,
@@ -39,6 +36,10 @@ import type {
   User,
   Skill,
   SkillSummary,
+  AgentMemory,
+  ListGeneratedSkillDeliveriesResponse,
+  DecideGeneratedSkillDeliveryRequest,
+  ListEvolutionMemoryDeliveriesResponse,
   CreateSkillRequest,
   UpdateSkillRequest,
   SetAgentSkillsRequest,
@@ -69,6 +70,13 @@ import type {
   ChatPendingTask,
   PendingChatTasksResponse,
   SendChatMessageResponse,
+  Channel,
+  ChannelActiveTask,
+  ChannelMember,
+  ChannelMessage,
+  ChannelStats,
+  ChannelProjectFiles,
+  ChannelProjectFileContent,
   CancelTaskResponse,
   Project,
   CreateProjectRequest,
@@ -121,6 +129,9 @@ import type {
   CreateBillingCheckoutSessionResponse,
   BillingCheckoutSessionStatus,
   CreateBillingPortalSessionResponse,
+  AgentTaskFeedPage,
+  AgentTaskStats,
+  IssueReviewStats,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type {
@@ -166,8 +177,6 @@ import {
   AppConfigSchema,
   type AppConfigResponse,
   GroupedIssuesResponseSchema,
-  ListAutopilotsResponseSchema,
-  EMPTY_LIST_AUTOPILOTS_RESPONSE,
   ListIssuesResponseSchema,
   ListWebhookDeliveriesResponseSchema,
   RuntimeHourlyActivityListSchema,
@@ -492,9 +501,6 @@ export class ApiClient {
     }
     if (params?.open_only) search.set("open_only", "true");
     if (params?.scheduled) search.set("scheduled", "true");
-    if (params?.date_field) search.set("date_field", params.date_field);
-    if (params?.date_start) search.set("date_start", params.date_start);
-    if (params?.date_end) search.set("date_end", params.date_end);
     if (params?.sort_by) search.set("sort", params.sort_by);
     if (params?.sort_direction) search.set("direction", params.sort_direction);
     const path = `/api/issues?${search}`;
@@ -532,9 +538,6 @@ export class ApiClient {
     if (params.label_ids?.length) search.set("label_ids", params.label_ids.join(","));
     if (params.group_assignee_type) search.set("group_assignee_type", params.group_assignee_type);
     if (params.group_assignee_id) search.set("group_assignee_id", params.group_assignee_id);
-    if (params.date_field) search.set("date_field", params.date_field);
-    if (params.date_start) search.set("date_start", params.date_start);
-    if (params.date_end) search.set("date_end", params.date_end);
     if (params.sort_by) search.set("sort", params.sort_by);
     if (params.sort_direction) search.set("direction", params.sort_direction);
     const raw = await this.fetch<unknown>(`/api/issues/grouped?${search}`);
@@ -672,13 +675,12 @@ export class ApiClient {
     });
   }
 
-  async previewCommentTriggers(issueId: string, content: string, parentId?: string, editingCommentId?: string): Promise<CommentTriggerPreview> {
+  async previewCommentTriggers(issueId: string, content: string, parentId?: string): Promise<CommentTriggerPreview> {
     const raw = await this.fetch<unknown>(`/api/issues/${issueId}/comments/trigger-preview`, {
       method: "POST",
       body: JSON.stringify({
         content,
         ...(parentId ? { parent_id: parentId } : {}),
-        ...(editingCommentId ? { editing_comment_id: editingCommentId } : {}),
       }),
     });
     return parseWithFallback(raw, CommentTriggerPreviewSchema, { agents: [] }, {
@@ -699,14 +701,10 @@ export class ApiClient {
     return this.fetch("/api/assignee-frequency");
   }
 
-  async updateComment(commentId: string, content: string, attachmentIds?: string[], suppressAgentIds?: string[]): Promise<Comment> {
+  async updateComment(commentId: string, content: string, attachmentIds?: string[]): Promise<Comment> {
     return this.fetch(`/api/comments/${commentId}`, {
       method: "PUT",
-      body: JSON.stringify({
-        content,
-        attachment_ids: attachmentIds,
-        ...(suppressAgentIds?.length ? { suppress_agent_ids: suppressAgentIds } : {}),
-      }),
+      body: JSON.stringify({ content, attachment_ids: attachmentIds }),
     });
   }
 
@@ -1101,61 +1099,6 @@ export class ApiClient {
     });
   }
 
-  // ---------------------------------------------------------------------
-  // Custom runtime profiles (MUL-3284). All workspace-scoped: the caller
-  // passes the workspace id the same way the runtimes list resolves it.
-  // ---------------------------------------------------------------------
-
-  async listRuntimeProfiles(workspaceId: string): Promise<RuntimeProfile[]> {
-    const res = await this.fetch<{ runtime_profiles?: RuntimeProfile[] }>(
-      `/api/workspaces/${workspaceId}/runtime-profiles`,
-    );
-    return res.runtime_profiles ?? [];
-  }
-
-  async getRuntimeProfile(
-    workspaceId: string,
-    profileId: string,
-  ): Promise<RuntimeProfile> {
-    return this.fetch(
-      `/api/workspaces/${workspaceId}/runtime-profiles/${profileId}`,
-    );
-  }
-
-  async createRuntimeProfile(
-    workspaceId: string,
-    body: CreateRuntimeProfileRequest,
-  ): Promise<RuntimeProfile> {
-    return this.fetch(`/api/workspaces/${workspaceId}/runtime-profiles`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-  }
-
-  async updateRuntimeProfile(
-    workspaceId: string,
-    profileId: string,
-    patch: UpdateRuntimeProfileRequest,
-  ): Promise<RuntimeProfile> {
-    return this.fetch(
-      `/api/workspaces/${workspaceId}/runtime-profiles/${profileId}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify(patch),
-      },
-    );
-  }
-
-  async deleteRuntimeProfile(
-    workspaceId: string,
-    profileId: string,
-  ): Promise<void> {
-    await this.fetch(
-      `/api/workspaces/${workspaceId}/runtime-profiles/${profileId}`,
-      { method: "DELETE" },
-    );
-  }
-
   async getRuntimeUsage(
     runtimeId: string,
     params?: { days?: number; tz?: string },
@@ -1375,6 +1318,33 @@ export class ApiClient {
   // Workspace is resolved server-side from the X-Workspace-Slug header.
   async getAgentTaskSnapshot(): Promise<AgentTask[]> {
     return this.fetch(`/api/agent-task-snapshot`);
+  }
+
+  // Overview "pending human approval" KPI: in_review issue count + longest wait.
+  async getIssueReviewStats(): Promise<IssueReviewStats> {
+    return this.fetch(`/api/issues/review-stats`);
+  }
+
+  // Overview "tasks done" KPI: completed/failed/total agent-task counts.
+  async getAgentTaskStats(): Promise<AgentTaskStats> {
+    return this.fetch(`/api/agent-task-stats`);
+  }
+
+  // Workspace-wide, cursor-paginated feed of terminal agent tasks (one row per
+  // completed/failed/cancelled task), newest first. Powers the overview agent
+  // activity timeline. Workspace is resolved server-side from the header.
+  async listAgentTaskFeed(params: {
+    before?: { completed_at: string; id: string } | null;
+    limit?: number;
+  }): Promise<AgentTaskFeedPage> {
+    const qs = new URLSearchParams();
+    if (params.limit != null) qs.set("limit", String(params.limit));
+    if (params.before) {
+      qs.set("before_completed_at", params.before.completed_at);
+      qs.set("before_id", params.before.id);
+    }
+    const q = qs.toString();
+    return this.fetch(`/api/agent-tasks${q ? `?${q}` : ""}`);
   }
 
   // Per-agent daily activity for the last 30 days, anchored on
@@ -1609,19 +1579,32 @@ export class ApiClient {
     return this.fetch(`/api/agents/${agentId}/skills`);
   }
 
-  async setAgentSkills(agentId: string, data: SetAgentSkillsRequest): Promise<void> {
-    await this.fetch(`/api/agents/${agentId}/skills`, {
-      method: "PUT",
+  async listAgentMemories(agentId: string): Promise<AgentMemory[]> {
+    return this.fetch(`/api/agents/${agentId}/memories`);
+  }
+
+  async listAgentGeneratedSkillDeliveries(agentId: string): Promise<ListGeneratedSkillDeliveriesResponse> {
+    return this.fetch(`/api/agents/${agentId}/generated-skills`);
+  }
+
+  async listAgentEvolutionMemoryDeliveries(agentId: string): Promise<ListEvolutionMemoryDeliveriesResponse> {
+    return this.fetch(`/api/agents/${agentId}/evolution-memories`);
+  }
+
+  async decideAgentGeneratedSkillDelivery(
+    agentId: string,
+    deliveryId: string,
+    data: DecideGeneratedSkillDeliveryRequest,
+  ): Promise<void> {
+    await this.fetch(`/api/agents/${agentId}/generated-skills/${deliveryId}/decision`, {
+      method: "POST",
       body: JSON.stringify(data),
     });
   }
 
-  // Incremental attach: POST /skills/add only inserts the given ids (the
-  // server upserts with ON CONFLICT DO NOTHING), so callers don't need to
-  // read the agent's current skill set first.
-  async addAgentSkills(agentId: string, data: SetAgentSkillsRequest): Promise<void> {
-    await this.fetch(`/api/agents/${agentId}/skills/add`, {
-      method: "POST",
+  async setAgentSkills(agentId: string, data: SetAgentSkillsRequest): Promise<void> {
+    await this.fetch(`/api/agents/${agentId}/skills`, {
+      method: "PUT",
       body: JSON.stringify(data),
     });
   }
@@ -1645,13 +1628,14 @@ export class ApiClient {
   // File Upload & Attachments
   async uploadFile(
     file: File,
-    opts?: { issueId?: string; commentId?: string; chatSessionId?: string },
+    opts?: { issueId?: string; commentId?: string; chatSessionId?: string; channelId?: string },
   ): Promise<Attachment> {
     const formData = new FormData();
     formData.append("file", file);
     if (opts?.issueId) formData.append("issue_id", opts.issueId);
     if (opts?.commentId) formData.append("comment_id", opts.commentId);
     if (opts?.chatSessionId) formData.append("chat_session_id", opts.chatSessionId);
+    if (opts?.channelId) formData.append("channel_id", opts.channelId);
 
     const rid = createRequestId();
     const start = Date.now();
@@ -1699,7 +1683,10 @@ export class ApiClient {
     await this.fetch(`/api/chat/sessions/${id}`, { method: "DELETE" });
   }
 
-  async updateChatSession(id: string, data: { title: string }): Promise<ChatSession> {
+  async updateChatSession(
+    id: string,
+    data: { title?: string; project_id?: string | null },
+  ): Promise<ChatSession> {
     return this.fetch(`/api/chat/sessions/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -1766,6 +1753,119 @@ export class ApiClient {
 
   async markChatSessionRead(sessionId: string): Promise<void> {
     await this.fetch(`/api/chat/sessions/${sessionId}/read`, { method: "POST" });
+  }
+
+  async listChannels(): Promise<Channel[]> {
+    return this.fetch("/api/channels");
+  }
+
+  async createChannel(data: { name: string; description?: string; lark_chat_id?: string }): Promise<Channel> {
+    return this.fetch("/api/channels", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteChannel(channelId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}`, { method: "DELETE" });
+  }
+
+  async listChannelMembers(channelId: string): Promise<ChannelMember[]> {
+    return this.fetch(`/api/channels/${channelId}/members`);
+  }
+
+  async addChannelMembers(
+    channelId: string,
+    members: { member_type: "user" | "agent"; member_id: string }[],
+  ): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/members/batch`, {
+      method: "POST",
+      body: JSON.stringify({ members }),
+    });
+  }
+
+  async addChannelMember(channelId: string, data: { member_type: "user" | "agent"; member_id: string }): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/members`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async removeChannelMember(channelId: string, memberType: "user" | "agent", memberId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/members/${memberType}/${memberId}`, { method: "DELETE" });
+  }
+
+  async listChannelMessages(channelId: string): Promise<ChannelMessage[]> {
+    return this.fetch(`/api/channels/${channelId}/messages`);
+  }
+
+  async sendChannelMessage(
+    channelId: string,
+    content: string,
+    attachmentIds?: string[],
+  ): Promise<ChannelMessage> {
+    const body: { content: string; attachment_ids?: string[] } = { content };
+    if (attachmentIds && attachmentIds.length > 0) {
+      body.attachment_ids = attachmentIds;
+    }
+    return this.fetch(`/api/channels/${channelId}/messages`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async listChannelAttachments(channelId: string): Promise<Attachment[]> {
+    return this.fetch(`/api/channels/${channelId}/attachments`);
+  }
+
+  async getChannelStats(channelId: string): Promise<ChannelStats> {
+    return this.fetch(`/api/channels/${channelId}/stats`);
+  }
+
+  async listChannelProjectFiles(channelId: string): Promise<ChannelProjectFiles> {
+    return this.fetch(`/api/channels/${channelId}/project-files`);
+  }
+
+  async getChannelProjectFile(channelId: string, path: string): Promise<ChannelProjectFileContent> {
+    return this.fetch(`/api/channels/${channelId}/project-files/content?path=${encodeURIComponent(path)}`);
+  }
+
+  async listChannelActiveTasks(channelId: string): Promise<{ tasks: ChannelActiveTask[] }> {
+    return this.fetch(`/api/channels/${channelId}/active-tasks`);
+  }
+
+  async markChannelRead(channelId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/read`, { method: "POST" });
+  }
+
+  async setChannelTyping(channelId: string, isTyping: boolean): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/typing`, {
+      method: "POST",
+      body: JSON.stringify({ is_typing: isTyping }),
+    });
+  }
+
+  async getChannelProject(channelId: string): Promise<{ project_id: string }> {
+    return this.fetch(`/api/channels/${channelId}/project`);
+  }
+
+  async setChannelProject(channelId: string, projectId: string | null): Promise<{ project_id: string }> {
+    return this.fetch(`/api/channels/${channelId}/project`, {
+      method: "PUT",
+      body: JSON.stringify({ project_id: projectId }),
+    });
+  }
+
+  async importLarkChannelMessage(data: {
+    lark_chat_id: string;
+    external_message_id?: string;
+    author_name?: string;
+    content: string;
+  }): Promise<ChannelMessage> {
+    return this.fetch("/api/channels/lark/messages", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
   }
 
   async cancelTaskById(taskId: string): Promise<CancelTaskResponse> {
@@ -2023,13 +2123,7 @@ export class ApiClient {
   async listAutopilots(params?: { status?: string }): Promise<ListAutopilotsResponse> {
     const search = new URLSearchParams();
     if (params?.status) search.set("status", params.status);
-    const raw = await this.fetch<unknown>(`/api/autopilots?${search}`);
-    return parseWithFallback(
-      raw,
-      ListAutopilotsResponseSchema,
-      EMPTY_LIST_AUTOPILOTS_RESPONSE as ListAutopilotsResponse,
-      { endpoint: "GET /api/autopilots" },
-    );
+    return this.fetch(`/api/autopilots?${search}`);
   }
 
   async getAutopilot(id: string): Promise<GetAutopilotResponse> {

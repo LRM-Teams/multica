@@ -8,7 +8,9 @@ import {
 } from "@multica/ui/markdown";
 import { useConfigStore } from "@multica/core/config";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
-import { useWorkspacePaths } from "@multica/core/paths";
+import { useWorkspacePaths, useCurrentWorkspace } from "@multica/core/paths";
+import { useActorName } from "@multica/core/workspace/hooks";
+import { agentColor } from "./agent-color";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
 import { AppLink } from "../navigation";
@@ -46,12 +48,49 @@ function ProjectMentionCard({ projectId }: { projectId: string }): React.ReactNo
   );
 }
 
-function defaultRenderMention({
+/**
+ * Member / agent / @all mention — a colored identity pill matching the editor
+ * composer's mention chips. The name is resolved from the workspace cache
+ * (same resolver as ActorAvatar) so renames reflect immediately.
+ */
+function ActorMention({
   type,
   id,
+  label,
 }: {
   type: string;
   id: string;
+  label?: string;
+}): React.JSX.Element {
+  const { getActorName } = useActorName();
+  // The link text is usually "@Name"; strip the leading @ so we don't double
+  // it, and use it as the fallback when the id isn't in the workspace cache.
+  const fallback = label ? label.replace(/^@+/, "").trim() || undefined : undefined;
+  const name = type === "all" ? "all" : getActorName(type, id, fallback);
+  const color = agentColor(id);
+  return (
+    <span
+      className="not-prose font-semibold"
+      style={{
+        color: color.fg,
+        backgroundColor: color.bg,
+        borderRadius: "0.3125rem",
+        padding: "0.0625rem 0.3125rem",
+      }}
+    >
+      @{name}
+    </span>
+  );
+}
+
+function defaultRenderMention({
+  type,
+  id,
+  label,
+}: {
+  type: string;
+  id: string;
+  label?: string;
 }): React.ReactNode {
   if (type === "issue") {
     return <IssueMentionCard issueId={id} />;
@@ -59,7 +98,7 @@ function defaultRenderMention({
   if (type === "project") {
     return <ProjectMentionCard projectId={id} />;
   }
-  return null;
+  return <ActorMention type={type} id={id} label={label} />;
 }
 
 function renderImage({ src, alt }: { src: string; alt: string }): React.ReactNode {
@@ -102,6 +141,10 @@ function renderFileCard({
  */
 export function Markdown(props: MarkdownProps): React.JSX.Element {
   const cdnDomain = useConfigStore((s) => s.cdnDomain);
+  // Auto-link bare issue identifiers (e.g. "MUL-123") to issue chips, scoped to
+  // the current workspace's prefix so it can't false-positive on tokens like
+  // "UTF-8". Empty/absent prefix disables it.
+  const issueRefPrefix = useCurrentWorkspace()?.issue_prefix || undefined;
   const { attachments, ...rest } = props;
   return (
     <AttachmentDownloadProvider attachments={attachments}>
@@ -110,6 +153,7 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
         renderImage={renderImage}
         renderFileCard={renderFileCard}
         cdnDomain={cdnDomain}
+        issueRefPrefix={issueRefPrefix}
         {...rest}
       />
     </AttachmentDownloadProvider>

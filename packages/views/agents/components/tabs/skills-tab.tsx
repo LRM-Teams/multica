@@ -1,16 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import { FileText, Plus, Trash2 } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, FileText, Plus, Trash2, X } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { Agent } from "@multica/core/types";
+import type { Agent, GeneratedSkillDelivery } from "@multica/core/types";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
+import {
+  generatedSkillDeliveryKeys,
+  generatedSkillDeliveryOptions,
+} from "@multica/core/agents/queries";
 import {
   skillListOptions,
   workspaceKeys,
 } from "@multica/core/workspace/queries";
+import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { SkillAddDialog } from "../skill-add-dialog";
 import { useT } from "../../../i18n";
@@ -31,8 +36,23 @@ export function SkillsTab({
   // to add" empty state, which is more useful than a mysterious
   // greyed-out button.
   const { data: workspaceSkills = [] } = useQuery(skillListOptions(wsId));
+  const { data: generatedResult, isLoading: generatedLoading } = useQuery(
+    generatedSkillDeliveryOptions(wsId, agent.id),
+  );
+  const generatedDeliveries = generatedResult?.deliveries ?? [];
   const [removing, setRemoving] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+
+  const decideGeneratedSkill = useMutation({
+    mutationFn: ({ deliveryId, decision }: { deliveryId: string; decision: "accepted" | "ignored" | "rejected" }) =>
+      api.decideAgentGeneratedSkillDelivery(agent.id, deliveryId, { decision }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: generatedSkillDeliveryKeys.list(wsId, agent.id) });
+    },
+    onError: (e) => {
+      toast.error(e instanceof Error ? e.message : t(($) => $.tab_body.skills.generated_decision_failed_toast));
+    },
+  });
 
   const handleRemove = async (skillId: string) => {
     setRemoving(true);
@@ -117,7 +137,105 @@ export function SkillsTab({
         </ul>
       )}
 
+      <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-medium">{t(($) => $.tab_body.skills.generated_title)}</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {t(($) => $.tab_body.skills.generated_intro)}
+            </p>
+          </div>
+          {generatedDeliveries.length > 0 && (
+            <Badge variant="outline">{t(($) => $.tab_body.skills.generated_count, { count: generatedDeliveries.length })}</Badge>
+          )}
+        </div>
+
+        {generatedLoading ? (
+          <div className="rounded-md border border-dashed bg-background/60 px-3 py-6 text-center text-xs text-muted-foreground">
+            {t(($) => $.tab_body.skills.generated_loading)}
+          </div>
+        ) : generatedDeliveries.length === 0 ? (
+          <div className="rounded-md border border-dashed bg-background/60 px-3 py-6 text-center text-xs text-muted-foreground">
+            {t(($) => $.tab_body.skills.generated_empty)}
+          </div>
+        ) : (
+          <ul className="space-y-1.5">
+            {generatedDeliveries.map((delivery) => (
+              <GeneratedSkillDeliveryRow
+                key={delivery.id}
+                delivery={delivery}
+                deciding={decideGeneratedSkill.isPending}
+                onDecide={(decision) => decideGeneratedSkill.mutate({ deliveryId: delivery.id, decision })}
+              />
+            ))}
+          </ul>
+        )}
+      </div>
+
       <SkillAddDialog agent={agent} open={showAdd} onOpenChange={setShowAdd} />
     </div>
+  );
+}
+
+function GeneratedSkillDeliveryRow({
+  delivery,
+  deciding,
+  onDecide,
+}: {
+  delivery: GeneratedSkillDelivery;
+  deciding: boolean;
+  onDecide: (decision: "accepted" | "ignored" | "rejected") => void;
+}) {
+  const { t } = useT("agents");
+  const enabled = delivery.status === "accepted" && delivery.delivered_path?.includes("/skills/enabled/");
+  const statusLabel = enabled
+    ? t(($) => $.tab_body.skills.generated_status_enabled)
+    : t(($) => $.tab_body.skills.generated_status[delivery.status]) ?? delivery.status;
+  const canDecide = delivery.status === "pending" || delivery.status === "delivered" || delivery.status === "accepted";
+
+  return (
+    <li className="rounded-md border bg-background px-3 py-2">
+      <div className="flex items-start gap-2.5">
+        <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <span className="truncate text-sm font-medium">{delivery.title}</span>
+            <Badge variant={enabled ? "secondary" : "outline"}>{statusLabel}</Badge>
+          </div>
+          {delivery.canonical_summary && (
+            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+              {delivery.canonical_summary}
+            </p>
+          )}
+          {delivery.delivered_path && (
+            <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground/80" title={delivery.delivered_path}>
+              {delivery.delivered_path}
+            </p>
+          )}
+        </div>
+        {canDecide && (
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onDecide("accepted")}
+              disabled={deciding || enabled}
+            >
+              <Check className="h-3 w-3" />
+              {enabled ? t(($) => $.tab_body.skills.generated_enabled_action) : t(($) => $.tab_body.skills.generated_accept_action)}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => onDecide("ignored")}
+              disabled={deciding || delivery.status === "ignored"}
+              title={t(($) => $.tab_body.skills.generated_ignore_action)}
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        )}
+      </div>
+    </li>
   );
 }

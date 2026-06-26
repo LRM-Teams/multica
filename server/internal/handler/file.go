@@ -54,17 +54,19 @@ const maxPreviewTextSize = 2 << 20 // 2 MB
 // ---------------------------------------------------------------------------
 
 type AttachmentResponse struct {
-	ID            string  `json:"id"`
-	WorkspaceID   string  `json:"workspace_id"`
-	IssueID       *string `json:"issue_id"`
-	CommentID     *string `json:"comment_id"`
-	ChatSessionID *string `json:"chat_session_id"`
-	ChatMessageID *string `json:"chat_message_id"`
-	UploaderType  string  `json:"uploader_type"`
-	UploaderID    string  `json:"uploader_id"`
-	Filename      string  `json:"filename"`
-	URL           string  `json:"url"`
-	DownloadURL   string  `json:"download_url"`
+	ID               string  `json:"id"`
+	WorkspaceID      string  `json:"workspace_id"`
+	IssueID          *string `json:"issue_id"`
+	CommentID        *string `json:"comment_id"`
+	ChatSessionID    *string `json:"chat_session_id"`
+	ChatMessageID    *string `json:"chat_message_id"`
+	ChannelID        *string `json:"channel_id"`
+	ChannelMessageID *string `json:"channel_message_id"`
+	UploaderType     string  `json:"uploader_type"`
+	UploaderID       string  `json:"uploader_id"`
+	Filename         string  `json:"filename"`
+	URL              string  `json:"url"`
+	DownloadURL      string  `json:"download_url"`
 	// MarkdownURL is the durable, absolute-when-possible URL the client
 	// SHOULD persist into markdown bodies (issue descriptions, comments,
 	// chat messages). It is computed per deployment policy by
@@ -130,6 +132,14 @@ func (h *Handler) attachmentToResponse(a db.Attachment) AttachmentResponse {
 		s := uuidToString(a.ChatMessageID)
 		resp.ChatMessageID = &s
 	}
+	if a.ChannelID.Valid {
+		s := uuidToString(a.ChannelID)
+		resp.ChannelID = &s
+	}
+	if a.ChannelMessageID.Valid {
+		s := uuidToString(a.ChannelMessageID)
+		resp.ChannelMessageID = &s
+	}
 	return resp
 }
 
@@ -145,17 +155,17 @@ func attachmentDownloadPath(id string) string {
 //
 //  1. Persist `a.Url` only when the deployment has signaled the storage
 //     backend serves URLs publicly without per-request auth:
-//       - `Storage.CdnDomain()` is non-empty (operator configured a
-//         public-facing base URL — `S3_CDN_DOMAIN` for the S3 backend or
-//         `LOCAL_UPLOAD_BASE_URL` for LocalStorage), AND
-//       - `h.CFSigner` is nil (no per-request CloudFront signing — when
-//         signing is on, the same CDN domain serves PRIVATE content via
-//         time-bounded signed URLs and the raw `a.Url` is unauth-deny),
-//         AND
-//       - `a.Url` is itself an absolute http(s) URL with no signature
-//         query — defends against legacy rows backfilled while baseURL
-//         was unset, and against a freshly-signed `download_url` ever
-//         leaking into `a.Url` (the original MUL-3130 bug).
+//     - `Storage.CdnDomain()` is non-empty (operator configured a
+//     public-facing base URL — `S3_CDN_DOMAIN` for the S3 backend or
+//     `LOCAL_UPLOAD_BASE_URL` for LocalStorage), AND
+//     - `h.CFSigner` is nil (no per-request CloudFront signing — when
+//     signing is on, the same CDN domain serves PRIVATE content via
+//     time-bounded signed URLs and the raw `a.Url` is unauth-deny),
+//     AND
+//     - `a.Url` is itself an absolute http(s) URL with no signature
+//     query — defends against legacy rows backfilled while baseURL
+//     was unset, and against a freshly-signed `download_url` ever
+//     leaking into `a.Url` (the original MUL-3130 bug).
 //
 //  2. Every other shape — CloudFront-signed mode, S3 presign /proxy
 //     against a private bucket without a CDN domain, raw S3 / R2 /
@@ -308,6 +318,30 @@ func (h *Handler) groupChatMessageAttachments(ctx context.Context, workspaceID s
 	return grouped
 }
 
+// groupChannelMessageAttachments loads attachments for multiple channel
+// messages and groups them by channel_message_id. Mirrors
+// groupChatMessageAttachments so the channel thread can surface file cards
+// without an N+1 query per message.
+func (h *Handler) groupChannelMessageAttachments(ctx context.Context, workspaceID string, messageIDs []pgtype.UUID) map[string][]AttachmentResponse {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+	attachments, err := h.Queries.ListAttachmentsByChannelMessageIDs(ctx, db.ListAttachmentsByChannelMessageIDsParams{
+		Column1:     messageIDs,
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil {
+		slog.Error("failed to load attachments for channel messages", "error", err)
+		return nil
+	}
+	grouped := make(map[string][]AttachmentResponse, len(messageIDs))
+	for _, a := range attachments {
+		mid := uuidToString(a.ChannelMessageID)
+		grouped[mid] = append(grouped[mid], h.attachmentToResponse(a))
+	}
+	return grouped
+}
+
 // ---------------------------------------------------------------------------
 // UploadFile — POST /api/upload-file
 // ---------------------------------------------------------------------------
@@ -434,6 +468,24 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			params.ChatSessionID = session.ID
+		}
+		if channelID := r.FormValue("channel_id"); channelID != "" {
+			// Bind the upload to the channel so SendChannelMessage can later
+			// back-fill channel_message_id (same unbound-then-link flow as
+			// chat). Gate on channel membership — only members may attach.
+			chUUID, ok := parseUUIDOrBadRequest(w, channelID, "channel_id")
+			if !ok {
+				return
+			}
+			if !h.channelExists(r.Context(), workspaceID, chUUID) {
+				writeError(w, http.StatusForbidden, "invalid channel_id")
+				return
+			}
+			if !h.channelUserIsMember(r.Context(), workspaceID, chUUID, parseUUID(userID)) {
+				writeError(w, http.StatusForbidden, "not a channel member")
+				return
+			}
+			params.ChannelID = chUUID
 		}
 
 		link, err := h.Storage.Upload(r.Context(), key, data, contentType, header.Filename)

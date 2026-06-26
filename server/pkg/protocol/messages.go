@@ -23,13 +23,68 @@ type TaskAvailablePayload struct {
 	TaskID    string `json:"task_id,omitempty"`
 }
 
-// RuntimeProfilesChangedPayload is sent from server to daemon as a wakeup hint
-// when a workspace custom runtime profile is created, edited, disabled, or
-// deleted. The daemon still fetches profiles and registers runtimes through the
-// existing HTTP endpoints.
-type RuntimeProfilesChangedPayload struct {
-	WorkspaceID      string `json:"workspace_id"`
-	RuntimeProfileID string `json:"runtime_profile_id,omitempty"`
+// ListWorkdirFilesRequestPayload is pushed server→daemon to ask a specific
+// runtime's daemon to enumerate a project's local working directory. The
+// daemon replies with ListWorkdirFilesResponsePayload carrying the same
+// RequestID. RelPath is the workdir path relative to the daemon's workspace
+// root (the daemon joins it onto its own root — the server never sends an
+// absolute host path).
+type ListWorkdirFilesRequestPayload struct {
+	RequestID  string `json:"request_id"`
+	RuntimeID  string `json:"runtime_id"`
+	RelPath    string `json:"rel_path"`
+	MaxEntries int    `json:"max_entries,omitempty"`
+	MaxDepth   int    `json:"max_depth,omitempty"`
+}
+
+// WorkdirFileNode is one entry in a flat workdir listing. Path is relative to
+// the workdir root using forward slashes; the frontend rebuilds the tree from
+// the path segments. Size is bytes for files (0 for directories).
+type WorkdirFileNode struct {
+	Path  string `json:"path"`
+	IsDir bool   `json:"is_dir"`
+	Size  int64  `json:"size,omitempty"`
+}
+
+// ListWorkdirFilesResponsePayload is the daemon→server reply for a workdir
+// listing. Missing is true when the workdir does not exist on that daemon (a
+// normal case — the project may not have run there). Truncated is true when
+// the entry/depth caps were hit.
+type ListWorkdirFilesResponsePayload struct {
+	RequestID string            `json:"request_id"`
+	Nodes     []WorkdirFileNode `json:"nodes,omitempty"`
+	Missing   bool              `json:"missing,omitempty"`
+	Truncated bool              `json:"truncated,omitempty"`
+	Error     string            `json:"error,omitempty"`
+}
+
+// ReadWorkdirFileRequestPayload is pushed server→daemon to read one file from a
+// project workdir for preview. RelPath is the workdir root (relative to
+// WorkspacesRoot); FilePath is the file relative to that root.
+type ReadWorkdirFileRequestPayload struct {
+	RequestID string `json:"request_id"`
+	RuntimeID string `json:"runtime_id"`
+	RelPath   string `json:"rel_path"`
+	FilePath  string `json:"file_path"`
+	MaxBytes  int    `json:"max_bytes,omitempty"`
+}
+
+// ReadWorkdirFileResponsePayload is the daemon→server reply for a file read.
+// For text files Content is UTF-8 and Encoding is empty/"utf8". For media files
+// (image/video/audio/pdf, by extension) Content is base64 and Encoding is
+// "base64" with MimeType set, so the client can render it directly. Binary is
+// set (no Content) for non-text files that aren't a known media type; TooLarge
+// when over the byte cap; Truncated when text was cut to the cap.
+type ReadWorkdirFileResponsePayload struct {
+	RequestID string `json:"request_id"`
+	Content   string `json:"content,omitempty"`
+	Encoding  string `json:"encoding,omitempty"`
+	MimeType  string `json:"mime_type,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+	TooLarge  bool   `json:"too_large,omitempty"`
+	Binary    bool   `json:"binary,omitempty"`
+	Missing   bool   `json:"missing,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // TaskProgressPayload is sent from daemon to server during task execution.
@@ -119,6 +174,17 @@ type ChatSessionUpdatedPayload struct {
 	ChatSessionID string `json:"chat_session_id"`
 	Title         string `json:"title"`
 	UpdatedAt     string `json:"updated_at"`
+}
+
+// ChannelTypingPayload is a transient group-chat typing indicator. It is not
+// persisted; clients expire it locally if a matching stop event is missed.
+type ChannelTypingPayload struct {
+	ChannelID   string `json:"channel_id"`
+	ActorType   string `json:"actor_type"`
+	ActorID     string `json:"actor_id,omitempty"`
+	ActorName   string `json:"actor_name"`
+	IsTyping    bool   `json:"is_typing"`
+	ExpiresInMS int    `json:"expires_in_ms,omitempty"`
 }
 
 // DaemonHeartbeatRequestPayload is sent from daemon to server over WebSocket

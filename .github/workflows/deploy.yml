@@ -11,15 +11,19 @@ name: Deploy
 #      the box's existing proxy (127.0.0.1:7893) — pulls the images and
 #      restarts the stack locally. Outbound is the only reliable direction.
 #
-# Test gate: branch protection on `main` must require the CI workflow to pass
-# before a PR can merge. By the time a commit lands on main it is already
-# green, so this workflow does not re-run tests.
+# Test gate: the CI workflow runs on every PR into `dev`. The team's workflow is
+# feature branch → PR → merge to `dev`, which builds images and deploys to s89.
+# `main` is left as the upstream-tracking branch and never deploys.
 #
 # One-time server + repo setup is documented in docs/deploy-s89.md.
 
 on:
-  push:
-    branches: [main]
+  # Deploy only when a PR is MERGED into `dev` (the team's integration branch).
+  # Direct pushes to dev do NOT deploy — the disciplined flow is
+  # feature branch → PR → merge to dev → deploy.
+  pull_request:
+    types: [closed]
+    branches: [dev]
   workflow_dispatch:
     inputs:
       image_tag:
@@ -29,7 +33,7 @@ on:
 
 # Never run two deploys at once; never cancel an in-flight one mid-restart.
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: deploy-s89
   cancel-in-progress: false
 
 jobs:
@@ -38,7 +42,8 @@ jobs:
     # On manual dispatch with an image_tag we skip building and redeploy that tag.
     if: >-
       github.repository_owner == 'LRM-Teams' &&
-      (github.event_name == 'push' || github.event.inputs.image_tag == '')
+      ((github.event_name == 'pull_request' && github.event.pull_request.merged == true) ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag == ''))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -49,18 +54,24 @@ jobs:
       backend_image: ${{ steps.prep.outputs.backend_image }}
       web_image: ${{ steps.prep.outputs.web_image }}
     steps:
+      # On a merged PR, build the actual merge commit on `dev`; on manual
+      # dispatch, build whatever ref was dispatched.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.ref }}
 
       # GHCR paths must be lowercase, but github.repository_owner preserves the
-      # org's display case (e.g. "LRM-Teams"). Lowercase it here.
+      # org's display case (e.g. "LRM-Teams"). Lowercase it here. The tag is the
+      # short SHA of the checked-out commit — the real dev commit being deployed.
       - name: Compute image refs + tag
         id: prep
         run: |
           owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          sha="$(git rev-parse --short=7 HEAD)"
           {
             echo "backend_image=ghcr.io/${owner_lc}/multica-backend"
             echo "web_image=ghcr.io/${owner_lc}/multica-web"
-            echo "tag=sha-${GITHUB_SHA::7}"
+            echo "tag=sha-${sha}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
@@ -133,6 +144,7 @@ jobs:
       # own /data/multica/.env, which is never in git.
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.ref }}
           sparse-checkout: docker-compose.selfhost.yml
           sparse-checkout-cone-mode: false
 

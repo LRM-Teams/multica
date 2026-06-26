@@ -18,6 +18,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   Inbox,
   ListTodo,
+  LayoutDashboard,
   Bot,
   Monitor,
   ChevronDown,
@@ -34,6 +35,7 @@ import {
   X,
   Zap,
   Users,
+  MessageCircle,
 } from "lucide-react";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
@@ -105,10 +107,12 @@ const EMPTY_INBOX: Awaited<ReturnType<typeof api.listInbox>> = [];
 // against the current workspace slug at render time (see AppSidebar body).
 // Only parameterless paths are valid nav destinations.
 type NavKey =
+  | "overview"
   | "inbox"
   | "myIssues"
   | "issues"
   | "projects"
+  | "channels"
   | "autopilots"
   | "agents"
   | "squads"
@@ -119,10 +123,12 @@ type NavKey =
 
 // Static schema (key + icon) — labels resolved at render via useT("layout").
 type NavLabelKey =
+  | "overview"
   | "inbox"
   | "my_issues"
   | "issues"
   | "projects"
+  | "channels"
   | "autopilots"
   | "agents"
   | "squads"
@@ -137,8 +143,10 @@ const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] 
 ];
 
 const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
+  { key: "overview", labelKey: "overview", icon: LayoutDashboard },
   { key: "issues", labelKey: "issues", icon: ListTodo },
   { key: "projects", labelKey: "projects", icon: FolderKanban },
+  { key: "channels", labelKey: "channels", icon: MessageCircle },
   { key: "autopilots", labelKey: "autopilots", icon: Zap },
   { key: "agents", labelKey: "agents", icon: Bot },
   { key: "squads", labelKey: "squads", icon: Users },

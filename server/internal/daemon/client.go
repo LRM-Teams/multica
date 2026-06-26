@@ -182,6 +182,16 @@ func (c *Client) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID, reas
 	}, nil)
 }
 
+// RegisterManagedWorkdir tells the server the daemon has provisioned a managed
+// shared working directory for a project, so it's recorded as a managed
+// local_directory resource and reused by later tasks. Idempotent server-side.
+func (c *Client) RegisterManagedWorkdir(ctx context.Context, projectID, localPath, daemonID string) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/projects/%s/managed-workdir", projectID), map[string]any{
+		"local_path": localPath,
+		"daemon_id":  daemonID,
+	}, nil)
+}
+
 func (c *Client) ReportProgress(ctx context.Context, taskID, summary string, step, total int) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/progress", taskID), map[string]any{
 		"summary": summary,
@@ -293,8 +303,8 @@ type (
 func (c *Client) SendHeartbeat(ctx context.Context, runtimeID string) (*HeartbeatResponse, error) {
 	var resp HeartbeatResponse
 	if err := c.postJSON(ctx, "/api/daemon/heartbeat", map[string]any{
-		"runtime_id":             runtimeID,
-		"supports_batch_import":  true,
+		"runtime_id":            runtimeID,
+		"supports_batch_import": true,
 	}, &resp); err != nil {
 		return nil, err
 	}
@@ -319,6 +329,39 @@ func (c *Client) ReportLocalSkillListResult(ctx context.Context, runtimeID, requ
 // ReportLocalSkillImportResult sends a runtime-local-skill bundle back to the server.
 func (c *Client) ReportLocalSkillImportResult(ctx context.Context, runtimeID, requestID string, result map[string]any) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/local-skills/import/%s/result", runtimeID, requestID), result, nil)
+}
+
+func (c *Client) SyncSharedSkills(ctx context.Context, runtimeID string, payload SharedSkillSyncPayload) (*SharedSkillSyncResult, error) {
+	var result SharedSkillSyncResult
+	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/shared-skills/sync", runtimeID), payload, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *Client) SyncEvolutionSubmissions(ctx context.Context, runtimeID string, payload EvolutionSubmissionSyncPayload) (*SharedSkillSyncResult, error) {
+	var result SharedSkillSyncResult
+	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/evolution/submissions", runtimeID), payload, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *Client) ListEvolutionDeliveries(ctx context.Context, runtimeID, agentID string) ([]EvolutionDelivery, error) {
+	var result EvolutionDeliveryListResponse
+	path := fmt.Sprintf("/api/daemon/runtimes/%s/evolution/deliveries?agent_id=%s", runtimeID, agentID)
+	if err := c.getJSON(ctx, path, &result); err != nil {
+		return nil, err
+	}
+	return result.Deliveries, nil
+}
+
+func (c *Client) MarkEvolutionDeliveryDelivered(ctx context.Context, runtimeID, agentID, deliveryID, deliveredPath string) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/evolution/deliveries/%s/delivered?agent_id=%s", runtimeID, deliveryID, agentID), map[string]string{"delivered_path": deliveredPath}, nil)
+}
+
+func (c *Client) FailEvolutionDelivery(ctx context.Context, runtimeID, agentID, deliveryID, message string) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/evolution/deliveries/%s/failed?agent_id=%s", runtimeID, deliveryID, agentID), map[string]string{"error": message}, nil)
 }
 
 // WorkspaceInfo holds minimal workspace metadata returned by the API.
@@ -391,10 +434,9 @@ func (c *Client) GetChatSessionGCCheck(ctx context.Context, sessionID string) (*
 }
 
 // AutopilotRunGCStatus carries the status of an autopilot run. CompletedAt
-// is the run's terminal timestamp (zero for non-terminal runs). The GC loop
-// reclaims a terminal run's never-reused workdir as soon as it sees the
-// terminal status, so it no longer gates on CompletedAt; the field is kept for
-// the API response contract and diagnostics.
+// is the run's terminal timestamp (zero for non-terminal runs); the GC loop
+// uses it as the TTL anchor instead of UpdatedAt because autopilot_run rows
+// have no updated_at column.
 type AutopilotRunGCStatus struct {
 	Status      string    `json:"status"`
 	CompletedAt time.Time `json:"completed_at"`
@@ -458,44 +500,6 @@ type WorkspaceReposResponse struct {
 func (c *Client) GetWorkspaceRepos(ctx context.Context, workspaceID string) (*WorkspaceReposResponse, error) {
 	var resp WorkspaceReposResponse
 	if err := c.getJSON(ctx, fmt.Sprintf("/api/daemon/workspaces/%s/repos", workspaceID), &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-// RuntimeProfile mirrors the server's workspace custom runtime profile
-// (MUL-3284). protocol_family is the provider used for task routing (it
-// selects the agent backend), while command_name is the actual executable
-// the daemon resolves on PATH and launches. fixed_args are launch arguments
-// every agent on this runtime inherits — wiring them into the spawned command
-// is best-effort and may not be plumbed yet (see the TODO in runTask).
-type RuntimeProfile struct {
-	ID             string   `json:"id"`
-	WorkspaceID    string   `json:"workspace_id"`
-	DisplayName    string   `json:"display_name"`
-	ProtocolFamily string   `json:"protocol_family"`
-	CommandName    string   `json:"command_name"`
-	Description    *string  `json:"description"`
-	FixedArgs      []string `json:"fixed_args"`
-	Visibility     string   `json:"visibility"`
-	Enabled        bool     `json:"enabled"`
-}
-
-// RuntimeProfilesResponse is the body of
-// GET /api/daemon/workspaces/{workspaceID}/runtime-profiles. The server only
-// returns enabled profiles for the workspace.
-type RuntimeProfilesResponse struct {
-	WorkspaceID     string           `json:"workspace_id"`
-	RuntimeProfiles []RuntimeProfile `json:"runtime_profiles"`
-}
-
-// GetRuntimeProfiles fetches the workspace's enabled custom runtime profiles.
-// Mirrors GetWorkspaceRepos. Callers must treat this as best-effort: an older
-// server with no profiles route returns 404, which the daemon swallows and
-// continues with built-in runtimes only.
-func (c *Client) GetRuntimeProfiles(ctx context.Context, workspaceID string) (*RuntimeProfilesResponse, error) {
-	var resp RuntimeProfilesResponse
-	if err := c.getJSON(ctx, fmt.Sprintf("/api/daemon/workspaces/%s/runtime-profiles", workspaceID), &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

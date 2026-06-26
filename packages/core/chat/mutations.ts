@@ -104,6 +104,46 @@ export function useUpdateChatSession() {
 }
 
 /**
+ * Binds (or unbinds) a chat session to a project. Optimistically patches the
+ * session's `project_id` in the cached list so the composer's project picker
+ * reflects the new selection immediately; rolls back on error. The matching
+ * `chat:session_updated` WS event keeps other tabs/devices in sync — see
+ * use-realtime-sync.ts. Pass `projectId: null` to clear the binding.
+ */
+export function useSetChatSessionProject() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+
+  return useMutation({
+    mutationFn: (data: { sessionId: string; projectId: string | null }) => {
+      logger.info("setChatSessionProject.start", {
+        sessionId: data.sessionId,
+        projectId: data.projectId,
+      });
+      return api.updateChatSession(data.sessionId, { project_id: data.projectId });
+    },
+    onMutate: async ({ sessionId, projectId }) => {
+      await qc.cancelQueries({ queryKey: chatKeys.sessions(wsId) });
+
+      const prevSessions = qc.getQueryData<ChatSession[]>(chatKeys.sessions(wsId));
+
+      const patch = (old?: ChatSession[]) =>
+        old?.map((s) => (s.id === sessionId ? { ...s, project_id: projectId } : s));
+      qc.setQueryData<ChatSession[]>(chatKeys.sessions(wsId), patch);
+
+      return { prevSessions };
+    },
+    onError: (err, vars, ctx) => {
+      logger.error("setChatSessionProject.error.rollback", { sessionId: vars.sessionId, err });
+      if (ctx?.prevSessions) qc.setQueryData(chatKeys.sessions(wsId), ctx.prevSessions);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: chatKeys.sessions(wsId) });
+    },
+  });
+}
+
+/**
  * Hard-deletes a chat session. Optimistically removes the row from the
  * sessions list so the dropdown updates instantly; rolls back on error.
  * The matching `chat:session_deleted` WS event keeps other tabs/devices

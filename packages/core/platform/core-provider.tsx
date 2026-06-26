@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { ApiClient } from "../api/client";
-import { installFreezeWatchdog } from "../diagnostics/freeze-watchdog";
 import { setApiInstance, setSchemaLogger } from "../api";
 import { createAuthStore, registerAuthStore } from "../auth";
 import { createChatStore, registerChatStore } from "../chat";
@@ -80,12 +79,6 @@ export function CoreProvider({
   // apiBaseUrl, storage, and callbacks are set at app boot and never change at runtime.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useMemo(() => initCore(apiBaseUrl, storage, onLogin, onLogout, cookieAuth, identity), []);
-
-  // Client-only freeze watchdog — shared by web and desktop. No-op on the
-  // server and idempotent, so mounting it here covers both apps in one place.
-  useEffect(() => {
-    installFreezeWatchdog();
-  }, []);
 
   // I18nProvider wraps everything else: server and client must use the same
   // (locale, resources) to avoid hydration mismatch. Language switching goes

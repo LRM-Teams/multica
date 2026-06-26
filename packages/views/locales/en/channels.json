@@ -1,0 +1,109 @@
+{
+  "page": {
+    "title": "Group chat",
+    "subtitle": "An instant-messaging space for people, agents and an optional Feishu group."
+  },
+  "sidebar": {
+    "heading": "Messages",
+    "search": "Search conversations...",
+    "groups": "Groups",
+    "name_placeholder": "Channel name",
+    "lark_placeholder": "Optional Feishu chat_id (oc_...)",
+    "create_aria": "Create channel",
+    "empty": "No channels yet.",
+    "menu_aria": "Channel actions",
+    "delete": "Delete group"
+  },
+  "delete_dialog": {
+    "title": "Delete this group?",
+    "description": "\"{{name}}\" and all its messages will be permanently deleted. This can't be undone.",
+    "cancel": "Cancel",
+    "confirm": "Delete",
+    "toast_success": "Group deleted",
+    "toast_failed": "Failed to delete group"
+  },
+  "empty_state": {
+    "title": "Create a group chat",
+    "description": "A group chat is an instant-messaging space in Multica. Add people and agents, then @mention an agent and it replies like a member.",
+    "cta": "New channel"
+  },
+  "header": {
+    "running": "Running",
+    "feishu": "Feishu",
+    "manage_members_aria": "Manage members",
+    "share_aria": "Share",
+    "stats_aria": "Stats",
+    "files_aria": "Files",
+    "back": "Back",
+    "more_aria": "More"
+  },
+  "members": {
+    "select_user": "Select a member",
+    "select_agent": "Select an agent",
+    "join": "Add",
+    "title": "Members",
+    "empty": "No members yet",
+    "remove_aria": "Remove member",
+    "no_candidates": "No one left to invite",
+    "invite": "Invite",
+    "invite_count": "Invite ({{count}})",
+    "tab_invite": "Invite",
+    "tab_members": "Members",
+    "search": "Search…",
+    "no_results": "No matches"
+  },
+  "files": {
+    "title": "Files",
+    "empty": "No files yet",
+    "no_project": "No project linked to this channel",
+    "offline": "Your runtime is offline — can't read project files",
+    "missing": "This project's folder isn't on your machine yet",
+    "error": "Failed to load files",
+    "truncated": "Showing a partial list (too many files)",
+    "preview_binary": "Binary file — can't preview",
+    "preview_truncated": "Large file — showing a partial preview",
+    "preview_error": "Failed to load file content",
+    "preview_empty": "(empty file)",
+    "preview_too_large": "File too large to preview"
+  },
+  "stats": {
+    "title": "Activity",
+    "messages": "Messages",
+    "files": "Files",
+    "members": "Members",
+    "by_author": "Messages by participant",
+    "empty": "No activity yet",
+    "error": "Failed to load"
+  },
+  "share": {
+    "copied": "Channel link copied",
+    "copy_failed": "Copy failed"
+  },
+  "thread": {
+    "empty": "Start chatting. Add an agent to the members, then type @agent-name to trigger a reply."
+  },
+  "typing": {
+    "single": "{{name}} is typing",
+    "pair": "{{a}} and {{b}} are typing",
+    "overflow": "{{a}}, {{b}} and {{count}} people are typing"
+  },
+  "agent_status": {
+    "queued": "Queued",
+    "dispatched": "Starting up",
+    "running": "Thinking",
+    "waiting_local_directory": "Waiting for local directory"
+  },
+  "composer": {
+    "placeholder": "Describe what you need…  @mention an agent to trigger its reply.",
+    "attach_aria": "Attach",
+    "mention_aria": "Mention an agent",
+    "send": "Send",
+    "project_label": "Project",
+    "project_none": "No project",
+    "project_tooltip": "Set the project this channel works in"
+  },
+  "message": {
+    "agent_badge": "Agent",
+    "feishu_badge": "Feishu"
+  }
+}

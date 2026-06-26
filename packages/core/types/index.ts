@@ -1,4 +1,4 @@
-export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueMetadata, IssueMetadataValue, IssueReaction } from "./issue";
+export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueMetadata, IssueMetadataValue, IssueReaction, IssueReviewStats } from "./issue";
 export type {
   Agent,
   AgentStatus,
@@ -7,14 +7,13 @@ export type {
   AgentTask,
   AgentActivityBucket,
   AgentRunCount,
+  AgentTaskFeedItem,
+  AgentTaskFeedCursor,
+  AgentTaskFeedPage,
+  AgentTaskStats,
   TaskFailureReason,
   AgentRuntime,
   RuntimeDevice,
-  RuntimeProfile,
-  RuntimeProtocolFamily,
-  RuntimeProfileVisibility,
-  CreateRuntimeProfileRequest,
-  UpdateRuntimeProfileRequest,
   CreateAgentRequest,
   AgentTemplate,
   AgentTemplateSummary,
@@ -29,6 +28,14 @@ export type {
   SkillSummary,
   AgentSkillSummary,
   SkillFile,
+  AgentMemory,
+  GeneratedSkillDeliveryStatus,
+  GeneratedSkillDeliveryFile,
+  GeneratedSkillDelivery,
+  ListGeneratedSkillDeliveriesResponse,
+  DecideGeneratedSkillDeliveryRequest,
+  EvolutionMemoryDelivery,
+  ListEvolutionMemoryDeliveriesResponse,
   CreateSkillRequest,
   UpdateSkillRequest,
   SetAgentSkillsRequest,
@@ -59,7 +66,6 @@ export type {
   RuntimeLocalSkillImportResult,
   IssueUsageSummary,
 } from "./agent";
-export { RUNTIME_PROFILE_PROTOCOL_FAMILIES } from "./agent";
 export type { Workspace, WorkspaceRepo, Member, MemberRole, User, MemberWithUser, Invitation } from "./workspace";
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
@@ -124,8 +130,6 @@ export type {
   AutopilotStatus,
   AutopilotExecutionMode,
   AutopilotAssigneeType,
-  AutopilotSubscriber,
-  AutopilotSubscriberInput,
   AutopilotTrigger,
   AutopilotTriggerKind,
   AutopilotRun,
@@ -180,3 +184,19 @@ export type {
   BillingCheckoutSessionStatus,
   CreateBillingPortalSessionResponse,
 } from "./billing";
+
+export type {
+  Channel,
+  ChannelMember,
+  ChannelMemberBrief,
+  ChannelLastMessage,
+  ChannelMessage,
+  ChannelStats,
+  ChannelAuthorStat,
+  ChannelActiveTask,
+  ChannelTypingPayload,
+  ChannelProjectFile,
+  ChannelProjectFilesStatus,
+  ChannelProjectFiles,
+  ChannelProjectFileContent,
+} from "./channel";

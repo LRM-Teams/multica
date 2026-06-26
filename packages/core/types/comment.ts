@@ -29,7 +29,6 @@ export interface Comment {
   resolved_at: string | null;
   resolved_by_type: CommentAuthorType | null;
   resolved_by_id: string | null;
-  source_task_id?: string | null;
 }
 
 export type CommentTriggerSource =

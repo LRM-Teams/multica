@@ -6,14 +6,14 @@ export function PriorityIcon({
   className = "",
   inheritColor = false,
 }: {
-  priority: IssuePriority | string;
+  priority: IssuePriority;
   className?: string;
   inheritColor?: boolean;
 }) {
-  const cfg = priority in PRIORITY_CONFIG ? PRIORITY_CONFIG[priority as IssuePriority] : null;
+  const cfg = PRIORITY_CONFIG[priority];
 
   // "none" — simple horizontal dashes
-  if (!cfg || cfg.bars === 0) {
+  if (cfg.bars === 0) {
     return (
       <svg
         viewBox="0 0 16 16"

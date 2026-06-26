@@ -13,8 +13,7 @@
   },
   "scope": {
     "mine": "Mine",
-    "all": "All",
-    "archived": "Archived"
+    "all": "All"
   },
   "sort": {
     "label_recent": "Recent activity",
@@ -67,11 +66,7 @@
     "workload": "Workload",
     "runtime": "Runtime",
     "activity_7d": "Activity (7d)",
-    "runs": "Runs",
-    "last_active": "Last active",
-    "model": "Model",
-    "created": "Created",
-    "owner": "Owner"
+    "runs": "Runs"
   },
   "row": {
     "you": "You",
@@ -79,9 +74,7 @@
     "no_description": "No description",
     "fallback_runtime_cloud": "Cloud",
     "fallback_runtime_local": "Local",
-    "actions_aria": "Row actions",
-    "task_count_one": "{{count}} task",
-    "task_count_other": "{{count}} tasks"
+    "actions_aria": "Row actions"
   },
   "activity_tooltip": {
     "created_today": "Created today",
@@ -217,11 +210,11 @@
     "custom_args": "Custom Args",
     "mcp_config": "MCP",
     "integrations": "Integrations",
-    "runtime_config": "Routing",
     "discard_dialog_title": "Discard unsaved changes?",
     "discard_dialog_description": "You have unsaved changes in this tab. Leaving now will discard them.",
     "discard_keep": "Keep editing",
-    "discard_confirm": "Discard changes"
+    "discard_confirm": "Discard changes",
+    "memory": "Memory"
   },
   "create_dialog": {
     "title_create": "Create Agent",
@@ -329,26 +322,6 @@
       "redacted_title": "Configured — hidden from your view",
       "redacted_hint": "Only the agent owner or a workspace admin can read this config."
     },
-    "runtime_config": {
-      "intro": "Choose how the OpenClaw runtime executes this agent's turns. Local mode runs the agent inside the daemon process. Gateway mode forwards each turn to an OpenClaw Gateway — useful when the daemon host is a lightweight coordinator and the agent should run on a more powerful machine.",
-      "mode_label": "Routing mode",
-      "mode_local": "Local",
-      "mode_gateway": "Gateway",
-      "mode_local_hint": "Default. The daemon spawns `openclaw agent --local …` and the agent loop runs on this host.",
-      "mode_gateway_hint": "The daemon dials an OpenClaw Gateway. Leave the endpoint fields blank to inherit them from the daemon host's `~/.openclaw/openclaw.json`.",
-      "gateway_legend": "Gateway endpoint",
-      "host_label": "Host",
-      "host_placeholder": "gw.internal",
-      "port_label": "Port",
-      "port_invalid": "Port must be a positive integer.",
-      "token_label": "Auth token",
-      "token_placeholder": "Bearer token issued by the gateway",
-      "token_masked_placeholder": "Saved — submit a new value to rotate, or leave blank to keep",
-      "tls_label": "Use TLS",
-      "tls_hint": "Dial https:// instead of http://",
-      "saved_toast": "Routing config saved",
-      "save_failed_toast": "Failed to save routing config"
-    },
     "skills": {
       "intro": "Workspace skills assigned to this agent. Local runtime skills are always available automatically.",
       "add_action": "Add skill",
@@ -366,7 +339,25 @@
       "add_dialog_confirm_one": "Add {{count}} skill",
       "add_dialog_confirm_other": "Add {{count}} skills",
       "add_dialog_cancel": "Cancel",
-      "add_failed_toast": "Failed to add skill"
+      "add_failed_toast": "Failed to add skill",
+      "generated_title": "Generated skills",
+      "generated_intro": "Skills this agent learned through the Pi evolution flow. Accept a generated skill to enable it locally for future Pi tasks.",
+      "generated_count": "{{count}} generated",
+      "generated_loading": "Loading generated skills…",
+      "generated_empty": "No generated skills yet.",
+      "generated_decision_failed_toast": "Failed to update generated skill decision",
+      "generated_accept_action": "Accept",
+      "generated_enabled_action": "Enabled",
+      "generated_ignore_action": "Ignore",
+      "generated_status_enabled": "Enabled",
+      "generated_status": {
+        "pending": "Pending",
+        "delivered": "Delivered",
+        "accepted": "Accepted",
+        "ignored": "Ignored",
+        "rejected": "Rejected",
+        "failed": "Failed"
+      }
     },
     "integrations": {
       "intro": "Connect this agent to external chat platforms so people can work with it where they already are.",
@@ -412,6 +403,26 @@
       "started_prefix": "Started {{when}}",
       "dispatched_prefix": "Dispatched {{when}}",
       "queued_prefix": "Queued {{when}}"
+    },
+    "memory": {
+      "intro": "Runtime-synced memories for this agent. They are saved in Multica so the agent keeps context when it moves to another runtime.",
+      "loading": "Loading memories…",
+      "empty_title": "No memories synced",
+      "empty_hint": "Memory files from this agent runtime will appear here after the next sync.",
+      "empty_content": "No content",
+      "updated_at": "Updated {{value}}",
+      "evolution_title": "Generated memories",
+      "evolution_intro": "Memory-like units delivered through the Pi evolution flow. They land in the local Pi inbox for review and reuse.",
+      "evolution_loading": "Loading generated memories…",
+      "evolution_empty": "No generated memories yet.",
+      "evolution_status": {
+        "pending": "Pending",
+        "delivered": "Delivered",
+        "accepted": "Accepted",
+        "ignored": "Ignored",
+        "rejected": "Rejected",
+        "failed": "Failed"
+      }
     }
   },
   "char_counter": {
@@ -473,31 +484,32 @@
     "runtime_recovery": "Daemon restarted",
     "manual": "Cancelled by user"
   },
-  "last_active": {
-    "today": "Today",
-    "days_ago_one": "{{count}} day ago",
-    "days_ago_other": "{{count}} days ago",
-    "none": "No activity (30d)"
-  },
-  "toolbar": {
-    "result_count_title": "Matching agents / agents in scope",
-    "filter_label": "Filter",
-    "filter_active_count_one": "{{count}} filter",
-    "filter_active_count_other": "{{count}} filters",
-    "clear_filters": "Clear filters",
-    "section_availability": "Availability",
-    "section_runtime": "Runtime",
-    "display": "Display",
-    "sort_by": "Sort by",
-    "direction_asc": "Ascending",
-    "direction_desc": "Descending",
-    "section_columns": "Columns",
-    "section_owner": "Owner",
-    "section_model": "Model"
-  },
-  "actions": {
-    "selected_one": "{{count}} selected",
-    "selected_other": "{{count}} selected",
-    "clear_selection": "Clear selection"
+  "dashboard": {
+    "all_agents": "All agents",
+    "edit_config": "Edit config",
+    "delete": "Delete",
+    "metric_tasks": "Total tasks",
+    "metric_success": "Success rate",
+    "metric_cost": "Cost",
+    "metric_version": "Evolution",
+    "last_30d": "Last 30d",
+    "coming_soon": "Coming soon",
+    "role_capabilities": "Role & capabilities",
+    "edit": "Edit",
+    "no_description": "No role or capability description yet",
+    "no_skills": "No capabilities yet",
+    "prompt_strategy": "Current prompt strategy",
+    "no_prompt": "No prompt configured",
+    "exec_log": "Execution log",
+    "view_all": "View all",
+    "no_logs": "No runs yet",
+    "evolution": "Self-evolution",
+    "evolution_placeholder": "Self-evolution is coming soon — it will show each prompt / config iteration and its success-rate change.",
+    "running_for": "In progress · {{min}}min elapsed",
+    "duration_min": "{{min}}min",
+    "task_fallback": "Task run",
+    "empty_select": "Select an agent on the left to see details",
+    "delete_success": "Agent deleted",
+    "delete_failed": "Failed to delete agent"
   }
 }

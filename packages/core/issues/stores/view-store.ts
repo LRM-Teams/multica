@@ -15,13 +15,6 @@ export type IssueGrouping = "status" | "assignee";
 export type SwimlaneGrouping = "parent" | "project" | "assignee";
 export type SortField = "position" | "priority" | "start_date" | "due_date" | "created_at" | "title";
 export type SortDirection = "asc" | "desc";
-export type IssueDateField = "created_at" | "updated_at";
-
-export interface IssueDateFilter {
-  field: IssueDateField;
-  from: string;
-  to: string;
-}
 
 export const SWIMLANE_GROUPINGS: SwimlaneGrouping[] = ["parent", "project", "assignee"];
 
@@ -77,7 +70,6 @@ export interface IssueViewState {
   projectFilters: string[];
   includeNoProject: boolean;
   labelFilters: string[];
-  dateFilter: IssueDateFilter | null;
   // When true, the list only shows issues that currently have at least one
   // agent task in `running` status. Drives the workspace "agents working"
   // quick filter chip in the issues header. Not persisted across reloads —
@@ -111,7 +103,6 @@ export interface IssueViewState {
   toggleProjectFilter: (projectId: string) => void;
   toggleNoProject: () => void;
   toggleLabelFilter: (labelId: string) => void;
-  setDateFilter: (filter: IssueDateFilter | null) => void;
   toggleAgentRunningFilter: () => void;
   hideStatus: (status: IssueStatus) => void;
   showStatus: (status: IssueStatus) => void;
@@ -138,7 +129,6 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
   projectFilters: [],
   includeNoProject: false,
   labelFilters: [],
-  dateFilter: null,
   agentRunningFilter: false,
   sortBy: "position",
   sortDirection: "asc",
@@ -218,7 +208,6 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
         ? state.labelFilters.filter((id) => id !== labelId)
         : [...state.labelFilters, labelId],
     })),
-  setDateFilter: (filter) => set({ dateFilter: filter }),
   toggleAgentRunningFilter: () =>
     set((state) => ({ agentRunningFilter: !state.agentRunningFilter })),
   hideStatus: (status) =>
@@ -247,7 +236,6 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
       projectFilters: [],
       includeNoProject: false,
       labelFilters: [],
-      dateFilter: null,
       agentRunningFilter: false,
     }),
   setSortBy: (field) => set({ sortBy: field }),
@@ -291,8 +279,6 @@ export const viewStorePersistOptions = (name: string) => ({
     // state changes second-to-second, and a stored toggle would let users
     // return to an unexplained empty list. Keep it ephemeral. See the
     // field comment on IssueViewState.
-    // `dateFilter` is also intentionally not persisted: relative presets such
-    // as Today would otherwise become stale after a calendar-day rollover.
     viewMode: state.viewMode,
     grouping: state.grouping,
     statusFilters: state.statusFilters,

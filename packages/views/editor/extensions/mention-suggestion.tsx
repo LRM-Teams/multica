@@ -27,6 +27,7 @@ import type {
 } from "@multica/core/types";
 import { ListTodo } from "lucide-react";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { agentColor } from "../../common/agent-color";
 import { StatusIcon } from "../../issues/components/status-icon";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { useT } from "../../i18n";
@@ -449,8 +450,9 @@ function MentionRow({
         actorId={item.id}
         size={20}
         showStatusDot
+        tint={agentColor(item.id)}
       />
-      <span className="truncate font-medium">
+      <span className="truncate font-medium" style={{ color: agentColor(item.id).fg }}>
         {item.type === "all" ? t(($) => $.mention.all_members) : item.label}
       </span>
       {item.type === "agent" && (
@@ -506,6 +508,10 @@ function matchesMentionQuery(item: MentionItem, query: string): boolean {
 interface MentionSuggestionOptions {
   mode?: "default" | "context";
   getContextItems?: () => MentionItem[];
+  /** When it returns a set, member/agent/squad candidates are restricted to
+   *  those actor ids (e.g. a channel's members) and issues / @all are omitted.
+   *  Returns null/undefined to fall back to the full workspace. */
+  getAllowedActorIds?: () => ReadonlySet<string> | null | undefined;
 }
 
 export function createMentionSuggestion(
@@ -543,14 +549,26 @@ export function createMentionSuggestion(
       members.find((m) => m.user_id === userId)?.role ?? null;
 
     const q = query.toLowerCase();
+    // When set (e.g. a channel's members), candidates are scoped to these ids.
+    const allow = options.getAllowedActorIds?.();
 
+    // @all is offered in channel-scoped mode too (allow set): in a group chat
+    // it means "everyone in this channel", which the backend honors by
+    // triggering every agent member (contentMentionsAll). The stored label
+    // stays English ("All members") so the rendered "@all" text keeps matching
+    // the backend check regardless of UI locale; display is localized in the
+    // picker row and the mention chip.
     const allItem: MentionItem[] =
       "all members".includes(q) || "all".includes(q)
         ? [{ id: "all", label: "All members", type: "all" as const }]
         : [];
 
     const memberItems: MentionItem[] = members
-      .filter((m) => m.name.toLowerCase().includes(q) || matchesPinyin(m.name, q))
+      .filter(
+        (m) =>
+          (m.name.toLowerCase().includes(q) || matchesPinyin(m.name, q)) &&
+          (!allow || allow.has(m.user_id)),
+      )
       .map((m) => ({
         id: m.user_id,
         label: m.name,
@@ -562,12 +580,18 @@ export function createMentionSuggestion(
         (a) =>
           !a.archived_at &&
           (a.name.toLowerCase().includes(q) || matchesPinyin(a.name, q)) &&
-          canAssignAgentToIssue(a, { userId, role: myRole }).allowed,
+          canAssignAgentToIssue(a, { userId, role: myRole }).allowed &&
+          (!allow || allow.has(a.id)),
       )
       .map((a) => ({ id: a.id, label: a.name, type: "agent" as const }));
 
     const squadItems: MentionItem[] = squads
-      .filter((s) => !s.archived_at && (s.name.toLowerCase().includes(q) || matchesPinyin(s.name, q)))
+      .filter(
+        (s) =>
+          !s.archived_at &&
+          (s.name.toLowerCase().includes(q) || matchesPinyin(s.name, q)) &&
+          (!allow || allow.has(s.id)),
+      )
       .map((s) => ({ id: s.id, label: s.name, type: "squad" as const }));
 
     // Members and agents share a single ranked list — recently mentioned
@@ -581,19 +605,27 @@ export function createMentionSuggestion(
 
     // Cached issues give an instant first paint; MentionList adds server
     // matches for done/cancelled and any other issues not in this cache.
-    const issueItems: MentionItem[] = cachedIssues
-      .filter(
-        (i) =>
-          i.identifier.toLowerCase().includes(q) ||
-          i.title.toLowerCase().includes(q),
-      )
-      .map(issueToMention);
+    const issueItems: MentionItem[] = allow
+      ? []
+      : cachedIssues
+          .filter(
+            (i) =>
+              i.identifier.toLowerCase().includes(q) ||
+              i.title.toLowerCase().includes(q),
+          )
+          .map(issueToMention);
 
     return [...allItem, ...userItems, ...issueItems];
   }
 
   return {
     pluginKey,
+    // Trigger the picker even when "@" directly follows another character
+    // (e.g. "hi@alice"). Tiptap's Suggestion defaults allowedPrefixes to
+    // [" "], which requires a space or node start before the trigger and made
+    // mid-word "@" type as plain text. null disables the prefix check, matching
+    // chat-composer expectations (Slack / Linear trigger "@" anywhere).
+    allowedPrefixes: null,
     items: ({ query }) => {
       if (options.mode === "context") {
         const normalizedQuery = query.trim();

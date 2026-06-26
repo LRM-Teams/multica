@@ -362,7 +362,11 @@
   color: var(--primary);
   font-weight: 600;
   text-decoration: none;
-  margin: 0 0.125rem;
+  margin: 0 0.0625rem;
+  border-radius: 0.3125rem;
+  padding: 0.0625rem 0.3125rem;
+  /* color + background are set per-actor via inline style (agentColor);
+     the values above are the fallback when no tint is provided. */
 }
 
 /* Slash command pills */

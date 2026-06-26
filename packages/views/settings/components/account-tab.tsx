@@ -8,6 +8,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
@@ -24,6 +25,17 @@ export function AccountTab() {
   const { t } = useT("settings");
   const user = useAuthStore((s) => s.user);
   const setUser = useAuthStore((s) => s.setUser);
+  const qc = useQueryClient();
+
+  // The auth store isn't the source for actor avatars/names rendered elsewhere
+  // (chat, channels, issues) — those resolve from the workspace members cache
+  // (workspaceKeys.members = ["workspaces", wsId, "members"]). Refetch every
+  // workspace's member list after a profile change so the new avatar/name
+  // propagates there too, across all workspaces the user belongs to.
+  const refreshMemberLists = () =>
+    qc.invalidateQueries({
+      predicate: (q) => q.queryKey[0] === "workspaces" && q.queryKey[2] === "members",
+    });
 
   const [profileName, setProfileName] = useState(user?.name ?? "");
   const [profileDescription, setProfileDescription] = useState(
@@ -57,6 +69,7 @@ export function AccountTab() {
       if (!result) return;
       const updated = await api.updateMe({ avatar_url: result.link });
       setUser(updated);
+      void refreshMemberLists();
       toast.success(t(($) => $.account.toast_avatar_updated));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t(($) => $.account.toast_avatar_failed));
@@ -72,6 +85,7 @@ export function AccountTab() {
         profile_description: profileDescription,
       });
       setUser(updated);
+      void refreshMemberLists();
       toast.success(t(($) => $.account.toast_profile_updated));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.account.toast_profile_failed));

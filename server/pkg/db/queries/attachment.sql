@@ -1,10 +1,10 @@
 -- name: CreateAttachment :one
 INSERT INTO attachment (
-  id, workspace_id, issue_id, comment_id, chat_session_id,
+  id, workspace_id, issue_id, comment_id, chat_session_id, channel_id,
   uploader_type, uploader_id, filename, url, content_type, size_bytes
 )
 VALUES (
-  $1, $2, sqlc.narg(issue_id), sqlc.narg(comment_id), sqlc.narg(chat_session_id),
+  $1, $2, sqlc.narg(issue_id), sqlc.narg(comment_id), sqlc.narg(chat_session_id), sqlc.narg(channel_id),
   $3, $4, $5, $6, $7, $8
 )
 RETURNING *;
@@ -66,35 +66,12 @@ WHERE issue_id = $2
     OR (comment_id IS NULL AND id = ANY(sqlc.arg(attachment_ids)::uuid[]))
   );
 
--- name: LinkAttachmentsToChatMessage :many
+-- name: LinkAttachmentsToChatMessage :exec
 UPDATE attachment
-SET chat_message_id = sqlc.arg(chat_message_id),
-    chat_session_id = sqlc.arg(chat_session_id)
-WHERE workspace_id = sqlc.arg(workspace_id)
-  AND issue_id IS NULL
-  AND comment_id IS NULL
+SET chat_message_id = $1
+WHERE chat_session_id = $2
   AND chat_message_id IS NULL
-  AND (
-    chat_session_id IS NULL
-    OR chat_session_id = sqlc.arg(chat_session_id)
-  )
-  AND uploader_type = sqlc.arg(uploader_type)
-  AND uploader_id = sqlc.arg(uploader_id)
-  AND id = ANY(sqlc.arg(attachment_ids)::uuid[])
-RETURNING id;
-
--- name: DetachAttachmentsFromUserChatMessageByTask :many
--- When an empty chat task is cancelled, its user message is deleted. The
--- attachment FK is ON DELETE CASCADE, so without this the bound rows would be
--- destroyed and a restored draft could never re-bind them. Detach first
--- (chat_message_id -> NULL, keep chat_session_id) so the rows survive as
--- workspace/session-scoped unattached attachments and re-send can re-link them.
-UPDATE attachment
-SET chat_message_id = NULL
-WHERE chat_message_id IN (
-  SELECT id FROM chat_message WHERE task_id = $1 AND role = 'user'
-)
-RETURNING *;
+  AND id = ANY($3::uuid[]);
 
 -- name: ListAttachmentsByChatMessage :many
 SELECT * FROM attachment
@@ -105,6 +82,23 @@ ORDER BY created_at ASC;
 SELECT * FROM attachment
 WHERE chat_message_id = ANY($1::uuid[]) AND workspace_id = $2
 ORDER BY created_at ASC;
+
+-- name: LinkAttachmentsToChannelMessage :exec
+UPDATE attachment
+SET channel_message_id = $1
+WHERE channel_id = $2
+  AND channel_message_id IS NULL
+  AND id = ANY($3::uuid[]);
+
+-- name: ListAttachmentsByChannelMessageIDs :many
+SELECT * FROM attachment
+WHERE channel_message_id = ANY($1::uuid[]) AND workspace_id = $2
+ORDER BY created_at ASC;
+
+-- name: ListAttachmentsByChannel :many
+SELECT * FROM attachment
+WHERE channel_id = $1 AND workspace_id = $2
+ORDER BY created_at DESC;
 
 -- name: LinkAttachmentsToIssue :exec
 UPDATE attachment

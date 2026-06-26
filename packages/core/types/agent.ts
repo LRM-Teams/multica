@@ -26,96 +26,12 @@ export interface RuntimeDevice {
   owner_id: string | null;
   /** Defaults to "private" when the backend predates the visibility flag. */
   visibility: RuntimeVisibility;
-  /**
-   * The custom runtime profile this registered runtime was launched from,
-   * or `null` for a built-in protocol family. The UI uses this to stamp a
-   * "Built-in" vs "Custom" badge on the runtime row. Older backends that
-   * predate the custom-runtime feature omit the field; consumers must treat
-   * a missing value as `null` (built-in).
-   */
-  profile_id?: string | null;
   last_seen_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export type AgentRuntime = RuntimeDevice;
-
-// ---------------------------------------------------------------------------
-// Custom runtime profiles (MUL-3284)
-//
-// A RuntimeProfile is a workspace-level *definition* of a custom runtime
-// backend — distinct from a RuntimeDevice, which is a daemon-registered
-// *instance*. An admin authors a profile (display name + base protocol
-// family + the CLI command to launch), and daemons can then register
-// runtimes against it; those instances carry `profile_id` pointing back here.
-// ---------------------------------------------------------------------------
-
-// The fixed allow-list of base protocol families a custom runtime can wrap.
-// These are the only backends the create flow may select; the server rejects
-// anything else with 400. Kept as a const tuple so the union type is derived
-// from the single source of truth.
-export const RUNTIME_PROFILE_PROTOCOL_FAMILIES = [
-  "claude",
-  "codebuddy",
-  "codex",
-  "copilot",
-  "opencode",
-  "openclaw",
-  "hermes",
-  "gemini",
-  "pi",
-  "cursor",
-  "kimi",
-  "kiro",
-  "antigravity",
-] as const;
-
-export type RuntimeProtocolFamily =
-  (typeof RUNTIME_PROFILE_PROTOCOL_FAMILIES)[number];
-
-// Profile visibility mirrors RuntimeVisibility's vocabulary but uses the
-// workspace/private axis the server documents for profiles.
-export type RuntimeProfileVisibility = "workspace" | "private";
-
-export interface RuntimeProfile {
-  id: string;
-  workspace_id: string;
-  display_name: string;
-  protocol_family: RuntimeProtocolFamily;
-  command_name: string;
-  description: string | null;
-  fixed_args: string[];
-  visibility: RuntimeProfileVisibility;
-  created_by: string | null;
-  enabled: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-// POST body. `protocol_family` is required and immutable after creation.
-// Optional fields are omitted entirely when unset (never sent as null/empty)
-// so the server applies its own defaults.
-export interface CreateRuntimeProfileRequest {
-  display_name: string;
-  protocol_family: RuntimeProtocolFamily;
-  command_name: string;
-  description?: string;
-  fixed_args?: string[];
-  visibility?: RuntimeProfileVisibility;
-  enabled?: boolean;
-}
-
-// PATCH body — every field optional; `protocol_family` is intentionally
-// absent because it is immutable.
-export interface UpdateRuntimeProfileRequest {
-  display_name?: string;
-  command_name?: string;
-  description?: string | null;
-  fixed_args?: string[];
-  visibility?: RuntimeProfileVisibility;
-  enabled?: boolean;
-}
 
 // Coarse classifier set by the backend when a task transitions to "failed".
 // Mirrors the migration-055 enum in agent_task_queue.failure_reason. Used by
@@ -144,6 +60,47 @@ export interface AgentActivityBucket {
 export interface AgentRunCount {
   agent_id: string;
   run_count: number;
+}
+
+// One terminal task in the workspace-wide agent activity feed (overview
+// timeline). Trimmed to display fields — the agent name is resolved client-side
+// from the cached agent list. `status` is one of completed/failed/cancelled.
+export interface AgentTaskFeedItem {
+  id: string;
+  agent_id: string;
+  issue_id: string;
+  // The linked issue's "PREFIX-N" identifier and title, resolved server-side.
+  // Absent for tasks with no linked issue (chat/autopilot-spawned). The title
+  // is the primary "what did this agent do" description in the timeline row.
+  issue_identifier?: string;
+  issue_title?: string;
+  // Title of the linked chat session — the "what" for chat-spawned tasks that
+  // have no issue. Empty session titles are omitted.
+  chat_title?: string;
+  status: AgentTask["status"];
+  completed_at: string | null;
+  trigger_summary?: string;
+}
+
+// Opaque composite cursor — the (completed_at, id) of the last returned row.
+export interface AgentTaskFeedCursor {
+  completed_at: string;
+  id: string;
+}
+
+export interface AgentTaskFeedPage {
+  tasks: AgentTaskFeedItem[];
+  has_more: boolean;
+  next_cursor?: AgentTaskFeedCursor | null;
+}
+
+// Overview "tasks done" KPI — completed/failed/total counts over ALL agent
+// tasks in the workspace (issue, chat, and channel-reply tasks alike), so a
+// channel reply counts as a finished task, matching the agent activity feed.
+export interface AgentTaskStats {
+  completed: number;
+  failed: number;
+  total: number;
 }
 
 export interface AgentTask {
@@ -498,6 +455,73 @@ export interface SkillFile {
   updated_at: string;
 }
 
+export interface AgentMemory {
+  id: string;
+  workspace_id: string;
+  agent_id: string;
+  name: string;
+  content: string;
+  config: Record<string, unknown>;
+  sync_key: string;
+  content_hash: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type GeneratedSkillDeliveryStatus =
+  | "pending"
+  | "delivered"
+  | "accepted"
+  | "ignored"
+  | "rejected"
+  | "failed";
+
+export interface GeneratedSkillDeliveryFile {
+  path: string;
+  content: string;
+  content_hash: string;
+  mime_type: string;
+}
+
+export interface GeneratedSkillDelivery {
+  id: string;
+  workspace_id: string;
+  unit_id: string;
+  version_id: string;
+  target_agent_id: string;
+  delivery_type: string;
+  status: GeneratedSkillDeliveryStatus;
+  reason: string;
+  matcher_score: number;
+  unit_type: string;
+  title: string;
+  canonical_summary: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  delivered_path?: string;
+  error?: string;
+  decided_at?: string | null;
+  delivered_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  files?: GeneratedSkillDeliveryFile[];
+}
+
+export interface ListGeneratedSkillDeliveriesResponse {
+  deliveries: GeneratedSkillDelivery[];
+}
+
+export interface DecideGeneratedSkillDeliveryRequest {
+  decision: "accepted" | "ignored" | "rejected";
+}
+
+export type EvolutionMemoryDelivery = GeneratedSkillDelivery;
+
+export interface ListEvolutionMemoryDeliveriesResponse {
+  deliveries: EvolutionMemoryDelivery[];
+}
+
 export interface CreateSkillRequest {
   name: string;
   description?: string;
@@ -542,14 +566,12 @@ export interface RuntimeHourlyActivity {
   count: number;
 }
 
-// One (agent, provider, model) row of the "Cost by agent" tab on the runtime
-// detail page. provider + model stay on the wire because cost is computed
-// client-side from a per-model pricing table (provider disambiguates bare
-// model ids that collide across providers) — the client groups these rows by
-// agent_id and sums cost per agent across models.
+// One (agent, model) row of the "Cost by agent" tab on the runtime detail
+// page. Model stays on the wire because cost is computed client-side from
+// a per-model pricing table — the client groups these rows by agent_id and
+// sums cost per agent across models.
 export interface RuntimeUsageByAgent {
   agent_id: string;
-  provider: string;
   model: string;
   input_tokens: number;
   output_tokens: number;
@@ -571,15 +593,12 @@ export interface RuntimeUsageByHour {
   task_count: number;
 }
 
-// One (date, provider, model) bucket of token usage for the workspace
-// dashboard. Workspace-scoped (no runtime_id) and optionally narrowed to a
-// single project on the server side. `provider` is kept on the wire so the
-// client can disambiguate bare model ids that collide across providers
-// (e.g. Cursor's `auto` vs another provider's `auto`) when pricing. Cost
-// stays client-side via the model pricing table.
+// One (date, model) bucket of token usage for the workspace dashboard.
+// Same shape as RuntimeUsage but workspace-scoped (no runtime_id, no
+// provider field on the wire) and optionally narrowed to a single project
+// on the server side. Cost stays client-side via the model pricing table.
 export interface DashboardUsageDaily {
   date: string;
-  provider: string;
   model: string;
   input_tokens: number;
   output_tokens: number;
@@ -593,7 +612,6 @@ export interface DashboardUsageDaily {
 // sums cost.
 export interface DashboardUsageByAgent {
   agent_id: string;
-  provider: string;
   model: string;
   input_tokens: number;
   output_tokens: number;

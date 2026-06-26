@@ -92,12 +92,6 @@ interface PreviewState {
   attachmentId: string | null;
 }
 
-function resolvePreviewMediaUrl(attachment: Attachment): string {
-  const raw =
-    attachment.download_url || attachment.markdown_url || attachment.url;
-  return resolvePublicFileUrl(raw) ?? raw;
-}
-
 function normalize(source: PreviewSource): PreviewState {
   // Resolve any server-relative URL (e.g. `/api/attachments/{id}/download`
   // returned by the unified-endpoint metadata path when no CloudFront
@@ -108,10 +102,13 @@ function normalize(source: PreviewSource): PreviewState {
   // form so `<img src>` / `<iframe src>` / `<video src>` actually point at
   // the API server instead of the shell origin.
   if (source.kind === "full") {
+    const mediaUrl =
+      resolvePublicFileUrl(source.attachment.download_url) ??
+      source.attachment.download_url;
     return {
       filename: source.attachment.filename,
       contentType: source.attachment.content_type,
-      mediaUrl: resolvePreviewMediaUrl(source.attachment),
+      mediaUrl,
       attachmentId: source.attachment.id,
     };
   }

@@ -3,6 +3,15 @@ SELECT * FROM agent_runtime
 WHERE workspace_id = $1
 ORDER BY created_at ASC;
 
+-- name: ListVisibleAgentRuntimes :many
+-- Privacy-scoped list: a member sees their own runtimes plus every public
+-- runtime; another member's private runtime is never returned. There is NO
+-- owner/admin override here — visibility is per-user even for workspace
+-- admins (the unscoped ListAgentRuntimes stays for internal callers).
+SELECT * FROM agent_runtime
+WHERE workspace_id = $1 AND (owner_id = $2 OR visibility = 'public')
+ORDER BY created_at ASC;
+
 -- name: GetAgentRuntime :one
 SELECT * FROM agent_runtime
 WHERE id = $1;
@@ -45,48 +54,10 @@ INSERT INTO agent_runtime (
     owner_id,
     last_seen_at
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
--- Built-in runtimes carry no profile_id. The arbiter is the partial unique
--- index from migration 121 (WHERE profile_id IS NULL); the predicate must be
--- spelled out so Postgres selects that partial index, not the custom-runtime
--- one on (workspace_id, daemon_id, profile_id).
-ON CONFLICT (workspace_id, daemon_id, provider) WHERE profile_id IS NULL
+ON CONFLICT (workspace_id, daemon_id, provider)
 DO UPDATE SET
     name = EXCLUDED.name,
     runtime_mode = EXCLUDED.runtime_mode,
-    status = EXCLUDED.status,
-    device_info = EXCLUDED.device_info,
-    metadata = EXCLUDED.metadata,
-    owner_id = COALESCE(EXCLUDED.owner_id, agent_runtime.owner_id),
-    last_seen_at = now(),
-    updated_at = now()
-RETURNING *, (xmax = 0) AS inserted;
-
--- name: UpsertAgentRuntimeWithProfile :one
--- Custom-runtime registration: a daemon resolved a workspace runtime_profile's
--- command_name on PATH and is registering an instance of it. The arbiter is the
--- partial unique index from migration 120 (WHERE profile_id IS NOT NULL), so a
--- single daemon can host the built-in provider AND any number of custom
--- profiles of the same protocol family. provider stays the protocol family so
--- task routing (agent.New(provider)) is unchanged; profile_id is the stable
--- identity. (xmax = 0) AS inserted mirrors UpsertAgentRuntime.
-INSERT INTO agent_runtime (
-    workspace_id,
-    daemon_id,
-    name,
-    runtime_mode,
-    provider,
-    status,
-    device_info,
-    metadata,
-    owner_id,
-    profile_id,
-    last_seen_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
-ON CONFLICT (workspace_id, daemon_id, profile_id) WHERE profile_id IS NOT NULL
-DO UPDATE SET
-    name = EXCLUDED.name,
-    runtime_mode = EXCLUDED.runtime_mode,
-    provider = EXCLUDED.provider,
     status = EXCLUDED.status,
     device_info = EXCLUDED.device_info,
     metadata = EXCLUDED.metadata,

@@ -32,6 +32,13 @@ export interface IssueReaction {
 export type IssueMetadataValue = string | number | boolean;
 export type IssueMetadata = Record<string, IssueMetadataValue>;
 
+// Overview "pending human approval" KPI: issues awaiting human review and how
+// long the oldest has waited (now − the oldest entered-in_review time).
+export interface IssueReviewStats {
+  count: number;
+  longest_wait_seconds: number;
+}
+
 export interface Issue {
   id: string;
   workspace_id: string;

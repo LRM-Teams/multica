@@ -43,6 +43,7 @@ import {
 } from "../platform/system-notification";
 import type { Workspace } from "../types/workspace";
 import { chatKeys } from "../chat/queries";
+import { channelKeys } from "../channels/queries";
 import { useChatStore } from "../chat";
 import { resolvePostAuthDestination, useHasOnboarded } from "../paths";
 import type {
@@ -301,6 +302,21 @@ export async function handleInboxNew(
  * new WSClient instance is detected (workspace switch) to recover events
  * missed while disconnected.
  */
+function invalidateSessionScopedChatQueries(qc: QueryClient): void {
+  qc.invalidateQueries({
+    predicate: (query) => {
+      const key = query.queryKey;
+      return (
+        (key[0] === "chat" &&
+          (key[1] === "messages" ||
+            key[1] === "messages-page" ||
+            key[1] === "pending-task")) ||
+        key[0] === "task-messages"
+      );
+    },
+  });
+}
+
 function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
   const wsId = getCurrentWsId();
   if (wsId) {
@@ -333,6 +349,10 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
   qc.invalidateQueries({ queryKey: issueKeys.usageAll() });
   qc.invalidateQueries({ queryKey: issueKeys.attachmentsAll() });
   qc.invalidateQueries({ queryKey: issueKeys.tasksAll() });
+  // Active chat session queries are keyed by session/task id instead of wsId.
+  // Without this, a WS reconnect after server restart can leave the chat UI
+  // stuck on a stale queued pill until a full page refresh.
+  invalidateSessionScopedChatQueries(qc);
   qc.invalidateQueries({ queryKey: workspaceKeys.list() });
 }
 
@@ -845,6 +865,10 @@ export function useRealtimeSync(
       invalidateChatMessageQueries(qc, payload.chat_session_id);
       qc.invalidateQueries({ queryKey: chatKeys.pendingTask(payload.chat_session_id) });
       invalidatePendingAggregate();
+      // A new message can flip has_unread and reorder the session list — e.g.
+      // an agent-initiated DM arriving in a thread the user isn't viewing.
+      // Refresh the lists so the contact row / FAB badge update live.
+      invalidateSessionLists();
     });
 
     const unsubChatDone = ws.on("chat:done", (p) => {
@@ -1063,6 +1087,18 @@ export function useRealtimeSync(
       }
     });
 
+    const unsubChannelMessage = ws.on("channel:message", (p) => {
+      const payload = p as { channel_id: string };
+      qc.invalidateQueries({ queryKey: channelKeys.messages(payload.channel_id) });
+      const id = getCurrentWsId();
+      if (id) qc.invalidateQueries({ queryKey: channelKeys.list(id) });
+    });
+
+    const unsubChannelUpdated = ws.on("channel:updated", () => {
+      const id = getCurrentWsId();
+      if (id) qc.invalidateQueries({ queryKey: channelKeys.list(id) });
+    });
+
     return () => {
       unsubAny();
       unsubIssueUpdated();
@@ -1104,6 +1140,8 @@ export function useRealtimeSync(
       unsubChatSessionRead();
       unsubChatSessionDeleted();
       unsubChatSessionUpdated();
+      unsubChannelMessage();
+      unsubChannelUpdated();
       timers.forEach(clearTimeout);
       timers.clear();
     };

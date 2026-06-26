@@ -1,9 +1,11 @@
 {
   "nav": {
+    "overview": "Overview",
     "inbox": "Inbox",
     "my_issues": "My Issues",
     "issues": "Issues",
     "projects": "Projects",
+    "channels": "Channels",
     "autopilots": "Autopilot",
     "agents": "Agents",
     "squads": "Squads",

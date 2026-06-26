@@ -13,8 +13,7 @@
   },
   "scope": {
     "mine": "내 것",
-    "all": "전체",
-    "archived": "보관됨"
+    "all": "전체"
   },
   "sort": {
     "label_recent": "최근 활동",
@@ -67,11 +66,7 @@
     "workload": "작업량",
     "runtime": "런타임",
     "activity_7d": "활동(7일)",
-    "runs": "실행",
-    "last_active": "최근 활동",
-    "model": "모델",
-    "created": "생성일",
-    "owner": "소유자"
+    "runs": "실행"
   },
   "row": {
     "you": "나",
@@ -79,9 +74,7 @@
     "no_description": "설명 없음",
     "fallback_runtime_cloud": "클라우드",
     "fallback_runtime_local": "로컬",
-    "actions_aria": "행 작업",
-    "task_count_one": "태스크 {{count}}개",
-    "task_count_other": "태스크 {{count}}개"
+    "actions_aria": "행 작업"
   },
   "activity_tooltip": {
     "created_today": "오늘 생성됨",
@@ -217,11 +210,11 @@
     "custom_args": "사용자 지정 인자",
     "mcp_config": "MCP",
     "integrations": "연동",
-    "runtime_config": "라우팅",
     "discard_dialog_title": "저장하지 않은 변경사항을 버릴까요?",
     "discard_dialog_description": "이 탭에 저장하지 않은 변경사항이 있습니다. 지금 나가면 변경사항이 사라집니다.",
     "discard_keep": "계속 편집",
-    "discard_confirm": "변경사항 버리기"
+    "discard_confirm": "변경사항 버리기",
+    "memory": "Memory"
   },
   "create_dialog": {
     "title_create": "에이전트 만들기",
@@ -329,26 +322,6 @@
       "redacted_title": "설정됨 - 현재 보기에서는 숨김",
       "redacted_hint": "에이전트 소유자 또는 워크스페이스 관리자만 이 config를 읽을 수 있습니다."
     },
-    "runtime_config": {
-      "intro": "OpenClaw 런타임이 이 에이전트의 각 턴을 어떻게 실행할지 선택하세요. Local 모드는 에이전트를 daemon 프로세스 내부에서 실행합니다. Gateway 모드는 각 턴을 OpenClaw Gateway로 전달합니다 — daemon 호스트가 가벼운 조율기 역할을 하고 실제 작업은 더 강력한 머신에서 돌리고 싶을 때 유용합니다.",
-      "mode_label": "라우팅 모드",
-      "mode_local": "Local",
-      "mode_gateway": "Gateway",
-      "mode_local_hint": "기본값. daemon이 `openclaw agent --local …`을 실행하고 에이전트 루프가 이 호스트에서 동작합니다.",
-      "mode_gateway_hint": "daemon이 OpenClaw Gateway에 다이얼합니다. 엔드포인트 필드를 비워두면 daemon 호스트의 `~/.openclaw/openclaw.json`에서 상속받습니다.",
-      "gateway_legend": "Gateway 엔드포인트",
-      "host_label": "Host",
-      "host_placeholder": "gw.internal",
-      "port_label": "포트",
-      "port_invalid": "포트는 양의 정수여야 합니다.",
-      "token_label": "인증 토큰",
-      "token_placeholder": "Gateway가 발급한 bearer 토큰",
-      "token_masked_placeholder": "저장됨 — 회전하려면 새 값을 입력. 비워두면 유지됩니다",
-      "tls_label": "TLS 사용",
-      "tls_hint": "http:// 대신 https://로 다이얼",
-      "saved_toast": "라우팅 설정이 저장되었습니다",
-      "save_failed_toast": "라우팅 설정 저장 실패"
-    },
     "skills": {
       "intro": "이 에이전트에 할당된 워크스페이스 스킬입니다. 로컬 런타임 스킬은 항상 자동으로 사용할 수 있습니다.",
       "add_action": "스킬 추가",
@@ -366,7 +339,25 @@
       "add_dialog_confirm_one": "스킬 {{count}}개 추가",
       "add_dialog_confirm_other": "스킬 {{count}}개 추가",
       "add_dialog_cancel": "취소",
-      "add_failed_toast": "스킬을 추가하지 못했습니다"
+      "add_failed_toast": "스킬을 추가하지 못했습니다",
+      "generated_title": "생성된 스킬",
+      "generated_intro": "이 에이전트가 Pi evolution 흐름에서 학습한 스킬입니다. 수락하면 로컬에서 활성화되어 이후 Pi 작업에 사용됩니다.",
+      "generated_count": "생성 {{count}}개",
+      "generated_loading": "생성된 스킬을 불러오는 중…",
+      "generated_empty": "아직 생성된 스킬이 없습니다.",
+      "generated_decision_failed_toast": "생성 스킬 결정을 업데이트하지 못했습니다",
+      "generated_accept_action": "수락",
+      "generated_enabled_action": "활성화됨",
+      "generated_ignore_action": "무시",
+      "generated_status_enabled": "활성화됨",
+      "generated_status": {
+        "pending": "대기 중",
+        "delivered": "전달됨",
+        "accepted": "수락됨",
+        "ignored": "무시됨",
+        "rejected": "거부됨",
+        "failed": "실패"
+      }
     },
     "integrations": {
       "intro": "이 에이전트를 외부 채팅 플랫폼에 연결해 팀원이 평소 사용하는 도구에서 바로 함께 작업할 수 있도록 합니다.",
@@ -412,6 +403,26 @@
       "started_prefix": "{{when}} 시작됨",
       "dispatched_prefix": "{{when}} 디스패치됨",
       "queued_prefix": "{{when}} 대기 시작"
+    },
+    "memory": {
+      "intro": "이 에이전트의 런타임에서 동기화된 메모리입니다. Multica에 저장되므로 에이전트가 다른 런타임으로 이동해도 컨텍스트가 유지됩니다.",
+      "loading": "메모리를 불러오는 중…",
+      "empty_title": "동기화된 메모리가 없습니다",
+      "empty_hint": "이 에이전트 런타임의 메모리 파일은 다음 동기화 후 여기에 표시됩니다.",
+      "empty_content": "내용 없음",
+      "updated_at": "업데이트 {{value}}",
+      "evolution_title": "생성된 메모리",
+      "evolution_intro": "Pi evolution 흐름으로 전달된 메모리 계열 유닛입니다. 로컬 Pi inbox에 들어가 검토와 재사용에 쓰입니다.",
+      "evolution_loading": "생성된 메모리를 불러오는 중…",
+      "evolution_empty": "아직 생성된 메모리가 없습니다.",
+      "evolution_status": {
+        "pending": "대기 중",
+        "delivered": "전달됨",
+        "accepted": "수락됨",
+        "ignored": "무시됨",
+        "rejected": "거부됨",
+        "failed": "실패"
+      }
     }
   },
   "char_counter": {
@@ -473,31 +484,32 @@
     "runtime_recovery": "데몬 재시작됨",
     "manual": "사용자가 취소함"
   },
-  "last_active": {
-    "today": "오늘",
-    "days_ago_one": "{{count}}일 전",
-    "days_ago_other": "{{count}}일 전",
-    "none": "30일간 활동 없음"
-  },
-  "toolbar": {
-    "result_count_title": "일치하는 에이전트 / 범위 내 전체",
-    "filter_label": "필터",
-    "filter_active_count_one": "필터 {{count}}개",
-    "filter_active_count_other": "필터 {{count}}개",
-    "clear_filters": "필터 지우기",
-    "section_availability": "가용성",
-    "section_runtime": "런타임",
-    "display": "표시",
-    "sort_by": "정렬",
-    "direction_asc": "오름차순",
-    "direction_desc": "내림차순",
-    "section_columns": "열",
-    "section_owner": "소유자",
-    "section_model": "모델"
-  },
-  "actions": {
-    "selected_one": "{{count}}개 선택됨",
-    "selected_other": "{{count}}개 선택됨",
-    "clear_selection": "선택 해제"
+  "dashboard": {
+    "all_agents": "모든 에이전트",
+    "edit_config": "설정 편집",
+    "delete": "삭제",
+    "metric_tasks": "누적 작업",
+    "metric_success": "성공률",
+    "metric_cost": "비용",
+    "metric_version": "진화 버전",
+    "last_30d": "최근 30일",
+    "coming_soon": "곧 출시",
+    "role_capabilities": "역할 & 역량",
+    "edit": "편집",
+    "no_description": "아직 역할·역량 설명이 없습니다",
+    "no_skills": "아직 역량이 없습니다",
+    "prompt_strategy": "현재 프롬프트 전략",
+    "no_prompt": "프롬프트 미설정",
+    "exec_log": "실행 로그",
+    "view_all": "전체 보기",
+    "no_logs": "아직 실행 기록이 없습니다",
+    "evolution": "자가 진화",
+    "evolution_placeholder": "자가 진화 기능이 곧 출시됩니다. 각 프롬프트/설정 반복과 성공률 변화를 보여줍니다.",
+    "running_for": "진행 중 · {{min}}min 경과",
+    "duration_min": "{{min}}min",
+    "task_fallback": "작업 실행",
+    "empty_select": "왼쪽에서 에이전트를 선택하면 상세 정보가 표시됩니다",
+    "delete_success": "에이전트를 삭제했습니다",
+    "delete_failed": "에이전트 삭제에 실패했습니다"
   }
 }

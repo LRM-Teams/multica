@@ -1,0 +1,109 @@
+{
+  "page": {
+    "title": "群聊",
+    "subtitle": "即时通讯空间：人类、智能体和可选的国内飞书群。"
+  },
+  "sidebar": {
+    "heading": "消息",
+    "search": "搜索对话...",
+    "groups": "群组",
+    "name_placeholder": "群聊名称",
+    "lark_placeholder": "可选飞书群 chat_id (oc_...)",
+    "create_aria": "新建群聊",
+    "empty": "还没有群聊。",
+    "menu_aria": "群组操作",
+    "delete": "删除群组"
+  },
+  "delete_dialog": {
+    "title": "删除这个群组？",
+    "description": "「{{name}}」及其所有消息将被永久删除，且无法恢复。",
+    "cancel": "取消",
+    "confirm": "删除",
+    "toast_success": "群组已删除",
+    "toast_failed": "删除群组失败"
+  },
+  "empty_state": {
+    "title": "创建一个群聊",
+    "description": "群聊是 Multica 里的即时通讯空间。把人和智能体拉进来，发消息时 @ 智能体，它会像群成员一样回复。",
+    "cta": "新建群聊"
+  },
+  "header": {
+    "running": "运行中",
+    "feishu": "飞书",
+    "manage_members_aria": "管理成员",
+    "share_aria": "分享",
+    "stats_aria": "统计",
+    "files_aria": "文件",
+    "back": "返回",
+    "more_aria": "更多"
+  },
+  "members": {
+    "select_user": "选择人类成员",
+    "select_agent": "选择智能体",
+    "join": "加入",
+    "title": "群成员",
+    "empty": "暂无成员",
+    "remove_aria": "移除成员",
+    "no_candidates": "没有可邀请的成员",
+    "invite": "邀请",
+    "invite_count": "邀请 ({{count}})",
+    "tab_invite": "邀请",
+    "tab_members": "群成员",
+    "search": "搜索…",
+    "no_results": "没有匹配的结果"
+  },
+  "files": {
+    "title": "文件",
+    "empty": "暂无文件",
+    "no_project": "本群未绑定项目",
+    "offline": "你的运行时离线，无法读取项目文件",
+    "missing": "这台机器上还没有该项目的工作目录",
+    "error": "加载文件失败",
+    "truncated": "文件较多，仅显示部分",
+    "preview_binary": "二进制文件，无法预览",
+    "preview_truncated": "文件较大，仅预览前一部分",
+    "preview_error": "加载文件内容失败",
+    "preview_empty": "（空文件）",
+    "preview_too_large": "文件过大，无法预览"
+  },
+  "stats": {
+    "title": "活跃度",
+    "messages": "消息",
+    "files": "文件",
+    "members": "成员",
+    "by_author": "各成员消息数",
+    "empty": "暂无数据",
+    "error": "加载失败"
+  },
+  "share": {
+    "copied": "已复制频道链接",
+    "copy_failed": "复制失败"
+  },
+  "thread": {
+    "empty": "开始聊天吧。把智能体加入成员后，输入 @智能体名称 触发回复。"
+  },
+  "typing": {
+    "single": "{{name}} 正在输入",
+    "pair": "{{a}}、{{b}} 正在输入",
+    "overflow": "{{a}}、{{b}} 等 {{count}} 人正在输入"
+  },
+  "agent_status": {
+    "queued": "排队中",
+    "dispatched": "启动中",
+    "running": "思考中",
+    "waiting_local_directory": "等待本地目录释放"
+  },
+  "composer": {
+    "placeholder": "描述你需要什么帮助...  @ 智能体名称会触发它回复。",
+    "attach_aria": "附件",
+    "mention_aria": "提及智能体",
+    "send": "发送",
+    "project_label": "项目",
+    "project_none": "无项目",
+    "project_tooltip": "设置该频道对应的项目"
+  },
+  "message": {
+    "agent_badge": "Agent",
+    "feishu_badge": "飞书"
+  }
+}

@@ -52,7 +52,6 @@ import { FileCardExtension } from "./file-card";
 import { ImageView } from "./image-view";
 import { BlockMathExtension, InlineMathExtension } from "./math";
 import { HighlightExtension } from "./highlight";
-import { AutolinkEmailRepairExtension } from "./autolink-email-repair";
 
 const lowlight = createLowlight(common);
 
@@ -137,6 +136,9 @@ export interface EditorExtensionsOptions {
   /** Override @ behavior for chat context suggestions. */
   mentionMode?: "default" | "context";
   getMentionContextItems?: () => MentionItem[];
+  /** When it returns a set, the @ picker restricts member/agent candidates to
+   *  those actor ids (e.g. a channel's members). */
+  getMentionAllowedActorIds?: () => ReadonlySet<string> | null | undefined;
   /** When true, attach the `/` picker. Default false. */
   enableSlashCommands?: boolean;
   /**
@@ -180,7 +182,6 @@ export function createEditorExtensions(
     // linkOnPaste relies on Link's handlePaste plugin firing first;
     // markdownPaste's handlePaste is a catch-all that returns true.
     LinkExtension,
-    AutolinkEmailRepairExtension,
     ImageExtension,
     // renderWrapper wraps the table in `<div class="tableWrapper">` (the same
     // wrapper the resizable NodeView emits), which prose.css styles with
@@ -205,7 +206,7 @@ export function createEditorExtensions(
       ...(options.disableMentions
         ? { suggestion: { allow: () => false } }
         : options.queryClient
-          ? { suggestion: createMentionSuggestion(options.queryClient, { mode: options.mentionMode, getContextItems: options.getMentionContextItems }) }
+          ? { suggestion: createMentionSuggestion(options.queryClient, { mode: options.mentionMode, getContextItems: options.getMentionContextItems, getAllowedActorIds: options.getMentionAllowedActorIds }) }
           : {}),
     }),
     SlashCommandExtension.configure({

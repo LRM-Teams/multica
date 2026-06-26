@@ -4,8 +4,8 @@ import { useMemo, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
-  CalendarDays,
   ChartGantt,
+  Check,
   ChevronDown,
   CircleDot,
   Columns3,
@@ -23,6 +23,7 @@ import {
   Waves,
 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
+import { cn } from "@multica/ui/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -43,7 +44,6 @@ import {
   PopoverTrigger,
   PopoverContent,
 } from "@multica/ui/components/ui/popover";
-import { Calendar } from "@multica/ui/components/ui/calendar";
 import { Switch } from "@multica/ui/components/ui/switch";
 import {
   ALL_STATUSES,
@@ -64,15 +64,9 @@ import {
   SWIMLANE_GROUPINGS,
   CARD_PROPERTY_OPTIONS,
   type ActorFilterValue,
-  type IssueDateField,
-  type IssueDateFilter,
-  type SortField,
-  type IssueGrouping,
-  type SwimlaneGrouping,
-  type ViewMode,
 } from "@multica/core/issues/stores/view-store";
 import { useViewStore, useViewStoreApi } from "@multica/core/issues/stores/view-store-context";
-import { addDaysDateOnly, dateOnlyToLocalDate, formatDateOnly, toDateOnly, todayDateOnly } from "@multica/core/issues/date";
+import type { SortField, IssueGrouping, SwimlaneGrouping, ViewMode } from "@multica/core/issues/stores/view-store";
 import {
   useIssuesScopeStore,
   type IssuesScope,
@@ -81,13 +75,25 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/
 import type { Issue } from "@multica/core/types";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
-import { FILTER_ITEM_CLASS, HoverCheck } from "../../common/hover-check";
 import { WorkspaceAgentWorkingChip } from "./workspace-agent-working-chip";
 
-type LocalDateRange = {
-  from: Date | undefined;
-  to?: Date;
-};
+// ---------------------------------------------------------------------------
+// HoverCheck — shadcn official pattern (PR #6862)
+// ---------------------------------------------------------------------------
+
+const FILTER_ITEM_CLASS =
+  "group/fitem pr-1.5! [&>[data-slot=dropdown-menu-checkbox-item-indicator]]:hidden";
+
+function HoverCheck({ checked }: { checked: boolean }) {
+  return (
+    <div
+      className="border-input data-[selected=true]:border-primary data-[selected=true]:bg-primary data-[selected=true]:text-primary-foreground pointer-events-none size-4 shrink-0 rounded-[4px] border transition-all select-none *:[svg]:opacity-0 data-[selected=true]:*:[svg]:opacity-100 opacity-0 group-hover/fitem:opacity-100 group-focus/fitem:opacity-100 data-[selected=true]:opacity-100"
+      data-selected={checked}
+    >
+      <Check className="size-3.5 text-current" />
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -102,7 +108,6 @@ function getActiveFilterCount(state: {
   projectFilters: string[];
   includeNoProject: boolean;
   labelFilters: string[];
-  dateFilter?: IssueDateFilter | null;
 }) {
   let count = 0;
   if (state.statusFilters.length > 0) count++;
@@ -111,22 +116,8 @@ function getActiveFilterCount(state: {
   if (state.creatorFilters.length > 0) count++;
   if (state.projectFilters.length > 0 || state.includeNoProject) count++;
   if (state.labelFilters.length > 0) count++;
-  if (state.dateFilter) count++;
   return count;
 }
-
-function shortDateLabel(dateOnly: string) {
-  return formatDateOnly(dateOnly, { month: "short", day: "numeric" }) || dateOnly;
-}
-
-function normalizeDateRange(from: Date, to: Date) {
-  return from <= to ? [from, to] as const : [to, from] as const;
-}
-
-const DATE_FIELD_LABEL_KEY: Record<IssueDateField, "date_field_created" | "date_field_updated"> = {
-  created_at: "date_field_created",
-  updated_at: "date_field_updated",
-};
 
 function useIssueCounts(allIssues: Issue[]) {
   return useMemo(() => {
@@ -505,132 +496,18 @@ function LabelSubContent({
 }
 
 // ---------------------------------------------------------------------------
-// Date sub-menu content
-// ---------------------------------------------------------------------------
-
-function DateSubContent({
-  value,
-  onChange,
-}: {
-  value: IssueDateFilter | null;
-  onChange: (filter: IssueDateFilter | null) => void;
-}) {
-  const { t } = useT("issues");
-  const [field, setField] = useState<IssueDateField>(value?.field ?? "created_at");
-  const [range, setRange] = useState<LocalDateRange | undefined>(() => {
-    if (!value) return undefined;
-    const from = dateOnlyToLocalDate(value.from);
-    if (!from) return undefined;
-    return { from, to: dateOnlyToLocalDate(value.to) };
-  });
-
-  const setFieldValue = (next: IssueDateField) => {
-    setField(next);
-    if (value) onChange({ ...value, field: next });
-  };
-
-  const applyPreset = (days: 1 | 3 | 7) => {
-    onChange({
-      field,
-      from: addDaysDateOnly(1 - days),
-      to: todayDateOnly(),
-    });
-  };
-
-  const applyCustom = () => {
-    if (!range?.from) return;
-    const [from, to] = normalizeDateRange(range.from, range.to ?? range.from);
-    onChange({
-      field,
-      from: toDateOnly(from),
-      to: toDateOnly(to),
-    });
-  };
-
-  return (
-    <>
-      <DropdownMenuGroup>
-        <DropdownMenuLabel>{t(($) => $.filters.date_field)}</DropdownMenuLabel>
-        <DropdownMenuRadioGroup value={field} onValueChange={(next) => setFieldValue(next as IssueDateField)}>
-          {(["created_at", "updated_at"] as const).map((option) => (
-            <DropdownMenuRadioItem key={option} value={option}>
-              {t(($) => $.filters[DATE_FIELD_LABEL_KEY[option]])}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuGroup>
-
-      <DropdownMenuSeparator />
-      <DropdownMenuItem onClick={() => applyPreset(1)}>
-        {t(($) => $.filters.date_today)}
-      </DropdownMenuItem>
-      <DropdownMenuItem onClick={() => applyPreset(3)}>
-        {t(($) => $.filters.date_last_3_days)}
-      </DropdownMenuItem>
-      <DropdownMenuItem onClick={() => applyPreset(7)}>
-        {t(($) => $.filters.date_last_7_days)}
-      </DropdownMenuItem>
-
-      <div className="px-1.5 py-1">
-        <Popover>
-          <PopoverTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 w-full justify-start px-0 text-sm font-normal"
-              >
-                {t(($) => $.filters.date_custom_range)}
-              </Button>
-            }
-          />
-          <PopoverContent align="start" side="right" className="w-auto gap-0 p-0">
-            <Calendar
-              mode="range"
-              selected={range}
-              onSelect={(next) => setRange(next)}
-              captionLayout="dropdown"
-            />
-            <div className="flex justify-end border-t p-2">
-              <Button size="sm" onClick={applyCustom} disabled={!range?.from}>
-                {t(($) => $.filters.date_apply)}
-              </Button>
-            </div>
-          </PopoverContent>
-        </Popover>
-      </div>
-
-      {value && (
-        <>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onClick={() => {
-              setRange(undefined);
-              onChange(null);
-            }}
-          >
-            {t(($) => $.filters.date_clear)}
-          </DropdownMenuItem>
-        </>
-      )}
-    </>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // IssuesHeader
 // ---------------------------------------------------------------------------
 
 export function IssuesHeader({
   scopedIssues,
   allowGantt = false,
-  dateFilter = null,
-  onDateFilterChange,
+  hideViewToggle = false,
 }: {
   scopedIssues: Issue[];
   allowGantt?: boolean;
-  dateFilter?: IssueDateFilter | null;
-  onDateFilterChange?: (filter: IssueDateFilter | null) => void;
+  /** Board page hoists the view toggle into the title row. */
+  hideViewToggle?: boolean;
 }) {
   const { t } = useT("issues");
   const scope = useIssuesScopeStore((s) => s.scope);
@@ -667,8 +544,11 @@ export function IssuesHeader({
   return (
     <div className="h-12 shrink-0 overflow-x-auto px-4 [-webkit-overflow-scrolling:touch]">
       <div className="flex h-full w-max min-w-full items-center justify-between gap-2">
-        {/* Left: scope buttons */}
-        <div className="hidden shrink-0 items-center gap-1 md:flex">
+        {/* Left: filter label + scope pills */}
+        <div className="hidden shrink-0 items-center gap-1.5 md:flex">
+          <span className="mr-0.5 shrink-0 text-sm text-muted-foreground">
+            {t(($) => $.scope.filter_prefix)}
+          </span>
           {SCOPE_VALUES.map((s) => (
             <Tooltip key={s}>
               <TooltipTrigger
@@ -676,11 +556,12 @@ export function IssuesHeader({
                   <Button
                     variant="outline"
                     size="sm"
-                    className={
+                    className={cn(
+                      "h-7 rounded-full px-3 text-[13px] font-normal",
                       scope === s
-                        ? "bg-accent text-accent-foreground hover:bg-accent/80"
-                        : "text-muted-foreground"
-                    }
+                        ? "border-foreground/20 bg-muted text-foreground hover:bg-muted"
+                        : "border-transparent text-muted-foreground hover:bg-muted/60",
+                    )}
                     onClick={() => setScope(s)}
                   >
                     {t(($) => $.scope[SCOPE_LABEL_KEY[s]])}
@@ -727,12 +608,7 @@ export function IssuesHeader({
             onToggle={toggleAgentRunningFilter}
             scopedIssueIds={scopedIssueIds}
           />
-          <IssueDisplayControls
-            scopedIssues={scopedIssues}
-            allowGantt={allowGantt}
-            dateFilter={dateFilter}
-            onDateFilterChange={onDateFilterChange}
-          />
+          <IssueDisplayControls scopedIssues={scopedIssues} allowGantt={allowGantt} hideViewToggle={hideViewToggle} />
         </div>
       </div>
     </div>
@@ -743,13 +619,9 @@ export function IssueDisplayControls({
   scopedIssues,
   hideViewToggle = false,
   allowGantt = false,
-  dateFilter = null,
-  onDateFilterChange,
 }: {
   scopedIssues: Issue[];
   hideViewToggle?: boolean;
-  dateFilter?: IssueDateFilter | null;
-  onDateFilterChange?: (filter: IssueDateFilter | null) => void;
   // Only Project Detail renders <GanttView>; other surfaces (global /issues,
   // /my-issues, actor panel) ignore viewMode === "gantt" and would silently
   // fall back to List if the option were exposed there. Keep Gantt opt-in.
@@ -773,7 +645,6 @@ export function IssueDisplayControls({
   const act = useViewStoreApi().getState();
 
   const counts = useIssueCounts(scopedIssues);
-  const showDateFilter = !!onDateFilterChange;
 
   const activeFilterCount = getActiveFilterCount({
     statusFilters,
@@ -784,7 +655,6 @@ export function IssueDisplayControls({
     projectFilters,
     includeNoProject,
     labelFilters,
-    dateFilter: showDateFilter ? dateFilter : null,
   });
   const hasActiveFilters = activeFilterCount > 0;
 
@@ -815,13 +685,6 @@ export function IssueDisplayControls({
     labels: "card_labels",
     childProgress: "card_child_progress",
   };
-  const dateFilterLabel = showDateFilter && dateFilter
-    ? `${t(($) => $.filters[DATE_FIELD_LABEL_KEY[dateFilter.field]])}: ${
-        dateFilter.from === dateFilter.to
-          ? shortDateLabel(dateFilter.from)
-          : `${shortDateLabel(dateFilter.from)} - ${shortDateLabel(dateFilter.to)}`
-      }`
-    : null;
   const sortLabel = t(($) => $.display[SORT_LABEL_KEY[sortBy]]);
   const groupingLabel = t(($) => $.display[GROUPING_LABEL_KEY[grouping]]);
   const swimlaneGroupingLabel = t(($) => $.display[SWIMLANE_GROUPING_LABEL_KEY[swimlaneGrouping]]);
@@ -859,12 +722,7 @@ export function IssueDisplayControls({
                           role="button"
                           tabIndex={-1}
                           className="-mr-1 ml-0.5 hidden rounded-sm p-0.5 hover:bg-white/20 md:inline-flex"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            act.clearFilters();
-                            onDateFilterChange?.(null);
-                          }}
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); act.clearFilters(); }}
                           onPointerDown={(e) => e.stopPropagation()}
                         >
                           <X className="size-3" />
@@ -949,26 +807,6 @@ export function IssueDisplayControls({
                 })}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-
-            {showDateFilter && onDateFilterChange && (
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>
-                  <CalendarDays className="size-3.5" />
-                  <span className="flex-1">{t(($) => $.filters.section_date)}</span>
-                  {dateFilterLabel && (
-                    <span className="max-w-36 truncate text-xs text-primary font-medium">
-                      {dateFilterLabel}
-                    </span>
-                  )}
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent className="w-56">
-                  <DateSubContent
-                    value={dateFilter}
-                    onChange={onDateFilterChange}
-                  />
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-            )}
 
             {/* Assignee */}
             <DropdownMenuSub>
@@ -1062,12 +900,7 @@ export function IssueDisplayControls({
             {hasActiveFilters && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => {
-                    act.clearFilters();
-                    onDateFilterChange?.(null);
-                  }}
-                >
+                <DropdownMenuItem onClick={act.clearFilters}>
                   {t(($) => $.filters.reset)}
                 </DropdownMenuItem>
               </>
@@ -1237,77 +1070,88 @@ export function IssueDisplayControls({
           </PopoverContent>
         </Popover>
 
-        {/* View toggle. If a store has `viewMode === "gantt"` persisted but
-            this surface doesn't render Gantt, fall back to "list" so the
-            trigger icon matches what's actually on screen. */}
-        {!hideViewToggle && (
-          <DropdownMenu>
-            <Tooltip>
-              <DropdownMenuTrigger
-                render={
-                  <TooltipTrigger
-                    render={
-                      <Button variant="outline" size="sm" className={controlButtonClass}>
-                        {viewMode === "board" ? (
-                          <Columns3 className="size-3.5" />
-                        ) : viewMode === "swimlane" ? (
-                          <Waves className="size-3.5" />
-                        ) : viewMode === "gantt" && allowGantt ? (
-                          <ChartGantt className="size-3.5" />
-                        ) : (
-                          <List className="size-3.5" />
-                        )}
-                        <span className="hidden md:inline">
-                          {viewMode === "board"
-                            ? t(($) => $.view.board)
-                            : viewMode === "swimlane"
-                            ? t(($) => $.view.swimlane)
-                            : viewMode === "gantt" && allowGantt
-                            ? t(($) => $.view.gantt)
-                            : t(($) => $.view.list)}
-                        </span>
-                      </Button>
-                    }
-                  />
-                }
-              />
-              <TooltipContent side="bottom">
-                {viewMode === "board"
-                  ? t(($) => $.view.tooltip_board)
-                  : viewMode === "swimlane"
-                  ? t(($) => $.view.tooltip_swimlane)
-                  : viewMode === "gantt" && allowGantt
-                  ? t(($) => $.view.tooltip_gantt)
-                  : t(($) => $.view.tooltip_list)}
-              </TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent align="end" className="w-auto">
-              <DropdownMenuGroup>
-                <DropdownMenuLabel>{t(($) => $.view.section)}</DropdownMenuLabel>
-              </DropdownMenuGroup>
-              <DropdownMenuRadioGroup value={viewMode} onValueChange={(v) => act.setViewMode(v as ViewMode)}>
-                <DropdownMenuRadioItem value="board">
-                  <Columns3 />
-                  {t(($) => $.view.board)}
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="list">
-                  <List />
-                  {t(($) => $.view.list)}
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="swimlane">
-                  <Waves />
-                  {t(($) => $.view.swimlane)}
-                </DropdownMenuRadioItem>
-                {allowGantt && (
-                  <DropdownMenuRadioItem value="gantt">
-                    <ChartGantt />
-                    {t(($) => $.view.gantt)}
-                  </DropdownMenuRadioItem>
-                )}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+        {/* View toggle. Extracted to <ViewToggle> so the board page can hoist
+            it into the title row (hideViewToggle) while other surfaces keep it
+            inline with the display controls. */}
+        {!hideViewToggle && <ViewToggle allowGantt={allowGantt} />}
     </div>
+  );
+}
+
+// Standalone view-mode switch. If a store has `viewMode === "gantt"` persisted
+// but this surface doesn't render Gantt, the trigger falls back to "list" so
+// the icon matches what's actually on screen. Must render inside a
+// ViewStoreProvider.
+export function ViewToggle({ allowGantt = false }: { allowGantt?: boolean }) {
+  const { t } = useT("issues");
+  const viewMode = useViewStore((s) => s.viewMode);
+  const act = useViewStoreApi().getState();
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <DropdownMenuTrigger
+          render={
+            <TooltipTrigger
+              render={
+                <Button variant="outline" size="sm" className="h-8 w-8 gap-1 px-0 text-muted-foreground md:h-7 md:w-auto md:px-2.5">
+                  {viewMode === "board" ? (
+                    <Columns3 className="size-3.5" />
+                  ) : viewMode === "swimlane" ? (
+                    <Waves className="size-3.5" />
+                  ) : viewMode === "gantt" && allowGantt ? (
+                    <ChartGantt className="size-3.5" />
+                  ) : (
+                    <List className="size-3.5" />
+                  )}
+                  <span className="hidden md:inline">
+                    {viewMode === "board"
+                      ? t(($) => $.view.board)
+                      : viewMode === "swimlane"
+                      ? t(($) => $.view.swimlane)
+                      : viewMode === "gantt" && allowGantt
+                      ? t(($) => $.view.gantt)
+                      : t(($) => $.view.list)}
+                  </span>
+                </Button>
+              }
+            />
+          }
+        />
+        <TooltipContent side="bottom">
+          {viewMode === "board"
+            ? t(($) => $.view.tooltip_board)
+            : viewMode === "swimlane"
+            ? t(($) => $.view.tooltip_swimlane)
+            : viewMode === "gantt" && allowGantt
+            ? t(($) => $.view.tooltip_gantt)
+            : t(($) => $.view.tooltip_list)}
+        </TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end" className="w-auto">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>{t(($) => $.view.section)}</DropdownMenuLabel>
+        </DropdownMenuGroup>
+        <DropdownMenuRadioGroup value={viewMode} onValueChange={(v) => act.setViewMode(v as ViewMode)}>
+          <DropdownMenuRadioItem value="board">
+            <Columns3 />
+            {t(($) => $.view.board)}
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="list">
+            <List />
+            {t(($) => $.view.list)}
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="swimlane">
+            <Waves />
+            {t(($) => $.view.swimlane)}
+          </DropdownMenuRadioItem>
+          {allowGantt && (
+            <DropdownMenuRadioItem value="gantt">
+              <ChartGantt />
+              {t(($) => $.view.gantt)}
+            </DropdownMenuRadioItem>
+          )}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

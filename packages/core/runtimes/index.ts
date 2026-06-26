@@ -1,5 +1,4 @@
 export * from "./queries";
-export * from "./profiles";
 export * from "./mutations";
 export * from "./hooks";
 export * from "./models";

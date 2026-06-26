@@ -51,13 +51,11 @@ func parseProjectIDParam(w http.ResponseWriter, r *http.Request) (pgtype.UUID, b
 	return u, true
 }
 
-// DashboardUsageDailyResponse is one (date, provider, model) bucket. Cost-side
-// math happens on the client from a per-model pricing table; provider + model
-// stay on the wire so the client can disambiguate bare model ids that collide
-// across providers (e.g. Cursor's `auto`).
+// DashboardUsageDailyResponse is one (date, model) bucket. Cost-side math
+// happens on the client from a per-model pricing table; model stays on the
+// wire for that reason.
 type DashboardUsageDailyResponse struct {
 	Date             string `json:"date"`
-	Provider         string `json:"provider"`
 	Model            string `json:"model"`
 	InputTokens      int64  `json:"input_tokens"`
 	OutputTokens     int64  `json:"output_tokens"`
@@ -109,7 +107,6 @@ func (h *Handler) listDashboardUsageDaily(
 	for i, row := range rows {
 		resp[i] = DashboardUsageDailyResponse{
 			Date:             row.Date.Time.Format("2006-01-02"),
-			Provider:         row.Provider,
 			Model:            row.Model,
 			InputTokens:      row.InputTokens,
 			OutputTokens:     row.OutputTokens,
@@ -121,12 +118,9 @@ func (h *Handler) listDashboardUsageDaily(
 	return resp, nil
 }
 
-// DashboardUsageByAgentResponse is one (agent, provider, model) row. provider
-// rides along for the same cross-provider pricing disambiguation as the daily
-// response; the client folds by agent_id and sums cost.
+// DashboardUsageByAgentResponse is one (agent, model) row.
 type DashboardUsageByAgentResponse struct {
 	AgentID          string `json:"agent_id"`
-	Provider         string `json:"provider"`
 	Model            string `json:"model"`
 	InputTokens      int64  `json:"input_tokens"`
 	OutputTokens     int64  `json:"output_tokens"`
@@ -178,7 +172,6 @@ func (h *Handler) listDashboardUsageByAgent(
 	for i, row := range rows {
 		resp[i] = DashboardUsageByAgentResponse{
 			AgentID:          uuidToString(row.AgentID),
-			Provider:         row.Provider,
 			Model:            row.Model,
 			InputTokens:      row.InputTokens,
 			OutputTokens:     row.OutputTokens,

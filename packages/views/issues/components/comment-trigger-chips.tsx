@@ -46,19 +46,16 @@ function sourceLabel(source: string, t: IssuesT): string {
   }
 }
 
-// Assignee / @mention reasons are intentionally omitted: the header
-// (name · source) already says why they fire, so a reason line there would
-// just restate it. Only the squad-leader link (non-obvious) and the unknown
-// fallback carry information the header doesn't.
-function sourceReason(agent: CommentTriggerPreviewAgent, t: IssuesT): string | null {
+function sourceReason(agent: CommentTriggerPreviewAgent, t: IssuesT): string {
   switch (agent.source) {
     case "issue_assignee":
+      return t(($) => $.comment.trigger_reason_issue_assignee, { name: agent.name });
     case "mention_agent":
-      return null;
+      return t(($) => $.comment.trigger_reason_mention_agent, { name: agent.name });
     case "mention_squad_leader":
-      return t(($) => $.comment.trigger_reason_mention_squad_leader);
+      return t(($) => $.comment.trigger_reason_mention_squad_leader, { name: agent.name });
     default:
-      return agent.reason || t(($) => $.comment.trigger_reason_unknown);
+      return agent.reason || t(($) => $.comment.trigger_reason_unknown, { name: agent.name });
   }
 }
 
@@ -95,12 +92,10 @@ function TriggerAgentTooltipBody({
         <div>{t(($) => $.comment.trigger_click_to_restore)}</div>
       ) : (
         <>
-          {(() => {
-            // Reason (when present) and presence share one line; either may be
-            // absent, so join only the parts that exist to avoid a stray space.
-            const line = [sourceReason(agent, t), presenceLine].filter(Boolean).join(" ");
-            return line ? <div>{line}</div> : null;
-          })()}
+          <div>
+            {sourceReason(agent, t)}
+            {presenceLine ? ` ${presenceLine}` : ""}
+          </div>
           <div className="text-muted-foreground">{t(($) => $.comment.trigger_click_to_skip)}</div>
         </>
       )}

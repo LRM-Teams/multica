@@ -10,7 +10,9 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -69,15 +71,6 @@ type AgentResponse struct {
 	ArchivedBy    *string             `json:"archived_by"`
 }
 
-// runtimeConfigGatewayTokenMask is the placeholder the API substitutes for
-// any non-empty `runtime_config.gateway.token` (openclaw gateway mode, issue
-// #3260). The token is a bearer credential; surfacing the real value through
-// GET responses would let anyone with read access to the agent dump the
-// gateway secret. The mask is a sentinel — when the UI later PATCHes the
-// agent and submits the same mask verbatim under that field, the update
-// handler restores the persisted token instead of overwriting it.
-const runtimeConfigGatewayTokenMask = "***"
-
 func agentToResponse(a db.Agent) AgentResponse {
 	var rc any
 	if a.RuntimeConfig != nil {
@@ -86,7 +79,6 @@ func agentToResponse(a db.Agent) AgentResponse {
 	if rc == nil {
 		rc = map[string]any{}
 	}
-	maskGatewayToken(rc)
 
 	// Compute env metadata WITHOUT exposing the values. We unmarshal here
 	// only to count keys; the map never reaches the response. A coarse
@@ -145,62 +137,6 @@ func agentToResponse(a db.Agent) AgentResponse {
 	}
 }
 
-// maskGatewayToken replaces runtime_config.gateway.token with the public
-// mask sentinel when a non-empty value is present. No-op for any other
-// shape so non-openclaw / non-gateway agents pass through untouched.
-func maskGatewayToken(rc any) {
-	root, ok := rc.(map[string]any)
-	if !ok {
-		return
-	}
-	gw, ok := root["gateway"].(map[string]any)
-	if !ok {
-		return
-	}
-	tok, _ := gw["token"].(string)
-	if tok == "" {
-		return
-	}
-	gw["token"] = runtimeConfigGatewayTokenMask
-}
-
-// preserveMaskedGatewayToken substitutes the previously persisted gateway
-// token back into an incoming runtime_config when the request submitted the
-// public mask sentinel under `gateway.token`. Without this the next PATCH
-// after a GET would round-trip the masked sentinel into the database and
-// silently destroy the real secret. The previous value is taken from the
-// agent row the handler has just loaded for ownership / scoping checks.
-func preserveMaskedGatewayToken(incoming any, persistedRuntimeConfig []byte) {
-	root, ok := incoming.(map[string]any)
-	if !ok {
-		return
-	}
-	gw, ok := root["gateway"].(map[string]any)
-	if !ok {
-		return
-	}
-	tok, _ := gw["token"].(string)
-	if tok != runtimeConfigGatewayTokenMask {
-		return
-	}
-	// The incoming token is the mask — fish the real one out of the row.
-	var prev struct {
-		Gateway struct {
-			Token string `json:"token"`
-		} `json:"gateway"`
-	}
-	if len(persistedRuntimeConfig) == 0 {
-		// No prior token to keep; the field becomes effectively empty.
-		delete(gw, "token")
-		return
-	}
-	if err := json.Unmarshal(persistedRuntimeConfig, &prev); err != nil || prev.Gateway.Token == "" {
-		delete(gw, "token")
-		return
-	}
-	gw["token"] = prev.Gateway.Token
-}
-
 // RepoData holds repository information included in claim responses so the
 // daemon can set up worktrees for each workspace repo.
 type RepoData struct {
@@ -251,6 +187,13 @@ type AgentTaskResponse struct {
 	ProjectID        string                `json:"project_id,omitempty"`        // issue's project, when present
 	ProjectTitle     string                `json:"project_title,omitempty"`     // for surfacing in agent context
 	ProjectResources []ProjectResourceData `json:"project_resources,omitempty"` // resources attached to the project
+	// ProvisionManagedWorkdir signals the daemon to lazily create a managed
+	// shared working directory for this task's project (one that has no
+	// resource yet) at <WorkspacesRoot>/<ManagedWorkdirRelPath>, run the task
+	// there, and self-register it so later tasks reuse it. Older daemons ignore
+	// these fields (omitempty) and fall back to an ephemeral per-task workdir.
+	ProvisionManagedWorkdir bool   `json:"provision_managed_workdir,omitempty"`
+	ManagedWorkdirRelPath   string `json:"managed_workdir_rel_path,omitempty"`
 	CreatedAt        string                `json:"created_at"`
 	PriorSessionID   string                `json:"prior_session_id,omitempty"` // session ID from a previous task on same issue
 	PriorWorkDir     string                `json:"prior_work_dir,omitempty"`   // work_dir from a previous task on same issue
@@ -320,9 +263,9 @@ type AgentTaskResponse struct {
 	// this (agent_id, task_id) pair at claim time and treats any request
 	// authenticated with it as actor=agent, regardless of headers — so the
 	// agent process cannot use it to read another agent's secrets via the
-	// env-management endpoint. Claim fails closed when the runtime has no
-	// owning user; the daemon must not fall back to its own credential. See
-	// MUL-3292.
+	// env-management endpoint. Empty when the runtime has no owning user
+	// (cloud / system runtimes that pre-date per-task tokens); in that case
+	// the daemon falls back to its own credential. See MUL-2600.
 	AuthToken string `json:"auth_token,omitempty"`
 }
 
@@ -350,12 +293,6 @@ type TaskAgentData struct {
 	McpConfig     json.RawMessage          `json:"mcp_config,omitempty"`
 	Model         string                   `json:"model,omitempty"`
 	ThinkingLevel string                   `json:"thinking_level,omitempty"`
-	// RuntimeConfig is the agent's saved runtime_config JSON as-is. The
-	// daemon decodes it per-provider — e.g. the openclaw backend reads
-	// `mode` + `gateway.*` to choose between embedded and gateway routing
-	// (issue #3260). Other providers ignore the payload entirely. Sent
-	// raw so the daemon can evolve its schema without a server roundtrip.
-	RuntimeConfig json.RawMessage `json:"runtime_config,omitempty"`
 }
 
 // taskToResponse maps a queue row to its wire shape. workspaceID is threaded
@@ -778,10 +715,6 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		isFirstAgent = len(existing) == 0
 	}
 
-	// A create has no prior token to restore, so if the caller submitted the
-	// public mask sentinel as gateway.token (e.g. replayed a masked GET body)
-	// drop it rather than persisting a literal "***" as a real bearer token.
-	preserveMaskedGatewayToken(req.RuntimeConfig, nil)
 	rc, _ := json.Marshal(req.RuntimeConfig)
 	if req.RuntimeConfig == nil {
 		rc = []byte("{}")
@@ -936,13 +869,6 @@ func canViewAgentSecrets(agent db.Agent, userID string, memberRole string) bool 
 func broadcastAgentResponse(resp AgentResponse) AgentResponse {
 	out := resp
 	redactMcpConfig(&out)
-	// Belt-and-suspenders: agentToResponse already masks gateway.token on
-	// every read, so by the time a response reaches this broadcast helper
-	// the field is already "***". Re-mask anyway so a future refactor that
-	// bypasses agentToResponse (e.g. constructing AgentResponse from raw
-	// db.Agent in a new handler) cannot silently leak the token to every
-	// WebSocket subscriber on the workspace, agent processes included.
-	maskGatewayToken(out.RuntimeConfig)
 	return out
 }
 
@@ -1036,11 +962,6 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		params.AvatarUrl = pgtype.Text{String: *req.AvatarURL, Valid: true}
 	}
 	if req.RuntimeConfig != nil {
-		// Restore the persisted gateway token when the request submitted the
-		// public mask sentinel. Without this, a UI that GETs the agent and
-		// PATCHes the same payload back round-trips "***" into the database
-		// and silently destroys the real secret (issue #3260).
-		preserveMaskedGatewayToken(req.RuntimeConfig, existing.RuntimeConfig)
 		rc, _ := json.Marshal(req.RuntimeConfig)
 		params.RuntimeConfig = rc
 	}
@@ -1059,7 +980,6 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	// request doesn't move the agent, we still need to load the *current*
 	// runtime to validate a thinking_level change. Resolve once and reuse.
 	targetRuntimeID := existing.RuntimeID
-	targetProvider := ""
 	if req.RuntimeID != nil {
 		runtimeUUID, ok := parseUUIDOrBadRequest(w, *req.RuntimeID, "runtime_id")
 		if !ok {
@@ -1087,7 +1007,6 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		params.RuntimeID = runtime.ID
 		params.RuntimeMode = pgtype.Text{String: runtime.RuntimeMode, Valid: true}
 		targetRuntimeID = runtime.ID
-		targetProvider = runtime.Provider
 	}
 	if req.Visibility != nil {
 		params.Visibility = pgtype.Text{String: *req.Visibility, Valid: true}
@@ -1100,13 +1019,6 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Model != nil {
 		params.Model = pgtype.Text{String: *req.Model, Valid: true}
-	} else if req.RuntimeID != nil && existing.Model.Valid && agent.ModelKnownIncompatibleWithProvider(targetProvider, existing.Model.String) {
-		// Model is runtime-native. When moving an agent across known provider
-		// families and the caller did not choose a replacement model, clear the
-		// old value so the new runtime falls back to its own default instead of
-		// receiving an obvious foreign model ID (e.g. Claude Code -> Codex).
-		// Unknown/custom model strings are preserved by the helper.
-		params.Model = pgtype.Text{String: "", Valid: true}
 	}
 
 	// thinking_level handling (MUL-2339). Tri-state semantics:
@@ -1130,14 +1042,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			// Need the target runtime's provider to validate. Re-fetch only when
 			// we haven't already loaded it above (i.e. the request didn't change
 			// runtime_id), to keep the no-change path one DB roundtrip.
-			provider := targetProvider
-			if provider == "" {
-				var ok bool
-				provider, ok = h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID)
-				if !ok {
-					writeError(w, http.StatusInternalServerError, "failed to resolve runtime for thinking_level validation")
-					return
-				}
+			provider, ok := h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID)
+			if !ok {
+				writeError(w, http.StatusInternalServerError, "failed to resolve runtime for thinking_level validation")
+				return
 			}
 			if !agent.IsKnownThinkingValue(provider, value) {
 				writeError(w, http.StatusBadRequest, fmt.Sprintf("thinking_level %q is not a recognised value for runtime %q", value, provider))
@@ -1153,14 +1061,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		// literal-invalid, never silently coerce. The caller can either
 		// pass `thinking_level: ""` to clear or pick a value valid for the
 		// new runtime.
-		provider := targetProvider
-		if provider == "" {
-			var ok bool
-			provider, ok = h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID)
-			if !ok {
-				writeError(w, http.StatusInternalServerError, "failed to resolve runtime for thinking_level validation")
-				return
-			}
+		provider, ok := h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID)
+		if !ok {
+			writeError(w, http.StatusInternalServerError, "failed to resolve runtime for thinking_level validation")
+			return
 		}
 		if !agent.IsKnownThinkingValue(provider, existing.ThinkingLevel.String) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf(
@@ -1542,5 +1446,185 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 		resp = append(resp, taskToResponse(t, workspaceID))
 	}
 
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// AgentTaskFeedItem is one terminal task in the workspace activity feed,
+// trimmed to the fields the overview timeline renders. The agent name is
+// resolved client-side from the cached agent list.
+type AgentTaskFeedItem struct {
+	ID              string  `json:"id"`
+	AgentID         string  `json:"agent_id"`
+	IssueID         string  `json:"issue_id"`
+	IssueIdentifier *string `json:"issue_identifier,omitempty"`
+	IssueTitle      *string `json:"issue_title,omitempty"`
+	ChatTitle       *string `json:"chat_title,omitempty"`
+	Status          string  `json:"status"`
+	CompletedAt     *string `json:"completed_at"`
+	TriggerSummary  *string `json:"trigger_summary,omitempty"`
+}
+
+// AgentTaskFeedCursor is the opaque composite cursor for the feed: the
+// (completed_at, id) of the last returned row. Passed back as
+// ?before_completed_at=&before_id= to fetch the next (older) page.
+type AgentTaskFeedCursor struct {
+	CompletedAt string `json:"completed_at"`
+	ID          string `json:"id"`
+}
+
+type AgentTaskFeedResponse struct {
+	Tasks      []AgentTaskFeedItem  `json:"tasks"`
+	HasMore    bool                 `json:"has_more"`
+	NextCursor *AgentTaskFeedCursor `json:"next_cursor,omitempty"`
+}
+
+// ListAgentTaskFeed returns a workspace-wide, cursor-paginated feed of terminal
+// agent tasks (completed / failed / cancelled), newest completion first. One
+// row per task — an agent that completed hundreds of tasks contributes hundreds
+// of rows; the client renders them with a virtualized infinite-scroll list.
+//
+// Hand-written raw query rather than sqlc: the feed is read-only, the projection
+// is a small fixed set of columns, and avoiding a new generated query keeps the
+// change self-contained.
+func (h *Handler) ListAgentTaskFeed(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
+		return
+	}
+
+	limit := 30
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = parsed
+	}
+
+	var beforeAt pgtype.Timestamptz
+	var beforeID pgtype.UUID
+	rawAt := r.URL.Query().Get("before_completed_at")
+	rawID := r.URL.Query().Get("before_id")
+	if rawAt != "" || rawID != "" {
+		if rawAt == "" || rawID == "" {
+			writeError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+		ts, err := time.Parse(time.RFC3339Nano, rawAt)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+		cid, ok := parseUUIDOrBadRequest(w, rawID, "before_id")
+		if !ok {
+			return
+		}
+		beforeAt = pgtype.Timestamptz{Time: ts, Valid: true}
+		beforeID = cid
+	}
+
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT atq.id, atq.agent_id, atq.issue_id, atq.status, atq.completed_at, atq.trigger_summary,
+		       i.title, (w.issue_prefix || '-' || i.number::text) AS issue_identifier,
+		       NULLIF(cs.title, '') AS chat_title
+		FROM agent_task_queue atq
+		JOIN agent a ON a.id = atq.agent_id
+		JOIN workspace w ON w.id = a.workspace_id
+		LEFT JOIN issue i ON i.id = atq.issue_id
+		LEFT JOIN chat_session cs ON cs.id = atq.chat_session_id
+		WHERE a.workspace_id = $1
+		  AND atq.status IN ('completed', 'failed', 'cancelled')
+		  AND atq.completed_at IS NOT NULL
+		  AND ($3::timestamptz IS NULL OR (atq.completed_at, atq.id) < ($3::timestamptz, $4::uuid))
+		ORDER BY atq.completed_at DESC, atq.id DESC
+		LIMIT $2`,
+		parseUUID(workspaceID), int32(limit+1), beforeAt, beforeID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list agent tasks")
+		return
+	}
+	defer rows.Close()
+
+	items := make([]AgentTaskFeedItem, 0, limit+1)
+	cursors := make([]AgentTaskFeedCursor, 0, limit+1)
+	for rows.Next() {
+		var (
+			id, agentID, issueID pgtype.UUID
+			status               string
+			completedAt          pgtype.Timestamptz
+			triggerSummary       pgtype.Text
+			issueTitle           pgtype.Text
+			issueIdentifier      pgtype.Text
+			chatTitle            pgtype.Text
+		)
+		if err := rows.Scan(&id, &agentID, &issueID, &status, &completedAt, &triggerSummary, &issueTitle, &issueIdentifier, &chatTitle); err != nil {
+			continue
+		}
+		items = append(items, AgentTaskFeedItem{
+			ID:              uuidToString(id),
+			AgentID:         uuidToString(agentID),
+			IssueID:         uuidToString(issueID),
+			IssueIdentifier: textToPtr(issueIdentifier),
+			IssueTitle:      textToPtr(issueTitle),
+			ChatTitle:       textToPtr(chatTitle),
+			Status:          status,
+			CompletedAt:     timestampToPtr(completedAt),
+			TriggerSummary:  textToPtr(triggerSummary),
+		})
+		cursors = append(cursors, AgentTaskFeedCursor{
+			CompletedAt: completedAt.Time.Format(time.RFC3339Nano),
+			ID:          uuidToString(id),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list agent tasks")
+		return
+	}
+
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+	var next *AgentTaskFeedCursor
+	if hasMore && limit > 0 {
+		next = &cursors[limit-1]
+	}
+
+	writeJSON(w, http.StatusOK, AgentTaskFeedResponse{Tasks: items, HasMore: hasMore, NextCursor: next})
+}
+
+// AgentTaskStatsResponse powers the overview "tasks done" KPI. Counts are over
+// ALL agent tasks in the workspace — issue tasks, chat tasks, and channel
+// replies alike — so a completed channel reply counts as a finished task,
+// matching the agent activity feed.
+type AgentTaskStatsResponse struct {
+	Completed int `json:"completed"`
+	Failed    int `json:"failed"`
+	Total     int `json:"total"`
+}
+
+// GetAgentTaskStats returns completed / failed / total agent-task counts for
+// the workspace.
+func (h *Handler) GetAgentTaskStats(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
+		return
+	}
+	var resp AgentTaskStatsResponse
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT
+			COUNT(*) FILTER (WHERE atq.status = 'completed'),
+			COUNT(*) FILTER (WHERE atq.status = 'failed'),
+			COUNT(*)
+		FROM agent_task_queue atq
+		JOIN agent a ON a.id = atq.agent_id
+		WHERE a.workspace_id = $1`,
+		parseUUID(workspaceID),
+	).Scan(&resp.Completed, &resp.Failed, &resp.Total)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to compute task stats")
+		return
+	}
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -375,11 +375,7 @@ export const ReadonlyContent = memo(function ReadonlyContent({
     <AttachmentDownloadProvider attachments={attachments}>
       <div ref={wrapperRef} className={cn("rich-text-editor readonly text-sm", className)}>
         <ReactMarkdown
-          remarkPlugins={[
-            [remarkMath, { singleDollarTextMath: false }],
-            remarkBreaks,
-            [remarkGfm, { singleTilde: false }],
-          ]}
+          remarkPlugins={[remarkMath, remarkBreaks, [remarkGfm, { singleTilde: false }]]}
           rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
           urlTransform={urlTransform}
           components={components}

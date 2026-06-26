@@ -11,7 +11,7 @@ import { cn } from '@multica/ui/lib/utils'
 import { CODE_LIGATURE_CLASS } from '@multica/ui/lib/code-style'
 import { CodeBlock, InlineCode } from './CodeBlock'
 import { isAllowedFileCardHref, preprocessFileCards } from './file-cards'
-import { preprocessLinks } from './linkify'
+import { preprocessLinks, preprocessIssueRefs } from './linkify'
 import { preprocessMentionShortcodes } from './mentions'
 import 'katex/dist/katex.min.css'
 import './markdown.css'
@@ -55,7 +55,7 @@ export interface MarkdownProps {
    * Custom renderer for mention links (e.g. mention://issue/UUID).
    * When not provided, mentions render as a simple styled span.
    */
-  renderMention?: (props: { type: string; id: string }) => React.ReactNode
+  renderMention?: (props: { type: string; id: string; label?: string }) => React.ReactNode
   /**
    * CDN hostname for file card detection (e.g. "multica-static.copilothub.ai").
    * When provided, enables file card preprocessing and rendering.
@@ -75,6 +75,12 @@ export interface MarkdownProps {
    * the views-package `<Attachment>` component.
    */
   renderFileCard?: (props: { href: string; filename: string }) => React.ReactNode
+  /**
+   * Workspace issue prefix (e.g. "MUL"). When set, bare issue identifiers like
+   * "MUL-123" in the text are auto-linked into issue mention chips. Scoped to
+   * this single prefix to avoid false positives. Omit to disable auto-linking.
+   */
+  issueRefPrefix?: string
 }
 
 // Sanitization schema — extends GitHub defaults to allow code highlighting classes
@@ -128,7 +134,7 @@ function createComponents(
   mode: RenderMode,
   onUrlClick?: (url: string) => void,
   onFileClick?: (path: string) => void,
-  renderMention?: (props: { type: string; id: string }) => React.ReactNode,
+  renderMention?: (props: { type: string; id: string; label?: string }) => React.ReactNode,
   renderImage?: (props: { src: string; alt: string }) => React.ReactNode,
   renderFileCard?: (props: { href: string; filename: string }) => React.ReactNode,
 ): Partial<Components> {
@@ -187,10 +193,19 @@ function createComponents(
           const id = mentionMatch[2]
 
           if (renderMention) {
+            // Pass the link text as a label so the renderer can fall back to
+            // the author's intended name when the id isn't resolvable (e.g. a
+            // user who left the workspace) instead of rendering "Unknown".
+            const label =
+              typeof children === 'string'
+                ? children
+                : Array.isArray(children)
+                  ? children.filter((c): c is string => typeof c === 'string').join('')
+                  : undefined
             // Let the custom renderer opt out for types it doesn't handle
             // by returning null/undefined — we then fall through to the
             // default styled span so nothing ever disappears silently.
-            const rendered = renderMention({ type, id })
+            const rendered = renderMention({ type, id, label })
             if (rendered) return <>{rendered}</>
           }
 
@@ -424,32 +439,31 @@ export function Markdown({
   renderMention,
   renderImage,
   renderFileCard,
-  cdnDomain
+  cdnDomain,
+  issueRefPrefix
 }: MarkdownProps): React.JSX.Element {
   const components = React.useMemo(
     () => createComponents(mode, onUrlClick, onFileClick, renderMention, renderImage, renderFileCard),
     [mode, onUrlClick, onFileClick, renderMention, renderImage, renderFileCard]
   )
 
-  // Preprocess: convert mention shortcodes, raw URLs, and file cards to renderable content
+  // Preprocess: convert mention shortcodes, bare issue identifiers, raw URLs,
+  // and file cards to renderable content
   const processedContent = React.useMemo(
     () => {
       let result = preprocessMentionShortcodes(children)
+      if (issueRefPrefix) result = preprocessIssueRefs(result, issueRefPrefix)
       result = preprocessLinks(result)
       result = preprocessFileCards(result, cdnDomain ?? '')
       return result
     },
-    [children, cdnDomain]
+    [children, cdnDomain, issueRefPrefix]
   )
 
   return (
     <div className={cn('markdown-content break-words', className)}>
       <ReactMarkdown
-        remarkPlugins={[
-          [remarkMath, { singleDollarTextMath: false }],
-          remarkBreaks,
-          [remarkGfm, { singleTilde: false }],
-        ]}
+        remarkPlugins={[remarkMath, remarkBreaks, [remarkGfm, { singleTilde: false }]]}
         rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
         urlTransform={urlTransform}
         components={components}

@@ -200,6 +200,14 @@ vi.mock("@tanstack/react-query", () => ({
   },
   useQueries: (opts: { queries: Array<{ queryKey: readonly unknown[] }> }) =>
     opts.queries.map((q) => ({ data: resolveIssue(q.queryKey) })),
+  // SearchCommand's "Send message" entry pulls in useOpenDM -> useCreateOrFindDM,
+  // which calls useQueryClient + useMutation. Stub both so the mock is complete.
+  useQueryClient: () => ({ invalidateQueries: () => {} }),
+  useMutation: () => ({
+    mutate: () => {},
+    mutateAsync: async () => ({}),
+    isPending: false,
+  }),
 }));
 
 vi.mock("../navigation", () => ({

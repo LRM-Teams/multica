@@ -323,7 +323,25 @@
       "add_dialog_confirm_default": "追加",
       "add_dialog_confirm_other": "スキル {{count}} 件を追加",
       "add_dialog_cancel": "キャンセル",
-      "add_failed_toast": "スキルを追加できませんでした"
+      "add_failed_toast": "スキルを追加できませんでした",
+      "generated_title": "生成されたスキル",
+      "generated_intro": "このエージェントが Pi evolution フローで学習したスキルです。承認するとローカルで有効化され、以後の Pi タスクで使われます。",
+      "generated_count": "生成 {{count}} 件",
+      "generated_loading": "生成されたスキルを読み込み中…",
+      "generated_empty": "生成されたスキルはまだありません。",
+      "generated_decision_failed_toast": "生成スキルの判断を更新できませんでした",
+      "generated_accept_action": "承認",
+      "generated_enabled_action": "有効",
+      "generated_ignore_action": "無視",
+      "generated_status_enabled": "有効",
+      "generated_status": {
+        "pending": "保留中",
+        "delivered": "配信済み",
+        "accepted": "承認済み",
+        "ignored": "無視済み",
+        "rejected": "却下済み",
+        "failed": "失敗"
+      }
     },
     "integrations": {
       "intro": "このエージェントを外部のチャットプラットフォームに接続し、普段使っているツールから直接やり取りできるようにします。",
@@ -374,7 +392,19 @@
       "empty_title": "同期済みメモリはありません",
       "empty_hint": "このエージェントのランタイムにあるメモリファイルは、次回の同期後にここへ表示されます。",
       "empty_content": "内容はありません",
-      "updated_at": "更新日時 {{value}}"
+      "updated_at": "更新日時 {{value}}",
+      "evolution_title": "生成されたメモリ",
+      "evolution_intro": "Pi evolution フローで配信されたメモリ系ユニットです。ローカルの Pi inbox に入り、確認や再利用に使えます。",
+      "evolution_loading": "生成されたメモリを読み込み中…",
+      "evolution_empty": "生成されたメモリはまだありません。",
+      "evolution_status": {
+        "pending": "保留中",
+        "delivered": "配信済み",
+        "accepted": "承認済み",
+        "ignored": "無視済み",
+        "rejected": "却下済み",
+        "failed": "失敗"
+      }
     }
   },
   "char_counter": {

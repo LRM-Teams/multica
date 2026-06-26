@@ -506,8 +506,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/local-skills/{requestId}/result", h.ReportLocalSkillListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
 		r.Post("/runtimes/{runtimeId}/shared-skills/sync", h.SyncRuntimeSharedSkills)
-		r.Post("/runtimes/{runtimeId}/agent-shared-skills/sync", h.SyncAgentSharedSkills)
-		r.Post("/runtimes/{runtimeId}/agent-memories/sync", h.SyncAgentMemories)
+		r.Post("/runtimes/{runtimeId}/evolution/submissions", h.SyncEvolutionSubmissions)
+		r.Get("/runtimes/{runtimeId}/evolution/deliveries", h.ListEvolutionDeliveries)
+		r.Post("/runtimes/{runtimeId}/evolution/deliveries/{deliveryId}/delivered", h.MarkEvolutionDeliveryDelivered)
+		r.Post("/runtimes/{runtimeId}/evolution/deliveries/{deliveryId}/failed", h.FailEvolutionDelivery)
+		r.Post("/runtimes/{runtimeId}/evolution/deliveries/{deliveryId}/decision", h.DecideEvolutionDelivery)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
 		r.Post("/tasks/{taskId}/start", h.StartTask)
@@ -856,6 +859,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/tasks", h.ListAgentTasks)
 					r.Get("/skills", h.ListAgentSkills)
 					r.Put("/skills", h.SetAgentSkills)
+					r.Get("/generated-skills", h.ListAgentGeneratedSkillDeliveries)
+					r.Post("/generated-skills/{deliveryId}/decision", h.DecideAgentGeneratedSkillDelivery)
+					r.Get("/evolution-memories", h.ListAgentEvolutionMemoryDeliveries)
 					r.Get("/memories", h.ListAgentMemories)
 					r.Post("/skills/add", h.AddAgentSkills)
 					// Dedicated env-management endpoint. Owner/admin only;

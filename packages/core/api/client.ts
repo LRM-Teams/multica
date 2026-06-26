@@ -1798,8 +1798,8 @@ export class ApiClient {
     return this.fetch(this.dmOpsPath(source, id), { method: "DELETE" });
   }
 
-  async listChannels(): Promise<Channel[]> {
-    return this.fetch("/api/channels");
+  async listChannels(options?: { archived?: boolean }): Promise<Channel[]> {
+    return this.fetch(options?.archived ? "/api/channels?archived=true" : "/api/channels");
   }
 
   async createChannel(data: { name: string; description?: string; lark_chat_id?: string }): Promise<Channel> {
@@ -1811,6 +1811,26 @@ export class ApiClient {
 
   async deleteChannel(channelId: string): Promise<void> {
     await this.fetch(`/api/channels/${channelId}`, { method: "DELETE" });
+  }
+
+  async archiveChannel(channelId: string): Promise<Channel> {
+    return this.fetch(`/api/channels/${channelId}/archive`, { method: "POST" });
+  }
+
+  async restoreChannel(channelId: string): Promise<Channel> {
+    return this.fetch(`/api/channels/${channelId}/restore`, { method: "POST" });
+  }
+
+  async pinChannel(channelId: string): Promise<{ ok: boolean }> {
+    return this.fetch(`/api/channels/${channelId}/pin`, { method: "PUT" });
+  }
+
+  async unpinChannel(channelId: string): Promise<{ ok: boolean }> {
+    return this.fetch(`/api/channels/${channelId}/pin`, { method: "DELETE" });
+  }
+
+  async markChannelUnread(channelId: string): Promise<{ ok: boolean }> {
+    return this.fetch(`/api/channels/${channelId}/unread`, { method: "POST" });
   }
 
   async listChannelMembers(channelId: string): Promise<ChannelMember[]> {

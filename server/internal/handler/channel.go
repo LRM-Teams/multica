@@ -37,10 +37,14 @@ type ChannelResponse struct {
 	CreatedBy   string  `json:"created_by"`
 	CreatedAt   string  `json:"created_at"`
 	UpdatedAt   string  `json:"updated_at"`
+	ArchivedAt  *string `json:"archived_at,omitempty"`
+	ArchivedBy  *string `json:"archived_by,omitempty"`
 	// List-only enrichments (zero/omitted on create/update/get responses).
-	UnreadCount int                  `json:"unread_count"`
-	LastMessage *ChannelLastMessage  `json:"last_message,omitempty"`
-	Members     []ChannelMemberBrief `json:"members,omitempty"`
+	UnreadCount    int                  `json:"unread_count"`
+	ManuallyUnread bool                 `json:"manually_unread,omitempty"`
+	PinnedAt       *string              `json:"pinned_at,omitempty"`
+	LastMessage    *ChannelLastMessage  `json:"last_message,omitempty"`
+	Members        []ChannelMemberBrief `json:"members,omitempty"`
 }
 
 type ChannelLastMessage struct {
@@ -130,10 +134,12 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	}
 	workspaceID := ctxWorkspaceID(r.Context())
 	uid := parseUUID(userID)
+	archivedOnly := queryBool(r, "archived")
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT ch.id, ch.workspace_id, ch.name, ch.description, ch.lark_chat_id, ch.created_by, ch.created_at, ch.updated_at, ch.kind,
+		       ch.archived_at, ch.archived_by, cm.pinned_at, cm.manual_unread_at,
 		       lm.author_type, lm.author_name, lm.content, lm.created_at,
-		       COALESCE(uc.cnt, 0)
+		       GREATEST(COALESCE(uc.cnt, 0), CASE WHEN cm.manual_unread_at IS NOT NULL THEN 1 ELSE 0 END)
 		FROM channel ch
 		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
 		LEFT JOIN LATERAL (
@@ -149,7 +155,8 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
 		) uc ON true
 		WHERE ch.workspace_id = $1 AND ch.kind = 'group'
-		ORDER BY ch.updated_at DESC, ch.created_at DESC`, parseUUID(workspaceID), uid)
+		  AND (($3 AND ch.archived_at IS NOT NULL) OR (NOT $3 AND ch.archived_at IS NULL))
+		ORDER BY CASE WHEN $3 THEN ch.archived_at ELSE cm.pinned_at END DESC NULLS LAST, ch.updated_at DESC, ch.created_at DESC`, parseUUID(workspaceID), uid, archivedOnly)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channels")
 		return
@@ -158,14 +165,14 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	out := []ChannelResponse{}
 	channelIDs := []pgtype.UUID{}
 	for rows.Next() {
-		var id, wsID, createdBy pgtype.UUID
+		var id, wsID, createdBy, archivedBy pgtype.UUID
 		var name string
 		var desc, lark, lastType, lastName, lastContent pgtype.Text
-		var createdAt, updatedAt, lastAt pgtype.Timestamptz
+		var createdAt, updatedAt, archivedAt, pinnedAt, manualUnreadAt, lastAt pgtype.Timestamptz
 		var unread int
 		var kind string
 		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt, &kind,
-			&lastType, &lastName, &lastContent, &lastAt, &unread); err != nil {
+			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &lastType, &lastName, &lastContent, &lastAt, &unread); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channels")
 			return
 		}
@@ -173,7 +180,8 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			ID: uuidToString(id), WorkspaceID: uuidToString(wsID), Name: name,
 			Description: textToPtr(desc), LarkChatID: textToPtr(lark), CreatedBy: uuidToString(createdBy),
 			CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt),
-			Kind: kind, UnreadCount: unread, Members: []ChannelMemberBrief{},
+			ArchivedAt: timestampToPtr(archivedAt), ArchivedBy: uuidToPtr(archivedBy),
+			Kind: kind, UnreadCount: unread, ManuallyUnread: manualUnreadAt.Valid, PinnedAt: timestampToPtr(pinnedAt), Members: []ChannelMemberBrief{},
 		}
 		if lastContent.Valid {
 			ch.LastMessage = &ChannelLastMessage{
@@ -238,7 +246,80 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to mark channel read")
 		return
 	}
+	_, _ = h.DB.Exec(r.Context(), `
+		UPDATE channel_member
+		SET manual_unread_at = NULL
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`,
+		channelID, parseUUID(workspaceID), parseUUID(userID))
 	h.clearDMPeerManualUnreadForChannel(r.Context(), workspaceID, userID, channelID)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handler) PinChannel(w http.ResponseWriter, r *http.Request) {
+	h.setChannelPinned(w, r, true)
+}
+
+func (h *Handler) UnpinChannel(w http.ResponseWriter, r *http.Request) {
+	h.setChannelPinned(w, r, false)
+}
+
+func (h *Handler) setChannelPinned(w http.ResponseWriter, r *http.Request, pinned bool) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	userUUID := parseUUID(userID)
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, userUUID) {
+		return
+	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+	value := "now()"
+	if !pinned {
+		value = "NULL"
+	}
+	if _, err := h.DB.Exec(r.Context(), fmt.Sprintf(`
+		UPDATE channel_member
+		SET pinned_at = %s
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`, value),
+		channelID, parseUUID(workspaceID), userUUID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update channel pin")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handler) MarkChannelUnread(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	userUUID := parseUUID(userID)
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, userUUID) {
+		return
+	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+	if _, err := h.DB.Exec(r.Context(), `
+		UPDATE channel_member
+		SET manual_unread_at = now()
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`,
+		channelID, parseUUID(workspaceID), userUUID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to mark channel unread")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -267,7 +348,7 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 	row := h.DB.QueryRow(r.Context(), `
 		INSERT INTO channel (workspace_id, name, description, lark_chat_id, created_by)
 		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind`,
+		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by`,
 		parseUUID(workspaceID), name, desc, larkChatID, parseUUID(userID))
 	ch, err := scanChannel(row)
 	if err != nil {
@@ -295,6 +376,9 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
 	var req UpdateChannelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -317,7 +401,7 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 		UPDATE channel
 		SET name = COALESCE($3, name), description = COALESCE($4, description), lark_chat_id = COALESCE($5, lark_chat_id), updated_at = now()
 		WHERE id = $1 AND workspace_id = $2
-		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind`,
+		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by`,
 		channelID, parseUUID(workspaceID), name, trimTextPtr(req.Description), trimTextPtr(req.LarkChatID))
 	ch, err := scanChannel(row)
 	if err != nil {
@@ -342,26 +426,85 @@ func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+	if !h.requireChannelManager(w, r, workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
-	// FK ON DELETE CASCADE clears every dependent row (channel_member,
-	// channel_message, channel_agent_session, channel_read, and attachment
-	// rows scoped to this channel). The agents' chat_session rows are not
-	// channel-owned and intentionally survive, mirroring 1:1 chat.
-	tag, err := h.DB.Exec(r.Context(),
-		`DELETE FROM channel WHERE id = $1 AND workspace_id = $2`,
-		channelID, parseUUID(workspaceID))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete channel")
+	if _, ok := h.archiveChannel(w, r, workspaceID, channelID, parseUUID(userID)); !ok {
 		return
 	}
-	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	h.publish(protocol.EventChannelDeleted, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) ArchiveChannel(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelManager(w, r, workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	ch, ok := h.archiveChannel(w, r, workspaceID, channelID, parseUUID(userID))
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, ch)
+}
+
+func (h *Handler) RestoreChannel(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelManager(w, r, workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	row := h.DB.QueryRow(r.Context(), `
+		UPDATE channel
+		SET archived_at = NULL, archived_by = NULL, updated_at = now()
+		WHERE id = $1 AND workspace_id = $2 AND kind = 'group'
+		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by`,
+		channelID, parseUUID(workspaceID))
+	ch, err := scanChannel(row)
+	if err != nil {
+		if errorsIsNoRows(err) {
+			writeError(w, http.StatusNotFound, "channel not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to restore channel")
+		return
+	}
+	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, ch)
+	writeJSON(w, http.StatusOK, ch)
+}
+
+func (h *Handler) archiveChannel(w http.ResponseWriter, r *http.Request, workspaceID string, channelID, userID pgtype.UUID) (ChannelResponse, bool) {
+	row := h.DB.QueryRow(r.Context(), `
+		UPDATE channel
+		SET archived_at = COALESCE(archived_at, now()), archived_by = COALESCE(archived_by, $3), updated_at = now()
+		WHERE id = $1 AND workspace_id = $2 AND kind = 'group'
+		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by`,
+		channelID, parseUUID(workspaceID), userID)
+	ch, err := scanChannel(row)
+	if err != nil {
+		if errorsIsNoRows(err) {
+			writeError(w, http.StatusNotFound, "channel not found")
+			return ChannelResponse{}, false
+		}
+		writeError(w, http.StatusInternalServerError, "failed to archive channel")
+		return ChannelResponse{}, false
+	}
+	h.publish(protocol.EventChannelDeleted, workspaceID, "member", uuidToString(userID), map[string]any{"id": uuidToString(channelID)})
+	return ch, true
 }
 
 func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
@@ -426,6 +569,9 @@ func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
 	if !h.validateChannelMemberTarget(w, r, workspaceID, req.MemberType, memberID) {
 		return
 	}
@@ -468,6 +614,9 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
 		return
 	}
 	_, err := h.DB.Exec(r.Context(), `
@@ -628,6 +777,9 @@ func (h *Handler) SetChannelTyping(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
 	h.publish(protocol.EventChannelTyping, workspaceID, "member", userID, protocol.ChannelTypingPayload{
 		ChannelID:   uuidToString(channelID),
 		ActorType:   "user",
@@ -676,6 +828,9 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
 		return
 	}
 	authorName := h.channelAuthorName(r.Context(), userID)
@@ -752,6 +907,10 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 	ch, found := h.getChannelByLarkChatID(r.Context(), workspaceID, larkChatID)
 	if !found {
 		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if ch.ArchivedAt != nil {
+		writeError(w, http.StatusConflict, "channel is archived")
 		return
 	}
 	threadID := uuid.NewString()
@@ -1240,6 +1399,9 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 		ActorName: agentName,
 		IsTyping:  false,
 	})
+	if archived, found := h.channelIsArchived(context.Background(), uuidToString(workspaceID), channelID); !found || archived {
+		return
+	}
 	msg, err := h.insertChannelMessage(context.Background(), channelID, workspaceID, "agent", agentID, agentName, payload.Content, "multica", nil, threadID, nextDepth)
 	if err != nil {
 		slog.Warn("channel bridge: insert agent reply failed", "chat_session_id", payload.ChatSessionID, "error", err)
@@ -1367,6 +1529,15 @@ func (h *Handler) channelExists(ctx context.Context, workspaceID string, channel
 	return h.DB.QueryRow(ctx, `SELECT id FROM channel WHERE id = $1 AND workspace_id = $2`, channelID, parseUUID(workspaceID)).Scan(&id) == nil
 }
 
+func (h *Handler) channelIsArchived(ctx context.Context, workspaceID string, channelID pgtype.UUID) (bool, bool) {
+	var archivedAt pgtype.Timestamptz
+	err := h.DB.QueryRow(ctx, `SELECT archived_at FROM channel WHERE id = $1 AND workspace_id = $2`, channelID, parseUUID(workspaceID)).Scan(&archivedAt)
+	if err != nil {
+		return false, false
+	}
+	return archivedAt.Valid, true
+}
+
 func (h *Handler) channelUserIsMember(ctx context.Context, workspaceID string, channelID, userID pgtype.UUID) bool {
 	var exists bool
 	err := h.DB.QueryRow(ctx, `
@@ -1389,14 +1560,51 @@ func (h *Handler) requireChannelUserMember(w http.ResponseWriter, ctx context.Co
 	return true
 }
 
+func (h *Handler) requireChannelWritable(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID pgtype.UUID) bool {
+	archived, found := h.channelIsArchived(ctx, workspaceID, channelID)
+	if !found {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return false
+	}
+	if archived {
+		writeError(w, http.StatusConflict, "channel is archived")
+		return false
+	}
+	return true
+}
+
+func (h *Handler) requireChannelManager(w http.ResponseWriter, r *http.Request, workspaceID string, channelID, userID pgtype.UUID) bool {
+	var createdBy pgtype.UUID
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT created_by
+		FROM channel
+		WHERE id = $1 AND workspace_id = $2 AND kind = 'group'`, channelID, parseUUID(workspaceID)).Scan(&createdBy)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return false
+	}
+	if uuidToString(createdBy) == uuidToString(userID) {
+		return true
+	}
+	member, ok := h.workspaceMember(w, r, workspaceID)
+	if !ok {
+		return false
+	}
+	if roleAllowed(member.Role, "owner", "admin") {
+		return true
+	}
+	writeError(w, http.StatusForbidden, "insufficient permissions")
+	return false
+}
+
 func (h *Handler) getChannel(ctx context.Context, workspaceID string, channelID pgtype.UUID) (ChannelResponse, bool) {
-	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind FROM channel WHERE id = $1 AND workspace_id = $2`, channelID, parseUUID(workspaceID))
+	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by FROM channel WHERE id = $1 AND workspace_id = $2`, channelID, parseUUID(workspaceID))
 	ch, err := scanChannel(row)
 	return ch, err == nil
 }
 
 func (h *Handler) getChannelByLarkChatID(ctx context.Context, workspaceID, larkChatID string) (ChannelResponse, bool) {
-	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind FROM channel WHERE workspace_id = $1 AND lark_chat_id = $2 LIMIT 1`, parseUUID(workspaceID), larkChatID)
+	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by FROM channel WHERE workspace_id = $1 AND lark_chat_id = $2 LIMIT 1`, parseUUID(workspaceID), larkChatID)
 	ch, err := scanChannel(row)
 	return ch, err == nil
 }
@@ -1425,15 +1633,27 @@ type rowScanner interface {
 }
 
 func scanChannel(row rowScanner) (ChannelResponse, error) {
-	var id, wsID, createdBy pgtype.UUID
+	var id, wsID, createdBy, archivedBy pgtype.UUID
 	var name string
 	var desc, lark pgtype.Text
-	var createdAt, updatedAt pgtype.Timestamptz
+	var createdAt, updatedAt, archivedAt pgtype.Timestamptz
 	var kind string
-	if err := row.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt, &kind); err != nil {
+	if err := row.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt, &kind, &archivedAt, &archivedBy); err != nil {
 		return ChannelResponse{}, err
 	}
-	return ChannelResponse{ID: uuidToString(id), WorkspaceID: uuidToString(wsID), Name: name, Kind: kind, Description: textToPtr(desc), LarkChatID: textToPtr(lark), CreatedBy: uuidToString(createdBy), CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt)}, nil
+	return ChannelResponse{
+		ID:          uuidToString(id),
+		WorkspaceID: uuidToString(wsID),
+		Name:        name,
+		Kind:        kind,
+		Description: textToPtr(desc),
+		LarkChatID:  textToPtr(lark),
+		CreatedBy:   uuidToString(createdBy),
+		CreatedAt:   timestampToString(createdAt),
+		UpdatedAt:   timestampToString(updatedAt),
+		ArchivedAt:  timestampToPtr(archivedAt),
+		ArchivedBy:  uuidToPtr(archivedBy),
+	}, nil
 }
 
 func scanChannelMessage(row rowScanner) (ChannelMessageResponse, error) {
@@ -1471,6 +1691,15 @@ func ptrString(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+func queryBool(r *http.Request, key string) bool {
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func errorsIsNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }

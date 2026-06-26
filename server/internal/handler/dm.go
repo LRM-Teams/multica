@@ -175,7 +175,7 @@ type dmMember struct {
 // findDMChannel looks up the dm channel for a canonical name. Returns false when
 // none exists (or the row is somehow not kind='dm').
 func (h *Handler) findDMChannel(ctx context.Context, workspaceID, canonical string) (ChannelResponse, bool) {
-	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind FROM channel WHERE workspace_id = $1 AND name = $2 AND kind = 'dm' LIMIT 1`, parseUUID(workspaceID), canonical)
+	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by FROM channel WHERE workspace_id = $1 AND name = $2 AND kind = 'dm' LIMIT 1`, parseUUID(workspaceID), canonical)
 	ch, err := scanChannel(row)
 	return ch, err == nil
 }
@@ -219,7 +219,7 @@ func (h *Handler) createDMChannel(ctx context.Context, w http.ResponseWriter, wo
 		INSERT INTO channel (workspace_id, name, created_by, kind)
 		VALUES ($1, $2, $3, 'dm')
 		ON CONFLICT (workspace_id, name) DO NOTHING
-		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind`,
+		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by`,
 		parseUUID(workspaceID), canonical, parseUUID(creatorID))
 	ch, err := scanChannel(row)
 	if err != nil {

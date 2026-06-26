@@ -485,6 +485,9 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusForbidden, "not a channel member")
 				return
 			}
+			if !h.requireChannelWritable(w, r.Context(), workspaceID, chUUID) {
+				return
+			}
 			params.ChannelID = chUUID
 		}
 

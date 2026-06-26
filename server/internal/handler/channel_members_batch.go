@@ -38,6 +38,9 @@ func (h *Handler) AddChannelMembers(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
 
 	types := make([]string, 0, len(req.Members))
 	ids := make([]string, 0, len(req.Members))

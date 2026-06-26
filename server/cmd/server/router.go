@@ -1014,6 +1014,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Route("/{channelId}", func(r chi.Router) {
 					r.Patch("/", h.UpdateChannel)
 					r.Delete("/", h.DeleteChannel)
+					r.Post("/archive", h.ArchiveChannel)
+					r.Post("/restore", h.RestoreChannel)
+					r.Put("/pin", h.PinChannel)
+					r.Delete("/pin", h.UnpinChannel)
+					r.Post("/unread", h.MarkChannelUnread)
 					r.Get("/project", h.GetChannelProject)
 					r.Put("/project", h.SetChannelProject)
 					r.Get("/project-files", h.ListChannelProjectFiles)

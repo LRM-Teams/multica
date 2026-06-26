@@ -4,6 +4,7 @@ import { api } from "../api";
 export const channelKeys = {
   all: (wsId: string) => ["channels", wsId] as const,
   list: (wsId: string) => [...channelKeys.all(wsId), "list"] as const,
+  archivedList: (wsId: string) => [...channelKeys.all(wsId), "archived-list"] as const,
   messages: (channelId: string) => ["channel-messages", channelId] as const,
   members: (channelId: string) => ["channel-members", channelId] as const,
   attachments: (channelId: string) => ["channel-attachments", channelId] as const,
@@ -15,6 +16,14 @@ export function channelsOptions(wsId: string) {
   return queryOptions({
     queryKey: channelKeys.list(wsId),
     queryFn: () => api.listChannels(),
+    enabled: !!wsId,
+  });
+}
+
+export function archivedChannelsOptions(wsId: string) {
+  return queryOptions({
+    queryKey: channelKeys.archivedList(wsId),
+    queryFn: () => api.listChannels({ archived: true }),
     enabled: !!wsId,
   });
 }

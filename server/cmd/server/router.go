@@ -734,6 +734,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/metadata/{key}", h.SetIssueMetadataKey)
 					r.Delete("/metadata/{key}", h.DeleteIssueMetadataKey)
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
+					r.Post("/fork", h.ForkIssue)
+					r.Delete("/fork", h.DeleteForkedIssue)
 				})
 			})
 
@@ -943,6 +945,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/nodes/reboot", h.RebootCloudRuntimeNode)
 				r.Post("/nodes/status", h.GetCloudRuntimeNodeStatus)
 				r.Post("/nodes/exec", h.ExecCloudRuntimeNode)
+				r.Post("/sandboxes/{sandboxID}/snapshot", h.SnapshotCloudRuntimeSandbox)
+				r.Post("/sandboxes/fork", h.ForkCloudRuntimeSandbox)
 			})
 
 			// Tasks (user-facing, with ownership check)

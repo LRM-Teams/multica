@@ -14,7 +14,9 @@ import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { MessageSquare } from "lucide-react";
 import { AppLink } from "../../navigation";
+import { useOpenDM } from "../../common/use-open-dm";
 import { HealthIcon } from "../../runtimes/components/shared";
 import { availabilityConfig } from "../presence";
 import { VisibilityBadge } from "./visibility-badge";
@@ -28,6 +30,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   const { t } = useT("agents");
   const wsId = useWorkspaceId();
   const p = useWorkspacePaths();
+  const { openDM, isPending: openingDM } = useOpenDM();
   const { data: agents = [], isLoading: agentsLoading } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
@@ -97,12 +100,23 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           )}
         </div>
         {!isArchived && (
-          <AppLink
-            href={p.agentDetail(agent.id)}
-            className="mr-1 mt-0.5 shrink-0 text-xs font-normal text-brand opacity-0 transition-opacity group-hover:opacity-100"
-          >
-            {t(($) => $.profile_card.detail_link)}
-          </AppLink>
+          <div className="mr-1 mt-0.5 flex shrink-0 items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+            <button
+              type="button"
+              disabled={openingDM}
+              onClick={() => void openDM({ peer_type: "agent", peer_id: agent.id })}
+              className="inline-flex items-center gap-1 text-xs font-normal text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+            >
+              <MessageSquare className="size-3.5" />
+              {t(($) => $.profile_card.send_message)}
+            </button>
+            <AppLink
+              href={p.agentDetail(agent.id)}
+              className="text-xs font-normal text-brand"
+            >
+              {t(($) => $.profile_card.detail_link)}
+            </AppLink>
+          </div>
         )}
       </div>
 

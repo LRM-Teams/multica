@@ -42,7 +42,7 @@ import { useWorkspaceId } from "@multica/core";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type { WorkspacePaths } from "@multica/core/paths";
 import { useModalStore } from "@multica/core/modals";
-import { memberListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { StatusIcon } from "../issues/components";
 import { ProjectIcon } from "../projects/components/project-icon";
@@ -60,6 +60,7 @@ import {
 import { useTheme } from "@multica/ui/components/common/theme-provider";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { useNavigation } from "../navigation";
+import { useOpenDM } from "../common/use-open-dm";
 import { useT } from "../i18n";
 import { matchesPinyin } from "../editor/extensions/pinyin-match";
 import { HighlightText } from "./highlight-text";
@@ -94,6 +95,38 @@ function memberInitials(name: string) {
     .join("")
     .toUpperCase()
     .slice(0, 2);
+}
+
+// Trailing "Send message" affordance on member / agent rows. Stops propagation
+// so clicking it opens the DM instead of triggering the row's default select
+// (member rows otherwise navigate to the member profile).
+function SendMessageButton({
+  label,
+  onSend,
+}: {
+  label: string;
+  onSend: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onSend();
+      }}
+      className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+    >
+      <MessageSquare className="size-3.5" />
+      <span className="hidden sm:inline">{label}</span>
+    </button>
+  );
 }
 
 function matchesMember(member: MemberWithUser, query: string) {
@@ -158,6 +191,8 @@ export function SearchCommand() {
   const p: WorkspacePaths = useWorkspacePaths();
   const { theme, setTheme } = useTheme();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { openDM } = useOpenDM();
 
   // Resolve each recent issue via its cached detail entry. Recent items are
   // typically already in the detail cache because the user has opened them;
@@ -328,10 +363,27 @@ export function SearchCommand() {
       .slice(0, 10);
   }, [members, query]);
 
+  const filteredAgents = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const wantsAllAgents =
+      q.length >= 3 && ("agents".startsWith(q) || "bots".startsWith(q));
+    return agents
+      .filter((a) => !a.archived_at)
+      .filter(
+        (a) =>
+          wantsAllAgents ||
+          a.name.toLowerCase().includes(q) ||
+          matchesPinyin(a.name, q),
+      )
+      .slice(0, 10);
+  }, [agents, query]);
+
   const hasResults =
     results.issues.length > 0 ||
     results.projects.length > 0 ||
-    filteredMembers.length > 0;
+    filteredMembers.length > 0 ||
+    filteredAgents.length > 0;
 
   // Global Cmd+K / Ctrl+K shortcut
   useEffect(() => {
@@ -457,6 +509,16 @@ export function SearchCommand() {
     [push, setOpen, p],
   );
 
+  // "Send message" affordance: create-or-find the DM and open it in Messages.
+  // Closes the palette first so navigation lands on the Messages view.
+  const handleSendMessage = useCallback(
+    (peerType: "user" | "agent", peerId: string) => {
+      setOpen(false);
+      void openDM({ peer_type: peerType, peer_id: peerId });
+    },
+    [openDM, setOpen],
+  );
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent
@@ -561,6 +623,41 @@ export function SearchCommand() {
                         <HighlightText text={member.email} query={query} />
                       </div>
                     </div>
+                    <SendMessageButton
+                      label={t(($) => $.actions.send_message)}
+                      onSend={() => handleSendMessage("user", member.user_id)}
+                    />
+                  </CommandPrimitive.Item>
+                ))}
+              </CommandPrimitive.Group>
+            )}
+
+            {filteredAgents.length > 0 && (
+              <CommandPrimitive.Group className="p-2">
+                <div className="px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                  {t(($) => $.groups.agents)}
+                </div>
+                {filteredAgents.map((agent) => (
+                  <CommandPrimitive.Item
+                    key={agent.id}
+                    value={`agent:${agent.id}`}
+                    onSelect={() => handleSendMessage("agent", agent.id)}
+                    className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
+                  >
+                    <ActorAvatarBase
+                      name={agent.name}
+                      initials={memberInitials(agent.name)}
+                      avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
+                      isAgent
+                      size={22}
+                    />
+                    <div className="min-w-0 flex-1 truncate">
+                      <HighlightText text={agent.name} query={query} />
+                    </div>
+                    <SendMessageButton
+                      label={t(($) => $.actions.send_message)}
+                      onSend={() => handleSendMessage("agent", agent.id)}
+                    />
                   </CommandPrimitive.Item>
                 ))}
               </CommandPrimitive.Group>

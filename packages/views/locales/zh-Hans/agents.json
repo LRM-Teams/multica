@@ -404,6 +404,7 @@
   "profile_card": {
     "unavailable": "智能体不可用",
     "detail_link": "详情 →",
+    "send_message": "发消息",
     "runtime_label": "运行时",
     "skills_label": "Skills",
     "owner_label": "所有者",

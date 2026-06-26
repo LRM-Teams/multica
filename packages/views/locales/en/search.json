@@ -6,9 +6,13 @@
     "pages": "Pages",
     "commands": "Commands",
     "members": "Members",
+    "agents": "Agents",
     "projects": "Projects",
     "issues": "Issues",
     "recent": "Recent"
+  },
+  "actions": {
+    "send_message": "Send message"
   },
   "pages": {
     "inbox": "Inbox",

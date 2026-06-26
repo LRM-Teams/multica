@@ -396,6 +396,7 @@
   "profile_card": {
     "unavailable": "エージェントを利用できません",
     "detail_link": "詳細 →",
+    "send_message": "メッセージを送信",
     "runtime_label": "ランタイム",
     "skills_label": "スキル",
     "owner_label": "オーナー",

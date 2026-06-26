@@ -141,6 +141,7 @@
     "pin": "고정",
     "unpin": "고정 해제",
     "close_chat": "대화 닫기",
-    "action_failed": "작업에 실패했습니다. 다시 시도해 주세요"
+    "action_failed": "작업에 실패했습니다. 다시 시도해 주세요",
+    "composer_placeholder": "{{name}}에게 메시지…"
   }
 }

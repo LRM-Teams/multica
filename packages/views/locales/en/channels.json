@@ -141,6 +141,7 @@
     "pin": "Pin",
     "unpin": "Unpin",
     "close_chat": "Close chat",
-    "action_failed": "Action failed, please try again"
+    "action_failed": "Action failed, please try again",
+    "composer_placeholder": "Message {{name}}…"
   }
 }

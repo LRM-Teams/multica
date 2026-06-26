@@ -337,7 +337,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
             <ContentEditor
               key={channelId}
               ref={editorRef}
-              placeholder={t(($) => $.composer.placeholder)}
+              placeholder={t(($) => $.dm.composer_placeholder, { name: dm.peer.name })}
               onUpdate={handleEditorUpdate}
               onSubmit={handleSend}
               onUploadFile={handleUpload}

@@ -406,7 +406,7 @@ function DmRow({
           {pinned ? t(($) => $.dm.unpin) : t(($) => $.dm.pin)}
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem variant="destructive" onClick={onClose}>
+        <ContextMenuItem onClick={onClose}>
           <X />
           {t(($) => $.dm.close_chat)}
         </ContextMenuItem>

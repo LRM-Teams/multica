@@ -998,6 +998,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// DM section; group channels stay on /api/channels.
 			r.Get("/api/dm", h.ListDirectMessages)
 			r.Post("/api/dm", h.CreateOrFindDirectMessage)
+			r.Put("/api/dm/channels/{channelId}/pin", h.PinDMChannel)
+			r.Delete("/api/dm/channels/{channelId}/pin", h.UnpinDMChannel)
+			r.Post("/api/dm/channels/{channelId}/unread", h.MarkDMChannelUnread)
+			r.Delete("/api/dm/channels/{channelId}", h.CloseDMChannel)
+			r.Put("/api/dm/sessions/{sessionId}/pin", h.PinDMSession)
+			r.Delete("/api/dm/sessions/{sessionId}/pin", h.UnpinDMSession)
+			r.Post("/api/dm/sessions/{sessionId}/unread", h.MarkDMSessionUnread)
+			r.Delete("/api/dm/sessions/{sessionId}", h.CloseDMSession)
 
 			r.Route("/api/channels", func(r chi.Router) {
 				r.Get("/", h.ListChannels)

@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import { channelKeys } from "./queries";
+import { dmKeys } from "../dm/queries";
 
 export function useCreateChannel() {
   const qc = useQueryClient();
@@ -39,7 +40,12 @@ export function useMarkChannelRead() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: (channelId: string) => api.markChannelRead(channelId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+      // DM channels (kind='dm') also clear manual_unread_at in dm_peer_state.
+      // Always invalidate dmKeys so the DM list badge stays in sync.
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+    },
   });
 }
 

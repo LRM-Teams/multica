@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import { chatKeys } from "./queries";
+import { dmKeys } from "../dm/queries";
 import { createLogger } from "../logger";
 import type { ChatSession } from "../types";
 
@@ -60,6 +61,8 @@ export function useMarkChatSessionRead() {
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: chatKeys.sessions(wsId) });
+      // Clears manual_unread_at in dm_peer_state — refresh the DM list badge.
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
     },
   });
 }

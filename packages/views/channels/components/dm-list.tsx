@@ -118,7 +118,11 @@ export function DmList({
           )}
         </button>
 
-        <NewDmPicker open={pickerOpen} onOpenChange={setPickerOpen} />
+        {/* Hide the compact "+" when the list is empty — the empty-state CTA
+            below is the sole entry point there, avoiding two visible triggers. */}
+        {(isLoading || dms.length > 0) && (
+          <NewDmPicker open={pickerOpen} onOpenChange={setPickerOpen} />
+        )}
       </div>
 
       {!collapsed &&

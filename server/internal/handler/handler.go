@@ -84,6 +84,8 @@ type Config struct {
 	CloudRuntimeFleetTimeout time.Duration
 	AttachmentDownloadMode   string
 	AttachmentDownloadURLTTL time.Duration
+	EvolutionReviewer        service.EvolutionReviewer
+	EvolutionReviewEnabled   bool
 }
 
 type cloudRuntimeProxy interface {

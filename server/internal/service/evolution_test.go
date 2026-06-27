@@ -2,13 +2,18 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -401,6 +406,187 @@ func TestCurateSubmissionWithReviewerErrorNeedsReview(t *testing.T) {
 	}
 	if mock.submission.Status != "needs_review" || mock.submission.ReviewReason != "reviewer error" {
 		t.Fatalf("submission review state = status %q reason %q", mock.submission.Status, mock.submission.ReviewReason)
+	}
+}
+
+func TestOpenAICompatibleEvolutionReviewerReturnsParsedReview(t *testing.T) {
+	var request openAIChatCompletionRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q, want /chat/completions", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Fatalf("Authorization = %q, want bearer token", got)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"decision\":\"promote\",\"confidence\":0.92,\"risk_level\":\"low\",\"unit_type\":\"memory\",\"title\":\"Safe lesson\",\"summary\":\"Safe reusable lesson\",\"suggested_tags\":[\"go\"],\"suggested_task_types\":[\"review\"],\"suggested_scope\":\"workspace\",\"risks\":[],\"rationale\":\"safe to promote\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	reviewer, err := NewOpenAICompatibleEvolutionReviewer(EvolutionHTTPReviewConfig{Model: "gpt-test", APIKey: "test-key", BaseURL: server.URL, Timeout: time.Second, Client: server.Client()})
+	if err != nil {
+		t.Fatalf("NewOpenAICompatibleEvolutionReviewer: %v", err)
+	}
+	result, err := reviewer.Review(context.Background(), evolutionReviewInput(validMemorySubmission(), nil))
+	if err != nil {
+		t.Fatalf("Review error = %v", err)
+	}
+	if result.Decision != EvolutionReviewPromote || result.RiskLevel != EvolutionReviewRiskLow || result.Confidence != 0.92 {
+		t.Fatalf("result = (%q, %q, %v), want promote low 0.92", result.Decision, result.RiskLevel, result.Confidence)
+	}
+	if request.Model != "gpt-test" || len(request.Messages) != 2 {
+		t.Fatalf("request model/messages = %q/%d", request.Model, len(request.Messages))
+	}
+	if !strings.Contains(request.Messages[0].Content, `"decision": "promote | needs_review | reject"`) {
+		t.Fatalf("system prompt missing output schema: %s", request.Messages[0].Content)
+	}
+	if !strings.Contains(request.Messages[1].Content, "deterministic_validation") {
+		t.Fatalf("user payload missing deterministic validation summary: %s", request.Messages[1].Content)
+	}
+}
+
+func TestOpenAICompatibleEvolutionReviewerProviderErrorNeedsReview(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":{"message":"upstream failed"}}`, http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	reviewer, err := NewOpenAICompatibleEvolutionReviewer(EvolutionHTTPReviewConfig{Model: "gpt-test", APIKey: "test-key", BaseURL: server.URL, Timeout: time.Second, Client: server.Client()})
+	if err != nil {
+		t.Fatalf("NewOpenAICompatibleEvolutionReviewer: %v", err)
+	}
+	result, err := reviewer.Review(context.Background(), evolutionReviewInput(validMemorySubmission(), nil))
+	if err != nil {
+		t.Fatalf("Review error = %v", err)
+	}
+	if result.Decision != EvolutionReviewNeedsReview || result.RiskLevel != EvolutionReviewRiskMedium {
+		t.Fatalf("result = (%q, %q), want needs_review medium", result.Decision, result.RiskLevel)
+	}
+	if result.Metadata["kind"] != "provider_error" {
+		t.Fatalf("metadata kind = %v, want provider_error", result.Metadata["kind"])
+	}
+}
+
+type fakeAgentReviewBackend struct {
+	prompt string
+	opts   agentpkg.ExecOptions
+	result agentpkg.Result
+	err    error
+}
+
+func (f *fakeAgentReviewBackend) Execute(_ context.Context, prompt string, opts agentpkg.ExecOptions) (*agentpkg.Session, error) {
+	f.prompt = prompt
+	f.opts = opts
+	if f.err != nil {
+		return nil, f.err
+	}
+	messages := make(chan agentpkg.Message)
+	results := make(chan agentpkg.Result, 1)
+	close(messages)
+	results <- f.result
+	close(results)
+	return &agentpkg.Session{Messages: messages, Result: results}, nil
+}
+
+func TestAgentEvolutionReviewerReturnsParsedReview(t *testing.T) {
+	backend := &fakeAgentReviewBackend{result: agentpkg.Result{
+		Status:    "completed",
+		Output:    `{"decision":"promote","confidence":0.91,"risk_level":"low","unit_type":"memory","title":"Safe lesson","summary":"Safe reusable lesson","suggested_tags":["go"],"suggested_task_types":["review"],"suggested_scope":"workspace","risks":[],"rationale":"safe to promote"}`,
+		SessionID: "sess-1",
+	}}
+	reviewer, err := NewAgentEvolutionReviewer(EvolutionAgentReviewConfig{Provider: "pi", Model: "anthropic/claude-sonnet", Timeout: time.Second, Backend: backend})
+	if err != nil {
+		t.Fatalf("NewAgentEvolutionReviewer: %v", err)
+	}
+
+	result, err := reviewer.Review(context.Background(), evolutionReviewInput(validMemorySubmission(), nil))
+	if err != nil {
+		t.Fatalf("Review error = %v", err)
+	}
+	if result.Decision != EvolutionReviewPromote || result.RiskLevel != EvolutionReviewRiskLow || result.Confidence != 0.91 {
+		t.Fatalf("result = (%q, %q, %v), want promote low 0.91", result.Decision, result.RiskLevel, result.Confidence)
+	}
+	if !strings.Contains(backend.prompt, "deterministic_validation") {
+		t.Fatalf("agent prompt missing deterministic validation summary: %s", backend.prompt)
+	}
+	if !strings.Contains(backend.opts.SystemPrompt, `"decision": "promote | needs_review | reject"`) {
+		t.Fatalf("agent system prompt missing output schema: %s", backend.opts.SystemPrompt)
+	}
+	if strings.Join(backend.opts.CustomArgs, " ") != "--no-tools" {
+		t.Fatalf("agent custom args = %v, want --no-tools", backend.opts.CustomArgs)
+	}
+	if result.Metadata["source"] != "agent_reviewer" || result.Metadata["provider"] != "pi" || result.Metadata["session_id"] != "sess-1" {
+		t.Fatalf("metadata = %#v", result.Metadata)
+	}
+}
+
+func TestAgentEvolutionReviewerFailureNeedsReview(t *testing.T) {
+	backend := &fakeAgentReviewBackend{result: agentpkg.Result{Status: "failed", Error: "agent failed"}}
+	reviewer, err := NewAgentEvolutionReviewer(EvolutionAgentReviewConfig{Provider: "pi", Timeout: time.Second, Backend: backend})
+	if err != nil {
+		t.Fatalf("NewAgentEvolutionReviewer: %v", err)
+	}
+
+	result, err := reviewer.Review(context.Background(), evolutionReviewInput(validMemorySubmission(), nil))
+	if err != nil {
+		t.Fatalf("Review error = %v", err)
+	}
+	if result.Decision != EvolutionReviewNeedsReview || result.Metadata["kind"] != "agent_error" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestParseEvolutionReviewResultHardensInvalidOutput(t *testing.T) {
+	metadata := map[string]any{"source": "test"}
+	invalidJSON := parseEvolutionReviewResult("not json", metadata)
+	if invalidJSON.Decision != EvolutionReviewNeedsReview || invalidJSON.Metadata["kind"] != "invalid_json" {
+		t.Fatalf("invalid JSON result = %#v", invalidJSON)
+	}
+
+	unknownEnums := parseEvolutionReviewResult(`{"decision":"approve","confidence":2,"risk_level":"tiny","rationale":"ok"}`, metadata)
+	if unknownEnums.Decision != EvolutionReviewNeedsReview {
+		t.Fatalf("decision = %q, want needs_review", unknownEnums.Decision)
+	}
+	if unknownEnums.RiskLevel != EvolutionReviewRiskMedium {
+		t.Fatalf("risk = %q, want medium", unknownEnums.RiskLevel)
+	}
+	if unknownEnums.Confidence != 1 {
+		t.Fatalf("confidence = %v, want clamped 1", unknownEnums.Confidence)
+	}
+	if unknownEnums.Metadata["normalized_decision_reason"] != "unknown decision" {
+		t.Fatalf("missing normalized decision metadata: %#v", unknownEnums.Metadata)
+	}
+}
+
+func TestEvolutionReviewPayloadTruncatesLargeContent(t *testing.T) {
+	input := evolutionReviewInput(validMemorySubmission(), []db.EvolutionUnitSubmissionFile{
+		{Path: "a.md", Content: strings.Repeat("a", maxEvolutionReviewFileBytes*2), MimeType: "text/markdown", SizeBytes: int64(maxEvolutionReviewFileBytes * 2)},
+		{Path: "b.md", Content: strings.Repeat("b", maxEvolutionReviewFileBytes*2), MimeType: "text/markdown", SizeBytes: int64(maxEvolutionReviewFileBytes * 2)},
+	})
+	input.Content = strings.Repeat("c", maxEvolutionReviewFileBytes*2)
+
+	payload, meta := evolutionReviewPayload(input)
+	if len(payload) > maxEvolutionReviewPayloadBytes {
+		t.Fatalf("payload bytes = %d, want <= %d", len(payload), maxEvolutionReviewPayloadBytes)
+	}
+	if meta["content_truncated"] != true {
+		t.Fatalf("content_truncated = %v, want true", meta["content_truncated"])
+	}
+	var decoded struct {
+		Files []struct {
+			Content string `json:"content"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("payload JSON: %v", err)
+	}
+	for _, file := range decoded.Files {
+		if len(file.Content) > maxEvolutionReviewFileBytes {
+			t.Fatalf("file content bytes = %d, want <= %d", len(file.Content), maxEvolutionReviewFileBytes)
+		}
 	}
 }
 

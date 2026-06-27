@@ -203,7 +203,7 @@ func (h *Handler) syncEvolutionSubmission(ctx context.Context, rt db.AgentRuntim
 		return "", err
 	}
 	if sensitivity != "secret" {
-		if _, err := service.NewEvolutionService(h.Queries).CurateAndMatchWorkspace(ctx, rt.WorkspaceID, 50); err != nil {
+		if _, err := service.NewEvolutionServiceWithReviewer(h.Queries, h.cfg.EvolutionReviewer, h.cfg.EvolutionReviewEnabled).CurateAndMatchWorkspace(ctx, rt.WorkspaceID, 50); err != nil {
 			return "", err
 		}
 	}

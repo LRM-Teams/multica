@@ -224,7 +224,24 @@
       "medium": "中リスク",
       "high": "高リスク",
       "unknown": "不明なリスク"
-    }
+    },
+    "source_agent": "ソースエージェント",
+    "submission_confidence": "提出の信頼度",
+    "audit_summary": "監査サマリー",
+    "metadata_source": "ソース",
+    "metadata_provider": "プロバイダー",
+    "metadata_model": "モデル",
+    "metadata_session": "セッション",
+    "metadata_rationale": "理由",
+    "metadata_risks": "リスク",
+    "delivery_preview": "配信プレビュー",
+    "delivery_type": "配信タイプ",
+    "delivery_target": "対象",
+    "promoted_unit": "昇格済みユニット",
+    "promoted_result": "昇格済み",
+    "pending_result": "まだ昇格していません",
+    "promotion_result_hint": "昇格すると共有 evolution unit が作成され、ソースエージェントへの配信がキューに追加されます。",
+    "review_metadata": "生のレビューメタデータ"
   },
   "github": {
     "page_description": "GitHub App を接続し、Pull request が Multica 内でどう表示されるかを制御し、エージェントがコミット履歴に残す情報を設定します。",

@@ -224,7 +224,24 @@
       "medium": "Medium risk",
       "high": "High risk",
       "unknown": "Unknown risk"
-    }
+    },
+    "source_agent": "Source agent",
+    "submission_confidence": "Submission confidence",
+    "audit_summary": "Audit summary",
+    "metadata_source": "Source",
+    "metadata_provider": "Provider",
+    "metadata_model": "Model",
+    "metadata_session": "Session",
+    "metadata_rationale": "Rationale",
+    "metadata_risks": "Risks",
+    "delivery_preview": "Delivery preview",
+    "delivery_type": "Delivery type",
+    "delivery_target": "Target",
+    "promoted_unit": "Promoted unit",
+    "promoted_result": "Promoted",
+    "pending_result": "Not promoted yet",
+    "promotion_result_hint": "Promotion created a shared evolution unit and queued delivery for the source agent.",
+    "review_metadata": "Raw review metadata"
   },
   "github": {
     "page_description": "Connect a GitHub App, control how Pull Requests show up inside Multica, and decide what your agents leave behind in commit history.",

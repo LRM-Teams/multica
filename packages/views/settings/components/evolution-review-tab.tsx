@@ -3,7 +3,16 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CheckCircle2, FileText, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
+import {
+  Bot,
+  CheckCircle2,
+  ExternalLink,
+  FileText,
+  PackageCheck,
+  RefreshCw,
+  ShieldAlert,
+  XCircle,
+} from "lucide-react";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
@@ -18,6 +27,8 @@ import {
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { paths, useCurrentWorkspace } from "@multica/core/paths";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import {
   evolutionKeys,
   evolutionReviewSubmissionDetailOptions,
@@ -28,6 +39,7 @@ import type {
   EvolutionReviewSubmissionStatus,
 } from "@multica/core/types";
 import { useT } from "../../i18n";
+import { AppLink } from "../../navigation";
 
 const REVIEW_STATUSES: EvolutionReviewSubmissionStatus[] = [
   "needs_review",
@@ -39,6 +51,7 @@ const REVIEW_STATUSES: EvolutionReviewSubmissionStatus[] = [
 export function EvolutionReviewTab() {
   const { t } = useT("settings");
   const wsId = useWorkspaceId();
+  const workspace = useCurrentWorkspace();
   const qc = useQueryClient();
   const [status, setStatus] = useState<EvolutionReviewSubmissionStatus>("needs_review");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -51,6 +64,7 @@ export function EvolutionReviewTab() {
   };
 
   const query = useQuery(evolutionReviewSubmissionListOptions(wsId, status));
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const submissions = useMemo(() => query.data ?? [], [query.data]);
   const selectedSummary = useMemo(
     () => submissions.find((item) => item.id === selectedId) ?? submissions[0] ?? null,
@@ -60,6 +74,11 @@ export function EvolutionReviewTab() {
     evolutionReviewSubmissionDetailOptions(wsId, selectedSummary?.id ?? ""),
   );
   const selected = detailQuery.data ?? selectedSummary;
+  const sourceAgent = useMemo(
+    () => agents.find((agent) => agent.id === selected?.source_agent_id) ?? null,
+    [agents, selected?.source_agent_id],
+  );
+  const workspaceSlug = workspace?.slug ?? "";
 
   const invalidateReviewQueue = async () => {
     await qc.invalidateQueries({ queryKey: evolutionKeys.all(wsId) });
@@ -135,6 +154,7 @@ export function EvolutionReviewTab() {
               <SubmissionListItem
                 key={submission.id}
                 submission={submission}
+                sourceAgentName={agents.find((agent) => agent.id === submission.source_agent_id)?.name}
                 active={submission.id === selected?.id}
                 onSelect={() => setSelectedId(submission.id)}
               />
@@ -157,18 +177,26 @@ export function EvolutionReviewTab() {
                 </div>
 
                 <dl className="grid grid-cols-2 gap-3 text-sm">
+                  <ReviewFact label={t(($) => $.evolution_review.source_agent)} value={sourceAgent?.name ?? shortId(selected.source_agent_id) ?? t(($) => $.evolution_review.unknown)} />
+                  <ReviewFact label={t(($) => $.evolution_review.submission_confidence)} value={selected.confidence || t(($) => $.evolution_review.none)} />
+                  <ReviewFact label={t(($) => $.evolution_review.sensitivity)} value={selected.sensitivity || t(($) => $.evolution_review.none)} />
                   <ReviewFact label={t(($) => $.evolution_review.decision)} value={selected.review_decision || t(($) => $.evolution_review.none)} />
                   <ReviewFact label={t(($) => $.evolution_review.confidence)} value={formatConfidence(selected.review_confidence)} />
-                  <ReviewFact label={t(($) => $.evolution_review.sensitivity)} value={selected.sensitivity || t(($) => $.evolution_review.none)} />
                   <ReviewFact label={t(($) => $.evolution_review.updated)} value={formatDateTime(selected.updated_at)} />
                 </dl>
+
+                <ReviewAuditSummary submission={selected} />
+
+                <DeliveryPreview submission={selected} sourceAgentName={sourceAgent?.name} workspaceSlug={workspaceSlug} />
 
                 <section className="space-y-2">
                   <h4 className="text-sm font-medium">{t(($) => $.evolution_review.review_reason)}</h4>
                   <p className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground whitespace-pre-wrap">
-                    {selected.review_reason || selected.reject_reason || t(($) => $.evolution_review.no_review_reason)}
+                    {selected.review_reason || selected.reject_reason || reviewString(selected.review_metadata, "rationale") || t(($) => $.evolution_review.no_review_reason)}
                   </p>
                 </section>
+
+                <ReviewMetadata metadata={selected.review_metadata} />
 
                 <section className="space-y-2">
                   <h4 className="text-sm font-medium">{t(($) => $.evolution_review.content)}</h4>
@@ -222,10 +250,12 @@ export function EvolutionReviewTab() {
 
 function SubmissionListItem({
   submission,
+  sourceAgentName,
   active,
   onSelect,
 }: {
   submission: EvolutionReviewSubmission;
+  sourceAgentName?: string;
   active: boolean;
   onSelect: () => void;
 }) {
@@ -248,7 +278,11 @@ function SubmissionListItem({
         <RiskBadge risk={submission.review_risk_level} />
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <span>{sourceAgentName ?? shortId(submission.source_agent_id) ?? t(($) => $.evolution_review.unknown)}</span>
+        <span>-</span>
         <span>{submission.unit_type || t(($) => $.evolution_review.unknown)}</span>
+        <span>-</span>
+        <span>{submission.confidence || t(($) => $.evolution_review.none)}</span>
         <span>-</span>
         <span>{formatDateTime(submission.updated_at)}</span>
       </div>
@@ -277,8 +311,108 @@ function ReviewFact({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border bg-muted/20 p-3">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1 truncate font-medium">{value}</dd>
+      <dd className="mt-1 truncate font-medium" title={value}>{value}</dd>
     </div>
+  );
+}
+
+function ReviewAuditSummary({ submission }: { submission: EvolutionReviewSubmission }) {
+  const { t } = useT("settings");
+  const metadata = submission.review_metadata;
+  const allItems: Array<[string, string | null]> = [
+    [t(($) => $.evolution_review.metadata_source), reviewString(metadata, "source")],
+    [
+      t(($) => $.evolution_review.metadata_provider),
+      nestedReviewString(metadata, ["metadata", "provider"]) ?? reviewString(metadata, "provider"),
+    ],
+    [
+      t(($) => $.evolution_review.metadata_model),
+      nestedReviewString(metadata, ["metadata", "model"]) ?? reviewString(metadata, "model"),
+    ],
+    [
+      t(($) => $.evolution_review.metadata_session),
+      nestedReviewString(metadata, ["metadata", "session_id"]) ?? reviewString(metadata, "session_id"),
+    ],
+    [t(($) => $.evolution_review.metadata_rationale), reviewString(metadata, "rationale")],
+    [t(($) => $.evolution_review.metadata_risks), reviewStringList(metadata["risks"])],
+  ];
+  const items = allItems.filter((item): item is [string, string] => Boolean(item[1]));
+
+  if (items.length === 0) return null;
+  return (
+    <section className="space-y-2 rounded-lg border bg-muted/20 p-3">
+      <h4 className="text-sm font-medium">{t(($) => $.evolution_review.audit_summary)}</h4>
+      <dl className="space-y-2 text-sm">
+        {items.map(([label, value]) => (
+          <div key={label} className="grid gap-1 sm:grid-cols-[7rem_minmax(0,1fr)]">
+            <dt className="text-xs text-muted-foreground">{label}</dt>
+            <dd className="min-w-0 break-words text-xs font-medium">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function DeliveryPreview({
+  submission,
+  sourceAgentName,
+  workspaceSlug,
+}: {
+  submission: EvolutionReviewSubmission;
+  sourceAgentName?: string;
+  workspaceSlug: string;
+}) {
+  const { t } = useT("settings");
+  const deliveryType = submission.unit_type === "skill" ? "generated" : "inbox";
+  const promoted = Boolean(submission.promoted_unit_id);
+  const agentLabel = sourceAgentName ?? shortId(submission.source_agent_id) ?? t(($) => $.evolution_review.unknown);
+  const agentHref = workspaceSlug && submission.source_agent_id
+    ? `${paths.workspace(workspaceSlug).agentDetail(submission.source_agent_id)}?tab=${submission.unit_type === "skill" ? "skills" : "memory"}`
+    : "";
+
+  return (
+    <section className="space-y-2 rounded-lg border bg-muted/20 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="text-sm font-medium">{t(($) => $.evolution_review.delivery_preview)}</h4>
+        <Badge variant={promoted ? "secondary" : "outline"}>{promoted ? t(($) => $.evolution_review.promoted_result) : t(($) => $.evolution_review.pending_result)}</Badge>
+      </div>
+      <div className="grid gap-2 text-sm sm:grid-cols-2">
+        <ReviewFact label={t(($) => $.evolution_review.delivery_type)} value={deliveryType} />
+        <ReviewFact label={t(($) => $.evolution_review.promoted_unit)} value={shortId(submission.promoted_unit_id) ?? t(($) => $.evolution_review.none)} />
+      </div>
+      <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+        <Bot className="h-4 w-4" />
+        <span>{t(($) => $.evolution_review.delivery_target)}:</span>
+        {agentHref ? (
+          <AppLink href={agentHref} className="inline-flex items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline">
+            {agentLabel}
+            <ExternalLink className="h-3 w-3" />
+          </AppLink>
+        ) : (
+          <span className="font-medium text-foreground">{agentLabel}</span>
+        )}
+      </div>
+      {promoted && (
+        <p className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+          <PackageCheck className="h-3.5 w-3.5" />
+          {t(($) => $.evolution_review.promotion_result_hint)}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ReviewMetadata({ metadata }: { metadata: Record<string, unknown> }) {
+  const { t } = useT("settings");
+  if (!metadata || Object.keys(metadata).length === 0) return null;
+  return (
+    <details className="rounded-lg border bg-muted/20 p-3">
+      <summary className="cursor-pointer text-sm font-medium">{t(($) => $.evolution_review.review_metadata)}</summary>
+      <pre className="mt-3 max-h-56 overflow-auto rounded-md bg-background p-3 text-xs whitespace-pre-wrap">
+        {formatMetadata(metadata)}
+      </pre>
+    </details>
   );
 }
 
@@ -335,6 +469,41 @@ function statusLabel(labels: Record<string, string>, status: string): string {
 function formatConfidence(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "-";
   return `${Math.round(value * 100)}%`;
+}
+
+function shortId(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return value.length > 8 ? value.slice(0, 8) : value;
+}
+
+function reviewString(metadata: Record<string, unknown>, key: string): string | null {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function nestedReviewString(metadata: Record<string, unknown>, path: string[]): string | null {
+  let value: unknown = metadata;
+  for (const segment of path) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    value = (value as Record<string, unknown>)[segment];
+  }
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function reviewStringList(value: unknown): string | null {
+  if (!Array.isArray(value)) return null;
+  const items = value.filter(
+    (item): item is string => typeof item === "string" && item.trim().length > 0,
+  );
+  return items.length > 0 ? items.join(", ") : null;
+}
+
+function formatMetadata(metadata: Record<string, unknown>): string {
+  try {
+    return JSON.stringify(metadata, null, 2);
+  } catch {
+    return String(metadata);
+  }
 }
 
 function formatDateTime(value: string | null | undefined): string {

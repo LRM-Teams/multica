@@ -224,7 +224,24 @@
       "medium": "中风险",
       "high": "高风险",
       "unknown": "未知风险"
-    }
+    },
+    "source_agent": "来源智能体",
+    "submission_confidence": "提交置信度",
+    "audit_summary": "审计摘要",
+    "metadata_source": "来源",
+    "metadata_provider": "Provider",
+    "metadata_model": "模型",
+    "metadata_session": "会话",
+    "metadata_rationale": "理由",
+    "metadata_risks": "风险",
+    "delivery_preview": "分发预览",
+    "delivery_type": "分发类型",
+    "delivery_target": "目标",
+    "promoted_unit": "已推广单元",
+    "promoted_result": "已推广",
+    "pending_result": "尚未推广",
+    "promotion_result_hint": "推广后会创建共享 evolution unit，并为来源智能体排队分发。",
+    "review_metadata": "原始审核 metadata"
   },
   "github": {
     "page_description": "连接 GitHub App、控制 Pull Request 如何出现在 Multica 中，并决定智能体在 commit 记录里留下哪些痕迹。",

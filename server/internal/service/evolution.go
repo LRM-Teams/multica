@@ -589,8 +589,14 @@ func validateEvolutionFiles(submission db.EvolutionUnitSubmission, files []db.Ev
 		if isDangerousEvolutionFilePath(cleanPath) {
 			return "unsafe file path"
 		}
+		if !isAllowedEvolutionFileMimeType(file.MimeType) {
+			return "unsupported file mime type"
+		}
 		if file.SizeBytes > maxEvolutionFileBytes || len(file.Content) > maxEvolutionFileBytes {
 			return "file exceeds size limit"
+		}
+		if isBinaryEvolutionFileContent(file.Content) {
+			return "binary file detected"
 		}
 		totalSize += len(file.Content)
 		if totalSize > maxEvolutionBundleBytes {
@@ -625,9 +631,31 @@ func cleanEvolutionFilePath(raw string) (string, bool) {
 }
 
 func isDangerousEvolutionFilePath(filePath string) bool {
+	lowerPath := strings.ToLower(filePath)
 	base := strings.ToLower(path.Base(filePath))
 	if strings.HasPrefix(base, ".env") || strings.HasPrefix(base, "id_rsa") || strings.HasPrefix(base, "id_dsa") || strings.HasPrefix(base, "id_ecdsa") || strings.HasPrefix(base, "id_ed25519") {
 		return true
+	}
+	switch path.Ext(base) {
+	case ".pem", ".key", ".p12", ".pfx":
+		return true
+	}
+	segments := strings.Split(lowerPath, "/")
+	for i, segment := range segments {
+		switch segment {
+		case ".ssh", ".aws":
+			return true
+		case ".kube":
+			if i+1 < len(segments) && segments[i+1] == "config" {
+				return true
+			}
+		case ".config":
+			for _, nested := range segments[i+1:] {
+				if nested == "credentials" || strings.HasPrefix(nested, "credentials.") {
+					return true
+				}
+			}
+		}
 	}
 	switch base {
 	case ".netrc", ".npmrc", ".pypirc", "credentials", "credentials.json", "auth.json", "secrets.json", "secret.json", "known_hosts":
@@ -635,6 +663,49 @@ func isDangerousEvolutionFilePath(filePath string) bool {
 	default:
 		return false
 	}
+}
+
+func isAllowedEvolutionFileMimeType(mimeType string) bool {
+	mimeType = strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
+	if mimeType == "" || strings.HasPrefix(mimeType, "text/") {
+		return true
+	}
+	switch mimeType {
+	case "application/json",
+		"application/ld+json",
+		"application/xml",
+		"application/yaml",
+		"application/x-yaml",
+		"application/toml",
+		"application/javascript",
+		"application/x-javascript",
+		"application/typescript",
+		"application/x-sh",
+		"application/x-shellscript",
+		"application/graphql",
+		"application/sql":
+		return true
+	default:
+		return false
+	}
+}
+
+func isBinaryEvolutionFileContent(content string) bool {
+	if content == "" {
+		return false
+	}
+	if strings.Contains(content, "\x00") || !utf8.ValidString(content) {
+		return true
+	}
+	control := 0
+	total := 0
+	for _, r := range content {
+		total++
+		if r < 0x20 && r != '\n' && r != '\r' && r != '\t' {
+			control++
+		}
+	}
+	return control >= 8 && float64(control)/float64(total) > 0.05
 }
 
 func validateEvolutionSkillMainFile(content string) string {

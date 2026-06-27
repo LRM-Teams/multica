@@ -74,12 +74,71 @@ func TestRejectEvolutionSubmissionReasonRejectsOversizedBundle(t *testing.T) {
 func TestRejectEvolutionSubmissionReasonAllowsValidSkill(t *testing.T) {
 	submission := validSkillSubmission()
 	files := []db.EvolutionUnitSubmissionFile{
-		{Path: "SKILL.md", Content: validSkillMainFile(), SizeBytes: int64(len(validSkillMainFile()))},
-		{Path: "references/guide.md", Content: "Use this skill for safe reviews.", SizeBytes: 32},
+		{Path: "SKILL.md", Content: validSkillMainFile(), MimeType: "text/markdown", SizeBytes: int64(len(validSkillMainFile()))},
+		{Path: "references/guide.md", Content: "Use this skill for safe reviews.", MimeType: "text/markdown", SizeBytes: 32},
 	}
 
 	if got := rejectEvolutionSubmissionReason(submission, files); got != "" {
 		t.Fatalf("reject reason = %q, want empty", got)
+	}
+}
+
+func TestRejectEvolutionSubmissionReasonRejectsMissingSkillFile(t *testing.T) {
+	submission := validSkillSubmission()
+	files := []db.EvolutionUnitSubmissionFile{
+		{Path: "README.md", Content: "# Review Helper", MimeType: "text/markdown", SizeBytes: 15},
+	}
+
+	if got := rejectEvolutionSubmissionReason(submission, files); got != "skill missing SKILL.md" {
+		t.Fatalf("reject reason = %q, want skill missing SKILL.md", got)
+	}
+}
+
+func TestRejectEvolutionSubmissionReasonRejectsBinaryFileContent(t *testing.T) {
+	submission := validSkillSubmission()
+	files := []db.EvolutionUnitSubmissionFile{
+		{Path: "SKILL.md", Content: validSkillMainFile(), MimeType: "text/markdown", SizeBytes: int64(len(validSkillMainFile()))},
+		{Path: "asset.txt", Content: "safe\x00unsafe", MimeType: "text/plain", SizeBytes: 11},
+	}
+
+	if got := rejectEvolutionSubmissionReason(submission, files); got != "binary file detected" {
+		t.Fatalf("reject reason = %q, want binary file detected", got)
+	}
+}
+
+func TestRejectEvolutionSubmissionReasonRejectsUnsupportedMimeType(t *testing.T) {
+	submission := validSkillSubmission()
+	files := []db.EvolutionUnitSubmissionFile{
+		{Path: "SKILL.md", Content: validSkillMainFile(), MimeType: "text/markdown", SizeBytes: int64(len(validSkillMainFile()))},
+		{Path: "diagram.png", Content: "not actually an image", MimeType: "image/png", SizeBytes: 21},
+	}
+
+	if got := rejectEvolutionSubmissionReason(submission, files); got != "unsupported file mime type" {
+		t.Fatalf("reject reason = %q, want unsupported file mime type", got)
+	}
+}
+
+func TestRejectEvolutionSubmissionReasonRejectsExpandedDangerousPaths(t *testing.T) {
+	submission := validSkillSubmission()
+	cases := []string{
+		".ssh/config",
+		".aws/credentials",
+		".config/gcloud/credentials.db",
+		"certs/client.pem",
+		"certs/client.key",
+		"certs/client.p12",
+		".kube/config",
+	}
+	for _, filePath := range cases {
+		t.Run(filePath, func(t *testing.T) {
+			files := []db.EvolutionUnitSubmissionFile{
+				{Path: "SKILL.md", Content: validSkillMainFile(), MimeType: "text/markdown", SizeBytes: int64(len(validSkillMainFile()))},
+				{Path: filePath, Content: "safe placeholder", MimeType: "text/plain", SizeBytes: 16},
+			}
+			if got := rejectEvolutionSubmissionReason(submission, files); got != "unsafe file path" {
+				t.Fatalf("reject reason = %q, want unsafe file path", got)
+			}
+		})
 	}
 }
 
@@ -95,11 +154,12 @@ func (f *fakeEvolutionReviewer) Review(context.Context, EvolutionReviewInput) (E
 }
 
 type evolutionMockDB struct {
-	submission db.EvolutionUnitSubmission
-	files      []db.EvolutionUnitSubmissionFile
-	unit       db.SharedEvolutionUnit
-	version    db.SharedEvolutionUnitVersion
-	delivery   db.EvolutionUnitDelivery
+	submission    db.EvolutionUnitSubmission
+	files         []db.EvolutionUnitSubmissionFile
+	unit          db.SharedEvolutionUnit
+	version       db.SharedEvolutionUnitVersion
+	delivery      db.EvolutionUnitDelivery
+	existingFound bool
 }
 
 func newEvolutionMockDB(submission db.EvolutionUnitSubmission) *evolutionMockDB {
@@ -141,6 +201,9 @@ func (m *evolutionMockDB) Query(_ context.Context, sql string, _ ...interface{})
 func (m *evolutionMockDB) QueryRow(_ context.Context, sql string, args ...interface{}) pgx.Row {
 	switch {
 	case strings.Contains(sql, "FindSharedEvolutionUnitByHash"):
+		if m.existingFound {
+			return &evolutionMockRow{values: sharedEvolutionUnitValues(m.unit)}
+		}
 		return &evolutionMockRow{err: pgx.ErrNoRows}
 	case strings.Contains(sql, "CreateSharedEvolutionUnitVersion"):
 		return &evolutionMockRow{values: sharedEvolutionUnitVersionValues(m.version)}
@@ -331,6 +394,81 @@ func TestCurateSubmissionWithReviewerDeterministicRejectDoesNotCallReviewer(t *t
 	}
 	if reviewer.called != 0 {
 		t.Fatalf("reviewer called %d times, want 0", reviewer.called)
+	}
+}
+
+func TestCurateSubmissionMissingContentHashRejects(t *testing.T) {
+	submission := validMemorySubmission()
+	submission.ContentHash = ""
+	reviewer := &fakeEvolutionReviewer{result: promoteLowRiskReview()}
+	mock := newEvolutionMockDB(submission)
+	service := NewEvolutionServiceWithReviewer(db.New(mock), reviewer, true)
+
+	_, status, err := service.curateSubmission(context.Background(), submission)
+	if err != nil {
+		t.Fatalf("curateSubmission error = %v", err)
+	}
+	if status != evolutionCurationRejected || mock.submission.RejectReason != "missing content hash" {
+		t.Fatalf("status/reason = %q/%q, want rejected/missing content hash", status, mock.submission.RejectReason)
+	}
+	if reviewer.called != 0 {
+		t.Fatalf("reviewer called %d times, want 0", reviewer.called)
+	}
+}
+
+func TestCurateSubmissionReviewDisabledLowConfidenceNeedsReview(t *testing.T) {
+	submission := validMemorySubmission()
+	submission.Confidence = "low"
+	reviewer := &fakeEvolutionReviewer{result: promoteLowRiskReview()}
+	mock := newEvolutionMockDB(submission)
+	service := NewEvolutionServiceWithReviewer(db.New(mock), reviewer, false)
+
+	_, status, err := service.curateSubmission(context.Background(), submission)
+	if err != nil {
+		t.Fatalf("curateSubmission error = %v", err)
+	}
+	if status != evolutionCurationNeedsReview || mock.submission.Status != "needs_review" || mock.submission.ReviewReason != "confidence requires review" {
+		t.Fatalf("status/review = %q/%q/%q, want needs_review/confidence requires review", status, mock.submission.Status, mock.submission.ReviewReason)
+	}
+	if reviewer.called != 0 {
+		t.Fatalf("reviewer called %d times, want 0", reviewer.called)
+	}
+}
+
+func TestCurateSubmissionReviewDisabledLocalPathPromotes(t *testing.T) {
+	submission := validMemorySubmission()
+	submission.Sensitivity = "local_path"
+	reviewer := &fakeEvolutionReviewer{result: promoteLowRiskReview()}
+	mock := newEvolutionMockDB(submission)
+	service := NewEvolutionServiceWithReviewer(db.New(mock), reviewer, false)
+
+	_, status, err := service.curateSubmission(context.Background(), submission)
+	if err != nil {
+		t.Fatalf("curateSubmission error = %v", err)
+	}
+	if status != evolutionCurationPromoted || mock.submission.Status != "promoted" {
+		t.Fatalf("status/submission = %q/%q, want promoted/promoted", status, mock.submission.Status)
+	}
+	if reviewer.called != 0 {
+		t.Fatalf("reviewer called %d times, want 0", reviewer.called)
+	}
+}
+
+func TestCurateSubmissionDuplicateHashMarksPromotedWithoutCreatingUnit(t *testing.T) {
+	submission := validMemorySubmission()
+	mock := newEvolutionMockDB(submission)
+	mock.existingFound = true
+	service := NewEvolutionService(db.New(mock))
+
+	unit, status, err := service.curateSubmission(context.Background(), submission)
+	if err != nil {
+		t.Fatalf("curateSubmission error = %v", err)
+	}
+	if status != evolutionCurationPromoted || mock.submission.Status != "promoted" {
+		t.Fatalf("status/submission = %q/%q, want promoted/promoted", status, mock.submission.Status)
+	}
+	if unit.ID != mock.unit.ID || mock.submission.PromotedUnitID != mock.unit.ID {
+		t.Fatalf("promoted unit = %v/%v, want existing %v", unit.ID, mock.submission.PromotedUnitID, mock.unit.ID)
 	}
 }
 

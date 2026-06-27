@@ -457,7 +457,7 @@ export function ChannelsPage() {
   const aggregateChannelUnread = useMemo(
     () =>
       channels.reduce(
-        (sum, c) => sum + (c.manually_unread ? Math.max(1, c.unread_count ?? 0) : (c.unread_count ?? 0)),
+        (sum, c) => sum + (c.real_unread_count ?? c.unread_count ?? 0),
         0,
       ),
     [channels],
@@ -1062,9 +1062,8 @@ export function ChannelsPage() {
                   <div className="p-3 text-sm text-muted-foreground">{t(($) => $.sidebar.empty)}</div>
                 ) : (
                   filteredChannels.map((channel) => {
-                    const displayUnread = channel.manually_unread
-                      ? Math.max(1, channel.unread_count ?? 0)
-                      : (channel.unread_count ?? 0);
+                    const realUnread = channel.real_unread_count ?? channel.unread_count ?? 0;
+                    const isManualDot = !!channel.manually_unread && realUnread === 0;
                     const last = channel.last_message;
                     const preview = last ? `${last.author_name}: ${last.content}`.replace(/\s+/g, " ") : "";
                     const pinned = !!channel.pinned_at;
@@ -1141,11 +1140,13 @@ export function ChannelsPage() {
                               </div>
                               <div className="mt-0.5 flex items-center justify-between gap-2">
                                 <span className="truncate text-xs text-muted-foreground">{preview}</span>
-                                {displayUnread > 0 && (
+                                {realUnread > 0 ? (
                                   <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
-                                    {displayUnread > 99 ? "99+" : displayUnread}
+                                    {realUnread > 99 ? "99+" : realUnread}
                                   </span>
-                                )}
+                                ) : isManualDot ? (
+                                  <span className="size-2 rounded-full bg-primary" />
+                                ) : null}
                               </div>
                             </div>
                           </button>

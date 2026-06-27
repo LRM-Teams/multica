@@ -25,6 +25,9 @@ export interface Channel {
   archived_by?: string | null;
   /** List-only enrichments (absent on create/update/get responses). */
   unread_count?: number;
+  /** True unread count excluding the manually-unread boost. Added by BE task #24.
+   *  Falls back to unread_count when absent so old API responses still work. */
+  real_unread_count?: number;
   manually_unread?: boolean;
   pinned_at?: string | null;
   last_message?: ChannelLastMessage | null;

@@ -63,7 +63,8 @@ type EvolutionReviewFileResponse struct {
 }
 
 type evolutionReviewDecisionRequest struct {
-	Reason string `json:"reason"`
+	Reason                 string `json:"reason"`
+	ApplyReviewSuggestions bool   `json:"apply_review_suggestions"`
 }
 
 func (h *Handler) ListEvolutionReviewSubmissions(w http.ResponseWriter, r *http.Request) {
@@ -130,11 +131,14 @@ func (h *Handler) PromoteEvolutionReviewSubmission(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
-	reason, ok := decodeEvolutionReviewDecisionReason(w, r)
+	req, ok := decodeEvolutionReviewDecisionRequest(w, r)
 	if !ok {
 		return
 	}
-	unit, err := service.NewEvolutionService(h.Queries).PromoteSubmissionFromReview(r.Context(), wsUUID, submissionID, reason)
+	unit, err := service.NewEvolutionService(h.Queries).PromoteSubmissionFromReview(r.Context(), wsUUID, submissionID, service.PromoteSubmissionReviewOptions{
+		Reason:                 req.Reason,
+		ApplyReviewSuggestions: req.ApplyReviewSuggestions,
+	})
 	if err != nil {
 		handleEvolutionReviewDecisionError(w, err)
 		return
@@ -151,11 +155,11 @@ func (h *Handler) RejectEvolutionReviewSubmission(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
-	reason, ok := decodeEvolutionReviewDecisionReason(w, r)
+	req, ok := decodeEvolutionReviewDecisionRequest(w, r)
 	if !ok {
 		return
 	}
-	submission, err := service.NewEvolutionService(h.Queries).RejectSubmissionFromReview(r.Context(), wsUUID, submissionID, reason)
+	submission, err := service.NewEvolutionService(h.Queries).RejectSubmissionFromReview(r.Context(), wsUUID, submissionID, req.Reason)
 	if err != nil {
 		handleEvolutionReviewDecisionError(w, err)
 		return
@@ -189,15 +193,16 @@ func (h *Handler) loadEvolutionReviewSubmission(w http.ResponseWriter, r *http.R
 	return submission, submissionID, true
 }
 
-func decodeEvolutionReviewDecisionReason(w http.ResponseWriter, r *http.Request) (string, bool) {
+func decodeEvolutionReviewDecisionRequest(w http.ResponseWriter, r *http.Request) (evolutionReviewDecisionRequest, bool) {
 	var req evolutionReviewDecisionRequest
 	if r.Body != nil {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			writeError(w, http.StatusBadRequest, "invalid request body")
-			return "", false
+			return evolutionReviewDecisionRequest{}, false
 		}
 	}
-	return strings.TrimSpace(req.Reason), true
+	req.Reason = strings.TrimSpace(req.Reason)
+	return req, true
 }
 
 func handleEvolutionReviewDecisionError(w http.ResponseWriter, err error) {

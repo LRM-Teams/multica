@@ -68,6 +68,7 @@ export interface EvolutionReviewSubmission {
 
 export interface EvolutionReviewDecisionRequest {
   reason?: string;
+  apply_review_suggestions?: boolean;
 }
 
 export interface PromoteEvolutionReviewSubmissionResponse {

@@ -241,7 +241,10 @@
     "promoted_result": "已推广",
     "pending_result": "尚未推广",
     "promotion_result_hint": "推广后会创建共享 evolution unit，并为来源智能体排队分发。",
-    "review_metadata": "原始审核 metadata"
+    "review_metadata": "原始审核 metadata",
+    "apply_suggestions": "应用 reviewer 建议",
+    "apply_suggestions_hint": "推广时使用 reviewer 建议的标题、摘要、标签、task 类型和范围。",
+    "no_suggestions_hint": "这次审核没有归一化建议。"
   },
   "github": {
     "page_description": "连接 GitHub App、控制 Pull Request 如何出现在 Multica 中，并决定智能体在 commit 记录里留下哪些痕迹。",

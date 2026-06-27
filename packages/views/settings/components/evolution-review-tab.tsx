@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
+import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { Label } from "@multica/ui/components/ui/label";
 import {
@@ -56,6 +57,7 @@ export function EvolutionReviewTab() {
   const [status, setStatus] = useState<EvolutionReviewSubmissionStatus>("needs_review");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reason, setReason] = useState("");
+  const [applyReviewSuggestions, setApplyReviewSuggestions] = useState(false);
   const statusLabels = {
     needs_review: t(($) => $.evolution_review.statuses.needs_review),
     rejected: t(($) => $.evolution_review.statuses.rejected),
@@ -86,10 +88,14 @@ export function EvolutionReviewTab() {
 
   const promote = useMutation({
     mutationFn: (submissionId: string) =>
-      api.promoteEvolutionReviewSubmission(submissionId, { reason }),
+      api.promoteEvolutionReviewSubmission(submissionId, {
+        reason,
+        apply_review_suggestions: applyReviewSuggestions,
+      }),
     onSuccess: async () => {
       toast.success(t(($) => $.evolution_review.toast_promoted));
       setReason("");
+      setApplyReviewSuggestions(false);
       await invalidateReviewQueue();
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : t(($) => $.evolution_review.toast_failed)),
@@ -216,6 +222,22 @@ export function EvolutionReviewTab() {
                     placeholder={t(($) => $.evolution_review.reason_placeholder)}
                     disabled={!canDecide || deciding}
                   />
+                  <label className="flex items-start gap-2 rounded-lg border bg-muted/20 p-3 text-sm">
+                    <Checkbox
+                      checked={applyReviewSuggestions}
+                      onCheckedChange={(checked) => setApplyReviewSuggestions(checked === true)}
+                      disabled={!canDecide || deciding || !hasReviewSuggestions(selected.review_metadata)}
+                      className="mt-0.5"
+                    />
+                    <span className="space-y-1">
+                      <span className="block font-medium">{t(($) => $.evolution_review.apply_suggestions)}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {hasReviewSuggestions(selected.review_metadata)
+                          ? t(($) => $.evolution_review.apply_suggestions_hint)
+                          : t(($) => $.evolution_review.no_suggestions_hint)}
+                      </span>
+                    </span>
+                  </label>
                   <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
                     <Button
                       variant="outline"
@@ -504,6 +526,16 @@ function formatMetadata(metadata: Record<string, unknown>): string {
   } catch {
     return String(metadata);
   }
+}
+
+function hasReviewSuggestions(metadata: Record<string, unknown>): boolean {
+  return Boolean(
+    reviewString(metadata, "title") ||
+      reviewString(metadata, "summary") ||
+      reviewString(metadata, "suggested_scope") ||
+      reviewStringList(metadata["suggested_tags"]) ||
+      reviewStringList(metadata["suggested_task_types"]),
+  );
 }
 
 function formatDateTime(value: string | null | undefined): string {

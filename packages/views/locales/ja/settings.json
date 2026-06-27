@@ -241,7 +241,10 @@
     "promoted_result": "昇格済み",
     "pending_result": "まだ昇格していません",
     "promotion_result_hint": "昇格すると共有 evolution unit が作成され、ソースエージェントへの配信がキューに追加されます。",
-    "review_metadata": "生のレビューメタデータ"
+    "review_metadata": "生のレビューメタデータ",
+    "apply_suggestions": "レビュー提案を適用",
+    "apply_suggestions_hint": "昇格時にレビューアー提案のタイトル、サマリー、タグ、タスクタイプ、スコープを使います。",
+    "no_suggestions_hint": "このレビューには正規化提案がありません。"
   },
   "github": {
     "page_description": "GitHub App を接続し、Pull request が Multica 内でどう表示されるかを制御し、エージェントがコミット履歴に残す情報を設定します。",

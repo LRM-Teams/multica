@@ -241,7 +241,10 @@
     "promoted_result": "승격됨",
     "pending_result": "아직 승격되지 않음",
     "promotion_result_hint": "승격하면 공유 evolution unit 이 생성되고 소스 에이전트로의 전달이 대기열에 추가됩니다.",
-    "review_metadata": "원본 리뷰 metadata"
+    "review_metadata": "원본 리뷰 metadata",
+    "apply_suggestions": "리뷰어 제안 적용",
+    "apply_suggestions_hint": "승격할 때 리뷰어가 제안한 제목, 요약, 태그, task 유형, 범위를 사용합니다.",
+    "no_suggestions_hint": "이 리뷰에는 정규화 제안이 없습니다."
   },
   "github": {
     "page_description": "GitHub App을 연결하고, Pull request가 Multica 안에서 표시되는 방식을 제어하며, 에이전트가 커밋 기록에 남기는 정보를 설정합니다.",

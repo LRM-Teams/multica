@@ -14,9 +14,18 @@ import (
 
 func seedEvolutionReviewSubmission(t *testing.T, status string) string {
 	t.Helper()
+	return seedEvolutionReviewSubmissionWithMetadata(t, status, map[string]any{})
+}
+
+func seedEvolutionReviewSubmissionWithMetadata(t *testing.T, status string, metadata map[string]any) string {
+	t.Helper()
 	agentID := createHandlerTestAgent(t, "Evolution Review Bot "+randomID(), []byte("[]"))
 	localID := "review-" + randomID()
 	content := "Run targeted Go tests before broader checks."
+	reviewMetadata, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatalf("marshal review metadata: %v", err)
+	}
 	var submissionID string
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO evolution_unit_submission (
@@ -25,9 +34,9 @@ func seedEvolutionReviewSubmission(t *testing.T, status string) string {
 			review_risk_level, review_reason, review_metadata, reviewed_at
 		) VALUES (
 			$1, $2, 'memory', $3, 'Targeted Go tests', 'Run narrow tests before broader checks.',
-			$4, $5, 'none', 'high', $6, 'needs_review', 'medium', 'seeded for review', '{}'::jsonb, now()
+			$4, $5, 'none', 'high', $6, 'needs_review', 'medium', 'seeded for review', $7::jsonb, now()
 		)
-		RETURNING id`, testWorkspaceID, agentID, localID, content, hashEvolutionContent(content), status).Scan(&submissionID); err != nil {
+		RETURNING id`, testWorkspaceID, agentID, localID, content, hashEvolutionContent(content), status, string(reviewMetadata)).Scan(&submissionID); err != nil {
 		t.Fatalf("seed evolution submission: %v", err)
 	}
 	if _, err := testPool.Exec(context.Background(), `
@@ -127,6 +136,43 @@ func TestEvolutionReviewAPIPromote(t *testing.T) {
 	}
 	if status != "promoted" || decision != "promote" || promotedUnitID == "" || metadata["human_decision"] != "promote" {
 		t.Fatalf("status=%q decision=%q promoted=%q metadata=%#v", status, decision, promotedUnitID, metadata)
+	}
+}
+
+func TestEvolutionReviewAPIPromoteCanApplyReviewSuggestions(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	submissionID := seedEvolutionReviewSubmissionWithMetadata(t, "needs_review", map[string]any{
+		"title":                "Reviewer title",
+		"summary":              "Reviewer summary",
+		"suggested_tags":       []string{"go", "testing"},
+		"suggested_task_types": []string{"verification"},
+		"suggested_scope":      "workspace",
+	})
+
+	req := withURLParam(newRequest(http.MethodPost, "/api/evolution/submissions/"+submissionID+"/promote?workspace_id="+testWorkspaceID, map[string]any{"reason": "approved with suggestions", "apply_review_suggestions": true}), "submissionId", submissionID)
+	rec := httptest.NewRecorder()
+	testHandler.PromoteEvolutionReviewSubmission(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("promote status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var title, summary string
+	var tags, taskTypes []string
+	var metadata map[string]any
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT u.title, u.canonical_summary, u.tags, u.task_types, s.review_metadata
+		FROM evolution_unit_submission s
+		JOIN shared_evolution_unit u ON u.id = s.promoted_unit_id
+		WHERE s.id=$1`, submissionID).Scan(&title, &summary, &tags, &taskTypes, &metadata); err != nil {
+		t.Fatalf("load promoted unit: %v", err)
+	}
+	if title != "Reviewer title" || summary != "Reviewer summary" || strings.Join(tags, ",") != "go,testing" || strings.Join(taskTypes, ",") != "verification" {
+		t.Fatalf("unit title=%q summary=%q tags=%v taskTypes=%v", title, summary, tags, taskTypes)
+	}
+	nested, ok := metadata["metadata"].(map[string]any)
+	if !ok || nested["applied_review_suggestions"] != true {
+		t.Fatalf("metadata missing applied_review_suggestions: %#v", metadata)
 	}
 }
 

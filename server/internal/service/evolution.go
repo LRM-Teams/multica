@@ -155,7 +155,12 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 	}
 }
 
-func (s *EvolutionService) PromoteSubmissionFromReview(ctx context.Context, workspaceID, submissionID pgtype.UUID, reason string) (db.SharedEvolutionUnit, error) {
+type PromoteSubmissionReviewOptions struct {
+	Reason                 string
+	ApplyReviewSuggestions bool
+}
+
+func (s *EvolutionService) PromoteSubmissionFromReview(ctx context.Context, workspaceID, submissionID pgtype.UUID, opts PromoteSubmissionReviewOptions) (db.SharedEvolutionUnit, error) {
 	submission, err := s.Queries.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID})
 	if err != nil {
 		return db.SharedEvolutionUnit{}, err
@@ -167,7 +172,14 @@ func (s *EvolutionService) PromoteSubmissionFromReview(ctx context.Context, work
 	if err != nil {
 		return db.SharedEvolutionUnit{}, err
 	}
-	review := humanEvolutionReviewResult(EvolutionReviewPromote, reason)
+	review := humanEvolutionReviewResult(EvolutionReviewPromote, opts.Reason)
+	if opts.ApplyReviewSuggestions {
+		var applied bool
+		submission, applied = applyEvolutionReviewSuggestions(submission)
+		if applied {
+			review.Metadata["applied_review_suggestions"] = true
+		}
+	}
 	unit, _, err := s.promoteSubmission(ctx, submission, files, &review)
 	if err != nil {
 		return db.SharedEvolutionUnit{}, err
@@ -486,6 +498,74 @@ func reviewMetadataMap(review EvolutionReviewResult) map[string]any {
 		}
 	}
 	return metadata
+}
+
+func applyEvolutionReviewSuggestions(submission db.EvolutionUnitSubmission) (db.EvolutionUnitSubmission, bool) {
+	var metadata map[string]any
+	if len(submission.ReviewMetadata) == 0 || json.Unmarshal(submission.ReviewMetadata, &metadata) != nil {
+		return submission, false
+	}
+	applied := false
+	if title := reviewMetadataString(metadata, "title", maxEvolutionCandidateTitle); title != "" {
+		submission.Title = title
+		applied = true
+	}
+	if summary := reviewMetadataString(metadata, "summary", maxEvolutionCandidateSummary); summary != "" {
+		submission.Summary = summary
+		applied = true
+	}
+	if scope := reviewMetadataString(metadata, "suggested_scope", 64); scope != "" {
+		submission.SuggestedScope = scope
+		applied = true
+	}
+	if tags := reviewMetadataStringList(metadata, "suggested_tags", 12, 64); tags != nil {
+		submission.Tags = tags
+		applied = true
+	}
+	if taskTypes := reviewMetadataStringList(metadata, "suggested_task_types", 12, 64); taskTypes != nil {
+		submission.TaskTypes = taskTypes
+		applied = true
+	}
+	return submission, applied
+}
+
+func reviewMetadataString(metadata map[string]any, key string, maxBytes int) string {
+	value, ok := metadata[key].(string)
+	if !ok {
+		return ""
+	}
+	return truncateUTF8Bytes(strings.TrimSpace(value), maxBytes)
+}
+
+func reviewMetadataStringList(metadata map[string]any, key string, maxItems, maxBytes int) []string {
+	values, ok := metadata[key].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, min(len(values), maxItems))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		text, ok := value.(string)
+		if !ok {
+			continue
+		}
+		text = truncateUTF8Bytes(strings.TrimSpace(text), maxBytes)
+		if text == "" {
+			continue
+		}
+		if _, exists := seen[text]; exists {
+			continue
+		}
+		seen[text] = struct{}{}
+		out = append(out, text)
+		if len(out) >= maxItems {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func humanEvolutionReviewResult(decision EvolutionReviewDecision, reason string) EvolutionReviewResult {

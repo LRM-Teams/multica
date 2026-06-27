@@ -92,6 +92,8 @@
     "./lark/queries": "./lark/queries.ts",
     "./feedback": "./feedback/index.ts",
     "./feedback/mutations": "./feedback/mutations.ts",
+    "./evolution": "./evolution/index.ts",
+    "./evolution/queries": "./evolution/queries.ts",
     "./realtime": "./realtime/index.ts",
     "./navigation": "./navigation/index.ts",
     "./modals": "./modals/index.ts",

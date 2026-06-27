@@ -40,6 +40,8 @@ type EvolutionCurateResult struct {
 	Matched     int `json:"matched"`
 }
 
+var ErrEvolutionSubmissionNotReviewable = errors.New("evolution submission is not awaiting review")
+
 func NewEvolutionService(queries *db.Queries) *EvolutionService {
 	return NewEvolutionServiceWithReviewer(queries, NoopEvolutionReviewer{}, false)
 }
@@ -151,6 +153,41 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 		_, err := s.markSubmissionNeedsReviewForInvalidReview(ctx, submission, review, "unknown review decision")
 		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, err
 	}
+}
+
+func (s *EvolutionService) PromoteSubmissionFromReview(ctx context.Context, workspaceID, submissionID pgtype.UUID, reason string) (db.SharedEvolutionUnit, error) {
+	submission, err := s.Queries.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID})
+	if err != nil {
+		return db.SharedEvolutionUnit{}, err
+	}
+	if submission.Status != "needs_review" {
+		return db.SharedEvolutionUnit{}, ErrEvolutionSubmissionNotReviewable
+	}
+	files, err := s.Queries.ListEvolutionSubmissionFiles(ctx, db.ListEvolutionSubmissionFilesParams{WorkspaceID: workspaceID, SubmissionID: submissionID})
+	if err != nil {
+		return db.SharedEvolutionUnit{}, err
+	}
+	review := humanEvolutionReviewResult(EvolutionReviewPromote, reason)
+	unit, _, err := s.promoteSubmission(ctx, submission, files, &review)
+	if err != nil {
+		return db.SharedEvolutionUnit{}, err
+	}
+	if _, err := s.matchSourceAgent(ctx, submission, unit); err != nil {
+		return db.SharedEvolutionUnit{}, err
+	}
+	return unit, nil
+}
+
+func (s *EvolutionService) RejectSubmissionFromReview(ctx context.Context, workspaceID, submissionID pgtype.UUID, reason string) (db.EvolutionUnitSubmission, error) {
+	submission, err := s.Queries.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID})
+	if err != nil {
+		return db.EvolutionUnitSubmission{}, err
+	}
+	if submission.Status != "needs_review" {
+		return db.EvolutionUnitSubmission{}, ErrEvolutionSubmissionNotReviewable
+	}
+	review := humanEvolutionReviewResult(EvolutionReviewReject, reason)
+	return s.rejectSubmissionWithReviewResult(ctx, submission, review)
 }
 
 func (s *EvolutionService) promoteSubmission(ctx context.Context, submission db.EvolutionUnitSubmission, files []db.EvolutionUnitSubmissionFile, review *EvolutionReviewResult) (db.SharedEvolutionUnit, evolutionCurationStatus, error) {
@@ -423,8 +460,14 @@ func reviewerFailureMetadata(kind, reason string, review *EvolutionReviewResult)
 }
 
 func reviewMetadataMap(review EvolutionReviewResult) map[string]any {
+	source := "evolution_reviewer"
+	if review.Metadata != nil {
+		if value, ok := review.Metadata["source"].(string); ok && strings.TrimSpace(value) != "" {
+			source = value
+		}
+	}
 	metadata := map[string]any{
-		"source":               "evolution_reviewer",
+		"source":               source,
 		"decision":             review.Decision,
 		"confidence":           review.Confidence,
 		"risk_level":           review.RiskLevel,
@@ -438,8 +481,33 @@ func reviewMetadataMap(review EvolutionReviewResult) map[string]any {
 	}
 	if review.Metadata != nil {
 		metadata["metadata"] = review.Metadata
+		if value, ok := review.Metadata["human_decision"]; ok {
+			metadata["human_decision"] = value
+		}
 	}
 	return metadata
+}
+
+func humanEvolutionReviewResult(decision EvolutionReviewDecision, reason string) EvolutionReviewResult {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		switch decision {
+		case EvolutionReviewReject:
+			reason = "human rejected submission"
+		default:
+			reason = "human approved promotion"
+		}
+	}
+	return EvolutionReviewResult{
+		Decision:   decision,
+		Confidence: 1,
+		RiskLevel:  EvolutionReviewRiskLow,
+		Rationale:  reason,
+		Metadata: map[string]any{
+			"source":         "human_review",
+			"human_decision": string(decision),
+		},
+	}
 }
 
 func (s *EvolutionService) matchSourceAgent(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) (bool, error) {

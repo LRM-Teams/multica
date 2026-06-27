@@ -17,6 +17,10 @@ import type {
   AgentTemplateSummary,
   CreateAgentFromTemplateRequest,
   CreateAgentFromTemplateResponse,
+  EvolutionReviewDecisionRequest,
+  EvolutionReviewSubmission,
+  EvolutionReviewSubmissionStatus,
+  PromoteEvolutionReviewSubmissionResponse,
   UpdateAgentRequest,
   AgentEnvResponse,
   UpdateAgentEnvRequest,
@@ -208,6 +212,9 @@ import {
   EMPTY_BILLING_CHECKOUT_SESSION_STATUS,
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
   EMPTY_CANCEL_TASK_RESPONSE,
+  EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
+  EvolutionReviewSubmissionListSchema,
+  EvolutionReviewSubmissionSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1600,6 +1607,53 @@ export class ApiClient {
     await this.fetch(`/api/agents/${agentId}/generated-skills/${deliveryId}/decision`, {
       method: "POST",
       body: JSON.stringify(data),
+    });
+  }
+
+  async listEvolutionReviewSubmissions(params?: {
+    status?: EvolutionReviewSubmissionStatus;
+    limit?: number;
+  }): Promise<EvolutionReviewSubmission[]> {
+    const search = new URLSearchParams();
+    if (params?.status) search.set("status", params.status);
+    if (params?.limit) search.set("limit", String(params.limit));
+    const suffix = search.toString();
+    const raw = await this.fetch<unknown>(`/api/evolution/submissions${suffix ? `?${suffix}` : ""}`);
+    return parseWithFallback(
+      raw,
+      EvolutionReviewSubmissionListSchema,
+      EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
+      { endpoint: "GET /api/evolution/submissions" },
+    );
+  }
+
+  async getEvolutionReviewSubmission(id: string): Promise<EvolutionReviewSubmission | null> {
+    const raw = await this.fetch<unknown>(`/api/evolution/submissions/${id}`);
+    return parseWithFallback(raw, EvolutionReviewSubmissionSchema, null, {
+      endpoint: "GET /api/evolution/submissions/{id}",
+    });
+  }
+
+  async promoteEvolutionReviewSubmission(
+    id: string,
+    data: EvolutionReviewDecisionRequest = {},
+  ): Promise<PromoteEvolutionReviewSubmissionResponse> {
+    return this.fetch(`/api/evolution/submissions/${id}/promote`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async rejectEvolutionReviewSubmission(
+    id: string,
+    data: EvolutionReviewDecisionRequest = {},
+  ): Promise<EvolutionReviewSubmission | null> {
+    const raw = await this.fetch<unknown>(`/api/evolution/submissions/${id}/reject`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, EvolutionReviewSubmissionSchema, null, {
+      endpoint: "POST /api/evolution/submissions/{id}/reject",
     });
   }
 

@@ -4,7 +4,9 @@ import {
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
   DuplicateIssueErrorBodySchema,
+  EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
   EMPTY_USER,
+  EvolutionReviewSubmissionListSchema,
   ListIssuesResponseSchema,
   RuntimeHourlyActivityListSchema,
   RuntimeUsageByAgentListSchema,
@@ -163,6 +165,50 @@ describe("UserSchema timezone drift", () => {
       { endpoint: "GET /api/me" },
     );
     expect(parsed).toBe(EMPTY_USER);
+  });
+});
+
+describe("EvolutionReviewSubmissionListSchema drift", () => {
+  const base = {
+    id: "sub-1",
+    workspace_id: "ws-1",
+    source_agent_id: "agent-1",
+    unit_type: "memory",
+    local_unit_id: "local-1",
+    title: "Targeted tests",
+    summary: "Run narrow tests first.",
+    content_hash: "hash",
+    sensitivity: "none",
+    confidence: "high",
+    status: "needs_review",
+    review_decision: "needs_review",
+    review_risk_level: "medium",
+    review_reason: "reviewer requested manual review",
+  };
+
+  it("defaults optional arrays and metadata so the review queue can render older rows", () => {
+    const parsed = EvolutionReviewSubmissionListSchema.parse([base]);
+    expect(parsed[0]?.tags).toEqual([]);
+    expect(parsed[0]?.review_metadata).toEqual({});
+    expect(parsed[0]?.files).toBeUndefined();
+  });
+
+  it("keeps unknown enum values as strings instead of failing the whole queue", () => {
+    const parsed = EvolutionReviewSubmissionListSchema.parse([
+      { ...base, status: "archived", review_risk_level: "critical" },
+    ]);
+    expect(parsed[0]?.status).toBe("archived");
+    expect(parsed[0]?.review_risk_level).toBe("critical");
+  });
+
+  it("falls back to an empty queue when the body is not an array", () => {
+    const parsed = parseWithFallback(
+      { submissions: [base] },
+      EvolutionReviewSubmissionListSchema,
+      EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
+      { endpoint: "GET /api/evolution/submissions" },
+    );
+    expect(parsed).toBe(EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST);
   });
 });
 

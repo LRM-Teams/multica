@@ -557,6 +557,55 @@ func TestCurateSubmissionMatchesMetadataRelevantAgents(t *testing.T) {
 	}
 }
 
+func TestCurateSubmissionDoesNotMatchSingleBroadTool(t *testing.T) {
+	submission := validMemorySubmission()
+	submission.Tools = []string{"github"}
+	mock := newEvolutionMockDB(submission)
+	mock.unit.Tools = submission.Tools
+	broadID := testUUID(63)
+	mock.agents = append(mock.agents,
+		db.Agent{ID: broadID, WorkspaceID: submission.WorkspaceID, Name: "GitHub helper", Description: "Handles GitHub notifications."},
+	)
+	service := NewEvolutionService(db.New(mock))
+
+	unit, status, err := service.curateSubmission(context.Background(), submission)
+	if err != nil {
+		t.Fatalf("curateSubmission error = %v", err)
+	}
+	if status != evolutionCurationPromoted {
+		t.Fatalf("status = %q, want promoted", status)
+	}
+	if _, err := service.matchSourceAgent(context.Background(), submission, unit); err != nil {
+		t.Fatalf("matchSourceAgent error = %v", err)
+	}
+	if len(mock.deliveries) != 1 || mock.deliveries[0].TargetAgentID != submission.SourceAgentID {
+		t.Fatalf("deliveries = %#v, want only source agent", mock.deliveries)
+	}
+}
+
+func TestShouldCreateEvolutionDeliveryMatchAllowsComplementaryMetadata(t *testing.T) {
+	target := evolutionDeliveryMatchTarget{
+		Score: 0.3,
+		Details: map[string]any{"matched": map[string][]string{
+			"tools":     {"github"},
+			"languages": {"go"},
+		}},
+	}
+	if !shouldCreateEvolutionDeliveryMatch(target) {
+		t.Fatal("expected complementary tool+language metadata to pass")
+	}
+}
+
+func TestShouldCreateEvolutionDeliveryMatchRejectsSingleBroadDimension(t *testing.T) {
+	target := evolutionDeliveryMatchTarget{
+		Score:   0.3,
+		Details: map[string]any{"matched": map[string][]string{"tools": {"github"}}},
+	}
+	if shouldCreateEvolutionDeliveryMatch(target) {
+		t.Fatal("expected single broad tool match to be rejected")
+	}
+}
+
 func TestCurateSubmissionWithReviewerPromoteLowRiskPromotes(t *testing.T) {
 	submission := validMemorySubmission()
 	reviewer := &fakeEvolutionReviewer{result: promoteLowRiskReview()}

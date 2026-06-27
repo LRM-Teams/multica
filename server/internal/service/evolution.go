@@ -647,11 +647,26 @@ func (s *EvolutionService) matchEvolutionDeliveryTargets(ctx context.Context, su
 			continue
 		}
 		candidate := scoreEvolutionDeliveryTarget(submission, unit, agent)
-		if candidate.Score >= 0.3 {
+		if shouldCreateEvolutionDeliveryMatch(candidate) {
 			targets = append(targets, candidate)
 		}
 	}
 	return targets, nil
+}
+
+func shouldCreateEvolutionDeliveryMatch(target evolutionDeliveryMatchTarget) bool {
+	if target.Score >= 0.45 {
+		return true
+	}
+	matched, _ := target.Details["matched"].(map[string][]string)
+	if len(matched) < 2 {
+		return false
+	}
+	_, hasTool := matched["tools"]
+	_, hasLanguage := matched["languages"]
+	_, hasFramework := matched["frameworks"]
+	_, hasTaskType := matched["task_types"]
+	return hasTool && (hasLanguage || hasFramework || hasTaskType) || hasTaskType && (hasLanguage || hasFramework)
 }
 
 func scoreEvolutionDeliveryTarget(submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit, agent db.Agent) evolutionDeliveryMatchTarget {
@@ -700,6 +715,7 @@ func scoreEvolutionDeliveryTarget(submission db.EvolutionUnitSubmission, unit db
 			"source_agent_id": uuidString(submission.SourceAgentID),
 			"target_agent_id": uuidString(agent.ID),
 			"matched":         matched,
+			"threshold":       0.45,
 		},
 	}
 }

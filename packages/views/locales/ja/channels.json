@@ -143,5 +143,13 @@
     "close_chat": "チャットを閉じる",
     "action_failed": "操作に失敗しました。もう一度お試しください",
     "composer_placeholder": "{{name}} にメッセージ…"
+  },
+  "quote": {
+    "reply": "返信",
+    "reply_aria": "このメッセージに返信",
+    "more_aria": "その他の操作",
+    "cancel": "返信をキャンセル",
+    "replying_to": "{{name}} への返信",
+    "jump_to": "元のメッセージへジャンプ"
   }
 }

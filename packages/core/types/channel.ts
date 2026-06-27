@@ -56,6 +56,10 @@ export interface ChannelMessage {
    */
   attachments?: import("./attachment").Attachment[];
   created_at: string;
+  /** BE task #23: id of the quoted message, null when not a reply. */
+  reply_to_message_id?: string | null;
+  /** BE task #23: author + content preview of the quoted message. Absent when not a reply or the original was deleted. */
+  reply_to?: { author_name: string; content: string } | null;
 }
 
 export interface ChannelAuthorStat {

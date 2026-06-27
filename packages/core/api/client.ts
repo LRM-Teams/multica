@@ -1866,10 +1866,16 @@ export class ApiClient {
     channelId: string,
     content: string,
     attachmentIds?: string[],
+    replyToMessageId?: string,
   ): Promise<ChannelMessage> {
-    const body: { content: string; attachment_ids?: string[] } = { content };
+    const body: { content: string; attachment_ids?: string[]; reply_to_message_id?: string } = {
+      content,
+    };
     if (attachmentIds && attachmentIds.length > 0) {
       body.attachment_ids = attachmentIds;
+    }
+    if (replyToMessageId) {
+      body.reply_to_message_id = replyToMessageId;
     }
     return this.fetch(`/api/channels/${channelId}/messages`, {
       method: "POST",

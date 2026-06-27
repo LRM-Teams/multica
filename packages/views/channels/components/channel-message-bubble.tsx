@@ -1,6 +1,13 @@
 "use client";
 
+import { MoreHorizontal, Reply } from "lucide-react";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@multica/ui/components/ui/context-menu";
 import { cn } from "@multica/ui/lib/utils";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
@@ -27,12 +34,18 @@ function formatTime(value: string): string {
  * on the avatar plus an "Agent" pill, and a faint-primary bubble so agent
  * output reads as distinct from human messages at a glance. Body is rendered
  * through the shared Markdown pipeline (mentions, attachments, light formatting).
+ *
+ * Desktop: hover → floating toolbar (Reply / ⋯) + right-click → context menu.
+ * Mobile: long-press → context menu (ContextMenu handles this natively).
+ * Keyboard: tabIndex on the row; toolbar is revealed on focus-within (a11y).
  */
 export function ChannelMessageBubble({
   message,
   currentUserId,
   ownName,
   highlighted = false,
+  onQuote,
+  onScrollTo,
 }: {
   message: ChannelMessage;
   currentUserId: string | null;
@@ -40,6 +53,10 @@ export function ChannelMessageBubble({
   ownName?: string;
   /** Deep-link target: briefly ring-highlights the message, then fades. */
   highlighted?: boolean;
+  /** Called when the user triggers "Reply" on this message. */
+  onQuote?: (message: ChannelMessage) => void;
+  /** Called when the user clicks the inline quote block to jump to the original. */
+  onScrollTo?: (messageId: string) => void;
 }) {
   const { t } = useT("channels");
   const { getActorAvatarUrl } = useActorName();
@@ -66,72 +83,137 @@ export function ChannelMessageBubble({
           : null;
   const displayName = isOwn ? ownName ?? message.author_name : message.author_name;
 
+  const canQuote = !!onQuote;
+
+  const toolbarBtnCls =
+    "flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
+
   return (
-    <div
-      id={`message-${message.id}`}
-      data-testid="message-bubble"
-      data-own={isOwn}
-      className={cn(
-        "group flex gap-2.5 rounded-lg px-2 py-2 transition-colors duration-1000",
-        isOwn ? "flex-row-reverse" : "flex-row",
-        highlighted && "bg-primary/10 ring-2 ring-primary/40 duration-0",
-      )}
-    >
-      <ActorAvatar
-        name={message.author_name}
-        initials={initialsOf(message.author_name)}
-        avatarUrl={avatarUrl ?? undefined}
-        isAgent={isAgent}
-        isSystem={message.author_type === "system"}
-        size={28}
-        className="mt-0.5"
-        tint={tint}
-      />
-      <div
-        className={cn(
-          "flex min-w-0 max-w-[78%] flex-col gap-1",
-          isOwn && "items-end",
-        )}
-      >
-        <div
-          className={cn(
-            "flex items-center gap-2 text-sm",
-            isOwn && "flex-row-reverse",
-          )}
-        >
-          <span className="truncate font-medium text-foreground">{displayName}</span>
-          {isAgent && (
-            <span className="shrink-0 rounded-full border border-primary/20 bg-primary/[0.08] px-2 py-0.5 text-[11px] font-normal leading-none text-primary">
-              {t(($) => $.message.agent_badge)}
-            </span>
-          )}
-          {isExternal && (
-            <span className="shrink-0 rounded-full border bg-muted px-2 py-0.5 text-[11px] leading-none text-muted-foreground">
-              {t(($) => $.message.feishu_badge)}
-            </span>
-          )}
-          <span className="shrink-0 text-[11px] text-muted-foreground">
-            {formatTime(message.created_at)}
-          </span>
-        </div>
-        <div
-          className={cn(
-            // min-w-0 + break long tokens so a wide code span / URL wraps
-            // inside the bubble instead of forcing the column wider.
-            "w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg border px-3 py-2 text-sm leading-6",
-            isOwn
-              ? "border-border/60 bg-card"
-              : "border-primary/20 bg-primary/[0.06]",
-          )}
-        >
-          <MemoizedMarkdown attachments={message.attachments}>{message.content}</MemoizedMarkdown>
-          <AttachmentList
-            attachments={message.attachments}
-            content={message.content}
-            className="mt-1.5"
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <div
+            id={`message-${message.id}`}
+            data-testid="message-bubble"
+            data-own={isOwn}
+            tabIndex={0}
+            className={cn(
+              "group relative flex gap-2.5 rounded-lg px-2 py-2 outline-none transition-colors duration-1000",
+              isOwn ? "flex-row-reverse" : "flex-row",
+              highlighted && "bg-primary/10 ring-2 ring-primary/40 duration-0",
+            )}
           />
+        }
+      >
+        {/* Hover / focus-within floating toolbar — desktop + keyboard */}
+        {canQuote && (
+          <div
+            className="absolute -top-4 right-2 hidden items-center gap-0.5 rounded-lg border bg-card px-1 py-0.5 shadow-sm group-hover:flex group-focus-within:flex"
+            aria-hidden="true"
+          >
+            <button
+              type="button"
+              aria-label={t(($) => $.quote.reply_aria)}
+              className={toolbarBtnCls}
+              onClick={(e) => {
+                e.stopPropagation();
+                onQuote(message);
+              }}
+            >
+              <Reply className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label={t(($) => $.quote.more_aria)}
+              className={toolbarBtnCls}
+            >
+              <MoreHorizontal className="size-3.5" />
+            </button>
+          </div>
+        )}
+
+        <ActorAvatar
+          name={message.author_name}
+          initials={initialsOf(message.author_name)}
+          avatarUrl={avatarUrl ?? undefined}
+          isAgent={isAgent}
+          isSystem={message.author_type === "system"}
+          size={28}
+          className="mt-0.5"
+          tint={tint}
+        />
+        <div
+          className={cn(
+            "flex min-w-0 max-w-[78%] flex-col gap-1",
+            isOwn && "items-end",
+          )}
+        >
+          <div
+            className={cn(
+              "flex items-center gap-2 text-sm",
+              isOwn && "flex-row-reverse",
+            )}
+          >
+            <span className="truncate font-medium text-foreground">{displayName}</span>
+            {isAgent && (
+              <span className="shrink-0 rounded-full border border-primary/20 bg-primary/[0.08] px-2 py-0.5 text-[11px] font-normal leading-none text-primary">
+                {t(($) => $.message.agent_badge)}
+              </span>
+            )}
+            {isExternal && (
+              <span className="shrink-0 rounded-full border bg-muted px-2 py-0.5 text-[11px] leading-none text-muted-foreground">
+                {t(($) => $.message.feishu_badge)}
+              </span>
+            )}
+            <span className="shrink-0 text-[11px] text-muted-foreground">
+              {formatTime(message.created_at)}
+            </span>
+          </div>
+          <div
+            className={cn(
+              "w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg border px-3 py-2 text-sm leading-6",
+              isOwn
+                ? "border-border/60 bg-card"
+                : "border-primary/20 bg-primary/[0.06]",
+            )}
+          >
+            {/* Inline quote block: rendered when reply_to is present (BE task #23) */}
+            {message.reply_to && (
+              <button
+                type="button"
+                onClick={() =>
+                  message.reply_to_message_id && onScrollTo?.(message.reply_to_message_id)
+                }
+                className="mb-2 w-full cursor-pointer rounded border-l-2 border-muted-foreground/30 bg-muted/30 px-2 py-1 text-left transition-opacity hover:opacity-80"
+                aria-label={t(($) => $.quote.jump_to)}
+              >
+                <p className="truncate text-[11px] font-semibold text-foreground/70">
+                  {message.reply_to.author_name}
+                </p>
+                <p className="line-clamp-1 text-[11px] text-muted-foreground">
+                  {message.reply_to.content}
+                </p>
+              </button>
+            )}
+            <MemoizedMarkdown attachments={message.attachments}>{message.content}</MemoizedMarkdown>
+            <AttachmentList
+              attachments={message.attachments}
+              content={message.content}
+              className="mt-1.5"
+            />
+          </div>
         </div>
-      </div>
-    </div>
+      </ContextMenuTrigger>
+
+      {/* Right-click / long-press context menu */}
+      {canQuote && (
+        <ContextMenuContent>
+          <ContextMenuItem onClick={() => onQuote(message)}>
+            <Reply className="size-4" />
+            {t(($) => $.quote.reply)}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      )}
+    </ContextMenu>
   );
 }

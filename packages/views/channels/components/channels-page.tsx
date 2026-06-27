@@ -1449,7 +1449,7 @@ export function ChannelsPage() {
                 ownName={currentUserName ?? undefined}
                 highlightMessageId={highlightMessageId}
                 emptyLabel={t(($) => $.thread.empty)}
-                onQuote={setQuoteMessage}
+                onQuote={isActiveArchived ? undefined : setQuoteMessage}
                 onScrollToMessage={setHighlightMessageId}
                 footer={
                   <>

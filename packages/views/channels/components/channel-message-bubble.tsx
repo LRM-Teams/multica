@@ -1,6 +1,6 @@
 "use client";
 
-import { MoreHorizontal, Reply } from "lucide-react";
+import { Reply } from "lucide-react";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import {
   ContextMenu,
@@ -35,9 +35,10 @@ function formatTime(value: string): string {
  * output reads as distinct from human messages at a glance. Body is rendered
  * through the shared Markdown pipeline (mentions, attachments, light formatting).
  *
- * Desktop: hover → floating toolbar (Reply / ⋯) + right-click → context menu.
+ * Desktop: hover → floating toolbar (Reply) + right-click → context menu.
  * Mobile: long-press → context menu (ContextMenu handles this natively).
- * Keyboard: tabIndex on the row; toolbar is revealed on focus-within (a11y).
+ * Keyboard: ContextMenu via Menu/Shift+F10 is the accessible path; toolbar
+ *   buttons have tabIndex={-1} since they are pointer shortcuts, not AT targets.
  */
 export function ChannelMessageBubble({
   message,
@@ -113,6 +114,7 @@ export function ChannelMessageBubble({
           >
             <button
               type="button"
+              tabIndex={-1}
               aria-label={t(($) => $.quote.reply_aria)}
               className={toolbarBtnCls}
               onClick={(e) => {
@@ -121,13 +123,6 @@ export function ChannelMessageBubble({
               }}
             >
               <Reply className="size-3.5" />
-            </button>
-            <button
-              type="button"
-              aria-label={t(($) => $.quote.more_aria)}
-              className={toolbarBtnCls}
-            >
-              <MoreHorizontal className="size-3.5" />
             </button>
           </div>
         )}

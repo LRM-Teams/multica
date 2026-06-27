@@ -15,6 +15,7 @@ import type {
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
   GroupedIssuesResponse,
+  ChannelMessageSearchResponse,
   ListIssuesResponse,
   ListWebhookDeliveriesResponse,
   Squad,
@@ -210,6 +211,28 @@ const CommentTriggerPreviewAgentSchema = z.object({
 export const CommentTriggerPreviewSchema = z.object({
   agents: z.array(CommentTriggerPreviewAgentSchema).default([]),
 }).loose();
+
+const ChannelMessageSearchResultSchema = z.object({
+  message_id: z.string().default(""),
+  channel_id: z.string().default(""),
+  author_type: z.string().default(""),
+  author_id: z.string().nullable().default(null),
+  author_name: z.string().default(""),
+  content: z.string().default(""),
+  created_at: z.string().default(""),
+}).loose();
+
+export const ChannelMessageSearchResponseSchema = z.object({
+  query: z.string().default(""),
+  total: z.number().default(0),
+  results: z.array(ChannelMessageSearchResultSchema).default([]),
+}).loose();
+
+export const EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE: ChannelMessageSearchResponse = {
+  query: "",
+  total: 0,
+  results: [],
+};
 
 // Metadata is primitive-only by API/DB contract. Stay lenient on shape:
 // unknown keys land as `unknown` to a caller, but the field itself defaults

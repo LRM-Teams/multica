@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -40,11 +41,14 @@ type ChannelResponse struct {
 	ArchivedAt  *string `json:"archived_at,omitempty"`
 	ArchivedBy  *string `json:"archived_by,omitempty"`
 	// List-only enrichments (zero/omitted on create/update/get responses).
-	UnreadCount    int                  `json:"unread_count"`
-	ManuallyUnread bool                 `json:"manually_unread,omitempty"`
-	PinnedAt       *string              `json:"pinned_at,omitempty"`
-	LastMessage    *ChannelLastMessage  `json:"last_message,omitempty"`
-	Members        []ChannelMemberBrief `json:"members,omitempty"`
+	UnreadCount     int                  `json:"unread_count"`
+	RealUnreadCount int                  `json:"real_unread_count"`
+	ManuallyUnread  bool                 `json:"manually_unread,omitempty"`
+	PinnedAt        *string              `json:"pinned_at,omitempty"`
+	MutedAt         *string              `json:"muted_at,omitempty"`
+	Muted           bool                 `json:"muted,omitempty"`
+	LastMessage     *ChannelLastMessage  `json:"last_message,omitempty"`
+	Members         []ChannelMemberBrief `json:"members,omitempty"`
 }
 
 type ChannelLastMessage struct {
@@ -68,21 +72,48 @@ type ChannelMemberResponse struct {
 }
 
 type ChannelMessageResponse struct {
-	ID                string  `json:"id"`
-	ChannelID         string  `json:"channel_id"`
-	WorkspaceID       string  `json:"workspace_id"`
-	AuthorType        string  `json:"author_type"`
-	AuthorID          *string `json:"author_id"`
-	AuthorName        string  `json:"author_name"`
-	Content           string  `json:"content"`
-	Source            string  `json:"source"`
-	ExternalMessageID *string `json:"external_message_id"`
-	ThreadID          *string `json:"thread_id,omitempty"`
-	TriggerDepth      int     `json:"trigger_depth"`
-	CreatedAt         string  `json:"created_at"`
+	ID                string               `json:"id"`
+	ChannelID         string               `json:"channel_id"`
+	WorkspaceID       string               `json:"workspace_id"`
+	AuthorType        string               `json:"author_type"`
+	AuthorID          *string              `json:"author_id"`
+	AuthorName        string               `json:"author_name"`
+	Content           string               `json:"content"`
+	Source            string               `json:"source"`
+	ExternalMessageID *string              `json:"external_message_id"`
+	ReplyToMessageID  *string              `json:"reply_to_message_id,omitempty"`
+	ReplyTo           *ChannelMessageReply `json:"reply_to,omitempty"`
+	ThreadID          *string              `json:"thread_id,omitempty"`
+	TriggerDepth      int                  `json:"trigger_depth"`
+	CreatedAt         string               `json:"created_at"`
 	// Attachments linked to this message via channel_message_id. The chat
 	// bubble renders file/image cards from these.
 	Attachments []AttachmentResponse `json:"attachments,omitempty"`
+}
+
+type ChannelMessageReply struct {
+	ID         string  `json:"id"`
+	AuthorType string  `json:"author_type"`
+	AuthorID   *string `json:"author_id"`
+	AuthorName string  `json:"author_name"`
+	Content    string  `json:"content"`
+	CreatedAt  string  `json:"created_at"`
+}
+
+type ChannelMessageSearchResponse struct {
+	Query   string                       `json:"query"`
+	Total   int                          `json:"total"`
+	Results []ChannelMessageSearchResult `json:"results"`
+}
+
+type ChannelMessageSearchResult struct {
+	MessageID  string  `json:"message_id"`
+	ChannelID  string  `json:"channel_id"`
+	AuthorType string  `json:"author_type"`
+	AuthorID   *string `json:"author_id"`
+	AuthorName string  `json:"author_name"`
+	Content    string  `json:"content"`
+	CreatedAt  string  `json:"created_at"`
 }
 
 type CreateChannelRequest struct {
@@ -103,8 +134,9 @@ type AddChannelMemberRequest struct {
 }
 
 type SendChannelMessageRequest struct {
-	Content       string   `json:"content"`
-	AttachmentIDs []string `json:"attachment_ids"`
+	Content          string   `json:"content"`
+	AttachmentIDs    []string `json:"attachment_ids"`
+	ReplyToMessageID *string  `json:"reply_to_message_id"`
 }
 
 type ChannelTypingRequest struct {
@@ -137,8 +169,9 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	archivedOnly := queryBool(r, "archived")
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT ch.id, ch.workspace_id, ch.name, ch.description, ch.lark_chat_id, ch.created_by, ch.created_at, ch.updated_at, ch.kind,
-		       ch.archived_at, ch.archived_by, cm.pinned_at, cm.manual_unread_at,
+		       ch.archived_at, ch.archived_by, cm.pinned_at, cm.manual_unread_at, cm.muted_at,
 		       lm.author_type, lm.author_name, lm.content, lm.created_at,
+		       COALESCE(uc.cnt, 0),
 		       GREATEST(COALESCE(uc.cnt, 0), CASE WHEN cm.manual_unread_at IS NOT NULL THEN 1 ELSE 0 END)
 		FROM channel ch
 		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
@@ -168,11 +201,11 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		var id, wsID, createdBy, archivedBy pgtype.UUID
 		var name string
 		var desc, lark, lastType, lastName, lastContent pgtype.Text
-		var createdAt, updatedAt, archivedAt, pinnedAt, manualUnreadAt, lastAt pgtype.Timestamptz
-		var unread int
+		var createdAt, updatedAt, archivedAt, pinnedAt, manualUnreadAt, mutedAt, lastAt pgtype.Timestamptz
+		var realUnread, unread int
 		var kind string
 		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt, &kind,
-			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &lastType, &lastName, &lastContent, &lastAt, &unread); err != nil {
+			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &mutedAt, &lastType, &lastName, &lastContent, &lastAt, &realUnread, &unread); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channels")
 			return
 		}
@@ -181,7 +214,8 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			Description: textToPtr(desc), LarkChatID: textToPtr(lark), CreatedBy: uuidToString(createdBy),
 			CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt),
 			ArchivedAt: timestampToPtr(archivedAt), ArchivedBy: uuidToPtr(archivedBy),
-			Kind: kind, UnreadCount: unread, ManuallyUnread: manualUnreadAt.Valid, PinnedAt: timestampToPtr(pinnedAt), Members: []ChannelMemberBrief{},
+			Kind: kind, UnreadCount: unread, RealUnreadCount: realUnread, ManuallyUnread: manualUnreadAt.Valid,
+			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid, Members: []ChannelMemberBrief{},
 		}
 		if lastContent.Valid {
 			ch.LastMessage = &ChannelLastMessage{
@@ -263,6 +297,14 @@ func (h *Handler) UnpinChannel(w http.ResponseWriter, r *http.Request) {
 	h.setChannelPinned(w, r, false)
 }
 
+func (h *Handler) MuteChannel(w http.ResponseWriter, r *http.Request) {
+	h.setChannelMuted(w, r, true)
+}
+
+func (h *Handler) UnmuteChannel(w http.ResponseWriter, r *http.Request) {
+	h.setChannelMuted(w, r, false)
+}
+
 func (h *Handler) setChannelPinned(w http.ResponseWriter, r *http.Request, pinned bool) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -290,6 +332,35 @@ func (h *Handler) setChannelPinned(w http.ResponseWriter, r *http.Request, pinne
 		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`, value),
 		channelID, parseUUID(workspaceID), userUUID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update channel pin")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handler) setChannelMuted(w http.ResponseWriter, r *http.Request, muted bool) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	userUUID := parseUUID(userID)
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, userUUID) {
+		return
+	}
+	value := "now()"
+	if !muted {
+		value = "NULL"
+	}
+	if _, err := h.DB.Exec(r.Context(), fmt.Sprintf(`
+		UPDATE channel_member
+		SET muted_at = %s
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`, value),
+		channelID, parseUUID(workspaceID), userUUID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update channel mute")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -645,7 +716,7 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, thread_id, trigger_depth, created_at
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, reply_to_message_id, thread_id, trigger_depth, created_at
 		FROM channel_message
 		WHERE channel_id = $1 AND workspace_id = $2
 		ORDER BY created_at ASC`, channelID, parseUUID(workspaceID))
@@ -671,7 +742,151 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	for i := range out {
 		out[i].Attachments = grouped[out[i].ID]
 	}
+	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	resp := ChannelMessageSearchResponse{Query: query, Results: []ChannelMessageSearchResult{}}
+	if query == "" {
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	limit := boundedQueryInt(r, "limit", 50, 100)
+	pattern := "%" + escapeLike(query) + "%"
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND workspace_id = $2 AND content ILIKE $3 ESCAPE '\'`,
+		channelID, parseUUID(workspaceID), pattern).Scan(&resp.Total); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to search channel messages")
+		return
+	}
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT id, channel_id, author_type, author_id, author_name, content, created_at
+		FROM channel_message
+		WHERE channel_id = $1 AND workspace_id = $2 AND content ILIKE $3 ESCAPE '\'
+		ORDER BY created_at ASC, id ASC
+		LIMIT $4`, channelID, parseUUID(workspaceID), pattern, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to search channel messages")
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, chID, authorID pgtype.UUID
+		var authorType, authorName, content string
+		var createdAt pgtype.Timestamptz
+		if err := rows.Scan(&id, &chID, &authorType, &authorID, &authorName, &content, &createdAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read channel message search results")
+			return
+		}
+		resp.Results = append(resp.Results, ChannelMessageSearchResult{
+			MessageID:  uuidToString(id),
+			ChannelID:  uuidToString(chID),
+			AuthorType: authorType,
+			AuthorID:   uuidToPtr(authorID),
+			AuthorName: authorName,
+			Content:    content,
+			CreatedAt:  timestampToString(createdAt),
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) validateChannelReplyTarget(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID pgtype.UUID, raw *string) (pgtype.UUID, bool) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return pgtype.UUID{}, true
+	}
+	replyToID, ok := parseUUIDOrBadRequest(w, strings.TrimSpace(*raw), "reply_to_message_id")
+	if !ok {
+		return pgtype.UUID{}, false
+	}
+	var exists bool
+	if err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM channel_message
+			WHERE id = $1 AND channel_id = $2 AND workspace_id = $3
+		)`, replyToID, channelID, parseUUID(workspaceID)).Scan(&exists); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to validate reply target")
+		return pgtype.UUID{}, false
+	}
+	if !exists {
+		writeError(w, http.StatusBadRequest, "reply_to_message_id must reference a message in this channel")
+		return pgtype.UUID{}, false
+	}
+	return replyToID, true
+}
+
+func (h *Handler) attachChannelMessageReplySummary(ctx context.Context, workspaceID string, msg ChannelMessageResponse) ChannelMessageResponse {
+	messages := []ChannelMessageResponse{msg}
+	h.attachChannelMessageReplySummaries(ctx, workspaceID, messages)
+	return messages[0]
+}
+
+func (h *Handler) attachChannelMessageReplySummaries(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
+	replyIDs := []pgtype.UUID{}
+	seen := map[string]bool{}
+	for _, msg := range messages {
+		if msg.ReplyToMessageID == nil || seen[*msg.ReplyToMessageID] {
+			continue
+		}
+		seen[*msg.ReplyToMessageID] = true
+		replyIDs = append(replyIDs, parseUUID(*msg.ReplyToMessageID))
+	}
+	if len(replyIDs) == 0 {
+		return
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT id, author_type, author_id, author_name, content, created_at
+		FROM channel_message
+		WHERE workspace_id = $1 AND id = ANY($2::uuid[])`,
+		parseUUID(workspaceID), replyIDs)
+	if err != nil {
+		slog.Warn("channel reply summary: load failed", "workspace", workspaceID, "error", err)
+		return
+	}
+	defer rows.Close()
+	byID := map[string]ChannelMessageReply{}
+	for rows.Next() {
+		var id, authorID pgtype.UUID
+		var authorType, authorName, content string
+		var createdAt pgtype.Timestamptz
+		if err := rows.Scan(&id, &authorType, &authorID, &authorName, &content, &createdAt); err != nil {
+			continue
+		}
+		key := uuidToString(id)
+		byID[key] = ChannelMessageReply{
+			ID:         key,
+			AuthorType: authorType,
+			AuthorID:   uuidToPtr(authorID),
+			AuthorName: authorName,
+			Content:    content,
+			CreatedAt:  timestampToString(createdAt),
+		}
+	}
+	for i := range messages {
+		if messages[i].ReplyToMessageID == nil {
+			continue
+		}
+		if reply, ok := byID[*messages[i].ReplyToMessageID]; ok {
+			messages[i].ReplyTo = &reply
+		}
+	}
 }
 
 type ChannelAuthorStat struct {
@@ -833,12 +1048,19 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
 		return
 	}
+	replyToMessageID, ok := h.validateChannelReplyTarget(w, r.Context(), workspaceID, channelID, req.ReplyToMessageID)
+	if !ok {
+		return
+	}
 	authorName := h.channelAuthorName(r.Context(), userID)
 	threadID := uuid.NewString()
-	msg, err := h.insertChannelMessage(r.Context(), channelID, parseUUID(workspaceID), "user", parseUUID(userID), authorName, content, "multica", nil, &threadID, 0)
+	msg, err := h.insertChannelMessage(r.Context(), channelID, parseUUID(workspaceID), "user", parseUUID(userID), authorName, content, "multica", nil, replyToMessageID, &threadID, 0)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create channel message")
 		return
+	}
+	if msg.ReplyToMessageID != nil {
+		msg = h.attachChannelMessageReplySummary(r.Context(), workspaceID, msg)
 	}
 	// Back-fill channel_message_id on attachments uploaded against this
 	// channel while composing. The query only touches rows where channel_id
@@ -914,7 +1136,7 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	threadID := uuid.NewString()
-	msg, err := h.insertChannelMessage(r.Context(), parseUUID(ch.ID), parseUUID(workspaceID), "lark", pgtype.UUID{}, authorName, content, "lark", external, &threadID, 0)
+	msg, err := h.insertChannelMessage(r.Context(), parseUUID(ch.ID), parseUUID(workspaceID), "lark", pgtype.UUID{}, authorName, content, "lark", external, pgtype.UUID{}, &threadID, 0)
 	if err != nil {
 		if errorsIsNoRows(err) || isUniqueViolation(err) {
 			writeError(w, http.StatusNotFound, "channel not found or message already imported")
@@ -1132,6 +1354,9 @@ func (h *Handler) notifyChannelMemberMentions(ctx context.Context, ch ChannelRes
 	title := fmt.Sprintf("%s mentioned you in #%s", msg.AuthorName, ch.Name)
 
 	for id := range recipients {
+		if h.channelMentionRecipientMuted(ctx, ch, id) {
+			continue
+		}
 		item, err := h.Queries.CreateInboxItem(ctx, db.CreateInboxItemParams{
 			WorkspaceID:   parseUUID(ch.WorkspaceID),
 			RecipientType: "member",
@@ -1149,6 +1374,42 @@ func (h *Handler) notifyChannelMemberMentions(ctx context.Context, ch ChannelRes
 			continue
 		}
 		h.publish(protocol.EventInboxNew, ch.WorkspaceID, actorType, uuidToString(actorID), map[string]any{"item": inboxToResponse(item)})
+	}
+}
+
+func (h *Handler) channelMentionRecipientMuted(ctx context.Context, ch ChannelResponse, recipientID string) bool {
+	switch ch.Kind {
+	case "group":
+		var muted bool
+		err := h.DB.QueryRow(ctx, `
+			SELECT muted_at IS NOT NULL
+			FROM channel_member
+			WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`,
+			parseUUID(ch.ID), parseUUID(ch.WorkspaceID), parseUUID(recipientID)).Scan(&muted)
+		return err == nil && muted
+	case "dm":
+		var peerType string
+		var peerID pgtype.UUID
+		err := h.DB.QueryRow(ctx, `
+			SELECT member_type, member_id
+			FROM channel_member
+			WHERE channel_id = $1
+			  AND NOT (member_type = 'user' AND member_id = $2)
+			ORDER BY created_at ASC
+			LIMIT 1`, parseUUID(ch.ID), parseUUID(recipientID)).Scan(&peerType, &peerID)
+		if err != nil {
+			return false
+		}
+		var muted bool
+		err = h.DB.QueryRow(ctx, `
+			SELECT COALESCE((
+				SELECT muted_at IS NOT NULL
+				FROM dm_peer_state
+				WHERE workspace_id = $1 AND user_id = $2 AND peer_type = $3 AND peer_id = $4
+			), false)`, parseUUID(ch.WorkspaceID), parseUUID(recipientID), peerType, peerID).Scan(&muted)
+		return err == nil && muted
+	default:
+		return false
 	}
 }
 
@@ -1291,9 +1552,9 @@ func (h *Handler) channelMemberSummaries(ctx context.Context, workspaceID, chann
 
 func (h *Handler) recentChannelMessages(ctx context.Context, workspaceID, channelID string, limit int) []ChannelMessageResponse {
 	rows, err := h.DB.Query(ctx, `
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, thread_id, trigger_depth, created_at
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, reply_to_message_id, thread_id, trigger_depth, created_at
 		FROM (
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, thread_id, trigger_depth, created_at
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, reply_to_message_id, thread_id, trigger_depth, created_at
 			FROM channel_message
 			WHERE channel_id = $1 AND workspace_id = $2
 			ORDER BY created_at DESC
@@ -1402,7 +1663,7 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 	if archived, found := h.channelIsArchived(context.Background(), uuidToString(workspaceID), channelID); !found || archived {
 		return
 	}
-	msg, err := h.insertChannelMessage(context.Background(), channelID, workspaceID, "agent", agentID, agentName, payload.Content, "multica", nil, threadID, nextDepth)
+	msg, err := h.insertChannelMessage(context.Background(), channelID, workspaceID, "agent", agentID, agentName, payload.Content, "multica", nil, pgtype.UUID{}, threadID, nextDepth)
 	if err != nil {
 		slog.Warn("channel bridge: insert agent reply failed", "chat_session_id", payload.ChatSessionID, "error", err)
 		return
@@ -1481,12 +1742,12 @@ func (h *Handler) channelInitiatorForChatSession(ctx context.Context, chatSessio
 	return pgtype.UUID{}
 }
 
-func (h *Handler) insertChannelMessage(ctx context.Context, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content, source string, externalID *string, threadID *string, triggerDepth int) (ChannelMessageResponse, error) {
+func (h *Handler) insertChannelMessage(ctx context.Context, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content, source string, externalID *string, replyToMessageID pgtype.UUID, threadID *string, triggerDepth int) (ChannelMessageResponse, error) {
 	row := h.DB.QueryRow(ctx, `
-		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, thread_id, trigger_depth)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, thread_id, trigger_depth, created_at`,
-		channelID, workspaceID, authorType, nullableUUID(authorID), authorName, content, source, externalID, threadID, triggerDepth)
+		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, reply_to_message_id, thread_id, trigger_depth)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, reply_to_message_id, thread_id, trigger_depth, created_at`,
+		channelID, workspaceID, authorType, nullableUUID(authorID), authorName, content, source, externalID, nullableUUID(replyToMessageID), threadID, triggerDepth)
 	return scanChannelMessage(row)
 }
 
@@ -1657,15 +1918,15 @@ func scanChannel(row rowScanner) (ChannelResponse, error) {
 }
 
 func scanChannelMessage(row rowScanner) (ChannelMessageResponse, error) {
-	var id, channelID, wsID, authorID pgtype.UUID
+	var id, channelID, wsID, authorID, replyToMessageID pgtype.UUID
 	var authorType, authorName, content, source string
 	var external, thread pgtype.Text
 	var triggerDepth int
 	var createdAt pgtype.Timestamptz
-	if err := row.Scan(&id, &channelID, &wsID, &authorType, &authorID, &authorName, &content, &source, &external, &thread, &triggerDepth, &createdAt); err != nil {
+	if err := row.Scan(&id, &channelID, &wsID, &authorType, &authorID, &authorName, &content, &source, &external, &replyToMessageID, &thread, &triggerDepth, &createdAt); err != nil {
 		return ChannelMessageResponse{}, err
 	}
-	return ChannelMessageResponse{ID: uuidToString(id), ChannelID: uuidToString(channelID), WorkspaceID: uuidToString(wsID), AuthorType: authorType, AuthorID: uuidToPtr(authorID), AuthorName: authorName, Content: content, Source: source, ExternalMessageID: textToPtr(external), ThreadID: textToPtr(thread), TriggerDepth: triggerDepth, CreatedAt: timestampToString(createdAt)}, nil
+	return ChannelMessageResponse{ID: uuidToString(id), ChannelID: uuidToString(channelID), WorkspaceID: uuidToString(wsID), AuthorType: authorType, AuthorID: uuidToPtr(authorID), AuthorName: authorName, Content: content, Source: source, ExternalMessageID: textToPtr(external), ReplyToMessageID: uuidToPtr(replyToMessageID), ThreadID: textToPtr(thread), TriggerDepth: triggerDepth, CreatedAt: timestampToString(createdAt)}, nil
 }
 
 func trimTextPtr(s *string) *string {
@@ -1700,6 +1961,19 @@ func queryBool(r *http.Request, key string) bool {
 	default:
 		return false
 	}
+}
+
+func boundedQueryInt(r *http.Request, key string, def, max int) int {
+	out := def
+	if raw := strings.TrimSpace(r.URL.Query().Get(key)); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			out = n
+		}
+	}
+	if out > max {
+		return max
+	}
+	return out
 }
 
 func errorsIsNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }

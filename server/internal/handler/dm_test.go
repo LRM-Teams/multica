@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TestDMCanonicalName locks in the deterministic, order-independent, lowercased
@@ -248,6 +250,15 @@ func TestDMActionsApplyAtPeerLevelAcrossSources(t *testing.T) {
 		t.Fatalf("mark legacy-backed DM unread: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
+	req = newRequest(http.MethodPut, "/api/dm/channels/"+channelID+"/mute", nil)
+	req = withChatTestWorkspaceCtx(t, req)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.MuteDMChannel(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mute channel-backed DM: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
 	got := listDMItemsForTest(t)
 	var peer DMItem
 	var found bool
@@ -266,6 +277,9 @@ func TestDMActionsApplyAtPeerLevelAcrossSources(t *testing.T) {
 	}
 	if !peer.ManuallyUnread || peer.Unread == 0 {
 		t.Fatalf("peer-level manual unread missing on listed source %+v", peer)
+	}
+	if !peer.Muted || peer.MutedAt == nil {
+		t.Fatalf("peer-level mute missing on listed source %+v", peer)
 	}
 
 	req = newRequest(http.MethodPost, "/api/channels/"+channelID+"/read", nil)
@@ -321,6 +335,30 @@ func TestDMActionsApplyAtPeerLevelAcrossSources(t *testing.T) {
 	if !found {
 		t.Fatalf("POST /api/dm did not unhide peer")
 	}
+}
+
+func TestLegacyDMSessionReturnsRealUnreadShape(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	cleanupDMArtifacts(t)
+	agentID := createHandlerTestAgent(t, "DM Legacy Real Unread Bot", []byte("[]"))
+	sessionID := seedLegacySession(t, agentID)
+	if _, err := testPool.Exec(ctx, `UPDATE chat_session SET unread_since = now() WHERE id = $1`, sessionID); err != nil {
+		t.Fatalf("mark legacy session unread: %v", err)
+	}
+
+	got := listDMItemsForTest(t)
+	for _, it := range got {
+		if it.Source == dmSourceLegacy && it.ID == sessionID {
+			if it.RealUnread != 1 || it.Unread != 1 || it.ManuallyUnread {
+				t.Fatalf("legacy unread shape = %+v, want real_unread=1 unread=1 manual=false", it)
+			}
+			return
+		}
+	}
+	t.Fatalf("legacy session %s missing from DM list: %+v", sessionID, got)
 }
 
 func listDMItemsForTest(t *testing.T) []DMItem {
@@ -405,7 +443,7 @@ func TestDMDispatch_SelfTriggerGuard(t *testing.T) {
 	if !found {
 		t.Fatal("dm channel not found after seed")
 	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "DM Guard Bot", "my own reply", "multica", nil, strPtr("g1"), 0)
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "DM Guard Bot", "my own reply", "multica", nil, pgtype.UUID{}, strPtr("g1"), 0)
 	if err != nil {
 		t.Fatalf("insert agent trigger: %v", err)
 	}

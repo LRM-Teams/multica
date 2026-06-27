@@ -74,6 +74,7 @@ import type {
   ChannelActiveTask,
   ChannelMember,
   ChannelMessage,
+  ChannelMessageSearchResponse,
   ChannelStats,
   ChannelProjectFiles,
   ChannelProjectFileContent,
@@ -166,6 +167,7 @@ import {
   EMPTY_CLOUD_RUNTIME_NODE,
   EMPTY_CLOUD_RUNTIME_NODE_LIST,
   EMPTY_CREATE_AGENT_FROM_TEMPLATE_RESPONSE,
+  EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE,
   EMPTY_GROUPED_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   EMPTY_SQUAD,
@@ -176,6 +178,7 @@ import {
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
   AppConfigSchema,
+  ChannelMessageSearchResponseSchema,
   type AppConfigResponse,
   GroupedIssuesResponseSchema,
   ListIssuesResponseSchema,
@@ -1789,6 +1792,14 @@ export class ApiClient {
     return this.fetch(`${this.dmOpsPath(source, id)}/pin`, { method: "DELETE" });
   }
 
+  async muteDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
+    return this.fetch(`${this.dmOpsPath(source, id)}/mute`, { method: "PUT" });
+  }
+
+  async unmuteDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
+    return this.fetch(`${this.dmOpsPath(source, id)}/mute`, { method: "DELETE" });
+  }
+
   async markDMUnread(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
     return this.fetch(`${this.dmOpsPath(source, id)}/unread`, { method: "POST" });
   }
@@ -1829,24 +1840,16 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/pin`, { method: "DELETE" });
   }
 
-  async markChannelUnread(channelId: string): Promise<{ ok: boolean }> {
-    return this.fetch(`/api/channels/${channelId}/unread`, { method: "POST" });
-  }
-
   async muteChannel(channelId: string): Promise<{ ok: boolean }> {
-    return this.fetch(`/api/channels/${channelId}/mute`, { method: "POST" });
+    return this.fetch(`/api/channels/${channelId}/mute`, { method: "PUT" });
   }
 
   async unmuteChannel(channelId: string): Promise<{ ok: boolean }> {
     return this.fetch(`/api/channels/${channelId}/mute`, { method: "DELETE" });
   }
 
-  async muteDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
-    return this.fetch(`${this.dmOpsPath(source, id)}/mute`, { method: "PUT" });
-  }
-
-  async unmuteDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
-    return this.fetch(`${this.dmOpsPath(source, id)}/mute`, { method: "DELETE" });
+  async markChannelUnread(channelId: string): Promise<{ ok: boolean }> {
+    return this.fetch(`/api/channels/${channelId}/unread`, { method: "POST" });
   }
 
   async listChannelMembers(channelId: string): Promise<ChannelMember[]> {
@@ -1878,15 +1881,24 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/messages`);
   }
 
+  async searchChannelMessages(channelId: string, query: string, limit?: number): Promise<ChannelMessageSearchResponse> {
+    const params = new URLSearchParams({ q: query });
+    if (limit) {
+      params.set("limit", String(limit));
+    }
+    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/messages/search?${params.toString()}`);
+    return parseWithFallback(raw, ChannelMessageSearchResponseSchema, EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE, {
+      endpoint: "GET /api/channels/{channelId}/messages/search",
+    });
+  }
+
   async sendChannelMessage(
     channelId: string,
     content: string,
     attachmentIds?: string[],
-    replyToMessageId?: string,
+    replyToMessageId?: string | null,
   ): Promise<ChannelMessage> {
-    const body: { content: string; attachment_ids?: string[]; reply_to_message_id?: string } = {
-      content,
-    };
+    const body: { content: string; attachment_ids?: string[]; reply_to_message_id?: string } = { content };
     if (attachmentIds && attachmentIds.length > 0) {
       body.attachment_ids = attachmentIds;
     }

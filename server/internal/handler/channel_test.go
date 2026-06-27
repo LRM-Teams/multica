@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -42,7 +43,7 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if !found {
 		t.Fatal("channel not found after seed")
 	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Channel Helper please join", "multica", nil, strPtr("debate-thread"), 2)
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Channel Helper please join", "multica", nil, pgtype.UUID{}, strPtr("debate-thread"), 2)
 	if err != nil {
 		t.Fatalf("insert trigger: %v", err)
 	}
@@ -124,7 +125,7 @@ func TestChannelMentionNotifiesHumanMember(t *testing.T) {
 
 	// Agent posts a message that @-mentions the human member.
 	content := fmt.Sprintf("On it [@Tester](mention://member/%s) — taking a look now.", testUserID)
-	msg, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "Mention Bot", content, "multica", nil, strPtr("t1"), 1)
+	msg, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "Mention Bot", content, "multica", nil, pgtype.UUID{}, strPtr("t1"), 1)
 	if err != nil {
 		t.Fatalf("insert agent message: %v", err)
 	}
@@ -160,6 +161,142 @@ func TestChannelMentionNotifiesHumanMember(t *testing.T) {
 	}
 }
 
+func TestChannelMutedMemberDoesNotReceiveMentionInbox(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	memberID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "muted-mention-"+uuid.NewString(), testUserID, memberID)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM inbox_item WHERE recipient_id = $1 AND type = 'mentioned'`, memberID)
+	})
+
+	req := newRequestAs(memberID, http.MethodPut, "/api/channels/"+channelID+"/mute", nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.MuteChannel(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mute channel: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	content := fmt.Sprintf("ping [@Channel Plain Member](mention://member/%s)", memberID)
+	msg, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", content, "multica", nil, pgtype.UUID{}, strPtr("muted"), 0)
+	if err != nil {
+		t.Fatalf("insert mention message: %v", err)
+	}
+	testHandler.notifyChannelMemberMentions(ctx, ch, msg)
+
+	var count int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM inbox_item
+		WHERE recipient_id = $1 AND type = 'mentioned'`, memberID).Scan(&count); err != nil {
+		t.Fatalf("count inbox items: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("muted member received %d mention inbox item(s), want 0", count)
+	}
+}
+
+func TestSendChannelMessageReplyReturnsSummary(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "quote-reply-"+uuid.NewString(), testUserID)
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root message", "multica", nil, pgtype.UUID{}, strPtr("quote-root"), 0)
+	if err != nil {
+		t.Fatalf("insert root message: %v", err)
+	}
+
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages", map[string]any{
+		"content":             "replying",
+		"reply_to_message_id": root.ID,
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send reply: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created message: %v", err)
+	}
+	if created.ReplyToMessageID == nil || *created.ReplyToMessageID != root.ID {
+		t.Fatalf("created reply_to_message_id = %v, want %s", created.ReplyToMessageID, root.ID)
+	}
+	if created.ReplyTo == nil || created.ReplyTo.ID != root.ID || created.ReplyTo.Content != "root message" {
+		t.Fatalf("created reply summary = %+v, want root summary", created.ReplyTo)
+	}
+
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list messages: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var messages []ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &messages); err != nil {
+		t.Fatalf("decode listed messages: %v", err)
+	}
+	for _, msg := range messages {
+		if msg.ID == created.ID {
+			if msg.ReplyTo == nil || msg.ReplyTo.ID != root.ID {
+				t.Fatalf("listed reply summary = %+v, want root", msg.ReplyTo)
+			}
+			return
+		}
+	}
+	t.Fatalf("created message %s missing from list", created.ID)
+}
+
+func TestSearchChannelMessagesReturnsStableResults(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "message-search-"+uuid.NewString(), testUserID)
+	first, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "Alpha apple", "multica", nil, pgtype.UUID{}, strPtr("s1"), 0)
+	if err != nil {
+		t.Fatalf("insert first message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "Beta banana", "multica", nil, pgtype.UUID{}, strPtr("s2"), 0); err != nil {
+		t.Fatalf("insert second message: %v", err)
+	}
+
+	req := newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages/search?q=alp&limit=10", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.SearchChannelMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("search messages: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp ChannelMessageSearchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode search response: %v", err)
+	}
+	if resp.Query != "alp" || resp.Total != 1 || len(resp.Results) != 1 {
+		t.Fatalf("search response = %+v, want one alp hit", resp)
+	}
+	if resp.Results[0].MessageID != first.ID || resp.Results[0].Content != "Alpha apple" {
+		t.Fatalf("search result = %+v, want first message", resp.Results[0])
+	}
+}
+
 func TestChannelArchiveHidesFromListFreezesWritesAndRestores(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -167,7 +304,7 @@ func TestChannelArchiveHidesFromListFreezesWritesAndRestores(t *testing.T) {
 
 	ctx := context.Background()
 	channelID := seedChannelForTest(t, "archive-freeze-"+uuid.NewString(), testUserID)
-	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "before archive", "multica", nil, strPtr("archive-thread"), 0); err != nil {
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "before archive", "multica", nil, pgtype.UUID{}, strPtr("archive-thread"), 0); err != nil {
 		t.Fatalf("seed message: %v", err)
 	}
 
@@ -297,7 +434,7 @@ func TestChannelPinAndManualUnreadArePerUserListState(t *testing.T) {
 	if ch.PinnedAt == nil {
 		t.Fatalf("listed channel missing pinned_at: %+v", *ch)
 	}
-	if !ch.ManuallyUnread || ch.UnreadCount == 0 {
+	if !ch.ManuallyUnread || ch.UnreadCount == 0 || ch.RealUnreadCount != 0 {
 		t.Fatalf("listed channel missing manual unread state: %+v", *ch)
 	}
 
@@ -314,7 +451,7 @@ func TestChannelPinAndManualUnreadArePerUserListState(t *testing.T) {
 	if ch == nil {
 		t.Fatal("channel missing from list after read")
 	}
-	if ch.ManuallyUnread || ch.UnreadCount != 0 {
+	if ch.ManuallyUnread || ch.UnreadCount != 0 || ch.RealUnreadCount != 0 {
 		t.Fatalf("manual unread not cleared by read: %+v", *ch)
 	}
 	if ch.PinnedAt == nil {

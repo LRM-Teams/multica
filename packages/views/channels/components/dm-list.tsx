@@ -160,6 +160,7 @@ export function DmList({
               onSelect={() => onSelect(dm)}
               onTogglePin={() => handleTogglePin(dm)}
               onMarkUnread={() => handleMarkUnread(dm)}
+              onToggleMute={() => handleToggleMute(dm)}
               onClose={() => handleClose(dm)}
             />
           ))

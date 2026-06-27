@@ -159,6 +159,8 @@ type evolutionMockDB struct {
 	unit          db.SharedEvolutionUnit
 	version       db.SharedEvolutionUnitVersion
 	delivery      db.EvolutionUnitDelivery
+	agents        []db.Agent
+	deliveries    []db.CreateEvolutionDeliveryParams
 	existingFound bool
 }
 
@@ -180,6 +182,9 @@ func newEvolutionMockDB(submission db.EvolutionUnitSubmission) *evolutionMockDB 
 		unit:       unit,
 		version:    db.SharedEvolutionUnitVersion{ID: versionID, WorkspaceID: submission.WorkspaceID, UnitID: unitID, Version: 1},
 		delivery:   db.EvolutionUnitDelivery{ID: testUUID(43), WorkspaceID: submission.WorkspaceID, UnitID: unitID, VersionID: versionID, TargetAgentID: submission.SourceAgentID, Status: "pending"},
+		agents: []db.Agent{
+			{ID: submission.SourceAgentID, WorkspaceID: submission.WorkspaceID, Name: "Source Agent"},
+		},
 	}
 }
 
@@ -188,14 +193,22 @@ func (m *evolutionMockDB) Exec(context.Context, string, ...interface{}) (pgconn.
 }
 
 func (m *evolutionMockDB) Query(_ context.Context, sql string, _ ...interface{}) (pgx.Rows, error) {
-	if strings.Contains(sql, "FROM evolution_unit_submission_file") {
+	switch {
+	case strings.Contains(sql, "FROM evolution_unit_submission_file"):
 		rows := make([][]any, 0, len(m.files))
 		for _, file := range m.files {
 			rows = append(rows, evolutionFileValues(file))
 		}
 		return &evolutionMockRows{rows: rows}, nil
+	case strings.Contains(sql, "FROM agent"):
+		rows := make([][]any, 0, len(m.agents))
+		for _, agent := range m.agents {
+			rows = append(rows, evolutionAgentValues(agent))
+		}
+		return &evolutionMockRows{rows: rows}, nil
+	default:
+		return &evolutionMockRows{}, nil
 	}
-	return &evolutionMockRows{}, nil
 }
 
 func (m *evolutionMockDB) QueryRow(_ context.Context, sql string, args ...interface{}) pgx.Row {
@@ -210,7 +223,22 @@ func (m *evolutionMockDB) QueryRow(_ context.Context, sql string, args ...interf
 	case strings.Contains(sql, "CreateSharedEvolutionUnit") || strings.Contains(sql, "SetSharedEvolutionUnitCurrentVersion"):
 		return &evolutionMockRow{values: sharedEvolutionUnitValues(m.unit)}
 	case strings.Contains(sql, "CreateEvolutionDelivery"):
-		return &evolutionMockRow{values: evolutionDeliveryValues(m.delivery)}
+		arg := db.CreateEvolutionDeliveryParams{
+			WorkspaceID:    uuidArg(args, 0),
+			UnitID:         uuidArg(args, 1),
+			VersionID:      uuidArg(args, 2),
+			TargetAgentID:  uuidArg(args, 3),
+			DeliveryType:   stringArg(args, 4),
+			Reason:         stringArg(args, 5),
+			MatcherScore:   float64Arg(args, 6),
+			MatcherDetails: bytesArg(args, 7),
+		}
+		m.deliveries = append(m.deliveries, arg)
+		delivery := m.delivery
+		delivery.TargetAgentID = arg.TargetAgentID
+		delivery.MatcherScore = arg.MatcherScore
+		delivery.MatcherDetails = arg.MatcherDetails
+		return &evolutionMockRow{values: evolutionDeliveryValues(delivery)}
 	case strings.Contains(sql, "RejectEvolutionSubmissionWithReview"):
 		updated := m.submission
 		updated.Status = "rejected"
@@ -326,6 +354,10 @@ func assignEvolutionValues(dest []any, values []any) error {
 	return nil
 }
 
+func evolutionAgentValues(a db.Agent) []any {
+	return []any{a.ID, a.WorkspaceID, a.Name, a.AvatarUrl, a.RuntimeMode, a.RuntimeConfig, a.Visibility, a.Status, a.MaxConcurrentTasks, a.OwnerID, a.CreatedAt, a.UpdatedAt, a.Description, a.RuntimeID, a.Instructions, a.ArchivedAt, a.ArchivedBy, a.CustomEnv, a.CustomArgs, a.McpConfig, a.Model, a.ThinkingLevel}
+}
+
 func evolutionSubmissionValues(s db.EvolutionUnitSubmission) []any {
 	return []any{s.ID, s.WorkspaceID, s.SourceAgentID, s.SourceMemberID, s.UnitType, s.LocalUnitID, s.Title, s.Summary, s.Content, s.Payload, s.SanitizedPayload, s.ContentHash, s.BundleHash, s.BundleRef, s.Sensitivity, s.Confidence, s.SuggestedScope, s.Evidence, s.Applies, s.Tags, s.Tools, s.TaskTypes, s.ProjectTypes, s.Languages, s.Frameworks, s.Status, s.RejectReason, s.ReviewDecision, s.ReviewConfidence, s.ReviewRiskLevel, s.ReviewReason, s.ReviewMetadata, s.ReviewedAt, s.PromotedUnitID, s.SourceCreatedAt, s.CreatedAt, s.UpdatedAt}
 }
@@ -375,6 +407,14 @@ func float8Arg(args []interface{}, index int) pgtype.Float8 {
 		return pgtype.Float8{}
 	}
 	value, _ := args[index].(pgtype.Float8)
+	return value
+}
+
+func float64Arg(args []interface{}, index int) float64 {
+	if index >= len(args) {
+		return 0
+	}
+	value, _ := args[index].(float64)
 	return value
 }
 
@@ -469,6 +509,51 @@ func TestCurateSubmissionDuplicateHashMarksPromotedWithoutCreatingUnit(t *testin
 	}
 	if unit.ID != mock.unit.ID || mock.submission.PromotedUnitID != mock.unit.ID {
 		t.Fatalf("promoted unit = %v/%v, want existing %v", unit.ID, mock.submission.PromotedUnitID, mock.unit.ID)
+	}
+}
+
+func TestCurateSubmissionMatchesMetadataRelevantAgents(t *testing.T) {
+	submission := validMemorySubmission()
+	submission.Tools = []string{"github"}
+	submission.TaskTypes = []string{"review"}
+	submission.Languages = []string{"go"}
+	mock := newEvolutionMockDB(submission)
+	mock.unit.Tools = submission.Tools
+	mock.unit.TaskTypes = submission.TaskTypes
+	mock.unit.Languages = submission.Languages
+	matchedID := testUUID(61)
+	unmatchedID := testUUID(62)
+	mock.agents = append(mock.agents,
+		db.Agent{ID: matchedID, WorkspaceID: submission.WorkspaceID, Name: "Go reviewer", Description: "Reviews Go pull requests with GitHub context."},
+		db.Agent{ID: unmatchedID, WorkspaceID: submission.WorkspaceID, Name: "Designer", Description: "Polishes product copy."},
+	)
+	service := NewEvolutionService(db.New(mock))
+
+	unit, status, err := service.curateSubmission(context.Background(), submission)
+	if err != nil {
+		t.Fatalf("curateSubmission error = %v", err)
+	}
+	if status != evolutionCurationPromoted {
+		t.Fatalf("status = %q, want promoted", status)
+	}
+	if _, err := service.matchSourceAgent(context.Background(), submission, unit); err != nil {
+		t.Fatalf("matchSourceAgent error = %v", err)
+	}
+	if len(mock.deliveries) != 2 {
+		t.Fatalf("deliveries = %d, want source + matched agent: %#v", len(mock.deliveries), mock.deliveries)
+	}
+	if mock.deliveries[0].TargetAgentID != submission.SourceAgentID {
+		t.Fatalf("first delivery target = %v, want source %v", mock.deliveries[0].TargetAgentID, submission.SourceAgentID)
+	}
+	if mock.deliveries[1].TargetAgentID != matchedID || mock.deliveries[1].MatcherScore < 0.3 {
+		t.Fatalf("matched delivery = target %v score %.2f, want %v score >= 0.3", mock.deliveries[1].TargetAgentID, mock.deliveries[1].MatcherScore, matchedID)
+	}
+	var details map[string]any
+	if err := json.Unmarshal(mock.deliveries[1].MatcherDetails, &details); err != nil {
+		t.Fatalf("matcher details JSON: %v", err)
+	}
+	if details["strategy"] != "deterministic_metadata" {
+		t.Fatalf("matcher details = %#v", details)
 	}
 }
 

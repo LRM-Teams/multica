@@ -598,21 +598,153 @@ func (s *EvolutionService) matchSourceAgent(ctx context.Context, submission db.E
 	if unit.UnitType == "skill" {
 		deliveryType = "generated"
 	}
-	details, _ := json.Marshal(map[string]any{"strategy": "source_agent_mvp", "source_agent_id": uuidString(submission.SourceAgentID)})
-	delivery, err := s.Queries.CreateEvolutionDelivery(ctx, db.CreateEvolutionDeliveryParams{
-		WorkspaceID:    unit.WorkspaceID,
-		UnitID:         unit.ID,
-		VersionID:      unit.CurrentVersionID,
-		TargetAgentID:  submission.SourceAgentID,
-		DeliveryType:   deliveryType,
-		Reason:         "source agent MVP match",
-		MatcherScore:   1,
-		MatcherDetails: details,
-	})
+	targets, err := s.matchEvolutionDeliveryTargets(ctx, submission, unit)
 	if err != nil {
 		return false, err
 	}
-	return delivery.Status == "pending", nil
+	created := false
+	for _, target := range targets {
+		details, _ := json.Marshal(target.Details)
+		delivery, err := s.Queries.CreateEvolutionDelivery(ctx, db.CreateEvolutionDeliveryParams{
+			WorkspaceID:    unit.WorkspaceID,
+			UnitID:         unit.ID,
+			VersionID:      unit.CurrentVersionID,
+			TargetAgentID:  target.AgentID,
+			DeliveryType:   deliveryType,
+			Reason:         target.Reason,
+			MatcherScore:   target.Score,
+			MatcherDetails: details,
+		})
+		if err != nil {
+			return created, err
+		}
+		created = created || delivery.Status == "pending"
+	}
+	return created, nil
+}
+
+type evolutionDeliveryMatchTarget struct {
+	AgentID pgtype.UUID
+	Score   float64
+	Reason  string
+	Details map[string]any
+}
+
+func (s *EvolutionService) matchEvolutionDeliveryTargets(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) ([]evolutionDeliveryMatchTarget, error) {
+	sourceTarget := evolutionDeliveryMatchTarget{
+		AgentID: submission.SourceAgentID,
+		Score:   1,
+		Reason:  "source agent match",
+		Details: map[string]any{"strategy": "deterministic", "source_agent_id": uuidString(submission.SourceAgentID), "matched_source_agent": true},
+	}
+	agents, err := s.Queries.ListAllAgents(ctx, unit.WorkspaceID)
+	if err != nil {
+		return []evolutionDeliveryMatchTarget{sourceTarget}, nil
+	}
+	targets := []evolutionDeliveryMatchTarget{sourceTarget}
+	for _, agent := range agents {
+		if agent.ID == submission.SourceAgentID || agent.ArchivedAt.Valid {
+			continue
+		}
+		candidate := scoreEvolutionDeliveryTarget(submission, unit, agent)
+		if candidate.Score >= 0.3 {
+			targets = append(targets, candidate)
+		}
+	}
+	return targets, nil
+}
+
+func scoreEvolutionDeliveryTarget(submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit, agent db.Agent) evolutionDeliveryMatchTarget {
+	tags := evolutionStrings(unit.Tags)
+	tools := evolutionStrings(unit.Tools)
+	taskTypes := evolutionStrings(unit.TaskTypes)
+	projectTypes := evolutionStrings(unit.ProjectTypes)
+	languages := evolutionStrings(unit.Languages)
+	frameworks := evolutionStrings(unit.Frameworks)
+	text := strings.ToLower(strings.Join([]string{agent.Name, agent.Description, agent.Instructions, string(agent.RuntimeConfig), string(agent.CustomArgs), agent.RuntimeMode, agent.Model.String}, " "))
+	matched := map[string][]string{}
+	score := 0.0
+	if values := matchingEvolutionTerms(text, tools); len(values) > 0 {
+		matched["tools"] = values
+		score += 0.3
+	}
+	if values := matchingEvolutionTerms(text, taskTypes); len(values) > 0 {
+		matched["task_types"] = values
+		score += 0.25
+	}
+	if values := matchingEvolutionTerms(text, languages); len(values) > 0 {
+		matched["languages"] = values
+		score += 0.2
+	}
+	if values := matchingEvolutionTerms(text, frameworks); len(values) > 0 {
+		matched["frameworks"] = values
+		score += 0.2
+	}
+	if values := matchingEvolutionTerms(text, projectTypes); len(values) > 0 {
+		matched["project_types"] = values
+		score += 0.15
+	}
+	if values := matchingEvolutionTerms(text, tags); len(values) > 0 {
+		matched["tags"] = values
+		score += 0.1
+	}
+	if score > 1 {
+		score = 1
+	}
+	return evolutionDeliveryMatchTarget{
+		AgentID: agent.ID,
+		Score:   score,
+		Reason:  "deterministic metadata match",
+		Details: map[string]any{
+			"strategy":        "deterministic_metadata",
+			"source_agent_id": uuidString(submission.SourceAgentID),
+			"target_agent_id": uuidString(agent.ID),
+			"matched":         matched,
+		},
+	}
+}
+
+func matchingEvolutionTerms(text string, values []string) []string {
+	if len(values) == 0 || text == "" {
+		return nil
+	}
+	out := []string{}
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		term := strings.ToLower(strings.TrimSpace(value))
+		if len(term) < 2 {
+			continue
+		}
+		if _, exists := seen[term]; exists {
+			continue
+		}
+		if containsEvolutionTerm(text, term) {
+			seen[term] = struct{}{}
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func containsEvolutionTerm(text, term string) bool {
+	if len(term) <= 3 {
+		for _, token := range strings.FieldsFunc(text, func(r rune) bool {
+			return !(r == '#' || r == '+' || r == '.' || r == '-' || r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z')
+		}) {
+			if token == term {
+				return true
+			}
+		}
+		return false
+	}
+	return strings.Contains(text, term)
+}
+
+func evolutionStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 func rejectEvolutionSubmissionReason(submission db.EvolutionUnitSubmission, files []db.EvolutionUnitSubmissionFile) string {

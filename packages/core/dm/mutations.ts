@@ -36,6 +36,16 @@ export function useSetDMPinned() {
   });
 }
 
+export function useSetDMMuted() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ source, id, muted }: DMRef & { muted: boolean }) =>
+      muted ? api.muteDM(source, id) : api.unmuteDM(source, id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: dmKeys.list(wsId) }),
+  });
+}
+
 /**
  * Mark a DM as manually unread. The server sets `manual_unread_at` and bumps
  * `unread` to >= 1; opening the conversation later clears it via the existing

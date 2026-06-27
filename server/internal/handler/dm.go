@@ -48,8 +48,11 @@ type DMItem struct {
 	Peer           DMPeer              `json:"peer"`
 	LastMessage    *ChannelLastMessage `json:"last_message,omitempty"`
 	Unread         int                 `json:"unread"`
+	RealUnread     int                 `json:"real_unread"`
 	ManuallyUnread bool                `json:"manually_unread,omitempty"`
 	PinnedAt       *string             `json:"pinned_at,omitempty"`
+	MutedAt        *string             `json:"muted_at,omitempty"`
+	Muted          bool                `json:"muted,omitempty"`
 	UpdatedAt      string              `json:"updated_at"`
 }
 
@@ -330,6 +333,24 @@ func (h *Handler) setDMPeerPin(ctx context.Context, workspaceID, userID string, 
 	return err
 }
 
+func (h *Handler) setDMPeerMute(ctx context.Context, workspaceID, userID string, peer dmPeerRef, muted bool) error {
+	if muted {
+		_, err := h.DB.Exec(ctx, `
+			INSERT INTO dm_peer_state (workspace_id, user_id, peer_type, peer_id, muted_at, updated_at)
+			VALUES ($1, $2, $3, $4, now(), now())
+			ON CONFLICT (workspace_id, user_id, peer_type, peer_id)
+			DO UPDATE SET muted_at = now(), updated_at = now()`,
+			parseUUID(workspaceID), parseUUID(userID), peer.Type, peer.ID)
+		return err
+	}
+	_, err := h.DB.Exec(ctx, `
+		UPDATE dm_peer_state
+		SET muted_at = NULL, updated_at = now()
+		WHERE workspace_id = $1 AND user_id = $2 AND peer_type = $3 AND peer_id = $4`,
+		parseUUID(workspaceID), parseUUID(userID), peer.Type, peer.ID)
+	return err
+}
+
 func (h *Handler) markDMPeerUnread(ctx context.Context, workspaceID, userID string, peer dmPeerRef) error {
 	_, err := h.DB.Exec(ctx, `
 		INSERT INTO dm_peer_state (workspace_id, user_id, peer_type, peer_id, manual_unread_at, updated_at)
@@ -458,6 +479,18 @@ func (h *Handler) UnpinDMChannel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) MuteDMChannel(w http.ResponseWriter, r *http.Request) {
+	h.mutateDMChannelPeer(w, r, func(ctx context.Context, workspaceID, userID string, peer dmPeerRef) error {
+		return h.setDMPeerMute(ctx, workspaceID, userID, peer, true)
+	})
+}
+
+func (h *Handler) UnmuteDMChannel(w http.ResponseWriter, r *http.Request) {
+	h.mutateDMChannelPeer(w, r, func(ctx context.Context, workspaceID, userID string, peer dmPeerRef) error {
+		return h.setDMPeerMute(ctx, workspaceID, userID, peer, false)
+	})
+}
+
 func (h *Handler) MarkDMChannelUnread(w http.ResponseWriter, r *http.Request) {
 	h.mutateDMChannelPeer(w, r, h.markDMPeerUnread)
 }
@@ -475,6 +508,18 @@ func (h *Handler) PinDMSession(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UnpinDMSession(w http.ResponseWriter, r *http.Request) {
 	h.mutateDMSessionPeer(w, r, func(ctx context.Context, workspaceID, userID string, peer dmPeerRef) error {
 		return h.setDMPeerPin(ctx, workspaceID, userID, peer, false)
+	})
+}
+
+func (h *Handler) MuteDMSession(w http.ResponseWriter, r *http.Request) {
+	h.mutateDMSessionPeer(w, r, func(ctx context.Context, workspaceID, userID string, peer dmPeerRef) error {
+		return h.setDMPeerMute(ctx, workspaceID, userID, peer, true)
+	})
+}
+
+func (h *Handler) UnmuteDMSession(w http.ResponseWriter, r *http.Request) {
+	h.mutateDMSessionPeer(w, r, func(ctx context.Context, workspaceID, userID string, peer dmPeerRef) error {
+		return h.setDMPeerMute(ctx, workspaceID, userID, peer, false)
 	})
 }
 
@@ -592,8 +637,8 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		       COALESCE(u.name, u.email, a.name, '') AS peer_name,
 		       a.avatar_url AS peer_avatar,
 		       lm.author_type, lm.author_name, lm.content, lm.created_at,
-		       COALESCE(uc.cnt, 0) AS unread,
-		       state.pinned_at, state.manual_unread_at
+		       COALESCE(uc.cnt, 0) AS real_unread,
+		       state.pinned_at, state.manual_unread_at, state.muted_at
 		FROM channel ch
 		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
 		JOIN LATERAL (
@@ -632,12 +677,12 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 	out := []DMItem{}
 	for rows.Next() {
 		var id, peerID pgtype.UUID
-		var updatedAt, lastAt, pinnedAt, manualUnreadAt pgtype.Timestamptz
+		var updatedAt, lastAt, pinnedAt, manualUnreadAt, mutedAt pgtype.Timestamptz
 		var peerType, peerName string
 		var peerAvatar, lastType, lastName, lastContent pgtype.Text
 		var unread int
 		if err := rows.Scan(&id, &updatedAt, &peerType, &peerID, &peerName, &peerAvatar,
-			&lastType, &lastName, &lastContent, &lastAt, &unread, &pinnedAt, &manualUnreadAt); err != nil {
+			&lastType, &lastName, &lastContent, &lastAt, &unread, &pinnedAt, &manualUnreadAt, &mutedAt); err != nil {
 			continue
 		}
 		if peerType == "agent" {
@@ -650,8 +695,11 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 			Source:         dmSourceChannel,
 			Peer:           DMPeer{Type: peerType, ID: uuidToString(peerID), Name: peerName, AvatarURL: textToPtr(peerAvatar)},
 			Unread:         unread,
+			RealUnread:     unread,
 			ManuallyUnread: manualUnreadAt.Valid,
 			PinnedAt:       timestampToPtr(pinnedAt),
+			MutedAt:        timestampToPtr(mutedAt),
+			Muted:          mutedAt.Valid,
 			UpdatedAt:      timestampToString(updatedAt),
 		}
 		if item.ManuallyUnread && item.Unread == 0 {
@@ -677,7 +725,7 @@ func (h *Handler) listLegacyDMSessions(ctx context.Context, workspaceID, userID 
 		       a.name, a.avatar_url,
 		       lm.role, lm.content, lm.created_at,
 		       (cs.unread_since IS NOT NULL)::bool AS has_unread,
-		       state.pinned_at, state.manual_unread_at
+		       state.pinned_at, state.manual_unread_at, state.muted_at
 		FROM chat_session cs
 		JOIN agent a ON a.id = cs.agent_id
 		LEFT JOIN LATERAL (
@@ -702,19 +750,23 @@ func (h *Handler) listLegacyDMSessions(ctx context.Context, workspaceID, userID 
 	out := []DMItem{}
 	for rows.Next() {
 		var id, agentID pgtype.UUID
-		var updatedAt, lastAt, pinnedAt, manualUnreadAt pgtype.Timestamptz
+		var updatedAt, lastAt, pinnedAt, manualUnreadAt, mutedAt pgtype.Timestamptz
 		var agentName string
 		var agentAvatar, lastRole, lastContent pgtype.Text
 		var hasUnread bool
 		if err := rows.Scan(&id, &agentID, &updatedAt, &agentName, &agentAvatar,
-			&lastRole, &lastContent, &lastAt, &hasUnread, &pinnedAt, &manualUnreadAt); err != nil {
+			&lastRole, &lastContent, &lastAt, &hasUnread, &pinnedAt, &manualUnreadAt, &mutedAt); err != nil {
 			continue
 		}
 		if _, okAgent := allowed[uuidToString(agentID)]; !okAgent {
 			continue
 		}
-		unread := 0
-		if hasUnread || manualUnreadAt.Valid {
+		realUnread := 0
+		if hasUnread {
+			realUnread = 1
+		}
+		unread := realUnread
+		if manualUnreadAt.Valid {
 			unread = 1
 		}
 		item := DMItem{
@@ -722,8 +774,11 @@ func (h *Handler) listLegacyDMSessions(ctx context.Context, workspaceID, userID 
 			Source:         dmSourceLegacy,
 			Peer:           DMPeer{Type: "agent", ID: uuidToString(agentID), Name: agentName, AvatarURL: textToPtr(agentAvatar)},
 			Unread:         unread,
+			RealUnread:     realUnread,
 			ManuallyUnread: manualUnreadAt.Valid,
 			PinnedAt:       timestampToPtr(pinnedAt),
+			MutedAt:        timestampToPtr(mutedAt),
+			Muted:          mutedAt.Valid,
 			UpdatedAt:      timestampToString(updatedAt),
 		}
 		if lastContent.Valid {

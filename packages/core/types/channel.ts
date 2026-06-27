@@ -25,8 +25,11 @@ export interface Channel {
   archived_by?: string | null;
   /** List-only enrichments (absent on create/update/get responses). */
   unread_count?: number;
+  real_unread_count?: number;
   manually_unread?: boolean;
   pinned_at?: string | null;
+  muted_at?: string | null;
+  muted?: boolean;
   last_message?: ChannelLastMessage | null;
   members?: ChannelMemberBrief[];
 }
@@ -48,6 +51,8 @@ export interface ChannelMessage {
   content: string;
   source: "multica" | "lark";
   external_message_id: string | null;
+  reply_to_message_id?: string | null;
+  reply_to?: ChannelMessageReply | null;
   /**
    * Attachments linked to this message via the attachment table's
    * channel_message_id FK. Populated by ListChannelMessages. The bubble
@@ -56,6 +61,31 @@ export interface ChannelMessage {
    */
   attachments?: import("./attachment").Attachment[];
   created_at: string;
+}
+
+export interface ChannelMessageReply {
+  id: string;
+  author_type: "user" | "agent" | "lark" | "system";
+  author_id: string | null;
+  author_name: string;
+  content: string;
+  created_at: string;
+}
+
+export interface ChannelMessageSearchResult {
+  message_id: string;
+  channel_id: string;
+  author_type: "user" | "agent" | "lark" | "system";
+  author_id: string | null;
+  author_name: string;
+  content: string;
+  created_at: string;
+}
+
+export interface ChannelMessageSearchResponse {
+  query: string;
+  total: number;
+  results: ChannelMessageSearchResult[];
 }
 
 export interface ChannelAuthorStat {

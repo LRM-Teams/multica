@@ -378,13 +378,22 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
 
   return (
     <main className="flex flex-1 min-h-0 min-w-0 flex-col">
-      {convSearchOpen ? (
-        <header
+      <DmHeader
+        dm={dm}
+        onBack={onBack}
+        filesChannelId={channelId}
+        onSearchOpen={() => setConvSearchOpen(true)}
+      />
+      {convSearchOpen && (
+        <div
           className={cn(
-            "flex items-center gap-2 border-b py-2.5",
+            "flex items-center gap-2 border-b bg-muted/20 py-2",
             isMobile ? "px-2" : "px-5",
           )}
         >
+          <span className="shrink-0 rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground">
+            {t(($) => $.conv_search.scope_current_messages)}
+          </span>
           <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           <input
             type="search"
@@ -400,7 +409,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
                 setConvSearchIndex(0);
               }
             }}
-            placeholder={t(($) => $.conv_search.placeholder, { name: dm.peer.name })}
+            placeholder={t(($) => $.conv_search.dm_placeholder, { name: dm.peer.name })}
             className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
           {convSearchQuery.trim() && (
@@ -448,14 +457,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
           >
             <X className="size-4" />
           </Button>
-        </header>
-      ) : (
-        <DmHeader
-          dm={dm}
-          onBack={onBack}
-          filesChannelId={channelId}
-          onSearchOpen={() => setConvSearchOpen(true)}
-        />
+        </div>
       )}
       <ChannelMessageList
         key={channelId}

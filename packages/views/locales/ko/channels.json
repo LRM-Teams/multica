@@ -6,6 +6,8 @@
   "sidebar": {
     "heading": "메시지",
     "search": "대화 검색...",
+    "no_conversation_matches": "일치하는 대화가 없습니다",
+    "search_scope_hint": "왼쪽은 대화 목록만 필터링합니다. 메시지 본문은 대화를 연 뒤 오른쪽 위 메시지 검색을 사용하세요.",
     "groups": "채널",
     "name_placeholder": "채널 이름",
     "lark_placeholder": "선택 Feishu chat_id (oc_...)",
@@ -161,6 +163,9 @@
   },
   "conv_search": {
     "placeholder": "{{name}} 검색…",
+    "group_placeholder": "이 채널의 메시지 검색…",
+    "dm_placeholder": "{{name}}와(과)의 메시지 검색…",
+    "scope_current_messages": "현재 대화 · 메시지",
     "result_count": "{{current}} / {{total}}",
     "no_results": "일치 없음",
     "prev_aria": "이전 결과",

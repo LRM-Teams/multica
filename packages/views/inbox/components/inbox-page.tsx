@@ -55,6 +55,7 @@ import { InboxListItem, useTimeAgo } from "./inbox-list-item";
 import { useTypeLabels } from "./inbox-detail-label";
 import { getInboxDisplayTitle } from "./inbox-display";
 import { useT } from "../../i18n";
+import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 
 export function InboxPage() {
   const { t } = useT("inbox");
@@ -388,36 +389,32 @@ export function InboxPage() {
       );
     }
 
-    // Mobile: show detail full-screen when an item is selected
-    if (selected) {
-      return (
-        <div className="flex flex-1 flex-col min-h-0">
-          <div className="flex h-12 shrink-0 items-center border-b px-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setSelectedKey("")}
-              className="gap-1.5 text-muted-foreground"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              {t(($) => $.page.back)}
-            </Button>
-          </div>
-          <div className="flex-1 min-h-0 overflow-y-auto">
-            {detailContent}
-          </div>
-        </div>
-      );
-    }
-
-    // Mobile: full-screen list
     return (
-      <div className="flex flex-1 flex-col min-h-0">
-        {listHeader}
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          {listBody}
-        </div>
-      </div>
+      <MobileListDetailLayout
+        showDetail={!!selected}
+        list={
+          <>
+            {listHeader}
+            <div className="flex-1 min-h-0 overflow-y-auto">{listBody}</div>
+          </>
+        }
+        detail={
+          <>
+            <div className="flex h-12 shrink-0 items-center border-b px-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedKey("")}
+                className="gap-1.5 text-muted-foreground"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                {t(($) => $.page.back)}
+              </Button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto">{detailContent}</div>
+          </>
+        }
+      />
     );
   }
 

@@ -57,10 +57,11 @@ import {
 } from "./mention-suggestion";
 
 function fakeQc(data: {
-  members?: Array<{ user_id: string; name: string; role?: string }>;
+  members?: Array<{ user_id: string; name: string; display_name?: string; role?: string }>;
   agents?: Array<{
     id: string;
     name: string;
+    display_name?: string;
     archived_at: string | null;
     visibility?: "workspace" | "private";
     owner_id?: string | null;
@@ -110,11 +111,12 @@ describe("createMentionSuggestion", () => {
 
   it("returns members and agents synchronously without waiting for the server search", () => {
     const qc = fakeQc({
-      members: [{ user_id: "u1", name: "Alice", role: "member" }],
+      members: [{ user_id: "u1", name: "alice", display_name: "Alice", role: "member" }],
       agents: [
         {
           id: "a1",
-          name: "Aegis",
+          name: "agent_aegis",
+          display_name: "Aegis",
           archived_at: null,
           visibility: "workspace",
           owner_id: null,
@@ -130,8 +132,51 @@ describe("createMentionSuggestion", () => {
     // Must be synchronous: a plain array, not a Promise.
     expect(Array.isArray(result)).toBe(true);
     const items = result as MentionItem[];
-    expect(items.some((i) => i.type === "member" && i.label === "Alice")).toBe(true);
-    expect(items.some((i) => i.type === "agent" && i.label === "Aegis")).toBe(true);
+    expect(items).toContainEqual(expect.objectContaining({
+      type: "member",
+      label: "Alice",
+      handle: "alice",
+      secondaryLabel: "@alice",
+    }));
+    expect(items).toContainEqual(expect.objectContaining({
+      type: "agent",
+      label: "Aegis",
+      handle: "agent_aegis",
+      secondaryLabel: "@agent_aegis",
+    }));
+  });
+
+  it("matches handles and ranks handle matches before display-name-only matches", () => {
+    const qc = fakeQc({
+      members: [{ user_id: "u1", name: "alice", display_name: "Alice", role: "member" }],
+      agents: [
+        {
+          id: "a-display",
+          name: "zeta",
+          display_name: "Atlas",
+          archived_at: null,
+          visibility: "workspace",
+          owner_id: null,
+        },
+        {
+          id: "a-handle",
+          name: "atlas",
+          display_name: "Support",
+          archived_at: null,
+          visibility: "workspace",
+          owner_id: null,
+        },
+      ],
+    });
+    searchIssuesMock.mockReturnValue(new Promise(() => {}));
+
+    const config = createMentionSuggestion(qc);
+    const items = config.items!({ query: "atlas", editor: {} as never }) as MentionItem[];
+
+    expect(items.filter((i) => i.type === "agent").map((i) => i.id)).toEqual([
+      "a-handle",
+      "a-display",
+    ]);
   });
 
   it("loads server issue matches into the popup when the list cache misses", async () => {

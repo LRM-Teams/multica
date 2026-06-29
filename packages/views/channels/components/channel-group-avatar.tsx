@@ -18,6 +18,10 @@ function firstLetter(name: string): string {
   return c ? c.toUpperCase() : "?";
 }
 
+function memberLabel(member: ChannelMemberBrief): string {
+  return member.display_name?.trim() || member.name?.trim() || "?";
+}
+
 export function ChannelGroupAvatar({
   members,
   size = 36,
@@ -47,10 +51,11 @@ export function ChannelGroupAvatar({
     >
       {shown.map((m) => {
         const color = m.member_type === "agent" ? agentColor(m.member_id) : undefined;
+        const label = memberLabel(m);
         return (
           <span
             key={`${m.member_type}:${m.member_id}`}
-            title={m.name}
+            title={label}
             style={{
               width: tile,
               height: tile,
@@ -64,7 +69,7 @@ export function ChannelGroupAvatar({
                 : "flex items-center justify-center bg-muted font-medium text-muted-foreground"
             }
           >
-            {firstLetter(m.name)}
+            {firstLetter(label)}
           </span>
         );
       })}

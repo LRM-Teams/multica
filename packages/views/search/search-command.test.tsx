@@ -58,6 +58,7 @@ const {
       role: "owner" | "admin" | "member";
       created_at: string;
       name: string;
+      display_name?: string;
       email: string;
       avatar_url: string | null;
     }>,
@@ -66,6 +67,7 @@ const {
     current: [] as Array<{
       id: string;
       name: string;
+      display_name?: string;
       avatar_url: string | null;
     }>,
   },
@@ -326,7 +328,8 @@ describe("SearchCommand", () => {
         user_id: "user-1",
         role: "member",
         created_at: "2026-01-01T00:00:00Z",
-        name: "Alice Zhang",
+        name: "alice",
+        display_name: "Alice Zhang",
         email: "alice@example.com",
         avatar_url: null,
       },
@@ -336,7 +339,8 @@ describe("SearchCommand", () => {
         user_id: "user-2",
         role: "admin",
         created_at: "2026-01-01T00:00:00Z",
-        name: "Bob Liu",
+        name: "bob",
+        display_name: "Bob Liu",
         email: "bob@example.com",
         avatar_url: null,
       },
@@ -353,7 +357,7 @@ describe("SearchCommand", () => {
       ).toBeInTheDocument();
     });
     expect(
-      screen.getByText((_, el) => el?.textContent === "alice@example.com" && el?.tagName === "DIV"),
+      screen.getByText((_, el) => el?.textContent === "@alice · alice@example.com" && el?.tagName === "DIV"),
     ).toBeInTheDocument();
     expect(screen.queryByText("Bob Liu")).not.toBeInTheDocument();
 

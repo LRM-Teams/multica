@@ -66,6 +66,15 @@ export type {
   RuntimeLocalSkillImportResult,
   IssueUsageSummary,
 } from "./agent";
+export type {
+  EvolutionReviewDecision,
+  EvolutionReviewDecisionRequest,
+  EvolutionReviewFile,
+  EvolutionReviewRiskLevel,
+  EvolutionReviewSubmission,
+  EvolutionReviewSubmissionStatus,
+  PromoteEvolutionReviewSubmissionResponse,
+} from "./evolution";
 export type { Workspace, WorkspaceRepo, Member, MemberRole, User, MemberWithUser, Invitation } from "./workspace";
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";

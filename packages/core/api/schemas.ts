@@ -12,6 +12,7 @@ import type {
   BillingTransactionsPage,
   CancelTaskResponse,
   CreateAgentFromTemplateResponse,
+  EvolutionReviewSubmission,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
   GroupedIssuesResponse,
@@ -211,6 +212,57 @@ const CommentTriggerPreviewAgentSchema = z.object({
 export const CommentTriggerPreviewSchema = z.object({
   agents: z.array(CommentTriggerPreviewAgentSchema).default([]),
 }).loose();
+
+const EvolutionReviewFileSchema = z.object({
+  id: z.string().default(""),
+  path: z.string().default(""),
+  content: z.string().optional(),
+  content_hash: z.string().default(""),
+  mime_type: z.string().default(""),
+  size_bytes: z.number().default(0),
+  created_at: z.string().nullable().optional(),
+}).loose();
+
+export const EvolutionReviewSubmissionSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string().default(""),
+  source_agent_id: z.string().default(""),
+  source_member_id: z.string().optional(),
+  unit_type: z.string().default(""),
+  local_unit_id: z.string().default(""),
+  title: z.string().default(""),
+  summary: z.string().default(""),
+  content: z.string().optional(),
+  content_hash: z.string().default(""),
+  bundle_hash: z.string().default(""),
+  bundle_ref: z.string().default(""),
+  sensitivity: z.string().default(""),
+  confidence: z.string().default(""),
+  suggested_scope: z.string().default(""),
+  tags: z.array(z.string()).default([]),
+  tools: z.array(z.string()).default([]),
+  task_types: z.array(z.string()).default([]),
+  project_types: z.array(z.string()).default([]),
+  languages: z.array(z.string()).default([]),
+  frameworks: z.array(z.string()).default([]),
+  status: z.string().default("needs_review"),
+  reject_reason: z.string().default(""),
+  review_decision: z.string().default(""),
+  review_confidence: z.number().nullable().optional(),
+  review_risk_level: z.string().default(""),
+  review_reason: z.string().default(""),
+  review_metadata: z.record(z.string(), z.unknown()).default({}),
+  reviewed_at: z.string().nullable().optional(),
+  promoted_unit_id: z.string().nullable().optional(),
+  source_created_at: z.string().nullable().optional(),
+  created_at: z.string().nullable().optional(),
+  updated_at: z.string().nullable().optional(),
+  files: z.array(EvolutionReviewFileSchema).optional(),
+}).loose();
+
+export const EvolutionReviewSubmissionListSchema = z.array(EvolutionReviewSubmissionSchema);
+
+export const EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST: EvolutionReviewSubmission[] = [];
 
 const ChannelMessageSearchResultSchema = z.object({
   message_id: z.string().default(""),

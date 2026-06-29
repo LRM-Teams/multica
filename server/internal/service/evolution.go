@@ -40,6 +40,8 @@ type EvolutionCurateResult struct {
 	Matched     int `json:"matched"`
 }
 
+var ErrEvolutionSubmissionNotReviewable = errors.New("evolution submission is not awaiting review")
+
 func NewEvolutionService(queries *db.Queries) *EvolutionService {
 	return NewEvolutionServiceWithReviewer(queries, NoopEvolutionReviewer{}, false)
 }
@@ -151,6 +153,53 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 		_, err := s.markSubmissionNeedsReviewForInvalidReview(ctx, submission, review, "unknown review decision")
 		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, err
 	}
+}
+
+type PromoteSubmissionReviewOptions struct {
+	Reason                 string
+	ApplyReviewSuggestions bool
+}
+
+func (s *EvolutionService) PromoteSubmissionFromReview(ctx context.Context, workspaceID, submissionID pgtype.UUID, opts PromoteSubmissionReviewOptions) (db.SharedEvolutionUnit, error) {
+	submission, err := s.Queries.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID})
+	if err != nil {
+		return db.SharedEvolutionUnit{}, err
+	}
+	if submission.Status != "needs_review" {
+		return db.SharedEvolutionUnit{}, ErrEvolutionSubmissionNotReviewable
+	}
+	files, err := s.Queries.ListEvolutionSubmissionFiles(ctx, db.ListEvolutionSubmissionFilesParams{WorkspaceID: workspaceID, SubmissionID: submissionID})
+	if err != nil {
+		return db.SharedEvolutionUnit{}, err
+	}
+	review := humanEvolutionReviewResult(EvolutionReviewPromote, opts.Reason)
+	if opts.ApplyReviewSuggestions {
+		var applied bool
+		submission, applied = applyEvolutionReviewSuggestions(submission)
+		if applied {
+			review.Metadata["applied_review_suggestions"] = true
+		}
+	}
+	unit, _, err := s.promoteSubmission(ctx, submission, files, &review)
+	if err != nil {
+		return db.SharedEvolutionUnit{}, err
+	}
+	if _, err := s.matchSourceAgent(ctx, submission, unit); err != nil {
+		return db.SharedEvolutionUnit{}, err
+	}
+	return unit, nil
+}
+
+func (s *EvolutionService) RejectSubmissionFromReview(ctx context.Context, workspaceID, submissionID pgtype.UUID, reason string) (db.EvolutionUnitSubmission, error) {
+	submission, err := s.Queries.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID})
+	if err != nil {
+		return db.EvolutionUnitSubmission{}, err
+	}
+	if submission.Status != "needs_review" {
+		return db.EvolutionUnitSubmission{}, ErrEvolutionSubmissionNotReviewable
+	}
+	review := humanEvolutionReviewResult(EvolutionReviewReject, reason)
+	return s.rejectSubmissionWithReviewResult(ctx, submission, review)
 }
 
 func (s *EvolutionService) promoteSubmission(ctx context.Context, submission db.EvolutionUnitSubmission, files []db.EvolutionUnitSubmissionFile, review *EvolutionReviewResult) (db.SharedEvolutionUnit, evolutionCurationStatus, error) {
@@ -423,8 +472,14 @@ func reviewerFailureMetadata(kind, reason string, review *EvolutionReviewResult)
 }
 
 func reviewMetadataMap(review EvolutionReviewResult) map[string]any {
+	source := "evolution_reviewer"
+	if review.Metadata != nil {
+		if value, ok := review.Metadata["source"].(string); ok && strings.TrimSpace(value) != "" {
+			source = value
+		}
+	}
 	metadata := map[string]any{
-		"source":               "evolution_reviewer",
+		"source":               source,
 		"decision":             review.Decision,
 		"confidence":           review.Confidence,
 		"risk_level":           review.RiskLevel,
@@ -438,8 +493,101 @@ func reviewMetadataMap(review EvolutionReviewResult) map[string]any {
 	}
 	if review.Metadata != nil {
 		metadata["metadata"] = review.Metadata
+		if value, ok := review.Metadata["human_decision"]; ok {
+			metadata["human_decision"] = value
+		}
 	}
 	return metadata
+}
+
+func applyEvolutionReviewSuggestions(submission db.EvolutionUnitSubmission) (db.EvolutionUnitSubmission, bool) {
+	var metadata map[string]any
+	if len(submission.ReviewMetadata) == 0 || json.Unmarshal(submission.ReviewMetadata, &metadata) != nil {
+		return submission, false
+	}
+	applied := false
+	if title := reviewMetadataString(metadata, "title", maxEvolutionCandidateTitle); title != "" {
+		submission.Title = title
+		applied = true
+	}
+	if summary := reviewMetadataString(metadata, "summary", maxEvolutionCandidateSummary); summary != "" {
+		submission.Summary = summary
+		applied = true
+	}
+	if scope := reviewMetadataString(metadata, "suggested_scope", 64); scope != "" {
+		submission.SuggestedScope = scope
+		applied = true
+	}
+	if tags := reviewMetadataStringList(metadata, "suggested_tags", 12, 64); tags != nil {
+		submission.Tags = tags
+		applied = true
+	}
+	if taskTypes := reviewMetadataStringList(metadata, "suggested_task_types", 12, 64); taskTypes != nil {
+		submission.TaskTypes = taskTypes
+		applied = true
+	}
+	return submission, applied
+}
+
+func reviewMetadataString(metadata map[string]any, key string, maxBytes int) string {
+	value, ok := metadata[key].(string)
+	if !ok {
+		return ""
+	}
+	return truncateUTF8Bytes(strings.TrimSpace(value), maxBytes)
+}
+
+func reviewMetadataStringList(metadata map[string]any, key string, maxItems, maxBytes int) []string {
+	values, ok := metadata[key].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, min(len(values), maxItems))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		text, ok := value.(string)
+		if !ok {
+			continue
+		}
+		text = truncateUTF8Bytes(strings.TrimSpace(text), maxBytes)
+		if text == "" {
+			continue
+		}
+		if _, exists := seen[text]; exists {
+			continue
+		}
+		seen[text] = struct{}{}
+		out = append(out, text)
+		if len(out) >= maxItems {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func humanEvolutionReviewResult(decision EvolutionReviewDecision, reason string) EvolutionReviewResult {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		switch decision {
+		case EvolutionReviewReject:
+			reason = "human rejected submission"
+		default:
+			reason = "human approved promotion"
+		}
+	}
+	return EvolutionReviewResult{
+		Decision:   decision,
+		Confidence: 1,
+		RiskLevel:  EvolutionReviewRiskLow,
+		Rationale:  reason,
+		Metadata: map[string]any{
+			"source":         "human_review",
+			"human_decision": string(decision),
+		},
+	}
 }
 
 func (s *EvolutionService) matchSourceAgent(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) (bool, error) {
@@ -450,21 +598,169 @@ func (s *EvolutionService) matchSourceAgent(ctx context.Context, submission db.E
 	if unit.UnitType == "skill" {
 		deliveryType = "generated"
 	}
-	details, _ := json.Marshal(map[string]any{"strategy": "source_agent_mvp", "source_agent_id": uuidString(submission.SourceAgentID)})
-	delivery, err := s.Queries.CreateEvolutionDelivery(ctx, db.CreateEvolutionDeliveryParams{
-		WorkspaceID:    unit.WorkspaceID,
-		UnitID:         unit.ID,
-		VersionID:      unit.CurrentVersionID,
-		TargetAgentID:  submission.SourceAgentID,
-		DeliveryType:   deliveryType,
-		Reason:         "source agent MVP match",
-		MatcherScore:   1,
-		MatcherDetails: details,
-	})
+	targets, err := s.matchEvolutionDeliveryTargets(ctx, submission, unit)
 	if err != nil {
 		return false, err
 	}
-	return delivery.Status == "pending", nil
+	created := false
+	for _, target := range targets {
+		details, _ := json.Marshal(target.Details)
+		delivery, err := s.Queries.CreateEvolutionDelivery(ctx, db.CreateEvolutionDeliveryParams{
+			WorkspaceID:    unit.WorkspaceID,
+			UnitID:         unit.ID,
+			VersionID:      unit.CurrentVersionID,
+			TargetAgentID:  target.AgentID,
+			DeliveryType:   deliveryType,
+			Reason:         target.Reason,
+			MatcherScore:   target.Score,
+			MatcherDetails: details,
+		})
+		if err != nil {
+			return created, err
+		}
+		created = created || delivery.Status == "pending"
+	}
+	return created, nil
+}
+
+type evolutionDeliveryMatchTarget struct {
+	AgentID pgtype.UUID
+	Score   float64
+	Reason  string
+	Details map[string]any
+}
+
+func (s *EvolutionService) matchEvolutionDeliveryTargets(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) ([]evolutionDeliveryMatchTarget, error) {
+	sourceTarget := evolutionDeliveryMatchTarget{
+		AgentID: submission.SourceAgentID,
+		Score:   1,
+		Reason:  "source agent match",
+		Details: map[string]any{"strategy": "deterministic", "source_agent_id": uuidString(submission.SourceAgentID), "matched_source_agent": true},
+	}
+	agents, err := s.Queries.ListAllAgents(ctx, unit.WorkspaceID)
+	if err != nil {
+		return []evolutionDeliveryMatchTarget{sourceTarget}, nil
+	}
+	targets := []evolutionDeliveryMatchTarget{sourceTarget}
+	for _, agent := range agents {
+		if agent.ID == submission.SourceAgentID || agent.ArchivedAt.Valid {
+			continue
+		}
+		candidate := scoreEvolutionDeliveryTarget(submission, unit, agent)
+		if shouldCreateEvolutionDeliveryMatch(candidate) {
+			targets = append(targets, candidate)
+		}
+	}
+	return targets, nil
+}
+
+func shouldCreateEvolutionDeliveryMatch(target evolutionDeliveryMatchTarget) bool {
+	if target.Score >= 0.45 {
+		return true
+	}
+	matched, _ := target.Details["matched"].(map[string][]string)
+	if len(matched) < 2 {
+		return false
+	}
+	_, hasTool := matched["tools"]
+	_, hasLanguage := matched["languages"]
+	_, hasFramework := matched["frameworks"]
+	_, hasTaskType := matched["task_types"]
+	return hasTool && (hasLanguage || hasFramework || hasTaskType) || hasTaskType && (hasLanguage || hasFramework)
+}
+
+func scoreEvolutionDeliveryTarget(submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit, agent db.Agent) evolutionDeliveryMatchTarget {
+	tags := evolutionStrings(unit.Tags)
+	tools := evolutionStrings(unit.Tools)
+	taskTypes := evolutionStrings(unit.TaskTypes)
+	projectTypes := evolutionStrings(unit.ProjectTypes)
+	languages := evolutionStrings(unit.Languages)
+	frameworks := evolutionStrings(unit.Frameworks)
+	text := strings.ToLower(strings.Join([]string{agent.Name, agent.Description, agent.Instructions, string(agent.RuntimeConfig), string(agent.CustomArgs), agent.RuntimeMode, agent.Model.String}, " "))
+	matched := map[string][]string{}
+	score := 0.0
+	if values := matchingEvolutionTerms(text, tools); len(values) > 0 {
+		matched["tools"] = values
+		score += 0.3
+	}
+	if values := matchingEvolutionTerms(text, taskTypes); len(values) > 0 {
+		matched["task_types"] = values
+		score += 0.25
+	}
+	if values := matchingEvolutionTerms(text, languages); len(values) > 0 {
+		matched["languages"] = values
+		score += 0.2
+	}
+	if values := matchingEvolutionTerms(text, frameworks); len(values) > 0 {
+		matched["frameworks"] = values
+		score += 0.2
+	}
+	if values := matchingEvolutionTerms(text, projectTypes); len(values) > 0 {
+		matched["project_types"] = values
+		score += 0.15
+	}
+	if values := matchingEvolutionTerms(text, tags); len(values) > 0 {
+		matched["tags"] = values
+		score += 0.1
+	}
+	if score > 1 {
+		score = 1
+	}
+	return evolutionDeliveryMatchTarget{
+		AgentID: agent.ID,
+		Score:   score,
+		Reason:  "deterministic metadata match",
+		Details: map[string]any{
+			"strategy":        "deterministic_metadata",
+			"source_agent_id": uuidString(submission.SourceAgentID),
+			"target_agent_id": uuidString(agent.ID),
+			"matched":         matched,
+			"threshold":       0.45,
+		},
+	}
+}
+
+func matchingEvolutionTerms(text string, values []string) []string {
+	if len(values) == 0 || text == "" {
+		return nil
+	}
+	out := []string{}
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		term := strings.ToLower(strings.TrimSpace(value))
+		if len(term) < 2 {
+			continue
+		}
+		if _, exists := seen[term]; exists {
+			continue
+		}
+		if containsEvolutionTerm(text, term) {
+			seen[term] = struct{}{}
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func containsEvolutionTerm(text, term string) bool {
+	if len(term) <= 3 {
+		for _, token := range strings.FieldsFunc(text, func(r rune) bool {
+			return !(r == '#' || r == '+' || r == '.' || r == '-' || r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z')
+		}) {
+			if token == term {
+				return true
+			}
+		}
+		return false
+	}
+	return strings.Contains(text, term)
+}
+
+func evolutionStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 func rejectEvolutionSubmissionReason(submission db.EvolutionUnitSubmission, files []db.EvolutionUnitSubmissionFile) string {
@@ -521,8 +817,14 @@ func validateEvolutionFiles(submission db.EvolutionUnitSubmission, files []db.Ev
 		if isDangerousEvolutionFilePath(cleanPath) {
 			return "unsafe file path"
 		}
+		if !isAllowedEvolutionFileMimeType(file.MimeType) {
+			return "unsupported file mime type"
+		}
 		if file.SizeBytes > maxEvolutionFileBytes || len(file.Content) > maxEvolutionFileBytes {
 			return "file exceeds size limit"
+		}
+		if isBinaryEvolutionFileContent(file.Content) {
+			return "binary file detected"
 		}
 		totalSize += len(file.Content)
 		if totalSize > maxEvolutionBundleBytes {
@@ -557,9 +859,31 @@ func cleanEvolutionFilePath(raw string) (string, bool) {
 }
 
 func isDangerousEvolutionFilePath(filePath string) bool {
+	lowerPath := strings.ToLower(filePath)
 	base := strings.ToLower(path.Base(filePath))
 	if strings.HasPrefix(base, ".env") || strings.HasPrefix(base, "id_rsa") || strings.HasPrefix(base, "id_dsa") || strings.HasPrefix(base, "id_ecdsa") || strings.HasPrefix(base, "id_ed25519") {
 		return true
+	}
+	switch path.Ext(base) {
+	case ".pem", ".key", ".p12", ".pfx":
+		return true
+	}
+	segments := strings.Split(lowerPath, "/")
+	for i, segment := range segments {
+		switch segment {
+		case ".ssh", ".aws":
+			return true
+		case ".kube":
+			if i+1 < len(segments) && segments[i+1] == "config" {
+				return true
+			}
+		case ".config":
+			for _, nested := range segments[i+1:] {
+				if nested == "credentials" || strings.HasPrefix(nested, "credentials.") {
+					return true
+				}
+			}
+		}
 	}
 	switch base {
 	case ".netrc", ".npmrc", ".pypirc", "credentials", "credentials.json", "auth.json", "secrets.json", "secret.json", "known_hosts":
@@ -567,6 +891,49 @@ func isDangerousEvolutionFilePath(filePath string) bool {
 	default:
 		return false
 	}
+}
+
+func isAllowedEvolutionFileMimeType(mimeType string) bool {
+	mimeType = strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
+	if mimeType == "" || strings.HasPrefix(mimeType, "text/") {
+		return true
+	}
+	switch mimeType {
+	case "application/json",
+		"application/ld+json",
+		"application/xml",
+		"application/yaml",
+		"application/x-yaml",
+		"application/toml",
+		"application/javascript",
+		"application/x-javascript",
+		"application/typescript",
+		"application/x-sh",
+		"application/x-shellscript",
+		"application/graphql",
+		"application/sql":
+		return true
+	default:
+		return false
+	}
+}
+
+func isBinaryEvolutionFileContent(content string) bool {
+	if content == "" {
+		return false
+	}
+	if strings.Contains(content, "\x00") || !utf8.ValidString(content) {
+		return true
+	}
+	control := 0
+	total := 0
+	for _, r := range content {
+		total++
+		if r < 0x20 && r != '\n' && r != '\r' && r != '\t' {
+			control++
+		}
+	}
+	return control >= 8 && float64(control)/float64(total) > 0.05
 }
 
 func validateEvolutionSkillMainFile(content string) string {

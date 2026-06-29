@@ -111,7 +111,10 @@
     "queued": "대기 중",
     "dispatched": "시작 중",
     "running": "생각 중",
-    "waiting_local_directory": "로컬 디렉터리 대기 중"
+    "waiting_local_directory": "로컬 디렉터리 대기 중",
+    "processing_single": "{{name}}이(가) 답장을 준비 중...",
+    "processing_pair": "{{a}}와(과) {{b}}이(가) 답장을 준비 중...",
+    "processing_overflow": "{{a}}, {{b}} 외 {{count}}명이 답장을 준비 중..."
   },
   "composer": {
     "placeholder": "필요한 내용을 입력하세요…  @에이전트이름 으로 답장을 요청하세요.",

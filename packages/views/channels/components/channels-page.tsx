@@ -246,41 +246,49 @@ export function TypingIndicator({ actors }: { actors: TypingActor[] }) {
   );
 }
 
-// Query-authoritative, per-agent working indicator. Unlike the transient typing
-// broadcast, this reflects the agent's recoverable task lifecycle stage. Unknown
-// statuses downgrade to the generic "thinking" label (enum-drift rule) rather
-// than rendering nothing.
+// Query-authoritative, per-conversation processing indicator. Keep it visually
+// close to an IM typing indicator, not a task/status card in the message canvas.
 export function AgentWorkingIndicator({ tasks }: { tasks: ChannelActiveTask[] }) {
   const { t } = useT("channels");
-  if (tasks.length === 0) return null;
-  const labelFor = (status: string): string => {
-    switch (status) {
-      case "queued":
-        return t(($) => $.agent_status.queued);
-      case "dispatched":
-        return t(($) => $.agent_status.dispatched);
-      case "waiting_local_directory":
-        return t(($) => $.agent_status.waiting_local_directory);
-      case "running":
-        return t(($) => $.agent_status.running);
-      default:
-        return t(($) => $.agent_status.running);
+  const [visible, setVisible] = useState(false);
+  const names = useMemo(() => {
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const task of tasks) {
+      const name = task.agent_name.trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      unique.push(name);
     }
-  };
+    return unique;
+  }, [tasks]);
+
+  useEffect(() => {
+    if (names.length === 0) {
+      setVisible(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setVisible(true), 800);
+    return () => window.clearTimeout(timer);
+  }, [names.length]);
+
+  if (!visible || names.length === 0) return null;
+
+  const label =
+    names.length === 1
+      ? t(($) => $.agent_status.processing_single, { name: names[0]! })
+      : names.length === 2
+        ? t(($) => $.agent_status.processing_pair, { a: names[0]!, b: names[1]! })
+        : t(($) => $.agent_status.processing_overflow, {
+            a: names[0]!,
+            b: names[1]!,
+            count: names.length,
+          });
+
   return (
-    <div className="flex flex-col gap-1 px-2 py-1.5" aria-live="polite">
-      {tasks.map((task) => (
-        <div
-          key={task.agent_id}
-          className="flex items-center gap-2 text-xs text-muted-foreground"
-        >
-          <span className="flex h-7 items-center gap-1.5 rounded-full border bg-card px-3 shadow-sm">
-            <UnicodeSpinner className="text-muted-foreground/70" />
-            <span className="font-medium text-foreground">{task.agent_name}</span>
-            <span>{labelFor(task.status)}</span>
-          </span>
-        </div>
-      ))}
+    <div className="flex items-center gap-1.5 px-1 pb-2 text-xs text-muted-foreground" aria-live="polite">
+      <UnicodeSpinner className="text-muted-foreground/70" />
+      <span>{label}</span>
     </div>
   );
 }
@@ -1608,10 +1616,7 @@ export function ChannelsPage() {
                 onQuote={isActiveArchived ? undefined : setQuoteMessage}
                 onScrollToMessage={setHighlightMessageId}
                 footer={
-                  <>
-                    <AgentWorkingIndicator tasks={activeTasks} />
-                    <TypingIndicator actors={activeTypingActors} />
-                  </>
+                  <TypingIndicator actors={activeTypingActors} />
                 }
               />
 
@@ -1649,6 +1654,7 @@ export function ChannelsPage() {
                 </div>
               ) : (
                 <div className="px-4 pb-4">
+                  <AgentWorkingIndicator tasks={activeTasks} />
                   <div className="rounded-xl border bg-card shadow-sm">
                     {quoteMessage && (
                       <div className="flex items-start gap-2 border-b px-4 py-2">

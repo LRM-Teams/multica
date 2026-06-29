@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"text/template"
 	"time"
 )
 
@@ -71,7 +72,41 @@ func SweLegoBuildScript(repoURL, baseCommit, issueDate, baseImage, cacheKey stri
 	callback := fmt.Sprintf("if int(commit.committer_date.split()[0]) > %d: commit.skip()", issueTime.Unix())
 	fmt.Fprintf(&b, "git filter-repo --force --commit-callback %s\n", shellQuote(callback))
 	fmt.Fprintf(&b, "pip install -e . 2>/dev/null || true\n")
+	// Write the Dockerfile, then build.
+	dockerfile, err := SweLegoDockerfile(baseImage)
+	if err != nil {
+		return "", fmt.Errorf("render dockerfile: %w", err)
+	}
+	fmt.Fprintf(&b, "cat > /tmp/swe-lego-build/Dockerfile <<'EOF'\n%s\nEOF\n", dockerfile)
 	fmt.Fprintf(&b, "docker build -t %s -f /tmp/swe-lego-build/Dockerfile .\n", shellQuote(imageRef))
+	return b.String(), nil
+}
+
+// sweLegoDockerfileTmpl is the Dockerfile baked into each SWE-Lego image.
+// The daemon binary is built from the existing multica daemon source and
+// copied in at image-build time — it is the same binary that runs locally
+// today, just inside the container (spec §4.3).
+const sweLegoDockerfileTmpl = `FROM {{.BaseImage}}
+COPY repo/ /workspace/repo
+WORKDIR /workspace/repo
+RUN pip install -e . 2>/dev/null || true
+COPY multica-daemon /usr/local/bin/multica-daemon
+ENV MULTICA_DAEMON_AUTO_REGISTER=1
+CMD ["multica-daemon", "run"]
+`
+
+// SweLegoDockerfile renders the Dockerfile for a SWE-Lego image given the
+// base image. The build script writes this to /tmp/swe-lego-build/Dockerfile
+// before invoking docker build.
+func SweLegoDockerfile(baseImage string) (string, error) {
+	t, err := template.New("swe-lego-dockerfile").Parse(sweLegoDockerfileTmpl)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	if err := t.Execute(&b, struct{ BaseImage string }{BaseImage: baseImage}); err != nil {
+		return "", err
+	}
 	return b.String(), nil
 }
 

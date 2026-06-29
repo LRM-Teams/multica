@@ -43,6 +43,16 @@ import { useT, useTimeAgo } from "../../i18n";
 import { useOpenDM } from "../../common/use-open-dm";
 import { formatChannelMessagePreview, type MentionPreviewResolver } from "./message-preview";
 
+function actorDisplayName(actor: { display_name?: string | null; name?: string | null }, fallback: string) {
+  return actor.display_name?.trim() || actor.name?.trim() || fallback;
+}
+
+function actorHandleLabel(actor: { display_name?: string | null; name?: string | null }) {
+  const name = actor.name?.trim();
+  const displayName = actor.display_name?.trim();
+  return name && name !== displayName ? `@${name}` : null;
+}
+
 /**
  * DIRECT MESSAGES sidebar region — the top half of the unified Messages
  * sidebar (GROUPS sits below). Fed by `GET /api/dm`, which unions kind='dm'
@@ -263,13 +273,25 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
     const q = search.trim().toLowerCase();
     const agentItems = agents
       .filter((a) => !a.archived_at)
-      .map((a) => ({ kind: "agent" as const, id: a.id, name: a.name }));
+      .map((a) => ({
+        kind: "agent" as const,
+        id: a.id,
+        displayName: actorDisplayName(a, a.id),
+        handleLabel: actorHandleLabel(a),
+        searchText: [a.display_name, a.name, a.id].filter(Boolean).join(" ").toLowerCase(),
+      }));
     const memberItems = members
       .filter((m) => m.user_id !== currentUser?.id)
-      .map((m) => ({ kind: "user" as const, id: m.user_id, name: m.name }));
+      .map((m) => ({
+        kind: "user" as const,
+        id: m.user_id,
+        displayName: actorDisplayName(m, m.user_id),
+        handleLabel: actorHandleLabel(m),
+        searchText: [m.display_name, m.name, m.user_id].filter(Boolean).join(" ").toLowerCase(),
+      }));
     const all = [...agentItems, ...memberItems];
     if (!q) return all;
-    return all.filter((item) => item.name.toLowerCase().includes(q));
+    return all.filter((item) => item.searchText.includes(q));
   }, [agents, members, currentUser?.id, search]);
 
   const isLoading = agentsLoading || membersLoading;
@@ -316,7 +338,16 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
                 showStatusDot={item.kind === "agent"}
                 profileLink={false}
               />
-              <span className="min-w-0 flex-1 truncate text-sm">{item.name}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-foreground">
+                  {item.displayName}
+                </span>
+                {item.handleLabel && (
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {item.handleLabel}
+                  </span>
+                )}
+              </span>
             </button>
           ))
         )}

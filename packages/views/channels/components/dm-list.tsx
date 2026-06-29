@@ -58,6 +58,9 @@ import {
 
 const identitySearchOptions = { extendedMatch: matchesPinyin };
 
+const newDmTriggerCls =
+  "flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
+
 /**
  * DIRECT MESSAGES sidebar region — the top half of the unified Messages
  * sidebar (GROUPS sits below). Fed by `GET /api/dm`, which unions kind='dm'
@@ -85,6 +88,7 @@ export function DmList({
 }) {
   const { t } = useT("channels");
   const timeAgo = useTimeAgo();
+  const isMobile = useIsMobile();
   const wsId = useWorkspaceId();
   const { data: dms = [], isLoading } = useQuery(dmListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
@@ -141,138 +145,138 @@ export function DmList({
     return sortedDms.filter((dm) => dm.peer.name.toLowerCase().includes(q));
   }, [searchQuery, sortedDms]);
 
-  return (
-    <div className="pb-1">
-      {/* Header row: collapse toggle (flex-1) + "+" new DM button */}
-      <div className="flex items-center gap-0.5 px-2 py-1.5">
-        <button
-          type="button"
-          onClick={() => setCollapsed((c) => !c)}
-          className="flex flex-1 items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
-          aria-expanded={!collapsed}
-        >
-          {collapsed ? (
-            <ChevronRight className="size-3.5 shrink-0" />
-          ) : (
-            <ChevronDown className="size-3.5 shrink-0" />
-          )}
-          <span className="flex-1 text-left">{t(($) => $.dm.heading)}</span>
-          {collapsed && aggregateUnread > 0 && (
-            <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
-              {aggregateUnread > 99 ? "99+" : aggregateUnread}
-            </span>
-          )}
-        </button>
+  const showHeaderTrigger = isLoading || dms.length > 0;
+  const openPicker = () => setPickerOpen(true);
+  const closePicker = () => setPickerOpen(false);
 
-        {/* Hide the compact "+" when the list is empty — the empty-state CTA
-            below is the sole entry point there, avoiding two visible triggers. */}
-        {(isLoading || dms.length > 0) && (
-          <NewDmPicker open={pickerOpen} onOpenChange={setPickerOpen} />
+  const listBody =
+    !collapsed &&
+    (isLoading ? (
+      <div className="space-y-2 p-2">
+        <Skeleton className="h-12" />
+        <Skeleton className="h-12" />
+      </div>
+    ) : dms.length === 0 ? (
+      <div className="flex flex-col items-center gap-2 px-3 py-3">
+        <p className="text-xs text-muted-foreground">{t(($) => $.dm.empty)}</p>
+        {isMobile ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-full text-xs"
+            onClick={openPicker}
+          >
+            <Plus className="size-3.5" />
+            {t(($) => $.dm.empty_cta)}
+          </Button>
+        ) : (
+          <PopoverTrigger
+            render={
+              <Button type="button" variant="outline" size="sm" className="w-full text-xs" />
+            }
+          >
+            <Plus className="size-3.5" />
+            {t(($) => $.dm.empty_cta)}
+          </PopoverTrigger>
         )}
       </div>
+    ) : filteredDms.length === 0 ? (
+      <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
+        <p className="font-medium text-foreground">
+          {t(($) => $.sidebar.no_conversation_matches)}
+        </p>
+        <p>{t(($) => $.sidebar.search_scope_hint)}</p>
+      </div>
+    ) : (
+      filteredDms.map((dm) => (
+        <DmRow
+          key={`${dm.source}:${dm.id}`}
+          dm={dm}
+          active={activeId === dm.id}
+          currentUserName={currentUserName}
+          timeAgo={timeAgo}
+          resolveMentionPreview={resolveMentionPreview}
+          onSelect={() => onSelect(dm)}
+          onTogglePin={() => handleTogglePin(dm)}
+          onMarkUnread={() => handleMarkUnread(dm)}
+          onToggleMute={() => handleToggleMute(dm)}
+          onClose={() => handleClose(dm)}
+        />
+      ))
+    ));
 
-      {!collapsed &&
-        (isLoading ? (
-          <div className="space-y-2 p-2">
-            <Skeleton className="h-12" />
-            <Skeleton className="h-12" />
-          </div>
-        ) : dms.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 px-3 py-3">
-            <p className="text-xs text-muted-foreground">{t(($) => $.dm.empty)}</p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="w-full text-xs"
-              onClick={() => setPickerOpen(true)}
-            >
-              <Plus className="size-3.5" />
-              {t(($) => $.dm.empty_cta)}
-            </Button>
-          </div>
-        ) : filteredDms.length === 0 ? (
-          <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
-            <p className="font-medium text-foreground">
-              {t(($) => $.sidebar.no_conversation_matches)}
-            </p>
-            <p>{t(($) => $.sidebar.search_scope_hint)}</p>
-          </div>
-        ) : (
-          filteredDms.map((dm) => (
-            <DmRow
-              key={`${dm.source}:${dm.id}`}
-              dm={dm}
-              active={activeId === dm.id}
-              currentUserName={currentUserName}
-              timeAgo={timeAgo}
-              resolveMentionPreview={resolveMentionPreview}
-              onSelect={() => onSelect(dm)}
-              onTogglePin={() => handleTogglePin(dm)}
-              onMarkUnread={() => handleMarkUnread(dm)}
-              onToggleMute={() => handleToggleMute(dm)}
-              onClose={() => handleClose(dm)}
-            />
-          ))
-        ))}
-    </div>
-  );
-}
+  return (
+    <div className="pb-1">
+      <Popover
+        open={isMobile ? false : pickerOpen}
+        onOpenChange={isMobile ? undefined : setPickerOpen}
+      >
+        {/* Header row: collapse toggle (flex-1) + "+" new DM button */}
+        <div className="flex items-center gap-0.5 px-2 py-1.5">
+          <button
+            type="button"
+            onClick={() => setCollapsed((c) => !c)}
+            className="flex flex-1 items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+            aria-expanded={!collapsed}
+          >
+            {collapsed ? (
+              <ChevronRight className="size-3.5 shrink-0" />
+            ) : (
+              <ChevronDown className="size-3.5 shrink-0" />
+            )}
+            <span className="flex-1 text-left">{t(($) => $.dm.heading)}</span>
+            {collapsed && aggregateUnread > 0 && (
+              <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                {aggregateUnread > 99 ? "99+" : aggregateUnread}
+              </span>
+            )}
+          </button>
 
-// ---------------------------------------------------------------------------
-// New DM picker — Popover (desktop) / Drawer (mobile)
-// ---------------------------------------------------------------------------
+          {showHeaderTrigger &&
+            (isMobile ? (
+              <button
+                type="button"
+                aria-label={t(($) => $.dm.new_aria)}
+                onClick={openPicker}
+                className={newDmTriggerCls}
+              >
+                <Plus className="size-4" />
+              </button>
+            ) : (
+              <PopoverTrigger
+                render={
+                  <button type="button" aria-label={t(($) => $.dm.new_aria)} className={newDmTriggerCls} />
+                }
+              >
+                <Plus className="size-4" />
+              </PopoverTrigger>
+            ))}
+        </div>
 
-function NewDmPicker({
-  open,
-  onOpenChange,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-}) {
-  const { t } = useT("channels");
-  const isMobile = useIsMobile();
-  const pickerBody = <DmPickerContent onClose={() => onOpenChange(false)} />;
-  const triggerCls =
-    "flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
+        {listBody}
 
-  if (isMobile) {
-    return (
-      <>
-        <button
-          type="button"
-          aria-label={t(($) => $.dm.new_aria)}
-          onClick={() => onOpenChange(true)}
-          className={triggerCls}
-        >
-          <Plus className="size-4" />
-        </button>
-        <Drawer open={open} onOpenChange={onOpenChange}>
+        {!isMobile && (
+          <PopoverContent align="start" className="w-72 p-0">
+            <div className="border-b px-3 py-2.5">
+              <p className="text-sm font-medium">{t(($) => $.dm.new_title)}</p>
+            </div>
+            <DmPickerContent onClose={closePicker} />
+          </PopoverContent>
+        )}
+      </Popover>
+
+      {isMobile && (
+        <Drawer open={pickerOpen} onOpenChange={setPickerOpen}>
           <DrawerContent className="px-4 pb-8">
             <DrawerHeader className="px-0 pb-3">
               <DrawerTitle>{t(($) => $.dm.new_title)}</DrawerTitle>
             </DrawerHeader>
-            {pickerBody}
+            <DmPickerContent onClose={closePicker} />
           </DrawerContent>
         </Drawer>
-      </>
-    );
-  }
-
-  return (
-    <Popover open={open} onOpenChange={onOpenChange}>
-      <PopoverTrigger
-        render={<button type="button" aria-label={t(($) => $.dm.new_aria)} className={triggerCls} />}
-      >
-        <Plus className="size-4" />
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 p-0">
-        <div className="border-b px-3 py-2.5">
-          <p className="text-sm font-medium">{t(($) => $.dm.new_title)}</p>
-        </div>
-        {pickerBody}
-      </PopoverContent>
-    </Popover>
+      )}
+    </div>
   );
 }
 

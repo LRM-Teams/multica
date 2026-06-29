@@ -124,6 +124,7 @@ SELECT session_id, work_dir, runtime_id FROM agent_task_queue
 WHERE chat_session_id = $1
   AND (
     status = 'completed'
+    OR (status = 'cancelled' AND COALESCE(failure_reason, '') = 'followup_interrupt')
     OR (
       status = 'failed'
       AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity')
@@ -131,7 +132,7 @@ WHERE chat_session_id = $1
     )
   )
   AND session_id IS NOT NULL
-ORDER BY completed_at DESC
+ORDER BY COALESCE(completed_at, started_at, dispatched_at, created_at) DESC
 LIMIT 1;
 
 -- name: GetPendingChatTask :one

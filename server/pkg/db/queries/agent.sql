@@ -214,6 +214,23 @@ SET status = 'cancelled', completed_at = now()
 WHERE issue_id = $1 AND agent_id = $2 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
 RETURNING *;
 
+-- name: CancelInFlightTasksByIssueAndAgent :many
+-- Cancels only already-claimed/running work for a single (issue, agent) pair.
+-- Queued follow-up tasks are deliberately left alone so the daemon can pick up
+-- the latest human guidance immediately after interrupting the stale run.
+UPDATE agent_task_queue
+SET status = 'cancelled', completed_at = now(), failure_reason = 'followup_interrupt'
+WHERE issue_id = $1 AND agent_id = $2 AND id <> $3 AND status IN ('dispatched', 'running', 'waiting_local_directory')
+RETURNING *;
+
+-- name: CancelInFlightChatTasksBySessionAndAgent :many
+-- Same interrupt path for chat sessions: leave queued follow-up chat turns in
+-- place, but stop the currently claimed turn so fresh guidance can run next.
+UPDATE agent_task_queue
+SET status = 'cancelled', completed_at = now(), failure_reason = 'followup_interrupt'
+WHERE chat_session_id = $1 AND agent_id = $2 AND id <> $3 AND status IN ('dispatched', 'running', 'waiting_local_directory')
+RETURNING *;
+
 -- name: CancelAgentTasksByAgent :many
 -- Bulk-cancel every active (queued/dispatched/running) task for an agent.
 -- Returns the affected rows so callers can broadcast task:cancelled events.
@@ -277,7 +294,7 @@ UPDATE agent_task_queue
 SET status = 'dispatched', dispatched_at = now()
 WHERE id = (
     SELECT atq.id FROM agent_task_queue atq
-    WHERE atq.agent_id = $1 AND atq.status = 'queued'
+    WHERE atq.agent_id = $1 AND atq.status = 'queued' AND atq.chat_session_id IS NULL
       AND NOT EXISTS (
           SELECT 1 FROM agent_task_queue active
           WHERE active.agent_id = atq.agent_id
@@ -413,6 +430,7 @@ SELECT session_id, work_dir, runtime_id FROM agent_task_queue
 WHERE agent_id = $1 AND issue_id = $2
   AND (
     status = 'completed'
+    OR (status = 'cancelled' AND COALESCE(failure_reason, '') = 'followup_interrupt')
     OR (
       status = 'failed'
       AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity')
@@ -547,7 +565,9 @@ RETURNING *;
 
 -- name: CountRunningTasks :one
 SELECT count(*) FROM agent_task_queue
-WHERE agent_id = $1 AND status IN ('dispatched', 'running', 'waiting_local_directory');
+WHERE agent_id = $1
+  AND chat_session_id IS NULL
+  AND status IN ('dispatched', 'running', 'waiting_local_directory');
 
 -- name: CountRunningChatTasks :one
 SELECT count(*) FROM agent_task_queue

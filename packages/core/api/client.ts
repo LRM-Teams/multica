@@ -79,6 +79,7 @@ import type {
   ChannelMember,
   ChannelMessage,
   ChannelMessageSearchResponse,
+  ChannelThreadMessagesPage,
   ChannelStats,
   ChannelProjectFiles,
   ChannelProjectFileContent,
@@ -1935,6 +1936,33 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/messages`);
   }
 
+  async listChannelMessageThread(
+    channelId: string,
+    messageId: string,
+    options?: { limit?: number; before?: string; beforeId?: string },
+  ): Promise<ChannelThreadMessagesPage> {
+    const params = new URLSearchParams();
+    if (options?.limit) {
+      params.set("limit", String(options.limit));
+    }
+    if (options?.before && options?.beforeId) {
+      params.set("before", options.before);
+      params.set("before_id", options.beforeId);
+    }
+    const suffix = params.toString();
+    const res = await this.fetchRaw(
+      `/api/channels/${channelId}/messages/${messageId}/thread${suffix ? `?${suffix}` : ""}`,
+      { extraHeaders: { "Content-Type": "application/json" } },
+    );
+    const messages = await res.json() as ChannelMessage[];
+    const before = res.headers.get("X-Next-Before");
+    const beforeId = res.headers.get("X-Next-Before-Id");
+    return {
+      messages,
+      next_cursor: before && beforeId ? { before, before_id: beforeId } : null,
+    };
+  }
+
   async searchChannelMessages(channelId: string, query: string, limit?: number): Promise<ChannelMessageSearchResponse> {
     const params = new URLSearchParams({ q: query });
     if (limit) {
@@ -1963,6 +1991,38 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(body),
     });
+  }
+
+  async sendChannelThreadMessage(
+    channelId: string,
+    messageId: string,
+    content: string,
+    attachmentIds?: string[],
+    replyToMessageId?: string | null,
+  ): Promise<ChannelMessage> {
+    const body: { content: string; attachment_ids?: string[]; reply_to_message_id?: string } = { content };
+    if (attachmentIds && attachmentIds.length > 0) {
+      body.attachment_ids = attachmentIds;
+    }
+    if (replyToMessageId) {
+      body.reply_to_message_id = replyToMessageId;
+    }
+    return this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async markChannelThreadRead(channelId: string, messageId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread/read`, { method: "POST" });
+  }
+
+  async followChannelThread(channelId: string, messageId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread/follow`, { method: "PUT" });
+  }
+
+  async unfollowChannelThread(channelId: string, messageId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread/follow`, { method: "DELETE" });
   }
 
   async listChannelAttachments(channelId: string): Promise<Attachment[]> {

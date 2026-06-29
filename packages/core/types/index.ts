@@ -201,6 +201,8 @@ export type {
   ChannelLastMessage,
   ChannelMessage,
   ChannelMessageReply,
+  ChannelThreadMessagesCursor,
+  ChannelThreadMessagesPage,
   ChannelMessageSearchResponse,
   ChannelMessageSearchResult,
   ChannelStats,

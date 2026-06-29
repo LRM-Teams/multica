@@ -443,7 +443,7 @@ func TestDMDispatch_SelfTriggerGuard(t *testing.T) {
 	if !found {
 		t.Fatal("dm channel not found after seed")
 	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "DM Guard Bot", "my own reply", "multica", nil, pgtype.UUID{}, strPtr("g1"), 0)
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "DM Guard Bot", "my own reply", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("g1"), 0)
 	if err != nil {
 		t.Fatalf("insert agent trigger: %v", err)
 	}

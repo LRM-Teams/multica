@@ -6,6 +6,7 @@ export const channelKeys = {
   list: (wsId: string) => [...channelKeys.all(wsId), "list"] as const,
   archivedList: (wsId: string) => [...channelKeys.all(wsId), "archived-list"] as const,
   messages: (channelId: string) => ["channel-messages", channelId] as const,
+  messageThread: (channelId: string, messageId: string) => ["channel-message-thread", channelId, messageId] as const,
   messageSearch: (channelId: string, query: string, limit?: number) => ["channel-message-search", channelId, query, limit] as const,
   members: (channelId: string) => ["channel-members", channelId] as const,
   attachments: (channelId: string) => ["channel-attachments", channelId] as const,
@@ -34,6 +35,14 @@ export function channelMessagesOptions(channelId: string) {
     queryKey: channelKeys.messages(channelId),
     queryFn: () => api.listChannelMessages(channelId),
     enabled: !!channelId,
+  });
+}
+
+export function channelMessageThreadOptions(channelId: string, messageId: string, options?: { limit?: number; before?: string; beforeId?: string }) {
+  return queryOptions({
+    queryKey: [...channelKeys.messageThread(channelId, messageId), options?.limit, options?.before, options?.beforeId] as const,
+    queryFn: () => api.listChannelMessageThread(channelId, messageId, options),
+    enabled: !!channelId && !!messageId,
   });
 }
 

@@ -112,12 +112,12 @@ func BuildOrReuse(ctx context.Context, exec NodeExec, repoURL, baseCommit, issue
 	if err != nil {
 		return "", "", fmt.Errorf("build script: %w", err)
 	}
-	_, exitCode, err = exec.Exec(ctx, node, []string{"sh", "-c", script})
+	out, exitCode, err := exec.Exec(ctx, node, []string{"sh", "-c", script})
 	if err != nil {
 		return "", "", fmt.Errorf("build transport error: %w", err)
 	}
 	if exitCode != 0 {
-		return "", "", ErrSweLegoBuildFailed
+		return "", "", fmt.Errorf("swe-lego build failed: exit %d: %s: %w", exitCode, strings.TrimSpace(out), ErrSweLegoBuildFailed)
 	}
 	return ref, node, nil
 }

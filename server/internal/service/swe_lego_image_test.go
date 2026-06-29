@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -88,10 +89,11 @@ func mustParseRFC3339(t *testing.T, s string) time.Time {
 }
 
 type fakeNodeExec struct {
-	calls       []string
-	inspectOK   bool // if true, the image is already cached on the node
-	inspectErr  error
-	buildExitOK bool // if true, the build script exits 0
+	calls            []string
+	inspectOK        bool // if true, the image is already cached on the node
+	inspectErr       error
+	buildExitOK      bool // if true, the build script exits 0
+	pickBuildNodeErr error
 }
 
 func (f *fakeNodeExec) Exec(ctx context.Context, nodeID string, cmd []string) (stdout string, exitCode int, err error) {
@@ -110,12 +112,15 @@ func (f *fakeNodeExec) Exec(ctx context.Context, nodeID string, cmd []string) (s
 		if f.buildExitOK {
 			return "", 0, nil
 		}
-		return "build failed", 1, fmt.Errorf("build exit 1")
+		return "build failed", 1, nil
 	}
-	return "", 0, nil
+	panic(fmt.Sprintf("fakeNodeExec: unrecognized command: %s", joined))
 }
 
 func (f *fakeNodeExec) PickBuildNode(ctx context.Context) (string, error) {
+	if f.pickBuildNodeErr != nil {
+		return "", f.pickBuildNodeErr
+	}
 	return "node-1", nil
 }
 
@@ -166,5 +171,32 @@ func TestBuildOrReuse_BuildFailureReturnsError(t *testing.T) {
 	_, _, err := BuildOrReuse(ctx, fe, "r", "c", "2025-03-14T09:30:00Z", "b")
 	if err == nil {
 		t.Fatal("expected error on build failure")
+	}
+	if !errors.Is(err, ErrSweLegoBuildFailed) {
+		t.Fatalf("expected error to wrap ErrSweLegoBuildFailed, got: %v", err)
+	}
+}
+
+func TestBuildOrReuse_PickBuildNodeFailure(t *testing.T) {
+	ctx := context.Background()
+	fe := &fakeNodeExec{pickBuildNodeErr: fmt.Errorf("fleet unavailable")}
+	_, _, err := BuildOrReuse(ctx, fe, "r", "c", "2025-03-14T09:30:00Z", "b")
+	if err == nil {
+		t.Fatal("expected error when PickBuildNode fails")
+	}
+	if !strings.Contains(err.Error(), "pick build node") {
+		t.Fatalf("expected error to mention 'pick build node', got: %v", err)
+	}
+}
+
+func TestBuildOrReuse_InspectTransportError(t *testing.T) {
+	ctx := context.Background()
+	fe := &fakeNodeExec{inspectErr: fmt.Errorf("connection refused")}
+	_, _, err := BuildOrReuse(ctx, fe, "r", "c", "2025-03-14T09:30:00Z", "b")
+	if err == nil {
+		t.Fatal("expected error when inspect fails with transport error")
+	}
+	if !strings.Contains(err.Error(), "cache inspect transport error") {
+		t.Fatalf("expected error to mention 'cache inspect transport error', got: %v", err)
 	}
 }

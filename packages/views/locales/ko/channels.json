@@ -6,13 +6,32 @@
   "sidebar": {
     "heading": "메시지",
     "search": "대화 검색...",
-    "groups": "그룹",
+    "groups": "채널",
     "name_placeholder": "채널 이름",
     "lark_placeholder": "선택 Feishu chat_id (oc_...)",
     "create_aria": "채널 만들기",
     "empty": "아직 채널이 없습니다.",
     "menu_aria": "채널 작업",
-    "delete": "그룹 삭제"
+    "delete": "그룹 삭제",
+    "mark_unread": "읽지 않음으로 표시",
+    "pin": "고정",
+    "unpin": "고정 해제",
+    "archive": "보관",
+    "mute": "음소거",
+    "unmute": "음소거 해제",
+    "archived_section": "보관됨",
+    "archived_restore": "보관 해제",
+    "archive_permission": "채널 생성자, 소유자 또는 관리자만 보관할 수 있습니다",
+    "restore_permission": "채널 생성자, 소유자 또는 관리자만 보관 해제할 수 있습니다"
+  },
+  "archive_dialog": {
+    "title": "이 채널을 보관할까요?",
+    "description": "\"{{name}}\"이(가) 사이드바에서 숨겨집니다. 모든 기록은 보존되며 언제든 복원할 수 있습니다.",
+    "cancel": "취소",
+    "confirm": "보관",
+    "error": "채널 보관에 실패했습니다",
+    "restore_error": "보관 해제에 실패했습니다",
+    "readonly_notice": "이 채널은 보관되었습니다"
   },
   "delete_dialog": {
     "title": "이 그룹을 삭제할까요?",
@@ -129,6 +148,14 @@
     "action_failed": "작업에 실패했습니다. 다시 시도해 주세요",
     "composer_placeholder": "{{name}}에게 메시지…"
   },
+  "quote": {
+    "reply": "답장",
+    "reply_aria": "이 메시지에 답장",
+    "more_aria": "더 많은 작업",
+    "cancel": "답장 취소",
+    "replying_to": "{{name}}에게 답장",
+    "jump_to": "원본 메시지로 이동"
+  },
   "conv_search": {
     "placeholder": "{{name}} 검색…",
     "result_count": "{{current}} / {{total}}",
@@ -138,13 +165,5 @@
     "close_aria": "검색 닫기",
     "search_aria": "대화 내 검색",
     "error": "검색 실패"
-  },
-  "quote": {
-    "reply": "답장",
-    "reply_aria": "이 메시지에 답장",
-    "more_aria": "더 많은 작업",
-    "cancel": "답장 취소",
-    "replying_to": "{{name}}에게 답장",
-    "jump_to": "원본 메시지로 이동"
   }
 }

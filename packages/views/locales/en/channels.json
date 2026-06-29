@@ -6,13 +6,32 @@
   "sidebar": {
     "heading": "Messages",
     "search": "Search conversations...",
-    "groups": "Groups",
+    "groups": "Channels",
     "name_placeholder": "Channel name",
     "lark_placeholder": "Optional Feishu chat_id (oc_...)",
     "create_aria": "Create channel",
     "empty": "No channels yet.",
     "menu_aria": "Channel actions",
-    "delete": "Delete group"
+    "delete": "Delete group",
+    "mark_unread": "Mark as Unread",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "archive": "Archive",
+    "mute": "Mute",
+    "unmute": "Unmute",
+    "archived_section": "Archived",
+    "archived_restore": "Unarchive",
+    "archive_permission": "Only the creator, owner, or admin can archive",
+    "restore_permission": "Only the creator, owner, or admin can unarchive"
+  },
+  "archive_dialog": {
+    "title": "Archive this channel?",
+    "description": "\"{{name}}\" will be hidden from the sidebar. All history is preserved — you can restore it anytime.",
+    "cancel": "Cancel",
+    "confirm": "Archive",
+    "error": "Failed to archive channel",
+    "restore_error": "Failed to restore channel",
+    "readonly_notice": "This channel is archived"
   },
   "delete_dialog": {
     "title": "Delete this group?",
@@ -129,6 +148,14 @@
     "action_failed": "Action failed, please try again",
     "composer_placeholder": "Message {{name}}…"
   },
+  "quote": {
+    "reply": "Reply",
+    "reply_aria": "Reply to this message",
+    "more_aria": "More actions",
+    "cancel": "Cancel reply",
+    "replying_to": "Replying to {{name}}",
+    "jump_to": "Jump to original message"
+  },
   "conv_search": {
     "placeholder": "Search in {{name}}…",
     "result_count": "{{current}} / {{total}}",
@@ -138,13 +165,5 @@
     "close_aria": "Close search",
     "search_aria": "Search in conversation",
     "error": "Search failed"
-  },
-  "quote": {
-    "reply": "Reply",
-    "reply_aria": "Reply to this message",
-    "more_aria": "More actions",
-    "cancel": "Cancel reply",
-    "replying_to": "Replying to {{name}}",
-    "jump_to": "Jump to original message"
   }
 }

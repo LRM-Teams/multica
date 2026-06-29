@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, FileText, Paperclip, Reply, Send, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, FileText, Paperclip, Search, Send, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   activeChannelTasksKeys,
@@ -28,7 +28,7 @@ import { useFileUpload, type UploadResult } from "@multica/core/hooks/use-file-u
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
-import type { ChannelMessage, ChannelTypingPayload, ChatMessage } from "@multica/core/types";
+import type { ChannelMessageSearchResult, ChannelTypingPayload, ChatMessage } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Popover,
@@ -72,16 +72,19 @@ export function DmConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   return <DmChannelConversation dm={dm} onBack={onBack} />;
 }
 
-// Shared peer header: avatar (presence dot for agents) + name + Files popover.
+// Shared peer header: avatar (presence dot for agents) + name + optional search + Files popover.
 function DmHeader({
   dm,
   onBack,
   filesChannelId,
+  onSearchOpen,
 }: {
   dm: DMItem;
   onBack: () => void;
   /** Channel id whose project files to surface. Only dm_channel DMs have one. */
   filesChannelId?: string;
+  /** When provided, renders a magnifying-glass button (source gate: dm_channel only). */
+  onSearchOpen?: () => void;
 }) {
   const { t } = useT("channels");
   const isMobile = useIsMobile();
@@ -117,20 +120,33 @@ function DmHeader({
           <div className="truncate font-semibold">{dm.peer.name}</div>
         </div>
       </div>
-      {filesChannelId && (
-        <Popover>
-          <PopoverTrigger
-            className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent"
-            aria-label={t(($) => $.dm.files)}
+      <div className="flex shrink-0 items-center gap-1 text-muted-foreground">
+        {onSearchOpen && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8"
+            aria-label={t(($) => $.conv_search.search_aria)}
+            onClick={onSearchOpen}
           >
-            <FileText className="size-4" />
-          </PopoverTrigger>
-          <PopoverContent align="end" className="w-80">
-            <p className="mb-3 text-sm font-medium">{t(($) => $.dm.files)}</p>
-            <ChannelFilesPanel channelId={filesChannelId} />
-          </PopoverContent>
-        </Popover>
-      )}
+            <Search className="size-4" />
+          </Button>
+        )}
+        {filesChannelId && (
+          <Popover>
+            <PopoverTrigger
+              className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
+              aria-label={t(($) => $.dm.files)}
+            >
+              <FileText className="size-4" />
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-80">
+              <p className="mb-3 text-sm font-medium">{t(($) => $.dm.files)}</p>
+              <ChannelFilesPanel channelId={filesChannelId} />
+            </PopoverContent>
+          </Popover>
+        )}
+      </div>
     </header>
   );
 }
@@ -156,14 +172,17 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
 
   const editorRef = useRef<ContentEditorRef>(null);
   const [draftEmpty, setDraftEmpty] = useState(true);
+  const [convSearchOpen, setConvSearchOpen] = useState(false);
+  const [convSearchQuery, setConvSearchQuery] = useState("");
+  const [convSearchResults, setConvSearchResults] = useState<ChannelMessageSearchResult[]>([]);
+  const [convSearchTotal, setConvSearchTotal] = useState(0);
+  const [convSearchIndex, setConvSearchIndex] = useState(0);
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const uploadMapRef = useRef<Map<string, string>>(new Map());
   const typingStartedRef = useRef(false);
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [quoteMessage, setQuoteMessage] = useState<ChannelMessage | null>(null);
-  const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
 
   // Agents surface lifecycle via the query-driven working indicator, so filter
   // them out of the transient typing render (same rule as the group thread).
@@ -171,6 +190,45 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     () => Object.values(typingActors).filter((a) => a.actorType !== "agent"),
     [typingActors],
   );
+
+  // 1-on-1 DM: scope the composer's @-mention picker to the peer only. Without
+  // an allowlist the picker defaults to the whole workspace, which is wrong for
+  // a 1-on-1 (only the peer is reachable here).
+  const mentionAllowedActorIds = useMemo(() => new Set([dm.peer.id]), [dm.peer.id]);
+
+  const searchHitIds = useMemo(
+    () =>
+      convSearchOpen && convSearchResults.length > 0
+        ? new Set(convSearchResults.map((r) => r.message_id))
+        : undefined,
+    [convSearchOpen, convSearchResults],
+  );
+  const searchHighlightId = convSearchOpen
+    ? (convSearchResults[convSearchIndex]?.message_id ?? null)
+    : null;
+
+  // Debounced in-conversation search.
+  useEffect(() => {
+    if (!convSearchOpen) return;
+    const q = convSearchQuery.trim();
+    if (!q) {
+      setConvSearchResults([]);
+      setConvSearchTotal(0);
+      setConvSearchIndex(0);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await api.searchChannelMessages(channelId, q);
+        setConvSearchResults(res.results);
+        setConvSearchTotal(res.total);
+        setConvSearchIndex(0);
+      } catch {
+        toast.error(t(($) => $.conv_search.error));
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [convSearchQuery, channelId, convSearchOpen]);
 
   // Bottom-stick on new messages and open-at-latest on switch are handled by
   // ChannelMessageList (react-virtuoso). No manual scrollIntoView needed.
@@ -199,12 +257,6 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     if (typingStopTimerRef.current) window.clearTimeout(typingStopTimerRef.current);
     if (typingPulseTimerRef.current) window.clearTimeout(typingPulseTimerRef.current);
   }, [channelId]);
-
-  useEffect(() => {
-    if (!highlightMessageId || messages.length === 0) return;
-    const clear = setTimeout(() => setHighlightMessageId(null), 2500);
-    return () => clearTimeout(clear);
-  }, [highlightMessageId, messages.length]);
 
   useWSEvent("channel:message", (payload) => {
     const e = payload as { channel_id?: string };
@@ -312,14 +364,12 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         channelId,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
-        replyToMessageId: quoteMessage?.id,
       },
       {
         onSuccess: () => {
           editorRef.current?.clearContent();
           uploadMapRef.current.clear();
           setDraftEmpty(true);
-          setQuoteMessage(null);
         },
       },
     );
@@ -327,16 +377,93 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
 
   return (
     <main className="flex flex-1 min-h-0 min-w-0 flex-col">
-      <DmHeader dm={dm} onBack={onBack} filesChannelId={channelId} />
+      {convSearchOpen ? (
+        <header
+          className={cn(
+            "flex items-center gap-2 border-b py-2.5",
+            isMobile ? "px-2" : "px-5",
+          )}
+        >
+          <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <input
+            type="search"
+            autoFocus
+            value={convSearchQuery}
+            onChange={(e) => setConvSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setConvSearchOpen(false);
+                setConvSearchQuery("");
+                setConvSearchResults([]);
+                setConvSearchTotal(0);
+                setConvSearchIndex(0);
+              }
+            }}
+            placeholder={t(($) => $.conv_search.placeholder, { name: dm.peer.name })}
+            className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          />
+          {convSearchQuery.trim() && (
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {convSearchTotal === 0
+                ? t(($) => $.conv_search.no_results)
+                : t(($) => $.conv_search.result_count, {
+                    current: convSearchIndex + 1,
+                    total: convSearchTotal,
+                  })}
+            </span>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            aria-label={t(($) => $.conv_search.prev_aria)}
+            onClick={() => setConvSearchIndex((i) => Math.max(0, i - 1))}
+            disabled={convSearchTotal === 0 || convSearchIndex === 0}
+          >
+            <ChevronUp className="size-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            aria-label={t(($) => $.conv_search.next_aria)}
+            onClick={() => setConvSearchIndex((i) => Math.min(convSearchTotal - 1, i + 1))}
+            disabled={convSearchTotal === 0 || convSearchIndex >= convSearchTotal - 1}
+          >
+            <ChevronDown className="size-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            aria-label={t(($) => $.conv_search.close_aria)}
+            onClick={() => {
+              setConvSearchOpen(false);
+              setConvSearchQuery("");
+              setConvSearchResults([]);
+              setConvSearchTotal(0);
+              setConvSearchIndex(0);
+            }}
+          >
+            <X className="size-4" />
+          </Button>
+        </header>
+      ) : (
+        <DmHeader
+          dm={dm}
+          onBack={onBack}
+          filesChannelId={channelId}
+          onSearchOpen={() => setConvSearchOpen(true)}
+        />
+      )}
       <ChannelMessageList
         key={channelId}
         messages={messages}
         currentUserId={currentUserId}
         ownName={currentUserName ?? undefined}
-        highlightMessageId={highlightMessageId}
+        highlightMessageId={searchHighlightId}
+        searchHitIds={searchHitIds}
         emptyLabel={t(($) => $.dm.thread_empty)}
-        onQuote={setQuoteMessage}
-        onScrollToMessage={setHighlightMessageId}
         footer={
           <>
             <AgentWorkingIndicator tasks={activeTasks} />
@@ -346,36 +473,15 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
       />
       <div className="px-4 pb-4">
         <div className="rounded-xl border bg-card shadow-sm">
-          {quoteMessage && (
-            <div className="flex items-start gap-2 border-b px-4 py-2">
-              <Reply className="mt-0.5 size-3.5 shrink-0 text-primary" />
-              <div className="min-w-0 flex-1 border-l-2 border-primary pl-2">
-                <p className="truncate text-[11px] font-semibold text-foreground">
-                  {t(($) => $.quote.replying_to, { name: quoteMessage.author_name })}
-                </p>
-                <p className="line-clamp-1 text-[11px] text-muted-foreground">
-                  {quoteMessage.content}
-                </p>
-              </div>
-              <button
-                type="button"
-                aria-label={t(($) => $.quote.cancel)}
-                className="flex size-5 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-                onClick={() => setQuoteMessage(null)}
-              >
-                <X className="size-3.5" />
-              </button>
-            </div>
-          )}
           <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
             <ContentEditor
               key={channelId}
               ref={editorRef}
-              placeholder={t(($) => $.dm.composer_placeholder, { name: dm.peer.name })}
+              placeholder={t(($) => $.composer.placeholder)}
               onUpdate={handleEditorUpdate}
               onSubmit={handleSend}
               onUploadFile={handleUpload}
-              disableMentions
+              mentionAllowedActorIds={mentionAllowedActorIds}
               submitOnEnter
               showBubbleMenu={false}
             />

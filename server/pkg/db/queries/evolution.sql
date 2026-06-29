@@ -75,6 +75,11 @@ WHERE workspace_id = @workspace_id AND status = 'active'
 ORDER BY priority DESC, score DESC, updated_at DESC
 LIMIT @limit_count;
 
+-- name: MaxSharedEvolutionUnitVersion :one
+SELECT COALESCE(MAX(version), 0)::int
+FROM shared_evolution_unit_version
+WHERE workspace_id = @workspace_id AND unit_id = @unit_id;
+
 -- name: ListCandidateEvolutionSubmissions :many
 SELECT * FROM evolution_unit_submission
 WHERE workspace_id = @workspace_id AND status = 'candidate'

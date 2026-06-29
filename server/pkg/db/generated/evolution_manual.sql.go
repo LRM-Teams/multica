@@ -249,6 +249,24 @@ func (q *Queries) ListActiveSharedEvolutionUnitsByWorkspace(ctx context.Context,
 	return items, rows.Err()
 }
 
+const maxSharedEvolutionUnitVersion = `-- name: MaxSharedEvolutionUnitVersion :one
+SELECT COALESCE(MAX(version), 0)::int
+FROM shared_evolution_unit_version
+WHERE workspace_id = $1 AND unit_id = $2
+`
+
+type MaxSharedEvolutionUnitVersionParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UnitID      pgtype.UUID `json:"unit_id"`
+}
+
+func (q *Queries) MaxSharedEvolutionUnitVersion(ctx context.Context, arg MaxSharedEvolutionUnitVersionParams) (int32, error) {
+	row := q.db.QueryRow(ctx, maxSharedEvolutionUnitVersion, arg.WorkspaceID, arg.UnitID)
+	var version int32
+	err := row.Scan(&version)
+	return version, err
+}
+
 const listCandidateEvolutionSubmissions = `-- name: ListCandidateEvolutionSubmissions :many
 SELECT id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at FROM evolution_unit_submission
 WHERE workspace_id = $1 AND status = 'candidate'

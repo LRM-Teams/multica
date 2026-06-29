@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // SweLegoCacheKey derives the docker image cache key for a SWE-Lego image.
@@ -29,15 +30,22 @@ func sweLegoImageRef(cacheKey string) string {
 // SweLegoBuildScript returns the shell script run on a Fleet build-node to
 // produce a SWE-Lego docker image. The script:
 //  1. Clones the repo shallow-extended to base_commit.
-//  2. SWE-Lego anti-hacking: deletes git history after issue_date via
-//     `git filter-repo --commit-cutoff`, so an agent cannot git log or
-//     git blame its way to the future fix (spec §2 decision 5, §4.3).
+//  2. SWE-Lego anti-hacking: runs git filter-repo with a commit-callback
+//     that drops every commit whose committer date is after issue_date,
+//     so an agent inside the container cannot git log or git blame its
+//     way to the future fix (spec §2 decision 5, §4.3).
 //  3. docker builds the image tagged with the cache key.
 //
 // The script is shipped to the node via /api/v1/nodes/exec and run there; the
 // multica server never shells out to docker locally (spec §2 decision 8).
-func SweLegoBuildScript(repoURL, baseCommit, issueDate, baseImage, cacheKey string) string {
+//
+// Returns an error if issueDate is not valid RFC3339.
+func SweLegoBuildScript(repoURL, baseCommit, issueDate, baseImage, cacheKey string) (string, error) {
 	imageRef := sweLegoImageRef(cacheKey)
+	issueTime, err := time.Parse(time.RFC3339, issueDate)
+	if err != nil {
+		return "", fmt.Errorf("parse issue_date %q as RFC3339: %w", issueDate, err)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "set -euo pipefail\n")
 	fmt.Fprintf(&b, "rm -rf /tmp/swe-lego-build && mkdir -p /tmp/swe-lego-build\n")
@@ -46,13 +54,23 @@ func SweLegoBuildScript(repoURL, baseCommit, issueDate, baseImage, cacheKey stri
 	fmt.Fprintf(&b, "cd repo\n")
 	fmt.Fprintf(&b, "git fetch origin %s\n", shellQuote(baseCommit))
 	fmt.Fprintf(&b, "git checkout %s\n", shellQuote(baseCommit))
-	// SWE-Lego anti-hacking: find the last commit at or before issue_date,
-	// then physically delete everything after it.
-	fmt.Fprintf(&b, "cutoff_commit=$(git rev-list -1 --before=%s HEAD)\n", shellQuote(issueDate))
-	fmt.Fprintf(&b, "git filter-repo --replace-ref refs/heads/main:${cutoff_commit} --commit-cutoff ${cutoff_commit}\n")
+	// SWE-Lego anti-hacking: drop every commit whose committer date is after
+	// issue_date. git-filter-repo rewrites all refs, expires the reflog, and
+	// runs `git gc --prune=now` at the end, so the orphaned commits are
+	// physically removed from the object database — an agent inside the
+	// container cannot git log or git blame its way to the future fix
+	// (spec §2 decision 5, §4.3).
+	//
+	// commit.committer_date is the raw git bytes b'<unix_ts> <tz>', so we
+	// parse issueDate to a Unix timestamp in Go and compare as integers in
+	// the callback. Lexicographic byte comparison would not work because
+	// b'<unix_ts> ...' starts with '1' (current era) and ISO 8601 starts
+	// with '2', so the predicate would always be false.
+	callback := fmt.Sprintf("if int(commit.committer_date.split()[0]) > %d: commit.skip()", issueTime.Unix())
+	fmt.Fprintf(&b, "git filter-repo --force --commit-callback %s\n", shellQuote(callback))
 	fmt.Fprintf(&b, "pip install -e . 2>/dev/null || true\n")
 	fmt.Fprintf(&b, "docker build -t %s -f /tmp/swe-lego-build/Dockerfile .\n", shellQuote(imageRef))
-	return b.String()
+	return b.String(), nil
 }
 
 // shellQuote single-quotes a string for safe inclusion in a shell script.

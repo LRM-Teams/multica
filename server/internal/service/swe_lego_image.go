@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -78,4 +80,44 @@ func SweLegoBuildScript(repoURL, baseCommit, issueDate, baseImage, cacheKey stri
 // might contain characters with special meaning.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// ErrSweLegoBuildFailed is returned when the build script exits non-zero.
+var ErrSweLegoBuildFailed = errors.New("swe-lego image build failed")
+
+// BuildOrReuse returns the docker image ref and the node it lives on.
+// If the image is already cached on the picked node (cache hit), the build
+// is short-circuited. Otherwise the build script is shipped to the node via
+// NodeExec.Exec. The image always lives on the node that built it (spec §4.3
+// "Image locality") — registry-backed distribution is out of scope for v1.
+func BuildOrReuse(ctx context.Context, exec NodeExec, repoURL, baseCommit, issueDate, baseImage string) (imageRef string, nodeID string, err error) {
+	node, err := exec.PickBuildNode(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("pick build node: %w", err)
+	}
+	cacheKey := SweLegoCacheKey(repoURL, baseCommit, issueDate, baseImage)
+	ref := sweLegoImageRef(cacheKey)
+
+	// 1. Cache check: `docker image inspect` exits 0 if the image exists.
+	_, exitCode, err := exec.Exec(ctx, node, []string{"docker", "image", "inspect", ref})
+	if err != nil {
+		return "", "", fmt.Errorf("cache inspect transport error: %w", err)
+	}
+	if exitCode == 0 {
+		return ref, node, nil
+	}
+
+	// 2. Cache miss: ship the build script and run it on the node.
+	script, err := SweLegoBuildScript(repoURL, baseCommit, issueDate, baseImage, cacheKey)
+	if err != nil {
+		return "", "", fmt.Errorf("build script: %w", err)
+	}
+	_, exitCode, err = exec.Exec(ctx, node, []string{"sh", "-c", script})
+	if err != nil {
+		return "", "", fmt.Errorf("build transport error: %w", err)
+	}
+	if exitCode != 0 {
+		return "", "", ErrSweLegoBuildFailed
+	}
+	return ref, node, nil
 }

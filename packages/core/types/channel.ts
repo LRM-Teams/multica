@@ -55,6 +55,13 @@ export interface ChannelMessage {
   external_message_id: string | null;
   reply_to_message_id?: string | null;
   reply_to?: ChannelMessageReply | null;
+  thread_root_message_id?: string | null;
+  thread_reply_count?: number;
+  thread_last_reply_at?: string | null;
+  thread_unread_count?: number;
+  thread_followed?: boolean;
+  thread_id?: string | null;
+  trigger_depth?: number;
   /**
    * Attachments linked to this message via the attachment table's
    * channel_message_id FK. Populated by ListChannelMessages. The bubble
@@ -63,6 +70,16 @@ export interface ChannelMessage {
    */
   attachments?: import("./attachment").Attachment[];
   created_at: string;
+}
+
+export interface ChannelThreadMessagesCursor {
+  before: string;
+  before_id: string;
+}
+
+export interface ChannelThreadMessagesPage {
+  messages: ChannelMessage[];
+  next_cursor: ChannelThreadMessagesCursor | null;
 }
 
 export interface ChannelMessageReply {
@@ -77,6 +94,7 @@ export interface ChannelMessageReply {
 export interface ChannelMessageSearchResult {
   message_id: string;
   channel_id: string;
+  thread_root_message_id?: string | null;
   author_type: "user" | "agent" | "lark" | "system";
   author_id: string | null;
   author_name: string;

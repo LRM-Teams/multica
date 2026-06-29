@@ -267,6 +267,7 @@ export const EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST: EvolutionReviewSubmission[]
 const ChannelMessageSearchResultSchema = z.object({
   message_id: z.string().default(""),
   channel_id: z.string().default(""),
+  thread_root_message_id: z.string().nullable().optional(),
   author_type: z.string().default(""),
   author_id: z.string().nullable().default(null),
   author_name: z.string().default(""),

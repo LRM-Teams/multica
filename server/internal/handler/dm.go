@@ -661,6 +661,16 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 			WHERE m.channel_id = ch.id
 			  AND m.created_at > COALESCE(cr.last_read_at, '-infinity'::timestamptz)
 			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
+			  AND (
+			    m.thread_root_message_id IS NULL
+			    OR EXISTS (
+			      SELECT 1
+			      FROM channel_thread_state cts
+			      WHERE cts.root_message_id = m.thread_root_message_id
+			        AND cts.user_id = $2
+			        AND cts.followed_at IS NOT NULL
+			    )
+			  )
 		) uc ON true
 		LEFT JOIN dm_peer_state state
 		  ON state.workspace_id = ch.workspace_id

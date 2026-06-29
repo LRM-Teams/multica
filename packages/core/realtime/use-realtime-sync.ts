@@ -1088,8 +1088,11 @@ export function useRealtimeSync(
     });
 
     const unsubChannelMessage = ws.on("channel:message", (p) => {
-      const payload = p as { channel_id: string };
+      const payload = p as { channel_id: string; thread_root_message_id?: string | null };
       qc.invalidateQueries({ queryKey: channelKeys.messages(payload.channel_id) });
+      if (payload.thread_root_message_id) {
+        qc.invalidateQueries({ queryKey: channelKeys.messageThread(payload.channel_id, payload.thread_root_message_id) });
+      }
       const id = getCurrentWsId();
       if (id) qc.invalidateQueries({ queryKey: channelKeys.list(id) });
     });

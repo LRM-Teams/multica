@@ -85,6 +85,35 @@ export function useSendChannelMessage() {
   });
 }
 
+export function useSendChannelThreadMessage() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({
+      channelId,
+      messageId,
+      content,
+      attachmentIds,
+      replyToMessageId,
+    }: {
+      channelId: string;
+      messageId: string;
+      content: string;
+      attachmentIds?: string[];
+      replyToMessageId?: string | null;
+    }) => api.sendChannelThreadMessage(channelId, messageId, content, attachmentIds, replyToMessageId),
+    onSuccess: (msg) => {
+      const rootId = msg.thread_root_message_id;
+      if (rootId) {
+        qc.invalidateQueries({ queryKey: channelKeys.messageThread(msg.channel_id, rootId) });
+      }
+      qc.invalidateQueries({ queryKey: channelKeys.messages(msg.channel_id) });
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+    },
+  });
+}
+
 export function useMarkChannelRead() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
@@ -110,6 +139,33 @@ export function useMarkChannelRead() {
       // DM channels (kind='dm') also clear manual_unread_at in dm_peer_state.
       // Always invalidate dmKeys so the DM list badge stays in sync.
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+    },
+  });
+}
+
+export function useMarkChannelThreadRead() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ channelId, messageId }: { channelId: string; messageId: string }) =>
+      api.markChannelThreadRead(channelId, messageId),
+    onSuccess: (_result, vars) => {
+      qc.invalidateQueries({ queryKey: channelKeys.messageThread(vars.channelId, vars.messageId) });
+      qc.invalidateQueries({ queryKey: channelKeys.messages(vars.channelId) });
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+    },
+  });
+}
+
+export function useSetChannelThreadFollowed() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ channelId, messageId, followed }: { channelId: string; messageId: string; followed: boolean }) =>
+      followed ? api.followChannelThread(channelId, messageId) : api.unfollowChannelThread(channelId, messageId),
+    onSuccess: (_result, vars) => {
+      qc.invalidateQueries({ queryKey: channelKeys.messageThread(vars.channelId, vars.messageId) });
+      qc.invalidateQueries({ queryKey: channelKeys.messages(vars.channelId) });
     },
   });
 }

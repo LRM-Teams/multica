@@ -53,6 +53,7 @@
     "copy_failed": "コピーできませんでした"
   },
   "mention": {
+    "group_all": "すべて",
     "group_users": "ユーザー",
     "group_issues": "イシュー",
     "all_members": "すべてのメンバー",
@@ -60,7 +61,9 @@
     "no_results": "結果なし",
     "group_current": "現在のページ",
     "group_recent": "最近見た項目",
-    "group_search": "検索結果"
+    "group_search": "検索結果",
+    "type_agent": "Agent",
+    "type_member": "メンバー"
   },
   "code_block": {
     "copy_code": "コードをコピー",

@@ -52,10 +52,14 @@ export interface MentionItem {
   id: string;
   label: string;
   type: "member" | "agent" | "squad" | "issue" | "project" | "all";
+  /** Stable handle for actor mentions. Shown only as weak identity help. */
+  handle?: string;
   /** Optional grouping hint for injected context items. */
   group?: "current" | "recent" | "search";
   /** Secondary text shown beside the label (e.g. issue title) */
   description?: string;
+  /** Secondary row for actor identity, e.g. @backend-engineer. */
+  secondaryLabel?: string;
   /** Issue status for StatusIcon rendering */
   status?: IssueStatus;
   /** Project emoji/icon snapshot for ProjectIcon rendering */
@@ -80,11 +84,12 @@ export interface MentionListRef {
 // ---------------------------------------------------------------------------
 
 interface MentionGroup {
-  label: string;
+  label: "All" | "Current" | "Recent" | "Search" | "Users" | "Issues";
   items: MentionItem[];
 }
 
 function groupItems(items: MentionItem[]): MentionGroup[] {
+  const all: MentionItem[] = [];
   const current: MentionItem[] = [];
   const recent: MentionItem[] = [];
   const search: MentionItem[] = [];
@@ -92,7 +97,9 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
   const issues: MentionItem[] = [];
 
   for (const item of items) {
-    if (item.group === "current") {
+    if (item.type === "all") {
+      all.push(item);
+    } else if (item.group === "current") {
       current.push(item);
     } else if (item.group === "recent") {
       recent.push(item);
@@ -106,6 +113,7 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
   }
 
   const groups: MentionGroup[] = [];
+  if (all.length > 0) groups.push({ label: "All", items: all });
   if (current.length > 0) groups.push({ label: "Current", items: current });
   if (recent.length > 0) groups.push({ label: "Recent", items: recent });
   if (search.length > 0) groups.push({ label: "Search", items: search });
@@ -122,6 +130,48 @@ const MAX_ITEMS = 20;
 const SERVER_ISSUE_SEARCH_LIMIT = 20;
 const SERVER_CONTEXT_SEARCH_LIMIT = 8;
 const SERVER_SEARCH_DEBOUNCE_MS = 150;
+
+function normalizeActorQuery(query: string): string {
+  return query.trim().replace(/^@+/, "").toLowerCase();
+}
+
+function formatHandle(handle: string | undefined): string | undefined {
+  const normalized = handle?.trim();
+  return normalized ? `@${normalized.replace(/^@+/, "")}` : undefined;
+}
+
+function matchesActorQuery(label: string, handle: string | undefined, query: string): boolean {
+  const q = normalizeActorQuery(query);
+  if (!q) return true;
+  const normalizedLabel = label.toLowerCase();
+  const normalizedHandle = handle?.replace(/^@+/, "").toLowerCase() ?? "";
+  return (
+    normalizedLabel.includes(q) ||
+    normalizedHandle.includes(q) ||
+    matchesPinyin(label, q)
+  );
+}
+
+function actorHandleRank(item: MentionItem, query: string): number {
+  const q = normalizeActorQuery(query);
+  if (!q) return 3;
+  const handle = item.handle?.replace(/^@+/, "").toLowerCase();
+  if (!handle) return 3;
+  if (handle === q) return 0;
+  if (handle.startsWith(q)) return 1;
+  if (handle.includes(q)) return 2;
+  return 3;
+}
+
+function sortActorItems(
+  items: MentionItem[],
+  recency: ReturnType<typeof getRecencyMap>,
+  query: string,
+): MentionItem[] {
+  return sortUserItemsByRecency(items, recency).toSorted(
+    (a, b) => actorHandleRank(a, query) - actorHandleRank(b, query),
+  );
+}
 
 function mentionItemKey(item: MentionItem): string {
   return `${item.type}:${item.id}`;
@@ -294,7 +344,8 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
     const groups = groupItems(displayItems);
     const hasContextGroups = displayItems.some((item) => item.group === "current" || item.group === "recent");
     const contextLayout = hasContextGroups;
-    const groupLabel = (label: string): string => {
+    const groupLabel = (label: MentionGroup["label"]): string => {
+      if (label === "All") return t(($) => $.mention.group_all);
       if (label === "Current") return t(($) => $.mention.group_current);
       if (label === "Recent") return t(($) => $.mention.group_recent);
       if (label === "Search") return t(($) => $.mention.group_search);
@@ -305,14 +356,33 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
 
     // Build a flat index mapping: globalIndex → item
     let globalIndex = 0;
+    const duplicateActorLabels = new Set(
+      Object.entries(
+        displayItems.reduce<Record<string, number>>((acc, item) => {
+          if (item.type === "member" || item.type === "agent") {
+            const key = item.label.trim().toLowerCase();
+            if (key) acc[key] = (acc[key] ?? 0) + 1;
+          }
+          return acc;
+        }, {}),
+      )
+        .filter(([, count]) => count > 1)
+        .map(([label]) => label),
+    );
 
     const renderRows = (group: MentionGroup): ReactNode =>
       group.items.map((item) => {
         const idx = globalIndex++;
+        const duplicateLabel = duplicateActorLabels.has(item.label.trim().toLowerCase());
+        const showSecondary =
+          item.type === "agent" ||
+          duplicateLabel ||
+          actorHandleRank(item, normalizedQuery) < 3;
         return (
           <MentionRow
             key={`${item.type}-${item.id}`}
             item={item}
+            showSecondary={showSecondary}
             selected={idx === selectedIndex}
             onSelect={() => selectItem(idx)}
             buttonRef={(el) => { itemRefs.current[idx] = el; }}
@@ -361,11 +431,13 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
 
 function MentionRow({
   item,
+  showSecondary,
   selected,
   onSelect,
   buttonRef,
 }: {
   item: MentionItem;
+  showSecondary: boolean;
   selected: boolean;
   onSelect: () => void;
   buttonRef: (el: HTMLButtonElement | null) => void;
@@ -436,11 +508,14 @@ function MentionRow({
     );
   }
 
+  const isActor = item.type === "member" || item.type === "agent";
+  const secondary = isActor && showSecondary ? item.secondaryLabel : undefined;
+
   return (
     <button
       type="button"
       ref={buttonRef}
-      className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs transition-colors ${
+      className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors ${
         selected ? "bg-accent" : "hover:bg-accent/50"
       }`}
       onClick={onSelect}
@@ -452,8 +527,18 @@ function MentionRow({
         showStatusDot
         tint={agentColor(item.id)}
       />
-      <span className="truncate font-medium" style={{ color: agentColor(item.id).fg }}>
-        {item.type === "all" ? t(($) => $.mention.all_members) : item.label}
+      <span className="min-w-0 flex-1">
+        <span
+          className="block truncate font-medium text-foreground"
+          style={item.type === "agent" ? { color: agentColor(item.id).fg } : undefined}
+        >
+          {item.type === "all" ? t(($) => $.mention.all_members) : item.label}
+        </span>
+        {secondary && (
+          <span className="block truncate text-[11px] text-muted-foreground">
+            {secondary}
+          </span>
+        )}
       </span>
       {item.type === "agent" && (
         // "Agent" is a glossary-protected product term — kept un-translated.
@@ -497,6 +582,9 @@ function projectToMention(p: { id: string; title: string; description?: string |
 function matchesMentionQuery(item: MentionItem, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
+  if (item.type === "member" || item.type === "agent") {
+    return matchesActorQuery(item.label, item.handle, query);
+  }
   return (
     item.label.toLowerCase().includes(q) ||
     item.description?.toLowerCase().includes(q) === true ||
@@ -548,7 +636,7 @@ export function createMentionSuggestion(
     const myRole =
       members.find((m) => m.user_id === userId)?.role ?? null;
 
-    const q = query.toLowerCase();
+    const q = normalizeActorQuery(query);
     // When set (e.g. a channel's members), candidates are scoped to these ids.
     const allow = options.getAllowedActorIds?.();
 
@@ -566,12 +654,14 @@ export function createMentionSuggestion(
     const memberItems: MentionItem[] = members
       .filter(
         (m) =>
-          (m.name.toLowerCase().includes(q) || matchesPinyin(m.name, q)) &&
+          matchesActorQuery(m.display_name || m.name, m.name, query) &&
           (!allow || allow.has(m.user_id)),
       )
       .map((m) => ({
         id: m.user_id,
-        label: m.name,
+        label: m.display_name || m.name,
+        handle: m.name,
+        secondaryLabel: formatHandle(m.name),
         type: "member" as const,
       }));
 
@@ -579,11 +669,17 @@ export function createMentionSuggestion(
       .filter(
         (a) =>
           !a.archived_at &&
-          (a.name.toLowerCase().includes(q) || matchesPinyin(a.name, q)) &&
+          matchesActorQuery(a.display_name || a.name, a.name, query) &&
           canAssignAgentToIssue(a, { userId, role: myRole }).allowed &&
           (!allow || allow.has(a.id)),
       )
-      .map((a) => ({ id: a.id, label: a.name, type: "agent" as const }));
+      .map((a) => ({
+        id: a.id,
+        label: a.display_name || a.name,
+        handle: a.name,
+        secondaryLabel: formatHandle(a.name),
+        type: "agent" as const,
+      }));
 
     const squadItems: MentionItem[] = squads
       .filter(
@@ -598,9 +694,10 @@ export function createMentionSuggestion(
     // targets come first regardless of type, with an alphabetical fallback
     // for everyone the user hasn't mentioned yet on this device.
     const recency = getRecencyMap(wsId);
-    const userItems = sortUserItemsByRecency(
+    const userItems = sortActorItems(
       [...memberItems, ...agentItems, ...squadItems],
       recency,
+      query,
     );
 
     // Cached issues give an instant first paint; MentionList adds server

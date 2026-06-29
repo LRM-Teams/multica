@@ -323,7 +323,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                   {t(($) => $.detail.archive_dialog_title)}
                 </DialogTitle>
                 <DialogDescription className="text-xs">
-                  {t(($) => $.detail.archive_dialog_description, { name: agent.name })}
+                  {t(($) => $.detail.archive_dialog_description, { name: agent.display_name || agent.name })}
                 </DialogDescription>
               </DialogHeader>
             </div>
@@ -367,6 +367,7 @@ function DetailHeader({
 }) {
   const { t } = useT("agents");
   const isArchived = !!agent.archived_at;
+  const displayName = agent.display_name || agent.name;
   const av = presence
     ? { ...availabilityConfig[presence.availability], label: t(($) => $.availability[presence.availability]) }
     : null;
@@ -380,7 +381,7 @@ function DetailHeader({
       segments={[{ href: backHref, label: t(($) => $.page.title) }]}
       leaf={
         <>
-          <h1 className="min-w-0 truncate text-sm font-medium text-foreground">{agent.name}</h1>
+          <h1 className="min-w-0 truncate text-sm font-medium text-foreground">{displayName}</h1>
           {av && presence && (
             <span
               className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-xs ${av.textClass}`}

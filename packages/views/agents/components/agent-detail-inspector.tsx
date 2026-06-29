@@ -355,11 +355,17 @@ function NameAndDescription({
   onUpdate: (data: Record<string, unknown>) => Promise<void>;
 }) {
   const { t } = useT("agents");
+  const displayName = agent.display_name || agent.name;
+  const handle = `@${agent.name.replace(/^@+/, "")}`;
+
   if (!canEdit) {
     return (
       <div className="flex flex-col gap-1">
         <span className="text-base font-semibold leading-tight">
-          {agent.name}
+          {displayName}
+        </span>
+        <span className="text-xs leading-tight text-muted-foreground">
+          {handle}
         </span>
         {agent.description ? (
           <span className="text-xs leading-relaxed text-muted-foreground">
@@ -377,12 +383,12 @@ function NameAndDescription({
   return (
     <div className="flex flex-col gap-1">
       <InlineEditPopover
-        value={agent.name}
-        onSave={(v) => onUpdate({ name: v.trim() })}
+        value={displayName}
+        onSave={(v) => onUpdate({ display_name: v.trim() })}
         kind="input"
-        title={t(($) => $.inspector.rename_title)}
-        placeholder={t(($) => $.inspector.rename_placeholder)}
-        validate={(v) => (v.trim().length > 0 ? null : t(($) => $.inspector.rename_required))}
+        title={t(($) => $.inspector.display_name_title)}
+        placeholder={t(($) => $.inspector.display_name_placeholder)}
+        validate={(v) => (v.trim().length > 0 ? null : t(($) => $.inspector.display_name_required))}
       >
         {(triggerProps) => (
           <button
@@ -390,11 +396,14 @@ function NameAndDescription({
             {...triggerProps}
             className="group -mx-1 inline-flex items-center gap-1.5 self-start rounded px-1 text-left text-base font-semibold leading-tight transition-colors hover:bg-accent/50"
           >
-            <span>{agent.name}</span>
+            <span>{displayName}</span>
             <Pencil className="h-3 w-3 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground" />
           </button>
         )}
       </InlineEditPopover>
+      <span className="text-xs leading-tight text-muted-foreground">
+        {handle}
+      </span>
 
       <DescriptionEditor
         value={agent.description ?? ""}

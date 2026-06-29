@@ -21,9 +21,19 @@ export function useActorName() {
     return m ? (m.display_name || m.name || fallback || "Unknown") : fallback ?? "Unknown";
   }, [members]);
 
+  const getMemberHandle = useCallback((userId: string, fallback?: string) => {
+    const m = members.find((m) => m.user_id === userId);
+    return m ? (m.name || fallback || "") : fallback ?? "";
+  }, [members]);
+
   const getAgentName = useCallback((agentId: string, fallback?: string) => {
     const a = agents.find((a) => a.id === agentId);
     return a ? (a.display_name || a.name || fallback || "Unknown Agent") : fallback ?? "Unknown Agent";
+  }, [agents]);
+
+  const getAgentHandle = useCallback((agentId: string, fallback?: string) => {
+    const a = agents.find((a) => a.id === agentId);
+    return a ? (a.name || fallback || "") : fallback ?? "";
   }, [agents]);
 
   const getSquadName = useCallback((squadId: string, fallback?: string) => {
@@ -38,6 +48,12 @@ export function useActorName() {
     if (type === "system") return "Multica";
     return fallback ?? "System";
   }, [getAgentName, getMemberName, getSquadName]);
+
+  const getActorHandle = useCallback((type: string, id: string, fallback?: string) => {
+    if (type === "member") return getMemberHandle(id, fallback);
+    if (type === "agent") return getAgentHandle(id, fallback);
+    return fallback ?? "";
+  }, [getAgentHandle, getMemberHandle]);
 
   const getActorInitials = useCallback((type: string, id: string) => {
     const name = getActorName(type, id);
@@ -59,17 +75,23 @@ export function useActorName() {
   return useMemo(
     () => ({
       getMemberName,
+      getMemberHandle,
       getAgentName,
+      getAgentHandle,
       getSquadName,
       getActorName,
+      getActorHandle,
       getActorInitials,
       getActorAvatarUrl,
     }),
     [
       getActorAvatarUrl,
+      getActorHandle,
       getActorInitials,
       getActorName,
+      getAgentHandle,
       getAgentName,
+      getMemberHandle,
       getMemberName,
       getSquadName,
     ],

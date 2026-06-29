@@ -87,6 +87,21 @@ const SORT_LABEL_KEY: Record<SortKey, "label_recent" | "label_name" | "label_run
   created: "label_created",
 };
 
+function agentDisplayName(agent: Pick<Agent, "display_name" | "name">) {
+  return agent.display_name || agent.name;
+}
+
+function matchesAgentIdentity(agent: Agent, query: string) {
+  const displayName = agentDisplayName(agent);
+  const handle = agent.name;
+  return (
+    displayName.toLowerCase().includes(query) ||
+    handle.toLowerCase().includes(query) ||
+    matchesPinyin(displayName, query) ||
+    matchesPinyin(handle, query)
+  );
+}
+
 export interface AgentsPageProps {
   /**
    * Desktop-only daemon id for the current host. Forwarded into
@@ -366,8 +381,7 @@ export function AgentsPage({
       }
       if (q) {
         if (
-          !a.name.toLowerCase().includes(q) &&
-          !matchesPinyin(a.name, q) &&
+          !matchesAgentIdentity(a, q) &&
           !(a.description ?? "").toLowerCase().includes(q)
         ) {
           return false;
@@ -409,7 +423,7 @@ export function AgentsPage({
     const xs = [...filteredAgents];
     switch (sort) {
       case "name":
-        xs.sort((a, b) => a.name.localeCompare(b.name));
+        xs.sort((a, b) => agentDisplayName(a).localeCompare(agentDisplayName(b)));
         break;
       case "runs":
         xs.sort(
@@ -944,6 +958,7 @@ function AgentRailRow({
   const { t } = useT("agents");
   const { openDM, isPending: openingDM } = useOpenDM();
   const cfg = availability ? availabilityConfig[availability] : null;
+  const displayName = agentDisplayName(agent);
   return (
     // Outer div (not a button) lets us nest two independent buttons:
     // the avatar (→ open DM) and the content area (→ select in detail).
@@ -977,7 +992,7 @@ function AgentRailRow({
         className="flex min-w-0 flex-1 items-center gap-3 text-left"
       >
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-foreground">{agent.name}</p>
+          <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
           <p className="truncate text-xs text-muted-foreground">
             {agent.description?.trim() || "—"}
           </p>

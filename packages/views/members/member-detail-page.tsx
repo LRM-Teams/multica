@@ -42,7 +42,9 @@ export function MemberDetailPage({ userId }: { userId: string }) {
     );
   }
 
-  const initials = member.name
+  const displayName = member.display_name || member.name;
+  const handle = `@${member.name.replace(/^@+/, "")}`;
+  const initials = displayName
     .split(" ")
     .map((w) => w[0])
     .join("")
@@ -51,11 +53,11 @@ export function MemberDetailPage({ userId }: { userId: string }) {
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <MemberBreadcrumb workspaceName={workspace?.name} workspaceAvatarUrl={workspace?.avatar_url} title={member.name} />
+      <MemberBreadcrumb workspaceName={workspace?.name} workspaceAvatarUrl={workspace?.avatar_url} title={displayName} />
 
       <div className="flex shrink-0 items-center gap-3 border-b px-6 py-4">
         <ActorAvatarBase
-          name={member.name}
+          name={displayName}
           initials={initials}
           avatarUrl={resolvePublicFileUrl(member.avatar_url)}
           size={44}
@@ -63,11 +65,11 @@ export function MemberDetailPage({ userId }: { userId: string }) {
         />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <h1 className="truncate text-base font-semibold">{member.name}</h1>
+            <h1 className="truncate text-base font-semibold">{displayName}</h1>
             <RoleBadge role={member.role} />
           </div>
           <p className="mt-0.5 truncate text-sm text-muted-foreground">
-            {member.email}
+            {handle} · {member.email}
           </p>
         </div>
       </div>

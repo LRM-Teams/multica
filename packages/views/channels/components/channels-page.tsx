@@ -63,6 +63,13 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import {
+  matchesActorIdentitySearch,
+  resolveActorDisplayName,
+  resolveActorHandle,
+  resolveActorIdentityPresentation,
+  type ActorIdentityPresentation,
+} from "@multica/core/identity";
 import type {
   Channel,
   ChannelActiveTask,
@@ -134,6 +141,7 @@ import { ProjectPickerButton } from "../../common/project-picker-button";
 import { initialsOf } from "../../common/initials";
 import { useT, useTimeAgo } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
@@ -156,34 +164,7 @@ export interface TypingActor {
   expiresAt: number;
 }
 
-function actorDisplayName(
-  actor: { display_name?: string | null; name?: string | null },
-  fallback: string,
-): string {
-  return actor.display_name?.trim() || actor.name?.trim() || fallback;
-}
-
-function actorHandle(name?: string | null): string {
-  return name?.trim().replace(/^@+/, "") || "";
-}
-
-function actorHandleLabel(name?: string | null): string | null {
-  const handle = actorHandle(name);
-  return handle ? `@${handle}` : null;
-}
-
-function matchesActorIdentity(displayName: string, handle: string, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-
-  const handleQuery = q.replace(/^@+/, "");
-  return (
-    displayName.toLowerCase().includes(q) ||
-    matchesPinyin(displayName, q) ||
-    (handleQuery.length > 0 &&
-      (handle.toLowerCase().includes(handleQuery) || matchesPinyin(handle, handleQuery)))
-  );
-}
+const identitySearchOptions = { extendedMatch: matchesPinyin };
 
 // Overlapping avatar stack for the channel roster (agents tinted by identity
 // color, humans as initials). The whole stack is the trigger that opens member
@@ -218,7 +199,7 @@ function MemberStack({
           className="inline-flex rounded-full ring-2 ring-background"
         >
           {(() => {
-            const name = actorDisplayName(
+            const name = resolveActorDisplayName(
               m,
               m.member_type === "agent" ? "Agent" : "Member",
             );
@@ -548,47 +529,50 @@ export function ChannelsPage() {
   // Flat, searchable candidate list (users + agents) for the invite tab.
   const inviteCandidates = useMemo(() => {
     const q = memberQuery.trim();
-    const list = [
-      ...availableMembers.map((m) => {
-        const displayName = actorDisplayName(m, m.email);
-        const handle = actorHandle(m.name);
-        return {
-          key: `user:${m.user_id}`,
-          type: "user" as const,
-          id: m.user_id,
-          name: displayName,
-          handle,
-          handleLabel: actorHandleLabel(m.name),
-        };
-      }),
-      ...availableAgents.map((a) => {
-        const displayName = actorDisplayName(a, "Agent");
-        const handle = actorHandle(a.name);
-        return {
-          key: `agent:${a.id}`,
-          type: "agent" as const,
-          id: a.id,
-          name: displayName,
-          handle,
-          handleLabel: actorHandleLabel(a.name),
-        };
-      }),
+    const list: Array<{
+      key: string;
+      type: "user" | "agent";
+      id: string;
+      presentation: ActorIdentityPresentation;
+    }> = [
+      ...availableMembers.map((m) => ({
+        key: `user:${m.user_id}`,
+        type: "user" as const,
+        id: m.user_id,
+        presentation: resolveActorIdentityPresentation(m, m.email),
+      })),
+      ...availableAgents.map((a) => ({
+        key: `agent:${a.id}`,
+        type: "agent" as const,
+        id: a.id,
+        presentation: resolveActorIdentityPresentation(a, "Agent"),
+      })),
     ];
-    return q ? list.filter((c) => matchesActorIdentity(c.name, c.handle, q)) : list;
+    return q
+      ? list.filter((c) =>
+          matchesActorIdentitySearch(
+            c.presentation.displayName,
+            c.presentation.handle,
+            q,
+            identitySearchOptions,
+          ),
+        )
+      : list;
   }, [availableMembers, availableAgents, memberQuery]);
   const filteredMembers = useMemo(() => {
     const q = memberQuery.trim();
     return q
       ? channelMembers.filter((m) =>
-          matchesActorIdentity(
-            actorDisplayName(
+          matchesActorIdentitySearch(
+            resolveActorDisplayName(
               m,
               m.member_type === "agent"
                 ? t(($) => $.message.agent_badge)
                 : t(($) => $.members.title),
             ),
-            actorHandle(m.name),
+            resolveActorHandle(m),
             q,
+            identitySearchOptions,
           ),
         )
       : channelMembers;
@@ -612,7 +596,9 @@ export function ChannelsPage() {
   const rosterSummary = useMemo(
     () =>
       channelMembers
-        .map((m) => actorDisplayName(m, m.member_type === "agent" ? "Agent" : "成员"))
+        .map((m) =>
+          resolveActorDisplayName(m, m.member_type === "agent" ? "Agent" : "成员"),
+        )
         .join("，"),
     [channelMembers],
   );
@@ -1135,20 +1121,18 @@ export function ChannelsPage() {
                     onCheckedChange={() => toggleInvite(c.key)}
                   />
                   <ActorAvatar
-                    name={c.name}
-                    initials={initialsOf(c.name || "?")}
+                    name={c.presentation.displayName}
+                    initials={initialsOf(c.presentation.displayName || "?")}
                     isAgent={c.type === "agent"}
                     size={26}
                     tint={c.type === "agent" ? agentColor(c.id) : undefined}
                   />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm">{c.name}</span>
-                    {c.handleLabel ? (
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {c.handleLabel}
-                      </span>
-                    ) : null}
-                  </span>
+                  <ActorIdentityRow
+                    displayName={c.presentation.displayName}
+                    handle={c.presentation.handle}
+                    showHandle={c.presentation.showHandleLabel}
+                    primaryClassName="truncate text-sm"
+                  />
                 </label>
               ))
             )}
@@ -1177,33 +1161,30 @@ export function ChannelsPage() {
           ) : (
             filteredMembers.map((m) => {
               const isAgent = m.member_type === "agent";
-              const name = actorDisplayName(
+              const presentation = resolveActorIdentityPresentation(
                 m,
                 isAgent
                   ? t(($) => $.message.agent_badge)
                   : t(($) => $.members.title),
               );
-              const handleLabel = actorHandleLabel(m.name);
               return (
                 <div
                   key={`${m.member_type}:${m.member_id}`}
                   className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent"
                 >
                   <ActorAvatar
-                    name={name}
-                    initials={initialsOf(name || "?")}
+                    name={presentation.displayName}
+                    initials={initialsOf(presentation.displayName || "?")}
                     isAgent={isAgent}
                     size={26}
                     tint={isAgent ? agentColor(m.member_id) : undefined}
                   />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm">{name}</span>
-                    {handleLabel ? (
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {handleLabel}
-                      </span>
-                    ) : null}
-                  </span>
+                  <ActorIdentityRow
+                    displayName={presentation.displayName}
+                    handle={presentation.handle}
+                    showHandle={presentation.showHandleLabel}
+                    primaryClassName="truncate text-sm"
+                  />
                   {/* Send message: agents always, users except yourself (the
                       backend rejects a self-DM). Create-or-find then open it. */}
                   {(isAgent || m.member_id !== currentUserId) && (

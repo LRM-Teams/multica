@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { CommentTriggerPreviewAgent } from "@multica/core/types";
+import { resolveActorDisplayName, resolveActorIdentityPresentation } from "@multica/core/identity";
 import { useAgentPresenceDetail } from "@multica/core/agents";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
@@ -46,12 +47,8 @@ function sourceLabel(source: string, t: IssuesT): string {
   }
 }
 
-function agentDisplayName(agent: Pick<CommentTriggerPreviewAgent, "id" | "name"> & { display_name?: string | null }) {
-  return agent.display_name?.trim() || agent.name.trim() || agent.id;
-}
-
 function sourceReason(agent: CommentTriggerPreviewAgent, t: IssuesT): string {
-  const name = agentDisplayName(agent);
+  const name = resolveActorDisplayName(agent, agent.id);
   switch (agent.source) {
     case "issue_assignee":
       return t(($) => $.comment.trigger_reason_issue_assignee, { name });
@@ -87,14 +84,13 @@ function TriggerAgentTooltipBody({
   t: IssuesT;
 }) {
   const presenceLine = useTriggerPresenceLine(agent.id, t);
-  const displayName = agentDisplayName(agent);
-  const handle = agent.name.trim() ? `@${agent.name.replace(/^@+/, "")}` : null;
+  const presentation = resolveActorIdentityPresentation(agent, agent.id);
   return (
     <div className="space-y-0.5">
       <div className="flex items-baseline gap-1.5">
-        <span className="font-medium">{displayName}</span>
-        {handle && displayName !== agent.name ? (
-          <span className="text-[10px] text-muted-foreground">{handle}</span>
+        <span className="font-medium">{presentation.displayName}</span>
+        {presentation.showHandleLabel && presentation.handleLabel ? (
+          <span className="text-[10px] text-muted-foreground">{presentation.handleLabel}</span>
         ) : null}
         <span className="text-[10px] text-muted-foreground">{sourceLabel(agent.source, t)}</span>
       </div>
@@ -160,7 +156,7 @@ function SingleTriggerChip({
   const state = suppressed
     ? t(($) => $.comment.trigger_skipped_label)
     : sourceLabel(agent.source, t);
-  const displayName = agentDisplayName(agent);
+  const displayName = resolveActorDisplayName(agent, agent.id);
   // The avatar carries "who"; the sentence carries only condition + outcome,
   // so it stays fixed-width and never truncates on long agent names.
   const sentence = suppressed
@@ -283,7 +279,7 @@ function MultiTriggerChip({
         <div className="flex flex-col">
           {agents.map((agent) => {
             const suppressed = suppressedAgentIds.has(agent.id);
-            const displayName = agentDisplayName(agent);
+            const displayName = resolveActorDisplayName(agent, agent.id);
             const state = suppressed
               ? t(($) => $.comment.trigger_skipped_label)
               : sourceLabel(agent.source, t);
@@ -343,7 +339,7 @@ function TriggerAgentAvatar({
       )}
     >
       <ActorAvatarBase
-        name={agentDisplayName(agent)}
+        name={resolveActorDisplayName(agent, agent.id)}
         initials=""
         avatarUrl={agent.avatar_url}
         isAgent

@@ -2,7 +2,9 @@
 
 import { useMemo } from "react";
 import type { Agent, ChatSession } from "@multica/core/types";
+import { resolveActorDisplayName } from "@multica/core/identity";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { cn } from "@multica/ui/lib/utils";
 import { agentColor } from "../../common/agent-color";
 import { initialsOf } from "../../common/initials";
@@ -72,7 +74,7 @@ export function ChatContactList({
         <div className="min-h-0 flex-1 overflow-y-auto py-1">
           {contacts.map(({ agent, sessionId, hasUnread, updatedAt }) => {
             const active = agent.id === activeAgentId;
-            const displayName = agent.display_name || agent.name;
+            const displayName = resolveActorDisplayName(agent, agent.id);
             return (
               <button
                 key={agent.id}
@@ -97,14 +99,13 @@ export function ChatContactList({
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p
-                    className={cn(
+                  <ActorIdentityRow
+                    identity={agent}
+                    primaryClassName={cn(
                       "truncate text-sm",
                       hasUnread ? "font-semibold" : "font-normal",
                     )}
-                  >
-                    {displayName}
-                  </p>
+                  />
                   <span className="text-[11px] text-muted-foreground">
                     {timeAgo(updatedAt)}
                   </span>

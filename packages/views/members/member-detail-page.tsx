@@ -7,6 +7,8 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
+import { resolveActorDisplayName } from "@multica/core/identity";
+import { ActorIdentityRow } from "../common/actor-identity-row";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { PageHeader } from "../layout/page-header";
@@ -42,8 +44,7 @@ export function MemberDetailPage({ userId }: { userId: string }) {
     );
   }
 
-  const displayName = member.display_name || member.name;
-  const handle = `@${member.name.replace(/^@+/, "")}`;
+  const displayName = resolveActorDisplayName(member, member.user_id);
   const initials = displayName
     .split(" ")
     .map((w) => w[0])
@@ -65,12 +66,13 @@ export function MemberDetailPage({ userId }: { userId: string }) {
         />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <h1 className="truncate text-base font-semibold">{displayName}</h1>
+            <ActorIdentityRow
+              identity={member}
+              primaryClassName="truncate text-base font-semibold"
+            />
             <RoleBadge role={member.role} />
           </div>
-          <p className="mt-0.5 truncate text-sm text-muted-foreground">
-            {handle} · {member.email}
-          </p>
+          <p className="mt-0.5 truncate text-sm text-muted-foreground">{member.email}</p>
         </div>
       </div>
 

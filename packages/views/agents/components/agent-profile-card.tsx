@@ -10,6 +10,8 @@ import {
 } from "@multica/core/runtimes";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
+import { resolveActorDisplayName } from "@multica/core/identity";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
@@ -60,8 +62,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
     : null;
   const runtime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
   const isArchived = !!agent.archived_at;
-  const displayName = agent.display_name || agent.name;
-  const handle = `@${agent.name.replace(/^@+/, "")}`;
+  const displayName = resolveActorDisplayName(agent, agent.id);
   const initials = displayName
     .split(" ")
     .map((w) => w[0])
@@ -89,7 +90,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <p className="truncate text-sm font-semibold">{displayName}</p>
+            <ActorIdentityRow identity={agent} primaryClassName="truncate text-sm font-semibold" className="min-w-0 shrink" />
             {!isArchived && <VisibilityBadge value={agent.visibility} compact />}
             {isArchived && (
               <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
@@ -100,9 +101,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           {!isArchived && (
             <AgentAvailabilityLine wsId={wsId} agentId={agent.id} />
           )}
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {handle}
-          </p>
+
         </div>
         {!isArchived && (
           <div className="mr-1 mt-0.5 flex shrink-0 items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">

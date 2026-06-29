@@ -26,6 +26,7 @@ import {
 } from "@multica/core/workspace/queries";
 import { runtimeListOptions } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
+import { resolveActorDisplayName } from "@multica/core/identity";
 import { Button } from "@multica/ui/components/ui/button";
 import { CapabilityBanner } from "@multica/ui/components/common/capability-banner";
 import {
@@ -323,7 +324,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                   {t(($) => $.detail.archive_dialog_title)}
                 </DialogTitle>
                 <DialogDescription className="text-xs">
-                  {t(($) => $.detail.archive_dialog_description, { name: agent.display_name || agent.name })}
+                  {t(($) => $.detail.archive_dialog_description, { name: resolveActorDisplayName(agent, agent.id) })}
                 </DialogDescription>
               </DialogHeader>
             </div>
@@ -367,7 +368,7 @@ function DetailHeader({
 }) {
   const { t } = useT("agents");
   const isArchived = !!agent.archived_at;
-  const displayName = agent.display_name || agent.name;
+  const displayName = resolveActorDisplayName(agent, agent.id);
   const av = presence
     ? { ...availabilityConfig[presence.availability], label: t(($) => $.availability[presence.availability]) }
     : null;

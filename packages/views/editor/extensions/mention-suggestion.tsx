@@ -41,6 +41,14 @@ import {
   recordMentionUsage,
   sortUserItemsByRecency,
 } from "./mention-recency";
+import {
+  actorHandleSearchRank,
+  matchesActorIdentitySearch,
+  normalizeActorSearchQuery,
+  resolveActorDisplayName,
+  resolveActorHandle,
+  resolveActorIdentityPresentation,
+} from "@multica/core/identity";
 import { matchesPinyin } from "./pinyin-match";
 import { createSuggestionPopupRender } from "./suggestion-popup";
 
@@ -130,37 +138,7 @@ const MAX_ITEMS = 20;
 const SERVER_CONTEXT_SEARCH_LIMIT = 8;
 const SERVER_SEARCH_DEBOUNCE_MS = 150;
 
-function normalizeActorQuery(query: string): string {
-  return query.trim().replace(/^@+/, "").toLowerCase();
-}
-
-function formatHandle(handle: string | undefined): string | undefined {
-  const normalized = handle?.trim();
-  return normalized ? `@${normalized.replace(/^@+/, "")}` : undefined;
-}
-
-function matchesActorQuery(label: string, handle: string | undefined, query: string): boolean {
-  const q = normalizeActorQuery(query);
-  if (!q) return true;
-  const normalizedLabel = label.toLowerCase();
-  const normalizedHandle = handle?.replace(/^@+/, "").toLowerCase() ?? "";
-  return (
-    normalizedLabel.includes(q) ||
-    normalizedHandle.includes(q) ||
-    matchesPinyin(label, q)
-  );
-}
-
-function actorHandleRank(item: MentionItem, query: string): number {
-  const q = normalizeActorQuery(query);
-  if (!q) return 3;
-  const handle = item.handle?.replace(/^@+/, "").toLowerCase();
-  if (!handle) return 3;
-  if (handle === q) return 0;
-  if (handle.startsWith(q)) return 1;
-  if (handle.includes(q)) return 2;
-  return 3;
-}
+const identitySearchOptions = { extendedMatch: matchesPinyin };
 
 function sortActorItems(
   items: MentionItem[],
@@ -168,7 +146,9 @@ function sortActorItems(
   query: string,
 ): MentionItem[] {
   return sortUserItemsByRecency(items, recency).toSorted(
-    (a, b) => actorHandleRank(a, query) - actorHandleRank(b, query),
+    (a, b) =>
+      actorHandleSearchRank(a.handle ?? "", query) -
+      actorHandleSearchRank(b.handle ?? "", query),
   );
 }
 
@@ -370,7 +350,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
         const showSecondary =
           item.type === "agent" ||
           duplicateLabel ||
-          actorHandleRank(item, normalizedQuery) < 3;
+          actorHandleSearchRank(item.handle ?? "", normalizedQuery) < 3;
         return (
           <MentionRow
             key={`${item.type}-${item.id}`}
@@ -586,7 +566,12 @@ function matchesMentionQuery(item: MentionItem, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   if (item.type === "member" || item.type === "agent") {
-    return matchesActorQuery(item.label, item.handle, query);
+    return matchesActorIdentitySearch(
+      item.label,
+      item.handle ?? "",
+      query,
+      identitySearchOptions,
+    );
   }
   return (
     item.label.toLowerCase().includes(q) ||
@@ -639,7 +624,7 @@ export function createMentionSuggestion(
     const myRole =
       members.find((m) => m.user_id === userId)?.role ?? null;
 
-    const q = normalizeActorQuery(query);
+    const q = normalizeActorSearchQuery(query);
     // When set (e.g. a channel's members), candidates are scoped to these ids.
     const allow = options.getAllowedActorIds?.();
 
@@ -657,32 +642,48 @@ export function createMentionSuggestion(
     const memberItems: MentionItem[] = members
       .filter(
         (m) =>
-          matchesActorQuery(m.display_name || m.name, m.name, query) &&
+          matchesActorIdentitySearch(
+            resolveActorDisplayName(m, m.name),
+            resolveActorHandle(m),
+            query,
+            identitySearchOptions,
+          ) &&
           (!allow || allow.has(m.user_id)),
       )
-      .map((m) => ({
-        id: m.user_id,
-        label: m.display_name || m.name,
-        handle: m.name,
-        secondaryLabel: formatHandle(m.name),
-        type: "member" as const,
-      }));
+      .map((m) => {
+        const presentation = resolveActorIdentityPresentation(m, m.name);
+        return {
+          id: m.user_id,
+          label: presentation.displayName,
+          handle: presentation.handle,
+          secondaryLabel: presentation.handleLabel ?? undefined,
+          type: "member" as const,
+        };
+      });
 
     const agentItems: MentionItem[] = agents
       .filter(
         (a) =>
           !a.archived_at &&
-          matchesActorQuery(a.display_name || a.name, a.name, query) &&
+          matchesActorIdentitySearch(
+            resolveActorDisplayName(a, a.name),
+            resolveActorHandle(a),
+            query,
+            identitySearchOptions,
+          ) &&
           canAssignAgentToIssue(a, { userId, role: myRole }).allowed &&
           (!allow || allow.has(a.id)),
       )
-      .map((a) => ({
-        id: a.id,
-        label: a.display_name || a.name,
-        handle: a.name,
-        secondaryLabel: formatHandle(a.name),
-        type: "agent" as const,
-      }));
+      .map((a) => {
+        const presentation = resolveActorIdentityPresentation(a, a.name);
+        return {
+          id: a.id,
+          label: presentation.displayName,
+          handle: presentation.handle,
+          secondaryLabel: presentation.handleLabel ?? undefined,
+          type: "agent" as const,
+        };
+      });
 
     const squadItems: MentionItem[] = squads
       .filter(

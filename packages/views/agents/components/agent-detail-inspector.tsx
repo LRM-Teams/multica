@@ -22,7 +22,13 @@ import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { isImeComposing } from "@multica/core/utils";
 import { useTimeAgo } from "../../i18n";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  formatActorHandleLabel,
+  resolveActorDisplayName,
+  resolveActorHandle,
+} from "@multica/core/identity";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { Input } from "@multica/ui/components/ui/input";
 import {
   Dialog,
@@ -355,18 +361,17 @@ function NameAndDescription({
   onUpdate: (data: Record<string, unknown>) => Promise<void>;
 }) {
   const { t } = useT("agents");
-  const displayName = agent.display_name || agent.name;
-  const handle = `@${agent.name.replace(/^@+/, "")}`;
+  const displayName = resolveActorDisplayName(agent, agent.id);
+  const handleLabel = formatActorHandleLabel(resolveActorHandle(agent));
 
   if (!canEdit) {
     return (
       <div className="flex flex-col gap-1">
-        <span className="text-base font-semibold leading-tight">
-          {displayName}
-        </span>
-        <span className="text-xs leading-tight text-muted-foreground">
-          {handle}
-        </span>
+        <ActorIdentityRow
+          identity={agent}
+          primaryClassName="text-base font-semibold leading-tight"
+          className="min-w-0"
+        />
         {agent.description ? (
           <span className="text-xs leading-relaxed text-muted-foreground">
             {agent.description}
@@ -401,9 +406,9 @@ function NameAndDescription({
           </button>
         )}
       </InlineEditPopover>
-      <span className="text-xs leading-tight text-muted-foreground">
-        {handle}
-      </span>
+      {handleLabel ? (
+        <span className="text-xs leading-tight text-muted-foreground">{handleLabel}</span>
+      ) : null}
 
       <DescriptionEditor
         value={agent.description ?? ""}

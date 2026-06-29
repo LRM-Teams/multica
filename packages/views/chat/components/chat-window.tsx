@@ -27,6 +27,8 @@ import {
   PickerSection,
   PropertyPicker,
 } from "../../issues/components/pickers/property-picker";
+import { matchesActorIdentitySearch, resolveActorDisplayName } from "@multica/core/identity";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { OfflineBanner } from "./offline-banner";
 import { NoAgentBanner } from "./no-agent-banner";
@@ -863,16 +865,14 @@ export function AgentDropdown({
   }, [agents, userId]);
 
   const query = filter.trim().toLowerCase();
-  const matches = (agent: Agent) => {
-    if (!query) return true;
-    const displayName = agent.display_name || agent.name;
-    return (
-      displayName.toLowerCase().includes(query) ||
-      agent.name.toLowerCase().includes(query) ||
-      matchesPinyin(displayName, query) ||
-      matchesPinyin(agent.name, query)
+  const identitySearchOptions = { extendedMatch: matchesPinyin };
+  const matches = (agent: Agent) =>
+    matchesActorIdentitySearch(
+      resolveActorDisplayName(agent, agent.id),
+      agent.name,
+      query,
+      identitySearchOptions,
     );
-  };
   const filteredMine = mine.filter(matches);
   const filteredOthers = others.filter(matches);
 
@@ -884,7 +884,7 @@ export function AgentDropdown({
   if (!activeAgent) {
     return <span className="text-xs text-muted-foreground">{t(($) => $.window.no_agents)}</span>;
   }
-  const activeAgentDisplayName = activeAgent.display_name || activeAgent.name;
+  const activeAgentDisplayName = resolveActorDisplayName(activeAgent, activeAgent.id);
 
   return (
     <PropertyPicker
@@ -959,7 +959,6 @@ function AgentPickerItem({
   isCurrent: boolean;
   onSelect: (agent: Agent) => void;
 }) {
-  const displayName = agent.display_name || agent.name;
   return (
     <PickerItem
       selected={isCurrent}
@@ -972,7 +971,7 @@ function AgentPickerItem({
         enableHoverCard
         showStatusDot
       />
-      <span className="truncate flex-1">{displayName}</span>
+      <ActorIdentityRow identity={agent} primaryClassName="truncate" />
     </PickerItem>
   );
 }

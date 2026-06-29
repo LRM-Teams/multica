@@ -35,7 +35,6 @@
       "github": "GitHub",
       "integrations": "集成",
       "labs": "实验室",
-      "evolution_review": "审核队列",
       "members": "成员"
     }
   },
@@ -185,107 +184,6 @@
     "section_placeholder_title": "暂无实验",
     "section_placeholder_description": "实验性功能上线后会出现在这里。当前实验室页面是空的。",
     "toast_failed": "更新设置失败"
-  },
-  "evolution_review": {
-    "title": "Evolution 人工审核",
-    "description": "审核智能体提交、需要人工决策后才能晋升和分发的 memory 与 skill。",
-    "status_filter": "提交状态",
-    "refresh": "刷新",
-    "refreshing": "刷新中...",
-    "loading": "正在加载审核队列...",
-    "empty_title": "当前队列没有提交",
-    "empty_description": "需要人工处理的审核结果会出现在这里。",
-    "toast_promoted": "提交已晋升",
-    "toast_rejected": "提交已拒绝",
-    "toast_failed": "更新提交失败",
-    "untitled": "未命名提交",
-    "unknown": "未知",
-    "none": "无",
-    "no_summary": "暂无摘要。",
-    "no_review_reason": "暂无审核说明。",
-    "no_content": "暂无内容。",
-    "decision": "审核决策",
-    "confidence": "审核置信度",
-    "sensitivity": "敏感度",
-    "updated": "更新时间",
-    "review_reason": "审核说明",
-    "content": "内容预览",
-    "files": "文件",
-    "reason_label": "决策原因",
-    "reason_placeholder": "可选，写入审计记录",
-    "reject": "拒绝",
-    "promote": "晋升",
-    "decision_disabled_hint": "只有待审核状态的提交可以晋升或拒绝。",
-    "statuses": {
-      "needs_review": "待审核",
-      "rejected": "已拒绝",
-      "promoted": "已晋升",
-      "candidate": "候选"
-    },
-    "unit_types": {
-      "memory": "memory",
-      "skill": "skill",
-      "workflow": "工作流",
-      "tool_pattern": "工具模式",
-      "preference": "偏好"
-    },
-    "delivery_types": {
-      "generated": "待启用 skill",
-      "inbox": "收件箱",
-      "recommendation": "推荐",
-      "shared_cache": "共享缓存"
-    },
-    "review_decisions": {
-      "promote": "建议晋升",
-      "needs_review": "建议人工审核",
-      "reject": "建议拒绝"
-    },
-    "confidence_levels": {
-      "low": "低",
-      "medium": "中",
-      "high": "高"
-    },
-    "sensitivity_levels": {
-      "none": "无敏感内容",
-      "local_path": "包含本地路径",
-      "personal": "包含个人信息",
-      "secret": "包含密钥",
-      "unknown": "未知"
-    },
-    "metadata_sources": {
-      "manual_seed": "手动测试数据",
-      "human_review": "人工审核",
-      "deterministic_rules": "规则引擎",
-      "evolution_reviewer": "智能审核器",
-      "agent_reviewer": "智能体审核器",
-      "llm_reviewer": "大模型审核器"
-    },
-    "risks": {
-      "low": "低风险",
-      "medium": "中风险",
-      "high": "高风险",
-      "unknown": "未知风险"
-    },
-    "source_agent": "来源智能体",
-    "submission_confidence": "提交置信度",
-    "audit_summary": "审计摘要",
-    "metadata_source": "来源",
-    "metadata_provider": "服务商",
-    "metadata_model": "模型",
-    "metadata_session": "会话",
-    "metadata_rationale": "理由",
-    "metadata_risks": "风险",
-    "delivery_preview": "分发预览",
-    "delivery_type": "分发类型",
-    "delivery_target": "目标",
-    "promoted_unit": "已晋升单元",
-    "promoted_result": "已晋升",
-    "pending_result": "尚未晋升",
-    "promotion_result_hint": "晋升后会创建共享 evolution unit，并为来源智能体排队分发。",
-    "review_metadata": "原始审核 metadata",
-    "apply_suggestions": "应用审核建议",
-    "apply_suggestions_hint": "晋升时使用审核建议的标题、摘要、标签、task 类型和范围。",
-    "no_suggestions_hint": "这次审核没有归一化建议。"
   },
   "github": {
     "page_description": "连接 GitHub App、控制 Pull Request 如何出现在 Multica 中，并决定智能体在 commit 记录里留下哪些痕迹。",

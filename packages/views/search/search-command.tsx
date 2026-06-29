@@ -198,7 +198,7 @@ export function SearchCommand() {
     { key: "projects", label: t(($) => $.pages.projects), icon: FolderKanban, keywords: ["projects", "kanban", "项目"] },
     { key: "agents", label: t(($) => $.pages.agents), icon: Bot, keywords: ["agents", "bots", "ai"] },
     { key: "runtimes", label: t(($) => $.pages.runtimes), icon: Monitor, keywords: ["runtimes", "environments"] },
-    { key: "skills", label: t(($) => $.pages.skills), icon: BookOpenText, keywords: ["skills", "library"] },
+    { key: "skills", label: t(($) => $.pages.skills), icon: BookOpenText, keywords: ["skills", "library", "review", "queue", "审核"] },
     { key: "settings", label: t(($) => $.pages.settings), icon: Settings, keywords: ["settings", "config", "preferences", "设置"] },
   ];
   const { push, pathname, getShareableUrl } = useNavigation();

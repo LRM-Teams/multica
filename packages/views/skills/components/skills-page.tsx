@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
   BookOpen,
   Plus,
   Search,
+  ShieldCheck,
 } from "lucide-react";
 import type {
   AgentRuntime,
@@ -30,6 +31,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { DataTable } from "@multica/ui/components/ui/data-table";
 import { Input } from "@multica/ui/components/ui/input";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import {
   Tooltip,
   TooltipContent,
@@ -40,10 +42,15 @@ import { PageHeader } from "../../layout/page-header";
 import { canEditSkill } from "../hooks/use-can-edit-skill";
 import { readOrigin, isRuntimeManagedOrigin } from "../lib/origin";
 import { CreateSkillDialog } from "./create-skill-dialog";
+import { EvolutionReviewSection } from "./evolution-review-section";
 import { type SkillRow, useSkillColumns } from "./skill-columns";
 import { useT } from "../../i18n";
 
 type FilterKey = "all" | "used" | "unused" | "mine";
+type SkillsSection = "library" | "review";
+
+const SECTION_QUERY_KEY = "section";
+const VALID_SECTIONS = new Set<SkillsSection>(["library", "review"]);
 
 const SCOPE_KEYS: FilterKey[] = ["all", "used", "unused", "mine"];
 
@@ -198,7 +205,34 @@ export default function SkillsPage() {
 
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
+  const sectionFromUrl = navigation.searchParams.get(SECTION_QUERY_KEY);
+  const [section, setSection] = useState<SkillsSection>(() =>
+    sectionFromUrl === "review" ? "review" : "library",
+  );
   const [createOpen, setCreateOpen] = useState(false);
+
+  useEffect(() => {
+    const next = navigation.searchParams.get(SECTION_QUERY_KEY);
+    if (next === "review") {
+      setSection("review");
+    } else if (!next || next === "library") {
+      setSection("library");
+    }
+  }, [navigation.searchParams]);
+
+  const handleSectionChange = (value: string) => {
+    if (!VALID_SECTIONS.has(value as SkillsSection)) return;
+    const next = value as SkillsSection;
+    setSection(next);
+    const params = new URLSearchParams(navigation.searchParams);
+    if (next === "library") {
+      params.delete(SECTION_QUERY_KEY);
+    } else {
+      params.set(SECTION_QUERY_KEY, next);
+    }
+    const qs = params.toString();
+    navigation.replace(qs ? `${navigation.pathname}?${qs}` : navigation.pathname);
+  };
 
   const assignments = useMemo(
     () => selectSkillAssignments(agents),
@@ -362,58 +396,77 @@ export default function SkillsPage() {
         </div>
       )}
 
-      <div className="flex flex-1 min-h-0 flex-col gap-4 p-3 sm:p-6">
-        {!showEmpty && (
-          <div className="max-w-3xl rounded-r-md border-l-2 border-l-brand bg-brand/5 px-4 py-3 text-xs leading-relaxed text-muted-foreground">
-            <span className="font-medium text-foreground">
-              {t(($) => $.page.intro_banner.title)}
-            </span>{" "}
-            {t(($) => $.page.intro_banner.body)}{" "}
-            <span className="font-semibold text-brand">
-              {t(($) => $.page.intro_banner.highlight)}
-            </span>
-          </div>
-        )}
-        {showEmpty ? (
-          <div className="flex flex-1 items-center justify-center">
-            <EmptyState onCreate={() => setCreateOpen(true)} />
-          </div>
-        ) : (
-          <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-lg border bg-background">
-            <CardToolbar
-              search={search}
-              setSearch={setSearch}
-              filter={filter}
-              setFilter={setFilter}
-            />
-            {filtered.length === 0 ? (
-              <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-16 text-center text-muted-foreground">
-                <Search className="h-8 w-8 text-muted-foreground/40" />
-                <p className="text-sm">{t(($) => $.page.no_matches.title)}</p>
-                <p className="max-w-xs text-xs">
-                  {search
-                    ? t(($) => $.page.no_matches.with_query, {
-                        query: search,
-                        filterSuffix:
-                          filter !== "all"
-                            ? t(($) => $.page.no_matches.with_query_filter_suffix)
-                            : "",
-                      })
-                    : t(($) => $.page.no_matches.filter_only)}
-                  {t(($) => $.page.no_matches.try_different)}
-                </p>
-              </div>
-            ) : (
-              <DataTable
-                table={table}
-                onRowClick={(row) =>
-                  navigation.push(paths.skillDetail(row.original.skill.id))
-                }
+      <Tabs value={section} onValueChange={handleSectionChange} className="flex flex-1 min-h-0 flex-col">
+        <div className="shrink-0 border-b px-3 py-2 sm:px-6">
+          <TabsList variant="line" className="h-auto">
+            <TabsTrigger value="library">
+              <BookOpen className="h-4 w-4" />
+              {t(($) => $.page.title)}
+            </TabsTrigger>
+            <TabsTrigger value="review">
+              <ShieldCheck className="h-4 w-4" />
+              {t(($) => $.page.review_queue.label)}
+            </TabsTrigger>
+          </TabsList>
+        </div>
+
+        <TabsContent value="library" className="flex flex-1 min-h-0 flex-col gap-4 p-3 sm:p-6">
+          {!showEmpty && (
+            <div className="max-w-3xl rounded-r-md border-l-2 border-l-brand bg-brand/5 px-4 py-3 text-xs leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">
+                {t(($) => $.page.intro_banner.title)}
+              </span>{" "}
+              {t(($) => $.page.intro_banner.body)}{" "}
+              <span className="font-semibold text-brand">
+                {t(($) => $.page.intro_banner.highlight)}
+              </span>
+            </div>
+          )}
+          {showEmpty ? (
+            <div className="flex flex-1 items-center justify-center">
+              <EmptyState onCreate={() => setCreateOpen(true)} />
+            </div>
+          ) : (
+            <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-lg border bg-background">
+              <CardToolbar
+                search={search}
+                setSearch={setSearch}
+                filter={filter}
+                setFilter={setFilter}
               />
-            )}
-          </div>
-        )}
-      </div>
+              {filtered.length === 0 ? (
+                <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-16 text-center text-muted-foreground">
+                  <Search className="h-8 w-8 text-muted-foreground/40" />
+                  <p className="text-sm">{t(($) => $.page.no_matches.title)}</p>
+                  <p className="max-w-xs text-xs">
+                    {search
+                      ? t(($) => $.page.no_matches.with_query, {
+                          query: search,
+                          filterSuffix:
+                            filter !== "all"
+                              ? t(($) => $.page.no_matches.with_query_filter_suffix)
+                              : "",
+                        })
+                      : t(($) => $.page.no_matches.filter_only)}
+                    {t(($) => $.page.no_matches.try_different)}
+                  </p>
+                </div>
+              ) : (
+                <DataTable
+                  table={table}
+                  onRowClick={(row) =>
+                    navigation.push(paths.skillDetail(row.original.skill.id))
+                  }
+                />
+              )}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="review" className="flex-1 overflow-y-auto p-3 sm:p-6">
+          <EvolutionReviewSection />
+        </TabsContent>
+      </Tabs>
 
       {createOpen && (
         <CreateSkillDialog

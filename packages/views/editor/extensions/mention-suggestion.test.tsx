@@ -179,7 +179,7 @@ describe("createMentionSuggestion", () => {
     ]);
   });
 
-  it("loads server issue matches into the popup when the list cache misses", async () => {
+  it("does not load server issue matches in the normal @ picker", async () => {
     searchIssuesMock.mockResolvedValue({
       issues: [
         {
@@ -194,19 +194,9 @@ describe("createMentionSuggestion", () => {
 
     render(<I18nWrapper><MentionList items={[]} query="协作" command={vi.fn()} /></I18nWrapper>);
 
-    expect(screen.getByText("Searching...")).toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(screen.getByText("MUL-1007")).toBeInTheDocument();
-    });
-    expect(screen.getByText("多 Agent 协作探索")).toBeInTheDocument();
-    expect(searchIssuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        q: "协作",
-        limit: 20,
-        include_closed: true,
-      }),
-    );
+    expect(screen.getByText("No results")).toBeInTheDocument();
+    expect(screen.queryByText("MUL-1007")).not.toBeInTheDocument();
+    expect(searchIssuesMock).not.toHaveBeenCalled();
   });
 
   it("loads server issue and project matches when project search is enabled", async () => {
@@ -326,7 +316,7 @@ describe("createMentionSuggestion", () => {
     expect(items.some((i) => i.type === "agent" && i.label === "Atlas")).toBe(true);
   });
 
-  it("includes cached issues in the synchronous response", () => {
+  it("excludes cached issues from the normal @ response", () => {
     const qc = fakeQc({
       issues: [
         { id: "i1", identifier: "MUL-1", title: "Login bug", status: "todo" },
@@ -339,7 +329,7 @@ describe("createMentionSuggestion", () => {
     const result = config.items!({ query: "bug", editor: {} as never });
 
     const items = result as MentionItem[];
-    expect(items.some((i) => i.type === "issue" && i.id === "i1")).toBe(true);
+    expect(items.some((i) => i.type === "issue")).toBe(false);
   });
 
   it("does not inject current/recent chat context into the normal @ results", () => {
@@ -354,7 +344,7 @@ describe("createMentionSuggestion", () => {
 
     expect(result.some((item) => item.group === "current" || item.group === "recent")).toBe(false);
     expect(result.map((item) => `${item.type}:${item.id}`)).toContain("member:u1");
-    expect(result.map((item) => `${item.type}:${item.id}`)).toContain("issue:i1");
+    expect(result.map((item) => `${item.type}:${item.id}`)).not.toContain("issue:i1");
   });
 
 

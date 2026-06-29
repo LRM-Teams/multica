@@ -94,6 +94,60 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	}
 }
 
+func TestChannelMentionedAgentsMatchesHandleDisplayAndStructuredID(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	handle := "identity_handle_" + suffix
+	displayName := "Identity Display " + suffix
+	agentID := createHandlerTestAgent(t, handle, nil)
+	decoyID := createHandlerTestAgent(t, "identity_decoy_"+suffix, nil)
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET display_name = $2 WHERE id = $1`, agentID, displayName); err != nil {
+		t.Fatalf("set agent display_name: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET display_name = $2 WHERE id = $1`, decoyID, "Identity Decoy "+suffix); err != nil {
+		t.Fatalf("set decoy display_name: %v", err)
+	}
+
+	channelID := seedChannelForTest(t, "identity-mentions-"+suffix, testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)`,
+		channelID, testWorkspaceID, agentID, decoyID,
+	); err != nil {
+		t.Fatalf("seed agent members: %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{"bare handle", "please @" + handle + " jump in"},
+		{"bare display", "please @" + displayName + " jump in"},
+		{"structured id", fmt.Sprintf("please [@Old Label](mention://agent/%s) jump in", agentID)},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			agents := testHandler.channelMentionedAgents(ctx, testWorkspaceID, channelID, tt.content)
+			if len(agents) != 1 {
+				t.Fatalf("channelMentionedAgents returned %d agents, want 1: %+v", len(agents), agents)
+			}
+			if got := uuidToString(agents[0].ID); got != agentID {
+				t.Fatalf("mentioned agent = %s, want %s", got, agentID)
+			}
+			if agents[0].Name != handle {
+				t.Fatalf("mentioned handle = %q, want %q", agents[0].Name, handle)
+			}
+			if agents[0].DisplayName != displayName {
+				t.Fatalf("mentioned display_name = %q, want %q", agents[0].DisplayName, displayName)
+			}
+		})
+	}
+}
+
 func TestChannelMentionNotifiesHumanMember(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

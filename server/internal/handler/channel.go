@@ -59,16 +59,18 @@ type ChannelLastMessage struct {
 }
 
 type ChannelMemberBrief struct {
-	MemberType string `json:"member_type"`
-	MemberID   string `json:"member_id"`
-	Name       string `json:"name"`
+	MemberType  string `json:"member_type"`
+	MemberID    string `json:"member_id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
 }
 
 type ChannelMemberResponse struct {
-	MemberType string `json:"member_type"`
-	MemberID   string `json:"member_id"`
-	Name       string `json:"name"`
-	CreatedAt  string `json:"created_at"`
+	MemberType  string `json:"member_type"`
+	MemberID    string `json:"member_id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	CreatedAt   string `json:"created_at"`
 }
 
 type ChannelMessageResponse struct {
@@ -231,7 +233,9 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	// Second pass: members for the avatar stack, grouped by channel.
 	if len(channelIDs) > 0 {
 		memberRows, err := h.DB.Query(r.Context(), `
-			SELECT cm.channel_id, cm.member_type, cm.member_id, COALESCE(u.name, u.email, a.name, '')
+			SELECT cm.channel_id, cm.member_type, cm.member_id,
+			       COALESCE(u.name, a.name, ''),
+			       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '')
 			FROM channel_member cm
 			LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
 			LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
@@ -242,12 +246,12 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			grouped := map[string][]ChannelMemberBrief{}
 			for memberRows.Next() {
 				var chID, memberID pgtype.UUID
-				var memberType, memberName string
-				if err := memberRows.Scan(&chID, &memberType, &memberID, &memberName); err != nil {
+				var memberType, memberName, memberDisplayName string
+				if err := memberRows.Scan(&chID, &memberType, &memberID, &memberName, &memberDisplayName); err != nil {
 					continue
 				}
 				key := uuidToString(chID)
-				grouped[key] = append(grouped[key], ChannelMemberBrief{MemberType: memberType, MemberID: uuidToString(memberID), Name: memberName})
+				grouped[key] = append(grouped[key], ChannelMemberBrief{MemberType: memberType, MemberID: uuidToString(memberID), Name: memberName, DisplayName: firstNonEmpty(memberDisplayName, memberName)})
 			}
 			for i := range out {
 				if m := grouped[out[i].ID]; m != nil {
@@ -593,7 +597,9 @@ func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT cm.member_type, cm.member_id,
-		       COALESCE(u.name, u.email, a.name, ''), cm.created_at
+		       COALESCE(u.name, a.name, ''),
+		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, ''),
+		       cm.created_at
 		FROM channel_member cm
 		LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
 		LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
@@ -606,14 +612,14 @@ func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	out := []ChannelMemberResponse{}
 	for rows.Next() {
-		var typ, name string
+		var typ, name, displayName string
 		var id pgtype.UUID
 		var createdAt pgtype.Timestamptz
-		if err := rows.Scan(&typ, &id, &name, &createdAt); err != nil {
+		if err := rows.Scan(&typ, &id, &name, &displayName, &createdAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channel members")
 			return
 		}
-		out = append(out, ChannelMemberResponse{MemberType: typ, MemberID: uuidToString(id), Name: name, CreatedAt: timestampToString(createdAt)})
+		out = append(out, ChannelMemberResponse{MemberType: typ, MemberID: uuidToString(id), Name: name, DisplayName: firstNonEmpty(displayName, name), CreatedAt: timestampToString(createdAt)})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -1440,18 +1446,25 @@ func (h *Handler) publishChannelAgentTyping(ch ChannelResponse, agent db.Agent, 
 		ChannelID:   ch.ID,
 		ActorType:   "agent",
 		ActorID:     uuidToString(agent.ID),
-		ActorName:   agent.Name,
+		ActorName:   agentDisplayName(agent),
 		IsTyping:    isTyping,
 		ExpiresInMS: channelAgentTypingExpiresInMS,
 	})
 }
 
 func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, channelID, content string) []db.Agent {
-	mentionAll := contentMentionsAll(content)
+	mentions := util.ParseMentions(content)
+	mentionAll := util.HasMentionAll(mentions) || contentMentionsAll(content)
+	mentionedAgents := map[string]struct{}{}
+	for _, mention := range mentions {
+		if mention.Type == "agent" {
+			mentionedAgents[mention.ID] = struct{}{}
+		}
+	}
 	rows, err := h.DB.Query(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
-		       a.archived_at
+		       a.archived_at, a.display_name
 		FROM channel_member cm
 		JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
 		WHERE cm.channel_id = $1 AND cm.workspace_id = $2 AND a.archived_at IS NULL`, parseUUID(channelID), parseUUID(workspaceID))
@@ -1462,10 +1475,11 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 	var out []db.Agent
 	for rows.Next() {
 		var a db.Agent
-		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Visibility, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.ArchivedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Visibility, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.ArchivedAt, &a.DisplayName); err != nil {
 			continue
 		}
-		if mentionAll || contentMentionsAgent(content, a.Name) {
+		_, mentionedByID := mentionedAgents[uuidToString(a.ID)]
+		if mentionAll || mentionedByID || contentMentionsAgent(content, a.Name) || contentMentionsAgent(content, a.DisplayName) {
 			out = append(out, a)
 		}
 	}
@@ -1508,7 +1522,8 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 			if mentionType == "user" {
 				mentionType = "member"
 			}
-			fmt.Fprintf(&b, "- %s (%s): [@%s](mention://%s/%s)\n", member.Name, member.MemberType, member.Name, mentionType, member.MemberID)
+			displayName := firstNonEmpty(member.DisplayName, member.Name)
+			fmt.Fprintf(&b, "- %s (%s, @%s): [@%s](mention://%s/%s)\n", displayName, member.MemberType, member.Name, displayName, mentionType, member.MemberID)
 		}
 		b.WriteString("\n")
 	}
@@ -1527,7 +1542,9 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 func (h *Handler) channelMemberSummaries(ctx context.Context, workspaceID, channelID string) []ChannelMemberResponse {
 	rows, err := h.DB.Query(ctx, `
 		SELECT cm.member_type, cm.member_id,
-		       COALESCE(u.name, u.email, a.name, ''), cm.created_at
+		       COALESCE(u.name, a.name, ''),
+		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, ''),
+		       cm.created_at
 		FROM channel_member cm
 		LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
 		LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
@@ -1539,13 +1556,13 @@ func (h *Handler) channelMemberSummaries(ctx context.Context, workspaceID, chann
 	defer rows.Close()
 	var out []ChannelMemberResponse
 	for rows.Next() {
-		var typ, name string
+		var typ, name, displayName string
 		var id pgtype.UUID
 		var createdAt pgtype.Timestamptz
-		if err := rows.Scan(&typ, &id, &name, &createdAt); err != nil {
+		if err := rows.Scan(&typ, &id, &name, &displayName, &createdAt); err != nil {
 			continue
 		}
-		out = append(out, ChannelMemberResponse{MemberType: typ, MemberID: uuidToString(id), Name: name, CreatedAt: timestampToString(createdAt)})
+		out = append(out, ChannelMemberResponse{MemberType: typ, MemberID: uuidToString(id), Name: name, DisplayName: firstNonEmpty(displayName, name), CreatedAt: timestampToString(createdAt)})
 	}
 	return out
 }
@@ -1872,8 +1889,8 @@ func (h *Handler) getChannelByLarkChatID(ctx context.Context, workspaceID, larkC
 
 func (h *Handler) channelAuthorName(ctx context.Context, userID string) string {
 	user, err := h.Queries.GetUser(ctx, parseUUID(userID))
-	if err == nil && strings.TrimSpace(user.Name) != "" {
-		return user.Name
+	if err == nil && strings.TrimSpace(userDisplayName(user)) != "" {
+		return userDisplayName(user)
 	}
 	if err == nil && strings.TrimSpace(user.Email) != "" {
 		return user.Email
@@ -1883,8 +1900,8 @@ func (h *Handler) channelAuthorName(ctx context.Context, userID string) string {
 
 func (h *Handler) agentName(ctx context.Context, agentID pgtype.UUID) string {
 	agent, err := h.Queries.GetAgent(ctx, agentID)
-	if err == nil && strings.TrimSpace(agent.Name) != "" {
-		return agent.Name
+	if err == nil && strings.TrimSpace(agentDisplayName(agent)) != "" {
+		return agentDisplayName(agent)
 	}
 	return "Agent"
 }

@@ -142,9 +142,14 @@ func TestCreateAgent_RejectsPrivateRuntimeForNonOwner(t *testing.T) {
 	runtimeID, runtimeOwnerID, plainMemberID := runtimeVisibilityFixture(t)
 
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(),
-			`DELETE FROM agent WHERE workspace_id = $1 AND name LIKE 'runtime-visibility-test-%'`,
-			testWorkspaceID)
+		testPool.Exec(context.Background(), `
+			DELETE FROM agent
+			 WHERE workspace_id = $1
+			   AND (
+			       name LIKE 'runtime_visibility_test_%'
+			       OR display_name LIKE 'runtime-visibility-test-%'
+			   )
+		`, testWorkspaceID)
 	})
 
 	body := func(name string) map[string]any {
@@ -197,9 +202,14 @@ func TestCreateAgent_AllowsPublicRuntimeForPlainMember(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(),
-			`DELETE FROM agent WHERE workspace_id = $1 AND name = 'runtime-visibility-test-public-runtime'`,
-			testWorkspaceID)
+		testPool.Exec(context.Background(), `
+			DELETE FROM agent
+			 WHERE workspace_id = $1
+			   AND (
+			       name = 'runtime_visibility_test_public_runtime'
+			       OR display_name = 'runtime-visibility-test-public-runtime'
+			   )
+		`, testWorkspaceID)
 	})
 
 	body := map[string]any{

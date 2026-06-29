@@ -77,7 +77,7 @@ export function AuthInitializer({
     const onAuthSuccess = (user: User) => {
       onLogin?.();
       useAuthStore.setState({ user, isLoading: false });
-      identifyAnalytics(user.id, { email: user.email, name: user.name });
+      identifyAnalytics(user.id, { email: user.email, name: user.display_name || user.name });
     };
 
     const onAuthFailure = () => {

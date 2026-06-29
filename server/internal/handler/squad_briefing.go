@@ -125,7 +125,7 @@ func buildSquadRoster(ctx context.Context, q *db.Queries, squad db.Squad) string
 	// Leader self-row. Leaders are always agents (FK enforced in schema).
 	leaderName := "Leader"
 	if leader, err := q.GetAgent(ctx, squad.LeaderID); err == nil {
-		leaderName = leader.Name
+		leaderName = agentDisplayName(leader)
 	}
 	sb.WriteString("Leader (you):\n")
 	sb.WriteString("- ")
@@ -178,7 +178,8 @@ func renderMemberRow(ctx context.Context, q *db.Queries, m db.SquadMember) strin
 		if ag.ArchivedAt.Valid {
 			return ""
 		}
-		return formatRosterRow(ag.Name, "agent", role, formatMention(ag.Name, "agent", id))
+		name := agentDisplayName(ag)
+		return formatRosterRow(name, "agent", role, formatMention(name, "agent", id))
 	case "member":
 		user, err := q.GetUser(ctx, m.MemberID)
 		if err != nil {
@@ -187,7 +188,8 @@ func renderMemberRow(ctx context.Context, q *db.Queries, m db.SquadMember) strin
 		// Mention syntax for humans uses the user_id (matches the rest of
 		// the product — see util.MentionRe and frontend mention payloads).
 		userID := util.UUIDToString(m.MemberID)
-		return formatRosterRow(user.Name, "member (human)", role, formatMention(user.Name, "member", userID))
+		name := userDisplayName(user)
+		return formatRosterRow(name, "member (human)", role, formatMention(name, "member", userID))
 	default:
 		return ""
 	}

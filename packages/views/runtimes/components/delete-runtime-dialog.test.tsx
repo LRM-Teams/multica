@@ -133,11 +133,11 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
 }
 
 function makeAgent(id: string, overrides: Partial<Agent> = {}): Agent {
+  const name = overrides.name ?? `Agent ${id}`;
   return {
     id,
     workspace_id: "ws-1",
     runtime_id: "rt-1",
-    name: `Agent ${id}`,
     description: "",
     instructions: "",
     avatar_url: null,
@@ -155,6 +155,8 @@ function makeAgent(id: string, overrides: Partial<Agent> = {}): Agent {
     archived_at: null,
     archived_by: null,
     ...overrides,
+    name,
+    display_name: overrides.display_name ?? name,
   };
 }
 

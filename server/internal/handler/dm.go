@@ -144,7 +144,7 @@ func (h *Handler) createOrFindAgentDM(w http.ResponseWriter, r *http.Request, wo
 		writeError(w, http.StatusForbidden, "you do not have access to this agent")
 		return
 	}
-	peer := DMPeer{Type: "agent", ID: uuidToString(agent.ID), Name: agent.Name, AvatarURL: textToPtr(agent.AvatarUrl)}
+	peer := DMPeer{Type: "agent", ID: uuidToString(agent.ID), Name: agentDisplayName(agent), AvatarURL: textToPtr(agent.AvatarUrl)}
 
 	// ① existing dm channel wins.
 	canonical := dmCanonicalName("user", userID, "agent", uuidToString(agentID))
@@ -634,7 +634,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 	rows, err := h.DB.Query(ctx, `
 		SELECT ch.id, ch.updated_at,
 		       peer.member_type, peer.member_id,
-		       COALESCE(u.name, u.email, a.name, '') AS peer_name,
+		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '') AS peer_name,
 		       a.avatar_url AS peer_avatar,
 		       lm.author_type, lm.author_name, lm.content, lm.created_at,
 		       COALESCE(uc.cnt, 0) AS real_unread,
@@ -722,7 +722,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 func (h *Handler) listLegacyDMSessions(ctx context.Context, workspaceID, userID string, allowed map[string]struct{}) []DMItem {
 	rows, err := h.DB.Query(ctx, `
 		SELECT cs.id, cs.agent_id, cs.updated_at,
-		       a.name, a.avatar_url,
+		       COALESCE(NULLIF(a.display_name, ''), a.name, '') AS agent_name, a.avatar_url,
 		       lm.role, lm.content, lm.created_at,
 		       (cs.unread_since IS NOT NULL)::bool AS has_unread,
 		       state.pinned_at, state.manual_unread_at, state.muted_at
@@ -815,7 +815,7 @@ func (h *Handler) channelAgentMembers(ctx context.Context, workspaceID, channelI
 	rows, err := h.DB.Query(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
-		       a.archived_at
+		       a.archived_at, a.display_name
 		FROM channel_member cm
 		JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
 		WHERE cm.channel_id = $1 AND cm.workspace_id = $2 AND a.archived_at IS NULL`, parseUUID(channelID), parseUUID(workspaceID))
@@ -826,7 +826,7 @@ func (h *Handler) channelAgentMembers(ctx context.Context, workspaceID, channelI
 	var out []db.Agent
 	for rows.Next() {
 		var a db.Agent
-		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Visibility, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.ArchivedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Visibility, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.ArchivedAt, &a.DisplayName); err != nil {
 			continue
 		}
 		out = append(out, a)

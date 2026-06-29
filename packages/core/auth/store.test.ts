@@ -6,7 +6,8 @@ import { createAuthStore } from "./store";
 
 const fakeUser: User = {
   id: "u1",
-  name: "Alice",
+  name: "alice",
+  display_name: "Alice",
   email: "alice@example.com",
   avatar_url: null,
 } as User;

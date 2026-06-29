@@ -197,45 +197,38 @@ func TestJoinCloudWaitlistSecondCallOverwrites(t *testing.T) {
 // onboarding_shim.go in the same commit.
 // ---------------------------------------------------------------------------
 
+func resetOnboardingRuntimeArtifacts(ctx context.Context) {
+	testPool.Exec(ctx, `
+		DELETE FROM agent_task_queue
+		 WHERE agent_id IN (
+		       SELECT id FROM agent
+		        WHERE workspace_id = $1
+		          AND (name = 'multica_helper' OR display_name = $2)
+		 )
+	`, testWorkspaceID, onboardingAssistantName)
+	testPool.Exec(ctx,
+		`DELETE FROM issue WHERE workspace_id = $1 AND title = $2`,
+		testWorkspaceID, onboardingIssueTitle,
+	)
+	testPool.Exec(ctx, `
+		DELETE FROM agent
+		 WHERE workspace_id = $1
+		   AND (name = 'multica_helper' OR display_name = $2)
+	`, testWorkspaceID, onboardingAssistantName)
+	testPool.Exec(ctx,
+		`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL WHERE id = $1`,
+		testUserID,
+	)
+}
+
 func TestBootstrapOnboardingRuntimeCreatesSingleGuideIssue(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `
-			DELETE FROM agent_task_queue
-			 WHERE agent_id IN (
-			       SELECT id FROM agent
-			        WHERE workspace_id = $1 AND name = $2
-			 )
-		`, testWorkspaceID, onboardingAssistantName)
-		testPool.Exec(ctx,
-			`DELETE FROM issue WHERE workspace_id = $1 AND title = $2`,
-			testWorkspaceID, onboardingIssueTitle,
-		)
-		testPool.Exec(ctx,
-			`DELETE FROM agent WHERE workspace_id = $1 AND name = $2`,
-			testWorkspaceID, onboardingAssistantName,
-		)
-		testPool.Exec(ctx,
-			`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL WHERE id = $1`,
-			testUserID,
-		)
-	})
-	testPool.Exec(ctx,
-		`DELETE FROM issue WHERE workspace_id = $1 AND title = $2`,
-		testWorkspaceID, onboardingIssueTitle,
-	)
-	testPool.Exec(ctx,
-		`DELETE FROM agent WHERE workspace_id = $1 AND name = $2`,
-		testWorkspaceID, onboardingAssistantName,
-	)
-	testPool.Exec(ctx,
-		`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL WHERE id = $1`,
-		testUserID,
-	)
+	t.Cleanup(func() { resetOnboardingRuntimeArtifacts(ctx) })
+	resetOnboardingRuntimeArtifacts(ctx)
 
 	body := map[string]string{
 		"workspace_id": testWorkspaceID,
@@ -256,20 +249,24 @@ func TestBootstrapOnboardingRuntimeCreatesSingleGuideIssue(t *testing.T) {
 	}
 
 	var (
-		agentName    string
-		agentRuntime string
-		instructions string
-		avatarURL    *string
+		agentName        string
+		agentDisplayName string
+		agentRuntime     string
+		instructions     string
+		avatarURL        *string
 	)
 	if err := testPool.QueryRow(ctx, `
-		SELECT name, runtime_id, instructions, avatar_url
+		SELECT name, display_name, runtime_id, instructions, avatar_url
 		  FROM agent
 		 WHERE id = $1
-	`, resp.AgentID).Scan(&agentName, &agentRuntime, &instructions, &avatarURL); err != nil {
+	`, resp.AgentID).Scan(&agentName, &agentDisplayName, &agentRuntime, &instructions, &avatarURL); err != nil {
 		t.Fatalf("lookup assistant: %v", err)
 	}
-	if agentName != onboardingAssistantName {
-		t.Fatalf("agent name = %q, want %q", agentName, onboardingAssistantName)
+	if agentName != "multica_helper" {
+		t.Fatalf("agent handle = %q, want multica_helper", agentName)
+	}
+	if agentDisplayName != onboardingAssistantName {
+		t.Fatalf("agent display_name = %q, want %q", agentDisplayName, onboardingAssistantName)
 	}
 	if agentRuntime != testRuntimeID {
 		t.Fatalf("agent runtime = %q, want %q", agentRuntime, testRuntimeID)
@@ -355,39 +352,8 @@ func TestBootstrapOnboardingRuntime_WithStarterPrompt(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `
-			DELETE FROM agent_task_queue
-			 WHERE agent_id IN (
-			       SELECT id FROM agent
-			        WHERE workspace_id = $1 AND name = $2
-			 )
-		`, testWorkspaceID, onboardingAssistantName)
-		testPool.Exec(ctx,
-			`DELETE FROM issue WHERE workspace_id = $1 AND title = $2`,
-			testWorkspaceID, onboardingIssueTitle,
-		)
-		testPool.Exec(ctx,
-			`DELETE FROM agent WHERE workspace_id = $1 AND name = $2`,
-			testWorkspaceID, onboardingAssistantName,
-		)
-		testPool.Exec(ctx,
-			`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL WHERE id = $1`,
-			testUserID,
-		)
-	})
-	testPool.Exec(ctx,
-		`DELETE FROM issue WHERE workspace_id = $1 AND title = $2`,
-		testWorkspaceID, onboardingIssueTitle,
-	)
-	testPool.Exec(ctx,
-		`DELETE FROM agent WHERE workspace_id = $1 AND name = $2`,
-		testWorkspaceID, onboardingAssistantName,
-	)
-	testPool.Exec(ctx,
-		`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL WHERE id = $1`,
-		testUserID,
-	)
+	t.Cleanup(func() { resetOnboardingRuntimeArtifacts(ctx) })
+	resetOnboardingRuntimeArtifacts(ctx)
 
 	const wantPrompt = "Introduce Multica to me, please."
 	body := map[string]string{
@@ -422,39 +388,8 @@ func TestBootstrapOnboardingRuntime_NoStarterPrompt(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `
-			DELETE FROM agent_task_queue
-			 WHERE agent_id IN (
-			       SELECT id FROM agent
-			        WHERE workspace_id = $1 AND name = $2
-			 )
-		`, testWorkspaceID, onboardingAssistantName)
-		testPool.Exec(ctx,
-			`DELETE FROM issue WHERE workspace_id = $1 AND title = $2`,
-			testWorkspaceID, onboardingIssueTitle,
-		)
-		testPool.Exec(ctx,
-			`DELETE FROM agent WHERE workspace_id = $1 AND name = $2`,
-			testWorkspaceID, onboardingAssistantName,
-		)
-		testPool.Exec(ctx,
-			`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL WHERE id = $1`,
-			testUserID,
-		)
-	})
-	testPool.Exec(ctx,
-		`DELETE FROM issue WHERE workspace_id = $1 AND title = $2`,
-		testWorkspaceID, onboardingIssueTitle,
-	)
-	testPool.Exec(ctx,
-		`DELETE FROM agent WHERE workspace_id = $1 AND name = $2`,
-		testWorkspaceID, onboardingAssistantName,
-	)
-	testPool.Exec(ctx,
-		`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL WHERE id = $1`,
-		testUserID,
-	)
+	t.Cleanup(func() { resetOnboardingRuntimeArtifacts(ctx) })
+	resetOnboardingRuntimeArtifacts(ctx)
 
 	body := map[string]string{
 		"workspace_id": testWorkspaceID,

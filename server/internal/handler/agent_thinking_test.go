@@ -23,10 +23,14 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 	claudeRuntimeID := createClaudeProviderRuntime(t)
 
 	t.Cleanup(func() {
-		testPool.Exec(ctx,
-			`DELETE FROM agent WHERE workspace_id = $1 AND name LIKE 'thinking-test-%'`,
-			testWorkspaceID,
-		)
+		testPool.Exec(ctx, `
+			DELETE FROM agent
+			 WHERE workspace_id = $1
+			   AND (
+			       name LIKE 'thinking_test_%'
+			       OR display_name LIKE 'thinking-test-%'
+			   )
+		`, testWorkspaceID)
 	})
 
 	t.Run("empty value succeeds", func(t *testing.T) {
@@ -211,7 +215,14 @@ func TestUpdateAgent_RuntimeSwitch_PreservesValidValueRejectsInvalid(t *testing.
 	codexRuntimeID := createCodexProviderRuntime(t)
 
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent WHERE workspace_id = $1 AND name LIKE 'runtime-switch-%'`, testWorkspaceID)
+		testPool.Exec(ctx, `
+			DELETE FROM agent
+			 WHERE workspace_id = $1
+			   AND (
+			       name LIKE 'runtime_switch_%'
+			       OR display_name LIKE 'runtime-switch-%'
+			   )
+		`, testWorkspaceID)
 	})
 
 	t.Run("existing value still valid for new runtime is kept", func(t *testing.T) {

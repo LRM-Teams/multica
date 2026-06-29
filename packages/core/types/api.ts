@@ -158,7 +158,10 @@ export interface SearchProjectsResponse {
 }
 
 export interface UpdateMeRequest {
+  /** Legacy profile-name input; updates display_name, not the stable handle. */
   name?: string;
+  /** Preferred human-facing profile label for new clients. */
+  display_name?: string;
   avatar_url?: string;
   language?: string;
   /** Free-form self-description (max 2000 chars). Pass "" to clear. */

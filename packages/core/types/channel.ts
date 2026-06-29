@@ -8,7 +8,10 @@ export interface ChannelLastMessage {
 export interface ChannelMemberBrief {
   member_type: "user" | "agent";
   member_id: string;
+  /** Stable handle. */
   name: string;
+  /** Human-facing member label. */
+  display_name: string;
 }
 
 export interface Channel {
@@ -39,7 +42,10 @@ export interface Channel {
 export interface ChannelMember {
   member_type: "user" | "agent";
   member_id: string;
+  /** Stable handle. */
   name: string;
+  /** Human-facing member label. */
+  display_name: string;
   created_at: string;
 }
 

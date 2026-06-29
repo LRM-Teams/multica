@@ -194,6 +194,7 @@ vi.mock("sonner", () => ({
 import { CreateSquadModal } from "./create-squad";
 
 function makeAgent(overrides: Partial<Agent> & { id: string; name: string; owner_id: string | null }): Agent {
+  const displayName = overrides.display_name ?? overrides.name;
   return {
     workspace_id: "ws-1",
     runtime_id: "rt-1",
@@ -213,6 +214,7 @@ function makeAgent(overrides: Partial<Agent> & { id: string; name: string; owner
     archived_at: null,
     archived_by: null,
     ...overrides,
+    display_name: displayName,
   };
 }
 
@@ -223,6 +225,7 @@ function makeMember(user_id: string, name: string): MemberWithUser {
     workspace_id: "ws-1",
     role: "member",
     name,
+    display_name: name,
     email: `${user_id}@example.com`,
     avatar_url: null,
     created_at: "2026-01-01T00:00:00Z",

@@ -49,22 +49,22 @@ only.
 | Contract | Line | Behavior |
 |---|---|---|
 | `maxAgentDescriptionLength = 255` | 31 | Cap is 255 **Unicode code points** (comment: counted via `utf8.RuneCountInString`, matches Postgres `char_length`) |
-| `AgentResponse` omits plaintext `custom_env` | 33–53 | Exposes only `has_custom_env` (52) and `custom_env_key_count` (53); comment cites MUL-2600 |
-| `CreateAgentRequest` fields | 565–585 | `description`, `instructions`, `runtime_config`, `custom_env`, `custom_args`, `model`, `thinking_level` (plus name/avatar/visibility/mcp_config/max_concurrent_tasks) |
-| `name` required | 623–625 | 400 "name is required" |
-| `description` ≤ 255 code points | 627–629 | `utf8.RuneCountInString(req.Description) > maxAgentDescriptionLength` → 400 |
-| `runtime_id` required | 631–633 | `if req.RuntimeID == ""` → 400 "runtime_id is required" |
-| `runtime_id` must resolve in workspace | 642–658 | parsed + `GetAgentRuntimeForWorkspace`; unknown → 400 "invalid runtime_id" |
-| `thinking_level` provider-level validation | 673–676 | `!agent.IsKnownThinkingValue(runtime.Provider, req.ThinkingLevel)` → 400; per-model gaps deferred to daemon (comment 669–672, MUL-2339) |
-| Defaults: `{}` config/env, `[]` args | 688–701 | `RuntimeConfig`→`{}`, `CustomEnv`→`{}`, `CustomArgs`→`[]` when nil, before insert |
-| `visibility` default | 635–636 | `if req.Visibility == "" { req.Visibility = "private" }` — access-control field, not the runtime prompt |
-| `max_concurrent_tasks` default | 638–639 | `if req.MaxConcurrentTasks == 0 { req.MaxConcurrentTasks = 6 }` — scheduler cap |
-| `mcp_config` null-skip on create | 704–705 | raw JSON copied through unless the body value is the literal `null` |
-| `mcp_config` redacted on read | 54, 848–851 | `redactMcpConfig` sets `McpConfigRedacted=true`; a private agent read by a member also redacts (494, 509) |
-| `CreateAgent` insert params | 708–722 | persists runtime_config, instructions, custom_env, custom_args, model, thinking_level, mcp_config, visibility, max_concurrent_tasks |
-| `UpdateAgent` rejects `custom_env` | 910–913 | if `custom_env` present in body → 400 "use PUT /api/agents/{id}/env (or `multica agent env set`)" |
-| `UpdateAgent` persists / clears `mcp_config` | 944–948, 1060–1061 | Tri-state from the raw body: key omitted → no change; literal `null` → `ClearAgentMcpConfig`; object → replace. No 400 like `custom_env` — `mcp_config` IS updatable here |
-| `description` ≤ 255 on update too | 921–924 | same cap re-checked on update |
+| `AgentResponse` omits plaintext `custom_env` | 34–71 | Exposes handle `name`, human-facing `display_name`, and only env metadata (`has_custom_env`, `custom_env_key_count`); comment cites MUL-2600 |
+| `CreateAgentRequest` fields | 595–615 | `name`, `display_name`, `description`, `instructions`, `runtime_config`, `custom_env`, `custom_args`, `model`, `thinking_level` (plus avatar/visibility/mcp_config/max_concurrent_tasks) |
+| identity seed required | 654–658 | Create accepts old `name` or new `display_name`; both empty → 400 "name or display_name is required" |
+| `description` ≤ 255 code points | 660–662 | `utf8.RuneCountInString(req.Description) > maxAgentDescriptionLength` → 400 |
+| `runtime_id` required | 664–666 | `if req.RuntimeID == ""` → 400 "runtime_id is required" |
+| `runtime_id` must resolve in workspace | 675–690 | parsed + `GetAgentRuntimeForWorkspace`; unknown → 400 "invalid runtime_id" |
+| `thinking_level` provider-level validation | 702–708 | `!agent.IsKnownThinkingValue(runtime.Provider, req.ThinkingLevel)` → 400; per-model gaps deferred to daemon (comment 702–705, MUL-2339) |
+| Defaults: `{}` config/env, `[]` args | 721–734 | `RuntimeConfig`→`{}`, `CustomEnv`→`{}`, `CustomArgs`→`[]` when nil, before insert |
+| `visibility` default | 668–670 | `if req.Visibility == "" { req.Visibility = "private" }` — access-control field, not the runtime prompt |
+| `max_concurrent_tasks` default | 671–672 | `if req.MaxConcurrentTasks == 0 { req.MaxConcurrentTasks = 6 }` — scheduler cap |
+| `mcp_config` null-skip on create | 736–739 | raw JSON copied through unless the body value is the literal `null` |
+| `mcp_config` redacted on read | 56, 573–590 | `redactMcpConfig` sets `McpConfigRedacted=true`; agent actors and private/unauthorized member reads redact |
+| `CreateAgent` insert params | 741–757 | persists generated handle/display_name plus runtime_config, instructions, custom_env, custom_args, model, thinking_level, mcp_config, visibility, max_concurrent_tasks |
+| `UpdateAgent` rejects `custom_env` | 929–938 | if `custom_env` present in body → 400 "use PUT /api/agents/{id}/env (or `multica agent env set`)" |
+| `UpdateAgent` treats `name` as display rename | 944–958 | old `name` and new `display_name` update only `display_name`; the stable handle remains unchanged |
+| `description` ≤ 255 on update too | 960–964 | same cap re-checked on update |
 
 ## Env endpoint — `server/internal/handler/agent_env.go`
 
@@ -107,7 +107,7 @@ only.
 
 | Contract | Line | Behavior |
 |---|---|---|
-| `CreateAgent` INSERT | 730–736 | columns include `runtime_config, runtime_id, instructions, custom_env, custom_args, mcp_config, model, thinking_level` |
-| `CreateAgentParams` | 739–756 | typed params: `RuntimeConfig []byte`, `Instructions string`, `CustomEnv []byte`, `CustomArgs []byte`, `Model pgtype.Text`, `ThinkingLevel pgtype.Text` |
-| `UpdateAgent` SET | 2552–2566 | COALESCE updates of `runtime_config, instructions, custom_env, custom_args, model, thinking_level` — note `custom_env` is COALESCE-guarded but the handler rejects it before this query runs |
+| `CreateAgent` INSERT | 820–826 | columns include `name, display_name, runtime_config, runtime_id, instructions, custom_env, custom_args, mcp_config, model, thinking_level` |
+| `CreateAgentParams` | 829–847 | typed params: `Name string`, `DisplayName string`, `RuntimeConfig []byte`, `Instructions string`, `CustomEnv []byte`, `CustomArgs []byte`, `Model pgtype.Text`, `ThinkingLevel pgtype.Text` |
+| `UpdateAgent` SET | 2673–2692 | COALESCE updates of `display_name, runtime_config, instructions, custom_env, custom_args, model, thinking_level` — note `custom_env` is COALESCE-guarded but the handler rejects it before this query runs |
 | `UpdateAgentCustomEnv` (called by the `UpdateAgentEnv` handler) | 2652 | `SET custom_env = $2` — the only write path for env values |

@@ -158,10 +158,10 @@ func (h *Handler) resolveDMRecipient(r *http.Request, wsUUID, agentUUID pgtype.U
 	return candidate, true
 }
 
-// userName returns a user's display name (their username), or "" if unknown.
+// userName returns a user's display name, or "" if unknown.
 func (h *Handler) userName(ctx context.Context, id pgtype.UUID) string {
 	var name string
-	_ = h.DB.QueryRow(ctx, `SELECT name FROM "user" WHERE id = $1`, id).Scan(&name)
+	_ = h.DB.QueryRow(ctx, `SELECT COALESCE(NULLIF(display_name, ''), name, email, '') FROM "user" WHERE id = $1`, id).Scan(&name)
 	return name
 }
 

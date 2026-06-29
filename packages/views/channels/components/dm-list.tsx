@@ -67,12 +67,15 @@ function actorHandleLabel(actor: { display_name?: string | null; name?: string |
 export function DmList({
   activeId,
   currentUserName,
+  searchQuery = "",
   onSelect,
 }: {
   /** Currently open conversation id (DM or group) — drives row highlight. */
   activeId: string | null;
   /** Viewer's display name, used to detect mentions in the last-message preview. */
   currentUserName: string | null;
+  /** Parent Messages sidebar query. Filters conversations only, never message bodies. */
+  searchQuery?: string;
   onSelect: (dm: DMItem) => void;
 }) {
   const { t } = useT("channels");
@@ -122,6 +125,11 @@ export function DmList({
     },
     [agents, members],
   );
+  const filteredDms = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return sortedDms;
+    return sortedDms.filter((dm) => dm.peer.name.toLowerCase().includes(q));
+  }, [searchQuery, sortedDms]);
 
   return (
     <div className="pb-1">
@@ -173,8 +181,15 @@ export function DmList({
               {t(($) => $.dm.empty_cta)}
             </Button>
           </div>
+        ) : filteredDms.length === 0 ? (
+          <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
+            <p className="font-medium text-foreground">
+              {t(($) => $.sidebar.no_conversation_matches)}
+            </p>
+            <p>{t(($) => $.sidebar.search_scope_hint)}</p>
+          </div>
         ) : (
-          sortedDms.map((dm) => (
+          filteredDms.map((dm) => (
             <DmRow
               key={`${dm.source}:${dm.id}`}
               dm={dm}

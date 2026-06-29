@@ -6,6 +6,8 @@
   "sidebar": {
     "heading": "Messages",
     "search": "Search conversations...",
+    "no_conversation_matches": "No matching conversations",
+    "search_scope_hint": "This filters the conversation list only. Open a conversation and use the top-right message search to search message text.",
     "groups": "Channels",
     "name_placeholder": "Channel name",
     "lark_placeholder": "Optional Feishu chat_id (oc_...)",
@@ -161,6 +163,9 @@
   },
   "conv_search": {
     "placeholder": "Search in {{name}}…",
+    "group_placeholder": "Search this channel's messages…",
+    "dm_placeholder": "Search messages with {{name}}…",
+    "scope_current_messages": "Current conversation · Messages",
     "result_count": "{{current}} / {{total}}",
     "no_results": "No matches",
     "prev_aria": "Previous result",

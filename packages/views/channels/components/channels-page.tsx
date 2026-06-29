@@ -1262,6 +1262,7 @@ export function ChannelsPage() {
             <DmList
               activeId={activeDmId}
               currentUserName={currentUserName}
+              searchQuery={search}
               onSelect={selectDm}
             />
             {/* CHANNELS section — collapsible, mirrors DIRECT MESSAGES layout */}
@@ -1327,6 +1328,13 @@ export function ChannelsPage() {
                   </div>
                 ) : channels.length === 0 ? (
                   <div className="p-3 text-sm text-muted-foreground">{t(($) => $.sidebar.empty)}</div>
+                ) : filteredChannels.length === 0 ? (
+                  <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
+                    <p className="font-medium text-foreground">
+                      {t(($) => $.sidebar.no_conversation_matches)}
+                    </p>
+                    <p>{t(($) => $.sidebar.search_scope_hint)}</p>
+                  </div>
                 ) : (
                   filteredChannels.map((channel) => {
                     const realUnread = channel.real_unread_count ?? channel.unread_count ?? 0;
@@ -1606,80 +1614,6 @@ export function ChannelsPage() {
             )
           ) : (
             <>
-              {convSearchOpen ? (
-                <header
-                  className={cn(
-                    "flex items-center gap-2 border-b py-2.5",
-                    isMobile ? "px-2" : "px-5",
-                  )}
-                >
-                  <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                  <input
-                    type="search"
-                    autoFocus
-                    value={convSearchQuery}
-                    onChange={(e) => setConvSearchQuery(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") {
-                        setConvSearchOpen(false);
-                        setConvSearchQuery("");
-                        setConvSearchResults([]);
-                        setConvSearchTotal(0);
-                        setConvSearchIndex(0);
-                      }
-                    }}
-                    placeholder={t(($) => $.conv_search.placeholder, { name: active.name })}
-                    className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                  />
-                  {convSearchQuery.trim() && (
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {convSearchTotal === 0
-                        ? t(($) => $.conv_search.no_results)
-                        : t(($) => $.conv_search.result_count, {
-                            current: convSearchIndex + 1,
-                            total: convSearchTotal,
-                          })}
-                    </span>
-                  )}
-                  <div className="flex shrink-0 items-center gap-0.5">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8"
-                      disabled={convSearchTotal === 0}
-                      aria-label={t(($) => $.conv_search.prev_aria)}
-                      onClick={() => setConvSearchIndex((i) => Math.max(0, i - 1))}
-                    >
-                      <ChevronUp className="size-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8"
-                      disabled={convSearchTotal === 0}
-                      aria-label={t(($) => $.conv_search.next_aria)}
-                      onClick={() => setConvSearchIndex((i) => Math.min(convSearchTotal - 1, i + 1))}
-                    >
-                      <ChevronDown className="size-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8"
-                      aria-label={t(($) => $.conv_search.close_aria)}
-                      onClick={() => {
-                        setConvSearchOpen(false);
-                        setConvSearchQuery("");
-                        setConvSearchResults([]);
-                        setConvSearchTotal(0);
-                        setConvSearchIndex(0);
-                      }}
-                    >
-                      <X className="size-4" />
-                    </Button>
-                  </div>
-                </header>
-              ) : (
               <header
                 className={cn(
                   "flex items-center justify-between gap-3 border-b py-2.5",
@@ -1795,6 +1729,82 @@ export function ChannelsPage() {
                   </div>
                 )}
               </header>
+              {convSearchOpen && (
+                <div
+                  className={cn(
+                    "flex items-center gap-2 border-b bg-muted/20 py-2",
+                    isMobile ? "px-2" : "px-5",
+                  )}
+                >
+                  <span className="shrink-0 rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground">
+                    {t(($) => $.conv_search.scope_current_messages)}
+                  </span>
+                  <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <input
+                    type="search"
+                    autoFocus
+                    value={convSearchQuery}
+                    onChange={(e) => setConvSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        setConvSearchOpen(false);
+                        setConvSearchQuery("");
+                        setConvSearchResults([]);
+                        setConvSearchTotal(0);
+                        setConvSearchIndex(0);
+                      }
+                    }}
+                    placeholder={t(($) => $.conv_search.group_placeholder)}
+                    className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                  />
+                  {convSearchQuery.trim() && (
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {convSearchTotal === 0
+                        ? t(($) => $.conv_search.no_results)
+                        : t(($) => $.conv_search.result_count, {
+                            current: convSearchIndex + 1,
+                            total: convSearchTotal,
+                          })}
+                    </span>
+                  )}
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8"
+                      disabled={convSearchTotal === 0}
+                      aria-label={t(($) => $.conv_search.prev_aria)}
+                      onClick={() => setConvSearchIndex((i) => Math.max(0, i - 1))}
+                    >
+                      <ChevronUp className="size-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8"
+                      disabled={convSearchTotal === 0}
+                      aria-label={t(($) => $.conv_search.next_aria)}
+                      onClick={() => setConvSearchIndex((i) => Math.min(convSearchTotal - 1, i + 1))}
+                    >
+                      <ChevronDown className="size-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8"
+                      aria-label={t(($) => $.conv_search.close_aria)}
+                      onClick={() => {
+                        setConvSearchOpen(false);
+                        setConvSearchQuery("");
+                        setConvSearchResults([]);
+                        setConvSearchTotal(0);
+                        setConvSearchIndex(0);
+                      }}
+                    >
+                      <X className="size-4" />
+                    </Button>
+                  </div>
+                </div>
               )}
 
               <ChannelMessageList

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
 import { ChannelMessageBubble } from "./channel-message-bubble";
@@ -28,8 +28,20 @@ vi.mock("@multica/core/workspace/hooks", () => ({
 
 vi.mock("../../i18n", () => ({
   useT: () => ({
-    t: (selector: (resources: { message: { agent_badge: string; feishu_badge: string } }) => string) =>
-      selector({ message: { agent_badge: "Agent", feishu_badge: "Feishu" } }),
+    t: (
+      selector: (resources: {
+        message: { agent_badge: string; feishu_badge: string };
+        quote: { jump_to: string; reply: string; reply_aria: string };
+      }) => string,
+    ) =>
+      selector({
+        message: { agent_badge: "Agent", feishu_badge: "Feishu" },
+        quote: {
+          jump_to: "Jump to original message",
+          reply: "Reply",
+          reply_aria: "Reply to message",
+        },
+      }),
   }),
 }));
 
@@ -103,5 +115,40 @@ describe("ChannelMessageBubble", () => {
     );
 
     expect(screen.getByText("Here is the data.")).not.toHaveAttribute("data-highlight-query");
+  });
+
+  it("allows native copy context menu when message body text is selected", () => {
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+
+    const body = screen.getByTestId("message-body");
+    const text = screen.getByText("Here is the data.");
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      isCollapsed: false,
+      anchorNode: text.firstChild,
+      focusNode: text.firstChild,
+      toString: () => "data",
+    } as Selection);
+
+    const event = createEvent.contextMenu(text);
+    fireEvent(text, event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(body).toHaveClass("select-text");
+  });
+
+  it("keeps the message action menu available from blank bubble space", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage()}
+        currentUserId="user-1"
+        onQuote={vi.fn()}
+      />,
+    );
+
+    vi.spyOn(window, "getSelection").mockReturnValue(null);
+    const event = createEvent.contextMenu(screen.getByTestId("message-body"));
+    fireEvent(screen.getByTestId("message-body"), event);
+
+    expect(event.defaultPrevented).toBe(true);
   });
 });

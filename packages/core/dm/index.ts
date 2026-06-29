@@ -2,6 +2,8 @@ export { dmKeys, dmListOptions } from "./queries";
 export {
   useCreateOrFindDM,
   useSetDMPinned,
+  useSetDMMuted,
+  useMuteDM,
   useMarkDMUnread,
   useCloseDM,
 } from "./mutations";

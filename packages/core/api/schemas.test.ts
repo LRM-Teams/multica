@@ -4,6 +4,7 @@ import {
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
   DuplicateIssueErrorBodySchema,
+  ChannelMessageSearchResponseSchema,
   EMPTY_USER,
   ListIssuesResponseSchema,
   RuntimeHourlyActivityListSchema,
@@ -208,6 +209,40 @@ describe("SquadListSchema member preview drift", () => {
     expect(parsed[0]?.member_count).toBe(2);
     expect(parsed[0]?.member_preview).toHaveLength(2);
     expect(parsed[0]?.member_preview?.[0]?.role).toBe("leader");
+  });
+});
+
+describe("ChannelMessageSearchResponseSchema", () => {
+  it("keeps a valid search result and unknown future fields", () => {
+    const parsed = ChannelMessageSearchResponseSchema.parse({
+      query: "deploy",
+      total: 1,
+      results: [
+        {
+          message_id: "11111111-1111-1111-1111-111111111111",
+          channel_id: "22222222-2222-2222-2222-222222222222",
+          author_type: "user",
+          author_id: null,
+          author_name: "Ada",
+          content: "deploy is ready",
+          created_at: "2026-06-27T00:00:00Z",
+          snippet: "future field",
+        },
+      ],
+    });
+    expect(parsed.results[0]?.content).toBe("deploy is ready");
+    expect(parsed.results[0]?.snippet).toBe("future field");
+  });
+
+  it("defaults an older empty response shape", () => {
+    const parsed = ChannelMessageSearchResponseSchema.parse({});
+    expect(parsed.query).toBe("");
+    expect(parsed.total).toBe(0);
+    expect(parsed.results).toEqual([]);
+  });
+
+  it("rejects a non-array result list so callers can fall back", () => {
+    expect(ChannelMessageSearchResponseSchema.safeParse({ results: null }).success).toBe(false);
   });
 });
 

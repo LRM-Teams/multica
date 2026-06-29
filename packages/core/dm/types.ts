@@ -38,6 +38,9 @@ export interface DMItem {
    * peer's dm_channel + legacy_session sources. Absent/undefined = not pinned.
    */
   pinned_at?: string;
+  /** Set when the conversation is muted for the current user. */
+  muted_at?: string;
+  muted?: boolean;
   /**
    * True when the user manually marked the conversation unread (peer-level
    * `dm_peer_state.manual_unread_at`). The server also bumps `unread` to at

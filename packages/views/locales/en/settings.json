@@ -222,6 +222,44 @@
       "promoted": "Promoted",
       "candidate": "Candidate"
     },
+    "unit_types": {
+      "memory": "Memory",
+      "skill": "Skill",
+      "workflow": "Workflow",
+      "tool_pattern": "Tool pattern",
+      "preference": "Preference"
+    },
+    "delivery_types": {
+      "generated": "Generated skill",
+      "inbox": "Inbox",
+      "recommendation": "Recommendation",
+      "shared_cache": "Shared cache"
+    },
+    "review_decisions": {
+      "promote": "Promote",
+      "needs_review": "Needs review",
+      "reject": "Reject"
+    },
+    "confidence_levels": {
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High"
+    },
+    "sensitivity_levels": {
+      "none": "None",
+      "local_path": "Local path",
+      "personal": "Personal",
+      "secret": "Secret",
+      "unknown": "Unknown"
+    },
+    "metadata_sources": {
+      "manual_seed": "Manual seed",
+      "human_review": "Human review",
+      "deterministic_rules": "Rules engine",
+      "evolution_reviewer": "Evolution reviewer",
+      "agent_reviewer": "Agent reviewer",
+      "llm_reviewer": "LLM reviewer"
+    },
     "risks": {
       "low": "Low risk",
       "medium": "Medium risk",

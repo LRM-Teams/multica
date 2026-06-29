@@ -5,6 +5,8 @@ import {
   Archive,
   ArchiveRestore,
   ArrowLeft,
+  Bell,
+  BellOff,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -46,6 +48,7 @@ import {
   useSetChannelPin,
   useMarkChannelRead,
   useMarkChannelUnread,
+  useMuteChannel,
   useRemoveChannelMember,
   useSendChannelMessage,
   useSetChannelTyping,
@@ -688,6 +691,15 @@ export function ChannelsPage() {
     });
   };
 
+  const muteChannel = useMuteChannel();
+
+  const handleToggleChannelMute = (channel: Channel) => {
+    muteChannel.mutate(
+      { channelId: channel.id, muted: !channel.muted_at },
+      { onError: () => toast.error(t(($) => $.dm.action_failed)) },
+    );
+  };
+
   const handleShare = async () => {
     if (!active) return;
     const url = getShareableUrl(`${wsPaths.channels()}?channel=${active.id}`);
@@ -1087,6 +1099,10 @@ export function ChannelsPage() {
                         <ContextMenuItem onClick={() => handleToggleChannelPin(channel)}>
                           {pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
                           {pinned ? t(($) => $.sidebar.unpin) : t(($) => $.sidebar.pin)}
+                        </ContextMenuItem>
+                        <ContextMenuItem onClick={() => handleToggleChannelMute(channel)}>
+                          {channel.muted_at ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+                          {channel.muted_at ? t(($) => $.sidebar.unmute) : t(($) => $.sidebar.mute)}
                         </ContextMenuItem>
                         <ContextMenuSeparator />
                         {archiveAllowed ? (

@@ -155,5 +155,15 @@
     "cancel": "답장 취소",
     "replying_to": "{{name}}에게 답장",
     "jump_to": "원본 메시지로 이동"
+  },
+  "conv_search": {
+    "placeholder": "{{name}} 검색…",
+    "result_count": "{{current}} / {{total}}",
+    "no_results": "일치 없음",
+    "prev_aria": "이전 결과",
+    "next_aria": "다음 결과",
+    "close_aria": "검색 닫기",
+    "search_aria": "대화 내 검색",
+    "error": "검색 실패"
   }
 }

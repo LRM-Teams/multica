@@ -155,5 +155,15 @@
     "cancel": "Cancel reply",
     "replying_to": "Replying to {{name}}",
     "jump_to": "Jump to original message"
+  },
+  "conv_search": {
+    "placeholder": "Search in {{name}}…",
+    "result_count": "{{current}} / {{total}}",
+    "no_results": "No matches",
+    "prev_aria": "Previous result",
+    "next_aria": "Next result",
+    "close_aria": "Close search",
+    "search_aria": "Search in conversation",
+    "error": "Search failed"
   }
 }

@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   FileText,
   Loader2,
   Mail,
@@ -69,6 +70,7 @@ import type {
   ChannelMember,
   ChannelMemberBrief,
   ChannelMessage,
+  ChannelMessageSearchResult,
   ChannelTypingPayload,
 } from "@multica/core/types";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
@@ -335,6 +337,11 @@ export function ChannelsPage() {
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [quoteMessage, setQuoteMessage] = useState<ChannelMessage | null>(null);
+  const [convSearchOpen, setConvSearchOpen] = useState(false);
+  const [convSearchQuery, setConvSearchQuery] = useState("");
+  const [convSearchResults, setConvSearchResults] = useState<ChannelMessageSearchResult[]>([]);
+  const [convSearchTotal, setConvSearchTotal] = useState(0);
+  const [convSearchIndex, setConvSearchIndex] = useState(0);
 
   const { data: channels = [], isLoading } = useQuery(channelsOptions(wsId));
   const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
@@ -490,11 +497,56 @@ export function ChannelsPage() {
   // ChannelMessageList (react-virtuoso followOutput + initialTopMostItemIndex).
   // The deep-linked message is scrolled into view inside the virtualized list
   // too; here we only clear the highlight after it has had time to flash.
+
+  const searchHitIds = useMemo(
+    () =>
+      convSearchOpen && convSearchResults.length > 0
+        ? new Set(convSearchResults.map((r) => r.message_id))
+        : undefined,
+    [convSearchOpen, convSearchResults],
+  );
+  const effectiveHighlightId = convSearchOpen
+    ? (convSearchResults[convSearchIndex]?.message_id ?? null)
+    : highlightMessageId;
+
   useEffect(() => {
+    if (convSearchOpen) return;
     if (!highlightMessageId || messages.length === 0) return;
     const clear = setTimeout(() => setHighlightMessageId(null), 2500);
     return () => clearTimeout(clear);
-  }, [highlightMessageId, messages.length]);
+  }, [highlightMessageId, messages.length, convSearchOpen]);
+
+  // Clear search state when the active channel changes.
+  useEffect(() => {
+    setConvSearchOpen(false);
+    setConvSearchQuery("");
+    setConvSearchResults([]);
+    setConvSearchTotal(0);
+    setConvSearchIndex(0);
+  }, [active?.id]);
+
+  // Debounced in-conversation search.
+  useEffect(() => {
+    if (!convSearchOpen || !active) return;
+    const q = convSearchQuery.trim();
+    if (!q) {
+      setConvSearchResults([]);
+      setConvSearchTotal(0);
+      setConvSearchIndex(0);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await api.searchChannelMessages(active.id, q);
+        setConvSearchResults(res.results);
+        setConvSearchTotal(res.total);
+        setConvSearchIndex(0);
+      } catch {
+        toast.error(t(($) => $.conv_search.error));
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [convSearchQuery, active?.id, convSearchOpen]);
 
   // Clear the unread badge when a channel becomes active (select / deep link /
   // auto-select). `markChannelRead` (mutate) is referentially stable.
@@ -1352,6 +1404,80 @@ export function ChannelsPage() {
             <EmptyState onCreate={handleCreate} />
           ) : (
             <>
+              {convSearchOpen ? (
+                <header
+                  className={cn(
+                    "flex items-center gap-2 border-b py-2.5",
+                    isMobile ? "px-2" : "px-5",
+                  )}
+                >
+                  <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <input
+                    type="search"
+                    autoFocus
+                    value={convSearchQuery}
+                    onChange={(e) => setConvSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        setConvSearchOpen(false);
+                        setConvSearchQuery("");
+                        setConvSearchResults([]);
+                        setConvSearchTotal(0);
+                        setConvSearchIndex(0);
+                      }
+                    }}
+                    placeholder={t(($) => $.conv_search.placeholder, { name: active.name })}
+                    className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                  />
+                  {convSearchQuery.trim() && (
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {convSearchTotal === 0
+                        ? t(($) => $.conv_search.no_results)
+                        : t(($) => $.conv_search.result_count, {
+                            current: convSearchIndex + 1,
+                            total: convSearchTotal,
+                          })}
+                    </span>
+                  )}
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8"
+                      disabled={convSearchTotal === 0}
+                      aria-label={t(($) => $.conv_search.prev_aria)}
+                      onClick={() => setConvSearchIndex((i) => Math.max(0, i - 1))}
+                    >
+                      <ChevronUp className="size-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8"
+                      disabled={convSearchTotal === 0}
+                      aria-label={t(($) => $.conv_search.next_aria)}
+                      onClick={() => setConvSearchIndex((i) => Math.min(convSearchTotal - 1, i + 1))}
+                    >
+                      <ChevronDown className="size-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8"
+                      aria-label={t(($) => $.conv_search.close_aria)}
+                      onClick={() => {
+                        setConvSearchOpen(false);
+                        setConvSearchQuery("");
+                        setConvSearchResults([]);
+                        setConvSearchTotal(0);
+                        setConvSearchIndex(0);
+                      }}
+                    >
+                      <X className="size-4" />
+                    </Button>
+                  </div>
+                </header>
+              ) : (
               <header
                 className={cn(
                   "flex items-center justify-between gap-3 border-b py-2.5",
@@ -1425,6 +1551,15 @@ export function ChannelsPage() {
                         variant="ghost"
                         size="icon"
                         className="size-8"
+                        aria-label={t(($) => $.conv_search.search_aria)}
+                        onClick={() => setConvSearchOpen(true)}
+                      >
+                        <Search className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8"
                         aria-label={t(($) => $.header.share_aria)}
                         onClick={handleShare}
                       >
@@ -1458,13 +1593,15 @@ export function ChannelsPage() {
                   </div>
                 )}
               </header>
+              )}
 
               <ChannelMessageList
                 key={active.id}
                 messages={messages}
                 currentUserId={currentUserId}
                 ownName={currentUserName ?? undefined}
-                highlightMessageId={highlightMessageId}
+                highlightMessageId={effectiveHighlightId}
+                searchHitIds={searchHitIds}
                 emptyLabel={t(($) => $.thread.empty)}
                 onQuote={isActiveArchived ? undefined : setQuoteMessage}
                 onScrollToMessage={setHighlightMessageId}

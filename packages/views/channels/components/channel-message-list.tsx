@@ -40,6 +40,7 @@ export function ChannelMessageList({
   footer,
   onQuote,
   onScrollToMessage,
+  searchHitIds,
 }: {
   messages: ChannelMessage[];
   currentUserId: string | null;
@@ -58,6 +59,8 @@ export function ChannelMessageList({
    * The parent updates `highlightMessageId` so the list scrolls + highlights.
    */
   onScrollToMessage?: (messageId: string) => void;
+  /** Search hit ids — all matching messages get bg-primary/20 while search is open. */
+  searchHitIds?: Set<string>;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
@@ -138,6 +141,7 @@ export function ChannelMessageList({
                 highlighted={msg.id === highlightMessageId}
                 onQuote={onQuote}
                 onScrollTo={onScrollToMessage}
+                searchHighlighted={searchHitIds?.has(msg.id) ?? false}
               />
             </div>
           )}

@@ -42,6 +42,12 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { useT, useTimeAgo } from "../../i18n";
 import { useOpenDM } from "../../common/use-open-dm";
 import { formatChannelMessagePreview, type MentionPreviewResolver } from "./message-preview";
+import {
+  ConversationUnreadAffordance,
+  isConversationMuted,
+  MutedIndicator,
+  sumUnmutedUnreadCounts,
+} from "./conversation-muted";
 
 /**
  * DIRECT MESSAGES sidebar region — the top half of the unified Messages
@@ -87,10 +93,15 @@ export function DmList({
   const handleClose = (dm: DMItem) =>
     closeDM.mutate({ source: dm.source, id: dm.id }, { onError });
   const handleToggleMute = (dm: DMItem) =>
-    muteDM.mutate({ source: dm.source, id: dm.id, muted: !dm.muted_at }, { onError });
+    muteDM.mutate({ source: dm.source, id: dm.id, muted: !isConversationMuted(dm) }, { onError });
 
   const aggregateUnread = useMemo(
-    () => dms.reduce((sum, dm) => sum + (dm.real_unread ?? dm.unread ?? 0), 0),
+    () =>
+      sumUnmutedUnreadCounts(
+        dms,
+        (dm) => dm.real_unread ?? dm.unread ?? 0,
+        (dm) => isConversationMuted(dm),
+      ),
     [dms],
   );
 
@@ -370,6 +381,7 @@ function DmRow({
   const realUnread = dm.real_unread ?? dm.unread ?? 0;
   const isManualDot = !!dm.manually_unread && realUnread === 0;
   const pinned = !!dm.pinned_at;
+  const isMuted = isConversationMuted(dm);
   // peer.type "user" maps to the member-style avatar; agents get the presence
   // status dot. Both resolve name/avatar from the workspace queries.
   const actorType = dm.peer.type === "agent" ? "agent" : "member";
@@ -404,6 +416,7 @@ function DmRow({
               <span className="truncate text-sm font-medium text-foreground">
                 {dm.peer.name}
               </span>
+              {isMuted && <MutedIndicator label={t(($) => $.dm.muted_label)} />}
             </span>
             {last && (
               <span className="shrink-0 text-[11px] text-muted-foreground">
@@ -420,13 +433,11 @@ function DmRow({
             >
               {preview}
             </span>
-            {realUnread > 0 ? (
-              <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
-                {realUnread > 99 ? "99+" : realUnread}
-              </span>
-            ) : isManualDot ? (
-              <span className="size-2 rounded-full bg-primary" />
-            ) : null}
+            <ConversationUnreadAffordance
+              realUnread={realUnread}
+              isManualDot={isManualDot}
+              isMuted={isMuted}
+            />
           </div>
         </div>
       </ContextMenuTrigger>
@@ -440,8 +451,8 @@ function DmRow({
           {pinned ? t(($) => $.dm.unpin) : t(($) => $.dm.pin)}
         </ContextMenuItem>
         <ContextMenuItem onClick={onToggleMute}>
-          {dm.muted_at ? <Bell /> : <BellOff />}
-          {dm.muted_at ? t(($) => $.dm.unmute) : t(($) => $.dm.mute)}
+          {isMuted ? <Bell /> : <BellOff />}
+          {isMuted ? t(($) => $.dm.unmute) : t(($) => $.dm.mute)}
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onClick={onClose}>

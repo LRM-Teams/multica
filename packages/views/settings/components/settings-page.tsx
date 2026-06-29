@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect } from "react";
 import {
   User,
   SlidersHorizontal,
@@ -11,11 +11,10 @@ import {
   FlaskConical,
   Bell,
   Plug,
-  ShieldCheck,
 } from "lucide-react";
 import { GitHubMark } from "./github-mark";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@multica/ui/components/ui/tabs";
-import { useCurrentWorkspace } from "@multica/core/paths";
+import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useNavigation } from "../../navigation";
 import { AccountTab } from "./account-tab";
 import { PreferencesTab } from "./preferences-tab";
@@ -27,7 +26,6 @@ import { GitHubTab } from "./github-tab";
 import { IntegrationsTab } from "./integrations-tab";
 import { LabsTab } from "./labs-tab";
 import { NotificationsTab } from "./notifications-tab";
-import { EvolutionReviewTab } from "./evolution-review-tab";
 import { useT } from "../../i18n";
 
 const ACCOUNT_TAB_KEYS = ["profile", "preferences", "notifications", "tokens"] as const;
@@ -44,7 +42,6 @@ const WORKSPACE_TAB_KEYS = [
   "github",
   "integrations",
   "labs",
-  "evolution_review",
   "members",
 ] as const;
 const WORKSPACE_TAB_VALUES = {
@@ -53,7 +50,6 @@ const WORKSPACE_TAB_VALUES = {
   github: "github",
   integrations: "integrations",
   labs: "labs",
-  evolution_review: "evolution-review",
   members: "members",
 } as const;
 const WORKSPACE_TAB_ICONS = {
@@ -62,7 +58,6 @@ const WORKSPACE_TAB_ICONS = {
   github: GitHubMark,
   integrations: Plug,
   labs: FlaskConical,
-  evolution_review: ShieldCheck,
   members: Users,
 } as const;
 
@@ -76,6 +71,9 @@ const TAB_QUERY_KEY = "tab";
 const LEGACY_WORKSPACE_TAB_REDIRECTS: Record<string, string> = {
   lark: "integrations",
 };
+
+// Evolution review moved from Settings to Skills; old bookmarks still use these tab values.
+const EVOLUTION_REVIEW_LEGACY_TABS = new Set(["evolution-review", "evolution_review"]);
 
 export interface ExtraSettingsTab {
   value: string;
@@ -93,6 +91,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
   const { t } = useT("settings");
   const workspaceName = useCurrentWorkspace()?.name;
   const navigation = useNavigation();
+  const paths = useWorkspacePaths();
 
   // Whitelist of valid tab values; unknown ?tab=… values silently fall back to
   // the default. Whitelisting also blocks junk like ?tab=<script> from
@@ -108,6 +107,13 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
   );
 
   const tabFromUrl = navigation.searchParams.get(TAB_QUERY_KEY);
+
+  useEffect(() => {
+    if (tabFromUrl && EVOLUTION_REVIEW_LEGACY_TABS.has(tabFromUrl)) {
+      navigation.replace(`${paths.skills()}?section=review`);
+    }
+  }, [navigation, paths, tabFromUrl]);
+
   const candidateTab = tabFromUrl
     ? LEGACY_WORKSPACE_TAB_REDIRECTS[tabFromUrl] ?? tabFromUrl
     : null;
@@ -181,7 +187,6 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <TabsContent value="github"><GitHubTab /></TabsContent>
           <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
           <TabsContent value="labs"><LabsTab /></TabsContent>
-          <TabsContent value="evolution-review"><EvolutionReviewTab /></TabsContent>
           <TabsContent value="members"><MembersTab /></TabsContent>
           {extraAccountTabs?.map((tab) => (
             <TabsContent key={tab.value} value={tab.value}>{tab.content}</TabsContent>

@@ -517,6 +517,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/shared-skills/sync", h.SyncRuntimeSharedSkills)
 		r.Post("/runtimes/{runtimeId}/evolution/submissions", h.SyncEvolutionSubmissions)
 		r.Get("/runtimes/{runtimeId}/evolution/deliveries", h.ListEvolutionDeliveries)
+		r.Get("/runtimes/{runtimeId}/evolution/deliveries/repair", h.ListEvolutionDeliveriesForRepair)
+		r.Get("/runtimes/{runtimeId}/evolution/delivery-target-agents", h.ListEvolutionDeliveryTargetAgents)
 		r.Post("/runtimes/{runtimeId}/evolution/deliveries/{deliveryId}/delivered", h.MarkEvolutionDeliveryDelivered)
 		r.Post("/runtimes/{runtimeId}/evolution/deliveries/{deliveryId}/failed", h.FailEvolutionDelivery)
 		r.Post("/runtimes/{runtimeId}/evolution/deliveries/{deliveryId}/decision", h.DecideEvolutionDelivery)

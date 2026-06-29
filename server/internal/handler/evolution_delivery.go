@@ -86,6 +86,60 @@ func (h *Handler) ListEvolutionDeliveries(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"deliveries": items})
 }
 
+func (h *Handler) ListEvolutionDeliveryTargetAgents(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	rt, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
+		return
+	}
+	rows, err := h.Queries.ListPendingEvolutionDeliveryTargetAgentIDsByWorkspace(r.Context(), rt.WorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list evolution delivery target agents")
+		return
+	}
+	agentIDs := make([]string, 0, len(rows))
+	for _, id := range rows {
+		agentIDs = append(agentIDs, uuidToString(id))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"agent_ids": agentIDs})
+}
+
+func (h *Handler) ListEvolutionDeliveriesForRepair(w http.ResponseWriter, r *http.Request) {
+	rt, agent, ok := h.requireRuntimeBoundAgentFromRequest(w, r)
+	if !ok {
+		return
+	}
+	limit := int32(50)
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 100 {
+			limit = int32(parsed)
+		}
+	}
+	rows, err := h.Queries.ListEvolutionDeliveriesForRepairByAgent(r.Context(), db.ListEvolutionDeliveriesForRepairByAgentParams{
+		WorkspaceID:   rt.WorkspaceID,
+		TargetAgentID: agent.ID,
+		LimitCount:    limit,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list evolution deliveries for repair")
+		return
+	}
+	items := make([]EvolutionDeliveryResponse, 0, len(rows))
+	for _, row := range rows {
+		files, err := h.Queries.ListSharedEvolutionUnitFiles(r.Context(), db.ListSharedEvolutionUnitFilesParams{
+			WorkspaceID: rt.WorkspaceID,
+			UnitID:      row.UnitID,
+			VersionID:   row.VersionID,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list evolution delivery files for repair")
+			return
+		}
+		items = append(items, evolutionDeliveryResponse(row, files))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deliveries": items})
+}
+
 func (h *Handler) MarkEvolutionDeliveryDelivered(w http.ResponseWriter, r *http.Request) {
 	rt, agent, ok := h.requireRuntimeBoundAgentFromRequest(w, r)
 	if !ok {

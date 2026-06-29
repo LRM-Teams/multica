@@ -6,10 +6,22 @@
     "new_skill": "新規スキル",
     "search_placeholder": "スキルを検索…",
     "scopes": {
-      "all": { "label": "すべて", "description": "このワークスペースのすべてのスキル" },
-      "used": { "label": "使用中", "description": "1 つ以上のエージェントに割り当てられたスキル" },
-      "unused": { "label": "未使用", "description": "どのエージェントにも割り当てられていないスキル" },
-      "mine": { "label": "自分が作成", "description": "あなたが作成したスキル" }
+      "all": {
+        "label": "すべて",
+        "description": "このワークスペースのすべてのスキル"
+      },
+      "used": {
+        "label": "使用中",
+        "description": "1 つ以上のエージェントに割り当てられたスキル"
+      },
+      "unused": {
+        "label": "未使用",
+        "description": "どのエージェントにも割り当てられていないスキル"
+      },
+      "mine": {
+        "label": "自分が作成",
+        "description": "あなたが作成したスキル"
+      }
     },
     "empty": {
       "title": "まだスキルがありません",
@@ -32,7 +44,11 @@
       "fallback": "スキル一覧の取得中に問題が発生しました。",
       "retry": "再試行"
     },
-    "supporting_data_warning": "一部のワークスペースデータを読み込めませんでした。作成者の表示、ランタイム名、編集権限が不完全に見える場合があります。"
+    "supporting_data_warning": "一部のワークスペースデータを読み込めませんでした。作成者の表示、ランタイム名、編集権限が不完全に見える場合があります。",
+    "review_queue": {
+      "label": "レビューキュー",
+      "description": "昇格前に生成されたメモリとスキルをレビューします。"
+    }
   },
   "table": {
     "name": "名前",
@@ -266,5 +282,106 @@
     "no_content": "*まだ内容がありません*",
     "markdown_placeholder": "Markdown の内容を記述...",
     "raw_placeholder": "ファイルの内容..."
+  },
+  "evolution_review": {
+    "title": "Evolution レビューキュー",
+    "description": "エージェントが送信し、昇格と配信の前に人の判断が必要なメモリと skill をレビューします。",
+    "status_filter": "送信ステータス",
+    "refresh": "更新",
+    "refreshing": "更新中...",
+    "loading": "レビューキューを読み込み中...",
+    "empty_title": "このキューに送信はありません",
+    "empty_description": "対応が必要な reviewer の判断がここに表示されます。",
+    "toast_promoted": "送信を昇格しました",
+    "toast_rejected": "送信を拒否しました",
+    "toast_failed": "送信を更新できませんでした",
+    "untitled": "無題の送信",
+    "unknown": "不明",
+    "none": "なし",
+    "no_summary": "概要はありません。",
+    "no_review_reason": "レビュー理由はありません。",
+    "no_content": "内容はありません。",
+    "decision": "判断",
+    "confidence": "Reviewer 信頼度",
+    "sensitivity": "機密度",
+    "updated": "更新日時",
+    "review_reason": "レビュー理由",
+    "content": "内容プレビュー",
+    "files": "ファイル",
+    "reason_label": "判断理由",
+    "reason_placeholder": "監査ログ用の任意メモ",
+    "reject": "拒否",
+    "promote": "昇格",
+    "decision_disabled_hint": "needs_review 状態の送信だけを昇格または拒否できます。",
+    "statuses": {
+      "needs_review": "Needs review",
+      "rejected": "Rejected",
+      "promoted": "Promoted",
+      "candidate": "Candidate"
+    },
+    "unit_types": {
+      "memory": "メモリ",
+      "skill": "skill",
+      "workflow": "ワークフロー",
+      "tool_pattern": "ツールパターン",
+      "preference": "好み"
+    },
+    "delivery_types": {
+      "generated": "生成 skill",
+      "inbox": "Inbox",
+      "recommendation": "おすすめ",
+      "shared_cache": "共有キャッシュ"
+    },
+    "review_decisions": {
+      "promote": "昇格",
+      "needs_review": "要レビュー",
+      "reject": "拒否"
+    },
+    "confidence_levels": {
+      "low": "低",
+      "medium": "中",
+      "high": "高"
+    },
+    "sensitivity_levels": {
+      "none": "なし",
+      "local_path": "ローカルパス",
+      "personal": "個人情報",
+      "secret": "シークレット",
+      "unknown": "不明"
+    },
+    "metadata_sources": {
+      "manual_seed": "手動シード",
+      "human_review": "人間レビュー",
+      "deterministic_rules": "ルールエンジン",
+      "evolution_reviewer": "Evolution reviewer",
+      "agent_reviewer": "エージェント reviewer",
+      "llm_reviewer": "LLM reviewer"
+    },
+    "risks": {
+      "low": "低リスク",
+      "medium": "中リスク",
+      "high": "高リスク",
+      "unknown": "不明なリスク"
+    },
+    "source_agent": "ソースエージェント",
+    "submission_confidence": "提出の信頼度",
+    "audit_summary": "監査サマリー",
+    "metadata_source": "ソース",
+    "metadata_provider": "プロバイダー",
+    "metadata_model": "モデル",
+    "metadata_session": "セッション",
+    "metadata_rationale": "理由",
+    "metadata_risks": "リスク",
+    "delivery_preview": "配信プレビュー",
+    "delivery_type": "配信タイプ",
+    "delivery_target": "対象",
+    "promoted_unit": "昇格済みユニット",
+    "promoted_result": "昇格済み",
+    "pending_result": "まだ昇格していません",
+    "promotion_result_hint": "昇格すると共有 evolution unit が作成され、ソースエージェントへの配信がキューに追加されます。",
+    "review_metadata": "生のレビューメタデータ",
+    "apply_suggestions": "レビュー提案を適用",
+    "apply_suggestions_hint": "昇格時にレビューアー提案のタイトル、サマリー、タグ、タスクタイプ、スコープを使います。",
+    "no_suggestions_hint": "このレビューには正規化提案がありません。"
   }
 }

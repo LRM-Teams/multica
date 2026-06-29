@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
-import type { Agent } from "@multica/core/types";
+import type { Agent, GeneratedSkillDelivery } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../../locales/en/common.json";
 import enAgents from "../../../locales/en/agents.json";
@@ -11,6 +11,8 @@ import enAgents from "../../../locales/en/agents.json";
 const TEST_RESOURCES = { en: { common: enCommon, agents: enAgents } };
 
 const mockListSkills = vi.hoisted(() => vi.fn());
+const mockListGeneratedSkillDeliveries = vi.hoisted(() => vi.fn());
+const mockDecideGeneratedSkillDelivery = vi.hoisted(() => vi.fn());
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -20,6 +22,10 @@ vi.mock("@multica/core/api", () => ({
   api: {
     listSkills: (...args: unknown[]) => mockListSkills(...args),
     setAgentSkills: vi.fn(),
+    listAgentGeneratedSkillDeliveries: (...args: unknown[]) =>
+      mockListGeneratedSkillDeliveries(...args),
+    decideAgentGeneratedSkillDelivery: (...args: unknown[]) =>
+      mockDecideGeneratedSkillDelivery(...args),
   },
 }));
 
@@ -30,7 +36,7 @@ vi.mock("sonner", () => ({
   },
 }));
 
-import { SkillsTab } from "./skills-tab";
+import { SkillsTab, getGeneratedSkillAwaitingHintKey } from "./skills-tab";
 
 const agent: Agent = {
   id: "agent-1",
@@ -56,6 +62,30 @@ const agent: Agent = {
   archived_by: null,
 };
 
+function makeGeneratedDelivery(
+  overrides: Partial<GeneratedSkillDelivery> = {},
+): GeneratedSkillDelivery {
+  return {
+    id: "delivery-1",
+    workspace_id: "ws-1",
+    unit_id: "unit-1",
+    version_id: "version-1",
+    target_agent_id: "agent-1",
+    delivery_type: "generated",
+    status: "delivered",
+    reason: "source agent match",
+    matcher_score: 1,
+    unit_type: "skill",
+    title: "Review Helper",
+    canonical_summary: "Check pull requests",
+    content: "",
+    metadata: {},
+    created_at: "2026-04-16T00:00:00Z",
+    updated_at: "2026-04-16T00:00:00Z",
+    ...overrides,
+  };
+}
+
 function renderSkillsTab() {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -78,6 +108,8 @@ describe("SkillsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListSkills.mockResolvedValue([]);
+    mockListGeneratedSkillDeliveries.mockResolvedValue({ deliveries: [] });
+    mockDecideGeneratedSkillDelivery.mockResolvedValue(undefined);
   });
 
   it("does not render the inline Local Runtime Skills section even for local-runtime agents", async () => {
@@ -107,5 +139,86 @@ describe("SkillsTab", () => {
     // already deleted from the mock setup above; this assertion is
     // implicit — the test file would fail to import if the component
     // still referenced runtimeListOptions / runtimeLocalSkillsOptions.)
+  });
+
+  it("shows accept actions only while a generated skill awaits a decision", async () => {
+    mockListGeneratedSkillDeliveries.mockResolvedValue({
+      deliveries: [makeGeneratedDelivery({ status: "delivered" })],
+    });
+
+    renderSkillsTab();
+
+    expect(await screen.findByRole("button", { name: /Accept/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Ignore/i })).toBeInTheDocument();
+  });
+
+  it("hides accept actions after a generated skill is accepted but not yet enabled locally", async () => {
+    mockListGeneratedSkillDeliveries.mockResolvedValue({
+      deliveries: [
+        makeGeneratedDelivery({
+          status: "accepted",
+          delivered_path: "/agents/agent-1/skills/generated/unit-1",
+        }),
+      ],
+    });
+
+    renderSkillsTab();
+
+    expect(await screen.findByText("Accepted")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Waiting for the local runtime to enable this skill/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Accept/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Ignore/i })).not.toBeInTheDocument();
+  });
+
+  it("shows a local-runtime hint when accepted before the daemon has written anything", async () => {
+    mockListGeneratedSkillDeliveries.mockResolvedValue({
+      deliveries: [makeGeneratedDelivery({ status: "accepted", delivered_path: "" })],
+    });
+
+    renderSkillsTab();
+
+    expect(
+      await screen.findByText(/Waiting for the local runtime to receive this skill/i),
+    ).toBeInTheDocument();
+  });
+
+  it("shows enabled status without actions after the runtime enables the generated skill", async () => {
+    mockListGeneratedSkillDeliveries.mockResolvedValue({
+      deliveries: [
+        makeGeneratedDelivery({
+          status: "accepted",
+          delivered_path: "/agents/agent-1/skills/enabled/unit-1",
+        }),
+      ],
+    });
+
+    renderSkillsTab();
+
+    expect(await screen.findByText("Enabled")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Accept/i })).not.toBeInTheDocument();
+  });
+
+  it("maps awaiting hint keys from delivery path state", () => {
+    expect(
+      getGeneratedSkillAwaitingHintKey(makeGeneratedDelivery({ status: "accepted", delivered_path: "" })),
+    ).toBe("generated_accepted_waiting_local_hint");
+    expect(
+      getGeneratedSkillAwaitingHintKey(
+        makeGeneratedDelivery({
+          status: "accepted",
+          delivered_path: "/agents/agent-1/skills/generated/unit-1",
+        }),
+      ),
+    ).toBe("generated_accepted_pending_hint");
+    expect(
+      getGeneratedSkillAwaitingHintKey(
+        makeGeneratedDelivery({
+          status: "accepted",
+          delivered_path: "/agents/agent-1/skills/enabled/unit-1",
+        }),
+      ),
+    ).toBeNull();
   });
 });

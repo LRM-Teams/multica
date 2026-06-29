@@ -205,6 +205,47 @@ ON CONFLICT (unit_id, version_id, target_agent_id) DO UPDATE SET
   updated_at = evolution_unit_delivery.updated_at
 RETURNING *;
 
+-- name: ListEvolutionDeliveriesForRepairByAgent :many
+SELECT
+  d.*,
+  u.unit_type, u.title, u.canonical_summary, u.content, u.metadata, u.applies,
+  u.tags, u.tools, u.task_types, u.project_types, u.languages, u.frameworks
+FROM evolution_unit_delivery d
+JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
+WHERE d.workspace_id = @workspace_id
+  AND d.target_agent_id = @target_agent_id
+  AND u.status = 'active'
+  AND COALESCE(d.delivered_path, '') <> ''
+  AND d.delivery_type = 'generated'
+  AND u.unit_type = 'skill'
+  AND d.status = 'accepted'
+  AND POSITION('/skills/enabled/' IN replace(d.delivered_path, chr(92), '/')) > 0
+ORDER BY d.updated_at DESC, d.created_at DESC
+LIMIT @limit_count;
+
+-- name: ListPendingEvolutionDeliveryTargetAgentIDsByWorkspace :many
+SELECT DISTINCT d.target_agent_id
+FROM evolution_unit_delivery d
+JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
+WHERE d.workspace_id = @workspace_id
+  AND u.status = 'active'
+  AND (
+    d.status = 'pending'
+    OR (
+      d.status = 'accepted'
+      AND d.delivery_type = 'generated'
+      AND u.unit_type = 'skill'
+      AND (d.delivered_path IS NULL OR POSITION('/skills/enabled/' IN replace(d.delivered_path, chr(92), '/')) = 0)
+    )
+    OR (
+      d.status = 'accepted'
+      AND d.delivery_type = 'generated'
+      AND u.unit_type = 'skill'
+      AND COALESCE(d.delivered_path, '') <> ''
+      AND POSITION('/skills/enabled/' IN replace(d.delivered_path, chr(92), '/')) > 0
+    )
+  );
+
 -- name: ListPendingEvolutionDeliveriesByAgent :many
 SELECT
   d.*,

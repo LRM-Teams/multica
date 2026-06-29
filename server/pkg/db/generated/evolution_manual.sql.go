@@ -641,6 +641,94 @@ func (q *Queries) CreateEvolutionDelivery(ctx context.Context, arg CreateEvoluti
 	return scanEvolutionUnitDelivery(row)
 }
 
+const listPendingEvolutionDeliveryTargetAgentIDsByWorkspace = `-- name: ListPendingEvolutionDeliveryTargetAgentIDsByWorkspace :many
+SELECT DISTINCT d.target_agent_id
+FROM evolution_unit_delivery d
+JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
+WHERE d.workspace_id = $1
+  AND u.status = 'active'
+  AND (
+    d.status = 'pending'
+    OR (
+      d.status = 'accepted'
+      AND d.delivery_type = 'generated'
+      AND u.unit_type = 'skill'
+      AND (d.delivered_path IS NULL OR POSITION('/skills/enabled/' IN replace(d.delivered_path, chr(92), '/')) = 0)
+    )
+    OR (
+      d.status = 'accepted'
+      AND d.delivery_type = 'generated'
+      AND u.unit_type = 'skill'
+      AND COALESCE(d.delivered_path, '') <> ''
+      AND POSITION('/skills/enabled/' IN replace(d.delivered_path, chr(92), '/')) > 0
+    )
+  )
+`
+
+func (q *Queries) ListPendingEvolutionDeliveryTargetAgentIDsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listPendingEvolutionDeliveryTargetAgentIDsByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var item pgtype.UUID
+		if err := rows.Scan(&item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+const listEvolutionDeliveriesForRepairByAgent = `-- name: ListEvolutionDeliveriesForRepairByAgent :many
+SELECT
+  d.id, d.workspace_id, d.unit_id, d.version_id, d.target_agent_id, d.delivery_type, d.status,
+  d.reason, d.matcher_score, d.matcher_details, d.delivered_path, d.error, d.decided_at, d.delivered_at, d.created_at, d.updated_at,
+  u.unit_type, u.title, u.canonical_summary, u.content, u.metadata, u.applies,
+  u.tags, u.tools, u.task_types, u.project_types, u.languages, u.frameworks
+FROM evolution_unit_delivery d
+JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
+WHERE d.workspace_id = $1
+  AND d.target_agent_id = $2
+  AND u.status = 'active'
+  AND COALESCE(d.delivered_path, '') <> ''
+  AND d.delivery_type = 'generated'
+  AND u.unit_type = 'skill'
+  AND d.status = 'accepted'
+  AND POSITION('/skills/enabled/' IN replace(d.delivered_path, chr(92), '/')) > 0
+ORDER BY d.updated_at DESC, d.created_at DESC
+LIMIT $3
+`
+
+type ListEvolutionDeliveriesForRepairByAgentParams = ListPendingEvolutionDeliveriesByAgentParams
+
+type ListEvolutionDeliveriesForRepairByAgentRow = ListPendingEvolutionDeliveriesByAgentRow
+
+func (q *Queries) ListEvolutionDeliveriesForRepairByAgent(ctx context.Context, arg ListEvolutionDeliveriesForRepairByAgentParams) ([]ListEvolutionDeliveriesForRepairByAgentRow, error) {
+	rows, err := q.db.Query(ctx, listEvolutionDeliveriesForRepairByAgent, arg.WorkspaceID, arg.TargetAgentID, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListEvolutionDeliveriesForRepairByAgentRow{}
+	for rows.Next() {
+		var item ListEvolutionDeliveriesForRepairByAgentRow
+		err := rows.Scan(
+			&item.ID, &item.WorkspaceID, &item.UnitID, &item.VersionID, &item.TargetAgentID, &item.DeliveryType, &item.Status,
+			&item.Reason, &item.MatcherScore, &item.MatcherDetails, &item.DeliveredPath, &item.Error, &item.DecidedAt, &item.DeliveredAt, &item.CreatedAt, &item.UpdatedAt,
+			&item.UnitType, &item.Title, &item.CanonicalSummary, &item.Content, &item.Metadata, &item.Applies,
+			&item.Tags, &item.Tools, &item.TaskTypes, &item.ProjectTypes, &item.Languages, &item.Frameworks,
+		)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 const listPendingEvolutionDeliveriesByAgent = `-- name: ListPendingEvolutionDeliveriesByAgent :many
 SELECT
   d.id, d.workspace_id, d.unit_id, d.version_id, d.target_agent_id, d.delivery_type, d.status,

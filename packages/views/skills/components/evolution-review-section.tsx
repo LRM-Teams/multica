@@ -49,8 +49,8 @@ const REVIEW_STATUSES: EvolutionReviewSubmissionStatus[] = [
   "candidate",
 ];
 
-export function EvolutionReviewTab() {
-  const { t } = useT("settings");
+export function EvolutionReviewSection() {
+  const { t } = useT("skills");
   const wsId = useWorkspaceId();
   const workspace = useCurrentWorkspace();
   const qc = useQueryClient();
@@ -117,10 +117,9 @@ export function EvolutionReviewTab() {
 
   return (
     <div className="space-y-6">
-      <section className="space-y-1">
-        <h2 className="text-sm font-semibold">{t(($) => $.evolution_review.title)}</h2>
+      <section>
         <p className="text-sm text-muted-foreground">
-          {t(($) => $.evolution_review.description)}
+          {t(($) => $.page.review_queue.description)}
         </p>
       </section>
 
@@ -133,7 +132,7 @@ export function EvolutionReviewTab() {
           }}
         >
           <SelectTrigger className="w-full sm:w-48" aria-label={t(($) => $.evolution_review.status_filter)}>
-            <SelectValue />
+            <SelectValue>{statusLabel(statusLabels, status)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             {REVIEW_STATUSES.map((item) => (
@@ -172,7 +171,7 @@ export function EvolutionReviewTab() {
               <CardContent className="space-y-5">
                 <div className="space-y-2">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="outline">{selected.unit_type || t(($) => $.evolution_review.unknown)}</Badge>
+                    <Badge variant="outline">{unitTypeLabel(t, selected.unit_type)}</Badge>
                     <RiskBadge risk={selected.review_risk_level} />
                     <Badge variant="secondary">{statusLabel(statusLabels, selected.status)}</Badge>
                   </div>
@@ -184,9 +183,9 @@ export function EvolutionReviewTab() {
 
                 <dl className="grid grid-cols-2 gap-3 text-sm">
                   <ReviewFact label={t(($) => $.evolution_review.source_agent)} value={sourceAgent?.name ?? shortId(selected.source_agent_id) ?? t(($) => $.evolution_review.unknown)} />
-                  <ReviewFact label={t(($) => $.evolution_review.submission_confidence)} value={selected.confidence || t(($) => $.evolution_review.none)} />
-                  <ReviewFact label={t(($) => $.evolution_review.sensitivity)} value={selected.sensitivity || t(($) => $.evolution_review.none)} />
-                  <ReviewFact label={t(($) => $.evolution_review.decision)} value={selected.review_decision || t(($) => $.evolution_review.none)} />
+                  <ReviewFact label={t(($) => $.evolution_review.submission_confidence)} value={confidenceLabel(t, selected.confidence)} />
+                  <ReviewFact label={t(($) => $.evolution_review.sensitivity)} value={sensitivityLabel(t, selected.sensitivity)} />
+                  <ReviewFact label={t(($) => $.evolution_review.decision)} value={reviewDecisionLabel(t, selected.review_decision)} />
                   <ReviewFact label={t(($) => $.evolution_review.confidence)} value={formatConfidence(selected.review_confidence)} />
                   <ReviewFact label={t(($) => $.evolution_review.updated)} value={formatDateTime(selected.updated_at)} />
                 </dl>
@@ -281,7 +280,7 @@ function SubmissionListItem({
   active: boolean;
   onSelect: () => void;
 }) {
-  const { t } = useT("settings");
+  const { t } = useT("skills");
   return (
     <button
       type="button"
@@ -302,9 +301,9 @@ function SubmissionListItem({
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span>{sourceAgentName ?? shortId(submission.source_agent_id) ?? t(($) => $.evolution_review.unknown)}</span>
         <span>-</span>
-        <span>{submission.unit_type || t(($) => $.evolution_review.unknown)}</span>
+        <span>{unitTypeLabel(t, submission.unit_type)}</span>
         <span>-</span>
-        <span>{submission.confidence || t(($) => $.evolution_review.none)}</span>
+        <span>{confidenceLabel(t, submission.confidence)}</span>
         <span>-</span>
         <span>{formatDateTime(submission.updated_at)}</span>
       </div>
@@ -313,7 +312,7 @@ function SubmissionListItem({
 }
 
 function RiskBadge({ risk }: { risk: string }) {
-  const { t } = useT("settings");
+  const { t } = useT("skills");
   const normalized = risk === "low" || risk === "medium" || risk === "high" ? risk : "unknown";
   const className =
     normalized === "high"
@@ -339,10 +338,10 @@ function ReviewFact({ label, value }: { label: string; value: string }) {
 }
 
 function ReviewAuditSummary({ submission }: { submission: EvolutionReviewSubmission }) {
-  const { t } = useT("settings");
+  const { t } = useT("skills");
   const metadata = submission.review_metadata;
   const allItems: Array<[string, string | null]> = [
-    [t(($) => $.evolution_review.metadata_source), reviewString(metadata, "source")],
+    [t(($) => $.evolution_review.metadata_source), metadataSourceLabel(t, reviewString(metadata, "source"))],
     [
       t(($) => $.evolution_review.metadata_provider),
       nestedReviewString(metadata, ["metadata", "provider"]) ?? reviewString(metadata, "provider"),
@@ -385,7 +384,7 @@ function DeliveryPreview({
   sourceAgentName?: string;
   workspaceSlug: string;
 }) {
-  const { t } = useT("settings");
+  const { t } = useT("skills");
   const deliveryType = submission.unit_type === "skill" ? "generated" : "inbox";
   const promoted = Boolean(submission.promoted_unit_id);
   const agentLabel = sourceAgentName ?? shortId(submission.source_agent_id) ?? t(($) => $.evolution_review.unknown);
@@ -400,7 +399,7 @@ function DeliveryPreview({
         <Badge variant={promoted ? "secondary" : "outline"}>{promoted ? t(($) => $.evolution_review.promoted_result) : t(($) => $.evolution_review.pending_result)}</Badge>
       </div>
       <div className="grid gap-2 text-sm sm:grid-cols-2">
-        <ReviewFact label={t(($) => $.evolution_review.delivery_type)} value={deliveryType} />
+        <ReviewFact label={t(($) => $.evolution_review.delivery_type)} value={deliveryTypeLabel(t, deliveryType)} />
         <ReviewFact label={t(($) => $.evolution_review.promoted_unit)} value={shortId(submission.promoted_unit_id) ?? t(($) => $.evolution_review.none)} />
       </div>
       <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
@@ -426,7 +425,7 @@ function DeliveryPreview({
 }
 
 function ReviewMetadata({ metadata }: { metadata: Record<string, unknown> }) {
-  const { t } = useT("settings");
+  const { t } = useT("skills");
   if (!metadata || Object.keys(metadata).length === 0) return null;
   return (
     <details className="rounded-lg border bg-muted/20 p-3">
@@ -439,7 +438,7 @@ function ReviewMetadata({ metadata }: { metadata: Record<string, unknown> }) {
 }
 
 function ReviewFiles({ submission }: { submission: EvolutionReviewSubmission }) {
-  const { t } = useT("settings");
+  const { t } = useT("skills");
   if (!submission.files?.length) return null;
   return (
     <section className="space-y-2">
@@ -484,8 +483,104 @@ function ReviewQueueState({
   );
 }
 
+type SkillsT = ReturnType<typeof useT<"skills">>["t"];
+
 function statusLabel(labels: Record<string, string>, status: string): string {
   return labels[status] ?? status;
+}
+
+function unitTypeLabel(t: SkillsT, value: string | null | undefined): string {
+  switch (value) {
+    case "memory":
+      return t(($) => $.evolution_review.unit_types.memory);
+    case "skill":
+      return t(($) => $.evolution_review.unit_types.skill);
+    case "workflow":
+      return t(($) => $.evolution_review.unit_types.workflow);
+    case "tool_pattern":
+      return t(($) => $.evolution_review.unit_types.tool_pattern);
+    case "preference":
+      return t(($) => $.evolution_review.unit_types.preference);
+    default:
+      return t(($) => $.evolution_review.unknown);
+  }
+}
+
+function deliveryTypeLabel(t: SkillsT, value: string): string {
+  switch (value) {
+    case "generated":
+      return t(($) => $.evolution_review.delivery_types.generated);
+    case "inbox":
+      return t(($) => $.evolution_review.delivery_types.inbox);
+    case "recommendation":
+      return t(($) => $.evolution_review.delivery_types.recommendation);
+    case "shared_cache":
+      return t(($) => $.evolution_review.delivery_types.shared_cache);
+    default:
+      return value;
+  }
+}
+
+function reviewDecisionLabel(t: SkillsT, value: string | null | undefined): string {
+  switch (value) {
+    case "promote":
+      return t(($) => $.evolution_review.review_decisions.promote);
+    case "needs_review":
+      return t(($) => $.evolution_review.review_decisions.needs_review);
+    case "reject":
+      return t(($) => $.evolution_review.review_decisions.reject);
+    default:
+      return t(($) => $.evolution_review.none);
+  }
+}
+
+function confidenceLabel(t: SkillsT, value: string | null | undefined): string {
+  switch (value) {
+    case "low":
+      return t(($) => $.evolution_review.confidence_levels.low);
+    case "medium":
+      return t(($) => $.evolution_review.confidence_levels.medium);
+    case "high":
+      return t(($) => $.evolution_review.confidence_levels.high);
+    default:
+      return t(($) => $.evolution_review.none);
+  }
+}
+
+function sensitivityLabel(t: SkillsT, value: string | null | undefined): string {
+  switch (value) {
+    case "none":
+      return t(($) => $.evolution_review.sensitivity_levels.none);
+    case "local_path":
+      return t(($) => $.evolution_review.sensitivity_levels.local_path);
+    case "personal":
+      return t(($) => $.evolution_review.sensitivity_levels.personal);
+    case "secret":
+      return t(($) => $.evolution_review.sensitivity_levels.secret);
+    case "unknown":
+      return t(($) => $.evolution_review.sensitivity_levels.unknown);
+    default:
+      return t(($) => $.evolution_review.none);
+  }
+}
+
+function metadataSourceLabel(t: SkillsT, value: string | null): string | null {
+  switch (value) {
+    case "manual_seed":
+      return t(($) => $.evolution_review.metadata_sources.manual_seed);
+    case "human_review":
+      return t(($) => $.evolution_review.metadata_sources.human_review);
+    case "deterministic_rules":
+      return t(($) => $.evolution_review.metadata_sources.deterministic_rules);
+    case "evolution_reviewer":
+      return t(($) => $.evolution_review.metadata_sources.evolution_reviewer);
+    case "agent_reviewer":
+      return t(($) => $.evolution_review.metadata_sources.agent_reviewer);
+    case "llm_reviewer":
+      return t(($) => $.evolution_review.metadata_sources.llm_reviewer);
+    default:
+      return value;
+  }
 }
 
 function formatConfidence(value: number | null | undefined): string {

@@ -8,6 +8,54 @@ import (
 	"testing"
 )
 
+func TestMergeAgentIDsDedupesAndPreservesOrder(t *testing.T) {
+	t.Parallel()
+
+	got := mergeAgentIDs([]string{"agent-b", "agent-a"}, []string{"agent-a", "agent-c"})
+	want := []string{"agent-b", "agent-a", "agent-c"}
+	if len(got) != len(want) {
+		t.Fatalf("mergeAgentIDs = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("mergeAgentIDs = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestEvolutionDeliveryPathMissing(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	missingDir := filepath.Join(root, "missing")
+	if evolutionDeliveryPathMissing(missingDir) != true {
+		t.Fatal("expected missing directory to need repair")
+	}
+
+	emptyDir := filepath.Join(root, "empty")
+	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
+		t.Fatalf("mkdir empty dir: %v", err)
+	}
+	if evolutionDeliveryPathMissing(emptyDir) != true {
+		t.Fatal("expected directory without SKILL.md to need repair")
+	}
+
+	skillDir := filepath.Join(root, "skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# skill\n"), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+	if evolutionDeliveryPathMissing(skillDir) {
+		t.Fatal("expected existing skill bundle not to need repair")
+	}
+
+	if evolutionDeliveryPathMissing("") {
+		t.Fatal("empty path should not trigger repair")
+	}
+}
+
 func TestEnableGeneratedSkillDeliveryCopiesBundleAndMarksEnabled(t *testing.T) {
 	t.Parallel()
 

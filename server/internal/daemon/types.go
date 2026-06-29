@@ -206,6 +206,7 @@ type EvolutionDelivery struct {
 	TargetAgentID    string          `json:"target_agent_id"`
 	DeliveryType     string          `json:"delivery_type"`
 	Status           string          `json:"status"`
+	DeliveredPath    string          `json:"delivered_path,omitempty"`
 	UnitType         string          `json:"unit_type"`
 	Title            string          `json:"title"`
 	CanonicalSummary string          `json:"canonical_summary"`

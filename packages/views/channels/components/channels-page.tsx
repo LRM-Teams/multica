@@ -757,6 +757,12 @@ export function ChannelsPage() {
     if (typingPulseTimerRef.current) window.clearTimeout(typingPulseTimerRef.current);
   }, [active?.id]);
 
+  // Quote-reply target is scoped to the open conversation — discard it when
+  // the user switches groups or opens a DM.
+  useEffect(() => {
+    setQuoteMessage(null);
+  }, [active?.id, activeDmId]);
+
   // Sync the DM selection from the `?dm=` deep link. The entry points outside
   // this view (Cmd+K, agent hover card) push(`...?dm=ID`); when the user is
   // already on the Messages page that's a same-route navigation that doesn't

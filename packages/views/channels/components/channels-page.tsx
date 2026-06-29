@@ -12,7 +12,6 @@ import {
   ChevronRight,
   ChevronUp,
   FileText,
-  Loader2,
   Mail,
   MessageCircle,
   MessageSquare,
@@ -260,6 +259,83 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
   );
 }
 
+function ConversationSwitchSkeleton({ isMobile }: { isMobile: boolean }) {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+      <header
+        className={cn(
+          "flex items-center justify-between gap-3 border-b py-2.5",
+          isMobile ? "px-2" : "px-5",
+        )}
+      >
+        <div className="flex min-w-0 items-center gap-3">
+          {isMobile && <Skeleton className="size-10 shrink-0 rounded-md" />}
+          <Skeleton className="size-10 shrink-0 rounded-full" />
+          <div className="min-w-0 space-y-2">
+            <Skeleton className="h-4 w-36" />
+            <Skeleton className="h-3 w-48 max-w-[50vw]" />
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Skeleton className="size-8 rounded-md" />
+          {!isMobile && <Skeleton className="size-8 rounded-md" />}
+        </div>
+      </header>
+      <div className="min-h-0 flex-1 space-y-4 overflow-hidden px-4 py-5">
+        <div className="flex gap-3">
+          <Skeleton className="size-8 shrink-0 rounded-full" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-16 w-4/5 rounded-lg" />
+          </div>
+        </div>
+        <div className="flex justify-end gap-3">
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="ml-auto h-3 w-20" />
+            <Skeleton className="ml-auto h-14 w-3/5 rounded-lg" />
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <Skeleton className="size-8 shrink-0 rounded-full" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-3 w-28" />
+            <Skeleton className="h-20 w-2/3 rounded-lg" />
+          </div>
+        </div>
+      </div>
+      <div className="px-4 pb-4">
+        <div className="rounded-xl border bg-card p-3 shadow-sm">
+          <Skeleton className="h-12 w-full rounded-md" />
+          <div className="mt-2 flex items-center justify-between">
+            <div className="flex gap-2">
+              <Skeleton className="size-8 rounded-md" />
+              <Skeleton className="h-8 w-24 rounded-md" />
+            </div>
+            <Skeleton className="h-8 w-20 rounded-md" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InitialChannelsShellSkeleton() {
+  return (
+    <div className="flex h-full min-h-0 bg-background">
+      <aside className="hidden w-72 shrink-0 flex-col border-r bg-muted/20 md:flex">
+        <div className="space-y-3 p-4">
+          <Skeleton className="h-6 w-28" />
+          <Skeleton className="h-9 w-full rounded-md" />
+          <Skeleton className="h-12 w-full rounded-lg" />
+          <Skeleton className="h-12 w-full rounded-lg" />
+          <Skeleton className="h-12 w-full rounded-lg" />
+        </div>
+      </aside>
+      <ConversationSwitchSkeleton isMobile={false} />
+    </div>
+  );
+}
+
 export function TypingIndicator({ actors }: { actors: TypingActor[] }) {
   const { t } = useT("channels");
   if (actors.length === 0) return null;
@@ -388,6 +464,8 @@ export function ChannelsPage() {
   const [convSearchResults, setConvSearchResults] = useState<ChannelMessageSearchResult[]>([]);
   const [convSearchTotal, setConvSearchTotal] = useState(0);
   const [convSearchIndex, setConvSearchIndex] = useState(0);
+  const [viewportReady, setViewportReady] = useState(false);
+  const previousMobileRef = useRef<boolean | null>(null);
 
   const { data: channels = [], isLoading } = useQuery(channelsOptions(wsId));
   const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
@@ -547,6 +625,21 @@ export function ChannelsPage() {
       ),
     [channels],
   );
+
+  useEffect(() => {
+    previousMobileRef.current =
+      typeof window !== "undefined" ? window.innerWidth < 768 : false;
+    setViewportReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!viewportReady) return;
+    const previous = previousMobileRef.current;
+    if (previous === false && isMobile && !activeId && !activeDmId && channels[0]) {
+      setActiveId(channels[0].id);
+    }
+    previousMobileRef.current = isMobile;
+  }, [viewportReady, isMobile, activeId, activeDmId, channels]);
 
   useEffect(() => {
     // Mobile is list-first — don't auto-open a channel, or the list would never
@@ -1487,10 +1580,16 @@ export function ChannelsPage() {
   // Channel detail pane: header + message stream + composer. On mobile it
   // takes the full width and grows a Back button into the header so the user
   // can return to the list.
+  const showChannelDetailSkeleton =
+    isLoading || (!!activeId && !activeDmId && !active);
   const detailPane = (
         <main className="flex flex-1 min-h-0 min-w-0 flex-col">
           {!active ? (
-            <EmptyState onCreate={handleCreate} />
+            showChannelDetailSkeleton ? (
+              <ConversationSwitchSkeleton isMobile={isMobile} />
+            ) : (
+              <EmptyState onCreate={handleCreate} />
+            )
           ) : (
             <>
               {convSearchOpen ? (
@@ -1820,20 +1919,22 @@ export function ChannelsPage() {
   // DM detail pane — branches by source internally (dm_channel vs
   // legacy_session). Rendered in place of the group detail when a DM is active.
   // When a `?dm=` deep link opens cold, `activeDmId` is set before the DM list
-  // resolves the row — show a brief spinner (design.md: spinner, not skeleton)
-  // instead of a blank pane during that window.
+  // resolves the row — keep the conversation structure in place instead of
+  // dropping to a blank pane during that window.
   const dmDetailPane = activeDm ? (
     <DmConversation key={`${activeDm.source}:${activeDm.id}`} dm={activeDm} onBack={mobileBackToList} />
   ) : (
-    <div className="flex min-h-0 flex-1 items-center justify-center bg-background">
-      <Loader2 className="size-5 animate-spin text-muted-foreground" />
-    </div>
+    <ConversationSwitchSkeleton isMobile={isMobile} />
   );
 
   // The detail surface: a selected DM wins over a group (selections are
   // mutually exclusive, but this also covers the deep-link-before-list-loads
   // window where `activeDmId` is set but the DM row hasn't resolved yet).
   const detailSurface = activeDmId ? dmDetailPane : detailPane;
+
+  if (!viewportReady) {
+    return <InitialChannelsShellSkeleton />;
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col">

@@ -934,7 +934,8 @@ func (h *Handler) attachChannelMessageThreadMetadata(ctx context.Context, worksp
 		         ELSE 0
 		       END AS unread_count
 		FROM channel_message roots
-		LEFT JOIN channel_message replies ON replies.thread_root_message_id = roots.id
+		LEFT JOIN channel_message replies ON replies.channel_id = roots.channel_id
+			AND replies.thread_root_message_id = roots.id
 		LEFT JOIN channel_thread_state cts ON cts.root_message_id = roots.id AND cts.user_id = $3
 		WHERE roots.workspace_id = $2 AND roots.id = ANY($1::uuid[])
 		GROUP BY roots.id, cts.followed_at, cts.last_read_at`,

@@ -947,6 +947,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/nodes/exec", h.ExecCloudRuntimeNode)
 				r.Post("/sandboxes/{sandboxID}/snapshot", h.SnapshotCloudRuntimeSandbox)
 				r.Post("/sandboxes/fork", h.ForkCloudRuntimeSandbox)
+				// SWE-Lego per-issue orchestration (spec §4.1).
+				r.Post("/swe-lego/issues", h.CreateSweLegoIssue)
 			})
 
 			// Tasks (user-facing, with ownership check)

@@ -84,21 +84,21 @@ export interface MentionListRef {
 // ---------------------------------------------------------------------------
 
 interface MentionGroup {
-  label: "All" | "Current" | "Recent" | "Search" | "Users" | "Issues";
+  label: "Broadcast" | "Current" | "Recent" | "Search" | "Members" | "Issues";
   items: MentionItem[];
 }
 
 function groupItems(items: MentionItem[]): MentionGroup[] {
-  const all: MentionItem[] = [];
+  const broadcast: MentionItem[] = [];
   const current: MentionItem[] = [];
   const recent: MentionItem[] = [];
   const search: MentionItem[] = [];
-  const users: MentionItem[] = [];
+  const members: MentionItem[] = [];
   const issues: MentionItem[] = [];
 
   for (const item of items) {
     if (item.type === "all") {
-      all.push(item);
+      broadcast.push(item);
     } else if (item.group === "current") {
       current.push(item);
     } else if (item.group === "recent") {
@@ -108,16 +108,16 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
     } else if (item.type === "issue" || item.type === "project") {
       issues.push(item);
     } else {
-      users.push(item);
+      members.push(item);
     }
   }
 
   const groups: MentionGroup[] = [];
-  if (all.length > 0) groups.push({ label: "All", items: all });
+  if (broadcast.length > 0) groups.push({ label: "Broadcast", items: broadcast });
   if (current.length > 0) groups.push({ label: "Current", items: current });
   if (recent.length > 0) groups.push({ label: "Recent", items: recent });
   if (search.length > 0) groups.push({ label: "Search", items: search });
-  if (users.length > 0) groups.push({ label: "Users", items: users });
+  if (members.length > 0) groups.push({ label: "Members", items: members });
   if (issues.length > 0) groups.push({ label: "Issues", items: issues });
   return groups;
 }
@@ -338,11 +338,11 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
     const hasContextGroups = displayItems.some((item) => item.group === "current" || item.group === "recent");
     const contextLayout = hasContextGroups;
     const groupLabel = (label: MentionGroup["label"]): string => {
-      if (label === "All") return t(($) => $.mention.group_all);
+      if (label === "Broadcast") return "";
       if (label === "Current") return t(($) => $.mention.group_current);
       if (label === "Recent") return t(($) => $.mention.group_recent);
       if (label === "Search") return t(($) => $.mention.group_search);
-      if (label === "Users") return t(($) => $.mention.group_users);
+      if (label === "Members") return t(($) => $.mention.group_members);
       if (label === "Issues") return t(($) => $.mention.group_issues);
       return label;
     };
@@ -390,9 +390,11 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
             const isRecent = group.label === "Recent";
             return (
               <section key={group.label} className={isRecent ? "min-h-0" : "shrink-0"}>
-                <div className="shrink-0 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
-                  {groupLabel(group.label)}
-                </div>
+                {group.label !== "Broadcast" && (
+                  <div className="shrink-0 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+                    {groupLabel(group.label)}
+                  </div>
+                )}
                 <div className={isRecent ? "max-h-64 overflow-y-auto overscroll-contain" : undefined}>
                   {renderRows(group)}
                 </div>
@@ -407,9 +409,11 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       <div className="w-72 max-h-[300px] overflow-y-auto rounded-md border bg-popover py-1 shadow-md">
         {groups.map((group) => (
           <div key={group.label}>
-            <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
-              {groupLabel(group.label)}
-            </div>
+            {group.label !== "Broadcast" && (
+              <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+                {groupLabel(group.label)}
+              </div>
+            )}
             {renderRows(group)}
           </div>
         ))}
@@ -503,6 +507,7 @@ function MentionRow({
 
   const isActor = item.type === "member" || item.type === "agent";
   const secondary = isActor && showSecondary ? item.secondaryLabel : undefined;
+  const allMembersHint = item.type === "all" ? t(($) => $.mention.all_members_hint) : null;
 
   return (
     <button
@@ -527,6 +532,11 @@ function MentionRow({
         >
           {item.type === "all" ? t(($) => $.mention.all_members) : item.label}
         </span>
+        {allMembersHint && (
+          <span className="block truncate text-[11px] text-muted-foreground">
+            {allMembersHint}
+          </span>
+        )}
         {secondary && (
           <span className="block truncate text-[11px] text-muted-foreground">
             {secondary}

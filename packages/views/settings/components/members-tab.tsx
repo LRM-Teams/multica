@@ -311,9 +311,10 @@ export function MembersTab() {
 
   const handleRemoveMember = (member: MemberWithUser) => {
     if (!workspace) return;
+    const displayName = member.display_name || member.name;
     setConfirmAction({
-      title: t(($) => $.members.remove_member_title, { name: member.name }),
-      description: t(($) => $.members.remove_member_description, { name: member.name, workspace: workspace.name }),
+      title: t(($) => $.members.remove_member_title, { name: displayName }),
+      description: t(($) => $.members.remove_member_description, { name: displayName, workspace: workspace.name }),
       variant: "destructive",
       onConfirm: async () => {
         setMemberActionId(member.id);

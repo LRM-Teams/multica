@@ -115,7 +115,7 @@ export function createRuntimeColumns({
               size={18}
             />
             <span className="truncate text-xs text-muted-foreground">
-              {row.original.ownerMember.name}
+              {row.original.ownerMember.display_name || row.original.ownerMember.name}
             </span>
           </span>
         ) : (

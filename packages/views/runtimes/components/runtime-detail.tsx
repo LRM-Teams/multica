@@ -67,6 +67,15 @@ function shortDaemonId(id: string | null): string | null {
   return `${id.slice(0, 6)}··${id.slice(-2)}`;
 }
 
+function agentDisplayName(agent: { id: string; display_name?: string | null; name?: string | null }) {
+  return agent.display_name?.trim() || agent.name?.trim() || agent.id;
+}
+
+function agentHandleLabel(agent: { name?: string | null }) {
+  const handle = agent.name?.trim();
+  return handle ? `@${handle}` : null;
+}
+
 // 30s tick keeps derived runtime health honest as time-based windows
 // (recently_lost → offline → about_to_gc) cross thresholds without any new
 // query data arriving. Agent presence has no time windows anymore, so it
@@ -266,7 +275,9 @@ function HeroCard({
                 size={18}
                 enableHoverCard
               />
-              <span className="cursor-pointer truncate text-sm">{ownerMember.name}</span>
+              <span className="cursor-pointer truncate text-sm">
+                {ownerMember.display_name || ownerMember.name}
+              </span>
             </span>
           ) : (
             <span className="text-sm text-muted-foreground">—</span>
@@ -392,6 +403,8 @@ function ServingAgentsCard({
             const wl = detail ? workloadConfig[detail.workload] : null;
             const running = detail?.runningCount ?? 0;
             const queued = detail?.queuedCount ?? 0;
+            const displayName = agentDisplayName(agent);
+            const handleLabel = agentHandleLabel(agent);
             return (
               <AppLink
                 key={agent.id}
@@ -401,8 +414,13 @@ function ServingAgentsCard({
                 <ActorAvatar actorType="agent" actorId={agent.id} size={20} enableHoverCard showStatusDot />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-xs font-medium">
-                    {agent.name}
+                    {displayName}
                   </div>
+                  {handleLabel && displayName !== agent.name ? (
+                    <div className="truncate text-[11px] text-muted-foreground">
+                      {handleLabel}
+                    </div>
+                  ) : null}
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
                     <span className="inline-flex items-center gap-1.5">
                       <span className={`h-1.5 w-1.5 rounded-full ${av.dotClass}`} />

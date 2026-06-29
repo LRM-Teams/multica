@@ -62,6 +62,15 @@ export interface DeleteRuntimeDialogProps {
   onDeleted: () => void;
 }
 
+function actorDisplayName(actor: { display_name?: string | null; name?: string | null } | null | undefined, fallback: string) {
+  return actor?.display_name?.trim() || actor?.name?.trim() || fallback;
+}
+
+function actorHandleLabel(actor: { name?: string | null } | null | undefined) {
+  const handle = actor?.name?.trim();
+  return handle ? `@${handle}` : null;
+}
+
 export function DeleteRuntimeDialog({
   open,
   onOpenChange,
@@ -446,8 +455,11 @@ function AgentPlanTable({
           const ownerLabel = ownerMember
             ? ownerMember.user_id === currentUserId
               ? t(($) => $.detail.delete_dialog.cascade.table.owner_self)
-              : ownerMember.name
+              : actorDisplayName(ownerMember, ownerMember.user_id)
             : t(($) => $.detail.delete_dialog.cascade.table.owner_unassigned);
+          const agentName = actorDisplayName(agent, agent.id);
+          const agentHandle = actorHandleLabel(agent);
+          const ownerHandle = actorHandleLabel(ownerMember);
           const presence = presenceMap.get(agent.id);
           return (
             <div
@@ -461,8 +473,15 @@ function AgentPlanTable({
                   size={20}
                   enableHoverCard
                 />
-                <span className="truncate font-medium text-foreground">
-                  {agent.name}
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate font-medium text-foreground">
+                    {agentName}
+                  </span>
+                  {agentHandle && agentName !== agent.name ? (
+                    <span className="truncate text-[11px] text-muted-foreground">
+                      {agentHandle}
+                    </span>
+                  ) : null}
                 </span>
               </span>
               <span className="inline-flex min-w-0 items-center gap-1.5">
@@ -473,8 +492,15 @@ function AgentPlanTable({
                     size={16}
                   />
                 ) : null}
-                <span className="truncate text-muted-foreground">
-                  {ownerLabel}
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate text-muted-foreground">
+                    {ownerLabel}
+                  </span>
+                  {ownerMember && ownerHandle && ownerLabel !== ownerMember.name ? (
+                    <span className="truncate text-[11px] text-muted-foreground/80">
+                      {ownerHandle}
+                    </span>
+                  ) : null}
                 </span>
               </span>
               <PresenceCell presence={presence} />

@@ -46,16 +46,21 @@ function sourceLabel(source: string, t: IssuesT): string {
   }
 }
 
+function agentDisplayName(agent: Pick<CommentTriggerPreviewAgent, "id" | "name"> & { display_name?: string | null }) {
+  return agent.display_name?.trim() || agent.name.trim() || agent.id;
+}
+
 function sourceReason(agent: CommentTriggerPreviewAgent, t: IssuesT): string {
+  const name = agentDisplayName(agent);
   switch (agent.source) {
     case "issue_assignee":
-      return t(($) => $.comment.trigger_reason_issue_assignee, { name: agent.name });
+      return t(($) => $.comment.trigger_reason_issue_assignee, { name });
     case "mention_agent":
-      return t(($) => $.comment.trigger_reason_mention_agent, { name: agent.name });
+      return t(($) => $.comment.trigger_reason_mention_agent, { name });
     case "mention_squad_leader":
-      return t(($) => $.comment.trigger_reason_mention_squad_leader, { name: agent.name });
+      return t(($) => $.comment.trigger_reason_mention_squad_leader, { name });
     default:
-      return agent.reason || t(($) => $.comment.trigger_reason_unknown, { name: agent.name });
+      return agent.reason || t(($) => $.comment.trigger_reason_unknown, { name });
   }
 }
 
@@ -82,10 +87,15 @@ function TriggerAgentTooltipBody({
   t: IssuesT;
 }) {
   const presenceLine = useTriggerPresenceLine(agent.id, t);
+  const displayName = agentDisplayName(agent);
+  const handle = agent.name.trim() ? `@${agent.name.replace(/^@+/, "")}` : null;
   return (
     <div className="space-y-0.5">
       <div className="flex items-baseline gap-1.5">
-        <span className="font-medium">{agent.name}</span>
+        <span className="font-medium">{displayName}</span>
+        {handle && displayName !== agent.name ? (
+          <span className="text-[10px] text-muted-foreground">{handle}</span>
+        ) : null}
         <span className="text-[10px] text-muted-foreground">{sourceLabel(agent.source, t)}</span>
       </div>
       {suppressed ? (
@@ -150,6 +160,7 @@ function SingleTriggerChip({
   const state = suppressed
     ? t(($) => $.comment.trigger_skipped_label)
     : sourceLabel(agent.source, t);
+  const displayName = agentDisplayName(agent);
   // The avatar carries "who"; the sentence carries only condition + outcome,
   // so it stays fixed-width and never truncates on long agent names.
   const sentence = suppressed
@@ -163,7 +174,7 @@ function SingleTriggerChip({
           <button
             type="button"
             aria-pressed={suppressed}
-            aria-label={t(($) => $.comment.trigger_chip_aria, { name: agent.name, state })}
+            aria-label={t(($) => $.comment.trigger_chip_aria, { name: displayName, state })}
             onClick={() => onToggle(agent.id)}
             className={cn(
               // Sidebar-style resting state: muted until hover so the strip
@@ -272,6 +283,7 @@ function MultiTriggerChip({
         <div className="flex flex-col">
           {agents.map((agent) => {
             const suppressed = suppressedAgentIds.has(agent.id);
+            const displayName = agentDisplayName(agent);
             const state = suppressed
               ? t(($) => $.comment.trigger_skipped_label)
               : sourceLabel(agent.source, t);
@@ -282,7 +294,7 @@ function MultiTriggerChip({
                     <button
                       type="button"
                       aria-pressed={suppressed}
-                      aria-label={t(($) => $.comment.trigger_chip_aria, { name: agent.name, state })}
+                      aria-label={t(($) => $.comment.trigger_chip_aria, { name: displayName, state })}
                       onClick={() => onToggle(agent.id)}
                       className={cn(
                         "flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-muted",
@@ -296,7 +308,7 @@ function MultiTriggerChip({
                           suppressed && "text-muted-foreground",
                         )}
                       >
-                        {agent.name}
+                        {displayName}
                       </span>
                       <span className="shrink-0 text-[10px] text-muted-foreground">{state}</span>
                     </button>
@@ -331,7 +343,7 @@ function TriggerAgentAvatar({
       )}
     >
       <ActorAvatarBase
-        name={agent.name}
+        name={agentDisplayName(agent)}
         initials=""
         avatarUrl={agent.avatar_url}
         isAgent

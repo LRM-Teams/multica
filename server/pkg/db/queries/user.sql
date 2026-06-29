@@ -7,9 +7,13 @@ SELECT * FROM "user"
 WHERE email = $1;
 
 -- name: CreateUser :one
-INSERT INTO "user" (name, email, avatar_url)
-VALUES ($1, $2, $3)
+INSERT INTO "user" (name, display_name, email, avatar_url)
+VALUES ($1, $2, $3, $4)
 RETURNING *;
+
+-- name: GetUserByName :one
+SELECT * FROM "user"
+WHERE name = $1;
 
 -- name: UpdateUser :one
 -- Patches the user-controlled profile fields. Each parameter follows
@@ -25,7 +29,7 @@ RETURNING *;
 -- rather than carrying a dedicated UpdateUserTimezone keeps the
 -- profile-patch shape uniform between Preferences fields.
 UPDATE "user" SET
-    name = COALESCE($2, name),
+    display_name = COALESCE(sqlc.narg('display_name'), display_name),
     avatar_url = COALESCE($3, avatar_url),
     language = COALESCE($4, language),
     profile_description = COALESCE(sqlc.narg('profile_description'), profile_description),

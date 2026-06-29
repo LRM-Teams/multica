@@ -144,21 +144,25 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	}
 }
 
-func TestCreateAgent_RejectsDuplicateName(t *testing.T) {
+func TestCreateAgent_GeneratesUniqueHandlesForDuplicateDisplayNames(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
-	// Clean up any agents created by this test.
-	t.Cleanup(func() {
+	displayName := "Duplicate Name Test Agent"
+	cleanup := func() {
 		testPool.Exec(context.Background(),
-			`DELETE FROM agent WHERE workspace_id = $1 AND name = $2`,
-			testWorkspaceID, "duplicate-name-test-agent",
+			`DELETE FROM agent
+			 WHERE workspace_id = $1
+			   AND (display_name = $2 OR name LIKE 'duplicate_name_test_agent%')`,
+			testWorkspaceID, displayName,
 		)
-	})
+	}
+	cleanup()
+	t.Cleanup(cleanup)
 
 	body := map[string]any{
-		"name":                 "duplicate-name-test-agent",
+		"name":                 displayName,
 		"description":          "first description",
 		"runtime_id":           testRuntimeID,
 		"visibility":           "private",
@@ -171,22 +175,93 @@ func TestCreateAgent_RejectsDuplicateName(t *testing.T) {
 	if w1.Code != http.StatusCreated {
 		t.Fatalf("first CreateAgent: expected 201, got %d: %s", w1.Code, w1.Body.String())
 	}
-	var resp1 map[string]any
+	var resp1 AgentResponse
 	if err := json.NewDecoder(w1.Body).Decode(&resp1); err != nil {
 		t.Fatalf("decode first response: %v", err)
 	}
-	agentID1, _ := resp1["id"].(string)
-	if agentID1 == "" {
+	if resp1.ID == "" {
 		t.Fatalf("first CreateAgent: no id in response: %v", resp1)
 	}
+	if resp1.Name != "duplicate_name_test_agent" {
+		t.Fatalf("first handle = %q, want duplicate_name_test_agent", resp1.Name)
+	}
+	if resp1.DisplayName != displayName {
+		t.Fatalf("first display_name = %q, want %q", resp1.DisplayName, displayName)
+	}
 
-	// Second call — same name must be rejected with 409 Conflict.
-	// The unique constraint prevents silent duplicates; the UI shows a clear error.
+	// Second call — same legacy display input is allowed. The server keeps the
+	// display label and suffixes only the stable handle.
 	body["description"] = "updated description"
 	w2 := httptest.NewRecorder()
 	testHandler.CreateAgent(w2, newRequest(http.MethodPost, "/api/agents", body))
-	if w2.Code != http.StatusConflict {
-		t.Fatalf("second CreateAgent with duplicate name: expected 409, got %d: %s", w2.Code, w2.Body.String())
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("second CreateAgent with duplicate display name: expected 201, got %d: %s", w2.Code, w2.Body.String())
+	}
+	var resp2 AgentResponse
+	if err := json.NewDecoder(w2.Body).Decode(&resp2); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+	if resp2.DisplayName != displayName {
+		t.Fatalf("second display_name = %q, want %q", resp2.DisplayName, displayName)
+	}
+	if resp2.Name != "duplicate_name_test_agent_2" {
+		t.Fatalf("second handle = %q, want duplicate_name_test_agent_2", resp2.Name)
+	}
+}
+
+func TestUpdateAgent_LegacyNameRenamesDisplayOnly(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	displayName := "Legacy Rename Agent"
+	cleanup := func() {
+		testPool.Exec(context.Background(),
+			`DELETE FROM agent
+			 WHERE workspace_id = $1
+			   AND (display_name IN ($2, $3) OR name LIKE 'legacy_rename_agent%')`,
+			testWorkspaceID, displayName, "Renamed Legacy Display",
+		)
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	createBody := map[string]any{
+		"name":                 displayName,
+		"runtime_id":           testRuntimeID,
+		"visibility":           "private",
+		"max_concurrent_tasks": 1,
+	}
+	createRec := httptest.NewRecorder()
+	testHandler.CreateAgent(createRec, newRequest(http.MethodPost, "/api/agents", createBody))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("CreateAgent: expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+	var created AgentResponse
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.Name == "" {
+		t.Fatal("created agent missing generated handle")
+	}
+
+	req := withURLParam(newRequest(http.MethodPut, "/api/agents/"+created.ID, map[string]any{
+		"name": "Renamed Legacy Display",
+	}), "id", created.ID)
+	updateRec := httptest.NewRecorder()
+	testHandler.UpdateAgent(updateRec, req)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("UpdateAgent: expected 200, got %d: %s", updateRec.Code, updateRec.Body.String())
+	}
+	var updated AgentResponse
+	if err := json.NewDecoder(updateRec.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode update response: %v", err)
+	}
+	if updated.Name != created.Name {
+		t.Fatalf("legacy name patch changed handle: got %q, want %q", updated.Name, created.Name)
+	}
+	if updated.DisplayName != "Renamed Legacy Display" {
+		t.Fatalf("display_name = %q, want Renamed Legacy Display", updated.DisplayName)
 	}
 }
 

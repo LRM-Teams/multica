@@ -29,7 +29,10 @@ export interface Member {
 
 export interface User {
   id: string;
+  /** Stable unique handle used for routing and bare @handle fallback. */
   name: string;
+  /** Human-facing label. Falls back to `name` for older server payloads. */
+  display_name: string;
   email: string;
   avatar_url: string | null;
   onboarded_at: string | null;
@@ -69,7 +72,10 @@ export interface MemberWithUser {
   user_id: string;
   role: MemberRole;
   created_at: string;
+  /** Stable user handle. */
   name: string;
+  /** Human-facing member label. */
+  display_name: string;
   email: string;
   avatar_url: string | null;
 }

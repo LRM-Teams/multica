@@ -46,7 +46,7 @@ Two distinct text fields, often confused:
 
 ## CLI / API entry points
 
-Minimum create call (`--name` and `--runtime-id` are both required):
+Minimum CLI create call (`--name` and `--runtime-id` are both required):
 
 ```bash
 multica agent create --name <name> --runtime-id <runtime-id> \
@@ -55,6 +55,13 @@ multica agent create --name <name> --runtime-id <runtime-id> \
   --output json
 ```
 
+On current servers, `name` is the stable handle (`@handle`) in persisted API
+responses. The CLI's `--name` flag is legacy input: the server treats it as a
+display seed, writes that human-facing value to `display_name`, and derives a
+unique workspace-scoped handle in `agent.name`. New HTTP clients may send
+`display_name` explicitly; old clients that rename with `name` update
+`display_name`, not the handle.
+
 `runAgentCreate` builds a JSON body and posts it to `/api/agents`. It only
 adds a key when its flag was provided — `description`/`instructions` on a
 non-empty value, the rest (`runtime-config`, `custom-args`, `model`,
@@ -62,14 +69,16 @@ non-empty value, the rest (`runtime-config`, `custom-args`, `model`,
 to server defaults rather than sending empty strings.
 
 The HTTP body (`CreateAgentRequest`) accepts: `name`, `description`,
-`instructions`, `runtime_id`, `runtime_config`, `custom_env`, `custom_args`,
-`model`, `thinking_level`, `visibility`, `max_concurrent_tasks`, `mcp_config`.
+`display_name`, `description`, `instructions`, `runtime_id`, `runtime_config`,
+`custom_env`, `custom_args`, `model`, `thinking_level`, `visibility`,
+`max_concurrent_tasks`, `mcp_config`.
 
 ## Field contracts
 
 | Field | Persisted as | Validated? | Consumed by |
 |---|---|---|---|
-| `name` | `agent.name` | required, 400 if empty | listings, runtime payload |
+| `name` | `agent.name` (derived handle) + `agent.display_name` (legacy display seed) | create requires either `name` or `display_name`; generated handle is unique per workspace | handle routing / bare @handle fallback |
+| `display_name` | `agent.display_name` | create requires either `name` or `display_name`; update rejects empty | listings, runtime payload labels |
 | `description` | `agent.description` | 400 if > 255 code points | catalog/listing only — NOT the runtime prompt |
 | `instructions` | `agent.instructions` | none | daemon → provider at claim time |
 | `runtime_id` | `agent.runtime_id` | required (400) + must resolve to a runtime in this workspace | selects runtime/provider |
@@ -82,11 +91,12 @@ The HTTP body (`CreateAgentRequest`) accepts: `name`, `description`,
 | `visibility` | `agent.visibility` | — | access control; defaults to `private`; gates who can read/route a private agent (e.g. a private squad leader) — NOT the runtime prompt |
 | `max_concurrent_tasks` | `agent.max_concurrent_tasks` | — | scheduler task cap; defaults to `6` |
 
-Defaults when omitted: `runtime_config` → `{}`, `custom_env` → `{}`,
-`custom_args` → `[]`, `visibility` → `private`, `max_concurrent_tasks` → `6`
-(all materialized server-side before the insert). `custom_args`/`runtime_config`
-are typed `[]string`/`any` and marshaled as-is — the JSON-shape rejection
-happens in the CLI, not the create handler.
+Defaults when omitted: `display_name` falls back to the legacy `name` seed,
+`runtime_config` → `{}`, `custom_env` → `{}`, `custom_args` → `[]`,
+`visibility` → `private`, `max_concurrent_tasks` → `6` (all materialized
+server-side before the insert). `custom_args`/`runtime_config` are typed
+`[]string`/`any` and marshaled as-is — the JSON-shape rejection happens in the
+CLI, not the create handler.
 
 `thinking_level` is validated only at the provider level: an unrecognized
 literal returns 400, but a value that is valid for the provider yet
@@ -199,6 +209,9 @@ State-changing (require an explicit instruction — do not run speculatively):
 - "`description` is the prompt." It is not — only `instructions` reaches the
   runtime. A rich description with empty instructions yields a named shell with
   no operating contract.
+- "`agent.name` is the display label." Not anymore. `agent.name` is the stable
+  handle. Render `display_name` when present and use `name` for routing /
+  bare-mention fallback.
 - "Create binds the agent's skills." It does not; bind explicitly afterward.
 - "`agent update` can rotate env." It cannot — it 400s on `custom_env`; use the
   env endpoint.

@@ -339,6 +339,7 @@ type MemberWithUserResponse struct {
 	Role        string  `json:"role"`
 	CreatedAt   string  `json:"created_at"`
 	Name        string  `json:"name"`
+	DisplayName string  `json:"display_name"`
 	Email       string  `json:"email"`
 	AvatarURL   *string `json:"avatar_url"`
 }
@@ -365,6 +366,7 @@ func (h *Handler) ListMembersWithUser(w http.ResponseWriter, r *http.Request) {
 			Role:        m.Role,
 			CreatedAt:   timestampToString(m.CreatedAt),
 			Name:        m.UserName,
+			DisplayName: firstNonEmpty(m.UserDisplayName, m.UserName),
 			Email:       m.UserEmail,
 			AvatarURL:   textToPtr(m.UserAvatarUrl),
 		}
@@ -386,6 +388,7 @@ func memberWithUserResponse(member db.Member, user db.User) MemberWithUserRespon
 		Role:        member.Role,
 		CreatedAt:   timestampToString(member.CreatedAt),
 		Name:        user.Name,
+		DisplayName: userDisplayName(user),
 		Email:       user.Email,
 		AvatarURL:   textToPtr(user.AvatarUrl),
 	}
@@ -438,10 +441,7 @@ func (h *Handler) CreateMember(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if isNotFound(err) {
 			// Auto-create user with email so they can be invited before signing up
-			user, err = h.Queries.CreateUser(r.Context(), db.CreateUserParams{
-				Name:  email,
-				Email: email,
-			})
+			user, err = h.createUserWithIdentity(r.Context(), email, emailLocalPart(email), pgtype.Text{})
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to create user")
 				return

@@ -44,6 +44,7 @@ type Agent struct {
 	McpConfig          []byte             `json:"mcp_config"`
 	Model              pgtype.Text        `json:"model"`
 	ThinkingLevel      pgtype.Text        `json:"thinking_level"`
+	DisplayName        string             `json:"display_name"`
 }
 
 type AgentRuntime struct {
@@ -912,6 +913,7 @@ type TaskUsageHourlyRollupState struct {
 type User struct {
 	ID                      pgtype.UUID        `json:"id"`
 	Name                    string             `json:"name"`
+	DisplayName             string             `json:"display_name"`
 	Email                   string             `json:"email"`
 	AvatarUrl               pgtype.Text        `json:"avatar_url"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`

@@ -18,15 +18,15 @@ WHERE id = $1 AND workspace_id = $2;
 
 -- name: CreateAgent :one
 INSERT INTO agent (
-    workspace_id, name, description, avatar_url, runtime_mode,
+    workspace_id, name, display_name, description, avatar_url, runtime_mode,
     runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
     instructions, custom_env, custom_args, mcp_config, model, thinking_level
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 RETURNING *;
 
 -- name: UpdateAgent :one
 UPDATE agent SET
-    name = COALESCE(sqlc.narg('name'), name),
+    display_name = COALESCE(sqlc.narg('display_name'), display_name),
     description = COALESCE(sqlc.narg('description'), description),
     avatar_url = COALESCE(sqlc.narg('avatar_url'), avatar_url),
     runtime_config = COALESCE(sqlc.narg('runtime_config'), runtime_config),

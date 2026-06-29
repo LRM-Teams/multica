@@ -41,7 +41,7 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT DISTINCT ON (a.id) a.id, a.name, atq.id, atq.status
+		SELECT DISTINCT ON (a.id) a.id, COALESCE(NULLIF(a.display_name, ''), a.name, ''), atq.id, atq.status
 		FROM channel_agent_session cas
 		JOIN chat_session cs ON cs.id = cas.chat_session_id
 		JOIN agent_task_queue atq ON atq.chat_session_id = cs.id

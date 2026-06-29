@@ -18,12 +18,12 @@ export function useActorName() {
   // back to that label beats rendering a bare "Unknown".
   const getMemberName = useCallback((userId: string, fallback?: string) => {
     const m = members.find((m) => m.user_id === userId);
-    return m?.name ?? fallback ?? "Unknown";
+    return m ? (m.display_name || m.name || fallback || "Unknown") : fallback ?? "Unknown";
   }, [members]);
 
   const getAgentName = useCallback((agentId: string, fallback?: string) => {
     const a = agents.find((a) => a.id === agentId);
-    return a?.name ?? fallback ?? "Unknown Agent";
+    return a ? (a.display_name || a.name || fallback || "Unknown Agent") : fallback ?? "Unknown Agent";
   }, [agents]);
 
   const getSquadName = useCallback((squadId: string, fallback?: string) => {

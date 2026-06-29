@@ -52,11 +52,12 @@ var supportedLanguages = map[string]struct{}{
 }
 
 type UserResponse struct {
-	ID        string  `json:"id"`
-	Name      string  `json:"name"`
-	Email     string  `json:"email"`
-	AvatarURL *string `json:"avatar_url"`
-	Language  *string `json:"language"`
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	DisplayName string  `json:"display_name"`
+	Email       string  `json:"email"`
+	AvatarURL   *string `json:"avatar_url"`
+	Language    *string `json:"language"`
 	// Pinned IANA tz; nil = no preference (use browser-detected tz).
 	Timezone                *string         `json:"timezone"`
 	OnboardedAt             *string         `json:"onboarded_at"`
@@ -84,6 +85,7 @@ func userToResponse(u db.User) UserResponse {
 	return UserResponse{
 		ID:                      uuidToString(u.ID),
 		Name:                    u.Name,
+		DisplayName:             userDisplayName(u),
 		Email:                   u.Email,
 		AvatarURL:               textToPtr(u.AvatarUrl),
 		Language:                textToPtr(u.Language),
@@ -179,14 +181,7 @@ func (h *Handler) findOrCreateUser(ctx context.Context, email string) (user db.U
 		return user, false, nil
 	}
 
-	name := email
-	if at := strings.Index(email, "@"); at > 0 {
-		name = email[:at]
-	}
-	created, err := h.Queries.CreateUser(ctx, db.CreateUserParams{
-		Name:  name,
-		Email: email,
-	})
+	created, err := h.createUserWithIdentity(ctx, email, emailLocalPart(email), pgtype.Text{})
 	if err != nil {
 		return db.User{}, false, err
 	}
@@ -437,6 +432,7 @@ func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 type UpdateMeRequest struct {
 	Name               *string `json:"name"`
+	DisplayName        *string `json:"display_name"`
 	AvatarURL          *string `json:"avatar_url"`
 	Language           *string `json:"language"`
 	ProfileDescription *string `json:"profile_description"`
@@ -564,14 +560,14 @@ func (h *Handler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 		obsmetrics.RecordEvent(h.Analytics, h.Metrics, evt)
 	}
 
-	// Update name and avatar from Google profile if the user was just created
-	// (default name is email prefix) or has no avatar yet.
+	// Update display name and avatar from Google profile if the user was just
+	// created (default display name is email prefix) or has no avatar yet.
 	needsUpdate := false
-	newName := user.Name
+	newDisplayName := pgtype.Text{}
 	newAvatar := user.AvatarUrl
 
-	if gUser.Name != "" && user.Name == strings.Split(email, "@")[0] {
-		newName = gUser.Name
+	if gUser.Name != "" && userDisplayName(user) == emailLocalPart(email) {
+		newDisplayName = pgtype.Text{String: gUser.Name, Valid: true}
 		needsUpdate = true
 	}
 	if gUser.Picture != "" && !user.AvatarUrl.Valid {
@@ -581,9 +577,9 @@ func (h *Handler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 
 	if needsUpdate {
 		updated, err := h.Queries.UpdateUser(r.Context(), db.UpdateUserParams{
-			ID:        user.ID,
-			Name:      newName,
-			AvatarUrl: newAvatar,
+			ID:          user.ID,
+			DisplayName: newDisplayName,
+			AvatarUrl:   newAvatar,
 		})
 		if err == nil {
 			user = updated
@@ -662,18 +658,27 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := currentUser.Name
+	displayName := pgtype.Text{}
 	if req.Name != nil {
-		name = strings.TrimSpace(*req.Name)
-		if name == "" {
+		value := strings.TrimSpace(*req.Name)
+		if value == "" {
 			writeError(w, http.StatusBadRequest, "name is required")
 			return
 		}
+		displayName = pgtype.Text{String: value, Valid: true}
+	}
+	if req.DisplayName != nil {
+		value := strings.TrimSpace(*req.DisplayName)
+		if value == "" {
+			writeError(w, http.StatusBadRequest, "display_name is required")
+			return
+		}
+		displayName = pgtype.Text{String: value, Valid: true}
 	}
 
 	params := db.UpdateUserParams{
-		ID:   currentUser.ID,
-		Name: name,
+		ID:          currentUser.ID,
+		DisplayName: displayName,
 	}
 	if req.AvatarURL != nil {
 		params.AvatarUrl = pgtype.Text{String: strings.TrimSpace(*req.AvatarURL), Valid: true}

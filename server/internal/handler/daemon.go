@@ -1133,7 +1133,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.Agent = &TaskAgentData{
 			ID:            uuidToString(agent.ID),
-			Name:          agent.Name,
+			Name:          agentDisplayName(agent),
 			Instructions:  agent.Instructions,
 			Skills:        skills,
 			CustomEnv:     customEnv,
@@ -1151,7 +1151,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	// can still run without the user-context section.
 	if runtime.OwnerID.Valid {
 		if owner, err := h.Queries.GetUser(r.Context(), runtime.OwnerID); err == nil {
-			resp.RequestingUserName = owner.Name
+			resp.RequestingUserName = userDisplayName(owner)
 			resp.RequestingUserProfileDescription = owner.ProfileDescription
 		} else {
 			slog.Debug("failed to load runtime owner for brief injection",
@@ -1174,7 +1174,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		resp.InitiatorType = "member"
 		resp.InitiatorID = uuidToString(task.InitiatorUserID)
 		if u, err := h.Queries.GetUser(r.Context(), task.InitiatorUserID); err == nil {
-			resp.InitiatorName = u.Name
+			resp.InitiatorName = userDisplayName(u)
 			resp.InitiatorEmail = u.Email
 		}
 	}
@@ -1278,8 +1278,8 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				case "agent":
 					if comment.AuthorID.Valid {
 						if a, err := h.Queries.GetAgent(r.Context(), comment.AuthorID); err == nil {
-							resp.TriggerAuthorName = a.Name
-							resp.InitiatorName = a.Name
+							resp.TriggerAuthorName = agentDisplayName(a)
+							resp.InitiatorName = agentDisplayName(a)
 						}
 					}
 				case "member":
@@ -1287,8 +1287,8 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					// (see handler.resolveActor) — look up the user's display name.
 					if comment.AuthorID.Valid {
 						if u, err := h.Queries.GetUser(r.Context(), comment.AuthorID); err == nil {
-							resp.TriggerAuthorName = u.Name
-							resp.InitiatorName = u.Name
+							resp.TriggerAuthorName = userDisplayName(u)
+							resp.InitiatorName = userDisplayName(u)
 							resp.InitiatorEmail = u.Email
 						}
 					}

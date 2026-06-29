@@ -114,7 +114,7 @@ func (h *Handler) GetAgentEnv(w http.ResponseWriter, r *http.Request) {
 	revealedKeys := sortedKeys(customEnv)
 	details, _ := json.Marshal(map[string]any{
 		"agent_id":      uuidToString(agent.ID),
-		"agent_name":    agent.Name,
+		"agent_name":    agentDisplayName(agent),
 		"revealed_keys": revealedKeys,
 		"key_count":     len(revealedKeys),
 	})
@@ -198,7 +198,7 @@ func (h *Handler) UpdateAgentEnv(w http.ResponseWriter, r *http.Request) {
 
 	auditDetails := map[string]any{
 		"agent_id":       uuidToString(agent.ID),
-		"agent_name":     agent.Name,
+		"agent_name":     agentDisplayName(agent),
 		"added_keys":     audit.added,
 		"removed_keys":   audit.removed,
 		"changed_keys":   audit.changed,

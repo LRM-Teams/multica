@@ -185,7 +185,10 @@ export interface Agent {
   id: string;
   workspace_id: string;
   runtime_id: string;
+  /** Stable unique handle used for routing and bare @handle fallback. */
   name: string;
+  /** Human-facing label. Falls back to `name` for older server payloads. */
+  display_name: string;
   description: string;
   instructions: string;
   avatar_url: string | null;
@@ -269,7 +272,10 @@ export interface AgentSkillSummary {
 }
 
 export interface CreateAgentRequest {
-  name: string;
+  /** Legacy display input; the server derives a stable handle from it. */
+  name?: string;
+  /** Preferred human-facing label for new clients. */
+  display_name?: string;
   description?: string;
   instructions?: string;
   avatar_url?: string;
@@ -324,7 +330,10 @@ export interface AgentTemplateSkillRef {
 
 export interface CreateAgentFromTemplateRequest {
   template_slug: string;
-  name: string;
+  /** Legacy display input; the server derives a stable handle from it. */
+  name?: string;
+  /** Preferred human-facing label for new clients. */
+  display_name?: string;
   runtime_id: string;
   model?: string;
   visibility?: AgentVisibility;
@@ -358,7 +367,10 @@ export interface CreateAgentFromTemplateFailure {
 }
 
 export interface UpdateAgentRequest {
+  /** Legacy rename input; updates display_name, not the stable handle. */
   name?: string;
+  /** Preferred human-facing label for new clients. */
+  display_name?: string;
   description?: string;
   instructions?: string;
   avatar_url?: string;

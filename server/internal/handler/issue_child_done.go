@@ -172,7 +172,7 @@ func (h *Handler) resolveAssigneeMentionLabel(ctx context.Context, workspaceID p
 		if err != nil {
 			return "", false
 		}
-		return sanitizeMentionLabel(agent.Name), true
+		return sanitizeMentionLabel(agentDisplayName(agent)), true
 	case "squad":
 		squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
 			ID:          assigneeID,

@@ -6,32 +6,13 @@
   "sidebar": {
     "heading": "メッセージ",
     "search": "会話を検索...",
-    "groups": "チャンネル",
+    "groups": "グループ",
     "name_placeholder": "チャンネル名",
     "lark_placeholder": "任意の Feishu chat_id (oc_...)",
     "create_aria": "チャンネルを作成",
     "empty": "まだチャンネルがありません。",
     "menu_aria": "チャンネル操作",
-    "delete": "グループを削除",
-    "mark_unread": "未読にする",
-    "pin": "ピン留め",
-    "unpin": "ピン留め解除",
-    "archive": "アーカイブ",
-    "mute": "ミュート",
-    "unmute": "ミュート解除",
-    "archived_section": "アーカイブ済み",
-    "archived_restore": "アーカイブ解除",
-    "archive_permission": "作成者、オーナー、または管理者のみアーカイブできます",
-    "restore_permission": "作成者、オーナー、または管理者のみアーカイブ解除できます"
-  },
-  "archive_dialog": {
-    "title": "このチャンネルをアーカイブしますか？",
-    "description": "「{{name}}」はサイドバーから非表示になります。すべての履歴は保持され、いつでも復元できます。",
-    "cancel": "キャンセル",
-    "confirm": "アーカイブ",
-    "error": "チャンネルのアーカイブに失敗しました",
-    "restore_error": "アーカイブ解除に失敗しました",
-    "readonly_notice": "このチャンネルはアーカイブされています"
+    "delete": "グループを削除"
   },
   "delete_dialog": {
     "title": "このグループを削除しますか？",
@@ -147,6 +128,16 @@
     "close_chat": "チャットを閉じる",
     "action_failed": "操作に失敗しました。もう一度お試しください",
     "composer_placeholder": "{{name}} にメッセージ…"
+  },
+  "conv_search": {
+    "placeholder": "{{name}} を検索…",
+    "result_count": "{{current}} / {{total}}",
+    "no_results": "一致なし",
+    "prev_aria": "前の結果",
+    "next_aria": "次の結果",
+    "close_aria": "検索を閉じる",
+    "search_aria": "会話内を検索",
+    "error": "検索に失敗しました"
   },
   "quote": {
     "reply": "返信",

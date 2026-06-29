@@ -1965,6 +1965,15 @@ export class ApiClient {
     });
   }
 
+  async searchChannelMessages(
+    channelId: string,
+    q: string,
+    limit = 50,
+  ): Promise<import("../types").ChannelMessageSearchResponse> {
+    const params = new URLSearchParams({ q, limit: String(limit) });
+    return this.fetch(`/api/channels/${channelId}/messages/search?${params}`);
+  }
+
   async cancelTaskById(taskId: string): Promise<CancelTaskResponse> {
     const raw = await this.fetch<unknown>(`/api/tasks/${taskId}/cancel`, { method: "POST" });
     return parseWithFallback(raw, CancelTaskResponseSchema, EMPTY_CANCEL_TASK_RESPONSE, {

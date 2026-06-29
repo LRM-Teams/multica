@@ -17,6 +17,8 @@
     "pin": "고정",
     "unpin": "고정 해제",
     "archive": "보관",
+    "mute": "음소거",
+    "unmute": "음소거 해제",
     "archived_section": "보관됨",
     "archived_restore": "보관 해제",
     "archive_permission": "채널 생성자, 소유자 또는 관리자만 보관할 수 있습니다",
@@ -140,6 +142,8 @@
     "mark_unread": "읽지 않음으로 표시",
     "pin": "고정",
     "unpin": "고정 해제",
+    "mute": "음소거",
+    "unmute": "음소거 해제",
     "close_chat": "대화 닫기",
     "action_failed": "작업에 실패했습니다. 다시 시도해 주세요",
     "composer_placeholder": "{{name}}에게 메시지…"

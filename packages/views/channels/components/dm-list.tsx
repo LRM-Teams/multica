@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2, Mail, Pin, PinOff, Plus, Search, X } from "lucide-react";
+import { Bell, BellOff, ChevronDown, ChevronRight, Loader2, Mail, Pin, PinOff, Plus, Search, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -9,6 +9,7 @@ import {
   useSetDMPinned,
   useMarkDMUnread,
   useCloseDM,
+  useMuteDM,
 } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
@@ -73,6 +74,7 @@ export function DmList({
   const setPinned = useSetDMPinned();
   const markUnread = useMarkDMUnread();
   const closeDM = useCloseDM();
+  const muteDM = useMuteDM();
 
   const onError = () => toast.error(t(($) => $.dm.action_failed));
   const handleTogglePin = (dm: DMItem) =>
@@ -81,9 +83,11 @@ export function DmList({
     markUnread.mutate({ source: dm.source, id: dm.id }, { onError });
   const handleClose = (dm: DMItem) =>
     closeDM.mutate({ source: dm.source, id: dm.id }, { onError });
+  const handleToggleMute = (dm: DMItem) =>
+    muteDM.mutate({ source: dm.source, id: dm.id, muted: !dm.muted_at }, { onError });
 
   const aggregateUnread = useMemo(
-    () => dms.reduce((sum, dm) => sum + (dm.unread ?? 0), 0),
+    () => dms.reduce((sum, dm) => sum + (dm.real_unread ?? dm.unread ?? 0), 0),
     [dms],
   );
 
@@ -156,6 +160,7 @@ export function DmList({
               onSelect={() => onSelect(dm)}
               onTogglePin={() => handleTogglePin(dm)}
               onMarkUnread={() => handleMarkUnread(dm)}
+              onToggleMute={() => handleToggleMute(dm)}
               onClose={() => handleClose(dm)}
             />
           ))
@@ -317,6 +322,7 @@ function DmRow({
   onSelect,
   onTogglePin,
   onMarkUnread,
+  onToggleMute,
   onClose,
 }: {
   dm: DMItem;
@@ -328,6 +334,8 @@ function DmRow({
   onTogglePin: () => void;
   /** Mark the conversation manually unread. */
   onMarkUnread: () => void;
+  /** Mute / unmute (toggles based on current muted state). */
+  onToggleMute: () => void;
   /** Close Chat — soft-hide the conversation (recoverable). */
   onClose: () => void;
 }) {
@@ -340,7 +348,8 @@ function DmRow({
     !!last &&
     !!currentUserName &&
     last.content.toLowerCase().includes(`@${currentUserName.toLowerCase()}`);
-  const unread = dm.unread ?? 0;
+  const realUnread = dm.real_unread ?? dm.unread ?? 0;
+  const isManualDot = !!dm.manually_unread && realUnread === 0;
   const pinned = !!dm.pinned_at;
   // peer.type "user" maps to the member-style avatar; agents get the presence
   // status dot. Both resolve name/avatar from the workspace queries.
@@ -392,11 +401,13 @@ function DmRow({
             >
               {preview}
             </span>
-            {unread > 0 && (
+            {realUnread > 0 ? (
               <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
-                {unread > 99 ? "99+" : unread}
+                {realUnread > 99 ? "99+" : realUnread}
               </span>
-            )}
+            ) : isManualDot ? (
+              <span className="size-2 rounded-full bg-primary" />
+            ) : null}
           </div>
         </div>
       </ContextMenuTrigger>
@@ -408,6 +419,10 @@ function DmRow({
         <ContextMenuItem onClick={onTogglePin}>
           {pinned ? <PinOff /> : <Pin />}
           {pinned ? t(($) => $.dm.unpin) : t(($) => $.dm.pin)}
+        </ContextMenuItem>
+        <ContextMenuItem onClick={onToggleMute}>
+          {dm.muted_at ? <Bell /> : <BellOff />}
+          {dm.muted_at ? t(($) => $.dm.unmute) : t(($) => $.dm.mute)}
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onClick={onClose}>

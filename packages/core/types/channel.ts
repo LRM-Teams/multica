@@ -25,8 +25,13 @@ export interface Channel {
   archived_by?: string | null;
   /** List-only enrichments (absent on create/update/get responses). */
   unread_count?: number;
+  /** True unread count excluding the manually-unread boost. Added by BE task #24.
+   *  Falls back to unread_count when absent so old API responses still work. */
+  real_unread_count?: number;
   manually_unread?: boolean;
   pinned_at?: string | null;
+  muted_at?: string | null;
+  muted?: boolean;
   last_message?: ChannelLastMessage | null;
   members?: ChannelMemberBrief[];
 }
@@ -48,6 +53,8 @@ export interface ChannelMessage {
   content: string;
   source: "multica" | "lark";
   external_message_id: string | null;
+  reply_to_message_id?: string | null;
+  reply_to?: ChannelMessageReply | null;
   /**
    * Attachments linked to this message via the attachment table's
    * channel_message_id FK. Populated by ListChannelMessages. The bubble
@@ -56,10 +63,31 @@ export interface ChannelMessage {
    */
   attachments?: import("./attachment").Attachment[];
   created_at: string;
-  /** BE task #23: id of the quoted message, null when not a reply. */
-  reply_to_message_id?: string | null;
-  /** BE task #23: author + content preview of the quoted message. Absent when not a reply or the original was deleted. */
-  reply_to?: { author_name: string; content: string } | null;
+}
+
+export interface ChannelMessageReply {
+  id: string;
+  author_type: "user" | "agent" | "lark" | "system";
+  author_id: string | null;
+  author_name: string;
+  content: string;
+  created_at: string;
+}
+
+export interface ChannelMessageSearchResult {
+  message_id: string;
+  channel_id: string;
+  author_type: "user" | "agent" | "lark" | "system";
+  author_id: string | null;
+  author_name: string;
+  content: string;
+  created_at: string;
+}
+
+export interface ChannelMessageSearchResponse {
+  query: string;
+  total: number;
+  results: ChannelMessageSearchResult[];
 }
 
 export interface ChannelAuthorStat {

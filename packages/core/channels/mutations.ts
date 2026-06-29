@@ -51,12 +51,33 @@ export function useSetChannelPin() {
   });
 }
 
+export function useMuteChannel() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ channelId, muted }: { channelId: string; muted: boolean }) =>
+      muted ? api.muteChannel(channelId) : api.unmuteChannel(channelId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+  });
+}
+
+export const useSetChannelMuted = useMuteChannel;
+
 export function useSendChannelMessage() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: ({ channelId, content, attachmentIds, replyToMessageId }: { channelId: string; content: string; attachmentIds?: string[]; replyToMessageId?: string }) =>
-      api.sendChannelMessage(channelId, content, attachmentIds, replyToMessageId),
+    mutationFn: ({
+      channelId,
+      content,
+      attachmentIds,
+      replyToMessageId,
+    }: {
+      channelId: string;
+      content: string;
+      attachmentIds?: string[];
+      replyToMessageId?: string | null;
+    }) => api.sendChannelMessage(channelId, content, attachmentIds, replyToMessageId),
     onSuccess: (msg) => {
       qc.invalidateQueries({ queryKey: channelKeys.messages(msg.channel_id) });
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
@@ -75,7 +96,7 @@ export function useMarkChannelRead() {
       qc.setQueryData<DMItem[]>(dmKeys.list(wsId), (old) =>
         old?.map((dm) =>
           dm.id === channelId && dm.source === "dm_channel"
-            ? { ...dm, unread: 0, manually_unread: false }
+            ? { ...dm, unread: 0, real_unread: 0, manually_unread: false }
             : dm,
         ),
       );

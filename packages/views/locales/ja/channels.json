@@ -17,6 +17,8 @@
     "pin": "ピン留め",
     "unpin": "ピン留め解除",
     "archive": "アーカイブ",
+    "mute": "ミュート",
+    "unmute": "ミュート解除",
     "archived_section": "アーカイブ済み",
     "archived_restore": "アーカイブ解除",
     "archive_permission": "作成者、オーナー、または管理者のみアーカイブできます",
@@ -140,6 +142,8 @@
     "mark_unread": "未読にする",
     "pin": "ピン留め",
     "unpin": "ピン留めを解除",
+    "mute": "ミュート",
+    "unmute": "ミュート解除",
     "close_chat": "チャットを閉じる",
     "action_failed": "操作に失敗しました。もう一度お試しください",
     "composer_placeholder": "{{name}} にメッセージ…"

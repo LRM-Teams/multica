@@ -17,6 +17,19 @@ import { agentColor } from "../../common/agent-color";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n";
 
+function hasTextSelectionWithin(element: HTMLElement): boolean {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+    return false;
+  }
+
+  const { anchorNode, focusNode } = selection;
+  return (
+    (anchorNode != null && element.contains(anchorNode)) ||
+    (focusNode != null && element.contains(focusNode))
+  );
+}
+
 function formatTime(value: string): string {
   try {
     return new Intl.DateTimeFormat(undefined, {
@@ -98,6 +111,7 @@ export function ChannelMessageBubble({
   return (
     <ContextMenu>
       <ContextMenuTrigger
+        className="select-text"
         render={
           <div
             id={`message-${message.id}`}
@@ -105,7 +119,7 @@ export function ChannelMessageBubble({
             data-own={isOwn}
             tabIndex={0}
             className={cn(
-              "group relative flex gap-2.5 rounded-lg px-2 py-2 outline-none transition-colors duration-1000",
+              "group relative flex select-text gap-2.5 rounded-lg px-2 py-2 outline-none transition-colors duration-1000",
               isOwn ? "flex-row-reverse" : "flex-row",
               highlighted && "bg-primary/10 ring-1 ring-primary/30 duration-0",
             )}
@@ -140,7 +154,7 @@ export function ChannelMessageBubble({
           isAgent={isAgent}
           isSystem={message.author_type === "system"}
           size={28}
-          className="mt-0.5"
+          className="mt-0.5 select-none"
           tint={tint}
         />
         <div
@@ -151,7 +165,7 @@ export function ChannelMessageBubble({
         >
           <div
             className={cn(
-              "flex items-center gap-2 text-sm",
+              "flex select-none items-center gap-2 text-sm",
               isOwn && "flex-row-reverse",
             )}
           >
@@ -172,11 +186,23 @@ export function ChannelMessageBubble({
           </div>
           <div
             className={cn(
-              "w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg border px-3 py-2 text-sm leading-6",
+              "w-fit min-w-0 max-w-full select-text overflow-hidden break-words rounded-lg border px-3 py-2 text-sm leading-6",
               isOwn
                 ? "border-border/60 bg-card"
                 : "border-primary/20 bg-primary/[0.06]",
             )}
+            data-testid="message-body"
+            onContextMenuCapture={(e) => {
+              if (hasTextSelectionWithin(e.currentTarget)) {
+                e.stopPropagation();
+              }
+            }}
+            onTouchStartCapture={(e) => {
+              if (e.target !== e.currentTarget) {
+                e.stopPropagation();
+              }
+            }}
+            style={{ WebkitTouchCallout: "default" }}
           >
             {/* Inline quote block: rendered when reply_to is present (BE task #23) */}
             {message.reply_to && (

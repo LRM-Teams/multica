@@ -200,3 +200,17 @@ func TestBuildOrReuse_InspectTransportError(t *testing.T) {
 		t.Fatalf("expected error to mention 'cache inspect transport error', got: %v", err)
 	}
 }
+
+func TestSweLegoDockerfileTemplate(t *testing.T) {
+	tmpl, err := SweLegoDockerfile("swe-lego/python:3.11")
+	if err != nil {
+		t.Fatalf("render template: %v", err)
+	}
+	assertContains(t, tmpl, "FROM swe-lego/python:3.11")
+	assertContains(t, tmpl, "COPY repo/ /workspace/repo")
+	assertContains(t, tmpl, "WORKDIR /workspace/repo")
+	assertContains(t, tmpl, "pip install -e . 2>/dev/null || true")
+	assertContains(t, tmpl, "COPY multica-daemon /usr/local/bin/multica-daemon")
+	assertContains(t, tmpl, "ENV MULTICA_DAEMON_AUTO_REGISTER=1")
+	assertContains(t, tmpl, `CMD ["multica-daemon", "run"]`)
+}

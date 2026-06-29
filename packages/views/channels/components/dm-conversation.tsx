@@ -50,6 +50,7 @@ import {
   TypingIndicator,
   type TypingActor,
 } from "./channels-page";
+import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 
 /**
  * DM detail pane. A DM routes entirely by `source`:
@@ -117,7 +118,12 @@ function DmHeader({
           profileLink={false}
         />
         <div className="min-w-0">
-          <div className="truncate font-semibold">{dm.peer.name}</div>
+          <div className="flex min-w-0 items-center gap-1.5 font-semibold">
+            <span className="truncate">{dm.peer.name}</span>
+            {isConversationMuted(dm) && (
+              <MutedIndicator label={t(($) => $.dm.muted_label)} />
+            )}
+          </div>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1 text-muted-foreground">

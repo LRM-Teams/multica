@@ -141,6 +141,12 @@ import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { DmList } from "./dm-list";
 import { DmConversation } from "./dm-conversation";
 import { formatChannelMessagePreview, type MentionPreviewResolver } from "./message-preview";
+import {
+  ConversationUnreadAffordance,
+  isConversationMuted,
+  MutedIndicator,
+  sumUnmutedUnreadCounts,
+} from "./conversation-muted";
 
 export interface TypingActor {
   key: string;
@@ -631,9 +637,10 @@ export function ChannelsPage() {
   );
   const aggregateChannelUnread = useMemo(
     () =>
-      channels.reduce(
-        (sum, c) => sum + (c.real_unread_count ?? c.unread_count ?? 0),
-        0,
+      sumUnmutedUnreadCounts(
+        channels,
+        (c) => c.real_unread_count ?? c.unread_count ?? 0,
+        (c) => isConversationMuted(c),
       ),
     [channels],
   );
@@ -925,7 +932,7 @@ export function ChannelsPage() {
 
   const handleToggleChannelMute = (channel: Channel) => {
     muteChannel.mutate(
-      { channelId: channel.id, muted: !channel.muted_at },
+      { channelId: channel.id, muted: !isConversationMuted(channel) },
       { onError: () => toast.error(t(($) => $.dm.action_failed)) },
     );
   };
@@ -1339,6 +1346,7 @@ export function ChannelsPage() {
                   filteredChannels.map((channel) => {
                     const realUnread = channel.real_unread_count ?? channel.unread_count ?? 0;
                     const isManualDot = !!channel.manually_unread && realUnread === 0;
+                    const isMuted = isConversationMuted(channel);
                     const last = channel.last_message;
                     const preview = last
                       ? formatChannelMessagePreview(last.author_name, last.content, resolveMentionPreview)
@@ -1356,8 +1364,8 @@ export function ChannelsPage() {
                           {pinned ? t(($) => $.sidebar.unpin) : t(($) => $.sidebar.pin)}
                         </ContextMenuItem>
                         <ContextMenuItem onClick={() => handleToggleChannelMute(channel)}>
-                          {channel.muted_at ? <Bell className="size-4" /> : <BellOff className="size-4" />}
-                          {channel.muted_at ? t(($) => $.sidebar.unmute) : t(($) => $.sidebar.mute)}
+                          {isMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+                          {isMuted ? t(($) => $.sidebar.unmute) : t(($) => $.sidebar.mute)}
                         </ContextMenuItem>
                         <ContextMenuSeparator />
                         {archiveAllowed ? (
@@ -1409,6 +1417,9 @@ export function ChannelsPage() {
                                     <Pin className="size-3 shrink-0 -rotate-45 fill-muted-foreground/70 text-muted-foreground/70" />
                                   )}
                                   <span className="truncate">{channel.name}</span>
+                                  {isMuted && (
+                                    <MutedIndicator label={t(($) => $.sidebar.muted_label)} />
+                                  )}
                                   {channel.lark_chat_id && (
                                     <Smartphone className="size-3 shrink-0 text-emerald-600" />
                                   )}
@@ -1421,13 +1432,11 @@ export function ChannelsPage() {
                               </div>
                               <div className="mt-0.5 flex items-center justify-between gap-2">
                                 <span className="truncate text-xs text-muted-foreground">{preview}</span>
-                                {realUnread > 0 ? (
-                                  <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
-                                    {realUnread > 99 ? "99+" : realUnread}
-                                  </span>
-                                ) : isManualDot ? (
-                                  <span className="size-2 rounded-full bg-primary" />
-                                ) : null}
+                                <ConversationUnreadAffordance
+                                  realUnread={realUnread}
+                                  isManualDot={isManualDot}
+                                  isMuted={isMuted}
+                                />
                               </div>
                             </div>
                           </button>
@@ -1451,6 +1460,10 @@ export function ChannelsPage() {
                               <DropdownMenuItem onClick={() => handleToggleChannelPin(channel)}>
                                 {pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
                                 {pinned ? t(($) => $.sidebar.unpin) : t(($) => $.sidebar.pin)}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleToggleChannelMute(channel)}>
+                                {isMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+                                {isMuted ? t(($) => $.sidebar.unmute) : t(($) => $.sidebar.mute)}
                               </DropdownMenuItem>
                               <DropdownMenuSeparator />
                               {archiveAllowed ? (
@@ -1636,6 +1649,9 @@ export function ChannelsPage() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 font-semibold">
                       <span className="truncate">{active.name}</span>
+                      {isConversationMuted(active) && (
+                        <MutedIndicator label={t(($) => $.sidebar.muted_label)} />
+                      )}
                       {isActiveArchived && (
                         <Badge variant="secondary" className="shrink-0 uppercase tracking-wide">
                           {t(($) => $.sidebar.archived_section)}

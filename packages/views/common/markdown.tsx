@@ -3,6 +3,7 @@
 import * as React from "react";
 import {
   Markdown as MarkdownBase,
+  highlightSearchText,
   type MarkdownProps as MarkdownBaseProps,
   type RenderMode,
 } from "@multica/ui/markdown";
@@ -58,10 +59,12 @@ function ActorMention({
   type,
   id,
   label,
+  highlightQuery,
 }: {
   type: string;
   id: string;
   label?: string;
+  highlightQuery?: string;
 }): React.JSX.Element {
   const { getActorName } = useActorName();
   // The link text is usually "@Name"; strip the leading @ so we don't double
@@ -79,27 +82,37 @@ function ActorMention({
         padding: "0.0625rem 0.3125rem",
       }}
     >
-      @{name}
+      {highlightSearchText(`@${name}`, highlightQuery)}
     </span>
   );
 }
 
-function defaultRenderMention({
-  type,
-  id,
-  label,
-}: {
-  type: string;
-  id: string;
-  label?: string;
-}): React.ReactNode {
+function defaultRenderMention(
+  {
+    type,
+    id,
+    label,
+  }: {
+    type: string;
+    id: string;
+    label?: string;
+  },
+  highlightQuery?: string,
+): React.ReactNode {
   if (type === "issue") {
     return <IssueMentionCard issueId={id} />;
   }
   if (type === "project") {
     return <ProjectMentionCard projectId={id} />;
   }
-  return <ActorMention type={type} id={id} label={label} />;
+  return (
+    <ActorMention
+      type={type}
+      id={id}
+      label={label}
+      highlightQuery={highlightQuery}
+    />
+  );
 }
 
 // A sticker token (:sticker:<id>:) is preprocessed into an image whose src is
@@ -187,15 +200,21 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
   // the current workspace's prefix so it can't false-positive on tokens like
   // "UTF-8". Empty/absent prefix disables it.
   const issueRefPrefix = useCurrentWorkspace()?.issue_prefix || undefined;
-  const { attachments, ...rest } = props;
+  const { attachments, highlightQuery, ...rest } = props;
+  const renderMention = React.useCallback(
+    (mention: { type: string; id: string; label?: string }) =>
+      defaultRenderMention(mention, highlightQuery),
+    [highlightQuery],
+  );
   return (
     <AttachmentDownloadProvider attachments={attachments}>
       <MarkdownBase
-        renderMention={defaultRenderMention}
+        renderMention={renderMention}
         renderImage={renderImage}
         renderFileCard={renderFileCard}
         cdnDomain={cdnDomain}
         issueRefPrefix={issueRefPrefix}
+        highlightQuery={highlightQuery}
         {...rest}
       />
     </AttachmentDownloadProvider>

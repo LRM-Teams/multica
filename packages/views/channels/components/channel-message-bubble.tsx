@@ -48,6 +48,7 @@ export function ChannelMessageBubble({
   onQuote,
   onScrollTo,
   searchHighlighted = false,
+  searchQuery,
 }: {
   message: ChannelMessage;
   currentUserId: string | null;
@@ -59,8 +60,10 @@ export function ChannelMessageBubble({
   onQuote?: (message: ChannelMessage) => void;
   /** Called when the user clicks the inline quote block to jump to the original. */
   onScrollTo?: (messageId: string) => void;
-  /** Search hit: persistent light background while search is open. */
+  /** Search hit: marks matching visible text while search is open. */
   searchHighlighted?: boolean;
+  /** Trimmed conversation search phrase to mark inside this hit's visible text. */
+  searchQuery?: string;
 }) {
   const { t } = useT("channels");
   const { getActorAvatarUrl } = useActorName();
@@ -104,8 +107,7 @@ export function ChannelMessageBubble({
             className={cn(
               "group relative flex gap-2.5 rounded-lg px-2 py-2 outline-none transition-colors duration-1000",
               isOwn ? "flex-row-reverse" : "flex-row",
-              searchHighlighted && "bg-primary/20",
-              highlighted && "bg-primary/10 ring-2 ring-primary/40 duration-0",
+              highlighted && "bg-primary/10 ring-1 ring-primary/30 duration-0",
             )}
           />
         }
@@ -194,7 +196,12 @@ export function ChannelMessageBubble({
                 </p>
               </button>
             )}
-            <MemoizedMarkdown attachments={message.attachments}>{message.content}</MemoizedMarkdown>
+            <MemoizedMarkdown
+              attachments={message.attachments}
+              highlightQuery={searchHighlighted ? searchQuery : undefined}
+            >
+              {message.content}
+            </MemoizedMarkdown>
             <AttachmentList
               attachments={message.attachments}
               content={message.content}

@@ -505,6 +505,7 @@ export function ChannelsPage() {
         : undefined,
     [convSearchOpen, convSearchResults],
   );
+  const searchHighlightQuery = convSearchOpen ? convSearchQuery.trim() : "";
   const effectiveHighlightId = convSearchOpen
     ? (convSearchResults[convSearchIndex]?.message_id ?? null)
     : highlightMessageId;
@@ -1602,6 +1603,7 @@ export function ChannelsPage() {
                 ownName={currentUserName ?? undefined}
                 highlightMessageId={effectiveHighlightId}
                 searchHitIds={searchHitIds}
+                searchQuery={searchHighlightQuery}
                 emptyLabel={t(($) => $.thread.empty)}
                 onQuote={isActiveArchived ? undefined : setQuoteMessage}
                 onScrollToMessage={setHighlightMessageId}

@@ -41,6 +41,7 @@ export function ChannelMessageList({
   onQuote,
   onScrollToMessage,
   searchHitIds,
+  searchQuery,
 }: {
   messages: ChannelMessage[];
   currentUserId: string | null;
@@ -59,8 +60,10 @@ export function ChannelMessageList({
    * The parent updates `highlightMessageId` so the list scrolls + highlights.
    */
   onScrollToMessage?: (messageId: string) => void;
-  /** Search hit ids — all matching messages get bg-primary/20 while search is open. */
+  /** Search hit ids — all matching messages get inline keyword marks while search is open. */
   searchHitIds?: Set<string>;
+  /** Conversation search phrase used for inline keyword marks within search hits. */
+  searchQuery?: string;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
@@ -132,19 +135,23 @@ export function ChannelMessageList({
             Footer: () =>
               footer ? <div className="px-4 pb-4 pt-1">{footer}</div> : <div className="pb-4" />,
           }}
-          itemContent={(_, msg) => (
-            <div className="px-4 pt-1">
-              <ChannelMessageBubble
-                message={msg}
-                currentUserId={currentUserId}
-                ownName={ownName}
-                highlighted={msg.id === highlightMessageId}
-                onQuote={onQuote}
-                onScrollTo={onScrollToMessage}
-                searchHighlighted={searchHitIds?.has(msg.id) ?? false}
-              />
-            </div>
-          )}
+          itemContent={(_, msg) => {
+            const searchHighlighted = searchHitIds?.has(msg.id) ?? false;
+            return (
+              <div className="px-4 pt-1">
+                <ChannelMessageBubble
+                  message={msg}
+                  currentUserId={currentUserId}
+                  ownName={ownName}
+                  highlighted={msg.id === highlightMessageId}
+                  onQuote={onQuote}
+                  onScrollTo={onScrollToMessage}
+                  searchHighlighted={searchHighlighted}
+                  searchQuery={searchHighlighted ? searchQuery : undefined}
+                />
+              </div>
+            );
+          }}
         />
       )}
     </div>

@@ -203,6 +203,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         : undefined,
     [convSearchOpen, convSearchResults],
   );
+  const searchHighlightQuery = convSearchOpen ? convSearchQuery.trim() : "";
   const searchHighlightId = convSearchOpen
     ? (convSearchResults[convSearchIndex]?.message_id ?? null)
     : null;
@@ -463,6 +464,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         ownName={currentUserName ?? undefined}
         highlightMessageId={searchHighlightId}
         searchHitIds={searchHitIds}
+        searchQuery={searchHighlightQuery}
         emptyLabel={t(($) => $.dm.thread_empty)}
         footer={
           <>

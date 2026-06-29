@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -84,4 +85,86 @@ func mustParseRFC3339(t *testing.T, s string) time.Time {
 		t.Fatalf("invalid test date %q: %v", s, err)
 	}
 	return ts
+}
+
+type fakeNodeExec struct {
+	calls       []string
+	inspectOK   bool // if true, the image is already cached on the node
+	inspectErr  error
+	buildExitOK bool // if true, the build script exits 0
+}
+
+func (f *fakeNodeExec) Exec(ctx context.Context, nodeID string, cmd []string) (stdout string, exitCode int, err error) {
+	f.calls = append(f.calls, fmt.Sprintf("%s:%s", nodeID, strings.Join(cmd, " ")))
+	joined := strings.Join(cmd, " ")
+	switch {
+	case strings.Contains(joined, "docker image inspect"):
+		if f.inspectErr != nil {
+			return "", 1, f.inspectErr
+		}
+		if f.inspectOK {
+			return "", 0, nil
+		}
+		return "no such image", 1, nil
+	case strings.Contains(joined, "set -euo pipefail"):
+		if f.buildExitOK {
+			return "", 0, nil
+		}
+		return "build failed", 1, fmt.Errorf("build exit 1")
+	}
+	return "", 0, nil
+}
+
+func (f *fakeNodeExec) PickBuildNode(ctx context.Context) (string, error) {
+	return "node-1", nil
+}
+
+func TestBuildOrReuse_CacheHitShortCircuits(t *testing.T) {
+	ctx := context.Background()
+	fe := &fakeNodeExec{inspectOK: true}
+	ref, nodeID, err := BuildOrReuse(ctx, fe, "r", "c", "d", "b")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if nodeID != "node-1" {
+		t.Fatalf("nodeID = %q, want node-1", nodeID)
+	}
+	// Only the inspect call should have fired; no build script.
+	if len(fe.calls) != 1 || !strings.Contains(fe.calls[0], "docker image inspect") {
+		t.Fatalf("expected exactly one inspect call, got %v", fe.calls)
+	}
+	if ref == "" {
+		t.Fatal("expected non-empty image ref")
+	}
+}
+
+func TestBuildOrReuse_CacheMissRunsBuild(t *testing.T) {
+	ctx := context.Background()
+	fe := &fakeNodeExec{inspectOK: false, buildExitOK: true}
+	ref, nodeID, err := BuildOrReuse(ctx, fe, "r", "c", "2025-03-14T09:30:00Z", "b")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if nodeID != "node-1" {
+		t.Fatalf("nodeID = %q, want node-1", nodeID)
+	}
+	// Two calls: inspect (cache miss) + build script.
+	if len(fe.calls) != 2 {
+		t.Fatalf("expected 2 calls, got %v", fe.calls)
+	}
+	if !strings.Contains(fe.calls[1], "git filter-repo") {
+		t.Fatalf("build script not shipped: %v", fe.calls[1])
+	}
+	if ref == "" {
+		t.Fatal("expected non-empty image ref")
+	}
+}
+
+func TestBuildOrReuse_BuildFailureReturnsError(t *testing.T) {
+	ctx := context.Background()
+	fe := &fakeNodeExec{inspectOK: false, buildExitOK: false}
+	_, _, err := BuildOrReuse(ctx, fe, "r", "c", "2025-03-14T09:30:00Z", "b")
+	if err == nil {
+		t.Fatal("expected error on build failure")
+	}
 }

@@ -33,6 +33,7 @@ function makeAgent(over: Partial<Agent> & Pick<Agent, "id" | "name">): Agent {
     archived_at: null,
     archived_by: null,
     ...over,
+    display_name: over.display_name ?? over.name,
   } as Agent;
 }
 

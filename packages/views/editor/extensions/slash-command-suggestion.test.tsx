@@ -47,11 +47,11 @@ import {
 } from "./slash-command-suggestion";
 
 function agent(overrides: Partial<Agent>): Agent {
+  const name = overrides.name ?? "Agent";
   return {
     id: "agent-1",
     workspace_id: "ws-1",
     runtime_id: "runtime-1",
-    name: "Agent",
     description: "",
     instructions: "",
     avatar_url: null,
@@ -69,6 +69,8 @@ function agent(overrides: Partial<Agent>): Agent {
     archived_at: null,
     archived_by: null,
     ...overrides,
+    name,
+    display_name: overrides.display_name ?? name,
   };
 }
 

@@ -17,6 +17,8 @@
     "pin": "Pin",
     "unpin": "Unpin",
     "archive": "Archive",
+    "mute": "Mute",
+    "unmute": "Unmute",
     "archived_section": "Archived",
     "archived_restore": "Unarchive",
     "archive_permission": "Only the creator, owner, or admin can archive",
@@ -140,6 +142,8 @@
     "mark_unread": "Mark as unread",
     "pin": "Pin",
     "unpin": "Unpin",
+    "mute": "Mute",
+    "unmute": "Unmute",
     "close_chat": "Close chat",
     "action_failed": "Action failed, please try again",
     "composer_placeholder": "Message {{name}}…"

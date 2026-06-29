@@ -51,6 +51,16 @@ export function useSetChannelPin() {
   });
 }
 
+export function useMuteChannel() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ channelId, muted }: { channelId: string; muted: boolean }) =>
+      muted ? api.muteChannel(channelId) : api.unmuteChannel(channelId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+  });
+}
+
 export function useSendChannelMessage() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();

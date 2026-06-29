@@ -1833,6 +1833,22 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/unread`, { method: "POST" });
   }
 
+  async muteChannel(channelId: string): Promise<{ ok: boolean }> {
+    return this.fetch(`/api/channels/${channelId}/mute`, { method: "POST" });
+  }
+
+  async unmuteChannel(channelId: string): Promise<{ ok: boolean }> {
+    return this.fetch(`/api/channels/${channelId}/mute`, { method: "DELETE" });
+  }
+
+  async muteDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
+    return this.fetch(`${this.dmOpsPath(source, id)}/mute`, { method: "PUT" });
+  }
+
+  async unmuteDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
+    return this.fetch(`${this.dmOpsPath(source, id)}/mute`, { method: "DELETE" });
+  }
+
   async listChannelMembers(channelId: string): Promise<ChannelMember[]> {
     return this.fetch(`/api/channels/${channelId}/members`);
   }

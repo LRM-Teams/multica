@@ -17,6 +17,8 @@
     "pin": "置顶",
     "unpin": "取消置顶",
     "archive": "归档",
+    "mute": "静音",
+    "unmute": "取消静音",
     "archived_section": "已归档",
     "archived_restore": "取消归档",
     "archive_permission": "只有创建者、所有者或管理员可归档",
@@ -140,6 +142,8 @@
     "mark_unread": "标为未读",
     "pin": "置顶",
     "unpin": "取消置顶",
+    "mute": "静音",
+    "unmute": "取消静音",
     "close_chat": "关闭会话",
     "action_failed": "操作失败，请重试",
     "composer_placeholder": "发消息给 {{name}}…"

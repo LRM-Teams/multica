@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2, Mail, Pin, PinOff, Plus, Search, X } from "lucide-react";
+import { Bell, BellOff, ChevronDown, ChevronRight, Loader2, Mail, Pin, PinOff, Plus, Search, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -9,6 +9,7 @@ import {
   useSetDMPinned,
   useMarkDMUnread,
   useCloseDM,
+  useMuteDM,
 } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
@@ -73,6 +74,7 @@ export function DmList({
   const setPinned = useSetDMPinned();
   const markUnread = useMarkDMUnread();
   const closeDM = useCloseDM();
+  const muteDM = useMuteDM();
 
   const onError = () => toast.error(t(($) => $.dm.action_failed));
   const handleTogglePin = (dm: DMItem) =>
@@ -81,6 +83,8 @@ export function DmList({
     markUnread.mutate({ source: dm.source, id: dm.id }, { onError });
   const handleClose = (dm: DMItem) =>
     closeDM.mutate({ source: dm.source, id: dm.id }, { onError });
+  const handleToggleMute = (dm: DMItem) =>
+    muteDM.mutate({ source: dm.source, id: dm.id, muted: !dm.muted_at }, { onError });
 
   const aggregateUnread = useMemo(
     () => dms.reduce((sum, dm) => sum + (dm.real_unread ?? dm.unread ?? 0), 0),
@@ -317,6 +321,7 @@ function DmRow({
   onSelect,
   onTogglePin,
   onMarkUnread,
+  onToggleMute,
   onClose,
 }: {
   dm: DMItem;
@@ -328,6 +333,8 @@ function DmRow({
   onTogglePin: () => void;
   /** Mark the conversation manually unread. */
   onMarkUnread: () => void;
+  /** Mute / unmute (toggles based on current muted state). */
+  onToggleMute: () => void;
   /** Close Chat — soft-hide the conversation (recoverable). */
   onClose: () => void;
 }) {
@@ -411,6 +418,10 @@ function DmRow({
         <ContextMenuItem onClick={onTogglePin}>
           {pinned ? <PinOff /> : <Pin />}
           {pinned ? t(($) => $.dm.unpin) : t(($) => $.dm.pin)}
+        </ContextMenuItem>
+        <ContextMenuItem onClick={onToggleMute}>
+          {dm.muted_at ? <Bell /> : <BellOff />}
+          {dm.muted_at ? t(($) => $.dm.unmute) : t(($) => $.dm.mute)}
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onClick={onClose}>

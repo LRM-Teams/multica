@@ -43,34 +43,120 @@ func (d *Daemon) syncEvolutionDeliveriesOnce(ctx context.Context) {
 }
 
 func (d *Daemon) syncEvolutionDeliveriesForRuntime(ctx context.Context, rt Runtime) error {
-	agentIDs := d.piAgentIDsForWorkspace(rt.WorkspaceID)
+	localAgentIDs := d.piAgentIDsForWorkspace(rt.WorkspaceID)
+	targetAgentIDs, err := d.client.ListEvolutionDeliveryTargetAgents(ctx, rt.ID)
+	if err != nil {
+		d.logger.Warn("evolution delivery target agents fetch failed", "runtime_id", rt.ID, "workspace_id", rt.WorkspaceID, "error", err)
+		targetAgentIDs = nil
+	}
+	agentIDs := mergeAgentIDs(localAgentIDs, targetAgentIDs)
+	if len(localAgentIDs) == 0 && len(targetAgentIDs) > 0 {
+		base := filepath.Join(d.cfg.WorkspacesRoot, rt.WorkspaceID, ".pi", "agents")
+		d.logger.Warn(
+			"no local pi agent directories; syncing evolution deliveries for server target agents",
+			"runtime_id", rt.ID,
+			"workspace_id", rt.WorkspaceID,
+			"path", base,
+			"target_agents", targetAgentIDs,
+		)
+	}
 	for _, agentID := range agentIDs {
-		deliveries, err := d.client.ListEvolutionDeliveries(ctx, rt.ID, agentID)
+		processed := make(map[string]struct{})
+		pending, err := d.client.ListEvolutionDeliveries(ctx, rt.ID, agentID)
 		if err != nil {
 			return err
 		}
-		for _, delivery := range deliveries {
-			deliveredPath, err := d.writeEvolutionDelivery(rt, agentID, delivery)
-			if err != nil {
-				d.logger.Warn("evolution delivery write failed", "runtime_id", rt.ID, "agent_id", agentID, "delivery_id", delivery.ID, "error", err)
-				_ = d.client.FailEvolutionDelivery(ctx, rt.ID, agentID, delivery.ID, err.Error())
-				continue
-			}
-			if delivery.DeliveryType == "generated" && delivery.Status == "accepted" {
-				deliveredPath, err = d.enableGeneratedSkillDelivery(rt.WorkspaceID, agentID, delivery, deliveredPath)
-				if err != nil {
-					d.logger.Warn("generated skill enable failed", "runtime_id", rt.ID, "agent_id", agentID, "delivery_id", delivery.ID, "error", err)
-					_ = d.client.FailEvolutionDelivery(ctx, rt.ID, agentID, delivery.ID, err.Error())
-					continue
-				}
-			}
-			if err := d.client.MarkEvolutionDeliveryDelivered(ctx, rt.ID, agentID, delivery.ID, deliveredPath); err != nil {
+		for _, delivery := range pending {
+			processed[delivery.ID] = struct{}{}
+			if err := d.applyEvolutionDelivery(ctx, rt, agentID, delivery, false); err != nil {
 				return err
 			}
-			d.logger.Debug("evolution delivery written", "runtime_id", rt.ID, "agent_id", agentID, "delivery_id", delivery.ID, "path", deliveredPath)
+		}
+
+		repairCandidates, err := d.client.ListEvolutionDeliveriesForRepair(ctx, rt.ID, agentID)
+		if err != nil {
+			d.logger.Warn("evolution delivery repair list fetch failed", "runtime_id", rt.ID, "agent_id", agentID, "error", err)
+			continue
+		}
+		for _, delivery := range repairCandidates {
+			if _, done := processed[delivery.ID]; done {
+				continue
+			}
+			if !evolutionDeliveryPathMissing(delivery.DeliveredPath) {
+				continue
+			}
+			d.logger.Warn(
+				"evolution delivery path missing; re-writing",
+				"runtime_id", rt.ID,
+				"agent_id", agentID,
+				"delivery_id", delivery.ID,
+				"path", delivery.DeliveredPath,
+			)
+			if err := d.applyEvolutionDelivery(ctx, rt, agentID, delivery, true); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+func (d *Daemon) applyEvolutionDelivery(ctx context.Context, rt Runtime, agentID string, delivery EvolutionDelivery, repair bool) error {
+	deliveredPath, err := d.writeEvolutionDelivery(rt, agentID, delivery)
+	if err != nil {
+		d.logger.Warn("evolution delivery write failed", "runtime_id", rt.ID, "agent_id", agentID, "delivery_id", delivery.ID, "repair", repair, "error", err)
+		_ = d.client.FailEvolutionDelivery(ctx, rt.ID, agentID, delivery.ID, err.Error())
+		return nil
+	}
+	if delivery.DeliveryType == "generated" && delivery.Status == "accepted" {
+		deliveredPath, err = d.enableGeneratedSkillDelivery(rt.WorkspaceID, agentID, delivery, deliveredPath)
+		if err != nil {
+			d.logger.Warn("generated skill enable failed", "runtime_id", rt.ID, "agent_id", agentID, "delivery_id", delivery.ID, "repair", repair, "error", err)
+			_ = d.client.FailEvolutionDelivery(ctx, rt.ID, agentID, delivery.ID, err.Error())
+			return nil
+		}
+	}
+	if err := d.client.MarkEvolutionDeliveryDelivered(ctx, rt.ID, agentID, delivery.ID, deliveredPath); err != nil {
+		return err
+	}
+	if repair {
+		d.logger.Info("evolution delivery repaired", "runtime_id", rt.ID, "agent_id", agentID, "delivery_id", delivery.ID, "path", deliveredPath)
+	} else {
+		d.logger.Debug("evolution delivery written", "runtime_id", rt.ID, "agent_id", agentID, "delivery_id", delivery.ID, "path", deliveredPath)
+	}
+	return nil
+}
+
+func evolutionDeliveryPathMissing(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	if info.IsDir() {
+		_, err = os.Stat(filepath.Join(path, "SKILL.md"))
+		return os.IsNotExist(err)
+	}
+	return false
+}
+
+func mergeAgentIDs(local, remote []string) []string {
+	seen := make(map[string]struct{}, len(local)+len(remote))
+	out := make([]string, 0, len(local)+len(remote))
+	for _, id := range append(local, remote...) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func (d *Daemon) piAgentIDsForWorkspace(workspaceID string) []string {

@@ -356,6 +356,28 @@ func (c *Client) ListEvolutionDeliveries(ctx context.Context, runtimeID, agentID
 	return result.Deliveries, nil
 }
 
+type EvolutionDeliveryTargetAgentsResponse struct {
+	AgentIDs []string `json:"agent_ids"`
+}
+
+func (c *Client) ListEvolutionDeliveryTargetAgents(ctx context.Context, runtimeID string) ([]string, error) {
+	var result EvolutionDeliveryTargetAgentsResponse
+	path := fmt.Sprintf("/api/daemon/runtimes/%s/evolution/delivery-target-agents", runtimeID)
+	if err := c.getJSON(ctx, path, &result); err != nil {
+		return nil, err
+	}
+	return result.AgentIDs, nil
+}
+
+func (c *Client) ListEvolutionDeliveriesForRepair(ctx context.Context, runtimeID, agentID string) ([]EvolutionDelivery, error) {
+	var result EvolutionDeliveryListResponse
+	path := fmt.Sprintf("/api/daemon/runtimes/%s/evolution/deliveries/repair?agent_id=%s", runtimeID, agentID)
+	if err := c.getJSON(ctx, path, &result); err != nil {
+		return nil, err
+	}
+	return result.Deliveries, nil
+}
+
 func (c *Client) MarkEvolutionDeliveryDelivered(ctx context.Context, runtimeID, agentID, deliveryID, deliveredPath string) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/evolution/deliveries/%s/delivered?agent_id=%s", runtimeID, deliveryID, agentID), map[string]string{"delivered_path": deliveredPath}, nil)
 }

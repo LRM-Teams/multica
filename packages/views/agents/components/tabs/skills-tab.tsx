@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Check, FileText, Plus, Trash2, X } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { Agent, GeneratedSkillDelivery } from "@multica/core/types";
+import type { Agent, GeneratedSkillDelivery, GeneratedSkillDeliveryStatus } from "@multica/core/types";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
@@ -46,11 +46,32 @@ export function SkillsTab({
   const decideGeneratedSkill = useMutation({
     mutationFn: ({ deliveryId, decision }: { deliveryId: string; decision: "accepted" | "ignored" | "rejected" }) =>
       api.decideAgentGeneratedSkillDelivery(agent.id, deliveryId, { decision }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: generatedSkillDeliveryKeys.list(wsId, agent.id) });
+    onMutate: async ({ deliveryId, decision }) => {
+      const queryKey = generatedSkillDeliveryKeys.list(wsId, agent.id);
+      await qc.cancelQueries({ queryKey });
+      const previous = qc.getQueryData<{ deliveries: GeneratedSkillDelivery[] }>(queryKey);
+      qc.setQueryData<{ deliveries: GeneratedSkillDelivery[] }>(queryKey, (current) => {
+        if (!current) return current;
+        return {
+          deliveries: current.deliveries.map((delivery) =>
+            delivery.id === deliveryId ? { ...delivery, status: decision } : delivery,
+          ),
+        };
+      });
+      return { previous };
     },
-    onError: (e) => {
+    onSuccess: () => {
+      toast.success(t(($) => $.tab_body.skills.generated_decision_saved_toast));
+    },
+    onError: (e, _variables, context) => {
+      const queryKey = generatedSkillDeliveryKeys.list(wsId, agent.id);
+      if (context?.previous) {
+        qc.setQueryData(queryKey, context.previous);
+      }
       toast.error(e instanceof Error ? e.message : t(($) => $.tab_body.skills.generated_decision_failed_toast));
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: generatedSkillDeliveryKeys.list(wsId, agent.id) });
     },
   });
 
@@ -164,7 +185,10 @@ export function SkillsTab({
               <GeneratedSkillDeliveryRow
                 key={delivery.id}
                 delivery={delivery}
-                deciding={decideGeneratedSkill.isPending}
+                deciding={
+                  decideGeneratedSkill.isPending &&
+                  decideGeneratedSkill.variables?.deliveryId === delivery.id
+                }
                 onDecide={(decision) => decideGeneratedSkill.mutate({ deliveryId: delivery.id, decision })}
               />
             ))}
@@ -177,6 +201,43 @@ export function SkillsTab({
   );
 }
 
+function isGeneratedSkillDeliveryEnabled(delivery: GeneratedSkillDelivery): boolean {
+  return (
+    delivery.status === "accepted" &&
+    delivery.delivered_path?.includes("/skills/enabled/") === true
+  );
+}
+
+function canDecideGeneratedSkillDelivery(status: GeneratedSkillDeliveryStatus): boolean {
+  return status === "pending" || status === "delivered";
+}
+
+function generatedSkillDeliveryStatusLabel(
+  t: ReturnType<typeof useT<"agents">>["t"],
+  delivery: GeneratedSkillDelivery,
+): string {
+  if (isGeneratedSkillDeliveryEnabled(delivery)) {
+    return t(($) => $.tab_body.skills.generated_status_enabled);
+  }
+  return t(($) => $.tab_body.skills.generated_status[delivery.status]) ?? delivery.status;
+}
+
+export function getGeneratedSkillAwaitingHintKey(
+  delivery: GeneratedSkillDelivery,
+): "generated_accepted_waiting_local_hint" | "generated_accepted_pending_hint" | null {
+  if (delivery.status !== "accepted" || isGeneratedSkillDeliveryEnabled(delivery)) {
+    return null;
+  }
+  const path = delivery.delivered_path?.trim() ?? "";
+  if (!path) {
+    return "generated_accepted_waiting_local_hint";
+  }
+  if (!path.includes("/skills/enabled/")) {
+    return "generated_accepted_pending_hint";
+  }
+  return null;
+}
+
 function GeneratedSkillDeliveryRow({
   delivery,
   deciding,
@@ -187,11 +248,10 @@ function GeneratedSkillDeliveryRow({
   onDecide: (decision: "accepted" | "ignored" | "rejected") => void;
 }) {
   const { t } = useT("agents");
-  const enabled = delivery.status === "accepted" && delivery.delivered_path?.includes("/skills/enabled/");
-  const statusLabel = enabled
-    ? t(($) => $.tab_body.skills.generated_status_enabled)
-    : t(($) => $.tab_body.skills.generated_status[delivery.status]) ?? delivery.status;
-  const canDecide = delivery.status === "pending" || delivery.status === "delivered" || delivery.status === "accepted";
+  const enabled = isGeneratedSkillDeliveryEnabled(delivery);
+  const awaitingHintKey = getGeneratedSkillAwaitingHintKey(delivery);
+  const statusLabel = generatedSkillDeliveryStatusLabel(t, delivery);
+  const canDecide = canDecideGeneratedSkillDelivery(delivery.status);
 
   return (
     <li className="rounded-md border bg-background px-3 py-2">
@@ -207,6 +267,11 @@ function GeneratedSkillDeliveryRow({
               {delivery.canonical_summary}
             </p>
           )}
+          {awaitingHintKey && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t(($) => $.tab_body.skills[awaitingHintKey])}
+            </p>
+          )}
           {delivery.delivered_path && (
             <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground/80" title={delivery.delivered_path}>
               {delivery.delivered_path}
@@ -219,16 +284,16 @@ function GeneratedSkillDeliveryRow({
               variant="outline"
               size="sm"
               onClick={() => onDecide("accepted")}
-              disabled={deciding || enabled}
+              disabled={deciding}
             >
               <Check className="h-3 w-3" />
-              {enabled ? t(($) => $.tab_body.skills.generated_enabled_action) : t(($) => $.tab_body.skills.generated_accept_action)}
+              {t(($) => $.tab_body.skills.generated_accept_action)}
             </Button>
             <Button
               variant="ghost"
               size="icon-sm"
               onClick={() => onDecide("ignored")}
-              disabled={deciding || delivery.status === "ignored"}
+              disabled={deciding}
               title={t(($) => $.tab_body.skills.generated_ignore_action)}
             >
               <X className="h-3.5 w-3.5" />

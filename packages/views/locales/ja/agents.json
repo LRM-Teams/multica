@@ -335,9 +335,12 @@
       "generated_loading": "生成されたスキルを読み込み中…",
       "generated_empty": "生成されたスキルはまだありません。",
       "generated_decision_failed_toast": "生成スキルの判断を更新できませんでした",
+      "generated_decision_saved_toast": "生成スキルの判断を保存しました",
       "generated_accept_action": "承認",
       "generated_enabled_action": "有効",
       "generated_ignore_action": "無視",
+      "generated_accepted_pending_hint": "承認済みです。ローカル runtime がこの skill を有効化するのを待っています。",
+      "generated_accepted_waiting_local_hint": "承認済みです。ローカル runtime がこの skill を受け取るのを待っています。daemon が稼働中で、この agent が少なくとも 1 回 Pi task を実行済み（ローカル agent ディレクトリを自動作成）であることを確認してください。",
       "generated_status_enabled": "有効",
       "generated_status": {
         "pending": "保留中",

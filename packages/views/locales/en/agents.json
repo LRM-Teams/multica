@@ -351,9 +351,12 @@
       "generated_loading": "Loading generated skills…",
       "generated_empty": "No generated skills yet.",
       "generated_decision_failed_toast": "Failed to update generated skill decision",
+      "generated_decision_saved_toast": "Generated skill decision saved",
       "generated_accept_action": "Accept",
       "generated_enabled_action": "Enabled",
       "generated_ignore_action": "Ignore",
+      "generated_accepted_pending_hint": "Accepted. Waiting for the local runtime to enable this skill.",
+      "generated_accepted_waiting_local_hint": "Accepted. Waiting for the local runtime to receive this skill — confirm the daemon is running and this agent has run at least one Pi task (that creates the local agent directory).",
       "generated_status_enabled": "Enabled",
       "generated_status": {
         "pending": "Pending",

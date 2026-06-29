@@ -100,6 +100,7 @@
     "./onboarding": "./onboarding/index.ts",
     "./paths": "./paths/index.ts",
     "./hooks": "./hooks.tsx",
+    "./identity": "./identity/index.ts",
     "./hooks/*": "./hooks/*.ts",
     "./query-client": "./query-client.ts",
     "./provider": "./provider.tsx",

@@ -6,7 +6,13 @@ import { Bot } from "lucide-react";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
 import type { AutopilotAssigneeType } from "@multica/core/types";
+import {
+  actorHandleSearchRank,
+  matchesActorIdentitySearch,
+  resolveActorDisplayName,
+} from "@multica/core/identity";
 import { ActorAvatar } from "../../../common/actor-avatar";
+import { ActorPickerItem } from "../../../common/actor-picker-item";
 import {
   PropertyPicker,
   PickerItem,
@@ -15,6 +21,8 @@ import {
 } from "../../../issues/components/pickers/property-picker";
 import { useT } from "../../../i18n";
 import { matchesPinyin } from "../../../editor/extensions/pinyin-match";
+
+const identitySearchOptions = { extendedMatch: matchesPinyin };
 
 export interface AssigneeSelection {
   type: AutopilotAssigneeType;
@@ -48,13 +56,30 @@ export function AgentPicker({
     assignee?.type === "agent" ? activeAgents.find((a) => a.id === assignee.id) : undefined;
   const selectedSquad =
     assignee?.type === "squad" ? activeSquads.find((s) => s.id === assignee.id) : undefined;
-  const selectedName = selectedAgent?.name ?? selectedSquad?.name;
+  const selectedName = selectedAgent
+    ? resolveActorDisplayName(selectedAgent, selectedAgent.name)
+    : selectedSquad?.name;
 
-  const query = filter.trim().toLowerCase();
-  const matches = (name: string) =>
-    !query || name.toLowerCase().includes(query) || matchesPinyin(name, query);
-  const filteredAgents = activeAgents.filter((a) => matches(a.name));
-  const filteredSquads = activeSquads.filter((s) => matches(s.name));
+  const query = filter.trim();
+  const filteredAgents = activeAgents
+    .filter((a) =>
+      matchesActorIdentitySearch(
+        resolveActorDisplayName(a, a.name),
+        a.name,
+        query,
+        identitySearchOptions,
+      ),
+    )
+    .toSorted(
+      (a, b) => actorHandleSearchRank(a.name, query) - actorHandleSearchRank(b.name, query),
+    );
+  const squadQuery = query.toLowerCase();
+  const filteredSquads = activeSquads.filter(
+    (s) =>
+      !squadQuery ||
+      s.name.toLowerCase().includes(squadQuery) ||
+      matchesPinyin(s.name, squadQuery),
+  );
 
   const isSelected = (type: AutopilotAssigneeType, id: string) =>
     assignee?.type === type && assignee?.id === id;
@@ -104,14 +129,15 @@ export function AgentPicker({
           {filteredAgents.length > 0 && (
             <PickerSection label={t(($) => $.agent_picker.agents_group)}>
               {filteredAgents.map((a) => (
-                <PickerItem
+                <ActorPickerItem
                   key={a.id}
+                  actorType="agent"
+                  actorId={a.id}
+                  identity={a}
+                  fallback={a.id}
                   selected={isSelected("agent", a.id)}
                   onClick={() => handlePick("agent", a.id)}
-                >
-                  <ActorAvatar actorType="agent" actorId={a.id} size={16} showStatusDot />
-                  <span className="truncate">{a.name}</span>
-                </PickerItem>
+                />
               ))}
             </PickerSection>
           )}

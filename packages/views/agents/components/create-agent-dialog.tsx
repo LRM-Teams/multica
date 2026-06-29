@@ -10,6 +10,7 @@ import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker } from "./avatar-picker";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { resolveActorDisplayName } from "@multica/core/identity";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import type {
   Agent,
@@ -80,7 +81,7 @@ export function CreateAgentDialog({
 
   // Display-name defaults: duplicate uses "<original> copy". Manual-create starts blank.
   const [name, setName] = useState(
-    template ? `${template.display_name || template.name}${t(($) => $.create_dialog.duplicate_copy_suffix)}` : "",
+    template ? `${resolveActorDisplayName(template, template.id)}${t(($) => $.create_dialog.duplicate_copy_suffix)}` : "",
   );
   const [description, setDescription] = useState(template?.description ?? "");
   const [visibility, setVisibility] = useState<AgentVisibility>(
@@ -208,7 +209,7 @@ export function CreateAgentDialog({
       // MUL-2178) — a partial failure surfaces a warning toast and
       // the user can retry from the Add Member dialog.
       if (createdAgent && squadId) {
-        await attachToSquad(createdAgent.id, createdAgent.display_name || createdAgent.name);
+        await attachToSquad(createdAgent.id, resolveActorDisplayName(createdAgent, createdAgent.id));
       }
       onClose();
     } catch (err) {
@@ -228,7 +229,7 @@ export function CreateAgentDialog({
           <DialogTitle className="text-base font-semibold">{headerTitle}</DialogTitle>
           {isDuplicate && template && (
             <DialogDescription className="mt-1 text-xs">
-              {t(($) => $.create_dialog.description_duplicate, { name: template.display_name || template.name })}
+              {t(($) => $.create_dialog.description_duplicate, { name: resolveActorDisplayName(template, template.id) })}
             </DialogDescription>
           )}
           {!isDuplicate && (

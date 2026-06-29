@@ -10,6 +10,7 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
+import { resolveActorDisplayName } from "@multica/core/identity";
 import { api } from "@multica/core/api";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
@@ -38,7 +39,7 @@ export function AccountTab() {
     });
 
   const [profileDisplayName, setProfileDisplayName] = useState(
-    user?.display_name || user?.name || "",
+    user ? resolveActorDisplayName(user, user.name) : "",
   );
   const [profileDescription, setProfileDescription] = useState(
     user?.profile_description ?? "",
@@ -48,13 +49,13 @@ export function AccountTab() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setProfileDisplayName(user?.display_name || user?.name || "");
+    setProfileDisplayName(user ? resolveActorDisplayName(user, user.name) : "");
     setProfileDescription(user?.profile_description ?? "");
   }, [user]);
 
   const descriptionTooLong = profileDescription.length > MAX_PROFILE_DESCRIPTION_LEN;
 
-  const displayName = user?.display_name || user?.name || "";
+  const displayName = user ? resolveActorDisplayName(user, user.name) : "";
   const handle = user?.name ?? "";
 
   const initials = displayName

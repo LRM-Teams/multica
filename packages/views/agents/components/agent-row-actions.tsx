@@ -15,6 +15,7 @@ import type { Agent } from "@multica/core/types";
 import type { AgentPresenceDetail } from "@multica/core/agents";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { resolveActorDisplayName } from "@multica/core/identity";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import {
   AlertDialog,
@@ -68,7 +69,7 @@ export function AgentRowActions({
   const { t } = useT("agents");
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
-  const displayName = agent.display_name || agent.name;
+  const displayName = resolveActorDisplayName(agent, agent.id);
 
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);

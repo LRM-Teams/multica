@@ -25,6 +25,10 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { canAssignAgentToIssue } from "@multica/core/permissions";
 import { useWorkspacePaths } from "@multica/core/paths";
 import {
+  matchesActorIdentitySearch,
+  resolveActorDisplayName,
+} from "@multica/core/identity";
+import {
   agentListOptions,
   memberListOptions,
   workspaceKeys,
@@ -87,20 +91,7 @@ const SORT_LABEL_KEY: Record<SortKey, "label_recent" | "label_name" | "label_run
   created: "label_created",
 };
 
-function agentDisplayName(agent: Pick<Agent, "display_name" | "name">) {
-  return agent.display_name || agent.name;
-}
-
-function matchesAgentIdentity(agent: Agent, query: string) {
-  const displayName = agentDisplayName(agent);
-  const handle = agent.name;
-  return (
-    displayName.toLowerCase().includes(query) ||
-    handle.toLowerCase().includes(query) ||
-    matchesPinyin(displayName, query) ||
-    matchesPinyin(handle, query)
-  );
-}
+const identitySearchOptions = { extendedMatch: matchesPinyin };
 
 export interface AgentsPageProps {
   /**
@@ -381,7 +372,12 @@ export function AgentsPage({
       }
       if (q) {
         if (
-          !matchesAgentIdentity(a, q) &&
+          !matchesActorIdentitySearch(
+            resolveActorDisplayName(a, a.name),
+            a.name,
+            q,
+            identitySearchOptions,
+          ) &&
           !(a.description ?? "").toLowerCase().includes(q)
         ) {
           return false;
@@ -423,7 +419,11 @@ export function AgentsPage({
     const xs = [...filteredAgents];
     switch (sort) {
       case "name":
-        xs.sort((a, b) => agentDisplayName(a).localeCompare(agentDisplayName(b)));
+        xs.sort((a, b) =>
+          resolveActorDisplayName(a, a.name).localeCompare(
+            resolveActorDisplayName(b, b.name),
+          ),
+        );
         break;
       case "runs":
         xs.sort(
@@ -958,7 +958,7 @@ function AgentRailRow({
   const { t } = useT("agents");
   const { openDM, isPending: openingDM } = useOpenDM();
   const cfg = availability ? availabilityConfig[availability] : null;
-  const displayName = agentDisplayName(agent);
+  const displayName = resolveActorDisplayName(agent, agent.name);
   return (
     // Outer div (not a button) lets us nest two independent buttons:
     // the avatar (→ open DM) and the content area (→ select in detail).

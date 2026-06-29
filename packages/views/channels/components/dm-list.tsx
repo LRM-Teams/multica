@@ -38,7 +38,14 @@ import {
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
+import {
+  matchesActorIdentitySearch,
+  resolveActorIdentityPresentation,
+  type ActorIdentityPresentation,
+} from "@multica/core/identity";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
+import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { useT, useTimeAgo } from "../../i18n";
 import { useOpenDM } from "../../common/use-open-dm";
 import { formatChannelMessagePreview, type MentionPreviewResolver } from "./message-preview";
@@ -49,15 +56,7 @@ import {
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
 
-function actorDisplayName(actor: { display_name?: string | null; name?: string | null }, fallback: string) {
-  return actor.display_name?.trim() || actor.name?.trim() || fallback;
-}
-
-function actorHandleLabel(actor: { display_name?: string | null; name?: string | null }) {
-  const name = actor.name?.trim();
-  const displayName = actor.display_name?.trim();
-  return name && name !== displayName ? `@${name}` : null;
-}
+const identitySearchOptions = { extendedMatch: matchesPinyin };
 
 /**
  * DIRECT MESSAGES sidebar region — the top half of the unified Messages
@@ -296,28 +295,35 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
   );
 
   const items = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim();
     const agentItems = agents
       .filter((a) => !a.archived_at)
       .map((a) => ({
         kind: "agent" as const,
         id: a.id,
-        displayName: actorDisplayName(a, a.id),
-        handleLabel: actorHandleLabel(a),
-        searchText: [a.display_name, a.name, a.id].filter(Boolean).join(" ").toLowerCase(),
+        presentation: resolveActorIdentityPresentation(a, a.id),
       }));
     const memberItems = members
       .filter((m) => m.user_id !== currentUser?.id)
       .map((m) => ({
         kind: "user" as const,
         id: m.user_id,
-        displayName: actorDisplayName(m, m.user_id),
-        handleLabel: actorHandleLabel(m),
-        searchText: [m.display_name, m.name, m.user_id].filter(Boolean).join(" ").toLowerCase(),
+        presentation: resolveActorIdentityPresentation(m, m.user_id),
       }));
-    const all = [...agentItems, ...memberItems];
+    const all: Array<{
+      kind: "agent" | "user";
+      id: string;
+      presentation: ActorIdentityPresentation;
+    }> = [...agentItems, ...memberItems];
     if (!q) return all;
-    return all.filter((item) => item.searchText.includes(q));
+    return all.filter((item) =>
+      matchesActorIdentitySearch(
+        item.presentation.displayName,
+        item.presentation.handle,
+        q,
+        identitySearchOptions,
+      ),
+    );
   }, [agents, members, currentUser?.id, search]);
 
   const isLoading = agentsLoading || membersLoading;
@@ -364,16 +370,12 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
                 showStatusDot={item.kind === "agent"}
                 profileLink={false}
               />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium text-foreground">
-                  {item.displayName}
-                </span>
-                {item.handleLabel && (
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {item.handleLabel}
-                  </span>
-                )}
-              </span>
+              <ActorIdentityRow
+                displayName={item.presentation.displayName}
+                handle={item.presentation.handle}
+                showHandle={item.presentation.showHandleLabel}
+                primaryClassName="truncate text-sm font-medium text-foreground"
+              />
             </button>
           ))
         )}

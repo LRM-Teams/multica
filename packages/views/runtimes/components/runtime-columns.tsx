@@ -7,6 +7,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
 import type { AgentRuntime, MemberWithUser } from "@multica/core/types";
 import { deriveWorkload } from "@multica/core/agents";
+import { resolveActorDisplayName } from "@multica/core/identity";
 import {
   deriveRuntimeHealth,
   runtimeUsageOptions,
@@ -115,7 +116,7 @@ export function createRuntimeColumns({
               size={18}
             />
             <span className="truncate text-xs text-muted-foreground">
-              {row.original.ownerMember.display_name || row.original.ownerMember.name}
+              {resolveActorDisplayName(row.original.ownerMember, row.original.ownerMember.user_id)}
             </span>
           </span>
         ) : (

@@ -27,7 +27,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@multica/ui/components/ui/tooltip";
+import { resolveActorDisplayName, resolveActorIdentityPresentation } from "@multica/core/identity";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
 import { AppLink, useNavigation } from "../../navigation";
 import { availabilityConfig, workloadConfig } from "../../agents/presence";
@@ -65,15 +67,6 @@ function shortDaemonId(id: string | null): string | null {
   if (!id) return null;
   if (id.length <= 10) return id;
   return `${id.slice(0, 6)}··${id.slice(-2)}`;
-}
-
-function agentDisplayName(agent: { id: string; display_name?: string | null; name?: string | null }) {
-  return agent.display_name?.trim() || agent.name?.trim() || agent.id;
-}
-
-function agentHandleLabel(agent: { name?: string | null }) {
-  const handle = agent.name?.trim();
-  return handle ? `@${handle}` : null;
 }
 
 // 30s tick keeps derived runtime health honest as time-based windows
@@ -276,7 +269,7 @@ function HeroCard({
                 enableHoverCard
               />
               <span className="cursor-pointer truncate text-sm">
-                {ownerMember.display_name || ownerMember.name}
+                {resolveActorDisplayName(ownerMember, ownerMember.user_id)}
               </span>
             </span>
           ) : (
@@ -403,8 +396,7 @@ function ServingAgentsCard({
             const wl = detail ? workloadConfig[detail.workload] : null;
             const running = detail?.runningCount ?? 0;
             const queued = detail?.queuedCount ?? 0;
-            const displayName = agentDisplayName(agent);
-            const handleLabel = agentHandleLabel(agent);
+            const presentation = resolveActorIdentityPresentation(agent, agent.id);
             return (
               <AppLink
                 key={agent.id}
@@ -413,14 +405,13 @@ function ServingAgentsCard({
               >
                 <ActorAvatar actorType="agent" actorId={agent.id} size={20} enableHoverCard showStatusDot />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-xs font-medium">
-                    {displayName}
-                  </div>
-                  {handleLabel && displayName !== agent.name ? (
-                    <div className="truncate text-[11px] text-muted-foreground">
-                      {handleLabel}
-                    </div>
-                  ) : null}
+                  <ActorIdentityRow
+                    displayName={presentation.displayName}
+                    handle={presentation.handle}
+                    showHandle={presentation.showHandleLabel}
+                    primaryClassName="truncate text-xs font-medium"
+                    secondaryClassName="truncate text-[11px] text-muted-foreground"
+                  />
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
                     <span className="inline-flex items-center gap-1.5">
                       <span className={`h-1.5 w-1.5 rounded-full ${av.dotClass}`} />

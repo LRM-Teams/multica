@@ -63,6 +63,12 @@ import { copyText } from "@multica/ui/lib/clipboard";
 import { useNavigation } from "../navigation";
 import { useOpenDM } from "../common/use-open-dm";
 import { useT } from "../i18n";
+import {
+  matchesActorIdentitySearch,
+  resolveActorDisplayName,
+  resolveActorHandle,
+  resolveActorIdentityPresentation,
+} from "@multica/core/identity";
 import { matchesPinyin } from "../editor/extensions/pinyin-match";
 import { HighlightText } from "./highlight-text";
 import { useSearchStore } from "./search-store";
@@ -130,29 +136,26 @@ function SendMessageButton({
   );
 }
 
+const identitySearchOptions = { extendedMatch: matchesPinyin };
+
 function matchesMember(member: MemberWithUser, query: string) {
-  const displayName = member.display_name || member.name;
   return (
-    displayName.toLowerCase().includes(query) ||
-    member.name.toLowerCase().includes(query) ||
-    member.email.toLowerCase().includes(query) ||
-    (query.length >= 3 && member.role.startsWith(query)) ||
-    matchesPinyin(displayName, query) ||
-    matchesPinyin(member.name, query)
+    matchesActorIdentitySearch(
+      resolveActorDisplayName(member, member.name),
+      resolveActorHandle(member),
+      query,
+      { ...identitySearchOptions, extra: [member.email] },
+    ) ||
+    (query.length >= 3 && member.role.startsWith(query))
   );
 }
 
-function agentDisplayName(agent: Pick<Agent, "display_name" | "name">) {
-  return agent.display_name || agent.name;
-}
-
 function matchesAgent(agent: Agent, query: string) {
-  const displayName = agentDisplayName(agent);
-  return (
-    displayName.toLowerCase().includes(query) ||
-    agent.name.toLowerCase().includes(query) ||
-    matchesPinyin(displayName, query) ||
-    matchesPinyin(agent.name, query)
+  return matchesActorIdentitySearch(
+    resolveActorDisplayName(agent, agent.name),
+    resolveActorHandle(agent),
+    query,
+    identitySearchOptions,
   );
 }
 
@@ -620,8 +623,7 @@ export function SearchCommand() {
                   {t(($) => $.groups.members)}
                 </div>
                 {filteredMembers.map((member) => {
-                  const displayName = member.display_name || member.name;
-                  const handle = `@${member.name.replace(/^@+/, "")}`;
+                  const presentation = resolveActorIdentityPresentation(member, member.name);
                   return (
                   <CommandPrimitive.Item
                     key={member.user_id}
@@ -630,20 +632,24 @@ export function SearchCommand() {
                     className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
                   >
                     <ActorAvatarBase
-                      name={displayName}
-                      initials={memberInitials(displayName)}
+                      name={presentation.displayName}
+                      initials={memberInitials(presentation.displayName)}
                       avatarUrl={resolvePublicFileUrl(member.avatar_url)}
                       size={22}
                     />
                     <div className="min-w-0 flex-1">
                       <div className="truncate">
-                        <HighlightText text={displayName} query={query} />
+                        <HighlightText text={presentation.displayName} query={query} />
                       </div>
                       <div className="truncate text-xs text-muted-foreground">
-                        <span>
-                          <HighlightText text={handle} query={query} />
-                        </span>
-                        <span aria-hidden> · </span>
+                        {presentation.showHandleLabel && presentation.handleLabel ? (
+                          <>
+                            <span>
+                              <HighlightText text={presentation.handleLabel} query={query} />
+                            </span>
+                            <span aria-hidden> · </span>
+                          </>
+                        ) : null}
                         <span>
                           <HighlightText text={member.email} query={query} />
                         </span>
@@ -665,8 +671,7 @@ export function SearchCommand() {
                   {t(($) => $.groups.agents)}
                 </div>
                 {filteredAgents.map((agent) => {
-                  const displayName = agentDisplayName(agent);
-                  const handle = `@${agent.name.replace(/^@+/, "")}`;
+                  const presentation = resolveActorIdentityPresentation(agent, agent.name);
                   return (
                   <CommandPrimitive.Item
                     key={agent.id}
@@ -675,19 +680,21 @@ export function SearchCommand() {
                     className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
                   >
                     <ActorAvatarBase
-                      name={displayName}
-                      initials={memberInitials(displayName)}
+                      name={presentation.displayName}
+                      initials={memberInitials(presentation.displayName)}
                       avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
                       isAgent
                       size={22}
                     />
                     <div className="min-w-0 flex-1">
                       <div className="truncate">
-                        <HighlightText text={displayName} query={query} />
+                        <HighlightText text={presentation.displayName} query={query} />
                       </div>
-                      <div className="truncate text-xs text-muted-foreground">
-                        <HighlightText text={handle} query={query} />
-                      </div>
+                      {presentation.showHandleLabel && presentation.handleLabel ? (
+                        <div className="truncate text-xs text-muted-foreground">
+                          <HighlightText text={presentation.handleLabel} query={query} />
+                        </div>
+                      ) : null}
                     </div>
                     <SendMessageButton
                       label={t(($) => $.actions.send_message)}

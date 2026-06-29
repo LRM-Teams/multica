@@ -6,11 +6,12 @@ import { useQuery } from "@tanstack/react-query";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { matchesActorIdentitySearch, resolveActorDisplayName } from "@multica/core/identity";
 import { Popover, PopoverContent, PopoverTrigger } from "@multica/ui/components/ui/popover";
 import type { Project, UpdateProjectRequest } from "@multica/core/types";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
-import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorPickerItem } from "../../common/actor-picker-item";
 
 export function ProjectLeadPicker({ project, handleUpdate, renderTrigger, align = "start" }: {
   project: Project;
@@ -28,8 +29,25 @@ export function ProjectLeadPicker({ project, handleUpdate, renderTrigger, align 
   const [leadFilter, setLeadFilter] = useState("");
   const leadQuery = leadFilter.toLowerCase();
 
-  const filteredMembers = members.filter((m) => m.name.toLowerCase().includes(leadQuery) || matchesPinyin(m.name, leadQuery));
-  const filteredAgents = agents.filter((a) => !a.archived_at && (a.name.toLowerCase().includes(leadQuery) || matchesPinyin(a.name, leadQuery)));
+  const identitySearchOptions = { extendedMatch: matchesPinyin };
+  const filteredMembers = members.filter((m) =>
+    matchesActorIdentitySearch(
+      resolveActorDisplayName(m, m.user_id),
+      m.name,
+      leadQuery,
+      identitySearchOptions,
+    ),
+  );
+  const filteredAgents = agents.filter(
+    (a) =>
+      !a.archived_at &&
+      matchesActorIdentitySearch(
+        resolveActorDisplayName(a, a.id),
+        a.name,
+        leadQuery,
+        identitySearchOptions,
+      ),
+  );
 
   const leadId = project.lead_id;
   const leadType = project.lead_type;
@@ -61,15 +79,18 @@ export function ProjectLeadPicker({ project, handleUpdate, renderTrigger, align 
             <>
               <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">{t(($) => $.lead.members_group)}</div>
               {filteredMembers.map((m) => (
-                <button
-                  type="button"
+                <ActorPickerItem
                   key={m.user_id}
-                  onClick={() => { handleUpdate({ lead_type: "member", lead_id: m.user_id }); setLeadOpen(false); }}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
-                >
-                  <ActorAvatar actorType="member" actorId={m.user_id} size={16} />
-                  <span>{m.name}</span>
-                </button>
+                  actorType="member"
+                  actorId={m.user_id}
+                  identity={m}
+                  fallback={m.user_id}
+                  selected={leadType === "member" && leadId === m.user_id}
+                  onClick={() => {
+                    handleUpdate({ lead_type: "member", lead_id: m.user_id });
+                    setLeadOpen(false);
+                  }}
+                />
               ))}
             </>
           )}
@@ -77,15 +98,18 @@ export function ProjectLeadPicker({ project, handleUpdate, renderTrigger, align 
             <>
               <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">{t(($) => $.lead.agents_group)}</div>
               {filteredAgents.map((a) => (
-                <button
-                  type="button"
+                <ActorPickerItem
                   key={a.id}
-                  onClick={() => { handleUpdate({ lead_type: "agent", lead_id: a.id }); setLeadOpen(false); }}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
-                >
-                  <ActorAvatar actorType="agent" actorId={a.id} size={16} showStatusDot />
-                  <span>{a.name}</span>
-                </button>
+                  actorType="agent"
+                  actorId={a.id}
+                  identity={a}
+                  fallback={a.id}
+                  selected={leadType === "agent" && leadId === a.id}
+                  onClick={() => {
+                    handleUpdate({ lead_type: "agent", lead_id: a.id });
+                    setLeadOpen(false);
+                  }}
+                />
               ))}
             </>
           )}

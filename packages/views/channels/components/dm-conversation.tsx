@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, FileText, Paperclip, Send } from "lucide-react";
+import { ArrowLeft, FileText, Paperclip, Reply, Send, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   activeChannelTasksKeys,
@@ -28,7 +28,7 @@ import { useFileUpload, type UploadResult } from "@multica/core/hooks/use-file-u
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
-import type { ChannelTypingPayload, ChatMessage } from "@multica/core/types";
+import type { ChannelMessage, ChannelTypingPayload, ChatMessage } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Popover,
@@ -162,6 +162,8 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   const typingStartedRef = useRef(false);
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [quoteMessage, setQuoteMessage] = useState<ChannelMessage | null>(null);
+  const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
 
   // Agents surface lifecycle via the query-driven working indicator, so filter
   // them out of the transient typing render (same rule as the group thread).
@@ -197,6 +199,12 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     if (typingStopTimerRef.current) window.clearTimeout(typingStopTimerRef.current);
     if (typingPulseTimerRef.current) window.clearTimeout(typingPulseTimerRef.current);
   }, [channelId]);
+
+  useEffect(() => {
+    if (!highlightMessageId || messages.length === 0) return;
+    const clear = setTimeout(() => setHighlightMessageId(null), 2500);
+    return () => clearTimeout(clear);
+  }, [highlightMessageId, messages.length]);
 
   useWSEvent("channel:message", (payload) => {
     const e = payload as { channel_id?: string };
@@ -304,12 +312,14 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         channelId,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        replyToMessageId: quoteMessage?.id,
       },
       {
         onSuccess: () => {
           editorRef.current?.clearContent();
           uploadMapRef.current.clear();
           setDraftEmpty(true);
+          setQuoteMessage(null);
         },
       },
     );
@@ -323,7 +333,10 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         messages={messages}
         currentUserId={currentUserId}
         ownName={currentUserName ?? undefined}
+        highlightMessageId={highlightMessageId}
         emptyLabel={t(($) => $.dm.thread_empty)}
+        onQuote={setQuoteMessage}
+        onScrollToMessage={setHighlightMessageId}
         footer={
           <>
             <AgentWorkingIndicator tasks={activeTasks} />
@@ -333,6 +346,27 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
       />
       <div className="px-4 pb-4">
         <div className="rounded-xl border bg-card shadow-sm">
+          {quoteMessage && (
+            <div className="flex items-start gap-2 border-b px-4 py-2">
+              <Reply className="mt-0.5 size-3.5 shrink-0 text-primary" />
+              <div className="min-w-0 flex-1 border-l-2 border-primary pl-2">
+                <p className="truncate text-[11px] font-semibold text-foreground">
+                  {t(($) => $.quote.replying_to, { name: quoteMessage.author_name })}
+                </p>
+                <p className="line-clamp-1 text-[11px] text-muted-foreground">
+                  {quoteMessage.content}
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label={t(($) => $.quote.cancel)}
+                className="flex size-5 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+                onClick={() => setQuoteMessage(null)}
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+          )}
           <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
             <ContentEditor
               key={channelId}

@@ -14,6 +14,12 @@ vi.mock("@multica/core/api", () => ({
   api: { getBaseUrl: () => "" },
 }));
 
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({
+    getActorName: (_type: string, _id: string, fallback?: string) => fallback ?? "Alice",
+  }),
+}));
+
 vi.mock("../issues/components/issue-mention-card", () => ({
   IssueMentionCard: ({ issueId }: { issueId: string }) => (
     <span data-testid="issue-mention-card">{issueId}</span>
@@ -122,5 +128,52 @@ describe("Markdown", () => {
 
     expect(container.querySelector("img")).toBeNull();
     expect(container.textContent).toContain("3:4:5");
+  });
+
+  it("highlights every visible search phrase match case-insensitively", () => {
+    const { container } = render(
+      <Markdown highlightQuery="abc">{"abc and ABC and abcd"}</Markdown>,
+    );
+
+    const marks = Array.from(container.querySelectorAll("mark"));
+    expect(marks.map((mark) => mark.textContent)).toEqual(["abc", "ABC", "abc"]);
+    for (const mark of marks) {
+      expect(mark).toHaveClass(
+        "bg-primary/20",
+        "text-foreground",
+        "rounded-[3px]",
+        "px-0.5",
+        "box-decoration-clone",
+      );
+    }
+  });
+
+  it("keeps highlighted link text clickable", () => {
+    const { container } = render(
+      <Markdown highlightQuery="docs">{"Read [Docs](https://example.com/docs)"}</Markdown>,
+    );
+
+    const link = screen.getByRole("link", { name: "Docs" });
+    expect(link).toHaveAttribute("href", "https://example.com/docs");
+    expect(container.querySelector("a mark")?.textContent).toBe("Docs");
+  });
+
+  it("highlights member mention text without breaking the mention chip", () => {
+    const { container } = render(
+      <Markdown highlightQuery="ali">{"Ping [@Alice](mention://member/user-1)"}</Markdown>,
+    );
+
+    expect(container.textContent).toContain("@Alice");
+    expect(container.querySelector("mark")?.textContent).toBe("Ali");
+  });
+
+  it("does not highlight inline code text", () => {
+    const { container } = render(
+      <Markdown highlightQuery="abc">{"abc stays visible, `abc` stays code"}</Markdown>,
+    );
+
+    expect(container.querySelectorAll("mark")).toHaveLength(1);
+    expect(container.querySelector("code mark")).toBeNull();
+    expect(container.querySelector("code")?.textContent).toBe("abc");
   });
 });

@@ -7,7 +7,13 @@ import { ChannelMessageBubble } from "./channel-message-bubble";
 // separately). Stub it to a passthrough so these tests focus on bubble layout
 // and identity styling, not markdown internals.
 vi.mock("../../common/markdown", () => ({
-  MemoizedMarkdown: ({ children }: { children: string }) => <span>{children}</span>,
+  MemoizedMarkdown: ({
+    children,
+    highlightQuery,
+  }: {
+    children: string;
+    highlightQuery?: string;
+  }) => <span data-highlight-query={highlightQuery}>{children}</span>,
 }));
 
 vi.mock("../../issues/components/comment-card", () => ({
@@ -73,5 +79,29 @@ describe("ChannelMessageBubble", () => {
 
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
     expect(screen.getByText("Bob")).toBeInTheDocument();
+  });
+
+  it("passes the search query to markdown only for search hits", () => {
+    const { rerender } = render(
+      <ChannelMessageBubble
+        message={makeMessage()}
+        currentUserId="user-1"
+        searchHighlighted
+        searchQuery="data"
+      />,
+    );
+
+    expect(screen.getByText("Here is the data.")).toHaveAttribute("data-highlight-query", "data");
+
+    rerender(
+      <ChannelMessageBubble
+        message={makeMessage()}
+        currentUserId="user-1"
+        searchHighlighted={false}
+        searchQuery="data"
+      />,
+    );
+
+    expect(screen.getByText("Here is the data.")).not.toHaveAttribute("data-highlight-query");
   });
 });

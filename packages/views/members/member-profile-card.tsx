@@ -54,7 +54,9 @@ export function MemberProfileCard({ userId }: MemberProfileCardProps) {
     );
   }
 
-  const initials = member.name
+  const displayName = member.display_name || member.name;
+  const handle = `@${member.name.replace(/^@+/, "")}`;
+  const initials = displayName
     .split(" ")
     .map((w) => w[0])
     .join("")
@@ -71,7 +73,7 @@ export function MemberProfileCard({ userId }: MemberProfileCardProps) {
       const ra = runCountById.get(a.id) ?? 0;
       const rb = runCountById.get(b.id) ?? 0;
       if (ra !== rb) return rb - ra;
-      return a.name.localeCompare(b.name);
+      return (a.display_name || a.name).localeCompare(b.display_name || b.name);
     });
 
   return (
@@ -79,7 +81,7 @@ export function MemberProfileCard({ userId }: MemberProfileCardProps) {
       {/* Header */}
       <div className="flex items-start gap-3">
         <ActorAvatarBase
-          name={member.name}
+          name={displayName}
           initials={initials}
           avatarUrl={resolvePublicFileUrl(member.avatar_url)}
           size={40}
@@ -87,11 +89,11 @@ export function MemberProfileCard({ userId }: MemberProfileCardProps) {
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <p className="truncate text-sm font-semibold">{member.name}</p>
+            <p className="truncate text-sm font-semibold">{displayName}</p>
             <RoleBadge role={member.role} />
           </div>
           <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {member.email}
+            {handle} · {member.email}
           </p>
         </div>
       </div>
@@ -145,7 +147,7 @@ function OwnedAgentsSection({ agents }: { agents: Agent[] }) {
               className="mt-0.5 shrink-0 rounded-md"
             />
             <div className="min-w-0 flex-1">
-              <div className="truncate font-medium">{a.name}</div>
+              <div className="truncate font-medium">{a.display_name || a.name}</div>
               {a.description && (
                 <div className="truncate text-muted-foreground">
                   {a.description}

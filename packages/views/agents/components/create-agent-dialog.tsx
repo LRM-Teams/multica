@@ -78,9 +78,9 @@ export function CreateAgentDialog({
   const queryClient = useQueryClient();
   const wsId = useWorkspaceId();
 
-  // Name defaults: duplicate uses "<original> copy". Manual-create starts blank.
+  // Display-name defaults: duplicate uses "<original> copy". Manual-create starts blank.
   const [name, setName] = useState(
-    template ? `${template.name}${t(($) => $.create_dialog.duplicate_copy_suffix)}` : "",
+    template ? `${template.display_name || template.name}${t(($) => $.create_dialog.duplicate_copy_suffix)}` : "",
   );
   const [description, setDescription] = useState(template?.description ?? "");
   const [visibility, setVisibility] = useState<AgentVisibility>(
@@ -155,7 +155,7 @@ export function CreateAgentDialog({
     try {
       const trimmedInstructions = instructions.trim();
       const data: CreateAgentRequest = {
-        name: name.trim(),
+        display_name: name.trim(),
         description: description.trim(),
         runtime_id: selectedRuntime.id,
         visibility,
@@ -208,7 +208,7 @@ export function CreateAgentDialog({
       // MUL-2178) — a partial failure surfaces a warning toast and
       // the user can retry from the Add Member dialog.
       if (createdAgent && squadId) {
-        await attachToSquad(createdAgent.id, createdAgent.name);
+        await attachToSquad(createdAgent.id, createdAgent.display_name || createdAgent.name);
       }
       onClose();
     } catch (err) {
@@ -228,7 +228,7 @@ export function CreateAgentDialog({
           <DialogTitle className="text-base font-semibold">{headerTitle}</DialogTitle>
           {isDuplicate && template && (
             <DialogDescription className="mt-1 text-xs">
-              {t(($) => $.create_dialog.description_duplicate, { name: template.name })}
+              {t(($) => $.create_dialog.description_duplicate, { name: template.display_name || template.name })}
             </DialogDescription>
           )}
           {!isDuplicate && (
@@ -240,9 +240,9 @@ export function CreateAgentDialog({
 
         <div className="flex-1 overflow-y-auto p-5">
           <div className="space-y-4 min-w-0">
-            {/* Identity row: avatar (left) + name & description stack
+            {/* Identity row: avatar (left) + display name & description stack
                 (right). The avatar visually anchors the identity of
-                what the user is creating; pairing it with the Name
+                what the user is creating; pairing it with the display-name
                 field reads as "this is the agent's face + name",
                 same shape as detail-page header so the affordance is
                 instantly familiar. */}
@@ -250,7 +250,7 @@ export function CreateAgentDialog({
               <AvatarPicker value={avatarUrl} onChange={setAvatarUrl} size={64} />
               <div className="flex-1 min-w-0 space-y-3">
                 <div>
-                  <Label className="text-xs text-muted-foreground">{t(($) => $.create_dialog.name_label)}</Label>
+                  <Label className="text-xs text-muted-foreground">{t(($) => $.create_dialog.display_name_label)}</Label>
                   <Input
                     autoFocus
                     type="text"
@@ -263,6 +263,9 @@ export function CreateAgentDialog({
                       if (e.key === "Enter") handleSubmit();
                     }}
                   />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {t(($) => $.create_dialog.handle_auto_hint)}
+                  </p>
                 </div>
 
                 <div>

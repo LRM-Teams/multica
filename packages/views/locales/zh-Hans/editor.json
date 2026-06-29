@@ -53,6 +53,7 @@
     "copy_failed": "复制失败"
   },
   "mention": {
+    "group_all": "所有人",
     "group_users": "用户",
     "group_issues": "Issues",
     "all_members": "所有成员",
@@ -60,7 +61,9 @@
     "no_results": "无结果",
     "group_current": "当前页面",
     "group_recent": "最近浏览",
-    "group_search": "搜索结果"
+    "group_search": "搜索结果",
+    "type_agent": "Agent",
+    "type_member": "成员"
   },
   "slash_command": {
     "no_skills_configured": "暂无配置的技能",

@@ -100,13 +100,15 @@ function MemberRow({
   const canRemove = canManage && !isSelf && (member.role !== "owner" || canManageOwners);
   const isLastOwner = member.role === "owner" && ownerCount <= 1;
   const showMenu = canEditRole || canRemove;
+  const displayName = member.display_name || member.name;
+  const handle = `@${member.name.replace(/^@+/, "")}`;
 
   return (
     <div className="flex items-center gap-3 px-4 py-3">
       <ActorAvatar actorType="member" actorId={member.user_id} size={32} />
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium truncate">{member.name}</div>
-        <div className="text-xs text-muted-foreground truncate">{member.email}</div>
+        <div className="text-sm font-medium truncate">{displayName}</div>
+        <div className="text-xs text-muted-foreground truncate">{handle} · {member.email}</div>
       </div>
       {showMenu && (
         <DropdownMenu>

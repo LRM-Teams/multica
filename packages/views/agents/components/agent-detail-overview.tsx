@@ -148,6 +148,7 @@ export function AgentDetailOverview({
   const recentTasks = useMemo(() => tasks.slice(0, 6), [tasks]);
 
   const availCfg = availability ? availabilityConfig[availability] : null;
+  const displayName = agent.display_name || agent.name;
 
   const costText = metric.cost === null ? "—" : `$${metric.cost.toFixed(2)}`;
   const successText = metric.successRate === null ? "—" : `${Math.round(metric.successRate)}%`;
@@ -160,7 +161,7 @@ export function AgentDetailOverview({
           <ActorAvatar actorType="agent" actorId={agent.id} size={40} className="shrink-0" />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h2 className="truncate text-base font-semibold">{agent.name}</h2>
+              <h2 className="truncate text-base font-semibold">{displayName}</h2>
               {availCfg && (
                 <span className={cn("inline-flex items-center gap-1 text-xs", availCfg.textClass)}>
                   <span className={cn("size-1.5 rounded-full", availCfg.dotClass)} />

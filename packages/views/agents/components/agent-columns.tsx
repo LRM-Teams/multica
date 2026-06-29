@@ -169,6 +169,7 @@ function AgentNameCell({ row }: { row: AgentRow }) {
   const { agent, ownerIdToShow, isOwnedByMe } = row;
   const isArchived = !!agent.archived_at;
   const isPrivate = agent.visibility === "private";
+  const displayName = agent.display_name || agent.name;
 
   return (
     <div className="flex min-w-0 items-center gap-3">
@@ -186,7 +187,7 @@ function AgentNameCell({ row }: { row: AgentRow }) {
               isArchived ? "text-muted-foreground" : ""
             }`}
           >
-            {agent.name}
+            {displayName}
           </span>
           {isPrivate && !isArchived && (
             <Tooltip>

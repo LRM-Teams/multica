@@ -53,6 +53,7 @@
     "copy_failed": "Failed to copy"
   },
   "mention": {
+    "group_all": "All",
     "group_users": "Users",
     "group_issues": "Issues",
     "all_members": "All members",
@@ -60,7 +61,9 @@
     "no_results": "No results",
     "group_current": "Current page",
     "group_recent": "Recently viewed",
-    "group_search": "Search results"
+    "group_search": "Search results",
+    "type_agent": "Agent",
+    "type_member": "Member"
   },
   "slash_command": {
     "no_skills_configured": "No skills configured",

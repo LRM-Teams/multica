@@ -48,10 +48,9 @@ function formatTime(value: string): string {
  * output reads as distinct from human messages at a glance. Body is rendered
  * through the shared Markdown pipeline (mentions, attachments, light formatting).
  *
- * Desktop: hover → floating toolbar (Reply) + right-click → context menu.
+ * Desktop: right-click → context menu (Reply).
  * Mobile: long-press → context menu (ContextMenu handles this natively).
- * Keyboard: ContextMenu via Menu/Shift+F10 is the accessible path; toolbar
- *   buttons have tabIndex={-1} since they are pointer shortcuts, not AT targets.
+ * Keyboard: ContextMenu via Menu/Shift+F10 is the accessible path.
  */
 export function ChannelMessageBubble({
   message,
@@ -105,9 +104,6 @@ export function ChannelMessageBubble({
 
   const canQuote = !!onQuote;
 
-  const toolbarBtnCls =
-    "flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
-
   return (
     <ContextMenu>
       <ContextMenuTrigger
@@ -126,27 +122,6 @@ export function ChannelMessageBubble({
           />
         }
       >
-        {/* Hover / focus-within floating toolbar — desktop + keyboard */}
-        {canQuote && (
-          <div
-            className="absolute -top-4 right-2 hidden items-center gap-0.5 rounded-lg border bg-card px-1 py-0.5 shadow-sm group-hover:flex group-focus-within:flex"
-            aria-hidden="true"
-          >
-            <button
-              type="button"
-              tabIndex={-1}
-              aria-label={t(($) => $.quote.reply_aria)}
-              className={toolbarBtnCls}
-              onClick={(e) => {
-                e.stopPropagation();
-                onQuote(message);
-              }}
-            >
-              <Reply className="size-3.5" />
-            </button>
-          </div>
-        )}
-
         <ActorAvatar
           name={message.author_name}
           initials={initialsOf(message.author_name)}

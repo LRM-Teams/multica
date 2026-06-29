@@ -7,6 +7,7 @@ import (
 	"math"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -30,6 +31,10 @@ const (
 	maxEvolutionBundleFileCount  = 128
 	maxEvolutionCandidateTitle   = 200
 	maxEvolutionCandidateSummary = 2000
+	semanticDedupeScanLimit      = 200
+	semanticDedupeThreshold      = 0.32
+	semanticMatchThreshold       = 0.45
+	semanticMatchStrongThreshold = 0.55
 )
 
 type EvolutionCurateResult struct {
@@ -212,6 +217,12 @@ func (s *EvolutionService) promoteSubmission(ctx context.Context, submission db.
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return db.SharedEvolutionUnit{}, evolutionCurationSkipped, err
 	}
+	if duplicate, ok, err := s.findSemanticDuplicate(ctx, submission, dedupeHash, review); err != nil {
+		return db.SharedEvolutionUnit{}, evolutionCurationSkipped, err
+	} else if ok {
+		err = s.markSubmissionPromoted(ctx, submission, duplicate.ID, review)
+		return duplicate, evolutionCurationPromoted, err
+	}
 
 	metadata := promotionMetadata(submission, dedupeHash, review)
 	unit, err := s.Queries.CreateSharedEvolutionUnit(ctx, db.CreateSharedEvolutionUnitParams{
@@ -261,6 +272,41 @@ func (s *EvolutionService) promoteSubmission(ctx context.Context, submission db.
 	}
 	err = s.markSubmissionPromoted(ctx, submission, unit.ID, review)
 	return unit, evolutionCurationPromoted, err
+}
+
+func (s *EvolutionService) findSemanticDuplicate(ctx context.Context, submission db.EvolutionUnitSubmission, dedupeHash string, review *EvolutionReviewResult) (db.SharedEvolutionUnit, bool, error) {
+	candidates, err := s.Queries.ListActiveSharedEvolutionUnitsByWorkspace(ctx, db.ListActiveSharedEvolutionUnitsByWorkspaceParams{WorkspaceID: submission.WorkspaceID, LimitCount: semanticDedupeScanLimit})
+	if err != nil {
+		return db.SharedEvolutionUnit{}, false, err
+	}
+	best, score := bestSemanticDuplicate(submission, candidates)
+	if score < semanticDedupeThreshold {
+		return db.SharedEvolutionUnit{}, false, nil
+	}
+	maxVersion, err := s.Queries.MaxSharedEvolutionUnitVersion(ctx, db.MaxSharedEvolutionUnitVersionParams{WorkspaceID: submission.WorkspaceID, UnitID: best.ID})
+	if err != nil {
+		return db.SharedEvolutionUnit{}, false, err
+	}
+	metadata := promotionMetadata(submission, dedupeHash, review)
+	version, err := s.Queries.CreateSharedEvolutionUnitVersion(ctx, db.CreateSharedEvolutionUnitVersionParams{
+		WorkspaceID:  submission.WorkspaceID,
+		UnitID:       best.ID,
+		Version:      maxVersion + 1,
+		Title:        best.Title,
+		Content:      best.Content,
+		Metadata:     mergeSemanticDuplicateMetadata(metadata, best, score),
+		Applies:      best.Applies,
+		SubmissionID: submission.ID,
+		ChangeReason: "semantic duplicate candidate",
+	})
+	if err != nil {
+		return db.SharedEvolutionUnit{}, false, err
+	}
+	unit, err := s.Queries.SetSharedEvolutionUnitCurrentVersion(ctx, db.SetSharedEvolutionUnitCurrentVersionParams{ID: best.ID, WorkspaceID: submission.WorkspaceID, CurrentVersionID: version.ID})
+	if err != nil {
+		return db.SharedEvolutionUnit{}, false, err
+	}
+	return unit, true, nil
 }
 
 func (s *EvolutionService) markSubmissionPromoted(ctx context.Context, submission db.EvolutionUnitSubmission, promotedUnitID pgtype.UUID, review *EvolutionReviewResult) error {
@@ -651,11 +697,13 @@ func (s *EvolutionService) matchEvolutionDeliveryTargets(ctx context.Context, su
 			targets = append(targets, candidate)
 		}
 	}
+	sort.SliceStable(targets[1:], func(i, j int) bool { return targets[i+1].Score > targets[j+1].Score })
 	return targets, nil
 }
 
 func shouldCreateEvolutionDeliveryMatch(target evolutionDeliveryMatchTarget) bool {
-	if target.Score >= 0.45 {
+	semanticScore, _ := target.Details["semantic_score"].(float64)
+	if target.Score >= semanticMatchThreshold || semanticScore >= semanticMatchStrongThreshold {
 		return true
 	}
 	matched, _ := target.Details["matched"].(map[string][]string)
@@ -703,19 +751,28 @@ func scoreEvolutionDeliveryTarget(submission db.EvolutionUnitSubmission, unit db
 		matched["tags"] = values
 		score += 0.1
 	}
+	semanticScore := semanticSimilarity(evolutionUnitText(unit), text)
+	if semanticScore >= semanticMatchStrongThreshold {
+		score += 0.2
+	} else if semanticScore >= semanticMatchThreshold {
+		score += 0.1
+	}
 	if score > 1 {
 		score = 1
 	}
 	return evolutionDeliveryMatchTarget{
 		AgentID: agent.ID,
 		Score:   score,
-		Reason:  "deterministic metadata match",
+		Reason:  evolutionMatchReason(score, semanticScore),
 		Details: map[string]any{
-			"strategy":        "deterministic_metadata",
-			"source_agent_id": uuidString(submission.SourceAgentID),
-			"target_agent_id": uuidString(agent.ID),
-			"matched":         matched,
-			"threshold":       0.45,
+			"strategy":         "hybrid_metadata_semantic",
+			"source_agent_id":  uuidString(submission.SourceAgentID),
+			"target_agent_id":  uuidString(agent.ID),
+			"matched":          matched,
+			"semantic_score":   semanticScore,
+			"metadata_score":   score - semanticMatchBonus(semanticScore),
+			"threshold":        semanticMatchThreshold,
+			"strong_threshold": semanticMatchStrongThreshold,
 		},
 	}
 }
@@ -756,11 +813,196 @@ func containsEvolutionTerm(text, term string) bool {
 	return strings.Contains(text, term)
 }
 
+func evolutionMatchReason(score, semanticScore float64) string {
+	if semanticScore >= semanticMatchStrongThreshold {
+		return "hybrid metadata and semantic match"
+	}
+	if score >= semanticMatchThreshold {
+		return "deterministic metadata match"
+	}
+	return "semantic match"
+}
+
+func semanticMatchBonus(score float64) float64 {
+	if score >= semanticMatchStrongThreshold {
+		return 0.2
+	}
+	if score >= semanticMatchThreshold {
+		return 0.1
+	}
+	return 0
+}
+
 func evolutionStrings(values []string) []string {
 	if values == nil {
 		return []string{}
 	}
 	return values
+}
+
+func bestSemanticDuplicate(submission db.EvolutionUnitSubmission, candidates []db.SharedEvolutionUnit) (db.SharedEvolutionUnit, float64) {
+	best := db.SharedEvolutionUnit{}
+	bestScore := 0.0
+	for _, candidate := range candidates {
+		if candidate.UnitType != submission.UnitType || candidate.Status != "active" {
+			continue
+		}
+		score := semanticDuplicateScore(submission, candidate)
+		if score > bestScore {
+			best = candidate
+			bestScore = score
+		}
+	}
+	return best, bestScore
+}
+
+func semanticDuplicateScore(submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) float64 {
+	textScore := semanticSimilarity(evolutionSubmissionText(submission), evolutionUnitText(unit))
+	metadataScore := weightedJaccard(submissionMetadataTerms(submission), unitMetadataTerms(unit))
+	if metadataScore == 0 {
+		return textScore
+	}
+	return textScore*0.75 + metadataScore*0.25
+}
+
+func evolutionSubmissionText(submission db.EvolutionUnitSubmission) string {
+	return strings.Join([]string{submission.Title, submission.Summary, submission.Content}, " ")
+}
+
+func evolutionUnitText(unit db.SharedEvolutionUnit) string {
+	return strings.Join([]string{unit.Title, unit.CanonicalSummary, unit.Content}, " ")
+}
+
+func submissionMetadataTerms(submission db.EvolutionUnitSubmission) []string {
+	return appendEvolutionTerms(nil, submission.Tags, submission.Tools, submission.TaskTypes, submission.ProjectTypes, submission.Languages, submission.Frameworks)
+}
+
+func unitMetadataTerms(unit db.SharedEvolutionUnit) []string {
+	return appendEvolutionTerms(nil, unit.Tags, unit.Tools, unit.TaskTypes, unit.ProjectTypes, unit.Languages, unit.Frameworks)
+}
+
+func appendEvolutionTerms(out []string, groups ...[]string) []string {
+	for _, group := range groups {
+		for _, value := range group {
+			value = strings.ToLower(strings.TrimSpace(value))
+			if value != "" {
+				out = append(out, value)
+			}
+		}
+	}
+	return out
+}
+
+func semanticSimilarity(a, b string) float64 {
+	left := semanticTermWeights(a)
+	right := semanticTermWeights(b)
+	if len(left) == 0 || len(right) == 0 {
+		return 0
+	}
+	dot := 0.0
+	leftNorm := 0.0
+	rightNorm := 0.0
+	for term, weight := range left {
+		leftNorm += weight * weight
+		if other, ok := right[term]; ok {
+			dot += weight * other
+		}
+	}
+	for _, weight := range right {
+		rightNorm += weight * weight
+	}
+	if leftNorm == 0 || rightNorm == 0 {
+		return 0
+	}
+	return dot / math.Sqrt(leftNorm*rightNorm)
+}
+
+func semanticTermWeights(text string) map[string]float64 {
+	weights := map[string]float64{}
+	for _, token := range semanticTokens(text) {
+		weights[token]++
+	}
+	return weights
+}
+
+func semanticTokens(text string) []string {
+	text = strings.ToLower(text)
+	raw := strings.FieldsFunc(text, func(r rune) bool {
+		return !(r == '#' || r == '+' || r == '.' || r == '-' || r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z')
+	})
+	out := make([]string, 0, len(raw))
+	for _, token := range raw {
+		token = normalizeSemanticToken(strings.Trim(token, "-_.+#"))
+		if len(token) < 2 || evolutionStopWords[token] {
+			continue
+		}
+		out = append(out, token)
+	}
+	return out
+}
+
+func normalizeSemanticToken(token string) string {
+	switch token {
+	case "prs":
+		return "pr"
+	case "pullrequest", "pullrequests":
+		return "pr"
+	}
+	for _, suffix := range []string{"ing", "ed", "es", "s"} {
+		if len(token) > len(suffix)+3 && strings.HasSuffix(token, suffix) {
+			return strings.TrimSuffix(token, suffix)
+		}
+	}
+	return token
+}
+
+func weightedJaccard(leftValues, rightValues []string) float64 {
+	left := termSet(leftValues)
+	right := termSet(rightValues)
+	if len(left) == 0 || len(right) == 0 {
+		return 0
+	}
+	intersection := 0
+	for value := range left {
+		if right[value] {
+			intersection++
+		}
+	}
+	union := len(left) + len(right) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
+}
+
+func termSet(values []string) map[string]bool {
+	out := map[string]bool{}
+	for _, value := range values {
+		for _, token := range semanticTokens(value) {
+			out[token] = true
+		}
+	}
+	return out
+}
+
+func mergeSemanticDuplicateMetadata(metadata []byte, existing db.SharedEvolutionUnit, score float64) []byte {
+	merged := map[string]any{}
+	if len(metadata) > 0 {
+		_ = json.Unmarshal(metadata, &merged)
+	}
+	merged["semantic_duplicate"] = map[string]any{
+		"unit_id": uuidString(existing.ID),
+		"score":   score,
+		"action":  "version_metadata_merge",
+	}
+	encoded, _ := json.Marshal(merged)
+	return encoded
+}
+
+var evolutionStopWords = map[string]bool{
+	"the": true, "and": true, "for": true, "with": true, "this": true, "that": true, "from": true,
+	"into": true, "when": true, "then": true, "than": true, "safe": true, "use": true, "uses": true,
+	"using": true, "reusable": true, "lesson": true, "memory": true, "skill": true, "workflow": true,
 }
 
 func rejectEvolutionSubmissionReason(submission db.EvolutionUnitSubmission, files []db.EvolutionUnitSubmissionFile) string {

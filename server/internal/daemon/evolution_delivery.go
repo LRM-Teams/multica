@@ -199,10 +199,15 @@ func writeMemoryInboxDelivery(agentRoot string, delivery EvolutionDelivery) (str
 
 func isSafeRelativePath(path string) bool {
 	path = strings.TrimSpace(path)
-	if path == "" || strings.Contains(path, "..") || strings.HasPrefix(path, "/") {
+	if path == "" || filepath.IsAbs(path) || strings.HasPrefix(path, "/") || strings.ContainsAny(path, "\\:") {
 		return false
 	}
-	return filepath.Clean(path) != "."
+	for _, segment := range strings.Split(path, "/") {
+		if segment == ".." {
+			return false
+		}
+	}
+	return filepath.Clean(filepath.FromSlash(path)) != "."
 }
 
 func safePathName(raw string) string {

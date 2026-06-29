@@ -2459,10 +2459,10 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Cancel active tasks when the issue is cancelled by a user.
-	// This is distinct from agent-managed status transitions — cancellation
-	// is a user-initiated terminal action that should stop execution.
-	if statusChanged && issue.Status == "cancelled" {
+	// Cancel active tasks when a human closes the issue. Agent-managed done
+	// transitions happen while the current task is still producing its final
+	// output, so only human-driven done should release the occupied agent slot.
+	if statusChanged && (issue.Status == "cancelled" || (issue.Status == "done" && actorType == "member")) {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 	}
 
@@ -2943,8 +2943,10 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Cancel active tasks when the issue is cancelled by a user.
-		if statusChanged && issue.Status == "cancelled" {
+		// Cancel active tasks when a human closes the issue. Agent-managed done
+		// transitions happen while the current task is still producing its final
+		// output, so only human-driven done should release the occupied agent slot.
+		if statusChanged && (issue.Status == "cancelled" || (issue.Status == "done" && actorType == "member")) {
 			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 		}
 

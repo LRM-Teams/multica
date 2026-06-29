@@ -55,8 +55,8 @@ export function useSendChannelMessage() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: ({ channelId, content, attachmentIds }: { channelId: string; content: string; attachmentIds?: string[] }) =>
-      api.sendChannelMessage(channelId, content, attachmentIds),
+    mutationFn: ({ channelId, content, attachmentIds, replyToMessageId }: { channelId: string; content: string; attachmentIds?: string[]; replyToMessageId?: string }) =>
+      api.sendChannelMessage(channelId, content, attachmentIds, replyToMessageId),
     onSuccess: (msg) => {
       qc.invalidateQueries({ queryKey: channelKeys.messages(msg.channel_id) });
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });

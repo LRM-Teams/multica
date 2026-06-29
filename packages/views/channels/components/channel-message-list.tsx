@@ -38,6 +38,8 @@ export function ChannelMessageList({
   highlightMessageId,
   emptyLabel,
   footer,
+  onQuote,
+  onScrollToMessage,
 }: {
   messages: ChannelMessage[];
   currentUserId: string | null;
@@ -49,6 +51,13 @@ export function ChannelMessageList({
   emptyLabel: string;
   /** Live affordances (agent-working / typing) pinned beneath the last message. */
   footer?: ReactNode;
+  /** Called when the user triggers Reply on a message (quote-reply flow). */
+  onQuote?: (message: ChannelMessage) => void;
+  /**
+   * Called when the user clicks an inline quote block to jump to the original.
+   * The parent updates `highlightMessageId` so the list scrolls + highlights.
+   */
+  onScrollToMessage?: (messageId: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
@@ -121,12 +130,14 @@ export function ChannelMessageList({
               footer ? <div className="px-4 pb-4 pt-1">{footer}</div> : <div className="pb-4" />,
           }}
           itemContent={(_, msg) => (
-            <div className="px-4">
+            <div className="px-4 pt-1">
               <ChannelMessageBubble
                 message={msg}
                 currentUserId={currentUserId}
                 ownName={ownName}
                 highlighted={msg.id === highlightMessageId}
+                onQuote={onQuote}
+                onScrollTo={onScrollToMessage}
               />
             </div>
           )}

@@ -41,6 +41,16 @@ func TestBuildPiArgsBasicFlags(t *testing.T) {
 	}
 }
 
+func TestBuildPiArgsForExecutionNonWindowsKeepsPromptInArgv(t *testing.T) {
+	args, stdinPrompt := buildPiArgsForExecution("hello from argv", "/tmp/s.jsonl", ExecOptions{}, slog.Default())
+	if stdinPrompt != "" {
+		t.Fatalf("non-Windows should not use stdin prompt, got %q", stdinPrompt)
+	}
+	if args[len(args)-1] != "hello from argv" {
+		t.Fatalf("prompt should be last argv on non-Windows, got %#v", args)
+	}
+}
+
 func TestBuildPiArgsCustomArgsAppended(t *testing.T) {
 	// Users can still restrict tools via custom_args if desired.
 	args := buildPiArgs("prompt", "/tmp/s.jsonl", ExecOptions{

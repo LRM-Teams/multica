@@ -83,6 +83,42 @@ func TestEnableGeneratedSkillDeliveryCopiesBundleAndMarksEnabled(t *testing.T) {
 	}
 }
 
+func TestEvolutionDeliveryRejectsWindowsUnsafeRelativePaths(t *testing.T) {
+	t.Parallel()
+
+	unsafe := []string{
+		`..\\evil.md`,
+		`C:\\temp\\skill.md`,
+		`nested\\skill.md`,
+		`C:/temp/skill.md`,
+		`nested/../evil.md`,
+	}
+	for _, path := range unsafe {
+		if isSafeRelativePath(path) {
+			t.Fatalf("path %q should be rejected", path)
+		}
+	}
+	for _, path := range []string{"SKILL.md", "references/notes.md"} {
+		if !isSafeRelativePath(path) {
+			t.Fatalf("path %q should be accepted", path)
+		}
+	}
+}
+
+func TestNormalizeLocalSkillKeyRejectsWindowsUnsafePaths(t *testing.T) {
+	t.Parallel()
+
+	unsafe := []string{`..\\evil`, `C:\\skills\\demo`, `demo\\nested`, `C:/skills/demo`, `demo/../evil`}
+	for _, key := range unsafe {
+		if got, err := normalizeLocalSkillKey(key); err == nil {
+			t.Fatalf("key %q normalized to %q; expected rejection", key, got)
+		}
+	}
+	if got, err := normalizeLocalSkillKey("release/reporter"); err != nil || got != "release/reporter" {
+		t.Fatalf("valid nested key normalized to %q err=%v", got, err)
+	}
+}
+
 func TestLoadEnabledPiSkillsReadsEnabledBundles(t *testing.T) {
 	t.Parallel()
 

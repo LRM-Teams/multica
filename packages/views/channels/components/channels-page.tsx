@@ -19,6 +19,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  Reply,
   Search,
   Send,
   Share2,
@@ -64,6 +65,7 @@ import type {
   ChannelActiveTask,
   ChannelMember,
   ChannelMemberBrief,
+  ChannelMessage,
   ChannelTypingPayload,
 } from "@multica/core/types";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
@@ -329,6 +331,7 @@ export function ChannelsPage() {
   const typingStartedRef = useRef(false);
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [quoteMessage, setQuoteMessage] = useState<ChannelMessage | null>(null);
 
   const { data: channels = [], isLoading } = useQuery(channelsOptions(wsId));
   const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
@@ -779,12 +782,18 @@ export function ChannelsPage() {
       publishTyping(false);
     }
     sendMessage.mutate(
-      { channelId: active.id, content, attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined },
+      {
+        channelId: active.id,
+        content,
+        attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        replyToMessageId: quoteMessage?.id,
+      },
       {
         onSuccess: () => {
           editorRef.current?.clearContent();
           uploadMapRef.current.clear();
           setDraftEmpty(true);
+          setQuoteMessage(null);
         },
       },
     );
@@ -1440,6 +1449,8 @@ export function ChannelsPage() {
                 ownName={currentUserName ?? undefined}
                 highlightMessageId={highlightMessageId}
                 emptyLabel={t(($) => $.thread.empty)}
+                onQuote={isActiveArchived ? undefined : setQuoteMessage}
+                onScrollToMessage={setHighlightMessageId}
                 footer={
                   <>
                     <AgentWorkingIndicator tasks={activeTasks} />
@@ -1483,6 +1494,27 @@ export function ChannelsPage() {
               ) : (
                 <div className="px-4 pb-4">
                   <div className="rounded-xl border bg-card shadow-sm">
+                    {quoteMessage && (
+                      <div className="flex items-start gap-2 border-b px-4 py-2">
+                        <Reply className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                        <div className="min-w-0 flex-1 border-l-2 border-primary pl-2">
+                          <p className="truncate text-[11px] font-semibold text-foreground">
+                            {t(($) => $.quote.replying_to, { name: quoteMessage.author_name })}
+                          </p>
+                          <p className="line-clamp-1 text-[11px] text-muted-foreground">
+                            {quoteMessage.content}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          aria-label={t(($) => $.quote.cancel)}
+                          className="flex size-5 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+                          onClick={() => setQuoteMessage(null)}
+                        >
+                          <X className="size-3.5" />
+                        </button>
+                      </div>
+                    )}
                     <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
                       <ContentEditor
                         key={active.id}

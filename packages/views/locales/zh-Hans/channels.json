@@ -143,5 +143,13 @@
     "close_chat": "关闭会话",
     "action_failed": "操作失败，请重试",
     "composer_placeholder": "发消息给 {{name}}…"
+  },
+  "quote": {
+    "reply": "引用回复",
+    "reply_aria": "回复此消息",
+    "more_aria": "更多操作",
+    "cancel": "取消引用",
+    "replying_to": "回复 {{name}}",
+    "jump_to": "跳转到原消息"
   }
 }

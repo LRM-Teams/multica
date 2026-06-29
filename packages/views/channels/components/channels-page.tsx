@@ -134,6 +134,7 @@ import { agentColor } from "../../common/agent-color";
 import { ProjectPickerButton } from "../../common/project-picker-button";
 import { initialsOf } from "../../common/initials";
 import { useT, useTimeAgo } from "../../i18n";
+import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
@@ -147,6 +148,35 @@ export interface TypingActor {
   actorName: string;
   actorType: ChannelTypingPayload["actor_type"];
   expiresAt: number;
+}
+
+function actorDisplayName(
+  actor: { display_name?: string | null; name?: string | null },
+  fallback: string,
+): string {
+  return actor.display_name?.trim() || actor.name?.trim() || fallback;
+}
+
+function actorHandle(name?: string | null): string {
+  return name?.trim().replace(/^@+/, "") || "";
+}
+
+function actorHandleLabel(name?: string | null): string | null {
+  const handle = actorHandle(name);
+  return handle ? `@${handle}` : null;
+}
+
+function matchesActorIdentity(displayName: string, handle: string, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+
+  const handleQuery = q.replace(/^@+/, "");
+  return (
+    displayName.toLowerCase().includes(q) ||
+    matchesPinyin(displayName, q) ||
+    (handleQuery.length > 0 &&
+      (handle.toLowerCase().includes(handleQuery) || matchesPinyin(handle, handleQuery)))
+  );
 }
 
 // Overlapping avatar stack for the channel roster (agents tinted by identity
@@ -181,13 +211,21 @@ function MemberStack({
           style={{ marginLeft: i === 0 ? 0 : -overlap }}
           className="inline-flex rounded-full ring-2 ring-background"
         >
-          <ActorAvatar
-            name={m.name || (m.member_type === "agent" ? "Agent" : "Member")}
-            initials={initialsOf(m.name || "?")}
-            isAgent={m.member_type === "agent"}
-            size={size}
-            tint={m.member_type === "agent" ? agentColor(m.member_id) : undefined}
-          />
+          {(() => {
+            const name = actorDisplayName(
+              m,
+              m.member_type === "agent" ? "Agent" : "Member",
+            );
+            return (
+              <ActorAvatar
+                name={name}
+                initials={initialsOf(name || "?")}
+                isAgent={m.member_type === "agent"}
+                size={size}
+                tint={m.member_type === "agent" ? agentColor(m.member_id) : undefined}
+              />
+            );
+          })()}
         </span>
       ))}
       {overflow > 0 && (
@@ -413,29 +451,52 @@ export function ChannelsPage() {
   const availableAgents = agents.filter((a) => !agentIds.has(a.id) && !a.archived_at);
   // Flat, searchable candidate list (users + agents) for the invite tab.
   const inviteCandidates = useMemo(() => {
-    const q = memberQuery.trim().toLowerCase();
+    const q = memberQuery.trim();
     const list = [
-      ...availableMembers.map((m) => ({
-        key: `user:${m.user_id}`,
-        type: "user" as const,
-        id: m.user_id,
-        name: m.name || m.email,
-      })),
-      ...availableAgents.map((a) => ({
-        key: `agent:${a.id}`,
-        type: "agent" as const,
-        id: a.id,
-        name: a.name,
-      })),
+      ...availableMembers.map((m) => {
+        const displayName = actorDisplayName(m, m.email);
+        const handle = actorHandle(m.name);
+        return {
+          key: `user:${m.user_id}`,
+          type: "user" as const,
+          id: m.user_id,
+          name: displayName,
+          handle,
+          handleLabel: actorHandleLabel(m.name),
+        };
+      }),
+      ...availableAgents.map((a) => {
+        const displayName = actorDisplayName(a, "Agent");
+        const handle = actorHandle(a.name);
+        return {
+          key: `agent:${a.id}`,
+          type: "agent" as const,
+          id: a.id,
+          name: displayName,
+          handle,
+          handleLabel: actorHandleLabel(a.name),
+        };
+      }),
     ];
-    return q ? list.filter((c) => c.name.toLowerCase().includes(q)) : list;
+    return q ? list.filter((c) => matchesActorIdentity(c.name, c.handle, q)) : list;
   }, [availableMembers, availableAgents, memberQuery]);
   const filteredMembers = useMemo(() => {
-    const q = memberQuery.trim().toLowerCase();
+    const q = memberQuery.trim();
     return q
-      ? channelMembers.filter((m) => (m.name || "").toLowerCase().includes(q))
+      ? channelMembers.filter((m) =>
+          matchesActorIdentity(
+            actorDisplayName(
+              m,
+              m.member_type === "agent"
+                ? t(($) => $.message.agent_badge)
+                : t(($) => $.members.title),
+            ),
+            actorHandle(m.name),
+            q,
+          ),
+        )
       : channelMembers;
-  }, [channelMembers, memberQuery]);
+  }, [channelMembers, memberQuery, t]);
   // Scope the composer's @ picker to this channel's members only.
   const channelMemberIds = useMemo(
     () => new Set(channelMembers.map((m) => m.member_id)),
@@ -453,7 +514,10 @@ export function ChannelsPage() {
     [active?.id, typingActors],
   );
   const rosterSummary = useMemo(
-    () => channelMembers.map((m) => m.name || (m.member_type === "agent" ? "Agent" : "成员")).join("，"),
+    () =>
+      channelMembers
+        .map((m) => actorDisplayName(m, m.member_type === "agent" ? "Agent" : "成员"))
+        .join("，"),
     [channelMembers],
   );
   const sortedChannels = useMemo(
@@ -965,7 +1029,14 @@ export function ChannelsPage() {
                     size={26}
                     tint={c.type === "agent" ? agentColor(c.id) : undefined}
                   />
-                  <span className="min-w-0 flex-1 truncate text-sm">{c.name}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm">{c.name}</span>
+                    {c.handleLabel ? (
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {c.handleLabel}
+                      </span>
+                    ) : null}
+                  </span>
                 </label>
               ))
             )}
@@ -994,11 +1065,13 @@ export function ChannelsPage() {
           ) : (
             filteredMembers.map((m) => {
               const isAgent = m.member_type === "agent";
-              const name =
-                m.name ||
-                (isAgent
+              const name = actorDisplayName(
+                m,
+                isAgent
                   ? t(($) => $.message.agent_badge)
-                  : t(($) => $.members.title));
+                  : t(($) => $.members.title),
+              );
+              const handleLabel = actorHandleLabel(m.name);
               return (
                 <div
                   key={`${m.member_type}:${m.member_id}`}
@@ -1006,12 +1079,19 @@ export function ChannelsPage() {
                 >
                   <ActorAvatar
                     name={name}
-                    initials={initialsOf(m.name || "?")}
+                    initials={initialsOf(name || "?")}
                     isAgent={isAgent}
                     size={26}
                     tint={isAgent ? agentColor(m.member_id) : undefined}
                   />
-                  <span className="min-w-0 flex-1 truncate text-sm">{name}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm">{name}</span>
+                    {handleLabel ? (
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {handleLabel}
+                      </span>
+                    ) : null}
+                  </span>
                   {/* Send message: agents always, users except yourself (the
                       backend rejects a self-DM). Create-or-find then open it. */}
                   {(isAgent || m.member_id !== currentUserId) && (

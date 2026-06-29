@@ -72,6 +72,7 @@ export function ChatContactList({
         <div className="min-h-0 flex-1 overflow-y-auto py-1">
           {contacts.map(({ agent, sessionId, hasUnread, updatedAt }) => {
             const active = agent.id === activeAgentId;
+            const displayName = agent.display_name || agent.name;
             return (
               <button
                 key={agent.id}
@@ -84,8 +85,8 @@ export function ChatContactList({
               >
                 <div className="relative shrink-0">
                   <ActorAvatar
-                    name={agent.name}
-                    initials={initialsOf(agent.name)}
+                    name={displayName}
+                    initials={initialsOf(displayName)}
                     avatarUrl={agent.avatar_url}
                     isAgent
                     size={28}
@@ -102,7 +103,7 @@ export function ChatContactList({
                       hasUnread ? "font-semibold" : "font-normal",
                     )}
                   >
-                    {agent.name}
+                    {displayName}
                   </p>
                   <span className="text-[11px] text-muted-foreground">
                     {timeAgo(updatedAt)}

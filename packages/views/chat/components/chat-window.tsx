@@ -863,10 +863,18 @@ export function AgentDropdown({
   }, [agents, userId]);
 
   const query = filter.trim().toLowerCase();
-  const matches = (name: string) =>
-    !query || name.toLowerCase().includes(query) || matchesPinyin(name, query);
-  const filteredMine = mine.filter((agent) => matches(agent.name));
-  const filteredOthers = others.filter((agent) => matches(agent.name));
+  const matches = (agent: Agent) => {
+    if (!query) return true;
+    const displayName = agent.display_name || agent.name;
+    return (
+      displayName.toLowerCase().includes(query) ||
+      agent.name.toLowerCase().includes(query) ||
+      matchesPinyin(displayName, query) ||
+      matchesPinyin(agent.name, query)
+    );
+  };
+  const filteredMine = mine.filter(matches);
+  const filteredOthers = others.filter(matches);
 
   const handlePick = (agent: Agent) => {
     onSelect(agent);
@@ -876,6 +884,7 @@ export function AgentDropdown({
   if (!activeAgent) {
     return <span className="text-xs text-muted-foreground">{t(($) => $.window.no_agents)}</span>;
   }
+  const activeAgentDisplayName = activeAgent.display_name || activeAgent.name;
 
   return (
     <PropertyPicker
@@ -902,7 +911,7 @@ export function AgentDropdown({
             enableHoverCard
             showStatusDot
           />
-          <span className="text-xs font-medium max-w-28 truncate">{activeAgent.name}</span>
+          <span className="text-xs font-medium max-w-28 truncate">{activeAgentDisplayName}</span>
           <ChevronDown className="size-3 text-muted-foreground shrink-0" />
         </>
       }
@@ -950,6 +959,7 @@ function AgentPickerItem({
   isCurrent: boolean;
   onSelect: (agent: Agent) => void;
 }) {
+  const displayName = agent.display_name || agent.name;
   return (
     <PickerItem
       selected={isCurrent}
@@ -962,7 +972,7 @@ function AgentPickerItem({
         enableHoverCard
         showStatusDot
       />
-      <span className="truncate flex-1">{agent.name}</span>
+      <span className="truncate flex-1">{displayName}</span>
     </PickerItem>
   );
 }

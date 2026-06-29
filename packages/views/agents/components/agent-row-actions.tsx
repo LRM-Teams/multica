@@ -68,6 +68,7 @@ export function AgentRowActions({
   const { t } = useT("agents");
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
+  const displayName = agent.display_name || agent.name;
 
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -200,7 +201,7 @@ export function AgentRowActions({
           >
             <AlertDialogHeader>
               <AlertDialogTitle>
-                {t(($) => $.row_actions.cancel_dialog_title, { name: agent.name })}
+                {t(($) => $.row_actions.cancel_dialog_title, { name: displayName })}
               </AlertDialogTitle>
               <AlertDialogDescription>
                 {describeCancelImpact(runningCount, queuedCount, t)}
@@ -239,7 +240,7 @@ export function AgentRowActions({
                 </div>
                 <div className="flex-1">
                   <AlertDialogTitle>
-                    {t(($) => $.row_actions.archive_dialog_title, { name: agent.name })}
+                    {t(($) => $.row_actions.archive_dialog_title, { name: displayName })}
                   </AlertDialogTitle>
                   <AlertDialogDescription>
                     {t(($) => $.row_actions.archive_dialog_description)}

@@ -27,6 +27,7 @@ import { Command as CommandPrimitive } from "cmdk";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type {
+  Agent,
   MemberWithUser,
   SearchIssueResult,
   SearchProjectResult,
@@ -130,11 +131,28 @@ function SendMessageButton({
 }
 
 function matchesMember(member: MemberWithUser, query: string) {
+  const displayName = member.display_name || member.name;
   return (
+    displayName.toLowerCase().includes(query) ||
     member.name.toLowerCase().includes(query) ||
     member.email.toLowerCase().includes(query) ||
     (query.length >= 3 && member.role.startsWith(query)) ||
+    matchesPinyin(displayName, query) ||
     matchesPinyin(member.name, query)
+  );
+}
+
+function agentDisplayName(agent: Pick<Agent, "display_name" | "name">) {
+  return agent.display_name || agent.name;
+}
+
+function matchesAgent(agent: Agent, query: string) {
+  const displayName = agentDisplayName(agent);
+  return (
+    displayName.toLowerCase().includes(query) ||
+    agent.name.toLowerCase().includes(query) ||
+    matchesPinyin(displayName, query) ||
+    matchesPinyin(agent.name, query)
   );
 }
 
@@ -373,8 +391,7 @@ export function SearchCommand() {
       .filter(
         (a) =>
           wantsAllAgents ||
-          a.name.toLowerCase().includes(q) ||
-          matchesPinyin(a.name, q),
+          matchesAgent(a, q),
       )
       .slice(0, 10);
   }, [agents, query]);
@@ -602,7 +619,10 @@ export function SearchCommand() {
                 <div className="px-3 py-1.5 text-xs font-medium text-muted-foreground">
                   {t(($) => $.groups.members)}
                 </div>
-                {filteredMembers.map((member) => (
+                {filteredMembers.map((member) => {
+                  const displayName = member.display_name || member.name;
+                  const handle = `@${member.name.replace(/^@+/, "")}`;
+                  return (
                   <CommandPrimitive.Item
                     key={member.user_id}
                     value={`member:${member.user_id}`}
@@ -610,17 +630,23 @@ export function SearchCommand() {
                     className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
                   >
                     <ActorAvatarBase
-                      name={member.name}
-                      initials={memberInitials(member.name)}
+                      name={displayName}
+                      initials={memberInitials(displayName)}
                       avatarUrl={resolvePublicFileUrl(member.avatar_url)}
                       size={22}
                     />
                     <div className="min-w-0 flex-1">
                       <div className="truncate">
-                        <HighlightText text={member.name} query={query} />
+                        <HighlightText text={displayName} query={query} />
                       </div>
                       <div className="truncate text-xs text-muted-foreground">
-                        <HighlightText text={member.email} query={query} />
+                        <span>
+                          <HighlightText text={handle} query={query} />
+                        </span>
+                        <span aria-hidden> · </span>
+                        <span>
+                          <HighlightText text={member.email} query={query} />
+                        </span>
                       </div>
                     </div>
                     <SendMessageButton
@@ -628,7 +654,8 @@ export function SearchCommand() {
                       onSend={() => handleSendMessage("user", member.user_id)}
                     />
                   </CommandPrimitive.Item>
-                ))}
+                  );
+                })}
               </CommandPrimitive.Group>
             )}
 
@@ -637,7 +664,10 @@ export function SearchCommand() {
                 <div className="px-3 py-1.5 text-xs font-medium text-muted-foreground">
                   {t(($) => $.groups.agents)}
                 </div>
-                {filteredAgents.map((agent) => (
+                {filteredAgents.map((agent) => {
+                  const displayName = agentDisplayName(agent);
+                  const handle = `@${agent.name.replace(/^@+/, "")}`;
+                  return (
                   <CommandPrimitive.Item
                     key={agent.id}
                     value={`agent:${agent.id}`}
@@ -645,21 +675,27 @@ export function SearchCommand() {
                     className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
                   >
                     <ActorAvatarBase
-                      name={agent.name}
-                      initials={memberInitials(agent.name)}
+                      name={displayName}
+                      initials={memberInitials(displayName)}
                       avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
                       isAgent
                       size={22}
                     />
-                    <div className="min-w-0 flex-1 truncate">
-                      <HighlightText text={agent.name} query={query} />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate">
+                        <HighlightText text={displayName} query={query} />
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        <HighlightText text={handle} query={query} />
+                      </div>
                     </div>
                     <SendMessageButton
                       label={t(($) => $.actions.send_message)}
                       onSend={() => handleSendMessage("agent", agent.id)}
                     />
                   </CommandPrimitive.Item>
-                ))}
+                  );
+                })}
               </CommandPrimitive.Group>
             )}
 

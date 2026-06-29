@@ -127,7 +127,6 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
 // ---------------------------------------------------------------------------
 
 const MAX_ITEMS = 20;
-const SERVER_ISSUE_SEARCH_LIMIT = 20;
 const SERVER_CONTEXT_SEARCH_LIMIT = 8;
 const SERVER_SEARCH_DEBOUNCE_MS = 150;
 
@@ -213,6 +212,12 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
         return;
       }
 
+      if (!includeProjectSearch) {
+        setIsSearching(false);
+        setSearchedQuery(q);
+        return;
+      }
+
       const wsId = getCurrentWsId();
       if (!wsId) {
         setIsSearching(false);
@@ -227,37 +232,25 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       const timer = setTimeout(() => {
         void (async () => {
           try {
-            if (includeProjectSearch) {
-              const [issues, projects] = await Promise.all([
-                api.searchIssues({
-                  q,
-                  limit: SERVER_CONTEXT_SEARCH_LIMIT,
-                  include_closed: true,
-                  signal: controller.signal,
-                }),
-                api.searchProjects({
-                  q,
-                  limit: SERVER_CONTEXT_SEARCH_LIMIT,
-                  include_closed: true,
-                  signal: controller.signal,
-                }),
-              ]);
-              if (!cancelled && !controller.signal.aborted) {
-                setServerItems([
-                  ...issues.issues.map((issue) => ({ ...issueToMention(issue), group: "search" as const })),
-                  ...projects.projects.map((project) => ({ ...projectToMention(project), group: "search" as const })),
-                ]);
-              }
-            } else {
-              const res = await api.searchIssues({
+            const [issues, projects] = await Promise.all([
+              api.searchIssues({
                 q,
-                limit: SERVER_ISSUE_SEARCH_LIMIT,
+                limit: SERVER_CONTEXT_SEARCH_LIMIT,
                 include_closed: true,
                 signal: controller.signal,
-              });
-              if (!cancelled && !controller.signal.aborted) {
-                setServerItems(res.issues.map(issueToMention));
-              }
+              }),
+              api.searchProjects({
+                q,
+                limit: SERVER_CONTEXT_SEARCH_LIMIT,
+                include_closed: true,
+                signal: controller.signal,
+              }),
+            ]);
+            if (!cancelled && !controller.signal.aborted) {
+              setServerItems([
+                ...issues.issues.map((issue) => ({ ...issueToMention(issue), group: "search" as const })),
+                ...projects.projects.map((project) => ({ ...projectToMention(project), group: "search" as const })),
+              ]);
             }
           } catch {
             // Aborted or network error: keep the synchronous cache results.
@@ -702,7 +695,7 @@ export function createMentionSuggestion(
 
     // Cached issues give an instant first paint; MentionList adds server
     // matches for done/cancelled and any other issues not in this cache.
-    const issueItems: MentionItem[] = allow
+    const issueItems: MentionItem[] = options.mode !== "context" || allow
       ? []
       : cachedIssues
           .filter(

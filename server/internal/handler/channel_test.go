@@ -796,12 +796,14 @@ func seedChannelForTest(t *testing.T, name string, memberIDs ...string) string {
 func createChannelPlainMember(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
-	email := "channel-plain-" + uuid.NewString() + "@multica.test"
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
+	name := "channel_plain_" + suffix
+	email := "channel-plain-" + suffix + "@multica.test"
 	var userID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO "user" (name, email)
-		VALUES ('Channel Plain Member', $1)
-		RETURNING id`, email).Scan(&userID); err != nil {
+		INSERT INTO "user" (name, display_name, email)
+		VALUES ($1, 'Channel Plain Member', $2)
+		RETURNING id`, name, email).Scan(&userID); err != nil {
 		t.Fatalf("create plain member user: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `

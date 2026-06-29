@@ -490,8 +490,50 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 	// before the queued one (rare but unsafe-by-construction). Publishing
 	// in the desired observe-order makes correctness independent of timing.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
+	s.interruptInFlightIssueTasksForFollowup(ctx, task)
 	s.NotifyTaskEnqueued(ctx, task)
 	return task, nil
+}
+
+func (s *TaskService) interruptInFlightIssueTasksForFollowup(ctx context.Context, task db.AgentTaskQueue) {
+	if !task.TriggerCommentID.Valid || !task.IssueID.Valid {
+		return
+	}
+	cancelled, err := s.Queries.CancelInFlightTasksByIssueAndAgent(ctx, db.CancelInFlightTasksByIssueAndAgentParams{
+		IssueID: task.IssueID,
+		AgentID: task.AgentID,
+		ID:      task.ID,
+	})
+	if err != nil {
+		slog.Warn("follow-up interrupt failed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID), "agent_id", util.UUIDToString(task.AgentID), "error", err)
+		return
+	}
+	s.broadcastFollowupInterruptedTasks(ctx, cancelled)
+}
+
+func (s *TaskService) interruptInFlightChatTasksForFollowup(ctx context.Context, task db.AgentTaskQueue) {
+	if !task.ChatSessionID.Valid {
+		return
+	}
+	cancelled, err := s.Queries.CancelInFlightChatTasksBySessionAndAgent(ctx, db.CancelInFlightChatTasksBySessionAndAgentParams{
+		ChatSessionID: task.ChatSessionID,
+		AgentID:       task.AgentID,
+		ID:            task.ID,
+	})
+	if err != nil {
+		slog.Warn("chat follow-up interrupt failed", "task_id", util.UUIDToString(task.ID), "chat_session_id", util.UUIDToString(task.ChatSessionID), "agent_id", util.UUIDToString(task.AgentID), "error", err)
+		return
+	}
+	s.broadcastFollowupInterruptedTasks(ctx, cancelled)
+}
+
+func (s *TaskService) broadcastFollowupInterruptedTasks(ctx context.Context, tasks []db.AgentTaskQueue) {
+	for _, t := range tasks {
+		slog.Info("task interrupted by newer guidance", "task_id", util.UUIDToString(t.ID), "issue_id", util.UUIDToString(t.IssueID), "chat_session_id", util.UUIDToString(t.ChatSessionID), "agent_id", util.UUIDToString(t.AgentID))
+		s.captureTaskCancelled(ctx, t)
+		s.ReconcileAgentStatus(ctx, t.AgentID)
+		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
+	}
 }
 
 // EnqueueTaskForMention creates a queued task for a mentioned agent on an issue.
@@ -544,6 +586,7 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 	slog.Info("mention task enqueued", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "is_leader_task", isLeader)
 	// See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
+	s.interruptInFlightIssueTasksForFollowup(ctx, task)
 	s.NotifyTaskEnqueued(ctx, task)
 	return task, nil
 }
@@ -736,6 +779,7 @@ func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSe
 	slog.Info("chat task enqueued", "task_id", util.UUIDToString(task.ID), "chat_session_id", util.UUIDToString(chatSession.ID), "agent_id", util.UUIDToString(chatSession.AgentID))
 	// See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
+	s.interruptInFlightChatTasksForFollowup(ctx, task)
 	s.NotifyTaskEnqueued(ctx, task)
 	return task, nil
 }
@@ -964,8 +1008,15 @@ func (s *TaskService) claimTask(ctx context.Context, agentID, runtimeID pgtype.U
 		outcome = "error_count_running"
 		return nil, fmt.Errorf("count running tasks: %w", err)
 	}
-	if running >= int64(agent.MaxConcurrentTasks) {
-		slog.Debug("task claim: no capacity", "agent_id", util.UUIDToString(agentID), "running", running, "max", agent.MaxConcurrentTasks, "chat_only", chatOnly)
+	capacity := int64(agent.MaxConcurrentTasks)
+	if chatOnly {
+		// Chat bypass is intentionally a single interrupt lane, not another full
+		// max_concurrent_tasks pool. This keeps @mention replies responsive without
+		// allowing max issue work + max chat work to run at once.
+		capacity = 1
+	}
+	if running >= capacity {
+		slog.Debug("task claim: no capacity", "agent_id", util.UUIDToString(agentID), "running", running, "max", agent.MaxConcurrentTasks, "capacity", capacity, "chat_only", chatOnly)
 		outcome = "no_capacity"
 		return nil, nil // No capacity
 	}

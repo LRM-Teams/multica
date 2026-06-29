@@ -2834,6 +2834,118 @@ func TestBacklogNoTriggerOnCreate(t *testing.T) {
 	testHandler.DeleteIssue(httptest.NewRecorder(), cleanupReq)
 }
 
+func TestFollowupCommentInterruptsRunningIssueTask(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	agentID := createHandlerTestAgent(t, "Followup Interrupt Issue Agent", nil)
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, assignee_type, assignee_id, number, position)
+		VALUES (
+			$1, 'followup interrupt issue', 'in_progress', 'medium', $2, 'member', 'agent', $3,
+			(SELECT COALESCE(MAX(number), 92000) + 1 FROM issue WHERE workspace_id = $1),
+			0
+		)
+		RETURNING id
+	`, testWorkspaceID, testUserID, agentID).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		testPool.Exec(ctx, `DELETE FROM comment WHERE issue_id = $1`, issueID)
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+
+	runningTaskID := createHandlerTestTaskForAgentOnIssue(t, agentID, issueID)
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues/"+issueID+"/comments", map[string]any{
+		"content": "Use the @lenovo.com suffix before continuing.",
+	})
+	req = withURLParam(req, "id", issueID)
+	testHandler.CreateComment(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateComment: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status, reason string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, COALESCE(failure_reason, '')
+		FROM agent_task_queue WHERE id = $1
+	`, runningTaskID).Scan(&status, &reason); err != nil {
+		t.Fatalf("load interrupted task: %v", err)
+	}
+	if status != "cancelled" || reason != "followup_interrupt" {
+		t.Fatalf("running task = (%q, %q), want (cancelled, followup_interrupt)", status, reason)
+	}
+
+	var queued int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_task_queue
+		WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued' AND trigger_comment_id IS NOT NULL
+	`, issueID, agentID).Scan(&queued); err != nil {
+		t.Fatalf("count queued followup task: %v", err)
+	}
+	if queued != 1 {
+		t.Fatalf("queued follow-up tasks = %d, want 1", queued)
+	}
+}
+
+func TestFollowupChatInterruptsRunningChatTask(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	agentID := createHandlerTestAgent(t, "Followup Interrupt Chat Agent", nil)
+	var sessionID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title)
+		VALUES ($1, $2, $3, 'followup chat interrupt')
+		RETURNING id
+	`, testWorkspaceID, agentID, testUserID).Scan(&sessionID); err != nil {
+		t.Fatalf("create chat session: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, sessionID) })
+
+	var runningTaskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, started_at)
+		VALUES ($1, $2, $3, 'running', 2, now())
+		RETURNING id
+	`, agentID, handlerTestRuntimeID(t), sessionID).Scan(&runningTaskID); err != nil {
+		t.Fatalf("create running chat task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, runningTaskID) })
+
+	session, err := testHandler.Queries.GetChatSession(ctx, parseUUID(sessionID))
+	if err != nil {
+		t.Fatalf("load chat session: %v", err)
+	}
+	followup, err := testHandler.TaskService.EnqueueChatTask(ctx, session, parseUUID(testUserID))
+	if err != nil {
+		t.Fatalf("enqueue follow-up chat task: %v", err)
+	}
+
+	var status, reason string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, COALESCE(failure_reason, '')
+		FROM agent_task_queue WHERE id = $1
+	`, runningTaskID).Scan(&status, &reason); err != nil {
+		t.Fatalf("load interrupted chat task: %v", err)
+	}
+	if status != "cancelled" || reason != "followup_interrupt" {
+		t.Fatalf("running chat task = (%q, %q), want (cancelled, followup_interrupt)", status, reason)
+	}
+	if followup.Status != "queued" {
+		t.Fatalf("follow-up chat task status = %q, want queued", followup.Status)
+	}
+}
+
 // TestHumanDoneCancelsActiveIssueTasks verifies that manually closing an issue
 // releases any active task occupying the assignee's concurrency slot.
 func TestHumanDoneCancelsActiveIssueTasks(t *testing.T) {

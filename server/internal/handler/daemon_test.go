@@ -367,6 +367,60 @@ func TestClaimTaskByRuntime_ClaimsChatWhenIssueTaskConsumesCapacity(t *testing.T
 	}
 }
 
+func TestClaimTaskByRuntime_ChatBypassUsesSingleInterruptSlot(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := createClaimReclaimRuntime(t, ctx, "Chat single slot runtime")
+	agentID, _ := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Chat single slot agent")
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET max_concurrent_tasks = 3 WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("setup: widen max_concurrent_tasks: %v", err)
+	}
+
+	var runningChatSessionID, queuedChatSessionID string
+	for i, dest := range []*string{&runningChatSessionID, &queuedChatSessionID} {
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO chat_session (workspace_id, agent_id, creator_id, title)
+			VALUES ($1, $2, $3, $4)
+			RETURNING id
+		`, testWorkspaceID, agentID, testUserID, fmt.Sprintf("chat slot session %d", i)).Scan(dest); err != nil {
+			t.Fatalf("setup: create chat session %d: %v", i, err)
+		}
+		sid := *dest
+		t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, sid) })
+		if _, err := testPool.Exec(ctx, `INSERT INTO chat_message (chat_session_id, role, content) VALUES ($1, 'user', 'ping')`, sid); err != nil {
+			t.Fatalf("setup: insert chat message %d: %v", i, err)
+		}
+	}
+
+	var runningChatTaskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, started_at)
+		VALUES ($1, $2, $3, 'running', 2, now())
+		RETURNING id
+	`, agentID, runtimeID, runningChatSessionID).Scan(&runningChatTaskID); err != nil {
+		t.Fatalf("setup: create running chat task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, runningChatTaskID) })
+
+	var queuedChatTaskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority)
+		VALUES ($1, $2, $3, 'queued', 2)
+		RETURNING id
+	`, agentID, runtimeID, queuedChatSessionID).Scan(&queuedChatTaskID); err != nil {
+		t.Fatalf("setup: create queued chat task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, queuedChatTaskID) })
+
+	task, body := claimTaskByRuntimeForTest(t, runtimeID)
+	if task != nil {
+		t.Fatalf("expected second chat task %s to wait for the single chat interrupt slot, got %s in %s", queuedChatTaskID, task.ID, body)
+	}
+}
+
 // TestClaimTaskByRuntime_PopulatesWorkspaceContext verifies the claim
 // response carries workspace.context so the daemon can inject the
 // workspace-level system prompt into every agent brief. Regression coverage

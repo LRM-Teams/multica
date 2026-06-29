@@ -127,6 +127,7 @@ import {
   AlertDialogTitle,
 } from "@multica/ui/components/ui/alert-dialog";
 import { cn } from "@multica/ui/lib/utils";
+import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 import { ContentEditor, type ContentEditorRef } from "../../editor";
 import { useNavigation } from "../../navigation";
 import { agentColor } from "../../common/agent-color";
@@ -1990,9 +1991,12 @@ export function ChannelsPage() {
         // compresses (`min-h-0 flex-1 overflow-y-auto`, inside detailPane) and
         // the composer is the pinned last flex child (non-absolute). 100vh would
         // include the keyboard's area and push the composer off-screen.
-        <div className="flex h-[100dvh] min-h-0 min-w-0 flex-col bg-background">
-          {active || activeDmId ? detailSurface : listPane}
-        </div>
+        <MobileListDetailLayout
+          className="h-[100dvh] min-h-0 min-w-0 bg-background"
+          showDetail={!!(active || activeDmId)}
+          list={listPane}
+          detail={detailSurface}
+        />
       ) : (
         <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
           <ResizablePanel id="list" defaultSize={280} minSize={240} maxSize={480} groupResizeBehavior="preserve-pixel-size" className="flex min-h-0 flex-col">

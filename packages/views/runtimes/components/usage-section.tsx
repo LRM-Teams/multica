@@ -56,6 +56,15 @@ const TIME_RANGES = [
 type TimeRange = (typeof TIME_RANGES)[number]["days"];
 type WhenTab = "daily" | "weekly" | "heatmap";
 
+function agentDisplayName(agent: { display_name?: string | null; name?: string | null } | undefined, fallback: string) {
+  return agent?.display_name?.trim() || agent?.name?.trim() || fallback;
+}
+
+function agentHandleLabel(agent: { display_name?: string | null; name?: string | null } | undefined) {
+  const handle = agent?.name?.trim();
+  return handle ? `@${handle}` : null;
+}
+
 // Default time range per dimension. Switching dimensions resets the period
 // to its default rather than keeping a now-invalid value.
 const DEFAULT_DAYS_BY_DIM: Record<Exclude<WhenTab, "heatmap">, TimeRange> = {
@@ -665,11 +674,20 @@ function CostByBlock({
             rows={byAgent}
             renderKey={(key) => {
               const agent = agents.find((a) => a.id === key);
+              const displayName = agentDisplayName(agent, key);
+              const handleLabel = agentHandleLabel(agent);
               return (
                 <div className="flex min-w-0 items-center gap-2">
                   <ActorAvatar actorType="agent" actorId={key} size={22} enableHoverCard />
-                  <span className="cursor-pointer truncate text-sm font-medium">
-                    {agent?.name ?? key}
+                  <span className="flex min-w-0 flex-col">
+                    <span className="cursor-pointer truncate text-sm font-medium">
+                      {displayName}
+                    </span>
+                    {handleLabel && displayName !== agent?.name ? (
+                      <span className="truncate text-[11px] text-muted-foreground">
+                        {handleLabel}
+                      </span>
+                    ) : null}
                   </span>
                 </div>
               );
@@ -870,4 +888,3 @@ function computeTotals(rows: RuntimeUsage[]): UsageTotals {
     { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, cacheSavings: 0 },
   );
 }
-

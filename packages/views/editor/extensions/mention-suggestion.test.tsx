@@ -49,6 +49,12 @@ vi.mock("@multica/core/auth", () => ({
   useAuthStore: { getState: () => authState },
 }));
 
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => (
+    <span data-testid="actor-avatar" data-actor-id={actorId} />
+  ),
+}));
+
 import {
   createMentionSuggestion,
   MentionList,
@@ -144,6 +150,30 @@ describe("createMentionSuggestion", () => {
       handle: "agent_aegis",
       secondaryLabel: "@agent_aegis",
     }));
+  });
+
+  it("renders broadcast as a top row and keeps members and agents in one section", () => {
+    render(
+      <I18nWrapper>
+        <MentionList
+          items={[
+            { id: "all", label: "All members", type: "all" },
+            { id: "u1", label: "Alice", type: "member", handle: "alice", secondaryLabel: "@alice" },
+            { id: "a1", label: "Aegis", type: "agent", handle: "agent_aegis", secondaryLabel: "@agent_aegis" },
+          ]}
+          query=""
+          command={vi.fn()}
+        />
+      </I18nWrapper>,
+    );
+
+    expect(screen.getByText("All members")).toBeInTheDocument();
+    expect(screen.getByText("Notify everyone in this conversation")).toBeInTheDocument();
+    expect(screen.getByText("Members")).toBeInTheDocument();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(screen.getByText("Aegis")).toBeInTheDocument();
+    expect(screen.queryByText("All")).not.toBeInTheDocument();
+    expect(screen.queryByText("Users")).not.toBeInTheDocument();
   });
 
   it("matches handles and ranks handle matches before display-name-only matches", () => {

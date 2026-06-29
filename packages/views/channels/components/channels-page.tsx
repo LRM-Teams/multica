@@ -140,6 +140,7 @@ import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { DmList } from "./dm-list";
 import { DmConversation } from "./dm-conversation";
+import { formatChannelMessagePreview, type MentionPreviewResolver } from "./message-preview";
 
 export interface TypingActor {
   key: string;
@@ -471,6 +472,17 @@ export function ChannelsPage() {
   const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
   const { data: workspaceMembers = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const resolveMentionPreview = useMemo<MentionPreviewResolver>(
+    () => (type, id, fallbackLabel) => {
+      if (type === "agent") {
+        const agent = agents.find((a) => a.id === id);
+        return agent?.display_name?.trim() || agent?.name?.trim() || fallbackLabel;
+      }
+      const member = workspaceMembers.find((m) => m.user_id === id);
+      return member?.display_name?.trim() || member?.name?.trim() || fallbackLabel;
+    },
+    [agents, workspaceMembers],
+  );
   // Desktop auto-selects the first channel so the stream pane is never blank.
   // Mobile is list-first: `active` resolves only from an explicit selection
   // (click or ?channel= deep link), so the list shows until the user opens a
@@ -1320,7 +1332,9 @@ export function ChannelsPage() {
                     const realUnread = channel.real_unread_count ?? channel.unread_count ?? 0;
                     const isManualDot = !!channel.manually_unread && realUnread === 0;
                     const last = channel.last_message;
-                    const preview = last ? `${last.author_name}: ${last.content}`.replace(/\s+/g, " ") : "";
+                    const preview = last
+                      ? formatChannelMessagePreview(last.author_name, last.content, resolveMentionPreview)
+                      : "";
                     const pinned = !!channel.pinned_at;
                     const archiveAllowed = canArchive(channel);
                     const channelMenuItems = (

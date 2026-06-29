@@ -41,6 +41,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT, useTimeAgo } from "../../i18n";
 import { useOpenDM } from "../../common/use-open-dm";
+import { formatChannelMessagePreview, type MentionPreviewResolver } from "./message-preview";
 
 /**
  * DIRECT MESSAGES sidebar region — the top half of the unified Messages
@@ -68,6 +69,8 @@ export function DmList({
   const timeAgo = useTimeAgo();
   const wsId = useWorkspaceId();
   const { data: dms = [], isLoading } = useQuery(dmListOptions(wsId));
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: members = [] } = useQuery(memberListOptions(wsId));
   const [collapsed, setCollapsed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -97,6 +100,17 @@ export function DmList({
   const sortedDms = useMemo(
     () => [...dms].sort((a, b) => (b.pinned_at ? 1 : 0) - (a.pinned_at ? 1 : 0)),
     [dms],
+  );
+  const resolveMentionPreview = useMemo<MentionPreviewResolver>(
+    () => (type, id, fallbackLabel) => {
+      if (type === "agent") {
+        const agent = agents.find((a) => a.id === id);
+        return agent?.display_name?.trim() || agent?.name?.trim() || fallbackLabel;
+      }
+      const member = members.find((m) => m.user_id === id);
+      return member?.display_name?.trim() || member?.name?.trim() || fallbackLabel;
+    },
+    [agents, members],
   );
 
   return (
@@ -157,6 +171,7 @@ export function DmList({
               active={activeId === dm.id}
               currentUserName={currentUserName}
               timeAgo={timeAgo}
+              resolveMentionPreview={resolveMentionPreview}
               onSelect={() => onSelect(dm)}
               onTogglePin={() => handleTogglePin(dm)}
               onMarkUnread={() => handleMarkUnread(dm)}
@@ -319,6 +334,7 @@ function DmRow({
   active,
   currentUserName,
   timeAgo,
+  resolveMentionPreview,
   onSelect,
   onTogglePin,
   onMarkUnread,
@@ -329,6 +345,7 @@ function DmRow({
   active: boolean;
   currentUserName: string | null;
   timeAgo: (dateStr: string) => string;
+  resolveMentionPreview: MentionPreviewResolver;
   onSelect: () => void;
   /** Pin / unpin (toggles based on current pinned state). */
   onTogglePin: () => void;
@@ -341,7 +358,9 @@ function DmRow({
 }) {
   const { t } = useT("channels");
   const last = dm.last_message;
-  const preview = last ? `${last.author_name}: ${last.content}`.replace(/\s+/g, " ") : "";
+  const preview = last
+    ? formatChannelMessagePreview(last.author_name, last.content, resolveMentionPreview)
+    : "";
   // Surface mentions of the viewer at full foreground weight (no bold) so an
   // @-mention reads as more salient than ordinary preview text.
   const mentionsUser =

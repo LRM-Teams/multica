@@ -78,6 +78,15 @@ const TIME_RANGES = [
 type TimeRange = (typeof TIME_RANGES)[number]["days"];
 type Dim = "daily" | "weekly";
 
+function agentDisplayName(agent: { display_name?: string | null; name?: string | null } | undefined, fallback: string) {
+  return agent?.display_name?.trim() || agent?.name?.trim() || fallback;
+}
+
+function agentHandleLabel(agent: { display_name?: string | null; name?: string | null } | undefined) {
+  const handle = agent?.name?.trim();
+  return handle ? `@${handle}` : null;
+}
+
 const DEFAULT_DAYS_BY_DIM: Record<Dim, TimeRange> = {
   daily: 30,
   weekly: 90,
@@ -687,6 +696,8 @@ function Leaderboard({
           <div className="divide-y">
             {sortedRows.map((row) => {
               const agent = agents.find((a) => a.id === row.agentId);
+              const displayName = agentDisplayName(agent, row.agentId);
+              const handleLabel = agentHandleLabel(agent);
               const value = SORT_METRIC[sortBy](row);
               const pct = maxValue > 0 ? (value / maxValue) * 100 : 0;
               return (
@@ -701,8 +712,15 @@ function Leaderboard({
                       size={22}
                       enableHoverCard
                     />
-                    <span className="cursor-pointer truncate text-sm font-medium">
-                      {agent?.name ?? row.agentId}
+                    <span className="flex min-w-0 flex-col">
+                      <span className="cursor-pointer truncate text-sm font-medium">
+                        {displayName}
+                      </span>
+                      {handleLabel && displayName !== agent?.name ? (
+                        <span className="truncate text-[11px] text-muted-foreground">
+                          {handleLabel}
+                        </span>
+                      ) : null}
                     </span>
                   </div>
                   <div className="relative h-2 overflow-hidden rounded-full bg-muted">

@@ -206,7 +206,9 @@ export function RuntimePicker({
                           actorId={ownerMember.user_id}
                           size={14}
                         />
-                        <span className="truncate">{ownerMember.name}</span>
+                        <span className="truncate">
+                          {ownerMember.display_name || ownerMember.name}
+                        </span>
                       </>
                     ) : (
                       <span className="truncate">{device.device_info}</span>

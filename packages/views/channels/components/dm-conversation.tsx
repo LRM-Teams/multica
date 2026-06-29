@@ -466,14 +466,10 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         searchHitIds={searchHitIds}
         searchQuery={searchHighlightQuery}
         emptyLabel={t(($) => $.dm.thread_empty)}
-        footer={
-          <>
-            <AgentWorkingIndicator tasks={activeTasks} />
-            <TypingIndicator actors={activeTypingActors} />
-          </>
-        }
+        footer={<TypingIndicator actors={activeTypingActors} />}
       />
       <div className="px-4 pb-4">
+        <AgentWorkingIndicator tasks={activeTasks} />
         <div className="rounded-xl border bg-card shadow-sm">
           <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
             <ContentEditor

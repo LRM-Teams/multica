@@ -111,7 +111,10 @@
     "queued": "待機中",
     "dispatched": "起動中",
     "running": "考え中",
-    "waiting_local_directory": "ローカルディレクトリを待機中"
+    "waiting_local_directory": "ローカルディレクトリを待機中",
+    "processing_single": "{{name}} が返信を準備しています...",
+    "processing_pair": "{{a}} と {{b}} が返信を準備しています...",
+    "processing_overflow": "{{a}}、{{b}} ほか {{count}} 人が返信を準備しています..."
   },
   "composer": {
     "placeholder": "必要なことを入力してください…  @エージェント名 で返信を促します。",

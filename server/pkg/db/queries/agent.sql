@@ -301,6 +301,28 @@ WHERE id = (
 )
 RETURNING *;
 
+-- name: ClaimAgentChatTask :one
+-- Claims the next queued chat task for an agent without considering active
+-- issue/autopilot/quick-create work. Group-channel @mentions are bridged
+-- through chat_session rows, and must remain responsive even while an issue
+-- task is running. Chat tasks still serialize per chat_session here.
+UPDATE agent_task_queue
+SET status = 'dispatched', dispatched_at = now()
+WHERE id = (
+    SELECT atq.id FROM agent_task_queue atq
+    WHERE atq.agent_id = $1 AND atq.runtime_id = $2 AND atq.status = 'queued' AND atq.chat_session_id IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM agent_task_queue active
+          WHERE active.agent_id = atq.agent_id
+            AND active.status IN ('dispatched', 'running', 'waiting_local_directory')
+            AND active.chat_session_id = atq.chat_session_id
+      )
+    ORDER BY atq.priority DESC, atq.created_at ASC
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING *;
+
 -- name: ReclaimStaleDispatchedTaskForRuntime :one
 -- Re-delivers a task whose previous claim likely succeeded server-side but
 -- whose response never reached the daemon. The task is still in `dispatched`
@@ -526,6 +548,12 @@ RETURNING *;
 -- name: CountRunningTasks :one
 SELECT count(*) FROM agent_task_queue
 WHERE agent_id = $1 AND status IN ('dispatched', 'running', 'waiting_local_directory');
+
+-- name: CountRunningChatTasks :one
+SELECT count(*) FROM agent_task_queue
+WHERE agent_id = $1
+  AND chat_session_id IS NOT NULL
+  AND status IN ('dispatched', 'running', 'waiting_local_directory');
 
 -- name: HasActiveTaskForIssue :one
 -- Returns true if there is any queued, dispatched, waiting_local_directory,

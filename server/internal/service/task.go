@@ -924,6 +924,17 @@ func (s *TaskService) finalizeCancelledChatMessage(ctx context.Context, task db.
 // ClaimTask atomically claims the next queued task for an agent,
 // respecting max_concurrent_tasks.
 func (s *TaskService) ClaimTask(ctx context.Context, agentID pgtype.UUID) (*db.AgentTaskQueue, error) {
+	return s.claimTask(ctx, agentID, pgtype.UUID{}, false)
+}
+
+// ClaimChatTask claims only chat-session-backed work for an agent. It is used
+// as a fallback when normal issue/autopilot/quick-create capacity is full so
+// channel @mentions stay responsive while long issue work is running.
+func (s *TaskService) ClaimChatTask(ctx context.Context, agentID, runtimeID pgtype.UUID) (*db.AgentTaskQueue, error) {
+	return s.claimTask(ctx, agentID, runtimeID, true)
+}
+
+func (s *TaskService) claimTask(ctx context.Context, agentID, runtimeID pgtype.UUID, chatOnly bool) (*db.AgentTaskQueue, error) {
 	start := time.Now()
 	var (
 		outcome                                                              = "unknown"
@@ -942,24 +953,37 @@ func (s *TaskService) ClaimTask(ctx context.Context, agentID pgtype.UUID) (*db.A
 	}
 
 	t0 = time.Now()
-	running, err := s.Queries.CountRunningTasks(ctx, agentID)
+	var running int64
+	if chatOnly {
+		running, err = s.Queries.CountRunningChatTasks(ctx, agentID)
+	} else {
+		running, err = s.Queries.CountRunningTasks(ctx, agentID)
+	}
 	countRunningMs = time.Since(t0).Milliseconds()
 	if err != nil {
 		outcome = "error_count_running"
 		return nil, fmt.Errorf("count running tasks: %w", err)
 	}
 	if running >= int64(agent.MaxConcurrentTasks) {
-		slog.Debug("task claim: no capacity", "agent_id", util.UUIDToString(agentID), "running", running, "max", agent.MaxConcurrentTasks)
+		slog.Debug("task claim: no capacity", "agent_id", util.UUIDToString(agentID), "running", running, "max", agent.MaxConcurrentTasks, "chat_only", chatOnly)
 		outcome = "no_capacity"
 		return nil, nil // No capacity
 	}
 
 	t0 = time.Now()
-	task, err := s.Queries.ClaimAgentTask(ctx, agentID)
+	var task db.AgentTaskQueue
+	if chatOnly {
+		task, err = s.Queries.ClaimAgentChatTask(ctx, db.ClaimAgentChatTaskParams{
+			AgentID:   agentID,
+			RuntimeID: runtimeID,
+		})
+	} else {
+		task, err = s.Queries.ClaimAgentTask(ctx, agentID)
+	}
 	claimAgentMs = time.Since(t0).Milliseconds()
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			slog.Debug("task claim: no tasks available", "agent_id", util.UUIDToString(agentID))
+			slog.Debug("task claim: no tasks available", "agent_id", util.UUIDToString(agentID), "chat_only", chatOnly)
 			outcome = "no_tasks"
 			return nil, nil // No tasks available
 		}
@@ -1086,6 +1110,14 @@ func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.
 			loopMs = time.Since(loopStart).Milliseconds()
 			outcome = "error_claim"
 			return nil, err
+		}
+		if task == nil {
+			task, err = s.ClaimChatTask(ctx, candidate.AgentID, runtimeID)
+			if err != nil {
+				loopMs = time.Since(loopStart).Milliseconds()
+				outcome = "error_claim_chat"
+				return nil, err
+			}
 		}
 		if task != nil && task.RuntimeID == runtimeID {
 			claimed = task

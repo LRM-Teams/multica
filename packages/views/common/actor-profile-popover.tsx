@@ -119,7 +119,7 @@ function ActorProfileContent({
   );
 }
 
-function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
+export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
   const { t } = useT("channels");
   const identity = {
     name: profile.name,

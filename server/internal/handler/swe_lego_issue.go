@@ -1,8 +1,12 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
+
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 // CreateSweLegoIssueRequest is the body of POST /api/v1/swe-lego/issues.
@@ -59,8 +63,69 @@ func (h *Handler) CreateSweLegoIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The service is wired in Task 9. For now, surface a 501 so the route
-	// exists and the auth/body-validation tests pass; Task 9 replaces this
-	// body with the real orchestration call.
-	writeError(w, http.StatusNotImplemented, "swe-lego issue orchestration not yet wired")
+	svc := service.NewSweLegoIssueService(newSweLegoDepsAdapter(h))
+	res, err := svc.Create(r.Context(), service.SweLegoIssueInput{
+		RepoURL: req.RepoURL, BaseCommit: req.BaseCommit, IssueDate: req.IssueDate,
+		IssueTitle: req.IssueTitle, IssueText: req.IssueText,
+		AcceptanceCriteria: req.AcceptanceCriteria,
+		FailToPass:         req.FailToPass, PassToPass: req.PassToPass,
+		GroupSize: req.GroupSize, AgentConfigID: req.AgentConfigID, BaseImage: req.BaseImage,
+	})
+	if err != nil {
+		// Image build failures → 502; sandbox/fork failures → 503.
+		status := http.StatusServiceUnavailable
+		if strings.Contains(err.Error(), "build image") {
+			status = http.StatusBadGateway
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, CreateSweLegoIssueResponse{
+		ProjectID: res.ProjectID, IssueID: res.IssueID, ImageID: res.ImageID,
+		BuildNodeID:          res.BuildNodeID, BaseSandboxID: res.BaseSandboxID,
+		BaseSandboxRuntimeID: res.BaseSandboxRuntimeID, AgentRunIDs: res.AgentRunIDs,
+	})
+}
+
+// sweLegoDepsAdapter bridges the *Handler (queries + cloud-runtime proxy) to
+// the service.SweLegoDeps seam. Each method wraps an existing query or
+// cloud-runtime call. Task 9 ships stubs so the handler compiles and the
+// route works end-to-end against a stub; Task 10 replaces them with real
+// queries + cloud-runtime calls.
+type sweLegoDepsAdapter struct {
+	h *Handler
+}
+
+func newSweLegoDepsAdapter(h *Handler) *sweLegoDepsAdapter { return &sweLegoDepsAdapter{h: h} }
+
+func (a *sweLegoDepsAdapter) CreateProject(ctx context.Context, name string) (string, error) {
+	return "stub-project", nil
+}
+
+func (a *sweLegoDepsAdapter) CreateIssue(ctx context.Context, projectID, title, body, criteria string, f2p, p2p []string) (string, error) {
+	return "stub-issue", nil
+}
+
+func (a *sweLegoDepsAdapter) BuildImage(ctx context.Context, repoURL, baseCommit, issueDate, baseImage string) (string, string, error) {
+	return "stub-image", "stub-node", nil
+}
+
+func (a *sweLegoDepsAdapter) BootBaseSandbox(ctx context.Context, imageRef, nodeID string) (string, string, error) {
+	return "stub-sandbox", "stub-runtime", nil
+}
+
+func (a *sweLegoDepsAdapter) ForkSandbox(ctx context.Context, sourceSandboxID string, idx int) (string, error) {
+	return "stub-fork", nil
+}
+
+func (a *sweLegoDepsAdapter) EnqueueAgentRun(ctx context.Context, issueID, sandboxID string, idx int) (string, error) {
+	return "stub-run", nil
+}
+
+func (a *sweLegoDepsAdapter) DeleteSandbox(ctx context.Context, sandboxID string) error {
+	return nil
+}
+
+func (a *sweLegoDepsAdapter) DeleteProject(ctx context.Context, projectID string) error {
+	return nil
 }

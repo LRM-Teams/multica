@@ -22,6 +22,7 @@ import { agentColor } from "../../common/agent-color";
 import { IssueChip } from "../../issues/components/issue-chip";
 import { ProjectChip } from "../../projects/components/project-chip";
 import { useT } from "../../i18n";
+import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 
 export function MentionView({ node }: NodeViewProps) {
   const { t } = useT("editor");
@@ -49,11 +50,29 @@ export function MentionView({ node }: NodeViewProps) {
   // The @all node stores an English label so its rendered "@all" text matches
   // the backend check; localize the display here.
   const displayLabel = type === "all" ? t(($) => $.mention.all_members) : (label ?? id);
+  const chip = (
+    <span className="mention" style={{ color: color.fg, backgroundColor: color.bg }}>
+      @{displayLabel}
+    </span>
+  );
+
+  if (type === "member" || type === "agent") {
+    return (
+      <NodeViewWrapper as="span" className="inline">
+        <ActorProfileTrigger
+          memberType={type === "agent" ? "agent" : "user"}
+          memberId={id}
+          triggerElement="span"
+        >
+          {chip}
+        </ActorProfileTrigger>
+      </NodeViewWrapper>
+    );
+  }
+
   return (
     <NodeViewWrapper as="span" className="inline">
-      <span className="mention" style={{ color: color.fg, backgroundColor: color.bg }}>
-        @{displayLabel}
-      </span>
+      {chip}
     </NodeViewWrapper>
   );
 }

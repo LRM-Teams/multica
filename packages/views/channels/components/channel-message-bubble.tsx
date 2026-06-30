@@ -146,21 +146,16 @@ export function ChannelMessageBubble({
 
   return (
     <ContextMenu>
-      <ContextMenuTrigger
-        className="select-text"
-        render={
-          <div
-            id={`message-${message.id}`}
-            data-testid="message-bubble"
-            data-own={isOwn}
-            tabIndex={0}
-            className={cn(
-              "group relative flex select-text gap-2.5 px-1 py-1.5 outline-none transition-colors duration-1000",
-              isOwn ? "flex-row-reverse" : "flex-row",
-              highlighted && "rounded-lg bg-primary/10 ring-1 ring-primary/25 duration-0",
-            )}
-          />
-        }
+      <div
+        id={`message-${message.id}`}
+        data-testid="message-bubble"
+        data-own={isOwn}
+        tabIndex={0}
+        className={cn(
+          "group relative flex select-text gap-2.5 px-1 py-1.5 outline-none transition-colors duration-1000",
+          isOwn ? "flex-row-reverse" : "flex-row",
+          highlighted && "rounded-lg bg-primary/10 ring-1 ring-primary/25 duration-0",
+        )}
       >
         {profileActorType && profileActorId ? (
           <ActorProfileTrigger
@@ -208,27 +203,32 @@ export function ChannelMessageBubble({
               {formatTime(message.created_at)}
             </span>
           </div>
-          <div
-            className={cn(
-              "w-fit min-w-0 max-w-full select-text overflow-hidden break-words rounded-lg border px-3 py-2 text-sm leading-6 shadow-none",
-              isOwn
-                ? "border-border/35 bg-background"
-                : isAgent
-                  ? "border-primary/10 bg-primary/[0.035]"
-                  : "border-border/35 bg-muted/30",
-            )}
-            data-testid="message-body"
-            onContextMenuCapture={(e) => {
-              if (hasTextSelectionWithin(e.currentTarget)) {
-                e.stopPropagation();
-              }
-            }}
-            onTouchStartCapture={(e) => {
-              if (e.target !== e.currentTarget) {
-                e.stopPropagation();
-              }
-            }}
-            style={{ WebkitTouchCallout: "default" }}
+          <ContextMenuTrigger
+            className="select-text"
+            render={
+              <div
+                className={cn(
+                  "w-fit min-w-0 max-w-full select-text overflow-hidden break-words rounded-lg border px-3 py-2 text-sm leading-6 shadow-none",
+                  isOwn
+                    ? "border-border/35 bg-background"
+                    : isAgent
+                      ? "border-primary/10 bg-primary/[0.035]"
+                      : "border-border/35 bg-muted/30",
+                )}
+                data-testid="message-body"
+                onContextMenuCapture={(e) => {
+                  if (hasTextSelectionWithin(e.currentTarget)) {
+                    e.stopPropagation();
+                  }
+                }}
+                onTouchStartCapture={(e) => {
+                  if (e.target !== e.currentTarget) {
+                    e.stopPropagation();
+                  }
+                }}
+                style={{ WebkitTouchCallout: "default" }}
+              />
+            }
           >
             {/* Inline quote block: rendered when reply_to is present (BE task #23) */}
             {message.reply_to && (
@@ -259,7 +259,7 @@ export function ChannelMessageBubble({
               content={message.content}
               className="mt-1.5"
             />
-          </div>
+          </ContextMenuTrigger>
           {onReact && (
             <ReactionBar
               reactions={message.reactions ?? []}
@@ -320,7 +320,7 @@ export function ChannelMessageBubble({
             </div>
           )}
         </div>
-      </ContextMenuTrigger>
+      </div>
 
       {/* Right-click / long-press context menu */}
       {(canQuote || canOpenThread) && (

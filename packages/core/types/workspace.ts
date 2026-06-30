@@ -83,7 +83,7 @@ export interface MemberWithUser {
 
 export interface MemberProfileActivityItem {
   id: string;
-  kind: "queued" | "working" | "failed" | "cancelled" | "task";
+  kind: "command" | "tool_use" | "text" | "queued" | "working" | "failed" | "cancelled" | "task";
   label: string;
   summary?: string;
   occurred_at: string;

@@ -178,7 +178,7 @@ function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
         <ProfileSection title={t(($) => $.profile_popover.recent_activity)}>
           {(profile.recent_activity ?? []).length > 0 ? (
             <div className="flex flex-col">
-              {(profile.recent_activity ?? []).slice(0, 3).map((activity) => (
+              {(profile.recent_activity ?? []).map((activity) => (
                 <ActivityRow key={activity.id} activity={activity} />
               ))}
             </div>

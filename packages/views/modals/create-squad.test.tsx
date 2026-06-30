@@ -228,6 +228,7 @@ function makeMember(user_id: string, name: string): MemberWithUser {
     display_name: name,
     email: `${user_id}@example.com`,
     avatar_url: null,
+    profile_description: "",
     created_at: "2026-01-01T00:00:00Z",
   };
 }

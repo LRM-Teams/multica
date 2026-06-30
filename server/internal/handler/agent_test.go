@@ -144,6 +144,87 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	}
 }
 
+func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "recent-activity-agent", []byte(`{}`))
+	longSummary := strings.Repeat("activity ", 30)
+
+	var olderID, newerID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, status, priority, trigger_summary,
+			created_at, started_at, completed_at, error
+		)
+		VALUES ($1, $2, 'failed', 0, $3, now() - interval '3 minutes',
+		        now() - interval '2 minutes', now() - interval '1 minute', 'raw stacktrace should not leak')
+		RETURNING id
+	`, agentID, handlerTestRuntimeID(t), longSummary).Scan(&olderID); err != nil {
+		t.Fatalf("insert older task: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, status, priority, trigger_summary,
+			created_at, started_at
+		)
+		VALUES ($1, $2, 'running', 0, 'newer work item', now() - interval '30 seconds',
+		        now() - interval '10 seconds')
+		RETURNING id
+	`, agentID, handlerTestRuntimeID(t)).Scan(&newerID); err != nil {
+		t.Fatalf("insert newer task: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id IN ($1, $2)`, olderID, newerID)
+	})
+
+	w := httptest.NewRecorder()
+	req := withRouteParams(
+		newRequest(http.MethodGet, "/api/member-profiles/agent/"+agentID, nil),
+		"memberType", "agent",
+		"memberId", agentID,
+	)
+	testHandler.GetMemberProfile(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetMemberProfile: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var profile MemberProfileResponse
+	if err := json.NewDecoder(w.Body).Decode(&profile); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if profile.MemberType != "agent" || profile.MemberID != agentID {
+		t.Fatalf("profile identity = %#v, want agent %s", profile, agentID)
+	}
+	if profile.Role != "Agent" {
+		t.Fatalf("agent profile role = %q, want Agent", profile.Role)
+	}
+	items := profile.RecentActivity
+	if len(items) != 2 {
+		t.Fatalf("expected 2 activity items, got %d: %#v", len(items), items)
+	}
+	if items[0].ID != newerID || items[0].Kind != "working" || items[0].Status != "running" {
+		t.Fatalf("newest activity = %#v, want running task %s", items[0], newerID)
+	}
+	if items[1].ID != olderID || items[1].Kind != "failed" || items[1].Status != "failed" {
+		t.Fatalf("older activity = %#v, want failed task %s", items[1], olderID)
+	}
+	if items[1].Summary == nil {
+		t.Fatal("expected failed task summary to be present")
+	}
+	if len([]rune(*items[1].Summary)) > 120 {
+		t.Fatalf("summary was not truncated to 120 runes: %d", len([]rune(*items[1].Summary)))
+	}
+	if strings.Contains(w.Body.String(), "raw stacktrace") {
+		t.Fatalf("recent activity leaked raw task error: %s", w.Body.String())
+	}
+	if items[0].OccurredAt == "" || items[1].OccurredAt == "" {
+		t.Fatalf("expected occurred_at on every item: %#v", items)
+	}
+}
+
 func TestCreateAgent_GeneratesUniqueHandlesForDuplicateDisplayNames(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

@@ -61,6 +61,7 @@ const {
       display_name?: string;
       email: string;
       avatar_url: string | null;
+      profile_description: string;
     }>,
   },
   mockAgents: {
@@ -332,6 +333,7 @@ describe("SearchCommand", () => {
         display_name: "Alice Zhang",
         email: "alice@example.com",
         avatar_url: null,
+        profile_description: "",
       },
       {
         id: "member-2",
@@ -343,6 +345,7 @@ describe("SearchCommand", () => {
         display_name: "Bob Liu",
         email: "bob@example.com",
         avatar_url: null,
+        profile_description: "",
       },
     ];
     renderSearch();
@@ -551,8 +554,10 @@ describe("SearchCommand", () => {
         role: "member",
         created_at: "2026-01-01T00:00:00Z",
         name: "Alice Zhang",
+        display_name: "Alice Zhang",
         email: "alice@example.com",
         avatar_url: null,
+        profile_description: "",
       },
     ];
     mockSearchIssues.mockResolvedValue({

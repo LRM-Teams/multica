@@ -226,7 +226,7 @@
     "description_duplicate": "\"{{name}}\"을(를) 바탕으로 새 에이전트를 만듭니다. 지침, 환경 변수, 스킬이 복사됩니다.",
     "name_label": "이름",
     "display_name_label": "표시 이름",
-    "handle_auto_hint": "안정적인 핸들은 자동으로 생성되며 여기서는 변경할 수 없습니다.",
+    "handle_auto_hint": "안정적인 사용자 이름은 자동으로 생성되며 여기서는 변경할 수 없습니다.",
     "name_placeholder": "예: 심층 리서치 에이전트",
     "description_label": "설명",
     "description_placeholder": "이 에이전트는 무엇을 하나요?",

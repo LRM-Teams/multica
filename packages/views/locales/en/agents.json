@@ -226,7 +226,7 @@
     "description_duplicate": "Create a new agent based on \"{{name}}\". Instructions, env, and skills are copied for you.",
     "name_label": "Name",
     "display_name_label": "Display name",
-    "handle_auto_hint": "A stable handle is generated automatically and cannot be changed here.",
+    "handle_auto_hint": "A stable username is generated automatically and cannot be changed here.",
     "name_placeholder": "e.g. Deep Research Agent",
     "description_label": "Description",
     "description_placeholder": "What does this agent do?",

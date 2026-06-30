@@ -332,6 +332,10 @@
       "recommendation": "おすすめ",
       "shared_cache": "共有キャッシュ"
     },
+    "promotion_outcomes": {
+      "skill": "ワークスペース skill + エージェント提案",
+      "memory": "共有 evolution unit のみ"
+    },
     "review_decisions": {
       "promote": "昇格",
       "needs_review": "要レビュー",
@@ -373,12 +377,17 @@
     "metadata_rationale": "理由",
     "metadata_risks": "リスク",
     "delivery_preview": "配信プレビュー",
+    "promotion_preview": "昇格プレビュー",
     "delivery_type": "配信タイプ",
+    "promotion_outcome": "昇格結果",
     "delivery_target": "対象",
+    "source_agent_label": "ソースエージェント",
     "promoted_unit": "昇格済みユニット",
     "promoted_result": "昇格済み",
     "pending_result": "まだ昇格していません",
     "promotion_result_hint": "昇格すると共有 evolution unit が作成され、ソースエージェントへの配信がキューに追加されます。",
+    "promotion_result_hint_skill": "昇格するとワークスペース skill が作成され、一致するエージェントへのバインド提案がキューに追加されます。",
+    "promotion_result_hint_memory": "昇格すると共有 evolution unit が保存されます。Memory はエージェントに自動割り当てされません。",
     "review_metadata": "生のレビューメタデータ",
     "apply_suggestions": "レビュー提案を適用",
     "apply_suggestions_hint": "昇格時にレビューアー提案のタイトル、サマリー、タグ、タスクタイプ、スコープを使います。",

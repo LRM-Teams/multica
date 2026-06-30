@@ -198,27 +198,6 @@ type EvolutionSubmissionBundle struct {
 	Files          []SkillFileData `json:"files,omitempty"`
 }
 
-type EvolutionDelivery struct {
-	ID               string          `json:"id"`
-	WorkspaceID      string          `json:"workspace_id"`
-	UnitID           string          `json:"unit_id"`
-	VersionID        string          `json:"version_id"`
-	TargetAgentID    string          `json:"target_agent_id"`
-	DeliveryType     string          `json:"delivery_type"`
-	Status           string          `json:"status"`
-	DeliveredPath    string          `json:"delivered_path,omitempty"`
-	UnitType         string          `json:"unit_type"`
-	Title            string          `json:"title"`
-	CanonicalSummary string          `json:"canonical_summary"`
-	Content          string          `json:"content"`
-	Metadata         json.RawMessage `json:"metadata,omitempty"`
-	Files            []SkillFileData `json:"files,omitempty"`
-}
-
-type EvolutionDeliveryListResponse struct {
-	Deliveries []EvolutionDelivery `json:"deliveries"`
-}
-
 type SharedSkillSyncConflict struct {
 	Key    string `json:"key"`
 	Name   string `json:"name"`

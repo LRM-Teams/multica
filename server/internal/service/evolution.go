@@ -2,12 +2,14 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"path"
 	"regexp"
-	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -93,19 +95,47 @@ func (s *EvolutionService) CurateAndMatchWorkspace(ctx context.Context, workspac
 			continue
 		case evolutionCurationPromoted:
 			result.Promoted++
+			if submission.UnitType == "skill" {
+				created, err := s.finalizeSkillPromotion(ctx, submission, unit)
+				if err != nil {
+					return result, err
+				}
+				if created {
+					result.Matched++
+				}
+			} else if isEvolutionAutoAssignMemoryUnit(submission.UnitType) {
+				result.Matched++
+			}
 		default:
 			result.Skipped++
 			continue
 		}
-		created, err := s.matchSourceAgent(ctx, submission, unit)
-		if err != nil {
-			return result, err
-		}
-		if created {
-			result.Matched++
-		}
 	}
 	return result, nil
+}
+
+func (s *EvolutionService) finalizeSkillPromotion(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) (bool, error) {
+	if submission.UnitType != "skill" {
+		return false, nil
+	}
+	files, err := s.Queries.ListEvolutionSubmissionFiles(ctx, db.ListEvolutionSubmissionFilesParams{
+		WorkspaceID:  submission.WorkspaceID,
+		SubmissionID: submission.ID,
+	})
+	if err != nil {
+		return false, err
+	}
+	skill, err := s.MaterializePromotedSkill(ctx, submission, unit, files)
+	if err != nil {
+		return false, err
+	}
+	if err := s.assignEvolutionSkillToSourceAgent(ctx, submission, skill); err != nil {
+		return false, err
+	}
+	if err := s.RefreshWorkspaceAgentSkillSuggestions(ctx, unit.WorkspaceID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.EvolutionUnitSubmission) (db.SharedEvolutionUnit, evolutionCurationStatus, error) {
@@ -120,6 +150,11 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 	if evolutionDedupeHash(submission) == "" {
 		_, err := s.rejectSubmissionWithReview(ctx, submission, "missing content hash", "medium")
 		return db.SharedEvolutionUnit{}, evolutionCurationRejected, err
+	}
+
+	if isEvolutionAutoAssignMemoryUnit(submission.UnitType) {
+		status, err := s.curateMemorySubmission(ctx, submission)
+		return db.SharedEvolutionUnit{}, status, err
 	}
 
 	if !s.ReviewEnabled {
@@ -189,7 +224,7 @@ func (s *EvolutionService) PromoteSubmissionFromReview(ctx context.Context, work
 	if err != nil {
 		return db.SharedEvolutionUnit{}, err
 	}
-	if _, err := s.matchSourceAgent(ctx, submission, unit); err != nil {
+	if _, err := s.finalizeSkillPromotion(ctx, submission, unit); err != nil {
 		return db.SharedEvolutionUnit{}, err
 	}
 	return unit, nil
@@ -211,6 +246,22 @@ func (s *EvolutionService) promoteSubmission(ctx context.Context, submission db.
 	dedupeHash := evolutionDedupeHash(submission)
 	existing, err := s.Queries.FindSharedEvolutionUnitByHash(ctx, db.FindSharedEvolutionUnitByHashParams{WorkspaceID: submission.WorkspaceID, UnitType: submission.UnitType, DedupeHash: dedupeHash})
 	if err == nil {
+		existing, err = s.Queries.SyncSharedEvolutionUnitMatchMetadata(ctx, db.SyncSharedEvolutionUnitMatchMetadataParams{
+			ID:               existing.ID,
+			WorkspaceID:      submission.WorkspaceID,
+			Title:            submission.Title,
+			CanonicalSummary: submission.Summary,
+			Content:          submission.Content,
+			Tags:             submission.Tags,
+			Tools:            submission.Tools,
+			TaskTypes:        submission.TaskTypes,
+			ProjectTypes:     submission.ProjectTypes,
+			Languages:        submission.Languages,
+			Frameworks:       submission.Frameworks,
+		})
+		if err != nil {
+			return db.SharedEvolutionUnit{}, evolutionCurationSkipped, err
+		}
 		err = s.markSubmissionPromoted(ctx, submission, existing.ID, review)
 		return existing, evolutionCurationPromoted, err
 	}
@@ -636,69 +687,11 @@ func humanEvolutionReviewResult(decision EvolutionReviewDecision, reason string)
 	}
 }
 
-func (s *EvolutionService) matchSourceAgent(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) (bool, error) {
-	if !unit.CurrentVersionID.Valid {
-		return false, nil
-	}
-	deliveryType := "inbox"
-	if unit.UnitType == "skill" {
-		deliveryType = "generated"
-	}
-	targets, err := s.matchEvolutionDeliveryTargets(ctx, submission, unit)
-	if err != nil {
-		return false, err
-	}
-	created := false
-	for _, target := range targets {
-		details, _ := json.Marshal(target.Details)
-		delivery, err := s.Queries.CreateEvolutionDelivery(ctx, db.CreateEvolutionDeliveryParams{
-			WorkspaceID:    unit.WorkspaceID,
-			UnitID:         unit.ID,
-			VersionID:      unit.CurrentVersionID,
-			TargetAgentID:  target.AgentID,
-			DeliveryType:   deliveryType,
-			Reason:         target.Reason,
-			MatcherScore:   target.Score,
-			MatcherDetails: details,
-		})
-		if err != nil {
-			return created, err
-		}
-		created = created || delivery.Status == "pending"
-	}
-	return created, nil
-}
-
 type evolutionDeliveryMatchTarget struct {
 	AgentID pgtype.UUID
 	Score   float64
 	Reason  string
 	Details map[string]any
-}
-
-func (s *EvolutionService) matchEvolutionDeliveryTargets(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) ([]evolutionDeliveryMatchTarget, error) {
-	sourceTarget := evolutionDeliveryMatchTarget{
-		AgentID: submission.SourceAgentID,
-		Score:   1,
-		Reason:  "source agent match",
-		Details: map[string]any{"strategy": "deterministic", "source_agent_id": uuidString(submission.SourceAgentID), "matched_source_agent": true},
-	}
-	agents, err := s.Queries.ListAllAgents(ctx, unit.WorkspaceID)
-	if err != nil {
-		return []evolutionDeliveryMatchTarget{sourceTarget}, nil
-	}
-	targets := []evolutionDeliveryMatchTarget{sourceTarget}
-	for _, agent := range agents {
-		if agent.ID == submission.SourceAgentID || agent.ArchivedAt.Valid {
-			continue
-		}
-		candidate := scoreEvolutionDeliveryTarget(submission, unit, agent)
-		if shouldCreateEvolutionDeliveryMatch(candidate) {
-			targets = append(targets, candidate)
-		}
-	}
-	sort.SliceStable(targets[1:], func(i, j int) bool { return targets[i+1].Score > targets[j+1].Score })
-	return targets, nil
 }
 
 func shouldCreateEvolutionDeliveryMatch(target evolutionDeliveryMatchTarget) bool {
@@ -717,13 +710,8 @@ func shouldCreateEvolutionDeliveryMatch(target evolutionDeliveryMatchTarget) boo
 	return hasTool && (hasLanguage || hasFramework || hasTaskType) || hasTaskType && (hasLanguage || hasFramework)
 }
 
-func scoreEvolutionDeliveryTarget(submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit, agent db.Agent) evolutionDeliveryMatchTarget {
-	tags := evolutionStrings(unit.Tags)
-	tools := evolutionStrings(unit.Tools)
-	taskTypes := evolutionStrings(unit.TaskTypes)
-	projectTypes := evolutionStrings(unit.ProjectTypes)
-	languages := evolutionStrings(unit.Languages)
-	frameworks := evolutionStrings(unit.Frameworks)
+func scoreEvolutionDeliveryTarget(sourceAgentID pgtype.UUID, unit db.SharedEvolutionUnit, agent db.Agent, submission *db.EvolutionUnitSubmission) evolutionDeliveryMatchTarget {
+	tags, tools, taskTypes, projectTypes, languages, frameworks := evolutionMatchDimensions(unit, submission)
 	text := strings.ToLower(strings.Join([]string{agent.Name, agent.Description, agent.Instructions, string(agent.RuntimeConfig), string(agent.CustomArgs), agent.RuntimeMode, agent.Model.String}, " "))
 	matched := map[string][]string{}
 	score := 0.0
@@ -751,7 +739,7 @@ func scoreEvolutionDeliveryTarget(submission db.EvolutionUnitSubmission, unit db
 		matched["tags"] = values
 		score += 0.1
 	}
-	semanticScore := semanticSimilarity(evolutionUnitText(unit), text)
+	semanticScore := semanticSimilarity(evolutionUnitMatchText(unit, submission), text)
 	if semanticScore >= semanticMatchStrongThreshold {
 		score += 0.2
 	} else if semanticScore >= semanticMatchThreshold {
@@ -766,7 +754,7 @@ func scoreEvolutionDeliveryTarget(submission db.EvolutionUnitSubmission, unit db
 		Reason:  evolutionMatchReason(score, semanticScore),
 		Details: map[string]any{
 			"strategy":         "hybrid_metadata_semantic",
-			"source_agent_id":  uuidString(submission.SourceAgentID),
+			"source_agent_id":  uuidString(sourceAgentID),
 			"target_agent_id":  uuidString(agent.ID),
 			"matched":          matched,
 			"semantic_score":   semanticScore,
@@ -871,6 +859,30 @@ func evolutionSubmissionText(submission db.EvolutionUnitSubmission) string {
 
 func evolutionUnitText(unit db.SharedEvolutionUnit) string {
 	return strings.Join([]string{unit.Title, unit.CanonicalSummary, unit.Content}, " ")
+}
+
+func evolutionUnitMatchText(unit db.SharedEvolutionUnit, submission *db.EvolutionUnitSubmission) string {
+	if submission != nil {
+		return strings.Join([]string{submission.Title, submission.Summary, submission.Content}, " ")
+	}
+	return evolutionUnitText(unit)
+}
+
+func evolutionMatchDimensions(unit db.SharedEvolutionUnit, submission *db.EvolutionUnitSubmission) (tags, tools, taskTypes, projectTypes, languages, frameworks []string) {
+	if submission != nil {
+		return evolutionStrings(submission.Tags),
+			evolutionStrings(submission.Tools),
+			evolutionStrings(submission.TaskTypes),
+			evolutionStrings(submission.ProjectTypes),
+			evolutionStrings(submission.Languages),
+			evolutionStrings(submission.Frameworks)
+	}
+	return evolutionStrings(unit.Tags),
+		evolutionStrings(unit.Tools),
+		evolutionStrings(unit.TaskTypes),
+		evolutionStrings(unit.ProjectTypes),
+		evolutionStrings(unit.Languages),
+		evolutionStrings(unit.Frameworks)
 }
 
 func submissionMetadataTerms(submission db.EvolutionUnitSubmission) []string {
@@ -1288,4 +1300,123 @@ func uuidString(id pgtype.UUID) string {
 		return ""
 	}
 	return id.String()
+}
+
+func sourceAgentIDFromUnitMetadata(unit db.SharedEvolutionUnit) pgtype.UUID {
+	if len(unit.Metadata) == 0 {
+		return pgtype.UUID{}
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(unit.Metadata, &metadata); err != nil {
+		return pgtype.UUID{}
+	}
+	raw, _ := metadata["source_agent_id"].(string)
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return pgtype.UUID{}
+	}
+	var id pgtype.UUID
+	if err := id.Scan(raw); err != nil {
+		return pgtype.UUID{}
+	}
+	return id
+}
+
+func isEvolutionAutoAssignMemoryUnit(unitType string) bool {
+	switch unitType {
+	case "memory", "preference", "tool_pattern", "workflow":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *EvolutionService) curateMemorySubmission(ctx context.Context, submission db.EvolutionUnitSubmission) (evolutionCurationStatus, error) {
+	if err := s.assignEvolutionMemory(ctx, submission); err != nil {
+		_, rejErr := s.rejectSubmissionWithReview(ctx, submission, err.Error(), "high")
+		return evolutionCurationRejected, rejErr
+	}
+	_, err := s.Queries.MarkEvolutionSubmissionPromoted(ctx, db.MarkEvolutionSubmissionPromotedParams{
+		ID:             submission.ID,
+		WorkspaceID:    submission.WorkspaceID,
+		PromotedUnitID: pgtype.UUID{},
+	})
+	if err != nil {
+		return evolutionCurationSkipped, err
+	}
+	return evolutionCurationPromoted, nil
+}
+
+func (s *EvolutionService) assignEvolutionMemory(ctx context.Context, submission db.EvolutionUnitSubmission) error {
+	if !submission.SourceAgentID.Valid {
+		return errors.New("memory submission missing source agent")
+	}
+	name := strings.TrimSpace(submission.Title)
+	if name == "" {
+		name = strings.TrimSpace(submission.LocalUnitID)
+	}
+	if name == "" {
+		return errors.New("memory submission missing name")
+	}
+	content := strings.TrimSpace(submission.Content)
+	if content == "" {
+		if summary := strings.TrimSpace(submission.Summary); summary != "" {
+			content = summary
+		}
+	}
+	if content == "" {
+		return errors.New("memory submission missing content")
+	}
+
+	syncKey := fmt.Sprintf("evolution/%s/%s", submission.UnitType, strings.TrimSpace(submission.LocalUnitID))
+	contentHash := strings.TrimSpace(submission.ContentHash)
+	if contentHash == "" {
+		contentHash = hashEvolutionContent(content)
+	}
+	config, _ := json.Marshal(map[string]any{
+		"origin": map[string]any{
+			"type":          "evolution",
+			"submission_id": uuidString(submission.ID),
+			"local_unit_id": submission.LocalUnitID,
+			"unit_type":     submission.UnitType,
+		},
+	})
+	createdBy, err := s.skillCreatedByFromSubmission(ctx, submission)
+	if err != nil {
+		return err
+	}
+
+	existing, err := s.Queries.GetAgentMemoryByAgentAndSyncKey(ctx, db.GetAgentMemoryByAgentAndSyncKeyParams{
+		AgentID: submission.SourceAgentID,
+		SyncKey: syncKey,
+	})
+	if err == nil {
+		_, err = s.Queries.UpdateAgentMemory(ctx, db.UpdateAgentMemoryParams{
+			ID:          existing.ID,
+			Name:        pgtype.Text{String: name, Valid: true},
+			Content:     pgtype.Text{String: content, Valid: true},
+			Config:      config,
+			ContentHash: pgtype.Text{String: contentHash, Valid: true},
+		})
+		return err
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	_, err = s.Queries.CreateAgentMemory(ctx, db.CreateAgentMemoryParams{
+		WorkspaceID: submission.WorkspaceID,
+		AgentID:     submission.SourceAgentID,
+		Name:        name,
+		Content:     content,
+		Config:      config,
+		SyncKey:     syncKey,
+		ContentHash: contentHash,
+		CreatedBy:   createdBy,
+	})
+	return err
+}
+
+func hashEvolutionContent(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return "sha256:" + hex.EncodeToString(h[:])
 }

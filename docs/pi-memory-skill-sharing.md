@@ -2,7 +2,7 @@
 
 This note documents the Pi-specific memory and skill sharing paths in Multica, excluding the workspace-level `~/.pi/share/skills` scanner.
 
-Last verified against the current working tree on 2026-06-25.
+Last verified against the current working tree on 2026-06-30.
 
 ## Scope
 
@@ -10,8 +10,8 @@ This document covers the Pi agent evolution/governance flow:
 
 ```text
 Local Pi agent root
-  sync_queue/memory-candidates.jsonl
-  sync_queue/skill-candidates.jsonl
+  sync_queue/memory-candidates.jsonl          ──► memory path (auto-assign)
+  sync_queue/skill-candidates.jsonl           ──► skill path (review + suggestions)
   skills/drafts/<skill_id>/
         |
         v
@@ -19,21 +19,22 @@ Multica server database
   evolution_unit_submission
   evolution_unit_submission_file
         |
-        v
-Curator / matcher
-  shared_evolution_unit
-  shared_evolution_unit_version
-  shared_evolution_unit_file
-  evolution_unit_delivery
+        +── memory / preference / tool_pattern / workflow
+        |       hard gates only → promoted → agent_memory (source agent)
         |
-        v
-Local Pi agent root
-  inbox/memory/<unit_id>.md
-  skills/generated/<unit_id>/
-  skills/enabled/<unit_id>/      after delivery decision = accepted
+        └── skill
+                optional LLM advisory review
+                → promoted → skill + skill_file
+                → agent_skill_suggestion → user confirm → agent_skill
 ```
 
-It does not cover the global shared-skill scanner under `~/.pi/share/skills`, which syncs directly into workspace skills.
+It does not cover the global shared-skill scanner under `~/.pi/share/skills`, which syncs directly into workspace `skill` / `skill_file` via the runtime shared-skill sync endpoint.
+
+## Design principles
+
+- **Skill promotion ≠ assignment.** A promoted skill is written to the workspace public `skill` table. Binding it to an agent is a separate, user-confirmed step.
+- **Memory auto-assigns to the submitting agent.** After deterministic hard gates pass, memory-like units are promoted and written to `agent_memory` for `source_agent_id` with no LLM or manual review.
+- **No per-agent delivery table.** `evolution_unit_delivery` was removed (migration 137). The server does not push generated bundles back to `skills/generated/` or `skills/enabled/`.
 
 ## Local Pi Agent Root
 
@@ -53,8 +54,8 @@ memory/
   audit/
 skills/
   drafts/
-  generated/
-  enabled/
+  generated/          # legacy empty scaffold; evolution no longer writes here
+  enabled/            # legacy empty scaffold; evolution no longer writes here
 inbox/
   memory/
   skills/
@@ -66,7 +67,9 @@ feedback/
 sync_queue/
 ```
 
-The daemon exposes the paths to the Pi runtime through environment variables:
+`ensurePiAgentRoot` still creates `skills/generated/` and `skills/enabled/` for backward-compatible layout, but the evolution flow documented here does **not** populate them. Agent skills used at task time come from the database via `agent_skill`, not from those directories.
+
+The daemon exposes paths to the Pi runtime through environment variables:
 
 ```bash
 PI_AGENT_ROOT=<agent_root>
@@ -154,7 +157,7 @@ When `bundle_path` is present, the daemon resolves it relative to `sync_queue/`,
 
 ## Paths That Are Not Uploaded Directly
 
-These paths are created for Pi runtime state or downflow, but are not direct upload sources in the current implementation:
+These paths are for Pi runtime state or legacy layout. They are not direct upload sources and are not written by the evolution downflow in the current implementation:
 
 - `<agent_root>/memory/MEMORY.md`
 - `<agent_root>/memory/USER.md`
@@ -168,7 +171,7 @@ These paths are created for Pi runtime state or downflow, but are not direct upl
 - `<agent_root>/profile/`
 - `<agent_root>/feedback/`
 
-If local Pi memory should be shared, Pi must emit a governed candidate into `sync_queue/memory-candidates.jsonl`. Multica does not mirror the raw memory files as a folder sync.
+If local Pi memory should be shared, Pi must emit a governed candidate into `sync_queue/memory-candidates.jsonl`. Multica does not mirror raw memory files as a folder sync.
 
 ## Upload API
 
@@ -185,6 +188,8 @@ The daemon only runs this flow for Pi runtimes with a workspace id. It scans age
 ```text
 <WorkspacesRoot>/<workspace_id>/.pi/agents/
 ```
+
+There is no daemon polling endpoint for evolution deliveries; that path was removed with `evolution_unit_delivery`.
 
 ## Database Writes: Inbound Submissions
 
@@ -207,7 +212,7 @@ Important fields:
 - `sensitivity`, `confidence`, `suggested_scope` — governance inputs.
 - `evidence`, `applies`, `tags`, `tools`, `task_types`, `project_types`, `languages`, `frameworks` — matching and audit metadata.
 - `status` — starts as `candidate`, may become `needs_review`, `rejected`, or `promoted`.
-- `review_decision`, `review_confidence`, `review_risk_level`, `review_reason`, `review_metadata`, `reviewed_at` — structured governance review metadata for submissions that require manual or future LLM-assisted review.
+- `review_decision`, `review_confidence`, `review_risk_level`, `review_reason`, `review_metadata`, `reviewed_at` — structured governance review metadata.
 - `promoted_unit_id` — points to `shared_evolution_unit` after promotion.
 
 ### `evolution_unit_submission_file`
@@ -235,7 +240,7 @@ After a non-secret submission is committed, the handler calls:
 service.NewEvolutionService(h.Queries).CurateAndMatchWorkspace(ctx, rt.WorkspaceID, 50)
 ```
 
-This performs a deterministic MVP governance pass.
+This performs a deterministic governance pass, optionally followed by an LLM advisory reviewer when `EVOLUTION_REVIEW_ENABLED=true`.
 
 ### Rejection Rules
 
@@ -253,16 +258,22 @@ Rejected submissions remain in `evolution_unit_submission` with `status='rejecte
 
 ### Needs Review Rules
 
-A submission moves to `status='needs_review'` when deterministic hard checks pass but the governance confidence is not high enough for automatic promotion. The current deterministic triggers are:
+**Skill only.** Memory-like units never enter `needs_review`.
+
+When LLM review is disabled (default), a **skill** submission moves to `status='needs_review'` when deterministic hard checks pass but confidence is not high enough for automatic promotion:
 
 - `confidence != "high"`.
 - `sensitivity` is not `none` or `local_path`.
 
-The curator writes `review_decision='needs_review'`, `review_risk_level='medium'`, a human-readable `review_reason`, and deterministic review metadata. These rows are not promoted or delivered until a later review flow handles them.
+When LLM review is enabled, the reviewer may also route submissions to `needs_review` or `rejected` based on structured JSON output. LLM cannot bypass secret/path/size/frontmatter hard gates.
+
+Review queue rows are handled through workspace evolution review APIs and the Settings UI (`EvolutionReviewSection`). They are not promoted until an admin promotes them from review.
 
 ### Promotion Rules
 
-A submission is eligible for promotion when:
+**Memory-like units** promote immediately after hard gates pass (no confidence / LLM / manual review).
+
+**Skill** submissions are eligible for automatic promotion (when review is disabled and confidence gates pass) when:
 
 - `confidence == "high"`.
 - `sensitivity` is `none` or `local_path`.
@@ -324,146 +335,134 @@ Important fields:
 - `mime_type`
 - `size_bytes`
 
-## Matcher and Delivery Queue
+## Skill Materialization (promotion → public catalog)
 
-After promotion, the MVP matcher currently matches only the source agent that submitted the unit.
+When a promoted unit has `unit_type == "skill"`, `EvolutionService.finalizeSkillPromotion` calls `MaterializePromotedSkill` in `server/internal/service/evolution_skill_catalog.go`.
 
-It creates a row in:
+This writes or updates workspace rows in:
 
 ```text
-evolution_unit_delivery
+skill
+skill_file
 ```
 
-Delivery type:
+Important behavior:
 
-- `skill` -> `generated`
-- `memory`, `preference`, `tool_pattern`, `workflow` -> `inbox`
+- `skill.source_evolution_unit_id` links back to `shared_evolution_unit.id` for provenance.
+- Only evolution-promoted skills participate in agent suggestion scans (`source_evolution_unit_id IS NOT NULL`).
+- Skills imported via `~/.pi/share/skills` or manual workspace CRUD do not set this column and are outside the evolution suggestion matcher.
+- `skill.created_by` is resolved from `evolution_unit_submission.source_member_id` → `member.user_id` (user FK), not the member PK.
 
-Important fields:
+After materialization, the service binds the skill to the submitting source agent (`agent_skill`, `source='evolution'`), then runs `RefreshWorkspaceAgentSkillSuggestions` for all non-archived agents in the workspace.
 
-- `workspace_id`
-- `unit_id`
-- `version_id`
-- `target_agent_id`
-- `delivery_type`
-- `status` — starts as `pending`.
-- `reason`
-- `matcher_score`
-- `matcher_details`
-- `delivered_path`
-- `error`
+## Agent Skill Suggestions
 
-## Downflow Back To Pi
+Promotion **auto-binds the source agent** that uploaded the candidate. The matcher creates `agent_skill_suggestion` rows for **other** agents only.
 
-The daemon has a Pi-only delivery loop. It polls deliveries through:
+### Trigger timing
+
+- After skill materialization (workspace-wide rescan).
+- When an agent is created or updated (name, description, instructions, runtime, model, and other profile fields that affect matching).
+
+### Matching scope
+
+- Only `skill` rows with `source_evolution_unit_id IS NOT NULL`.
+- Hybrid metadata + semantic scoring (tags, tools, languages, frameworks, task_types, etc.).
+- The submitting source agent is skipped by the matcher (already bound directly on promotion).
+
+### Suggestion rules
+
+| Suggestion | Condition |
+|------------|-----------|
+| `add` | Skill matches agent profile and is not bound in `agent_skill` |
+| `remove` | Skill no longer matches and current binding has `agent_skill.source = 'evolution'` |
+| (none) | Already bound and still matches; or binding is `manual` / `template` |
+
+Pending suggestions are replaced on each rescan (`DeletePendingAgentSkillSuggestions` then upsert).
+
+### User-facing APIs
 
 ```http
-GET /api/daemon/runtimes/{runtimeId}/evolution/deliveries?agent_id=<agent_id>
+GET  /api/agents/{agentId}/skill-suggestions
+POST /api/agents/{agentId}/skill-suggestions/{suggestionId}/decision
 ```
 
-The server returns active pending deliveries plus accepted generated skill deliveries that have not yet been enabled locally, together with shared unit metadata and files.
-
-### Skill Delivery
-
-For `unit_type == "skill"`, the daemon writes files to:
-
-```text
-<agent_root>/skills/generated/<unit_id>/
-```
-
-It also writes metadata:
-
-```text
-<agent_root>/skills/generated/<unit_id>/.multica-delivery.json
-```
-
-The generated metadata contains:
+Request body for decision:
 
 ```json
-{
-  "delivery_id": "...",
-  "unit_id": "...",
-  "version_id": "...",
-  "enabled": false
-}
+{ "decision": "accept" | "dismiss" }
 ```
 
-Generated skills are intentionally delivered inactive first. They become active only after the delivery decision is `accepted`.
+- **accept** on `add` → `AddAgentSkillWithSource(source='evolution')`.
+- **accept** on `remove` → `RemoveAgentSkill`.
+- **dismiss** → marks suggestion dismissed; does not change bindings.
 
-### Accepted Generated Skill Enablement
+The web/desktop Skills tab renders pending suggestions and calls these endpoints.
 
-When a skill delivery has `delivery_type == "generated"` and `status == "accepted"`, the daemon mirrors the generated bundle into:
+## Task Execution (runtime skill injection)
+
+Accepted bindings in `agent_skill` are what the runtime uses. On task dispatch, the handler loads skills via:
+
+```go
+TaskService.LoadAgentSkills(ctx, agentID)
+```
+
+This reads `skill` + `skill_file` through `agent_skill` joins and returns skill content to the daemon. The daemon injects them into the Pi task environment (for example under `<task_workdir>/.pi/skills/<skill_name>/`).
+
+Evolution-promoted skills therefore reach Pi only after:
+
+1. promotion → `skill` materialization, then
+2. matcher → `agent_skill_suggestion`, then
+3. user accept → `agent_skill`.
+
+There is no separate enablement step on `skills/enabled/`.
+
+## Memory auto-assign (memory-like units)
+
+For `memory`, `preference`, `tool_pattern`, and `workflow`, the flow after upload is:
 
 ```text
-<agent_root>/skills/enabled/<unit_id>/
+1. Deterministic hard gates (secret / path / size / empty content)
+2. assignEvolutionMemory → agent_memory (source_agent_id only)
+3. Mark submission promoted (no shared_evolution_unit row)
 ```
 
-The enabled copy receives metadata with `enabled: true`:
+Implementation lives in `curateMemorySubmission` / `assignEvolutionMemory` in `server/internal/service/evolution.go`.
 
-```json
-{
-  "delivery_id": "...",
-  "unit_id": "...",
-  "version_id": "...",
-  "enabled": true
-}
-```
+Important behavior:
 
-The original generated bundle remains in `skills/generated/<unit_id>/` with `enabled: false`, so `generated` is the inactive delivered archive and `enabled` is the local active set.
+- **No LLM review** and **no `needs_review` queue** for memory-like units, even when `EVOLUTION_REVIEW_ENABLED=true`.
+- **No cross-agent assignment** — only the submitting agent (`source_agent_id`) receives the memory row.
+- Idempotency via `sync_key`: `evolution/{unit_type}/{local_unit_id}`.
+- Re-uploads with the same `local_unit_id` update the existing `agent_memory` row.
+- `config.origin` records `evolution_unit_id`, `submission_id`, and `local_unit_id` for traceability.
 
-On Pi task startup, the daemon scans `<agent_root>/skills/enabled/*/SKILL.md`, parses frontmatter, loads supporting files, and merges those skills into the task skill context. Database-assigned agent skills win when names collide.
-
-### Memory Delivery
-
-For `memory`, `preference`, `tool_pattern`, and `workflow`, the daemon writes a markdown inbox item:
-
-```text
-<agent_root>/inbox/memory/<unit_id>.md
-```
-
-The file includes frontmatter with delivery metadata and the unit content.
-
-### Delivery Status Updates
-
-After local write succeeds, the daemon marks delivery as delivered:
-
-```http
-POST /api/daemon/runtimes/{runtimeId}/evolution/deliveries/{deliveryId}/delivered?agent_id=<agent_id>
-```
-
-For pending deliveries, the server updates `evolution_unit_delivery.status` to `delivered` and records `delivered_path`. For accepted deliveries, the server preserves `status='accepted'` and updates `delivered_path` to the enabled skill directory, so the acceptance decision remains visible while repeated polling stops once the path points under `skills/enabled/`.
-
-If local write fails, the daemon calls:
-
-```http
-POST /api/daemon/runtimes/{runtimeId}/evolution/deliveries/{deliveryId}/failed?agent_id=<agent_id>
-```
-
-The server updates the delivery to `failed` and records the error.
-
-There is also a decision endpoint:
-
-```http
-POST /api/daemon/runtimes/{runtimeId}/evolution/deliveries/{deliveryId}/decision?agent_id=<agent_id>
-```
-
-Valid decisions are `accepted`, `ignored`, and `rejected`.
+The agent **Memory** tab reads bound rows via `GET /api/agents/{id}/memories`.
 
 ## Relationship To Other Tables
 
-### `skill` / `skill_file`
+### `skill` / `skill_file` / `agent_skill`
 
-The excluded `~/.pi/share/skills` scanner writes into the workspace skill tables (`skill` and `skill_file`) via the runtime shared-skill sync endpoint.
+Three distinct entry paths populate the workspace skill catalog:
 
-The evolution/governance flow in this document does not write generated skill candidates directly into `skill` / `skill_file`. It writes them into evolution tables first, then delivers generated files back to Pi agent roots.
+| Source | How it arrives | `source_evolution_unit_id` | `agent_skill.source` |
+|--------|----------------|----------------------------|----------------------|
+| `~/.pi/share/skills` scanner | daemon shared-skill sync | NULL | `manual` (default) |
+| Manual workspace CRUD | web/desktop settings | NULL | `manual` |
+| Evolution promotion | `MaterializePromotedSkill` | set | `evolution` after user accepts suggestion |
+| Agent template | template create flow | NULL | `manual` today (template source planned) |
 
 ### `agent_memory`
 
-The repository contains `agent_memory` tables and sync handler code, but those handlers are not wired in the daemon router in the current tree. The active Pi memory-sharing path is `evolution_unit_submission` -> `shared_evolution_unit` -> `evolution_unit_delivery`.
+Evolution memory candidates materialize into `agent_memory` for the submitting agent after hard gates pass. The separate runtime sync handler (`SyncAgentMemories`) still exists for direct runtime memory bundles, but the Pi evolution upload path documented here uses `sync_queue/memory-candidates.jsonl` → `evolution_unit_submission` → `agent_memory`.
 
 ### `agent_shared_skill`
 
-The repository contains `agent_shared_skill` tables and sync handler code, but those handlers are not wired in the daemon router in the current tree. The active Pi skill-sharing path outside `~/.pi/share/skills` is the evolution/governance flow documented here.
+`agent_shared_skill` tables and sync handler code exist, but those handlers are not wired in the daemon router. The active Pi skill-sharing path outside `~/.pi/share/skills` is the evolution flow documented here.
+
+### Removed: `evolution_unit_delivery`
+
+Migration 137 dropped this table and removed daemon/server delivery endpoints (`GET/POST .../evolution/deliveries*`). Do not reference it in new code or docs.
 
 ## End-to-End Summary
 
@@ -479,35 +478,31 @@ The repository contains `agent_shared_skill` tables and sync handler code, but t
    evolution_unit_submission
    evolution_unit_submission_file
 
-4. Curator promotes safe/high-confidence candidates:
-   shared_evolution_unit
-   shared_evolution_unit_version
-   shared_evolution_unit_file
+4. Curator runs deterministic gates:
+   memory-like → promoted + agent_memory (source agent)
+   skill → optional LLM review → promoted or needs_review or rejected
 
-5. Matcher queues delivery to the source agent:
-   evolution_unit_delivery
+5. For skill units, server materializes public catalog rows and binds the source agent:
+   skill (+ source_evolution_unit_id)
+   skill_file
+   agent_skill (source agent, source=evolution)
 
-6. Daemon pulls pending deliveries:
-   GET /api/daemon/runtimes/{runtimeId}/evolution/deliveries
+6. Matcher scans other workspace agents and writes suggestions:
+   agent_skill_suggestion (add | remove, status=pending)
 
-7. Daemon writes local downflow:
-   skills/generated/<unit_id>/       for pending skills
-   inbox/memory/<unit_id>.md         for memory-like units
+7. User reviews skill suggestions in agent Skills tab (or via API) — non-source agents only
 
-8. User/service records a delivery decision:
-   accepted / ignored / rejected
+8. On accept, skill binding is persisted:
+   agent_skill (source=evolution for add suggestions)
 
-9. Daemon enables accepted generated skills:
-   skills/enabled/<unit_id>/
-
-10. Daemon task startup injects enabled skills into the Pi task environment:
-   <task_workdir>/.pi/skills/<skill_name>/SKILL.md
+9. Task dispatch loads bound skills from DB:
+   LoadAgentSkills → daemon injects into Pi task environment
 ```
 
 ## Current Limitations
 
 - Raw Pi memory files are not mirrored to the server; only explicit candidate JSONL entries are uploaded.
-- Matcher currently targets only the source agent, not all potentially relevant agents in the workspace.
-- Generated skills are not enabled at initial delivery time; enablement requires an explicit `accepted` delivery decision.
-- `agent_memory` and `agent_shared_skill` tables exist, but the currently wired Pi sharing path uses the evolution tables.
-- Governance is deterministic MVP logic, not an LLM curator.
+- Memory-like evolution units auto-bind to the submitting agent only; there is no cross-agent memory suggestion flow.
+- Matcher skips the source agent for **skills** (already auto-bound); other agents need sufficient profile metadata or skill suggestions may be empty.
+- Workspace rescan after skill promotion is synchronous; large workspaces may need an async job.
+- Skill governance defaults to deterministic rules with optional LLM review (`EVOLUTION_REVIEW_ENABLED`); memory-like units never enter that queue.

@@ -93,9 +93,9 @@ WHERE ask.agent_id = $1
 ORDER BY s.name ASC;
 
 -- name: AddAgentSkill :exec
-INSERT INTO agent_skill (agent_id, skill_id)
-VALUES ($1, $2)
-ON CONFLICT DO NOTHING;
+INSERT INTO agent_skill (agent_id, skill_id, source)
+VALUES ($1, $2, 'manual')
+ON CONFLICT (agent_id, skill_id) DO NOTHING;
 
 -- name: RemoveAgentSkill :exec
 DELETE FROM agent_skill

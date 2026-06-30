@@ -155,12 +155,12 @@ func (f *fakeEvolutionReviewer) Review(context.Context, EvolutionReviewInput) (E
 
 type evolutionMockDB struct {
 	submission    db.EvolutionUnitSubmission
+	submissions   []db.EvolutionUnitSubmission
 	files         []db.EvolutionUnitSubmissionFile
 	unit          db.SharedEvolutionUnit
 	version       db.SharedEvolutionUnitVersion
-	delivery      db.EvolutionUnitDelivery
 	agents        []db.Agent
-	deliveries    []db.CreateEvolutionDeliveryParams
+	memories      []db.AgentMemory
 	existingFound bool
 	activeUnits   []db.SharedEvolutionUnit
 	maxVersion    int32
@@ -183,7 +183,6 @@ func newEvolutionMockDB(submission db.EvolutionUnitSubmission) *evolutionMockDB 
 		submission: submission,
 		unit:       unit,
 		version:    db.SharedEvolutionUnitVersion{ID: versionID, WorkspaceID: submission.WorkspaceID, UnitID: unitID, Version: 1},
-		delivery:   db.EvolutionUnitDelivery{ID: testUUID(43), WorkspaceID: submission.WorkspaceID, UnitID: unitID, VersionID: versionID, TargetAgentID: submission.SourceAgentID, Status: "pending"},
 		maxVersion: 1,
 		agents: []db.Agent{
 			{ID: submission.SourceAgentID, WorkspaceID: submission.WorkspaceID, Name: "Source Agent"},
@@ -197,6 +196,15 @@ func (m *evolutionMockDB) Exec(context.Context, string, ...interface{}) (pgconn.
 
 func (m *evolutionMockDB) Query(_ context.Context, sql string, _ ...interface{}) (pgx.Rows, error) {
 	switch {
+	case strings.Contains(sql, "ListCandidateEvolutionSubmissions"):
+		rows := make([][]any, 0, len(m.submissions))
+		for _, item := range m.submissions {
+			rows = append(rows, evolutionSubmissionValues(item))
+		}
+		if len(rows) == 0 {
+			rows = append(rows, evolutionSubmissionValues(m.submission))
+		}
+		return &evolutionMockRows{rows: rows}, nil
 	case strings.Contains(sql, "FROM evolution_unit_submission_file"):
 		rows := make([][]any, 0, len(m.files))
 		for _, file := range m.files {
@@ -227,6 +235,25 @@ func (m *evolutionMockDB) QueryRow(_ context.Context, sql string, args ...interf
 			return &evolutionMockRow{values: sharedEvolutionUnitValues(m.unit)}
 		}
 		return &evolutionMockRow{err: pgx.ErrNoRows}
+	case strings.Contains(sql, "SyncSharedEvolutionUnitMatchMetadata"):
+		updated := m.unit
+		updated.Title = stringArg(args, 2)
+		updated.CanonicalSummary = stringArg(args, 3)
+		updated.Content = stringArg(args, 4)
+		updated.Tags = stringSliceArg(args, 5)
+		updated.Tools = stringSliceArg(args, 6)
+		updated.TaskTypes = stringSliceArg(args, 7)
+		updated.ProjectTypes = stringSliceArg(args, 8)
+		updated.Languages = stringSliceArg(args, 9)
+		updated.Frameworks = stringSliceArg(args, 10)
+		m.unit = updated
+		for i, unit := range m.activeUnits {
+			if unit.ID == updated.ID {
+				m.activeUnits[i] = updated
+				break
+			}
+		}
+		return &evolutionMockRow{values: sharedEvolutionUnitValues(updated)}
 	case strings.Contains(sql, "MaxSharedEvolutionUnitVersion"):
 		return &evolutionMockRow{values: []any{m.maxVersion}}
 	case strings.Contains(sql, "CreateSharedEvolutionUnitVersion"):
@@ -256,23 +283,6 @@ func (m *evolutionMockDB) QueryRow(_ context.Context, sql string, args ...interf
 		return &evolutionMockRow{values: sharedEvolutionUnitValues(updated)}
 	case strings.Contains(sql, "CreateSharedEvolutionUnit"):
 		return &evolutionMockRow{values: sharedEvolutionUnitValues(m.unit)}
-	case strings.Contains(sql, "CreateEvolutionDelivery"):
-		arg := db.CreateEvolutionDeliveryParams{
-			WorkspaceID:    uuidArg(args, 0),
-			UnitID:         uuidArg(args, 1),
-			VersionID:      uuidArg(args, 2),
-			TargetAgentID:  uuidArg(args, 3),
-			DeliveryType:   stringArg(args, 4),
-			Reason:         stringArg(args, 5),
-			MatcherScore:   float64Arg(args, 6),
-			MatcherDetails: bytesArg(args, 7),
-		}
-		m.deliveries = append(m.deliveries, arg)
-		delivery := m.delivery
-		delivery.TargetAgentID = arg.TargetAgentID
-		delivery.MatcherScore = arg.MatcherScore
-		delivery.MatcherDetails = arg.MatcherDetails
-		return &evolutionMockRow{values: evolutionDeliveryValues(delivery)}
 	case strings.Contains(sql, "RejectEvolutionSubmissionWithReview"):
 		updated := m.submission
 		updated.Status = "rejected"
@@ -311,6 +321,51 @@ func (m *evolutionMockDB) QueryRow(_ context.Context, sql string, args ...interf
 		updated.PromotedUnitID = uuidArg(args, 2)
 		m.submission = updated
 		return &evolutionMockRow{values: evolutionSubmissionValues(updated)}
+	case strings.Contains(sql, "UpsertSharedEvolutionUnitFile"):
+		return &evolutionMockRow{values: []any{testUUID(99), m.submission.WorkspaceID, uuidArg(args, 1), uuidArg(args, 2), stringArg(args, 3), stringArg(args, 4), stringArg(args, 5), stringArg(args, 6), int64Arg(args, 7), pgtype.Timestamptz{Time: time.Now(), Valid: true}}}
+	case strings.Contains(sql, "sync_key = $2"):
+		syncKey := stringArg(args, 1)
+		for _, memory := range m.memories {
+			if memory.SyncKey == syncKey {
+				return &evolutionMockRow{values: agentMemoryValues(memory)}
+			}
+		}
+		return &evolutionMockRow{err: pgx.ErrNoRows}
+	case strings.Contains(sql, "FROM agent_memory") && strings.Contains(sql, "name = $2"):
+		return &evolutionMockRow{err: pgx.ErrNoRows}
+	case strings.Contains(sql, "INSERT INTO agent_memory"):
+		memory := db.AgentMemory{
+			ID:          testUUID(91),
+			WorkspaceID: uuidArg(args, 0),
+			AgentID:     uuidArg(args, 1),
+			Name:        stringArg(args, 2),
+			Content:     stringArg(args, 3),
+			Config:      bytesArg(args, 4),
+			SyncKey:     stringArg(args, 5),
+			ContentHash: stringArg(args, 6),
+			CreatedBy:   uuidArg(args, 7),
+		}
+		m.memories = append(m.memories, memory)
+		return &evolutionMockRow{values: agentMemoryValues(memory)}
+	case strings.Contains(sql, "UPDATE agent_memory SET"):
+		id := uuidArg(args, 0)
+		for i, memory := range m.memories {
+			if memory.ID == id {
+				if name := textArg(args, 1); name != "" {
+					memory.Name = name
+				}
+				if content := textArg(args, 2); content != "" {
+					memory.Content = content
+				}
+				memory.Config = bytesArg(args, 3)
+				if hash := textArg(args, 4); hash != "" {
+					memory.ContentHash = hash
+				}
+				m.memories[i] = memory
+				return &evolutionMockRow{values: agentMemoryValues(memory)}
+			}
+		}
+		return &evolutionMockRow{err: pgx.ErrNoRows}
 	default:
 		return &evolutionMockRow{err: pgx.ErrNoRows}
 	}
@@ -408,8 +463,8 @@ func sharedEvolutionUnitVersionValues(v db.SharedEvolutionUnitVersion) []any {
 	return []any{v.ID, v.WorkspaceID, v.UnitID, v.Version, v.Title, v.Content, v.Metadata, v.Applies, v.FailureCases, v.SourceSubmissionIds, v.ChangeReason, v.CreatedBy, v.CreatedAt}
 }
 
-func evolutionDeliveryValues(d db.EvolutionUnitDelivery) []any {
-	return []any{d.ID, d.WorkspaceID, d.UnitID, d.VersionID, d.TargetAgentID, d.DeliveryType, d.Status, d.Reason, d.MatcherScore, d.MatcherDetails, d.DeliveredPath, d.Error, d.DecidedAt, d.DeliveredAt, d.CreatedAt, d.UpdatedAt}
+func agentMemoryValues(m db.AgentMemory) []any {
+	return []any{m.ID, m.WorkspaceID, m.AgentID, m.Name, m.Content, m.Config, m.SyncKey, m.ContentHash, m.CreatedBy, m.CreatedAt, m.UpdatedAt}
 }
 
 func stringArg(args []interface{}, index int) string {
@@ -460,6 +515,37 @@ func int32Arg(args []interface{}, index int) int32 {
 	return value
 }
 
+func int64Arg(args []interface{}, index int) int64 {
+	if index >= len(args) {
+		return 0
+	}
+	value, _ := args[index].(int64)
+	return value
+}
+
+func textArg(args []interface{}, index int) string {
+	if index >= len(args) {
+		return ""
+	}
+	switch value := args[index].(type) {
+	case string:
+		return value
+	case pgtype.Text:
+		if value.Valid {
+			return value.String
+		}
+	}
+	return ""
+}
+
+func stringSliceArg(args []interface{}, index int) []string {
+	if index >= len(args) {
+		return nil
+	}
+	value, _ := args[index].([]string)
+	return value
+}
+
 func TestCurateSubmissionWithReviewerDeterministicRejectDoesNotCallReviewer(t *testing.T) {
 	submission := validMemorySubmission()
 	submission.Sensitivity = "secret"
@@ -499,10 +585,13 @@ func TestCurateSubmissionMissingContentHashRejects(t *testing.T) {
 }
 
 func TestCurateSubmissionReviewDisabledLowConfidenceNeedsReview(t *testing.T) {
-	submission := validMemorySubmission()
+	submission := validSkillSubmission()
 	submission.Confidence = "low"
 	reviewer := &fakeEvolutionReviewer{result: promoteLowRiskReview()}
 	mock := newEvolutionMockDB(submission)
+	mock.files = []db.EvolutionUnitSubmissionFile{
+		{Path: "SKILL.md", Content: validSkillMainFile(), MimeType: "text/markdown", SizeBytes: int64(len(validSkillMainFile()))},
+	}
 	service := NewEvolutionServiceWithReviewer(db.New(mock), reviewer, false)
 
 	_, status, err := service.curateSubmission(context.Background(), submission)
@@ -514,6 +603,39 @@ func TestCurateSubmissionReviewDisabledLowConfidenceNeedsReview(t *testing.T) {
 	}
 	if reviewer.called != 0 {
 		t.Fatalf("reviewer called %d times, want 0", reviewer.called)
+	}
+}
+
+func TestCurateSubmissionMemoryLowConfidenceAutoPromotes(t *testing.T) {
+	submission := validMemorySubmission()
+	submission.Confidence = "low"
+	mock := newEvolutionMockDB(submission)
+	service := NewEvolutionService(db.New(mock))
+
+	_, status, err := service.curateSubmission(context.Background(), submission)
+	if err != nil {
+		t.Fatalf("curateSubmission error = %v", err)
+	}
+	if status != evolutionCurationPromoted || mock.submission.Status != "promoted" {
+		t.Fatalf("status/submission = %q/%q, want promoted/promoted", status, mock.submission.Status)
+	}
+}
+
+func TestCurateSubmissionMemorySkipsReviewerWhenEnabled(t *testing.T) {
+	submission := validMemorySubmission()
+	reviewer := &fakeEvolutionReviewer{result: EvolutionReviewResult{Decision: EvolutionReviewReject, Confidence: 0.9, RiskLevel: EvolutionReviewRiskHigh, Rationale: "unsafe"}}
+	mock := newEvolutionMockDB(submission)
+	service := NewEvolutionServiceWithReviewer(db.New(mock), reviewer, true)
+
+	_, status, err := service.curateSubmission(context.Background(), submission)
+	if err != nil {
+		t.Fatalf("curateSubmission error = %v", err)
+	}
+	if status != evolutionCurationPromoted || mock.submission.Status != "promoted" {
+		t.Fatalf("status/submission = %q/%q, want promoted/promoted", status, mock.submission.Status)
+	}
+	if reviewer.called != 0 {
+		t.Fatalf("reviewer called %d times, want 0 for memory auto-assign", reviewer.called)
 	}
 }
 
@@ -537,8 +659,11 @@ func TestCurateSubmissionReviewDisabledLocalPathPromotes(t *testing.T) {
 }
 
 func TestCurateSubmissionDuplicateHashMarksPromotedWithoutCreatingUnit(t *testing.T) {
-	submission := validMemorySubmission()
+	submission := validSkillSubmission()
 	mock := newEvolutionMockDB(submission)
+	mock.files = []db.EvolutionUnitSubmissionFile{
+		{Path: "SKILL.md", Content: validSkillMainFile(), MimeType: "text/markdown", SizeBytes: int64(len(validSkillMainFile()))},
+	}
 	mock.existingFound = true
 	service := NewEvolutionService(db.New(mock))
 
@@ -554,89 +679,16 @@ func TestCurateSubmissionDuplicateHashMarksPromotedWithoutCreatingUnit(t *testin
 	}
 }
 
-func TestCurateSubmissionMatchesMetadataRelevantAgents(t *testing.T) {
-	submission := validMemorySubmission()
-	submission.Tools = []string{"github"}
-	submission.TaskTypes = []string{"review"}
-	submission.Languages = []string{"go"}
-	mock := newEvolutionMockDB(submission)
-	mock.unit.Tools = submission.Tools
-	mock.unit.TaskTypes = submission.TaskTypes
-	mock.unit.Languages = submission.Languages
-	matchedID := testUUID(61)
-	unmatchedID := testUUID(62)
-	mock.agents = append(mock.agents,
-		db.Agent{ID: matchedID, WorkspaceID: submission.WorkspaceID, Name: "Go reviewer", Description: "Reviews Go pull requests with GitHub context."},
-		db.Agent{ID: unmatchedID, WorkspaceID: submission.WorkspaceID, Name: "Designer", Description: "Polishes product copy."},
-	)
-	service := NewEvolutionService(db.New(mock))
-
-	unit, status, err := service.curateSubmission(context.Background(), submission)
-	if err != nil {
-		t.Fatalf("curateSubmission error = %v", err)
-	}
-	if status != evolutionCurationPromoted {
-		t.Fatalf("status = %q, want promoted", status)
-	}
-	if _, err := service.matchSourceAgent(context.Background(), submission, unit); err != nil {
-		t.Fatalf("matchSourceAgent error = %v", err)
-	}
-	if len(mock.deliveries) != 2 {
-		t.Fatalf("deliveries = %d, want source + matched agent: %#v", len(mock.deliveries), mock.deliveries)
-	}
-	if mock.deliveries[0].TargetAgentID != submission.SourceAgentID {
-		t.Fatalf("first delivery target = %v, want source %v", mock.deliveries[0].TargetAgentID, submission.SourceAgentID)
-	}
-	if mock.deliveries[1].TargetAgentID != matchedID || mock.deliveries[1].MatcherScore < 0.3 {
-		t.Fatalf("matched delivery = target %v score %.2f, want %v score >= 0.3", mock.deliveries[1].TargetAgentID, mock.deliveries[1].MatcherScore, matchedID)
-	}
-	var details map[string]any
-	if err := json.Unmarshal(mock.deliveries[1].MatcherDetails, &details); err != nil {
-		t.Fatalf("matcher details JSON: %v", err)
-	}
-	if details["strategy"] != "hybrid_metadata_semantic" {
-		t.Fatalf("matcher details = %#v", details)
-	}
-}
-
-func TestCurateSubmissionDoesNotMatchSingleBroadTool(t *testing.T) {
-	submission := validMemorySubmission()
-	submission.Content = "Workflow note."
-	submission.Summary = "Workflow note"
-	submission.Tools = []string{"github"}
-	mock := newEvolutionMockDB(submission)
-	mock.unit.Content = "Workflow note."
-	mock.unit.CanonicalSummary = "Workflow note"
-	mock.unit.Tags = []string{"other"}
-	mock.unit.Tools = submission.Tools
-	broadID := testUUID(63)
-	mock.agents = append(mock.agents,
-		db.Agent{ID: broadID, WorkspaceID: submission.WorkspaceID, Name: "GitHub helper", Description: "Handles GitHub notifications."},
-	)
-	service := NewEvolutionService(db.New(mock))
-
-	unit, status, err := service.curateSubmission(context.Background(), submission)
-	if err != nil {
-		t.Fatalf("curateSubmission error = %v", err)
-	}
-	if status != evolutionCurationPromoted {
-		t.Fatalf("status = %q, want promoted", status)
-	}
-	if _, err := service.matchSourceAgent(context.Background(), submission, unit); err != nil {
-		t.Fatalf("matchSourceAgent error = %v", err)
-	}
-	if len(mock.deliveries) != 1 || mock.deliveries[0].TargetAgentID != submission.SourceAgentID {
-		t.Fatalf("deliveries = %#v, want only source agent", mock.deliveries)
-	}
-}
-
 func TestCurateSubmissionSemanticDuplicateMarksPromotedWithoutNewUnit(t *testing.T) {
-	submission := validMemorySubmission()
+	submission := validSkillSubmission()
 	submission.Title = "Reusable Go review checklist"
 	submission.Summary = "Check Go pull requests for tests and migrations."
 	submission.Content = "When reviewing Go pull requests, verify targeted tests and database migrations before approval."
 	submission.ContentHash = "sha256:new"
 	mock := newEvolutionMockDB(submission)
+	mock.files = []db.EvolutionUnitSubmissionFile{
+		{Path: "SKILL.md", Content: validSkillMainFile(), MimeType: "text/markdown", SizeBytes: int64(len(validSkillMainFile()))},
+	}
 	existing := mock.unit
 	existing.ID = testUUID(64)
 	existing.Title = "Go pull request review checklist"
@@ -673,43 +725,6 @@ func TestSemanticSimilaritySeparatesRelatedAndUnrelatedText(t *testing.T) {
 	}
 }
 
-func TestCurateSubmissionSemanticAgentMatch(t *testing.T) {
-	submission := validMemorySubmission()
-	submission.Title = "Go migration review checklist"
-	submission.Summary = "Verify migrations and targeted tests before approving Go pull requests."
-	submission.Content = "Go pull request review should check database migrations and targeted tests."
-	mock := newEvolutionMockDB(submission)
-	mock.unit.Title = submission.Title
-	mock.unit.CanonicalSummary = submission.Summary
-	mock.unit.Content = submission.Content
-	semanticID := testUUID(65)
-	mock.agents = append(mock.agents,
-		db.Agent{ID: semanticID, WorkspaceID: submission.WorkspaceID, Name: "Backend reviewer", Description: "Reviews Go PR migrations and targeted tests."},
-	)
-	service := NewEvolutionService(db.New(mock))
-
-	unit, status, err := service.curateSubmission(context.Background(), submission)
-	if err != nil {
-		t.Fatalf("curateSubmission error = %v", err)
-	}
-	if status != evolutionCurationPromoted {
-		t.Fatalf("status = %q, want promoted", status)
-	}
-	if _, err := service.matchSourceAgent(context.Background(), submission, unit); err != nil {
-		t.Fatalf("matchSourceAgent error = %v", err)
-	}
-	if len(mock.deliveries) != 2 || mock.deliveries[1].TargetAgentID != semanticID {
-		t.Fatalf("deliveries = %#v, want source + semantic agent", mock.deliveries)
-	}
-	var details map[string]any
-	if err := json.Unmarshal(mock.deliveries[1].MatcherDetails, &details); err != nil {
-		t.Fatalf("matcher details JSON: %v", err)
-	}
-	if details["strategy"] != "hybrid_metadata_semantic" {
-		t.Fatalf("matcher details = %#v", details)
-	}
-}
-
 func TestShouldCreateEvolutionDeliveryMatchAllowsComplementaryMetadata(t *testing.T) {
 	target := evolutionDeliveryMatchTarget{
 		Score: 0.3,
@@ -733,10 +748,35 @@ func TestShouldCreateEvolutionDeliveryMatchRejectsSingleBroadDimension(t *testin
 	}
 }
 
+func TestScoreEvolutionDeliveryTargetPrefersSubmissionMetadata(t *testing.T) {
+	submission := validSkillSubmission()
+	submission.Tools = []string{"github", "docker"}
+	submission.Languages = []string{"go"}
+	unit := db.SharedEvolutionUnit{
+		Tools:     []string{"github"},
+		Languages: []string{"python"},
+	}
+	agent := db.Agent{
+		Name:        "Container helper",
+		Description: "Builds docker images for Go services on GitHub.",
+	}
+	target := scoreEvolutionDeliveryTarget(testUUID(11), unit, agent, &submission)
+	if !shouldCreateEvolutionDeliveryMatch(target) {
+		t.Fatalf("target = %#v, want match from submission metadata", target)
+	}
+	unitOnly := scoreEvolutionDeliveryTarget(testUUID(11), unit, agent, nil)
+	if shouldCreateEvolutionDeliveryMatch(unitOnly) {
+		t.Fatalf("unit-only target = %#v, want no match from stale unit metadata", unitOnly)
+	}
+}
+
 func TestCurateSubmissionWithReviewerPromoteLowRiskPromotes(t *testing.T) {
-	submission := validMemorySubmission()
+	submission := validSkillSubmission()
 	reviewer := &fakeEvolutionReviewer{result: promoteLowRiskReview()}
 	mock := newEvolutionMockDB(submission)
+	mock.files = []db.EvolutionUnitSubmissionFile{
+		{Path: "SKILL.md", Content: validSkillMainFile(), MimeType: "text/markdown", SizeBytes: int64(len(validSkillMainFile()))},
+	}
 	service := NewEvolutionServiceWithReviewer(db.New(mock), reviewer, true)
 
 	_, status, err := service.curateSubmission(context.Background(), submission)
@@ -755,9 +795,12 @@ func TestCurateSubmissionWithReviewerPromoteLowRiskPromotes(t *testing.T) {
 }
 
 func TestCurateSubmissionWithReviewerPromoteMediumRiskNeedsReview(t *testing.T) {
-	submission := validMemorySubmission()
+	submission := validSkillSubmission()
 	reviewer := &fakeEvolutionReviewer{result: EvolutionReviewResult{Decision: EvolutionReviewPromote, Confidence: 0.9, RiskLevel: EvolutionReviewRiskMedium, Rationale: "medium risk"}}
 	mock := newEvolutionMockDB(submission)
+	mock.files = []db.EvolutionUnitSubmissionFile{
+		{Path: "SKILL.md", Content: validSkillMainFile(), MimeType: "text/markdown", SizeBytes: int64(len(validSkillMainFile()))},
+	}
 	service := NewEvolutionServiceWithReviewer(db.New(mock), reviewer, true)
 
 	_, status, err := service.curateSubmission(context.Background(), submission)
@@ -773,9 +816,12 @@ func TestCurateSubmissionWithReviewerPromoteMediumRiskNeedsReview(t *testing.T) 
 }
 
 func TestCurateSubmissionWithReviewerRejectRejects(t *testing.T) {
-	submission := validMemorySubmission()
+	submission := validSkillSubmission()
 	reviewer := &fakeEvolutionReviewer{result: EvolutionReviewResult{Decision: EvolutionReviewReject, Confidence: 0.8, RiskLevel: EvolutionReviewRiskHigh, Rationale: "unsafe"}}
 	mock := newEvolutionMockDB(submission)
+	mock.files = []db.EvolutionUnitSubmissionFile{
+		{Path: "SKILL.md", Content: validSkillMainFile(), MimeType: "text/markdown", SizeBytes: int64(len(validSkillMainFile()))},
+	}
 	service := NewEvolutionServiceWithReviewer(db.New(mock), reviewer, true)
 
 	_, status, err := service.curateSubmission(context.Background(), submission)
@@ -791,9 +837,12 @@ func TestCurateSubmissionWithReviewerRejectRejects(t *testing.T) {
 }
 
 func TestCurateSubmissionWithReviewerErrorNeedsReview(t *testing.T) {
-	submission := validMemorySubmission()
+	submission := validSkillSubmission()
 	reviewer := &fakeEvolutionReviewer{err: errors.New("review failed")}
 	mock := newEvolutionMockDB(submission)
+	mock.files = []db.EvolutionUnitSubmissionFile{
+		{Path: "SKILL.md", Content: validSkillMainFile(), MimeType: "text/markdown", SizeBytes: int64(len(validSkillMainFile()))},
+	}
 	service := NewEvolutionServiceWithReviewer(db.New(mock), reviewer, true)
 
 	_, status, err := service.curateSubmission(context.Background(), submission)

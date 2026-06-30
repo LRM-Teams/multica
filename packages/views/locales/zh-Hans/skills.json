@@ -288,7 +288,7 @@
   },
   "evolution_review": {
     "title": "Evolution 人工审核",
-    "description": "审核智能体提交、需要人工决策后才能晋升和分发的 memory 与 skill。",
+    "description": "审核智能体提交、需要人工决策后才能晋升到工作区目录的 memory 与 skill。",
     "status_filter": "提交状态",
     "refresh": "刷新",
     "refreshing": "刷新中...",
@@ -335,6 +335,10 @@
       "recommendation": "推荐",
       "shared_cache": "共享缓存"
     },
+    "promotion_outcomes": {
+      "skill": "工作区 skill + 智能体建议",
+      "memory": "仅共享 evolution unit"
+    },
     "review_decisions": {
       "promote": "建议晋升",
       "needs_review": "建议人工审核",
@@ -376,12 +380,17 @@
     "metadata_rationale": "理由",
     "metadata_risks": "风险",
     "delivery_preview": "分发预览",
+    "promotion_preview": "晋升预览",
     "delivery_type": "分发类型",
+    "promotion_outcome": "晋升结果",
     "delivery_target": "目标",
+    "source_agent_label": "来源智能体",
     "promoted_unit": "已晋升单元",
     "promoted_result": "已晋升",
     "pending_result": "尚未晋升",
     "promotion_result_hint": "晋升后会创建共享 evolution unit，并为来源智能体排队分发。",
+    "promotion_result_hint_skill": "晋升后会物化为工作区 skill，并为匹配的智能体生成绑定建议。",
+    "promotion_result_hint_memory": "晋升后会存储共享 evolution unit。Memory 不会自动分配给智能体。",
     "review_metadata": "原始审核 metadata",
     "apply_suggestions": "应用审核建议",
     "apply_suggestions_hint": "晋升时使用审核建议的标题、摘要、标签、task 类型和范围。",

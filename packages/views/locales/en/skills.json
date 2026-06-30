@@ -288,7 +288,7 @@
   },
   "evolution_review": {
     "title": "Evolution Review Queue",
-    "description": "Review agent-submitted memories and skills that need a human decision before they are promoted and delivered.",
+    "description": "Review agent-submitted memories and skills that need a human decision before they are promoted into the workspace catalog.",
     "status_filter": "Submission status",
     "refresh": "Refresh",
     "refreshing": "Refreshing...",
@@ -335,6 +335,10 @@
       "recommendation": "Recommendation",
       "shared_cache": "Shared cache"
     },
+    "promotion_outcomes": {
+      "skill": "Workspace skill + agent suggestions",
+      "memory": "Shared evolution unit only"
+    },
     "review_decisions": {
       "promote": "Promote",
       "needs_review": "Needs review",
@@ -376,12 +380,17 @@
     "metadata_rationale": "Rationale",
     "metadata_risks": "Risks",
     "delivery_preview": "Delivery preview",
+    "promotion_preview": "Promotion preview",
     "delivery_type": "Delivery type",
+    "promotion_outcome": "Promotion outcome",
     "delivery_target": "Target",
+    "source_agent_label": "Source agent",
     "promoted_unit": "Promoted unit",
     "promoted_result": "Promoted",
     "pending_result": "Not promoted yet",
     "promotion_result_hint": "Promotion created a shared evolution unit and queued delivery for the source agent.",
+    "promotion_result_hint_skill": "Promotion materialized a workspace skill and queued binding suggestions for matching agents.",
+    "promotion_result_hint_memory": "Promotion stored a shared evolution unit. Memory is not auto-assigned to agents.",
     "review_metadata": "Raw review metadata",
     "apply_suggestions": "Apply reviewer suggestions",
     "apply_suggestions_hint": "Use reviewer title, summary, tags, task types, and scope when promoting.",

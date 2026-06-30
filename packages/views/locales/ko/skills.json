@@ -335,6 +335,10 @@
       "recommendation": "추천",
       "shared_cache": "공유 캐시"
     },
+    "promotion_outcomes": {
+      "skill": "워크스페이스 skill + 에이전트 제안",
+      "memory": "공유 evolution unit 만"
+    },
     "review_decisions": {
       "promote": "승격",
       "needs_review": "검토 필요",
@@ -376,12 +380,17 @@
     "metadata_rationale": "근거",
     "metadata_risks": "위험",
     "delivery_preview": "전달 미리보기",
+    "promotion_preview": "승격 미리보기",
     "delivery_type": "전달 유형",
+    "promotion_outcome": "승격 결과",
     "delivery_target": "대상",
+    "source_agent_label": "소스 에이전트",
     "promoted_unit": "승격된 유닛",
     "promoted_result": "승격됨",
     "pending_result": "아직 승격되지 않음",
     "promotion_result_hint": "승격하면 공유 evolution unit 이 생성되고 소스 에이전트로의 전달이 대기열에 추가됩니다.",
+    "promotion_result_hint_skill": "승격하면 워크스페이스 skill 이 생성되고 일치하는 에이전트에 대한 바인딩 제안이 대기열에 추가됩니다.",
+    "promotion_result_hint_memory": "승격하면 공유 evolution unit 이 저장됩니다. Memory 는 에이전트에 자동 할당되지 않습니다.",
     "review_metadata": "원본 리뷰 metadata",
     "apply_suggestions": "리뷰어 제안 적용",
     "apply_suggestions_hint": "승격할 때 리뷰어가 제안한 제목, 요약, 태그, task 유형, 범위를 사용합니다.",

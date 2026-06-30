@@ -68,6 +68,7 @@ type AgentRuntime struct {
 type AgentSkill struct {
 	AgentID   pgtype.UUID        `json:"agent_id"`
 	SkillID   pgtype.UUID        `json:"skill_id"`
+	Source    string             `json:"source"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -597,15 +598,16 @@ type ProjectResource struct {
 }
 
 type Skill struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	Content     string             `json:"content"`
-	Config      []byte             `json:"config"`
-	CreatedBy   pgtype.UUID        `json:"created_by"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ID                    pgtype.UUID        `json:"id"`
+	WorkspaceID           pgtype.UUID        `json:"workspace_id"`
+	Name                  string             `json:"name"`
+	Description           string             `json:"description"`
+	Content               string             `json:"content"`
+	Config                []byte             `json:"config"`
+	CreatedBy             pgtype.UUID        `json:"created_by"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	SourceEvolutionUnitID pgtype.UUID        `json:"source_evolution_unit_id"`
 }
 
 type SkillFile struct {
@@ -767,25 +769,6 @@ type SharedEvolutionUnitFile struct {
 	MimeType    string             `json:"mime_type"`
 	SizeBytes   int64              `json:"size_bytes"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-}
-
-type EvolutionUnitDelivery struct {
-	ID             pgtype.UUID        `json:"id"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	UnitID         pgtype.UUID        `json:"unit_id"`
-	VersionID      pgtype.UUID        `json:"version_id"`
-	TargetAgentID  pgtype.UUID        `json:"target_agent_id"`
-	DeliveryType   string             `json:"delivery_type"`
-	Status         string             `json:"status"`
-	Reason         string             `json:"reason"`
-	MatcherScore   float64            `json:"matcher_score"`
-	MatcherDetails []byte             `json:"matcher_details"`
-	DeliveredPath  string             `json:"delivered_path"`
-	Error          string             `json:"error"`
-	DecidedAt      pgtype.Timestamptz `json:"decided_at"`
-	DeliveredAt    pgtype.Timestamptz `json:"delivered_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Squad struct {

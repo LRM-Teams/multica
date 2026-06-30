@@ -329,26 +329,18 @@
       "add_dialog_confirm_other": "スキル {{count}} 件を追加",
       "add_dialog_cancel": "キャンセル",
       "add_failed_toast": "スキルを追加できませんでした",
-      "generated_title": "生成されたスキル",
-      "generated_intro": "このエージェントが Pi evolution フローで学習したスキルです。承認するとローカルで有効化され、以後の Pi タスクで使われます。",
-      "generated_count": "生成 {{count}} 件",
-      "generated_loading": "生成されたスキルを読み込み中…",
-      "generated_empty": "生成されたスキルはまだありません。",
-      "generated_decision_failed_toast": "生成スキルの判断を更新できませんでした",
-      "generated_decision_saved_toast": "生成スキルの判断を保存しました",
-      "generated_accept_action": "承認",
-      "generated_enabled_action": "有効",
-      "generated_ignore_action": "無視",
-      "generated_accepted_pending_hint": "承認済みです。ローカル runtime がこの skill を有効化するのを待っています。",
-      "generated_accepted_waiting_local_hint": "承認済みです。ローカル runtime がこの skill を受け取るのを待っています。daemon が稼働中で、この agent が少なくとも 1 回 Pi task を実行済み（ローカル agent ディレクトリを自動作成）であることを確認してください。",
-      "generated_status_enabled": "有効",
-      "generated_status": {
-        "pending": "保留中",
-        "delivered": "配信済み",
-        "accepted": "承認済み",
-        "ignored": "無視済み",
-        "rejected": "却下済み",
-        "failed": "失敗"
+      "suggestion_title": "Evolution スキル提案",
+      "suggestion_intro": "昇格済みでこのエージェントに合いそうなワークスペース skill。承認でバインド、却下で無視します。",
+      "suggestion_count": "保留 {{count}} 件",
+      "suggestion_loading": "スキル提案を読み込み中…",
+      "suggestion_empty": "保留中のスキル提案はありません。",
+      "suggestion_decision_failed_toast": "スキル提案を更新できませんでした",
+      "suggestion_decision_saved_toast": "スキル提案を更新しました",
+      "suggestion_accept_action": "承認",
+      "suggestion_dismiss_action": "却下",
+      "suggestion_action": {
+        "add": "追加を提案",
+        "remove": "削除を提案"
       }
     },
     "integrations": {

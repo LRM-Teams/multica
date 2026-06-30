@@ -611,6 +611,7 @@ export function ChannelsPage() {
     const q = search.trim().toLowerCase();
     return q ? sortedChannels.filter((c) => c.name.toLowerCase().includes(q)) : sortedChannels;
   }, [sortedChannels, search]);
+  const hasSidebarSearch = search.trim().length > 0;
   const currentUserRole = useMemo(
     () => workspaceMembers.find((m) => m.user_id === currentUserId)?.role ?? "member",
     [workspaceMembers, currentUserId],
@@ -1321,15 +1322,15 @@ export function ChannelsPage() {
                     <Skeleton className="h-12" />
                     <Skeleton className="h-12" />
                   </div>
-                ) : channels.length === 0 ? (
-                  <div className="p-3 text-sm text-muted-foreground">{t(($) => $.sidebar.empty)}</div>
-                ) : filteredChannels.length === 0 ? (
+                ) : hasSidebarSearch && filteredChannels.length === 0 ? (
                   <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
                     <p className="font-medium text-foreground">
                       {t(($) => $.sidebar.no_conversation_matches)}
                     </p>
                     <p>{t(($) => $.sidebar.search_scope_hint)}</p>
                   </div>
+                ) : channels.length === 0 ? (
+                  <div className="p-3 text-sm text-muted-foreground">{t(($) => $.sidebar.empty)}</div>
                 ) : (
                   filteredChannels.map((channel) => {
                     const realUnread = channel.real_unread_count ?? channel.unread_count ?? 0;

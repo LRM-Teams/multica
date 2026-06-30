@@ -139,6 +139,8 @@
     "mention_aria": "에이전트 멘션",
     "send": "전송",
     "issue_ref_aria": "이슈 참조",
+    "issue_picker_title": "이슈 참조",
+    "issue_picker_description": "이슈를 검색해 현재 메시지에 참조를 삽입합니다.",
     "project_label": "프로젝트",
     "project_none": "프로젝트 없음",
     "project_tooltip": "이 채널이 작업할 프로젝트 설정"

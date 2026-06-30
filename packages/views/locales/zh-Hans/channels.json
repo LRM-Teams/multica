@@ -139,6 +139,8 @@
     "mention_aria": "提及智能体",
     "send": "发送",
     "issue_ref_aria": "引用 Issue",
+    "issue_picker_title": "引用 Issue",
+    "issue_picker_description": "搜索并插入一个 Issue 引用到当前消息。",
     "project_label": "项目",
     "project_none": "无项目",
     "project_tooltip": "设置该频道对应的项目"

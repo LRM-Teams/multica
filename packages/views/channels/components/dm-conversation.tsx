@@ -56,6 +56,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { useT, useTimeAgo } from "../../i18n";
 import { ChatMessageList } from "../../chat/components/chat-message-list";
 import { ChatInput } from "../../chat/components/chat-input";
+import { IssuePickerModal } from "../../modals/issue-picker-modal";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelComposer, ConversationHeader } from "./conversation-surface";
@@ -211,6 +212,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   const [convSearchResults, setConvSearchResults] = useState<ChannelMessageSearchResult[]>([]);
   const [convSearchTotal, setConvSearchTotal] = useState(0);
   const [convSearchIndex, setConvSearchIndex] = useState(0);
+  const [issuePickerOpen, setIssuePickerOpen] = useState(false);
   const [threadParentHighlightId, setThreadParentHighlightId] = useState<string | null>(null);
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -738,7 +740,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
                 size="icon"
                 className={cn(isMobile ? "size-10" : "size-8")}
                 aria-label={t(($) => $.composer.issue_ref_aria)}
-                onClick={() => editorRef.current?.insertText("#")}
+                onClick={() => setIssuePickerOpen(true)}
               >
                 <Hash className={cn(isMobile ? "size-5" : "size-4")} />
               </Button>
@@ -757,6 +759,16 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
           </DrawerContent>
         </Drawer>
       )}
+      <IssuePickerModal
+        open={issuePickerOpen}
+        onOpenChange={setIssuePickerOpen}
+        title={t(($) => $.composer.issue_picker_title)}
+        description={t(($) => $.composer.issue_picker_description)}
+        excludeIds={[]}
+        onSelect={(issue) => {
+          editorRef.current?.insertText(`[${issue.identifier}](mention://issue/${issue.id})`);
+        }}
+      />
     </main>
   );
 

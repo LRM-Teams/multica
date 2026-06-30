@@ -139,6 +139,8 @@
     "mention_aria": "Mention an agent",
     "send": "Send",
     "issue_ref_aria": "Reference issue",
+    "issue_picker_title": "Reference issue",
+    "issue_picker_description": "Search and insert an issue reference into this message.",
     "project_label": "Project",
     "project_none": "No project",
     "project_tooltip": "Set the project this channel works in"

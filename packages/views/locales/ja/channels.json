@@ -139,6 +139,8 @@
     "mention_aria": "エージェントをメンション",
     "send": "送信",
     "issue_ref_aria": "Issue を参照",
+    "issue_picker_title": "Issue を参照",
+    "issue_picker_description": "Issue を検索して、このメッセージに参照を挿入します。",
     "project_label": "プロジェクト",
     "project_none": "プロジェクトなし",
     "project_tooltip": "このチャンネルが作業するプロジェクトを設定"

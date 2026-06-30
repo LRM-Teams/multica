@@ -20,7 +20,7 @@ ensure_agent_root() {
 download_skill_md_only() {
   local url="$1" dest="$2"
   mkdir -p "$dest"
-  curl -fsSL "$url" -o "$dest/SKILL.md"
+  curl -fsSL --max-time 30 "$url" -o "$dest/SKILL.md"
   python3 - "$dest" <<'PY'
 import sys
 from pathlib import Path

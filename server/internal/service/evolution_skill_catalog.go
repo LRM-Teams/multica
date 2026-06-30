@@ -85,6 +85,22 @@ func (s *EvolutionService) MaterializePromotedSkill(ctx context.Context, submiss
 	return created, nil
 }
 
+// assignEvolutionSkillToSourceAgent binds a promoted workspace skill to the agent
+// that uploaded the evolution candidate. Other agents still receive suggestions via rescan.
+func (s *EvolutionService) assignEvolutionSkillToSourceAgent(ctx context.Context, submission db.EvolutionUnitSubmission, skill db.Skill) error {
+	if !submission.SourceAgentID.Valid {
+		return nil
+	}
+	if !skill.ID.Valid {
+		return errors.New("promoted skill missing id")
+	}
+	return s.Queries.AddAgentSkillWithSource(ctx, db.AddAgentSkillWithSourceParams{
+		AgentID: submission.SourceAgentID,
+		SkillID: skill.ID,
+		Source:  "evolution",
+	})
+}
+
 // skillCreatedByFromSubmission maps evolution submission source_member_id (member PK)
 // to skill.created_by (user FK). Invalid/missing members yield NULL created_by.
 func (s *EvolutionService) skillCreatedByFromSubmission(ctx context.Context, submission db.EvolutionUnitSubmission) (pgtype.UUID, error) {

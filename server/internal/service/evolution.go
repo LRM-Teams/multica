@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"path"
 	"regexp"
@@ -92,16 +95,20 @@ func (s *EvolutionService) CurateAndMatchWorkspace(ctx context.Context, workspac
 			continue
 		case evolutionCurationPromoted:
 			result.Promoted++
+			if submission.UnitType == "skill" {
+				created, err := s.finalizeSkillPromotion(ctx, submission, unit)
+				if err != nil {
+					return result, err
+				}
+				if created {
+					result.Matched++
+				}
+			} else if isEvolutionAutoAssignMemoryUnit(submission.UnitType) {
+				result.Matched++
+			}
 		default:
 			result.Skipped++
 			continue
-		}
-		created, err := s.finalizeSkillPromotion(ctx, submission, unit)
-		if err != nil {
-			return result, err
-		}
-		if created {
-			result.Matched++
 		}
 	}
 	return result, nil
@@ -118,7 +125,11 @@ func (s *EvolutionService) finalizeSkillPromotion(ctx context.Context, submissio
 	if err != nil {
 		return false, err
 	}
-	if _, err := s.MaterializePromotedSkill(ctx, submission, unit, files); err != nil {
+	skill, err := s.MaterializePromotedSkill(ctx, submission, unit, files)
+	if err != nil {
+		return false, err
+	}
+	if err := s.assignEvolutionSkillToSourceAgent(ctx, submission, skill); err != nil {
 		return false, err
 	}
 	if err := s.RefreshWorkspaceAgentSkillSuggestions(ctx, unit.WorkspaceID); err != nil {
@@ -139,6 +150,11 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 	if evolutionDedupeHash(submission) == "" {
 		_, err := s.rejectSubmissionWithReview(ctx, submission, "missing content hash", "medium")
 		return db.SharedEvolutionUnit{}, evolutionCurationRejected, err
+	}
+
+	if isEvolutionAutoAssignMemoryUnit(submission.UnitType) {
+		status, err := s.curateMemorySubmission(ctx, submission)
+		return db.SharedEvolutionUnit{}, status, err
 	}
 
 	if !s.ReviewEnabled {
@@ -1304,4 +1320,103 @@ func sourceAgentIDFromUnitMetadata(unit db.SharedEvolutionUnit) pgtype.UUID {
 		return pgtype.UUID{}
 	}
 	return id
+}
+
+func isEvolutionAutoAssignMemoryUnit(unitType string) bool {
+	switch unitType {
+	case "memory", "preference", "tool_pattern", "workflow":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *EvolutionService) curateMemorySubmission(ctx context.Context, submission db.EvolutionUnitSubmission) (evolutionCurationStatus, error) {
+	if err := s.assignEvolutionMemory(ctx, submission); err != nil {
+		_, rejErr := s.rejectSubmissionWithReview(ctx, submission, err.Error(), "high")
+		return evolutionCurationRejected, rejErr
+	}
+	_, err := s.Queries.MarkEvolutionSubmissionPromoted(ctx, db.MarkEvolutionSubmissionPromotedParams{
+		ID:             submission.ID,
+		WorkspaceID:    submission.WorkspaceID,
+		PromotedUnitID: pgtype.UUID{},
+	})
+	if err != nil {
+		return evolutionCurationSkipped, err
+	}
+	return evolutionCurationPromoted, nil
+}
+
+func (s *EvolutionService) assignEvolutionMemory(ctx context.Context, submission db.EvolutionUnitSubmission) error {
+	if !submission.SourceAgentID.Valid {
+		return errors.New("memory submission missing source agent")
+	}
+	name := strings.TrimSpace(submission.Title)
+	if name == "" {
+		name = strings.TrimSpace(submission.LocalUnitID)
+	}
+	if name == "" {
+		return errors.New("memory submission missing name")
+	}
+	content := strings.TrimSpace(submission.Content)
+	if content == "" {
+		if summary := strings.TrimSpace(submission.Summary); summary != "" {
+			content = summary
+		}
+	}
+	if content == "" {
+		return errors.New("memory submission missing content")
+	}
+
+	syncKey := fmt.Sprintf("evolution/%s/%s", submission.UnitType, strings.TrimSpace(submission.LocalUnitID))
+	contentHash := strings.TrimSpace(submission.ContentHash)
+	if contentHash == "" {
+		contentHash = hashEvolutionContent(content)
+	}
+	config, _ := json.Marshal(map[string]any{
+		"origin": map[string]any{
+			"type":          "evolution",
+			"submission_id": uuidString(submission.ID),
+			"local_unit_id": submission.LocalUnitID,
+			"unit_type":     submission.UnitType,
+		},
+	})
+	createdBy, err := s.skillCreatedByFromSubmission(ctx, submission)
+	if err != nil {
+		return err
+	}
+
+	existing, err := s.Queries.GetAgentMemoryByAgentAndSyncKey(ctx, db.GetAgentMemoryByAgentAndSyncKeyParams{
+		AgentID: submission.SourceAgentID,
+		SyncKey: syncKey,
+	})
+	if err == nil {
+		_, err = s.Queries.UpdateAgentMemory(ctx, db.UpdateAgentMemoryParams{
+			ID:          existing.ID,
+			Name:        pgtype.Text{String: name, Valid: true},
+			Content:     pgtype.Text{String: content, Valid: true},
+			Config:      config,
+			ContentHash: pgtype.Text{String: contentHash, Valid: true},
+		})
+		return err
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	_, err = s.Queries.CreateAgentMemory(ctx, db.CreateAgentMemoryParams{
+		WorkspaceID: submission.WorkspaceID,
+		AgentID:     submission.SourceAgentID,
+		Name:        name,
+		Content:     content,
+		Config:      config,
+		SyncKey:     syncKey,
+		ContentHash: contentHash,
+		CreatedBy:   createdBy,
+	})
+	return err
+}
+
+func hashEvolutionContent(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return "sha256:" + hex.EncodeToString(h[:])
 }

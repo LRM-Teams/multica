@@ -68,9 +68,17 @@ func main() {
 			panic(err)
 		}
 		skill, err := svc.MaterializePromotedSkill(context.Background(), sub, unit, files)
-		fmt.Printf("local_unit_id=%s skill_name=%q err=%v\n", sub.LocalUnitID, skill.Name, err)
+		fmt.Printf("local_unit_id=%s skill_name=%q materialize_err=%v\n", sub.LocalUnitID, skill.Name, err)
 		if err != nil {
 			continue
+		}
+		if sub.SourceAgentID.Valid {
+			assignErr := q.AddAgentSkillWithSource(context.Background(), db.AddAgentSkillWithSourceParams{
+				AgentID: sub.SourceAgentID,
+				SkillID: skill.ID,
+				Source:  "evolution",
+			})
+			fmt.Printf("  assign_source_agent err=%v\n", assignErr)
 		}
 		if err := svc.RefreshWorkspaceAgentSkillSuggestions(context.Background(), wsID); err != nil {
 			fmt.Printf("rescan err=%v\n", err)

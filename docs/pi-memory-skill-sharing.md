@@ -10,8 +10,8 @@ This document covers the Pi agent evolution/governance flow:
 
 ```text
 Local Pi agent root
-  sync_queue/memory-candidates.jsonl
-  sync_queue/skill-candidates.jsonl
+  sync_queue/memory-candidates.jsonl          ──► memory path (auto-assign)
+  sync_queue/skill-candidates.jsonl           ──► skill path (review + suggestions)
   skills/drafts/<skill_id>/
         |
         v
@@ -19,36 +19,22 @@ Multica server database
   evolution_unit_submission
   evolution_unit_submission_file
         |
-        v
-Curator / optional LLM advisory review
-  shared_evolution_unit
-  shared_evolution_unit_version
-  shared_evolution_unit_file
+        +── memory / preference / tool_pattern / workflow
+        |       hard gates only → promoted → agent_memory (source agent)
         |
-        v  (unit_type == skill only)
-  skill + skill_file                    # workspace public catalog
-        |
-        v
-  agent_skill_suggestion (add | remove)   # scan only; no auto-bind
-        |
-        v
-  user accept / dismiss (web or desktop UI)
-        |
-        v
-  agent_skill (source: manual | evolution | template)
-        |
-        v
-Task execution
-  TaskService.LoadAgentSkills → daemon injects skills into Pi task env
+        └── skill
+                optional LLM advisory review
+                → promoted → skill + skill_file
+                → agent_skill_suggestion → user confirm → agent_skill
 ```
 
 It does not cover the global shared-skill scanner under `~/.pi/share/skills`, which syncs directly into workspace `skill` / `skill_file` via the runtime shared-skill sync endpoint.
 
 ## Design principles
 
-- **Promotion ≠ assignment.** A promoted skill is written to the workspace public `skill` table. Binding it to an agent is a separate, user-confirmed step.
+- **Skill promotion ≠ assignment.** A promoted skill is written to the workspace public `skill` table. Binding it to an agent is a separate, user-confirmed step.
+- **Memory auto-assigns to the submitting agent.** After deterministic hard gates pass, memory-like units are promoted and written to `agent_memory` for `source_agent_id` with no LLM or manual review.
 - **No per-agent delivery table.** `evolution_unit_delivery` was removed (migration 137). The server does not push generated bundles back to `skills/generated/` or `skills/enabled/`.
-- **Memory stays in the governance layer for now.** Promoted memory units live in `shared_evolution_unit*` only; there is no automatic per-agent memory assignment yet.
 
 ## Local Pi Agent Root
 
@@ -272,7 +258,9 @@ Rejected submissions remain in `evolution_unit_submission` with `status='rejecte
 
 ### Needs Review Rules
 
-When LLM review is disabled (default), a submission moves to `status='needs_review'` when deterministic hard checks pass but confidence is not high enough for automatic promotion:
+**Skill only.** Memory-like units never enter `needs_review`.
+
+When LLM review is disabled (default), a **skill** submission moves to `status='needs_review'` when deterministic hard checks pass but confidence is not high enough for automatic promotion:
 
 - `confidence != "high"`.
 - `sensitivity` is not `none` or `local_path`.
@@ -283,7 +271,9 @@ Review queue rows are handled through workspace evolution review APIs and the Se
 
 ### Promotion Rules
 
-A submission is eligible for automatic promotion (when review is disabled and confidence gates pass) when:
+**Memory-like units** promote immediately after hard gates pass (no confidence / LLM / manual review).
+
+**Skill** submissions are eligible for automatic promotion (when review is disabled and confidence gates pass) when:
 
 - `confidence == "high"`.
 - `sensitivity` is `none` or `local_path`.
@@ -363,11 +353,11 @@ Important behavior:
 - Skills imported via `~/.pi/share/skills` or manual workspace CRUD do not set this column and are outside the evolution suggestion matcher.
 - `skill.created_by` is resolved from `evolution_unit_submission.source_member_id` → `member.user_id` (user FK), not the member PK.
 
-After materialization, the service runs `RefreshWorkspaceAgentSkillSuggestions` for all non-archived agents in the workspace.
+After materialization, the service binds the skill to the submitting source agent (`agent_skill`, `source='evolution'`), then runs `RefreshWorkspaceAgentSkillSuggestions` for all non-archived agents in the workspace.
 
 ## Agent Skill Suggestions
 
-Promotion does **not** bind skills to agents. Instead, the matcher creates rows in `agent_skill_suggestion`.
+Promotion **auto-binds the source agent** that uploaded the candidate. The matcher creates `agent_skill_suggestion` rows for **other** agents only.
 
 ### Trigger timing
 
@@ -378,7 +368,7 @@ Promotion does **not** bind skills to agents. Instead, the matcher creates rows 
 
 - Only `skill` rows with `source_evolution_unit_id IS NOT NULL`.
 - Hybrid metadata + semantic scoring (tags, tools, languages, frameworks, task_types, etc.).
-- The submitting source agent is skipped (no self-suggestion for the agent that uploaded the candidate).
+- The submitting source agent is skipped by the matcher (already bound directly on promotion).
 
 ### Suggestion rules
 
@@ -427,11 +417,27 @@ Evolution-promoted skills therefore reach Pi only after:
 
 There is no separate enablement step on `skills/enabled/`.
 
-## Memory promotion (current state)
+## Memory auto-assign (memory-like units)
 
-Memory, preference, tool_pattern, and workflow units are promoted into `shared_evolution_unit*` the same way as skills, but they are **not** materialized into `agent_memory` and are **not** delivered to `<agent_root>/inbox/memory/` in the current tree.
+For `memory`, `preference`, `tool_pattern`, and `workflow`, the flow after upload is:
 
-The active Pi memory upload path ends at governed shared units until a separate memory assignment product is implemented.
+```text
+1. Deterministic hard gates (secret / path / size / empty content)
+2. assignEvolutionMemory → agent_memory (source_agent_id only)
+3. Mark submission promoted (no shared_evolution_unit row)
+```
+
+Implementation lives in `curateMemorySubmission` / `assignEvolutionMemory` in `server/internal/service/evolution.go`.
+
+Important behavior:
+
+- **No LLM review** and **no `needs_review` queue** for memory-like units, even when `EVOLUTION_REVIEW_ENABLED=true`.
+- **No cross-agent assignment** — only the submitting agent (`source_agent_id`) receives the memory row.
+- Idempotency via `sync_key`: `evolution/{unit_type}/{local_unit_id}`.
+- Re-uploads with the same `local_unit_id` update the existing `agent_memory` row.
+- `config.origin` records `evolution_unit_id`, `submission_id`, and `local_unit_id` for traceability.
+
+The agent **Memory** tab reads bound rows via `GET /api/agents/{id}/memories`.
 
 ## Relationship To Other Tables
 
@@ -448,7 +454,7 @@ Three distinct entry paths populate the workspace skill catalog:
 
 ### `agent_memory`
 
-`agent_memory` tables and sync handler code exist, but per-agent memory assignment is not wired through the evolution flow documented here. Promoted memory units remain in `shared_evolution_unit*`.
+Evolution memory candidates materialize into `agent_memory` for the submitting agent after hard gates pass. The separate runtime sync handler (`SyncAgentMemories`) still exists for direct runtime memory bundles, but the Pi evolution upload path documented here uses `sync_queue/memory-candidates.jsonl` → `evolution_unit_submission` → `agent_memory`.
 
 ### `agent_shared_skill`
 
@@ -472,23 +478,21 @@ Migration 137 dropped this table and removed daemon/server delivery endpoints (`
    evolution_unit_submission
    evolution_unit_submission_file
 
-4. Curator (and optional LLM reviewer) promotes safe candidates:
-   shared_evolution_unit
-   shared_evolution_unit_version
-   shared_evolution_unit_file
+4. Curator runs deterministic gates:
+   memory-like → promoted + agent_memory (source agent)
+   skill → optional LLM review → promoted or needs_review or rejected
 
-5. For skill units, server materializes public catalog rows:
+5. For skill units, server materializes public catalog rows and binds the source agent:
    skill (+ source_evolution_unit_id)
    skill_file
+   agent_skill (source agent, source=evolution)
 
-6. Matcher scans workspace agents and writes suggestions:
+6. Matcher scans other workspace agents and writes suggestions:
    agent_skill_suggestion (add | remove, status=pending)
 
-7. User reviews suggestions in agent Skills tab (or via API):
-   GET  /api/agents/{id}/skill-suggestions
-   POST /api/agents/{id}/skill-suggestions/{id}/decision
+7. User reviews skill suggestions in agent Skills tab (or via API) — non-source agents only
 
-8. On accept, binding is persisted:
+8. On accept, skill binding is persisted:
    agent_skill (source=evolution for add suggestions)
 
 9. Task dispatch loads bound skills from DB:
@@ -498,8 +502,7 @@ Migration 137 dropped this table and removed daemon/server delivery endpoints (`
 ## Current Limitations
 
 - Raw Pi memory files are not mirrored to the server; only explicit candidate JSONL entries are uploaded.
-- Promoted memory units are not assigned to agents or written to local inbox paths yet.
-- Matcher skips the source agent; other agents need sufficient profile metadata or suggestions may be empty.
-- Workspace rescan after promotion is synchronous; large workspaces may need an async job.
-- Governance defaults to deterministic rules with optional LLM review (`EVOLUTION_REVIEW_ENABLED`); production review policy is still evolving.
-- `agent_memory` and `agent_shared_skill` tables exist, but the wired Pi sharing path for skills uses evolution → `skill` → `agent_skill_suggestion` → `agent_skill`.
+- Memory-like evolution units auto-bind to the submitting agent only; there is no cross-agent memory suggestion flow.
+- Matcher skips the source agent for **skills** (already auto-bound); other agents need sufficient profile metadata or skill suggestions may be empty.
+- Workspace rescan after skill promotion is synchronous; large workspaces may need an async job.
+- Skill governance defaults to deterministic rules with optional LLM review (`EVOLUTION_REVIEW_ENABLED`); memory-like units never enter that queue.

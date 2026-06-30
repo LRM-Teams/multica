@@ -147,6 +147,11 @@ import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
+import {
+  ComposerShell,
+  ConversationHeader,
+  ReadOnlyConversationBanner,
+} from "./conversation-surface";
 import { DmList } from "./dm-list";
 import { DmConversation } from "./dm-conversation";
 import { formatChannelMessagePreview, type MentionPreviewResolver } from "./message-preview";
@@ -1616,49 +1621,49 @@ export function ChannelsPage() {
             )
           ) : (
             <>
-              <header
-                className={cn(
-                  "flex items-center justify-between gap-3 border-b border-border/40 bg-background/95 py-2.5",
-                  isMobile ? "px-2" : "px-5",
-                )}
-              >
-                <div className={cn("flex min-w-0 items-center", isMobile ? "gap-2" : "gap-3")}>
-                  {isMobile && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-10 shrink-0 text-muted-foreground"
-                      aria-label={t(($) => $.header.back)}
-                      onClick={mobileBackToList}
-                    >
-                      <ArrowLeft className="size-5" />
-                    </Button>
-                  )}
-                  <ChannelGroupAvatar members={channelMembers} size={40} />
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 font-semibold">
-                      <span className="truncate">{active.name}</span>
-                      {isConversationMuted(active) && (
-                        <MutedIndicator label={t(($) => $.sidebar.muted_label)} />
-                      )}
-                      {isActiveArchived && (
-                        <Badge variant="secondary" className="shrink-0 uppercase tracking-wide">
-                          {t(($) => $.sidebar.archived_section)}
-                        </Badge>
-                      )}
-                      {active.lark_chat_id && (
-                        <Badge variant="secondary" className="shrink-0">
-                          {t(($) => $.header.feishu)}
-                        </Badge>
-                      )}
-                    </div>
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground/80">
-                      {t(($) => $.header.running)}
-                      {rosterSummary ? ` · ${rosterSummary}` : ""}
-                    </p>
-                  </div>
-                </div>
-                {isMobile ? (
+              <ConversationHeader
+                isMobile={isMobile}
+                leading={
+                  <>
+                    {isMobile && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-10 shrink-0 text-muted-foreground"
+                        aria-label={t(($) => $.header.back)}
+                        onClick={mobileBackToList}
+                      >
+                        <ArrowLeft className="size-5" />
+                      </Button>
+                    )}
+                    <ChannelGroupAvatar members={channelMembers} size={34} />
+                  </>
+                }
+                title={active.name}
+                meta={
+                  <>
+                    {t(($) => $.header.running)}
+                    {rosterSummary ? ` · ${rosterSummary}` : ""}
+                  </>
+                }
+                badges={
+                  <>
+                    {isConversationMuted(active) && (
+                      <MutedIndicator label={t(($) => $.sidebar.muted_label)} />
+                    )}
+                    {isActiveArchived && (
+                      <Badge variant="secondary" className="shrink-0 uppercase tracking-wide">
+                        {t(($) => $.sidebar.archived_section)}
+                      </Badge>
+                    )}
+                    {active.lark_chat_id && (
+                      <Badge variant="secondary" className="shrink-0">
+                        {t(($) => $.header.feishu)}
+                      </Badge>
+                    )}
+                  </>
+                }
+                actions={isMobile ? (
                   // Mobile: collapse members / share / stats / files into a
                   // single "⋯" that opens the bottom Drawer's action menu.
                   // size-10 keeps the tap target ≥44px.
@@ -1672,7 +1677,7 @@ export function ChannelsPage() {
                     <MoreHorizontal className="size-5" />
                   </Button>
                 ) : (
-                  <div className="flex shrink-0 items-center gap-3">
+                  <>
                     <Popover>
                       <PopoverTrigger
                         className="flex items-center gap-1.5 rounded-full p-0.5 transition-colors hover:bg-accent"
@@ -1687,7 +1692,7 @@ export function ChannelsPage() {
                         {memberPanelBody}
                       </PopoverContent>
                     </Popover>
-                    <div className="flex items-center gap-1 text-muted-foreground">
+                    <div className="flex items-center gap-1">
                       <Button
                         variant="ghost"
                         size="icon"
@@ -1731,9 +1736,9 @@ export function ChannelsPage() {
                         </PopoverContent>
                       </Popover>
                     </div>
-                  </div>
+                  </>
                 )}
-              </header>
+              />
               {convSearchOpen && (
                 <div
                   className={cn(
@@ -1829,7 +1834,7 @@ export function ChannelsPage() {
               />
 
               {isActiveArchived ? (
-                <div className="flex items-center gap-2 border-t border-border/40 px-5 py-3 text-sm text-muted-foreground">
+                <ReadOnlyConversationBanner>
                   <Archive className="size-4 shrink-0" />
                   <span className="flex-1">{t(($) => $.archive_dialog.readonly_notice)}</span>
                   {canArchive(active) ? (
@@ -1859,11 +1864,13 @@ export function ChannelsPage() {
                       <TooltipContent>{t(($) => $.sidebar.restore_permission)}</TooltipContent>
                     </Tooltip>
                   )}
-                </div>
+                </ReadOnlyConversationBanner>
               ) : (
-                <div className="px-5 pb-5">
-                  <AgentWorkingIndicator tasks={activeTasks} />
-                  <div className="rounded-lg border border-border/45 bg-background shadow-none">
+                <>
+                  <div className="px-5">
+                    <AgentWorkingIndicator tasks={activeTasks} />
+                  </div>
+                  <ComposerShell>
                     {quoteMessage && (
                       <div className="flex items-start gap-2 border-b border-border/40 px-4 py-2">
                         <Reply className="mt-0.5 size-3.5 shrink-0 text-primary" />
@@ -1937,8 +1944,8 @@ export function ChannelsPage() {
                         <Send className="size-4" /> {t(($) => $.composer.send)}
                       </Button>
                     </div>
-                  </div>
-                </div>
+                  </ComposerShell>
+                </>
               )}
             </>
           )}

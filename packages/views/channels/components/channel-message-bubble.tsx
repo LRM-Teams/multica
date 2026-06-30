@@ -115,9 +115,9 @@ export function ChannelMessageBubble({
             data-own={isOwn}
             tabIndex={0}
             className={cn(
-              "group relative flex select-text gap-2.5 rounded-lg px-2 py-2 outline-none transition-colors duration-1000",
+              "group relative flex select-text gap-2.5 px-1 py-1.5 outline-none transition-colors duration-1000",
               isOwn ? "flex-row-reverse" : "flex-row",
-              highlighted && "bg-primary/10 ring-1 ring-primary/30 duration-0",
+              highlighted && "rounded-lg bg-primary/10 ring-1 ring-primary/25 duration-0",
             )}
           />
         }
@@ -134,7 +134,7 @@ export function ChannelMessageBubble({
         />
         <div
           className={cn(
-            "flex min-w-0 max-w-[78%] flex-col gap-1",
+            "flex min-w-0 max-w-[82%] flex-col gap-1 md:max-w-[min(720px,72%)]",
             isOwn && "items-end",
           )}
         >
@@ -161,10 +161,12 @@ export function ChannelMessageBubble({
           </div>
           <div
             className={cn(
-              "w-fit min-w-0 max-w-full select-text overflow-hidden break-words rounded-lg border px-3 py-2 text-sm leading-6",
+              "w-fit min-w-0 max-w-full select-text overflow-hidden break-words rounded-lg border px-3 py-2 text-sm leading-6 shadow-none",
               isOwn
-                ? "border-border/60 bg-card"
-                : "border-primary/20 bg-primary/[0.06]",
+                ? "border-border/35 bg-background"
+                : isAgent
+                  ? "border-primary/10 bg-primary/[0.035]"
+                  : "border-border/35 bg-muted/30",
             )}
             data-testid="message-body"
             onContextMenuCapture={(e) => {

@@ -103,7 +103,7 @@ export function ChannelMessageList({
   // indicators visible even before the first message — preserve that.
   if (messages.length === 0) {
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-4 py-4">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-5 pb-5 pt-[18px]">
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
           {emptyLabel}
         </div>
@@ -131,14 +131,14 @@ export function ChannelMessageList({
           followOutput={() => (isNearBottom ? "smooth" : false)}
           computeItemKey={(_, msg) => msg.id}
           components={{
-            Header: () => <div className="pt-4" />,
+            Header: () => <div className="pt-[18px]" />,
             Footer: () =>
-              footer ? <div className="px-4 pb-4 pt-1">{footer}</div> : <div className="pb-4" />,
+              footer ? <div className="px-5 pb-5 pt-2">{footer}</div> : <div className="pb-5" />,
           }}
           itemContent={(_, msg) => {
             const searchHighlighted = searchHitIds?.has(msg.id) ?? false;
             return (
-              <div className="px-4 pt-1">
+              <div className="px-5 pt-1.5">
                 <ChannelMessageBubble
                   message={msg}
                   currentUserId={currentUserId}

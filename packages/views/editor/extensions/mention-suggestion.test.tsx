@@ -61,6 +61,7 @@ import {
   type MentionListRef,
   type MentionItem,
 } from "./mention-suggestion";
+import { createIssueReferenceSuggestion } from "./issue-reference-suggestion";
 
 function fakeQc(data: {
   members?: Array<{ user_id: string; name: string; display_name?: string; role?: string }>;
@@ -257,6 +258,57 @@ describe("createMentionSuggestion", () => {
     expect(searchProjectsMock).toHaveBeenCalledWith(expect.objectContaining({ q: "road", limit: 8 }));
   });
 
+  it("loads server issues without project matches for the issue reference picker", async () => {
+    searchIssuesMock.mockResolvedValue({
+      issues: [
+        {
+          id: "i-roadmap",
+          identifier: "LRM-36",
+          title: "Roadmap blocker",
+          status: "todo",
+        },
+      ],
+      total: 1,
+    });
+    searchProjectsMock.mockResolvedValue({
+      projects: [
+        {
+          id: "p-roadmap",
+          title: "Roadmap",
+          description: "Q3",
+          icon: null,
+          status: "active",
+        },
+      ],
+      total: 1,
+    });
+
+    render(
+      <I18nWrapper>
+        <MentionList
+          items={[]}
+          query="road"
+          command={vi.fn()}
+          searchIssues={(q, signal) =>
+            searchIssuesMock({
+              q,
+              limit: 8,
+              include_closed: true,
+              signal,
+            })
+          }
+        />
+      </I18nWrapper>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("LRM-36")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Roadmap")).not.toBeInTheDocument();
+    expect(searchIssuesMock).toHaveBeenCalledWith(expect.objectContaining({ q: "road", limit: 8 }));
+    expect(searchProjectsMock).not.toHaveBeenCalled();
+  });
+
   it("does not call searchIssues for an empty query", () => {
     render(<I18nWrapper><MentionList items={[]} query="" command={vi.fn()} /></I18nWrapper>);
 
@@ -360,6 +412,37 @@ describe("createMentionSuggestion", () => {
 
     const items = result as MentionItem[];
     expect(items.some((i) => i.type === "issue")).toBe(false);
+  });
+
+  it("returns only cached issue items from the # issue reference suggestion", () => {
+    const qc = fakeQc({
+      members: [{ user_id: "u1", name: "Alice", role: "member" }],
+      agents: [
+        {
+          id: "a1",
+          name: "Roadie",
+          archived_at: null,
+          visibility: "workspace",
+          owner_id: null,
+        },
+      ],
+      issues: [
+        { id: "i1", identifier: "LRM-36", title: "Roadmap blocker", status: "todo" },
+        { id: "i2", identifier: "LRM-40", title: "Other", status: "done" },
+      ],
+    });
+
+    const config = createIssueReferenceSuggestion(qc);
+    const items = config.items!({ query: "road", editor: {} as never }) as MentionItem[];
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        id: "i1",
+        label: "LRM-36",
+        type: "issue",
+        description: "Roadmap blocker",
+      }),
+    ]);
   });
 
   it("does not inject current/recent chat context into the normal @ results", () => {

@@ -80,6 +80,10 @@ interface MentionListProps {
   items: MentionItem[];
   query: string;
   command: (item: MentionItem) => void;
+  searchIssues?: (
+    query: string,
+    signal: AbortSignal,
+  ) => Promise<{ issues: Array<Pick<Issue, "id" | "identifier" | "title" | "status">> }>;
   includeProjectSearch?: boolean;
 }
 
@@ -173,7 +177,7 @@ function mergeMentionItems(
 }
 
 export const MentionList = forwardRef<MentionListRef, MentionListProps>(
-  function MentionList({ items, query, command, includeProjectSearch = false }, ref) {
+  function MentionList({ items, query, command, searchIssues, includeProjectSearch = false }, ref) {
     const { t } = useT("editor");
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [serverItems, setServerItems] = useState<MentionItem[]>([]);
@@ -192,7 +196,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
         return;
       }
 
-      if (!includeProjectSearch) {
+      if (!searchIssues && !includeProjectSearch) {
         setIsSearching(false);
         setSearchedQuery(q);
         return;
@@ -213,18 +217,22 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
         void (async () => {
           try {
             const [issues, projects] = await Promise.all([
-              api.searchIssues({
-                q,
-                limit: SERVER_CONTEXT_SEARCH_LIMIT,
-                include_closed: true,
-                signal: controller.signal,
-              }),
-              api.searchProjects({
-                q,
-                limit: SERVER_CONTEXT_SEARCH_LIMIT,
-                include_closed: true,
-                signal: controller.signal,
-              }),
+              searchIssues
+                ? searchIssues(q, controller.signal)
+                : api.searchIssues({
+                    q,
+                    limit: SERVER_CONTEXT_SEARCH_LIMIT,
+                    include_closed: true,
+                    signal: controller.signal,
+                  }),
+              includeProjectSearch
+                ? api.searchProjects({
+                    q,
+                    limit: SERVER_CONTEXT_SEARCH_LIMIT,
+                    include_closed: true,
+                    signal: controller.signal,
+                  })
+                : Promise.resolve({ projects: [] }),
             ]);
             if (!cancelled && !controller.signal.aborted) {
               setServerItems([
@@ -248,7 +256,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
         clearTimeout(timer);
         controller.abort();
       };
-    }, [includeProjectSearch, normalizedQuery]);
+    }, [includeProjectSearch, normalizedQuery, searchIssues]);
 
     const displayItems = useMemo(() => {
       const currentServerItems = searchedQuery === normalizedQuery ? serverItems : [];
@@ -744,6 +752,13 @@ export function createMentionSuggestion(
         items: props.items,
         query: props.query,
         command: props.command,
+        searchIssues: (q, signal) =>
+          api.searchIssues({
+            q,
+            limit: SERVER_CONTEXT_SEARCH_LIMIT,
+            include_closed: true,
+            signal,
+          }),
         includeProjectSearch: options.mode === "context",
       }),
       onKeyDown: (ref, props) => ref?.onKeyDown(props) ?? false,

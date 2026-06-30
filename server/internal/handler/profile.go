@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -283,7 +284,7 @@ func projectTextActivity(msg recentTaskActivityMessage, status string) (AgentRec
 	if !msg.Content.Valid || strings.TrimSpace(msg.Content.String) == "" {
 		return AgentRecentActivityItem{}, false
 	}
-	summary := sanitizeActivitySummary(msg.Content.String, 160)
+	summary := sanitizeTextActivitySummary(msg.Content.String, 160)
 	return AgentRecentActivityItem{
 		Kind:       "text",
 		Label:      textActivityLabel(status),
@@ -451,6 +452,99 @@ func parseTaskMessageInput(raw []byte) map[string]any {
 func sanitizeActivitySummary(summary string, max int) string {
 	summary = strings.Join(strings.Fields(redact.Text(summary)), " ")
 	return truncateRunes(summary, max)
+}
+
+func sanitizeTextActivitySummary(summary string, max int) string {
+	summary = sanitizeActivitySummary(summary, max)
+	if !looksLikeNaturalLanguage(summary) {
+		return ""
+	}
+	return summary
+}
+
+func looksLikeNaturalLanguage(summary string) bool {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return false
+	}
+
+	var letters, han, digits, spaces, other int
+	for _, r := range summary {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			han++
+			letters++
+		case unicode.IsLetter(r):
+			letters++
+		case unicode.IsDigit(r):
+			digits++
+		case unicode.IsSpace(r):
+			spaces++
+		case strings.ContainsRune("-_()[]{}.,!?;:'\"/\\", r):
+			other++
+		default:
+			other++
+		}
+	}
+
+	if han >= 2 {
+		return true
+	}
+	if letters == 0 {
+		return false
+	}
+	if isTokenLikeSummary(summary, letters, digits, spaces, other) {
+		return false
+	}
+	if spaces > 0 && letters >= 3 {
+		return true
+	}
+	return hasSentencePunctuation(summary) && letters >= 3
+}
+
+func isTokenLikeSummary(summary string, letters, digits, spaces, other int) bool {
+	if spaces > 0 {
+		return false
+	}
+	trimmed := strings.Trim(summary, "()[]{}.,;:'\"")
+	if trimmed == "" {
+		return true
+	}
+	if digits > 0 && isASCIIIdentifierToken(trimmed) {
+		return true
+	}
+	if utf8.RuneCountInString(trimmed) >= 8 && isHexishToken(trimmed) {
+		return true
+	}
+	return letters+digits == 0 || (digits > 0 && other > 0)
+}
+
+func isASCIIIdentifierToken(s string) bool {
+	for _, r := range s {
+		if r > unicode.MaxASCII {
+			return false
+		}
+		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+func isHexishToken(s string) bool {
+	for _, r := range s {
+		if r == '-' || r == '_' {
+			continue
+		}
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasSentencePunctuation(s string) bool {
+	return strings.ContainsAny(s, ".!?。！？")
 }
 
 func stringPtrIfNotEmpty(s string) *string {

@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TestListWorkspaceAgentTaskSnapshot covers the agent presence snapshot endpoint:
@@ -272,6 +274,60 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	}
 	if items[0].OccurredAt == "" || items[1].OccurredAt == "" {
 		t.Fatalf("expected occurred_at on every item: %#v", items)
+	}
+}
+
+func TestProjectTextActivity_DropsRawTokenSummaries(t *testing.T) {
+	stringPtr := func(s string) *string { return &s }
+
+	tests := []struct {
+		name        string
+		content     string
+		wantSummary *string
+	}{
+		{
+			name:        "hash fragment with dangling parenthesis",
+			content:     "9a5-d69cd32e15e6)",
+			wantSummary: nil,
+		},
+		{
+			name:        "uuid",
+			content:     "550e8400-e29b-41d4-a716-446655440000",
+			wantSummary: nil,
+		},
+		{
+			name:        "token-looking text",
+			content:     "sk-proj-abc123def456",
+			wantSummary: nil,
+		},
+		{
+			name:        "normal english",
+			content:     "I finished updating the profile activity summary.",
+			wantSummary: stringPtr("I finished updating the profile activity summary."),
+		},
+		{
+			name:        "normal chinese",
+			content:     "我已完成资料页活动摘要清理",
+			wantSummary: stringPtr("我已完成资料页活动摘要清理"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item, ok := projectTextActivity(recentTaskActivityMessage{
+				Type:    "text",
+				Content: pgtype.Text{String: tt.content, Valid: true},
+			}, "completed")
+			if !ok {
+				t.Fatalf("projectTextActivity returned ok=false")
+			}
+			if item.Label != "Writing response" {
+				t.Fatalf("label = %q, want Writing response", item.Label)
+			}
+			if !reflect.DeepEqual(item.Summary, tt.wantSummary) {
+				t.Fatalf("summary = %#v, want %#v", item.Summary, tt.wantSummary)
+			}
+		})
 	}
 }
 

@@ -96,6 +96,81 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	}
 }
 
+func TestChannelRementionInterruptsRunningTaskWithFreshSession(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Remention Agent", nil)
+	var channelID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel (workspace_id, name, created_by)
+		VALUES ($1, $2, $3)
+		RETURNING id`, testWorkspaceID, "remention-interrupt", testUserID).Scan(&channelID); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'user', $3), ($1, $2, 'agent', $4)`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
+		t.Fatalf("seed members: %v", err)
+	}
+
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	first, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Remention Agent start the long task", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("interrupt-thread"), 0)
+	if err != nil {
+		t.Fatalf("insert first trigger: %v", err)
+	}
+	testHandler.dispatchChannelMentions(ctx, ch, first, parseUUID(testUserID))
+
+	var sessionID string
+	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {
+		t.Fatalf("channel agent session not created: %v", err)
+	}
+	var firstTaskID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id FROM agent_task_queue
+		WHERE chat_session_id = $1
+		ORDER BY created_at DESC LIMIT 1`, sessionID).Scan(&firstTaskID); err != nil {
+		t.Fatalf("load first task: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE agent_task_queue SET status = 'running', started_at = now() WHERE id = $1`, firstTaskID); err != nil {
+		t.Fatalf("mark first task running: %v", err)
+	}
+
+	second, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Remention Agent stop and use this corrected direction", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("interrupt-thread"), 1)
+	if err != nil {
+		t.Fatalf("insert second trigger: %v", err)
+	}
+	testHandler.dispatchChannelMentions(ctx, ch, second, parseUUID(testUserID))
+
+	var oldStatus, oldReason string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, COALESCE(failure_reason, '')
+		FROM agent_task_queue WHERE id = $1`, firstTaskID).Scan(&oldStatus, &oldReason); err != nil {
+		t.Fatalf("load interrupted task: %v", err)
+	}
+	if oldStatus != "cancelled" || oldReason != "followup_interrupt" {
+		t.Fatalf("first task = (%q, %q), want (cancelled, followup_interrupt)", oldStatus, oldReason)
+	}
+
+	var fresh bool
+	if err := testPool.QueryRow(ctx, `
+		SELECT force_fresh_session
+		FROM agent_task_queue
+		WHERE chat_session_id = $1 AND id <> $2
+		ORDER BY created_at DESC LIMIT 1`, sessionID, firstTaskID).Scan(&fresh); err != nil {
+		t.Fatalf("load fresh follow-up task: %v", err)
+	}
+	if !fresh {
+		t.Fatal("re-mention follow-up task should force a fresh session")
+	}
+}
+
 func TestChannelMentionedAgentsMatchesHandleDisplayAndStructuredID(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

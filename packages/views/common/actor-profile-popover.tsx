@@ -21,6 +21,7 @@ import {
   HoverCardTrigger,
 } from "@multica/ui/components/ui/hover-card";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
+import { cn } from "@multica/ui/lib/utils";
 import { memberProfileOptions } from "@multica/core/agents";
 import type {
   MemberProfile,
@@ -41,6 +42,9 @@ interface ActorProfileTriggerProps {
   memberId: string | null | undefined;
   children: React.ReactNode;
   align?: "start" | "center" | "end";
+  triggerElement?: "button" | "span";
+  className?: string;
+  onClickCapture?: React.MouseEventHandler;
 }
 
 export function ActorProfileTrigger({
@@ -48,18 +52,44 @@ export function ActorProfileTrigger({
   memberId,
   children,
   align = "start",
+  triggerElement = "button",
+  className,
+  onClickCapture,
 }: ActorProfileTriggerProps) {
   const isMobile = useIsMobile();
   if (!memberId) return <>{children}</>;
 
   const content = <ActorProfileContent memberType={memberType} memberId={memberId} />;
+  const triggerClassName = cn(
+    "inline-flex cursor-pointer rounded-md border-0 bg-transparent p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+    className,
+  );
+  const triggerRender = triggerElement === "span"
+    ? <span />
+    : <button type="button" />;
 
   if (isMobile) {
+    if (triggerElement === "span") {
+      return (
+        <Drawer>
+          <DrawerTrigger asChild>
+            <span className={triggerClassName} onClickCapture={onClickCapture}>
+              {children}
+            </span>
+          </DrawerTrigger>
+          <DrawerContent className="max-h-[80dvh] overflow-y-auto p-0">
+            {content}
+          </DrawerContent>
+        </Drawer>
+      );
+    }
+
     return (
       <Drawer>
         <DrawerTrigger
           type="button"
-          className="inline-flex cursor-pointer rounded-md border-0 bg-transparent p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className={triggerClassName}
+          onClickCapture={onClickCapture}
         >
           {children}
         </DrawerTrigger>
@@ -73,8 +103,9 @@ export function ActorProfileTrigger({
   return (
     <HoverCard>
       <HoverCardTrigger
-        render={<button type="button" />}
-        className="inline-flex cursor-pointer rounded-md border-0 bg-transparent p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        render={triggerRender}
+        className={triggerClassName}
+        onClickCapture={onClickCapture}
       >
         {children}
       </HoverCardTrigger>
@@ -169,11 +200,14 @@ function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
         </div>
       </div>
 
-      <ProfileSection title={t(($) => $.profile_popover.description)}>
-        <p className="line-clamp-3 text-sm leading-6 text-foreground/85">
+      <section className="border-b p-4 last:border-b-0">
+        <p className={cn(
+          "line-clamp-3 text-sm leading-6",
+          profile.description?.trim() ? "text-foreground/85" : "text-muted-foreground",
+        )}>
           {safeDescription}
         </p>
-      </ProfileSection>
+      </section>
       {profile.member_type === "agent" ? (
         <ProfileSection title={t(($) => $.profile_popover.recent_activity)}>
           {(profile.recent_activity ?? []).length > 0 ? (

@@ -27,6 +27,7 @@ import type {
 } from "@multica/core/types";
 import { ListTodo } from "lucide-react";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { agentColor } from "../../common/agent-color";
 import { StatusIcon } from "../../issues/components/status-icon";
 import { ProjectIcon } from "../../projects/components/project-icon";
@@ -488,16 +489,8 @@ function MentionRow({
   const isActor = item.type === "member" || item.type === "agent";
   const secondary = isActor && showSecondary ? item.secondaryLabel : undefined;
   const allMembersHint = item.type === "all" ? t(($) => $.mention.all_members_hint) : null;
-
-  return (
-    <button
-      type="button"
-      ref={buttonRef}
-      className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors ${
-        selected ? "bg-accent" : "hover:bg-accent/50"
-      }`}
-      onClick={onSelect}
-    >
+  const actorContent = (
+    <>
       <ActorAvatar
         actorType={item.type === "all" ? "member" : item.type}
         actorId={item.id}
@@ -523,6 +516,31 @@ function MentionRow({
           </span>
         )}
       </span>
+    </>
+  );
+
+  return (
+    <button
+      type="button"
+      ref={buttonRef}
+      className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors ${
+        selected ? "bg-accent" : "hover:bg-accent/50"
+      }`}
+      onClick={onSelect}
+    >
+      {isActor ? (
+        <ActorProfileTrigger
+          memberType={item.type === "agent" ? "agent" : "user"}
+          memberId={item.id}
+          triggerElement="span"
+          className="min-w-0 flex-1 items-center gap-2.5"
+          onClickCapture={(event) => event.stopPropagation()}
+        >
+          {actorContent}
+        </ActorProfileTrigger>
+      ) : (
+        actorContent
+      )}
       {item.type === "agent" && (
         // "Agent" is a glossary-protected product term — kept un-translated.
         // eslint-disable-next-line i18next/no-literal-string

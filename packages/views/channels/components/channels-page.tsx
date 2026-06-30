@@ -146,6 +146,7 @@ import { initialsOf } from "../../common/initials";
 import { useT, useTimeAgo } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
+import { IssuePickerModal } from "../../modals/issue-picker-modal";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
@@ -464,6 +465,7 @@ export function ChannelsPage() {
   const [convSearchResults, setConvSearchResults] = useState<ChannelMessageSearchResult[]>([]);
   const [convSearchTotal, setConvSearchTotal] = useState(0);
   const [convSearchIndex, setConvSearchIndex] = useState(0);
+  const [issuePickerOpen, setIssuePickerOpen] = useState(false);
   const [viewportReady, setViewportReady] = useState(false);
   const previousMobileRef = useRef<boolean | null>(null);
 
@@ -2149,7 +2151,7 @@ export function ChannelsPage() {
                           size="icon"
                           className={cn(isMobile ? "size-10" : "size-8")}
                           aria-label={t(($) => $.composer.issue_ref_aria)}
-                          onClick={() => editorRef.current?.insertText("#")}
+                          onClick={() => setIssuePickerOpen(true)}
                         >
                           <Hash className={cn(isMobile ? "size-5" : "size-4")} />
                         </Button>
@@ -2172,6 +2174,16 @@ export function ChannelsPage() {
               </DrawerContent>
             </Drawer>
           )}
+          <IssuePickerModal
+            open={issuePickerOpen}
+            onOpenChange={setIssuePickerOpen}
+            title={t(($) => $.composer.issue_picker_title)}
+            description={t(($) => $.composer.issue_picker_description)}
+            excludeIds={[]}
+            onSelect={(issue) => {
+              editorRef.current?.insertText(`[${issue.identifier}](mention://issue/${issue.id})`);
+            }}
+          />
         </main>
   );
   const detailPane =

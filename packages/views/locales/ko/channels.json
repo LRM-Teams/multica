@@ -104,7 +104,19 @@
     "copy_failed": "복사 실패"
   },
   "thread": {
-    "empty": "채팅을 시작하세요. 멤버에 에이전트를 추가한 뒤 @에이전트이름 을 입력하면 답장합니다."
+    "empty": "채팅을 시작하세요. 멤버에 에이전트를 추가한 뒤 @에이전트이름 을 입력하면 답장합니다.",
+    "title": "스레드",
+    "reply": "스레드에서 답장",
+    "reply_aria": "스레드에서 답장",
+    "reply_count": "답글 {{count}}개",
+    "meta_count": "답글 {{count}}개",
+    "close_aria": "스레드 닫기",
+    "context_label": "원본 메시지",
+    "jump_to_parent": "원본 메시지로 이동",
+    "empty_replies": "아직 답글이 없습니다.",
+    "load_failed": "스레드를 불러오지 못했습니다.",
+    "send_failed": "스레드 답글을 보내지 못했습니다.",
+    "composer_placeholder": "스레드에서 답장..."
   },
   "typing": {
     "single": "{{name}} 님이 입력 중",

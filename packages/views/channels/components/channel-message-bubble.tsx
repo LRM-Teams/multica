@@ -1,6 +1,6 @@
 "use client";
 
-import { Reply } from "lucide-react";
+import { MessageSquare, Reply } from "lucide-react";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import {
   ContextMenu,
@@ -58,6 +58,7 @@ export function ChannelMessageBubble({
   ownName,
   highlighted = false,
   onQuote,
+  onOpenThread,
   onScrollTo,
   searchHighlighted = false,
   searchQuery,
@@ -70,6 +71,8 @@ export function ChannelMessageBubble({
   highlighted?: boolean;
   /** Called when the user triggers "Reply" on this message. */
   onQuote?: (message: ChannelMessage) => void;
+  /** Called when the user opens the message's side thread. */
+  onOpenThread?: (message: ChannelMessage) => void;
   /** Called when the user clicks the inline quote block to jump to the original. */
   onScrollTo?: (messageId: string) => void;
   /** Search hit: marks matching visible text while search is open. */
@@ -103,6 +106,10 @@ export function ChannelMessageBubble({
   const displayName = isOwn ? ownName ?? message.author_name : message.author_name;
 
   const canQuote = !!onQuote;
+  const canOpenThread = !!onOpenThread && !message.thread_root_message_id;
+  const threadReplyCount = message.thread_reply_count ?? 0;
+  const threadUnreadCount = message.thread_unread_count ?? 0;
+  const hasThreadActivity = threadReplyCount > 0 || threadUnreadCount > 0;
 
   return (
     <ContextMenu>
@@ -122,6 +129,22 @@ export function ChannelMessageBubble({
           />
         }
       >
+        {canOpenThread && (
+          <button
+            type="button"
+            aria-label={t(($) => $.thread.reply_aria)}
+            className={cn(
+              "absolute -top-3 z-10 hidden size-7 items-center justify-center rounded-md border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground group-hover:flex group-focus-within:flex",
+              isOwn ? "left-8" : "right-8",
+            )}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenThread(message);
+            }}
+          >
+            <MessageSquare className="size-3.5" />
+          </button>
+        )}
         <ActorAvatar
           name={message.author_name}
           initials={initialsOf(message.author_name)}
@@ -211,16 +234,42 @@ export function ChannelMessageBubble({
               className="mt-1.5"
             />
           </div>
+          {hasThreadActivity && onOpenThread && (
+            <button
+              type="button"
+              onClick={() => onOpenThread(message)}
+              className={cn(
+                "flex w-fit items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+                threadUnreadCount > 0 && "font-medium text-primary",
+              )}
+            >
+              <MessageSquare className="size-3.5" />
+              <span>{t(($) => $.thread.reply_count, { count: threadReplyCount })}</span>
+              {threadUnreadCount > 0 && (
+                <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground">
+                  {threadUnreadCount}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       </ContextMenuTrigger>
 
       {/* Right-click / long-press context menu */}
-      {canQuote && (
+      {(canQuote || canOpenThread) && (
         <ContextMenuContent>
-          <ContextMenuItem onClick={() => onQuote(message)}>
-            <Reply className="size-4" />
-            {t(($) => $.quote.reply)}
-          </ContextMenuItem>
+          {canOpenThread && (
+            <ContextMenuItem onClick={() => onOpenThread(message)}>
+              <MessageSquare className="size-4" />
+              {t(($) => $.thread.reply)}
+            </ContextMenuItem>
+          )}
+          {canQuote && (
+            <ContextMenuItem onClick={() => onQuote(message)}>
+              <Reply className="size-4" />
+              {t(($) => $.quote.reply)}
+            </ContextMenuItem>
+          )}
         </ContextMenuContent>
       )}
     </ContextMenu>

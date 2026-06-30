@@ -38,6 +38,7 @@ function MessageViewport({
   emptyLabel,
   footer,
   onQuote,
+  onOpenThread,
   onScrollToMessage,
   searchHitIds,
   searchQuery,
@@ -54,6 +55,8 @@ function MessageViewport({
   footer?: ReactNode;
   /** Called when the user triggers Reply on a message (quote-reply flow). */
   onQuote?: (message: ChannelMessage) => void;
+  /** Called when the user opens the message's side thread. */
+  onOpenThread?: (message: ChannelMessage) => void;
   /**
    * Called when the user clicks an inline quote block to jump to the original.
    * The parent updates `highlightMessageId` so the list scrolls + highlights.
@@ -134,6 +137,7 @@ function MessageViewport({
                   ownName={ownName}
                   highlighted={msg.id === highlightMessageId}
                   onQuote={onQuote}
+                  onOpenThread={onOpenThread}
                   onScrollTo={onScrollToMessage}
                   searchHighlighted={searchHighlighted}
                   searchQuery={searchHighlighted ? searchQuery : undefined}

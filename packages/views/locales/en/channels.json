@@ -104,7 +104,19 @@
     "copy_failed": "Copy failed"
   },
   "thread": {
-    "empty": "Start chatting. Add an agent to the members, then type @agent-name to trigger a reply."
+    "empty": "Start chatting. Add an agent to the members, then type @agent-name to trigger a reply.",
+    "title": "Thread",
+    "reply": "Reply in thread",
+    "reply_aria": "Reply in thread",
+    "reply_count": "{{count}} replies",
+    "meta_count": "{{count}} replies",
+    "close_aria": "Close thread",
+    "context_label": "Original message",
+    "jump_to_parent": "Jump to original message",
+    "empty_replies": "No replies yet.",
+    "load_failed": "Failed to load thread.",
+    "send_failed": "Failed to send thread reply.",
+    "composer_placeholder": "Reply in thread..."
   },
   "typing": {
     "single": "{{name}} is typing",

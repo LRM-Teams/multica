@@ -136,6 +136,7 @@ import type {
   CreateBillingPortalSessionResponse,
   AgentTaskFeedPage,
   AgentTaskStats,
+  MemberProfile,
   IssueReviewStats,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
@@ -1320,6 +1321,10 @@ export class ApiClient {
 
   async listAgentTasks(agentId: string): Promise<AgentTask[]> {
     return this.fetch(`/api/agents/${agentId}/tasks`);
+  }
+
+  async getMemberProfile(memberType: "user" | "agent", memberId: string): Promise<MemberProfile> {
+    return this.fetch(`/api/member-profiles/${memberType}/${memberId}`);
   }
 
   // Workspace-scoped agent task snapshot: every active task

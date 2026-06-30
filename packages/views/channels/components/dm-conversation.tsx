@@ -53,6 +53,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { ContentEditor, type ContentEditorRef } from "../../editor";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useT, useTimeAgo } from "../../i18n";
 import { ChatMessageList } from "../../chat/components/chat-message-list";
 import { ChatInput } from "../../chat/components/chat-input";
@@ -105,7 +106,17 @@ function DmHeader({
   const { t } = useT("channels");
   const isMobile = useIsMobile();
   const actorType = dm.peer.type === "agent" ? "agent" : "member";
+  const memberType = dm.peer.type === "agent" ? "agent" : "user";
   const meta = dm.peer.type === "agent" ? t(($) => $.dm.agent_meta) : t(($) => $.dm.human_meta);
+  const peerAvatar = (
+    <ActorAvatar
+      actorType={actorType}
+      actorId={dm.peer.id}
+      size={34}
+      showStatusDot={dm.peer.type === "agent"}
+      profileLink={false}
+    />
+  );
 
   return (
     <ConversationHeader
@@ -123,16 +134,16 @@ function DmHeader({
               <ArrowLeft className="size-5" />
             </Button>
           )}
-          <ActorAvatar
-            actorType={actorType}
-            actorId={dm.peer.id}
-            size={34}
-            showStatusDot={dm.peer.type === "agent"}
-            profileLink={false}
-          />
+          <ActorProfileTrigger memberType={memberType} memberId={dm.peer.id}>
+            {peerAvatar}
+          </ActorProfileTrigger>
         </>
       }
-      title={dm.peer.name}
+      title={
+        <ActorProfileTrigger memberType={memberType} memberId={dm.peer.id}>
+          <span className="truncate">{dm.peer.name}</span>
+        </ActorProfileTrigger>
+      }
       meta={meta}
       badges={
         isConversationMuted(dm) ? (

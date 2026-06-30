@@ -75,6 +75,28 @@
     "search": "Search…",
     "no_results": "No matches"
   },
+  "profile_popover": {
+    "unknown": "Unknown",
+    "loading": "Loading profile…",
+    "agent_unavailable": "Agent unavailable",
+    "member_unavailable": "Member unavailable",
+    "description": "Description",
+    "no_description": "No description yet",
+    "recent_activity": "Recent activity",
+    "no_recent_activity": "No recent activity",
+    "role": {
+      "owner": "Owner",
+      "admin": "Admin",
+      "member": "Member"
+    },
+    "activity": {
+      "queued": "Queued",
+      "working": "Working",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "task": "Task"
+    }
+  },
   "files": {
     "title": "Files",
     "empty": "No files yet",

@@ -39,6 +39,8 @@ import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import { escapeMarkdownLabel } from "../utils/escape-markdown-label";
 import { BaseMentionExtension } from "./mention-extension";
 import { createMentionSuggestion, type MentionItem } from "./mention-suggestion";
+import { IssueReferenceExtension } from "./issue-reference";
+import { createIssueReferenceSuggestion } from "./issue-reference-suggestion";
 import { SlashCommandExtension } from "./slash-command-extension";
 import { createSlashCommandSuggestion, createBuiltinCommandSuggestion } from "./slash-command-suggestion";
 import { CodeBlockView } from "./code-block-view";
@@ -141,6 +143,8 @@ export interface EditorExtensionsOptions {
   getMentionAllowedActorIds?: () => ReadonlySet<string> | null | undefined;
   /** When true, attach the `/` picker. Default false. */
   enableSlashCommands?: boolean;
+  /** When true, attach an issue reference `#` picker. Default false. */
+  enableIssueReferences?: boolean;
   /**
    * Which `/` menu to attach when enableSlashCommands is true:
    * - "skill" (default) — the chat picker listing the active agent's skills.
@@ -208,6 +212,11 @@ export function createEditorExtensions(
         : options.queryClient
           ? { suggestion: createMentionSuggestion(options.queryClient, { mode: options.mentionMode, getContextItems: options.getMentionContextItems, getAllowedActorIds: options.getMentionAllowedActorIds }) }
           : {}),
+    }),
+    IssueReferenceExtension.configure({
+      suggestion: options.enableIssueReferences && options.queryClient
+        ? createIssueReferenceSuggestion(options.queryClient)
+        : { char: "#", allow: () => false },
     }),
     SlashCommandExtension.configure({
       HTMLAttributes: { class: "slash-command" },

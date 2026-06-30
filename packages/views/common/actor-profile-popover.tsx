@@ -2,11 +2,11 @@
 
 import { useQuery } from "@tanstack/react-query";
 import {
-  Brain,
-  MessageSquare,
-  Reply,
-  Terminal,
-  Wrench,
+  Activity,
+  AlertCircle,
+  Ban,
+  Clock,
+  ListTodo,
   type LucideIcon,
 } from "lucide-react";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
@@ -16,10 +16,10 @@ import {
   DrawerTrigger,
 } from "@multica/ui/components/ui/drawer";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@multica/ui/components/ui/popover";
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@multica/ui/components/ui/hover-card";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { memberProfileOptions } from "@multica/core/agents";
 import type {
@@ -71,17 +71,17 @@ export function ActorProfileTrigger({
   }
 
   return (
-    <Popover>
-      <PopoverTrigger
-        render={<span />}
-        className="inline-flex cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    <HoverCard>
+      <HoverCardTrigger
+        render={<button type="button" />}
+        className="inline-flex cursor-pointer rounded-md border-0 bg-transparent p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {children}
-      </PopoverTrigger>
-      <PopoverContent align={align} side="bottom" className="w-[360px] p-0">
+      </HoverCardTrigger>
+      <HoverCardContent align={align} side="bottom" className="w-[360px] p-0">
         {content}
-      </PopoverContent>
-    </Popover>
+      </HoverCardContent>
+    </HoverCard>
   );
 }
 
@@ -134,7 +134,8 @@ function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
     .toUpperCase()
     .slice(0, 2);
   const safeDescription = profile.description?.trim() || t(($) => $.profile_popover.no_description);
-  const metadata = profile.status ?? roleLabel(profile.role, t);
+  const role = roleLabel(profile.role ?? (profile.member_type === "agent" ? "agent" : null), t);
+  const status = profile.status?.trim() || null;
 
   return (
     <div className="text-left">
@@ -155,9 +156,18 @@ function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
             secondaryClassName="mt-0.5 truncate text-xs text-muted-foreground"
             className="block min-w-0"
           />
-          {metadata ? (
-            <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border bg-muted/35 px-2 py-0.5 text-xs text-muted-foreground">
-              <span>{metadata}</span>
+          {role || status ? (
+            <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+              {role ? (
+                <span className="inline-flex max-w-full items-center rounded-full border bg-muted/35 px-2 py-0.5 text-xs text-muted-foreground">
+                  {role}
+                </span>
+              ) : null}
+              {status ? (
+                <span className="inline-flex max-w-full items-center rounded-full border bg-muted/35 px-2 py-0.5 text-xs text-muted-foreground">
+                  {status}
+                </span>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -244,6 +254,7 @@ function roleLabel(
   if (role === "owner") return t(($) => $.profile_popover.role.owner);
   if (role === "admin") return t(($) => $.profile_popover.role.admin);
   if (role === "member") return t(($) => $.profile_popover.role.member);
+  if (role === "agent") return t(($) => $.profile_popover.role.agent);
   return null;
 }
 
@@ -253,16 +264,16 @@ function activityMeta(
 ): { label: string; icon: LucideIcon } {
   switch (kind) {
     case "queued":
-      return { label: t(($) => $.profile_popover.activity.queued), icon: Reply };
+      return { label: t(($) => $.profile_popover.activity.queued), icon: Clock };
     case "failed":
-      return { label: t(($) => $.profile_popover.activity.failed), icon: Wrench };
+      return { label: t(($) => $.profile_popover.activity.failed), icon: AlertCircle };
     case "cancelled":
-      return { label: t(($) => $.profile_popover.activity.cancelled), icon: MessageSquare };
+      return { label: t(($) => $.profile_popover.activity.cancelled), icon: Ban };
     case "task":
-      return { label: t(($) => $.profile_popover.activity.task), icon: Terminal };
+      return { label: t(($) => $.profile_popover.activity.task), icon: ListTodo };
     case "working":
     default:
-      return { label: t(($) => $.profile_popover.activity.working), icon: Brain };
+      return { label: t(($) => $.profile_popover.activity.working), icon: Activity };
   }
 }
 

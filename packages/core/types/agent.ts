@@ -128,7 +128,7 @@ export interface MemberProfile {
   display_name: string;
   avatar_url: string | null;
   description: string;
-  role: "owner" | "admin" | "member" | null;
+  role: "owner" | "admin" | "member" | "agent" | null;
   status: string | null;
   recent_activity: MemberProfileActivityItem[];
 }

@@ -87,7 +87,8 @@
     "role": {
       "owner": "Owner",
       "admin": "Admin",
-      "member": "Member"
+      "member": "Member",
+      "agent": "Agent"
     },
     "activity": {
       "queued": "Queued",

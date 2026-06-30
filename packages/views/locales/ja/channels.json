@@ -87,7 +87,8 @@
     "role": {
       "owner": "オーナー",
       "admin": "管理者",
-      "member": "メンバー"
+      "member": "メンバー",
+      "agent": "エージェント"
     },
     "activity": {
       "queued": "キュー中",

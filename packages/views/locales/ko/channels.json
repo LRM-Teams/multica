@@ -87,7 +87,8 @@
     "role": {
       "owner": "소유자",
       "admin": "관리자",
-      "member": "멤버"
+      "member": "멤버",
+      "agent": "에이전트"
     },
     "activity": {
       "queued": "대기 중",

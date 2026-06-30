@@ -87,7 +87,8 @@
     "role": {
       "owner": "所有者",
       "admin": "管理员",
-      "member": "成员"
+      "member": "成员",
+      "agent": "智能体"
     },
     "activity": {
       "queued": "排队中",

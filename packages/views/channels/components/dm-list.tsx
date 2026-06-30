@@ -144,6 +144,7 @@ export function DmList({
     if (!q) return sortedDms;
     return sortedDms.filter((dm) => dm.peer.name.toLowerCase().includes(q));
   }, [searchQuery, sortedDms]);
+  const hasSearchQuery = searchQuery.trim().length > 0;
 
   const showHeaderTrigger = isLoading || dms.length > 0;
   const openPicker = () => setPickerOpen(true);
@@ -155,6 +156,13 @@ export function DmList({
       <div className="space-y-2 p-2">
         <Skeleton className="h-12" />
         <Skeleton className="h-12" />
+      </div>
+    ) : hasSearchQuery && filteredDms.length === 0 ? (
+      <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
+        <p className="font-medium text-foreground">
+          {t(($) => $.sidebar.no_conversation_matches)}
+        </p>
+        <p>{t(($) => $.sidebar.search_scope_hint)}</p>
       </div>
     ) : dms.length === 0 ? (
       <div className="flex flex-col items-center gap-2 px-3 py-3">
@@ -180,13 +188,6 @@ export function DmList({
             {t(($) => $.dm.empty_cta)}
           </PopoverTrigger>
         )}
-      </div>
-    ) : filteredDms.length === 0 ? (
-      <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground">
-          {t(($) => $.sidebar.no_conversation_matches)}
-        </p>
-        <p>{t(($) => $.sidebar.search_scope_hint)}</p>
       </div>
     ) : (
       filteredDms.map((dm) => (

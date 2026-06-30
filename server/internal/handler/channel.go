@@ -24,7 +24,7 @@ import (
 
 const channelNameMaxLen = 80
 const channelMessageMaxLen = 20000
-const channelContextMessageLimit = 30
+const channelContextMessageLimit = 10
 const channelRunTriggerLimit = 10
 const channelUserTypingExpiresInMS = 5000
 const channelAgentTypingExpiresInMS = 10 * 60 * 1000

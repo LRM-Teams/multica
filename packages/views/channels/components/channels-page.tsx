@@ -12,6 +12,7 @@ import {
   ChevronRight,
   ChevronUp,
   FileText,
+  Hash,
   Mail,
   MessageCircle,
   MessageSquare,
@@ -23,7 +24,6 @@ import {
   Plus,
   Reply,
   Search,
-  Send,
   Share2,
   Smartphone,
   Users,
@@ -151,7 +151,7 @@ import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import {
-  ComposerShell,
+  ChannelComposer,
   ConversationHeader,
   ReadOnlyConversationBanner,
 } from "./conversation-surface";
@@ -536,7 +536,9 @@ export function ChannelsPage() {
   // so on send we bind only attachments still referenced in the content.
   // Mirrors the chat-input flow. Cleared after every successful send.
   const uploadMapRef = useRef<Map<string, string>>(new Map());
+  const threadUploadMapRef = useRef<Map<string, string>>(new Map());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const threadFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const memberIds = useMemo(
     () => new Set(channelMembers.filter((m) => m.member_type === "user").map((m) => m.member_id)),
@@ -1039,6 +1041,25 @@ export function ChannelsPage() {
     }
   };
 
+  const handleThreadUpload = useCallback(
+    async (file: File): Promise<UploadResult | null> => {
+      if (!active) return null;
+      const result = await uploadWithToast(file, { channelId: active.id });
+      if (result) {
+        threadUploadMapRef.current.set(result.markdownLink || result.link, result.id);
+      }
+      return result;
+    },
+    [active, uploadWithToast],
+  );
+
+  const handlePickThreadFiles = (files: FileList | null) => {
+    if (!files) return;
+    for (const file of Array.from(files)) {
+      threadEditorRef.current?.uploadFile(file);
+    }
+  };
+
   const handleSend = () => {
     const content = editorRef.current?.getMarkdown()?.trim();
     if (!content || !active) return;
@@ -1077,15 +1098,22 @@ export function ChannelsPage() {
   const handleThreadSend = () => {
     const content = threadEditorRef.current?.getMarkdown()?.trim();
     if (!content || !active || !threadRoot) return;
+    if (threadEditorRef.current?.hasActiveUploads()) return;
+    const attachmentIds: string[] = [];
+    for (const [url, id] of threadUploadMapRef.current) {
+      if (content.includes(url)) attachmentIds.push(id);
+    }
     sendThreadMessage.mutate(
       {
         channelId: active.id,
         messageId: threadRoot.id,
         content,
+        attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
       },
       {
         onSuccess: () => {
           threadEditorRef.current?.clearContent();
+          threadUploadMapRef.current.clear();
           setThreadDraftEmpty(true);
         },
         onError: () => {
@@ -1674,15 +1702,28 @@ export function ChannelsPage() {
             count: threadMessages.length,
           })}
           actions={
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-8"
-              aria-label={t(($) => $.thread.close_aria)}
-              onClick={() => setOpenThreadRoot(null)}
-            >
-              <X className="size-4" />
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2 text-xs"
+                onClick={() => {
+                  setHighlightMessageId(threadRoot.id);
+                  if (isMobile) setOpenThreadRoot(null);
+                }}
+              >
+                {t(($) => $.thread.view_parent)}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label={t(($) => $.thread.close_aria)}
+                onClick={() => setOpenThreadRoot(null)}
+              >
+                <X className="size-4" />
+              </Button>
+            </>
           }
         />
         <button
@@ -1728,34 +1769,53 @@ export function ChannelsPage() {
             <span>{t(($) => $.archive_dialog.readonly_notice)}</span>
           </ReadOnlyConversationBanner>
         ) : (
-          <ComposerShell>
-            <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
+          <ChannelComposer
+            sendLabel={t(($) => $.composer.send)}
+            sendDisabled={threadDraftEmpty}
+            sending={sendThreadMessage.isPending}
+            onSend={handleThreadSend}
+            isMobile={isMobile}
+            editor={
               <ContentEditor
                 key={`thread-editor:${threadRoot.id}`}
                 ref={threadEditorRef}
                 placeholder={t(($) => $.thread.composer_placeholder)}
                 onUpdate={handleThreadEditorUpdate}
                 onSubmit={handleThreadSend}
+                onUploadFile={handleThreadUpload}
                 submitOnEnter
                 showBubbleMenu={false}
                 mentionAllowedActorIds={channelMemberIds}
               />
-            </div>
-            <div className="flex items-center justify-end px-2 pb-2">
-              <Button
-                onClick={handleThreadSend}
-                disabled={threadDraftEmpty || sendThreadMessage.isPending}
-                size="sm"
-                className={cn(isMobile && "min-h-10 px-4")}
-              >
-                <Send className="size-4" /> {t(($) => $.composer.send)}
-              </Button>
-            </div>
-          </ComposerShell>
+            }
+            leadingActions={
+              <>
+                <input
+                  ref={threadFileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    handlePickThreadFiles(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn(isMobile ? "size-10" : "size-8")}
+                  aria-label={t(($) => $.composer.attach_aria)}
+                  onClick={() => threadFileInputRef.current?.click()}
+                >
+                  <Paperclip className={cn(isMobile ? "size-5" : "size-4")} />
+                </Button>
+              </>
+            }
+          />
         )}
       </div>
     ) : null;
-  const detailPane = (
+  const channelConversationPane = (
         <main className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background">
           {!active ? (
             showChannelDetailSkeleton ? (
@@ -2015,8 +2075,13 @@ export function ChannelsPage() {
                   <div className="px-5">
                     <AgentWorkingIndicator tasks={activeTasks} />
                   </div>
-                  <ComposerShell>
-                    {quoteMessage && (
+                  <ChannelComposer
+                    sendLabel={t(($) => $.composer.send)}
+                    sendDisabled={draftEmpty}
+                    sending={sendMessage.isPending}
+                    onSend={handleSend}
+                    isMobile={isMobile}
+                    prefix={quoteMessage && (
                       <div className="flex items-start gap-2 border-b border-border/40 px-4 py-2">
                         <Reply className="mt-0.5 size-3.5 shrink-0 text-primary" />
                         <div className="min-w-0 flex-1 border-l-2 border-primary pl-2">
@@ -2037,7 +2102,7 @@ export function ChannelsPage() {
                         </button>
                       </div>
                     )}
-                    <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
+                    editor={
                       <ContentEditor
                         key={active.id}
                         ref={editorRef}
@@ -2049,9 +2114,9 @@ export function ChannelsPage() {
                         showBubbleMenu={false}
                         mentionAllowedActorIds={channelMemberIds}
                       />
-                    </div>
-                    <div className="flex items-center justify-between px-2 pb-2">
-                      <div className="flex items-center gap-0.5 text-muted-foreground">
+                    }
+                    leadingActions={
+                      <>
                         <input
                           ref={fileInputRef}
                           type="file"
@@ -2079,25 +2144,21 @@ export function ChannelsPage() {
                           noneLabel={t(($) => $.composer.project_none)}
                           tooltip={t(($) => $.composer.project_tooltip)}
                         />
-                      </div>
-                      <Button
-                        onClick={handleSend}
-                        disabled={draftEmpty || sendMessage.isPending}
-                        size="sm"
-                        className={cn(isMobile && "min-h-10 px-4")}
-                      >
-                        <Send className="size-4" /> {t(($) => $.composer.send)}
-                      </Button>
-                    </div>
-                  </ComposerShell>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className={cn(isMobile ? "size-10" : "size-8")}
+                          aria-label={t(($) => $.composer.issue_ref_aria)}
+                          onClick={() => editorRef.current?.insertText("#")}
+                        >
+                          <Hash className={cn(isMobile ? "size-5" : "size-4")} />
+                        </Button>
+                      </>
+                    }
+                  />
                 </>
               )}
             </>
-          )}
-          {!isMobile && threadPanel && (
-            <aside className="absolute inset-y-0 right-0 z-20 w-[380px] border-l border-border/30 bg-background shadow-xl">
-              {threadPanel}
-            </aside>
           )}
           {isMobile && (
             <Drawer
@@ -2113,6 +2174,27 @@ export function ChannelsPage() {
           )}
         </main>
   );
+  const detailPane =
+    !isMobile && threadPanel ? (
+      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+        <ResizablePanel id="conversation" minSize="50%" className="flex min-h-0 flex-col">
+          {channelConversationPane}
+        </ResizablePanel>
+        <ResizableHandle />
+        <ResizablePanel
+          id="thread"
+          defaultSize={440}
+          minSize={360}
+          maxSize={640}
+          groupResizeBehavior="preserve-pixel-size"
+          className="border-l border-border/30 bg-background"
+        >
+          {threadPanel}
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    ) : (
+      channelConversationPane
+    );
 
   // DM detail pane — branches by source internally (dm_channel vs
   // legacy_session). Rendered in place of the group detail when a DM is active.

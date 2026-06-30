@@ -112,6 +112,7 @@
     "meta_count": "{{count}} 条回复",
     "close_aria": "关闭线程",
     "context_label": "原消息",
+    "view_parent": "返回主会话",
     "jump_to_parent": "定位到原消息",
     "empty_replies": "暂无回复。",
     "load_failed": "线程加载失败。",
@@ -137,6 +138,7 @@
     "attach_aria": "附件",
     "mention_aria": "提及智能体",
     "send": "发送",
+    "issue_ref_aria": "引用 Issue",
     "project_label": "项目",
     "project_none": "无项目",
     "project_tooltip": "设置该频道对应的项目"

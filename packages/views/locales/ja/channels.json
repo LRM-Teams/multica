@@ -104,7 +104,19 @@
     "copy_failed": "コピーに失敗しました"
   },
   "thread": {
-    "empty": "チャットを始めましょう。メンバーにエージェントを追加し、@エージェント名 を入力すると返信します。"
+    "empty": "チャットを始めましょう。メンバーにエージェントを追加し、@エージェント名 を入力すると返信します。",
+    "title": "スレッド",
+    "reply": "スレッドで返信",
+    "reply_aria": "スレッドで返信",
+    "reply_count": "{{count}} 件の返信",
+    "meta_count": "{{count}} 件の返信",
+    "close_aria": "スレッドを閉じる",
+    "context_label": "元のメッセージ",
+    "jump_to_parent": "元のメッセージへ移動",
+    "empty_replies": "返信はまだありません。",
+    "load_failed": "スレッドの読み込みに失敗しました。",
+    "send_failed": "スレッド返信の送信に失敗しました。",
+    "composer_placeholder": "スレッドで返信..."
   },
   "typing": {
     "single": "{{name}} が入力中",

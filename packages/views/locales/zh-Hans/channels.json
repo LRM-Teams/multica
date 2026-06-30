@@ -104,7 +104,19 @@
     "copy_failed": "复制失败"
   },
   "thread": {
-    "empty": "开始聊天吧。把智能体加入成员后，输入 @智能体名称 触发回复。"
+    "empty": "开始聊天吧。把智能体加入成员后，输入 @智能体名称 触发回复。",
+    "title": "线程",
+    "reply": "在线程中回复",
+    "reply_aria": "在线程中回复",
+    "reply_count": "{{count}} 条回复",
+    "meta_count": "{{count}} 条回复",
+    "close_aria": "关闭线程",
+    "context_label": "原消息",
+    "jump_to_parent": "定位到原消息",
+    "empty_replies": "暂无回复。",
+    "load_failed": "线程加载失败。",
+    "send_failed": "发送线程回复失败。",
+    "composer_placeholder": "在线程中回复..."
   },
   "typing": {
     "single": "{{name}} 正在输入",

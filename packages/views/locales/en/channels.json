@@ -57,7 +57,8 @@
     "stats_aria": "Stats",
     "files_aria": "Files",
     "back": "Back",
-    "more_aria": "More"
+    "more_aria": "More",
+    "roster_summary": "{{members}} members · {{agents}} agents"
   },
   "members": {
     "select_user": "Select a member",

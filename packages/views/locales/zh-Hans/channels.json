@@ -57,7 +57,8 @@
     "stats_aria": "统计",
     "files_aria": "文件",
     "back": "返回",
-    "more_aria": "更多"
+    "more_aria": "更多",
+    "roster_summary": "{{members}} 人 · {{agents}} 个智能体"
   },
   "members": {
     "select_user": "选择人类成员",

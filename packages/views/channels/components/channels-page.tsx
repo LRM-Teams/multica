@@ -595,13 +595,13 @@ export function ChannelsPage() {
     [active?.id, typingActors],
   );
   const rosterSummary = useMemo(
-    () =>
-      channelMembers
-        .map((m) =>
-          resolveActorDisplayName(m, m.member_type === "agent" ? "Agent" : "成员"),
-        )
-        .join("，"),
-    [channelMembers],
+    () => {
+      const memberCount = channelMembers.filter((m) => m.member_type === "user").length;
+      const agentCount = channelMembers.filter((m) => m.member_type === "agent").length;
+      if (memberCount === 0 && agentCount === 0) return "";
+      return t(($) => $.header.roster_summary, { members: memberCount, agents: agentCount });
+    },
+    [channelMembers, t],
   );
   const sortedChannels = useMemo(
     () => [...channels].sort((a, b) => (b.pinned_at ? 1 : 0) - (a.pinned_at ? 1 : 0)),
@@ -1606,7 +1606,7 @@ export function ChannelsPage() {
   const showChannelDetailSkeleton =
     isLoading || (!!activeId && !activeDmId && !active);
   const detailPane = (
-        <main className="flex flex-1 min-h-0 min-w-0 flex-col">
+        <main className="flex flex-1 min-h-0 min-w-0 flex-col bg-background">
           {!active ? (
             showChannelDetailSkeleton ? (
               <ConversationSwitchSkeleton isMobile={isMobile} />
@@ -1617,7 +1617,7 @@ export function ChannelsPage() {
             <>
               <header
                 className={cn(
-                  "flex items-center justify-between gap-3 border-b py-2.5",
+                  "flex items-center justify-between gap-3 border-b border-border/40 bg-background/95 py-2.5",
                   isMobile ? "px-2" : "px-5",
                 )}
               >
@@ -1651,7 +1651,7 @@ export function ChannelsPage() {
                         </Badge>
                       )}
                     </div>
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground/80">
                       {t(($) => $.header.running)}
                       {rosterSummary ? ` · ${rosterSummary}` : ""}
                     </p>
@@ -1736,7 +1736,7 @@ export function ChannelsPage() {
               {convSearchOpen && (
                 <div
                   className={cn(
-                    "flex items-center gap-2 border-b bg-muted/20 py-2",
+                    "flex items-center gap-2 border-b border-border/40 bg-muted/15 py-2",
                     isMobile ? "px-2" : "px-5",
                   )}
                 >
@@ -1828,7 +1828,7 @@ export function ChannelsPage() {
               />
 
               {isActiveArchived ? (
-                <div className="flex items-center gap-2 border-t px-4 py-3 text-sm text-muted-foreground">
+                <div className="flex items-center gap-2 border-t border-border/40 px-5 py-3 text-sm text-muted-foreground">
                   <Archive className="size-4 shrink-0" />
                   <span className="flex-1">{t(($) => $.archive_dialog.readonly_notice)}</span>
                   {canArchive(active) ? (
@@ -1860,11 +1860,11 @@ export function ChannelsPage() {
                   )}
                 </div>
               ) : (
-                <div className="px-4 pb-4">
+                <div className="px-5 pb-5">
                   <AgentWorkingIndicator tasks={activeTasks} />
-                  <div className="rounded-xl border bg-card shadow-sm">
+                  <div className="rounded-lg border border-border/45 bg-background shadow-none">
                     {quoteMessage && (
-                      <div className="flex items-start gap-2 border-b px-4 py-2">
+                      <div className="flex items-start gap-2 border-b border-border/40 px-4 py-2">
                         <Reply className="mt-0.5 size-3.5 shrink-0 text-primary" />
                         <div className="min-w-0 flex-1 border-l-2 border-primary pl-2">
                           <p className="truncate text-[11px] font-semibold text-foreground">

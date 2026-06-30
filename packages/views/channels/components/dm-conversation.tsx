@@ -94,7 +94,7 @@ function DmHeader({
   return (
     <header
       className={cn(
-        "flex items-center justify-between gap-3 border-b py-2.5",
+        "flex items-center justify-between gap-3 border-b border-border/40 bg-background/95 py-2.5",
         isMobile ? "px-2" : "px-5",
       )}
     >
@@ -383,7 +383,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   };
 
   return (
-    <main className="flex flex-1 min-h-0 min-w-0 flex-col">
+    <main className="flex flex-1 min-h-0 min-w-0 flex-col bg-background">
       <DmHeader
         dm={dm}
         onBack={onBack}
@@ -393,7 +393,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
       {convSearchOpen && (
         <div
           className={cn(
-            "flex items-center gap-2 border-b bg-muted/20 py-2",
+            "flex items-center gap-2 border-b border-border/40 bg-muted/15 py-2",
             isMobile ? "px-2" : "px-5",
           )}
         >
@@ -476,9 +476,9 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         emptyLabel={t(($) => $.dm.thread_empty)}
         footer={<TypingIndicator actors={activeTypingActors} />}
       />
-      <div className="px-4 pb-4">
+      <div className="px-5 pb-5">
         <AgentWorkingIndicator tasks={activeTasks} />
-        <div className="rounded-xl border bg-card shadow-sm">
+        <div className="rounded-lg border border-border/45 bg-background shadow-none">
           <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
             <ContentEditor
               key={channelId}

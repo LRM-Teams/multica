@@ -57,7 +57,8 @@
     "stats_aria": "統計",
     "files_aria": "ファイル",
     "back": "戻る",
-    "more_aria": "その他"
+    "more_aria": "その他",
+    "roster_summary": "メンバー {{members}} 人 · エージェント {{agents}} 体"
   },
   "members": {
     "select_user": "メンバーを選択",

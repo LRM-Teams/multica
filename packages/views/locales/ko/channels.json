@@ -57,7 +57,8 @@
     "stats_aria": "통계",
     "files_aria": "파일",
     "back": "뒤로",
-    "more_aria": "더 보기"
+    "more_aria": "더 보기",
+    "roster_summary": "멤버 {{members}}명 · 에이전트 {{agents}}개"
   },
   "members": {
     "select_user": "멤버 선택",

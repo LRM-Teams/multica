@@ -31,7 +31,7 @@ import { ChannelMessageBubble } from "./channel-message-bubble";
  * conversations keeps the previous scroll offset instead of jumping to the
  * newest message.
  */
-export function ChannelMessageList({
+function MessageViewport({
   messages,
   currentUserId,
   ownName,
@@ -103,7 +103,7 @@ export function ChannelMessageList({
   // indicators visible even before the first message — preserve that.
   if (messages.length === 0) {
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-5 pb-5 pt-[18px]">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-5 pb-5 pt-3">
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
           {emptyLabel}
         </div>
@@ -131,7 +131,7 @@ export function ChannelMessageList({
           followOutput={() => (isNearBottom ? "smooth" : false)}
           computeItemKey={(_, msg) => msg.id}
           components={{
-            Header: () => <div className="pt-[18px]" />,
+            Header: () => <div className="pt-3" />,
             Footer: () =>
               footer ? <div className="px-5 pb-5 pt-2">{footer}</div> : <div className="pb-5" />,
           }}
@@ -157,3 +157,5 @@ export function ChannelMessageList({
     </div>
   );
 }
+
+export { MessageViewport, MessageViewport as ChannelMessageList };

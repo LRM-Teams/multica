@@ -134,7 +134,7 @@ export function ChannelMessageBubble({
         />
         <div
           className={cn(
-            "flex min-w-0 max-w-[82%] flex-col gap-1 md:max-w-[min(720px,72%)]",
+            "flex min-w-0 max-w-[82%] flex-col gap-1 md:max-w-[min(680px,68%)]",
             isOwn && "items-end",
           )}
         >

@@ -45,6 +45,7 @@ import { ChatMessageList } from "../../chat/components/chat-message-list";
 import { ChatInput } from "../../chat/components/chat-input";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
+import { ComposerShell, ConversationHeader } from "./conversation-surface";
 import {
   AgentWorkingIndicator,
   TypingIndicator,
@@ -90,70 +91,70 @@ function DmHeader({
   const { t } = useT("channels");
   const isMobile = useIsMobile();
   const actorType = dm.peer.type === "agent" ? "agent" : "member";
+  const meta = dm.peer.type === "agent" ? t(($) => $.dm.agent_meta) : t(($) => $.dm.human_meta);
 
   return (
-    <header
-      className={cn(
-        "flex items-center justify-between gap-3 border-b border-border/40 bg-background/95 py-2.5",
-        isMobile ? "px-2" : "px-5",
-      )}
-    >
-      <div className={cn("flex min-w-0 items-center", isMobile ? "gap-2" : "gap-3")}>
-        {isMobile && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-10 shrink-0 text-muted-foreground"
-            aria-label={t(($) => $.header.back)}
-            onClick={onBack}
-          >
-            <ArrowLeft className="size-5" />
-          </Button>
-        )}
-        <ActorAvatar
-          actorType={actorType}
-          actorId={dm.peer.id}
-          size={40}
-          showStatusDot={dm.peer.type === "agent"}
-          profileLink={false}
-        />
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-1.5 font-semibold">
-            <span className="truncate">{dm.peer.name}</span>
-            {isConversationMuted(dm) && (
-              <MutedIndicator label={t(($) => $.dm.muted_label)} />
-            )}
-          </div>
-        </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-1 text-muted-foreground">
-        {onSearchOpen && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8"
-            aria-label={t(($) => $.conv_search.search_aria)}
-            onClick={onSearchOpen}
-          >
-            <Search className="size-4" />
-          </Button>
-        )}
-        {filesChannelId && (
-          <Popover>
-            <PopoverTrigger
-              className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
-              aria-label={t(($) => $.dm.files)}
+    <ConversationHeader
+      isMobile={isMobile}
+      leading={
+        <>
+          {isMobile && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-10 shrink-0 text-muted-foreground"
+              aria-label={t(($) => $.header.back)}
+              onClick={onBack}
             >
-              <FileText className="size-4" />
-            </PopoverTrigger>
-            <PopoverContent align="end" className="w-80">
-              <p className="mb-3 text-sm font-medium">{t(($) => $.dm.files)}</p>
-              <ChannelFilesPanel channelId={filesChannelId} />
-            </PopoverContent>
-          </Popover>
-        )}
-      </div>
-    </header>
+              <ArrowLeft className="size-5" />
+            </Button>
+          )}
+          <ActorAvatar
+            actorType={actorType}
+            actorId={dm.peer.id}
+            size={34}
+            showStatusDot={dm.peer.type === "agent"}
+            profileLink={false}
+          />
+        </>
+      }
+      title={dm.peer.name}
+      meta={meta}
+      badges={
+        isConversationMuted(dm) ? (
+          <MutedIndicator label={t(($) => $.dm.muted_label)} />
+        ) : null
+      }
+      actions={
+        <>
+          {onSearchOpen && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              aria-label={t(($) => $.conv_search.search_aria)}
+              onClick={onSearchOpen}
+            >
+              <Search className="size-4" />
+            </Button>
+          )}
+          {filesChannelId && (
+            <Popover>
+              <PopoverTrigger
+                className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
+                aria-label={t(($) => $.dm.files)}
+              >
+                <FileText className="size-4" />
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-80">
+                <p className="mb-3 text-sm font-medium">{t(($) => $.dm.files)}</p>
+                <ChannelFilesPanel channelId={filesChannelId} />
+              </PopoverContent>
+            </Popover>
+          )}
+        </>
+      }
+    />
   );
 }
 
@@ -476,9 +477,10 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         emptyLabel={t(($) => $.dm.thread_empty)}
         footer={<TypingIndicator actors={activeTypingActors} />}
       />
-      <div className="px-5 pb-5">
+      <div className="px-5">
         <AgentWorkingIndicator tasks={activeTasks} />
-        <div className="rounded-lg border border-border/45 bg-background shadow-none">
+      </div>
+      <ComposerShell>
           <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
             <ContentEditor
               key={channelId}
@@ -523,8 +525,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
               <Send className="size-4" /> {t(($) => $.composer.send)}
             </Button>
           </div>
-        </div>
-      </div>
+      </ComposerShell>
     </main>
   );
 }

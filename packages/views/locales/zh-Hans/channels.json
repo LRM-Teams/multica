@@ -139,6 +139,8 @@
     "empty_cta": "开始私信",
     "new_aria": "新建私信",
     "menu_aria": "私信操作",
+    "agent_meta": "智能体",
+    "human_meta": "成员",
     "new_title": "新建私信",
     "search_placeholder": "搜索人或 agent…",
     "no_results": "无匹配结果",

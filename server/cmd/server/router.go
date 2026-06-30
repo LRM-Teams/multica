@@ -947,8 +947,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/nodes/exec", h.ExecCloudRuntimeNode)
 				r.Post("/sandboxes/{sandboxID}/snapshot", h.SnapshotCloudRuntimeSandbox)
 				r.Post("/sandboxes/fork", h.ForkCloudRuntimeSandbox)
-				// SWE-Lego per-issue orchestration (spec §4.1).
-				r.Post("/swe-lego/issues", h.CreateSweLegoIssue)
+			})
+
+			// SWE-Lego per-issue orchestration (spec §4.1). Top-level under
+			// /api/v1 so the areal-side MulticaSweLegoClient hits the spec'd
+			// path; NOT nested under /api/cloud-runtime (that group proxies
+			// raw Fleet ops, while this endpoint orchestrates multica-owned
+			// project + issue + sandbox lifecycle).
+			r.Route("/api/v1/swe-lego", func(r chi.Router) {
+				r.Post("/issues", h.CreateSweLegoIssue)
+				r.Delete("/issues/{projectID}", h.DeleteSweLegoIssue)
 			})
 
 			// Tasks (user-facing, with ownership check)

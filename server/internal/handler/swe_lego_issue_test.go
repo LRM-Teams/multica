@@ -2,10 +2,13 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 )
 
 func TestCreateSweLegoIssue_RequiresAuth(t *testing.T) {
@@ -72,5 +75,30 @@ func TestCreateSweLegoIssue_Returns201WithStubIDsWhenFieldsValid(t *testing.T) {
 	}
 	if len(resp.AgentRunIDs) != 2 {
 		t.Fatalf("expected 2 agent run IDs, got %d", len(resp.AgentRunIDs))
+	}
+}
+
+func TestDeleteSweLegoIssue_RequiresAuth(t *testing.T) {
+	h := newTestHandler(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("DELETE", "/api/v1/swe-lego/issues/p1", nil)
+	h.DeleteSweLegoIssue(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
+	}
+}
+
+func TestDeleteSweLegoIssue_Returns204(t *testing.T) {
+	h := newTestHandler(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("DELETE", "/api/v1/swe-lego/issues/p1", nil)
+	r.Header.Set("X-User-ID", "u1")
+	// Inject URL param via chi context (httptest doesn't run the router).
+	chiCtx := chi.NewRouteContext()
+	chiCtx.URLParams.Add("projectID", "p1")
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, chiCtx))
+	h.DeleteSweLegoIssue(w, r)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w.Code)
 	}
 }

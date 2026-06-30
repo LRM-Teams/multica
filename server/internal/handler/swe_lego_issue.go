@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/service"
 )
 
@@ -85,6 +86,27 @@ func (h *Handler) CreateSweLegoIssue(w http.ResponseWriter, r *http.Request) {
 		BuildNodeID:          res.BuildNodeID, BaseSandboxID: res.BaseSandboxID,
 		BaseSandboxRuntimeID: res.BaseSandboxRuntimeID, AgentRunIDs: res.AgentRunIDs,
 	})
+}
+
+// DeleteSweLegoIssue handles DELETE /api/v1/swe-lego/issues/{projectID}.
+//
+// Cascades: deletes forked sandboxes, the base sandbox, and the project.
+// The areal-side runner calls this in a `finally` block to guarantee no
+// sandbox leaks. Returns 204 on success (including when the project is
+// already gone — idempotent). Stubbed until Task 10's real wiring lands.
+func (h *Handler) DeleteSweLegoIssue(w http.ResponseWriter, r *http.Request) {
+	_, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	projectID := chi.URLParam(r, "projectID")
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, "projectID is required")
+		return
+	}
+	// Stub: Task 10 wires this to DeleteProject + cascade-delete sandboxes.
+	// Until then, return 204 so the areal client's cleanup contract holds.
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // sweLegoDepsAdapter bridges the *Handler (queries + cloud-runtime proxy) to

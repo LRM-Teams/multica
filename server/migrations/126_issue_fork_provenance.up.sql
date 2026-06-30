@@ -1,4 +1,4 @@
--- 122_issue_fork_provenance.up.sql
+-- 126_issue_fork_provenance.up.sql
 -- Tracks issue fork provenance for multi-agent DAG RL training.
 -- A row with forked_from_issue_id IS NULL is an original; non-NULL means it
 -- was forked from another issue at (forked_at_task_id, forked_at_seq) -- the

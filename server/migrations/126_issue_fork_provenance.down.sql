@@ -1,4 +1,4 @@
--- 122_issue_fork_provenance.down.sql
+-- 126_issue_fork_provenance.down.sql
 DROP INDEX IF EXISTS idx_issue_forked_from;
 ALTER TABLE issue
     DROP COLUMN IF EXISTS forked_at_task_id,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, ChevronUp, FileText, MessageSquare, Paperclip, Search, Send, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, FileText, Hash, MessageSquare, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   activeChannelTasksKeys,
@@ -39,6 +39,11 @@ import {
   DrawerContent,
 } from "@multica/ui/components/ui/drawer";
 import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@multica/ui/components/ui/resizable";
+import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -53,7 +58,7 @@ import { ChatMessageList } from "../../chat/components/chat-message-list";
 import { ChatInput } from "../../chat/components/chat-input";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
-import { ComposerShell, ConversationHeader } from "./conversation-surface";
+import { ChannelComposer, ConversationHeader } from "./conversation-surface";
 import {
   AgentWorkingIndicator,
   TypingIndicator,
@@ -209,7 +214,9 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   const [threadParentHighlightId, setThreadParentHighlightId] = useState<string | null>(null);
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const threadFileInputRef = useRef<HTMLInputElement | null>(null);
   const uploadMapRef = useRef<Map<string, string>>(new Map());
+  const threadUploadMapRef = useRef<Map<string, string>>(new Map());
   const typingStartedRef = useRef(false);
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -394,6 +401,22 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     for (const file of Array.from(files)) editorRef.current?.uploadFile(file);
   };
 
+  const handleThreadUpload = useCallback(
+    async (file: File): Promise<UploadResult | null> => {
+      const result = await uploadWithToast(file, { channelId });
+      if (result) {
+        threadUploadMapRef.current.set(result.markdownLink || result.link, result.id);
+      }
+      return result;
+    },
+    [channelId, uploadWithToast],
+  );
+
+  const handlePickThreadFiles = (files: FileList | null) => {
+    if (!files) return;
+    for (const file of Array.from(files)) threadEditorRef.current?.uploadFile(file);
+  };
+
   const handleSend = () => {
     const content = editorRef.current?.getMarkdown()?.trim();
     if (!content) return;
@@ -425,15 +448,22 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   const handleThreadSend = () => {
     const content = threadEditorRef.current?.getMarkdown()?.trim();
     if (!content || !threadRoot) return;
+    if (threadEditorRef.current?.hasActiveUploads()) return;
+    const attachmentIds: string[] = [];
+    for (const [url, id] of threadUploadMapRef.current) {
+      if (content.includes(url)) attachmentIds.push(id);
+    }
     sendThreadMessage.mutate(
       {
         channelId,
         messageId: threadRoot.id,
         content,
+        attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
       },
       {
         onSuccess: () => {
           threadEditorRef.current?.clearContent();
+          threadUploadMapRef.current.clear();
           setThreadDraftEmpty(true);
         },
         onError: () => {
@@ -458,15 +488,28 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
             count: threadMessages.length,
           })}
           actions={
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-8"
-              aria-label={t(($) => $.thread.close_aria)}
-              onClick={() => setOpenThreadRoot(null)}
-            >
-              <X className="size-4" />
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2 text-xs"
+                onClick={() => {
+                  setThreadParentHighlightId(threadRoot.id);
+                  if (isMobile) setOpenThreadRoot(null);
+                }}
+              >
+                {t(($) => $.thread.view_parent)}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label={t(($) => $.thread.close_aria)}
+                onClick={() => setOpenThreadRoot(null)}
+              >
+                <X className="size-4" />
+              </Button>
+            </>
           }
         />
         <button
@@ -506,34 +549,53 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
             emptyLabel={t(($) => $.thread.empty_replies)}
           />
         )}
-        <ComposerShell>
-          <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
+        <ChannelComposer
+          sendLabel={t(($) => $.composer.send)}
+          sendDisabled={threadDraftEmpty}
+          sending={sendThreadMessage.isPending}
+          onSend={handleThreadSend}
+          isMobile={isMobile}
+          editor={
             <ContentEditor
               key={`dm-thread-editor:${threadRoot.id}`}
               ref={threadEditorRef}
               placeholder={t(($) => $.thread.composer_placeholder)}
               onUpdate={handleThreadEditorUpdate}
               onSubmit={handleThreadSend}
+              onUploadFile={handleThreadUpload}
               submitOnEnter
               showBubbleMenu={false}
               mentionAllowedActorIds={mentionAllowedActorIds}
             />
-          </div>
-          <div className="flex items-center justify-end px-2 pb-2">
-            <Button
-              onClick={handleThreadSend}
-              disabled={threadDraftEmpty || sendThreadMessage.isPending}
-              size="sm"
-              className={cn(isMobile && "min-h-10 px-4")}
-            >
-              <Send className="size-4" /> {t(($) => $.composer.send)}
-            </Button>
-          </div>
-        </ComposerShell>
+          }
+          leadingActions={
+            <>
+              <input
+                ref={threadFileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  handlePickThreadFiles(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn(isMobile ? "size-10" : "size-8")}
+                aria-label={t(($) => $.composer.attach_aria)}
+                onClick={() => threadFileInputRef.current?.click()}
+              >
+                <Paperclip className={cn(isMobile ? "size-5" : "size-4")} />
+              </Button>
+            </>
+          }
+        />
       </div>
     ) : null;
 
-  return (
+  const conversationPane = (
     <main className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background">
       <DmHeader
         dm={dm}
@@ -631,22 +693,27 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
       <div className="px-5">
         <AgentWorkingIndicator tasks={activeTasks} />
       </div>
-      <ComposerShell>
-          <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
+      <ChannelComposer
+        sendLabel={t(($) => $.composer.send)}
+        sendDisabled={draftEmpty}
+        sending={sendMessage.isPending}
+        onSend={handleSend}
+        isMobile={isMobile}
+        editor={
             <ContentEditor
               key={channelId}
               ref={editorRef}
-              placeholder={t(($) => $.composer.placeholder)}
+              placeholder={t(($) => $.dm.composer_placeholder, { name: dm.peer.name })}
               onUpdate={handleEditorUpdate}
               onSubmit={handleSend}
               onUploadFile={handleUpload}
-              mentionAllowedActorIds={mentionAllowedActorIds}
+              disableMentions
               submitOnEnter
               showBubbleMenu={false}
             />
-          </div>
-          <div className="flex items-center justify-between px-2 pb-2">
-            <div className="flex items-center gap-0.5 text-muted-foreground">
+        }
+        leadingActions={
+          <>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -666,22 +733,18 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
               >
                 <Paperclip className={cn(isMobile ? "size-5" : "size-4")} />
               </Button>
-            </div>
-            <Button
-              onClick={handleSend}
-              disabled={draftEmpty || sendMessage.isPending}
-              size="sm"
-              className={cn(isMobile && "min-h-10 px-4")}
-            >
-              <Send className="size-4" /> {t(($) => $.composer.send)}
-            </Button>
-          </div>
-      </ComposerShell>
-      {!isMobile && threadPanel && (
-        <aside className="absolute inset-y-0 right-0 z-20 w-[380px] border-l border-border/30 bg-background shadow-xl">
-          {threadPanel}
-        </aside>
-      )}
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn(isMobile ? "size-10" : "size-8")}
+                aria-label={t(($) => $.composer.issue_ref_aria)}
+                onClick={() => editorRef.current?.insertText("#")}
+              >
+                <Hash className={cn(isMobile ? "size-5" : "size-4")} />
+              </Button>
+          </>
+        }
+      />
       {isMobile && (
         <Drawer
           open={!!threadPanel}
@@ -696,6 +759,29 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
       )}
     </main>
   );
+
+  if (!isMobile && threadPanel) {
+    return (
+      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+        <ResizablePanel id="dm-conversation" minSize="50%" className="flex min-h-0 flex-col">
+          {conversationPane}
+        </ResizablePanel>
+        <ResizableHandle />
+        <ResizablePanel
+          id="dm-thread"
+          defaultSize={440}
+          minSize={360}
+          maxSize={640}
+          groupResizeBehavior="preserve-pixel-size"
+          className="border-l border-border/30 bg-background"
+        >
+          {threadPanel}
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    );
+  }
+
+  return conversationPane;
 }
 
 // ─── legacy_session: reuse the chat-window internals via the chat store ────

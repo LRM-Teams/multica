@@ -1,6 +1,6 @@
 "use client";
 
-import { MessageSquare, Reply } from "lucide-react";
+import { MessageSquare, MoreHorizontal, Reply } from "lucide-react";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import {
   ContextMenu,
@@ -8,6 +8,12 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@multica/ui/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@multica/ui/components/ui/dropdown-menu";
 import { cn } from "@multica/ui/lib/utils";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
@@ -129,22 +135,6 @@ export function ChannelMessageBubble({
           />
         }
       >
-        {canOpenThread && (
-          <button
-            type="button"
-            aria-label={t(($) => $.thread.reply_aria)}
-            className={cn(
-              "absolute -top-3 z-10 hidden size-7 items-center justify-center rounded-md border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground group-hover:flex group-focus-within:flex",
-              isOwn ? "left-8" : "right-8",
-            )}
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenThread(message);
-            }}
-          >
-            <MessageSquare className="size-3.5" />
-          </button>
-        )}
         <ActorAvatar
           name={message.author_name}
           initials={initialsOf(message.author_name)}
@@ -234,23 +224,54 @@ export function ChannelMessageBubble({
               className="mt-1.5"
             />
           </div>
-          {hasThreadActivity && onOpenThread && (
-            <button
-              type="button"
-              onClick={() => onOpenThread(message)}
+          {(canOpenThread || hasThreadActivity) && onOpenThread && (
+            <div
               className={cn(
-                "flex w-fit items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-                threadUnreadCount > 0 && "font-medium text-primary",
+                "flex w-fit items-center gap-1",
+                isOwn && "flex-row-reverse",
               )}
             >
-              <MessageSquare className="size-3.5" />
-              <span>{t(($) => $.thread.reply_count, { count: threadReplyCount })}</span>
-              {threadUnreadCount > 0 && (
-                <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground">
-                  {threadUnreadCount}
-                </span>
+              {hasThreadActivity && (
+                <button
+                  type="button"
+                  onClick={() => onOpenThread(message)}
+                  className={cn(
+                    "flex w-fit items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+                    threadUnreadCount > 0 && "font-medium text-primary",
+                  )}
+                >
+                  <MessageSquare className="size-3.5" />
+                  <span>{t(($) => $.thread.reply_count, { count: threadReplyCount })}</span>
+                  {threadUnreadCount > 0 && (
+                    <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground">
+                      {threadUnreadCount}
+                    </span>
+                  )}
+                </button>
               )}
-            </button>
+              {canOpenThread && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-foreground data-[state=open]:opacity-100 md:size-6 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+                    aria-label={t(($) => $.quote.more_aria)}
+                  >
+                    <MoreHorizontal className="size-3.5" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align={isOwn ? "start" : "end"}>
+                    <DropdownMenuItem onClick={() => onOpenThread(message)}>
+                      <MessageSquare className="size-4" />
+                      {t(($) => $.thread.reply)}
+                    </DropdownMenuItem>
+                    {canQuote && (
+                      <DropdownMenuItem onClick={() => onQuote?.(message)}>
+                        <Reply className="size-4" />
+                        {t(($) => $.quote.reply)}
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </div>
           )}
         </div>
       </ContextMenuTrigger>

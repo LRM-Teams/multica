@@ -112,6 +112,7 @@
     "meta_count": "답글 {{count}}개",
     "close_aria": "스레드 닫기",
     "context_label": "원본 메시지",
+    "view_parent": "메인 대화로 돌아가기",
     "jump_to_parent": "원본 메시지로 이동",
     "empty_replies": "아직 답글이 없습니다.",
     "load_failed": "스레드를 불러오지 못했습니다.",
@@ -137,6 +138,7 @@
     "attach_aria": "첨부",
     "mention_aria": "에이전트 멘션",
     "send": "전송",
+    "issue_ref_aria": "이슈 참조",
     "project_label": "프로젝트",
     "project_none": "프로젝트 없음",
     "project_tooltip": "이 채널이 작업할 프로젝트 설정"

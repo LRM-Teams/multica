@@ -112,6 +112,7 @@
     "meta_count": "{{count}} 件の返信",
     "close_aria": "スレッドを閉じる",
     "context_label": "元のメッセージ",
+    "view_parent": "メイン会話へ戻る",
     "jump_to_parent": "元のメッセージへ移動",
     "empty_replies": "返信はまだありません。",
     "load_failed": "スレッドの読み込みに失敗しました。",
@@ -137,6 +138,7 @@
     "attach_aria": "添付",
     "mention_aria": "エージェントをメンション",
     "send": "送信",
+    "issue_ref_aria": "Issue を参照",
     "project_label": "プロジェクト",
     "project_none": "プロジェクトなし",
     "project_tooltip": "このチャンネルが作業するプロジェクトを設定"

@@ -140,6 +140,8 @@ interface ContentEditorRef {
   uploadFile: (file: File) => void;
   /** True when file uploads are still in progress. */
   hasActiveUploads: () => boolean;
+  /** Insert plain text at the current selection and focus the editor. */
+  insertText: (text: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -433,6 +435,9 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           return !uploading;
         });
         return uploading;
+      },
+      insertText: (text: string) => {
+        editor?.chain().focus().insertContent(text).run();
       },
     }));
 

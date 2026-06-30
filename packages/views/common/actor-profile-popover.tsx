@@ -136,6 +136,9 @@ function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
   const safeDescription = profile.description?.trim() || t(($) => $.profile_popover.no_description);
   const role = roleLabel(profile.role ?? (profile.member_type === "agent" ? "agent" : null), t);
   const status = profile.status?.trim() || null;
+  const metadata = [role, profile.member_type === "agent" ? status : null]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <div className="text-left">
@@ -156,18 +159,11 @@ function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
             secondaryClassName="mt-0.5 truncate text-xs text-muted-foreground"
             className="block min-w-0"
           />
-          {role || status ? (
-            <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
-              {role ? (
-                <span className="inline-flex max-w-full items-center rounded-full border bg-muted/35 px-2 py-0.5 text-xs text-muted-foreground">
-                  {role}
-                </span>
-              ) : null}
-              {status ? (
-                <span className="inline-flex max-w-full items-center rounded-full border bg-muted/35 px-2 py-0.5 text-xs text-muted-foreground">
-                  {status}
-                </span>
-              ) : null}
+          {metadata ? (
+            <div className="mt-2">
+              <span className="inline-flex max-w-full items-center rounded-full border bg-muted/35 px-2 py-0.5 text-xs text-muted-foreground">
+                {metadata}
+              </span>
             </div>
           ) : null}
         </div>

@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "../hooks";
 import { memberListOptions, agentListOptions, squadListOptions } from "./queries";
 import { resolvePublicFileUrl } from "./avatar-url";
+import { resolveActorDisplayName, resolveActorHandle } from "../identity";
 
 export function useActorName() {
   const wsId = useWorkspaceId();
@@ -18,22 +19,22 @@ export function useActorName() {
   // back to that label beats rendering a bare "Unknown".
   const getMemberName = useCallback((userId: string, fallback?: string) => {
     const m = members.find((m) => m.user_id === userId);
-    return m ? (m.display_name || m.name || fallback || "Unknown") : fallback ?? "Unknown";
+    return resolveActorDisplayName(m, fallback ?? "Unknown");
   }, [members]);
 
   const getMemberHandle = useCallback((userId: string, fallback?: string) => {
     const m = members.find((m) => m.user_id === userId);
-    return m ? (m.name || fallback || "") : fallback ?? "";
+    return resolveActorHandle(m, fallback);
   }, [members]);
 
   const getAgentName = useCallback((agentId: string, fallback?: string) => {
     const a = agents.find((a) => a.id === agentId);
-    return a ? (a.display_name || a.name || fallback || "Unknown Agent") : fallback ?? "Unknown Agent";
+    return resolveActorDisplayName(a, fallback ?? "Unknown Agent");
   }, [agents]);
 
   const getAgentHandle = useCallback((agentId: string, fallback?: string) => {
     const a = agents.find((a) => a.id === agentId);
-    return a ? (a.name || fallback || "") : fallback ?? "";
+    return resolveActorHandle(a, fallback);
   }, [agents]);
 
   const getSquadName = useCallback((squadId: string, fallback?: string) => {

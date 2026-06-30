@@ -78,4 +78,9 @@ describe("resolveActorHandle", () => {
   it("reads the stable handle from name", () => {
     expect(resolveActorHandle({ display_name: "Alice", name: "@alice" })).toBe("alice");
   });
+
+  it("falls back to a normalized fallback handle", () => {
+    expect(resolveActorHandle({ display_name: "Alice", name: "" }, "@legacy")).toBe("legacy");
+    expect(resolveActorHandle(null, "@legacy")).toBe("legacy");
+  });
 });

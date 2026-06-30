@@ -464,10 +464,10 @@ export function ChannelsPage() {
     () => (type, id, fallbackLabel) => {
       if (type === "agent") {
         const agent = agents.find((a) => a.id === id);
-        return agent?.display_name?.trim() || agent?.name?.trim() || fallbackLabel;
+        return resolveActorDisplayName(agent, fallbackLabel);
       }
       const member = workspaceMembers.find((m) => m.user_id === id);
-      return member?.display_name?.trim() || member?.name?.trim() || fallbackLabel;
+      return resolveActorDisplayName(member, fallbackLabel);
     },
     [agents, workspaceMembers],
   );

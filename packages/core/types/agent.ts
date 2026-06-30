@@ -103,6 +103,36 @@ export interface AgentTaskStats {
   total: number;
 }
 
+export type MemberProfileActivityKind =
+  | "queued"
+  | "working"
+  | "failed"
+  | "cancelled"
+  | "task";
+
+export interface MemberProfileActivityItem {
+  id: string;
+  kind: MemberProfileActivityKind;
+  label: string;
+  summary?: string;
+  occurred_at: string;
+  status: string;
+}
+
+export type MemberProfileType = "user" | "agent";
+
+export interface MemberProfile {
+  member_type: MemberProfileType;
+  member_id: string;
+  name: string;
+  display_name: string;
+  avatar_url: string | null;
+  description: string;
+  role: "owner" | "admin" | "member" | "agent" | null;
+  status: string | null;
+  recent_activity: MemberProfileActivityItem[];
+}
+
 export interface AgentTask {
   id: string;
   agent_id: string;

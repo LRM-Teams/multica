@@ -136,6 +136,12 @@ export const agentTasksKeys = {
     [...agentTasksKeys.all(wsId), agentId] as const,
 };
 
+export const memberProfileKeys = {
+  all: (wsId: string) => ["workspaces", wsId, "member-profile"] as const,
+  detail: (wsId: string, memberType: "user" | "agent", memberId: string) =>
+    [...memberProfileKeys.all(wsId), memberType, memberId] as const,
+};
+
 // All tasks for a single agent (the agent detail page consumer). Powers both
 // the inspector's 7-day throughput stats and the Tasks tab list — shared so
 // they don't fetch twice. WS task events invalidate this via the existing
@@ -147,6 +153,22 @@ export function agentTasksOptions(wsId: string, agentId: string) {
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
     refetchOnWindowFocus: true,
+  });
+}
+
+export function memberProfileOptions(
+  wsId: string,
+  memberType: "user" | "agent",
+  memberId: string,
+) {
+  return queryOptions({
+    queryKey: memberProfileKeys.detail(wsId, memberType, memberId),
+    queryFn: () => api.getMemberProfile(memberType, memberId),
+    enabled: !!wsId && !!memberId,
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: true,
+    retry: false,
   });
 }
 

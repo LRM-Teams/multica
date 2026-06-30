@@ -75,6 +75,29 @@
     "search": "搜索…",
     "no_results": "没有匹配的结果"
   },
+  "profile_popover": {
+    "unknown": "未知",
+    "loading": "正在加载资料…",
+    "agent_unavailable": "智能体不可用",
+    "member_unavailable": "成员不可用",
+    "description": "简介",
+    "no_description": "暂无简介",
+    "recent_activity": "最近活动",
+    "no_recent_activity": "暂无最近活动",
+    "role": {
+      "owner": "所有者",
+      "admin": "管理员",
+      "member": "成员",
+      "agent": "智能体"
+    },
+    "activity": {
+      "queued": "排队中",
+      "working": "处理中",
+      "failed": "失败",
+      "cancelled": "已取消",
+      "task": "任务"
+    }
+  },
   "files": {
     "title": "文件",
     "empty": "暂无文件",

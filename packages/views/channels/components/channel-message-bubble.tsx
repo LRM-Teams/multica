@@ -20,6 +20,7 @@ import type { ChannelMessage } from "@multica/core/types";
 import { MemoizedMarkdown } from "../../common/markdown";
 import { AttachmentList } from "../../issues/components/comment-card";
 import { agentColor } from "../../common/agent-color";
+import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n";
 
@@ -110,6 +111,28 @@ export function ChannelMessageBubble({
           ? getActorAvatarUrl("member", message.author_id)
           : null;
   const displayName = isOwn ? ownName ?? message.author_name : message.author_name;
+  const profileActorType =
+    message.author_type === "agent"
+      ? "agent"
+      : message.author_type === "user"
+        ? "user"
+        : null;
+  const profileActorId = profileActorType ? message.author_id : null;
+  const avatar = (
+    <ActorAvatar
+      name={message.author_name}
+      initials={initialsOf(message.author_name)}
+      avatarUrl={avatarUrl ?? undefined}
+      isAgent={isAgent}
+      isSystem={message.author_type === "system"}
+      size={28}
+      className="mt-0.5 select-none"
+      tint={tint}
+    />
+  );
+  const nameLabel = (
+    <span className="truncate font-medium text-foreground">{displayName}</span>
+  );
 
   const canQuote = !!onQuote;
   const canOpenThread = !!onOpenThread && !message.thread_root_message_id;
@@ -135,16 +158,16 @@ export function ChannelMessageBubble({
           />
         }
       >
-        <ActorAvatar
-          name={message.author_name}
-          initials={initialsOf(message.author_name)}
-          avatarUrl={avatarUrl ?? undefined}
-          isAgent={isAgent}
-          isSystem={message.author_type === "system"}
-          size={28}
-          className="mt-0.5 select-none"
-          tint={tint}
-        />
+        {profileActorType && profileActorId ? (
+          <ActorProfileTrigger
+            memberType={profileActorType}
+            memberId={profileActorId}
+          >
+            {avatar}
+          </ActorProfileTrigger>
+        ) : (
+          avatar
+        )}
         <div
           className={cn(
             "flex min-w-0 max-w-[82%] flex-col gap-1 md:max-w-[min(680px,68%)]",
@@ -157,7 +180,16 @@ export function ChannelMessageBubble({
               isOwn && "flex-row-reverse",
             )}
           >
-            <span className="truncate font-medium text-foreground">{displayName}</span>
+            {profileActorType && profileActorId ? (
+              <ActorProfileTrigger
+                memberType={profileActorType}
+                memberId={profileActorId}
+              >
+                {nameLabel}
+              </ActorProfileTrigger>
+            ) : (
+              nameLabel
+            )}
             {isAgent && (
               <span className="shrink-0 rounded-full border border-primary/20 bg-primary/[0.08] px-2 py-0.5 text-[11px] font-normal leading-none text-primary">
                 {t(($) => $.message.agent_badge)}

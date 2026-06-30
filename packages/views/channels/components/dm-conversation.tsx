@@ -523,9 +523,6 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
           }}
           aria-label={t(($) => $.thread.jump_to_parent)}
         >
-          <p className="mb-1 text-[11px] font-medium uppercase text-muted-foreground">
-            {t(($) => $.thread.context_label)}
-          </p>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className="font-medium text-foreground">{threadRoot.author_name}</span>
             <span>{timeAgo(threadRoot.created_at)}</span>

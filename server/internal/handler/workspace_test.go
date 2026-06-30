@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -34,6 +35,99 @@ func TestCreateWorkspace_RejectsReservedSlug(t *testing.T) {
 				t.Fatalf("slug %q: expected 400, got %d: %s", slug, w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestListMembersWithUser_IncludesProfileDescription(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	const profileDescription = "Profile popover contract description"
+	var previousDescription string
+	if err := testPool.QueryRow(ctx, `SELECT profile_description FROM "user" WHERE id = $1`, testUserID).Scan(&previousDescription); err != nil {
+		t.Fatalf("load previous profile_description: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE "user" SET profile_description = $1 WHERE id = $2`, profileDescription, testUserID); err != nil {
+		t.Fatalf("update profile_description: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `UPDATE "user" SET profile_description = $1 WHERE id = $2`, previousDescription, testUserID)
+	})
+
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest(http.MethodGet, "/api/workspaces/"+testWorkspaceID+"/members", nil), "id", testWorkspaceID)
+	testHandler.ListMembersWithUser(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListMembersWithUser: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var members []MemberWithUserResponse
+	if err := json.NewDecoder(w.Body).Decode(&members); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	for _, member := range members {
+		if member.UserID == testUserID {
+			if member.ProfileDescription != profileDescription {
+				t.Fatalf("profile_description = %q, want %q", member.ProfileDescription, profileDescription)
+			}
+			return
+		}
+	}
+	t.Fatalf("test user %s not found in member list: %#v", testUserID, members)
+}
+
+func TestGetMemberProfile_UserOmitsEmailAndUsesProfileDescription(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	const profileDescription = "Human profile popover description"
+	var previousDescription string
+	if err := testPool.QueryRow(ctx, `SELECT profile_description FROM "user" WHERE id = $1`, testUserID).Scan(&previousDescription); err != nil {
+		t.Fatalf("load previous profile_description: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE "user" SET profile_description = $1 WHERE id = $2`, profileDescription, testUserID); err != nil {
+		t.Fatalf("update profile_description: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `UPDATE "user" SET profile_description = $1 WHERE id = $2`, previousDescription, testUserID)
+	})
+
+	w := httptest.NewRecorder()
+	req := withRouteParams(
+		newRequest(http.MethodGet, "/api/member-profiles/user/"+testUserID, nil),
+		"memberType", "user",
+		"memberId", testUserID,
+	)
+	testHandler.GetMemberProfile(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetMemberProfile: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "email") {
+		t.Fatalf("user profile response must not expose email: %s", w.Body.String())
+	}
+
+	var profile MemberProfileResponse
+	if err := json.NewDecoder(w.Body).Decode(&profile); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if profile.MemberType != "user" || profile.MemberID != testUserID {
+		t.Fatalf("profile identity = %#v, want user %s", profile, testUserID)
+	}
+	if profile.Description != profileDescription {
+		t.Fatalf("description = %q, want %q", profile.Description, profileDescription)
+	}
+	if profile.Role == "" {
+		t.Fatal("expected user profile role to be present")
+	}
+	if profile.Status != nil {
+		t.Fatalf("user profile status = %q, want nil", *profile.Status)
+	}
+	if len(profile.RecentActivity) != 0 {
+		t.Fatalf("user profile recent_activity = %#v, want empty", profile.RecentActivity)
 	}
 }
 

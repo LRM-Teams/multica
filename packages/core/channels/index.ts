@@ -29,6 +29,7 @@ export {
   useSetChannelMuted,
   useSendChannelMessage,
   useSendChannelThreadMessage,
+  useAddChannelReaction,
   useMarkChannelRead,
   useMarkChannelThreadRead,
   useSetChannelThreadFollowed,

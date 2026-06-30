@@ -49,6 +49,16 @@ export interface ChannelMember {
   created_at: string;
 }
 
+export interface ChannelReaction {
+  id: string;
+  channel_id: string;
+  message_id: string;
+  actor_type: string;
+  actor_id: string;
+  emoji: string;
+  created_at: string;
+}
+
 export interface ChannelMessage {
   id: string;
   channel_id: string;
@@ -68,6 +78,7 @@ export interface ChannelMessage {
   thread_followed?: boolean;
   thread_id?: string | null;
   trigger_depth?: number;
+  reactions?: ChannelReaction[];
   /**
    * Attachments linked to this message via the attachment table's
    * channel_message_id FK. Populated by ListChannelMessages. The bubble

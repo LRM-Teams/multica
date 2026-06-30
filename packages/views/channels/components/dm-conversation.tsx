@@ -13,6 +13,7 @@ import {
   useMarkChannelRead,
   useSendChannelMessage,
   useSendChannelThreadMessage,
+  useAddChannelReaction,
   useSetChannelTyping,
 } from "@multica/core/channels";
 import {
@@ -198,6 +199,10 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
   const sendMessage = useSendChannelMessage();
   const sendThreadMessage = useSendChannelThreadMessage();
+  const addChannelReaction = useAddChannelReaction();
+  const handleReactToMessage = useCallback((message: ChannelMessage, emoji: string) => {
+    addChannelReaction.mutate({ channelId: message.channel_id, messageId: message.id, emoji });
+  }, [addChannelReaction]);
   const setTyping = useSetChannelTyping();
   const { uploadWithToast } = useFileUpload(api);
 
@@ -555,6 +560,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
             currentUserId={currentUserId}
             ownName={currentUserName ?? undefined}
             emptyLabel={t(($) => $.thread.empty_replies)}
+            onReact={handleReactToMessage}
           />
         )}
         <ChannelComposer
@@ -697,6 +703,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         emptyLabel={t(($) => $.dm.thread_empty)}
         footer={<TypingIndicator actors={activeTypingActors} />}
         onOpenThread={setOpenThreadRoot}
+        onReact={handleReactToMessage}
       />
       <div className="px-5">
         <AgentWorkingIndicator tasks={activeTasks} />

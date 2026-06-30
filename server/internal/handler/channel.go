@@ -24,7 +24,7 @@ import (
 
 const channelNameMaxLen = 80
 const channelMessageMaxLen = 20000
-const channelContextMessageLimit = 10
+const channelContextMessageLimit = 5
 const channelRunTriggerLimit = 10
 const channelUserTypingExpiresInMS = 5000
 const channelAgentTypingExpiresInMS = 10 * 60 * 1000
@@ -95,6 +95,7 @@ type ChannelMessageResponse struct {
 	ThreadFollowed      bool                 `json:"thread_followed,omitempty"`
 	ThreadID            *string              `json:"thread_id,omitempty"`
 	TriggerDepth        int                  `json:"trigger_depth"`
+	Reactions           []ChannelReactionResponse `json:"reactions,omitempty"`
 	CreatedAt           string               `json:"created_at"`
 	// Attachments linked to this message via channel_message_id. The chat
 	// bubble renders file/image cards from these.
@@ -108,6 +109,16 @@ type ChannelMessageReply struct {
 	AuthorName string  `json:"author_name"`
 	Content    string  `json:"content"`
 	CreatedAt  string  `json:"created_at"`
+}
+
+type ChannelReactionResponse struct {
+	ID        string `json:"id"`
+	ChannelID string `json:"channel_id"`
+	MessageID string `json:"message_id"`
+	ActorType string `json:"actor_type"`
+	ActorID   string `json:"actor_id"`
+	Emoji     string `json:"emoji"`
+	CreatedAt string `json:"created_at"`
 }
 
 type ChannelMessageSearchResponse struct {
@@ -767,6 +778,7 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	for i := range out {
 		out[i].Attachments = grouped[out[i].ID]
 	}
+	h.attachChannelMessageReactions(r.Context(), workspaceID, out)
 	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
 	h.attachChannelMessageThreadMetadata(r.Context(), workspaceID, parseUUID(userID), out)
 	writeJSON(w, http.StatusOK, out)
@@ -862,7 +874,52 @@ func (h *Handler) validateChannelReplyTarget(w http.ResponseWriter, ctx context.
 func (h *Handler) attachChannelMessageReplySummary(ctx context.Context, workspaceID string, msg ChannelMessageResponse) ChannelMessageResponse {
 	messages := []ChannelMessageResponse{msg}
 	h.attachChannelMessageReplySummaries(ctx, workspaceID, messages)
+	h.attachChannelMessageReactions(ctx, workspaceID, messages)
 	return messages[0]
+}
+
+func (h *Handler) attachChannelMessageReactions(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
+	messageIDs := []pgtype.UUID{}
+	channelIDs := map[string]string{}
+	for _, msg := range messages {
+		messageIDs = append(messageIDs, parseUUID(msg.ID))
+		channelIDs[msg.ID] = msg.ChannelID
+	}
+	if len(messageIDs) == 0 {
+		return
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT id, channel_message_id, actor_type, actor_id, emoji, created_at
+		FROM channel_message_reaction
+		WHERE workspace_id = $1 AND channel_message_id = ANY($2::uuid[])
+		ORDER BY created_at ASC`, parseUUID(workspaceID), messageIDs)
+	if err != nil {
+		slog.Warn("channel reactions: load failed", "workspace", workspaceID, "error", err)
+		return
+	}
+	defer rows.Close()
+	byMessage := map[string][]ChannelReactionResponse{}
+	for rows.Next() {
+		var id, messageID, actorID pgtype.UUID
+		var actorType, emoji string
+		var createdAt pgtype.Timestamptz
+		if err := rows.Scan(&id, &messageID, &actorType, &actorID, &emoji, &createdAt); err != nil {
+			continue
+		}
+		key := uuidToString(messageID)
+		byMessage[key] = append(byMessage[key], ChannelReactionResponse{
+			ID:        uuidToString(id),
+			ChannelID: channelIDs[key],
+			MessageID: key,
+			ActorType: actorType,
+			ActorID:   uuidToString(actorID),
+			Emoji:     emoji,
+			CreatedAt: timestampToString(createdAt),
+		})
+	}
+	for i := range messages {
+		messages[i].Reactions = byMessage[messages[i].ID]
+	}
 }
 
 func (h *Handler) attachChannelMessageReplySummaries(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
@@ -985,6 +1042,64 @@ func (h *Handler) attachChannelMessageThreadMetadata(ctx context.Context, worksp
 	}
 }
 
+func (h *Handler) AddChannelMessageReaction(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	messageID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "messageId"), "message id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+	var req struct {
+		Emoji string `json:"emoji"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	emoji := strings.TrimSpace(req.Emoji)
+	if emoji == "" {
+		writeError(w, http.StatusBadRequest, "emoji is required")
+		return
+	}
+	var id, msgID, actorID pgtype.UUID
+	var createdAt pgtype.Timestamptz
+	reaction := ChannelReactionResponse{ChannelID: uuidToString(channelID), ActorType: "member", Emoji: emoji}
+	err := h.DB.QueryRow(r.Context(), `
+		INSERT INTO channel_message_reaction (channel_message_id, workspace_id, actor_type, actor_id, emoji)
+		SELECT id, workspace_id, 'member', $4::uuid, $5
+		FROM channel_message
+		WHERE id = $1 AND channel_id = $2 AND workspace_id = $3
+		ON CONFLICT (channel_message_id, actor_type, actor_id, emoji) DO UPDATE SET created_at = channel_message_reaction.created_at
+		RETURNING id, channel_message_id, actor_id, created_at`, messageID, channelID, parseUUID(workspaceID), parseUUID(userID), emoji).Scan(&id, &msgID, &actorID, &createdAt)
+	if err != nil {
+		if errorsIsNoRows(err) {
+			writeError(w, http.StatusNotFound, "message not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to add reaction")
+		return
+	}
+	reaction.ID = uuidToString(id)
+	reaction.MessageID = uuidToString(msgID)
+	reaction.ActorID = uuidToString(actorID)
+	reaction.CreatedAt = timestampToString(createdAt)
+	h.publish(protocol.EventChannelReactionAdded, workspaceID, "member", userID, map[string]any{"reaction": reaction, "channel_id": uuidToString(channelID), "message_id": uuidToString(messageID)})
+	writeJSON(w, http.StatusCreated, reaction)
+}
+
 func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -1054,6 +1169,7 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	for i := range out {
 		out[i].Attachments = grouped[out[i].ID]
 	}
+	h.attachChannelMessageReactions(r.Context(), workspaceID, out)
 	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
 	h.attachChannelMessageThreadMetadata(r.Context(), workspaceID, parseUUID(userID), out[:1])
 	writeJSON(w, http.StatusOK, out)
@@ -1516,7 +1632,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		// without an @-mention. Human↔human DMs have no agent member → no-op.
 		h.dispatchDMAgentReply(r.Context(), ch, msg, parseUUID(userID))
 	} else {
-		h.dispatchChannelMentions(r.Context(), ch, msg, parseUUID(userID))
+		h.dispatchChannelMessageToAgents(r.Context(), ch, msg, parseUUID(userID))
 	}
 	h.sendChannelMessageToFeishu(r.Context(), ch, authorName, content)
 	writeJSON(w, http.StatusCreated, msg)
@@ -1574,7 +1690,7 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 	}
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, parseUUID(msg.ChannelID))
 	h.publish(protocol.EventChannelMessage, workspaceID, "member", userID, msg)
-	h.dispatchChannelMentions(r.Context(), ch, msg, parseUUID(userID))
+	h.dispatchChannelMessageToAgents(r.Context(), ch, msg, parseUUID(userID))
 	writeJSON(w, http.StatusCreated, msg)
 }
 
@@ -1605,13 +1721,25 @@ func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Req
 	}
 }
 
-func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
+func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
 	// Notify mentioned humans regardless of the agent trigger limit — surfacing a
 	// mention to a person never feeds the automatic agent-reply loop.
 	h.notifyChannelMemberMentions(ctx, ch, trigger)
-	for _, agent := range h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content) {
-		h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
+	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content)
+	if len(mentionedAgents) > 0 {
+		for _, agent := range mentionedAgents {
+			h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
+		}
+		return
 	}
+	if strings.Contains(trigger.Content, "@") {
+		return
+	}
+	h.dispatchChannelAmbientObservation(ctx, ch, trigger, initiatorUserID)
+}
+
+func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
+	h.dispatchChannelMessageToAgents(ctx, ch, trigger, initiatorUserID)
 }
 
 // dispatchChannelAgentReply runs one agent's reply to a triggering message:
@@ -1632,31 +1760,41 @@ func (h *Handler) dispatchChannelAgentReply(ctx context.Context, ch ChannelRespo
 	if trigger.AuthorType == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == uuidToString(agent.ID) {
 		return
 	}
-	h.publishChannelAgentTyping(ch, agent, true)
+	h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger), "channel agent reply", true, true, true, false)
+}
+
+func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, logScope string, showTyping, forceFresh, interruptActive, lowPriority bool) {
+	if showTyping {
+		h.publishChannelAgentTyping(ch, agent, true)
+	}
 	session, err := h.ensureChannelAgentSession(ctx, ch, agent.ID, initiatorUserID)
 	if err != nil {
-		slog.Warn("channel agent reply: ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		slog.Warn(logScope+": ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
 	}
-	interruptingActiveTask := h.interruptInFlightChannelAgentTasks(ctx, session.ID)
-	prompt := h.buildChannelMentionPrompt(ctx, ch, trigger)
+	interruptingActiveTask := false
+	if interruptActive {
+		interruptingActiveTask = h.interruptInFlightChannelAgentTasks(ctx, session.ID)
+	}
 	promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, trigger)
 	if err != nil {
-		slog.Warn("channel agent reply: create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		slog.Warn(logScope+": create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
 	}
 	var task db.AgentTaskQueue
-	if interruptingActiveTask {
+	if lowPriority && !interruptingActiveTask {
+		task, err = h.TaskService.EnqueueAmbientChatTask(ctx, session, initiatorUserID)
+	} else if interruptingActiveTask || forceFresh {
 		task, err = h.TaskService.EnqueueFreshChatTask(ctx, session, initiatorUserID)
 	} else {
 		task, err = h.TaskService.EnqueueChatTask(ctx, session, initiatorUserID)
 	}
 	if err != nil {
-		slog.Warn("channel agent reply: enqueue chat task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		slog.Warn(logScope+": enqueue chat task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
 	}
 	if _, err := h.DB.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
-		slog.Warn("channel agent reply: tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
+		slog.Warn(logScope+": tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
 	}
 }
 
@@ -1896,7 +2034,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 	rows, err := h.DB.Query(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
-		       a.archived_at, a.display_name
+		       a.instructions, a.archived_at, a.display_name
 		FROM channel_member cm
 		JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
 		WHERE cm.channel_id = $1 AND cm.workspace_id = $2 AND a.archived_at IS NULL`, parseUUID(channelID), parseUUID(workspaceID))
@@ -1907,7 +2045,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 	var out []db.Agent
 	for rows.Next() {
 		var a db.Agent
-		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Visibility, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.ArchivedAt, &a.DisplayName); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Visibility, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName); err != nil {
 			continue
 		}
 		_, mentionedByID := mentionedAgents[uuidToString(a.ID)]
@@ -1928,6 +2066,36 @@ func contentMentionsAgent(content, name string) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(content), needle)
+}
+
+func (h *Handler) dispatchChannelAmbientObservation(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
+	if trigger.AuthorType == "agent" {
+		return
+	}
+	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
+		h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, buildChannelAmbientObservationPrompt(ch, agent, trigger), "channel ambient observation", false, true, false, true)
+	}
+}
+
+func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "You are a member of the Multica group chat #%s. A user sent a message without @-mentioning anyone.\n", ch.Name)
+	b.WriteString("You can see ONLY the current message below. Do not assume any prior channel context.\n")
+	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, stay silent by producing no final reply.\n")
+	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
+	b.WriteString("If a lightweight acknowledgement is enough, prefer a short emoji reaction command instead of a text reply: write exactly `multica channel react CURRENT_MESSAGE <emoji>` and nothing else. Use 👍 for a simple like.\n")
+	b.WriteString("If a greeting or sticker is explicitly appropriate, keep it to one short line and you may include one :sticker:<id>: token. Do not @-mention anyone from this ambient observation.\n\n")
+	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
+	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))
+	if strings.TrimSpace(agent.Description) != "" {
+		fmt.Fprintf(&b, "Your agent description: %s\n", strings.TrimSpace(agent.Description))
+	}
+	if strings.TrimSpace(agent.Instructions) != "" {
+		fmt.Fprintf(&b, "Your agent instructions: %s\n", strings.TrimSpace(agent.Instructions))
+	}
+	b.WriteString("\nCurrent message only:\n")
+	fmt.Fprintf(&b, "%s (%s): %s", trigger.AuthorName, trigger.AuthorType, trigger.Content)
+	return b.String()
 }
 
 func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse) string {
@@ -2186,6 +2354,13 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 	if archived, found := h.channelIsArchived(context.Background(), uuidToString(workspaceID), channelID); !found || archived {
 		return
 	}
+	reactionTargetID := h.channelReactionTargetFromPrompt(context.Background(), parseUUID(payload.ChatSessionID), taskID)
+	if !reactionTargetID.Valid {
+		reactionTargetID = threadRootMessageID
+	}
+	if h.handleChannelReactionCommand(context.Background(), channelID, workspaceID, agentID, reactionTargetID, payload.Content) {
+		return
+	}
 	msg, err := h.insertChannelMessage(context.Background(), channelID, workspaceID, "agent", agentID, agentName, payload.Content, "multica", nil, pgtype.UUID{}, threadRootMessageID, threadID, nextDepth)
 	if err != nil {
 		slog.Warn("channel bridge: insert agent reply failed", "chat_session_id", payload.ChatSessionID, "error", err)
@@ -2199,6 +2374,59 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 		h.dispatchChannelMentions(context.Background(), ch, msg, h.channelInitiatorForChatSession(context.Background(), parseUUID(payload.ChatSessionID)))
 		h.sendChannelMessageToFeishu(context.Background(), ch, agentName, payload.Content)
 	}
+}
+
+func (h *Handler) channelReactionTargetFromPrompt(ctx context.Context, chatSessionID, taskID pgtype.UUID) pgtype.UUID {
+	if !taskID.Valid {
+		return pgtype.UUID{}
+	}
+	var content string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT content FROM chat_message
+		WHERE chat_session_id = $1 AND task_id = $2 AND role = 'user'
+		ORDER BY created_at DESC
+		LIMIT 1`, chatSessionID, taskID).Scan(&content); err != nil {
+		return pgtype.UUID{}
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if target, ok := strings.CutPrefix(strings.TrimSpace(line), "Reaction target message id: "); ok {
+			return parseUUID(strings.TrimSpace(target))
+		}
+	}
+	return pgtype.UUID{}
+}
+
+func (h *Handler) handleChannelReactionCommand(ctx context.Context, channelID, workspaceID, agentID, triggerMessageID pgtype.UUID, content string) bool {
+	body := strings.TrimSpace(content)
+	if triggerMessageID.Valid && strings.HasPrefix(body, "multica channel react CURRENT_MESSAGE ") {
+		emoji := strings.TrimSpace(strings.TrimPrefix(body, "multica channel react CURRENT_MESSAGE "))
+		if emoji == "" {
+			return true
+		}
+		var id, messageID, actorID pgtype.UUID
+		var createdAt pgtype.Timestamptz
+		err := h.DB.QueryRow(ctx, `
+			INSERT INTO channel_message_reaction (channel_message_id, workspace_id, actor_type, actor_id, emoji)
+			VALUES ($1, $2, 'agent', $3, $4)
+			ON CONFLICT (channel_message_id, actor_type, actor_id, emoji) DO UPDATE SET created_at = channel_message_reaction.created_at
+			RETURNING id, channel_message_id, actor_id, created_at`, triggerMessageID, workspaceID, agentID, emoji).Scan(&id, &messageID, &actorID, &createdAt)
+		if err != nil {
+			slog.Warn("channel reaction command failed", "channel", uuidToString(channelID), "agent", uuidToString(agentID), "error", err)
+			return true
+		}
+		reaction := ChannelReactionResponse{
+			ID:        uuidToString(id),
+			ChannelID: uuidToString(channelID),
+			MessageID: uuidToString(messageID),
+			ActorType: "agent",
+			ActorID:   uuidToString(actorID),
+			Emoji:     emoji,
+			CreatedAt: timestampToString(createdAt),
+		}
+		h.publish(protocol.EventChannelReactionAdded, uuidToString(workspaceID), "agent", uuidToString(agentID), map[string]any{"reaction": reaction, "channel_id": uuidToString(channelID), "message_id": uuidToString(triggerMessageID)})
+		return true
+	}
+	return false
 }
 
 func (h *Handler) channelAgentForChatSession(ctx context.Context, chatSessionID string) (pgtype.UUID, pgtype.UUID, pgtype.UUID, bool) {

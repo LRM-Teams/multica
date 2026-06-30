@@ -1432,6 +1432,15 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			// URL alone is signed and 30-min expiring on the private CDN.
 			if msgs, err := h.Queries.ListChatMessages(r.Context(), cs.ID); err == nil && len(msgs) > 0 {
 				unanswered := trailingUserMessages(msgs)
+				if task.ForceFreshSession {
+					for i := len(msgs) - 1; i >= 0; i-- {
+						m := msgs[i]
+						if m.Role == "user" && m.TaskID == task.ID {
+							unanswered = []db.ChatMessage{m}
+							break
+						}
+					}
+				}
 				parts := make([]string, 0, len(unanswered))
 				for _, m := range unanswered {
 					if strings.TrimSpace(m.Content) != "" {

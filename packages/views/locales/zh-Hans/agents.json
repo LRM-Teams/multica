@@ -337,26 +337,18 @@
       "add_dialog_confirm_other": "添加 {{count}} 个 skill",
       "add_dialog_cancel": "取消",
       "add_failed_toast": "添加 skill 失败",
-      "generated_title": "生成的 skills",
-      "generated_intro": "这个智能体通过 Pi evolution 流程学到的 skills。接受后会在本地启用，并用于后续 Pi task。",
-      "generated_count": "{{count}} 个生成项",
-      "generated_loading": "正在加载生成的 skills…",
-      "generated_empty": "还没有生成的 skills。",
-      "generated_decision_failed_toast": "更新生成 skill 决策失败",
-      "generated_decision_saved_toast": "已保存生成 skill 决策",
-      "generated_accept_action": "接受",
-      "generated_enabled_action": "已启用",
-      "generated_ignore_action": "忽略",
-      "generated_accepted_pending_hint": "已接受，等待本地 runtime 启用此 skill。",
-      "generated_accepted_waiting_local_hint": "已接受，等待本地 runtime 接收此 skill。请确认 daemon 在运行，且该 agent 至少跑过一次 Pi task（会自动创建本地 agent 目录）。",
-      "generated_status_enabled": "已启用",
-      "generated_status": {
-        "pending": "待处理",
-        "delivered": "已送达",
-        "accepted": "已接受",
-        "ignored": "已忽略",
-        "rejected": "已拒绝",
-        "failed": "失败"
+      "suggestion_title": "Evolution skill 建议",
+      "suggestion_intro": "已晋升且可能适合此智能体的工作区 skill。接受即绑定，忽略则不再提示。",
+      "suggestion_count": "{{count}} 条待处理",
+      "suggestion_loading": "正在加载 skill 建议…",
+      "suggestion_empty": "暂无待处理的 skill 建议。",
+      "suggestion_decision_failed_toast": "更新 skill 建议失败",
+      "suggestion_decision_saved_toast": "已更新 skill 建议",
+      "suggestion_accept_action": "接受",
+      "suggestion_dismiss_action": "忽略",
+      "suggestion_action": {
+        "add": "建议添加",
+        "remove": "建议移除"
       }
     },
     "integrations": {

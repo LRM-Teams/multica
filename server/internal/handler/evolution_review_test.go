@@ -46,7 +46,7 @@ func seedEvolutionReviewSubmissionWithMetadata(t *testing.T, status string, meta
 		t.Fatalf("seed evolution submission file: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM evolution_unit_delivery WHERE workspace_id=$1`, testWorkspaceID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_skill_suggestion WHERE workspace_id=$1`, testWorkspaceID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM shared_evolution_unit WHERE workspace_id=$1 AND metadata->>'content_hash'=$2`, testWorkspaceID, hashEvolutionContent(content))
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM evolution_unit_submission WHERE id=$1`, submissionID)
 	})

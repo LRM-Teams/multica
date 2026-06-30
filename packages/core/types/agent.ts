@@ -481,57 +481,32 @@ export interface AgentMemory {
   updated_at: string;
 }
 
-export type GeneratedSkillDeliveryStatus =
-  | "pending"
-  | "delivered"
-  | "accepted"
-  | "ignored"
-  | "rejected"
-  | "failed";
+export type AgentSkillSuggestionAction = "add" | "remove";
 
-export interface GeneratedSkillDeliveryFile {
-  path: string;
-  content: string;
-  content_hash: string;
-  mime_type: string;
-}
+export type AgentSkillSuggestionStatus = "pending" | "accepted" | "dismissed";
 
-export interface GeneratedSkillDelivery {
+export interface AgentSkillSuggestion {
   id: string;
   workspace_id: string;
-  unit_id: string;
-  version_id: string;
-  target_agent_id: string;
-  delivery_type: string;
-  status: GeneratedSkillDeliveryStatus;
+  agent_id: string;
+  skill_id: string;
+  action: AgentSkillSuggestionAction;
   reason: string;
   matcher_score: number;
-  unit_type: string;
-  title: string;
-  canonical_summary: string;
-  content: string;
-  metadata: Record<string, unknown>;
-  delivered_path?: string;
-  error?: string;
-  decided_at?: string | null;
-  delivered_at?: string | null;
+  matcher_details?: Record<string, unknown>;
+  status: AgentSkillSuggestionStatus;
+  skill_name: string;
+  skill_description: string;
   created_at: string;
   updated_at: string;
-  files?: GeneratedSkillDeliveryFile[];
 }
 
-export interface ListGeneratedSkillDeliveriesResponse {
-  deliveries: GeneratedSkillDelivery[];
+export interface ListAgentSkillSuggestionsResponse {
+  suggestions: AgentSkillSuggestion[];
 }
 
-export interface DecideGeneratedSkillDeliveryRequest {
-  decision: "accepted" | "ignored" | "rejected";
-}
-
-export type EvolutionMemoryDelivery = GeneratedSkillDelivery;
-
-export interface ListEvolutionMemoryDeliveriesResponse {
-  deliveries: EvolutionMemoryDelivery[];
+export interface DecideAgentSkillSuggestionRequest {
+  decision: "accept" | "dismiss";
 }
 
 export interface CreateSkillRequest {

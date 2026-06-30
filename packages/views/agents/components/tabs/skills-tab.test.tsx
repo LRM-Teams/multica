@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
-import type { Agent, GeneratedSkillDelivery } from "@multica/core/types";
+import type { Agent, AgentSkillSuggestion } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../../locales/en/common.json";
 import enAgents from "../../../locales/en/agents.json";
@@ -11,8 +11,8 @@ import enAgents from "../../../locales/en/agents.json";
 const TEST_RESOURCES = { en: { common: enCommon, agents: enAgents } };
 
 const mockListSkills = vi.hoisted(() => vi.fn());
-const mockListGeneratedSkillDeliveries = vi.hoisted(() => vi.fn());
-const mockDecideGeneratedSkillDelivery = vi.hoisted(() => vi.fn());
+const mockListSkillSuggestions = vi.hoisted(() => vi.fn());
+const mockDecideSkillSuggestion = vi.hoisted(() => vi.fn());
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -22,10 +22,10 @@ vi.mock("@multica/core/api", () => ({
   api: {
     listSkills: (...args: unknown[]) => mockListSkills(...args),
     setAgentSkills: vi.fn(),
-    listAgentGeneratedSkillDeliveries: (...args: unknown[]) =>
-      mockListGeneratedSkillDeliveries(...args),
-    decideAgentGeneratedSkillDelivery: (...args: unknown[]) =>
-      mockDecideGeneratedSkillDelivery(...args),
+    listAgentSkillSuggestions: (...args: unknown[]) =>
+      mockListSkillSuggestions(...args),
+    decideAgentSkillSuggestion: (...args: unknown[]) =>
+      mockDecideSkillSuggestion(...args),
   },
 }));
 
@@ -36,7 +36,7 @@ vi.mock("sonner", () => ({
   },
 }));
 
-import { SkillsTab, getGeneratedSkillAwaitingHintKey } from "./skills-tab";
+import { SkillsTab } from "./skills-tab";
 
 const agent: Agent = {
   id: "agent-1",
@@ -62,24 +62,20 @@ const agent: Agent = {
   archived_by: null,
 };
 
-function makeGeneratedDelivery(
-  overrides: Partial<GeneratedSkillDelivery> = {},
-): GeneratedSkillDelivery {
+function makeSuggestion(
+  overrides: Partial<AgentSkillSuggestion> = {},
+): AgentSkillSuggestion {
   return {
-    id: "delivery-1",
+    id: "suggestion-1",
     workspace_id: "ws-1",
-    unit_id: "unit-1",
-    version_id: "version-1",
-    target_agent_id: "agent-1",
-    delivery_type: "generated",
-    status: "delivered",
-    reason: "source agent match",
-    matcher_score: 1,
-    unit_type: "skill",
-    title: "Review Helper",
-    canonical_summary: "Check pull requests",
-    content: "",
-    metadata: {},
+    agent_id: "agent-1",
+    skill_id: "skill-1",
+    action: "add",
+    reason: "metadata match",
+    matcher_score: 0.8,
+    status: "pending",
+    skill_name: "Review Helper",
+    skill_description: "Check pull requests",
     created_at: "2026-04-16T00:00:00Z",
     updated_at: "2026-04-16T00:00:00Z",
     ...overrides,
@@ -108,117 +104,48 @@ describe("SkillsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListSkills.mockResolvedValue([]);
-    mockListGeneratedSkillDeliveries.mockResolvedValue({ deliveries: [] });
-    mockDecideGeneratedSkillDelivery.mockResolvedValue(undefined);
+    mockListSkillSuggestions.mockResolvedValue({ suggestions: [] });
+    mockDecideSkillSuggestion.mockResolvedValue(undefined);
   });
 
   it("does not render the inline Local Runtime Skills section even for local-runtime agents", async () => {
-    // The inline section auto-loaded local skills on every Skills-tab
-    // entry, which was both noisy and (under multi-replica deploys) prone
-    // to "request not found" because the request store is in-process.
-    // Local-skill import now lives behind the explicit Skills page →
-    // Add Skill → From Runtime tab; nothing here may auto-load.
     renderSkillsTab();
 
-    // Top informational callout should still render; that's how we know
-    // the tab body itself rendered (not stuck in a loading state).
     expect(
       await screen.findByText(/Local runtime skills are always available/i),
     ).toBeInTheDocument();
 
-    // The removed section's heading and its trigger button must be gone.
     expect(screen.queryByText("Local Runtime Skills")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /Import to Workspace/i }),
     ).not.toBeInTheDocument();
-
-    // No runtime list / local-skills query should be wired up either —
-    // we removed @multica/core/runtimes from this file's imports.
-    // Surface it via behaviour: the `agent` here has runtime_id but the
-    // tab must not invoke any runtime-list mock to render. (Both are
-    // already deleted from the mock setup above; this assertion is
-    // implicit — the test file would fail to import if the component
-    // still referenced runtimeListOptions / runtimeLocalSkillsOptions.)
   });
 
-  it("shows accept actions only while a generated skill awaits a decision", async () => {
-    mockListGeneratedSkillDeliveries.mockResolvedValue({
-      deliveries: [makeGeneratedDelivery({ status: "delivered" })],
+  it("shows accept and dismiss actions for pending skill suggestions", async () => {
+    mockListSkillSuggestions.mockResolvedValue({
+      suggestions: [makeSuggestion()],
     });
 
     renderSkillsTab();
 
     expect(await screen.findByRole("button", { name: /Accept/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Ignore/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Dismiss/i })).toBeInTheDocument();
+    expect(screen.getByText("Suggested add")).toBeInTheDocument();
   });
 
-  it("hides accept actions after a generated skill is accepted but not yet enabled locally", async () => {
-    mockListGeneratedSkillDeliveries.mockResolvedValue({
-      deliveries: [
-        makeGeneratedDelivery({
-          status: "accepted",
-          delivered_path: "/agents/agent-1/skills/generated/unit-1",
-        }),
-      ],
+  it("shows remove suggestion badge for remove actions", async () => {
+    mockListSkillSuggestions.mockResolvedValue({
+      suggestions: [makeSuggestion({ action: "remove" })],
     });
 
     renderSkillsTab();
 
-    expect(await screen.findByText("Accepted")).toBeInTheDocument();
-    expect(
-      screen.getByText(/Waiting for the local runtime to enable this skill/i),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Accept/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Ignore/i })).not.toBeInTheDocument();
+    expect(await screen.findByText("Suggested remove")).toBeInTheDocument();
   });
 
-  it("shows a local-runtime hint when accepted before the daemon has written anything", async () => {
-    mockListGeneratedSkillDeliveries.mockResolvedValue({
-      deliveries: [makeGeneratedDelivery({ status: "accepted", delivered_path: "" })],
-    });
-
+  it("shows empty state when there are no pending suggestions", async () => {
     renderSkillsTab();
 
-    expect(
-      await screen.findByText(/Waiting for the local runtime to receive this skill/i),
-    ).toBeInTheDocument();
-  });
-
-  it("shows enabled status without actions after the runtime enables the generated skill", async () => {
-    mockListGeneratedSkillDeliveries.mockResolvedValue({
-      deliveries: [
-        makeGeneratedDelivery({
-          status: "accepted",
-          delivered_path: "/agents/agent-1/skills/enabled/unit-1",
-        }),
-      ],
-    });
-
-    renderSkillsTab();
-
-    expect(await screen.findByText("Enabled")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Accept/i })).not.toBeInTheDocument();
-  });
-
-  it("maps awaiting hint keys from delivery path state", () => {
-    expect(
-      getGeneratedSkillAwaitingHintKey(makeGeneratedDelivery({ status: "accepted", delivered_path: "" })),
-    ).toBe("generated_accepted_waiting_local_hint");
-    expect(
-      getGeneratedSkillAwaitingHintKey(
-        makeGeneratedDelivery({
-          status: "accepted",
-          delivered_path: "/agents/agent-1/skills/generated/unit-1",
-        }),
-      ),
-    ).toBe("generated_accepted_pending_hint");
-    expect(
-      getGeneratedSkillAwaitingHintKey(
-        makeGeneratedDelivery({
-          status: "accepted",
-          delivered_path: "/agents/agent-1/skills/enabled/unit-1",
-        }),
-      ),
-    ).toBeNull();
+    expect(await screen.findByText("No pending skill suggestions.")).toBeInTheDocument();
   });
 });

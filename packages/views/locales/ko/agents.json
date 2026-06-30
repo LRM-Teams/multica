@@ -345,26 +345,18 @@
       "add_dialog_confirm_other": "스킬 {{count}}개 추가",
       "add_dialog_cancel": "취소",
       "add_failed_toast": "스킬을 추가하지 못했습니다",
-      "generated_title": "생성된 스킬",
-      "generated_intro": "이 에이전트가 Pi evolution 흐름에서 학습한 스킬입니다. 수락하면 로컬에서 활성화되어 이후 Pi 작업에 사용됩니다.",
-      "generated_count": "생성 {{count}}개",
-      "generated_loading": "생성된 스킬을 불러오는 중…",
-      "generated_empty": "아직 생성된 스킬이 없습니다.",
-      "generated_decision_failed_toast": "생성 스킬 결정을 업데이트하지 못했습니다",
-      "generated_decision_saved_toast": "생성 스킬 결정을 저장했습니다",
-      "generated_accept_action": "수락",
-      "generated_enabled_action": "활성화됨",
-      "generated_ignore_action": "무시",
-      "generated_accepted_pending_hint": "수락되었습니다. 로컬 runtime이 이 skill을 활성화할 때까지 기다리는 중입니다.",
-      "generated_accepted_waiting_local_hint": "수락되었습니다. 로컬 runtime이 이 skill을 받을 때까지 기다리는 중입니다. daemon이 실행 중이고, 이 agent가 Pi task를 최소 한 번 실행했는지(로컬 agent 디렉터리 자동 생성) 확인하세요.",
-      "generated_status_enabled": "활성화됨",
-      "generated_status": {
-        "pending": "대기 중",
-        "delivered": "전달됨",
-        "accepted": "수락됨",
-        "ignored": "무시됨",
-        "rejected": "거부됨",
-        "failed": "실패"
+      "suggestion_title": "Evolution 스킬 제안",
+      "suggestion_intro": "승격되어 이 에이전트에 맞을 수 있는 워크스페이스 skill입니다. 수락하면 바인딩하고, 무시하면 다시 표시하지 않습니다.",
+      "suggestion_count": "대기 {{count}}개",
+      "suggestion_loading": "스킬 제안을 불러오는 중…",
+      "suggestion_empty": "대기 중인 스킬 제안이 없습니다.",
+      "suggestion_decision_failed_toast": "스킬 제안을 업데이트하지 못했습니다",
+      "suggestion_decision_saved_toast": "스킬 제안을 업데이트했습니다",
+      "suggestion_accept_action": "수락",
+      "suggestion_dismiss_action": "무시",
+      "suggestion_action": {
+        "add": "추가 제안",
+        "remove": "제거 제안"
       }
     },
     "integrations": {

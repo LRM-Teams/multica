@@ -158,9 +158,7 @@ type evolutionMockDB struct {
 	files         []db.EvolutionUnitSubmissionFile
 	unit          db.SharedEvolutionUnit
 	version       db.SharedEvolutionUnitVersion
-	delivery      db.EvolutionUnitDelivery
 	agents        []db.Agent
-	deliveries    []db.CreateEvolutionDeliveryParams
 	existingFound bool
 	activeUnits   []db.SharedEvolutionUnit
 	maxVersion    int32
@@ -183,7 +181,6 @@ func newEvolutionMockDB(submission db.EvolutionUnitSubmission) *evolutionMockDB 
 		submission: submission,
 		unit:       unit,
 		version:    db.SharedEvolutionUnitVersion{ID: versionID, WorkspaceID: submission.WorkspaceID, UnitID: unitID, Version: 1},
-		delivery:   db.EvolutionUnitDelivery{ID: testUUID(43), WorkspaceID: submission.WorkspaceID, UnitID: unitID, VersionID: versionID, TargetAgentID: submission.SourceAgentID, Status: "pending"},
 		maxVersion: 1,
 		agents: []db.Agent{
 			{ID: submission.SourceAgentID, WorkspaceID: submission.WorkspaceID, Name: "Source Agent"},
@@ -227,6 +224,25 @@ func (m *evolutionMockDB) QueryRow(_ context.Context, sql string, args ...interf
 			return &evolutionMockRow{values: sharedEvolutionUnitValues(m.unit)}
 		}
 		return &evolutionMockRow{err: pgx.ErrNoRows}
+	case strings.Contains(sql, "SyncSharedEvolutionUnitMatchMetadata"):
+		updated := m.unit
+		updated.Title = stringArg(args, 2)
+		updated.CanonicalSummary = stringArg(args, 3)
+		updated.Content = stringArg(args, 4)
+		updated.Tags = stringSliceArg(args, 5)
+		updated.Tools = stringSliceArg(args, 6)
+		updated.TaskTypes = stringSliceArg(args, 7)
+		updated.ProjectTypes = stringSliceArg(args, 8)
+		updated.Languages = stringSliceArg(args, 9)
+		updated.Frameworks = stringSliceArg(args, 10)
+		m.unit = updated
+		for i, unit := range m.activeUnits {
+			if unit.ID == updated.ID {
+				m.activeUnits[i] = updated
+				break
+			}
+		}
+		return &evolutionMockRow{values: sharedEvolutionUnitValues(updated)}
 	case strings.Contains(sql, "MaxSharedEvolutionUnitVersion"):
 		return &evolutionMockRow{values: []any{m.maxVersion}}
 	case strings.Contains(sql, "CreateSharedEvolutionUnitVersion"):
@@ -256,23 +272,6 @@ func (m *evolutionMockDB) QueryRow(_ context.Context, sql string, args ...interf
 		return &evolutionMockRow{values: sharedEvolutionUnitValues(updated)}
 	case strings.Contains(sql, "CreateSharedEvolutionUnit"):
 		return &evolutionMockRow{values: sharedEvolutionUnitValues(m.unit)}
-	case strings.Contains(sql, "CreateEvolutionDelivery"):
-		arg := db.CreateEvolutionDeliveryParams{
-			WorkspaceID:    uuidArg(args, 0),
-			UnitID:         uuidArg(args, 1),
-			VersionID:      uuidArg(args, 2),
-			TargetAgentID:  uuidArg(args, 3),
-			DeliveryType:   stringArg(args, 4),
-			Reason:         stringArg(args, 5),
-			MatcherScore:   float64Arg(args, 6),
-			MatcherDetails: bytesArg(args, 7),
-		}
-		m.deliveries = append(m.deliveries, arg)
-		delivery := m.delivery
-		delivery.TargetAgentID = arg.TargetAgentID
-		delivery.MatcherScore = arg.MatcherScore
-		delivery.MatcherDetails = arg.MatcherDetails
-		return &evolutionMockRow{values: evolutionDeliveryValues(delivery)}
 	case strings.Contains(sql, "RejectEvolutionSubmissionWithReview"):
 		updated := m.submission
 		updated.Status = "rejected"
@@ -408,10 +407,6 @@ func sharedEvolutionUnitVersionValues(v db.SharedEvolutionUnitVersion) []any {
 	return []any{v.ID, v.WorkspaceID, v.UnitID, v.Version, v.Title, v.Content, v.Metadata, v.Applies, v.FailureCases, v.SourceSubmissionIds, v.ChangeReason, v.CreatedBy, v.CreatedAt}
 }
 
-func evolutionDeliveryValues(d db.EvolutionUnitDelivery) []any {
-	return []any{d.ID, d.WorkspaceID, d.UnitID, d.VersionID, d.TargetAgentID, d.DeliveryType, d.Status, d.Reason, d.MatcherScore, d.MatcherDetails, d.DeliveredPath, d.Error, d.DecidedAt, d.DeliveredAt, d.CreatedAt, d.UpdatedAt}
-}
-
 func stringArg(args []interface{}, index int) string {
 	if index >= len(args) {
 		return ""
@@ -457,6 +452,14 @@ func int32Arg(args []interface{}, index int) int32 {
 		return 0
 	}
 	value, _ := args[index].(int32)
+	return value
+}
+
+func stringSliceArg(args []interface{}, index int) []string {
+	if index >= len(args) {
+		return nil
+	}
+	value, _ := args[index].([]string)
 	return value
 }
 
@@ -554,82 +557,6 @@ func TestCurateSubmissionDuplicateHashMarksPromotedWithoutCreatingUnit(t *testin
 	}
 }
 
-func TestCurateSubmissionMatchesMetadataRelevantAgents(t *testing.T) {
-	submission := validMemorySubmission()
-	submission.Tools = []string{"github"}
-	submission.TaskTypes = []string{"review"}
-	submission.Languages = []string{"go"}
-	mock := newEvolutionMockDB(submission)
-	mock.unit.Tools = submission.Tools
-	mock.unit.TaskTypes = submission.TaskTypes
-	mock.unit.Languages = submission.Languages
-	matchedID := testUUID(61)
-	unmatchedID := testUUID(62)
-	mock.agents = append(mock.agents,
-		db.Agent{ID: matchedID, WorkspaceID: submission.WorkspaceID, Name: "Go reviewer", Description: "Reviews Go pull requests with GitHub context."},
-		db.Agent{ID: unmatchedID, WorkspaceID: submission.WorkspaceID, Name: "Designer", Description: "Polishes product copy."},
-	)
-	service := NewEvolutionService(db.New(mock))
-
-	unit, status, err := service.curateSubmission(context.Background(), submission)
-	if err != nil {
-		t.Fatalf("curateSubmission error = %v", err)
-	}
-	if status != evolutionCurationPromoted {
-		t.Fatalf("status = %q, want promoted", status)
-	}
-	if _, err := service.matchSourceAgent(context.Background(), submission, unit); err != nil {
-		t.Fatalf("matchSourceAgent error = %v", err)
-	}
-	if len(mock.deliveries) != 2 {
-		t.Fatalf("deliveries = %d, want source + matched agent: %#v", len(mock.deliveries), mock.deliveries)
-	}
-	if mock.deliveries[0].TargetAgentID != submission.SourceAgentID {
-		t.Fatalf("first delivery target = %v, want source %v", mock.deliveries[0].TargetAgentID, submission.SourceAgentID)
-	}
-	if mock.deliveries[1].TargetAgentID != matchedID || mock.deliveries[1].MatcherScore < 0.3 {
-		t.Fatalf("matched delivery = target %v score %.2f, want %v score >= 0.3", mock.deliveries[1].TargetAgentID, mock.deliveries[1].MatcherScore, matchedID)
-	}
-	var details map[string]any
-	if err := json.Unmarshal(mock.deliveries[1].MatcherDetails, &details); err != nil {
-		t.Fatalf("matcher details JSON: %v", err)
-	}
-	if details["strategy"] != "hybrid_metadata_semantic" {
-		t.Fatalf("matcher details = %#v", details)
-	}
-}
-
-func TestCurateSubmissionDoesNotMatchSingleBroadTool(t *testing.T) {
-	submission := validMemorySubmission()
-	submission.Content = "Workflow note."
-	submission.Summary = "Workflow note"
-	submission.Tools = []string{"github"}
-	mock := newEvolutionMockDB(submission)
-	mock.unit.Content = "Workflow note."
-	mock.unit.CanonicalSummary = "Workflow note"
-	mock.unit.Tags = []string{"other"}
-	mock.unit.Tools = submission.Tools
-	broadID := testUUID(63)
-	mock.agents = append(mock.agents,
-		db.Agent{ID: broadID, WorkspaceID: submission.WorkspaceID, Name: "GitHub helper", Description: "Handles GitHub notifications."},
-	)
-	service := NewEvolutionService(db.New(mock))
-
-	unit, status, err := service.curateSubmission(context.Background(), submission)
-	if err != nil {
-		t.Fatalf("curateSubmission error = %v", err)
-	}
-	if status != evolutionCurationPromoted {
-		t.Fatalf("status = %q, want promoted", status)
-	}
-	if _, err := service.matchSourceAgent(context.Background(), submission, unit); err != nil {
-		t.Fatalf("matchSourceAgent error = %v", err)
-	}
-	if len(mock.deliveries) != 1 || mock.deliveries[0].TargetAgentID != submission.SourceAgentID {
-		t.Fatalf("deliveries = %#v, want only source agent", mock.deliveries)
-	}
-}
-
 func TestCurateSubmissionSemanticDuplicateMarksPromotedWithoutNewUnit(t *testing.T) {
 	submission := validMemorySubmission()
 	submission.Title = "Reusable Go review checklist"
@@ -673,43 +600,6 @@ func TestSemanticSimilaritySeparatesRelatedAndUnrelatedText(t *testing.T) {
 	}
 }
 
-func TestCurateSubmissionSemanticAgentMatch(t *testing.T) {
-	submission := validMemorySubmission()
-	submission.Title = "Go migration review checklist"
-	submission.Summary = "Verify migrations and targeted tests before approving Go pull requests."
-	submission.Content = "Go pull request review should check database migrations and targeted tests."
-	mock := newEvolutionMockDB(submission)
-	mock.unit.Title = submission.Title
-	mock.unit.CanonicalSummary = submission.Summary
-	mock.unit.Content = submission.Content
-	semanticID := testUUID(65)
-	mock.agents = append(mock.agents,
-		db.Agent{ID: semanticID, WorkspaceID: submission.WorkspaceID, Name: "Backend reviewer", Description: "Reviews Go PR migrations and targeted tests."},
-	)
-	service := NewEvolutionService(db.New(mock))
-
-	unit, status, err := service.curateSubmission(context.Background(), submission)
-	if err != nil {
-		t.Fatalf("curateSubmission error = %v", err)
-	}
-	if status != evolutionCurationPromoted {
-		t.Fatalf("status = %q, want promoted", status)
-	}
-	if _, err := service.matchSourceAgent(context.Background(), submission, unit); err != nil {
-		t.Fatalf("matchSourceAgent error = %v", err)
-	}
-	if len(mock.deliveries) != 2 || mock.deliveries[1].TargetAgentID != semanticID {
-		t.Fatalf("deliveries = %#v, want source + semantic agent", mock.deliveries)
-	}
-	var details map[string]any
-	if err := json.Unmarshal(mock.deliveries[1].MatcherDetails, &details); err != nil {
-		t.Fatalf("matcher details JSON: %v", err)
-	}
-	if details["strategy"] != "hybrid_metadata_semantic" {
-		t.Fatalf("matcher details = %#v", details)
-	}
-}
-
 func TestShouldCreateEvolutionDeliveryMatchAllowsComplementaryMetadata(t *testing.T) {
 	target := evolutionDeliveryMatchTarget{
 		Score: 0.3,
@@ -730,6 +620,28 @@ func TestShouldCreateEvolutionDeliveryMatchRejectsSingleBroadDimension(t *testin
 	}
 	if shouldCreateEvolutionDeliveryMatch(target) {
 		t.Fatal("expected single broad tool match to be rejected")
+	}
+}
+
+func TestScoreEvolutionDeliveryTargetPrefersSubmissionMetadata(t *testing.T) {
+	submission := validSkillSubmission()
+	submission.Tools = []string{"github", "docker"}
+	submission.Languages = []string{"go"}
+	unit := db.SharedEvolutionUnit{
+		Tools:     []string{"github"},
+		Languages: []string{"python"},
+	}
+	agent := db.Agent{
+		Name:        "Container helper",
+		Description: "Builds docker images for Go services on GitHub.",
+	}
+	target := scoreEvolutionDeliveryTarget(testUUID(11), unit, agent, &submission)
+	if !shouldCreateEvolutionDeliveryMatch(target) {
+		t.Fatalf("target = %#v, want match from submission metadata", target)
+	}
+	unitOnly := scoreEvolutionDeliveryTarget(testUUID(11), unit, agent, nil)
+	if shouldCreateEvolutionDeliveryMatch(unitOnly) {
+		t.Fatalf("unit-only target = %#v, want no match from stale unit metadata", unitOnly)
 	}
 }
 

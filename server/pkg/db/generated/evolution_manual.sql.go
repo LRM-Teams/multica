@@ -533,6 +533,54 @@ func (q *Queries) SetSharedEvolutionUnitCurrentVersion(ctx context.Context, arg 
 	return scanSharedEvolutionUnit(row)
 }
 
+const syncSharedEvolutionUnitMatchMetadata = `-- name: SyncSharedEvolutionUnitMatchMetadata :one
+UPDATE shared_evolution_unit
+SET
+  title = $3,
+  canonical_summary = $4,
+  content = $5,
+  tags = $6,
+  tools = $7,
+  task_types = $8,
+  project_types = $9,
+  languages = $10,
+  frameworks = $11,
+  updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, unit_type, title, canonical_summary, content, metadata, applies, failure_cases, scope, tags, tools, task_types, project_types, languages, frameworks, applicable_agent_types, applicable_projects, priority, score, success_count, failure_count, ignored_count, conflict_count, last_used_at, status, current_version_id, created_at, updated_at
+`
+
+type SyncSharedEvolutionUnitMatchMetadataParams struct {
+	ID               pgtype.UUID `json:"id"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	Title            string      `json:"title"`
+	CanonicalSummary string      `json:"canonical_summary"`
+	Content          string      `json:"content"`
+	Tags             []string    `json:"tags"`
+	Tools            []string    `json:"tools"`
+	TaskTypes        []string    `json:"task_types"`
+	ProjectTypes     []string    `json:"project_types"`
+	Languages        []string    `json:"languages"`
+	Frameworks       []string    `json:"frameworks"`
+}
+
+func (q *Queries) SyncSharedEvolutionUnitMatchMetadata(ctx context.Context, arg SyncSharedEvolutionUnitMatchMetadataParams) (SharedEvolutionUnit, error) {
+	row := q.db.QueryRow(ctx, syncSharedEvolutionUnitMatchMetadata,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Title,
+		arg.CanonicalSummary,
+		arg.Content,
+		arg.Tags,
+		arg.Tools,
+		arg.TaskTypes,
+		arg.ProjectTypes,
+		arg.Languages,
+		arg.Frameworks,
+	)
+	return scanSharedEvolutionUnit(row)
+}
+
 const markEvolutionSubmissionPromoted = `-- name: MarkEvolutionSubmissionPromoted :one
 UPDATE evolution_unit_submission
 SET status = 'promoted', promoted_unit_id = $3, updated_at = now()
@@ -614,387 +662,6 @@ func (q *Queries) UpsertSharedEvolutionUnitFile(ctx context.Context, arg UpsertS
 	return item, err
 }
 
-const createEvolutionDelivery = `-- name: CreateEvolutionDelivery :one
-INSERT INTO evolution_unit_delivery (
-  workspace_id, unit_id, version_id, target_agent_id, delivery_type, reason, matcher_score, matcher_details
-) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8
-)
-ON CONFLICT (unit_id, version_id, target_agent_id) DO UPDATE SET
-  updated_at = evolution_unit_delivery.updated_at
-RETURNING id, workspace_id, unit_id, version_id, target_agent_id, delivery_type, status, reason, matcher_score, matcher_details, delivered_path, error, decided_at, delivered_at, created_at, updated_at
-`
-
-type CreateEvolutionDeliveryParams struct {
-	WorkspaceID    pgtype.UUID `json:"workspace_id"`
-	UnitID         pgtype.UUID `json:"unit_id"`
-	VersionID      pgtype.UUID `json:"version_id"`
-	TargetAgentID  pgtype.UUID `json:"target_agent_id"`
-	DeliveryType   string      `json:"delivery_type"`
-	Reason         string      `json:"reason"`
-	MatcherScore   float64     `json:"matcher_score"`
-	MatcherDetails []byte      `json:"matcher_details"`
-}
-
-func (q *Queries) CreateEvolutionDelivery(ctx context.Context, arg CreateEvolutionDeliveryParams) (EvolutionUnitDelivery, error) {
-	row := q.db.QueryRow(ctx, createEvolutionDelivery, arg.WorkspaceID, arg.UnitID, arg.VersionID, arg.TargetAgentID, arg.DeliveryType, arg.Reason, arg.MatcherScore, arg.MatcherDetails)
-	return scanEvolutionUnitDelivery(row)
-}
-
-const listPendingEvolutionDeliveryTargetAgentIDsByWorkspace = `-- name: ListPendingEvolutionDeliveryTargetAgentIDsByWorkspace :many
-SELECT DISTINCT d.target_agent_id
-FROM evolution_unit_delivery d
-JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
-WHERE d.workspace_id = $1
-  AND u.status = 'active'
-  AND (
-    d.status = 'pending'
-    OR (
-      d.status = 'accepted'
-      AND d.delivery_type = 'generated'
-      AND u.unit_type = 'skill'
-      AND (d.delivered_path IS NULL OR POSITION('/skills/enabled/' IN replace(d.delivered_path, chr(92), '/')) = 0)
-    )
-    OR (
-      d.status = 'accepted'
-      AND d.delivery_type = 'generated'
-      AND u.unit_type = 'skill'
-      AND COALESCE(d.delivered_path, '') <> ''
-      AND POSITION('/skills/enabled/' IN replace(d.delivered_path, chr(92), '/')) > 0
-    )
-  )
-`
-
-func (q *Queries) ListPendingEvolutionDeliveryTargetAgentIDsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listPendingEvolutionDeliveryTargetAgentIDsByWorkspace, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []pgtype.UUID{}
-	for rows.Next() {
-		var item pgtype.UUID
-		if err := rows.Scan(&item); err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
-}
-
-const listEvolutionDeliveriesForRepairByAgent = `-- name: ListEvolutionDeliveriesForRepairByAgent :many
-SELECT
-  d.id, d.workspace_id, d.unit_id, d.version_id, d.target_agent_id, d.delivery_type, d.status,
-  d.reason, d.matcher_score, d.matcher_details, d.delivered_path, d.error, d.decided_at, d.delivered_at, d.created_at, d.updated_at,
-  u.unit_type, u.title, u.canonical_summary, u.content, u.metadata, u.applies,
-  u.tags, u.tools, u.task_types, u.project_types, u.languages, u.frameworks
-FROM evolution_unit_delivery d
-JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
-WHERE d.workspace_id = $1
-  AND d.target_agent_id = $2
-  AND u.status = 'active'
-  AND COALESCE(d.delivered_path, '') <> ''
-  AND d.delivery_type = 'generated'
-  AND u.unit_type = 'skill'
-  AND d.status = 'accepted'
-  AND POSITION('/skills/enabled/' IN replace(d.delivered_path, chr(92), '/')) > 0
-ORDER BY d.updated_at DESC, d.created_at DESC
-LIMIT $3
-`
-
-type ListEvolutionDeliveriesForRepairByAgentParams = ListPendingEvolutionDeliveriesByAgentParams
-
-type ListEvolutionDeliveriesForRepairByAgentRow = ListPendingEvolutionDeliveriesByAgentRow
-
-func (q *Queries) ListEvolutionDeliveriesForRepairByAgent(ctx context.Context, arg ListEvolutionDeliveriesForRepairByAgentParams) ([]ListEvolutionDeliveriesForRepairByAgentRow, error) {
-	rows, err := q.db.Query(ctx, listEvolutionDeliveriesForRepairByAgent, arg.WorkspaceID, arg.TargetAgentID, arg.LimitCount)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListEvolutionDeliveriesForRepairByAgentRow{}
-	for rows.Next() {
-		var item ListEvolutionDeliveriesForRepairByAgentRow
-		err := rows.Scan(
-			&item.ID, &item.WorkspaceID, &item.UnitID, &item.VersionID, &item.TargetAgentID, &item.DeliveryType, &item.Status,
-			&item.Reason, &item.MatcherScore, &item.MatcherDetails, &item.DeliveredPath, &item.Error, &item.DecidedAt, &item.DeliveredAt, &item.CreatedAt, &item.UpdatedAt,
-			&item.UnitType, &item.Title, &item.CanonicalSummary, &item.Content, &item.Metadata, &item.Applies,
-			&item.Tags, &item.Tools, &item.TaskTypes, &item.ProjectTypes, &item.Languages, &item.Frameworks,
-		)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
-}
-
-const listPendingEvolutionDeliveriesByAgent = `-- name: ListPendingEvolutionDeliveriesByAgent :many
-SELECT
-  d.id, d.workspace_id, d.unit_id, d.version_id, d.target_agent_id, d.delivery_type, d.status,
-  d.reason, d.matcher_score, d.matcher_details, d.delivered_path, d.error, d.decided_at, d.delivered_at, d.created_at, d.updated_at,
-  u.unit_type, u.title, u.canonical_summary, u.content, u.metadata, u.applies,
-  u.tags, u.tools, u.task_types, u.project_types, u.languages, u.frameworks
-FROM evolution_unit_delivery d
-JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
-WHERE d.workspace_id = $1
-  AND d.target_agent_id = $2
-  AND u.status = 'active'
-  AND (
-    d.status = 'pending'
-    OR (
-      d.status = 'accepted'
-      AND d.delivery_type = 'generated'
-      AND u.unit_type = 'skill'
-      AND (d.delivered_path IS NULL OR POSITION('/skills/enabled/' IN replace(d.delivered_path, chr(92), '/')) = 0)
-    )
-  )
-ORDER BY d.matcher_score DESC, d.created_at ASC
-LIMIT $3
-`
-
-type ListPendingEvolutionDeliveriesByAgentParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	TargetAgentID pgtype.UUID `json:"target_agent_id"`
-	LimitCount    int32       `json:"limit_count"`
-}
-
-type ListPendingEvolutionDeliveriesByAgentRow struct {
-	EvolutionUnitDelivery
-	UnitType         string   `json:"unit_type"`
-	Title            string   `json:"title"`
-	CanonicalSummary string   `json:"canonical_summary"`
-	Content          string   `json:"content"`
-	Metadata         []byte   `json:"metadata"`
-	Applies          []byte   `json:"applies"`
-	Tags             []string `json:"tags"`
-	Tools            []string `json:"tools"`
-	TaskTypes        []string `json:"task_types"`
-	ProjectTypes     []string `json:"project_types"`
-	Languages        []string `json:"languages"`
-	Frameworks       []string `json:"frameworks"`
-}
-
-func (q *Queries) ListPendingEvolutionDeliveriesByAgent(ctx context.Context, arg ListPendingEvolutionDeliveriesByAgentParams) ([]ListPendingEvolutionDeliveriesByAgentRow, error) {
-	rows, err := q.db.Query(ctx, listPendingEvolutionDeliveriesByAgent, arg.WorkspaceID, arg.TargetAgentID, arg.LimitCount)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListPendingEvolutionDeliveriesByAgentRow{}
-	for rows.Next() {
-		var item ListPendingEvolutionDeliveriesByAgentRow
-		err := rows.Scan(
-			&item.ID, &item.WorkspaceID, &item.UnitID, &item.VersionID, &item.TargetAgentID, &item.DeliveryType, &item.Status,
-			&item.Reason, &item.MatcherScore, &item.MatcherDetails, &item.DeliveredPath, &item.Error, &item.DecidedAt, &item.DeliveredAt, &item.CreatedAt, &item.UpdatedAt,
-			&item.UnitType, &item.Title, &item.CanonicalSummary, &item.Content, &item.Metadata, &item.Applies,
-			&item.Tags, &item.Tools, &item.TaskTypes, &item.ProjectTypes, &item.Languages, &item.Frameworks,
-		)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
-}
-
-const listSharedEvolutionUnitFiles = `-- name: ListSharedEvolutionUnitFiles :many
-SELECT id, workspace_id, unit_id, version_id, path, content, content_hash, mime_type, size_bytes, created_at FROM shared_evolution_unit_file
-WHERE workspace_id = $1 AND unit_id = $2 AND version_id = $3
-ORDER BY path ASC
-`
-
-type ListSharedEvolutionUnitFilesParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	UnitID      pgtype.UUID `json:"unit_id"`
-	VersionID   pgtype.UUID `json:"version_id"`
-}
-
-func (q *Queries) ListSharedEvolutionUnitFiles(ctx context.Context, arg ListSharedEvolutionUnitFilesParams) ([]SharedEvolutionUnitFile, error) {
-	rows, err := q.db.Query(ctx, listSharedEvolutionUnitFiles, arg.WorkspaceID, arg.UnitID, arg.VersionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []SharedEvolutionUnitFile{}
-	for rows.Next() {
-		var item SharedEvolutionUnitFile
-		if err := rows.Scan(&item.ID, &item.WorkspaceID, &item.UnitID, &item.VersionID, &item.Path, &item.Content, &item.ContentHash, &item.MimeType, &item.SizeBytes, &item.CreatedAt); err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
-}
-
-const listGeneratedEvolutionSkillDeliveriesByAgent = `-- name: ListGeneratedEvolutionSkillDeliveriesByAgent :many
-SELECT
-  d.id, d.workspace_id, d.unit_id, d.version_id, d.target_agent_id, d.delivery_type, d.status,
-  d.reason, d.matcher_score, d.matcher_details, d.delivered_path, d.error, d.decided_at, d.delivered_at, d.created_at, d.updated_at,
-  u.unit_type, u.title, u.canonical_summary, u.content, u.metadata, u.applies,
-  u.tags, u.tools, u.task_types, u.project_types, u.languages, u.frameworks
-FROM evolution_unit_delivery d
-JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
-WHERE d.workspace_id = $1
-  AND d.target_agent_id = $2
-  AND d.delivery_type = 'generated'
-  AND u.unit_type = 'skill'
-  AND u.status = 'active'
-ORDER BY d.updated_at DESC, d.created_at DESC
-LIMIT $3
-`
-
-type ListGeneratedEvolutionSkillDeliveriesByAgentParams = ListPendingEvolutionDeliveriesByAgentParams
-
-type ListGeneratedEvolutionSkillDeliveriesByAgentRow = ListPendingEvolutionDeliveriesByAgentRow
-
-func (q *Queries) ListGeneratedEvolutionSkillDeliveriesByAgent(ctx context.Context, arg ListGeneratedEvolutionSkillDeliveriesByAgentParams) ([]ListGeneratedEvolutionSkillDeliveriesByAgentRow, error) {
-	rows, err := q.db.Query(ctx, listGeneratedEvolutionSkillDeliveriesByAgent, arg.WorkspaceID, arg.TargetAgentID, arg.LimitCount)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListGeneratedEvolutionSkillDeliveriesByAgentRow{}
-	for rows.Next() {
-		var item ListGeneratedEvolutionSkillDeliveriesByAgentRow
-		err := rows.Scan(
-			&item.ID, &item.WorkspaceID, &item.UnitID, &item.VersionID, &item.TargetAgentID, &item.DeliveryType, &item.Status,
-			&item.Reason, &item.MatcherScore, &item.MatcherDetails, &item.DeliveredPath, &item.Error, &item.DecidedAt, &item.DeliveredAt, &item.CreatedAt, &item.UpdatedAt,
-			&item.UnitType, &item.Title, &item.CanonicalSummary, &item.Content, &item.Metadata, &item.Applies,
-			&item.Tags, &item.Tools, &item.TaskTypes, &item.ProjectTypes, &item.Languages, &item.Frameworks,
-		)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
-}
-
-const listEvolutionMemoryDeliveriesByAgent = `-- name: ListEvolutionMemoryDeliveriesByAgent :many
-SELECT
-  d.id, d.workspace_id, d.unit_id, d.version_id, d.target_agent_id, d.delivery_type, d.status,
-  d.reason, d.matcher_score, d.matcher_details, d.delivered_path, d.error, d.decided_at, d.delivered_at, d.created_at, d.updated_at,
-  u.unit_type, u.title, u.canonical_summary, u.content, u.metadata, u.applies,
-  u.tags, u.tools, u.task_types, u.project_types, u.languages, u.frameworks
-FROM evolution_unit_delivery d
-JOIN shared_evolution_unit u ON u.id = d.unit_id AND u.workspace_id = d.workspace_id
-WHERE d.workspace_id = $1
-  AND d.target_agent_id = $2
-  AND d.delivery_type = 'inbox'
-  AND u.unit_type IN ('memory', 'preference', 'tool_pattern', 'workflow')
-  AND u.status = 'active'
-ORDER BY d.updated_at DESC, d.created_at DESC
-LIMIT $3
-`
-
-type ListEvolutionMemoryDeliveriesByAgentParams = ListPendingEvolutionDeliveriesByAgentParams
-
-type ListEvolutionMemoryDeliveriesByAgentRow = ListPendingEvolutionDeliveriesByAgentRow
-
-func (q *Queries) ListEvolutionMemoryDeliveriesByAgent(ctx context.Context, arg ListEvolutionMemoryDeliveriesByAgentParams) ([]ListEvolutionMemoryDeliveriesByAgentRow, error) {
-	rows, err := q.db.Query(ctx, listEvolutionMemoryDeliveriesByAgent, arg.WorkspaceID, arg.TargetAgentID, arg.LimitCount)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListEvolutionMemoryDeliveriesByAgentRow{}
-	for rows.Next() {
-		var item ListEvolutionMemoryDeliveriesByAgentRow
-		err := rows.Scan(
-			&item.ID, &item.WorkspaceID, &item.UnitID, &item.VersionID, &item.TargetAgentID, &item.DeliveryType, &item.Status,
-			&item.Reason, &item.MatcherScore, &item.MatcherDetails, &item.DeliveredPath, &item.Error, &item.DecidedAt, &item.DeliveredAt, &item.CreatedAt, &item.UpdatedAt,
-			&item.UnitType, &item.Title, &item.CanonicalSummary, &item.Content, &item.Metadata, &item.Applies,
-			&item.Tags, &item.Tools, &item.TaskTypes, &item.ProjectTypes, &item.Languages, &item.Frameworks,
-		)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
-}
-
-const markEvolutionDeliveryDelivered = `-- name: MarkEvolutionDeliveryDelivered :one
-UPDATE evolution_unit_delivery
-SET status = CASE WHEN status = 'accepted' THEN status ELSE 'delivered' END,
-    delivered_path = $4, delivered_at = now(), updated_at = now()
-WHERE id = $1 AND workspace_id = $2 AND target_agent_id = $3
-RETURNING id, workspace_id, unit_id, version_id, target_agent_id, delivery_type, status, reason, matcher_score, matcher_details, delivered_path, error, decided_at, delivered_at, created_at, updated_at
-`
-
-type MarkEvolutionDeliveryDeliveredParams struct {
-	ID            pgtype.UUID `json:"id"`
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	TargetAgentID pgtype.UUID `json:"target_agent_id"`
-	DeliveredPath string      `json:"delivered_path"`
-}
-
-func (q *Queries) MarkEvolutionDeliveryDelivered(ctx context.Context, arg MarkEvolutionDeliveryDeliveredParams) (EvolutionUnitDelivery, error) {
-	row := q.db.QueryRow(ctx, markEvolutionDeliveryDelivered, arg.ID, arg.WorkspaceID, arg.TargetAgentID, arg.DeliveredPath)
-	return scanEvolutionUnitDelivery(row)
-}
-
-const failEvolutionDelivery = `-- name: FailEvolutionDelivery :one
-UPDATE evolution_unit_delivery
-SET status = 'failed', error = $4, updated_at = now()
-WHERE id = $1 AND workspace_id = $2 AND target_agent_id = $3
-RETURNING id, workspace_id, unit_id, version_id, target_agent_id, delivery_type, status, reason, matcher_score, matcher_details, delivered_path, error, decided_at, delivered_at, created_at, updated_at
-`
-
-type FailEvolutionDeliveryParams struct {
-	ID            pgtype.UUID `json:"id"`
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	TargetAgentID pgtype.UUID `json:"target_agent_id"`
-	Error         string      `json:"error"`
-}
-
-func (q *Queries) FailEvolutionDelivery(ctx context.Context, arg FailEvolutionDeliveryParams) (EvolutionUnitDelivery, error) {
-	row := q.db.QueryRow(ctx, failEvolutionDelivery, arg.ID, arg.WorkspaceID, arg.TargetAgentID, arg.Error)
-	return scanEvolutionUnitDelivery(row)
-}
-
-const updateEvolutionDeliveryDecision = `-- name: UpdateEvolutionDeliveryDecision :one
-UPDATE evolution_unit_delivery
-SET status = $4, decided_at = now(), updated_at = now()
-WHERE id = $1 AND workspace_id = $2 AND target_agent_id = $3
-  AND $4 IN ('accepted', 'ignored', 'rejected')
-RETURNING id, workspace_id, unit_id, version_id, target_agent_id, delivery_type, status, reason, matcher_score, matcher_details, delivered_path, error, decided_at, delivered_at, created_at, updated_at
-`
-
-type UpdateEvolutionDeliveryDecisionParams struct {
-	ID            pgtype.UUID `json:"id"`
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	TargetAgentID pgtype.UUID `json:"target_agent_id"`
-	Status        string      `json:"status"`
-}
-
-func (q *Queries) UpdateEvolutionDeliveryDecision(ctx context.Context, arg UpdateEvolutionDeliveryDecisionParams) (EvolutionUnitDelivery, error) {
-	row := q.db.QueryRow(ctx, updateEvolutionDeliveryDecision, arg.ID, arg.WorkspaceID, arg.TargetAgentID, arg.Status)
-	return scanEvolutionUnitDelivery(row)
-}
-
-const updateGeneratedEvolutionSkillDeliveryDecision = `-- name: UpdateGeneratedEvolutionSkillDeliveryDecision :one
-UPDATE evolution_unit_delivery d
-SET status = $4, decided_at = now(), updated_at = now()
-FROM shared_evolution_unit u
-WHERE d.id = $1
-  AND d.workspace_id = $2
-  AND d.target_agent_id = $3
-  AND d.unit_id = u.id
-  AND d.workspace_id = u.workspace_id
-  AND d.delivery_type = 'generated'
-  AND u.unit_type = 'skill'
-  AND $4 IN ('accepted', 'ignored', 'rejected')
-RETURNING d.id, d.workspace_id, d.unit_id, d.version_id, d.target_agent_id, d.delivery_type, d.status, d.reason, d.matcher_score, d.matcher_details, d.delivered_path, d.error, d.decided_at, d.delivered_at, d.created_at, d.updated_at
-`
-
-type UpdateGeneratedEvolutionSkillDeliveryDecisionParams = UpdateEvolutionDeliveryDecisionParams
-
-func (q *Queries) UpdateGeneratedEvolutionSkillDeliveryDecision(ctx context.Context, arg UpdateGeneratedEvolutionSkillDeliveryDecisionParams) (EvolutionUnitDelivery, error) {
-	row := q.db.QueryRow(ctx, updateGeneratedEvolutionSkillDeliveryDecision, arg.ID, arg.WorkspaceID, arg.TargetAgentID, arg.Status)
-	return scanEvolutionUnitDelivery(row)
-}
 
 func scanEvolutionUnitSubmission(row pgx.Row) (EvolutionUnitSubmission, error) {
 	var i EvolutionUnitSubmission
@@ -1070,29 +737,6 @@ func scanSharedEvolutionUnit(row pgx.Row) (SharedEvolutionUnit, error) {
 		&i.LastUsedAt,
 		&i.Status,
 		&i.CurrentVersionID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-func scanEvolutionUnitDelivery(row pgx.Row) (EvolutionUnitDelivery, error) {
-	var i EvolutionUnitDelivery
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.UnitID,
-		&i.VersionID,
-		&i.TargetAgentID,
-		&i.DeliveryType,
-		&i.Status,
-		&i.Reason,
-		&i.MatcherScore,
-		&i.MatcherDetails,
-		&i.DeliveredPath,
-		&i.Error,
-		&i.DecidedAt,
-		&i.DeliveredAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

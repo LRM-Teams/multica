@@ -385,7 +385,12 @@ function DeliveryPreview({
   workspaceSlug: string;
 }) {
   const { t } = useT("skills");
-  const deliveryType = submission.unit_type === "skill" ? "generated" : "inbox";
+  const outcomeType =
+    submission.unit_type === "skill"
+      ? t(($) => $.evolution_review.promotion_outcomes.skill)
+      : submission.unit_type === "memory"
+        ? t(($) => $.evolution_review.promotion_outcomes.memory)
+        : t(($) => $.evolution_review.unknown);
   const promoted = Boolean(submission.promoted_unit_id);
   const agentLabel = sourceAgentName ?? shortId(submission.source_agent_id) ?? t(($) => $.evolution_review.unknown);
   const agentHref = workspaceSlug && submission.source_agent_id
@@ -395,16 +400,16 @@ function DeliveryPreview({
   return (
     <section className="space-y-2 rounded-lg border bg-muted/20 p-3">
       <div className="flex items-center justify-between gap-3">
-        <h4 className="text-sm font-medium">{t(($) => $.evolution_review.delivery_preview)}</h4>
+        <h4 className="text-sm font-medium">{t(($) => $.evolution_review.promotion_preview)}</h4>
         <Badge variant={promoted ? "secondary" : "outline"}>{promoted ? t(($) => $.evolution_review.promoted_result) : t(($) => $.evolution_review.pending_result)}</Badge>
       </div>
       <div className="grid gap-2 text-sm sm:grid-cols-2">
-        <ReviewFact label={t(($) => $.evolution_review.delivery_type)} value={deliveryTypeLabel(t, deliveryType)} />
+        <ReviewFact label={t(($) => $.evolution_review.promotion_outcome)} value={outcomeType} />
         <ReviewFact label={t(($) => $.evolution_review.promoted_unit)} value={shortId(submission.promoted_unit_id) ?? t(($) => $.evolution_review.none)} />
       </div>
       <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
         <Bot className="h-4 w-4" />
-        <span>{t(($) => $.evolution_review.delivery_target)}:</span>
+        <span>{t(($) => $.evolution_review.source_agent_label)}:</span>
         {agentHref ? (
           <AppLink href={agentHref} className="inline-flex items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline">
             {agentLabel}
@@ -417,7 +422,9 @@ function DeliveryPreview({
       {promoted && (
         <p className="inline-flex items-center gap-2 text-xs text-muted-foreground">
           <PackageCheck className="h-3.5 w-3.5" />
-          {t(($) => $.evolution_review.promotion_result_hint)}
+          {submission.unit_type === "skill"
+            ? t(($) => $.evolution_review.promotion_result_hint_skill)
+            : t(($) => $.evolution_review.promotion_result_hint_memory)}
         </p>
       )}
     </section>
@@ -503,21 +510,6 @@ function unitTypeLabel(t: SkillsT, value: string | null | undefined): string {
       return t(($) => $.evolution_review.unit_types.preference);
     default:
       return t(($) => $.evolution_review.unknown);
-  }
-}
-
-function deliveryTypeLabel(t: SkillsT, value: string): string {
-  switch (value) {
-    case "generated":
-      return t(($) => $.evolution_review.delivery_types.generated);
-    case "inbox":
-      return t(($) => $.evolution_review.delivery_types.inbox);
-    case "recommendation":
-      return t(($) => $.evolution_review.delivery_types.recommendation);
-    case "shared_cache":
-      return t(($) => $.evolution_review.delivery_types.shared_cache);
-    default:
-      return value;
   }
 }
 

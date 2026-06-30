@@ -762,6 +762,8 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
 
+	h.refreshAgentSkillSuggestions(r.Context(), created)
+
 	if runtime.Status == "online" {
 		h.TaskService.ReconcileAgentStatus(r.Context(), created.ID)
 		created, _ = h.Queries.GetAgent(r.Context(), created.ID)
@@ -907,6 +909,17 @@ func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent d
 		return false
 	}
 	return true
+}
+
+func agentUpdateAffectsEvolutionMatching(req UpdateAgentRequest) bool {
+	return req.Name != nil ||
+		req.DisplayName != nil ||
+		req.Description != nil ||
+		req.Instructions != nil ||
+		req.RuntimeConfig != nil ||
+		req.CustomArgs != nil ||
+		req.RuntimeID != nil ||
+		req.Model != nil
 }
 
 func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
@@ -1121,6 +1134,9 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("load agent skills after update failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
+	}
+	if agentUpdateAffectsEvolutionMatching(req) {
+		h.refreshAgentSkillSuggestions(r.Context(), updated)
 	}
 	slog.Info("agent updated", append(logger.RequestAttrs(r), "agent_id", id, "workspace_id", uuidToString(updated.WorkspaceID))...)
 	userID := requestUserID(r)

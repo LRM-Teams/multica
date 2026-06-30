@@ -345,26 +345,18 @@
       "add_dialog_confirm_other": "Add {{count}} skills",
       "add_dialog_cancel": "Cancel",
       "add_failed_toast": "Failed to add skill",
-      "generated_title": "Generated skills",
-      "generated_intro": "Skills this agent learned through the Pi evolution flow. Accept a generated skill to enable it locally for future Pi tasks.",
-      "generated_count": "{{count}} generated",
-      "generated_loading": "Loading generated skills…",
-      "generated_empty": "No generated skills yet.",
-      "generated_decision_failed_toast": "Failed to update generated skill decision",
-      "generated_decision_saved_toast": "Generated skill decision saved",
-      "generated_accept_action": "Accept",
-      "generated_enabled_action": "Enabled",
-      "generated_ignore_action": "Ignore",
-      "generated_accepted_pending_hint": "Accepted. Waiting for the local runtime to enable this skill.",
-      "generated_accepted_waiting_local_hint": "Accepted. Waiting for the local runtime to receive this skill — confirm the daemon is running and this agent has run at least one Pi task (that creates the local agent directory).",
-      "generated_status_enabled": "Enabled",
-      "generated_status": {
-        "pending": "Pending",
-        "delivered": "Delivered",
-        "accepted": "Accepted",
-        "ignored": "Ignored",
-        "rejected": "Rejected",
-        "failed": "Failed"
+      "suggestion_title": "Evolution skill suggestions",
+      "suggestion_intro": "Promoted workspace skills that may fit this agent. Accept to bind or dismiss to ignore.",
+      "suggestion_count": "{{count}} pending",
+      "suggestion_loading": "Loading skill suggestions…",
+      "suggestion_empty": "No pending skill suggestions.",
+      "suggestion_decision_failed_toast": "Failed to update skill suggestion",
+      "suggestion_decision_saved_toast": "Skill suggestion updated",
+      "suggestion_accept_action": "Accept",
+      "suggestion_dismiss_action": "Dismiss",
+      "suggestion_action": {
+        "add": "Suggested add",
+        "remove": "Suggested remove"
       }
     },
     "integrations": {

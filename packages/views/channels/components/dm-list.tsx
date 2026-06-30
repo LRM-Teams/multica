@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Bell, BellOff, ChevronDown, ChevronRight, Loader2, Mail, Pin, PinOff, Plus, Search, X } from "lucide-react";
+import { Bell, BellOff, ChevronDown, ChevronRight, Loader2, Mail, MoreHorizontal, Pin, PinOff, Plus, Search, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -25,6 +25,13 @@ import {
   ContextMenuTrigger,
 } from "@multica/ui/components/ui/context-menu";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@multica/ui/components/ui/dropdown-menu";
+import {
   Drawer,
   DrawerContent,
   DrawerHeader,
@@ -40,6 +47,7 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import {
   matchesActorIdentitySearch,
+  resolveActorDisplayName,
   resolveActorIdentityPresentation,
   type ActorIdentityPresentation,
 } from "@multica/core/identity";
@@ -132,10 +140,10 @@ export function DmList({
     () => (type, id, fallbackLabel) => {
       if (type === "agent") {
         const agent = agents.find((a) => a.id === id);
-        return agent?.display_name?.trim() || agent?.name?.trim() || fallbackLabel;
+        return resolveActorDisplayName(agent, fallbackLabel);
       }
       const member = members.find((m) => m.user_id === id);
-      return member?.display_name?.trim() || member?.name?.trim() || fallbackLabel;
+      return resolveActorDisplayName(member, fallbackLabel);
     },
     [agents, members],
   );
@@ -144,6 +152,7 @@ export function DmList({
     if (!q) return sortedDms;
     return sortedDms.filter((dm) => dm.peer.name.toLowerCase().includes(q));
   }, [searchQuery, sortedDms]);
+  const hasSearchQuery = searchQuery.trim().length > 0;
 
   const showHeaderTrigger = isLoading || dms.length > 0;
   const openPicker = () => setPickerOpen(true);
@@ -155,6 +164,13 @@ export function DmList({
       <div className="space-y-2 p-2">
         <Skeleton className="h-12" />
         <Skeleton className="h-12" />
+      </div>
+    ) : hasSearchQuery && filteredDms.length === 0 ? (
+      <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
+        <p className="font-medium text-foreground">
+          {t(($) => $.sidebar.no_conversation_matches)}
+        </p>
+        <p>{t(($) => $.sidebar.search_scope_hint)}</p>
       </div>
     ) : dms.length === 0 ? (
       <div className="flex flex-col items-center gap-2 px-3 py-3">
@@ -180,13 +196,6 @@ export function DmList({
             {t(($) => $.dm.empty_cta)}
           </PopoverTrigger>
         )}
-      </div>
-    ) : filteredDms.length === 0 ? (
-      <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground">
-          {t(($) => $.sidebar.no_conversation_matches)}
-        </p>
-        <p>{t(($) => $.sidebar.search_scope_hint)}</p>
       </div>
     ) : (
       filteredDms.map((dm) => (
@@ -442,76 +451,172 @@ function DmRow({
     <ContextMenu>
       <ContextMenuTrigger
         render={
-          <button
-            type="button"
-            onClick={onSelect}
+          <div
             className={cn(
-              "mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors",
+              "group/row relative mb-0.5 rounded-lg transition-colors",
               active ? "bg-primary/[0.08]" : "hover:bg-accent",
             )}
           />
         }
       >
-        <ActorAvatar
-          actorType={actorType}
-          actorId={dm.peer.id}
-          size={40}
-          showStatusDot={dm.peer.type === "agent"}
-          profileLink={false}
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-2">
-            <span className="flex min-w-0 items-center gap-1">
-              {pinned && (
-                <Pin className="size-3 shrink-0 -rotate-45 fill-muted-foreground/70 text-muted-foreground/70" />
+        <button
+          type="button"
+          onClick={onSelect}
+          className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
+        >
+          <ActorAvatar
+            actorType={actorType}
+            actorId={dm.peer.id}
+            size={40}
+            showStatusDot={dm.peer.type === "agent"}
+            profileLink={false}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-1">
+                {pinned && (
+                  <Pin className="size-3 shrink-0 -rotate-45 fill-muted-foreground/70 text-muted-foreground/70" />
+                )}
+                <span className="truncate text-sm font-medium text-foreground">
+                  {dm.peer.name}
+                </span>
+                {isMuted && <MutedIndicator label={t(($) => $.dm.muted_label)} />}
+              </span>
+              {last && (
+                <span className="shrink-0 text-[11px] text-muted-foreground">
+                  {timeAgo(last.created_at)}
+                </span>
               )}
-              <span className="truncate text-sm font-medium text-foreground">
-                {dm.peer.name}
+            </div>
+            <div className="mt-0.5 flex items-center justify-between gap-2">
+              <span
+                className={cn(
+                  "truncate text-xs",
+                  mentionsUser ? "text-foreground" : "text-muted-foreground",
+                )}
+              >
+                {preview}
               </span>
-              {isMuted && <MutedIndicator label={t(($) => $.dm.muted_label)} />}
-            </span>
-            {last && (
-              <span className="shrink-0 text-[11px] text-muted-foreground">
-                {timeAgo(last.created_at)}
-              </span>
-            )}
+              <ConversationUnreadAffordance
+                realUnread={realUnread}
+                isManualDot={isManualDot}
+                isMuted={isMuted}
+              />
+            </div>
           </div>
-          <div className="mt-0.5 flex items-center justify-between gap-2">
-            <span
-              className={cn(
-                "truncate text-xs",
-                mentionsUser ? "text-foreground" : "text-muted-foreground",
-              )}
-            >
-              {preview}
-            </span>
-            <ConversationUnreadAffordance
-              realUnread={realUnread}
-              isManualDot={isManualDot}
+        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <button
+                type="button"
+                aria-label={t(($) => $.dm.menu_aria)}
+                className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 data-[popup-open]:opacity-100"
+              >
+                <MoreHorizontal className="size-4" />
+              </button>
+            }
+          />
+          <DropdownMenuContent align="end">
+            <DmDropdownMenuItems
+              pinned={pinned}
               isMuted={isMuted}
+              onMarkUnread={onMarkUnread}
+              onTogglePin={onTogglePin}
+              onToggleMute={onToggleMute}
+              onClose={onClose}
             />
-          </div>
-        </div>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuItem onClick={onMarkUnread}>
-          <Mail />
-          {t(($) => $.dm.mark_unread)}
-        </ContextMenuItem>
-        <ContextMenuItem onClick={onTogglePin}>
-          {pinned ? <PinOff /> : <Pin />}
-          {pinned ? t(($) => $.dm.unpin) : t(($) => $.dm.pin)}
-        </ContextMenuItem>
-        <ContextMenuItem onClick={onToggleMute}>
-          {isMuted ? <Bell /> : <BellOff />}
-          {isMuted ? t(($) => $.dm.unmute) : t(($) => $.dm.mute)}
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={onClose}>
-          <X />
-          {t(($) => $.dm.close_chat)}
-        </ContextMenuItem>
+        <DmContextMenuItems
+          pinned={pinned}
+          isMuted={isMuted}
+          onMarkUnread={onMarkUnread}
+          onTogglePin={onTogglePin}
+          onToggleMute={onToggleMute}
+          onClose={onClose}
+        />
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+function DmContextMenuItems({
+  pinned,
+  isMuted,
+  onMarkUnread,
+  onTogglePin,
+  onToggleMute,
+  onClose,
+}: {
+  pinned: boolean;
+  isMuted: boolean;
+  onMarkUnread: () => void;
+  onTogglePin: () => void;
+  onToggleMute: () => void;
+  onClose: () => void;
+}) {
+  const { t } = useT("channels");
+  return (
+    <>
+      <ContextMenuItem onClick={onMarkUnread}>
+        <Mail />
+        {t(($) => $.dm.mark_unread)}
+      </ContextMenuItem>
+      <ContextMenuItem onClick={onTogglePin}>
+        {pinned ? <PinOff /> : <Pin />}
+        {pinned ? t(($) => $.dm.unpin) : t(($) => $.dm.pin)}
+      </ContextMenuItem>
+      <ContextMenuItem onClick={onToggleMute}>
+        {isMuted ? <Bell /> : <BellOff />}
+        {isMuted ? t(($) => $.dm.unmute) : t(($) => $.dm.mute)}
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem onClick={onClose}>
+        <X />
+        {t(($) => $.dm.close_chat)}
+      </ContextMenuItem>
+    </>
+  );
+}
+
+function DmDropdownMenuItems({
+  pinned,
+  isMuted,
+  onMarkUnread,
+  onTogglePin,
+  onToggleMute,
+  onClose,
+}: {
+  pinned: boolean;
+  isMuted: boolean;
+  onMarkUnread: () => void;
+  onTogglePin: () => void;
+  onToggleMute: () => void;
+  onClose: () => void;
+}) {
+  const { t } = useT("channels");
+  return (
+    <>
+      <DropdownMenuItem onClick={onMarkUnread}>
+        <Mail className="size-4" />
+        {t(($) => $.dm.mark_unread)}
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={onTogglePin}>
+        {pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+        {pinned ? t(($) => $.dm.unpin) : t(($) => $.dm.pin)}
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={onToggleMute}>
+        {isMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+        {isMuted ? t(($) => $.dm.unmute) : t(($) => $.dm.mute)}
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem onClick={onClose}>
+        <X className="size-4" />
+        {t(($) => $.dm.close_chat)}
+      </DropdownMenuItem>
+    </>
   );
 }

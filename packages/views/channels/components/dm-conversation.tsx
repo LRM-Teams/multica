@@ -1,15 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, ChevronUp, FileText, Paperclip, Search, Send, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, FileText, MessageSquare, Paperclip, Search, Send, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   activeChannelTasksKeys,
   activeChannelTasksOptions,
+  channelMessageThreadOptions,
   channelKeys,
   channelMessagesOptions,
+  useMarkChannelThreadRead,
   useMarkChannelRead,
   useSendChannelMessage,
+  useSendChannelThreadMessage,
   useSetChannelTyping,
 } from "@multica/core/channels";
 import {
@@ -28,8 +31,13 @@ import { useFileUpload, type UploadResult } from "@multica/core/hooks/use-file-u
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
-import type { ChannelMessageSearchResult, ChannelTypingPayload, ChatMessage } from "@multica/core/types";
+import type { ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload, ChatMessage } from "@multica/core/types";
+import { UnicodeSpinner } from "@multica/ui/components/common/unicode-spinner";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Drawer,
+  DrawerContent,
+} from "@multica/ui/components/ui/drawer";
 import {
   Popover,
   PopoverContent,
@@ -40,11 +48,12 @@ import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { ContentEditor, type ContentEditorRef } from "../../editor";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { useT } from "../../i18n";
+import { useT, useTimeAgo } from "../../i18n";
 import { ChatMessageList } from "../../chat/components/chat-message-list";
 import { ChatInput } from "../../chat/components/chat-input";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
+import { ComposerShell, ConversationHeader } from "./conversation-surface";
 import {
   AgentWorkingIndicator,
   TypingIndicator,
@@ -90,70 +99,70 @@ function DmHeader({
   const { t } = useT("channels");
   const isMobile = useIsMobile();
   const actorType = dm.peer.type === "agent" ? "agent" : "member";
+  const meta = dm.peer.type === "agent" ? t(($) => $.dm.agent_meta) : t(($) => $.dm.human_meta);
 
   return (
-    <header
-      className={cn(
-        "flex items-center justify-between gap-3 border-b py-2.5",
-        isMobile ? "px-2" : "px-5",
-      )}
-    >
-      <div className={cn("flex min-w-0 items-center", isMobile ? "gap-2" : "gap-3")}>
-        {isMobile && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-10 shrink-0 text-muted-foreground"
-            aria-label={t(($) => $.header.back)}
-            onClick={onBack}
-          >
-            <ArrowLeft className="size-5" />
-          </Button>
-        )}
-        <ActorAvatar
-          actorType={actorType}
-          actorId={dm.peer.id}
-          size={40}
-          showStatusDot={dm.peer.type === "agent"}
-          profileLink={false}
-        />
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-1.5 font-semibold">
-            <span className="truncate">{dm.peer.name}</span>
-            {isConversationMuted(dm) && (
-              <MutedIndicator label={t(($) => $.dm.muted_label)} />
-            )}
-          </div>
-        </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-1 text-muted-foreground">
-        {onSearchOpen && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8"
-            aria-label={t(($) => $.conv_search.search_aria)}
-            onClick={onSearchOpen}
-          >
-            <Search className="size-4" />
-          </Button>
-        )}
-        {filesChannelId && (
-          <Popover>
-            <PopoverTrigger
-              className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
-              aria-label={t(($) => $.dm.files)}
+    <ConversationHeader
+      isMobile={isMobile}
+      leading={
+        <>
+          {isMobile && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-10 shrink-0 text-muted-foreground"
+              aria-label={t(($) => $.header.back)}
+              onClick={onBack}
             >
-              <FileText className="size-4" />
-            </PopoverTrigger>
-            <PopoverContent align="end" className="w-80">
-              <p className="mb-3 text-sm font-medium">{t(($) => $.dm.files)}</p>
-              <ChannelFilesPanel channelId={filesChannelId} />
-            </PopoverContent>
-          </Popover>
-        )}
-      </div>
-    </header>
+              <ArrowLeft className="size-5" />
+            </Button>
+          )}
+          <ActorAvatar
+            actorType={actorType}
+            actorId={dm.peer.id}
+            size={34}
+            showStatusDot={dm.peer.type === "agent"}
+            profileLink={false}
+          />
+        </>
+      }
+      title={dm.peer.name}
+      meta={meta}
+      badges={
+        isConversationMuted(dm) ? (
+          <MutedIndicator label={t(($) => $.dm.muted_label)} />
+        ) : null
+      }
+      actions={
+        <>
+          {onSearchOpen && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              aria-label={t(($) => $.conv_search.search_aria)}
+              onClick={onSearchOpen}
+            >
+              <Search className="size-4" />
+            </Button>
+          )}
+          {filesChannelId && (
+            <Popover>
+              <PopoverTrigger
+                className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
+                aria-label={t(($) => $.dm.files)}
+              >
+                <FileText className="size-4" />
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-80">
+                <p className="mb-3 text-sm font-medium">{t(($) => $.dm.files)}</p>
+                <ChannelFilesPanel channelId={filesChannelId} />
+              </PopoverContent>
+            </Popover>
+          )}
+        </>
+      }
+    />
   );
 }
 
@@ -164,25 +173,40 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   const isMobile = useIsMobile();
+  const timeAgo = useTimeAgo();
   const channelId = dm.id;
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const currentUserName = useAuthStore((s) => s.user?.name ?? null);
 
   const { mutate: markChannelRead } = useMarkChannelRead();
+  const { mutate: markThreadRead } = useMarkChannelThreadRead();
   const sendMessage = useSendChannelMessage();
+  const sendThreadMessage = useSendChannelThreadMessage();
   const setTyping = useSetChannelTyping();
   const { uploadWithToast } = useFileUpload(api);
 
   const { data: messages = [] } = useQuery(channelMessagesOptions(channelId));
+  const [openThreadRoot, setOpenThreadRoot] = useState<ChannelMessage | null>(null);
+  const threadRoot =
+    openThreadRoot && openThreadRoot.channel_id === channelId
+      ? messages.find((m) => m.id === openThreadRoot.id) ?? openThreadRoot
+      : null;
+  const { data: threadPage, isLoading: threadLoading, isError: threadError } = useQuery(
+    channelMessageThreadOptions(channelId, threadRoot?.id ?? ""),
+  );
+  const threadMessages = threadPage?.messages ?? [];
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(channelId));
 
   const editorRef = useRef<ContentEditorRef>(null);
+  const threadEditorRef = useRef<ContentEditorRef>(null);
   const [draftEmpty, setDraftEmpty] = useState(true);
+  const [threadDraftEmpty, setThreadDraftEmpty] = useState(true);
   const [convSearchOpen, setConvSearchOpen] = useState(false);
   const [convSearchQuery, setConvSearchQuery] = useState("");
   const [convSearchResults, setConvSearchResults] = useState<ChannelMessageSearchResult[]>([]);
   const [convSearchTotal, setConvSearchTotal] = useState(0);
   const [convSearchIndex, setConvSearchIndex] = useState(0);
+  const [threadParentHighlightId, setThreadParentHighlightId] = useState<string | null>(null);
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const uploadMapRef = useRef<Map<string, string>>(new Map());
@@ -213,6 +237,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   const searchHighlightId = convSearchOpen
     ? (convSearchResults[convSearchIndex]?.message_id ?? null)
     : null;
+  const highlightMessageId = threadParentHighlightId ?? searchHighlightId;
 
   // Debounced in-conversation search.
   useEffect(() => {
@@ -244,6 +269,17 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   useEffect(() => {
     if (channelId) markChannelRead(channelId);
   }, [channelId, markChannelRead]);
+
+  useEffect(() => {
+    setOpenThreadRoot(null);
+    setThreadDraftEmpty(true);
+    setThreadParentHighlightId(null);
+  }, [channelId]);
+
+  useEffect(() => {
+    if (!threadRoot) return;
+    markThreadRead({ channelId, messageId: threadRoot.id });
+  }, [channelId, threadRoot?.id, markThreadRead]);
 
   // Expire stale typing pulses.
   useEffect(() => {
@@ -338,6 +374,10 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     }
   };
 
+  const handleThreadEditorUpdate = (value: string) => {
+    setThreadDraftEmpty(!value.trim());
+  };
+
   const handleUpload = useCallback(
     async (file: File): Promise<UploadResult | null> => {
       const result = await uploadWithToast(file, { channelId });
@@ -382,8 +422,119 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     );
   };
 
+  const handleThreadSend = () => {
+    const content = threadEditorRef.current?.getMarkdown()?.trim();
+    if (!content || !threadRoot) return;
+    sendThreadMessage.mutate(
+      {
+        channelId,
+        messageId: threadRoot.id,
+        content,
+      },
+      {
+        onSuccess: () => {
+          threadEditorRef.current?.clearContent();
+          setThreadDraftEmpty(true);
+        },
+        onError: () => {
+          toast.error(t(($) => $.thread.send_failed));
+        },
+      },
+    );
+  };
+
+  const threadPanel =
+    threadRoot ? (
+      <div className="flex h-full min-h-0 flex-col bg-background">
+        <ConversationHeader
+          isMobile={isMobile}
+          leading={
+            <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
+              <MessageSquare className="size-4" />
+            </span>
+          }
+          title={t(($) => $.thread.title)}
+          meta={t(($) => $.thread.meta_count, {
+            count: threadMessages.length,
+          })}
+          actions={
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              aria-label={t(($) => $.thread.close_aria)}
+              onClick={() => setOpenThreadRoot(null)}
+            >
+              <X className="size-4" />
+            </Button>
+          }
+        />
+        <button
+          type="button"
+          className="mx-5 mt-3 rounded-lg border border-border/35 bg-muted/20 px-3 py-2 text-left transition-colors hover:bg-muted/35"
+          onClick={() => {
+            setThreadParentHighlightId(threadRoot.id);
+            if (isMobile) setOpenThreadRoot(null);
+          }}
+          aria-label={t(($) => $.thread.jump_to_parent)}
+        >
+          <p className="mb-1 text-[11px] font-medium uppercase text-muted-foreground">
+            {t(($) => $.thread.context_label)}
+          </p>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">{threadRoot.author_name}</span>
+            <span>{timeAgo(threadRoot.created_at)}</span>
+          </div>
+          <p className="mt-1 line-clamp-2 text-sm leading-5 text-foreground">
+            {threadRoot.content}
+          </p>
+        </button>
+        {threadError ? (
+          <div className="flex flex-1 items-center justify-center px-5 text-sm text-muted-foreground">
+            {t(($) => $.thread.load_failed)}
+          </div>
+        ) : threadLoading ? (
+          <div className="flex flex-1 items-center justify-center">
+            <UnicodeSpinner className="size-5 text-muted-foreground" />
+          </div>
+        ) : (
+          <ChannelMessageList
+            key={`dm-thread:${threadRoot.id}`}
+            messages={threadMessages}
+            currentUserId={currentUserId}
+            ownName={currentUserName ?? undefined}
+            emptyLabel={t(($) => $.thread.empty_replies)}
+          />
+        )}
+        <ComposerShell>
+          <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
+            <ContentEditor
+              key={`dm-thread-editor:${threadRoot.id}`}
+              ref={threadEditorRef}
+              placeholder={t(($) => $.thread.composer_placeholder)}
+              onUpdate={handleThreadEditorUpdate}
+              onSubmit={handleThreadSend}
+              submitOnEnter
+              showBubbleMenu={false}
+              mentionAllowedActorIds={mentionAllowedActorIds}
+            />
+          </div>
+          <div className="flex items-center justify-end px-2 pb-2">
+            <Button
+              onClick={handleThreadSend}
+              disabled={threadDraftEmpty || sendThreadMessage.isPending}
+              size="sm"
+              className={cn(isMobile && "min-h-10 px-4")}
+            >
+              <Send className="size-4" /> {t(($) => $.composer.send)}
+            </Button>
+          </div>
+        </ComposerShell>
+      </div>
+    ) : null;
+
   return (
-    <main className="flex flex-1 min-h-0 min-w-0 flex-col">
+    <main className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background">
       <DmHeader
         dm={dm}
         onBack={onBack}
@@ -393,7 +544,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
       {convSearchOpen && (
         <div
           className={cn(
-            "flex items-center gap-2 border-b bg-muted/20 py-2",
+            "flex items-center gap-2 border-b border-border/40 bg-muted/15 py-2",
             isMobile ? "px-2" : "px-5",
           )}
         >
@@ -470,15 +621,17 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         messages={messages}
         currentUserId={currentUserId}
         ownName={currentUserName ?? undefined}
-        highlightMessageId={searchHighlightId}
+        highlightMessageId={highlightMessageId}
         searchHitIds={searchHitIds}
         searchQuery={searchHighlightQuery}
         emptyLabel={t(($) => $.dm.thread_empty)}
         footer={<TypingIndicator actors={activeTypingActors} />}
+        onOpenThread={setOpenThreadRoot}
       />
-      <div className="px-4 pb-4">
+      <div className="px-5">
         <AgentWorkingIndicator tasks={activeTasks} />
-        <div className="rounded-xl border bg-card shadow-sm">
+      </div>
+      <ComposerShell>
           <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
             <ContentEditor
               key={channelId}
@@ -523,8 +676,24 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
               <Send className="size-4" /> {t(($) => $.composer.send)}
             </Button>
           </div>
-        </div>
-      </div>
+      </ComposerShell>
+      {!isMobile && threadPanel && (
+        <aside className="absolute inset-y-0 right-0 z-20 w-[380px] border-l border-border/30 bg-background shadow-xl">
+          {threadPanel}
+        </aside>
+      )}
+      {isMobile && (
+        <Drawer
+          open={!!threadPanel}
+          onOpenChange={(open) => {
+            if (!open) setOpenThreadRoot(null);
+          }}
+        >
+          <DrawerContent className="h-[90vh] p-0">
+            {threadPanel}
+          </DrawerContent>
+        </Drawer>
+      )}
     </main>
   );
 }

@@ -57,7 +57,8 @@
     "stats_aria": "통계",
     "files_aria": "파일",
     "back": "뒤로",
-    "more_aria": "더 보기"
+    "more_aria": "더 보기",
+    "roster_summary": "멤버 {{members}}명 · 에이전트 {{agents}}개"
   },
   "members": {
     "select_user": "멤버 선택",
@@ -103,7 +104,19 @@
     "copy_failed": "복사 실패"
   },
   "thread": {
-    "empty": "채팅을 시작하세요. 멤버에 에이전트를 추가한 뒤 @에이전트이름 을 입력하면 답장합니다."
+    "empty": "채팅을 시작하세요. 멤버에 에이전트를 추가한 뒤 @에이전트이름 을 입력하면 답장합니다.",
+    "title": "스레드",
+    "reply": "스레드에서 답장",
+    "reply_aria": "스레드에서 답장",
+    "reply_count": "답글 {{count}}개",
+    "meta_count": "답글 {{count}}개",
+    "close_aria": "스레드 닫기",
+    "context_label": "원본 메시지",
+    "jump_to_parent": "원본 메시지로 이동",
+    "empty_replies": "아직 답글이 없습니다.",
+    "load_failed": "스레드를 불러오지 못했습니다.",
+    "send_failed": "스레드 답글을 보내지 못했습니다.",
+    "composer_placeholder": "스레드에서 답장..."
   },
   "typing": {
     "single": "{{name}} 님이 입력 중",
@@ -137,6 +150,9 @@
     "empty": "아직 다이렉트 메시지가 없습니다.",
     "empty_cta": "채팅 시작",
     "new_aria": "새 다이렉트 메시지",
+    "menu_aria": "다이렉트 메시지 작업",
+    "agent_meta": "에이전트",
+    "human_meta": "멤버",
     "new_title": "새 메시지",
     "search_placeholder": "사람 또는 에이전트 검색…",
     "no_results": "일치 없음",

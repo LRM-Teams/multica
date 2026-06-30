@@ -20,9 +20,12 @@ export function resolveActorDisplayName(
   return fallback;
 }
 
-/** Resolve the stable handle from an actor record (`name` field). */
-export function resolveActorHandle(actor: ActorIdentityFields | null | undefined): string {
-  return normalizeActorHandle(actor?.name);
+/** Resolve the stable handle from an actor record (`name` field), then fallback. */
+export function resolveActorHandle(
+  actor: ActorIdentityFields | null | undefined,
+  fallback = "",
+): string {
+  return normalizeActorHandle(actor?.name) || normalizeActorHandle(fallback);
 }
 
 /** Format a handle as a weak secondary label (`@handle`). */

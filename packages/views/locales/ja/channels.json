@@ -57,7 +57,8 @@
     "stats_aria": "統計",
     "files_aria": "ファイル",
     "back": "戻る",
-    "more_aria": "その他"
+    "more_aria": "その他",
+    "roster_summary": "メンバー {{members}} 人 · エージェント {{agents}} 体"
   },
   "members": {
     "select_user": "メンバーを選択",
@@ -103,7 +104,19 @@
     "copy_failed": "コピーに失敗しました"
   },
   "thread": {
-    "empty": "チャットを始めましょう。メンバーにエージェントを追加し、@エージェント名 を入力すると返信します。"
+    "empty": "チャットを始めましょう。メンバーにエージェントを追加し、@エージェント名 を入力すると返信します。",
+    "title": "スレッド",
+    "reply": "スレッドで返信",
+    "reply_aria": "スレッドで返信",
+    "reply_count": "{{count}} 件の返信",
+    "meta_count": "{{count}} 件の返信",
+    "close_aria": "スレッドを閉じる",
+    "context_label": "元のメッセージ",
+    "jump_to_parent": "元のメッセージへ移動",
+    "empty_replies": "返信はまだありません。",
+    "load_failed": "スレッドの読み込みに失敗しました。",
+    "send_failed": "スレッド返信の送信に失敗しました。",
+    "composer_placeholder": "スレッドで返信..."
   },
   "typing": {
     "single": "{{name}} が入力中",
@@ -137,6 +150,9 @@
     "empty": "ダイレクトメッセージはまだありません。",
     "empty_cta": "チャットを始める",
     "new_aria": "新しいダイレクトメッセージ",
+    "menu_aria": "ダイレクトメッセージの操作",
+    "agent_meta": "エージェント",
+    "human_meta": "メンバー",
     "new_title": "新しいメッセージ",
     "search_placeholder": "ユーザーまたはエージェントを検索…",
     "no_results": "一致なし",

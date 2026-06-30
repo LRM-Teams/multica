@@ -33,6 +33,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   activeChannelTasksKeys,
   activeChannelTasksOptions,
+  channelMessageThreadOptions,
   channelKeys,
   channelsOptions,
   archivedChannelsOptions,
@@ -51,6 +52,8 @@ import {
   useMuteChannel,
   useRemoveChannelMember,
   useSendChannelMessage,
+  useSendChannelThreadMessage,
+  useMarkChannelThreadRead,
   useSetChannelTyping,
 } from "@multica/core/channels";
 import { useAuthStore } from "@multica/core/auth";
@@ -147,6 +150,11 @@ import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
+import {
+  ComposerShell,
+  ConversationHeader,
+  ReadOnlyConversationBanner,
+} from "./conversation-surface";
 import { DmList } from "./dm-list";
 import { DmConversation } from "./dm-conversation";
 import { formatChannelMessagePreview, type MentionPreviewResolver } from "./message-preview";
@@ -448,6 +456,9 @@ export function ChannelsPage() {
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [quoteMessage, setQuoteMessage] = useState<ChannelMessage | null>(null);
+  const [openThreadRoot, setOpenThreadRoot] = useState<ChannelMessage | null>(null);
+  const threadEditorRef = useRef<ContentEditorRef>(null);
+  const [threadDraftEmpty, setThreadDraftEmpty] = useState(true);
   const [convSearchOpen, setConvSearchOpen] = useState(false);
   const [convSearchQuery, setConvSearchQuery] = useState("");
   const [convSearchResults, setConvSearchResults] = useState<ChannelMessageSearchResult[]>([]);
@@ -464,10 +475,10 @@ export function ChannelsPage() {
     () => (type, id, fallbackLabel) => {
       if (type === "agent") {
         const agent = agents.find((a) => a.id === id);
-        return agent?.display_name?.trim() || agent?.name?.trim() || fallbackLabel;
+        return resolveActorDisplayName(agent, fallbackLabel);
       }
       const member = workspaceMembers.find((m) => m.user_id === id);
-      return member?.display_name?.trim() || member?.name?.trim() || fallbackLabel;
+      return resolveActorDisplayName(member, fallbackLabel);
     },
     [agents, workspaceMembers],
   );
@@ -495,6 +506,14 @@ export function ChannelsPage() {
   }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
   const isActiveArchived = !!active?.archived_at;
   const { data: messages = [] } = useQuery(channelMessagesOptions(active?.id ?? ""));
+  const threadRoot =
+    openThreadRoot && active?.id === openThreadRoot.channel_id
+      ? messages.find((m) => m.id === openThreadRoot.id) ?? openThreadRoot
+      : null;
+  const { data: threadPage, isLoading: threadLoading, isError: threadError } = useQuery(
+    channelMessageThreadOptions(active?.id ?? "", threadRoot?.id ?? ""),
+  );
+  const threadMessages = threadPage?.messages ?? [];
   const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
@@ -506,6 +525,8 @@ export function ChannelsPage() {
   const setChannelPin = useSetChannelPin();
   const markChannelUnread = useMarkChannelUnread();
   const sendMessage = useSendChannelMessage();
+  const sendThreadMessage = useSendChannelThreadMessage();
+  const { mutate: markThreadRead } = useMarkChannelThreadRead();
   const setTyping = useSetChannelTyping();
   const addMembers = useAddChannelMembers();
   const removeMember = useRemoveChannelMember();
@@ -595,13 +616,13 @@ export function ChannelsPage() {
     [active?.id, typingActors],
   );
   const rosterSummary = useMemo(
-    () =>
-      channelMembers
-        .map((m) =>
-          resolveActorDisplayName(m, m.member_type === "agent" ? "Agent" : "成员"),
-        )
-        .join("，"),
-    [channelMembers],
+    () => {
+      const memberCount = channelMembers.filter((m) => m.member_type === "user").length;
+      const agentCount = channelMembers.filter((m) => m.member_type === "agent").length;
+      if (memberCount === 0 && agentCount === 0) return "";
+      return t(($) => $.header.roster_summary, { members: memberCount, agents: agentCount });
+    },
+    [channelMembers, t],
   );
   const sortedChannels = useMemo(
     () => [...channels].sort((a, b) => (b.pinned_at ? 1 : 0) - (a.pinned_at ? 1 : 0)),
@@ -611,6 +632,7 @@ export function ChannelsPage() {
     const q = search.trim().toLowerCase();
     return q ? sortedChannels.filter((c) => c.name.toLowerCase().includes(q)) : sortedChannels;
   }, [sortedChannels, search]);
+  const hasSidebarSearch = search.trim().length > 0;
   const currentUserRole = useMemo(
     () => workspaceMembers.find((m) => m.user_id === currentUserId)?.role ?? "member",
     [workspaceMembers, currentUserId],
@@ -747,7 +769,14 @@ export function ChannelsPage() {
   // the user switches groups or opens a DM.
   useEffect(() => {
     setQuoteMessage(null);
+    setOpenThreadRoot(null);
+    setThreadDraftEmpty(true);
   }, [active?.id, activeDmId]);
+
+  useEffect(() => {
+    if (!active?.id || !threadRoot) return;
+    markThreadRead({ channelId: active.id, messageId: threadRoot.id });
+  }, [active?.id, threadRoot?.id, markThreadRead]);
 
   // Sync the DM selection from the `?dm=` deep link. The entry points outside
   // this view (Cmd+K, agent hover card) push(`...?dm=ID`); when the user is
@@ -984,6 +1013,10 @@ export function ChannelsPage() {
     }
   };
 
+  const handleThreadEditorUpdate = (value: string) => {
+    setThreadDraftEmpty(!value.trim());
+  };
+
   // Upload a file against the active channel and remember its URL → id so the
   // attachment binds to the message on send. The editor inserts the markdown
   // link itself; we only track the mapping.
@@ -1036,6 +1069,27 @@ export function ChannelsPage() {
           uploadMapRef.current.clear();
           setDraftEmpty(true);
           setQuoteMessage(null);
+        },
+      },
+    );
+  };
+
+  const handleThreadSend = () => {
+    const content = threadEditorRef.current?.getMarkdown()?.trim();
+    if (!content || !active || !threadRoot) return;
+    sendThreadMessage.mutate(
+      {
+        channelId: active.id,
+        messageId: threadRoot.id,
+        content,
+      },
+      {
+        onSuccess: () => {
+          threadEditorRef.current?.clearContent();
+          setThreadDraftEmpty(true);
+        },
+        onError: () => {
+          toast.error(t(($) => $.thread.send_failed));
         },
       },
     );
@@ -1321,15 +1375,15 @@ export function ChannelsPage() {
                     <Skeleton className="h-12" />
                     <Skeleton className="h-12" />
                   </div>
-                ) : channels.length === 0 ? (
-                  <div className="p-3 text-sm text-muted-foreground">{t(($) => $.sidebar.empty)}</div>
-                ) : filteredChannels.length === 0 ? (
+                ) : hasSidebarSearch && filteredChannels.length === 0 ? (
                   <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
                     <p className="font-medium text-foreground">
                       {t(($) => $.sidebar.no_conversation_matches)}
                     </p>
                     <p>{t(($) => $.sidebar.search_scope_hint)}</p>
                   </div>
+                ) : channels.length === 0 ? (
+                  <div className="p-3 text-sm text-muted-foreground">{t(($) => $.sidebar.empty)}</div>
                 ) : (
                   filteredChannels.map((channel) => {
                     const realUnread = channel.real_unread_count ?? channel.unread_count ?? 0;
@@ -1605,8 +1659,104 @@ export function ChannelsPage() {
   // can return to the list.
   const showChannelDetailSkeleton =
     isLoading || (!!activeId && !activeDmId && !active);
+  const threadPanel =
+    active && threadRoot ? (
+      <div className="flex h-full min-h-0 flex-col bg-background">
+        <ConversationHeader
+          isMobile={isMobile}
+          leading={
+            <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
+              <MessageSquare className="size-4" />
+            </span>
+          }
+          title={t(($) => $.thread.title)}
+          meta={t(($) => $.thread.meta_count, {
+            count: threadMessages.length,
+          })}
+          actions={
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              aria-label={t(($) => $.thread.close_aria)}
+              onClick={() => setOpenThreadRoot(null)}
+            >
+              <X className="size-4" />
+            </Button>
+          }
+        />
+        <button
+          type="button"
+          className="mx-5 mt-3 rounded-lg border border-border/35 bg-muted/20 px-3 py-2 text-left transition-colors hover:bg-muted/35"
+          onClick={() => {
+            setHighlightMessageId(threadRoot.id);
+            if (isMobile) setOpenThreadRoot(null);
+          }}
+          aria-label={t(($) => $.thread.jump_to_parent)}
+        >
+          <p className="mb-1 text-[11px] font-medium uppercase text-muted-foreground">
+            {t(($) => $.thread.context_label)}
+          </p>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">{threadRoot.author_name}</span>
+            <span>{timeAgo(threadRoot.created_at)}</span>
+          </div>
+          <p className="mt-1 line-clamp-2 text-sm leading-5 text-foreground">
+            {threadRoot.content}
+          </p>
+        </button>
+        {threadError ? (
+          <div className="flex flex-1 items-center justify-center px-5 text-sm text-muted-foreground">
+            {t(($) => $.thread.load_failed)}
+          </div>
+        ) : threadLoading ? (
+          <div className="flex flex-1 items-center justify-center">
+            <UnicodeSpinner className="size-5 text-muted-foreground" />
+          </div>
+        ) : (
+          <ChannelMessageList
+            key={`thread:${threadRoot.id}`}
+            messages={threadMessages}
+            currentUserId={currentUserId}
+            ownName={currentUserName ?? undefined}
+            emptyLabel={t(($) => $.thread.empty_replies)}
+          />
+        )}
+        {isActiveArchived ? (
+          <ReadOnlyConversationBanner>
+            <Archive className="size-4 shrink-0" />
+            <span>{t(($) => $.archive_dialog.readonly_notice)}</span>
+          </ReadOnlyConversationBanner>
+        ) : (
+          <ComposerShell>
+            <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
+              <ContentEditor
+                key={`thread-editor:${threadRoot.id}`}
+                ref={threadEditorRef}
+                placeholder={t(($) => $.thread.composer_placeholder)}
+                onUpdate={handleThreadEditorUpdate}
+                onSubmit={handleThreadSend}
+                submitOnEnter
+                showBubbleMenu={false}
+                mentionAllowedActorIds={channelMemberIds}
+              />
+            </div>
+            <div className="flex items-center justify-end px-2 pb-2">
+              <Button
+                onClick={handleThreadSend}
+                disabled={threadDraftEmpty || sendThreadMessage.isPending}
+                size="sm"
+                className={cn(isMobile && "min-h-10 px-4")}
+              >
+                <Send className="size-4" /> {t(($) => $.composer.send)}
+              </Button>
+            </div>
+          </ComposerShell>
+        )}
+      </div>
+    ) : null;
   const detailPane = (
-        <main className="flex flex-1 min-h-0 min-w-0 flex-col">
+        <main className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background">
           {!active ? (
             showChannelDetailSkeleton ? (
               <ConversationSwitchSkeleton isMobile={isMobile} />
@@ -1615,49 +1765,49 @@ export function ChannelsPage() {
             )
           ) : (
             <>
-              <header
-                className={cn(
-                  "flex items-center justify-between gap-3 border-b py-2.5",
-                  isMobile ? "px-2" : "px-5",
-                )}
-              >
-                <div className={cn("flex min-w-0 items-center", isMobile ? "gap-2" : "gap-3")}>
-                  {isMobile && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-10 shrink-0 text-muted-foreground"
-                      aria-label={t(($) => $.header.back)}
-                      onClick={mobileBackToList}
-                    >
-                      <ArrowLeft className="size-5" />
-                    </Button>
-                  )}
-                  <ChannelGroupAvatar members={channelMembers} size={40} />
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 font-semibold">
-                      <span className="truncate">{active.name}</span>
-                      {isConversationMuted(active) && (
-                        <MutedIndicator label={t(($) => $.sidebar.muted_label)} />
-                      )}
-                      {isActiveArchived && (
-                        <Badge variant="secondary" className="shrink-0 uppercase tracking-wide">
-                          {t(($) => $.sidebar.archived_section)}
-                        </Badge>
-                      )}
-                      {active.lark_chat_id && (
-                        <Badge variant="secondary" className="shrink-0">
-                          {t(($) => $.header.feishu)}
-                        </Badge>
-                      )}
-                    </div>
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {t(($) => $.header.running)}
-                      {rosterSummary ? ` · ${rosterSummary}` : ""}
-                    </p>
-                  </div>
-                </div>
-                {isMobile ? (
+              <ConversationHeader
+                isMobile={isMobile}
+                leading={
+                  <>
+                    {isMobile && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-10 shrink-0 text-muted-foreground"
+                        aria-label={t(($) => $.header.back)}
+                        onClick={mobileBackToList}
+                      >
+                        <ArrowLeft className="size-5" />
+                      </Button>
+                    )}
+                    <ChannelGroupAvatar members={channelMembers} size={34} />
+                  </>
+                }
+                title={active.name}
+                meta={
+                  <>
+                    {t(($) => $.header.running)}
+                    {rosterSummary ? ` · ${rosterSummary}` : ""}
+                  </>
+                }
+                badges={
+                  <>
+                    {isConversationMuted(active) && (
+                      <MutedIndicator label={t(($) => $.sidebar.muted_label)} />
+                    )}
+                    {isActiveArchived && (
+                      <Badge variant="secondary" className="shrink-0 uppercase tracking-wide">
+                        {t(($) => $.sidebar.archived_section)}
+                      </Badge>
+                    )}
+                    {active.lark_chat_id && (
+                      <Badge variant="secondary" className="shrink-0">
+                        {t(($) => $.header.feishu)}
+                      </Badge>
+                    )}
+                  </>
+                }
+                actions={isMobile ? (
                   // Mobile: collapse members / share / stats / files into a
                   // single "⋯" that opens the bottom Drawer's action menu.
                   // size-10 keeps the tap target ≥44px.
@@ -1671,7 +1821,7 @@ export function ChannelsPage() {
                     <MoreHorizontal className="size-5" />
                   </Button>
                 ) : (
-                  <div className="flex shrink-0 items-center gap-3">
+                  <>
                     <Popover>
                       <PopoverTrigger
                         className="flex items-center gap-1.5 rounded-full p-0.5 transition-colors hover:bg-accent"
@@ -1686,7 +1836,7 @@ export function ChannelsPage() {
                         {memberPanelBody}
                       </PopoverContent>
                     </Popover>
-                    <div className="flex items-center gap-1 text-muted-foreground">
+                    <div className="flex items-center gap-1">
                       <Button
                         variant="ghost"
                         size="icon"
@@ -1730,13 +1880,13 @@ export function ChannelsPage() {
                         </PopoverContent>
                       </Popover>
                     </div>
-                  </div>
+                  </>
                 )}
-              </header>
+              />
               {convSearchOpen && (
                 <div
                   className={cn(
-                    "flex items-center gap-2 border-b bg-muted/20 py-2",
+                    "flex items-center gap-2 border-b border-border/40 bg-muted/15 py-2",
                     isMobile ? "px-2" : "px-5",
                   )}
                 >
@@ -1821,6 +1971,7 @@ export function ChannelsPage() {
                 searchQuery={searchHighlightQuery}
                 emptyLabel={t(($) => $.thread.empty)}
                 onQuote={isActiveArchived ? undefined : setQuoteMessage}
+                onOpenThread={isActiveArchived ? undefined : setOpenThreadRoot}
                 onScrollToMessage={setHighlightMessageId}
                 footer={
                   <TypingIndicator actors={activeTypingActors} />
@@ -1828,7 +1979,7 @@ export function ChannelsPage() {
               />
 
               {isActiveArchived ? (
-                <div className="flex items-center gap-2 border-t px-4 py-3 text-sm text-muted-foreground">
+                <ReadOnlyConversationBanner>
                   <Archive className="size-4 shrink-0" />
                   <span className="flex-1">{t(($) => $.archive_dialog.readonly_notice)}</span>
                   {canArchive(active) ? (
@@ -1858,13 +2009,15 @@ export function ChannelsPage() {
                       <TooltipContent>{t(($) => $.sidebar.restore_permission)}</TooltipContent>
                     </Tooltip>
                   )}
-                </div>
+                </ReadOnlyConversationBanner>
               ) : (
-                <div className="px-4 pb-4">
-                  <AgentWorkingIndicator tasks={activeTasks} />
-                  <div className="rounded-xl border bg-card shadow-sm">
+                <>
+                  <div className="px-5">
+                    <AgentWorkingIndicator tasks={activeTasks} />
+                  </div>
+                  <ComposerShell>
                     {quoteMessage && (
-                      <div className="flex items-start gap-2 border-b px-4 py-2">
+                      <div className="flex items-start gap-2 border-b border-border/40 px-4 py-2">
                         <Reply className="mt-0.5 size-3.5 shrink-0 text-primary" />
                         <div className="min-w-0 flex-1 border-l-2 border-primary pl-2">
                           <p className="truncate text-[11px] font-semibold text-foreground">
@@ -1936,10 +2089,27 @@ export function ChannelsPage() {
                         <Send className="size-4" /> {t(($) => $.composer.send)}
                       </Button>
                     </div>
-                  </div>
-                </div>
+                  </ComposerShell>
+                </>
               )}
             </>
+          )}
+          {!isMobile && threadPanel && (
+            <aside className="absolute inset-y-0 right-0 z-20 w-[380px] border-l border-border/30 bg-background shadow-xl">
+              {threadPanel}
+            </aside>
+          )}
+          {isMobile && (
+            <Drawer
+              open={!!threadPanel}
+              onOpenChange={(open) => {
+                if (!open) setOpenThreadRoot(null);
+              }}
+            >
+              <DrawerContent className="h-[90vh] p-0">
+                {threadPanel}
+              </DrawerContent>
+            </Drawer>
           )}
         </main>
   );

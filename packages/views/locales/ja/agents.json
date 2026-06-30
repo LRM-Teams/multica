@@ -213,7 +213,7 @@
     "description_duplicate": "\"{{name}}\" を基に新しいエージェントを作成します。指示、環境変数、スキルがコピーされます。",
     "name_label": "名前",
     "display_name_label": "表示名",
-    "handle_auto_hint": "安定したハンドルは自動生成され、ここでは変更できません。",
+    "handle_auto_hint": "安定したユーザー名は自動生成され、ここでは変更できません。",
     "name_placeholder": "例: ディープリサーチエージェント",
     "description_label": "説明",
     "description_placeholder": "このエージェントは何をしますか？",

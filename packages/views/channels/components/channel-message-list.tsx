@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -31,7 +30,7 @@ import { ChannelMessageBubble } from "./channel-message-bubble";
  * conversations keeps the previous scroll offset instead of jumping to the
  * newest message.
  */
-export function ChannelMessageList({
+function MessageViewport({
   messages,
   currentUserId,
   ownName,
@@ -39,6 +38,7 @@ export function ChannelMessageList({
   emptyLabel,
   footer,
   onQuote,
+  onOpenThread,
   onScrollToMessage,
   searchHitIds,
   searchQuery,
@@ -55,6 +55,8 @@ export function ChannelMessageList({
   footer?: ReactNode;
   /** Called when the user triggers Reply on a message (quote-reply flow). */
   onQuote?: (message: ChannelMessage) => void;
+  /** Called when the user opens the message's side thread. */
+  onOpenThread?: (message: ChannelMessage) => void;
   /**
    * Called when the user clicks an inline quote block to jump to the original.
    * The parent updates `highlightMessageId` so the list scrolls + highlights.
@@ -65,14 +67,8 @@ export function ChannelMessageList({
   /** Conversation search phrase used for inline keyword marks within search hits. */
   searchQuery?: string;
 }) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
-  const setScrollContainerRef = useCallback((node: HTMLDivElement | null) => {
-    scrollRef.current = node;
-    setScrollEl(node);
-  }, []);
 
   // Index of the deep-link target, or -1 when none / not loaded yet.
   const highlightIndex = useMemo(() => {
@@ -103,7 +99,7 @@ export function ChannelMessageList({
   // indicators visible even before the first message — preserve that.
   if (messages.length === 0) {
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-4 py-4">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-5 pb-5 pt-3">
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
           {emptyLabel}
         </div>
@@ -113,14 +109,10 @@ export function ChannelMessageList({
   }
 
   return (
-    <div
-      ref={setScrollContainerRef}
-      className="min-h-0 min-w-0 flex-1 overflow-y-auto"
-    >
-      {scrollEl && (
+    <div className="min-h-0 min-w-0 flex-1">
         <Virtuoso
           ref={virtuosoRef}
-          customScrollParent={scrollEl}
+          style={{ height: "100%" }}
           data={messages}
           initialTopMostItemIndex={initialIndex}
           increaseViewportBy={{ top: 400, bottom: 600 }}
@@ -131,20 +123,21 @@ export function ChannelMessageList({
           followOutput={() => (isNearBottom ? "smooth" : false)}
           computeItemKey={(_, msg) => msg.id}
           components={{
-            Header: () => <div className="pt-4" />,
+            Header: () => <div className="pt-3" />,
             Footer: () =>
-              footer ? <div className="px-4 pb-4 pt-1">{footer}</div> : <div className="pb-4" />,
+              footer ? <div className="px-5 pb-5 pt-2">{footer}</div> : <div className="pb-5" />,
           }}
           itemContent={(_, msg) => {
             const searchHighlighted = searchHitIds?.has(msg.id) ?? false;
             return (
-              <div className="px-4 pt-1">
+              <div className="px-5 pt-1.5">
                 <ChannelMessageBubble
                   message={msg}
                   currentUserId={currentUserId}
                   ownName={ownName}
                   highlighted={msg.id === highlightMessageId}
                   onQuote={onQuote}
+                  onOpenThread={onOpenThread}
                   onScrollTo={onScrollToMessage}
                   searchHighlighted={searchHighlighted}
                   searchQuery={searchHighlighted ? searchQuery : undefined}
@@ -153,7 +146,8 @@ export function ChannelMessageList({
             );
           }}
         />
-      )}
     </div>
   );
 }
+
+export { MessageViewport, MessageViewport as ChannelMessageList };

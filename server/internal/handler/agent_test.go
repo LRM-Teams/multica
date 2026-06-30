@@ -165,6 +165,14 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	`, agentID, handlerTestRuntimeID(t), longSummary).Scan(&olderID); err != nil {
 		t.Fatalf("insert older task: %v", err)
 	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO task_message (task_id, seq, type, tool, input, output)
+		VALUES ($1, 1, 'tool_use', 'exec_command',
+		        '{"cmd":"pnpm --filter @multica/web build --token sk-proj-abc123def456ghi789jkl012mno345"}',
+		        'raw command output should not leak')
+	`, olderID); err != nil {
+		t.Fatalf("insert command task message: %v", err)
+	}
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_task_queue (
 			agent_id, runtime_id, status, priority, trigger_summary,
@@ -176,8 +184,35 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	`, agentID, handlerTestRuntimeID(t)).Scan(&newerID); err != nil {
 		t.Fatalf("insert newer task: %v", err)
 	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO task_message (task_id, seq, type, tool, input, output)
+		VALUES ($1, 1, 'tool_use', 'apply_patch',
+		        '{"path":"/repo/server/internal/handler/profile.go"}',
+		        'raw patch output should not leak')
+	`, newerID); err != nil {
+		t.Fatalf("insert file task message: %v", err)
+	}
+	extraIDs := make([]string, 0, 3)
+	for i := 0; i < 3; i++ {
+		var id string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO agent_task_queue (
+				agent_id, runtime_id, status, priority, trigger_summary,
+				created_at, completed_at
+			)
+			VALUES ($1, $2, 'completed', 0, $3, now() - ($4::int * interval '10 minutes'),
+			        now() - ($4::int * interval '10 minutes'))
+			RETURNING id
+		`, agentID, handlerTestRuntimeID(t), fmt.Sprintf("fallback task %d", i+1), i+1).Scan(&id); err != nil {
+			t.Fatalf("insert extra task %d: %v", i, err)
+		}
+		extraIDs = append(extraIDs, id)
+	}
 	t.Cleanup(func() {
 		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id IN ($1, $2)`, olderID, newerID)
+		for _, id := range extraIDs {
+			testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, id)
+		}
 	})
 
 	w := httptest.NewRecorder()
@@ -202,23 +237,38 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 		t.Fatalf("agent profile role = %q, want Agent", profile.Role)
 	}
 	items := profile.RecentActivity
-	if len(items) != 2 {
-		t.Fatalf("expected 2 activity items, got %d: %#v", len(items), items)
+	if len(items) != 5 {
+		t.Fatalf("expected 5 activity items, got %d: %#v", len(items), items)
 	}
-	if items[0].ID != newerID || items[0].Kind != "working" || items[0].Status != "running" {
-		t.Fatalf("newest activity = %#v, want running task %s", items[0], newerID)
+	if items[0].ID != newerID || items[0].Kind != "tool_use" || items[0].Status != "running" {
+		t.Fatalf("newest activity = %#v, want running file activity %s", items[0], newerID)
 	}
-	if items[1].ID != olderID || items[1].Kind != "failed" || items[1].Status != "failed" {
-		t.Fatalf("older activity = %#v, want failed task %s", items[1], olderID)
+	if items[0].Label != "Editing file" || items[0].Summary == nil || *items[0].Summary != "profile.go" {
+		t.Fatalf("newest activity projection = %#v, want Editing file/profile.go", items[0])
 	}
-	if items[1].Summary == nil {
-		t.Fatal("expected failed task summary to be present")
+	if items[1].ID != olderID || items[1].Kind != "command" || items[1].Status != "failed" {
+		t.Fatalf("older activity = %#v, want command task %s", items[1], olderID)
 	}
-	if len([]rune(*items[1].Summary)) > 120 {
-		t.Fatalf("summary was not truncated to 120 runes: %d", len([]rune(*items[1].Summary)))
+	if items[1].Label != "Ran command" {
+		t.Fatalf("command activity label = %q, want Ran command", items[1].Label)
 	}
-	if strings.Contains(w.Body.String(), "raw stacktrace") {
-		t.Fatalf("recent activity leaked raw task error: %s", w.Body.String())
+	if items[1].Summary != nil {
+		t.Fatalf("command activity summary = %q, want nil for compact profile card", *items[1].Summary)
+	}
+	body := w.Body.String()
+	for _, leak := range []string{
+		"raw stacktrace",
+		"raw command output",
+		"raw patch output",
+		"exec_command",
+		"apply_patch",
+		"pnpm --filter @multica/web build",
+		"--token",
+		"sk-proj-abc123def456ghi789jkl012mno345",
+	} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("recent activity leaked %q: %s", leak, body)
+		}
 	}
 	if items[0].OccurredAt == "" || items[1].OccurredAt == "" {
 		t.Fatalf("expected occurred_at on every item: %#v", items)

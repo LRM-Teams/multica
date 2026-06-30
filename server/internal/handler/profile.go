@@ -2,7 +2,10 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -10,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/redact"
 )
 
 type MemberProfileResponse struct {
@@ -102,7 +106,7 @@ func (h *Handler) getAgentMemberProfile(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	activity, err := h.listAgentRecentActivity(r.Context(), agent, 3)
+	activity, err := h.listAgentRecentActivity(r.Context(), agent, 5)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load member profile")
 		return
@@ -159,12 +163,13 @@ func (h *Handler) listAgentRecentActivity(ctx context.Context, agent db.Agent, l
 		}
 		items = append(items, AgentRecentActivityItem{
 			ID:         uuidToString(taskID),
-			Kind:       recentActivityKind(status),
-			Label:      recentActivityLabel(status),
+			Kind:       recentActivityFallbackKind(status),
+			Label:      recentActivityFallbackLabel(status),
 			Summary:    recentActivitySummary(issueIdentifier, issueTitle, chatTitle, triggerSummary),
 			OccurredAt: timestampToString(occurredAt),
 			Status:     status,
 		})
+		h.attachRecentExecutionActivity(ctx, taskID, status, &items[len(items)-1])
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -172,7 +177,291 @@ func (h *Handler) listAgentRecentActivity(ctx context.Context, agent db.Agent, l
 	return items, nil
 }
 
-func recentActivityKind(status string) string {
+func (h *Handler) attachRecentExecutionActivity(ctx context.Context, taskID pgtype.UUID, status string, item *AgentRecentActivityItem) {
+	messages, err := h.listRecentTaskActivityMessages(ctx, taskID, 5)
+	if err != nil || len(messages) == 0 {
+		return
+	}
+
+	var textFallback *AgentRecentActivityItem
+	for _, msg := range messages {
+		switch msg.Type {
+		case "tool_use":
+			if projected, ok := projectToolUseActivity(msg, status); ok {
+				occurredAt := item.OccurredAt
+				*item = projected
+				item.ID = uuidToString(taskID)
+				if item.OccurredAt == "" {
+					item.OccurredAt = occurredAt
+				}
+				item.Status = status
+				return
+			}
+		case "text":
+			if textFallback == nil {
+				if projected, ok := projectTextActivity(msg, status); ok {
+					textFallback = &projected
+				}
+			}
+		}
+	}
+	if textFallback != nil {
+		textFallback.ID = uuidToString(taskID)
+		textFallback.Status = status
+		if textFallback.OccurredAt == "" {
+			textFallback.OccurredAt = item.OccurredAt
+		}
+		*item = *textFallback
+	}
+}
+
+type recentTaskActivityMessage struct {
+	ID        pgtype.UUID
+	TaskID    pgtype.UUID
+	Seq       int32
+	Type      string
+	Tool      pgtype.Text
+	Content   pgtype.Text
+	Input     []byte
+	CreatedAt pgtype.Timestamptz
+}
+
+func (h *Handler) listRecentTaskActivityMessages(ctx context.Context, taskID pgtype.UUID, limit int32) ([]recentTaskActivityMessage, error) {
+	rows, err := h.DB.Query(ctx, `
+		SELECT id, task_id, seq, type, tool, content, input, created_at
+		FROM task_message
+		WHERE task_id = $1
+		  AND type IN ('tool_use', 'text')
+		ORDER BY seq DESC
+		LIMIT $2`, taskID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	messages := make([]recentTaskActivityMessage, 0, limit)
+	for rows.Next() {
+		var msg recentTaskActivityMessage
+		if err := rows.Scan(
+			&msg.ID,
+			&msg.TaskID,
+			&msg.Seq,
+			&msg.Type,
+			&msg.Tool,
+			&msg.Content,
+			&msg.Input,
+			&msg.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		messages = append(messages, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return messages, nil
+}
+
+func projectToolUseActivity(msg recentTaskActivityMessage, status string) (AgentRecentActivityItem, bool) {
+	tool := strings.ToLower(strings.TrimSpace(msg.Tool.String))
+	input := parseTaskMessageInput(msg.Input)
+	label, kind := toolActivityLabel(tool, status)
+	if label == "" {
+		return AgentRecentActivityItem{}, false
+	}
+
+	summary := summarizeToolInput(tool, input)
+	return AgentRecentActivityItem{
+		Kind:       kind,
+		Label:      label,
+		Summary:    stringPtrIfNotEmpty(summary),
+		OccurredAt: timestampToString(msg.CreatedAt),
+	}, true
+}
+
+func projectTextActivity(msg recentTaskActivityMessage, status string) (AgentRecentActivityItem, bool) {
+	if !msg.Content.Valid || strings.TrimSpace(msg.Content.String) == "" {
+		return AgentRecentActivityItem{}, false
+	}
+	summary := sanitizeActivitySummary(msg.Content.String, 160)
+	return AgentRecentActivityItem{
+		Kind:       "text",
+		Label:      textActivityLabel(status),
+		Summary:    stringPtrIfNotEmpty(summary),
+		OccurredAt: timestampToString(msg.CreatedAt),
+	}, true
+}
+
+func toolActivityLabel(tool, status string) (label string, kind string) {
+	switch {
+	case isCommandTool(tool):
+		if isActiveTaskStatus(status) {
+			return "Running command", "command"
+		}
+		return "Ran command", "command"
+	case isFileEditTool(tool):
+		return "Editing file", "tool_use"
+	case isSearchTool(tool):
+		if strings.Contains(tool, "issue") {
+			return "Searching issues", "tool_use"
+		}
+		return "Reading context", "tool_use"
+	case isFileReadTool(tool):
+		return "Reading files", "tool_use"
+	case tool != "":
+		return "Reading context", "tool_use"
+	default:
+		return "", ""
+	}
+}
+
+func isCommandTool(tool string) bool {
+	return strings.Contains(tool, "exec") ||
+		strings.Contains(tool, "command") ||
+		strings.Contains(tool, "shell") ||
+		strings.Contains(tool, "terminal") ||
+		strings.Contains(tool, "bash")
+}
+
+func isFileEditTool(tool string) bool {
+	return strings.Contains(tool, "edit") ||
+		strings.Contains(tool, "write") ||
+		strings.Contains(tool, "patch") ||
+		strings.Contains(tool, "apply")
+}
+
+func isFileReadTool(tool string) bool {
+	return strings.Contains(tool, "read") ||
+		strings.Contains(tool, "open") ||
+		strings.Contains(tool, "file") ||
+		strings.Contains(tool, "list") ||
+		strings.Contains(tool, "cat")
+}
+
+func isSearchTool(tool string) bool {
+	return strings.Contains(tool, "search") ||
+		strings.Contains(tool, "query") ||
+		strings.Contains(tool, "grep") ||
+		strings.Contains(tool, "rg") ||
+		strings.Contains(tool, "find") ||
+		strings.Contains(tool, "issue") ||
+		strings.Contains(tool, "context")
+}
+
+func isActiveTaskStatus(status string) bool {
+	return status == "queued" ||
+		status == "dispatched" ||
+		status == "running" ||
+		status == "waiting_local_directory"
+}
+
+func summarizeToolInput(tool string, input map[string]any) string {
+	if isCommandTool(tool) {
+		return ""
+	}
+	if isFileEditTool(tool) || isFileReadTool(tool) {
+		if summary := firstPathSummary(input, 80, "path", "file", "file_path", "filepath", "target_file", "files"); summary != "" {
+			return summary
+		}
+	}
+	return ""
+}
+
+func firstInputSummary(input map[string]any, max int, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := input[key]; ok {
+			if summary := inputValueSummary(value); summary != "" {
+				return sanitizeActivitySummary(summary, max)
+			}
+		}
+	}
+	return ""
+}
+
+func firstPathSummary(input map[string]any, max int, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := input[key]; ok {
+			if summary := pathValueSummary(value); summary != "" {
+				return sanitizeActivitySummary(summary, max)
+			}
+		}
+	}
+	return ""
+}
+
+func inputValueSummary(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			if s := inputValueSummary(item); s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, " ")
+	case map[string]any:
+		if s := firstInputSummary(v, 160, "cmd", "command", "query", "q", "path", "file"); s != "" {
+			return s
+		}
+	}
+	return fmt.Sprint(value)
+}
+
+func pathValueSummary(value any) string {
+	switch v := value.(type) {
+	case string:
+		return safePathLabel(v)
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			if s := pathValueSummary(item); s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, ", ")
+	}
+	return inputValueSummary(value)
+}
+
+func safePathLabel(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	base := filepath.Base(path)
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		return path
+	}
+	return base
+}
+
+func parseTaskMessageInput(raw []byte) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var input map[string]any
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return nil
+	}
+	return input
+}
+
+func sanitizeActivitySummary(summary string, max int) string {
+	summary = strings.Join(strings.Fields(redact.Text(summary)), " ")
+	return truncateRunes(summary, max)
+}
+
+func stringPtrIfNotEmpty(s string) *string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func recentActivityFallbackKind(status string) string {
 	switch status {
 	case "queued":
 		return "queued"
@@ -187,19 +476,26 @@ func recentActivityKind(status string) string {
 	}
 }
 
-func recentActivityLabel(status string) string {
+func recentActivityFallbackLabel(status string) string {
 	switch status {
 	case "queued":
-		return "Queued"
+		return "Thinking"
 	case "dispatched", "running", "waiting_local_directory":
-		return "Working"
+		return "Thinking"
 	case "failed":
-		return "Failed task"
+		return "Writing response"
 	case "cancelled":
-		return "Cancelled task"
+		return "Writing response"
 	default:
-		return "Completed task"
+		return "Writing response"
 	}
+}
+
+func textActivityLabel(status string) string {
+	if isActiveTaskStatus(status) {
+		return "Replying"
+	}
+	return "Writing response"
 }
 
 func recentActivitySummary(issueIdentifier, issueTitle, chatTitle, triggerSummary pgtype.Text) *string {
@@ -218,7 +514,7 @@ func recentActivitySummary(issueIdentifier, issueTitle, chatTitle, triggerSummar
 	if summary == "" {
 		return nil
 	}
-	summary = truncateRunes(summary, 120)
+	summary = sanitizeActivitySummary(summary, 120)
 	return &summary
 }
 

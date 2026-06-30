@@ -150,7 +150,7 @@ function ActorProfileContent({
   );
 }
 
-function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
+export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
   const { t } = useT("channels");
   const identity = {
     name: profile.name,
@@ -212,7 +212,7 @@ function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
         <ProfileSection title={t(($) => $.profile_popover.recent_activity)}>
           {(profile.recent_activity ?? []).length > 0 ? (
             <div className="flex flex-col">
-              {(profile.recent_activity ?? []).slice(0, 3).map((activity) => (
+              {(profile.recent_activity ?? []).map((activity) => (
                 <ActivityRow key={activity.id} activity={activity} />
               ))}
             </div>

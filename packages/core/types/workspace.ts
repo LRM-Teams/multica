@@ -83,7 +83,7 @@ export interface MemberWithUser {
 
 export interface MemberProfileActivityItem {
   id: string;
-  kind: "queued" | "working" | "failed" | "cancelled" | "task";
+  kind: "command" | "tool_use" | "text" | "queued" | "working" | "failed" | "cancelled" | "task";
   label: string;
   summary?: string;
   occurred_at: string;
@@ -104,7 +104,7 @@ export interface MemberProfile {
   role: string;
   /** null for user profiles in v1. */
   status: string | null;
-  /** Empty for user profiles in v1; max 3 safe items for agents. */
+  /** Empty for user profiles in v1; max 5 safe items for agents. */
   recent_activity: MemberProfileActivityItem[];
 }
 

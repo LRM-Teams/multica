@@ -1,6 +1,7 @@
 "use client";
 
 import { Hash } from "lucide-react";
+import { resolveActorDisplayName } from "@multica/core/identity";
 import type { ChannelMemberBrief } from "@multica/core/types";
 import { agentColor } from "../../common/agent-color";
 
@@ -19,7 +20,7 @@ function firstLetter(name: string): string {
 }
 
 function memberLabel(member: ChannelMemberBrief): string {
-  return member.display_name?.trim() || member.name?.trim() || "?";
+  return resolveActorDisplayName(member, "?");
 }
 
 export function ChannelGroupAvatar({

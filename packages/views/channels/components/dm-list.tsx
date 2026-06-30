@@ -40,6 +40,7 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import {
   matchesActorIdentitySearch,
+  resolveActorDisplayName,
   resolveActorIdentityPresentation,
   type ActorIdentityPresentation,
 } from "@multica/core/identity";
@@ -132,10 +133,10 @@ export function DmList({
     () => (type, id, fallbackLabel) => {
       if (type === "agent") {
         const agent = agents.find((a) => a.id === id);
-        return agent?.display_name?.trim() || agent?.name?.trim() || fallbackLabel;
+        return resolveActorDisplayName(agent, fallbackLabel);
       }
       const member = members.find((m) => m.user_id === id);
-      return member?.display_name?.trim() || member?.name?.trim() || fallbackLabel;
+      return resolveActorDisplayName(member, fallbackLabel);
     },
     [agents, members],
   );

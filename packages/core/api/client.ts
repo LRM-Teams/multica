@@ -78,6 +78,7 @@ import type {
   ChannelActiveTask,
   ChannelMember,
   ChannelMessage,
+  ChannelReaction,
   ChannelMessageSearchResponse,
   ChannelThreadMessagesPage,
   ChannelStats,
@@ -1990,6 +1991,13 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
+    });
+  }
+
+  async addChannelReaction(channelId: string, messageId: string, emoji: string): Promise<ChannelReaction> {
+    return this.fetch(`/api/channels/${channelId}/messages/${messageId}/reactions`, {
+      method: "POST",
+      body: JSON.stringify({ emoji }),
     });
   }
 

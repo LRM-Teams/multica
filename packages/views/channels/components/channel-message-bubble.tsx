@@ -1,6 +1,7 @@
 "use client";
 
 import { MessageSquare, MoreHorizontal, Reply } from "lucide-react";
+import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import {
   ContextMenu,
@@ -67,6 +68,7 @@ export function ChannelMessageBubble({
   onQuote,
   onOpenThread,
   onScrollTo,
+  onReact,
   searchHighlighted = false,
   searchQuery,
 }: {
@@ -82,13 +84,15 @@ export function ChannelMessageBubble({
   onOpenThread?: (message: ChannelMessage) => void;
   /** Called when the user clicks the inline quote block to jump to the original. */
   onScrollTo?: (messageId: string) => void;
+  /** Toggle/add a lightweight emoji reaction on this message. */
+  onReact?: (message: ChannelMessage, emoji: string) => void;
   /** Search hit: marks matching visible text while search is open. */
   searchHighlighted?: boolean;
   /** Trimmed conversation search phrase to mark inside this hit's visible text. */
   searchQuery?: string;
 }) {
   const { t } = useT("channels");
-  const { getActorAvatarUrl } = useActorName();
+  const { getActorAvatarUrl, getActorName } = useActorName();
   const isOwn =
     message.author_type === "user" &&
     message.author_id != null &&
@@ -256,6 +260,15 @@ export function ChannelMessageBubble({
               className="mt-1.5"
             />
           </div>
+          {onReact && (
+            <ReactionBar
+              reactions={message.reactions ?? []}
+              currentUserId={currentUserId ?? undefined}
+              onToggle={(emoji) => onReact(message, emoji)}
+              getActorName={getActorName}
+              className={cn(isOwn && "justify-end")}
+            />
+          )}
           {(canOpenThread || hasThreadActivity) && onOpenThread && (
             <div
               className={cn(

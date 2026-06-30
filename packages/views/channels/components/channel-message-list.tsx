@@ -40,6 +40,7 @@ function MessageViewport({
   onQuote,
   onOpenThread,
   onScrollToMessage,
+  onReact,
   searchHitIds,
   searchQuery,
 }: {
@@ -62,6 +63,8 @@ function MessageViewport({
    * The parent updates `highlightMessageId` so the list scrolls + highlights.
    */
   onScrollToMessage?: (messageId: string) => void;
+  /** Toggle/add a lightweight emoji reaction on this message. */
+  onReact?: (message: ChannelMessage, emoji: string) => void;
   /** Search hit ids — all matching messages get inline keyword marks while search is open. */
   searchHitIds?: Set<string>;
   /** Conversation search phrase used for inline keyword marks within search hits. */
@@ -139,6 +142,7 @@ function MessageViewport({
                   onQuote={onQuote}
                   onOpenThread={onOpenThread}
                   onScrollTo={onScrollToMessage}
+                  onReact={onReact}
                   searchHighlighted={searchHighlighted}
                   searchQuery={searchHighlighted ? searchQuery : undefined}
                 />

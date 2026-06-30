@@ -53,6 +53,7 @@ import {
   useRemoveChannelMember,
   useSendChannelMessage,
   useSendChannelThreadMessage,
+  useAddChannelReaction,
   useMarkChannelThreadRead,
   useSetChannelTyping,
 } from "@multica/core/channels";
@@ -526,8 +527,12 @@ export function ChannelsPage() {
   const markChannelUnread = useMarkChannelUnread();
   const sendMessage = useSendChannelMessage();
   const sendThreadMessage = useSendChannelThreadMessage();
+  const addChannelReaction = useAddChannelReaction();
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
   const setTyping = useSetChannelTyping();
+  const handleReactToMessage = useCallback((message: ChannelMessage, emoji: string) => {
+    addChannelReaction.mutate({ channelId: message.channel_id, messageId: message.id, emoji });
+  }, [addChannelReaction]);
   const addMembers = useAddChannelMembers();
   const removeMember = useRemoveChannelMember();
   const createOrFindDm = useCreateOrFindDM();
@@ -1758,6 +1763,7 @@ export function ChannelsPage() {
             currentUserId={currentUserId}
             ownName={currentUserName ?? undefined}
             emptyLabel={t(($) => $.thread.empty_replies)}
+            onReact={handleReactToMessage}
           />
         )}
         {isActiveArchived ? (
@@ -2030,6 +2036,7 @@ export function ChannelsPage() {
                 onQuote={isActiveArchived ? undefined : setQuoteMessage}
                 onOpenThread={isActiveArchived ? undefined : setOpenThreadRoot}
                 onScrollToMessage={setHighlightMessageId}
+                onReact={handleReactToMessage}
                 footer={
                   <TypingIndicator actors={activeTypingActors} />
                 }

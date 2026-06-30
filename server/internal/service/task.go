@@ -752,7 +752,7 @@ var ErrChatTaskAgentNoRuntime = errors.New("chat task: agent has no runtime")
 // latest message in the silence window. Stored on the task so the daemon brief
 // can attribute the run to the right person. See MUL-2645.
 func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
-	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, false)
+	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, false, 2, true)
 }
 
 // EnqueueFreshChatTask creates a chat task that must not resume the prior
@@ -760,10 +760,16 @@ func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSe
 // so the agent starts from the latest channel context instead of continuing the
 // previous mistaken execution path.
 func (s *TaskService) EnqueueFreshChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
-	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, true)
+	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, true, 2, true)
 }
 
-func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID, forceFreshSession bool) (db.AgentTaskQueue, error) {
+// EnqueueAmbientChatTask is for low-priority channel observation runs where the
+// agent may stay silent or add a reaction instead of posting a full reply.
+func (s *TaskService) EnqueueAmbientChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, true, 1, false)
+}
+
+func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID, forceFreshSession bool, priority int32, interruptFollowup bool) (db.AgentTaskQueue, error) {
 	agent, err := s.Queries.GetAgent(ctx, chatSession.AgentID)
 	if err != nil {
 		slog.Error("chat task enqueue failed", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)
@@ -779,7 +785,7 @@ func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSe
 	task, err := s.Queries.CreateChatTask(ctx, db.CreateChatTaskParams{
 		AgentID:           chatSession.AgentID,
 		RuntimeID:         agent.RuntimeID,
-		Priority:          2, // medium priority for chat
+		Priority:          priority,
 		ChatSessionID:     chatSession.ID,
 		InitiatorUserID:   initiatorUserID,
 		ForceFreshSession: pgtype.Bool{Bool: forceFreshSession, Valid: forceFreshSession},
@@ -792,7 +798,9 @@ func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSe
 	slog.Info("chat task enqueued", "task_id", util.UUIDToString(task.ID), "chat_session_id", util.UUIDToString(chatSession.ID), "agent_id", util.UUIDToString(chatSession.AgentID), "force_fresh_session", forceFreshSession)
 	// See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
-	s.interruptInFlightChatTasksForFollowup(ctx, task)
+	if interruptFollowup {
+		s.interruptInFlightChatTasksForFollowup(ctx, task)
+	}
 	s.NotifyTaskEnqueued(ctx, task)
 	return task, nil
 }

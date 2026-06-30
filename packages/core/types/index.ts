@@ -209,6 +209,7 @@ export type {
   ChannelLastMessage,
   ChannelMessage,
   ChannelMessageReply,
+  ChannelReaction,
   ChannelThreadMessagesCursor,
   ChannelThreadMessagesPage,
   ChannelMessageSearchResponse,

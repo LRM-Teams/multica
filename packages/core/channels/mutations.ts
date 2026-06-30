@@ -85,6 +85,17 @@ export function useSendChannelMessage() {
   });
 }
 
+export function useAddChannelReaction() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ channelId, messageId, emoji }: { channelId: string; messageId: string; emoji: string }) =>
+      api.addChannelReaction(channelId, messageId, emoji),
+    onSuccess: (reaction) => {
+      qc.invalidateQueries({ queryKey: channelKeys.messages(reaction.channel_id) });
+    },
+  });
+}
+
 export function useSendChannelThreadMessage() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();

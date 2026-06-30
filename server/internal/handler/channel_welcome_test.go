@@ -3,11 +3,34 @@ package handler
 import (
 	"strings"
 	"testing"
+
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // The welcome prompt must (1) name the joiner and channel, (2) ask for a
 // sticker, and (3) forbid @-mentions / follow-up — that last rule is what keeps
 // a wall of welcomes from chaining into the automatic agent-reply loop.
+func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
+	agent := db.Agent{Name: "总监助理", DisplayName: "总监助理", Description: "负责总监以上协调"}
+	trigger := ChannelMessageResponse{ID: "11111111-1111-1111-1111-111111111111", AuthorName: "用户", AuthorType: "user", Content: "全体总监以上欢迎一下新同事"}
+	p := buildChannelAmbientObservationPrompt(ChannelResponse{Name: "产品讨论"}, agent, trigger)
+
+	for _, want := range []string{
+		"ONLY the current message",
+		"stay silent",
+		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
+		"multica channel react CURRENT_MESSAGE <emoji>",
+		"全体总监以上欢迎一下新同事",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("ambient prompt missing %q:\n%s", want, p)
+		}
+	}
+	if strings.Contains(p, "Recent channel messages") {
+		t.Error("ambient prompt must not include channel history")
+	}
+}
+
 func TestBuildChannelWelcomePrompt(t *testing.T) {
 	p := buildChannelWelcomePrompt("产品讨论", "张三")
 

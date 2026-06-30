@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -65,14 +64,8 @@ function MessageViewport({
   /** Conversation search phrase used for inline keyword marks within search hits. */
   searchQuery?: string;
 }) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
-  const setScrollContainerRef = useCallback((node: HTMLDivElement | null) => {
-    scrollRef.current = node;
-    setScrollEl(node);
-  }, []);
 
   // Index of the deep-link target, or -1 when none / not loaded yet.
   const highlightIndex = useMemo(() => {
@@ -113,14 +106,10 @@ function MessageViewport({
   }
 
   return (
-    <div
-      ref={setScrollContainerRef}
-      className="min-h-0 min-w-0 flex-1 overflow-y-auto"
-    >
-      {scrollEl && (
+    <div className="min-h-0 min-w-0 flex-1">
         <Virtuoso
           ref={virtuosoRef}
-          customScrollParent={scrollEl}
+          style={{ height: "100%" }}
           data={messages}
           initialTopMostItemIndex={initialIndex}
           increaseViewportBy={{ top: 400, bottom: 600 }}
@@ -153,7 +142,6 @@ function MessageViewport({
             );
           }}
         />
-      )}
     </div>
   );
 }

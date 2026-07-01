@@ -14,6 +14,7 @@ import {
   useSendChannelMessage,
   useSendChannelThreadMessage,
   useAddChannelReaction,
+  useRemoveChannelReaction,
   useSetChannelTyping,
 } from "@multica/core/channels";
 import {
@@ -200,9 +201,18 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   const sendMessage = useSendChannelMessage();
   const sendThreadMessage = useSendChannelThreadMessage();
   const addChannelReaction = useAddChannelReaction();
+  const removeChannelReaction = useRemoveChannelReaction();
   const handleReactToMessage = useCallback((message: ChannelMessage, emoji: string) => {
-    addChannelReaction.mutate({ channelId: message.channel_id, messageId: message.id, emoji });
-  }, [addChannelReaction]);
+    const hasReacted = message.reactions?.some(
+      (reaction) => reaction.actor_type === "member" && reaction.actor_id === currentUserId && reaction.emoji === emoji,
+    );
+    const vars = { channelId: message.channel_id, messageId: message.id, emoji };
+    if (hasReacted) {
+      removeChannelReaction.mutate(vars);
+    } else {
+      addChannelReaction.mutate(vars);
+    }
+  }, [addChannelReaction, currentUserId, removeChannelReaction]);
   const setTyping = useSetChannelTyping();
   const { uploadWithToast } = useFileUpload(api);
 

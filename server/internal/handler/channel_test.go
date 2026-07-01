@@ -393,6 +393,69 @@ func TestSendChannelMessageReplyReturnsSummary(t *testing.T) {
 	t.Fatalf("created message %s missing from list", created.ID)
 }
 
+func TestChannelMessageReactionCanBeRemoved(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "reaction-remove-"+uuid.NewString(), testUserID)
+	msg, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "hello", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("reaction-thread"), 0)
+	if err != nil {
+		t.Fatalf("insert channel message: %v", err)
+	}
+
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages/"+msg.ID+"/reactions", map[string]string{"emoji": "👍"})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
+	rec := httptest.NewRecorder()
+	testHandler.AddChannelMessageReaction(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("add reaction: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list messages after add: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var messages []ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &messages); err != nil {
+		t.Fatalf("decode messages after add: %v", err)
+	}
+	if len(messages) != 1 || len(messages[0].Reactions) != 1 {
+		t.Fatalf("expected one reaction after add, got %#v", messages)
+	}
+
+	req = newRequest(http.MethodDelete, "/api/channels/"+channelID+"/messages/"+msg.ID+"/reactions", map[string]string{"emoji": "👍"})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
+	rec = httptest.NewRecorder()
+	testHandler.RemoveChannelMessageReaction(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("remove reaction: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list messages after remove: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	messages = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &messages); err != nil {
+		t.Fatalf("decode messages after remove: %v", err)
+	}
+	if len(messages) != 1 || len(messages[0].Reactions) != 0 {
+		t.Fatalf("expected no reactions after remove, got %#v", messages)
+	}
+}
+
 func TestSearchChannelMessagesReturnsStableResults(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

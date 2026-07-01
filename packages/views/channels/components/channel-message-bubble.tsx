@@ -2,11 +2,15 @@
 
 import { MessageSquare, MoreHorizontal, Reply } from "lucide-react";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
+import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@multica/ui/components/ui/context-menu";
 import {
@@ -50,11 +54,9 @@ function formatTime(value: string): string {
 }
 
 /**
- * One message in the group-chat thread. Own messages right-align with a neutral
- * card bubble; everyone else left-aligns. Agents get a per-agent identity color
- * on the avatar plus an "Agent" pill, and a faint-primary bubble so agent
- * output reads as distinct from human messages at a glance. Body is rendered
- * through the shared Markdown pipeline (mentions, attachments, light formatting).
+ * One message in the shared Channel/DM/Thread timeline. Ordinary text renders
+ * as an IM-style message item, while quote/attachment/code-like content keeps
+ * local structure inside the shared Markdown pipeline.
  *
  * Desktop: right-click → context menu (Reply).
  * Mobile: long-press → context menu (ContextMenu handles this natively).
@@ -143,6 +145,8 @@ export function ChannelMessageBubble({
   const threadReplyCount = message.thread_reply_count ?? 0;
   const threadUnreadCount = message.thread_unread_count ?? 0;
   const hasThreadActivity = threadReplyCount > 0 || threadUnreadCount > 0;
+  const hasFeedback = (message.reactions?.length ?? 0) > 0 || hasThreadActivity;
+  const quickReactionEmojis = ["👍", "❤️", "👌", "👀", "🎉", "💯"];
 
   return (
     <ContextMenu>
@@ -152,9 +156,8 @@ export function ChannelMessageBubble({
         data-own={isOwn}
         tabIndex={0}
         className={cn(
-          "group relative flex select-text gap-2.5 px-1 py-1.5 outline-none transition-colors duration-1000",
-          isOwn ? "flex-row-reverse" : "flex-row",
-          highlighted && "rounded-lg bg-primary/10 ring-1 ring-primary/25 duration-0",
+          "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 py-1.5 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35",
+          highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0",
         )}
       >
         {profileActorType && profileActorId ? (
@@ -167,18 +170,8 @@ export function ChannelMessageBubble({
         ) : (
           avatar
         )}
-        <div
-          className={cn(
-            "flex min-w-0 max-w-[82%] flex-col gap-1 md:max-w-[min(680px,68%)]",
-            isOwn && "items-end",
-          )}
-        >
-          <div
-            className={cn(
-              "flex select-none items-center gap-2 text-sm",
-              isOwn && "flex-row-reverse",
-            )}
-          >
+        <div className="min-w-0 max-w-[min(760px,100%)]">
+          <div className="mb-0.5 flex select-none items-baseline gap-2 text-sm">
             {profileActorType && profileActorId ? (
               <ActorProfileTrigger
                 memberType={profileActorType}
@@ -203,26 +196,75 @@ export function ChannelMessageBubble({
               {formatTime(message.created_at)}
             </span>
           </div>
+          <div className="absolute right-2 top-1.5 z-10 hidden items-center gap-0.5 rounded-md border bg-background p-0.5 text-muted-foreground group-hover:flex group-focus-within:flex">
+            {onReact && (
+              <QuickEmojiPicker
+                onSelect={(emoji) => onReact(message, emoji)}
+                align="end"
+                className="size-7 rounded-md"
+                ariaLabel={t(($) => $.message.add_reaction)}
+                sideOffset={1}
+                contentClassName="rounded-md border border-border bg-popover shadow-none ring-0"
+              />
+            )}
+            {canQuote && (
+              <button
+                type="button"
+                onClick={() => onQuote?.(message)}
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-foreground"
+                aria-label={t(($) => $.quote.reply)}
+                title={t(($) => $.quote.reply)}
+              >
+                <Reply className="size-3.5" />
+              </button>
+            )}
+            {canOpenThread && (
+              <button
+                type="button"
+                onClick={() => onOpenThread?.(message)}
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-foreground"
+                aria-label={t(($) => $.thread.reply)}
+                title={t(($) => $.thread.reply)}
+              >
+                <MessageSquare className="size-3.5" />
+              </button>
+            )}
+            {(canQuote || canOpenThread) && (
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-foreground"
+                  aria-label={t(($) => $.quote.more_aria)}
+                >
+                  <MoreHorizontal className="size-3.5" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {canOpenThread && (
+                    <DropdownMenuItem onClick={() => onOpenThread(message)}>
+                      <MessageSquare className="size-4" />
+                      {t(($) => $.thread.reply)}
+                    </DropdownMenuItem>
+                  )}
+                  {canQuote && (
+                    <DropdownMenuItem onClick={() => onQuote?.(message)}>
+                      <Reply className="size-4" />
+                      {t(($) => $.quote.reply)}
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
           <ContextMenuTrigger
             className="select-text"
             render={
               <div
                 className={cn(
-                  "w-fit min-w-0 max-w-full select-text overflow-hidden break-words rounded-lg border px-3 py-2 text-sm leading-6 shadow-none",
-                  isOwn
-                    ? "border-border/35 bg-background"
-                    : isAgent
-                      ? "border-primary/10 bg-primary/[0.035]"
-                      : "border-border/35 bg-muted/30",
+                  "min-w-0 max-w-full select-text overflow-hidden break-words text-sm leading-6 text-foreground",
+                  searchHighlighted && "rounded-md bg-primary/5",
                 )}
                 data-testid="message-body"
                 onContextMenuCapture={(e) => {
                   if (hasTextSelectionWithin(e.currentTarget)) {
-                    e.stopPropagation();
-                  }
-                }}
-                onTouchStartCapture={(e) => {
-                  if (e.target !== e.currentTarget) {
                     e.stopPropagation();
                   }
                 }}
@@ -260,29 +302,24 @@ export function ChannelMessageBubble({
               className="mt-1.5"
             />
           </ContextMenuTrigger>
-          {onReact && (
-            <ReactionBar
-              reactions={message.reactions ?? []}
-              currentUserId={currentUserId ?? undefined}
-              onToggle={(emoji) => onReact(message, emoji)}
-              getActorName={getActorName}
-              className={cn(isOwn && "justify-end")}
-              quickEmojis={["👍", "❤️", "💯", "🎉"]}
-            />
-          )}
-          {(canOpenThread || hasThreadActivity) && onOpenThread && (
-            <div
-              className={cn(
-                "flex w-fit items-center gap-1",
-                isOwn && "flex-row-reverse",
+          {hasFeedback && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {onReact && (message.reactions?.length ?? 0) > 0 && (
+                <ReactionBar
+                  reactions={message.reactions ?? []}
+                  currentUserId={currentUserId ?? undefined}
+                  onToggle={(emoji) => onReact(message, emoji)}
+                  getActorName={getActorName}
+                  hideAddButton
+                  showQuickReactions={false}
+                />
               )}
-            >
-              {hasThreadActivity && (
+              {hasThreadActivity && onOpenThread && (
                 <button
                   type="button"
                   onClick={() => onOpenThread(message)}
                   className={cn(
-                    "flex w-fit items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+                    "inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
                     threadUnreadCount > 0 && "font-medium text-primary",
                   )}
                 >
@@ -295,36 +332,34 @@ export function ChannelMessageBubble({
                   )}
                 </button>
               )}
-              {canOpenThread && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-foreground data-[state=open]:opacity-100 md:size-6 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
-                    aria-label={t(($) => $.quote.more_aria)}
-                  >
-                    <MoreHorizontal className="size-3.5" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align={isOwn ? "start" : "end"}>
-                    <DropdownMenuItem onClick={() => onOpenThread(message)}>
-                      <MessageSquare className="size-4" />
-                      {t(($) => $.thread.reply)}
-                    </DropdownMenuItem>
-                    {canQuote && (
-                      <DropdownMenuItem onClick={() => onQuote?.(message)}>
-                        <Reply className="size-4" />
-                        {t(($) => $.quote.reply)}
-                      </DropdownMenuItem>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
             </div>
           )}
         </div>
       </div>
 
       {/* Right-click / long-press context menu */}
-      {(canQuote || canOpenThread) && (
+      {(onReact || canQuote || canOpenThread) && (
         <ContextMenuContent>
+          {onReact && (
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                {t(($) => $.message.add_reaction)}
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent>
+                <div className="grid grid-cols-6 gap-1 p-1">
+                  {quickReactionEmojis.map((emoji) => (
+                    <ContextMenuItem
+                      key={emoji}
+                      onClick={() => onReact(message, emoji)}
+                      className="justify-center px-2 text-base"
+                    >
+                      {emoji}
+                    </ContextMenuItem>
+                  ))}
+                </div>
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          )}
           {canOpenThread && (
             <ContextMenuItem onClick={() => onOpenThread(message)}>
               <MessageSquare className="size-4" />

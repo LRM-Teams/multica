@@ -1104,6 +1104,13 @@ export function useRealtimeSync(
       }
     });
 
+    const unsubChannelReactionRemoved = ws.on("channel_reaction:removed", (p) => {
+      const payload = p as { channel_id?: string; message_id?: string };
+      if (payload.channel_id) {
+        qc.invalidateQueries({ queryKey: channelKeys.messages(payload.channel_id) });
+      }
+    });
+
     const unsubChannelUpdated = ws.on("channel:updated", () => {
       const id = getCurrentWsId();
       if (id) qc.invalidateQueries({ queryKey: channelKeys.list(id) });
@@ -1152,6 +1159,7 @@ export function useRealtimeSync(
       unsubChatSessionUpdated();
       unsubChannelMessage();
       unsubChannelReactionAdded();
+      unsubChannelReactionRemoved();
       unsubChannelUpdated();
       timers.forEach(clearTimeout);
       timers.clear();

@@ -171,8 +171,6 @@ func (f *fakeEnvDispatchDeps) seedBaseEnv() string {
 	return id
 }
 
-const EnvModeBase EnvMode = "base"
-
 func TestDispatch_ScratchSweLegoIssue_N3(t *testing.T) {
 	f := newFakeEnvDispatchDeps()
 	baseEnv := f.seedBaseEnv()

@@ -3,31 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
 import { MessageViewport } from "./channel-message-list";
 
-vi.mock("react-virtuoso", () => ({
-  Virtuoso: ({
-    data,
-    itemContent,
-    components,
-  }: {
-    data: ChannelMessage[];
-    itemContent: (index: number, message: ChannelMessage) => React.ReactNode;
-    components?: {
-      Header?: () => React.ReactNode;
-      Footer?: () => React.ReactNode;
-    };
-  }) => (
-    <div data-testid="virtuoso-item-list">
-      {components?.Header?.()}
-      {data.map((message, index) => (
-        <div key={message.id} data-testid="virtuoso-row">
-          {itemContent(index, message)}
-        </div>
-      ))}
-      {components?.Footer?.()}
-    </div>
-  ),
-}));
-
 vi.mock("../../common/markdown", () => ({
   MemoizedMarkdown: ({ children }: { children: string }) => <span>{children}</span>,
 }));
@@ -101,6 +76,8 @@ describe("MessageViewport", () => {
     );
 
     expect(screen.getAllByTestId("message-bubble")).toHaveLength(2);
+    expect(screen.getAllByTestId("message-row")).toHaveLength(2);
+    expect(screen.getByTestId("message-item-list").children).toHaveLength(3);
     expect(screen.getByText("First visible message")).toBeInTheDocument();
     expect(screen.getByText("Second visible message")).toBeInTheDocument();
   });

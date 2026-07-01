@@ -7,8 +7,8 @@ import {
   activeChannelTasksKeys,
   activeChannelTasksOptions,
   channelMessageThreadOptions,
-  channelKeys,
-  channelMessagesOptions,
+  channelMessagesPageOptions,
+  flattenChannelMessagePages,
   useMarkChannelThreadRead,
   useMarkChannelRead,
   useSendChannelMessage,
@@ -216,7 +216,16 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   const setTyping = useSetChannelTyping();
   const { uploadWithToast } = useFileUpload(api);
 
-  const { data: messages = [] } = useQuery(channelMessagesOptions(channelId));
+  const {
+    data: messagePages,
+    isLoading: messagesLoading,
+    isError: messagesError,
+    refetch: refetchMessages,
+    fetchNextPage: fetchOlderMessages,
+    hasNextPage: hasOlderMessages,
+    isFetchingNextPage: isFetchingOlderMessages,
+  } = useInfiniteQuery(channelMessagesPageOptions(channelId));
+  const messages = useMemo(() => flattenChannelMessagePages(messagePages), [messagePages]);
   const [openThreadRoot, setOpenThreadRoot] = useState<ChannelMessage | null>(null);
   const threadRoot =
     openThreadRoot && openThreadRoot.channel_id === channelId
@@ -352,7 +361,6 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   useWSEvent("channel:message", (payload) => {
     const e = payload as { channel_id?: string };
     if (e.channel_id !== channelId) return;
-    qc.invalidateQueries({ queryKey: channelKeys.messages(channelId) });
     qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelId) });
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
     markChannelRead(channelId);
@@ -722,6 +730,14 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         highlightMessageId={highlightMessageId}
         searchHitIds={searchHitIds}
         searchQuery={searchHighlightQuery}
+        loading={messagesLoading}
+        loadingOlder={isFetchingOlderMessages}
+        hasOlder={!!hasOlderMessages}
+        onLoadOlder={() => fetchOlderMessages()}
+        loadOlderLabel={t(($) => $.message_loading.load_older)}
+        loadingOlderLabel={t(($) => $.message_loading.loading_older)}
+        loadErrorLabel={messagesError ? t(($) => $.message_loading.load_failed_retry) : undefined}
+        onRetry={() => refetchMessages()}
         emptyLabel={t(($) => $.dm.thread_empty)}
         footer={<TypingIndicator actors={activeTypingActors} />}
         onOpenThread={handleOpenThread}

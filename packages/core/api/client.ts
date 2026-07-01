@@ -1935,23 +1935,32 @@ export class ApiClient {
   }
 
   async listChannelMessages(channelId: string): Promise<ChannelMessage[]> {
-    return this.fetch(`/api/channels/${channelId}/messages`);
+    const page = await this.listChannelMessagesPage(channelId);
+    return page.messages;
   }
 
   async listChannelMessagesPage(
     channelId: string,
-    options?: { limit?: number; beforeCreatedAt?: string; beforeId?: string },
+    options: { limit?: number; before?: { created_at: string; id: string } | null } = {},
   ): Promise<ChannelMessagesPage> {
-    const params = new URLSearchParams();
-    if (options?.limit) {
-      params.set("limit", String(options.limit));
+    const limit = options.limit ?? 50;
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (options.before) {
+      params.set("before_created_at", options.before.created_at);
+      params.set("before_id", options.before.id);
     }
-    if (options?.beforeCreatedAt && options?.beforeId) {
-      params.set("before_created_at", options.beforeCreatedAt);
-      params.set("before_id", options.beforeId);
+    const raw = await this.fetch<ChannelMessage[] | Partial<ChannelMessagesPage>>(
+      `/api/channels/${channelId}/messages?${params.toString()}`,
+    );
+    if (Array.isArray(raw)) {
+      return { messages: raw, limit, has_more: false, next_cursor: null };
     }
-    const suffix = params.toString();
-    return this.fetch(`/api/channels/${channelId}/messages${suffix ? `?${suffix}` : "?limit=50"}`);
+    return {
+      messages: raw.messages ?? [],
+      limit: raw.limit ?? limit,
+      has_more: raw.has_more ?? false,
+      next_cursor: raw.next_cursor ?? null,
+    };
   }
 
   async listChannelMessageThread(

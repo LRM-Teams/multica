@@ -204,6 +204,11 @@
   "quote": {
     "jump_to": "Jump to original message"
   },
+  "message_loading": {
+    "load_older": "Load older messages",
+    "loading_older": "Loading older messages...",
+    "load_failed_retry": "Messages failed to load · Retry"
+  },
   "conv_search": {
     "placeholder": "Search in {{name}}…",
     "group_placeholder": "Search this channel's messages…",

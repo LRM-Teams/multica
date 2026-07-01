@@ -43,7 +43,7 @@ import {
 } from "../platform/system-notification";
 import type { Workspace } from "../types/workspace";
 import { chatKeys } from "../chat/queries";
-import { channelKeys } from "../channels/queries";
+import { channelKeys, invalidateChannelMessages, upsertChannelMessageInCache } from "../channels/queries";
 import { dmKeys } from "../dm/queries";
 import { useChatStore } from "../chat";
 import { resolvePostAuthDestination, useHasOnboarded } from "../paths";
@@ -84,6 +84,7 @@ import type {
   ChatMessage,
   ChatPendingTask,
   ChatMessagesPage,
+  ChannelMessage,
   InvitationCreatedPayload,
 } from "../types";
 
@@ -1110,8 +1111,12 @@ export function useRealtimeSync(
     });
 
     const unsubChannelMessage = ws.on("channel:message", (p) => {
-      const payload = p as { channel_id: string; thread_root_message_id?: string | null };
-      qc.invalidateQueries({ queryKey: channelKeys.messages(payload.channel_id) });
+      const payload = p as ChannelMessage;
+      if (payload.channel_id && payload.id && !payload.thread_root_message_id) {
+        upsertChannelMessageInCache(qc, payload);
+      } else if (payload.channel_id) {
+        invalidateChannelMessages(qc, payload.channel_id);
+      }
       if (payload.thread_root_message_id) {
         qc.invalidateQueries({ queryKey: channelKeys.messageThread(payload.channel_id, payload.thread_root_message_id) });
       }

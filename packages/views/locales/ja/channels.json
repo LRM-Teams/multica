@@ -204,6 +204,11 @@
   "quote": {
     "jump_to": "元のメッセージへジャンプ"
   },
+  "message_loading": {
+    "load_older": "過去のメッセージを読み込む",
+    "loading_older": "過去のメッセージを読み込み中...",
+    "load_failed_retry": "メッセージを読み込めませんでした · 再試行"
+  },
   "conv_search": {
     "placeholder": "{{name}} を検索…",
     "group_placeholder": "このチャンネルのメッセージを検索…",

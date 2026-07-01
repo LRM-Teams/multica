@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -11,6 +12,7 @@ import {
 } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";
+import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 
 /**
@@ -43,12 +45,20 @@ function MessageViewport({
   onReact,
   searchHitIds,
   searchQuery,
+  loading,
+  loadingOlder,
+  hasOlder,
+  onLoadOlder,
+  loadOlderLabel,
+  loadingOlderLabel,
+  loadErrorLabel,
+  onRetry,
 }: {
   messages: ChannelMessage[];
   currentUserId: string | null;
   /** Display name for the viewer's own messages. */
   ownName?: string;
-  /** Deep-link target id — scrolls to and ring-highlights that bubble. */
+  /** Deep-link target id - scrolls to and ring-highlights that bubble. */
   highlightMessageId?: string | null;
   /** Centered placeholder shown when there are no messages yet. */
   emptyLabel: string;
@@ -63,18 +73,37 @@ function MessageViewport({
   onScrollToMessage?: (messageId: string) => void;
   /** Toggle/add a lightweight emoji reaction on this message. */
   onReact?: (message: ChannelMessage, emoji: string) => void;
-  /** Search hit ids — all matching messages get inline keyword marks while search is open. */
+  /** Search hit ids - all matching messages get inline keyword marks while search is open. */
   searchHitIds?: Set<string>;
   /** Conversation search phrase used for inline keyword marks within search hits. */
   searchQuery?: string;
+  /** Initial page is loading and no cached messages are available. */
+  loading?: boolean;
+  /** Older history page is loading above the current viewport. */
+  loadingOlder?: boolean;
+  /** Whether older history can be requested from the top affordance. */
+  hasOlder?: boolean;
+  /** Load the next older history page. */
+  onLoadOlder?: () => void;
+  loadOlderLabel?: string;
+  loadingOlderLabel?: string;
+  /** Localized error text for initial-load failures. */
+  loadErrorLabel?: string;
+  /** Retry the initial page without replacing the shell. */
+  onRetry?: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const messageRefs = useRef<Map<string, HTMLDivElement> | null>(null);
+  const previousMessageCountRef = useRef(messages.length);
+  const previousFirstMessageIdRef = useRef(messages[0]?.id ?? null);
+  const preserveScrollDeltaRef = useRef<number | null>(null);
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
   const [directFallbackChannelId, setDirectFallbackChannelId] = useState<string | null>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const channelId = messages[0]?.channel_id;
+  const canLoadOlder = !!hasOlder && !loadingOlder && !!onLoadOlder;
+
   if (!messageRefs.current) {
     messageRefs.current = new Map<string, HTMLDivElement>();
   }
@@ -89,6 +118,22 @@ function MessageViewport({
     if (!highlightMessageId) return -1;
     return messages.findIndex((m) => m.id === highlightMessageId);
   }, [messages, highlightMessageId]);
+
+  const requestLoadOlder = useCallback(() => {
+    const scroller = scrollRef.current;
+    if (scroller) {
+      preserveScrollDeltaRef.current = scroller.scrollHeight - scroller.scrollTop;
+    }
+    onLoadOlder?.();
+  }, [onLoadOlder]);
+
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    const delta = preserveScrollDeltaRef.current;
+    if (!scroller || delta === null) return;
+    scroller.scrollTop = scroller.scrollHeight - delta;
+    preserveScrollDeltaRef.current = null;
+  }, [messages]);
 
   useEffect(() => {
     if (messages.length === 0 || useDirectFallback) return;
@@ -116,14 +161,49 @@ function MessageViewport({
       });
       return;
     }
+
     const scroller = scrollRef.current;
     if (!scroller) return;
-    scroller.scrollTop = scroller.scrollHeight;
-  }, [highlightIndex, highlightMessageId, messageRefMap, messages.length]);
+    const previousCount = previousMessageCountRef.current;
+    const previousFirstId = previousFirstMessageIdRef.current;
+    const firstId = messages[0]?.id ?? null;
+    const appendedAtBottom = messages.length > previousCount && firstId === previousFirstId;
+    const initialMessages = previousCount === 0 && messages.length > 0;
+    if (initialMessages || appendedAtBottom) {
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+    previousMessageCountRef.current = messages.length;
+    previousFirstMessageIdRef.current = firstId;
+  }, [highlightIndex, highlightMessageId, messageRefMap, messages]);
+
+  if (loadErrorLabel) {
+    return (
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-5 pb-5 pt-3">
+        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+          <button
+            type="button"
+            className="rounded-md px-3 py-2 text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={onRetry}
+          >
+            {loadErrorLabel}
+          </button>
+        </div>
+        {footer}
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-0 min-w-0 flex-1 overflow-hidden px-5 pb-5 pt-3">
+        <MessageRowsSkeleton />
+      </div>
+    );
+  }
 
   // Empty thread: render the placeholder + live affordances directly (no
   // message rows). The previous plain-map rendering always kept the
-  // agent-working / typing indicators visible even before the first message —
+  // agent-working / typing indicators visible even before the first message -
   // preserve that.
   if (messages.length === 0) {
     return (
@@ -135,6 +215,25 @@ function MessageViewport({
       </div>
     );
   }
+
+  const renderLoadOlderAffordance = () => {
+    if (!hasOlder && !loadingOlder) return null;
+    return (
+      <div className="px-5 pb-2">
+        {loadingOlder ? (
+          <div className="text-center text-xs text-muted-foreground">{loadingOlderLabel}</div>
+        ) : (
+          <button
+            type="button"
+            className="mx-auto block rounded-md px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={requestLoadOlder}
+          >
+            {loadOlderLabel}
+          </button>
+        )}
+      </div>
+    );
+  };
 
   const renderRow = (msg: ChannelMessage) => {
     const searchHighlighted = searchHitIds?.has(msg.id) ?? false;
@@ -182,8 +281,13 @@ function MessageViewport({
         ref={setScrollContainerRef}
         className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
         data-testid="message-scroller"
+        onScroll={(event) => {
+          if (!canLoadOlder) return;
+          if (event.currentTarget.scrollTop < 80) requestLoadOlder();
+        }}
       >
         <div className="virtuoso-item-list pt-3" data-testid="message-item-list">
+          {renderLoadOlderAffordance()}
           {messages.map(renderRow)}
           {footer ? <div className="px-5 pb-5 pt-2">{footer}</div> : <div className="pb-5" />}
         </div>
@@ -196,6 +300,10 @@ function MessageViewport({
       ref={setScrollContainerRef}
       className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
       data-testid="message-scroller"
+      onScroll={(event) => {
+        if (!canLoadOlder) return;
+        if (event.currentTarget.scrollTop < 80) requestLoadOlder();
+      }}
     >
       <Virtuoso
         ref={virtuosoRef}
@@ -209,7 +317,11 @@ function MessageViewport({
         computeItemKey={(_, msg) => msg.id}
         components={{
           List: VirtuosoItemList,
-          Header: () => <div className="pt-3" />,
+          Header: () => (
+            <div className="pt-3">
+              {renderLoadOlderAffordance()}
+            </div>
+          ),
           Footer: () => (footer ? <div className="px-5 pb-5 pt-2">{footer}</div> : <div className="pb-5" />),
         }}
         itemContent={(_, msg) => renderRow(msg)}
@@ -229,6 +341,31 @@ function VirtuosoItemList({
       className={["virtuoso-item-list", props.className].filter(Boolean).join(" ")}
       data-testid="message-item-list"
     />
+  );
+}
+
+function MessageRowsSkeleton() {
+  const rows = [
+    ["w-44", "w-72", "w-52"],
+    ["w-28", "w-80", "w-40"],
+    ["w-36", "w-64", "w-72"],
+    ["w-32", "w-56", "w-44"],
+    ["w-40", "w-72", "w-48"],
+    ["w-24", "w-60", "w-36"],
+  ];
+  return (
+    <div className="space-y-5" aria-hidden="true">
+      {rows.map((widths, index) => (
+        <div key={index} className="flex gap-3">
+          <Skeleton className="mt-1 size-8 shrink-0 rounded-full opacity-60" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className={`${widths[0]} h-3 max-w-full opacity-50`} />
+            <Skeleton className={`${widths[1]} h-3 max-w-full opacity-40`} />
+            <Skeleton className={`${widths[2]} h-3 max-w-full opacity-30`} />
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 

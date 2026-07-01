@@ -1,13 +1,13 @@
-import { queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
+import type { ChannelMessage, ChannelMessagesPage } from "../types";
 
 export const channelKeys = {
   all: (wsId: string) => ["channels", wsId] as const,
   list: (wsId: string) => [...channelKeys.all(wsId), "list"] as const,
   archivedList: (wsId: string) => [...channelKeys.all(wsId), "archived-list"] as const,
   messages: (channelId: string) => ["channel-messages", channelId] as const,
-  messagesPage: (channelId: string, limit?: number, beforeCreatedAt?: string, beforeId?: string) =>
-    ["channel-messages-page", channelId, limit, beforeCreatedAt, beforeId] as const,
+  messagesPage: (channelId: string) => ["channel-messages-page", channelId] as const,
   messageThread: (channelId: string, messageId: string) => ["channel-message-thread", channelId, messageId] as const,
   messageSearch: (channelId: string, query: string, limit?: number) => ["channel-message-search", channelId, query, limit] as const,
   members: (channelId: string) => ["channel-members", channelId] as const,
@@ -40,12 +40,64 @@ export function channelMessagesOptions(channelId: string) {
   });
 }
 
-export function channelMessagesPageOptions(channelId: string, options?: { limit?: number; beforeCreatedAt?: string; beforeId?: string }) {
-  return queryOptions({
-    queryKey: channelKeys.messagesPage(channelId, options?.limit, options?.beforeCreatedAt, options?.beforeId),
-    queryFn: () => api.listChannelMessagesPage(channelId, options),
+export function channelMessagesPageOptions(channelId: string, limit = 50) {
+  return infiniteQueryOptions({
+    queryKey: channelKeys.messagesPage(channelId),
+    queryFn: ({ pageParam }) =>
+      api.listChannelMessagesPage(channelId, {
+        before: pageParam,
+        limit,
+      }),
+    initialPageParam: null as { created_at: string; id: string } | null,
+    getNextPageParam: (lastPage) =>
+      lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined,
     enabled: !!channelId,
+    staleTime: Infinity,
   });
+}
+
+export function flattenChannelMessagePages(data?: InfiniteData<ChannelMessagesPage>): ChannelMessage[] {
+  return data ? [...data.pages].reverse().flatMap((page) => page.messages) : [];
+}
+
+export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMessage) {
+  qc.setQueryData<ChannelMessage[]>(channelKeys.messages(message.channel_id), (old) => upsertChannelMessage(old, message));
+  qc.setQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage(message.channel_id), (old) => {
+    if (!old) {
+      return {
+        pageParams: [null],
+        pages: [{ messages: [message], limit: 1, next_cursor: null, has_more: false }],
+      };
+    }
+    const existingPageIndex = old.pages.findIndex((page: ChannelMessagesPage) =>
+      page.messages.some((existing: ChannelMessage) => existing.id === message.id),
+    );
+    const pages = old.pages.map((page, index) => {
+      if (existingPageIndex < 0 && index === 0) {
+        return { ...page, messages: [...page.messages, message] };
+      }
+      const messages = page.messages.map((existing: ChannelMessage) => {
+        if (existing.id !== message.id) return existing;
+        return message;
+      });
+      return { ...page, messages };
+    });
+    return { ...old, pages };
+  });
+}
+
+export function invalidateChannelMessages(qc: QueryClient, channelId: string) {
+  qc.invalidateQueries({ queryKey: channelKeys.messages(channelId) });
+  qc.invalidateQueries({ queryKey: channelKeys.messagesPage(channelId) });
+}
+
+function upsertChannelMessage(old: ChannelMessage[] | undefined, message: ChannelMessage) {
+  if (!old) return [message];
+  const index = old.findIndex((existing) => existing.id === message.id);
+  if (index >= 0) {
+    return old.map((existing) => (existing.id === message.id ? message : existing));
+  }
+  return [...old, message];
 }
 
 export function channelMessageThreadOptions(channelId: string, messageId: string, options?: { limit?: number; before?: string; beforeId?: string }) {

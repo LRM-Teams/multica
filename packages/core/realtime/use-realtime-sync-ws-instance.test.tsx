@@ -1,11 +1,13 @@
 /**
  * @vitest-environment jsdom
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, type InfiniteData } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
+import { channelKeys } from "../channels/queries";
+import type { ChannelMessage, ChannelMessagesPage } from "../types";
 import { useRealtimeSync, type RealtimeSyncStores } from "./use-realtime-sync";
 
 vi.mock("../platform/workspace-storage", () => ({
@@ -169,4 +171,77 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(calls).toContainEqual(["issues", "attachments"]);
     expect(calls).toContainEqual(["issues", "tasks"]);
   });
+
+  it("upserts root channel messages but invalidates thread replies", () => {
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+
+    const channelMessageHandler = (ws.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([eventName]) => eventName === "channel:message",
+    )?.[1] as ((payload: ChannelMessage) => void) | undefined;
+    expect(channelMessageHandler).toBeDefined();
+
+    qc.setQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage("channel-1"), {
+      pages: [
+        {
+          messages: [channelMessage("root-old")],
+          limit: 50,
+          has_more: false,
+          next_cursor: null,
+        },
+      ],
+      pageParams: [null],
+    });
+
+    channelMessageHandler?.(channelMessage("root-new"));
+
+    expect(
+      qc
+        .getQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage("channel-1"))
+        ?.pages[0]?.messages.map((message) => message.id),
+    ).toEqual(["root-old", "root-new"]);
+
+    const invalidateBeforeThreadReply = invalidateSpy.mock.calls.length;
+    channelMessageHandler?.(channelMessage("reply-1", { thread_root_message_id: "root-old" }));
+
+    expect(
+      qc
+        .getQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage("channel-1"))
+        ?.pages[0]?.messages.map((message) => message.id),
+    ).toEqual(["root-old", "root-new"]);
+    expect(invalidateSpy.mock.calls.length).toBeGreaterThan(invalidateBeforeThreadReply);
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: channelKeys.messageThread("channel-1", "root-old"),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: channelKeys.messagesPage("channel-1"),
+    });
+  });
 });
+
+function channelMessage(
+  id: string,
+  overrides: Partial<ChannelMessage> = {},
+): ChannelMessage {
+  return {
+    id,
+    channel_id: "channel-1",
+    workspace_id: "ws-1",
+    author_type: "user",
+    author_id: "author-1",
+    author_name: "Author",
+    content: id,
+    source: "multica",
+    external_message_id: null,
+    created_at: "2026-07-01T00:00:00Z",
+    thread_root_message_id: null,
+    thread_reply_count: 0,
+    thread_last_reply_at: null,
+    thread_unread_count: 0,
+    thread_followed: false,
+    reactions: [],
+    ...overrides,
+  };
+}

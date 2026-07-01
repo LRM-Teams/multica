@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TestListWorkspaceAgentTaskSnapshot covers the agent presence snapshot endpoint:
@@ -243,8 +245,8 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	if items[0].ID != newerID || items[0].Kind != "tool_use" || items[0].Status != "running" {
 		t.Fatalf("newest activity = %#v, want running file activity %s", items[0], newerID)
 	}
-	if items[0].Label != "Editing file" || items[0].Summary == nil || *items[0].Summary != "profile.go" {
-		t.Fatalf("newest activity projection = %#v, want Editing file/profile.go", items[0])
+	if items[0].Label != "Editing file" {
+		t.Fatalf("newest activity projection = %#v, want Editing file", items[0])
 	}
 	if items[1].ID != olderID || items[1].Kind != "command" || items[1].Status != "failed" {
 		t.Fatalf("older activity = %#v, want command task %s", items[1], olderID)
@@ -252,11 +254,12 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	if items[1].Label != "Ran command" {
 		t.Fatalf("command activity label = %q, want Ran command", items[1].Label)
 	}
-	if items[1].Summary != nil {
-		t.Fatalf("command activity summary = %q, want nil for compact profile card", *items[1].Summary)
-	}
 	body := w.Body.String()
 	for _, leak := range []string{
+		`"summary"`,
+		"newer work item",
+		"fallback task",
+		"profile.go",
 		"raw stacktrace",
 		"raw command output",
 		"raw patch output",
@@ -272,6 +275,27 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	}
 	if items[0].OccurredAt == "" || items[1].OccurredAt == "" {
 		t.Fatalf("expected occurred_at on every item: %#v", items)
+	}
+}
+
+func TestProjectTextActivity_ProjectsActionWithoutSummary(t *testing.T) {
+	for _, content := range []string{
+		"9a5-d69cd32e15e6)",
+		"550e8400-e29b-41d4-a716-446655440000",
+		"sk-proj-abc123def456",
+		"I finished updating the profile activity summary.",
+		"我已完成资料页活动摘要清理",
+	} {
+		item, ok := projectTextActivity(recentTaskActivityMessage{
+			Type:    "text",
+			Content: pgtype.Text{String: content, Valid: true},
+		}, "completed")
+		if !ok {
+			t.Fatalf("projectTextActivity returned ok=false for %q", content)
+		}
+		if item.Label != "Writing response" {
+			t.Fatalf("label = %q, want Writing response", item.Label)
+		}
 	}
 }
 

@@ -63,7 +63,6 @@ function makeActivity(index: number): MemberProfileActivityItem {
     id: `activity-${index}`,
     kind: "task",
     label: `Activity ${index}`,
-    summary: `Summary ${index}`,
     occurred_at: `2026-06-30T00:0${index}:00Z`,
     status: "completed",
   };
@@ -91,7 +90,7 @@ describe("ActorProfileContentLoaded", () => {
 
     for (let index = 1; index <= 5; index += 1) {
       expect(screen.getByText(`Activity ${index}`)).toBeInTheDocument();
-      expect(screen.getByText(`Summary ${index}`)).toBeInTheDocument();
     }
+    expect(screen.getAllByText("just now")).toHaveLength(5);
   });
 });

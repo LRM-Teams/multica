@@ -85,7 +85,6 @@ export interface MemberProfileActivityItem {
   id: string;
   kind: "command" | "tool_use" | "text" | "queued" | "working" | "failed" | "cancelled" | "task";
   label: string;
-  summary?: string;
   occurred_at: string;
   status: "queued" | "dispatched" | "waiting_local_directory" | "running" | "completed" | "failed" | "cancelled";
 }

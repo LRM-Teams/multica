@@ -15,15 +15,13 @@ import (
 // tryResolveAppURL returns the app URL if configured, or "" if not available.
 // Unlike resolveAppURL, it never calls os.Exit.
 func tryResolveAppURL(cmd *cobra.Command) string {
+	if val := configuredAppURL(cmd); val != "" {
+		return val
+	}
 	for _, key := range []string{"MULTICA_APP_URL", "FRONTEND_ORIGIN"} {
 		if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 			return strings.TrimRight(val, "/")
 		}
-	}
-	profile := resolveProfile(cmd)
-	cfg, err := cli.LoadCLIConfigForProfile(profile)
-	if err == nil && cfg.AppURL != "" {
-		return strings.TrimRight(cfg.AppURL, "/")
 	}
 	return ""
 }

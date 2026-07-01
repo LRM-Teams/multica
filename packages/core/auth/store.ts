@@ -118,12 +118,17 @@ export function createAuthStore(options: AuthStoreOptions) {
     },
 
     logout: () => {
-      if (cookieAuth) {
-        // Clear server-side HttpOnly cookie.
-        api.logout().catch(() => {});
-      }
+      // Best-effort: remove this browser/device binding before clearing auth so
+      // background Push cannot keep delivering to a logged-out browser profile.
+      void (async () => {
+        await unbindBrowserPushSubscription(api).catch(() => undefined);
+        if (cookieAuth) {
+          // Clear server-side HttpOnly cookie.
+          await api.logout().catch(() => undefined);
+        }
+        api.setToken(null);
+      })();
       storage.removeItem("multica_token");
-      api.setToken(null);
       setCurrentWorkspace(null, null);
       resetAnalytics();
       onLogout?.();
@@ -139,4 +144,17 @@ export function createAuthStore(options: AuthStoreOptions) {
       set({ user });
     },
   }));
+}
+
+async function unbindBrowserPushSubscription(api: ApiClient): Promise<void> {
+  if (typeof window === "undefined" || !("serviceWorker" in window.navigator)) return;
+  const registrations = await window.navigator.serviceWorker.getRegistrations();
+  await Promise.all(
+    registrations.map(async (registration) => {
+      const subscription = await registration.pushManager.getSubscription();
+      if (!subscription) return;
+      await api.unbindWebPushSubscription(subscription.endpoint).catch(() => undefined);
+      await subscription.unsubscribe().catch(() => false);
+    }),
+  );
 }

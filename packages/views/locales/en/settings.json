@@ -94,6 +94,8 @@
       "enable": "Enable",
       "granted": "This browser can show notification banners.",
       "denied": "Blocked by your browser. Enable notifications for this site in your browser settings.",
+      "unsupported": "This browser does not support background Web Push. In-app notifications still work while Multica is open.",
+      "ios_requires_pwa": "On iOS, add Multica to your Home Screen first, then open it from the Home Screen to enable background push.",
       "enabled_badge": "Enabled"
     }
   },

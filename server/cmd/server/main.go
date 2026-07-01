@@ -258,6 +258,15 @@ func main() {
 	registerActivityListeners(bus, queries)
 	registerNotificationListeners(bus, queries)
 
+	webPushConfig := handler.Config{
+		PublicURL:                strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_PUBLIC_URL")), "/"),
+		WebPushVAPIDPublicKey:    strings.TrimSpace(os.Getenv("WEB_PUSH_VAPID_PUBLIC_KEY")),
+		WebPushVAPIDPrivateKey:   strings.TrimSpace(os.Getenv("WEB_PUSH_VAPID_PRIVATE_KEY")),
+		WebPushVAPIDSubject:      strings.TrimSpace(os.Getenv("WEB_PUSH_VAPID_SUBJECT")),
+		WebPushAppURL:            strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_APP_URL")), "/"),
+	}
+	registerWebPushListeners(bus, queries, webPushConfig)
+
 	metricsConfig := obsmetrics.ConfigFromEnv()
 	var metricsServer *http.Server
 	var httpMetrics *obsmetrics.HTTPMetrics

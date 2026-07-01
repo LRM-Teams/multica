@@ -2173,27 +2173,30 @@ export function ChannelsPage() {
           )}
         </main>
   );
-  const detailPane =
-    !isMobile && threadPanel ? (
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-        <ResizablePanel id="conversation" minSize="50%" className="flex min-h-0 flex-col">
-          {channelConversationPane}
-        </ResizablePanel>
-        <ResizableHandle />
-        <ResizablePanel
-          id="thread"
-          defaultSize={440}
-          minSize={360}
-          maxSize={640}
-          groupResizeBehavior="preserve-pixel-size"
-          className="border-l border-border/30 bg-background"
-        >
-          {threadPanel}
-        </ResizablePanel>
-      </ResizablePanelGroup>
-    ) : (
-      channelConversationPane
-    );
+  const detailPane = !isMobile ? (
+    <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+      <ResizablePanel id="conversation" minSize="50%" className="flex min-h-0 flex-col">
+        {channelConversationPane}
+      </ResizablePanel>
+      {threadPanel ? (
+        <>
+          <ResizableHandle />
+          <ResizablePanel
+            id="thread"
+            defaultSize={440}
+            minSize={360}
+            maxSize={640}
+            groupResizeBehavior="preserve-pixel-size"
+            className="border-l border-border/30 bg-background"
+          >
+            {threadPanel}
+          </ResizablePanel>
+        </>
+      ) : null}
+    </ResizablePanelGroup>
+  ) : (
+    channelConversationPane
+  );
 
   // DM detail pane — branches by source internally (dm_channel vs
   // legacy_session). Rendered in place of the group detail when a DM is active.

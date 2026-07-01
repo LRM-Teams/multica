@@ -133,6 +133,22 @@ describe("applyChatDoneToCache", () => {
     ]);
     expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({});
   });
+
+  it("does not clear a newer queued follow-up when the interrupted run finishes", () => {
+    const qc = createQueryClient();
+    qc.setQueryData<ChatMessage[]>(messagesKey, [userMessage()]);
+    qc.setQueryData<ChatPendingTask>(pendingKey, {
+      task_id: "task-followup",
+      status: "queued",
+    });
+
+    applyChatDoneToCache(qc, donePayload({ task_id: taskId }));
+
+    expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({
+      task_id: "task-followup",
+      status: "queued",
+    });
+  });
 });
 
 describe("invalidateChatMessageQueries", () => {

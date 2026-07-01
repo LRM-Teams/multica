@@ -1900,7 +1900,17 @@ func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelRespons
 
 func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
 	h.notifyChannelMemberMentions(ctx, ch, trigger)
-	for _, agent := range h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content) {
+	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content)
+	if len(mentionedAgents) > 0 {
+		for _, agent := range mentionedAgents {
+			h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
+		}
+		return
+	}
+	if strings.Contains(trigger.Content, "@") || trigger.ThreadRootMessageID == nil {
+		return
+	}
+	for _, agent := range h.channelThreadTargetAgents(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID) {
 		h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
 	}
 }
@@ -2215,6 +2225,71 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 		if mentionAll || mentionedByID || contentMentionsAgent(content, a.Name) || contentMentionsAgent(content, a.DisplayName) {
 			out = append(out, a)
 		}
+	}
+	return out
+}
+
+func (h *Handler) channelThreadTargetAgents(ctx context.Context, workspaceID, channelID, rootMessageID string) []db.Agent {
+	agents := h.channelThreadAgentsFromQuery(ctx, `
+		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
+		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
+		       a.instructions, a.archived_at, a.display_name
+		FROM channel_message m
+		JOIN agent a ON m.author_type = 'agent' AND a.id = m.author_id
+		JOIN channel_member cm ON cm.channel_id = m.channel_id AND cm.workspace_id = m.workspace_id AND cm.member_type = 'agent' AND cm.member_id = a.id
+		WHERE m.id = $3
+		  AND m.channel_id = $1
+		  AND m.workspace_id = $2
+		  AND a.archived_at IS NULL
+		LIMIT 1`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID))
+	if len(agents) > 0 {
+		return agents
+	}
+	agents = h.channelThreadAgentsFromQuery(ctx, `
+		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
+		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
+		       a.instructions, a.archived_at, a.display_name
+		FROM channel_message m
+		JOIN agent a ON m.author_type = 'agent' AND a.id = m.author_id
+		JOIN channel_member cm ON cm.channel_id = m.channel_id AND cm.workspace_id = m.workspace_id AND cm.member_type = 'agent' AND cm.member_id = a.id
+		WHERE m.channel_id = $1
+		  AND m.workspace_id = $2
+		  AND m.thread_root_message_id = $3
+		  AND a.archived_at IS NULL
+		ORDER BY m.created_at DESC, m.id DESC
+		LIMIT 1`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID))
+	if len(agents) > 0 {
+		return agents
+	}
+	return h.channelThreadAgentsFromQuery(ctx, `
+		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
+		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
+		       a.instructions, a.archived_at, a.display_name
+		FROM chat_message cmg
+		JOIN channel_agent_session cas ON cas.chat_session_id = cmg.chat_session_id
+		JOIN agent a ON a.id = cas.agent_id
+		JOIN channel_member cm ON cm.channel_id = cas.channel_id AND cm.workspace_id = a.workspace_id AND cm.member_type = 'agent' AND cm.member_id = a.id
+		WHERE cas.channel_id = $1
+		  AND a.workspace_id = $2
+		  AND cmg.channel_thread_root_message_id = $3
+		  AND a.archived_at IS NULL
+		ORDER BY cmg.created_at DESC, cmg.id DESC
+		LIMIT 1`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID))
+}
+
+func (h *Handler) channelThreadAgentsFromQuery(ctx context.Context, query string, args ...any) []db.Agent {
+	rows, err := h.DB.Query(ctx, query, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []db.Agent
+	for rows.Next() {
+		var a db.Agent
+		if err := rows.Scan(&a.ID, &a.WorkspaceID, &a.Name, &a.AvatarUrl, &a.RuntimeMode, &a.RuntimeConfig, &a.Visibility, &a.Status, &a.MaxConcurrentTasks, &a.OwnerID, &a.CreatedAt, &a.UpdatedAt, &a.Description, &a.RuntimeID, &a.Instructions, &a.ArchivedAt, &a.DisplayName); err != nil {
+			continue
+		}
+		out = append(out, a)
 	}
 	return out
 }

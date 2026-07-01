@@ -27,6 +27,7 @@ images:
 #     --from-literal=RESEND_API_KEY="" \
 #     --from-literal=GOOGLE_CLIENT_SECRET="" \
 #     --from-literal=CLOUDFRONT_PRIVATE_KEY="" \
+#     --from-literal=WEB_PUSH_VAPID_PRIVATE_KEY="" \
 #     --from-literal=MULTICA_DEV_VERIFICATION_CODE=""
 #
 # The chart references this Secret by name; it does not template it, so real
@@ -111,6 +112,8 @@ backend:
     cloudfrontDomain: ""
     cloudfrontKeyPairId: ""
     localUploadBaseUrl: http://api.multica.dev.lan
+    webPushVapidPublicKey: ""
+    webPushVapidSubject: ""
   resources:
     requests:
       cpu: 100m

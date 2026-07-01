@@ -23,6 +23,8 @@ import type {
   TimelineEntry,
   User,
   WebhookDelivery,
+  WebPushPublicKeyResponse,
+  WebPushSubscriptionResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 
@@ -183,6 +185,35 @@ export const EMPTY_APP_CONFIG: AppConfigResponse = {
   daemon_server_url: "",
   daemon_app_url: "",
   workspace_creation_disabled: false,
+};
+
+export const WebPushPublicKeySchema = z.object({
+  public_key: z.string().default(""),
+  enabled: BooleanWithDefaultSchema(false),
+}).loose();
+
+export const EMPTY_WEB_PUSH_PUBLIC_KEY: WebPushPublicKeyResponse = {
+  public_key: "",
+  enabled: false,
+};
+
+export const WebPushSubscriptionSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  user_id: z.string().default(""),
+  endpoint: z.string().default(""),
+  expiration_time: OptionalStringSchema,
+  device_id: OptionalStringSchema,
+  user_agent: OptionalStringSchema,
+  last_active_at: z.string().default(""),
+}).loose();
+
+export const EMPTY_WEB_PUSH_SUBSCRIPTION: WebPushSubscriptionResponse = {
+  id: "",
+  workspace_id: "",
+  user_id: "",
+  endpoint: "",
+  last_active_at: "",
 };
 
 export const CommentSchema = z.object({

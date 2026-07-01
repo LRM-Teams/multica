@@ -4,9 +4,15 @@ import { useEffect, useState } from "react";
 import {
   getWebNotificationPermission,
   isWebNotificationSupported,
-  requestWebNotificationPermission,
   type WebNotificationPermission,
 } from "@multica/core/platform";
+import {
+  bindCurrentWebPushSubscription,
+  getWebPushSupportState,
+  requestAndBindWebPushSubscription,
+  unbindCurrentWebPushSubscription,
+  type WebPushSupportState,
+} from "@multica/core/web-push";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { isDesktopShell } from "../../platform";
@@ -27,25 +33,54 @@ export function BrowserNotificationSetting() {
   const [mounted, setMounted] = useState(false);
   const [permission, setPermission] =
     useState<WebNotificationPermission>("default");
+  const [pushState, setPushState] = useState<WebPushSupportState>("unsupported");
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     setMounted(true);
     setPermission(getWebNotificationPermission());
+    setPushState(getWebPushSupportState());
   }, []);
 
-  // Pre-mount, on desktop, or where the API is missing → nothing to manage.
-  if (!mounted || isDesktopShell() || !isWebNotificationSupported()) return null;
+  useEffect(() => {
+    if (!mounted) return;
+    if (permission === "denied") {
+      unbindCurrentWebPushSubscription().catch(() => undefined);
+      return;
+    }
+    if (permission !== "granted" || pushState !== "supported") return;
+    bindCurrentWebPushSubscription().catch(() => undefined);
+  }, [mounted, permission, pushState]);
+
+  // Pre-mount or desktop -> nothing to manage. On iOS Safari we still render
+  // the Home Screen install guidance even before Notification is exposed.
+  if (!mounted || isDesktopShell()) return null;
+  if (!isWebNotificationSupported() && pushState !== "ios_requires_pwa") return null;
 
   const handleEnable = async () => {
-    setPermission(await requestWebNotificationPermission());
+    setBusy(true);
+    try {
+      await requestAndBindWebPushSubscription();
+    } catch {
+      // Permission denial or unavailable Push Service is reflected by the
+      // browser APIs below; the in-app preference toggle remains authoritative.
+    } finally {
+      setPermission(getWebNotificationPermission());
+      setPushState(getWebPushSupportState());
+      setBusy(false);
+    }
   };
 
   const statusHint =
-    permission === "granted"
-      ? t(($) => $.notifications.browser.granted)
-      : permission === "denied"
-        ? t(($) => $.notifications.browser.denied)
-        : t(($) => $.notifications.browser.hint);
+    pushState === "ios_requires_pwa"
+      ? t(($) => $.notifications.browser.ios_requires_pwa)
+      : pushState === "unsupported"
+        ? t(($) => $.notifications.browser.unsupported)
+        : permission === "granted"
+          ? t(($) => $.notifications.browser.granted)
+          : permission === "denied"
+            ? t(($) => $.notifications.browser.denied)
+            : t(($) => $.notifications.browser.hint);
 
   return (
     <Card>
@@ -57,8 +92,8 @@ export function BrowserNotificationSetting() {
             </p>
             <p className="text-xs text-muted-foreground">{statusHint}</p>
           </div>
-          {permission === "default" && (
-            <Button size="sm" variant="outline" onClick={handleEnable}>
+          {permission !== "granted" && pushState === "supported" && (
+            <Button size="sm" variant="outline" onClick={handleEnable} disabled={busy}>
               {t(($) => $.notifications.browser.enable)}
             </Button>
           )}

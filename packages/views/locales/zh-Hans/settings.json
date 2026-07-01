@@ -94,6 +94,8 @@
       "enable": "启用",
       "granted": "当前浏览器可以弹出通知横幅。",
       "denied": "已被浏览器拦截。请在浏览器设置中为本站点开启通知权限。",
+      "unsupported": "当前浏览器不支持后台 Web Push，仍可在页面打开时接收站内通知。",
+      "ios_requires_pwa": "iOS 需要先将 Multica 添加到主屏幕，再从主屏幕打开后启用后台推送。",
       "enabled_badge": "已启用"
     }
   },

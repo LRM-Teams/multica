@@ -21,10 +21,16 @@ export interface SystemNotificationPayload {
    * then a no-op rather than routing to the wrong workspace (#3766).
    */
   slug: string;
+  /** Web route to open when a ServiceWorker-rendered notification is clicked. */
+  url?: string;
   /** Inbox row id — lets the click mark the item read. */
-  itemId: string;
+  itemId?: string;
   /** `?issue=<…>` selector for the inbox page (issue id, else the item id). */
-  issueKey: string;
+  issueKey?: string;
+  /** Channel row id for chat/channel notifications. */
+  channelId?: string;
+  /** Direct-message channel row id for DM notifications. */
+  dmId?: string;
   title: string;
   body: string;
 }
@@ -88,36 +94,41 @@ export async function requestWebNotificationPermission(): Promise<WebNotificatio
 }
 
 /**
- * Show a native browser notification for a new inbox item. No-op unless the
- * Notification API is supported AND permission is "granted" — the caller
- * (`handleInboxNew`) owns the WHETHER (focus + mute gating); this owns only the
- * rendering. Clicking the banner focuses the tab and routes via the registered
- * click handler.
+ * Show a native browser notification. Chrome on Android requires notifications
+ * to be displayed through a ServiceWorkerRegistration, while desktop browsers
+ * usually allow `new Notification`. Try the page path first for click-handler
+ * routing, then fall back to the service worker for mobile browsers.
  */
 export function showWebNotification(payload: SystemNotificationPayload): void {
   const ctor = getNotificationCtor();
   if (!ctor || ctor.permission !== "granted") return;
-  let notification: Notification;
-  try {
-    notification = new ctor(payload.title, {
-      body: payload.body,
-      // Collapse repeat banners for the same inbox row (e.g. a reconnect
-      // replays the `inbox:new` event).
-      tag: payload.itemId,
-    });
-  } catch {
-    // Some engines require an active ServiceWorkerRegistration to construct a
-    // Notification (notably Chrome on Android). Degrade silently — the in-app
-    // inbox and unread badge still surface the new item.
-    return;
-  }
-  notification.onclick = () => {
-    try {
-      window.focus();
-    } catch {
-      // Best-effort; some browsers disallow programmatic focus.
-    }
-    notification.close();
-    clickHandler?.(payload);
+  const tag = payload.itemId ?? payload.dmId ?? payload.channelId ?? payload.title;
+  const options: NotificationOptions = {
+    body: payload.body,
+    tag,
+    data: payload,
   };
+  try {
+    const notification = new ctor(payload.title, options);
+    notification.onclick = () => {
+      try {
+        window.focus();
+      } catch {
+        // Best-effort; some browsers disallow programmatic focus.
+      }
+      notification.close();
+      clickHandler?.(payload);
+    };
+    return;
+  } catch {
+    // Fall through to the service-worker path below.
+  }
+
+  const sw = typeof navigator !== "undefined" ? navigator.serviceWorker : undefined;
+  if (!sw?.ready) return;
+  void sw.ready
+    .then((registration) => registration.showNotification(payload.title, options))
+    .catch(() => {
+      // The in-app inbox/unread state still surfaces the event.
+    });
 }

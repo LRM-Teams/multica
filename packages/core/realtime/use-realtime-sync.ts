@@ -84,6 +84,7 @@ import type {
   ChatMessage,
   ChatPendingTask,
   ChatMessagesPage,
+  Channel,
   ChannelMessage,
   InvitationCreatedPayload,
 } from "../types";
@@ -236,61 +237,37 @@ export async function resolveInboxSourceSlug(
  * count / dock badge, the mute check must honor the source workspace's
  * preference, and the deep link must carry the source workspace's slug.
  */
-export async function handleInboxNew(
+async function isSystemNotificationMuted(
   qc: QueryClient,
-  item: InboxItem,
-): Promise<void> {
-  const sourceWsId = item.workspace_id;
-  if (sourceWsId) onInboxNew(qc, sourceWsId, item);
-  // Fire a native OS notification only when the app isn't focused. When
-  // the user is already looking at Multica, the inbox sidebar's unread
-  // styling is enough — no need to interrupt with a banner. `desktopAPI`
-  // is injected by the preload script; its absence (web app) skips silently.
-  if (typeof document !== "undefined" && document.hasFocus()) return;
-  // Resolve the source workspace's slug once: it pins BOTH the mute check
-  // and the deep link to the workspace the inbox item BELONGS to, never the
-  // currently active one. Reading `getCurrentSlug()` here was the source of
-  // wrong-workspace routing (#3766): an `inbox:new` from workspace A arriving
-  // while workspace B is active emitted a notification carrying B's slug and
-  // A's issue id, deep-linking to an issue B doesn't have.
-  const slug = await resolveInboxSourceSlug(qc, sourceWsId);
-  // Respect the SOURCE workspace's system-notification preference. Keying the
-  // query on `sourceWsId` is not enough: the request resolves its workspace
-  // from the `X-Workspace-Slug` header, which follows the ACTIVE workspace —
-  // so a cold-cache lookup while viewing B would read B's mute setting and
-  // cache it under A's key. Passing the source slug scopes the fetch to A.
-  // When the slug can't be resolved we read only an already-warm cache
-  // (populated earlier with the correct workspace context) rather than fetch
-  // with the wrong one; on network failure we fall through to the default
-  // ("all") rather than swallow the banner.
-  if (sourceWsId) {
-    try {
-      const prefData = slug
-        ? await qc.ensureQueryData(
-            notificationPreferenceOptions(sourceWsId, slug),
-          )
-        : qc.getQueryData<NotificationPreferenceResponse>(
-            notificationPreferenceKeys.all(sourceWsId),
-          );
-      if (prefData?.preferences?.system_notifications === "muted") return;
-    } catch {
-      // Fall through with default behavior.
-    }
+  sourceWsId: string,
+  slug: string | null,
+): Promise<boolean> {
+  if (!sourceWsId) return false;
+  try {
+    const prefData = slug
+      ? await qc.ensureQueryData(
+          notificationPreferenceOptions(sourceWsId, slug),
+        )
+      : qc.getQueryData<NotificationPreferenceResponse>(
+          notificationPreferenceKeys.all(sourceWsId),
+        );
+    return prefData?.preferences?.system_notifications === "muted";
+  } catch {
+    // Fall through with default behavior.
+    return false;
   }
-  // `issueKey` matches the inbox page's URL selector (issue id when the
-  // item is attached to an issue, otherwise the inbox item id). `itemId`
-  // is the inbox row's own id, needed to fire markInboxRead on click.
-  // A null slug (workspace list unavailable / item from a workspace this
-  // client can't see) still shows the banner — the user should learn about
-  // the inbox item — but with an empty slug so the click is a no-op
-  // (the inbox bridge ignores empty slugs) instead of routing wrong.
-  const payload: SystemNotificationPayload = {
-    slug: slug ?? "",
-    itemId: item.id,
-    issueKey: item.issue_id ?? item.id,
-    title: item.title,
-    body: item.body ?? "",
-  };
+}
+
+async function deliverSystemNotification(
+  qc: QueryClient,
+  sourceWsId: string,
+  payload: Omit<SystemNotificationPayload, "slug">,
+): Promise<void> {
+  if (typeof document !== "undefined" && document.hasFocus()) return;
+  const slug = await resolveInboxSourceSlug(qc, sourceWsId);
+  if (await isSystemNotificationMuted(qc, sourceWsId, slug)) return;
+  const fullPayload: SystemNotificationPayload = { ...payload, slug: slug ?? "" };
+  fullPayload.url = buildSystemNotificationUrl(fullPayload);
   const desktopAPI = (
     globalThis as unknown as {
       desktopAPI?: {
@@ -299,13 +276,73 @@ export async function handleInboxNew(
     }
   ).desktopAPI;
   if (desktopAPI?.showNotification) {
-    // Desktop: native OS banner rendered by the Electron main process.
-    desktopAPI.showNotification(payload);
+    desktopAPI.showNotification(fullPayload);
     return;
   }
-  // Web: the browser Notification API. No-op without granted permission or on
-  // SSR — the in-app inbox + unread badge still reflect the new item.
-  showWebNotification(payload);
+  showWebNotification(fullPayload);
+}
+
+function buildSystemNotificationUrl(payload: SystemNotificationPayload): string {
+  if (!payload.slug) return "/";
+  const slug = encodeURIComponent(payload.slug);
+  if (payload.dmId) return `/${slug}/channels?dm=${encodeURIComponent(payload.dmId)}`;
+  if (payload.channelId) return `/${slug}/channels?channel=${encodeURIComponent(payload.channelId)}`;
+  return `/${slug}/inbox${payload.issueKey ? `?issue=${encodeURIComponent(payload.issueKey)}` : ""}`;
+}
+
+export async function handleInboxNew(
+  qc: QueryClient,
+  item: InboxItem,
+): Promise<void> {
+  const sourceWsId = item.workspace_id;
+  if (sourceWsId) onInboxNew(qc, sourceWsId, item);
+  // `issueKey` matches the inbox page's URL selector (issue id when the
+  // item is attached to an issue, otherwise the inbox item id). `itemId`
+  // is the inbox row's own id, needed to fire markInboxRead on click.
+  // A null slug (workspace list unavailable / item from a workspace this
+  // client can't see) still shows the banner — the user should learn about
+  // the inbox item — but with an empty slug so the click is a no-op
+  // (the inbox bridge ignores empty slugs) instead of routing wrong.
+  await deliverSystemNotification(qc, sourceWsId, {
+    itemId: item.id,
+    issueKey: item.issue_id ?? item.id,
+    title: item.title,
+    body: item.body ?? "",
+  });
+}
+
+function notificationBody(author: string, content: string): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  const text = normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+  return text ? `${author}: ${text}` : author;
+}
+
+export async function handleChannelMessageNotification(
+  qc: QueryClient,
+  message: ChannelMessage,
+  myUserId?: string,
+): Promise<void> {
+  const sourceWsId = message.workspace_id;
+  if (!sourceWsId) return;
+  if (message.author_type === "user" && message.author_id === myUserId) return;
+
+  const channels = qc.getQueryData<Channel[]>(channelKeys.list(sourceWsId)) ?? [];
+  const channel = channels.find((c) => c.id === message.channel_id) ?? null;
+  if (channel?.muted || channel?.muted_at) return;
+
+  const isDM = channel?.kind === "dm";
+  const title = isDM
+    ? message.author_name || "Direct message"
+    : channel?.name
+      ? `#${channel.name}`
+      : "New group message";
+
+  await deliverSystemNotification(qc, sourceWsId, {
+    channelId: isDM ? undefined : message.channel_id,
+    dmId: isDM ? message.channel_id : undefined,
+    title,
+    body: notificationBody(message.author_name || "Someone", message.content),
+  });
 }
 
 /**
@@ -1122,6 +1159,7 @@ export function useRealtimeSync(
       }
       const id = getCurrentWsId();
       if (id) qc.invalidateQueries({ queryKey: channelKeys.list(id) });
+      void handleChannelMessageNotification(qc, payload, authStore.getState().user?.id);
     });
 
     const unsubChannelReactionAdded = ws.on("channel_reaction:added", (p) => {

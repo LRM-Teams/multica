@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   registerSystemNotificationClickHandler,
   type SystemNotificationPayload,
@@ -29,16 +29,44 @@ export function WebNotificationBridge() {
     pushRef.current = push;
   }, [push]);
 
+  const buildNotificationPath = useCallback(
+    ({ slug, issueKey, channelId, dmId }: SystemNotificationPayload) => {
+      if (!slug) return null;
+      const wsPaths = paths.workspace(slug);
+      if (dmId) return `${wsPaths.channels()}?dm=${encodeURIComponent(dmId)}`;
+      if (channelId) return `${wsPaths.channels()}?channel=${encodeURIComponent(channelId)}`;
+      const selector = issueKey ? `?issue=${encodeURIComponent(issueKey)}` : "";
+      return `${wsPaths.inbox()}${selector}`;
+    },
+    [],
+  );
+
   useEffect(() => {
-    registerSystemNotificationClickHandler(
-      ({ slug, issueKey }: SystemNotificationPayload) => {
-        if (!slug) return;
-        const inboxPath = `${paths.workspace(slug).inbox()}?issue=${encodeURIComponent(issueKey)}`;
-        pushRef.current(inboxPath);
-      },
-    );
+    registerSystemNotificationClickHandler((payload) => {
+      const target = buildNotificationPath(payload);
+      if (target) pushRef.current(target);
+    });
     return () => registerSystemNotificationClickHandler(null);
+  }, [buildNotificationPath]);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    void navigator.serviceWorker.register("/sw.js").catch(() => {
+      // Notifications degrade to in-app unread state when SW registration fails.
+    });
   }, []);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    const handleMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; payload?: SystemNotificationPayload } | null;
+      if (data?.type !== "multica:notification-click" || !data.payload) return;
+      const target = buildNotificationPath(data.payload);
+      if (target) pushRef.current(target);
+    };
+    navigator.serviceWorker.addEventListener("message", handleMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", handleMessage);
+  }, [buildNotificationPath]);
 
   return null;
 }

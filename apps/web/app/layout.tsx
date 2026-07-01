@@ -67,9 +67,16 @@ export const metadata: Metadata = {
   },
   description:
     "Open-source platform that turns coding agents into real teammates. Assign tasks, track progress, compound skills.",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "Multica",
+    statusBarStyle: "black-translucent",
+  },
   icons: {
     icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
     shortcut: ["/favicon.svg"],
+    apple: [{ url: "/favicon.svg", type: "image/svg+xml" }],
   },
   openGraph: {
     type: "website",

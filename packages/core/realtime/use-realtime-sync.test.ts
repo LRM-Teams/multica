@@ -2,6 +2,7 @@ import { QueryClient, type InfiniteData } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
+import { channelKeys } from "../channels/queries";
 import { chatKeys } from "../chat/queries";
 import { inboxKeys } from "../inbox/queries";
 import { issueKeys } from "../issues/queries";
@@ -12,12 +13,15 @@ import type {
   ChatMessage,
   ChatPendingTask,
   ChatMessagesPage,
+  Channel,
+  ChannelMessage,
   InboxItem,
   Workspace,
 } from "../types";
 import {
   applyChatDoneToCache,
   applyWorkspaceUpdatedToCache,
+  handleChannelMessageNotification,
   handleInboxNew,
   invalidateChatMessageQueries,
   resolveInboxSourceSlug,
@@ -393,6 +397,7 @@ describe("handleInboxNew", () => {
       issueKey: "issue-1",
       title: "Mentioned you",
       body: "in a comment",
+      url: "/",
     });
   });
 
@@ -564,6 +569,100 @@ describe("handleInboxNew", () => {
     installBrowserNotification("default");
 
     await handleInboxNew(qc, inboxItem());
+
+    expect(webBanners).toHaveLength(0);
+  });
+
+  function channel(overrides: Partial<Channel> = {}): Channel {
+    return {
+      id: "channel-1",
+      workspace_id: "ws-a",
+      name: "general",
+      kind: "group",
+      description: null,
+      lark_chat_id: null,
+      created_by: "member-1",
+      created_at: "2026-05-18T00:00:00Z",
+      updated_at: "2026-05-18T00:00:00Z",
+      ...overrides,
+    };
+  }
+
+  function channelMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
+    return {
+      id: "message-1",
+      channel_id: "channel-1",
+      workspace_id: "ws-a",
+      author_type: "agent",
+      author_id: "agent-1",
+      author_name: "Agent Bot",
+      content: "I finished the work",
+      source: "multica",
+      external_message_id: null,
+      created_at: "2026-05-18T00:00:00Z",
+      ...overrides,
+    };
+  }
+
+  it("shows a group-channel browser banner that links back to the channel", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
+    qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
+      preferences: { system_notifications: "all" },
+    });
+    qc.setQueryData<Channel[]>(channelKeys.list("ws-a"), [channel()]);
+    installBrowserNotification("granted");
+
+    await handleChannelMessageNotification(qc, channelMessage(), "member-1");
+
+    expect(webBanners).toHaveLength(1);
+    expect(webBanners[0]?.title).toBe("#general");
+    expect(webBanners[0]?.options).toMatchObject({
+      body: "Agent Bot: I finished the work",
+      tag: "channel-1",
+      data: expect.objectContaining({
+        channelId: "channel-1",
+        url: "/workspace-a/channels?channel=channel-1",
+      }),
+    });
+  });
+
+  it("routes DM channel banners with the dm query param", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
+    qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
+      preferences: { system_notifications: "all" },
+    });
+    qc.setQueryData<Channel[]>(channelKeys.list("ws-a"), [channel({ kind: "dm" })]);
+    installBrowserNotification("granted");
+
+    await handleChannelMessageNotification(qc, channelMessage(), "member-1");
+
+    expect(webBanners[0]?.title).toBe("Agent Bot");
+    expect(webBanners[0]?.options).toMatchObject({
+      tag: "channel-1",
+      data: expect.objectContaining({
+        dmId: "channel-1",
+        url: "/workspace-a/channels?dm=channel-1",
+      }),
+    });
+  });
+
+  it("suppresses banners for muted channels and self-sent user messages", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
+    qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
+      preferences: { system_notifications: "all" },
+    });
+    qc.setQueryData<Channel[]>(channelKeys.list("ws-a"), [channel({ muted: true })]);
+    installBrowserNotification("granted");
+
+    await handleChannelMessageNotification(qc, channelMessage(), "member-1");
+    await handleChannelMessageNotification(
+      qc,
+      channelMessage({ author_type: "user", author_id: "member-1" }),
+      "member-1",
+    );
 
     expect(webBanners).toHaveLength(0);
   });

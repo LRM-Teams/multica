@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import {
+  getBrowserNotificationCapability,
   getWebNotificationPermission,
-  isWebNotificationSupported,
   requestWebNotificationPermission,
+  type BrowserNotificationCapability,
   type WebNotificationPermission,
 } from "@multica/core/platform";
 import { Button } from "@multica/ui/components/ui/button";
@@ -27,25 +28,37 @@ export function BrowserNotificationSetting() {
   const [mounted, setMounted] = useState(false);
   const [permission, setPermission] =
     useState<WebNotificationPermission>("default");
+  const [capability, setCapability] =
+    useState<BrowserNotificationCapability>("unsupported");
 
   useEffect(() => {
     setMounted(true);
     setPermission(getWebNotificationPermission());
+    setCapability(getBrowserNotificationCapability());
   }, []);
 
-  // Pre-mount, on desktop, or where the API is missing → nothing to manage.
-  if (!mounted || isDesktopShell() || !isWebNotificationSupported()) return null;
+  // Pre-mount or desktop: desktop uses OS-native delivery, not browser prompts.
+  if (!mounted || isDesktopShell()) return null;
 
   const handleEnable = async () => {
     setPermission(await requestWebNotificationPermission());
   };
 
   const statusHint =
-    permission === "granted"
-      ? t(($) => $.notifications.browser.granted)
-      : permission === "denied"
-        ? t(($) => $.notifications.browser.denied)
-        : t(($) => $.notifications.browser.hint);
+    capability === "unsupported"
+      ? t(($) => $.notifications.browser.unsupported)
+      : capability === "ios-needs-pwa"
+        ? t(($) => $.notifications.browser.ios_needs_pwa)
+        : permission === "granted"
+          ? t(($) => $.notifications.browser.granted)
+          : permission === "denied"
+            ? t(($) => $.notifications.browser.denied)
+            : capability === "ios-pwa"
+              ? t(($) => $.notifications.browser.ios_pwa_hint)
+              : t(($) => $.notifications.browser.hint);
+
+  const canRequestPermission =
+    capability === "standard" || capability === "ios-pwa";
 
   return (
     <Card>
@@ -57,7 +70,7 @@ export function BrowserNotificationSetting() {
             </p>
             <p className="text-xs text-muted-foreground">{statusHint}</p>
           </div>
-          {permission === "default" && (
+          {permission === "default" && canRequestPermission && (
             <Button size="sm" variant="outline" onClick={handleEnable}>
               {t(($) => $.notifications.browser.enable)}
             </Button>

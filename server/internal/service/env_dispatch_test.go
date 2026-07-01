@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -334,5 +335,86 @@ func TestDispatch_RejectsBranchSweLegoWithIssue(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("want error")
+	}
+}
+
+func TestDispatch_RollbackOnForkFailure(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.forkErr = fmt.Errorf("fork crashed")
+	svc := NewEnvDispatchService(f, 8)
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 2,
+		AgentID: "ag", Issue: &IssueInput{Title: "t"},
+	})
+	if err == nil {
+		t.Fatal("want reset_failed error")
+	}
+	// No projects should remain.
+	if len(f.projects) != 0 {
+		t.Fatalf("want 0 projects after rollback, got %d", len(f.projects))
+	}
+}
+
+func TestDispatch_AllDispatchFail_KeepsEnvReturnsSentinel(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.enqueueErr = fmt.Errorf("enqueue crashed") // every EnqueueAgentRun fails
+	svc := NewEnvDispatchService(f, 8)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 2,
+		AgentID: "ag", Issue: &IssueInput{Title: "t"},
+	})
+	// All dispatches failed → ErrAllDispatchFailed (handler → 500), env kept.
+	if !errors.Is(err, ErrAllDispatchFailed) {
+		t.Fatalf("want ErrAllDispatchFailed, got %v", err)
+	}
+	if len(res.Rollouts) != 2 {
+		t.Fatalf("want 2, got %d", len(res.Rollouts))
+	}
+	for i, r := range res.Rollouts {
+		if r.AgentRunID != "" {
+			t.Fatalf("rollout %d: agent_run_id should be empty", i)
+		}
+		if r.Error == "" {
+			t.Fatalf("rollout %d: error should be set", i)
+		}
+		if r.ProjectID == "" || r.EnvID == "" {
+			t.Fatalf("rollout %d: env+project should be kept", i)
+		}
+	}
+}
+
+func TestDispatch_IdempotencyReplay(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 8)
+	in := EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 2,
+		AgentID: "ag", Issue: &IssueInput{Title: "t"}, IdempotencyKey: "key-1",
+	}
+	first, err := svc.Dispatch(context.Background(), in)
+	if err != nil {
+		t.Fatalf("first dispatch: %v", err)
+	}
+	projectsAfterFirst := len(f.projects)
+	runsAfterFirst := len(f.agentRuns)
+
+	second, err := svc.Dispatch(context.Background(), in)
+	if err != nil {
+		t.Fatalf("replay dispatch: %v", err)
+	}
+	// Replay returns the stored response and does NO new work.
+	if len(f.projects) != projectsAfterFirst {
+		t.Fatalf("replay created new projects: %d → %d", projectsAfterFirst, len(f.projects))
+	}
+	if len(f.agentRuns) != runsAfterFirst {
+		t.Fatalf("replay enqueued new runs")
+	}
+	if second.Rollouts[0].ProjectID != first.Rollouts[0].ProjectID {
+		t.Fatal("replay returned different rollouts")
 	}
 }

@@ -33,16 +33,22 @@ vi.mock("../../i18n", () => ({
   useT: () => ({
     t: (
       selector: (resources: {
-        message: { agent_badge: string; feishu_badge: string };
-        quote: { jump_to: string; reply: string; reply_aria: string };
+        message: { add_reaction: string; agent_badge: string; feishu_badge: string };
+        quote: { jump_to: string; reply: string; reply_aria: string; more_aria: string };
+        thread: { reply: string; reply_count: string };
       }) => string,
     ) =>
       selector({
-        message: { agent_badge: "Agent", feishu_badge: "Feishu" },
+        message: { add_reaction: "Add reaction", agent_badge: "Agent", feishu_badge: "Feishu" },
         quote: {
           jump_to: "Jump to original message",
           reply: "Reply",
           reply_aria: "Reply to message",
+          more_aria: "More actions",
+        },
+        thread: {
+          reply: "Reply in thread",
+          reply_count: "{{count}} replies",
         },
       }),
   }),
@@ -194,5 +200,22 @@ describe("ChannelMessageBubble", () => {
 
     expect(screen.getByRole("button", { name: "👍1" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "React with ❤️" })).not.toBeInTheDocument();
+  });
+
+  it("does not duplicate first-level actions inside a More menu", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage()}
+        currentUserId="user-1"
+        onQuote={vi.fn()}
+        onOpenThread={vi.fn()}
+        onReact={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Add reaction" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reply" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reply in thread" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
   });
 });

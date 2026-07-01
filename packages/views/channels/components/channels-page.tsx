@@ -156,6 +156,7 @@ import { ThreadRootPreview } from "./thread-root-preview";
 import {
   ChannelComposer,
   ConversationHeader,
+  MobileThreadDrawerContent,
   ReadOnlyConversationBanner,
 } from "./conversation-surface";
 import { DmList } from "./dm-list";
@@ -2183,9 +2184,9 @@ export function ChannelsPage() {
                 if (!open) setOpenThreadRoot(null);
               }}
             >
-              <DrawerContent className="h-[calc(100dvh-env(safe-area-inset-top))] max-h-[calc(100dvh-env(safe-area-inset-top))] min-w-0 rounded-t-none p-0">
+              <MobileThreadDrawerContent open={!!threadPanel}>
                 {threadPanel}
-              </DrawerContent>
+              </MobileThreadDrawerContent>
             </Drawer>
           )}
         </main>

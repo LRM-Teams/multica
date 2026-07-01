@@ -1,8 +1,9 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Send } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
+import { DrawerContent } from "@multica/ui/components/ui/drawer";
 import { cn } from "@multica/ui/lib/utils";
 
 export function ConversationHeader({
@@ -68,6 +69,70 @@ export function ComposerShell({
         {children}
       </div>
     </div>
+  );
+}
+
+type MobileVisualViewportStyle = Pick<CSSProperties, "top" | "bottom" | "height" | "maxHeight">;
+
+export function getMobileVisualViewportStyle(
+  viewport: Pick<VisualViewport, "height" | "offsetTop">,
+): MobileVisualViewportStyle {
+  return {
+    top: Math.max(0, Math.round(viewport.offsetTop)),
+    bottom: "auto",
+    height: Math.max(0, Math.round(viewport.height)),
+    maxHeight: Math.max(0, Math.round(viewport.height)),
+  };
+}
+
+function useMobileVisualViewportStyle(active: boolean): MobileVisualViewportStyle | undefined {
+  const [style, setStyle] = useState<MobileVisualViewportStyle>();
+
+  useEffect(() => {
+    if (!active || typeof window === "undefined" || !window.visualViewport) {
+      setStyle(undefined);
+      return;
+    }
+
+    const viewport = window.visualViewport;
+    const syncStyle = () => {
+      const next = getMobileVisualViewportStyle(viewport);
+      setStyle((current) =>
+        current?.top === next.top && current?.height === next.height ? current : next,
+      );
+    };
+
+    syncStyle();
+    viewport.addEventListener("resize", syncStyle);
+    viewport.addEventListener("scroll", syncStyle);
+    window.addEventListener("orientationchange", syncStyle);
+
+    return () => {
+      viewport.removeEventListener("resize", syncStyle);
+      viewport.removeEventListener("scroll", syncStyle);
+      window.removeEventListener("orientationchange", syncStyle);
+    };
+  }, [active]);
+
+  return style;
+}
+
+export function MobileThreadDrawerContent({
+  open,
+  children,
+}: {
+  open: boolean;
+  children: ReactNode;
+}) {
+  const viewportStyle = useMobileVisualViewportStyle(open);
+
+  return (
+    <DrawerContent
+      className="h-[calc(100dvh-env(safe-area-inset-top))] max-h-[calc(100dvh-env(safe-area-inset-top))] min-w-0 rounded-t-none p-0"
+      style={viewportStyle}
+    >
+      {children}
+    </DrawerContent>
   );
 }
 

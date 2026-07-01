@@ -27,7 +27,7 @@ INSERT INTO project_resource (
     project_id, workspace_id, resource_type, resource_ref, label, position, created_by
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7
-) RETURNING id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by
+) RETURNING id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by, managed
 `
 
 type CreateProjectResourceParams struct {
@@ -61,6 +61,7 @@ func (q *Queries) CreateProjectResource(ctx context.Context, arg CreateProjectRe
 		&i.Position,
 		&i.CreatedAt,
 		&i.CreatedBy,
+		&i.Managed,
 	)
 	return i, err
 }
@@ -75,7 +76,7 @@ func (q *Queries) DeleteProjectResource(ctx context.Context, id pgtype.UUID) err
 }
 
 const getProjectResource = `-- name: GetProjectResource :one
-SELECT id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by FROM project_resource
+SELECT id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by, managed FROM project_resource
 WHERE id = $1
 `
 
@@ -92,6 +93,7 @@ func (q *Queries) GetProjectResource(ctx context.Context, id pgtype.UUID) (Proje
 		&i.Position,
 		&i.CreatedAt,
 		&i.CreatedBy,
+		&i.Managed,
 	)
 	return i, err
 }
@@ -129,7 +131,7 @@ func (q *Queries) GetProjectResourceCounts(ctx context.Context, projectIds []pgt
 }
 
 const getProjectResourceInWorkspace = `-- name: GetProjectResourceInWorkspace :one
-SELECT id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by FROM project_resource
+SELECT id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by, managed FROM project_resource
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -151,12 +153,13 @@ func (q *Queries) GetProjectResourceInWorkspace(ctx context.Context, arg GetProj
 		&i.Position,
 		&i.CreatedAt,
 		&i.CreatedBy,
+		&i.Managed,
 	)
 	return i, err
 }
 
 const listProjectResources = `-- name: ListProjectResources :many
-SELECT id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by FROM project_resource
+SELECT id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by, managed FROM project_resource
 WHERE project_id = $1
 ORDER BY position ASC, created_at ASC
 `
@@ -180,6 +183,7 @@ func (q *Queries) ListProjectResources(ctx context.Context, projectID pgtype.UUI
 			&i.Position,
 			&i.CreatedAt,
 			&i.CreatedBy,
+			&i.Managed,
 		); err != nil {
 			return nil, err
 		}
@@ -192,7 +196,7 @@ func (q *Queries) ListProjectResources(ctx context.Context, projectID pgtype.UUI
 }
 
 const listProjectResourcesForProjects = `-- name: ListProjectResourcesForProjects :many
-SELECT id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by FROM project_resource
+SELECT id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by, managed FROM project_resource
 WHERE project_id = ANY($1::uuid[])
 ORDER BY project_id, position ASC, created_at ASC
 `
@@ -216,6 +220,7 @@ func (q *Queries) ListProjectResourcesForProjects(ctx context.Context, projectId
 			&i.Position,
 			&i.CreatedAt,
 			&i.CreatedBy,
+			&i.Managed,
 		); err != nil {
 			return nil, err
 		}
@@ -233,7 +238,7 @@ SET resource_ref = $2,
     label        = $3,
     position     = $4
 WHERE id = $1
-RETURNING id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by
+RETURNING id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by, managed
 `
 
 type UpdateProjectResourceParams struct {
@@ -261,6 +266,7 @@ func (q *Queries) UpdateProjectResource(ctx context.Context, arg UpdateProjectRe
 		&i.Position,
 		&i.CreatedAt,
 		&i.CreatedBy,
+		&i.Managed,
 	)
 	return i, err
 }

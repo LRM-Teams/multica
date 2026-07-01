@@ -29,7 +29,7 @@ INSERT INTO project (
     lead_type, lead_id, priority
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8
-) RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority
+) RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, env_id
 `
 
 type CreateProjectParams struct {
@@ -67,6 +67,55 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Priority,
+		&i.EnvID,
+	)
+	return i, err
+}
+
+const createProjectWithEnv = `-- name: CreateProjectWithEnv :one
+INSERT INTO project (workspace_id, title, description, icon, status, lead_type, lead_id, priority, env_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, env_id
+`
+
+type CreateProjectWithEnvParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Title       string      `json:"title"`
+	Description pgtype.Text `json:"description"`
+	Icon        pgtype.Text `json:"icon"`
+	Status      string      `json:"status"`
+	LeadType    pgtype.Text `json:"lead_type"`
+	LeadID      pgtype.UUID `json:"lead_id"`
+	Priority    string      `json:"priority"`
+	EnvID       pgtype.UUID `json:"env_id"`
+}
+
+func (q *Queries) CreateProjectWithEnv(ctx context.Context, arg CreateProjectWithEnvParams) (Project, error) {
+	row := q.db.QueryRow(ctx, createProjectWithEnv,
+		arg.WorkspaceID,
+		arg.Title,
+		arg.Description,
+		arg.Icon,
+		arg.Status,
+		arg.LeadType,
+		arg.LeadID,
+		arg.Priority,
+		arg.EnvID,
+	)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Icon,
+		&i.Status,
+		&i.LeadType,
+		&i.LeadID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Priority,
+		&i.EnvID,
 	)
 	return i, err
 }
@@ -87,7 +136,7 @@ func (q *Queries) DeleteProject(ctx context.Context, arg DeleteProjectParams) er
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority FROM project
+SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, env_id FROM project
 WHERE id = $1
 `
 
@@ -106,12 +155,13 @@ func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, erro
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Priority,
+		&i.EnvID,
 	)
 	return i, err
 }
 
 const getProjectInWorkspace = `-- name: GetProjectInWorkspace :one
-SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority FROM project
+SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, env_id FROM project
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -135,6 +185,7 @@ func (q *Queries) GetProjectInWorkspace(ctx context.Context, arg GetProjectInWor
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Priority,
+		&i.EnvID,
 	)
 	return i, err
 }
@@ -175,7 +226,7 @@ func (q *Queries) GetProjectIssueStats(ctx context.Context, projectIds []pgtype.
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority FROM project
+SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, env_id FROM project
 WHERE workspace_id = $1
   AND ($2::text IS NULL OR status = $2)
   AND ($3::text IS NULL OR priority = $3)
@@ -209,6 +260,7 @@ func (q *Queries) ListProjects(ctx context.Context, arg ListProjectsParams) ([]P
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Priority,
+			&i.EnvID,
 		); err != nil {
 			return nil, err
 		}
@@ -218,6 +270,22 @@ func (q *Queries) ListProjects(ctx context.Context, arg ListProjectsParams) ([]P
 		return nil, err
 	}
 	return items, nil
+}
+
+const setProjectEnvID = `-- name: SetProjectEnvID :exec
+UPDATE project SET env_id = $2, updated_at = now()
+WHERE id = $1 AND workspace_id = $3
+`
+
+type SetProjectEnvIDParams struct {
+	ID          pgtype.UUID `json:"id"`
+	EnvID       pgtype.UUID `json:"env_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) SetProjectEnvID(ctx context.Context, arg SetProjectEnvIDParams) error {
+	_, err := q.db.Exec(ctx, setProjectEnvID, arg.ID, arg.EnvID, arg.WorkspaceID)
+	return err
 }
 
 const updateProject = `-- name: UpdateProject :one
@@ -231,7 +299,7 @@ UPDATE project SET
     lead_id = $8,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority
+RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, env_id
 `
 
 type UpdateProjectParams struct {
@@ -269,6 +337,7 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Priority,
+		&i.EnvID,
 	)
 	return i, err
 }

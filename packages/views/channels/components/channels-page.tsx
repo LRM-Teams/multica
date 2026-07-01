@@ -54,6 +54,7 @@ import {
   useSendChannelMessage,
   useSendChannelThreadMessage,
   useAddChannelReaction,
+  useRemoveChannelReaction,
   useMarkChannelThreadRead,
   useSetChannelTyping,
 } from "@multica/core/channels";
@@ -529,11 +530,20 @@ export function ChannelsPage() {
   const sendMessage = useSendChannelMessage();
   const sendThreadMessage = useSendChannelThreadMessage();
   const addChannelReaction = useAddChannelReaction();
+  const removeChannelReaction = useRemoveChannelReaction();
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
   const setTyping = useSetChannelTyping();
   const handleReactToMessage = useCallback((message: ChannelMessage, emoji: string) => {
-    addChannelReaction.mutate({ channelId: message.channel_id, messageId: message.id, emoji });
-  }, [addChannelReaction]);
+    const hasReacted = message.reactions?.some(
+      (reaction) => reaction.actor_type === "member" && reaction.actor_id === currentUserId && reaction.emoji === emoji,
+    );
+    const vars = { channelId: message.channel_id, messageId: message.id, emoji };
+    if (hasReacted) {
+      removeChannelReaction.mutate(vars);
+    } else {
+      addChannelReaction.mutate(vars);
+    }
+  }, [addChannelReaction, currentUserId, removeChannelReaction]);
   const addMembers = useAddChannelMembers();
   const removeMember = useRemoveChannelMember();
   const createOrFindDm = useCreateOrFindDM();

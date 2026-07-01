@@ -1046,6 +1046,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/messages", h.SendChannelMessage)
 					r.Get("/messages/{messageId}/thread", h.ListChannelMessageThread)
 					r.Post("/messages/{messageId}/reactions", h.AddChannelMessageReaction)
+					r.Delete("/messages/{messageId}/reactions", h.RemoveChannelMessageReaction)
 					r.Post("/messages/{messageId}/thread", h.SendChannelMessageThreadReply)
 					r.Post("/messages/{messageId}/thread/read", h.MarkChannelThreadRead)
 					r.Put("/messages/{messageId}/thread/follow", h.FollowChannelThread)

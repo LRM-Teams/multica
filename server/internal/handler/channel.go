@@ -77,26 +77,26 @@ type ChannelMemberResponse struct {
 }
 
 type ChannelMessageResponse struct {
-	ID                  string               `json:"id"`
-	ChannelID           string               `json:"channel_id"`
-	WorkspaceID         string               `json:"workspace_id"`
-	AuthorType          string               `json:"author_type"`
-	AuthorID            *string              `json:"author_id"`
-	AuthorName          string               `json:"author_name"`
-	Content             string               `json:"content"`
-	Source              string               `json:"source"`
-	ExternalMessageID   *string              `json:"external_message_id"`
-	ReplyToMessageID    *string              `json:"reply_to_message_id,omitempty"`
-	ReplyTo             *ChannelMessageReply `json:"reply_to,omitempty"`
-	ThreadRootMessageID *string              `json:"thread_root_message_id,omitempty"`
-	ThreadReplyCount    int                  `json:"thread_reply_count,omitempty"`
-	ThreadLastReplyAt   *string              `json:"thread_last_reply_at,omitempty"`
-	ThreadUnreadCount   int                  `json:"thread_unread_count,omitempty"`
-	ThreadFollowed      bool                 `json:"thread_followed,omitempty"`
-	ThreadID            *string              `json:"thread_id,omitempty"`
-	TriggerDepth        int                  `json:"trigger_depth"`
+	ID                  string                    `json:"id"`
+	ChannelID           string                    `json:"channel_id"`
+	WorkspaceID         string                    `json:"workspace_id"`
+	AuthorType          string                    `json:"author_type"`
+	AuthorID            *string                   `json:"author_id"`
+	AuthorName          string                    `json:"author_name"`
+	Content             string                    `json:"content"`
+	Source              string                    `json:"source"`
+	ExternalMessageID   *string                   `json:"external_message_id"`
+	ReplyToMessageID    *string                   `json:"reply_to_message_id,omitempty"`
+	ReplyTo             *ChannelMessageReply      `json:"reply_to,omitempty"`
+	ThreadRootMessageID *string                   `json:"thread_root_message_id,omitempty"`
+	ThreadReplyCount    int                       `json:"thread_reply_count,omitempty"`
+	ThreadLastReplyAt   *string                   `json:"thread_last_reply_at,omitempty"`
+	ThreadUnreadCount   int                       `json:"thread_unread_count,omitempty"`
+	ThreadFollowed      bool                      `json:"thread_followed,omitempty"`
+	ThreadID            *string                   `json:"thread_id,omitempty"`
+	TriggerDepth        int                       `json:"trigger_depth"`
 	Reactions           []ChannelReactionResponse `json:"reactions,omitempty"`
-	CreatedAt           string               `json:"created_at"`
+	CreatedAt           string                    `json:"created_at"`
 	// Attachments linked to this message via channel_message_id. The chat
 	// bubble renders file/image cards from these.
 	Attachments []AttachmentResponse `json:"attachments,omitempty"`
@@ -1098,6 +1098,79 @@ func (h *Handler) AddChannelMessageReaction(w http.ResponseWriter, r *http.Reque
 	reaction.CreatedAt = timestampToString(createdAt)
 	h.publish(protocol.EventChannelReactionAdded, workspaceID, "member", userID, map[string]any{"reaction": reaction, "channel_id": uuidToString(channelID), "message_id": uuidToString(messageID)})
 	writeJSON(w, http.StatusCreated, reaction)
+}
+
+func (h *Handler) RemoveChannelMessageReaction(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	messageID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "messageId"), "message id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+	var req struct {
+		Emoji string `json:"emoji"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	emoji := strings.TrimSpace(req.Emoji)
+	if emoji == "" {
+		writeError(w, http.StatusBadRequest, "emoji is required")
+		return
+	}
+
+	tag, err := h.DB.Exec(r.Context(), `
+		DELETE FROM channel_message_reaction r
+		USING channel_message m
+		WHERE r.channel_message_id = m.id
+		  AND r.channel_message_id = $1
+		  AND m.channel_id = $2
+		  AND r.workspace_id = $3
+		  AND r.actor_type = 'member'
+		  AND r.actor_id = $4
+		  AND r.emoji = $5`, messageID, channelID, parseUUID(workspaceID), parseUUID(userID), emoji)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to remove reaction")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		var exists bool
+		if err := h.DB.QueryRow(r.Context(), `
+			SELECT EXISTS (
+				SELECT 1 FROM channel_message
+				WHERE id = $1 AND channel_id = $2 AND workspace_id = $3
+			)`, messageID, channelID, parseUUID(workspaceID)).Scan(&exists); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to remove reaction")
+			return
+		}
+		if !exists {
+			writeError(w, http.StatusNotFound, "message not found")
+			return
+		}
+	}
+
+	h.publish(protocol.EventChannelReactionRemoved, workspaceID, "member", userID, map[string]any{
+		"channel_id": uuidToString(channelID),
+		"message_id": uuidToString(messageID),
+		"emoji":      emoji,
+		"actor_type": "member",
+		"actor_id":   userID,
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Request) {

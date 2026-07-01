@@ -61,6 +61,7 @@ export type WSEventType =
   | "channel:message"
   | "channel:typing"
   | "channel_reaction:added"
+  | "channel_reaction:removed"
   | "channel:updated"
   | "channel:deleted"
   | "project:created"
@@ -444,6 +445,7 @@ export interface WSEventPayloadMap {
   "channel:message": ChannelMessage;
   "channel:typing": ChannelTypingPayload;
   "channel_reaction:added": { reaction: ChannelReaction; channel_id: string; message_id: string };
+  "channel_reaction:removed": { channel_id: string; message_id: string; emoji: string; actor_type: string; actor_id: string };
   "channel:updated": unknown;
   "channel:deleted": { id: string };
   "project:created": ProjectCreatedPayload;

@@ -169,6 +169,9 @@
   },
   "message": {
     "add_reaction": "반응 추가",
+    "copy_action": "복사",
+    "copied_toast": "복사했습니다",
+    "copy_failed_toast": "복사 실패",
     "agent_badge": "Agent",
     "feishu_badge": "Feishu"
   },

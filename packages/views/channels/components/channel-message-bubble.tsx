@@ -1,6 +1,7 @@
 "use client";
 
-import { MessageSquare } from "lucide-react";
+import { Copy, MessageSquare } from "lucide-react";
+import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
@@ -13,6 +14,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@multica/ui/components/ui/context-menu";
+import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
@@ -137,6 +139,13 @@ export function ChannelMessageBubble({
   const hasThreadActivity = threadReplyCount > 0 || threadUnreadCount > 0;
   const hasFeedback = (message.reactions?.length ?? 0) > 0 || hasThreadActivity;
   const quickReactionEmojis = ["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"];
+  const handleCopy = async () => {
+    if (await copyText(message.content)) {
+      toast.success(t(($) => $.message.copied_toast));
+    } else {
+      toast.error(t(($) => $.message.copy_failed_toast));
+    }
+  };
 
   return (
     <ContextMenu>
@@ -200,7 +209,20 @@ export function ChannelMessageBubble({
                 contentClassName="rounded-md border border-border/70 bg-popover/95 shadow-none ring-0"
               />
             )}
-            {canOpenThread && (
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+              aria-label={t(($) => $.message.copy_action)}
+              title={t(($) => $.message.copy_action)}
+            >
+              <Copy className="size-3.5" />
+            </button>
+            <ContextMenuItem onClick={handleCopy}>
+            <Copy className="size-4" />
+            {t(($) => $.message.copy_action)}
+          </ContextMenuItem>
+          {canOpenThread && (
               <button
                 type="button"
                 onClick={() => onOpenThread?.(message)}
@@ -296,8 +318,7 @@ export function ChannelMessageBubble({
       </div>
 
       {/* Right-click / long-press context menu */}
-      {(onReact || canOpenThread) && (
-        <ContextMenuContent>
+      <ContextMenuContent>
           {onReact && (
             <ContextMenuSub>
               <ContextMenuSubTrigger>
@@ -325,7 +346,6 @@ export function ChannelMessageBubble({
             </ContextMenuItem>
           )}
         </ContextMenuContent>
-      )}
     </ContextMenu>
   );
 }

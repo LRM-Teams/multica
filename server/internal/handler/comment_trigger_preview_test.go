@@ -236,6 +236,75 @@ func TestPreviewCommentTriggers_AllSuppressesAssigneeAndPendingDedupes(t *testin
 	}
 }
 
+func TestThreadReplyTargetsRootAgentWhenNoExplicitAgentMention(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	rootAgent := createHandlerTestAgent(t, "Thread Root Agent", nil)
+	otherAgent := createHandlerTestAgent(t, "Explicit Thread Agent", nil)
+	issueID := createCommentTriggerPreviewIssue(t, "thread reply targets root agent", "agent", otherAgent)
+
+	rootTask := createHandlerTestTaskForAgent(t, rootAgent)
+	w := httptest.NewRecorder()
+	r := newRequest(http.MethodPost, "/api/issues/"+issueID+"/comments", map[string]any{
+		"content": "I can help with this. Reply here if you need more.",
+	})
+	r = withURLParam(r, "id", issueID)
+	r.Header.Set("X-Agent-ID", rootAgent)
+	r.Header.Set("X-Task-ID", rootTask)
+	testHandler.CreateComment(w, r)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("agent root comment: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var root CommentResponse
+	if err := json.NewDecoder(w.Body).Decode(&root); err != nil {
+		t.Fatalf("decode root comment: %v", err)
+	}
+
+	preview := previewCommentTriggersForTest(t, issueID, map[string]any{
+		"content":   "yes, please continue",
+		"parent_id": root.ID,
+	})
+	if got := len(preview.Agents); got != 1 {
+		t.Fatalf("expected 1 preview agent, got %d: %+v", got, preview.Agents)
+	}
+	if preview.Agents[0].ID != rootAgent {
+		t.Fatalf("preview agent id = %s, want root agent %s", preview.Agents[0].ID, rootAgent)
+	}
+	if preview.Agents[0].Source != string(commentTriggerSourceThreadRootAgent) {
+		t.Fatalf("preview source = %q, want %q", preview.Agents[0].Source, commentTriggerSourceThreadRootAgent)
+	}
+
+	postCommentForTriggerPreviewTest(t, issueID, map[string]any{
+		"content":   "yes, please continue",
+		"parent_id": root.ID,
+	})
+	if got := countQueuedCommentTriggerTasks(t, issueID, rootAgent); got != 1 {
+		t.Fatalf("root agent queued tasks = %d, want 1", got)
+	}
+	if got := countQueuedCommentTriggerTasks(t, issueID, otherAgent); got != 0 {
+		t.Fatalf("assignee/other agent queued tasks = %d, want 0", got)
+	}
+
+	if _, err := testPool.Exec(ctx, `UPDATE agent_task_queue SET status = 'cancelled' WHERE issue_id = $1`, issueID); err != nil {
+		t.Fatalf("cancel queued tasks: %v", err)
+	}
+
+	explicitContent := fmt.Sprintf("[@Other](mention://agent/%s) please take over", otherAgent)
+	explicitPreview := previewCommentTriggersForTest(t, issueID, map[string]any{
+		"content":   explicitContent,
+		"parent_id": root.ID,
+	})
+	if got := len(explicitPreview.Agents); got != 1 {
+		t.Fatalf("expected 1 explicit preview agent, got %d: %+v", got, explicitPreview.Agents)
+	}
+	if explicitPreview.Agents[0].ID != otherAgent {
+		t.Fatalf("explicit preview agent id = %s, want explicitly mentioned agent %s", explicitPreview.Agents[0].ID, otherAgent)
+	}
+}
+
 func TestPreviewCommentTriggers_AssignedSquadLeaderAndSuppress(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

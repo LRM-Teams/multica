@@ -798,6 +798,7 @@ const (
 	commentTriggerSourceIssueAssignee      commentAgentTriggerSource = "issue_assignee"
 	commentTriggerSourceMentionAgent       commentAgentTriggerSource = "mention_agent"
 	commentTriggerSourceMentionSquadLeader commentAgentTriggerSource = "mention_squad_leader"
+	commentTriggerSourceThreadRootAgent    commentAgentTriggerSource = "thread_root_agent"
 )
 
 type commentAgentTrigger struct {
@@ -814,6 +815,8 @@ func commentAgentTriggerReason(trigger commentAgentTrigger) string {
 		return "This agent was mentioned in the comment."
 	case commentTriggerSourceMentionSquadLeader:
 		return "A mentioned squad will trigger its leader."
+	case commentTriggerSourceThreadRootAgent:
+		return "This reply is in a thread started by this agent."
 	default:
 		return "This comment will trigger this agent."
 	}
@@ -860,6 +863,7 @@ func (h *Handler) PreviewCommentTriggers(w http.ResponseWriter, r *http.Request)
 		}
 		parentComment = &parent
 	}
+	threadRootComment := h.threadRootForParent(r.Context(), issue, parentComment)
 
 	content := mention.ExpandIssueIdentifiers(r.Context(), h.Queries, issue.WorkspaceID, req.Content)
 	if content == "" {
@@ -868,7 +872,7 @@ func (h *Handler) PreviewCommentTriggers(w http.ResponseWriter, r *http.Request)
 	}
 
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
-	triggers := h.computeCommentAgentTriggers(r.Context(), issue, content, parentComment, actorType, actorID)
+	triggers := h.computeCommentAgentTriggers(r.Context(), issue, content, parentComment, threadRootComment, actorType, actorID)
 	resp := CommentTriggerPreviewResponse{Agents: make([]CommentTriggerAgentResponse, 0, len(triggers))}
 	for _, trigger := range triggers {
 		resp.Agents = append(resp.Agents, commentAgentTriggerToResponse(trigger))
@@ -1058,7 +1062,8 @@ func (h *Handler) triggerTasksForComment(ctx context.Context, issue db.Issue, co
 	if isNoteComment(comment.Content) {
 		return
 	}
-	triggers := h.computeCommentAgentTriggers(ctx, issue, comment.Content, parentComment, actorType, actorID)
+	threadRootComment := h.threadRootForParent(ctx, issue, parentComment)
+	triggers := h.computeCommentAgentTriggers(ctx, issue, comment.Content, parentComment, threadRootComment, actorType, actorID)
 	triggers = filterSuppressedCommentAgentTriggers(triggers, suppressAgentIDs)
 	h.enqueueCommentAgentTriggers(ctx, issue, comment.ID, triggers)
 }
@@ -1121,7 +1126,7 @@ func (h *Handler) enqueueCommentAgentTriggers(ctx context.Context, issue db.Issu
 	}
 }
 
-func (h *Handler) computeCommentAgentTriggers(ctx context.Context, issue db.Issue, content string, parentComment *db.Comment, actorType, actorID string) []commentAgentTrigger {
+func (h *Handler) computeCommentAgentTriggers(ctx context.Context, issue db.Issue, content string, parentComment, threadRootComment *db.Comment, actorType, actorID string) []commentAgentTrigger {
 	if isNoteComment(content) {
 		return nil
 	}
@@ -1136,8 +1141,18 @@ func (h *Handler) computeCommentAgentTriggers(ctx context.Context, issue db.Issu
 		seen[id] = struct{}{}
 		triggers = append(triggers, trigger)
 	}
+	mentions := util.ParseMentions(content)
+	hasExplicitAgentTargets := commentHasAgentTargetMention(mentions)
+	replyTargetsThreadRootAgent := actorType == "member" && parentComment != nil &&
+		threadRootComment != nil && threadRootComment.AuthorType == "agent" && !hasExplicitAgentTargets
 
-	if actorType == "member" && h.shouldEnqueueOnComment(ctx, issue, actorType, actorID) &&
+	if replyTargetsThreadRootAgent {
+		if trigger, ok := h.computeThreadRootAgentCommentTrigger(ctx, issue, threadRootComment, actorType, actorID); ok {
+			add(trigger)
+		}
+	}
+
+	if actorType == "member" && !replyTargetsThreadRootAgent && h.shouldEnqueueOnComment(ctx, issue, actorType, actorID) &&
 		!h.commentMentionsOthersButNotAssignee(content, issue) &&
 		!h.isReplyToMemberThread(ctx, parentComment, content, issue) {
 		if agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
@@ -1148,8 +1163,10 @@ func (h *Handler) computeCommentAgentTriggers(ctx context.Context, issue db.Issu
 		}
 	}
 
-	if trigger, ok := h.computeAssignedSquadLeaderCommentTrigger(ctx, issue, content, actorType, actorID); ok {
-		add(trigger)
+	if !replyTargetsThreadRootAgent {
+		if trigger, ok := h.computeAssignedSquadLeaderCommentTrigger(ctx, issue, content, actorType, actorID); ok {
+			add(trigger)
+		}
 	}
 
 	for _, trigger := range h.computeMentionedAgentCommentTriggers(ctx, issue, content, parentComment, actorType, actorID) {
@@ -1157,6 +1174,54 @@ func (h *Handler) computeCommentAgentTriggers(ctx context.Context, issue db.Issu
 	}
 
 	return triggers
+}
+
+func commentHasAgentTargetMention(mentions []util.Mention) bool {
+	for _, m := range mentions {
+		if m.Type == "agent" || m.Type == "squad" {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Handler) threadRootForParent(ctx context.Context, issue db.Issue, parentComment *db.Comment) *db.Comment {
+	if parentComment == nil {
+		return nil
+	}
+	root, err := h.Queries.GetThreadRoot(ctx, db.GetThreadRootParams{
+		CommentID:   parentComment.ID,
+		WorkspaceID: issue.WorkspaceID,
+	})
+	if err != nil {
+		return parentComment
+	}
+	return &root
+}
+
+func (h *Handler) computeThreadRootAgentCommentTrigger(ctx context.Context, issue db.Issue, threadRootComment *db.Comment, authorType, authorID string) (commentAgentTrigger, bool) {
+	if threadRootComment == nil || threadRootComment.AuthorType != "agent" || !threadRootComment.AuthorID.Valid {
+		return commentAgentTrigger{}, false
+	}
+	agentID := threadRootComment.AuthorID
+	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+		ID:          agentID,
+		WorkspaceID: issue.WorkspaceID,
+	})
+	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+		return commentAgentTrigger{}, false
+	}
+	if !h.canAccessPrivateAgent(ctx, agent, authorType, authorID, uuidToString(issue.WorkspaceID)) {
+		return commentAgentTrigger{}, false
+	}
+	hasPending, err := h.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
+		IssueID: issue.ID,
+		AgentID: agentID,
+	})
+	if err != nil || hasPending {
+		return commentAgentTrigger{}, false
+	}
+	return commentAgentTrigger{Agent: agent, Source: commentTriggerSourceThreadRootAgent}, true
 }
 
 func (h *Handler) computeAssignedSquadLeaderCommentTrigger(ctx context.Context, issue db.Issue, content, authorType, authorID string) (commentAgentTrigger, bool) {

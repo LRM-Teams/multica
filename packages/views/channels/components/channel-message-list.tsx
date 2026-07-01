@@ -35,7 +35,6 @@ function MessageViewport({
   highlightMessageId,
   emptyLabel,
   footer,
-  onQuote,
   onOpenThread,
   onScrollToMessage,
   onReact,
@@ -52,8 +51,6 @@ function MessageViewport({
   emptyLabel: string;
   /** Live affordances (agent-working / typing) pinned beneath the last message. */
   footer?: ReactNode;
-  /** Called when the user triggers Reply on a message (quote-reply flow). */
-  onQuote?: (message: ChannelMessage) => void;
   /** Called when the user opens the message's side thread. */
   onOpenThread?: (message: ChannelMessage) => void;
   /**
@@ -132,7 +129,6 @@ function MessageViewport({
                 currentUserId={currentUserId}
                 ownName={ownName}
                 highlighted={msg.id === highlightMessageId}
-                onQuote={onQuote}
                 onOpenThread={onOpenThread}
                 onScrollTo={onScrollToMessage}
                 onReact={onReact}

@@ -25,7 +25,8 @@ vi.mock("../../issues/components/comment-card", () => ({
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorAvatarUrl: () => null,
-    getActorName: () => null,
+    getActorName: (_type: string, id: string) =>
+      id === "user-1" ? "Alice" : id === "user-2" ? "Bob" : null,
   }),
 }));
 
@@ -34,7 +35,7 @@ vi.mock("../../i18n", () => ({
     t: (
       selector: (resources: {
         message: { add_reaction: string; agent_badge: string; feishu_badge: string };
-        quote: { jump_to: string; reply: string; reply_aria: string; more_aria: string };
+        quote: { jump_to: string };
         thread: { reply: string; reply_count: string };
       }) => string,
     ) =>
@@ -42,13 +43,10 @@ vi.mock("../../i18n", () => ({
         message: { add_reaction: "Add reaction", agent_badge: "Agent", feishu_badge: "Feishu" },
         quote: {
           jump_to: "Jump to original message",
-          reply: "Reply",
-          reply_aria: "Reply to message",
-          more_aria: "More actions",
         },
         thread: {
           reply: "Reply in thread",
-          reply_count: "{{count}} replies",
+          reply_count: "2 replies",
         },
       }),
   }),
@@ -150,7 +148,7 @@ describe("ChannelMessageBubble", () => {
       <ChannelMessageBubble
         message={makeMessage()}
         currentUserId="user-1"
-        onQuote={vi.fn()}
+        onOpenThread={vi.fn()}
       />,
     );
 
@@ -166,7 +164,7 @@ describe("ChannelMessageBubble", () => {
       <ChannelMessageBubble
         message={makeMessage()}
         currentUserId="user-1"
-        onQuote={vi.fn()}
+        onOpenThread={vi.fn()}
       />,
     );
 
@@ -202,20 +200,82 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByRole("button", { name: "React with ❤️" })).not.toBeInTheDocument();
   });
 
+  it("renders the thread chip before reaction chips in the footer", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          thread_reply_count: 2,
+          reactions: [
+            {
+              id: "reaction-1",
+              channel_id: "c1",
+              message_id: "m1",
+              actor_type: "member",
+              actor_id: "user-2",
+              emoji: "👍",
+              created_at: "2026-06-17T09:16:00Z",
+            },
+          ],
+        })}
+        currentUserId="user-1"
+        onOpenThread={vi.fn()}
+        onReact={vi.fn()}
+      />,
+    );
+
+    const footer = screen.getByRole("button", { name: /2 replies/ }).parentElement;
+    expect(footer?.children[0]).toHaveTextContent("2 replies");
+    expect(footer?.children[1]).toHaveTextContent("👍1");
+  });
+
+  it("labels the current user as You in reaction attribution", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          reactions: [
+            {
+              id: "reaction-1",
+              channel_id: "c1",
+              message_id: "m1",
+              actor_type: "member",
+              actor_id: "user-2",
+              emoji: "👍",
+              created_at: "2026-06-17T09:16:00Z",
+            },
+            {
+              id: "reaction-2",
+              channel_id: "c1",
+              message_id: "m1",
+              actor_type: "member",
+              actor_id: "user-1",
+              emoji: "👍",
+              created_at: "2026-06-17T09:17:00Z",
+            },
+          ],
+        })}
+        currentUserId="user-1"
+        onReact={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "👍2" })).toHaveAttribute(
+      "title",
+      "You, Bob",
+    );
+  });
+
   it("does not duplicate first-level actions inside a More menu", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage()}
         currentUserId="user-1"
-        onQuote={vi.fn()}
         onOpenThread={vi.fn()}
         onReact={vi.fn()}
       />,
     );
 
     expect(screen.getByRole("button", { name: "Add reaction" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Reply" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reply in thread" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Quote reply" })).not.toBeInTheDocument();
   });
 });

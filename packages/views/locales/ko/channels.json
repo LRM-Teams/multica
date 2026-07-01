@@ -199,11 +199,6 @@
     "composer_placeholder": "{{name}}에게 메시지…"
   },
   "quote": {
-    "reply": "답장",
-    "reply_aria": "이 메시지에 답장",
-    "more_aria": "더 많은 작업",
-    "cancel": "답장 취소",
-    "replying_to": "{{name}}에게 답장",
     "jump_to": "원본 메시지로 이동"
   },
   "conv_search": {

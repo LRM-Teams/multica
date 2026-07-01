@@ -23,7 +23,7 @@ vi.mock("../../i18n", () => ({
     t: (
       selector: (resources: {
         message: { add_reaction: string; agent_badge: string; feishu_badge: string };
-        quote: { jump_to: string; reply: string; reply_aria: string; more_aria: string };
+        quote: { jump_to: string };
         thread: { reply: string; reply_count: string };
       }) => string,
     ) =>
@@ -35,9 +35,6 @@ vi.mock("../../i18n", () => ({
         },
         quote: {
           jump_to: "Jump to original message",
-          reply: "Reply",
-          reply_aria: "Reply to message",
-          more_aria: "More actions",
         },
         thread: {
           reply: "Reply in thread",

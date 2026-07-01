@@ -1727,7 +1727,7 @@ export function ChannelsPage() {
     isLoading || (!!activeId && !activeDmId && !active);
   const threadPanel =
     active && threadRoot ? (
-      <div className="flex h-full min-h-0 flex-col bg-background">
+      <div className="flex h-full min-h-0 min-w-0 flex-col bg-background">
         <ConversationHeader
           isMobile={isMobile}
           leading={
@@ -2183,7 +2183,7 @@ export function ChannelsPage() {
                 if (!open) setOpenThreadRoot(null);
               }}
             >
-              <DrawerContent className="h-[90vh] p-0">
+              <DrawerContent className="h-[calc(100dvh-env(safe-area-inset-top))] max-h-[calc(100dvh-env(safe-area-inset-top))] min-w-0 rounded-t-none p-0">
                 {threadPanel}
               </DrawerContent>
             </Drawer>

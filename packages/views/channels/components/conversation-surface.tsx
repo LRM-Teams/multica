@@ -50,10 +50,21 @@ export function ConversationHeader({
   );
 }
 
-export function ComposerShell({ children }: { children: ReactNode }) {
+export function ComposerShell({
+  children,
+  isMobile = false,
+}: {
+  children: ReactNode;
+  isMobile?: boolean;
+}) {
   return (
-    <div className="px-5 pb-4">
-      <div className="rounded-lg border border-border/35 bg-background shadow-none">
+    <div
+      className={cn(
+        "shrink-0",
+        isMobile ? "px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]" : "px-5 pb-4",
+      )}
+    >
+      <div className="min-w-0 rounded-lg border border-border/35 bg-background shadow-none">
         {children}
       </div>
     </div>
@@ -80,20 +91,25 @@ export function ChannelComposer({
   leadingActions?: ReactNode;
 }) {
   return (
-    <ComposerShell>
+    <ComposerShell isMobile={isMobile}>
       {prefix}
-      <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
+      <div
+        className={cn(
+          "min-h-16 overflow-y-auto px-4 pt-3 overscroll-contain",
+          isMobile ? "max-h-[28dvh]" : "max-h-40",
+        )}
+      >
         {editor}
       </div>
-      <div className="flex items-center justify-between px-2 pb-2">
-        <div className="flex min-h-8 items-center gap-0.5 text-muted-foreground">
+      <div className={cn("flex items-center justify-between px-2 pb-2", isMobile && "gap-2")}>
+        <div className="flex min-h-8 min-w-0 flex-1 items-center gap-0.5 overflow-x-auto text-muted-foreground">
           {leadingActions}
         </div>
         <Button
           onClick={onSend}
           disabled={sendDisabled || sending}
           size="sm"
-          className={cn(isMobile && "min-h-10 px-4")}
+          className={cn("shrink-0", isMobile && "min-h-10 px-4")}
         >
           <Send className="size-4" /> {sendLabel}
         </Button>

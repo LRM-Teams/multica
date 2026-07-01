@@ -230,6 +230,7 @@
     "name_placeholder": "예: 심층 리서치 에이전트",
     "description_label": "설명",
     "description_placeholder": "이 에이전트는 무엇을 하나요?",
+    "thinking_label": "추론",
     "visibility_label": "공개 범위",
     "runtime_label": "런타임",
     "runtime_filter_mine": "내 것",

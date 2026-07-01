@@ -217,6 +217,7 @@
     "name_placeholder": "例: ディープリサーチエージェント",
     "description_label": "説明",
     "description_placeholder": "このエージェントは何をしますか？",
+    "thinking_label": "思考",
     "visibility_label": "公開範囲",
     "runtime_label": "ランタイム",
     "runtime_filter_mine": "自分のもの",

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"strings"
 	"testing"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -34,6 +35,39 @@ func eq(a, b []string) bool {
 // chat prompt: the agent must receive every user message since its last reply
 // (the MUL-2968 debounce can land several before one run fires), not just the
 // most recent one.
+func TestChatResumeSafetyHelpers(t *testing.T) {
+	msgs := []db.ChatMessage{
+		msg("user", "old 1"),
+		msg("assistant", "old 2"),
+		msg("user", "new 3"),
+	}
+	if shouldStartFreshChatSession(msgs, 0) {
+		t.Fatal("short chat without high token usage should resume")
+	}
+	if !shouldStartFreshChatSession(make([]db.ChatMessage, chatFreshAfterMessageCount), 0) {
+		t.Fatal("long chat should start fresh")
+	}
+	if !shouldStartFreshChatSession(msgs, chatFreshAfterTokenCount) {
+		t.Fatal("high token usage should start fresh")
+	}
+	if !chatFailureResumeUnsafe("agent_error.context_overflow") {
+		t.Fatal("context overflow must not resume the native session")
+	}
+	if got := contents(recentChatMessages(msgs, 2)); !eq(got, []string{"old 2", "new 3"}) {
+		t.Fatalf("recentChatMessages = %v", got)
+	}
+	line := compactChatLine("  a\n\t b   c  ")
+	if line != "a b c" {
+		t.Fatalf("compactChatLine = %q", line)
+	}
+	summary := buildChatContextSummary(msgs, 123, "test reason")
+	for _, want := range []string{"Native session resume was intentionally skipped", "test reason", "Recent messages", "Older tool outputs/log dumps are not included"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q:\n%s", want, summary)
+		}
+	}
+}
+
 func TestTrailingUserMessages(t *testing.T) {
 	cases := []struct {
 		name string

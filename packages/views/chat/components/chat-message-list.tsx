@@ -188,23 +188,30 @@ export function ChatMessageSkeleton() {
 
 // ─── Message bubbles ─────────────────────────────────────────────────────
 
+const selectableMessageTextClass = "select-text [-webkit-user-select:text] [-webkit-touch-callout:default]";
+
 function MessageBubble({ message, isPending }: { message: ChatMessage; isPending: boolean }) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="rounded-2xl bg-muted px-3.5 py-2 text-sm max-w-[80%] break-words">
-          {/* User messages are authored as markdown in ContentEditor, so
-           * render them through the same pipeline as assistant replies.
-           * Neutralise prose's leading/trailing margin so single-line
-           * bubbles stay as compact as the plain-text version used to. */}
-          <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-            <Markdown attachments={message.attachments}>{message.content}</Markdown>
+        <div className="max-w-[80%] space-y-1">
+          <div className={cn("rounded-2xl bg-muted px-3.5 py-2 text-sm break-words", selectableMessageTextClass)}>
+            {/* User messages are authored as markdown in ContentEditor, so
+             * render them through the same pipeline as assistant replies.
+             * Neutralise prose's leading/trailing margin so single-line
+             * bubbles stay as compact as the plain-text version used to. */}
+            <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+              <Markdown attachments={message.attachments}>{message.content}</Markdown>
+            </div>
+            <AttachmentList
+              attachments={message.attachments}
+              content={message.content}
+              className="mt-1.5"
+            />
           </div>
-          <AttachmentList
-            attachments={message.attachments}
-            content={message.content}
-            className="mt-1.5"
-          />
+          <div className="flex justify-end">
+            <MessageCopyButton message={message} timeline={[]} />
+          </div>
         </div>
       </div>
     );
@@ -253,7 +260,7 @@ function AssistantMessage({
       {timeline.length > 0 ? (
         <TimelineView items={timeline} attachments={message.attachments} />
       ) : (
-        <div className="text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none">
+        <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
           <Markdown attachments={message.attachments}>{message.content}</Markdown>
         </div>
       )}
@@ -401,7 +408,7 @@ function FailureBubble({
                 <span>{t(($) => $.message_list.show_details)}</span>
               </CollapsibleTrigger>
               <CollapsibleContent>
-                <pre className="mt-1 max-h-40 overflow-auto rounded bg-muted/40 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all">
+                <pre className={cn("mt-1 max-h-40 overflow-auto rounded bg-muted/40 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all", selectableMessageTextClass)}>
                   {rawError}
                 </pre>
               </CollapsibleContent>
@@ -445,7 +452,7 @@ function TimelineView({
   return (
     <>
       {preface.length > 0 && (
-        <div className="text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none">
+        <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
           <Markdown attachments={attachments}>
             {preface.map((t) => t.content ?? "").join("")}
           </Markdown>
@@ -459,7 +466,7 @@ function TimelineView({
         />
       )}
       {final.length > 0 && (
-        <div className="text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none">
+        <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
           <Markdown attachments={attachments}>
             {final.map((t) => t.content ?? "").join("")}
           </Markdown>
@@ -520,7 +527,7 @@ function MiddleTextRow({
   attachments?: import("@multica/core/types").Attachment[];
 }) {
   return (
-    <div className="py-0.5 text-xs text-muted-foreground prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+    <div className={cn("py-0.5 text-xs text-muted-foreground prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", selectableMessageTextClass)}>
       <Markdown attachments={attachments}>{item.content ?? ""}</Markdown>
     </div>
   );
@@ -592,7 +599,7 @@ function ToolCallRow({ item }: { item: ChatTimelineItem }) {
       </CollapsibleTrigger>
       {hasInput && (
         <CollapsibleContent>
-          <pre className="ml-[18px] mt-0.5 max-h-32 overflow-auto rounded bg-muted/50 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all">
+          <pre className={cn("ml-[18px] mt-0.5 max-h-32 overflow-auto rounded bg-muted/50 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all", selectableMessageTextClass)}>
             {JSON.stringify(item.input, null, 2)}
           </pre>
         </CollapsibleContent>
@@ -623,7 +630,7 @@ function ToolResultRow({ item }: { item: ChatTimelineItem }) {
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <pre className="ml-[18px] mt-0.5 max-h-40 overflow-auto rounded bg-muted/50 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all">
+        <pre className={cn("ml-[18px] mt-0.5 max-h-40 overflow-auto rounded bg-muted/50 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all", selectableMessageTextClass)}>
           {output.length > 4000 ? output.slice(0, 4000) + "\n... (truncated)" : output}
         </pre>
       </CollapsibleContent>
@@ -645,7 +652,7 @@ function ThinkingRow({ item }: { item: ChatTimelineItem }) {
         <span className="text-muted-foreground italic truncate">{preview}</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <pre className="ml-[18px] mt-0.5 max-h-40 overflow-auto rounded bg-muted/30 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-words">
+        <pre className={cn("ml-[18px] mt-0.5 max-h-40 overflow-auto rounded bg-muted/30 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-words", selectableMessageTextClass)}>
           {text}
         </pre>
       </CollapsibleContent>
@@ -657,7 +664,7 @@ function ErrorRow({ item }: { item: ChatTimelineItem }) {
   return (
     <div className="flex items-start gap-1.5 px-1 -mx-1 py-0.5 text-xs">
       <AlertCircle className="h-3 w-3 shrink-0 text-destructive mt-0.5" />
-      <span className="text-destructive">{item.content}</span>
+      <span className={cn("text-destructive", selectableMessageTextClass)}>{item.content}</span>
     </div>
   );
 }

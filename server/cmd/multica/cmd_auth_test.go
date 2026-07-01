@@ -6,20 +6,51 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/multica-ai/multica/server/internal/cli"
 )
 
 // testCmd returns a minimal cobra.Command with the --profile persistent flag
 // registered, matching the rootCmd setup used in production.
 func testCmd() *cobra.Command {
 	cmd := &cobra.Command{}
-	cmd.PersistentFlags().String("profile", "", "")
+	cmd.Flags().String("profile", "", "")
 	return cmd
 }
 
 func TestResolveAppURL(t *testing.T) {
 	cmd := testCmd()
 
-	t.Run("prefers MULTICA_APP_URL", func(t *testing.T) {
+	t.Run("prefers configured app URL over localhost env", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("MULTICA_APP_URL", "http://localhost:3000")
+		t.Setenv("FRONTEND_ORIGIN", "http://localhost:13000")
+		if err := cli.SaveCLIConfig(cli.CLIConfig{AppURL: "https://multica.ai"}); err != nil {
+			t.Fatalf("SaveCLIConfig: %v", err)
+		}
+
+		if got := resolveAppURL(cmd); got != "https://multica.ai" {
+			t.Fatalf("resolveAppURL() = %q, want %q", got, "https://multica.ai")
+		}
+	})
+
+	t.Run("prefers self-host app URL over localhost env", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("MULTICA_APP_URL", "http://localhost:3000")
+		if err := cli.SaveCLIConfig(cli.CLIConfig{
+			ServerURL: "http://82.157.184.89:8090",
+			AppURL:    "http://82.157.184.89:8090",
+		}); err != nil {
+			t.Fatalf("SaveCLIConfig: %v", err)
+		}
+
+		if got := resolveAppURL(cmd); got != "http://82.157.184.89:8090" {
+			t.Fatalf("resolveAppURL() = %q, want %q", got, "http://82.157.184.89:8090")
+		}
+	})
+
+	t.Run("uses MULTICA_APP_URL when no config exists", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
 		t.Setenv("MULTICA_APP_URL", "http://localhost:14000")
 		t.Setenv("FRONTEND_ORIGIN", "http://localhost:13000")
 
@@ -29,6 +60,7 @@ func TestResolveAppURL(t *testing.T) {
 	})
 
 	t.Run("falls back to FRONTEND_ORIGIN", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
 		t.Setenv("MULTICA_APP_URL", "")
 		t.Setenv("FRONTEND_ORIGIN", "http://localhost:13026")
 
@@ -36,6 +68,60 @@ func TestResolveAppURL(t *testing.T) {
 			t.Fatalf("resolveAppURL() = %q, want %q", got, "http://localhost:13026")
 		}
 	})
+}
+
+func TestTryResolveAppURL(t *testing.T) {
+	cmd := testCmd()
+
+	t.Run("prefers configured app URL over localhost env", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("MULTICA_APP_URL", "http://localhost:3000")
+		if err := cli.SaveCLIConfig(cli.CLIConfig{AppURL: "https://app.internal.example"}); err != nil {
+			t.Fatalf("SaveCLIConfig: %v", err)
+		}
+
+		if got := tryResolveAppURL(cmd); got != "https://app.internal.example" {
+			t.Fatalf("tryResolveAppURL() = %q, want %q", got, "https://app.internal.example")
+		}
+	})
+
+	t.Run("returns env fallback when no config exists", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("MULTICA_APP_URL", "http://localhost:3000")
+
+		if got := tryResolveAppURL(cmd); got != "http://localhost:3000" {
+			t.Fatalf("tryResolveAppURL() = %q, want %q", got, "http://localhost:3000")
+		}
+	})
+
+	t.Run("returns empty when neither config nor env exists", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("MULTICA_APP_URL", "")
+		t.Setenv("FRONTEND_ORIGIN", "")
+
+		if got := tryResolveAppURL(cmd); got != "" {
+			t.Fatalf("tryResolveAppURL() = %q, want empty", got)
+		}
+	})
+}
+
+func TestConfiguredAppURLRespectsProfile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := cli.SaveCLIConfig(cli.CLIConfig{AppURL: "https://default.example"}); err != nil {
+		t.Fatalf("SaveCLIConfig(default): %v", err)
+	}
+	if err := cli.SaveCLIConfigForProfile(cli.CLIConfig{AppURL: "https://staging.example"}, "staging"); err != nil {
+		t.Fatalf("SaveCLIConfigForProfile(staging): %v", err)
+	}
+
+	cmd := testCmd()
+	if err := cmd.Flags().Set("profile", "staging"); err != nil {
+		t.Fatalf("set profile: %v", err)
+	}
+
+	if got := configuredAppURL(cmd); got != "https://staging.example" {
+		t.Fatalf("configuredAppURL() = %q, want %q", got, "https://staging.example")
+	}
 }
 
 func TestResolveCallbackBinding(t *testing.T) {

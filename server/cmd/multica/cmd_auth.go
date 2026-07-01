@@ -77,19 +77,29 @@ func resolveToken(cmd *cobra.Command) string {
 }
 
 func resolveAppURL(cmd *cobra.Command) string {
+	// The persisted profile is the user's selected login surface. Ambient env
+	// vars are only fallbacks for dev/no-config flows; otherwise a stale
+	// MULTICA_APP_URL=http://localhost:3000 can make cloud setup open localhost.
+	if val := configuredAppURL(cmd); val != "" {
+		return val
+	}
 	for _, key := range []string{"MULTICA_APP_URL", "FRONTEND_ORIGIN"} {
 		if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 			return strings.TrimRight(val, "/")
 		}
 	}
+	fmt.Fprintln(os.Stderr, "No app URL configured. Run 'multica setup' first.")
+	os.Exit(1)
+	return "" // unreachable
+}
+
+func configuredAppURL(cmd *cobra.Command) string {
 	profile := resolveProfile(cmd)
 	cfg, err := cli.LoadCLIConfigForProfile(profile)
 	if err == nil && cfg.AppURL != "" {
 		return strings.TrimRight(cfg.AppURL, "/")
 	}
-	fmt.Fprintln(os.Stderr, "No app URL configured. Run 'multica setup' first.")
-	os.Exit(1)
-	return "" // unreachable
+	return ""
 }
 
 func openBrowser(url string) error {

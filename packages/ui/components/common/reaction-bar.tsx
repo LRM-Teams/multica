@@ -34,6 +34,15 @@ function groupReactions(reactions: ReactionItem[], currentUserId?: string): Grou
   return Array.from(map.values());
 }
 
+function actorDisplayName(
+  actor: { type: string; id: string },
+  currentUserId: string | undefined,
+  getActorName: (type: string, id: string) => string,
+): string {
+  if (actor.type === "member" && actor.id === currentUserId) return "You";
+  return getActorName(actor.type, actor.id) || actor.id;
+}
+
 interface ReactionBarProps {
   reactions: ReactionItem[];
   currentUserId?: string;
@@ -75,10 +84,17 @@ function ReactionBar({
         </button>
       ))}
       {grouped.map((g) => {
-        const actors = g.actors.map((a) => ({
-          ...a,
-          name: getActorName(a.type, a.id) || a.id,
-        }));
+        const actors = [...g.actors]
+          .sort((a, b) => {
+            const aIsCurrent = a.type === "member" && a.id === currentUserId;
+            const bIsCurrent = b.type === "member" && b.id === currentUserId;
+            return Number(bIsCurrent) - Number(aIsCurrent);
+          })
+          .map((a) => ({
+            ...a,
+            name: actorDisplayName(a, currentUserId, getActorName),
+          }));
+        const actorSummary = actors.map((actor) => actor.name).join(", ");
         return (
         <HoverCard key={g.emoji}>
           <HoverCardTrigger
@@ -86,6 +102,7 @@ function ReactionBar({
               <button
                 type="button"
                 onClick={() => onToggle(g.emoji)}
+                title={actorSummary}
                 className={`inline-flex h-8 touch-manipulation items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:bg-brand/15 active:scale-95 md:h-6 ${
                   g.reacted
                     ? "border-brand/30 bg-brand/8 text-brand"

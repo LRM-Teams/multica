@@ -199,11 +199,6 @@
     "composer_placeholder": "Message {{name}}…"
   },
   "quote": {
-    "reply": "Reply",
-    "reply_aria": "Reply to this message",
-    "more_aria": "More actions",
-    "cancel": "Cancel reply",
-    "replying_to": "Replying to {{name}}",
     "jump_to": "Jump to original message"
   },
   "conv_search": {

@@ -22,7 +22,6 @@ import {
   Pin,
   PinOff,
   Plus,
-  Reply,
   Search,
   Share2,
   Smartphone,
@@ -458,7 +457,6 @@ export function ChannelsPage() {
   const typingStartedRef = useRef(false);
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [quoteMessage, setQuoteMessage] = useState<ChannelMessage | null>(null);
   const [openThreadRoot, setOpenThreadRoot] = useState<ChannelMessage | null>(null);
   const threadEditorRef = useRef<ContentEditorRef>(null);
   const focusThreadComposerOnOpenRef = useRef(false);
@@ -790,10 +788,7 @@ export function ChannelsPage() {
     if (typingPulseTimerRef.current) window.clearTimeout(typingPulseTimerRef.current);
   }, [active?.id]);
 
-  // Quote-reply target is scoped to the open conversation — discard it when
-  // the user switches groups or opens a DM.
   useEffect(() => {
-    setQuoteMessage(null);
     setOpenThreadRoot(null);
     setThreadDraftEmpty(true);
   }, [active?.id, activeDmId]);
@@ -1113,14 +1108,12 @@ export function ChannelsPage() {
         channelId: active.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
-        replyToMessageId: quoteMessage?.id,
       },
       {
         onSuccess: () => {
           editorRef.current?.clearContent();
           uploadMapRef.current.clear();
           setDraftEmpty(true);
-          setQuoteMessage(null);
         },
       },
     );
@@ -1152,13 +1145,6 @@ export function ChannelsPage() {
         },
       },
     );
-  };
-
-  const handleQuoteMessage = (message: ChannelMessage) => {
-    setQuoteMessage(message);
-    requestAnimationFrame(() => {
-      editorRef.current?.focus();
-    });
   };
 
   const handleOpenThread = (message: ChannelMessage) => {
@@ -2063,7 +2049,6 @@ export function ChannelsPage() {
                 searchHitIds={searchHitIds}
                 searchQuery={searchHighlightQuery}
                 emptyLabel={t(($) => $.thread.empty)}
-                onQuote={isActiveArchived ? undefined : handleQuoteMessage}
                 onOpenThread={isActiveArchived ? undefined : handleOpenThread}
                 onScrollToMessage={setHighlightMessageId}
                 onReact={handleReactToMessage}
@@ -2115,27 +2100,6 @@ export function ChannelsPage() {
                     sending={sendMessage.isPending}
                     onSend={handleSend}
                     isMobile={isMobile}
-                    prefix={quoteMessage && (
-                      <div className="flex items-start gap-2 border-b border-border/40 px-4 py-2">
-                        <Reply className="mt-0.5 size-3.5 shrink-0 text-primary" />
-                        <div className="min-w-0 flex-1 border-l-2 border-primary pl-2">
-                          <p className="truncate text-[11px] font-semibold text-foreground">
-                            {t(($) => $.quote.replying_to, { name: quoteMessage.author_name })}
-                          </p>
-                          <p className="line-clamp-1 text-[11px] text-muted-foreground">
-                            {quoteMessage.content}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          aria-label={t(($) => $.quote.cancel)}
-                          className="flex size-5 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-                          onClick={() => setQuoteMessage(null)}
-                        >
-                          <X className="size-3.5" />
-                        </button>
-                      </div>
-                    )}
                     editor={
                       <ContentEditor
                         key={active.id}

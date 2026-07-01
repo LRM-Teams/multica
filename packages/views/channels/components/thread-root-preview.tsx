@@ -1,8 +1,6 @@
 "use client";
 
-import { useState } from "react";
 import { Bot } from "lucide-react";
-import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import type { ChannelMessage } from "@multica/core/types";
 import { MemoizedMarkdown } from "../../common/markdown";
@@ -34,7 +32,6 @@ export function ThreadRootPreview({
   ownName?: string;
 }) {
   const { t } = useT("channels");
-  const [expanded, setExpanded] = useState(false);
   const isOwn =
     message.author_type === "user" &&
     message.author_id != null &&
@@ -100,12 +97,7 @@ export function ThreadRootPreview({
             </span>
           </div>
           <div
-            className={cn(
-              "mt-1 min-w-0 text-sm leading-6 text-foreground",
-              expanded
-                ? "max-h-[min(360px,38vh)] overflow-y-auto overscroll-contain pr-1"
-                : "max-h-32 overflow-hidden",
-            )}
+            className="mt-1 min-w-0 text-sm leading-6 text-foreground"
           >
             <MemoizedMarkdown attachments={message.attachments}>{message.content}</MemoizedMarkdown>
             <AttachmentList
@@ -113,17 +105,6 @@ export function ThreadRootPreview({
               content={message.content}
               className="mt-1.5"
             />
-          </div>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="link"
-              size="sm"
-              className="h-auto px-0 text-xs text-muted-foreground"
-              onClick={() => setExpanded((value) => !value)}
-            >
-              {expanded ? t(($) => $.thread.collapse_message) : t(($) => $.thread.show_full_message)}
-            </Button>
           </div>
         </div>
       </div>

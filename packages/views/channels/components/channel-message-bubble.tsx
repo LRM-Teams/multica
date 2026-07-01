@@ -1,6 +1,6 @@
 "use client";
 
-import { MessageSquare, Reply } from "lucide-react";
+import { MessageSquare } from "lucide-react";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
@@ -52,7 +52,7 @@ function formatTime(value: string): string {
  * as an IM-style message item, while quote/attachment/code-like content keeps
  * local structure inside the shared Markdown pipeline.
  *
- * Desktop: right-click → context menu (Reply).
+ * Desktop: right-click → context menu (thread reply / reactions).
  * Mobile: long-press → context menu (ContextMenu handles this natively).
  * Keyboard: ContextMenu via Menu/Shift+F10 is the accessible path.
  */
@@ -61,7 +61,6 @@ export function ChannelMessageBubble({
   currentUserId,
   ownName,
   highlighted = false,
-  onQuote,
   onOpenThread,
   onScrollTo,
   onReact,
@@ -74,8 +73,6 @@ export function ChannelMessageBubble({
   ownName?: string;
   /** Deep-link target: briefly ring-highlights the message, then fades. */
   highlighted?: boolean;
-  /** Called when the user triggers "Reply" on this message. */
-  onQuote?: (message: ChannelMessage) => void;
   /** Called when the user opens the message's side thread. */
   onOpenThread?: (message: ChannelMessage) => void;
   /** Called when the user clicks the inline quote block to jump to the original. */
@@ -134,7 +131,6 @@ export function ChannelMessageBubble({
     <span className="truncate font-medium text-foreground">{displayName}</span>
   );
 
-  const canQuote = !!onQuote;
   const canOpenThread = !!onOpenThread && !message.thread_root_message_id;
   const threadReplyCount = message.thread_reply_count ?? 0;
   const threadUnreadCount = message.thread_unread_count ?? 0;
@@ -190,36 +186,25 @@ export function ChannelMessageBubble({
               {formatTime(message.created_at)}
             </span>
           </div>
-          <div className="pointer-events-none absolute right-3 top-2 z-10 flex items-center gap-0.5 rounded-md bg-muted/45 p-0.5 text-muted-foreground opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+          <div className="pointer-events-none absolute right-3 top-2 z-10 flex items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
             {onReact && (
               <QuickEmojiPicker
                 onSelect={(emoji) => onReact(message, emoji)}
                 align="end"
-                side="top"
-                className="size-7 rounded-md hover:bg-background/70 hover:text-foreground"
+                side="bottom"
+                className="size-7 rounded-md hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
                 ariaLabel={t(($) => $.message.add_reaction)}
-                sideOffset={6}
+                sideOffset={4}
                 emojis={quickReactionEmojis}
                 showMore={false}
                 contentClassName="rounded-md border border-border/70 bg-popover/95 shadow-none ring-0"
               />
             )}
-            {canQuote && (
-              <button
-                type="button"
-                onClick={() => onQuote?.(message)}
-                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground"
-                aria-label={t(($) => $.quote.reply)}
-                title={t(($) => $.quote.reply)}
-              >
-                <Reply className="size-3.5" />
-              </button>
-            )}
             {canOpenThread && (
               <button
                 type="button"
                 onClick={() => onOpenThread?.(message)}
-                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground"
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
                 aria-label={t(($) => $.thread.reply)}
                 title={t(($) => $.thread.reply)}
               >
@@ -277,23 +262,13 @@ export function ChannelMessageBubble({
           </ContextMenuTrigger>
           {hasFeedback && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              {onReact && (message.reactions?.length ?? 0) > 0 && (
-                <ReactionBar
-                  reactions={message.reactions ?? []}
-                  currentUserId={currentUserId ?? undefined}
-                  onToggle={(emoji) => onReact(message, emoji)}
-                  getActorName={getActorName}
-                  hideAddButton
-                  showQuickReactions={false}
-                />
-              )}
               {hasThreadActivity && onOpenThread && (
                 <button
                   type="button"
                   onClick={() => onOpenThread(message)}
                   className={cn(
-                    "inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-                    threadUnreadCount > 0 && "font-medium text-primary",
+                    "inline-flex h-7 items-center gap-1.5 rounded-md border border-border/80 bg-muted/45 px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:h-6",
+                    threadUnreadCount > 0 && "border-primary/35 bg-primary/10 text-primary",
                   )}
                 >
                   <MessageSquare className="size-3.5" />
@@ -305,13 +280,23 @@ export function ChannelMessageBubble({
                   )}
                 </button>
               )}
+              {onReact && (message.reactions?.length ?? 0) > 0 && (
+                <ReactionBar
+                  reactions={message.reactions ?? []}
+                  currentUserId={currentUserId ?? undefined}
+                  onToggle={(emoji) => onReact(message, emoji)}
+                  getActorName={getActorName}
+                  hideAddButton
+                  showQuickReactions={false}
+                />
+              )}
             </div>
           )}
         </div>
       </div>
 
       {/* Right-click / long-press context menu */}
-      {(onReact || canQuote || canOpenThread) && (
+      {(onReact || canOpenThread) && (
         <ContextMenuContent>
           {onReact && (
             <ContextMenuSub>
@@ -337,12 +322,6 @@ export function ChannelMessageBubble({
             <ContextMenuItem onClick={() => onOpenThread(message)}>
               <MessageSquare className="size-4" />
               {t(($) => $.thread.reply)}
-            </ContextMenuItem>
-          )}
-          {canQuote && (
-            <ContextMenuItem onClick={() => onQuote(message)}>
-              <Reply className="size-4" />
-              {t(($) => $.quote.reply)}
             </ContextMenuItem>
           )}
         </ContextMenuContent>

@@ -58,7 +58,7 @@ function makeMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
 }
 
 describe("ThreadRootPreview", () => {
-  it("keeps parent actions local and does not duplicate the panel back action", () => {
+  it("keeps parent preview lightweight without duplicate navigation actions", () => {
     render(
       <ThreadRootPreview
         message={makeMessage()}
@@ -67,7 +67,7 @@ describe("ThreadRootPreview", () => {
     );
 
     expect(screen.getByText("Thread root content")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show full message" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Back to main chat" })).not.toBeInTheDocument();
   });
 });

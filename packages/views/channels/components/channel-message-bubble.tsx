@@ -267,6 +267,7 @@ export function ChannelMessageBubble({
               onToggle={(emoji) => onReact(message, emoji)}
               getActorName={getActorName}
               className={cn(isOwn && "justify-end")}
+              quickEmojis={["👍", "❤️", "💯", "🎉"]}
             />
           )}
           {(canOpenThread || hasThreadActivity) && onOpenThread && (

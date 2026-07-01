@@ -166,7 +166,17 @@ function MessageViewport({
     );
   };
 
-  if (useDirectFallback || !scrollContainerEl) {
+  if (!scrollContainerEl) {
+    return (
+      <div
+        ref={setScrollContainerRef}
+        className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
+        data-testid="message-scroller"
+      />
+    );
+  }
+
+  if (useDirectFallback) {
     return (
       <div
         ref={setScrollContainerRef}

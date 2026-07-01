@@ -12,6 +12,7 @@ vi.mock("react-virtuoso", async () => {
         components = {},
         data = [],
         itemContent,
+        initialTopMostItemIndex,
       }: {
         components?: {
           Footer?: React.ComponentType;
@@ -19,6 +20,7 @@ vi.mock("react-virtuoso", async () => {
           List?: React.ComponentType<React.HTMLAttributes<HTMLDivElement>>;
         };
         data?: ChannelMessage[];
+        initialTopMostItemIndex?: number;
         itemContent: (index: number, item: ChannelMessage) => React.ReactNode;
       },
       ref: React.ForwardedRef<{ scrollToIndex: () => void }>,
@@ -28,11 +30,14 @@ vi.mock("react-virtuoso", async () => {
       const Header = components.Header;
       const List = components.List ?? "div";
       const Footer = components.Footer;
+      const targetIndex = Math.max(0, Math.min(initialTopMostItemIndex ?? 0, data.length - 1));
+      const start = Math.max(0, Math.min(targetIndex - 1, data.length - 2));
+      const windowedData = data.slice(start, start + 2);
 
       return (
         <div data-testid="virtuoso-scroller">
           {Header ? <Header /> : null}
-          <List>{data.map((item, index) => itemContent(index, item))}</List>
+          <List>{windowedData.map((item, offset) => itemContent(start + offset, item))}</List>
           {Footer ? <Footer /> : null}
         </div>
       );
@@ -102,22 +107,39 @@ function makeMessage(id: string, content: string): ChannelMessage {
 }
 
 describe("MessageViewport", () => {
-  it("renders message items when messages are present", () => {
+  it("renders the virtualized window when messages are present", async () => {
     render(
       <MessageViewport
         messages={[
           makeMessage("m1", "First visible message"),
           makeMessage("m2", "Second visible message"),
+          makeMessage("m3", "Third visible message"),
         ]}
         currentUserId="user-1"
         emptyLabel="No messages"
       />,
     );
 
+    expect(screen.getByText("Second visible message")).toBeInTheDocument();
+    expect(screen.getByText("Third visible message")).toBeInTheDocument();
+    expect(screen.queryByText("First visible message")).not.toBeInTheDocument();
     expect(screen.getAllByTestId("message-bubble")).toHaveLength(2);
     expect(screen.getAllByTestId("message-row")).toHaveLength(2);
     expect(screen.getByTestId("message-item-list").children).toHaveLength(2);
-    expect(screen.getByText("First visible message")).toBeInTheDocument();
-    expect(screen.getByText("Second visible message")).toBeInTheDocument();
+  });
+
+  it("does not render the full list while the custom scroller ref is being captured", () => {
+    const messages = Array.from({ length: 700 }, (_, index) =>
+      makeMessage(`m${index}`, `Message ${index}`),
+    );
+    const { container } = render(
+      <MessageViewport
+        messages={messages}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+      />,
+    );
+
+    expect(container.querySelectorAll('[data-testid="message-row"]').length).toBeLessThan(700);
   });
 });

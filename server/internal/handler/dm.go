@@ -16,9 +16,9 @@ import (
 )
 
 // Source discriminators for a unified DM list item. A 1-on-1 DM is either a
-// kind='dm' channel (the new model, used for human↔human and freshly created
-// human↔agent DMs) or a pre-existing standalone chat_session (the legacy
-// human↔agent "Chat", soft-unified here so a user sees one DM list).
+// kind='dm' channel (used for human↔human DMs, plus older human↔agent rows
+// created before the chat unification) or a standalone chat_session (the
+// human↔agent "Chat" surface, shared by the old chat panel and Messages).
 const (
 	dmSourceChannel = "dm_channel"
 	dmSourceLegacy  = "legacy_session"
@@ -77,10 +77,9 @@ func dmCanonicalName(typeA, idA, typeB, idB string) string {
 }
 
 // CreateOrFindDirectMessage (POST /api/dm) returns the existing DM with the
-// peer or creates one, idempotently. For an agent peer it is legacy-first: an
-// existing dm channel wins, else an unbound legacy chat_session the caller owns
-// with that agent is reused (so the same agent never shows twice), else a new
-// dm channel is created. Human↔human always uses a dm channel.
+// peer or creates one, idempotently. Human↔human uses a dm channel. Human↔agent
+// uses the same standalone chat_session as the old Chat panel so Messages and
+// Chat share one message list, pending-task state, and resume context.
 func (h *Handler) CreateOrFindDirectMessage(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -146,28 +145,26 @@ func (h *Handler) createOrFindAgentDM(w http.ResponseWriter, r *http.Request, wo
 	}
 	peer := DMPeer{Type: "agent", ID: uuidToString(agent.ID), Name: agentDisplayName(agent), AvatarURL: textToPtr(agent.AvatarUrl)}
 
-	// ① existing dm channel wins.
-	canonical := dmCanonicalName("user", userID, "agent", uuidToString(agentID))
-	if ch, found := h.findDMChannel(r.Context(), workspaceID, canonical); found {
-		h.clearDMPeerHidden(r.Context(), workspaceID, userID, dmPeerRef{Type: "agent", ID: agentID})
-		writeJSON(w, http.StatusOK, dmItemForChannel(ch, peer))
-		return
-	}
-	// ② reuse an unbound legacy chat_session the caller owns with this agent.
+	// Reuse or create the standalone chat_session that backs the old Chat panel.
+	// Returning that session here keeps the new Messages DM entry point and the
+	// old chat surface synchronized instead of forking agent DMs into channels.
 	if sessionID, updatedAt, found := h.findUnboundLegacySession(r.Context(), workspaceID, userID, agentID); found {
 		h.clearDMPeerHidden(r.Context(), workspaceID, userID, dmPeerRef{Type: "agent", ID: agentID})
 		writeJSON(w, http.StatusOK, DMItem{ID: uuidToString(sessionID), Source: dmSourceLegacy, Peer: peer, UpdatedAt: updatedAt})
 		return
 	}
-	// ③ otherwise create a fresh dm channel.
-	ch, created := h.createDMChannel(r.Context(), w, workspaceID, userID, canonical, []dmMember{
-		{memberType: "user", memberID: parseUUID(userID)},
-		{memberType: "agent", memberID: agentID},
+	session, err := h.Queries.CreateChatSession(r.Context(), db.CreateChatSessionParams{
+		WorkspaceID: parseUUID(workspaceID),
+		AgentID:     agentID,
+		CreatorID:   parseUUID(userID),
+		Title:       "",
 	})
-	if !created {
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create chat session")
 		return
 	}
-	writeJSON(w, http.StatusCreated, dmItemForChannel(ch, peer))
+	h.clearDMPeerHidden(r.Context(), workspaceID, userID, dmPeerRef{Type: "agent", ID: agentID})
+	writeJSON(w, http.StatusCreated, DMItem{ID: uuidToString(session.ID), Source: dmSourceLegacy, Peer: peer, UpdatedAt: timestampToString(session.UpdatedAt)})
 }
 
 type dmMember struct {
@@ -568,7 +565,7 @@ func (h *Handler) ListDirectMessages(w http.ResponseWriter, r *http.Request) {
 	for _, it := range items {
 		key := it.Peer.Type + ":" + it.Peer.ID
 		if idx, seen := byPeer[key]; seen {
-			if preferDMItem(it, deduped[idx]) {
+			if preferDMItemForSamePeer(it, deduped[idx]) {
 				deduped[idx] = it
 			}
 			continue
@@ -624,6 +621,17 @@ func preferDMItem(a, b DMItem) bool {
 		return a.UpdatedAt > b.UpdatedAt
 	}
 	return a.Source < b.Source
+}
+
+func preferDMItemForSamePeer(a, b DMItem) bool {
+	// Human↔agent DMs are now chat_session-backed so the old Chat panel and the
+	// new Messages DM view share state. If a pre-unification agent dm_channel
+	// coexists with a chat_session, keep the chat_session visible in the unified
+	// list instead of re-opening the split channel surface.
+	if a.Peer.Type == "agent" && b.Peer.Type == "agent" && a.Source != b.Source {
+		return a.Source == dmSourceLegacy
+	}
+	return preferDMItem(a, b)
 }
 
 // listDMChannels returns the caller's kind='dm' channels as DM items, resolving

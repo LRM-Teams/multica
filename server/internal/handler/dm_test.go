@@ -60,9 +60,27 @@ func cleanupDMArtifacts(t *testing.T) {
 	})
 }
 
-// TestCreateOrFindAgentDM_Idempotent: the first call creates a dm channel (201),
-// a repeat call returns the same channel (200). The channel is kind='dm' with
-// exactly the two members.
+func seedAgentDMChannel(t *testing.T, agentID string) string {
+	t.Helper()
+	ctx := context.Background()
+	var channelID string
+	canonical := dmCanonicalName("user", testUserID, "agent", agentID)
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel (workspace_id, name, created_by, kind)
+		VALUES ($1,$2,$3,'dm') RETURNING id`, testWorkspaceID, canonical, testUserID).Scan(&channelID); err != nil {
+		t.Fatalf("seed dm channel: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1,$2,'user',$3),($1,$2,'agent',$4)`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
+		t.Fatalf("seed members: %v", err)
+	}
+	return channelID
+}
+
+// TestCreateOrFindAgentDM_Idempotent: the first call creates the standalone
+// chat_session used by the old Chat panel (201), and a repeat call returns the
+// same session (200). No parallel dm channel is created for agent DMs.
 func TestCreateOrFindAgentDM_Idempotent(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -75,23 +93,19 @@ func TestCreateOrFindAgentDM_Idempotent(t *testing.T) {
 	if rec1.Code != http.StatusCreated {
 		t.Fatalf("first create: status=%d body=%s", rec1.Code, rec1.Body.String())
 	}
-	if item1.Source != dmSourceChannel || item1.Peer.Type != "agent" || item1.Peer.ID != agentID {
+	if item1.Source != dmSourceLegacy || item1.Peer.Type != "agent" || item1.Peer.ID != agentID {
 		t.Fatalf("unexpected item1: %+v", item1)
 	}
 	rec2, item2 := postCreateOrFindDM(t, "agent", agentID)
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("second find: status=%d body=%s", rec2.Code, rec2.Body.String())
 	}
-	if item2.ID != item1.ID {
-		t.Fatalf("not idempotent: %s vs %s", item1.ID, item2.ID)
-	}
-	var kind string
-	if err := testPool.QueryRow(ctx, `SELECT kind FROM channel WHERE id=$1`, item1.ID).Scan(&kind); err != nil || kind != "dm" {
-		t.Fatalf("channel kind=%q err=%v, want dm", kind, err)
+	if item2.ID != item1.ID || item2.Source != dmSourceLegacy {
+		t.Fatalf("not idempotent: first=%+v second=%+v", item1, item2)
 	}
 	var n int
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel_member WHERE channel_id=$1`, item1.ID).Scan(&n); err != nil || n != 2 {
-		t.Fatalf("member count=%d err=%v, want 2", n, err)
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel WHERE workspace_id=$1 AND kind='dm'`, testWorkspaceID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("agent DM must not create a channel, count=%d err=%v", n, err)
 	}
 }
 
@@ -171,20 +185,16 @@ func TestListDirectMessages_UnionAndDedup(t *testing.T) {
 		t.Skip("database not available")
 	}
 	cleanupDMArtifacts(t)
-	agentA := createHandlerTestAgent(t, "DM List A", []byte("[]")) // dm channel only
+	agentA := createHandlerTestAgent(t, "DM List A", []byte("[]")) // old dm channel only
 	agentB := createHandlerTestAgent(t, "DM List B", []byte("[]")) // legacy session only
-	agentC := createHandlerTestAgent(t, "DM List C", []byte("[]")) // both → dedup
+	agentC := createHandlerTestAgent(t, "DM List C", []byte("[]")) // both → dedup to session
 
-	// agentA: dm channel via the handler.
-	if rec, _ := postCreateOrFindDM(t, "agent", agentA); rec.Code != http.StatusCreated {
-		t.Fatalf("seed agentA dm channel: status=%d", rec.Code)
-	}
+	// agentA: pre-unification dm channel only.
+	seedAgentDMChannel(t, agentA)
 	// agentB: legacy session only.
 	seedLegacySession(t, agentB)
-	// agentC: dm channel FIRST (no legacy yet → handler creates it), THEN legacy → both coexist.
-	if rec, _ := postCreateOrFindDM(t, "agent", agentC); rec.Code != http.StatusCreated {
-		t.Fatalf("seed agentC dm channel: status=%d", rec.Code)
-	}
+	// agentC: old dm channel and current chat_session coexist.
+	seedAgentDMChannel(t, agentC)
 	seedLegacySession(t, agentC)
 
 	req := newRequest("GET", "/api/dm", nil)
@@ -213,8 +223,8 @@ func TestListDirectMessages_UnionAndDedup(t *testing.T) {
 	if source[agentB] != dmSourceLegacy {
 		t.Fatalf("agentB source=%q, want legacy_session", source[agentB])
 	}
-	if count[agentC] != 1 {
-		t.Fatalf("agentC should be deduped to 1 entry, got %d", count[agentC])
+	if count[agentC] != 1 || source[agentC] != dmSourceLegacy {
+		t.Fatalf("agentC should be deduped to the legacy session, source=%q count=%d", source[agentC], count[agentC])
 	}
 }
 
@@ -225,17 +235,13 @@ func TestDMActionsApplyAtPeerLevelAcrossSources(t *testing.T) {
 	cleanupDMArtifacts(t)
 	agentID := createHandlerTestAgent(t, "DM Peer State Bot", []byte("[]"))
 
-	rec, item := postCreateOrFindDM(t, "agent", agentID)
-	if rec.Code != http.StatusCreated || item.Source != dmSourceChannel {
-		t.Fatalf("seed dm channel: status=%d item=%+v", rec.Code, item)
-	}
-	channelID := item.ID
+	channelID := seedAgentDMChannel(t, agentID)
 	sessionID := seedLegacySession(t, agentID)
 
 	req := newRequest(http.MethodPut, "/api/dm/channels/"+channelID+"/pin", nil)
 	req = withChatTestWorkspaceCtx(t, req)
 	req = withURLParam(req, "channelId", channelID)
-	rec = httptest.NewRecorder()
+	rec := httptest.NewRecorder()
 	testHandler.PinDMChannel(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("pin channel-backed DM: status=%d body=%s", rec.Code, rec.Body.String())
@@ -317,12 +323,12 @@ func TestDMActionsApplyAtPeerLevelAcrossSources(t *testing.T) {
 		}
 	}
 
-	rec, item = postCreateOrFindDM(t, "agent", agentID)
+	rec, item := postCreateOrFindDM(t, "agent", agentID)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reopen hidden DM: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if item.ID != channelID {
-		t.Fatalf("reopen should return existing dm channel %s, got %+v", channelID, item)
+	if item.ID != sessionID || item.Source != dmSourceLegacy {
+		t.Fatalf("reopen should return existing chat session %s, got %+v", sessionID, item)
 	}
 	got = listDMItemsForTest(t)
 	found = false
@@ -388,18 +394,7 @@ func TestSendChannelMessageDM_DispatchesAgent(t *testing.T) {
 	cleanupDMArtifacts(t)
 	agentID := createHandlerTestAgent(t, "DM Dispatch Bot", nil)
 
-	var channelID string
-	canonical := dmCanonicalName("user", testUserID, "agent", agentID)
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO channel (workspace_id, name, created_by, kind)
-		VALUES ($1,$2,$3,'dm') RETURNING id`, testWorkspaceID, canonical, testUserID).Scan(&channelID); err != nil {
-		t.Fatalf("seed dm channel: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1,$2,'user',$3),($1,$2,'agent',$4)`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
-		t.Fatalf("seed members: %v", err)
-	}
+	channelID := seedAgentDMChannel(t, agentID)
 
 	req := newRequest("POST", "/api/channels/"+channelID+"/messages", map[string]string{"content": "hey, no mention needed"})
 	req = withChatTestWorkspaceCtx(t, req)
@@ -426,18 +421,7 @@ func TestDMDispatch_SelfTriggerGuard(t *testing.T) {
 	cleanupDMArtifacts(t)
 	agentID := createHandlerTestAgent(t, "DM Guard Bot", nil)
 
-	var channelID string
-	canonical := dmCanonicalName("user", testUserID, "agent", agentID)
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO channel (workspace_id, name, created_by, kind)
-		VALUES ($1,$2,$3,'dm') RETURNING id`, testWorkspaceID, canonical, testUserID).Scan(&channelID); err != nil {
-		t.Fatalf("seed dm channel: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1,$2,'user',$3),($1,$2,'agent',$4)`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
-		t.Fatalf("seed members: %v", err)
-	}
+	channelID := seedAgentDMChannel(t, agentID)
 
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
 	if !found {

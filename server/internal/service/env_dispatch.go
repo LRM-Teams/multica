@@ -464,3 +464,12 @@ func (s *EnvDispatchService) DeleteEnv(ctx context.Context, envID, workspaceID s
 	_ = s.deps.DeleteSandbox(ctx, env.SandboxID)
 	return nil
 }
+
+// DeleteProject deletes a project by ID (cascades to issues/chat/tasks).
+// Idempotent: a missing project returns nil.
+func (s *EnvDispatchService) DeleteProject(ctx context.Context, projectID, workspaceID string) error {
+	if err := s.deps.DeleteProject(ctx, projectID, workspaceID); err != nil {
+		return fmt.Errorf("delete project: %w", err)
+	}
+	return nil
+}

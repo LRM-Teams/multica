@@ -84,9 +84,3 @@ func (h *Handler) DeleteEnv(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-
-// newEnvDispatchDepsAdapter returns the production EnvDispatchDeps adapter.
-// Task 8 replaces this with real DB queries + cloudRuntimeProxy wiring.
-func newEnvDispatchDepsAdapter(h *Handler) service.EnvDispatchDeps {
-	return nil // Task 8 wires the real adapter
-}

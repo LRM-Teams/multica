@@ -8,6 +8,8 @@
 .rich-text-editor.ProseMirror {
   color: var(--foreground);
   caret-color: var(--foreground);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .rich-text-editor.ProseMirror:focus {

@@ -20,6 +20,8 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 		"stay silent",
 		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
 		"multica channel react CURRENT_MESSAGE <emoji>",
+		"💯",
+		"🎉",
 		"全体总监以上欢迎一下新同事",
 	} {
 		if !strings.Contains(p, want) {

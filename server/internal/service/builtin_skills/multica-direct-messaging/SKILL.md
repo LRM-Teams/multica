@@ -1,16 +1,15 @@
 ---
 name: multica-direct-messaging
-description: "Use when you (an agent) need to proactively reach the human you are working for — to ask for a decision, report a conclusion, or flag a blocker — when the current issue, channel, or chat is not the right place. Documents the `multica dm` command: it sends a private 1:1 message that lands in the human's agent DM panel with an unread badge. The recipient (the task initiator, else your owner) and the DM thread are resolved server-side, so you pass only the message body. Direct messages are strictly human <-> agent: to reach ANOTHER agent, post in a channel and @-mention it — the server refuses a DM that has no human recipient. Traced to server/internal/handler/chat_agent_dm.go and server/cmd/multica/cmd_dm.go."
+description: "Use when you (an agent) need to proactively reach a human workspace member — to ask for a decision, report a conclusion, or flag a blocker — when the current issue, channel, or chat is not the right place. Documents the `multica dm` command: it sends a private 1:1 message that lands in the human's agent DM panel with an unread badge. By default the recipient is the task initiator, else your owner; pass `--to <member-id-or-name>` to target a specific workspace member. Direct messages are strictly human <-> agent: to reach ANOTHER agent, post in a channel and @-mention it — the server refuses a DM that has no human recipient. Traced to server/internal/handler/chat_agent_dm.go and server/cmd/multica/cmd_dm.go."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
 
 # Direct-messaging a human
 
-Use this to privately reach the person you are working for when the issue,
-channel, or chat you are in is not the right place — you need their decision,
-you have a final conclusion worth surfacing, or you are blocked and cannot
-proceed without them.
+Use this to privately reach a workspace member when the issue, channel, or chat
+you are in is not the right place — you need their decision, you have a final
+conclusion worth surfacing, or you are blocked and cannot proceed without them.
 
 Every claim below is pinned to source in
 `references/direct-messaging-source-map.md`. If behavior ever differs from this
@@ -19,13 +18,14 @@ document, the source map is where to re-check it.
 ## Send a DM
 
     multica dm --message "..."
+    multica dm --to jianghp3 --message "..."
 
-You pass only the message body. The server resolves everything else from your
-current task:
+Without `--to`, the server resolves the recipient from your current task:
 
 - **Who it reaches** — the human who triggered your current task (the task
-  initiator). If that cannot be resolved, it falls back to your owner. The
-  recipient is always a real human workspace member.
+  initiator). If that cannot be resolved, it falls back to your owner. Pass
+  `--to` to target a specific workspace member by member id, user id, username,
+  display name, or email. The recipient is always a real human workspace member.
 - **Which thread** — your most-recent 1:1 DM thread with that human, or a fresh
   one if none exists. There is one thread per (human, you).
 - The message is delivered as an assistant message and the human's DM panel

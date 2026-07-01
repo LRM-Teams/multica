@@ -17,16 +17,18 @@ import (
 
 type AgentDirectMessageRequest struct {
 	Content string `json:"content"`
+	To      string `json:"to"`
 }
 
-// AgentDirectMessage lets an agent proactively send a 1:1 direct message to the
-// human it is currently working for. DMs are strictly human <-> agent: an agent
-// that needs to reach ANOTHER agent must post in a channel and @-mention it, so
-// this endpoint refuses any non-human recipient.
+// AgentDirectMessage lets an agent proactively send a 1:1 direct message to a
+// human workspace member. DMs are strictly human <-> agent: an agent that needs
+// to reach ANOTHER agent must post in a channel and @-mention it, so this
+// endpoint only resolves workspace members as recipients.
 //
 // Auth: agent-only. The caller must be a task-scoped agent actor (resolveActor
-// returns "agent"); a human/member request is rejected with 403. The recipient
-// is the current task's initiator, falling back to the agent's owner.
+// returns "agent"); a human/member request is rejected with 403. Without an
+// explicit recipient, the recipient is the current task's initiator, falling
+// back to the agent's owner.
 func (h *Handler) AgentDirectMessage(w http.ResponseWriter, r *http.Request) {
 	workspaceID := ctxWorkspaceID(r.Context())
 	actorType, actorID := h.resolveActor(r, "", workspaceID)
@@ -54,10 +56,12 @@ func (h *Handler) AgentDirectMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the recipient: the human who triggered the current task, falling
-	// back to the agent's owner. Must be a real workspace member (human).
-	recipient, ok := h.resolveDMRecipient(r, wsUUID, agentUUID)
+	recipient, ok := h.resolveDMRecipient(r, wsUUID, agentUUID, req.To)
 	if !ok {
+		if strings.TrimSpace(req.To) != "" {
+			writeError(w, http.StatusNotFound, "recipient workspace member not found or not reachable")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "no human recipient for this DM — to reach another agent, post in a channel and @-mention it")
 		return
 	}
@@ -130,11 +134,16 @@ func (h *Handler) AgentDirectMessage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// resolveDMRecipient picks the human a proactive DM should reach: the current
-// task's initiator, else the agent's owner. The chosen id must be a real
-// workspace member (human) — otherwise the DM is refused so agent<->agent talk
-// is forced into channels.
-func (h *Handler) resolveDMRecipient(r *http.Request, wsUUID, agentUUID pgtype.UUID) (pgtype.UUID, bool) {
+// resolveDMRecipient picks the human a proactive DM should reach. An explicit
+// recipient may be a workspace member id, user id, username, display name, or
+// email. Without one, the current task's initiator wins, then the agent owner.
+// The chosen id must be a real workspace member (human) — otherwise the DM is
+// refused so agent<->agent talk is forced into channels.
+func (h *Handler) resolveDMRecipient(r *http.Request, wsUUID, agentUUID pgtype.UUID, rawTo string) (pgtype.UUID, bool) {
+	if to := strings.TrimSpace(rawTo); to != "" {
+		return h.resolveExplicitDMRecipient(r.Context(), wsUUID, to)
+	}
+
 	var candidate pgtype.UUID
 	if tid := r.Header.Get("X-Task-ID"); tid != "" {
 		if taskUUID, err := util.ParseUUID(tid); err == nil {
@@ -146,22 +155,54 @@ func (h *Handler) resolveDMRecipient(r *http.Request, wsUUID, agentUUID pgtype.U
 		_ = h.DB.QueryRow(r.Context(),
 			`SELECT owner_id FROM agent WHERE id = $1`, agentUUID).Scan(&candidate)
 	}
-	if !candidate.Valid {
-		return pgtype.UUID{}, false
-	}
-	var isMember bool
-	if err := h.DB.QueryRow(r.Context(),
-		`SELECT EXISTS(SELECT 1 FROM member WHERE workspace_id = $1 AND user_id = $2)`,
-		wsUUID, candidate).Scan(&isMember); err != nil || !isMember {
+	if !candidate.Valid || !h.isWorkspaceUserMember(r.Context(), wsUUID, candidate) {
 		return pgtype.UUID{}, false
 	}
 	return candidate, true
 }
 
+func (h *Handler) resolveExplicitDMRecipient(ctx context.Context, wsUUID pgtype.UUID, rawTo string) (pgtype.UUID, bool) {
+	if u, err := util.ParseUUID(rawTo); err == nil {
+		var userID pgtype.UUID
+		err := h.DB.QueryRow(ctx, `
+			SELECT user_id FROM member
+			WHERE workspace_id = $1 AND (id = $2 OR user_id = $2)
+			LIMIT 1`, wsUUID, u).Scan(&userID)
+		if err == nil {
+			return userID, true
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return pgtype.UUID{}, false
+		}
+	}
+
+	var userID pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+		SELECT m.user_id
+		FROM member m
+		JOIN "user" u ON u.id = m.user_id
+		WHERE m.workspace_id = $1
+		  AND (lower(u.name) = lower($2) OR lower(to_jsonb(u)->>'display_name') = lower($2) OR lower(u.email) = lower($2))
+		ORDER BY m.created_at ASC
+		LIMIT 1`, wsUUID, rawTo).Scan(&userID)
+	if err != nil {
+		return pgtype.UUID{}, false
+	}
+	return userID, true
+}
+
+func (h *Handler) isWorkspaceUserMember(ctx context.Context, wsUUID, userID pgtype.UUID) bool {
+	var isMember bool
+	err := h.DB.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM member WHERE workspace_id = $1 AND user_id = $2)`,
+		wsUUID, userID).Scan(&isMember)
+	return err == nil && isMember
+}
+
 // userName returns a user's display name, or "" if unknown.
 func (h *Handler) userName(ctx context.Context, id pgtype.UUID) string {
 	var name string
-	_ = h.DB.QueryRow(ctx, `SELECT COALESCE(NULLIF(display_name, ''), name, email, '') FROM "user" WHERE id = $1`, id).Scan(&name)
+	_ = h.DB.QueryRow(ctx, `SELECT COALESCE(NULLIF(to_jsonb(u)->>'display_name', ''), NULLIF(u.name, ''), u.email, '') FROM "user" u WHERE id = $1`, id).Scan(&name)
 	return name
 }
 

@@ -204,6 +204,11 @@
   "quote": {
     "jump_to": "원본 메시지로 이동"
   },
+  "message_loading": {
+    "load_older": "이전 메시지 불러오기",
+    "loading_older": "이전 메시지를 불러오는 중...",
+    "load_failed_retry": "메시지를 불러오지 못했습니다 · 다시 시도"
+  },
   "conv_search": {
     "placeholder": "{{name}} 검색…",
     "group_placeholder": "이 채널의 메시지 검색…",

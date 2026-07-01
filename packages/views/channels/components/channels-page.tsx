@@ -28,15 +28,16 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   activeChannelTasksKeys,
   activeChannelTasksOptions,
   channelMessageThreadOptions,
   channelKeys,
+  channelMessagesPageOptions,
+  flattenChannelMessagePages,
   channelsOptions,
   archivedChannelsOptions,
-  channelMessagesOptions,
   channelMembersOptions,
   channelProjectOptions,
   useSetChannelProject,
@@ -507,7 +508,16 @@ export function ChannelsPage() {
     return isMobile ? explicit : (explicit ?? channels[0] ?? null);
   }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
   const isActiveArchived = !!active?.archived_at;
-  const { data: messages = [] } = useQuery(channelMessagesOptions(active?.id ?? ""));
+  const {
+    data: messagePages,
+    isLoading: messagesLoading,
+    isError: messagesError,
+    refetch: refetchMessages,
+    fetchNextPage: fetchOlderMessages,
+    hasNextPage: hasOlderMessages,
+    isFetchingNextPage: isFetchingOlderMessages,
+  } = useInfiniteQuery(channelMessagesPageOptions(active?.id ?? ""));
+  const messages = useMemo(() => flattenChannelMessagePages(active?.id ? messagePages : undefined), [active?.id, messagePages]);
   const threadRoot =
     openThreadRoot && active?.id === openThreadRoot.channel_id
       ? messages.find((m) => m.id === openThreadRoot.id) ?? openThreadRoot
@@ -826,13 +836,12 @@ export function ChannelsPage() {
   // New messages (from others / agents) refresh the list (unread + preview)
   // and the open thread. Keep the active channel marked read while viewing it.
   useWSEvent("channel:message", (payload) => {
-    const e = payload as { channel_id?: string };
+    const e = payload as ChannelMessage;
     qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     // The DM list unions dm_channel items, so a channel message may change a DM
     // row's preview / unread — refresh it too.
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
     if (e.channel_id) {
-      qc.invalidateQueries({ queryKey: channelKeys.messages(e.channel_id) });
       qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(e.channel_id) });
       if (e.channel_id === active?.id) markChannelRead(active.id);
     }
@@ -2048,6 +2057,14 @@ export function ChannelsPage() {
                 highlightMessageId={effectiveHighlightId}
                 searchHitIds={searchHitIds}
                 searchQuery={searchHighlightQuery}
+                loading={messagesLoading}
+                loadingOlder={isFetchingOlderMessages}
+                hasOlder={!!hasOlderMessages}
+                onLoadOlder={() => fetchOlderMessages()}
+                loadOlderLabel={t(($) => $.message_loading.load_older)}
+                loadingOlderLabel={t(($) => $.message_loading.loading_older)}
+                loadErrorLabel={messagesError ? t(($) => $.message_loading.load_failed_retry) : undefined}
+                onRetry={() => refetchMessages()}
                 emptyLabel={t(($) => $.thread.empty)}
                 onOpenThread={isActiveArchived ? undefined : handleOpenThread}
                 onScrollToMessage={setHighlightMessageId}

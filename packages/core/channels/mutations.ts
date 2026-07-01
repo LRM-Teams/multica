@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
-import { channelKeys } from "./queries";
+import { channelKeys, invalidateChannelMessages, upsertChannelMessageInCache } from "./queries";
 import { dmKeys } from "../dm/queries";
 import type { DMItem } from "../dm/types";
 
@@ -79,7 +79,7 @@ export function useSendChannelMessage() {
       replyToMessageId?: string | null;
     }) => api.sendChannelMessage(channelId, content, attachmentIds, replyToMessageId),
     onSuccess: (msg) => {
-      qc.invalidateQueries({ queryKey: channelKeys.messages(msg.channel_id) });
+      upsertChannelMessageInCache(qc, msg);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     },
   });
@@ -91,7 +91,7 @@ export function useAddChannelReaction() {
     mutationFn: ({ channelId, messageId, emoji }: { channelId: string; messageId: string; emoji: string }) =>
       api.addChannelReaction(channelId, messageId, emoji),
     onSuccess: (reaction) => {
-      qc.invalidateQueries({ queryKey: channelKeys.messages(reaction.channel_id) });
+      invalidateChannelMessages(qc, reaction.channel_id);
     },
   });
 }
@@ -102,7 +102,7 @@ export function useRemoveChannelReaction() {
     mutationFn: ({ channelId, messageId, emoji }: { channelId: string; messageId: string; emoji: string }) =>
       api.removeChannelReaction(channelId, messageId, emoji),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: channelKeys.messages(vars.channelId) });
+      invalidateChannelMessages(qc, vars.channelId);
     },
   });
 }
@@ -129,7 +129,7 @@ export function useSendChannelThreadMessage() {
       if (rootId) {
         qc.invalidateQueries({ queryKey: channelKeys.messageThread(msg.channel_id, rootId) });
       }
-      qc.invalidateQueries({ queryKey: channelKeys.messages(msg.channel_id) });
+      invalidateChannelMessages(qc, msg.channel_id);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
     },
@@ -173,7 +173,7 @@ export function useMarkChannelThreadRead() {
       api.markChannelThreadRead(channelId, messageId),
     onSuccess: (_result, vars) => {
       qc.invalidateQueries({ queryKey: channelKeys.messageThread(vars.channelId, vars.messageId) });
-      qc.invalidateQueries({ queryKey: channelKeys.messages(vars.channelId) });
+      invalidateChannelMessages(qc, vars.channelId);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
     },
@@ -187,7 +187,7 @@ export function useSetChannelThreadFollowed() {
       followed ? api.followChannelThread(channelId, messageId) : api.unfollowChannelThread(channelId, messageId),
     onSuccess: (_result, vars) => {
       qc.invalidateQueries({ queryKey: channelKeys.messageThread(vars.channelId, vars.messageId) });
-      qc.invalidateQueries({ queryKey: channelKeys.messages(vars.channelId) });
+      invalidateChannelMessages(qc, vars.channelId);
     },
   });
 }

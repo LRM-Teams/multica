@@ -204,6 +204,11 @@
   "quote": {
     "jump_to": "跳转到原消息"
   },
+  "message_loading": {
+    "load_older": "加载更早消息",
+    "loading_older": "正在加载更早消息...",
+    "load_failed_retry": "消息加载失败 · 重试"
+  },
   "conv_search": {
     "placeholder": "在 {{name}} 中搜索…",
     "group_placeholder": "搜索此群聊的消息…",

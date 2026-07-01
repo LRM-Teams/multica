@@ -18,6 +18,9 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 	for _, want := range []string{
 		"ONLY the current message",
 		"stay silent",
+		"全体",
+		"Do not stay silent",
+		"do not use a reaction-only command",
 		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
 		"multica channel react CURRENT_MESSAGE <emoji>",
 		"💯",

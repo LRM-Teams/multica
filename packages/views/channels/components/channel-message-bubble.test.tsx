@@ -170,4 +170,29 @@ describe("ChannelMessageBubble", () => {
 
     expect(event.defaultPrevented).toBe(false);
   });
+
+  it("only renders existing reaction chips in the footer", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          reactions: [
+            {
+              id: "reaction-1",
+              channel_id: "c1",
+              message_id: "m1",
+              actor_type: "member",
+              actor_id: "user-1",
+              emoji: "👍",
+              created_at: "2026-06-17T09:16:00Z",
+            },
+          ],
+        })}
+        currentUserId="user-1"
+        onReact={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "👍1" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "React with ❤️" })).not.toBeInTheDocument();
+  });
 });

@@ -168,6 +168,7 @@
     "project_tooltip": "このチャンネルが作業するプロジェクトを設定"
   },
   "message": {
+    "add_reaction": "リアクションを追加",
     "agent_badge": "Agent",
     "feishu_badge": "Feishu"
   },

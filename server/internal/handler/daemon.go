@@ -1472,17 +1472,21 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					resp.ThreadName = resp.ChatMessage
 				}
 			}
-			if resp.PriorSessionID != "" {
+			if len(chatMessages) > 0 {
 				freshReason := ""
-				if reason, ok := h.latestChatTaskFailureReason(r.Context(), cs.ID, task.ID); ok && chatFailureResumeUnsafe(reason) {
-					freshReason = "the latest task failed because the saved native session is no longer safe to resume (" + reason + ")"
-				}
 				totalTokens := h.chatSessionTokenTotal(r.Context(), cs.ID)
-				if freshReason == "" && shouldStartFreshChatSession(chatMessages, totalTokens) {
-					freshReason = fmt.Sprintf("the chat is long enough to risk context overflow (%d messages, %d recorded tokens)", len(chatMessages), totalTokens)
+				if resp.PriorSessionID != "" {
+					if reason, ok := h.latestChatTaskFailureReason(r.Context(), cs.ID, task.ID); ok && chatFailureResumeUnsafe(reason) {
+						freshReason = "the latest task failed because the saved native session is no longer safe to resume (" + reason + ")"
+					}
+					if freshReason == "" && shouldStartFreshChatSession(chatMessages, totalTokens) {
+						freshReason = fmt.Sprintf("the chat is long enough to risk context overflow (%d messages, %d recorded tokens)", len(chatMessages), totalTokens)
+					}
+					if freshReason != "" {
+						resp.PriorSessionID = ""
+					}
 				}
-				if freshReason != "" {
-					resp.PriorSessionID = ""
+				if freshReason != "" || shouldIncludeChatContextSummary(chatMessages) {
 					resp.ChatContextSummary = buildChatContextSummary(chatMessages, totalTokens, freshReason)
 				}
 			}
@@ -1782,6 +1786,63 @@ func shouldStartFreshChatSession(msgs []db.ChatMessage, totalTokens int64) bool 
 	return len(msgs) >= chatFreshAfterMessageCount || totalTokens >= chatFreshAfterTokenCount
 }
 
+func shouldIncludeChatContextSummary(msgs []db.ChatMessage) bool {
+	if len(msgs) <= 1 || !isShortChatConfirmation(msgs[len(msgs)-1]) {
+		return false
+	}
+	prev := previousAssistantMessage(msgs)
+	return prev != nil && isAssistantFollowupPrompt(*prev)
+}
+
+func previousAssistantMessage(msgs []db.ChatMessage) *db.ChatMessage {
+	if len(msgs) < 2 {
+		return nil
+	}
+	for i := len(msgs) - 2; i >= 0; i-- {
+		if msgs[i].Role != "user" {
+			return &msgs[i]
+		}
+	}
+	return nil
+}
+
+func isShortChatConfirmation(m db.ChatMessage) bool {
+	if m.Role != "user" {
+		return false
+	}
+	text := strings.TrimSpace(m.Content)
+	if text == "" || len([]rune(text)) > 8 {
+		return false
+	}
+	text = strings.Trim(text, " \t\r\n.,!?;:，。！？；：~～")
+	switch strings.ToLower(text) {
+	case "行", "继续", "可以", "确认", "嗯", "好", "好的", "ok", "okay", "yes", "y", "go", "继续吧", "可以的", "没问题":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAssistantFollowupPrompt(m db.ChatMessage) bool {
+	if m.Role == "user" {
+		return false
+	}
+	text := strings.TrimSpace(m.Content)
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	if strings.ContainsAny(text, "?？") {
+		return true
+	}
+	for _, marker := range []string{"确认", "继续", "可以", "是否", "要不要", "选择", "哪个", "哪一个", "need me", "should i"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func chatFailureResumeUnsafe(reason string) bool {
 	switch reason {
 	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", "agent_error.context_overflow":
@@ -1822,7 +1883,9 @@ func (h *Handler) chatSessionTokenTotal(ctx context.Context, chatSessionID pgtyp
 
 func buildChatContextSummary(msgs []db.ChatMessage, totalTokens int64, reason string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Native session resume was intentionally skipped because %s.\n", reason)
+	if strings.TrimSpace(reason) != "" {
+		fmt.Fprintf(&b, "Native session resume was intentionally skipped because %s.\n", reason)
+	}
 	fmt.Fprintf(&b, "Full chat history is preserved by Multica, but only the latest %d messages are included here to avoid carrying old tool outputs into every new turn.\n", chatResumeRecentMessageLimit)
 	if totalTokens > 0 {
 		fmt.Fprintf(&b, "Recorded token usage for this chat so far: %d.\n", totalTokens)

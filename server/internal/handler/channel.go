@@ -2245,8 +2245,9 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	fmt.Fprintf(&b, "You are a member of the Multica group chat #%s. A user sent a message without @-mentioning anyone.\n", ch.Name)
 	b.WriteString("You can see ONLY the current message below. Do not assume any prior channel context.\n")
 	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, stay silent by producing no final reply.\n")
+	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and produce one short visible reply. Do not stay silent, and do not use a reaction-only command for that case.\n")
 	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
-	b.WriteString("If a lightweight acknowledgement is enough, prefer a short emoji reaction command instead of a text reply: write exactly `multica channel react CURRENT_MESSAGE <emoji>` and nothing else. Prefer 👍 for a simple like, ❤️ for warmth/welcome/support, 💯 for strong agreement or praise, and 🎉 for celebration/welcome.\n")
+	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, prefer a short emoji reaction command instead of a text reply: write exactly `multica channel react CURRENT_MESSAGE <emoji>` and nothing else. Prefer 👍 for a simple like, ❤️ for warmth/welcome/support, 💯 for strong agreement or praise, and 🎉 for celebration/welcome.\n")
 	b.WriteString("If a greeting or sticker is explicitly appropriate, keep it to one short line and you may include one :sticker:<id>: token. Do not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
 	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))
@@ -2534,7 +2535,12 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 	h.publish(protocol.EventChannelMessage, uuidToString(workspaceID), "agent", uuidToString(agentID), msg)
 	ch, found := h.getChannel(context.Background(), uuidToString(workspaceID), channelID)
 	if found {
-		h.dispatchChannelMentions(context.Background(), ch, msg, h.channelInitiatorForChatSession(context.Background(), parseUUID(payload.ChatSessionID)))
+		initiatorID := h.channelInitiatorForChatSession(context.Background(), parseUUID(payload.ChatSessionID))
+		if threadRootMessageID.Valid {
+			h.dispatchChannelThreadReplyMentions(context.Background(), ch, msg, initiatorID)
+		} else {
+			h.dispatchChannelMentions(context.Background(), ch, msg, initiatorID)
+		}
 		h.sendChannelMessageToFeishu(context.Background(), ch, agentName, payload.Content)
 	}
 }

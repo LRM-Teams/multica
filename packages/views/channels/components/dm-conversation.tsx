@@ -36,10 +36,7 @@ import { useWSEvent } from "@multica/core/realtime";
 import type { ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload, ChatMessage } from "@multica/core/types";
 import { UnicodeSpinner } from "@multica/ui/components/common/unicode-spinner";
 import { Button } from "@multica/ui/components/ui/button";
-import {
-  Drawer,
-  DrawerContent,
-} from "@multica/ui/components/ui/drawer";
+import { Drawer } from "@multica/ui/components/ui/drawer";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -61,7 +58,7 @@ import { ChatMessageList } from "../../chat/components/chat-message-list";
 import { ChatInput } from "../../chat/components/chat-input";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
-import { ChannelComposer, ConversationHeader } from "./conversation-surface";
+import { ChannelComposer, ConversationHeader, MobileThreadDrawerContent } from "./conversation-surface";
 import { ThreadRootPreview } from "./thread-root-preview";
 import {
   AgentWorkingIndicator,
@@ -806,9 +803,9 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
             if (!open) setOpenThreadRoot(null);
           }}
         >
-          <DrawerContent className="h-[calc(100dvh-env(safe-area-inset-top))] max-h-[calc(100dvh-env(safe-area-inset-top))] min-w-0 rounded-t-none p-0">
+          <MobileThreadDrawerContent open={!!threadPanel}>
             {threadPanel}
-          </DrawerContent>
+          </MobileThreadDrawerContent>
         </Drawer>
       )}
     </main>

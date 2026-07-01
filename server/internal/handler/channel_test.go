@@ -815,6 +815,44 @@ func TestChannelThreadPlainReplyDispatchesOnlyParticipatingAgent(t *testing.T) {
 
 	testHandler.dispatchChannelThreadReplyMentions(ctx, ch, followup, parseUUID(testUserID))
 
+	assertChannelAgentTaskCounts(t, channelID, participantID, bystanderID, 1, 0)
+}
+
+func TestChannelThreadPlainReplyDispatchesRootMentionedAgent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	participantID := createHandlerTestAgent(t, "Thread Root Helper", nil)
+	bystanderID := createHandlerTestAgent(t, "Thread Root Bystander", nil)
+	channelID := seedChannelForTest(t, "thread-root-mention-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)`, channelID, testWorkspaceID, participantID, bystanderID); err != nil {
+		t.Fatalf("seed agent members: %v", err)
+	}
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Thread Root Helper please help", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("root-mention-followup"), 0)
+	if err != nil {
+		t.Fatalf("insert root: %v", err)
+	}
+	followup, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "hi", "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("root-mention-followup"), 0)
+	if err != nil {
+		t.Fatalf("insert follow-up: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+
+	testHandler.dispatchChannelThreadReplyMentions(ctx, ch, followup, parseUUID(testUserID))
+
+	assertChannelAgentTaskCounts(t, channelID, participantID, bystanderID, 1, 0)
+}
+
+func assertChannelAgentTaskCounts(t *testing.T, channelID, participantID, bystanderID string, wantParticipant, wantBystander int) {
+	t.Helper()
+	ctx := context.Background()
 	var participantTasks, bystanderTasks int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
@@ -830,8 +868,8 @@ func TestChannelThreadPlainReplyDispatchesOnlyParticipatingAgent(t *testing.T) {
 		WHERE cas.channel_id = $1 AND cas.agent_id = $2`, channelID, bystanderID).Scan(&bystanderTasks); err != nil {
 		t.Fatalf("count bystander tasks: %v", err)
 	}
-	if participantTasks != 1 || bystanderTasks != 0 {
-		t.Fatalf("thread follow-up tasks = participant:%d bystander:%d, want 1/0", participantTasks, bystanderTasks)
+	if participantTasks != wantParticipant || bystanderTasks != wantBystander {
+		t.Fatalf("thread follow-up tasks = participant:%d bystander:%d, want %d/%d", participantTasks, bystanderTasks, wantParticipant, wantBystander)
 	}
 }
 

@@ -2264,6 +2264,10 @@ func (h *Handler) channelThreadTargetAgents(ctx context.Context, workspaceID, ch
 	if len(agents) > 0 {
 		return agents
 	}
+	agents = h.channelThreadRootMentionedAgents(ctx, workspaceID, channelID, rootMessageID)
+	if len(agents) > 0 {
+		return agents
+	}
 	return h.channelThreadAgentsFromQuery(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
@@ -2278,6 +2282,17 @@ func (h *Handler) channelThreadTargetAgents(ctx context.Context, workspaceID, ch
 		  AND a.archived_at IS NULL
 		ORDER BY cmg.created_at DESC, cmg.id DESC
 		LIMIT 1`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID))
+}
+
+func (h *Handler) channelThreadRootMentionedAgents(ctx context.Context, workspaceID, channelID, rootMessageID string) []db.Agent {
+	var content string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT content
+		FROM channel_message
+		WHERE id = $3 AND channel_id = $1 AND workspace_id = $2`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID)).Scan(&content); err != nil {
+		return nil
+	}
+	return h.channelMentionedAgents(ctx, workspaceID, channelID, content)
 }
 
 func (h *Handler) channelThreadAgentsFromQuery(ctx context.Context, query string, args ...any) []db.Agent {

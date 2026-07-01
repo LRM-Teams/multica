@@ -2001,6 +2001,13 @@ export class ApiClient {
     });
   }
 
+  async removeChannelReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/messages/${messageId}/reactions`, {
+      method: "DELETE",
+      body: JSON.stringify({ emoji }),
+    });
+  }
+
   async sendChannelThreadMessage(
     channelId: string,
     messageId: string,

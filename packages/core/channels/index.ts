@@ -30,6 +30,7 @@ export {
   useSendChannelMessage,
   useSendChannelThreadMessage,
   useAddChannelReaction,
+  useRemoveChannelReaction,
   useMarkChannelRead,
   useMarkChannelThreadRead,
   useSetChannelThreadFollowed,

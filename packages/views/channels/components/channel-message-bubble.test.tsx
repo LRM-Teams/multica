@@ -1,7 +1,22 @@
-import { createEvent, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
 import { ChannelMessageBubble } from "./channel-message-bubble";
+
+const copyTextMock = vi.fn();
+
+vi.mock("@multica/ui/lib/clipboard", () => ({
+  copyText: (text: string) => copyTextMock(text),
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
 
 // The bubble delegates body rendering to the shared Markdown pipeline (tested
 // separately). Stub it to a passthrough so these tests focus on bubble layout
@@ -34,13 +49,27 @@ vi.mock("../../i18n", () => ({
   useT: () => ({
     t: (
       selector: (resources: {
-        message: { add_reaction: string; agent_badge: string; feishu_badge: string };
+        message: {
+          add_reaction: string;
+          agent_badge: string;
+          feishu_badge: string;
+          copy_action: string;
+          copied_toast: string;
+          copy_failed_toast: string;
+        };
         quote: { jump_to: string };
         thread: { reply: string; reply_count: string };
       }) => string,
     ) =>
       selector({
-        message: { add_reaction: "Add reaction", agent_badge: "Agent", feishu_badge: "Feishu" },
+        message: {
+          add_reaction: "Add reaction",
+          agent_badge: "Agent",
+          feishu_badge: "Feishu",
+          copy_action: "Copy",
+          copied_toast: "Copied",
+          copy_failed_toast: "Copy failed",
+        },
         quote: {
           jump_to: "Jump to original message",
         },
@@ -69,6 +98,12 @@ function makeMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
 }
 
 describe("ChannelMessageBubble", () => {
+  beforeEach(() => {
+    copyTextMock.mockReset();
+    vi.mocked(toast.success).mockReset();
+    vi.mocked(toast.error).mockReset();
+  });
+
   it("renders an agent message left-aligned with an Agent pill, name and body", () => {
     render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
 
@@ -141,6 +176,17 @@ describe("ChannelMessageBubble", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(body).toHaveClass("select-text");
+  });
+
+  it("copies the message content from the visible action button", async () => {
+    copyTextMock.mockResolvedValue(true);
+
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("Here is the data."));
+    expect(toast.success).toHaveBeenCalledWith("Copied");
   });
 
   it("keeps the message action menu available from blank bubble space", () => {

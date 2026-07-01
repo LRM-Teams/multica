@@ -169,6 +169,9 @@
   },
   "message": {
     "add_reaction": "リアクションを追加",
+    "copy_action": "コピー",
+    "copied_toast": "コピーしました",
+    "copy_failed_toast": "コピーに失敗しました",
     "agent_badge": "Agent",
     "feishu_badge": "Feishu"
   },

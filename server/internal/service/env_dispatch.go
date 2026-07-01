@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -13,6 +14,10 @@ const (
 	EnvModeScratch EnvMode = "scratch"
 	EnvModeBranch  EnvMode = "branch"
 )
+
+// EnvModeBase is the mode for a freshly booted env (POST /api/v1/env). A base
+// env has no project and is the reset source for scratch dispatch.
+const EnvModeBase EnvMode = "base"
 
 // EnvDomain enumerates the dispatch domains (spec §4.2). Required on dispatch;
 // each domain pins a dispatch_type (swe_lego⇒issue, self_play⇒message).
@@ -415,4 +420,47 @@ func (s *EnvDispatchService) rollbackRollout(ctx context.Context, workspaceID st
 			_ = s.deps.DeleteSandbox(ctx, env.SandboxID)
 		}
 	}
+}
+
+// CreateBaseEnv boots a sandbox and creates a mode='base' env row.
+func (s *EnvDispatchService) CreateBaseEnv(ctx context.Context, workspaceID, imageRef string) (envID, sandboxID string, err error) {
+	if imageRef == "" || len(imageRef) > 256 {
+		return "", "", fmt.Errorf("validation_failed: image_ref must be 1..256 chars")
+	}
+	sbx, err := s.deps.BootSandbox(ctx, imageRef)
+	if err != nil {
+		return "", "", fmt.Errorf("boot sandbox: %w", err)
+	}
+	eid, err := s.deps.CreateEnv(ctx, workspaceID, sbx, "", EnvModeBase, "")
+	if err != nil {
+		_ = s.deps.DeleteSandbox(ctx, sbx)
+		return "", "", fmt.Errorf("create env: %w", err)
+	}
+	return eid, sbx, nil
+}
+
+// ErrEnvInUse signals a DELETE /api/v1/env against an env a project still
+// references (ON DELETE RESTRICT). Handler maps it to 409.
+var ErrEnvInUse = fmt.Errorf("env_in_use")
+
+// DeleteEnv deletes the env row + its sandbox. Idempotent: a missing env
+// returns a "not found" error which the handler maps to 404. Returns
+// ErrEnvInUse (→ 409) if a project still references the env.
+func (s *EnvDispatchService) DeleteEnv(ctx context.Context, envID, workspaceID string) error {
+	env, err := s.deps.GetEnv(ctx, envID, workspaceID)
+	if err != nil {
+		return fmt.Errorf("not found: %w", err)
+	}
+	// Delete the env ROW first. Under ON DELETE RESTRICT this fails with a FK
+	// violation if a project still references it — the adapter surfaces that as
+	// ErrEnvInUse, and the sandbox is left untouched. Only once the row is gone
+	// do we reclaim the sandbox.
+	if err := s.deps.DeleteEnv(ctx, envID, workspaceID); err != nil {
+		if errors.Is(err, ErrEnvInUse) {
+			return ErrEnvInUse
+		}
+		return fmt.Errorf("delete env: %w", err)
+	}
+	_ = s.deps.DeleteSandbox(ctx, env.SandboxID)
+	return nil
 }

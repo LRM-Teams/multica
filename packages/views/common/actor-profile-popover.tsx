@@ -263,11 +263,6 @@ function ActivityRow({ activity }: { activity: MemberProfileActivityItem }) {
             {timeAgo(activity.occurred_at)}
           </span>
         </div>
-        {activity.summary ? (
-          <div className="mt-0.5 truncate text-xs text-muted-foreground">
-            {activity.summary}
-          </div>
-        ) : null}
       </div>
     </div>
   );

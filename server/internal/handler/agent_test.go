@@ -245,8 +245,8 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	if items[0].ID != newerID || items[0].Kind != "tool_use" || items[0].Status != "running" {
 		t.Fatalf("newest activity = %#v, want running file activity %s", items[0], newerID)
 	}
-	if items[0].Label != "Editing file" || items[0].Summary == nil || *items[0].Summary != "profile.go" {
-		t.Fatalf("newest activity projection = %#v, want Editing file/profile.go", items[0])
+	if items[0].Label != "Editing file" {
+		t.Fatalf("newest activity projection = %#v, want Editing file", items[0])
 	}
 	if items[1].ID != olderID || items[1].Kind != "command" || items[1].Status != "failed" {
 		t.Fatalf("older activity = %#v, want command task %s", items[1], olderID)
@@ -254,11 +254,12 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	if items[1].Label != "Ran command" {
 		t.Fatalf("command activity label = %q, want Ran command", items[1].Label)
 	}
-	if items[1].Summary != nil {
-		t.Fatalf("command activity summary = %q, want nil for compact profile card", *items[1].Summary)
-	}
 	body := w.Body.String()
 	for _, leak := range []string{
+		`"summary"`,
+		"newer work item",
+		"fallback task",
+		"profile.go",
 		"raw stacktrace",
 		"raw command output",
 		"raw patch output",
@@ -277,57 +278,24 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	}
 }
 
-func TestProjectTextActivity_DropsRawTokenSummaries(t *testing.T) {
-	stringPtr := func(s string) *string { return &s }
-
-	tests := []struct {
-		name        string
-		content     string
-		wantSummary *string
-	}{
-		{
-			name:        "hash fragment with dangling parenthesis",
-			content:     "9a5-d69cd32e15e6)",
-			wantSummary: nil,
-		},
-		{
-			name:        "uuid",
-			content:     "550e8400-e29b-41d4-a716-446655440000",
-			wantSummary: nil,
-		},
-		{
-			name:        "token-looking text",
-			content:     "sk-proj-abc123def456",
-			wantSummary: nil,
-		},
-		{
-			name:        "normal english",
-			content:     "I finished updating the profile activity summary.",
-			wantSummary: stringPtr("I finished updating the profile activity summary."),
-		},
-		{
-			name:        "normal chinese",
-			content:     "我已完成资料页活动摘要清理",
-			wantSummary: stringPtr("我已完成资料页活动摘要清理"),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			item, ok := projectTextActivity(recentTaskActivityMessage{
-				Type:    "text",
-				Content: pgtype.Text{String: tt.content, Valid: true},
-			}, "completed")
-			if !ok {
-				t.Fatalf("projectTextActivity returned ok=false")
-			}
-			if item.Label != "Writing response" {
-				t.Fatalf("label = %q, want Writing response", item.Label)
-			}
-			if !reflect.DeepEqual(item.Summary, tt.wantSummary) {
-				t.Fatalf("summary = %#v, want %#v", item.Summary, tt.wantSummary)
-			}
-		})
+func TestProjectTextActivity_ProjectsActionWithoutSummary(t *testing.T) {
+	for _, content := range []string{
+		"9a5-d69cd32e15e6)",
+		"550e8400-e29b-41d4-a716-446655440000",
+		"sk-proj-abc123def456",
+		"I finished updating the profile activity summary.",
+		"我已完成资料页活动摘要清理",
+	} {
+		item, ok := projectTextActivity(recentTaskActivityMessage{
+			Type:    "text",
+			Content: pgtype.Text{String: content, Valid: true},
+		}, "completed")
+		if !ok {
+			t.Fatalf("projectTextActivity returned ok=false for %q", content)
+		}
+		if item.Label != "Writing response" {
+			t.Fatalf("label = %q, want Writing response", item.Label)
+		}
 	}
 }
 

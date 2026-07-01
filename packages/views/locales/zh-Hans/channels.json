@@ -168,6 +168,7 @@
     "project_tooltip": "设置该频道对应的项目"
   },
   "message": {
+    "add_reaction": "添加表情回应",
     "agent_badge": "Agent",
     "feishu_badge": "飞书"
   },

@@ -14,9 +14,19 @@ interface QuickEmojiPickerProps {
   onSelect: (emoji: string) => void;
   align?: "start" | "end";
   className?: string;
+  ariaLabel?: string;
+  contentClassName?: string;
+  sideOffset?: number;
 }
 
-function QuickEmojiPicker({ onSelect, align = "start", className }: QuickEmojiPickerProps) {
+function QuickEmojiPicker({
+  onSelect,
+  align = "start",
+  className,
+  ariaLabel = "Add reaction",
+  contentClassName,
+  sideOffset,
+}: QuickEmojiPickerProps) {
   const [open, setOpen] = useState(false);
   const [showFull, setShowFull] = useState(false);
 
@@ -37,13 +47,15 @@ function QuickEmojiPicker({ onSelect, align = "start", className }: QuickEmojiPi
         render={
           <button
             type="button"
+            aria-label={ariaLabel}
+            title={ariaLabel}
             className={`inline-flex items-center justify-center h-6 w-6 rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors ${className ?? ""}`}
           >
             <SmilePlus className="h-3.5 w-3.5" />
           </button>
         }
       />
-      <PopoverContent align={align} className="w-auto p-0">
+      <PopoverContent align={align} sideOffset={sideOffset} className={`w-auto p-0 ${contentClassName ?? ""}`}>
         {showFull ? (
           <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading...</div>}>
             <EmojiPicker onSelect={handleSelect} />

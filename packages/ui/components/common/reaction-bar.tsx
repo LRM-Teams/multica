@@ -1,6 +1,6 @@
 "use client";
 
-import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
+import { HoverCard, HoverCardTrigger, HoverCardContent } from "@multica/ui/components/ui/hover-card";
 import { QuickEmojiPicker } from "./quick-emoji-picker";
 
 interface ReactionItem {
@@ -42,6 +42,7 @@ interface ReactionBarProps {
   className?: string;
   hideAddButton?: boolean;
   quickEmojis?: string[];
+  showQuickReactions?: boolean;
 }
 
 function ReactionBar({
@@ -52,10 +53,13 @@ function ReactionBar({
   className,
   hideAddButton,
   quickEmojis = [],
+  showQuickReactions = true,
 }: ReactionBarProps) {
   const grouped = groupReactions(reactions, currentUserId);
   const groupedEmojis = new Set(grouped.map((g) => g.emoji));
-  const quickOnly = quickEmojis.filter((emoji) => !groupedEmojis.has(emoji));
+  const quickOnly = showQuickReactions
+    ? quickEmojis.filter((emoji) => !groupedEmojis.has(emoji))
+    : [];
 
   return (
     <div className={`flex flex-wrap items-center gap-1.5 ${className ?? ""}`}>
@@ -70,9 +74,14 @@ function ReactionBar({
           {emoji}
         </button>
       ))}
-      {grouped.map((g) => (
-        <Tooltip key={g.emoji}>
-          <TooltipTrigger
+      {grouped.map((g) => {
+        const actors = g.actors.map((a) => ({
+          ...a,
+          name: getActorName(a.type, a.id) || a.id,
+        }));
+        return (
+        <HoverCard key={g.emoji}>
+          <HoverCardTrigger
             render={
               <button
                 type="button"
@@ -88,11 +97,25 @@ function ReactionBar({
               </button>
             }
           />
-          <TooltipContent side="top">
-            {g.actors.map((a) => getActorName(a.type, a.id)).join(", ")}
-          </TooltipContent>
-        </Tooltip>
-      ))}
+          <HoverCardContent
+            side="top"
+            align="start"
+            sideOffset={2}
+            className="w-auto min-w-40 max-w-56 rounded-md border border-border bg-popover p-2 shadow-none ring-0"
+          >
+            <div className="space-y-1">
+              {actors.map((actor) => (
+                <div key={`${actor.type}:${actor.id}`} className="flex min-w-0 items-center gap-2">
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded bg-muted text-[10px] font-medium text-muted-foreground">
+                    {actor.name.slice(0, 1).toUpperCase()}
+                  </span>
+                  <span className="truncate text-xs text-foreground">{actor.name}</span>
+                </div>
+              ))}
+            </div>
+          </HoverCardContent>
+        </HoverCard>
+      )})}
       {!hideAddButton && <QuickEmojiPicker onSelect={onToggle} />}
     </div>
   );

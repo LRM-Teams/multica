@@ -168,6 +168,7 @@
     "project_tooltip": "Set the project this channel works in"
   },
   "message": {
+    "add_reaction": "Add reaction",
     "agent_badge": "Agent",
     "feishu_badge": "Feishu"
   },

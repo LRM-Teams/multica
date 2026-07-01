@@ -851,6 +851,90 @@ func TestChannelThreadPaginationUsesOlderCursor(t *testing.T) {
 	}
 }
 
+func TestChannelMessagesPaginationUsesOlderCursor(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "message-page-"+uuid.NewString(), testUserID)
+	base := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+	for i := 1; i <= 4; i++ {
+		msg, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", fmt.Sprintf("msg-%d", i), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr(fmt.Sprintf("message-page-%d", i)), 0)
+		if err != nil {
+			t.Fatalf("insert message %d: %v", i, err)
+		}
+		if _, err := testPool.Exec(ctx, `UPDATE channel_message SET created_at = $1 WHERE id = $2`, base.Add(time.Duration(i)*time.Minute), msg.ID); err != nil {
+			t.Fatalf("pin message time %d: %v", i, err)
+		}
+	}
+
+	req := newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages?limit=2", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.ListChannelMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list page 1: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var page ChannelMessagesPageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode page 1: %v", err)
+	}
+	if page.Limit != 2 || !page.HasMore || page.NextCursor == nil {
+		t.Fatalf("page 1 metadata = limit:%d has_more:%t cursor:%+v", page.Limit, page.HasMore, page.NextCursor)
+	}
+	if got := threadContents(page.Messages); fmt.Sprint(got) != "[msg-3 msg-4]" {
+		t.Fatalf("page 1 contents = %v", got)
+	}
+
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages?limit=2&before_created_at="+url.QueryEscape(page.NextCursor.CreatedAt)+"&before_id="+page.NextCursor.ID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list page 2: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	page = ChannelMessagesPageResponse{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode page 2: %v", err)
+	}
+	if page.Limit != 2 || page.HasMore || page.NextCursor != nil {
+		t.Fatalf("page 2 metadata = limit:%d has_more:%t cursor:%+v", page.Limit, page.HasMore, page.NextCursor)
+	}
+	if got := threadContents(page.Messages); fmt.Sprint(got) != "[msg-1 msg-2]" {
+		t.Fatalf("page 2 contents = %v", got)
+	}
+}
+
+func TestChannelMessagesPaginationRejectsInvalidParams(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	channelID := seedChannelForTest(t, "message-page-invalid-"+uuid.NewString(), testUserID)
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{name: "invalid limit", path: "/api/channels/" + channelID + "/messages?limit=0"},
+		{name: "partial cursor", path: "/api/channels/" + channelID + "/messages?before_id=" + uuid.NewString()},
+		{name: "invalid cursor time", path: "/api/channels/" + channelID + "/messages?before_created_at=nope&before_id=" + uuid.NewString()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := newRequest(http.MethodGet, tc.path, nil)
+			req = withChannelTestWorkspaceCtx(t, req, testUserID)
+			req = withURLParam(req, "channelId", channelID)
+			rec := httptest.NewRecorder()
+			testHandler.ListChannelMessages(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -28,6 +28,8 @@ const channelContextMessageLimit = 5
 const channelRunTriggerLimit = 10
 const channelUserTypingExpiresInMS = 5000
 const channelAgentTypingExpiresInMS = 10 * 60 * 1000
+const channelMessagesDefaultLimit = 50
+const channelMessagesMaxLimit = 100
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 
@@ -100,6 +102,18 @@ type ChannelMessageResponse struct {
 	// Attachments linked to this message via channel_message_id. The chat
 	// bubble renders file/image cards from these.
 	Attachments []AttachmentResponse `json:"attachments,omitempty"`
+}
+
+type ChannelMessagesCursorResponse struct {
+	CreatedAt string `json:"created_at"`
+	ID        string `json:"id"`
+}
+
+type ChannelMessagesPageResponse struct {
+	Messages   []ChannelMessageResponse       `json:"messages"`
+	Limit      int                            `json:"limit"`
+	HasMore    bool                           `json:"has_more"`
+	NextCursor *ChannelMessagesCursorResponse `json:"next_cursor,omitempty"`
 }
 
 type ChannelMessageReply struct {
@@ -751,24 +765,48 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+	usePageResponse := hasChannelMessagesPageParams(r)
+	limit, beforeCreatedAt, beforeID, err := parseChannelMessagesPageParams(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
 		FROM channel_message
 		WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id IS NULL
-		ORDER BY created_at ASC`, channelID, parseUUID(workspaceID))
+		  AND (($3::timestamptz IS NULL AND $4::uuid IS NULL) OR (created_at, id) < ($3::timestamptz, $4::uuid))
+		ORDER BY created_at DESC, id DESC
+		LIMIT $5`, channelID, parseUUID(workspaceID), beforeCreatedAt, beforeID, limit+1)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channel messages")
 		return
 	}
 	defer rows.Close()
-	out := []ChannelMessageResponse{}
+	desc := []ChannelMessageResponse{}
 	for rows.Next() {
 		msg, err := scanChannelMessage(rows)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channel messages")
 			return
 		}
-		out = append(out, msg)
+		desc = append(desc, msg)
+	}
+	hasMore := len(desc) > limit
+	if hasMore {
+		desc = desc[:limit]
+	}
+	var nextCursor *ChannelMessagesCursorResponse
+	if hasMore && len(desc) > 0 {
+		oldest := desc[len(desc)-1]
+		nextCursor = &ChannelMessagesCursorResponse{
+			CreatedAt: oldest.CreatedAt,
+			ID:        oldest.ID,
+		}
+	}
+	out := make([]ChannelMessageResponse, 0, len(desc))
+	for i := len(desc) - 1; i >= 0; i-- {
+		out = append(out, desc[i])
 	}
 	messageIDs := make([]pgtype.UUID, len(out))
 	for i, m := range out {
@@ -781,6 +819,15 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	h.attachChannelMessageReactions(r.Context(), workspaceID, out)
 	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
 	h.attachChannelMessageThreadMetadata(r.Context(), workspaceID, parseUUID(userID), out)
+	if usePageResponse {
+		writeJSON(w, http.StatusOK, ChannelMessagesPageResponse{
+			Messages:   out,
+			Limit:      limit,
+			HasMore:    hasMore,
+			NextCursor: nextCursor,
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -1503,6 +1550,42 @@ func parseChannelThreadPageParams(w http.ResponseWriter, r *http.Request) (int, 
 		return 0, pgtype.Timestamptz{}, pgtype.UUID{}, false, false
 	}
 	return limit, pgtype.Timestamptz{Time: t, Valid: true}, id, true, true
+}
+
+func hasChannelMessagesPageParams(r *http.Request) bool {
+	q := r.URL.Query()
+	return strings.TrimSpace(q.Get("limit")) != "" ||
+		strings.TrimSpace(q.Get("before_created_at")) != "" ||
+		strings.TrimSpace(q.Get("before_id")) != ""
+}
+
+func parseChannelMessagesPageParams(r *http.Request) (int, pgtype.Timestamptz, pgtype.UUID, error) {
+	limit := channelMessagesDefaultLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > channelMessagesMaxLimit {
+			return 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid limit")
+		}
+		limit = parsed
+	}
+
+	rawBeforeCreatedAt := strings.TrimSpace(r.URL.Query().Get("before_created_at"))
+	rawBeforeID := strings.TrimSpace(r.URL.Query().Get("before_id"))
+	if rawBeforeCreatedAt == "" && rawBeforeID == "" {
+		return limit, pgtype.Timestamptz{}, pgtype.UUID{}, nil
+	}
+	if rawBeforeCreatedAt == "" || rawBeforeID == "" {
+		return 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+	}
+	beforeTime, err := time.Parse(time.RFC3339Nano, rawBeforeCreatedAt)
+	if err != nil {
+		return 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+	}
+	beforeID, err := util.ParseUUID(rawBeforeID)
+	if err != nil {
+		return 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+	}
+	return limit, pgtype.Timestamptz{Time: beforeTime, Valid: true}, beforeID, nil
 }
 
 type ChannelAuthorStat struct {

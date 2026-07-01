@@ -3,6 +3,7 @@ export {
   channelsOptions,
   archivedChannelsOptions,
   channelMessagesOptions,
+  channelMessagesPageOptions,
   channelMessageThreadOptions,
   channelMessageSearchOptions,
   channelMembersOptions,

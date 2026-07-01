@@ -89,6 +89,18 @@ export interface ChannelMessage {
   created_at: string;
 }
 
+export interface ChannelMessagesCursor {
+  created_at: string;
+  id: string;
+}
+
+export interface ChannelMessagesPage {
+  messages: ChannelMessage[];
+  limit: number;
+  has_more: boolean;
+  next_cursor?: ChannelMessagesCursor | null;
+}
+
 export interface ChannelThreadMessagesCursor {
   before: string;
   before_id: string;

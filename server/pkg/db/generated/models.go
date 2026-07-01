@@ -1267,6 +1267,23 @@ type SandboxSnapshot struct {
 	Status         string             `json:"status"`
 	Error          pgtype.Text        `json:"error"`
 	Metadata       []byte             `json:"metadata"`
+type WebPushSubscription struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	Endpoint       string             `json:"endpoint"`
+	P256dh         string             `json:"p256dh"`
+	Auth           string             `json:"auth"`
+	ExpirationTime pgtype.Timestamptz `json:"expiration_time"`
+	DeviceID       pgtype.Text        `json:"device_id"`
+	UserAgent      pgtype.Text        `json:"user_agent"`
+	LastActiveAt   pgtype.Timestamptz `json:"last_active_at"`
+	LastError      pgtype.Text        `json:"last_error"`
+	RevokedAt      pgtype.Timestamptz `json:"revoked_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }

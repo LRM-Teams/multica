@@ -154,6 +154,9 @@ import type {
   WebhookDelivery,
   NotificationPreferenceResponse,
   NotificationPreferences,
+  WebPushPublicKeyResponse,
+  WebPushSubscriptionPayload,
+  WebPushSubscriptionResponse,
   GitHubPullRequest,
   ListGitHubInstallationsResponse,
   GitHubConnectResponse,
@@ -315,6 +318,10 @@ import {
   EMPTY_VOICE_TRANSCRIPT_RESPONSE,
   RawReminderPageSchema,
   EMPTY_REMINDER_PAGE,
+  EMPTY_WEB_PUSH_PUBLIC_KEY,
+  EMPTY_WEB_PUSH_SUBSCRIPTION,
+  WebPushPublicKeySchema,
+  WebPushSubscriptionSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1722,6 +1729,30 @@ export class ApiClient {
     return this.fetch("/api/notification-preferences", {
       method: "PUT",
       body: JSON.stringify({ preferences }),
+    });
+  }
+
+  async getWebPushPublicKey(): Promise<WebPushPublicKeyResponse> {
+    const raw = await this.fetch<unknown>("/api/web-push/public-key");
+    return parseWithFallback<WebPushPublicKeyResponse>(raw, WebPushPublicKeySchema, EMPTY_WEB_PUSH_PUBLIC_KEY, {
+      endpoint: "GET /api/web-push/public-key",
+    });
+  }
+
+  async bindWebPushSubscription(subscription: WebPushSubscriptionPayload): Promise<WebPushSubscriptionResponse> {
+    const raw = await this.fetch<unknown>("/api/web-push/subscriptions", {
+      method: "POST",
+      body: JSON.stringify({ subscription }),
+    });
+    return parseWithFallback<WebPushSubscriptionResponse>(raw, WebPushSubscriptionSchema, EMPTY_WEB_PUSH_SUBSCRIPTION, {
+      endpoint: "POST /api/web-push/subscriptions",
+    });
+  }
+
+  async unbindWebPushSubscription(endpoint: string): Promise<{ ok: boolean }> {
+    return this.fetch("/api/web-push/subscriptions", {
+      method: "DELETE",
+      body: JSON.stringify({ endpoint }),
     });
   }
 

@@ -169,6 +169,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		ChannelAmbientGateMaxRecentPerRuntime: envPositiveInt("MULTICA_AMBIENT_QUEUE_GATE_RUNTIME_CAP", 64),
 		EvolutionReviewer:                     evolutionReviewer,
 		EvolutionReviewEnabled:                evolutionReviewEnabled,
+		WebPushVAPIDPublicKey:                 strings.TrimSpace(os.Getenv("WEB_PUSH_VAPID_PUBLIC_KEY")),
+		WebPushVAPIDPrivateKey:                strings.TrimSpace(os.Getenv("WEB_PUSH_VAPID_PRIVATE_KEY")),
+		WebPushVAPIDSubject:                   strings.TrimSpace(os.Getenv("WEB_PUSH_VAPID_SUBJECT")),
+		WebPushAppURL:                         strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_APP_URL")), "/"),
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
 	h.VoiceProvider = doubaospeech.New(doubaospeech.Config{
@@ -714,6 +718,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// the token only proves "this open_id requested binding," and
 		// is combined with the logged-in user to create the mapping.
 		r.Post("/api/lark/binding/redeem", h.RedeemLarkBindingToken)
+
+		// Web Push VAPID public key and unbind. Authenticated but not workspace-
+		// scoped so logout can remove the browser/device binding reliably.
+		r.Get("/api/web-push/public-key", h.GetWebPushPublicKey)
+		r.Delete("/api/web-push/subscriptions", h.DeleteWebPushSubscription)
 
 		// User-scoped invitation routes (no workspace context required)
 		r.Get("/api/invitations", h.ListMyInvitations)
@@ -1275,6 +1284,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/", h.GetNotificationPreferences)
 				r.Put("/", h.UpdateNotificationPreferences)
 			})
+
+			// Web Push device binding. POST is workspace-scoped so the subscription
+			// captures the current workspace while the route still enforces membership.
+			r.Post("/api/web-push/subscriptions", h.UpsertWebPushSubscription)
 		})
 	})
 

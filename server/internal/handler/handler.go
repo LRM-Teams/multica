@@ -104,6 +104,12 @@ type Config struct {
 	ChannelAmbientGateMaxRecentPerRuntime int
 	EvolutionReviewer                     service.EvolutionReviewer
 	EvolutionReviewEnabled                bool
+	// WebPushVAPIDPublicKey is safe to expose to browsers so they can create
+	// PushSubscription objects. The private key stays environment-only.
+	WebPushVAPIDPublicKey  string
+	WebPushVAPIDPrivateKey string
+	WebPushVAPIDSubject    string
+	WebPushAppURL          string
 }
 
 type cloudRuntimeProxy interface {

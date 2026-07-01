@@ -1091,6 +1091,104 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 	}
 }
 
+func TestAddChannelMembersRejectsPrivateAgentForPlainMember(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID, _, memberID := privateAgentTestFixture(t)
+	channelID := seedChannelForTest(t, "private-agent-batch-"+uuid.NewString(), memberID, testUserID)
+
+	req := newRequestAs(memberID, http.MethodPost, "/api/channels/"+channelID+"/members/batch", AddChannelMembersRequest{Members: []AddChannelMemberRequest{
+		{MemberType: "agent", MemberID: agentID},
+	}})
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.AddChannelMembers(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("batch add private agent as plain member: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var count int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'agent' AND member_id = $3`, channelID, testWorkspaceID, agentID).Scan(&count); err != nil {
+		t.Fatalf("count private agent channel members: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("private agent was added by unauthorized batch request; count=%d", count)
+	}
+}
+
+func TestAddChannelMemberRejectsDMChannel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	cleanupDMArtifacts(t)
+	agentID := createHandlerTestAgent(t, "DM Member Guard", nil)
+	thirdUserID := createChannelPlainMember(t)
+	channelID := seedAgentDMChannel(t, agentID)
+
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/members", AddChannelMemberRequest{MemberType: "user", MemberID: thirdUserID})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.AddChannelMember(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("single add member to dm: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var count int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`, channelID, testWorkspaceID, thirdUserID).Scan(&count); err != nil {
+		t.Fatalf("count third dm member: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("dm channel accepted a third member via single add; count=%d", count)
+	}
+}
+
+func TestAddChannelMembersRejectsDMChannel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	cleanupDMArtifacts(t)
+	agentID := createHandlerTestAgent(t, "DM Batch Guard", nil)
+	thirdUserID := createChannelPlainMember(t)
+	channelID := seedAgentDMChannel(t, agentID)
+
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/members/batch", AddChannelMembersRequest{Members: []AddChannelMemberRequest{
+		{MemberType: "user", MemberID: thirdUserID},
+	}})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.AddChannelMembers(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("batch add member to dm: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var count int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`, channelID, testWorkspaceID, thirdUserID).Scan(&count); err != nil {
+		t.Fatalf("count third dm member: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("dm channel accepted a third member via batch add; count=%d", count)
+	}
+}
+
 func seedChannelForTest(t *testing.T, name string, memberIDs ...string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -1121,8 +1219,8 @@ func createChannelPlainMember(t *testing.T) string {
 	email := "channel-plain-" + suffix + "@multica.test"
 	var userID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO "user" (name, display_name, email)
-		VALUES ($1, 'Channel Plain Member', $2)
+		INSERT INTO "user" (name, email)
+		VALUES ($1, $2)
 		RETURNING id`, name, email).Scan(&userID); err != nil {
 		t.Fatalf("create plain member user: %v", err)
 	}

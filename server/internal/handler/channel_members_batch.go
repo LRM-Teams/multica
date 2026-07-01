@@ -15,11 +15,11 @@ type AddChannelMembersRequest struct {
 	Members []AddChannelMemberRequest `json:"members"`
 }
 
-// AddChannelMembers adds many members to a channel at once. Entries with a bad
-// type or id are skipped; only ids that actually belong to the workspace (a
-// real member or a workspace agent) are inserted. Already-present members are
-// no-ops (ON CONFLICT DO NOTHING). One channel-updated event fires for the
-// whole batch.
+// AddChannelMembers adds many members to a group channel at once. Entries with
+// a bad type or malformed id are skipped; targets must pass the same workspace
+// and private agent visibility checks as single-member invites.
+// Already-present members are no-ops (ON CONFLICT DO NOTHING). One
+// channel-updated event fires for the whole batch.
 func (h *Handler) AddChannelMembers(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -38,6 +38,9 @@ func (h *Handler) AddChannelMembers(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+	if !h.requireGroupChannel(w, r.Context(), workspaceID, channelID) {
+		return
+	}
 	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
 		return
 	}
@@ -48,8 +51,12 @@ func (h *Handler) AddChannelMembers(w http.ResponseWriter, r *http.Request) {
 		if m.MemberType != "user" && m.MemberType != "agent" {
 			continue
 		}
-		if _, err := util.ParseUUID(m.MemberID); err != nil {
+		memberID, err := util.ParseUUID(m.MemberID)
+		if err != nil {
 			continue
+		}
+		if !h.validateChannelMemberTarget(w, r, workspaceID, m.MemberType, memberID) {
+			return
 		}
 		types = append(types, m.MemberType)
 		ids = append(ids, m.MemberID)

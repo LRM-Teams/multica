@@ -690,6 +690,9 @@ func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+	if !h.requireGroupChannel(w, r.Context(), workspaceID, channelID) {
+		return
+	}
 	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
 		return
 	}
@@ -2812,6 +2815,15 @@ func (h *Handler) requireChannelUserMember(w http.ResponseWriter, ctx context.Co
 	}
 	if !h.channelUserIsMember(ctx, workspaceID, channelID, userID) {
 		writeError(w, http.StatusForbidden, "not a channel member")
+		return false
+	}
+	return true
+}
+
+func (h *Handler) requireGroupChannel(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID pgtype.UUID) bool {
+	var id pgtype.UUID
+	if err := h.DB.QueryRow(ctx, `SELECT id FROM channel WHERE id = $1 AND workspace_id = $2 AND kind = 'group'`, channelID, parseUUID(workspaceID)).Scan(&id); err != nil {
+		writeError(w, http.StatusNotFound, "channel not found")
 		return false
 	}
 	return true

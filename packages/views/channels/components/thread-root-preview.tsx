@@ -28,12 +28,10 @@ export function ThreadRootPreview({
   message,
   currentUserId,
   ownName,
-  onViewInChannel,
 }: {
   message: ChannelMessage;
   currentUserId: string | null;
   ownName?: string;
-  onViewInChannel: () => void;
 }) {
   const { t } = useT("channels");
   const [expanded, setExpanded] = useState(false);
@@ -125,15 +123,6 @@ export function ThreadRootPreview({
               onClick={() => setExpanded((value) => !value)}
             >
               {expanded ? t(($) => $.thread.collapse_message) : t(($) => $.thread.show_full_message)}
-            </Button>
-            <Button
-              type="button"
-              variant="link"
-              size="sm"
-              className="h-auto px-0 text-xs text-muted-foreground"
-              onClick={onViewInChannel}
-            >
-              {t(($) => $.thread.view_parent)}
             </Button>
           </div>
         </div>

@@ -798,23 +798,27 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     </main>
   );
 
-  if (!isMobile && threadPanel) {
+  if (!isMobile) {
     return (
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         <ResizablePanel id="dm-conversation" minSize="50%" className="flex min-h-0 flex-col">
           {conversationPane}
         </ResizablePanel>
-        <ResizableHandle />
-        <ResizablePanel
-          id="dm-thread"
-          defaultSize={440}
-          minSize={360}
-          maxSize={640}
-          groupResizeBehavior="preserve-pixel-size"
-          className="border-l border-border/30 bg-background"
-        >
-          {threadPanel}
-        </ResizablePanel>
+        {threadPanel ? (
+          <>
+            <ResizableHandle />
+            <ResizablePanel
+              id="dm-thread"
+              defaultSize={440}
+              minSize={360}
+              maxSize={640}
+              groupResizeBehavior="preserve-pixel-size"
+              className="border-l border-border/30 bg-background"
+            >
+              {threadPanel}
+            </ResizablePanel>
+          </>
+        ) : null}
       </ResizablePanelGroup>
     );
   }

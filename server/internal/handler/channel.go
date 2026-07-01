@@ -1384,7 +1384,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if ch.Kind == "dm" {
 		h.dispatchDMAgentReply(r.Context(), ch, msg, parseUUID(userID))
 	} else {
-		h.dispatchChannelMentions(r.Context(), ch, msg, parseUUID(userID))
+		h.dispatchChannelThreadReplyMentions(r.Context(), ch, msg, parseUUID(userID))
 	}
 	h.sendChannelMessageToFeishu(r.Context(), ch, authorName, content)
 	writeJSON(w, http.StatusCreated, msg)
@@ -1896,6 +1896,13 @@ func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch Channel
 
 func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
 	h.dispatchChannelMessageToAgents(ctx, ch, trigger, initiatorUserID)
+}
+
+func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
+	h.notifyChannelMemberMentions(ctx, ch, trigger)
+	for _, agent := range h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content) {
+		h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
+	}
 }
 
 // dispatchChannelAgentReply runs one agent's reply to a triggering message:

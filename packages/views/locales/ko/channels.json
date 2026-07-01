@@ -135,6 +135,8 @@
     "close_aria": "스레드 닫기",
     "context_label": "원본 메시지",
     "view_parent": "메인 대화로 돌아가기",
+    "show_full_message": "전체 메시지 보기",
+    "collapse_message": "접기",
     "jump_to_parent": "원본 메시지로 이동",
     "empty_replies": "아직 답글이 없습니다.",
     "load_failed": "스레드를 불러오지 못했습니다.",

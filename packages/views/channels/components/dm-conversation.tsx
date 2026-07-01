@@ -58,10 +58,10 @@ import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useT } from "../../i18n";
 import { ChatMessageList } from "../../chat/components/chat-message-list";
 import { ChatInput } from "../../chat/components/chat-input";
-import { ChannelMessageBubble } from "./channel-message-bubble";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelComposer, ConversationHeader } from "./conversation-surface";
+import { ThreadRootPreview } from "./thread-root-preview";
 import {
   AgentWorkingIndicator,
   TypingIndicator,
@@ -215,7 +215,13 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   const { data: threadPage, isLoading: threadLoading, isError: threadError } = useQuery(
     channelMessageThreadOptions(channelId, threadRoot?.id ?? ""),
   );
-  const threadMessages = threadPage?.messages ?? [];
+  const threadReplies = useMemo(
+    () => {
+      const messages = threadPage?.messages ?? [];
+      return threadRoot ? messages.filter((msg) => msg.id !== threadRoot.id) : messages;
+    },
+    [threadPage?.messages, threadRoot],
+  );
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(channelId));
 
   const editorRef = useRef<ContentEditorRef>(null);
@@ -501,7 +507,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
           }
           title={t(($) => $.thread.title)}
           meta={t(($) => $.thread.meta_count, {
-            count: threadMessages.length,
+            count: threadReplies.length,
           })}
           actions={
             <>
@@ -528,18 +534,15 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
             </>
           }
         />
-        <div className="px-5 pt-3">
-          <ChannelMessageBubble
-            message={threadRoot}
-            currentUserId={currentUserId}
-            ownName={currentUserName ?? undefined}
-            onReact={handleReactToMessage}
-            onScrollTo={(messageId) => {
-              setThreadParentHighlightId(messageId);
-              if (isMobile) setOpenThreadRoot(null);
-            }}
-          />
-        </div>
+        <ThreadRootPreview
+          message={threadRoot}
+          currentUserId={currentUserId}
+          ownName={currentUserName ?? undefined}
+          onViewInChannel={() => {
+            setThreadParentHighlightId(threadRoot.id);
+            if (isMobile) setOpenThreadRoot(null);
+          }}
+        />
         {threadError ? (
           <div className="flex flex-1 items-center justify-center px-5 text-sm text-muted-foreground">
             {t(($) => $.thread.load_failed)}
@@ -551,7 +554,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         ) : (
           <ChannelMessageList
             key={`dm-thread:${threadRoot.id}`}
-            messages={threadMessages}
+            messages={threadReplies}
             currentUserId={currentUserId}
             ownName={currentUserName ?? undefined}
             emptyLabel={t(($) => $.thread.empty_replies)}

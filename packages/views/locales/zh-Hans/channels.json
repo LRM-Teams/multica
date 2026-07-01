@@ -135,6 +135,8 @@
     "close_aria": "关闭线程",
     "context_label": "原消息",
     "view_parent": "返回主会话",
+    "show_full_message": "查看完整消息",
+    "collapse_message": "收起",
     "jump_to_parent": "定位到原消息",
     "empty_replies": "暂无回复。",
     "load_failed": "线程加载失败。",

@@ -135,6 +135,8 @@
     "close_aria": "Close thread",
     "context_label": "Original message",
     "view_parent": "Back to main chat",
+    "show_full_message": "Show full message",
+    "collapse_message": "Collapse",
     "jump_to_parent": "Jump to original message",
     "empty_replies": "No replies yet.",
     "load_failed": "Failed to load thread.",

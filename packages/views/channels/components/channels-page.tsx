@@ -147,11 +147,11 @@ import { initialsOf } from "../../common/initials";
 import { useT, useTimeAgo } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
-import { ChannelMessageBubble } from "./channel-message-bubble";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
+import { ThreadRootPreview } from "./thread-root-preview";
 import {
   ChannelComposer,
   ConversationHeader,
@@ -515,7 +515,13 @@ export function ChannelsPage() {
   const { data: threadPage, isLoading: threadLoading, isError: threadError } = useQuery(
     channelMessageThreadOptions(active?.id ?? "", threadRoot?.id ?? ""),
   );
-  const threadMessages = threadPage?.messages ?? [];
+  const threadReplies = useMemo(
+    () => {
+      const messages = threadPage?.messages ?? [];
+      return threadRoot ? messages.filter((msg) => msg.id !== threadRoot.id) : messages;
+    },
+    [threadPage?.messages, threadRoot],
+  );
   const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
@@ -1705,7 +1711,7 @@ export function ChannelsPage() {
           }
           title={t(($) => $.thread.title)}
           meta={t(($) => $.thread.meta_count, {
-            count: threadMessages.length,
+            count: threadReplies.length,
           })}
           actions={
             <>
@@ -1732,18 +1738,15 @@ export function ChannelsPage() {
             </>
           }
         />
-        <div className="px-5 pt-3">
-          <ChannelMessageBubble
-            message={threadRoot}
-            currentUserId={currentUserId}
-            ownName={currentUserName ?? undefined}
-            onReact={handleReactToMessage}
-            onScrollTo={(messageId) => {
-              setHighlightMessageId(messageId);
-              if (isMobile) setOpenThreadRoot(null);
-            }}
-          />
-        </div>
+        <ThreadRootPreview
+          message={threadRoot}
+          currentUserId={currentUserId}
+          ownName={currentUserName ?? undefined}
+          onViewInChannel={() => {
+            setHighlightMessageId(threadRoot.id);
+            if (isMobile) setOpenThreadRoot(null);
+          }}
+        />
         {threadError ? (
           <div className="flex flex-1 items-center justify-center px-5 text-sm text-muted-foreground">
             {t(($) => $.thread.load_failed)}
@@ -1755,7 +1758,7 @@ export function ChannelsPage() {
         ) : (
           <ChannelMessageList
             key={`thread:${threadRoot.id}`}
-            messages={threadMessages}
+            messages={threadReplies}
             currentUserId={currentUserId}
             ownName={currentUserName ?? undefined}
             emptyLabel={t(($) => $.thread.empty_replies)}

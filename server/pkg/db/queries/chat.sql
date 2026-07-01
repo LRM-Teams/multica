@@ -179,3 +179,8 @@ SELECT * FROM chat_message
 WHERE chat_session_id = $1 AND role = 'user'
 ORDER BY created_at DESC
 LIMIT 1;
+
+-- name: CreateChatSessionForProject :one
+INSERT INTO chat_session (workspace_id, project_id, agent_id, creator_id, title, runtime_id)
+VALUES ($1, $2, $3, $4, $5, (SELECT runtime_id FROM agent WHERE id = $3))
+RETURNING *;

@@ -49,3 +49,12 @@ SELECT project_id,
 FROM issue
 WHERE project_id = ANY(sqlc.arg('project_ids')::uuid[])
 GROUP BY project_id;
+
+-- name: CreateProjectWithEnv :one
+INSERT INTO project (workspace_id, title, description, icon, status, lead_type, lead_id, priority, env_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING *;
+
+-- name: SetProjectEnvID :exec
+UPDATE project SET env_id = $2, updated_at = now()
+WHERE id = $1 AND workspace_id = $3;

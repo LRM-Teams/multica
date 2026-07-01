@@ -737,6 +737,52 @@ func TestChannelThreadReplyMetadataReadAndMainTimelineFiltering(t *testing.T) {
 	}
 }
 
+func TestChannelThreadReplyWithoutMentionDoesNotAmbientDispatch(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Thread Ambient Guard", nil)
+	channelID := seedChannelForTest(t, "thread-no-ambient-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ambient-guard-root"), 0)
+	if err != nil {
+		t.Fatalf("insert root: %v", err)
+	}
+
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages/"+root.ID+"/thread", map[string]string{"content": "hi"})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParams(req, "channelId", channelID, "messageId", root.ID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessageThreadReply(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send thread reply: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var sessionCount, taskCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_agent_session
+		WHERE channel_id = $1`, channelID).Scan(&sessionCount); err != nil {
+		t.Fatalf("count channel agent sessions: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_queue atq
+		JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
+		WHERE cas.channel_id = $1`, channelID).Scan(&taskCount); err != nil {
+		t.Fatalf("count channel agent tasks: %v", err)
+	}
+	if sessionCount != 0 || taskCount != 0 {
+		t.Fatalf("plain thread reply created %d agent sessions and %d tasks; want none", sessionCount, taskCount)
+	}
+}
+
 func TestChannelThreadNoNestedAndArchiveReadOnly(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -960,7 +1006,7 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 	if !found {
 		t.Fatal("channel not found after seed")
 	}
-	testHandler.dispatchChannelMentions(ctx, ch, trigger, parseUUID(testUserID))
+	testHandler.dispatchChannelThreadReplyMentions(ctx, ch, trigger, parseUUID(testUserID))
 
 	var sessionID string
 	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {

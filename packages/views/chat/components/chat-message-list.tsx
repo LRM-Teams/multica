@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { Virtuoso } from "react-virtuoso";
@@ -17,7 +17,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@multica/ui/components/ui/tooltip";
-import { ChevronRight, ChevronDown, Brain, AlertCircle, AlertTriangle, Copy } from "lucide-react";
+import { ChevronRight, ChevronDown, ChevronUp, Brain, AlertCircle, AlertTriangle, Copy } from "lucide-react";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { isTaskMessageTaskId, taskMessagesOptions } from "@multica/core/chat/queries";
 import { Markdown } from "@multica/views/common/markdown";
@@ -61,6 +61,7 @@ export function ChatMessageList({
 }: ChatMessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
+  const [isNearTop, setIsNearTop] = useState(true);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const setScrollContainerRef = useCallback((node: HTMLDivElement | null) => {
     scrollRef.current = node;
@@ -93,67 +94,129 @@ export function ChatMessageList({
 
   const totalCount = messages.length + (hasLive || showStatusPill ? 1 : 0);
   const firstIndex = totalCount > 0 ? firstItemIndex : 0;
+  const showScrollControls = totalCount > 0 && (!isNearTop || !isNearBottom);
+
+  const updateScrollPosition = useCallback(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+
+    const distanceFromBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+    setIsNearTop(scrollEl.scrollTop <= 120);
+    setIsNearBottom(distanceFromBottom <= 120);
+  }, []);
+
+  useEffect(() => {
+    if (!scrollContainerEl) return;
+
+    updateScrollPosition();
+    scrollContainerEl.addEventListener("scroll", updateScrollPosition, { passive: true });
+    return () => scrollContainerEl.removeEventListener("scroll", updateScrollPosition);
+  }, [scrollContainerEl, updateScrollPosition]);
+
+  useEffect(() => {
+    updateScrollPosition();
+  }, [totalCount, hasLive, showStatusPill, updateScrollPosition]);
+
+  const scrollToBoundary = useCallback((top: number) => {
+    scrollRef.current?.scrollTo({ top, behavior: "smooth" });
+  }, []);
 
   return (
-    <div
-      ref={setScrollContainerRef}
-      data-tab-scroll-root
-      style={fadeStyle}
-      className="flex-1 overflow-y-auto"
-    >
-      {!scrollContainerEl ? (
-        <div className="mx-auto w-full max-w-4xl px-5 pt-4 space-y-3">
-          <ChatMessageSkeleton />
-        </div>
-      ) : (
-      <Virtuoso
-        customScrollParent={scrollContainerEl}
-        data={messages}
-        firstItemIndex={firstIndex}
-        increaseViewportBy={{ top: 400, bottom: 600 }}
-        atBottomThreshold={120}
-        atBottomStateChange={setIsNearBottom}
-        followOutput={() => (!isFetchingOlderMessages && isNearBottom ? "smooth" : false)}
-        startReached={() => {
-          if (hasOlderMessages && !isFetchingOlderMessages) {
-            onLoadOlderMessages?.();
-          }
-        }}
-        computeItemKey={(_, msg) => msg.id}
-        components={{
-          Header: () => (
-            <div className="mx-auto w-full max-w-4xl px-5 pt-4">
-              {isFetchingOlderMessages && (
-                <div className="text-center text-xs text-muted-foreground">{t(($) => $.message_list.loading_older)}</div>
-              )}
-            </div>
-          ),
-          Footer: () => (
-            <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
-              {hasLive && (
-                <div className="w-full space-y-1.5">
-                  <TimelineView items={liveTimeline} isStreaming />
-                </div>
-              )}
-              {showStatusPill && pendingTask && (
-                <TaskStatusPill
-                  pendingTask={pendingTask}
-                  taskMessages={liveTaskMessages ?? []}
-                  availability={availability}
-                />
-              )}
-            </div>
-          ),
-        }}
-        itemContent={(_, msg) => (
-          <div className="mx-auto w-full max-w-4xl px-5 py-2">
-            <MessageBubble
-              message={msg}
-              isPending={!!pendingTaskId && msg.task_id === pendingTaskId}
-            />
+    <div className="relative flex-1 min-h-0">
+      <div
+        ref={setScrollContainerRef}
+        data-tab-scroll-root
+        style={fadeStyle}
+        className="h-full overflow-y-auto"
+      >
+        {!scrollContainerEl ? (
+          <div className="mx-auto w-full max-w-4xl px-5 pt-4 space-y-3">
+            <ChatMessageSkeleton />
           </div>
+        ) : (
+          <Virtuoso
+            customScrollParent={scrollContainerEl}
+            data={messages}
+            firstItemIndex={firstIndex}
+            increaseViewportBy={{ top: 400, bottom: 600 }}
+            atBottomThreshold={120}
+            atBottomStateChange={setIsNearBottom}
+            followOutput={() => (!isFetchingOlderMessages && isNearBottom ? "smooth" : false)}
+            startReached={() => {
+              if (hasOlderMessages && !isFetchingOlderMessages) {
+                onLoadOlderMessages?.();
+              }
+            }}
+            computeItemKey={(_, msg) => msg.id}
+            components={{
+              Header: () => (
+                <div className="mx-auto w-full max-w-4xl px-5 pt-4">
+                  {isFetchingOlderMessages && (
+                    <div className="text-center text-xs text-muted-foreground">{t(($) => $.message_list.loading_older)}</div>
+                  )}
+                </div>
+              ),
+              Footer: () => (
+                <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
+                  {hasLive && (
+                    <div className="w-full space-y-1.5">
+                      <TimelineView items={liveTimeline} isStreaming />
+                    </div>
+                  )}
+                  {showStatusPill && pendingTask && (
+                    <TaskStatusPill
+                      pendingTask={pendingTask}
+                      taskMessages={liveTaskMessages ?? []}
+                      availability={availability}
+                    />
+                  )}
+                </div>
+              ),
+            }}
+            itemContent={(_, msg) => (
+              <div className="mx-auto w-full max-w-4xl px-5 py-2">
+                <MessageBubble
+                  message={msg}
+                  isPending={!!pendingTaskId && msg.task_id === pendingTaskId}
+                />
+              </div>
+            )}
+          />
         )}
-      />
+      </div>
+      {showScrollControls && (
+        <div className="pointer-events-none absolute right-3 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-2 sm:right-4">
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            className={cn(
+              "pointer-events-auto size-9 rounded-full border bg-background/90 shadow-lg backdrop-blur transition-opacity hover:bg-accent sm:size-8",
+              isNearTop && "opacity-40",
+            )}
+            aria-label={t(($) => $.message_list.scroll_to_top)}
+            title={t(($) => $.message_list.scroll_to_top)}
+            disabled={isNearTop}
+            onClick={() => scrollToBoundary(0)}
+          >
+            <ChevronUp className="size-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            className={cn(
+              "pointer-events-auto size-9 rounded-full border bg-background/90 shadow-lg backdrop-blur transition-opacity hover:bg-accent sm:size-8",
+              isNearBottom && "opacity-40",
+            )}
+            aria-label={t(($) => $.message_list.scroll_to_bottom)}
+            title={t(($) => $.message_list.scroll_to_bottom)}
+            disabled={isNearBottom}
+            onClick={() => scrollToBoundary(scrollRef.current?.scrollHeight ?? 0)}
+          >
+            <ChevronDown className="size-4" />
+          </Button>
+        </div>
       )}
     </div>
   );

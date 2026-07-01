@@ -35,7 +35,9 @@
     "copy_action": "Copy",
     "copied_toast": "Copied",
     "copy_failed_toast": "Copy failed",
-    "loading_older": "Loading older messages…"
+    "loading_older": "Loading older messages…",
+    "scroll_to_top": "Scroll to top",
+    "scroll_to_bottom": "Scroll to bottom"
   },
   "session_history": {
     "untitled": "Untitled",

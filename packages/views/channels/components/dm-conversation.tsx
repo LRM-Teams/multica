@@ -236,6 +236,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
 
   const editorRef = useRef<ContentEditorRef>(null);
   const threadEditorRef = useRef<ContentEditorRef>(null);
+  const focusThreadComposerOnOpenRef = useRef(false);
   const [draftEmpty, setDraftEmpty] = useState(true);
   const [threadDraftEmpty, setThreadDraftEmpty] = useState(true);
   const [convSearchOpen, setConvSearchOpen] = useState(false);
@@ -319,6 +320,14 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     if (!threadRoot) return;
     markThreadRead({ channelId, messageId: threadRoot.id });
   }, [channelId, threadRoot?.id, markThreadRead]);
+
+  useEffect(() => {
+    if (!threadRoot || !focusThreadComposerOnOpenRef.current) return;
+    focusThreadComposerOnOpenRef.current = false;
+    requestAnimationFrame(() => {
+      threadEditorRef.current?.focus();
+    });
+  }, [threadRoot?.id]);
 
   // Expire stale typing pulses.
   useEffect(() => {
@@ -505,6 +514,11 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     );
   };
 
+  const handleOpenThread = (message: ChannelMessage) => {
+    focusThreadComposerOnOpenRef.current = true;
+    setOpenThreadRoot(message);
+  };
+
   const threadPanel =
     threadRoot ? (
       <div className="flex h-full min-h-0 flex-col bg-background">
@@ -552,10 +566,6 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
           message={threadRoot}
           currentUserId={currentUserId}
           ownName={currentUserName ?? undefined}
-          onViewInChannel={() => {
-            setThreadParentHighlightId(threadRoot.id);
-            if (isMobile) setOpenThreadRoot(null);
-          }}
         />
         {threadError ? (
           <div className="flex flex-1 items-center justify-center px-5 text-sm text-muted-foreground">
@@ -714,7 +724,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         searchQuery={searchHighlightQuery}
         emptyLabel={t(($) => $.dm.thread_empty)}
         footer={<TypingIndicator actors={activeTypingActors} />}
-        onOpenThread={setOpenThreadRoot}
+        onOpenThread={handleOpenThread}
         onReact={handleReactToMessage}
       />
       <div className="px-5">

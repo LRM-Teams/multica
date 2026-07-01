@@ -461,6 +461,7 @@ export function ChannelsPage() {
   const [quoteMessage, setQuoteMessage] = useState<ChannelMessage | null>(null);
   const [openThreadRoot, setOpenThreadRoot] = useState<ChannelMessage | null>(null);
   const threadEditorRef = useRef<ContentEditorRef>(null);
+  const focusThreadComposerOnOpenRef = useRef(false);
   const [threadDraftEmpty, setThreadDraftEmpty] = useState(true);
   const [convSearchOpen, setConvSearchOpen] = useState(false);
   const [convSearchQuery, setConvSearchQuery] = useState("");
@@ -801,6 +802,14 @@ export function ChannelsPage() {
     if (!active?.id || !threadRoot) return;
     markThreadRead({ channelId: active.id, messageId: threadRoot.id });
   }, [active?.id, threadRoot?.id, markThreadRead]);
+
+  useEffect(() => {
+    if (!threadRoot || !focusThreadComposerOnOpenRef.current) return;
+    focusThreadComposerOnOpenRef.current = false;
+    requestAnimationFrame(() => {
+      threadEditorRef.current?.focus();
+    });
+  }, [threadRoot?.id]);
 
   // Sync the DM selection from the `?dm=` deep link. The entry points outside
   // this view (Cmd+K, agent hover card) push(`...?dm=ID`); when the user is
@@ -1143,6 +1152,18 @@ export function ChannelsPage() {
         },
       },
     );
+  };
+
+  const handleQuoteMessage = (message: ChannelMessage) => {
+    setQuoteMessage(message);
+    requestAnimationFrame(() => {
+      editorRef.current?.focus();
+    });
+  };
+
+  const handleOpenThread = (message: ChannelMessage) => {
+    focusThreadComposerOnOpenRef.current = true;
+    setOpenThreadRoot(message);
   };
 
   const toggleInvite = (key: string) => {
@@ -1756,10 +1777,6 @@ export function ChannelsPage() {
           message={threadRoot}
           currentUserId={currentUserId}
           ownName={currentUserName ?? undefined}
-          onViewInChannel={() => {
-            setHighlightMessageId(threadRoot.id);
-            if (isMobile) setOpenThreadRoot(null);
-          }}
         />
         {threadError ? (
           <div className="flex flex-1 items-center justify-center px-5 text-sm text-muted-foreground">
@@ -2046,8 +2063,8 @@ export function ChannelsPage() {
                 searchHitIds={searchHitIds}
                 searchQuery={searchHighlightQuery}
                 emptyLabel={t(($) => $.thread.empty)}
-                onQuote={isActiveArchived ? undefined : setQuoteMessage}
-                onOpenThread={isActiveArchived ? undefined : setOpenThreadRoot}
+                onQuote={isActiveArchived ? undefined : handleQuoteMessage}
+                onOpenThread={isActiveArchived ? undefined : handleOpenThread}
                 onScrollToMessage={setHighlightMessageId}
                 onReact={handleReactToMessage}
                 footer={

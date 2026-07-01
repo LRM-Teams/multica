@@ -13,19 +13,25 @@ const QUICK_EMOJIS = ["👍", "👌", "❤️", "✅", "🎉", "😕", "🚀", "
 interface QuickEmojiPickerProps {
   onSelect: (emoji: string) => void;
   align?: "start" | "end";
+  side?: "top" | "bottom" | "left" | "right" | "inline-start" | "inline-end";
   className?: string;
   ariaLabel?: string;
   contentClassName?: string;
   sideOffset?: number;
+  emojis?: string[];
+  showMore?: boolean;
 }
 
 function QuickEmojiPicker({
   onSelect,
   align = "start",
+  side = "bottom",
   className,
   ariaLabel = "Add reaction",
   contentClassName,
   sideOffset,
+  emojis = QUICK_EMOJIS,
+  showMore = true,
 }: QuickEmojiPickerProps) {
   const [open, setOpen] = useState(false);
   const [showFull, setShowFull] = useState(false);
@@ -55,7 +61,7 @@ function QuickEmojiPicker({
           </button>
         }
       />
-      <PopoverContent align={align} sideOffset={sideOffset} className={`w-auto p-0 ${contentClassName ?? ""}`}>
+      <PopoverContent align={align} side={side} sideOffset={sideOffset} className={`w-auto p-0 ${contentClassName ?? ""}`}>
         {showFull ? (
           <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading...</div>}>
             <EmojiPicker onSelect={handleSelect} />
@@ -63,7 +69,7 @@ function QuickEmojiPicker({
         ) : (
           <div className="p-2">
             <div className="flex gap-1">
-              {QUICK_EMOJIS.map((emoji) => (
+              {emojis.map((emoji) => (
                 <button
                   key={emoji}
                   type="button"
@@ -74,13 +80,15 @@ function QuickEmojiPicker({
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              onClick={() => setShowFull(true)}
-              className="mt-1.5 w-full text-xs text-muted-foreground hover:text-foreground text-center py-1 rounded hover:bg-accent transition-colors"
-            >
-              More emojis...
-            </button>
+            {showMore && (
+              <button
+                type="button"
+                onClick={() => setShowFull(true)}
+                className="mt-1.5 w-full text-xs text-muted-foreground hover:text-foreground text-center py-1 rounded hover:bg-accent transition-colors"
+              >
+                More emojis...
+              </button>
+            )}
           </div>
         )}
       </PopoverContent>

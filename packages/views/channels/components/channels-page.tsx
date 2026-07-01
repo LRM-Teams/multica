@@ -1720,9 +1720,13 @@ export function ChannelsPage() {
             </span>
           }
           title={t(($) => $.thread.title)}
-          meta={t(($) => $.thread.meta_count, {
-            count: threadReplies.length,
-          })}
+          meta={
+            threadReplies.length > 0
+              ? t(($) => $.thread.meta_count, {
+                  count: threadReplies.length,
+                })
+              : undefined
+          }
           actions={
             <>
               <Button

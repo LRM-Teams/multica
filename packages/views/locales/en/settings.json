@@ -90,11 +90,14 @@
     },
     "browser": {
       "label": "Browser notifications",
-      "hint": "Allow this browser to show notification banners for new inbox items.",
+      "hint": "Allow this browser to show notification banners for new inbox, direct-message, and group replies.",
       "enable": "Enable",
-      "granted": "This browser can show notification banners.",
+      "granted": "This browser can show notification banners for inbox, DM, and group replies.",
       "denied": "Blocked by your browser. Enable notifications for this site in your browser settings.",
-      "enabled_badge": "Enabled"
+      "enabled_badge": "Enabled",
+      "unsupported": "This browser does not support system notifications. You will still see in-app unread badges and toasts.",
+      "ios_needs_pwa": "On iPhone, add Multica to the Home Screen first. Then open it from the Home Screen to enable notifications.",
+      "ios_pwa_hint": "Allow this Home Screen web app to show notification banners for inbox, DM, and group replies."
     }
   },
   "tokens": {

@@ -15,3 +15,10 @@ export {
   type SystemNotificationPayload,
   type WebNotificationPermission,
 } from "./system-notification";
+export {
+  getBrowserNotificationCapability,
+  isIOSBrowser,
+  isStandaloneDisplayMode,
+  isPushNotificationSupported,
+  type BrowserNotificationCapability,
+} from "./browser-notification-capability";

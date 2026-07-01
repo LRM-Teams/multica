@@ -129,14 +129,26 @@ describe("showWebNotification", () => {
     expect(onClick).toHaveBeenCalledWith(payload());
   });
 
-  it("swallows constructors that throw (e.g. service-worker-only engines)", () => {
+  it("falls back to ServiceWorkerRegistration.showNotification when constructors throw", async () => {
     class ThrowingNotification {
       static permission: NotificationPermission = "granted";
       constructor() {
         throw new Error("requires a ServiceWorkerRegistration");
       }
     }
+    const showNotification = vi.fn(async () => undefined);
+    Object.defineProperty(globalThis, "navigator", {
+      value: { serviceWorker: { ready: Promise.resolve({ showNotification }) } },
+      configurable: true,
+    });
     installWindow(ThrowingNotification);
+
     expect(() => showWebNotification(payload())).not.toThrow();
+    await Promise.resolve();
+
+    expect(showNotification).toHaveBeenCalledWith(
+      "Mentioned you",
+      expect.objectContaining({ body: "in a comment", tag: "item-1" }),
+    );
   });
 });

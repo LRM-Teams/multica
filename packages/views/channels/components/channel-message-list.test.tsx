@@ -3,6 +3,48 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
 import { MessageViewport } from "./channel-message-list";
 
+vi.mock("react-virtuoso", async () => {
+  const React = await import("react");
+
+  const MockVirtuoso = React.forwardRef(
+    (
+      {
+        components = {},
+        data = [],
+        itemContent,
+      }: {
+        components?: {
+          Footer?: React.ComponentType;
+          Header?: React.ComponentType;
+          List?: React.ComponentType<React.HTMLAttributes<HTMLDivElement>>;
+        };
+        data?: ChannelMessage[];
+        itemContent: (index: number, item: ChannelMessage) => React.ReactNode;
+      },
+      ref: React.ForwardedRef<{ scrollToIndex: () => void }>,
+    ) => {
+      React.useImperativeHandle(ref, () => ({ scrollToIndex: vi.fn() }));
+
+      const Header = components.Header;
+      const List = components.List ?? "div";
+      const Footer = components.Footer;
+
+      return (
+        <div data-testid="virtuoso-scroller">
+          {Header ? <Header /> : null}
+          <List>{data.map((item, index) => itemContent(index, item))}</List>
+          {Footer ? <Footer /> : null}
+        </div>
+      );
+    },
+  );
+  MockVirtuoso.displayName = "MockVirtuoso";
+
+  return {
+    Virtuoso: MockVirtuoso,
+  };
+});
+
 vi.mock("../../common/markdown", () => ({
   MemoizedMarkdown: ({ children }: { children: string }) => <span>{children}</span>,
 }));
@@ -74,7 +116,7 @@ describe("MessageViewport", () => {
 
     expect(screen.getAllByTestId("message-bubble")).toHaveLength(2);
     expect(screen.getAllByTestId("message-row")).toHaveLength(2);
-    expect(screen.getByTestId("message-item-list").children).toHaveLength(3);
+    expect(screen.getByTestId("message-item-list").children).toHaveLength(2);
     expect(screen.getByText("First visible message")).toBeInTheDocument();
     expect(screen.getByText("Second visible message")).toBeInTheDocument();
   });

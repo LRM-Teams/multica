@@ -28,6 +28,12 @@ import (
 	"github.com/multica-ai/multica/server/pkg/redact"
 )
 
+const (
+	chatResumeRecentMessageLimit = 10
+	chatFreshAfterMessageCount   = 40
+	chatFreshAfterTokenCount     = int64(180000)
+)
+
 // ---------------------------------------------------------------------------
 // Daemon workspace ownership helpers
 // ---------------------------------------------------------------------------
@@ -1417,6 +1423,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+			var chatMessages []db.ChatMessage
 			// Build the chat prompt from EVERY user message that has arrived
 			// since the agent's last reply — not just the most recent one. A
 			// short-window debounce (MUL-2968) can land several user messages
@@ -1431,6 +1438,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			// the agent can `multica attachment download <id>` — the markdown
 			// URL alone is signed and 30-min expiring on the private CDN.
 			if msgs, err := h.Queries.ListChatMessages(r.Context(), cs.ID); err == nil && len(msgs) > 0 {
+				chatMessages = msgs
 				unanswered := trailingUserMessages(msgs)
 				if task.ForceFreshSession {
 					for i := len(msgs) - 1; i >= 0; i-- {
@@ -1462,6 +1470,20 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				resp.ChatMessage = strings.Join(parts, "\n\n")
 				if strings.TrimSpace(resp.ThreadName) == "" {
 					resp.ThreadName = resp.ChatMessage
+				}
+			}
+			if resp.PriorSessionID != "" {
+				freshReason := ""
+				if reason, ok := h.latestChatTaskFailureReason(r.Context(), cs.ID, task.ID); ok && chatFailureResumeUnsafe(reason) {
+					freshReason = "the latest task failed because the saved native session is no longer safe to resume (" + reason + ")"
+				}
+				totalTokens := h.chatSessionTokenTotal(r.Context(), cs.ID)
+				if freshReason == "" && shouldStartFreshChatSession(chatMessages, totalTokens) {
+					freshReason = fmt.Sprintf("the chat is long enough to risk context overflow (%d messages, %d recorded tokens)", len(chatMessages), totalTokens)
+				}
+				if freshReason != "" {
+					resp.PriorSessionID = ""
+					resp.ChatContextSummary = buildChatContextSummary(chatMessages, totalTokens, freshReason)
 				}
 			}
 		}
@@ -1754,6 +1776,82 @@ func trailingUserMessages(msgs []db.ChatMessage) []db.ChatMessage {
 		}
 	}
 	return msgs[start:]
+}
+
+func shouldStartFreshChatSession(msgs []db.ChatMessage, totalTokens int64) bool {
+	return len(msgs) >= chatFreshAfterMessageCount || totalTokens >= chatFreshAfterTokenCount
+}
+
+func chatFailureResumeUnsafe(reason string) bool {
+	switch reason {
+	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", "agent_error.context_overflow":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *Handler) latestChatTaskFailureReason(ctx context.Context, chatSessionID, currentTaskID pgtype.UUID) (string, bool) {
+	var status, reason string
+	err := h.DB.QueryRow(ctx, `
+		SELECT status, COALESCE(failure_reason, '')
+		FROM agent_task_queue
+		WHERE chat_session_id = $1
+		  AND id <> $2
+		  AND status IN ('completed', 'failed', 'cancelled')
+		ORDER BY COALESCE(completed_at, started_at, dispatched_at, created_at) DESC
+		LIMIT 1`, chatSessionID, currentTaskID).Scan(&status, &reason)
+	if err != nil || status != "failed" || strings.TrimSpace(reason) == "" {
+		return "", false
+	}
+	return reason, true
+}
+
+func (h *Handler) chatSessionTokenTotal(ctx context.Context, chatSessionID pgtype.UUID) int64 {
+	var total int64
+	err := h.DB.QueryRow(ctx, `
+		SELECT COALESCE(SUM(tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_write_tokens), 0)::bigint
+		FROM task_usage tu
+		JOIN agent_task_queue atq ON atq.id = tu.task_id
+		WHERE atq.chat_session_id = $1`, chatSessionID).Scan(&total)
+	if err != nil {
+		return 0
+	}
+	return total
+}
+
+func buildChatContextSummary(msgs []db.ChatMessage, totalTokens int64, reason string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Native session resume was intentionally skipped because %s.\n", reason)
+	fmt.Fprintf(&b, "Full chat history is preserved by Multica, but only the latest %d messages are included here to avoid carrying old tool outputs into every new turn.\n", chatResumeRecentMessageLimit)
+	if totalTokens > 0 {
+		fmt.Fprintf(&b, "Recorded token usage for this chat so far: %d.\n", totalTokens)
+	}
+	if len(msgs) == 0 {
+		return b.String()
+	}
+	b.WriteString("Recent messages:\n")
+	for _, m := range recentChatMessages(msgs, chatResumeRecentMessageLimit) {
+		fmt.Fprintf(&b, "- %s: %s\n", m.Role, compactChatLine(m.Content))
+	}
+	b.WriteString("Older tool outputs/log dumps are not included. If exact older details matter, re-read the referenced files/logs instead of assuming they are in context.\n")
+	return b.String()
+}
+
+func recentChatMessages(msgs []db.ChatMessage, limit int) []db.ChatMessage {
+	if limit <= 0 || len(msgs) <= limit {
+		return msgs
+	}
+	return msgs[len(msgs)-limit:]
+}
+
+func compactChatLine(s string) string {
+	line := strings.Join(strings.Fields(s), " ")
+	const max = 500
+	if len(line) <= max {
+		return line
+	}
+	return line[:max] + "..."
 }
 
 // ListPendingTasksByRuntime returns queued/dispatched tasks for a runtime.

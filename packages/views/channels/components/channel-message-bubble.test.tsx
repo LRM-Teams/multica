@@ -23,7 +23,10 @@ vi.mock("../../issues/components/comment-card", () => ({
 // The bubble resolves the author's live avatar from the members/agents cache.
 // Stub it so these layout/identity tests don't need a QueryClient/workspace.
 vi.mock("@multica/core/workspace/hooks", () => ({
-  useActorName: () => ({ getActorAvatarUrl: () => null }),
+  useActorName: () => ({
+    getActorAvatarUrl: () => null,
+    getActorName: () => null,
+  }),
 }));
 
 vi.mock("../../i18n", () => ({
@@ -150,5 +153,21 @@ describe("ChannelMessageBubble", () => {
     fireEvent(screen.getByTestId("message-body"), event);
 
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("does not open the message action menu from row padding", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage()}
+        currentUserId="user-1"
+        onQuote={vi.fn()}
+      />,
+    );
+
+    vi.spyOn(window, "getSelection").mockReturnValue(null);
+    const event = createEvent.contextMenu(screen.getByTestId("message-bubble"));
+    fireEvent(screen.getByTestId("message-bubble"), event);
+
+    expect(event.defaultPrevented).toBe(false);
   });
 });

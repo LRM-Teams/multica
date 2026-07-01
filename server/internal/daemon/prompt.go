@@ -16,6 +16,11 @@ import (
 // to any one provider (MUL-2904).
 func BuildPrompt(task Task, provider string) string {
 	if task.ChatSessionID != "" {
+		if provider == "pi" {
+			if command, ok := piNativeSlashChatCommand(task.ChatMessage); ok {
+				return command
+			}
+		}
 		return buildChatPrompt(task)
 	}
 	if task.TriggerCommentID != "" {
@@ -33,6 +38,34 @@ func BuildPrompt(task Task, provider string) string {
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", task.IssueID)
 	fmt.Fprintf(&b, "For comment history, follow the rule in your runtime workflow file (assignment-triggered tasks treat the read as mandatory). `multica issue comment list %s --output json` returns all comments for the issue (server caps at 2000). On long-running issues use `--recent 20 --output json` to read the 20 most recently active threads, then page older threads via the stderr `Next thread cursor: ...` line and the matching `--before` / `--before-id` until you have enough history. `--since <RFC3339>` is still available for incremental polling and may combine with `--recent`.\n", task.IssueID)
 	return b.String()
+}
+
+// piNativeSlashChatCommand returns the raw Pi command when a direct chat
+// message is intended for Pi's native slash-command router. Other runtimes
+// keep the normal Multica chat wrapper so their command semantics are not
+// affected.
+func piNativeSlashChatCommand(message string) (string, bool) {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "/") {
+		return "", false
+	}
+	nameEnd := len(trimmed)
+	for i, r := range trimmed[1:] {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			nameEnd = i + 1
+			break
+		}
+	}
+	name := strings.TrimPrefix(trimmed[:nameEnd], "/")
+	if i := strings.IndexByte(name, ':'); i >= 0 {
+		name = name[:i]
+	}
+	switch name {
+	case "goal", "autogoal", "pet", "memory-review", "memory-skill", "memory-sync-upload", "memory-sync-pull", "memory-curator-enable", "memory-curator-disable", "memory-curator-status", "memory-curator-manager-scan", "memory-curator-manager-enable", "memory-curator-manager-disable", "memory-curator-manager-status", "memory-version-status", "memory-version-snapshot", "memory-version-list", "memory-version-restore", "memory-version-push":
+		return trimmed, true
+	default:
+		return "", false
+	}
 }
 
 // buildQuickCreatePrompt constructs a prompt for quick-create tasks. The
@@ -213,6 +246,14 @@ func buildChatPrompt(task Task) string {
 				b.WriteString("\n")
 			}
 		}
+	}
+	if strings.TrimSpace(task.ChatContextSummary) != "" {
+		b.WriteString("Conversation handoff context:\n")
+		b.WriteString(task.ChatContextSummary)
+		if !strings.HasSuffix(task.ChatContextSummary, "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "User message:\n%s\n", task.ChatMessage)
 	// List attachments by id + filename so the agent can fetch them via

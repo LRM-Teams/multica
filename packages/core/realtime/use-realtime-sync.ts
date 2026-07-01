@@ -44,6 +44,7 @@ import {
 import type { Workspace } from "../types/workspace";
 import { chatKeys } from "../chat/queries";
 import { channelKeys } from "../channels/queries";
+import { dmKeys } from "../dm/queries";
 import { useChatStore } from "../chat";
 import { resolvePostAuthDestination, useHasOnboarded } from "../paths";
 import type {
@@ -854,9 +855,13 @@ export function useRealtimeSync(
       const id = getCurrentWsId();
       if (id) qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(id) });
     };
-    const invalidateSessionLists = () => {
+    const invalidateChatConversationLists = () => {
       const id = getCurrentWsId();
-      if (id) qc.invalidateQueries({ queryKey: chatKeys.sessions(id) });
+      if (!id) return;
+      qc.invalidateQueries({ queryKey: chatKeys.sessions(id) });
+      // The Messages view unions legacy chat_sessions into its DM list, so any
+      // chat lifecycle change can affect a row preview, unread badge, or order.
+      qc.invalidateQueries({ queryKey: dmKeys.list(id) });
     };
 
     const unsubChatMessage = ws.on("chat:message", (p) => {
@@ -868,7 +873,7 @@ export function useRealtimeSync(
       // A new message can flip has_unread and reorder the session list — e.g.
       // an agent-initiated DM arriving in a thread the user isn't viewing.
       // Refresh the lists so the contact row / FAB badge update live.
-      invalidateSessionLists();
+      invalidateChatConversationLists();
     });
 
     const unsubChatDone = ws.on("chat:done", (p) => {
@@ -893,7 +898,7 @@ export function useRealtimeSync(
       applyChatDoneToCache(qc, payload);
       invalidatePendingAggregate();
       // Assistant message just landed → has_unread may have flipped to true.
-      invalidateSessionLists();
+      invalidateChatConversationLists();
     });
 
     // Chat task lifecycle writethrough: keep `chatKeys.pendingTask(sessionId)`
@@ -1033,7 +1038,7 @@ export function useRealtimeSync(
     const unsubChatSessionRead = ws.on("chat:session_read", (p) => {
       const payload = p as { chat_session_id: string };
       chatWsLogger.info("chat:session_read (global)", payload);
-      invalidateSessionLists();
+      invalidateChatConversationLists();
     });
 
     // chat:session_updated fires after the creator renames a session in

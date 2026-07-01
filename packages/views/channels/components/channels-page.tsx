@@ -147,6 +147,7 @@ import { initialsOf } from "../../common/initials";
 import { useT, useTimeAgo } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
+import { ChannelMessageBubble } from "./channel-message-bubble";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
@@ -1731,23 +1732,18 @@ export function ChannelsPage() {
             </>
           }
         />
-        <button
-          type="button"
-          className="mx-5 mt-3 rounded-lg border border-border/35 bg-muted/20 px-3 py-2 text-left transition-colors hover:bg-muted/35"
-          onClick={() => {
-            setHighlightMessageId(threadRoot.id);
-            if (isMobile) setOpenThreadRoot(null);
-          }}
-          aria-label={t(($) => $.thread.jump_to_parent)}
-        >
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">{threadRoot.author_name}</span>
-            <span>{timeAgo(threadRoot.created_at)}</span>
-          </div>
-          <p className="mt-1 line-clamp-2 text-sm leading-5 text-foreground">
-            {threadRoot.content}
-          </p>
-        </button>
+        <div className="px-5 pt-3">
+          <ChannelMessageBubble
+            message={threadRoot}
+            currentUserId={currentUserId}
+            ownName={currentUserName ?? undefined}
+            onReact={handleReactToMessage}
+            onScrollTo={(messageId) => {
+              setHighlightMessageId(messageId);
+              if (isMobile) setOpenThreadRoot(null);
+            }}
+          />
+        </div>
         {threadError ? (
           <div className="flex flex-1 items-center justify-center px-5 text-sm text-muted-foreground">
             {t(($) => $.thread.load_failed)}

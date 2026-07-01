@@ -78,6 +78,7 @@ import type {
   ChannelActiveTask,
   ChannelMember,
   ChannelMessage,
+  ChannelMessagesPage,
   ChannelReaction,
   ChannelMessageSearchResponse,
   ChannelThreadMessagesPage,
@@ -1935,6 +1936,22 @@ export class ApiClient {
 
   async listChannelMessages(channelId: string): Promise<ChannelMessage[]> {
     return this.fetch(`/api/channels/${channelId}/messages`);
+  }
+
+  async listChannelMessagesPage(
+    channelId: string,
+    options?: { limit?: number; beforeCreatedAt?: string; beforeId?: string },
+  ): Promise<ChannelMessagesPage> {
+    const params = new URLSearchParams();
+    if (options?.limit) {
+      params.set("limit", String(options.limit));
+    }
+    if (options?.beforeCreatedAt && options?.beforeId) {
+      params.set("before_created_at", options.beforeCreatedAt);
+      params.set("before_id", options.beforeId);
+    }
+    const suffix = params.toString();
+    return this.fetch(`/api/channels/${channelId}/messages${suffix ? `?${suffix}` : "?limit=50"}`);
   }
 
   async listChannelMessageThread(

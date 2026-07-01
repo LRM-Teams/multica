@@ -208,6 +208,8 @@ export type {
   ChannelMemberBrief,
   ChannelLastMessage,
   ChannelMessage,
+  ChannelMessagesCursor,
+  ChannelMessagesPage,
   ChannelMessageReply,
   ChannelReaction,
   ChannelThreadMessagesCursor,

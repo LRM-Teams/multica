@@ -337,6 +337,23 @@ describe("ChatInput attachment wiring", () => {
     // in this test (no leftAdornment passed). So a single button = submit.
     expect(buttons.length).toBe(1);
   });
+
+  it("keeps send available while a run is active and renders stop separately", async () => {
+    const onSend = vi.fn();
+    const onStop = vi.fn();
+    renderInput({ onSend, onStop, isRunning: true });
+
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "more context" } });
+
+    const buttons = screen.getAllByRole("button");
+    expect(buttons.length).toBe(3); // upload, stop, send
+    const sendButton = buttons[buttons.length - 1]!;
+    expect(sendButton).not.toBeDisabled();
+    fireEvent.click(sendButton);
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("more context", undefined));
+    expect(onStop).not.toHaveBeenCalled();
+  });
 });
 
 describe("ChatInput async send", () => {

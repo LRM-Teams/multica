@@ -131,8 +131,17 @@ export function applyChatDoneToCache(
       (old) => patchLatestChatMessagePage(old, assistant),
     );
   }
-  // Replacement is in the messages list now; safe to drop pending.
-  qc.setQueryData(chatKeys.pendingTask(sessionId), {});
+  // Replacement is in the messages list now; safe to drop pending unless a
+  // newer follow-up turn has already been queued for the same session.
+  qc.setQueryData<ChatPendingTask | Record<string, never>>(
+    chatKeys.pendingTask(sessionId),
+    (old) => {
+      if (old && "task_id" in old && old.task_id && old.task_id !== taskId) {
+        return old;
+      }
+      return {};
+    },
+  );
   // Authoritative refetch reconciles redaction / migrations / clients
   // that took the fallback branch above.
   invalidateChatMessageQueries(qc, sessionId);
@@ -995,7 +1004,15 @@ export function useRealtimeSync(
         task_id: payload.task_id,
         chat_session_id: payload.chat_session_id,
       });
-      qc.setQueryData(chatKeys.pendingTask(payload.chat_session_id), {});
+      qc.setQueryData<ChatPendingTask | Record<string, never>>(
+        chatKeys.pendingTask(payload.chat_session_id),
+        (old) => {
+          if (old && "task_id" in old && old.task_id && old.task_id !== payload.task_id) {
+            return old;
+          }
+          return {};
+        },
+      );
       invalidateChatMessageQueries(qc, payload.chat_session_id);
       invalidatePendingAggregate();
     });

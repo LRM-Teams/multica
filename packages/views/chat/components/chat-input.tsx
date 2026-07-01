@@ -183,7 +183,7 @@ export function ChatInput({
 
   const handleSend = async () => {
     const content = editorRef.current?.getMarkdown()?.replace(/(\n\s*)+$/, "").trim();
-    if (!content || isRunning || isSubmitting || disabled || noAgent) {
+    if (!content || isSubmitting || disabled || noAgent) {
       logger.debug("input.send skipped", {
         emptyContent: !content,
         isRunning,
@@ -327,13 +327,20 @@ export function ChatInput({
               onSelect={(file) => editorRef.current?.uploadFile(file)}
             />
           )}
+          {isRunning && onStop && (
+            <SubmitButton
+              onClick={() => {}}
+              running
+              onStop={onStop}
+              stopTooltip={t(($) => $.input.stop_tooltip)}
+            />
+          )}
           <SubmitButton
             onClick={handleSend}
             disabled={isEmpty || isSubmitting || !!disabled || !!noAgent || pendingUploads > 0}
             running={isRunning}
-            onStop={onStop}
+            allowSubmitWhileRunning
             tooltip={`${t(($) => $.input.send_tooltip)} · ${formatShortcut(modKey, enterKey)}`}
-            stopTooltip={t(($) => $.input.stop_tooltip)}
           />
         </div>
         {uploadEnabled && isDragOver && <FileDropOverlay />}

@@ -135,6 +135,8 @@
     "close_aria": "スレッドを閉じる",
     "context_label": "元のメッセージ",
     "view_parent": "メイン会話へ戻る",
+    "show_full_message": "全文を表示",
+    "collapse_message": "折りたたむ",
     "jump_to_parent": "元のメッセージへ移動",
     "empty_replies": "返信はまだありません。",
     "load_failed": "スレッドの読み込みに失敗しました。",

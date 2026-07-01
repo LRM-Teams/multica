@@ -24,12 +24,13 @@ func TestBuildPiArgsNoToolAllowlist(t *testing.T) {
 
 func TestBuildPiArgsBasicFlags(t *testing.T) {
 	args := buildPiArgs("hello world", "/tmp/s.jsonl", ExecOptions{
-		Model:        "anthropic/claude-sonnet-4-20250514",
-		SystemPrompt: "be helpful",
+		Model:         "anthropic/claude-sonnet-4-20250514",
+		SystemPrompt:  "be helpful",
+		ThinkingLevel: "high",
 	}, slog.Default())
 
 	joined := strings.Join(args, " ")
-	for _, want := range []string{"-p", "--mode json", "--session /tmp/s.jsonl", "--provider anthropic", "--model claude-sonnet-4-20250514", "--append-system-prompt"} {
+	for _, want := range []string{"-p", "--mode json", "--session /tmp/s.jsonl", "--provider anthropic", "--model claude-sonnet-4-20250514", "--thinking high", "--append-system-prompt"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("expected %q in args, got: %v", want, args)
 		}

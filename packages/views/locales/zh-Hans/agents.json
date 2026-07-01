@@ -225,6 +225,7 @@
     "name_placeholder": "例如：深度研究智能体",
     "description_label": "描述",
     "description_placeholder": "这个智能体做什么？",
+    "thinking_label": "思考等级",
     "visibility_label": "可见性",
     "runtime_label": "运行时",
     "runtime_filter_mine": "我的",

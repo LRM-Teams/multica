@@ -614,6 +614,7 @@ func parsePiModels(output string) []Model {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	var models []Model
 	seen := map[string]bool{}
+	thinkingCol := -1
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -633,6 +634,13 @@ func parsePiModels(output string) []Model {
 		}
 		first := fields[0]
 		if strings.EqualFold(first, "provider") {
+			thinkingCol = -1
+			for i, field := range fields {
+				if strings.EqualFold(field, "thinking") {
+					thinkingCol = i
+					break
+				}
+			}
 			continue
 		}
 		var id string
@@ -660,9 +668,35 @@ func parsePiModels(output string) []Model {
 		if i := strings.Index(id, "/"); i > 0 {
 			provider = id[:i]
 		}
-		models = append(models, Model{ID: id, Label: id, Provider: provider})
+		model := Model{ID: id, Label: id, Provider: provider}
+		if thinkingCol >= 0 && thinkingCol < len(fields) && piThinkingCellEnabled(fields[thinkingCol]) {
+			model.Thinking = piDefaultThinking()
+		}
+		models = append(models, model)
 	}
 	return models
+}
+
+func piThinkingCellEnabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "yes", "true", "on", "1":
+		return true
+	default:
+		return false
+	}
+}
+
+func piDefaultThinking() *ModelThinking {
+	return &ModelThinking{
+		SupportedLevels: []ThinkingLevel{
+			{Value: "off", Label: "Off"},
+			{Value: "minimal", Label: "Minimal"},
+			{Value: "low", Label: "Low"},
+			{Value: "medium", Label: "Medium"},
+			{Value: "high", Label: "High"},
+			{Value: "xhigh", Label: "Extra high"},
+		},
+	}
 }
 
 // isPiDiscoveryNoise reports whether a `pi --list-models` line is a diagnostic

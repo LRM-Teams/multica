@@ -509,20 +509,31 @@ bareword-only-line
 	if len(models) != 4 {
 		t.Fatalf("expected 4 models (header skipped, duplicate deduped, bareword skipped), got %d: %+v", len(models), models)
 	}
+	assertThinking := func(i int, want bool) {
+		t.Helper()
+		got := models[i].Thinking != nil
+		if got != want {
+			t.Fatalf("models[%d].Thinking presence = %v, want %v: %+v", i, got, want, models[i])
+		}
+	}
 	if models[0].ID != "bailian-coding-plan/glm-4.7" || models[0].Provider != "bailian-coding-plan" {
 		t.Errorf("unexpected first model: %+v", models[0])
 	}
+	assertThinking(0, false)
 	if models[1].ID != "bailian-coding-plan/qwen3.6-plus" || models[1].Provider != "bailian-coding-plan" {
 		t.Errorf("unexpected second model: %+v", models[1])
 	}
+	assertThinking(1, false)
 	if models[2].ID != "opencode/claude-sonnet-4-6" || models[2].Provider != "opencode" {
 		t.Errorf("unexpected third model: %+v", models[2])
 	}
+	assertThinking(2, true)
 	// Colon inside a model name in column 1 must be preserved — only
 	// the legacy `provider:model` form gets colon→slash normalization.
 	if models[3].ID != "opencode/claude-sonnet-4-6:exp" || models[3].Provider != "opencode" {
 		t.Errorf("expected ':' inside table-format model name to be preserved: %+v", models[3])
 	}
+	assertThinking(3, true)
 }
 
 // TestDiscoverPiModelsNonZeroExit verifies that discoverPiModels still returns

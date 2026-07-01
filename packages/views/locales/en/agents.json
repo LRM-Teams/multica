@@ -230,6 +230,7 @@
     "name_placeholder": "e.g. Deep Research Agent",
     "description_label": "Description",
     "description_placeholder": "What does this agent do?",
+    "thinking_label": "Thinking",
     "visibility_label": "Visibility",
     "runtime_label": "Runtime",
     "runtime_filter_mine": "Mine",

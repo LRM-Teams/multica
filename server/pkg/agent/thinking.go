@@ -11,8 +11,8 @@ import (
 )
 
 // thinking.go discovers per-model reasoning/effort catalogs for the
-// claude, codex, and opencode backends so the daemon can advertise them to the
-// UI without hard-coding (and getting wrong) what's installed locally.
+// claude, codex, opencode, and pi backends so the daemon can advertise them to
+// the UI without hard-coding (and getting wrong) what's installed locally.
 //
 // MUL-2339: we deliberately do not flatten Claude's `low|medium|high|
 // xhigh|max` and Codex's `none|minimal|low|medium|high|xhigh` onto a
@@ -533,7 +533,7 @@ func ValidateThinkingLevel(ctx context.Context, providerType, executablePath, mo
 			}
 		}
 		if target == "" {
-			if providerType == "opencode" {
+			if providerType == "opencode" || providerType == "pi" {
 				return anyModelSupportsThinkingValue(models, value), nil
 			}
 			return false, nil
@@ -609,6 +609,14 @@ var providerThinkingEnums = map[string]map[string]bool{
 		"medium": true,
 		"high":   true,
 		"xhigh":  true,
+	},
+	"pi": {
+		"off":     true,
+		"minimal": true,
+		"low":     true,
+		"medium":  true,
+		"high":    true,
+		"xhigh":   true,
 	},
 }
 

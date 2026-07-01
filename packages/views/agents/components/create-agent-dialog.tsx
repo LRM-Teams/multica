@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Globe, Lock } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ModelDropdown } from "./model-dropdown";
+import { ThinkingDropdown } from "./thinking-dropdown";
 import { RuntimePicker, isRuntimeUsableForUser } from "./runtime-picker";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
@@ -88,6 +89,7 @@ export function CreateAgentDialog({
     template?.visibility ?? "workspace",
   );
   const [model, setModel] = useState(template?.model ?? "");
+  const [thinkingLevel, setThinkingLevel] = useState(template?.thinking_level ?? "");
   const [instructions, setInstructions] = useState(template?.instructions ?? "");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(template?.avatar_url ?? null);
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(
@@ -161,6 +163,7 @@ export function CreateAgentDialog({
         runtime_id: selectedRuntime.id,
         visibility,
         model: model.trim() || undefined,
+        thinking_level: thinkingLevel || undefined,
         instructions: trimmedInstructions || undefined,
         avatar_url: avatarUrl ?? undefined,
       };
@@ -342,7 +345,19 @@ export function CreateAgentDialog({
               runtimeId={selectedRuntime?.id ?? null}
               runtimeOnline={selectedRuntime?.status === "online"}
               value={model}
-              onChange={setModel}
+              onChange={(next) => {
+                setModel(next);
+                setThinkingLevel("");
+              }}
+              disabled={!selectedRuntime}
+            />
+
+            <ThinkingDropdown
+              runtimeId={selectedRuntime?.id ?? null}
+              runtimeOnline={selectedRuntime?.status === "online"}
+              model={model}
+              value={thinkingLevel}
+              onChange={setThinkingLevel}
               disabled={!selectedRuntime}
             />
 

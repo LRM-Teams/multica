@@ -14,6 +14,7 @@ const MULTICA_CLIP = `polygon(
   18.2% 11.1%, 11.1% 18.2%, 37.9% 45%, 0% 45%,
   0% 55%, 37.9% 55%, 11.1% 81.8%, 18.2% 88.9%
 )`;
+const MULTICA_GITHUB_URL = "https://github.com/LRM-Teams/multica";
 
 function MulticaMark() {
   return (
@@ -63,7 +64,7 @@ export const baseOptions: BaseLayoutProps = {
     {
       icon: <GitHubMark />,
       text: externalLinkText("GitHub"),
-      url: "https://github.com/multica-ai/multica",
+      url: MULTICA_GITHUB_URL,
       external: true,
     },
     {

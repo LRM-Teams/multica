@@ -2,6 +2,7 @@ import {
   parseReleaseAssets,
   type DownloadAssets,
 } from "./parse-release-assets";
+import { MULTICA_RELEASES_API_URL } from "@multica/core/constants/repository";
 
 /**
  * Server-side fetcher for the latest Multica release, designed to
@@ -30,8 +31,7 @@ export interface LatestRelease {
   assets: DownloadAssets;
 }
 
-const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/multica-ai/multica/releases?per_page=2";
+const GITHUB_RELEASES_URL = `${MULTICA_RELEASES_API_URL}?per_page=2`;
 
 const REVALIDATE_SECONDS = 300;
 

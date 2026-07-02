@@ -8,6 +8,7 @@ import { runtimeKeys } from "@multica/core/runtimes/queries";
 import { useWSEvent } from "@multica/core/realtime";
 import { paths, useWorkspaceSlug } from "@multica/core/paths";
 import { useConfigStore } from "@multica/core/config";
+import { MULTICA_INSTALL_COMMAND } from "@multica/core/constants/repository";
 import {
   Dialog,
   DialogContent,
@@ -25,8 +26,6 @@ import { useT } from "../../i18n";
 
 type Step = "instructions" | "success";
 
-const INSTALL_CMD =
-  "curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash";
 const CLOUD_SERVER_URL = "https://api.multica.ai";
 const CLOUD_APP_URL = "https://multica.ai";
 
@@ -209,7 +208,7 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
           <CommandStep
             n={1}
             label={t(($) => $.connect.step1_label)}
-            cmd={INSTALL_CMD}
+            cmd={MULTICA_INSTALL_COMMAND}
             copyAria={t(($) => $.connect.copy_aria)}
           />
 
@@ -270,7 +269,6 @@ function TroubleshootingDetails({ tokenCmd }: { tokenCmd: string }) {
           <li className="flex items-center gap-1.5">
             <span>{t(($) => $.connect.trouble_check_status)}</span>
             {/* CLI command — literal shell string, not i18n content. */}
-            {/* eslint-disable-next-line i18next/no-literal-string */}
             <code
               className={cn(
                 "rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground",
@@ -283,7 +281,6 @@ function TroubleshootingDetails({ tokenCmd }: { tokenCmd: string }) {
           <li className="flex items-center gap-1.5">
             <span>{t(($) => $.connect.trouble_view_logs)}</span>
             {/* CLI command — literal shell string, not i18n content. */}
-            {/* eslint-disable-next-line i18next/no-literal-string */}
             <code
               className={cn(
                 "rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground",

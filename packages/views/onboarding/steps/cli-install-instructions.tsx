@@ -3,13 +3,12 @@
 import { useState } from "react";
 import { Check, Copy, Terminal } from "lucide-react";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
+import { MULTICA_INSTALL_COMMAND } from "@multica/core/constants/repository";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { useT } from "../../i18n";
 
-const INSTALL_CMD =
-  "curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash";
 const SETUP_CMD = "multica setup";
 
 function CopyButton({ text }: { text: string }) {
@@ -78,7 +77,7 @@ export function CliInstallInstructions() {
         <p className="text-xs leading-[1.55] text-muted-foreground">
           {t(($) => $.cli_install.intro)}
         </p>
-        <Step n={1} label={t(($) => $.cli_install.step1_label)} cmd={INSTALL_CMD} />
+        <Step n={1} label={t(($) => $.cli_install.step1_label)} cmd={MULTICA_INSTALL_COMMAND} />
         <Step n={2} label={t(($) => $.cli_install.step2_label)} cmd={SETUP_CMD} />
       </CardContent>
     </Card>

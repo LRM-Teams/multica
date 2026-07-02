@@ -9,6 +9,7 @@ import { AllPlatforms } from "@/features/landing/components/download/all-platfor
 import { CliSection } from "@/features/landing/components/download/cli-section";
 import { CloudSection } from "@/features/landing/components/download/cloud-section";
 import { useLocale } from "@/features/landing/i18n";
+import { MULTICA_RELEASES_URL } from "@multica/core/constants/repository";
 import {
   detectOS,
   type DetectResult,
@@ -16,8 +17,7 @@ import {
 import type { LatestRelease } from "@/features/landing/utils/github-release";
 import { captureDownloadPageViewed } from "@multica/core/analytics";
 
-const ALL_RELEASES_URL =
-  "https://github.com/multica-ai/multica/releases";
+const ALL_RELEASES_URL = MULTICA_RELEASES_URL;
 
 export function DownloadClient({ release }: { release: LatestRelease }) {
   const [detected, setDetected] = useState<DetectResult | null>(null);

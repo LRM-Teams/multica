@@ -2,11 +2,10 @@
 
 import { useState } from "react";
 import { Check, Copy, Terminal } from "lucide-react";
+import { MULTICA_INSTALL_COMMAND } from "@multica/core/constants/repository";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { useLocale } from "../../i18n";
 
-const INSTALL_CMD =
-  "curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash";
 const SETUP_CMD = "multica setup";
 
 /**
@@ -31,7 +30,7 @@ export function CliSection() {
         <div className="mt-10 flex flex-col gap-5">
           <CommandBlock
             label={d.installLabel}
-            cmd={INSTALL_CMD}
+            cmd={MULTICA_INSTALL_COMMAND}
             copyLabel={d.copyLabel}
             copiedLabel={d.copiedLabel}
           />

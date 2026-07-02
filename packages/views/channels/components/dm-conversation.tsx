@@ -545,11 +545,12 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
           }
         />
         <ChannelMessageList
-          key={`dm-thread:${threadRoot.id}`}
+          key={`dm-thread:${threadRoot.id}:${threadLoading ? "loading" : "ready"}`}
           messages={threadReplies}
           currentUserId={currentUserId}
           ownName={currentUserName ?? undefined}
           emptyLabel={t(($) => $.thread.empty_replies)}
+          initialScroll="top"
           header={
             <ThreadRootPreview
               message={threadRoot}

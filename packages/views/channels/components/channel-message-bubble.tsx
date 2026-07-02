@@ -14,7 +14,7 @@ import { AttachmentList } from "../../issues/components/comment-card";
 import { agentColor } from "../../common/agent-color";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { initialsOf } from "../../common/initials";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/use-t";
 
 function formatTime(value: string): string {
   try {

@@ -9,7 +9,7 @@ import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { agentColor } from "../../common/agent-color";
 import { initialsOf } from "../../common/initials";
 import { AttachmentList } from "../../issues/components/comment-card";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/use-t";
 
 function formatTime(value: string): string {
   try {

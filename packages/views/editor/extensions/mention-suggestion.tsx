@@ -30,7 +30,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { agentColor } from "../../common/agent-color";
 import { StatusIcon } from "../../issues/components/status-icon";
 import { ProjectIcon } from "../../projects/components/project-icon";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/use-t";
 import { Badge } from "@multica/ui/components/ui/badge";
 import type { IssueStatus, ProjectStatus } from "@multica/core/types";
 import { PROJECT_STATUS_CONFIG } from "@multica/core/projects/config";

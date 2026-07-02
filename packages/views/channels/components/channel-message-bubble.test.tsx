@@ -45,7 +45,7 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   }),
 }));
 
-vi.mock("../../i18n", () => ({
+vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (
       selector: (resources: {

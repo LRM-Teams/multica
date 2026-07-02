@@ -31,7 +31,8 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { resolveActorIdentityPresentation } from "@multica/core/identity";
 import { ActorIdentityRow } from "./actor-identity-row";
-import { useT, useTimeAgo } from "../i18n";
+import { useT } from "../i18n/use-t";
+import { useTimeAgo } from "../i18n/use-time-ago";
 
 type ChannelsT = ReturnType<typeof useT<"channels">>["t"];
 

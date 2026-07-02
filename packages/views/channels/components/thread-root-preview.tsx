@@ -66,7 +66,12 @@ export function ThreadRootPreview({
   );
   const avatarNode =
     profileActorType && profileActorId ? (
-      <ActorProfileTrigger memberType={profileActorType} memberId={profileActorId}>
+      <ActorProfileTrigger
+        memberType={profileActorType}
+        memberId={profileActorId}
+        side="top"
+        sideOffset={8}
+      >
         {avatar}
       </ActorProfileTrigger>
     ) : (
@@ -81,7 +86,12 @@ export function ThreadRootPreview({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2 text-sm">
             {profileActorType && profileActorId ? (
-              <ActorProfileTrigger memberType={profileActorType} memberId={profileActorId}>
+              <ActorProfileTrigger
+                memberType={profileActorType}
+                memberId={profileActorId}
+                side="top"
+                sideOffset={8}
+              >
                 {nameNode}
               </ActorProfileTrigger>
             ) : (

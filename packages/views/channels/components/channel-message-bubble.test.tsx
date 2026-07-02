@@ -189,7 +189,7 @@ describe("ChannelMessageBubble", () => {
     expect(toast.success).toHaveBeenCalledWith("Copied");
   });
 
-  it("keeps the message action menu available from blank bubble space", () => {
+  it("does not open a custom message menu from the message body", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage()}
@@ -202,10 +202,10 @@ describe("ChannelMessageBubble", () => {
     const event = createEvent.contextMenu(screen.getByTestId("message-body"));
     fireEvent(screen.getByTestId("message-body"), event);
 
-    expect(event.defaultPrevented).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
   });
 
-  it("does not open the message action menu from row padding", () => {
+  it("does not open a custom message menu from row padding", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage()}
@@ -310,7 +310,7 @@ describe("ChannelMessageBubble", () => {
     );
   });
 
-  it("does not duplicate first-level actions inside a More menu", () => {
+  it("keeps first-level actions on the visible action surface only", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage()}
@@ -321,6 +321,7 @@ describe("ChannelMessageBubble", () => {
     );
 
     expect(screen.getByRole("button", { name: "Add reaction" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Reply in thread" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Quote reply" })).not.toBeInTheDocument();
   });

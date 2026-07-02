@@ -36,12 +36,15 @@ import { useT, useTimeAgo } from "../i18n";
 type ChannelsT = ReturnType<typeof useT<"channels">>["t"];
 
 type ProfileMemberType = "agent" | "user";
+type ProfilePopoverSide = "top" | "right" | "bottom" | "left" | "inline-start" | "inline-end";
 
 interface ActorProfileTriggerProps {
   memberType: ProfileMemberType;
   memberId: string | null | undefined;
   children: React.ReactNode;
   align?: "start" | "center" | "end";
+  side?: ProfilePopoverSide;
+  sideOffset?: number;
   triggerElement?: "button" | "span";
   className?: string;
   onClickCapture?: React.MouseEventHandler;
@@ -52,6 +55,8 @@ export function ActorProfileTrigger({
   memberId,
   children,
   align = "start",
+  side = "bottom",
+  sideOffset = 4,
   triggerElement = "button",
   className,
   onClickCapture,
@@ -109,7 +114,12 @@ export function ActorProfileTrigger({
       >
         {children}
       </HoverCardTrigger>
-      <HoverCardContent align={align} side="bottom" className="w-[360px] p-0">
+      <HoverCardContent
+        align={align}
+        side={side}
+        sideOffset={sideOffset}
+        className="w-[360px] p-0"
+      >
         {content}
       </HoverCardContent>
     </HoverCard>

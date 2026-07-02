@@ -96,43 +96,35 @@ function ReactionBar({
           }));
         const actorSummary = actors.map((actor) => actor.name).join(", ");
         return (
-        <HoverCard key={g.emoji}>
-          <HoverCardTrigger
-            render={
-              <button
-                type="button"
-                onClick={() => onToggle(g.emoji)}
-                title={actorSummary}
-                className={`inline-flex h-8 touch-manipulation items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:bg-brand/15 active:scale-95 md:h-6 ${
-                  g.reacted
-                    ? "border-brand/30 bg-brand/8 text-brand"
-                    : "border-brand/10 bg-brand/4 text-muted-foreground"
-                }`}
-              >
-                <span>{g.emoji}</span>
-                <span>{g.count}</span>
-              </button>
-            }
-          />
-          <HoverCardContent
-            side="top"
-            align="start"
-            sideOffset={2}
-            className="w-auto min-w-40 max-w-56 rounded-md border border-border bg-popover p-2 shadow-none ring-0"
-          >
-            <div className="space-y-1">
-              {actors.map((actor) => (
-                <div key={`${actor.type}:${actor.id}`} className="flex min-w-0 items-center gap-2">
-                  <span className="flex size-5 shrink-0 items-center justify-center rounded bg-muted text-[10px] font-medium text-muted-foreground">
-                    {actor.name.slice(0, 1).toUpperCase()}
-                  </span>
-                  <span className="truncate text-xs text-foreground">{actor.name}</span>
-                </div>
-              ))}
-            </div>
-          </HoverCardContent>
-        </HoverCard>
-      )})}
+          <HoverCard key={g.emoji}>
+            <HoverCardTrigger
+              render={
+                <button
+                  type="button"
+                  onClick={() => onToggle(g.emoji)}
+                  title={actorSummary}
+                  className={`inline-flex h-8 touch-manipulation items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:bg-brand/15 active:scale-95 md:h-6 ${
+                    g.reacted
+                      ? "border-brand/30 bg-brand/8 text-brand"
+                      : "border-brand/10 bg-brand/4 text-muted-foreground"
+                  }`}
+                >
+                  <span>{g.emoji}</span>
+                  <span>{g.count}</span>
+                </button>
+              }
+            />
+            <HoverCardContent
+              side="top"
+              align="start"
+              sideOffset={2}
+              className="w-auto max-w-64 rounded-md border border-border/70 bg-popover px-2.5 py-1.5 text-xs text-foreground shadow-none ring-0"
+            >
+              <span className="block truncate">{actorSummary}</span>
+            </HoverCardContent>
+          </HoverCard>
+        );
+      })}
       {!hideAddButton && <QuickEmojiPicker onSelect={onToggle} />}
     </div>
   );

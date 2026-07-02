@@ -5,15 +5,6 @@ import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
-  ContextMenuTrigger,
-} from "@multica/ui/components/ui/context-menu";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { useActorName } from "@multica/core/workspace/hooks";
@@ -24,19 +15,6 @@ import { agentColor } from "../../common/agent-color";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n";
-
-function hasTextSelectionWithin(element: HTMLElement): boolean {
-  const selection = window.getSelection();
-  if (!selection || selection.isCollapsed || !selection.toString().trim()) {
-    return false;
-  }
-
-  const { anchorNode, focusNode } = selection;
-  return (
-    (anchorNode != null && element.contains(anchorNode)) ||
-    (focusNode != null && element.contains(focusNode))
-  );
-}
 
 function formatTime(value: string): string {
   try {
@@ -53,10 +31,6 @@ function formatTime(value: string): string {
  * One message in the shared Channel/DM/Thread timeline. Ordinary text renders
  * as an IM-style message item, while quote/attachment/code-like content keeps
  * local structure inside the shared Markdown pipeline.
- *
- * Desktop: right-click → context menu (thread reply / reactions).
- * Mobile: long-press → context menu (ContextMenu handles this natively).
- * Keyboard: ContextMenu via Menu/Shift+F10 is the accessible path.
  */
 export function ChannelMessageBubble({
   message,
@@ -148,204 +122,162 @@ export function ChannelMessageBubble({
   };
 
   return (
-    <ContextMenu>
-      <div
-        id={`message-${message.id}`}
-        data-testid="message-bubble"
-        data-own={isOwn}
-        tabIndex={0}
-        className={cn(
-          "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 py-1.5 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35",
-          highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0",
-        )}
-      >
-        {profileActorType && profileActorId ? (
-          <ActorProfileTrigger
-            memberType={profileActorType}
-            memberId={profileActorId}
-          >
-            {avatar}
-          </ActorProfileTrigger>
-        ) : (
-          avatar
-        )}
-        <div className="min-w-0 max-w-[min(760px,100%)]">
-          <div className="mb-0.5 flex select-none items-baseline gap-2 pr-24 text-sm">
-            {profileActorType && profileActorId ? (
-              <ActorProfileTrigger
-                memberType={profileActorType}
-                memberId={profileActorId}
-              >
-                {nameLabel}
-              </ActorProfileTrigger>
-            ) : (
-              nameLabel
-            )}
-            {isAgent && (
-              <span className="shrink-0 rounded-full border border-primary/20 bg-primary/[0.08] px-2 py-0.5 text-[11px] font-normal leading-none text-primary">
-                {t(($) => $.message.agent_badge)}
-              </span>
-            )}
-            {isExternal && (
-              <span className="shrink-0 rounded-full border bg-muted px-2 py-0.5 text-[11px] leading-none text-muted-foreground">
-                {t(($) => $.message.feishu_badge)}
-              </span>
-            )}
-            <span className="shrink-0 text-[11px] text-muted-foreground">
-              {formatTime(message.created_at)}
+    <div
+      id={`message-${message.id}`}
+      data-testid="message-bubble"
+      data-own={isOwn}
+      tabIndex={0}
+      className={cn(
+        "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 py-1.5 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35",
+        highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0",
+      )}
+    >
+      {profileActorType && profileActorId ? (
+        <ActorProfileTrigger
+          memberType={profileActorType}
+          memberId={profileActorId}
+          side="top"
+          sideOffset={8}
+        >
+          {avatar}
+        </ActorProfileTrigger>
+      ) : (
+        avatar
+      )}
+      <div className="min-w-0 max-w-[min(760px,100%)]">
+        <div className="mb-0.5 flex select-none items-baseline gap-2 pr-24 text-sm">
+          {profileActorType && profileActorId ? (
+            <ActorProfileTrigger
+              memberType={profileActorType}
+              memberId={profileActorId}
+              side="top"
+              sideOffset={8}
+            >
+              {nameLabel}
+            </ActorProfileTrigger>
+          ) : (
+            nameLabel
+          )}
+          {isAgent && (
+            <span className="shrink-0 rounded-full border border-primary/20 bg-primary/[0.08] px-2 py-0.5 text-[11px] font-normal leading-none text-primary">
+              {t(($) => $.message.agent_badge)}
             </span>
-          </div>
-          <div className="pointer-events-none absolute right-3 top-2 z-10 flex items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
-            {onReact && (
-              <QuickEmojiPicker
-                onSelect={(emoji) => onReact(message, emoji)}
-                align="end"
-                side="bottom"
-                className="size-7 rounded-md hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
-                ariaLabel={t(($) => $.message.add_reaction)}
-                sideOffset={4}
-                emojis={quickReactionEmojis}
-                showMore={false}
-                contentClassName="rounded-md border border-border/70 bg-popover/95 shadow-none ring-0"
-              />
-            )}
+          )}
+          {isExternal && (
+            <span className="shrink-0 rounded-full border bg-muted px-2 py-0.5 text-[11px] leading-none text-muted-foreground">
+              {t(($) => $.message.feishu_badge)}
+            </span>
+          )}
+          <span className="shrink-0 text-[11px] text-muted-foreground">
+            {formatTime(message.created_at)}
+          </span>
+        </div>
+        <div className="pointer-events-none absolute right-3 top-2 z-10 flex items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+          {onReact && (
+            <QuickEmojiPicker
+              onSelect={(emoji) => onReact(message, emoji)}
+              align="end"
+              side="bottom"
+              className="size-7 rounded-md hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+              ariaLabel={t(($) => $.message.add_reaction)}
+              sideOffset={4}
+              emojis={quickReactionEmojis}
+              showMore={false}
+              contentClassName="rounded-md border border-border/70 bg-popover/95 shadow-none ring-0"
+            />
+          )}
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+            aria-label={t(($) => $.message.copy_action)}
+            title={t(($) => $.message.copy_action)}
+          >
+            <Copy className="size-3.5" />
+          </button>
+          {canOpenThread && (
             <button
               type="button"
-              onClick={handleCopy}
+              onClick={() => onOpenThread?.(message)}
               className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
-              aria-label={t(($) => $.message.copy_action)}
-              title={t(($) => $.message.copy_action)}
+              aria-label={t(($) => $.thread.reply)}
+              title={t(($) => $.thread.reply)}
             >
-              <Copy className="size-3.5" />
+              <MessageSquare className="size-3.5" />
             </button>
-            <ContextMenuItem onClick={handleCopy}>
-            <Copy className="size-4" />
-            {t(($) => $.message.copy_action)}
-          </ContextMenuItem>
-          {canOpenThread && (
-              <button
-                type="button"
-                onClick={() => onOpenThread?.(message)}
-                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
-                aria-label={t(($) => $.thread.reply)}
-                title={t(($) => $.thread.reply)}
-              >
-                <MessageSquare className="size-3.5" />
-              </button>
-            )}
-          </div>
-          <ContextMenuTrigger
-            className="select-text"
-            render={
-              <div
-                className={cn(
-                  "min-w-0 max-w-full select-text overflow-hidden break-words text-sm leading-6 text-foreground",
-                  searchHighlighted && "rounded-md bg-primary/5",
-                )}
-                data-testid="message-body"
-                onContextMenuCapture={(e) => {
-                  if (hasTextSelectionWithin(e.currentTarget)) {
-                    e.stopPropagation();
-                  }
-                }}
-                style={{ WebkitTouchCallout: "default" }}
-              />
-            }
-          >
-            {/* Inline quote block: rendered when reply_to is present (BE task #23) */}
-            {message.reply_to && (
-              <button
-                type="button"
-                onClick={() =>
-                  message.reply_to_message_id && onScrollTo?.(message.reply_to_message_id)
-                }
-                className="mb-2 w-full cursor-pointer rounded border-l-2 border-muted-foreground/30 bg-muted/30 px-2 py-1 text-left transition-opacity hover:opacity-80"
-                aria-label={t(($) => $.quote.jump_to)}
-              >
-                <p className="truncate text-[11px] font-semibold text-foreground/70">
-                  {message.reply_to.author_name}
-                </p>
-                <p className="line-clamp-1 text-[11px] text-muted-foreground">
-                  {message.reply_to.content}
-                </p>
-              </button>
-            )}
-            <MemoizedMarkdown
-              attachments={message.attachments}
-              highlightQuery={searchHighlighted ? searchQuery : undefined}
-            >
-              {message.content}
-            </MemoizedMarkdown>
-            <AttachmentList
-              attachments={message.attachments}
-              content={message.content}
-              className="mt-1.5"
-            />
-          </ContextMenuTrigger>
-          {hasFeedback && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              {hasThreadActivity && onOpenThread && (
-                <button
-                  type="button"
-                  onClick={() => onOpenThread(message)}
-                  className={cn(
-                    "inline-flex h-7 items-center gap-1.5 rounded-md border border-border/80 bg-muted/45 px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:h-6",
-                    threadUnreadCount > 0 && "border-primary/35 bg-primary/10 text-primary",
-                  )}
-                >
-                  <MessageSquare className="size-3.5" />
-                  <span>{t(($) => $.thread.reply_count, { count: threadReplyCount })}</span>
-                  {threadUnreadCount > 0 && (
-                    <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground">
-                      {threadUnreadCount}
-                    </span>
-                  )}
-                </button>
-              )}
-              {onReact && (message.reactions?.length ?? 0) > 0 && (
-                <ReactionBar
-                  reactions={message.reactions ?? []}
-                  currentUserId={currentUserId ?? undefined}
-                  onToggle={(emoji) => onReact(message, emoji)}
-                  getActorName={getActorName}
-                  hideAddButton
-                  showQuickReactions={false}
-                />
-              )}
-            </div>
           )}
         </div>
+        <div
+          className={cn(
+            "min-w-0 max-w-full select-text overflow-hidden break-words text-sm leading-6 text-foreground",
+            searchHighlighted && "rounded-md bg-primary/5",
+          )}
+          data-testid="message-body"
+          style={{ WebkitTouchCallout: "default" }}
+        >
+          {/* Inline quote block: rendered when reply_to is present (BE task #23) */}
+          {message.reply_to && (
+            <button
+              type="button"
+              onClick={() =>
+                message.reply_to_message_id && onScrollTo?.(message.reply_to_message_id)
+              }
+              className="mb-2 w-full cursor-pointer rounded border-l-2 border-muted-foreground/30 bg-muted/30 px-2 py-1 text-left transition-opacity hover:opacity-80"
+              aria-label={t(($) => $.quote.jump_to)}
+            >
+              <p className="truncate text-[11px] font-semibold text-foreground/70">
+                {message.reply_to.author_name}
+              </p>
+              <p className="line-clamp-1 text-[11px] text-muted-foreground">
+                {message.reply_to.content}
+              </p>
+            </button>
+          )}
+          <MemoizedMarkdown
+            attachments={message.attachments}
+            highlightQuery={searchHighlighted ? searchQuery : undefined}
+          >
+            {message.content}
+          </MemoizedMarkdown>
+          <AttachmentList
+            attachments={message.attachments}
+            content={message.content}
+            className="mt-1.5"
+          />
+        </div>
+        {hasFeedback && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {hasThreadActivity && onOpenThread && (
+              <button
+                type="button"
+                onClick={() => onOpenThread(message)}
+                className={cn(
+                  "inline-flex h-7 items-center gap-1.5 rounded-md border border-border/80 bg-muted/45 px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:h-6",
+                  threadUnreadCount > 0 && "border-primary/35 bg-primary/10 text-primary",
+                )}
+              >
+                <MessageSquare className="size-3.5" />
+                <span>{t(($) => $.thread.reply_count, { count: threadReplyCount })}</span>
+                {threadUnreadCount > 0 && (
+                  <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground">
+                    {threadUnreadCount}
+                  </span>
+                )}
+              </button>
+            )}
+            {onReact && (message.reactions?.length ?? 0) > 0 && (
+              <ReactionBar
+                reactions={message.reactions ?? []}
+                currentUserId={currentUserId ?? undefined}
+                onToggle={(emoji) => onReact(message, emoji)}
+                getActorName={getActorName}
+                hideAddButton
+                showQuickReactions={false}
+              />
+            )}
+          </div>
+        )}
       </div>
-
-      {/* Right-click / long-press context menu */}
-      <ContextMenuContent>
-          {onReact && (
-            <ContextMenuSub>
-              <ContextMenuSubTrigger>
-                {t(($) => $.message.add_reaction)}
-              </ContextMenuSubTrigger>
-              <ContextMenuSubContent>
-                <div className="grid grid-cols-6 gap-1 p-1">
-                  {quickReactionEmojis.map((emoji) => (
-                    <ContextMenuItem
-                      key={emoji}
-                      onClick={() => onReact(message, emoji)}
-                      className="justify-center px-2 text-base"
-                    >
-                      {emoji}
-                    </ContextMenuItem>
-                  ))}
-                </div>
-              </ContextMenuSubContent>
-            </ContextMenuSub>
-          )}
-          {canOpenThread && (
-            <ContextMenuItem onClick={() => onOpenThread(message)}>
-              <MessageSquare className="size-4" />
-              {t(($) => $.thread.reply)}
-            </ContextMenuItem>
-          )}
-        </ContextMenuContent>
-    </ContextMenu>
+    </div>
   );
 }

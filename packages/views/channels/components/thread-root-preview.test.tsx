@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { ChannelMessage } from "@multica/core/types";
@@ -29,7 +29,7 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   }),
 }));
 
-vi.mock("../../i18n", () => ({
+vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (
       selector: (resources: {
@@ -76,6 +76,23 @@ describe("ThreadRootPreview", () => {
     expect(screen.getByText("Thread root content")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Back to main chat" })).not.toBeInTheDocument();
+  });
+
+  it("uses a compact root preview with a local view-parent action", async () => {
+    const onViewParent = vi.fn();
+    const { container } = render(
+      <ThreadRootPreview
+        message={makeMessage({
+          content: ["line 1", "line 2", "line 3", "line 4", "line 5"].join("\n"),
+        })}
+        currentUserId="user-1"
+        onViewParent={onViewParent}
+      />,
+    );
+
+    expect(container.querySelector(".line-clamp-3")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Back to main chat" }));
+    expect(onViewParent).toHaveBeenCalledTimes(1);
   });
 
   it("uses the live display name for the root author label", () => {

@@ -34,7 +34,6 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
 import type { ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload, ChatMessage } from "@multica/core/types";
-import { UnicodeSpinner } from "@multica/ui/components/common/unicode-spinner";
 import { Button } from "@multica/ui/components/ui/button";
 import { Drawer } from "@multica/ui/components/ui/drawer";
 import {
@@ -227,7 +226,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     openThreadRoot && openThreadRoot.channel_id === channelId
       ? messages.find((m) => m.id === openThreadRoot.id) ?? openThreadRoot
       : null;
-  const { data: threadPage, isLoading: threadLoading, isError: threadError } = useQuery(
+  const { data: threadPage, isLoading: threadLoading, isError: threadError, refetch: refetchThread } = useQuery(
     channelMessageThreadOptions(channelId, threadRoot?.id ?? ""),
   );
   const threadReplies = useMemo(
@@ -545,17 +544,6 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
             <>
               <Button
                 variant="ghost"
-                size="sm"
-                className="h-8 px-2 text-xs"
-                onClick={() => {
-                  setThreadParentHighlightId(threadRoot.id);
-                  if (isMobile) setOpenThreadRoot(null);
-                }}
-              >
-                {t(($) => $.thread.view_parent)}
-              </Button>
-              <Button
-                variant="ghost"
                 size="icon"
                 className="size-8"
                 aria-label={t(($) => $.thread.close_aria)}
@@ -566,29 +554,28 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
             </>
           }
         />
-        <ThreadRootPreview
-          message={threadRoot}
+        <ChannelMessageList
+          key={`dm-thread:${threadRoot.id}`}
+          messages={threadReplies}
           currentUserId={currentUserId}
           ownName={currentUserName ?? undefined}
+          emptyLabel={t(($) => $.thread.empty_replies)}
+          header={
+            <ThreadRootPreview
+              message={threadRoot}
+              currentUserId={currentUserId}
+              ownName={currentUserName ?? undefined}
+              onViewParent={() => {
+                setThreadParentHighlightId(threadRoot.id);
+                if (isMobile) setOpenThreadRoot(null);
+              }}
+            />
+          }
+          loading={threadLoading}
+          loadErrorLabel={threadError ? t(($) => $.thread.load_failed) : undefined}
+          onRetry={() => refetchThread()}
+          onReact={handleReactToMessage}
         />
-        {threadError ? (
-          <div className="flex flex-1 items-center justify-center px-5 text-sm text-muted-foreground">
-            {t(($) => $.thread.load_failed)}
-          </div>
-        ) : threadLoading ? (
-          <div className="flex flex-1 items-center justify-center">
-            <UnicodeSpinner className="size-5 text-muted-foreground" />
-          </div>
-        ) : (
-          <ChannelMessageList
-            key={`dm-thread:${threadRoot.id}`}
-            messages={threadReplies}
-            currentUserId={currentUserId}
-            ownName={currentUserName ?? undefined}
-            emptyLabel={t(($) => $.thread.empty_replies)}
-            onReact={handleReactToMessage}
-          />
-        )}
         <ConversationActivityStrip tasks={activeTasks} />
         <ChannelComposer
           sendLabel={t(($) => $.composer.send)}

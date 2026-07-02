@@ -8,10 +8,12 @@ import {
   useRef,
   useState,
   type Ref,
+  type ReactNode,
 } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { cn } from "@multica/ui/lib/utils";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 
 /**
@@ -30,26 +32,7 @@ import { ChannelMessageBubble } from "./channel-message-bubble";
  * Opens scrolled to the latest message (chat convention), or to a deep-linked
  * `highlightMessageId` when present.
  */
-function MessageViewport({
-  messages,
-  currentUserId,
-  ownName,
-  highlightMessageId,
-  emptyLabel,
-  onOpenThread,
-  onScrollToMessage,
-  onReact,
-  searchHitIds,
-  searchQuery,
-  loading,
-  loadingOlder,
-  hasOlder,
-  onLoadOlder,
-  loadOlderLabel,
-  loadingOlderLabel,
-  loadErrorLabel,
-  onRetry,
-}: {
+type MessageViewportProps = {
   messages: ChannelMessage[];
   currentUserId: string | null;
   /** Display name for the viewer's own messages. */
@@ -58,6 +41,8 @@ function MessageViewport({
   highlightMessageId?: string | null;
   /** Centered placeholder shown when there are no messages yet. */
   emptyLabel: string;
+  /** Content rendered at the top of the scroll window, before messages. */
+  header?: ReactNode;
   /** Called when the user opens the message's side thread. */
   onOpenThread?: (message: ChannelMessage) => void;
   /**
@@ -85,7 +70,29 @@ function MessageViewport({
   loadErrorLabel?: string;
   /** Retry the initial page without replacing the shell. */
   onRetry?: () => void;
-}) {
+};
+
+function MessageViewport({
+  messages,
+  currentUserId,
+  ownName,
+  highlightMessageId,
+  emptyLabel,
+  header,
+  onOpenThread,
+  onScrollToMessage,
+  onReact,
+  searchHitIds,
+  searchQuery,
+  loading,
+  loadingOlder,
+  hasOlder,
+  onLoadOlder,
+  loadOlderLabel,
+  loadingOlderLabel,
+  loadErrorLabel,
+  onRetry,
+}: MessageViewportProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const messageRefs = useRef<Map<string, HTMLDivElement> | null>(null);
@@ -172,57 +179,37 @@ function MessageViewport({
 
   if (loadErrorLabel) {
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-5 pb-5 pt-3">
-        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-          <button
-            type="button"
-            className="rounded-md px-3 py-2 text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={onRetry}
-          >
-            {loadErrorLabel}
-          </button>
-        </div>
-      </div>
+      <StaticMessageScroller header={header}>
+        <button
+          type="button"
+          className="rounded-md px-3 py-2 text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={onRetry}
+        >
+          {loadErrorLabel}
+        </button>
+      </StaticMessageScroller>
     );
   }
 
   if (loading) {
     return (
-      <div className="min-h-0 min-w-0 flex-1 overflow-hidden px-5 pb-5 pt-3">
+      <StaticMessageScroller
+        header={header}
+        centered={false}
+      >
         <MessageRowsSkeleton />
-      </div>
+      </StaticMessageScroller>
     );
   }
 
   // Empty thread: render the placeholder directly (no message rows).
   if (messages.length === 0) {
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-5 pb-5 pt-3">
-        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-          {emptyLabel}
-        </div>
-      </div>
+      <StaticMessageScroller header={header}>
+        {emptyLabel}
+      </StaticMessageScroller>
     );
   }
-
-  const renderLoadOlderAffordance = () => {
-    if (!hasOlder && !loadingOlder) return null;
-    return (
-      <div className="px-5 pb-2">
-        {loadingOlder ? (
-          <div className="text-center text-xs text-muted-foreground">{loadingOlderLabel}</div>
-        ) : (
-          <button
-            type="button"
-            className="mx-auto block rounded-md px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={requestLoadOlder}
-          >
-            {loadOlderLabel}
-          </button>
-        )}
-      </div>
-    );
-  };
 
   const renderRow = (msg: ChannelMessage) => {
     const searchHighlighted = searchHitIds?.has(msg.id) ?? false;
@@ -275,8 +262,20 @@ function MessageViewport({
           if (event.currentTarget.scrollTop < 80) requestLoadOlder();
         }}
       >
-        <div className="virtuoso-item-list pt-3" data-testid="message-item-list">
-          {renderLoadOlderAffordance()}
+        <div
+          className={cn("virtuoso-item-list", !header && "pt-3")}
+          data-testid="message-item-list"
+        >
+          {header}
+          <div className={header ? "pt-2" : undefined}>
+            <LoadOlderAffordance
+              hasOlder={hasOlder}
+              loadingOlder={loadingOlder}
+              loadingOlderLabel={loadingOlderLabel}
+              loadOlderLabel={loadOlderLabel}
+              onLoadOlder={requestLoadOlder}
+            />
+          </div>
           {messages.map(renderRow)}
           <div className="pb-5" />
         </div>
@@ -307,9 +306,18 @@ function MessageViewport({
         components={{
           List: VirtuosoItemList,
           Header: () => (
-            <div className="pt-3">
-              {renderLoadOlderAffordance()}
-            </div>
+            <>
+              {header}
+              <div className={header ? "pt-2" : "pt-3"}>
+                <LoadOlderAffordance
+                  hasOlder={hasOlder}
+                  loadingOlder={loadingOlder}
+                  loadingOlderLabel={loadingOlderLabel}
+                  loadOlderLabel={loadOlderLabel}
+                  onLoadOlder={requestLoadOlder}
+                />
+              </div>
+            </>
           ),
           Footer: () => <div className="pb-5" />,
         }}
@@ -330,6 +338,68 @@ function VirtuosoItemList({
       className={["virtuoso-item-list", props.className].filter(Boolean).join(" ")}
       data-testid="message-item-list"
     />
+  );
+}
+
+function StaticMessageScroller({
+  header,
+  bodyClassName,
+  centered = true,
+  children,
+}: {
+  header?: ReactNode;
+  bodyClassName?: string;
+  centered?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto"
+      data-testid="message-scroller"
+    >
+      {header}
+      <div
+        className={cn(
+          "flex-1 px-5 pb-5 pt-3",
+          centered && "flex items-center justify-center text-sm text-muted-foreground",
+          bodyClassName,
+        )}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function LoadOlderAffordance({
+  hasOlder,
+  loadingOlder,
+  loadingOlderLabel,
+  loadOlderLabel,
+  onLoadOlder,
+}: {
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  loadingOlderLabel?: string;
+  loadOlderLabel?: string;
+  onLoadOlder: () => void;
+}) {
+  if (!hasOlder && !loadingOlder) return null;
+
+  return (
+    <div className="px-5 pb-2">
+      {loadingOlder ? (
+        <div className="text-center text-xs text-muted-foreground">{loadingOlderLabel}</div>
+      ) : (
+        <button
+          type="button"
+          className="mx-auto block rounded-md px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={onLoadOlder}
+        >
+          {loadOlderLabel}
+        </button>
+      )}
+    </div>
   );
 }
 

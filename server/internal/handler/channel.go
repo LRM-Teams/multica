@@ -2355,7 +2355,7 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, stay silent by producing no final reply.\n")
 	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and produce one short visible reply. Do not stay silent, and do not use a reaction-only command for that case.\n")
 	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
-	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, prefer a short emoji reaction command instead of a text reply: write exactly `multica channel react CURRENT_MESSAGE <emoji>` and nothing else. Prefer 👍 for a simple like, ❤️ for warmth/welcome/support, 💯 for strong agreement or praise, and 🎉 for celebration/welcome.\n")
+	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, prefer a structured reaction result instead of a text reply: return exactly one JSON object like {\"type\":\"reaction\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}} and nothing else. Prefer 👍 for a simple like, ❤️ for warmth/welcome/support, 💯 for strong agreement or praise, and 🎉 for celebration/welcome.\n")
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
@@ -2633,24 +2633,15 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 	if !ok || payload.ChatSessionID == "" {
 		return
 	}
-	content, parts, err := messageparts.Normalize(payload.Content, payload.Parts)
+	outputType, err := protocol.NormalizeChatOutputType(payload.Type, strings.TrimSpace(payload.Content) != "" || len(payload.Parts) > 0, payload.Reaction != nil)
 	if err != nil {
-		slog.Warn("channel bridge: invalid message parts", "chat_session_id", payload.ChatSessionID, "error", err)
-		return
-	}
-	if strings.TrimSpace(content) == "" {
+		slog.Warn("channel bridge: invalid chat output type", "chat_session_id", payload.ChatSessionID, "error", err)
 		return
 	}
 	channelID, workspaceID, agentID, ok := h.channelAgentForChatSession(context.Background(), payload.ChatSessionID)
 	if !ok {
 		return
 	}
-	var taskID pgtype.UUID
-	if strings.TrimSpace(payload.TaskID) != "" {
-		taskID = parseUUID(payload.TaskID)
-	}
-	threadID, threadRootMessageID, triggerDepth := h.channelThreadForChatTask(context.Background(), parseUUID(payload.ChatSessionID), taskID)
-	nextDepth := triggerDepth + 1
 	agentName := h.agentName(context.Background(), agentID)
 	h.publish(protocol.EventChannelTyping, uuidToString(workspaceID), "agent", uuidToString(agentID), protocol.ChannelTypingPayload{
 		ChannelID: uuidToString(channelID),
@@ -2659,6 +2650,11 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 		ActorName: agentName,
 		IsTyping:  false,
 	})
+	var taskID pgtype.UUID
+	if strings.TrimSpace(payload.TaskID) != "" {
+		taskID = parseUUID(payload.TaskID)
+	}
+	threadID, threadRootMessageID, triggerDepth := h.channelThreadForChatTask(context.Background(), parseUUID(payload.ChatSessionID), taskID)
 	if archived, found := h.channelIsArchived(context.Background(), uuidToString(workspaceID), channelID); !found || archived {
 		return
 	}
@@ -2666,9 +2662,25 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 	if !reactionTargetID.Valid {
 		reactionTargetID = threadRootMessageID
 	}
+	if outputType == protocol.ChatOutputKindReaction {
+		h.handleChannelReactionPayload(context.Background(), channelID, workspaceID, agentID, reactionTargetID, payload.Reaction)
+		return
+	}
+	if outputType != protocol.ChatOutputKindMessage {
+		return
+	}
+	content, parts, err := messageparts.Normalize(payload.Content, payload.Parts)
+	if err != nil {
+		slog.Warn("channel bridge: invalid message parts", "chat_session_id", payload.ChatSessionID, "error", err)
+		return
+	}
+	if strings.TrimSpace(content) == "" {
+		return
+	}
 	if h.handleChannelReactionCommand(context.Background(), channelID, workspaceID, agentID, reactionTargetID, content) {
 		return
 	}
+	nextDepth := triggerDepth + 1
 	msg, err := h.insertChannelMessageWithParts(context.Background(), channelID, workspaceID, "agent", agentID, agentName, content, parts, "multica", nil, pgtype.UUID{}, threadRootMessageID, threadID, nextDepth)
 	if err != nil {
 		slog.Warn("channel bridge: insert agent reply failed", "chat_session_id", payload.ChatSessionID, "error", err)
@@ -2709,37 +2721,87 @@ func (h *Handler) channelReactionTargetFromPrompt(ctx context.Context, chatSessi
 	return pgtype.UUID{}
 }
 
+func (h *Handler) handleChannelReactionPayload(ctx context.Context, channelID, workspaceID, agentID, triggerMessageID pgtype.UUID, reaction *protocol.ChatReactionPayload) bool {
+	if reaction == nil {
+		return true
+	}
+	messageID := triggerMessageID
+	messageIDText := strings.TrimSpace(reaction.MessageID)
+	if messageIDText != "" && !strings.EqualFold(messageIDText, "CURRENT_MESSAGE") {
+		parsed, err := util.ParseUUID(messageIDText)
+		if err != nil {
+			return true
+		}
+		if !h.channelMessageBelongsToChannel(ctx, channelID, workspaceID, parsed) {
+			return true
+		}
+		messageID = parsed
+	}
+	return h.insertChannelReactionCommand(ctx, channelID, workspaceID, agentID, messageID, strings.TrimSpace(reaction.Emoji))
+}
+
 func (h *Handler) handleChannelReactionCommand(ctx context.Context, channelID, workspaceID, agentID, triggerMessageID pgtype.UUID, content string) bool {
 	body := strings.TrimSpace(content)
 	if triggerMessageID.Valid && strings.HasPrefix(body, "multica channel react CURRENT_MESSAGE ") {
 		emoji := strings.TrimSpace(strings.TrimPrefix(body, "multica channel react CURRENT_MESSAGE "))
-		if emoji == "" {
+		return h.insertChannelReactionCommand(ctx, channelID, workspaceID, agentID, triggerMessageID, emoji)
+	}
+	if strings.HasPrefix(body, "multica channel react ") {
+		rest := strings.TrimSpace(strings.TrimPrefix(body, "multica channel react "))
+		messageIDText, emoji, ok := strings.Cut(rest, " ")
+		if !ok {
 			return true
 		}
-		var id, messageID, actorID pgtype.UUID
-		var createdAt pgtype.Timestamptz
-		err := h.DB.QueryRow(ctx, `
-			INSERT INTO channel_message_reaction (channel_message_id, workspace_id, actor_type, actor_id, emoji)
-			VALUES ($1, $2, 'agent', $3, $4)
-			ON CONFLICT (channel_message_id, actor_type, actor_id, emoji) DO UPDATE SET created_at = channel_message_reaction.created_at
-			RETURNING id, channel_message_id, actor_id, created_at`, triggerMessageID, workspaceID, agentID, emoji).Scan(&id, &messageID, &actorID, &createdAt)
+		messageID, err := util.ParseUUID(strings.TrimSpace(messageIDText))
 		if err != nil {
-			slog.Warn("channel reaction command failed", "channel", uuidToString(channelID), "agent", uuidToString(agentID), "error", err)
 			return true
 		}
-		reaction := ChannelReactionResponse{
-			ID:        uuidToString(id),
-			ChannelID: uuidToString(channelID),
-			MessageID: uuidToString(messageID),
-			ActorType: "agent",
-			ActorID:   uuidToString(actorID),
-			Emoji:     emoji,
-			CreatedAt: timestampToString(createdAt),
+		if !h.channelMessageBelongsToChannel(ctx, channelID, workspaceID, messageID) {
+			return true
 		}
-		h.publish(protocol.EventChannelReactionAdded, uuidToString(workspaceID), "agent", uuidToString(agentID), map[string]any{"reaction": reaction, "channel_id": uuidToString(channelID), "message_id": uuidToString(triggerMessageID)})
-		return true
+		return h.insertChannelReactionCommand(ctx, channelID, workspaceID, agentID, messageID, strings.TrimSpace(emoji))
 	}
 	return false
+}
+
+func (h *Handler) insertChannelReactionCommand(ctx context.Context, channelID, workspaceID, agentID, messageID pgtype.UUID, emoji string) bool {
+	if !messageID.Valid || strings.TrimSpace(emoji) == "" {
+		return true
+	}
+	var id, returnedMessageID, actorID pgtype.UUID
+	var createdAt pgtype.Timestamptz
+	err := h.DB.QueryRow(ctx, `
+		INSERT INTO channel_message_reaction (channel_message_id, workspace_id, actor_type, actor_id, emoji)
+		VALUES ($1, $2, 'agent', $3, $4)
+		ON CONFLICT (channel_message_id, actor_type, actor_id, emoji) DO UPDATE SET created_at = channel_message_reaction.created_at
+		RETURNING id, channel_message_id, actor_id, created_at`, messageID, workspaceID, agentID, emoji).Scan(&id, &returnedMessageID, &actorID, &createdAt)
+	if err != nil {
+		slog.Warn("channel reaction command failed", "channel", uuidToString(channelID), "agent", uuidToString(agentID), "error", err)
+		return true
+	}
+	reaction := ChannelReactionResponse{
+		ID:        uuidToString(id),
+		ChannelID: uuidToString(channelID),
+		MessageID: uuidToString(returnedMessageID),
+		ActorType: "agent",
+		ActorID:   uuidToString(actorID),
+		Emoji:     emoji,
+		CreatedAt: timestampToString(createdAt),
+	}
+	h.publish(protocol.EventChannelReactionAdded, uuidToString(workspaceID), "agent", uuidToString(agentID), map[string]any{"reaction": reaction, "channel_id": uuidToString(channelID), "message_id": uuidToString(messageID)})
+	return true
+}
+
+func (h *Handler) channelMessageBelongsToChannel(ctx context.Context, channelID, workspaceID, messageID pgtype.UUID) bool {
+	var exists bool
+	if err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM channel_message
+			WHERE id = $1 AND channel_id = $2 AND workspace_id = $3
+		)`, messageID, channelID, workspaceID).Scan(&exists); err != nil {
+		return false
+	}
+	return exists
 }
 
 func (h *Handler) channelAgentForChatSession(ctx context.Context, chatSessionID string) (pgtype.UUID, pgtype.UUID, pgtype.UUID, bool) {

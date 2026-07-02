@@ -1378,7 +1378,10 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 		if !suppressNoActionComment && !agentCommented {
 			var payload protocol.TaskCompletedPayload
 			if err := json.Unmarshal(result, &payload); err == nil {
-				if payload.Output != "" {
+				outputType, outputTypeErr := protocol.NormalizeChatOutputType(payload.Type, strings.TrimSpace(payload.Output) != "" || len(payload.Parts) > 0, payload.Reaction != nil)
+				if outputTypeErr != nil {
+					slog.Warn("skipping issue fallback comment with invalid chat output type", "task_id", util.UUIDToString(task.ID), "error", outputTypeErr)
+				} else if outputType == protocol.ChatOutputKindMessage && payload.Output != "" {
 					// Match the CLI's --content / --description behavior: agents that
 					// emit literal `\n` 4-char sequences (Python/JSON-style) get them
 					// decoded into real newlines before the comment hits the DB. See
@@ -1412,8 +1415,10 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	// resume pointer was already persisted inside the transaction above.
 	if task.ChatSessionID.Valid {
 		var assistantMsg *db.ChatMessage
+		outputType := protocol.ChatOutputKindNoReply
+		var reaction *protocol.ChatReactionPayload
 		var payload protocol.TaskCompletedPayload
-		if err := json.Unmarshal(result, &payload); err == nil && (payload.Output != "" || len(payload.Parts) > 0) {
+		if err := json.Unmarshal(result, &payload); err == nil {
 			// Same unescape as the issue-comment path above: literal `\n` from
 			// agent stdout becomes a real newline so the chat panel renders
 			// paragraph breaks instead of one wall of prose.
@@ -1425,9 +1430,18 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 				slog.Warn("dropping invalid chat message parts", "task_id", util.UUIDToString(task.ID), "error", partsErr)
 				parts = nil
 			}
-			if strings.TrimSpace(body) == "" {
+			normalizedOutputType, outputTypeErr := protocol.NormalizeChatOutputType(payload.Type, strings.TrimSpace(body) != "" || len(parts) > 0, payload.Reaction != nil)
+			if outputTypeErr != nil {
+				slog.Warn("skipping assistant chat message with invalid output type", "task_id", util.UUIDToString(task.ID), "error", outputTypeErr)
+			} else if normalizedOutputType == protocol.ChatOutputKindNoReply {
+				outputType = protocol.ChatOutputKindNoReply
+			} else if normalizedOutputType == protocol.ChatOutputKindReaction {
+				outputType = protocol.ChatOutputKindReaction
+				reaction = payload.Reaction
+			} else if strings.TrimSpace(body) == "" {
 				slog.Warn("skipping empty assistant chat message", "task_id", util.UUIDToString(task.ID))
 			} else {
+				outputType = protocol.ChatOutputKindMessage
 				row, err := s.Queries.CreateChatMessage(ctx, db.CreateChatMessageParams{
 					ChatSessionID: task.ChatSessionID,
 					Role:          "assistant",
@@ -1450,7 +1464,7 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 				}
 			}
 		}
-		s.broadcastChatDone(ctx, task, assistantMsg)
+		s.broadcastChatDone(ctx, task, assistantMsg, outputType, reaction)
 	}
 
 	// Reconcile agent status
@@ -2168,16 +2182,23 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 	return ""
 }
 
-func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQueue, msg *db.ChatMessage) {
+func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQueue, msg *db.ChatMessage, outputType string, reaction *protocol.ChatReactionPayload) {
 	workspaceID := s.ResolveTaskWorkspaceID(ctx, task)
 	if workspaceID == "" {
 		return
 	}
+	if outputType == "" {
+		outputType = protocol.ChatOutputKindNoReply
+	}
 	payload := protocol.ChatDonePayload{
 		ChatSessionID: util.UUIDToString(task.ChatSessionID),
 		TaskID:        util.UUIDToString(task.ID),
+		Type:          outputType,
+		Reaction:      reaction,
 	}
 	if msg != nil {
+		payload.Type = protocol.ChatOutputKindMessage
+		payload.Reaction = nil
 		payload.MessageID = util.UUIDToString(msg.ID)
 		payload.Content = msg.Content
 		payload.Parts = messageparts.Decode(msg.Parts)

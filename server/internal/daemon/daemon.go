@@ -2524,7 +2524,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 	switch result.Status {
 	case "completed":
 		taskLog.Info("task completed", "status", result.Status)
-		err := d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.SessionID, result.WorkDir, result.Parts)
+		err := d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Type, result.SessionID, result.WorkDir, result.Parts, result.Reaction)
 		if err == nil {
 			return
 		}
@@ -3131,18 +3131,22 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	output := result.Output
 	var parts []protocol.MessagePart
-	if normalizedOutput, normalizedParts, structured, err := parseStructuredMessageOutput(result.Output); structured {
+	var reaction *protocol.ChatReactionPayload
+	outputType := protocol.ChatOutputKindMessage
+	if normalizedOutput, normalizedParts, normalizedOutputType, normalizedReaction, structured, err := parseStructuredMessageOutput(result.Output); structured {
 		if err != nil {
 			taskLog.Warn("agent structured message parts invalid; keeping raw output", "error", err)
 		} else {
 			output = normalizedOutput
 			parts = normalizedParts
+			outputType = normalizedOutputType
+			reaction = normalizedReaction
 		}
 	}
 
 	switch result.Status {
 	case "completed":
-		if output == "" && len(parts) == 0 {
+		if output == "" && len(parts) == 0 && reaction == nil {
 			// The agent completed successfully but produced no text output.
 			// This is valid — the agent may have done all its work via tool
 			// calls (e.g. posting comments via CLI, pushing code). Treat as
@@ -3151,6 +3155,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			return TaskResult{
 				Status:    "completed",
 				Comment:   "",
+				Type:      protocol.ChatOutputKindNoReply,
 				SessionID: result.SessionID,
 				WorkDir:   env.WorkDir,
 				EnvRoot:   env.RootDir,
@@ -3181,7 +3186,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		return TaskResult{
 			Status:    "completed",
 			Comment:   output,
+			Type:      outputType,
 			Parts:     parts,
+			Reaction:  reaction,
 			SessionID: result.SessionID,
 			WorkDir:   env.WorkDir,
 			EnvRoot:   env.RootDir,

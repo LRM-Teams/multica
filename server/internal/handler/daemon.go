@@ -2043,11 +2043,13 @@ func (h *Handler) ReportTaskProgress(w http.ResponseWriter, r *http.Request) {
 
 // CompleteTask marks a running task as completed.
 type TaskCompleteRequest struct {
-	PRURL     string                 `json:"pr_url"`
-	Output    string                 `json:"output"`
-	Parts     []protocol.MessagePart `json:"parts"`
-	SessionID string                 `json:"session_id"` // Claude session ID for future resumption
-	WorkDir   string                 `json:"work_dir"`   // working directory used during execution
+	PRURL     string                        `json:"pr_url"`
+	Output    string                        `json:"output"`
+	Type      string                        `json:"type"`
+	Parts     []protocol.MessagePart        `json:"parts"`
+	Reaction  *protocol.ChatReactionPayload `json:"reaction"`
+	SessionID string                        `json:"session_id"` // Claude session ID for future resumption
+	WorkDir   string                        `json:"work_dir"`   // working directory used during execution
 }
 
 func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
@@ -2069,7 +2071,23 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
 		return
 	}
+	if strings.TrimSpace(req.Type) == "" && req.Reaction == nil && len(parts) == 0 {
+		if reaction, ok := protocol.ParseLegacyChatReactionCommand(output); ok {
+			req.Type = protocol.ChatOutputKindReaction
+			req.Reaction = reaction
+		}
+	}
+	outputType, err := protocol.NormalizeChatOutputType(req.Type, strings.TrimSpace(output) != "" || len(parts) > 0, req.Reaction != nil)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if outputType != protocol.ChatOutputKindMessage {
+		output = ""
+		parts = nil
+	}
 	req.Output = output
+	req.Type = outputType
 	req.Parts = parts
 
 	result, _ := json.Marshal(req)

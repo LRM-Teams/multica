@@ -128,8 +128,9 @@ export function MobileThreadDrawerContent({
 
   return (
     <DrawerContent
-      className="h-[calc(100dvh-env(safe-area-inset-top))] max-h-[calc(100dvh-env(safe-area-inset-top))] min-w-0 rounded-t-none p-0"
-      style={viewportStyle}
+      data-vaul-no-drag=""
+      className="h-[calc(100dvh-env(safe-area-inset-top))] max-h-[calc(100dvh-env(safe-area-inset-top))] min-w-0 overflow-hidden rounded-t-none p-0"
+      style={{ ...viewportStyle, touchAction: "pan-y" }}
     >
       {children}
     </DrawerContent>

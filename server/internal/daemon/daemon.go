@@ -782,6 +782,7 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"device_name":       d.cfg.DeviceName,
 		"cli_version":       d.cfg.CLIVersion,
 		"launched_by":       d.cfg.LaunchedBy,
+		"capabilities":      []string{protocol.DaemonCapabilityChannelOutputActions},
 		"runtimes":          runtimes,
 	}
 
@@ -2524,7 +2525,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 	switch result.Status {
 	case "completed":
 		taskLog.Info("task completed", "status", result.Status)
-		err := d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Type, result.SessionID, result.WorkDir, result.Parts, result.Reaction)
+		err := d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Type, result.SessionID, result.WorkDir, result.Parts, result.Reaction)
 		if err == nil {
 			return
 		}
@@ -3132,14 +3133,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	output := result.Output
 	var parts []protocol.MessagePart
 	var reaction *protocol.ChatReactionPayload
-	outputType := protocol.ChatOutputKindMessage
-	if normalizedOutput, normalizedParts, normalizedOutputType, normalizedReaction, structured, err := parseStructuredMessageOutput(result.Output); structured {
+	outputAction := ""
+	outputType := ""
+	if normalizedOutput, normalizedParts, normalizedOutputType, normalizedOutputAction, normalizedReaction, structured, err := parseStructuredMessageOutput(result.Output); structured {
 		if err != nil {
 			taskLog.Warn("agent structured message parts invalid; keeping raw output", "error", err)
 		} else {
 			output = normalizedOutput
 			parts = normalizedParts
 			outputType = normalizedOutputType
+			outputAction = normalizedOutputAction
 			reaction = normalizedReaction
 		}
 	}
@@ -3155,6 +3158,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			return TaskResult{
 				Status:    "completed",
 				Comment:   "",
+				Action:    protocol.ChatOutputActionNoReply,
 				Type:      protocol.ChatOutputKindNoReply,
 				SessionID: result.SessionID,
 				WorkDir:   env.WorkDir,
@@ -3186,6 +3190,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		return TaskResult{
 			Status:    "completed",
 			Comment:   output,
+			Action:    outputAction,
 			Type:      outputType,
 			Parts:     parts,
 			Reaction:  reaction,

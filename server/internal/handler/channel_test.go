@@ -154,7 +154,7 @@ func TestChannelChatDoneNoReplyAndReactionCommandsAreNotPersisted(t *testing.T) 
 		t.Fatalf("reaction count = %d, want 1", reactionCount)
 	}
 
-	reactionCommand := fmt.Sprintf("multica channel react %s 🎉", trigger.ID)
+	reactionCommand := fmt.Sprintf("multica message react --message %s --emoji 🎉", trigger.ID)
 	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
 		ChatSessionID: sessionID,
 		Type:          protocol.ChatOutputKindMessage,
@@ -170,7 +170,26 @@ func TestChannelChatDoneNoReplyAndReactionCommandsAreNotPersisted(t *testing.T) 
 		t.Fatalf("count legacy channel reaction: %v", err)
 	}
 	if legacyReactionCount != 1 {
-		t.Fatalf("legacy reaction count = %d, want 1", legacyReactionCount)
+		t.Fatalf("message react count = %d, want 1", legacyReactionCount)
+	}
+
+	legacyReactionCommand := fmt.Sprintf("multica channel react %s 🚀", trigger.ID)
+	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
+		ChatSessionID: sessionID,
+		Type:          protocol.ChatOutputKindMessage,
+		Content:       legacyReactionCommand,
+	}})
+	assertNoChannelMessageContent(t, channelID, legacyReactionCommand)
+
+	var legacyChannelReactionCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message_reaction
+		WHERE channel_message_id = $1 AND actor_type = 'agent' AND actor_id = $2 AND emoji = '🚀'`, trigger.ID, agentID).Scan(&legacyChannelReactionCount); err != nil {
+		t.Fatalf("count legacy channel reaction: %v", err)
+	}
+	if legacyChannelReactionCount != 1 {
+		t.Fatalf("legacy channel reaction count = %d, want 1", legacyChannelReactionCount)
 	}
 
 	malformedReactionCommand := "multica channel react not-a-message-id 👍"
@@ -180,6 +199,77 @@ func TestChannelChatDoneNoReplyAndReactionCommandsAreNotPersisted(t *testing.T) 
 		Content:       malformedReactionCommand,
 	}})
 	assertNoChannelMessageContent(t, channelID, malformedReactionCommand)
+}
+
+func TestChannelChatDoneSuppressedOutputPublishesNotice(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Suppressed Output Agent", nil)
+	channelID := seedChannelForTest(t, "suppressed-output-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Suppressed Output Agent reply", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert trigger: %v", err)
+	}
+	testHandler.dispatchChannelMentions(ctx, ch, trigger, parseUUID(testUserID))
+
+	var sessionID string
+	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {
+		t.Fatalf("channel agent session not created: %v", err)
+	}
+
+	notices := make(chan protocol.ChannelNoticePayload, 1)
+	testHandler.Bus.Subscribe(protocol.EventChannelNotice, func(e events.Event) {
+		payload, ok := e.Payload.(protocol.ChannelNoticePayload)
+		if ok && payload.ChatSessionID == sessionID {
+			notices <- payload
+		}
+	})
+
+	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
+		ChatSessionID:          sessionID,
+		TaskID:                 uuid.NewString(),
+		Type:                   protocol.ChatOutputKindNoReply,
+		OutputSuppressedReason: protocol.ChannelOutputSuppressedReasonDaemonOutdated,
+	}})
+
+	select {
+	case notice := <-notices:
+		if notice.ChannelID != channelID {
+			t.Fatalf("notice channel_id = %q, want %q", notice.ChannelID, channelID)
+		}
+		if notice.Kind != "agent_daemon_output_suppressed" {
+			t.Fatalf("notice kind = %q, want agent_daemon_output_suppressed", notice.Kind)
+		}
+		if notice.OutputSuppressedReason != protocol.ChannelOutputSuppressedReasonDaemonOutdated {
+			t.Fatalf("notice reason = %q, want %q", notice.OutputSuppressedReason, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for channel notice")
+	}
+
+	var messageCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'agent'
+	`, channelID).Scan(&messageCount); err != nil {
+		t.Fatalf("count agent messages: %v", err)
+	}
+	if messageCount != 0 {
+		t.Fatalf("agent channel message count = %d, want 0", messageCount)
+	}
 }
 
 func TestChannelRementionInterruptsRunningTaskWithFreshSession(t *testing.T) {

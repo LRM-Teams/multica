@@ -18,17 +18,18 @@ import (
 )
 
 type AgentRuntimeResponse struct {
-	ID           string  `json:"id"`
-	WorkspaceID  string  `json:"workspace_id"`
-	DaemonID     *string `json:"daemon_id"`
-	Name         string  `json:"name"`
-	RuntimeMode  string  `json:"runtime_mode"`
-	Provider     string  `json:"provider"`
-	LaunchHeader string  `json:"launch_header"`
-	Status       string  `json:"status"`
-	DeviceInfo   string  `json:"device_info"`
-	Metadata     any     `json:"metadata"`
-	OwnerID      *string `json:"owner_id"`
+	ID           string   `json:"id"`
+	WorkspaceID  string   `json:"workspace_id"`
+	DaemonID     *string  `json:"daemon_id"`
+	Name         string   `json:"name"`
+	RuntimeMode  string   `json:"runtime_mode"`
+	Provider     string   `json:"provider"`
+	LaunchHeader string   `json:"launch_header"`
+	Status       string   `json:"status"`
+	DeviceInfo   string   `json:"device_info"`
+	Metadata     any      `json:"metadata"`
+	Capabilities []string `json:"capabilities"`
+	OwnerID      *string  `json:"owner_id"`
 	// Visibility is "private" (default — only the owner / workspace admins
 	// can bind agents) or "public" (any workspace member can). See migration
 	// 083 and canUseRuntimeForAgent.
@@ -58,11 +59,37 @@ func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
 		Status:       rt.Status,
 		DeviceInfo:   rt.DeviceInfo,
 		Metadata:     metadata,
+		Capabilities: runtimeCapabilities(metadata),
 		OwnerID:      uuidToPtr(rt.OwnerID),
 		Visibility:   rt.Visibility,
 		LastSeenAt:   timestampToPtr(rt.LastSeenAt),
 		CreatedAt:    timestampToString(rt.CreatedAt),
 		UpdatedAt:    timestampToString(rt.UpdatedAt),
+	}
+}
+
+func runtimeCapabilities(metadata any) []string {
+	metadataMap, ok := metadata.(map[string]any)
+	if !ok {
+		return []string{}
+	}
+	raw, ok := metadataMap["capabilities"]
+	if !ok {
+		return []string{}
+	}
+	switch capabilities := raw.(type) {
+	case []string:
+		return normalizeDaemonCapabilities(capabilities)
+	case []any:
+		values := make([]string, 0, len(capabilities))
+		for _, capability := range capabilities {
+			if value, ok := capability.(string); ok {
+				values = append(values, value)
+			}
+		}
+		return normalizeDaemonCapabilities(values)
+	default:
+		return []string{}
 	}
 }
 

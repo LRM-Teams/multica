@@ -1417,8 +1417,10 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 		var assistantMsg *db.ChatMessage
 		outputType := protocol.ChatOutputKindNoReply
 		var reaction *protocol.ChatReactionPayload
+		outputSuppressedReason := ""
 		var payload protocol.TaskCompletedPayload
 		if err := json.Unmarshal(result, &payload); err == nil {
+			outputSuppressedReason = payload.OutputSuppressedReason
 			// Same unescape as the issue-comment path above: literal `\n` from
 			// agent stdout becomes a real newline so the chat panel renders
 			// paragraph breaks instead of one wall of prose.
@@ -1464,7 +1466,7 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 				}
 			}
 		}
-		s.broadcastChatDone(ctx, task, assistantMsg, outputType, reaction)
+		s.broadcastChatDone(ctx, task, assistantMsg, outputType, reaction, outputSuppressedReason)
 	}
 
 	// Reconcile agent status
@@ -2182,7 +2184,7 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 	return ""
 }
 
-func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQueue, msg *db.ChatMessage, outputType string, reaction *protocol.ChatReactionPayload) {
+func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQueue, msg *db.ChatMessage, outputType string, reaction *protocol.ChatReactionPayload, outputSuppressedReason string) {
 	workspaceID := s.ResolveTaskWorkspaceID(ctx, task)
 	if workspaceID == "" {
 		return
@@ -2191,10 +2193,11 @@ func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQu
 		outputType = protocol.ChatOutputKindNoReply
 	}
 	payload := protocol.ChatDonePayload{
-		ChatSessionID: util.UUIDToString(task.ChatSessionID),
-		TaskID:        util.UUIDToString(task.ID),
-		Type:          outputType,
-		Reaction:      reaction,
+		ChatSessionID:          util.UUIDToString(task.ChatSessionID),
+		TaskID:                 util.UUIDToString(task.ID),
+		Type:                   outputType,
+		Reaction:               reaction,
+		OutputSuppressedReason: outputSuppressedReason,
 	}
 	if msg != nil {
 		payload.Type = protocol.ChatOutputKindMessage

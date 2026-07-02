@@ -26,12 +26,14 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 		"Do not stay silent",
 		"do not use a reaction-only command",
 		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
-		"\"type\":\"reaction\"",
+		"\"action\":\"message_react\"",
+		"multica message react --message CURRENT_MESSAGE --emoji",
 		"\"message_id\":\"CURRENT_MESSAGE\"",
 		"💯",
 		"🎉",
 		"multica-stickers",
 		"\"parts\"",
+		"\"action\":\"send_channel_message\"",
 		"\"sticker_id\":\"hi\"",
 		"全体总监以上欢迎一下新同事",
 	} {
@@ -126,6 +128,9 @@ func TestBuildChannelWelcomePrompt(t *testing.T) {
 	}
 	if !strings.Contains(p, "\"parts\"") || !strings.Contains(p, "\"sticker_id\":\"applause\"") {
 		t.Error("prompt should instruct the agent to include structured sticker parts")
+	}
+	if !strings.Contains(p, "\"action\":\"send_channel_message\"") {
+		t.Error("prompt should instruct the agent to use the send_channel_message action")
 	}
 	if !strings.Contains(p, "multica-stickers") {
 		t.Error("prompt should point at the multica-stickers skill")

@@ -121,12 +121,14 @@ type TaskProgressPayload struct {
 
 // TaskCompletedPayload is sent from daemon to server when a task finishes.
 type TaskCompletedPayload struct {
-	TaskID   string               `json:"task_id"`
-	PRURL    string               `json:"pr_url,omitempty"`
-	Type     string               `json:"type,omitempty"`
-	Output   string               `json:"output,omitempty"`
-	Parts    []MessagePart        `json:"parts,omitempty"`
-	Reaction *ChatReactionPayload `json:"reaction,omitempty"`
+	TaskID                 string               `json:"task_id"`
+	PRURL                  string               `json:"pr_url,omitempty"`
+	Action                 string               `json:"action,omitempty"`
+	Type                   string               `json:"type,omitempty"`
+	Output                 string               `json:"output,omitempty"`
+	Parts                  []MessagePart        `json:"parts,omitempty"`
+	Reaction               *ChatReactionPayload `json:"reaction,omitempty"`
+	OutputSuppressedReason string               `json:"output_suppressed_reason,omitempty"`
 }
 
 const (
@@ -135,9 +137,65 @@ const (
 	ChatOutputKindReaction = "reaction"
 )
 
+const (
+	ChatOutputActionSendChannelMessage = "send_channel_message"
+	ChatOutputActionMessageReact       = "message_react"
+	ChatOutputActionSendReaction       = ChatOutputActionMessageReact
+	ChatOutputActionNoReply            = "no_reply"
+)
+
+const (
+	DaemonCapabilityChannelOutputActions = "channel_output_actions"
+)
+
+const (
+	ChannelOutputSuppressedReasonDaemonOutdated       = "daemon_outdated"
+	ChannelOutputSuppressedReasonInvalidOutput        = "invalid_output"
+	ChannelOutputSuppressedReasonInvalidAction        = "invalid_action"
+	ChannelOutputSuppressedReasonInvalidType          = "invalid_type"
+	ChannelOutputSuppressedReasonEmptyMessage         = "empty_message"
+	ChannelOutputSuppressedReasonInvalidReaction      = "invalid_reaction"
+	ChannelOutputSuppressedReasonMessageMissingAction = "message_missing_action"
+)
+
 type ChatReactionPayload struct {
 	MessageID string `json:"message_id,omitempty"`
 	Emoji     string `json:"emoji,omitempty"`
+}
+
+func NormalizeChatOutputAction(action string) (string, error) {
+	normalized := strings.TrimSpace(strings.ToLower(action))
+	switch normalized {
+	case "":
+		return "", nil
+	case ChatOutputActionSendChannelMessage, "channel_send", "send_message", "message_send":
+		return ChatOutputActionSendChannelMessage, nil
+	case ChatOutputActionMessageReact, "react_message", "message_reaction", "send_reaction":
+		return ChatOutputActionMessageReact, nil
+	case ChatOutputActionNoReply, "stay_silent":
+		return ChatOutputActionNoReply, nil
+	default:
+		return "", fmt.Errorf("invalid chat output action %q", normalized)
+	}
+}
+
+func ChatOutputTypeForAction(action string) (string, error) {
+	normalized, err := NormalizeChatOutputAction(action)
+	if err != nil {
+		return "", err
+	}
+	switch normalized {
+	case "":
+		return "", nil
+	case ChatOutputActionSendChannelMessage:
+		return ChatOutputKindMessage, nil
+	case ChatOutputActionMessageReact:
+		return ChatOutputKindReaction, nil
+	case ChatOutputActionNoReply:
+		return ChatOutputKindNoReply, nil
+	default:
+		return "", fmt.Errorf("invalid chat output action %q", normalized)
+	}
 }
 
 func NormalizeChatOutputType(outputType string, hasReplyBody, hasReactionPayload bool) (string, error) {
@@ -162,9 +220,69 @@ func ErrInvalidChatOutputType(outputType string) error {
 	return fmt.Errorf("invalid chat output type %q", outputType)
 }
 
-func ParseLegacyChatReactionCommand(output string) (*ChatReactionPayload, bool) {
-	const prefix = "multica channel react "
+func ParseChannelSendCommand(output string) (string, bool) {
+	const prefix = "multica channel send"
 	body := strings.TrimSpace(output)
+	if body != prefix && !strings.HasPrefix(body, prefix+" ") {
+		return "", false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(body, prefix))
+	if rest == "" {
+		return "", true
+	}
+	if strings.HasPrefix(rest, "--channel ") {
+		_, after, ok := splitFirstCommandArg(strings.TrimSpace(strings.TrimPrefix(rest, "--channel ")))
+		if !ok {
+			return "", true
+		}
+		rest = strings.TrimSpace(after)
+	}
+	if strings.HasPrefix(rest, "--message ") {
+		rest = strings.TrimSpace(strings.TrimPrefix(rest, "--message "))
+	} else if strings.HasPrefix(rest, "-m ") {
+		rest = strings.TrimSpace(strings.TrimPrefix(rest, "-m "))
+	}
+	return trimMatchingCommandQuotes(rest), true
+}
+
+func ParseMessageReactCommand(output string) (*ChatReactionPayload, bool) {
+	body := strings.TrimSpace(output)
+	const messageReactPrefix = "multica message react"
+	if body == messageReactPrefix || strings.HasPrefix(body, messageReactPrefix+" ") {
+		rest := strings.TrimSpace(strings.TrimPrefix(body, messageReactPrefix))
+		if rest == "" {
+			return &ChatReactionPayload{}, true
+		}
+		fields := strings.Fields(rest)
+		var messageID string
+		var emoji string
+		for i := 0; i < len(fields); i++ {
+			switch fields[i] {
+			case "--message", "--message-id":
+				if i+1 < len(fields) {
+					messageID = fields[i+1]
+					i++
+				}
+			case "--emoji":
+				if i+1 < len(fields) {
+					emoji = trimMatchingCommandQuotes(fields[i+1])
+					i++
+				}
+			default:
+				if messageID == "" {
+					messageID = fields[i]
+				} else if emoji == "" {
+					emoji = trimMatchingCommandQuotes(fields[i])
+				}
+			}
+		}
+		return &ChatReactionPayload{
+			MessageID: strings.TrimSpace(messageID),
+			Emoji:     strings.TrimSpace(emoji),
+		}, true
+	}
+
+	const prefix = "multica channel react "
 	if !strings.HasPrefix(body, prefix) {
 		return nil, false
 	}
@@ -177,6 +295,43 @@ func ParseLegacyChatReactionCommand(output string) (*ChatReactionPayload, bool) 
 		MessageID: strings.TrimSpace(messageID),
 		Emoji:     strings.TrimSpace(emoji),
 	}, true
+}
+
+func ParseLegacyChatReactionCommand(output string) (*ChatReactionPayload, bool) {
+	return ParseMessageReactCommand(output)
+}
+
+func splitFirstCommandArg(input string) (string, string, bool) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", "", false
+	}
+	quote := byte(0)
+	if input[0] == '"' || input[0] == '\'' {
+		quote = input[0]
+		for i := 1; i < len(input); i++ {
+			if input[i] == quote {
+				return input[1:i], input[i+1:], true
+			}
+		}
+		return "", "", false
+	}
+	arg, rest, ok := strings.Cut(input, " ")
+	if !ok {
+		return input, "", true
+	}
+	return arg, rest, true
+}
+
+func trimMatchingCommandQuotes(input string) string {
+	input = strings.TrimSpace(input)
+	if len(input) < 2 {
+		return input
+	}
+	if (input[0] == '"' && input[len(input)-1] == '"') || (input[0] == '\'' && input[len(input)-1] == '\'') {
+		return input[1 : len(input)-1]
+	}
+	return input
 }
 
 // TaskMessagePayload represents a single agent execution message (tool call, text, etc.)
@@ -223,15 +378,16 @@ type ChatMessagePayload struct {
 // during the live-timeline → AssistantMessage handoff that previously caused
 // a visible flicker (#2123).
 type ChatDonePayload struct {
-	ChatSessionID string               `json:"chat_session_id"`
-	TaskID        string               `json:"task_id"`
-	Type          string               `json:"type,omitempty"`
-	MessageID     string               `json:"message_id,omitempty"`
-	Content       string               `json:"content,omitempty"`
-	Parts         []MessagePart        `json:"parts,omitempty"`
-	Reaction      *ChatReactionPayload `json:"reaction,omitempty"`
-	ElapsedMs     int64                `json:"elapsed_ms,omitempty"`
-	CreatedAt     string               `json:"created_at,omitempty"`
+	ChatSessionID          string               `json:"chat_session_id"`
+	TaskID                 string               `json:"task_id"`
+	Type                   string               `json:"type,omitempty"`
+	MessageID              string               `json:"message_id,omitempty"`
+	Content                string               `json:"content,omitempty"`
+	Parts                  []MessagePart        `json:"parts,omitempty"`
+	Reaction               *ChatReactionPayload `json:"reaction,omitempty"`
+	OutputSuppressedReason string               `json:"output_suppressed_reason,omitempty"`
+	ElapsedMs              int64                `json:"elapsed_ms,omitempty"`
+	CreatedAt              string               `json:"created_at,omitempty"`
 }
 
 // ChatSessionReadPayload is broadcast when the creator marks a session as read.
@@ -266,6 +422,18 @@ type ChannelTypingPayload struct {
 	ActorName   string `json:"actor_name"`
 	IsTyping    bool   `json:"is_typing"`
 	ExpiresInMS int    `json:"expires_in_ms,omitempty"`
+}
+
+// ChannelNoticePayload is a typed, non-message system row for group-chat
+// surfaces. It is not a channel_message and must not enter ordinary message
+// actions such as reply/thread/save/search.
+type ChannelNoticePayload struct {
+	ChannelID              string `json:"channel_id"`
+	ChatSessionID          string `json:"chat_session_id,omitempty"`
+	TaskID                 string `json:"task_id,omitempty"`
+	AgentID                string `json:"agent_id,omitempty"`
+	Kind                   string `json:"kind"`
+	OutputSuppressedReason string `json:"output_suppressed_reason,omitempty"`
 }
 
 // DaemonHeartbeatRequestPayload is sent from daemon to server over WebSocket

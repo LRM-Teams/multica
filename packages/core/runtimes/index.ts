@@ -7,5 +7,6 @@ export * from "./types";
 export * from "./derive-health";
 export * from "./use-runtime-health";
 export * from "./cli-version";
+export * from "./channel-output-actions";
 export * from "./custom-pricing-store";
 export * from "./cloud-runtime";

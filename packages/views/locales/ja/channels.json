@@ -155,7 +155,18 @@
     "waiting_local_directory": "ローカルディレクトリを待機中",
     "processing_single": "{{name}} が返信を準備しています...",
     "processing_pair": "{{a}} と {{b}} が返信を準備しています...",
-    "processing_overflow": "{{a}}、{{b}} ほか {{count}} 人が返信を準備しています..."
+    "processing_overflow": "{{a}}、{{b}} ほか {{count}} 人が返信を準備しています...",
+    "daemon": {
+      "outdated": "デーモンの更新が必要",
+      "missing": "デーモンの起動が必要",
+      "disconnected": "デーモン未接続"
+    }
+  },
+  "daemon_notice": {
+    "outdated": "ローカルデーモンが古いため、更新が必要です。",
+    "missing": "Multica CLI をインストールしてデーモンを起動してください。",
+    "disconnected": "ローカルデーモンが接続されていません。",
+    "open_runtimes": "ランタイムを開く"
   },
   "composer": {
     "placeholder": "必要なことを入力してください…  @エージェント名 で返信を促します。",

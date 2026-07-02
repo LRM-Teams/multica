@@ -57,6 +57,12 @@ vi.mock("../../i18n/use-t", () => ({
           copied_toast: string;
           copy_failed_toast: string;
         };
+        daemon_notice: {
+          outdated: string;
+          missing: string;
+          disconnected: string;
+          open_runtimes: string;
+        };
         quote: { jump_to: string };
         thread: { reply: string; reply_count: string };
       }) => string,
@@ -69,6 +75,12 @@ vi.mock("../../i18n/use-t", () => ({
           copy_action: "Copy",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
+        },
+        daemon_notice: {
+          outdated: "Local daemon is outdated.",
+          missing: "Install the Multica CLI and start the daemon.",
+          disconnected: "Local daemon is disconnected.",
+          open_runtimes: "Open Runtimes",
         },
         quote: {
           jump_to: "Jump to original message",
@@ -351,5 +363,84 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Reply in thread" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Quote reply" })).not.toBeInTheDocument();
+  });
+
+  it("renders system messages as notice rows without chat bubble actions", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          author_type: "system",
+          author_id: null,
+          author_name: "System",
+          content: "Barry archived this channel.",
+          thread_reply_count: 2,
+          reactions: [
+            {
+              id: "reaction-1",
+              channel_id: "c1",
+              message_id: "m1",
+              actor_type: "member",
+              actor_id: "user-1",
+              emoji: "👍",
+              created_at: "2026-06-17T09:16:00Z",
+            },
+          ],
+        })}
+        currentUserId="user-1"
+        onOpenThread={vi.fn()}
+        onReact={vi.fn()}
+        onOpenRuntimes={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("system-message-row")).toHaveTextContent(
+      "Barry archived this channel.",
+    );
+    expect(screen.queryByTestId("message-bubble")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add reaction" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reply in thread" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /2 replies/ })).not.toBeInTheDocument();
+  });
+
+  it("renders runtime system notices with a Runtimes CTA", async () => {
+    const onOpenRuntimes = vi.fn();
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          author_type: "system",
+          author_id: null,
+          author_name: "System",
+          content: "",
+          system_message_kind: "runtime_outdated",
+        })}
+        currentUserId="user-1"
+        onOpenRuntimes={onOpenRuntimes}
+      />,
+    );
+
+    expect(screen.getByTestId("system-message-row")).toHaveTextContent("Local daemon is outdated.");
+
+    await userEvent.click(screen.getByRole("button", { name: /Open Runtimes/ }));
+
+    expect(onOpenRuntimes).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps runtime notice copy from the notice state instead of raw content", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          author_type: "system",
+          author_id: null,
+          author_name: "System",
+          content: "daemon_outdated",
+          system_message_kind: "runtime_outdated",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByTestId("system-message-row")).toHaveTextContent("Local daemon is outdated.");
+    expect(screen.queryByText("daemon_outdated")).not.toBeInTheDocument();
   });
 });

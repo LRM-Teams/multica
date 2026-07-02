@@ -23,6 +23,12 @@ export interface RuntimeDevice {
   status: "online" | "offline";
   device_info: string;
   metadata: Record<string, unknown>;
+  /**
+   * Runtime/daemon-advertised protocol capabilities. Older daemons omit this;
+   * consumers must treat a missing capability as unsupported, not as proof the
+   * action is safe to send.
+   */
+  capabilities?: string[];
   owner_id: string | null;
   /** Defaults to "private" when the backend predates the visibility flag. */
   visibility: RuntimeVisibility;

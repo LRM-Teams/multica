@@ -447,6 +447,7 @@ function DmRow({
         resolveChannelAuthorDisplayName(last, { members, agents }),
         last.content,
         resolveMentionPreview,
+        last.parts,
       )
     : "";
   // Surface mentions of the viewer at full foreground weight (no bold) so an

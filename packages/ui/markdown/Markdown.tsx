@@ -87,6 +87,11 @@ export interface MarkdownProps {
    * case-insensitive and does not touch code/preformatted blocks.
    */
   highlightQuery?: string
+  /**
+   * Convert `:sticker:<id>:` shortcodes into sticker image markdown.
+   * @default true
+   */
+  enableStickerShortcodes?: boolean
 }
 
 // Sanitization schema — extends GitHub defaults to allow code highlighting classes
@@ -565,7 +570,8 @@ export function Markdown({
   renderFileCard,
   cdnDomain,
   issueRefPrefix,
-  highlightQuery
+  highlightQuery,
+  enableStickerShortcodes = true
 }: MarkdownProps): React.JSX.Element {
   const normalizedHighlightQuery = normalizeHighlightQuery(highlightQuery)
   const components = React.useMemo(
@@ -587,13 +593,13 @@ export function Markdown({
   const processedContent = React.useMemo(
     () => {
       let result = preprocessMentionShortcodes(children)
-      result = preprocessStickers(result)
+      if (enableStickerShortcodes) result = preprocessStickers(result)
       if (issueRefPrefix) result = preprocessIssueRefs(result, issueRefPrefix)
       result = preprocessLinks(result)
       result = preprocessFileCards(result, cdnDomain ?? '')
       return result
     },
-    [children, cdnDomain, issueRefPrefix]
+    [children, cdnDomain, enableStickerShortcodes, issueRefPrefix]
   )
 
   return (

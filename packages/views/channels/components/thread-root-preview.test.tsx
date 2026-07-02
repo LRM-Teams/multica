@@ -110,4 +110,19 @@ describe("ThreadRootPreview", () => {
     expect(screen.getByText("Frank An")).toBeInTheDocument();
     expect(screen.queryByText("andong3")).not.toBeInTheDocument();
   });
+
+  it("uses compact part text for sticker root previews", () => {
+    render(
+      <ThreadRootPreview
+        message={makeMessage({
+          content: ":sticker:hi:",
+          parts: [{ type: "sticker", sticker_id: "hi", alt: "Hi sticker" }],
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("[Sticker] Hi sticker")).toBeInTheDocument();
+    expect(screen.queryByText(":sticker:hi:")).not.toBeInTheDocument();
+  });
 });

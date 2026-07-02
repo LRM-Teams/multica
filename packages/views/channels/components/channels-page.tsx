@@ -1491,6 +1491,7 @@ export function ChannelsPage() {
                           }),
                           last.content,
                           resolveMentionPreview,
+                          last.parts,
                         )
                       : "";
                     const pinned = !!channel.pinned_at;

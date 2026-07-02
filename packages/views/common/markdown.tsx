@@ -14,14 +14,12 @@ import { MentionHoverCard } from "@multica/ui/components/common/mention-hover-ca
 import { useWorkspacePaths, useCurrentWorkspace } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { agentColor } from "./agent-color";
-import { useT } from "../i18n";
+import { useT } from "../i18n/use-t";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
-import { AppLink } from "../navigation";
-import {
-  Attachment as AttachmentRenderer,
-  AttachmentDownloadProvider,
-} from "../editor";
+import { AppLink } from "../navigation/app-link";
+import { Attachment as AttachmentRenderer } from "../editor/attachment";
+import { AttachmentDownloadProvider } from "../editor/attachment-download-context";
 
 export type { RenderMode };
 
@@ -191,9 +189,12 @@ function StickerImage({ id, alt }: { id: string; alt: string }): React.ReactNode
   );
 }
 
-function renderImage({ src, alt }: { src: string; alt: string }): React.ReactNode {
+function renderImage(
+  { src, alt }: { src: string; alt: string },
+  enableStickerShortcodes = true,
+): React.ReactNode {
   const stickerMatch = STICKER_SRC.exec(src);
-  if (stickerMatch?.[1]) {
+  if (enableStickerShortcodes && stickerMatch?.[1]) {
     return <StickerImage id={stickerMatch[1]} alt={alt} />;
   }
   return (
@@ -239,7 +240,11 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
   // the current workspace's prefix so it can't false-positive on tokens like
   // "UTF-8". Empty/absent prefix disables it.
   const issueRefPrefix = useCurrentWorkspace()?.issue_prefix || undefined;
-  const { attachments, highlightQuery, ...rest } = props;
+  const { attachments, highlightQuery, enableStickerShortcodes = true, ...rest } = props;
+  const renderAppImage = React.useCallback(
+    (image: { src: string; alt: string }) => renderImage(image, enableStickerShortcodes),
+    [enableStickerShortcodes],
+  );
   const renderMention = React.useCallback(
     (mention: { type: string; id: string; label?: string }) =>
       defaultRenderMention(mention, highlightQuery),
@@ -249,11 +254,12 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
     <AttachmentDownloadProvider attachments={attachments}>
       <MarkdownBase
         renderMention={renderMention}
-        renderImage={renderImage}
+        renderImage={renderAppImage}
         renderFileCard={renderFileCard}
         cdnDomain={cdnDomain}
         issueRefPrefix={issueRefPrefix}
         highlightQuery={highlightQuery}
+        enableStickerShortcodes={enableStickerShortcodes}
         {...rest}
       />
     </AttachmentDownloadProvider>

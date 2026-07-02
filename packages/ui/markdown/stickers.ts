@@ -4,11 +4,9 @@
  *
  *   :sticker:tada:  ->  ![sticker:tada](/api/stickers/tada)
  *
- * Agents embed the token in message content (see the multica-stickers built-in
- * skill); this normalises it to an `<img>` the app-level renderImage hook then
- * styles as a sticker (it recognises the `/api/stickers/<id>` src). Keeping the
- * transform here — a pure string pass with no business logic — means both chat
- * and channel surfaces get it for free via the shared Markdown component.
+ * This is a legacy Markdown compatibility transform. Formal channel messages
+ * use structured message parts instead, and those surfaces opt out of this
+ * preprocessing so `content` never becomes a sticker display fallback.
  *
  * The id charset is restricted to [a-z0-9-] so the token can't swallow
  * surrounding punctuation or collide with `mention://` / URL syntax. An id that

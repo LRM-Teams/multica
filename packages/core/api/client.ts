@@ -75,6 +75,7 @@ import type {
   MessagePart,
   PendingChatTasksResponse,
   SendChatMessageResponse,
+  StickerCatalogResponse,
   Channel,
   ChannelActiveTask,
   ChannelMember,
@@ -183,6 +184,7 @@ import {
   EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE,
   EMPTY_GROUPED_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
+  EMPTY_STICKER_CATALOG_RESPONSE,
   EMPTY_SQUAD,
   EMPTY_SQUAD_LIST,
   EMPTY_SQUAD_MEMBER_STATUS_LIST,
@@ -192,6 +194,7 @@ import {
   EMPTY_WEBHOOK_DELIVERY,
   AppConfigSchema,
   ChannelMessageSearchResponseSchema,
+  StickerCatalogResponseSchema,
   type AppConfigResponse,
   GroupedIssuesResponseSchema,
   ListIssuesResponseSchema,
@@ -1467,6 +1470,13 @@ export class ApiClient {
     const raw = await this.fetch<unknown>("/api/config");
     return parseWithFallback<AppConfigResponse>(raw, AppConfigSchema, EMPTY_APP_CONFIG, {
       endpoint: "GET /api/config",
+    });
+  }
+
+  async listStickers(): Promise<StickerCatalogResponse> {
+    const raw = await this.fetch<unknown>("/api/stickers");
+    return parseWithFallback(raw, StickerCatalogResponseSchema, EMPTY_STICKER_CATALOG_RESPONSE, {
+      endpoint: "GET /api/stickers",
     });
   }
 

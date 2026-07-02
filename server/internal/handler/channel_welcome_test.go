@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -25,6 +29,8 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 		"multica channel react CURRENT_MESSAGE <emoji>",
 		"💯",
 		"🎉",
+		"multica-stickers",
+		":sticker:hi:",
 		"全体总监以上欢迎一下新同事",
 	} {
 		if !strings.Contains(p, want) {
@@ -33,6 +39,35 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 	}
 	if strings.Contains(p, "Recent channel messages") {
 		t.Error("ambient prompt must not include channel history")
+	}
+}
+
+func TestBuildChannelMentionPromptIncludesStickerInstruction(t *testing.T) {
+	h := &Handler{DB: channelPromptNoopDB{}}
+	ch := ChannelResponse{
+		ID:          "22222222-2222-2222-2222-222222222222",
+		WorkspaceID: "11111111-1111-1111-1111-111111111111",
+		Name:        "产品讨论",
+	}
+	threadRootID := "33333333-3333-3333-3333-333333333333"
+	triggers := []ChannelMessageResponse{
+		{AuthorName: "Frank", AuthorType: "user", Content: "@Atlas 回复个表情包"},
+		{AuthorName: "Frank", AuthorType: "user", Content: "@Atlas 在线程里回复个表情包", ThreadRootMessageID: &threadRootID},
+	}
+
+	for _, trigger := range triggers {
+		p := h.buildChannelMentionPrompt(context.Background(), ch, trigger)
+		for _, want := range []string{
+			"Multica group chat #产品讨论",
+			"multica-stickers",
+			":sticker:hi:",
+			"Current message to respond to",
+			trigger.Content,
+		} {
+			if !strings.Contains(p, want) {
+				t.Errorf("mention prompt missing %q:\n%s", want, p)
+			}
+		}
 	}
 }
 
@@ -58,4 +93,24 @@ func TestBuildChannelWelcomePrompt(t *testing.T) {
 	if !strings.Contains(strings.ToLower(p), "one short line") {
 		t.Error("prompt must constrain the welcome to one short line")
 	}
+}
+
+type channelPromptNoopDB struct{}
+
+func (channelPromptNoopDB) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, errors.New("not implemented")
+}
+
+func (channelPromptNoopDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (channelPromptNoopDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return channelPromptNoopRow{}
+}
+
+type channelPromptNoopRow struct{}
+
+func (channelPromptNoopRow) Scan(dest ...any) error {
+	return pgx.ErrNoRows
 }

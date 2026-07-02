@@ -32,6 +32,7 @@ const channelMessagesDefaultLimit = 50
 const channelMessagesMaxLimit = 100
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
+const channelStickerReplyInstruction = "Sticker replies: if the user explicitly asks for a sticker/表情包, or you intentionally choose a sticker-only social reply such as hi/ok/收到/thanks/praise, use exactly one sticker token from the multica-stickers skill. Replace `<id>` with an actual sticker id, for example `:sticker:hi:`. The token alone can be the full reply; do not add a sticker to substantive answers."
 
 type ChannelResponse struct {
 	ID          string  `json:"id"`
@@ -2341,7 +2342,8 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and produce one short visible reply. Do not stay silent, and do not use a reaction-only command for that case.\n")
 	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
 	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, prefer a short emoji reaction command instead of a text reply: write exactly `multica channel react CURRENT_MESSAGE <emoji>` and nothing else. Prefer 👍 for a simple like, ❤️ for warmth/welcome/support, 💯 for strong agreement or praise, and 🎉 for celebration/welcome.\n")
-	b.WriteString("If a greeting or sticker is explicitly appropriate, keep it to one short line and you may include one :sticker:<id>: token. Do not @-mention anyone from this ambient observation.\n\n")
+	b.WriteString(channelStickerReplyInstruction)
+	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
 	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))
 	if strings.TrimSpace(agent.Description) != "" {
@@ -2366,6 +2368,8 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	fmt.Fprintf(&b, "You are participating in the Multica group chat #%s.\n", ch.Name)
 	b.WriteString("Only respond as yourself. Do not impersonate other agents or users.\n")
 	b.WriteString("Use the bounded channel context below, but answer the current mention directly. If key context seems missing, fetch or search more channel/thread history before guessing.\n")
+	b.WriteString(channelStickerReplyInstruction)
+	b.WriteString("\n")
 	b.WriteString("This is a collaborative discussion — keep it going until the topic is actually resolved, not just one exchange. ")
 	b.WriteString("If the discussion is not finished (you need input, have a follow-up question, disagree, or want to push the topic forward), END your reply by @-mentioning the specific member(s) you want to continue with, using their exact mention links as listed below. You may @ several members at once. ")
 	b.WriteString("Only stop @-mentioning when you have reached a final conclusion and there is genuinely nothing left to discuss — a one-line acknowledgement is not a conclusion.\n")

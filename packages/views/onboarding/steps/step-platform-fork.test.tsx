@@ -25,6 +25,7 @@ vi.mock("../components/use-runtime-picker", () => ({
 }));
 
 import { StepPlatformFork } from "./step-platform-fork";
+import { CliInstallInstructions } from "./cli-install-instructions";
 
 function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
   return {
@@ -147,6 +148,20 @@ describe("StepPlatformFork", () => {
     expect(
       within(dialog).getByRole("button", { name: /start exploring/i }),
     ).toBeDisabled();
+  });
+
+  it("CLI dialog: Windows + WSL mode updates the waiting guidance", async () => {
+    const user = userEvent.setup();
+    renderFork({ cliInstructions: <CliInstallInstructions /> });
+
+    await user.click(screen.getByRole("button", { name: /show steps/i }));
+
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("radio", { name: /windows \+ wsl/i }));
+
+    expect(
+      within(dialog).getByText(/finish the sign-in tab that opened in windows/i),
+    ).toBeInTheDocument();
   });
 
   it("CLI dialog with a selected runtime: Connect enables and fires onNext(runtime)", async () => {

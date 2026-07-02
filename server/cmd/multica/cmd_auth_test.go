@@ -206,6 +206,71 @@ func TestResolveCallbackBinding(t *testing.T) {
 	}
 }
 
+func TestBrowserOpenCommand(t *testing.T) {
+	url := "https://multica.ai/login?cli_callback=http%3A%2F%2F172.20.1.2%3A1234&cli_state=abc123"
+	cases := []struct {
+		name     string
+		goos     string
+		wsl      bool
+		wantCmd  string
+		wantArgs []string
+		wantErr  bool
+	}{
+		{
+			name:     "macOS uses open",
+			goos:     "darwin",
+			wantCmd:  "open",
+			wantArgs: []string{url},
+		},
+		{
+			name:     "Linux uses xdg-open",
+			goos:     "linux",
+			wantCmd:  "xdg-open",
+			wantArgs: []string{url},
+		},
+		{
+			name:     "WSL opens the Windows browser",
+			goos:     "linux",
+			wsl:      true,
+			wantCmd:  "cmd.exe",
+			wantArgs: []string{"/c", "start", "", `"` + url + `"`},
+		},
+		{
+			name:     "Windows uses url handler",
+			goos:     "windows",
+			wantCmd:  "rundll32",
+			wantArgs: []string{"url.dll,FileProtocolHandler", url},
+		},
+		{
+			name:    "unsupported platform errors",
+			goos:    "plan9",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			gotCmd, gotArgs, err := browserOpenCommand(tc.goos, tc.wsl, url)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("browserOpenCommand() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("browserOpenCommand() unexpected error: %v", err)
+			}
+			if gotCmd != tc.wantCmd {
+				t.Fatalf("cmd = %q, want %q", gotCmd, tc.wantCmd)
+			}
+			if strings.Join(gotArgs, "\x00") != strings.Join(tc.wantArgs, "\x00") {
+				t.Fatalf("args = %#v, want %#v", gotArgs, tc.wantArgs)
+			}
+		})
+	}
+}
+
 // TestLoginTokenFlagWiring asserts the production loginCmd flag is registered
 // the way #1994 needs it to be: a String flag (not Bool) with a NoOptDefVal
 // so `--token` (no value) keeps its legacy prompt-mode behavior. This is the

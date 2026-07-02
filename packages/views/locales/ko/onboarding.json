@@ -118,8 +118,21 @@
   "cli_install": {
     "copy_aria": "복사",
     "intro": "이 컴퓨터에서 에이전트를 실행하려면 에이전트 런타임(Claude Code, Codex, Cursor 등)이 필요합니다. 서버와 원격 개발 환경에서도 사용할 수 있습니다.",
+    "mode_label": "어디에서 실행하나요?",
+    "modes": {
+      "unix": "Mac / Linux",
+      "windows-powershell": "Windows",
+      "windows-wsl": "Windows + WSL"
+    },
+    "mode_hints": {
+      "unix": "macOS, Linux, SSH 기기, 대부분의 호스팅 터미널에 사용하세요.",
+      "windows-powershell": "Windows PowerShell에서 사용하세요.",
+      "windows-wsl": "Multica는 WSL 안에서 실행되고 브라우저는 Windows에서 열릴 때 사용하세요."
+    },
     "step1_label": "Multica CLI 설치",
-    "step2_label": "데몬 시작"
+    "step2_label": "데몬 시작",
+    "step2_hint": "브라우저를 열어 로그인한 뒤 데몬을 시작합니다.",
+    "step2_hint_wsl": "Windows 브라우저에서 로그인하고 승인을 WSL에서 실행 중인 데몬으로 돌려보냅니다."
   },
   "cloud_waitlist": {
     "intro_main": "클라우드 런타임은 아직 제공되지 않습니다. 이메일을 남겨주시면 준비되는 대로 연락드리겠습니다.",
@@ -374,6 +387,8 @@
     "stage_midway_suffix": "이(가) 연 브라우저 탭에서 로그인을 승인했는지 확인하세요. 그래야 컴퓨터가 연결됩니다.",
     "stage_slow_prefix": "평소보다 오래 걸리고 있습니다. ",
     "stage_slow_suffix": "을(를) 실행한 터미널에서 오류가 있는지 확인하세요.",
+    "stage_wsl_waiting": "Windows에서 열린 로그인 탭을 완료하세요. WSL 데몬이 승인되면 이 컴퓨터가 자동으로 여기에 표시됩니다.",
+    "stage_wsl_retry": "아직 기다리는 중입니다. WSL 터미널로 돌아가 위의 Windows + WSL 명령을 다시 실행하고, 열리는 Windows 브라우저에서 로그인을 완료하세요.",
     "stage_stalled_prefix": "아직 아무 것도 들어오지 않습니다. 터미널이 익숙하지 않다면 ",
     "stage_stalled_term": "데스크톱",
     "stage_stalled_suffix": "이 더 부드러운 경로입니다. 한 번 클릭하면 이 컴퓨터가 연결됩니다. 이 대화상자를 닫고 데스크톱을 선택하거나, 건너뛰기를 눌러 계속하세요."

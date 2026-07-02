@@ -157,11 +157,24 @@
   "connect": {
     "title": "コンピュータを追加",
     "description": "追加したいコンピュータで、この 2 つのコマンドを実行してください。デーモンがオンラインになった瞬間に検出します。",
+    "mode_label": "どこで実行しますか?",
+    "modes": {
+      "unix": "Mac / Linux",
+      "windows-powershell": "Windows",
+      "windows-wsl": "Windows + WSL"
+    },
+    "mode_hints": {
+      "unix": "macOS、Linux、SSH 接続先、ほとんどのホスト型ターミナルで使います。",
+      "windows-powershell": "Windows の PowerShell で使います。",
+      "windows-wsl": "Multica を WSL 内で実行し、ブラウザは Windows 側で開く場合に使います。"
+    },
     "step1_label": "Multica CLI をインストール",
     "step2_label": "デーモンを起動",
     "step2_hint": "サインインのためにブラウザを開き、その後デーモンをバックグラウンドで実行し続けます。",
+    "step2_hint_wsl": "Windows のブラウザでサインインし、承認を WSL 内で動くデーモンに戻します。",
     "live_listening": "あなたのコンピュータを待っています",
     "live_listening_hint": "デーモンが起動するとすぐに検出します — 通常は 1 分以内です。",
+    "live_listening_hint_wsl": "Windows のブラウザでサインインを完了してください。このページが WSL デーモンを自動で検出します。",
     "troubleshooting": "そのコンピュータでブラウザを開けませんか?",
     "trouble_intro": "ブラウザでのサインインの代わりにトークンを使ってください。手順 2 を置き換え、ターミナルがある場所ならどこでも動作します。",
     "trouble_token_hint_prefix": "トークンは ",

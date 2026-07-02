@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  cloneElement,
+  isValidElement,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { ArrowLeft, ArrowRight, Download } from "lucide-react";
 import {
   captureDownloadIntent,
@@ -24,7 +31,11 @@ import { StepHeader } from "../components/step-header";
 import { RuntimeAsidePanel } from "../components/runtime-aside-panel";
 import { CompactRuntimeRow } from "../components/compact-runtime-row";
 import { useRuntimePicker } from "../components/use-runtime-picker";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/use-t";
+import {
+  type DaemonSetupMode,
+  defaultDaemonSetupMode,
+} from "../../common/daemon-setup-commands";
 
 /**
  * Step 3 on **web**. The user is in a browser and hasn't downloaded
@@ -48,6 +59,11 @@ import { useT } from "../../i18n";
  */
 
 type DialogState = "cli" | null;
+
+type CliInstructionsControlProps = {
+  mode?: DaemonSetupMode;
+  onModeChange?: (mode: DaemonSetupMode) => void;
+};
 
 // Single canonical download destination — the /download page owns
 // OS + arch detection, the All-Platforms matrix, release-note links,
@@ -361,6 +377,17 @@ function CliInstallDialog({
   cliInstructions?: ReactNode;
 }) {
   const { t } = useT("onboarding");
+  const [setupMode, setSetupMode] = useState<DaemonSetupMode>(() =>
+    defaultDaemonSetupMode(),
+  );
+  const renderedCliInstructions =
+    isValidElement<CliInstructionsControlProps>(cliInstructions) &&
+    typeof cliInstructions.type !== "string"
+      ? cloneElement(cliInstructions, {
+          mode: setupMode,
+          onModeChange: setSetupMode,
+        })
+      : cliInstructions;
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? null : onClose())}>
       <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-[560px]">
@@ -372,7 +399,7 @@ function CliInstallDialog({
         </DialogHeader>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pt-2">
-          {cliInstructions}
+          {renderedCliInstructions}
 
           {hasRuntimes ? (
             <>
@@ -397,7 +424,7 @@ function CliInstallDialog({
               </div>
             </>
           ) : (
-            <CliWaitingStatus dialogOpen={open} />
+            <CliWaitingStatus dialogOpen={open} mode={setupMode} />
           )}
         </div>
 
@@ -459,7 +486,13 @@ function formatElapsed(seconds: number) {
  * Elapsed-time counter only ticks while the dialog is open so reopen
  * after closing resets the staging.
  */
-function CliWaitingStatus({ dialogOpen }: { dialogOpen: boolean }) {
+function CliWaitingStatus({
+  dialogOpen,
+  mode,
+}: {
+  dialogOpen: boolean;
+  mode: DaemonSetupMode;
+}) {
   const { t } = useT("onboarding");
   const [elapsed, setElapsed] = useState(0);
 
@@ -490,6 +523,7 @@ function CliWaitingStatus({ dialogOpen }: { dialogOpen: boolean }) {
         : elapsed < 90
           ? "slow"
           : "stalled";
+  const isWsl = mode === "windows-wsl";
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-4">
@@ -513,28 +547,34 @@ function CliWaitingStatus({ dialogOpen }: { dialogOpen: boolean }) {
         aria-live="polite"
         className="text-[12.5px] leading-[1.55] text-muted-foreground"
       >
-        {stage === "normal" && (
+        {isWsl && (stage === "normal" || stage === "midway") && (
+          <>{t(($) => $.step_platform.stage_wsl_waiting)}</>
+        )}
+        {isWsl && (stage === "slow" || stage === "stalled") && (
+          <>{t(($) => $.step_platform.stage_wsl_retry)}</>
+        )}
+        {!isWsl && stage === "normal" && (
           <>
             {t(($) => $.step_platform.stage_normal_prefix)}
             <span className="font-mono">{"multica setup"}</span>
             {t(($) => $.step_platform.stage_normal_suffix)}
           </>
         )}
-        {stage === "midway" && (
+        {!isWsl && stage === "midway" && (
           <>
             {t(($) => $.step_platform.stage_midway_prefix)}
             <span className="font-mono">{"multica setup"}</span>
             {t(($) => $.step_platform.stage_midway_suffix)}
           </>
         )}
-        {stage === "slow" && (
+        {!isWsl && stage === "slow" && (
           <>
             {t(($) => $.step_platform.stage_slow_prefix)}
             <span className="font-mono">{"multica setup"}</span>
             {t(($) => $.step_platform.stage_slow_suffix)}
           </>
         )}
-        {stage === "stalled" && (
+        {!isWsl && stage === "stalled" && (
           <>
             {t(($) => $.step_platform.stage_stalled_prefix)}
             <span className="font-medium text-foreground">{t(($) => $.step_platform.stage_stalled_term)}</span>

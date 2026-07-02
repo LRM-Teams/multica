@@ -8,7 +8,6 @@ import { runtimeKeys } from "@multica/core/runtimes/queries";
 import { useWSEvent } from "@multica/core/realtime";
 import { paths, useWorkspaceSlug } from "@multica/core/paths";
 import { useConfigStore } from "@multica/core/config";
-import { MULTICA_INSTALL_COMMAND } from "@multica/core/constants/repository";
 import {
   Dialog,
   DialogContent,
@@ -23,37 +22,14 @@ import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
+import {
+  DAEMON_SETUP_MODES,
+  type DaemonSetupMode,
+  daemonSetupCommands,
+  defaultDaemonSetupMode,
+} from "../../common/daemon-setup-commands";
 
 type Step = "instructions" | "success";
-
-const CLOUD_SERVER_URL = "https://api.multica.ai";
-const CLOUD_APP_URL = "https://multica.ai";
-
-function normalizeCommandURL(url: string | undefined) {
-  return url?.trim().replace(/\/+$/, "") ?? "";
-}
-
-function daemonCommands(serverUrl: string | undefined, appUrl: string | undefined) {
-  const normalizedServerUrl = normalizeCommandURL(serverUrl);
-  const normalizedAppUrl = normalizeCommandURL(appUrl);
-  if (normalizedServerUrl && normalizedAppUrl) {
-    return {
-      setupCmd: `multica setup self-host --server-url ${normalizedServerUrl} --app-url ${normalizedAppUrl}`,
-      tokenCmd: `multica config set server_url ${normalizedServerUrl}
-multica config set app_url ${normalizedAppUrl}
-multica login --token <YOUR_TOKEN>
-multica daemon start`,
-    };
-  }
-
-  return {
-    setupCmd: "multica setup",
-    tokenCmd: `multica config set server_url ${CLOUD_SERVER_URL}
-multica config set app_url ${CLOUD_APP_URL}
-multica login --token <YOUR_TOKEN>
-multica daemon start`,
-  };
-}
 
 export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState<Step>("instructions");
@@ -189,9 +165,14 @@ function CommandStep({
 
 function InstructionsStep({ onClose }: { onClose: () => void }) {
   const { t } = useT("runtimes");
+  const [mode, setMode] = useState<DaemonSetupMode>(() => defaultDaemonSetupMode());
   const daemonServerUrl = useConfigStore((s) => s.daemonServerUrl);
   const daemonAppUrl = useConfigStore((s) => s.daemonAppUrl);
-  const { setupCmd, tokenCmd } = daemonCommands(daemonServerUrl, daemonAppUrl);
+  const { installCmd, setupCmd, tokenCmd } = daemonSetupCommands(
+    daemonServerUrl,
+    daemonAppUrl,
+    mode,
+  );
   return (
     <>
       <DialogHeader className="px-6 pt-6 pb-2">
@@ -205,10 +186,12 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         <div className="space-y-4">
+          <SetupModeSelector mode={mode} onChange={setMode} />
+
           <CommandStep
             n={1}
             label={t(($) => $.connect.step1_label)}
-            cmd={MULTICA_INSTALL_COMMAND}
+            cmd={installCmd}
             copyAria={t(($) => $.connect.copy_aria)}
           />
 
@@ -220,11 +203,13 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
               copyAria={t(($) => $.connect.copy_aria)}
             />
             <p className="mt-1.5 text-[11px] leading-[1.55] text-muted-foreground">
-              {t(($) => $.connect.step2_hint)}
+              {mode === "windows-wsl"
+                ? t(($) => $.connect.step2_hint_wsl)
+                : t(($) => $.connect.step2_hint)}
             </p>
           </div>
 
-          <LiveListening />
+          <LiveListening mode={mode} />
 
           <TroubleshootingDetails tokenCmd={tokenCmd} />
         </div>
@@ -236,6 +221,47 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
         </Button>
       </DialogFooter>
     </>
+  );
+}
+
+function SetupModeSelector({
+  mode,
+  onChange,
+}: {
+  mode: DaemonSetupMode;
+  onChange: (mode: DaemonSetupMode) => void;
+}) {
+  const { t } = useT("runtimes");
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-medium text-foreground">
+        {t(($) => $.connect.mode_label)}
+      </div>
+      <div
+        className="grid grid-cols-1 gap-1 rounded-lg bg-muted p-1 sm:grid-cols-3"
+        role="radiogroup"
+        aria-label={t(($) => $.connect.mode_label)}
+      >
+        {DAEMON_SETUP_MODES.map((item) => (
+          <button
+            key={item}
+            type="button"
+            role="radio"
+            aria-checked={mode === item}
+            onClick={() => onChange(item)}
+            className={cn(
+              "rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors",
+              mode === item && "bg-background text-foreground shadow-sm",
+            )}
+          >
+            {t(($) => $.connect.modes[item])}
+          </button>
+        ))}
+      </div>
+      <p className="text-[11px] leading-[1.55] text-muted-foreground">
+        {t(($) => $.connect.mode_hints[mode])}
+      </p>
+    </div>
   );
 }
 
@@ -300,7 +326,7 @@ function TroubleshootingDetails({ tokenCmd }: { tokenCmd: string }) {
 // Live-listening indicator
 // ---------------------------------------------------------------------------
 
-function LiveListening() {
+function LiveListening({ mode }: { mode: DaemonSetupMode }) {
   const { t } = useT("runtimes");
   return (
     <div
@@ -316,7 +342,9 @@ function LiveListening() {
         {t(($) => $.connect.live_listening)}
       </span>
       <span className="text-muted-foreground">
-        {t(($) => $.connect.live_listening_hint)}
+        {mode === "windows-wsl"
+          ? t(($) => $.connect.live_listening_hint_wsl)
+          : t(($) => $.connect.live_listening_hint)}
       </span>
     </div>
   );

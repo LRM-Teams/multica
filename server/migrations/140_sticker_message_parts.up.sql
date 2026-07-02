@@ -1,8 +1,10 @@
 ALTER TABLE chat_message
-  ADD COLUMN parts jsonb NOT NULL DEFAULT '[]'::jsonb;
+  ADD COLUMN parts jsonb NOT NULL DEFAULT '[]'::jsonb,
+  ADD CONSTRAINT chat_message_parts_array CHECK (jsonb_typeof(parts) = 'array');
 
 ALTER TABLE channel_message
-  ADD COLUMN parts jsonb NOT NULL DEFAULT '[]'::jsonb;
+  ADD COLUMN parts jsonb NOT NULL DEFAULT '[]'::jsonb,
+  ADD CONSTRAINT channel_message_parts_array CHECK (jsonb_typeof(parts) = 'array');
 
 CREATE TABLE sticker_pack (
   id text PRIMARY KEY,
@@ -38,7 +40,6 @@ CREATE TABLE sticker_asset (
 );
 
 CREATE INDEX idx_sticker_pack_workspace ON sticker_pack (workspace_id);
-CREATE INDEX idx_sticker_asset_pack ON sticker_asset (pack_id, sticker_id);
 
 INSERT INTO sticker_pack (id, workspace_id, name, source, license)
 VALUES ('builtin', NULL, 'Built-in stickers', 'builtin', 'Apache-2.0')

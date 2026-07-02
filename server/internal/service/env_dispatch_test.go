@@ -20,6 +20,8 @@ type fakeEnvDispatchDeps struct {
 	runCounter int
 	idem       map[string]EnvDispatchResult // idempotency ledger
 
+	defaultSelfPlayEnv string // per-workspace default self_play base env ("" = unconfigured)
+
 	forkErr        error
 	createEnvErr   error
 	copyProjectErr error
@@ -161,7 +163,7 @@ func (f *fakeEnvDispatchDeps) CreateChatSession(_ context.Context, pid, _, _, _ 
 func (f *fakeEnvDispatchDeps) CreateChatMessage(_ context.Context, _, _, _ string) (string, error) {
 	return "msg-1", nil
 }
-func (f *fakeEnvDispatchDeps) EnqueueAgentRun(_ context.Context, _, _, _, _, _ string, idx int) (string, error) {
+func (f *fakeEnvDispatchDeps) EnqueueAgentRun(_ context.Context, _, _, _, _, _, _ string, idx int) (string, error) {
 	if f.enqueueErr != nil {
 		return "", f.enqueueErr
 	}
@@ -171,6 +173,14 @@ func (f *fakeEnvDispatchDeps) EnqueueAgentRun(_ context.Context, _, _, _, _, _ s
 	id := fmt.Sprintf("run-%d", f.runCounter)
 	f.agentRuns = append(f.agentRuns, id)
 	return id, nil
+}
+func (f *fakeEnvDispatchDeps) GetDefaultSelfPlayEnv(_ context.Context, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.defaultSelfPlayEnv == "" {
+		return "", fmt.Errorf("not configured")
+	}
+	return f.defaultSelfPlayEnv, nil
 }
 
 // Helper: seed a base env in the fake.
@@ -544,5 +554,94 @@ func TestDispatch_ForksEverySandbox(t *testing.T) {
 	}
 	if len(newEnv.SandboxIDs) != 3 {
 		t.Fatalf("want 3 forked sandboxes in the new env, got %d", len(newEnv.SandboxIDs))
+	}
+}
+
+// TestDispatch_ResumeNormalizesToBranch verifies mode="resume" is treated as
+// branch: it forks a state env and dispatches the copied issue (spec D1).
+func TestDispatch_ResumeNormalizesToBranch(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	// a state (branch-able) env + its 1:1 project with one issue
+	f.envs["src-env"] = Env{ID: "src-env", Mode: EnvModeBranch, Domain: EnvDomainSweLego, SandboxIDs: []string{"s1"}}
+	f.projects["src-proj"] = "src-env"
+	f.issues["src-proj"] = []IssueRow{{ID: "iss-1", ProjectID: "src-proj"}}
+	svc := NewEnvDispatchService(f, 4)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", Mode: "resume", EnvID: "src-env",
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue,
+		GroupSize: 1, AgentID: "ag",
+	})
+	if err != nil {
+		t.Fatalf("resume dispatch: %v", err)
+	}
+	if len(res.Rollouts) != 1 || res.Rollouts[0].AgentRunID == "" {
+		t.Fatalf("resume should behave as branch and dispatch, got %+v", res.Rollouts)
+	}
+}
+
+// TestValidate_ExactlyOneAgentOrSquad verifies that neither/both agent_id and
+// squad_id are rejected (spec D4).
+func TestValidate_ExactlyOneAgentOrSquad(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	svc := NewEnvDispatchService(f, 1)
+	base := EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeScratch, EnvID: "base",
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
+		GroupSize: 1, Message: &MessageInput{Content: "hi"},
+	}
+	// neither
+	if _, err := svc.Dispatch(context.Background(), base); err == nil {
+		t.Error("expected error when neither agent_id nor squad_id set")
+	}
+	// both
+	b2 := base
+	b2.AgentID, b2.SquadID = "ag", "sq"
+	if _, err := svc.Dispatch(context.Background(), b2); err == nil {
+		t.Error("expected error when both agent_id and squad_id set")
+	}
+}
+
+// TestDispatch_EmptyEnvIDResolvesDefaultForSelfPlay verifies scratch+self_play
+// with an empty env_id resolves the configured per-workspace default base env
+// and forks it (spec D2/D3).
+func TestDispatch_EmptyEnvIDResolvesDefaultForSelfPlay(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	f.envs["ws-default-base"] = Env{ID: "ws-default-base", Mode: EnvModeBase, SandboxIDs: []string{"s1"}}
+	f.defaultSelfPlayEnv = "ws-default-base"
+	svc := NewEnvDispatchService(f, 1)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeScratch, EnvID: "",
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
+		GroupSize: 1, AgentID: "ag", Message: &MessageInput{Content: "hi"},
+	})
+	if err != nil {
+		t.Fatalf("default-env self_play dispatch: %v", err)
+	}
+	if res.Rollouts[0].EnvID == "" {
+		t.Fatal("expected a forked env_id from the default base")
+	}
+}
+
+// TestValidate_EmptyEnvIDRejectedForSweLegoAndUnconfigured verifies empty
+// env_id is rejected for swe_lego, and for self_play when no default is
+// configured (spec D2/D3).
+func TestValidate_EmptyEnvIDRejectedForSweLegoAndUnconfigured(t *testing.T) {
+	f := newFakeEnvDispatchDeps() // defaultSelfPlayEnv == "" (unconfigured)
+	svc := NewEnvDispatchService(f, 1)
+	// swe_lego + empty env_id → 400
+	if _, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeScratch, EnvID: "",
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue,
+		GroupSize: 1, AgentID: "ag", Issue: &IssueInput{Title: "t"},
+	}); err == nil {
+		t.Error("swe_lego with empty env_id must be rejected")
+	}
+	// self_play + empty env_id + no default configured → 400
+	if _, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeScratch, EnvID: "",
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
+		GroupSize: 1, AgentID: "ag", Message: &MessageInput{Content: "hi"},
+	}); err == nil {
+		t.Error("self_play with empty env_id and no default must be rejected")
 	}
 }

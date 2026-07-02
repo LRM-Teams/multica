@@ -47,6 +47,7 @@ type EnvDispatchInput struct {
 	DispatchType    EnvDispatchType
 	GroupSize       int
 	AgentID         string
+	SquadID         string // team dispatch; mutually exclusive with AgentID (leader resolved server-side)
 	IdempotencyKey  string // optional; dedupes retries (spec §7.7)
 
 	// Issue dispatch (required for scratch+swe_lego; forbidden for
@@ -118,7 +119,12 @@ type EnvDispatchDeps interface {
 	ListChatSessionsByProject(ctx context.Context, projectID, workspaceID string) ([]string, error)
 
 	// Agent run
-	EnqueueAgentRun(ctx context.Context, workspaceID, agentID, issueID, chatSessionID, sandboxID string, idx int) (runID string, err error)
+	EnqueueAgentRun(ctx context.Context, workspaceID, agentID, squadID, issueID, chatSessionID, sandboxID string, idx int) (runID string, err error)
+
+	// GetDefaultSelfPlayEnv resolves the per-workspace default self_play base
+	// env used when a scratch+self_play dispatch is called with an empty
+	// env_id. Returns ("", nil) or an error when unconfigured (spec D2/D3).
+	GetDefaultSelfPlayEnv(ctx context.Context, workspaceID string) (envID string, err error)
 
 	// Idempotency ledger (spec §7.7). GetIdempotentResponse returns ok=false
 	// when the key is unseen; SaveIdempotentResponse persists the response for
@@ -168,6 +174,12 @@ var ErrAllDispatchFailed = fmt.Errorf("dispatch_failed: all rollouts failed")
 
 // Dispatch runs the unified dispatch flow.
 func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) (EnvDispatchResult, error) {
+	// resume is an alias for branch (spec D1): normalize at the edge so there
+	// is a single downstream code path and no new EnvMode.
+	if in.Mode == "resume" {
+		in.Mode = EnvModeBranch
+	}
+
 	if err := s.validate(in); err != nil {
 		return EnvDispatchResult{}, err
 	}
@@ -179,6 +191,16 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		} else if ok {
 			return prev, nil
 		}
+	}
+
+	// Resolve the per-workspace default self_play base env when env_id is empty.
+	// validate() guarantees this is only reachable for scratch+self_play.
+	if in.EnvID == "" {
+		envID, err := s.deps.GetDefaultSelfPlayEnv(ctx, in.WorkspaceID)
+		if err != nil || envID == "" {
+			return EnvDispatchResult{}, fmt.Errorf("validation_failed: default self-play env not configured")
+		}
+		in.EnvID = envID
 	}
 
 	env, err := s.deps.GetEnv(ctx, in.EnvID, in.WorkspaceID)
@@ -298,8 +320,11 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 	if in.GroupSize < 1 || in.GroupSize > 64 {
 		return fmt.Errorf("validation_failed: group_size must be in [1, 64]")
 	}
-	if in.AgentID == "" {
-		return fmt.Errorf("validation_failed: agent_id is required")
+	switch {
+	case in.AgentID == "" && in.SquadID == "":
+		return fmt.Errorf("validation_failed: agent_id or squad_id is required")
+	case in.AgentID != "" && in.SquadID != "":
+		return fmt.Errorf("validation_failed: agent_id and squad_id are mutually exclusive")
 	}
 	if in.Domain != EnvDomainSweLego && in.Domain != EnvDomainSelfPlay {
 		return fmt.Errorf("validation_failed: domain is required (swe_lego or self_play)")
@@ -318,6 +343,13 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 	}
 	if in.DispatchType == EnvDispatchMessage && (in.Message == nil || in.Message.Content == "") {
 		return fmt.Errorf("validation_failed: message.content required")
+	}
+	// env_id may be empty ONLY for scratch+self_play (resolves the workspace
+	// default base env); every other combination requires an explicit env_id.
+	if in.EnvID == "" {
+		if in.Mode != EnvModeScratch || in.Domain != EnvDomainSelfPlay {
+			return fmt.Errorf("validation_failed: env_id is required except for scratch self_play")
+		}
 	}
 	return nil
 }
@@ -432,7 +464,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 			issueID = newID
 			r.IssueID = newID
 		}
-		runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, issueID, "", "", idx)
+		runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, issueID, "", "", idx)
 		if err != nil {
 			r.Error = fmt.Sprintf("enqueue agent run: %v", err)
 			return
@@ -457,7 +489,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 		r.Error = fmt.Sprintf("create chat message: %v", err)
 		return
 	}
-	runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, "", sessionID, "", idx)
+	runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, "", sessionID, "", idx)
 	if err != nil {
 		r.Error = fmt.Sprintf("enqueue agent run: %v", err)
 		return

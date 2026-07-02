@@ -5,14 +5,44 @@ import {
   XCircle,
   ArrowUpCircle,
   Check,
+  Copy,
+  Terminal,
 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@multica/ui/components/ui/dialog";
 import { api } from "@multica/core/api";
+import { copyText } from "@multica/ui/lib/clipboard";
+import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
+import { cn } from "@multica/ui/lib/utils";
 import { MULTICA_LATEST_RELEASE_API_URL } from "@multica/core/constants/repository";
 import type { RuntimeUpdateStatus } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
 
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+const MANUAL_UPDATE_COMMANDS = [
+  {
+    key: "brew",
+    command: "brew upgrade multica-ai/tap/multica && multica daemon restart",
+  },
+  {
+    key: "linux_script",
+    command:
+      "curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash && multica daemon restart",
+  },
+  {
+    key: "windows",
+    command:
+      "irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex; multica daemon restart",
+  },
+] as const;
 
 let cachedLatestVersion: string | null = null;
 let cachedAt = 0;
@@ -85,6 +115,7 @@ export function UpdateSection({
 }: UpdateSectionProps) {
   const { t } = useT("runtimes");
   const isManaged = launchedBy === "desktop";
+  const [manualOpen, setManualOpen] = useState(false);
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [status, setStatus] = useState<RuntimeUpdateStatus | null>(null);
   const [error, setError] = useState("");
@@ -237,14 +268,18 @@ export function UpdateSection({
         )}
       </div>
 
-      {!isManaged && canUpdate && (
-        <p className="text-[11px] leading-[1.55] text-muted-foreground">
-          {t(($) => $.update.manual_hint_prefix)}{" "}
-          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-foreground">
-            {"multica update"}
-          </code>{" "}
-          {t(($) => $.update.manual_hint_suffix)}
-        </p>
+      {!isManaged && (
+        <div className="flex flex-wrap items-center gap-2 text-[11px] leading-[1.55] text-muted-foreground">
+          <p>{t(($) => $.update.manual_hint)}</p>
+          <Button
+            variant="ghost"
+            size="xs"
+            className="h-6 px-2 text-[11px]"
+            onClick={() => setManualOpen(true)}
+          >
+            {t(($) => $.update.manual_action)}
+          </Button>
+        </div>
       )}
 
       {status === "completed" && output && (
@@ -257,17 +292,125 @@ export function UpdateSection({
         <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2">
           <p className="text-xs text-destructive">{error}</p>
           {status === "failed" && (
-            <Button
-              variant="ghost"
-              size="xs"
-              className="mt-1"
-              onClick={handleUpdate}
-            >
-              {t(($) => $.update.retry)}
-            </Button>
+            <div className="mt-1 flex flex-wrap gap-1">
+              <Button variant="ghost" size="xs" onClick={handleUpdate}>
+                {t(($) => $.update.retry)}
+              </Button>
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => setManualOpen(true)}
+              >
+                {t(($) => $.update.manual_action)}
+              </Button>
+            </div>
           )}
         </div>
       )}
+
+      <ManualUpdateDialog open={manualOpen} onOpenChange={setManualOpen} />
+    </div>
+  );
+}
+
+function ManualUpdateDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { t } = useT("runtimes");
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{t(($) => $.update.manual_dialog_title)}</DialogTitle>
+          <DialogDescription>
+            {t(($) => $.update.manual_dialog_description)}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          {MANUAL_UPDATE_COMMANDS.map((entry) => (
+            <CommandRow
+              key={entry.key}
+              label={t(($) => $.update.manual_commands[entry.key])}
+              command={entry.command}
+              copyLabel={t(($) => $.update.copy_command)}
+              copiedLabel={t(($) => $.update.copied)}
+            />
+          ))}
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          {t(($) => $.update.manual_after_restart)}
+        </p>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            {t(($) => $.update.manual_close)}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CommandRow({
+  label,
+  command,
+  copyLabel,
+  copiedLabel,
+}: {
+  label: string;
+  command: string;
+  copyLabel: string;
+  copiedLabel: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timeout = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timeout);
+  }, [copied]);
+
+  const handleCopy = () => {
+    void copyText(command).then((ok) => {
+      if (ok) setCopied(true);
+    });
+  };
+
+  return (
+    <div className="rounded-lg border bg-muted/30 p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
+        <Terminal className="h-3.5 w-3.5 text-muted-foreground" />
+        {label}
+      </div>
+      <div className="flex items-start gap-2 rounded-md bg-background px-3 py-2 ring-1 ring-border/70">
+        <code
+          className={cn(
+            "min-w-0 flex-1 break-all font-mono text-[11px] leading-5 text-foreground",
+            CODE_LIGATURE_CLASS,
+          )}
+        >
+          {command}
+        </code>
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label={copied ? copiedLabel : copyLabel}
+          className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {copied ? (
+            <Check className="h-3.5 w-3.5 text-success" aria-hidden />
+          ) : (
+            <Copy className="h-3.5 w-3.5" aria-hidden />
+          )}
+        </button>
+      </div>
     </div>
   );
 }

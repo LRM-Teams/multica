@@ -248,8 +248,19 @@
     "retry": "Retry",
     "unknown_error": "Unknown error",
     "initiate_failed": "Failed to initiate update",
-    "manual_hint_prefix": "To update this local daemon from a terminal, run",
-    "manual_hint_suffix": "on that computer. The daemon will restart itself after the update.",
+    "manual_hint": "If the automatic update cannot write to the install location, update from a terminal on that computer.",
+    "manual_action": "Manual commands",
+    "manual_dialog_title": "Update this runtime manually",
+    "manual_dialog_description": "Run the command that matches the runtime computer. Use the Linux script if the CLI was installed directly instead of through Homebrew.",
+    "manual_after_restart": "After the command finishes, the daemon reconnects with the new CLI version. If it stays offline, run multica daemon restart once more.",
+    "manual_close": "Close",
+    "copy_command": "Copy command",
+    "copied": "Copied",
+    "manual_commands": {
+      "brew": "macOS or Linux with Homebrew",
+      "linux_script": "Linux direct install",
+      "windows": "Windows PowerShell"
+    },
     "status": {
       "pending": "Waiting for daemon...",
       "running": "Updating...",

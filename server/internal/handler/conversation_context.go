@@ -11,6 +11,11 @@ import (
 
 const conversationContextVersion = "ctx_v1"
 
+const (
+	channelHistoryMessageMaxChars = 800
+	channelHistoryMessageMaxLines = 20
+)
+
 type conversationSurface struct {
 	Type       string
 	SurfaceKey string
@@ -115,6 +120,46 @@ func (h *Handler) channelIDForChatSession(ctx context.Context, chatSessionID pgt
 	return uuidToString(channelID)
 }
 
+func channelContextMessagesExcludingTrigger(messages []ChannelMessageResponse, triggerID string) []ChannelMessageResponse {
+	triggerID = strings.TrimSpace(triggerID)
+	if triggerID == "" {
+		return messages
+	}
+	out := make([]ChannelMessageResponse, 0, len(messages))
+	for _, msg := range messages {
+		if strings.TrimSpace(msg.ID) == triggerID {
+			continue
+		}
+		out = append(out, msg)
+	}
+	return out
+}
+
 func formatChannelMessageLine(msg ChannelMessageResponse) string {
-	return fmt.Sprintf("[%s] %s (%s): %s", msg.CreatedAt, msg.AuthorName, msg.AuthorType, msg.Content)
+	return fmt.Sprintf("[%s] %s (%s): %s", msg.CreatedAt, msg.AuthorName, msg.AuthorType, truncateChannelHistoryContent(msg.Content))
+}
+
+func truncateChannelHistoryContent(content string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
+	truncated := false
+
+	lines := strings.Split(content, "\n")
+	if len(lines) > channelHistoryMessageMaxLines {
+		lines = lines[:channelHistoryMessageMaxLines]
+		truncated = true
+	}
+	content = strings.Join(lines, "\n")
+
+	runes := []rune(content)
+	if len(runes) > channelHistoryMessageMaxChars {
+		content = string(runes[:channelHistoryMessageMaxChars])
+		truncated = true
+	}
+
+	content = strings.TrimRight(content, " \t\n")
+	if truncated {
+		content += "\n...[truncated]"
+	}
+	return content
 }

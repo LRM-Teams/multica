@@ -6,7 +6,7 @@ import (
 )
 
 func TestParseStructuredMessageOutputStickerParts(t *testing.T) {
-	content, parts, outputType, reaction, structured, err := parseStructuredMessageOutput(`{"parts":[{"type":"sticker","sticker_id":"hi"}]}`)
+	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`{"parts":[{"type":"sticker","sticker_id":"hi"}]}`)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -15,6 +15,9 @@ func TestParseStructuredMessageOutputStickerParts(t *testing.T) {
 	}
 	if outputType != "message" {
 		t.Fatalf("outputType = %q, want message", outputType)
+	}
+	if action != "send_channel_message" {
+		t.Fatalf("action = %q, want migrated send_channel_message action", action)
 	}
 	if reaction != nil {
 		t.Fatalf("reaction = %+v, want nil", reaction)
@@ -28,7 +31,7 @@ func TestParseStructuredMessageOutputStickerParts(t *testing.T) {
 }
 
 func TestParseStructuredMessageOutputTextPlusSticker(t *testing.T) {
-	content, parts, outputType, reaction, structured, err := parseStructuredMessageOutput(`{"output":"收到","parts":[{"type":"text","text":"收到"},{"type":"sticker","sticker_id":"got-it"}]}`)
+	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`{"output":"收到","parts":[{"type":"text","text":"收到"},{"type":"sticker","sticker_id":"got-it"}]}`)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -37,6 +40,9 @@ func TestParseStructuredMessageOutputTextPlusSticker(t *testing.T) {
 	}
 	if outputType != "message" {
 		t.Fatalf("outputType = %q, want message", outputType)
+	}
+	if action != "send_channel_message" {
+		t.Fatalf("action = %q, want migrated send_channel_message action", action)
 	}
 	if reaction != nil {
 		t.Fatalf("reaction = %+v, want nil", reaction)
@@ -50,7 +56,7 @@ func TestParseStructuredMessageOutputTextPlusSticker(t *testing.T) {
 }
 
 func TestParseStructuredMessageOutputPlainTextIsUnchanged(t *testing.T) {
-	content, parts, outputType, reaction, structured, err := parseStructuredMessageOutput("hello")
+	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput("hello")
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -59,6 +65,9 @@ func TestParseStructuredMessageOutputPlainTextIsUnchanged(t *testing.T) {
 	}
 	if outputType != "" {
 		t.Fatalf("outputType = %q, want empty", outputType)
+	}
+	if action != "" {
+		t.Fatalf("action = %q, want empty", action)
 	}
 	if reaction != nil {
 		t.Fatalf("reaction = %+v, want nil", reaction)
@@ -70,7 +79,7 @@ func TestParseStructuredMessageOutputPlainTextIsUnchanged(t *testing.T) {
 
 func TestParseStructuredMessageOutputJSONWithoutPartsIsUnchanged(t *testing.T) {
 	raw := `{"output":"hello"}`
-	content, parts, outputType, reaction, structured, err := parseStructuredMessageOutput(raw)
+	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(raw)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -79,6 +88,9 @@ func TestParseStructuredMessageOutputJSONWithoutPartsIsUnchanged(t *testing.T) {
 	}
 	if outputType != "" {
 		t.Fatalf("outputType = %q, want empty", outputType)
+	}
+	if action != "" {
+		t.Fatalf("action = %q, want empty", action)
 	}
 	if reaction != nil {
 		t.Fatalf("reaction = %+v, want nil", reaction)
@@ -89,7 +101,7 @@ func TestParseStructuredMessageOutputJSONWithoutPartsIsUnchanged(t *testing.T) {
 }
 
 func TestParseStructuredMessageOutputNoReply(t *testing.T) {
-	content, parts, outputType, reaction, structured, err := parseStructuredMessageOutput(`{"type":"no_reply","output":"internal reason"}`)
+	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`{"type":"no_reply","output":"internal reason"}`)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -99,13 +111,16 @@ func TestParseStructuredMessageOutputNoReply(t *testing.T) {
 	if outputType != "no_reply" {
 		t.Fatalf("outputType = %q, want no_reply", outputType)
 	}
+	if action != "no_reply" {
+		t.Fatalf("action = %q, want migrated no_reply action", action)
+	}
 	if reaction != nil || content != "" || len(parts) != 0 {
 		t.Fatalf("content=%q parts=%+v reaction=%+v, want no visible output", content, parts, reaction)
 	}
 }
 
 func TestParseStructuredMessageOutputReaction(t *testing.T) {
-	content, parts, outputType, reaction, structured, err := parseStructuredMessageOutput(`{"type":"reaction","reaction":{"message_id":"CURRENT_MESSAGE","emoji":"👍"}}`)
+	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`{"type":"reaction","reaction":{"message_id":"CURRENT_MESSAGE","emoji":"👍"}}`)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -115,6 +130,9 @@ func TestParseStructuredMessageOutputReaction(t *testing.T) {
 	if outputType != "reaction" {
 		t.Fatalf("outputType = %q, want reaction", outputType)
 	}
+	if action != "message_react" {
+		t.Fatalf("action = %q, want message_react", action)
+	}
 	if content != "" || len(parts) != 0 {
 		t.Fatalf("content=%q parts=%+v, want no visible message", content, parts)
 	}
@@ -123,16 +141,48 @@ func TestParseStructuredMessageOutputReaction(t *testing.T) {
 	}
 }
 
-func TestParseStructuredMessageOutputLegacyReactionCommand(t *testing.T) {
-	content, parts, outputType, reaction, structured, err := parseStructuredMessageOutput(`multica channel react 11111111-1111-1111-1111-111111111111 👍`)
+func TestParseStructuredMessageOutputChannelSendCommand(t *testing.T) {
+	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`multica channel send --message "hello team"`)
+	if err != nil {
+		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
+	}
+	if !structured {
+		t.Fatal("expected channel send command to be typed")
+	}
+	if outputType != "message" || action != "send_channel_message" || content != "hello team" {
+		t.Fatalf("content=%q outputType=%q action=%q, want send_channel_message hello team", content, outputType, action)
+	}
+	if reaction != nil || len(parts) != 0 {
+		t.Fatalf("parts=%+v reaction=%+v, want plain text content without structured parts", parts, reaction)
+	}
+}
+
+func TestParseStructuredMessageOutputMessageReactCommand(t *testing.T) {
+	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`multica message react --message 11111111-1111-1111-1111-111111111111 --emoji 👍`)
+	if err != nil {
+		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
+	}
+	if !structured {
+		t.Fatal("expected message react command to be typed")
+	}
+	if outputType != "reaction" || action != "message_react" || content != "" || len(parts) != 0 {
+		t.Fatalf("content=%q parts=%+v outputType=%q action=%q, want reaction with no visible message", content, parts, outputType, action)
+	}
+	if reaction == nil || reaction.MessageID != "11111111-1111-1111-1111-111111111111" || reaction.Emoji != "👍" {
+		t.Fatalf("reaction = %+v, want typed payload", reaction)
+	}
+}
+
+func TestParseStructuredMessageOutputLegacyChannelReactionCommand(t *testing.T) {
+	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`multica channel react 11111111-1111-1111-1111-111111111111 👍`)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
 	if !structured {
 		t.Fatal("expected legacy reaction command to be typed")
 	}
-	if outputType != "reaction" || content != "" || len(parts) != 0 {
-		t.Fatalf("content=%q parts=%+v outputType=%q, want reaction with no visible message", content, parts, outputType)
+	if outputType != "reaction" || action != "message_react" || content != "" || len(parts) != 0 {
+		t.Fatalf("content=%q parts=%+v outputType=%q action=%q, want reaction with no visible message", content, parts, outputType, action)
 	}
 	if reaction == nil || reaction.MessageID != "11111111-1111-1111-1111-111111111111" || reaction.Emoji != "👍" {
 		t.Fatalf("reaction = %+v, want typed payload", reaction)
@@ -140,7 +190,7 @@ func TestParseStructuredMessageOutputLegacyReactionCommand(t *testing.T) {
 }
 
 func TestParseStructuredMessageOutputRejectsUnknownType(t *testing.T) {
-	_, _, _, _, structured, err := parseStructuredMessageOutput(`{"type":"thinking","output":"internal"}`)
+	_, _, _, _, _, structured, err := parseStructuredMessageOutput(`{"type":"thinking","output":"internal"}`)
 	if !structured {
 		t.Fatal("expected structured output")
 	}

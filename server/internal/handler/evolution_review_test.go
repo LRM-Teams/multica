@@ -182,13 +182,15 @@ func TestEvolutionReviewRouteRequiresAdminRole(t *testing.T) {
 	}
 	ctx := context.Background()
 	var memberUserID string
-	if err := testPool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ('Evolution Member', $1) RETURNING id`, "evolution-member-"+randomID()+"@multica.test").Scan(&memberUserID); err != nil {
+	memberSuffix := randomID()
+	if err := testPool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id`, "Evolution Member "+memberSuffix, "evolution-member-"+memberSuffix+"@multica.test").Scan(&memberUserID); err != nil {
 		t.Fatalf("create member user: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'member')`, testWorkspaceID, memberUserID); err != nil {
 		t.Fatalf("add member: %v", err)
 	}
 	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM member WHERE workspace_id=$1 AND user_id=$2`, testWorkspaceID, memberUserID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id=$1`, memberUserID)
 	})
 

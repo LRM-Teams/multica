@@ -182,6 +182,7 @@ type DaemonRegisterRequest struct {
 	DeviceName      string   `json:"device_name"`
 	CLIVersion      string   `json:"cli_version"` // multica CLI version
 	LaunchedBy      string   `json:"launched_by"` // "desktop" when spawned by the Electron app
+	Capabilities    []string `json:"capabilities"`
 	Runtimes        []struct {
 		Name    string `json:"name"`
 		Type    string `json:"type"`
@@ -309,6 +310,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return
 	}
+	capabilities := normalizeDaemonCapabilities(req.Capabilities)
 
 	resp := make([]AgentRuntimeResponse, 0, len(req.Runtimes))
 	for _, runtime := range req.Runtimes {
@@ -334,9 +336,10 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			status = "offline"
 		}
 		metadata, _ := json.Marshal(map[string]any{
-			"version":     runtime.Version,
-			"cli_version": req.CLIVersion,
-			"launched_by": req.LaunchedBy,
+			"version":      runtime.Version,
+			"cli_version":  req.CLIVersion,
+			"launched_by":  req.LaunchedBy,
+			"capabilities": capabilities,
 		})
 
 		row, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
@@ -429,6 +432,29 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		"repos_version": repoResp.ReposVersion,
 		"settings":      repoResp.Settings,
 	})
+}
+
+func normalizeDaemonCapabilities(capabilities []string) []string {
+	if len(capabilities) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]struct{}, len(capabilities))
+	normalized := make([]string, 0, len(capabilities))
+	for _, capability := range capabilities {
+		capability = strings.TrimSpace(capability)
+		if capability == "" {
+			continue
+		}
+		if _, ok := seen[capability]; ok {
+			continue
+		}
+		seen[capability] = struct{}{}
+		normalized = append(normalized, capability)
+	}
+	if normalized == nil {
+		return []string{}
+	}
+	return normalized
 }
 
 // mergeLegacyRuntimes folds every runtime row keyed on a prior hostname-derived
@@ -2043,20 +2069,31 @@ func (h *Handler) ReportTaskProgress(w http.ResponseWriter, r *http.Request) {
 
 // CompleteTask marks a running task as completed.
 type TaskCompleteRequest struct {
-	PRURL     string                        `json:"pr_url"`
-	Output    string                        `json:"output"`
-	Type      string                        `json:"type"`
-	Parts     []protocol.MessagePart        `json:"parts"`
-	Reaction  *protocol.ChatReactionPayload `json:"reaction"`
-	SessionID string                        `json:"session_id"` // Claude session ID for future resumption
-	WorkDir   string                        `json:"work_dir"`   // working directory used during execution
+	PRURL                  string                        `json:"pr_url"`
+	Output                 string                        `json:"output"`
+	Action                 string                        `json:"action"`
+	Type                   string                        `json:"type"`
+	Parts                  []protocol.MessagePart        `json:"parts"`
+	Reaction               *protocol.ChatReactionPayload `json:"reaction"`
+	OutputSuppressedReason string                        `json:"output_suppressed_reason,omitempty"`
+	SessionID              string                        `json:"session_id"` // Claude session ID for future resumption
+	WorkDir                string                        `json:"work_dir"`   // working directory used during execution
+}
+
+type taskCompleteOutputEnvelope struct {
+	Action   string                        `json:"action"`
+	Type     string                        `json:"type"`
+	Output   string                        `json:"output"`
+	Content  string                        `json:"content"`
+	Parts    []protocol.MessagePart        `json:"parts"`
+	Reaction *protocol.ChatReactionPayload `json:"reaction"`
 }
 
 func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 
 	// Verify the caller owns this task's workspace.
-	_, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	originalTask, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
 	if !ok {
 		return
 	}
@@ -2066,29 +2103,10 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	output, parts, err := messageparts.Normalize(req.Output, req.Parts)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
-		return
-	}
-	if strings.TrimSpace(req.Type) == "" && req.Reaction == nil && len(parts) == 0 {
-		if reaction, ok := protocol.ParseLegacyChatReactionCommand(output); ok {
-			req.Type = protocol.ChatOutputKindReaction
-			req.Reaction = reaction
-		}
-	}
-	outputType, err := protocol.NormalizeChatOutputType(req.Type, strings.TrimSpace(output) != "" || len(parts) > 0, req.Reaction != nil)
-	if err != nil {
+	if err := h.normalizeTaskCompleteOutput(r.Context(), originalTask, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if outputType != protocol.ChatOutputKindMessage {
-		output = ""
-		parts = nil
-	}
-	req.Output = output
-	req.Type = outputType
-	req.Parts = parts
 
 	result, _ := json.Marshal(req)
 	task, err := h.TaskService.CompleteTask(r.Context(), parseUUID(taskID), result, req.SessionID, req.WorkDir)
@@ -2112,6 +2130,194 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
+}
+
+func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.AgentTaskQueue, req *TaskCompleteRequest) error {
+	groupChannelTask := h.isGroupChannelAgentTask(ctx, task)
+	explicitAction := strings.TrimSpace(req.Action) != ""
+
+	envelope, structured, err := parseTaskCompleteOutputEnvelope(req.Output)
+	if err != nil {
+		if groupChannelTask {
+			slog.Warn("complete task: suppressing invalid structured channel output", "task_id", uuidToString(task.ID), "error", err)
+			suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidOutput)
+			return nil
+		}
+		structured = false
+	}
+	if structured {
+		migratedStructuredAction := ""
+		if strings.TrimSpace(envelope.Action) == "" {
+			legacyType, legacyErr := protocol.NormalizeChatOutputType(envelope.Type, strings.TrimSpace(firstNonEmpty(envelope.Output, envelope.Content)) != "" || len(envelope.Parts) > 0, envelope.Reaction != nil)
+			if legacyErr == nil {
+				switch legacyType {
+				case protocol.ChatOutputKindMessage:
+					migratedStructuredAction = protocol.ChatOutputActionSendChannelMessage
+				case protocol.ChatOutputKindReaction:
+					migratedStructuredAction = protocol.ChatOutputActionMessageReact
+				case protocol.ChatOutputKindNoReply:
+					migratedStructuredAction = protocol.ChatOutputActionNoReply
+				}
+			}
+		}
+		if strings.TrimSpace(envelope.Action) != "" || !explicitAction {
+			req.Action = firstNonEmpty(envelope.Action, migratedStructuredAction)
+			explicitAction = strings.TrimSpace(req.Action) != ""
+		}
+		if strings.TrimSpace(envelope.Type) != "" || strings.TrimSpace(req.Type) == "" {
+			req.Type = envelope.Type
+		}
+		if strings.TrimSpace(envelope.Output) != "" || envelope.Content == "" {
+			req.Output = envelope.Output
+		} else {
+			req.Output = envelope.Content
+		}
+		req.Parts = envelope.Parts
+		req.Reaction = envelope.Reaction
+	}
+
+	output, parts, err := messageparts.Normalize(req.Output, req.Parts)
+	if err != nil {
+		return fmt.Errorf("invalid message parts: %w", err)
+	}
+
+	if message, ok := protocol.ParseChannelSendCommand(output); ok {
+		output, parts, err = messageparts.Normalize(message, nil)
+		if err != nil {
+			return fmt.Errorf("invalid message parts: %w", err)
+		}
+		req.Action = protocol.ChatOutputActionSendChannelMessage
+		req.Type = protocol.ChatOutputKindMessage
+		req.Reaction = nil
+		explicitAction = true
+	} else if reaction, ok := protocol.ParseMessageReactCommand(output); ok {
+		if strings.TrimSpace(req.Action) == "" {
+			req.Action = protocol.ChatOutputActionMessageReact
+			req.Type = protocol.ChatOutputKindReaction
+			req.Reaction = reaction
+		}
+		output = ""
+		parts = nil
+		explicitAction = true
+	}
+
+	if groupChannelTask && strings.TrimSpace(req.Action) == "" {
+		legacyType, legacyErr := protocol.NormalizeChatOutputType(req.Type, strings.TrimSpace(output) != "" || len(parts) > 0, req.Reaction != nil)
+		if legacyErr == nil {
+			switch legacyType {
+			case protocol.ChatOutputKindReaction:
+				req.Action = protocol.ChatOutputActionMessageReact
+				req.Type = protocol.ChatOutputKindReaction
+				output = ""
+				parts = nil
+				explicitAction = true
+			case protocol.ChatOutputKindNoReply:
+				req.Action = protocol.ChatOutputActionNoReply
+				req.Type = protocol.ChatOutputKindNoReply
+				output = ""
+				parts = nil
+				explicitAction = true
+			}
+		}
+	}
+
+	outputType := ""
+	if strings.TrimSpace(req.Action) != "" {
+		normalizedAction, actionErr := protocol.NormalizeChatOutputAction(req.Action)
+		if actionErr != nil {
+			if groupChannelTask {
+				slog.Warn("complete task: suppressing invalid group channel output action", "task_id", uuidToString(task.ID), "action", req.Action, "error", actionErr)
+				suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidAction)
+				return nil
+			}
+			return actionErr
+		}
+		req.Action = normalizedAction
+		outputType, err = protocol.ChatOutputTypeForAction(normalizedAction)
+	} else if !groupChannelTask {
+		outputType, err = protocol.NormalizeChatOutputType(req.Type, strings.TrimSpace(output) != "" || len(parts) > 0, req.Reaction != nil)
+	} else {
+		slog.Warn("complete task: suppressing group channel output without explicit action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_type", req.Type)
+		suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+		return nil
+	}
+	if err != nil {
+		if groupChannelTask {
+			slog.Warn("complete task: suppressing invalid group channel output type", "task_id", uuidToString(task.ID), "output_type", req.Type, "error", err)
+			suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidType)
+			return nil
+		}
+		return err
+	}
+	if outputType != protocol.ChatOutputKindMessage {
+		output = ""
+		parts = nil
+	}
+	if groupChannelTask && outputType == protocol.ChatOutputKindMessage && !explicitAction {
+		slog.Warn("complete task: suppressing group channel message without send action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
+		suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonMessageMissingAction)
+		return nil
+	}
+	if groupChannelTask && outputType == protocol.ChatOutputKindMessage && strings.TrimSpace(output) == "" && len(parts) == 0 {
+		slog.Warn("complete task: suppressing empty group channel send action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
+		suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonEmptyMessage)
+		return nil
+	}
+	if groupChannelTask && outputType == protocol.ChatOutputKindReaction && (req.Reaction == nil || strings.TrimSpace(req.Reaction.Emoji) == "") {
+		slog.Warn("complete task: suppressing invalid group channel message react action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
+		suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidReaction)
+		return nil
+	}
+	req.Output = output
+	req.Type = outputType
+	req.Parts = parts
+	return nil
+}
+
+func suppressTaskCompleteOutput(req *TaskCompleteRequest, reason string) {
+	req.Action = protocol.ChatOutputActionNoReply
+	req.Type = protocol.ChatOutputKindNoReply
+	req.Output = ""
+	req.Parts = nil
+	req.Reaction = nil
+	req.OutputSuppressedReason = reason
+}
+
+func parseTaskCompleteOutputEnvelope(raw string) (taskCompleteOutputEnvelope, bool, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
+		return taskCompleteOutputEnvelope{}, false, nil
+	}
+	var envelope taskCompleteOutputEnvelope
+	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
+		return taskCompleteOutputEnvelope{}, true, err
+	}
+	if strings.TrimSpace(envelope.Type) == "" &&
+		strings.TrimSpace(envelope.Action) == "" &&
+		len(envelope.Parts) == 0 &&
+		envelope.Reaction == nil {
+		return taskCompleteOutputEnvelope{}, false, nil
+	}
+	return envelope, true, nil
+}
+
+func (h *Handler) isGroupChannelAgentTask(ctx context.Context, task db.AgentTaskQueue) bool {
+	if !task.ChatSessionID.Valid {
+		return false
+	}
+	var kind string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT ch.kind
+		FROM channel_agent_session cas
+		JOIN channel ch ON ch.id = cas.channel_id
+		WHERE cas.chat_session_id = $1
+	`, task.ChatSessionID).Scan(&kind); err != nil {
+		if !isNotFound(err) {
+			slog.Warn("complete task: failed to resolve channel kind", "task_id", uuidToString(task.ID), "chat_session_id", uuidToString(task.ChatSessionID), "error", err)
+		}
+		return false
+	}
+	return kind != "dm"
 }
 
 // emitIssueExecutedOnFirstCompletion atomically flips issue.first_executed_at

@@ -75,6 +75,7 @@ const (
 	EventChatSessionDeleted     = "chat:session_deleted"
 	EventChatSessionUpdated     = "chat:session_updated"
 	EventChannelMessage         = "channel:message"
+	EventChannelNotice          = "channel:notice"
 	EventChannelTyping          = "channel:typing"
 	EventChannelReactionAdded   = "channel_reaction:added"
 	EventChannelReactionRemoved = "channel_reaction:removed"

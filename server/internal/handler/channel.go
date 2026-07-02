@@ -33,7 +33,8 @@ const channelMessagesDefaultLimit = 50
 const channelMessagesMaxLimit = 100
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
-const channelStickerReplyInstruction = "Sticker replies: if the user explicitly asks for a sticker/表情包, or you intentionally choose a sticker-only social reply such as hi/ok/收到/thanks/praise, your final reply must be exactly one JSON object with structured parts, for example {\"parts\":[{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}. Use a real sticker_id from the multica-stickers skill. Do not output :sticker:<id>: tokens, and do not add a sticker to substantive answers."
+const channelOutputContractInstruction = "Channel action contract: create a visible group message only by calling the send action. Return exactly one action and nothing else: use {\"action\":\"send_channel_message\",\"output\":\"...\"} or {\"action\":\"send_channel_message\",\"parts\":[...]} for a visible message, or output exactly multica channel send --message \"...\" for a plain-text message. To react, use {\"action\":\"message_react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}} or output exactly multica message react --message CURRENT_MESSAGE --emoji 👍. If you should not reply, do not call a send/reply action; internal no_reply is allowed only as a non-visible outcome. Never output analysis, thinking, plans, tool intent, raw completion text, or described commands as a chat message."
+const channelStickerReplyInstruction = "Sticker replies: if the user explicitly asks for a sticker/表情包, or you intentionally choose a sticker-only social reply such as hi/ok/收到/thanks/praise, use the send_channel_message action with structured parts, for example {\"action\":\"send_channel_message\",\"output\":\"Welcome!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome!\"},{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}. Use a real sticker_id from the multica-stickers skill. Do not output :sticker:<id>: tokens, and do not add a sticker to substantive answers."
 
 type ChannelResponse struct {
 	ID          string  `json:"id"`
@@ -2044,8 +2045,11 @@ func buildChannelWelcomePrompt(channelName, joinedName string) string {
 	fmt.Fprintf(&b, "A new member just joined the Multica group chat #%s: %s.\n", channelName, joinedName)
 	b.WriteString("Greet them as yourself with a warm, friendly welcome.\n\n")
 	b.WriteString("Rules — follow all of them:\n")
+	b.WriteString("- ")
+	b.WriteString(channelOutputContractInstruction)
+	b.WriteString("\n")
 	b.WriteString("- Keep it to ONE short line, in the language the channel uses (Chinese if the member's name is Chinese).\n")
-	fmt.Fprintf(&b, "- Include exactly one sticker via the multica-stickers skill by returning structured parts JSON, e.g. {\"output\":\"Welcome %s!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome %s!\"},{\"type\":\"sticker\",\"sticker_id\":\"applause\"}]}. The sticker is the point of welcoming %s.\n", joinedName, joinedName, joinedName)
+	fmt.Fprintf(&b, "- Include exactly one sticker via the multica-stickers skill by returning a send_channel_message action with structured parts, e.g. {\"action\":\"send_channel_message\",\"output\":\"Welcome %s!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome %s!\"},{\"type\":\"sticker\",\"sticker_id\":\"applause\"}]}. The sticker is the point of welcoming %s.\n", joinedName, joinedName, joinedName)
 	b.WriteString("- Do NOT @-mention anyone — not the new member, not other agents. This is a one-off greeting, not a discussion.\n")
 	b.WriteString("- Do not ask questions, assign work, or start a conversation. Just welcome them in one line and stop.\n")
 	return b.String()
@@ -2352,10 +2356,12 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are a member of the Multica group chat #%s. A user sent a message without @-mentioning anyone.\n", ch.Name)
 	b.WriteString("You can see ONLY the current message below. Do not assume any prior channel context.\n")
-	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, stay silent by producing no final reply.\n")
-	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and produce one short visible reply. Do not stay silent, and do not use a reaction-only command for that case.\n")
+	b.WriteString(channelOutputContractInstruction)
+	b.WriteString("\n")
+	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, do not call the send/reply action; an internal {\"action\":\"no_reply\"} outcome is acceptable but must not be visible.\n")
+	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and send one short visible message. Do not stay silent (do not return no_reply), and do not use a reaction-only command/result for that case.\n")
 	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
-	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, prefer a structured reaction result instead of a text reply: return exactly one JSON object like {\"type\":\"reaction\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}} and nothing else. Prefer 👍 for a simple like, ❤️ for warmth/welcome/support, 💯 for strong agreement or praise, and 🎉 for celebration/welcome.\n")
+	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, prefer a message-scoped reaction action instead of a text reply: return exactly one JSON object like {\"action\":\"message_react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}} and nothing else. Prefer 👍 for a simple like, ❤️ for warmth/welcome/support, 💯 for strong agreement or praise, and 🎉 for celebration/welcome.\n")
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
@@ -2382,6 +2388,8 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	fmt.Fprintf(&b, "You are participating in the Multica group chat #%s.\n", ch.Name)
 	b.WriteString("Only respond as yourself. Do not impersonate other agents or users.\n")
 	b.WriteString("Use the bounded channel context below, but answer the current mention directly. If key context seems missing, fetch or search more channel/thread history before guessing.\n")
+	b.WriteString(channelOutputContractInstruction)
+	b.WriteString("\n")
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\n")
 	b.WriteString("This is a collaborative discussion — keep it going until the topic is actually resolved, not just one exchange. ")
@@ -2666,6 +2674,17 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 		h.handleChannelReactionPayload(context.Background(), channelID, workspaceID, agentID, reactionTargetID, payload.Reaction)
 		return
 	}
+	if outputType == protocol.ChatOutputKindNoReply && strings.TrimSpace(payload.OutputSuppressedReason) != "" {
+		h.publish(protocol.EventChannelNotice, uuidToString(workspaceID), "system", "", protocol.ChannelNoticePayload{
+			ChannelID:              uuidToString(channelID),
+			ChatSessionID:          payload.ChatSessionID,
+			TaskID:                 payload.TaskID,
+			AgentID:                uuidToString(agentID),
+			Kind:                   "agent_daemon_output_suppressed",
+			OutputSuppressedReason: payload.OutputSuppressedReason,
+		})
+		return
+	}
 	if outputType != protocol.ChatOutputKindMessage {
 		return
 	}
@@ -2741,27 +2760,11 @@ func (h *Handler) handleChannelReactionPayload(ctx context.Context, channelID, w
 }
 
 func (h *Handler) handleChannelReactionCommand(ctx context.Context, channelID, workspaceID, agentID, triggerMessageID pgtype.UUID, content string) bool {
-	body := strings.TrimSpace(content)
-	if triggerMessageID.Valid && strings.HasPrefix(body, "multica channel react CURRENT_MESSAGE ") {
-		emoji := strings.TrimSpace(strings.TrimPrefix(body, "multica channel react CURRENT_MESSAGE "))
-		return h.insertChannelReactionCommand(ctx, channelID, workspaceID, agentID, triggerMessageID, emoji)
+	reaction, ok := protocol.ParseMessageReactCommand(content)
+	if !ok {
+		return false
 	}
-	if strings.HasPrefix(body, "multica channel react ") {
-		rest := strings.TrimSpace(strings.TrimPrefix(body, "multica channel react "))
-		messageIDText, emoji, ok := strings.Cut(rest, " ")
-		if !ok {
-			return true
-		}
-		messageID, err := util.ParseUUID(strings.TrimSpace(messageIDText))
-		if err != nil {
-			return true
-		}
-		if !h.channelMessageBelongsToChannel(ctx, channelID, workspaceID, messageID) {
-			return true
-		}
-		return h.insertChannelReactionCommand(ctx, channelID, workspaceID, agentID, messageID, strings.TrimSpace(emoji))
-	}
-	return false
+	return h.handleChannelReactionPayload(ctx, channelID, workspaceID, agentID, triggerMessageID, reaction)
 }
 
 func (h *Handler) insertChannelReactionCommand(ctx context.Context, channelID, workspaceID, agentID, messageID pgtype.UUID, emoji string) bool {

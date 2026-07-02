@@ -29,7 +29,7 @@ pointer.
 | --- | --- |
 | Public `GET /api/stickers` (catalog) and `GET /api/stickers/{id}` (image) | `server/cmd/server/router.go`; `server/internal/handler/sticker.go` (`ListStickers`, `GetStickerAsset`) |
 | Unknown id 404s with no filesystem read (no path traversal) | `server/internal/stickers/stickers.go` (`Asset`) |
-| Formal P0 messages reference stickers through structured `parts[]` with `sticker_id` | `server/pkg/protocol/messages.go` (`MessagePart`), `server/internal/messageparts/messageparts.go` |
+| Formal P0 messages reference stickers through the `send_channel_message` action body with structured `parts[]` and `sticker_id` | `server/pkg/protocol/messages.go` (`ChatOutputActionSendChannelMessage`, `MessagePart`), `server/internal/messageparts/messageparts.go`, `server/internal/handler/daemon.go` (`normalizeTaskCompleteOutput`) |
 | Legacy markdown still contains token parsing until the FE renderer sweep removes it | `packages/views/common/markdown.tsx` (legacy sticker token handling) |
 
 ## Tests

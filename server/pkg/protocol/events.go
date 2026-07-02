@@ -75,7 +75,6 @@ const (
 	EventChatSessionDeleted     = "chat:session_deleted"
 	EventChatSessionUpdated     = "chat:session_updated"
 	EventChannelMessage         = "channel:message"
-	EventChannelNotice          = "channel:notice"
 	EventChannelTyping          = "channel:typing"
 	EventChannelReactionAdded   = "channel_reaction:added"
 	EventChannelReactionRemoved = "channel_reaction:removed"
@@ -120,10 +119,11 @@ const (
 	EventSquadDeleted = "squad:deleted"
 
 	// Daemon events
-	EventDaemonHeartbeat     = "daemon:heartbeat"
-	EventDaemonHeartbeatAck  = "daemon:heartbeat_ack"
-	EventDaemonRegister      = "daemon:register"
-	EventDaemonTaskAvailable = "daemon:task_available"
+	EventDaemonHeartbeat      = "daemon:heartbeat"
+	EventDaemonHeartbeatAck   = "daemon:heartbeat_ack"
+	EventDaemonRegister       = "daemon:register"
+	EventDaemonRuntimeUpdated = "daemon:runtime_updated"
+	EventDaemonTaskAvailable  = "daemon:task_available"
 
 	// Sandbox events. Node-facing events wake shared sandbox infrastructure;
 	// instance events are broadcast to workspace clients for UI refresh.

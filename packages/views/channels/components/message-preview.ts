@@ -19,7 +19,7 @@ export type ActorNameResolver = (
 ) => string;
 
 export interface ChannelAuthorIdentity {
-  author_type: ChannelAuthorType;
+  type: ChannelAuthorType;
   author_id?: string | null;
   author_name: string;
 }
@@ -46,13 +46,13 @@ export function resolveChannelAuthorDisplayName(
   } = {},
 ): string {
   const fallback =
-    author.author_type === "user" &&
+    author.type === "user" &&
     author.author_id != null &&
     author.author_id === options.currentUserId
       ? options.ownName ?? author.author_name
       : author.author_name;
 
-  if (author.author_type === "agent") {
+  if (author.type === "agent") {
     if (author.author_id && options.getActorName) {
       return options.getActorName("agent", author.author_id, fallback) || fallback;
     }
@@ -60,7 +60,7 @@ export function resolveChannelAuthorDisplayName(
     return resolveActorDisplayName(agent, fallback);
   }
 
-  if (author.author_type === "user") {
+  if (author.type === "user") {
     if (author.author_id && options.getActorName) {
       return options.getActorName("member", author.author_id, fallback) || fallback;
     }

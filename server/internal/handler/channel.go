@@ -33,8 +33,8 @@ const channelMessagesDefaultLimit = 50
 const channelMessagesMaxLimit = 100
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
-const channelOutputContractInstruction = "Channel action contract: create a visible group message only by calling the send action. Return exactly one action and nothing else: use {\"action\":\"send_channel_message\",\"output\":\"...\"} or {\"action\":\"send_channel_message\",\"parts\":[...]} for a visible message, or output exactly multica channel send --message \"...\" for a plain-text message. To react, use {\"action\":\"message_react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}} or output exactly multica message react --message CURRENT_MESSAGE --emoji 👍. If you should not reply, do not call a send/reply action; internal no_reply is allowed only as a non-visible outcome. Never output analysis, thinking, plans, tool intent, raw completion text, or described commands as a chat message."
-const channelStickerReplyInstruction = "Sticker replies: if the user explicitly asks for a sticker/表情包, or you intentionally choose a sticker-only social reply such as hi/ok/收到/thanks/praise, use the send_channel_message action with structured parts, for example {\"action\":\"send_channel_message\",\"output\":\"Welcome!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome!\"},{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}. Use a real sticker_id from the multica-stickers skill. Do not output :sticker:<id>: tokens, and do not add a sticker to substantive answers."
+const channelOutputContractInstruction = "Channel action contract: create a visible group message only by calling the send action. Return exactly one action and nothing else: use {\"action\":\"message_send\",\"output\":\"...\"} or {\"action\":\"message_send\",\"parts\":[...]} for a visible message, or output exactly multica message send --message \"...\" for a plain-text message. To react, use {\"action\":\"message_react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}} or output exactly multica message react --message CURRENT_MESSAGE --emoji 👍. If you should not reply, do not call a send/reply action; internal no_reply is allowed only as a non-visible outcome. Never output analysis, thinking, plans, tool intent, raw completion text, or described commands as a chat message."
+const channelStickerReplyInstruction = "Sticker replies: if the user explicitly asks for a sticker/表情包, or you intentionally choose a sticker-only social reply such as hi/ok/收到/thanks/praise, use the message_send action with structured parts, for example {\"action\":\"message_send\",\"output\":\"Welcome!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome!\"},{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}. Use a real sticker_id from the multica-stickers skill. Do not output :sticker:<id>: tokens, and do not add a sticker to substantive answers."
 
 type ChannelResponse struct {
 	ID          string  `json:"id"`
@@ -60,7 +60,7 @@ type ChannelResponse struct {
 }
 
 type ChannelLastMessage struct {
-	AuthorType string `json:"author_type"`
+	Type       string `json:"type"`
 	AuthorName string `json:"author_name"`
 	Content    string `json:"content"`
 	CreatedAt  string `json:"created_at"`
@@ -85,7 +85,7 @@ type ChannelMessageResponse struct {
 	ID                  string                    `json:"id"`
 	ChannelID           string                    `json:"channel_id"`
 	WorkspaceID         string                    `json:"workspace_id"`
-	AuthorType          string                    `json:"author_type"`
+	Type                string                    `json:"type"`
 	AuthorID            *string                   `json:"author_id"`
 	AuthorName          string                    `json:"author_name"`
 	Content             string                    `json:"content"`
@@ -122,7 +122,7 @@ type ChannelMessagesPageResponse struct {
 
 type ChannelMessageReply struct {
 	ID         string                 `json:"id"`
-	AuthorType string                 `json:"author_type"`
+	Type       string                 `json:"type"`
 	AuthorID   *string                `json:"author_id"`
 	AuthorName string                 `json:"author_name"`
 	Content    string                 `json:"content"`
@@ -150,7 +150,7 @@ type ChannelMessageSearchResult struct {
 	MessageID           string  `json:"message_id"`
 	ChannelID           string  `json:"channel_id"`
 	ThreadRootMessageID *string `json:"thread_root_message_id,omitempty"`
-	AuthorType          string  `json:"author_type"`
+	Type                string  `json:"type"`
 	AuthorID            *string `json:"author_id"`
 	AuthorName          string  `json:"author_name"`
 	Content             string  `json:"content"`
@@ -271,7 +271,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		}
 		if lastContent.Valid {
 			ch.LastMessage = &ChannelLastMessage{
-				AuthorType: lastType.String, AuthorName: lastName.String,
+				Type: lastType.String, AuthorName: lastName.String,
 				Content: lastContent.String, CreatedAt: timestampToString(lastAt),
 			}
 		}
@@ -864,7 +864,7 @@ func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) 
 	if err := h.DB.QueryRow(r.Context(), `
 		SELECT count(*)
 		FROM channel_message
-		WHERE channel_id = $1 AND workspace_id = $2 AND content ILIKE $3 ESCAPE '\'`,
+		WHERE channel_id = $1 AND workspace_id = $2 AND author_type <> 'system' AND content ILIKE $3 ESCAPE '\'`,
 		channelID, parseUUID(workspaceID), pattern).Scan(&resp.Total); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to search channel messages")
 		return
@@ -872,7 +872,7 @@ func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) 
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT id, channel_id, thread_root_message_id, author_type, author_id, author_name, content, created_at
 		FROM channel_message
-		WHERE channel_id = $1 AND workspace_id = $2 AND content ILIKE $3 ESCAPE '\'
+		WHERE channel_id = $1 AND workspace_id = $2 AND author_type <> 'system' AND content ILIKE $3 ESCAPE '\'
 		ORDER BY created_at ASC, id ASC
 		LIMIT $4`, channelID, parseUUID(workspaceID), pattern, limit)
 	if err != nil {
@@ -892,7 +892,7 @@ func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) 
 			MessageID:           uuidToString(id),
 			ChannelID:           uuidToString(chID),
 			ThreadRootMessageID: uuidToPtr(threadRootID),
-			AuthorType:          authorType,
+			Type:                authorType,
 			AuthorID:            uuidToPtr(authorID),
 			AuthorName:          authorName,
 			Content:             content,
@@ -915,7 +915,7 @@ func (h *Handler) validateChannelReplyTarget(w http.ResponseWriter, ctx context.
 		SELECT EXISTS (
 			SELECT 1
 			FROM channel_message
-			WHERE id = $1 AND channel_id = $2 AND workspace_id = $3
+			WHERE id = $1 AND channel_id = $2 AND workspace_id = $3 AND author_type <> 'system'
 		)`, replyToID, channelID, parseUUID(workspaceID)).Scan(&exists); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to validate reply target")
 		return pgtype.UUID{}, false
@@ -1013,7 +1013,7 @@ func (h *Handler) attachChannelMessageReplySummaries(ctx context.Context, worksp
 		key := uuidToString(id)
 		byID[key] = ChannelMessageReply{
 			ID:         key,
-			AuthorType: authorType,
+			Type:       authorType,
 			AuthorID:   uuidToPtr(authorID),
 			AuthorName: authorName,
 			Content:    content,
@@ -1139,7 +1139,7 @@ func (h *Handler) AddChannelMessageReaction(w http.ResponseWriter, r *http.Reque
 		INSERT INTO channel_message_reaction (channel_message_id, workspace_id, actor_type, actor_id, emoji)
 		SELECT id, workspace_id, 'member', $4::uuid, $5
 		FROM channel_message
-		WHERE id = $1 AND channel_id = $2 AND workspace_id = $3
+		WHERE id = $1 AND channel_id = $2 AND workspace_id = $3 AND author_type <> 'system'
 		ON CONFLICT (channel_message_id, actor_type, actor_id, emoji) DO UPDATE SET created_at = channel_message_reaction.created_at
 		RETURNING id, channel_message_id, actor_id, created_at`, messageID, channelID, parseUUID(workspaceID), parseUUID(userID), emoji).Scan(&id, &msgID, &actorID, &createdAt)
 	if err != nil {
@@ -1197,6 +1197,7 @@ func (h *Handler) RemoveChannelMessageReaction(w http.ResponseWriter, r *http.Re
 		WHERE r.channel_message_id = m.id
 		  AND r.channel_message_id = $1
 		  AND m.channel_id = $2
+		  AND m.author_type <> 'system'
 		  AND r.workspace_id = $3
 		  AND r.actor_type = 'member'
 		  AND r.actor_id = $4
@@ -1210,7 +1211,7 @@ func (h *Handler) RemoveChannelMessageReaction(w http.ResponseWriter, r *http.Re
 		if err := h.DB.QueryRow(r.Context(), `
 			SELECT EXISTS (
 				SELECT 1 FROM channel_message
-				WHERE id = $1 AND channel_id = $2 AND workspace_id = $3
+				WHERE id = $1 AND channel_id = $2 AND workspace_id = $3 AND author_type <> 'system'
 			)`, messageID, channelID, parseUUID(workspaceID)).Scan(&exists); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to remove reaction")
 			return
@@ -1387,7 +1388,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		}
 	}
 	h.followChannelThreadUser(r.Context(), channelID, rootID, parseUUID(userID), true)
-	if root.AuthorType == "user" && root.AuthorID != nil {
+	if root.Type == "user" && root.AuthorID != nil {
 		h.followChannelThreadUser(r.Context(), channelID, rootID, parseUUID(*root.AuthorID), false)
 	}
 	h.followChannelThreadMentionedUsers(r.Context(), ch, msg)
@@ -1468,6 +1469,10 @@ func (h *Handler) loadChannelThreadRoot(w http.ResponseWriter, ctx context.Conte
 		writeError(w, http.StatusBadRequest, "thread replies cannot be thread roots")
 		return ChannelMessageResponse{}, false
 	}
+	if msg.Type == "system" {
+		writeError(w, http.StatusBadRequest, "system messages cannot be thread roots")
+		return ChannelMessageResponse{}, false
+	}
 	return msg, true
 }
 
@@ -1485,6 +1490,7 @@ func (h *Handler) validateChannelThreadReplyTarget(w http.ResponseWriter, ctx co
 			SELECT 1
 			FROM channel_message
 			WHERE id = $1 AND channel_id = $2 AND workspace_id = $3
+			  AND author_type <> 'system'
 			  AND (id = $4 OR thread_root_message_id = $4)
 		)`, replyToID, channelID, parseUUID(workspaceID), rootID).Scan(&exists); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to validate reply target")
@@ -1949,7 +1955,7 @@ func (h *Handler) dispatchChannelAgentReply(ctx context.Context, ch ChannelRespo
 		slog.Warn("channel agent reply: trigger limit reached", "channel", ch.ID, "thread_id", ptrString(trigger.ThreadID), "depth", trigger.TriggerDepth)
 		return
 	}
-	if trigger.AuthorType == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == uuidToString(agent.ID) {
+	if trigger.Type == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == uuidToString(agent.ID) {
 		return
 	}
 	h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger), "channel agent reply", true, true, true, false)
@@ -2049,7 +2055,7 @@ func buildChannelWelcomePrompt(channelName, joinedName string) string {
 	b.WriteString(channelOutputContractInstruction)
 	b.WriteString("\n")
 	b.WriteString("- Keep it to ONE short line, in the language the channel uses (Chinese if the member's name is Chinese).\n")
-	fmt.Fprintf(&b, "- Include exactly one sticker via the multica-stickers skill by returning a send_channel_message action with structured parts, e.g. {\"action\":\"send_channel_message\",\"output\":\"Welcome %s!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome %s!\"},{\"type\":\"sticker\",\"sticker_id\":\"applause\"}]}. The sticker is the point of welcoming %s.\n", joinedName, joinedName, joinedName)
+	fmt.Fprintf(&b, "- Include exactly one sticker via the multica-stickers skill by returning a message_send action with structured parts, e.g. {\"action\":\"message_send\",\"output\":\"Welcome %s!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome %s!\"},{\"type\":\"sticker\",\"sticker_id\":\"applause\"}]}. The sticker is the point of welcoming %s.\n", joinedName, joinedName, joinedName)
 	b.WriteString("- Do NOT @-mention anyone — not the new member, not other agents. This is a one-off greeting, not a discussion.\n")
 	b.WriteString("- Do not ask questions, assign work, or start a conversation. Just welcome them in one line and stop.\n")
 	return b.String()
@@ -2099,7 +2105,7 @@ func (h *Handler) notifyChannelMemberMentions(ctx context.Context, ch ChannelRes
 	// inbox_item.actor_type is constrained to member|agent|system.
 	actorType := "system"
 	var actorID pgtype.UUID
-	switch msg.AuthorType {
+	switch msg.Type {
 	case "user":
 		actorType = "member"
 		if msg.AuthorID != nil {
@@ -2344,7 +2350,7 @@ func contentMentionsAgent(content, name string) bool {
 }
 
 func (h *Handler) dispatchChannelAmbientObservation(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
-	if trigger.AuthorType == "agent" {
+	if trigger.Type == "agent" {
 		return
 	}
 	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
@@ -2373,7 +2379,7 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 		fmt.Fprintf(&b, "Your agent instructions: %s\n", strings.TrimSpace(agent.Instructions))
 	}
 	b.WriteString("\nCurrent message only:\n")
-	fmt.Fprintf(&b, "%s (%s): %s", trigger.AuthorName, trigger.AuthorType, trigger.Content)
+	fmt.Fprintf(&b, "%s (%s): %s", trigger.AuthorName, trigger.Type, trigger.Content)
 	return b.String()
 }
 
@@ -2432,7 +2438,7 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 		}
 	}
 	b.WriteString("Current message to respond to:\n")
-	fmt.Fprintf(&b, "%s (%s): %s", trigger.AuthorName, trigger.AuthorType, trigger.Content)
+	fmt.Fprintf(&b, "%s (%s): %s", trigger.AuthorName, trigger.Type, trigger.Content)
 	return b.String()
 }
 
@@ -2485,7 +2491,7 @@ func (h *Handler) recentChannelMessages(ctx context.Context, workspaceID, channe
 		FROM (
 			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
 			FROM channel_message
-			WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id IS NULL
+			WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id IS NULL AND author_type <> 'system'
 			ORDER BY created_at DESC
 			LIMIT $3
 		) recent
@@ -2513,7 +2519,7 @@ func (h *Handler) channelThreadContextMessages(ctx context.Context, workspaceID,
 		WITH replies AS (
 			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
 			FROM channel_message
-			WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id = $3
+			WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id = $3 AND author_type <> 'system'
 			ORDER BY created_at DESC
 			LIMIT $4
 		)
@@ -2521,7 +2527,7 @@ func (h *Handler) channelThreadContextMessages(ctx context.Context, workspaceID,
 		FROM (
 			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
 			FROM channel_message
-			WHERE id = $3 AND channel_id = $1 AND workspace_id = $2
+			WHERE id = $3 AND channel_id = $1 AND workspace_id = $2 AND author_type <> 'system'
 			UNION ALL
 			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
 			FROM replies
@@ -2675,15 +2681,16 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 		h.handleChannelReactionPayload(context.Background(), channelID, workspaceID, agentID, reactionTargetID, payload.Reaction)
 		return
 	}
-	if outputType == protocol.ChatOutputKindNoReply && strings.TrimSpace(payload.OutputSuppressedReason) != "" {
-		h.publish(protocol.EventChannelNotice, uuidToString(workspaceID), "system", "", protocol.ChannelNoticePayload{
-			ChannelID:              uuidToString(channelID),
-			ChatSessionID:          payload.ChatSessionID,
-			TaskID:                 payload.TaskID,
-			AgentID:                uuidToString(agentID),
-			Kind:                   "agent_daemon_output_suppressed",
-			OutputSuppressedReason: payload.OutputSuppressedReason,
-		})
+	if outputType == protocol.ChatOutputKindNoReply {
+		if payload.OutputSuppressedReason == protocol.ChannelOutputSuppressedReasonDaemonOutdated {
+			content := "本地守护进程已过期，需要更新。"
+			msg, err := h.insertChannelMessage(context.Background(), channelID, workspaceID, "system", pgtype.UUID{}, "system", content, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+			if err != nil {
+				slog.Warn("channel bridge: insert system message failed", "chat_session_id", payload.ChatSessionID, "output_suppressed_reason", payload.OutputSuppressedReason, "error", err)
+				return
+			}
+			h.publish(protocol.EventChannelMessage, uuidToString(workspaceID), "system", "", msg)
+		}
 		return
 	}
 	if outputType != protocol.ChatOutputKindMessage {
@@ -2801,7 +2808,7 @@ func (h *Handler) channelMessageBelongsToChannel(ctx context.Context, channelID,
 	if err := h.DB.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM channel_message
-			WHERE id = $1 AND channel_id = $2 AND workspace_id = $3
+			WHERE id = $1 AND channel_id = $2 AND workspace_id = $3 AND author_type <> 'system'
 		)`, messageID, channelID, workspaceID).Scan(&exists); err != nil {
 		return false
 	}
@@ -3071,7 +3078,7 @@ func scanChannelMessage(row rowScanner) (ChannelMessageResponse, error) {
 	if err := row.Scan(&id, &channelID, &wsID, &authorType, &authorID, &authorName, &content, &parts, &source, &external, &replyToMessageID, &threadRootMessageID, &thread, &triggerDepth, &createdAt); err != nil {
 		return ChannelMessageResponse{}, err
 	}
-	return ChannelMessageResponse{ID: uuidToString(id), ChannelID: uuidToString(channelID), WorkspaceID: uuidToString(wsID), AuthorType: authorType, AuthorID: uuidToPtr(authorID), AuthorName: authorName, Content: content, Parts: messageparts.Decode(parts), Source: source, ExternalMessageID: textToPtr(external), ReplyToMessageID: uuidToPtr(replyToMessageID), ThreadRootMessageID: uuidToPtr(threadRootMessageID), ThreadID: textToPtr(thread), TriggerDepth: triggerDepth, CreatedAt: timestampToString(createdAt)}, nil
+	return ChannelMessageResponse{ID: uuidToString(id), ChannelID: uuidToString(channelID), WorkspaceID: uuidToString(wsID), Type: authorType, AuthorID: uuidToPtr(authorID), AuthorName: authorName, Content: content, Parts: messageparts.Decode(parts), Source: source, ExternalMessageID: textToPtr(external), ReplyToMessageID: uuidToPtr(replyToMessageID), ThreadRootMessageID: uuidToPtr(threadRootMessageID), ThreadID: textToPtr(thread), TriggerDepth: triggerDepth, CreatedAt: timestampToString(createdAt)}, nil
 }
 
 func trimTextPtr(s *string) *string {

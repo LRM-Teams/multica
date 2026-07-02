@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,7 @@ const (
 type UpdateStore interface {
 	Create(ctx context.Context, runtimeID, targetVersion string) (*UpdateRequest, error)
 	Get(ctx context.Context, id string) (*UpdateRequest, error)
+	LatestForRuntime(ctx context.Context, runtimeID string) (*UpdateRequest, error)
 	HasPending(ctx context.Context, runtimeID string) (bool, error)
 	PopPending(ctx context.Context, runtimeID string) (*UpdateRequest, error)
 	Complete(ctx context.Context, id string, output string) error
@@ -137,6 +139,24 @@ func (s *InMemoryUpdateStore) Get(_ context.Context, id string) (*UpdateRequest,
 	}
 	applyUpdateTimeout(req, time.Now())
 	return req, nil
+}
+
+func (s *InMemoryUpdateStore) LatestForRuntime(_ context.Context, runtimeID string) (*UpdateRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	var latest *UpdateRequest
+	for _, req := range s.requests {
+		if req.RuntimeID != runtimeID {
+			continue
+		}
+		applyUpdateTimeout(req, now)
+		if latest == nil || req.UpdatedAt.After(latest.UpdatedAt) {
+			latest = req
+		}
+	}
+	return latest, nil
 }
 
 func (s *InMemoryUpdateStore) HasPending(_ context.Context, runtimeID string) (bool, error) {
@@ -246,6 +266,10 @@ func (h *Handler) InitiateUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "member", uuidToString(member.UserID), map[string]any{
+		"runtime": h.runtimeToResponse(r.Context(), rt),
+	})
+
 	writeJSON(w, http.StatusOK, update)
 }
 
@@ -291,7 +315,8 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
 
 	// Verify the caller owns this runtime's workspace.
-	if _, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID); !ok {
+	rt, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
 		return
 	}
 
@@ -329,12 +354,18 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to persist completion")
 			return
 		}
+		h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{
+			"runtime": h.runtimeToResponse(r.Context(), rt),
+		})
 	case "failed":
 		if err := h.UpdateStore.Fail(r.Context(), updateID, req.Error); err != nil {
 			slog.Error("UpdateStore Fail failed", "error", err, "update_id", updateID)
 			writeError(w, http.StatusInternalServerError, "failed to persist failure")
 			return
 		}
+		h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{
+			"runtime": h.runtimeToResponse(r.Context(), rt),
+		})
 	case "running":
 		// No-op: status is already "running" from PopPending. This call is
 		// just a progress signal from the daemon to confirm it received the

@@ -53,7 +53,7 @@ function makeMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
     id: "m1",
     channel_id: "c1",
     workspace_id: "w1",
-    author_type: "agent",
+    type: "agent",
     author_id: "agent-1",
     author_name: "Research Agent",
     content: "Thread root content",
@@ -99,7 +99,7 @@ describe("ThreadRootPreview", () => {
     render(
       <ThreadRootPreview
         message={makeMessage({
-          author_type: "user",
+          type: "user",
           author_id: "user-1",
           author_name: "andong3",
         })}

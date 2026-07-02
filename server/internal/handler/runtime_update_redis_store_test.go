@@ -76,6 +76,46 @@ func TestRedisUpdateStore_CreateGetComplete(t *testing.T) {
 	}
 }
 
+func TestRedisUpdateStore_LatestForRuntimeAcrossLifecycle(t *testing.T) {
+	rdb := newRedisTestClient(t)
+	ctx := context.Background()
+	store := NewRedisUpdateStore(rdb)
+
+	req, err := store.Create(ctx, "runtime-latest", "v1.2.3")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	latest, err := store.LatestForRuntime(ctx, "runtime-latest")
+	if err != nil {
+		t.Fatalf("latest after create: %v", err)
+	}
+	if latest == nil || latest.ID != req.ID || latest.Status != UpdatePending {
+		t.Fatalf("latest after create mismatch: %+v", latest)
+	}
+
+	if _, err := store.PopPending(ctx, "runtime-latest"); err != nil {
+		t.Fatalf("pop: %v", err)
+	}
+	latest, err = store.LatestForRuntime(ctx, "runtime-latest")
+	if err != nil {
+		t.Fatalf("latest after pop: %v", err)
+	}
+	if latest == nil || latest.ID != req.ID || latest.Status != UpdateRunning {
+		t.Fatalf("latest after pop mismatch: %+v", latest)
+	}
+
+	if err := store.Complete(ctx, req.ID, "done"); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	latest, err = store.LatestForRuntime(ctx, "runtime-latest")
+	if err != nil {
+		t.Fatalf("latest after complete: %v", err)
+	}
+	if latest == nil || latest.ID != req.ID || latest.Status != UpdateCompleted {
+		t.Fatalf("latest after complete mismatch: %+v", latest)
+	}
+}
+
 func TestRedisUpdateStore_PopPendingAcrossInstances(t *testing.T) {
 	rdb := newRedisTestClient(t)
 	ctx := context.Background()

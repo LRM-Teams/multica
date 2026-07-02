@@ -665,7 +665,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		}
 		if lastContent.Valid {
 			item.LastMessage = &ChannelLastMessage{
-				AuthorType: lastType.String, AuthorName: lastName.String,
+				Type: lastType.String, AuthorName: lastName.String,
 				Content: lastContent.String, CreatedAt: timestampToString(lastAt),
 			}
 		}

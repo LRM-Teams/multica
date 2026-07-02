@@ -229,7 +229,7 @@ function channelMessage(
     id,
     channel_id: "channel-1",
     workspace_id: "ws-1",
-    author_type: "user",
+    type: "user",
     author_id: "author-1",
     author_name: "Author",
     content: id,

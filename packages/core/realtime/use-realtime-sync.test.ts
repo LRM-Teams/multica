@@ -593,7 +593,7 @@ describe("handleInboxNew", () => {
       id: "message-1",
       channel_id: "channel-1",
       workspace_id: "ws-a",
-      author_type: "agent",
+      type: "agent",
       author_id: "agent-1",
       author_name: "Agent Bot",
       content: "I finished the work",
@@ -660,7 +660,7 @@ describe("handleInboxNew", () => {
     await handleChannelMessageNotification(qc, channelMessage(), "member-1");
     await handleChannelMessageNotification(
       qc,
-      channelMessage({ author_type: "user", author_id: "member-1" }),
+      channelMessage({ type: "user", author_id: "member-1" }),
       "member-1",
     );
 

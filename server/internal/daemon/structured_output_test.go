@@ -16,8 +16,8 @@ func TestParseStructuredMessageOutputStickerParts(t *testing.T) {
 	if outputType != "message" {
 		t.Fatalf("outputType = %q, want message", outputType)
 	}
-	if action != "send_channel_message" {
-		t.Fatalf("action = %q, want migrated send_channel_message action", action)
+	if action != "message_send" {
+		t.Fatalf("action = %q, want migrated message_send action", action)
 	}
 	if reaction != nil {
 		t.Fatalf("reaction = %+v, want nil", reaction)
@@ -41,8 +41,8 @@ func TestParseStructuredMessageOutputTextPlusSticker(t *testing.T) {
 	if outputType != "message" {
 		t.Fatalf("outputType = %q, want message", outputType)
 	}
-	if action != "send_channel_message" {
-		t.Fatalf("action = %q, want migrated send_channel_message action", action)
+	if action != "message_send" {
+		t.Fatalf("action = %q, want migrated message_send action", action)
 	}
 	if reaction != nil {
 		t.Fatalf("reaction = %+v, want nil", reaction)
@@ -142,15 +142,15 @@ func TestParseStructuredMessageOutputReaction(t *testing.T) {
 }
 
 func TestParseStructuredMessageOutputChannelSendCommand(t *testing.T) {
-	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`multica channel send --message "hello team"`)
+	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`multica message send --message "hello team"`)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
 	if !structured {
 		t.Fatal("expected channel send command to be typed")
 	}
-	if outputType != "message" || action != "send_channel_message" || content != "hello team" {
-		t.Fatalf("content=%q outputType=%q action=%q, want send_channel_message hello team", content, outputType, action)
+	if outputType != "message" || action != "message_send" || content != "hello team" {
+		t.Fatalf("content=%q outputType=%q action=%q, want message_send hello team", content, outputType, action)
 	}
 	if reaction != nil || len(parts) != 0 {
 		t.Fatalf("parts=%+v reaction=%+v, want plain text content without structured parts", parts, reaction)

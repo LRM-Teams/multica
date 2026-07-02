@@ -16,7 +16,7 @@ import (
 // a wall of welcomes from chaining into the automatic agent-reply loop.
 func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 	agent := db.Agent{Name: "总监助理", DisplayName: "总监助理", Description: "负责总监以上协调"}
-	trigger := ChannelMessageResponse{ID: "11111111-1111-1111-1111-111111111111", AuthorName: "用户", AuthorType: "user", Content: "全体总监以上欢迎一下新同事"}
+	trigger := ChannelMessageResponse{ID: "11111111-1111-1111-1111-111111111111", AuthorName: "用户", Type: "user", Content: "全体总监以上欢迎一下新同事"}
 	p := buildChannelAmbientObservationPrompt(ChannelResponse{Name: "产品讨论"}, agent, trigger)
 
 	for _, want := range []string{
@@ -33,7 +33,7 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 		"🎉",
 		"multica-stickers",
 		"\"parts\"",
-		"\"action\":\"send_channel_message\"",
+		"\"action\":\"message_send\"",
 		"\"sticker_id\":\"hi\"",
 		"全体总监以上欢迎一下新同事",
 	} {
@@ -55,8 +55,8 @@ func TestBuildChannelMentionPromptIncludesStickerInstruction(t *testing.T) {
 	}
 	threadRootID := "33333333-3333-3333-3333-333333333333"
 	triggers := []ChannelMessageResponse{
-		{AuthorName: "Frank", AuthorType: "user", Content: "@Atlas 回复个表情包"},
-		{AuthorName: "Frank", AuthorType: "user", Content: "@Atlas 在线程里回复个表情包", ThreadRootMessageID: &threadRootID},
+		{AuthorName: "Frank", Type: "user", Content: "@Atlas 回复个表情包"},
+		{AuthorName: "Frank", Type: "user", Content: "@Atlas 在线程里回复个表情包", ThreadRootMessageID: &threadRootID},
 	}
 
 	for _, trigger := range triggers {
@@ -78,7 +78,7 @@ func TestBuildChannelMentionPromptIncludesStickerInstruction(t *testing.T) {
 
 func TestFormatChannelMessageLineTruncatesHistoryContent(t *testing.T) {
 	longContent := strings.Repeat("a", channelHistoryMessageMaxChars+50)
-	line := formatChannelMessageLine(ChannelMessageResponse{AuthorName: "Frank", AuthorType: "user", Content: longContent})
+	line := formatChannelMessageLine(ChannelMessageResponse{AuthorName: "Frank", Type: "user", Content: longContent})
 	if strings.Contains(line, strings.Repeat("a", channelHistoryMessageMaxChars+1)) {
 		t.Fatalf("history line was not truncated: %d chars", len(line))
 	}
@@ -90,7 +90,7 @@ func TestFormatChannelMessageLineTruncatesHistoryContent(t *testing.T) {
 		"01", "02", "03", "04", "05", "06", "07", "08", "09", "10",
 		"11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21",
 	}, "\n")
-	line = formatChannelMessageLine(ChannelMessageResponse{AuthorName: "Frank", AuthorType: "user", Content: manyLines})
+	line = formatChannelMessageLine(ChannelMessageResponse{AuthorName: "Frank", Type: "user", Content: manyLines})
 	if strings.Contains(line, "21") {
 		t.Fatalf("history line kept content past line cap:\n%s", line)
 	}
@@ -129,8 +129,8 @@ func TestBuildChannelWelcomePrompt(t *testing.T) {
 	if !strings.Contains(p, "\"parts\"") || !strings.Contains(p, "\"sticker_id\":\"applause\"") {
 		t.Error("prompt should instruct the agent to include structured sticker parts")
 	}
-	if !strings.Contains(p, "\"action\":\"send_channel_message\"") {
-		t.Error("prompt should instruct the agent to use the send_channel_message action")
+	if !strings.Contains(p, "\"action\":\"message_send\"") {
+		t.Error("prompt should instruct the agent to use the message_send action")
 	}
 	if !strings.Contains(p, "multica-stickers") {
 		t.Error("prompt should point at the multica-stickers skill")

@@ -99,7 +99,7 @@ function makeMessage(id: string, content: string): ChannelMessage {
     id,
     channel_id: "c1",
     workspace_id: "w1",
-    author_type: "agent",
+    type: "agent",
     author_id: "agent-1",
     author_name: "Research Agent",
     content,

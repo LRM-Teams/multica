@@ -23,8 +23,6 @@ import {
 } from "./message-parts-preview";
 import { MessagePartsRenderer } from "./message-parts-renderer";
 
-type RuntimeNoticeState = "outdated" | "missing" | "disconnected";
-
 function formatTime(value: string): string {
   try {
     return new Intl.DateTimeFormat(undefined, {
@@ -33,19 +31,6 @@ function formatTime(value: string): string {
     }).format(new Date(value));
   } catch {
     return "";
-  }
-}
-
-function runtimeNoticeStateFromMessage(message: ChannelMessage): RuntimeNoticeState | null {
-  switch (message.system_message_kind) {
-    case "runtime_outdated":
-      return "outdated";
-    case "runtime_missing":
-      return "missing";
-    case "runtime_disconnected":
-      return "disconnected";
-    default:
-      return null;
   }
 }
 
@@ -59,7 +44,7 @@ function ChannelSystemMessageRow({
 }: {
   message: ChannelMessage;
   highlighted: boolean;
-  runtimeNoticeState: RuntimeNoticeState | null;
+  runtimeNoticeState: boolean;
   systemText: string;
   openRuntimesLabel: string;
   onOpenRuntimes?: () => void;
@@ -129,18 +114,14 @@ export function ChannelMessageBubble({
 }) {
   const { t } = useT("channels");
   const { getActorAvatarUrl, getActorName } = useActorName();
-  const runtimeNoticeState = runtimeNoticeStateFromMessage(message);
 
-  if (message.author_type === "system") {
-    const systemText = runtimeNoticeState
-      ? t(($) => $.daemon_notice[runtimeNoticeState])
-      : message.content.trim() || message.author_name || "System";
-
+  if (message.type === "system") {
+    const systemText = message.content.trim() || message.author_name || "System";
     return (
       <ChannelSystemMessageRow
         message={message}
         highlighted={highlighted}
-        runtimeNoticeState={runtimeNoticeState}
+        runtimeNoticeState={false}
         systemText={systemText}
         openRuntimesLabel={t(($) => $.daemon_notice.open_runtimes)}
         onOpenRuntimes={onOpenRuntimes}
@@ -149,10 +130,10 @@ export function ChannelMessageBubble({
   }
 
   const isOwn =
-    message.author_type === "user" &&
+    message.type === "user" &&
     message.author_id != null &&
     message.author_id === currentUserId;
-  const isAgent = message.author_type === "agent";
+  const isAgent = message.type === "agent";
   const isExternal = message.source === "lark";
   const tint = isAgent
     ? agentColor(message.author_id ?? message.author_name)
@@ -166,7 +147,7 @@ export function ChannelMessageBubble({
       ? null
       : isAgent
         ? getActorAvatarUrl("agent", message.author_id)
-        : message.author_type === "user"
+        : message.type === "user"
           ? getActorAvatarUrl("member", message.author_id)
           : null;
   const displayName = resolveChannelAuthorDisplayName(message, {
@@ -182,9 +163,9 @@ export function ChannelMessageBubble({
       })
     : "";
   const profileActorType =
-    message.author_type === "agent"
+    message.type === "agent"
       ? "agent"
-      : message.author_type === "user"
+      : message.type === "user"
         ? "user"
         : null;
   const profileActorId = profileActorType ? message.author_id : null;

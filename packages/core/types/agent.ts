@@ -4,6 +4,22 @@ export type AgentRuntimeMode = "local" | "cloud";
 
 export type AgentVisibility = "workspace" | "private";
 
+export type RuntimeUpdateState =
+  | "idle"
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "timed_out";
+
+export type RuntimeHealthState =
+  | "ok"
+  | "update_available"
+  | "updating"
+  | "awaiting_confirmation"
+  | "failed"
+  | "offline";
+
 // Runtime visibility is a separate axis from agent visibility — different
 // vocabulary because it gates a different action. "private" (default) means
 // only the runtime owner and workspace admins can bind agents to it;
@@ -29,6 +45,10 @@ export interface RuntimeDevice {
    * action is safe to send.
    */
   capabilities?: string[];
+  current_version: string | null;
+  target_version?: string | null;
+  update_state: RuntimeUpdateState;
+  runtime_health: RuntimeHealthState;
   owner_id: string | null;
   /** Defaults to "private" when the backend predates the visibility flag. */
   visibility: RuntimeVisibility;

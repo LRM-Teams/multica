@@ -18,18 +18,22 @@ import (
 )
 
 type AgentRuntimeResponse struct {
-	ID           string   `json:"id"`
-	WorkspaceID  string   `json:"workspace_id"`
-	DaemonID     *string  `json:"daemon_id"`
-	Name         string   `json:"name"`
-	RuntimeMode  string   `json:"runtime_mode"`
-	Provider     string   `json:"provider"`
-	LaunchHeader string   `json:"launch_header"`
-	Status       string   `json:"status"`
-	DeviceInfo   string   `json:"device_info"`
-	Metadata     any      `json:"metadata"`
-	Capabilities []string `json:"capabilities"`
-	OwnerID      *string  `json:"owner_id"`
+	ID             string   `json:"id"`
+	WorkspaceID    string   `json:"workspace_id"`
+	DaemonID       *string  `json:"daemon_id"`
+	Name           string   `json:"name"`
+	RuntimeMode    string   `json:"runtime_mode"`
+	Provider       string   `json:"provider"`
+	LaunchHeader   string   `json:"launch_header"`
+	Status         string   `json:"status"`
+	DeviceInfo     string   `json:"device_info"`
+	Metadata       any      `json:"metadata"`
+	Capabilities   []string `json:"capabilities"`
+	CurrentVersion *string  `json:"current_version"`
+	TargetVersion  *string  `json:"target_version,omitempty"`
+	UpdateState    string   `json:"update_state"`
+	RuntimeHealth  string   `json:"runtime_health"`
+	OwnerID        *string  `json:"owner_id"`
 	// Visibility is "private" (default — only the owner / workspace admins
 	// can bind agents) or "public" (any workspace member can). See migration
 	// 083 and canUseRuntimeForAgent.
@@ -40,6 +44,22 @@ type AgentRuntimeResponse struct {
 }
 
 func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
+	return runtimeToResponseWithUpdate(rt, nil)
+}
+
+func (h *Handler) runtimeToResponse(ctx context.Context, rt db.AgentRuntime) AgentRuntimeResponse {
+	var update *UpdateRequest
+	if h != nil && h.UpdateStore != nil {
+		var err error
+		update, err = h.UpdateStore.LatestForRuntime(ctx, uuidToString(rt.ID))
+		if err != nil {
+			slog.Warn("failed to load runtime update state", "error", err, "runtime_id", uuidToString(rt.ID))
+		}
+	}
+	return runtimeToResponseWithUpdate(rt, update)
+}
+
+func runtimeToResponseWithUpdate(rt db.AgentRuntime, update *UpdateRequest) AgentRuntimeResponse {
 	var metadata any
 	if rt.Metadata != nil {
 		json.Unmarshal(rt.Metadata, &metadata)
@@ -47,25 +67,94 @@ func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
+	currentVersion := runtimeCurrentVersion(metadata)
+	targetVersion, updateState := runtimeUpdateState(update)
+	runtimeHealth := deriveRuntimeHealth(rt, currentVersion, targetVersion, updateState)
 
 	return AgentRuntimeResponse{
-		ID:           uuidToString(rt.ID),
-		WorkspaceID:  uuidToString(rt.WorkspaceID),
-		DaemonID:     textToPtr(rt.DaemonID),
-		Name:         rt.Name,
-		RuntimeMode:  rt.RuntimeMode,
-		Provider:     rt.Provider,
-		LaunchHeader: agent.LaunchHeader(rt.Provider),
-		Status:       rt.Status,
-		DeviceInfo:   rt.DeviceInfo,
-		Metadata:     metadata,
-		Capabilities: runtimeCapabilities(metadata),
-		OwnerID:      uuidToPtr(rt.OwnerID),
-		Visibility:   rt.Visibility,
-		LastSeenAt:   timestampToPtr(rt.LastSeenAt),
-		CreatedAt:    timestampToString(rt.CreatedAt),
-		UpdatedAt:    timestampToString(rt.UpdatedAt),
+		ID:             uuidToString(rt.ID),
+		WorkspaceID:    uuidToString(rt.WorkspaceID),
+		DaemonID:       textToPtr(rt.DaemonID),
+		Name:           rt.Name,
+		RuntimeMode:    rt.RuntimeMode,
+		Provider:       rt.Provider,
+		LaunchHeader:   agent.LaunchHeader(rt.Provider),
+		Status:         rt.Status,
+		DeviceInfo:     rt.DeviceInfo,
+		Metadata:       metadata,
+		Capabilities:   runtimeCapabilities(metadata),
+		CurrentVersion: currentVersion,
+		TargetVersion:  targetVersion,
+		UpdateState:    updateState,
+		RuntimeHealth:  runtimeHealth,
+		OwnerID:        uuidToPtr(rt.OwnerID),
+		Visibility:     rt.Visibility,
+		LastSeenAt:     timestampToPtr(rt.LastSeenAt),
+		CreatedAt:      timestampToString(rt.CreatedAt),
+		UpdatedAt:      timestampToString(rt.UpdatedAt),
 	}
+}
+
+func runtimeCurrentVersion(metadata any) *string {
+	metadataMap, ok := metadata.(map[string]any)
+	if !ok {
+		return nil
+	}
+	value, ok := metadataMap["cli_version"].(string)
+	if !ok || strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return &value
+}
+
+func runtimeUpdateState(update *UpdateRequest) (*string, string) {
+	if update == nil {
+		return nil, "idle"
+	}
+	targetVersion := update.TargetVersion
+	switch update.Status {
+	case UpdatePending:
+		return &targetVersion, "pending"
+	case UpdateRunning:
+		return &targetVersion, "running"
+	case UpdateCompleted:
+		return &targetVersion, "completed"
+	case UpdateFailed:
+		return &targetVersion, "failed"
+	case UpdateTimeout:
+		return &targetVersion, "timed_out"
+	default:
+		return &targetVersion, "idle"
+	}
+}
+
+func deriveRuntimeHealth(rt db.AgentRuntime, currentVersion, targetVersion *string, updateState string) string {
+	if rt.Status != "online" {
+		return "offline"
+	}
+	switch updateState {
+	case "pending", "running":
+		return "updating"
+	case "completed":
+		if versionsMatch(currentVersion, targetVersion) {
+			return "ok"
+		}
+		return "awaiting_confirmation"
+	case "failed", "timed_out":
+		return "failed"
+	default:
+		return "ok"
+	}
+}
+
+func versionsMatch(left, right *string) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	normalize := func(value string) string {
+		return strings.TrimPrefix(strings.TrimSpace(value), "v")
+	}
+	return normalize(*left) != "" && normalize(*left) == normalize(*right)
 }
 
 func runtimeCapabilities(metadata any) []string {
@@ -495,7 +584,7 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, runtimeToResponse(rt))
+	writeJSON(w, http.StatusOK, h.runtimeToResponse(r.Context(), rt))
 }
 
 func canEditRuntime(member db.Member, rt db.AgentRuntime) bool {
@@ -554,7 +643,7 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]AgentRuntimeResponse, len(runtimes))
 	for i, rt := range runtimes {
-		resp[i] = runtimeToResponse(rt)
+		resp[i] = h.runtimeToResponse(r.Context(), rt)
 	}
 
 	writeJSON(w, http.StatusOK, resp)

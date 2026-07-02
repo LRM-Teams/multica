@@ -20,6 +20,30 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+func TestChannelMessageResponseUsesRaftTypeField(t *testing.T) {
+	body, err := json.Marshal(ChannelMessageResponse{
+		ID:          "message-1",
+		ChannelID:   "channel-1",
+		WorkspaceID: "workspace-1",
+		Type:        "system",
+		AuthorName:  "system",
+		Content:     "runtime outdated",
+	})
+	if err != nil {
+		t.Fatalf("marshal channel message: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal channel message: %v", err)
+	}
+	if payload["type"] != "system" {
+		t.Fatalf("type = %v, want system", payload["type"])
+	}
+	if _, ok := payload["author_type"]; ok {
+		t.Fatalf("channel message response exposed legacy author_type: %s", string(body))
+	}
+}
+
 func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -201,14 +225,14 @@ func TestChannelChatDoneNoReplyAndReactionCommandsAreNotPersisted(t *testing.T) 
 	assertNoChannelMessageContent(t, channelID, malformedReactionCommand)
 }
 
-func TestChannelChatDoneSuppressedOutputPublishesNotice(t *testing.T) {
+func TestChannelChatDoneSystemMessageWritesSystemMessage(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "Suppressed Output Agent", nil)
-	channelID := seedChannelForTest(t, "suppressed-output-"+uuid.NewString(), testUserID)
+	agentID := createHandlerTestAgent(t, "System Message Agent", nil)
+	channelID := seedChannelForTest(t, "system-message-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
@@ -219,7 +243,7 @@ func TestChannelChatDoneSuppressedOutputPublishesNotice(t *testing.T) {
 	if !found {
 		t.Fatal("channel not found after seed")
 	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Suppressed Output Agent reply", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@System Message Agent reply", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
 	if err != nil {
 		t.Fatalf("insert trigger: %v", err)
 	}
@@ -230,14 +254,6 @@ func TestChannelChatDoneSuppressedOutputPublishesNotice(t *testing.T) {
 		t.Fatalf("channel agent session not created: %v", err)
 	}
 
-	notices := make(chan protocol.ChannelNoticePayload, 1)
-	testHandler.Bus.Subscribe(protocol.EventChannelNotice, func(e events.Event) {
-		payload, ok := e.Payload.(protocol.ChannelNoticePayload)
-		if ok && payload.ChatSessionID == sessionID {
-			notices <- payload
-		}
-	})
-
 	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
 		ChatSessionID:          sessionID,
 		TaskID:                 uuid.NewString(),
@@ -245,19 +261,16 @@ func TestChannelChatDoneSuppressedOutputPublishesNotice(t *testing.T) {
 		OutputSuppressedReason: protocol.ChannelOutputSuppressedReasonDaemonOutdated,
 	}})
 
-	select {
-	case notice := <-notices:
-		if notice.ChannelID != channelID {
-			t.Fatalf("notice channel_id = %q, want %q", notice.ChannelID, channelID)
-		}
-		if notice.Kind != "agent_daemon_output_suppressed" {
-			t.Fatalf("notice kind = %q, want agent_daemon_output_suppressed", notice.Kind)
-		}
-		if notice.OutputSuppressedReason != protocol.ChannelOutputSuppressedReasonDaemonOutdated {
-			t.Fatalf("notice reason = %q, want %q", notice.OutputSuppressedReason, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for channel notice")
+	var authorType, authorName, content string
+	if err := testPool.QueryRow(ctx, `
+		SELECT author_type, author_name, content
+		FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'system'
+	`, channelID).Scan(&authorType, &authorName, &content); err != nil {
+		t.Fatalf("load system message: %v", err)
+	}
+	if authorType != "system" || authorName != "system" || content != "本地守护进程已过期，需要更新。" {
+		t.Fatalf("system message = %q/%q/%q", authorType, authorName, content)
 	}
 
 	var messageCount int
@@ -269,6 +282,54 @@ func TestChannelChatDoneSuppressedOutputPublishesNotice(t *testing.T) {
 	}
 	if messageCount != 0 {
 		t.Fatalf("agent channel message count = %d, want 0", messageCount)
+	}
+}
+
+func TestChannelChatDoneSuppressedTraceOnlyDoesNotWriteSystemMessage(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Trace Only Agent", nil)
+	channelID := seedChannelForTest(t, "trace-only-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Trace Only Agent reply", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert trigger: %v", err)
+	}
+	testHandler.dispatchChannelMentions(ctx, ch, trigger, parseUUID(testUserID))
+
+	var sessionID string
+	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {
+		t.Fatalf("channel agent session not created: %v", err)
+	}
+
+	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
+		ChatSessionID:          sessionID,
+		TaskID:                 uuid.NewString(),
+		Type:                   protocol.ChatOutputKindNoReply,
+		OutputSuppressedReason: protocol.ChannelOutputSuppressedReasonInvalidAction,
+	}})
+
+	var messageCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_message
+		WHERE channel_id = $1 AND author_type IN ('agent', 'system')
+	`, channelID).Scan(&messageCount); err != nil {
+		t.Fatalf("count visible output messages: %v", err)
+	}
+	if messageCount != 0 {
+		t.Fatalf("visible output message count = %d, want 0", messageCount)
 	}
 }
 
@@ -698,6 +759,59 @@ func TestChannelMessageReactionCanBeRemoved(t *testing.T) {
 	}
 }
 
+func TestSystemChannelMessageRejectsOrdinaryAbilities(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "system-ability-guard-"+uuid.NewString(), testUserID)
+	msg, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "system", pgtype.UUID{}, "system", "runtime notice", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert system channel message: %v", err)
+	}
+
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages/"+msg.ID+"/reactions", map[string]string{"emoji": "👍"})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
+	rec := httptest.NewRecorder()
+	testHandler.AddChannelMessageReaction(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("add reaction to system message: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_message_reaction (channel_message_id, workspace_id, actor_type, actor_id, emoji)
+		VALUES ($1, $2, 'member', $3, '👍')`, parseUUID(msg.ID), parseUUID(testWorkspaceID), parseUUID(testUserID)); err != nil {
+		t.Fatalf("seed system reaction row: %v", err)
+	}
+	req = newRequest(http.MethodDelete, "/api/channels/"+channelID+"/messages/"+msg.ID+"/reactions", map[string]string{"emoji": "👍"})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
+	rec = httptest.NewRecorder()
+	testHandler.RemoveChannelMessageReaction(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("remove reaction from system message: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var reactionCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM channel_message_reaction WHERE channel_message_id = $1`, msg.ID).Scan(&reactionCount); err != nil {
+		t.Fatalf("count system reactions: %v", err)
+	}
+	if reactionCount != 1 {
+		t.Fatalf("system reaction row should remain untouched, got count=%d", reactionCount)
+	}
+
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages/"+msg.ID+"/thread", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelMessageThread(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("open system message thread: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSearchChannelMessagesReturnsStableResults(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -711,6 +825,9 @@ func TestSearchChannelMessagesReturnsStableResults(t *testing.T) {
 	}
 	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "Beta banana", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("s2"), 0); err != nil {
 		t.Fatalf("insert second message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "system", pgtype.UUID{}, "system", "Alpha system message", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("insert system message: %v", err)
 	}
 	threadReply, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "Nested pear", "multica", nil, pgtype.UUID{}, parseUUID(first.ID), strPtr("s1"), 0)
 	if err != nil {

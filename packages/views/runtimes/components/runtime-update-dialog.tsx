@@ -5,8 +5,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
-import { runtimeKeys, runtimeListOptions, latestCliVersionOptions } from "@multica/core/runtimes/queries";
-import type { AgentRuntime, RuntimeUpdateStatus } from "@multica/core/types";
+import {
+  runtimeCanStartSelfUpdate,
+  runtimeCurrentVersion,
+  runtimeTargetVersion,
+} from "@multica/core/runtimes";
+import { runtimeKeys, runtimeListOptions } from "@multica/core/runtimes/queries";
+import type { RuntimeUpdateStatus } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -16,33 +21,6 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { useT } from "../../i18n/use-t";
-import { isVersionNewer } from "../utils";
-
-const runtimeRefreshIntervalMs = 2000;
-const runtimeRefreshTimeoutMs = 60_000;
-
-function runtimeCliVersion(runtime: AgentRuntime): string | null {
-  const version = runtime.metadata?.cli_version;
-  return typeof version === "string" && version ? version : null;
-}
-
-function runtimeLaunchedBy(runtime: AgentRuntime): string | null {
-  const launchedBy = runtime.metadata?.launched_by;
-  return typeof launchedBy === "string" && launchedBy ? launchedBy : null;
-}
-
-function isUpdatableRuntime(
-  runtime: AgentRuntime,
-  latestVersion: string,
-  userId: string,
-): boolean {
-  if (runtime.runtime_mode !== "local") return false;
-  if (runtime.status !== "online") return false;
-  if (runtime.owner_id !== userId) return false;
-  if (runtimeLaunchedBy(runtime) === "desktop") return false;
-  const cliVersion = runtimeCliVersion(runtime);
-  return !!cliVersion && isVersionNewer(latestVersion, cliVersion);
-}
 
 interface RuntimeUpdateDialogProps {
   wsId: string | undefined;
@@ -56,7 +34,6 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
     ...runtimeListOptions(wsId ?? ""),
     enabled: !!wsId,
   });
-  const { data: latestVersion } = useQuery(latestCliVersionOptions());
   const [dismissedKey, setDismissedKey] = useState<string | null>(null);
   const [dismissedHydrated, setDismissedHydrated] = useState(false);
   const [activeRuntimeId, setActiveRuntimeId] = useState<string | null>(null);
@@ -65,20 +42,19 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
   const [output, setOutput] = useState("");
   const [starting, setStarting] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const runtimeRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const runtimeRefreshStartedAtRef = useRef(0);
 
   const updatableRuntimes = useMemo(() => {
-    if (!latestVersion || !userId) return [];
-    return runtimes.filter((runtime) =>
-      isUpdatableRuntime(runtime, latestVersion, userId),
-    );
-  }, [latestVersion, runtimes, userId]);
+    if (!userId) return [];
+    return runtimes.filter((runtime) => runtimeCanStartSelfUpdate(runtime, userId));
+  }, [runtimes, userId]);
 
   const promptKey = useMemo(() => {
-    if (!latestVersion || updatableRuntimes.length === 0) return null;
-    return `${latestVersion}:${updatableRuntimes.map((r) => r.id).sort().join(",")}`;
-  }, [latestVersion, updatableRuntimes]);
+    if (updatableRuntimes.length === 0) return null;
+    return updatableRuntimes
+      .map((runtime) => `${runtime.id}:${runtimeTargetVersion(runtime) ?? ""}`)
+      .sort()
+      .join(",");
+  }, [updatableRuntimes]);
   const dismissStorageKey = useMemo(() => {
     if (!wsId || !userId) return null;
     return `multica_runtime_update_prompt:${wsId}:${userId}`;
@@ -94,6 +70,9 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
 
   const open = !!promptKey && dismissedHydrated && dismissedKey !== promptKey;
   const isActive = status === "pending" || status === "running" || starting;
+  const activeTargetVersion = activeRuntime
+    ? runtimeTargetVersion(activeRuntime)
+    : null;
 
   const cleanupUpdatePoll = useCallback(() => {
     if (pollRef.current) {
@@ -102,18 +81,9 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
     }
   }, []);
 
-  const cleanupRuntimeRefresh = useCallback(() => {
-    if (runtimeRefreshRef.current) {
-      clearInterval(runtimeRefreshRef.current);
-      runtimeRefreshRef.current = null;
-    }
-    runtimeRefreshStartedAtRef.current = 0;
-  }, []);
-
   const cleanup = useCallback(() => {
     cleanupUpdatePoll();
-    cleanupRuntimeRefresh();
-  }, [cleanupRuntimeRefresh, cleanupUpdatePoll]);
+  }, [cleanupUpdatePoll]);
 
   useEffect(() => cleanup, [cleanup]);
 
@@ -159,19 +129,6 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
     qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
   }, [qc, wsId]);
 
-  const startRuntimeRefresh = useCallback(() => {
-    cleanupRuntimeRefresh();
-    runtimeRefreshStartedAtRef.current = Date.now();
-    refreshRuntimes();
-    runtimeRefreshRef.current = setInterval(() => {
-      if (Date.now() - runtimeRefreshStartedAtRef.current > runtimeRefreshTimeoutMs) {
-        cleanupRuntimeRefresh();
-        return;
-      }
-      refreshRuntimes();
-    }, runtimeRefreshIntervalMs);
-  }, [cleanupRuntimeRefresh, refreshRuntimes]);
-
   const pollUpdate = useCallback(
     (runtimeId: string, nextUpdateId: string) => {
       cleanupUpdatePoll();
@@ -183,7 +140,7 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
             setOutput(result.output ?? t(($) => $.update_prompt.status.completed));
             cleanupUpdatePoll();
             setStarting(false);
-            startRuntimeRefresh();
+            refreshRuntimes();
           } else if (result.status === "failed" || result.status === "timeout") {
             setError(result.error ?? t(($) => $.update.unknown_error));
             cleanupUpdatePoll();
@@ -194,18 +151,18 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
         }
       }, 2000);
     },
-    [cleanupUpdatePoll, startRuntimeRefresh, t],
+    [cleanupUpdatePoll, refreshRuntimes, t],
   );
 
   const startUpdate = async () => {
-    if (!activeRuntime || !latestVersion) return;
+    if (!activeRuntime || !activeTargetVersion) return;
     cleanup();
     setStarting(true);
     setStatus("pending");
     setError("");
     setOutput("");
     try {
-      const update = await api.initiateUpdate(activeRuntime.id, latestVersion);
+      const update = await api.initiateUpdate(activeRuntime.id, activeTargetVersion);
       setStatus(update.status);
       pollUpdate(activeRuntime.id, update.id);
     } catch (err) {
@@ -220,7 +177,7 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
     }
   };
 
-  if (!activeRuntime || !latestVersion || !promptKey) return null;
+  if (!activeRuntime || !activeTargetVersion || !promptKey) return null;
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !isActive && dismiss()}>
@@ -229,8 +186,8 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
           <DialogTitle>{t(($) => $.update_prompt.title)}</DialogTitle>
           <DialogDescription className="mt-1">
             {t(($) => $.update_prompt.description, {
-              current: runtimeCliVersion(activeRuntime) ?? t(($) => $.update.version_unknown),
-              latest: latestVersion,
+              current: runtimeCurrentVersion(activeRuntime) ?? t(($) => $.update.version_unknown),
+              latest: activeTargetVersion,
             })}
           </DialogDescription>
         </div>
@@ -239,7 +196,7 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
           <div className="flex items-center justify-between gap-3">
             <span className="min-w-0 truncate font-medium">{activeRuntime.name}</span>
             <span className="shrink-0 font-mono text-xs text-muted-foreground">
-              {runtimeCliVersion(activeRuntime) ?? "?"} → {latestVersion}
+              {runtimeCurrentVersion(activeRuntime) ?? "?"} → {activeTargetVersion}
             </span>
           </div>
         </div>

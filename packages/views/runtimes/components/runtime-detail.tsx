@@ -15,7 +15,12 @@ import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
 import { useUpdateRuntime } from "@multica/core/runtimes/mutations";
-import { deriveRuntimeHealth } from "@multica/core/runtimes";
+import {
+  deriveRuntimeHealth,
+  runtimeCurrentVersion,
+  runtimeLaunchedBy,
+  runtimeTargetVersion,
+} from "@multica/core/runtimes";
 import {
   type AgentPresenceDetail,
   useWorkspacePresenceMap,
@@ -31,7 +36,8 @@ import { resolveActorDisplayName, resolveActorIdentityPresentation } from "@mult
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
-import { AppLink, useNavigation } from "../../navigation";
+import { AppLink } from "../../navigation/app-link";
+import { useNavigation } from "../../navigation/context";
 import { availabilityConfig, workloadConfig } from "../../agents/presence";
 import { formatLastSeen, isSelfHealingRuntime } from "../utils";
 import { HealthBadge } from "./shared";
@@ -39,29 +45,7 @@ import { ProviderLogo } from "./provider-logo";
 import { UpdateSection } from "./update-section";
 import { UsageSection } from "./usage-section";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
-import { useT } from "../../i18n";
-
-function getCliVersion(metadata: Record<string, unknown>): string | null {
-  if (
-    metadata &&
-    typeof metadata.cli_version === "string" &&
-    metadata.cli_version
-  ) {
-    return metadata.cli_version;
-  }
-  return null;
-}
-
-function getLaunchedBy(metadata: Record<string, unknown>): string | null {
-  if (
-    metadata &&
-    typeof metadata.launched_by === "string" &&
-    metadata.launched_by
-  ) {
-    return metadata.launched_by;
-  }
-  return null;
-}
+import { useT } from "../../i18n/use-t";
 
 function shortDaemonId(id: string | null): string | null {
   if (!id) return null;
@@ -86,9 +70,9 @@ function useNowTick(intervalMs = 30_000): number {
 export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
   const { t } = useT("runtimes");
   const cliVersion =
-    runtime.runtime_mode === "local" ? getCliVersion(runtime.metadata) : null;
+    runtime.runtime_mode === "local" ? runtimeCurrentVersion(runtime) : null;
   const launchedBy =
-    runtime.runtime_mode === "local" ? getLaunchedBy(runtime.metadata) : null;
+    runtime.runtime_mode === "local" ? runtimeLaunchedBy(runtime) : null;
 
   const user = useAuthStore((s) => s.user);
   const wsId = useWorkspaceId();
@@ -487,6 +471,9 @@ function DiagnosticsCard({
             <UpdateSection
               runtimeId={runtime.id}
               currentVersion={cliVersion}
+              targetVersion={runtimeTargetVersion(runtime)}
+              updateState={runtime.update_state}
+              runtimeHealth={runtime.runtime_health}
               isOnline={runtime.status === "online"}
               launchedBy={launchedBy}
               canUpdate={canDelete}

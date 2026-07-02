@@ -77,6 +77,14 @@
       "description": "离线 6 天以上。如不重连，将在 7 天时自动删除。"
     }
   },
+  "runtime_health": {
+    "ok": "正常",
+    "update_available": "可更新",
+    "updating": "更新中",
+    "awaiting_confirmation": "等待确认",
+    "failed": "更新失败",
+    "offline": "离线"
+  },
   "detail": {
     "all_runtimes": "全部运行时",
     "read_only": "只读",
@@ -236,6 +244,8 @@
     "retry": "重试",
     "unknown_error": "未知错误",
     "initiate_failed": "启动更新失败",
+    "awaiting_confirmation": "已更新，正在等待守护进程确认。",
+    "offline": "守护进程离线",
     "manual_hint": "如果自动更新无法写入安装位置，请在那台电脑的终端手动更新。",
     "manual_action": "手动命令",
     "manual_dialog_title": "手动更新这台运行时",

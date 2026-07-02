@@ -81,6 +81,14 @@
       "description": "Offline 6+ days. Auto-deleted at 7 days unless it reconnects."
     }
   },
+  "runtime_health": {
+    "ok": "OK",
+    "update_available": "Update available",
+    "updating": "Updating",
+    "awaiting_confirmation": "Waiting for confirmation",
+    "failed": "Update failed",
+    "offline": "Offline"
+  },
   "detail": {
     "all_runtimes": "All runtimes",
     "read_only": "Read-only",
@@ -248,6 +256,8 @@
     "retry": "Retry",
     "unknown_error": "Unknown error",
     "initiate_failed": "Failed to initiate update",
+    "awaiting_confirmation": "Updated. Waiting for daemon confirmation.",
+    "offline": "Daemon offline",
     "manual_hint": "If the automatic update cannot write to the install location, update from a terminal on that computer.",
     "manual_action": "Manual commands",
     "manual_dialog_title": "Update this runtime manually",

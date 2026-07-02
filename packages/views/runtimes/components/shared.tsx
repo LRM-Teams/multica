@@ -1,8 +1,9 @@
 import { Cloud, Monitor, Wifi, WifiHigh, WifiOff } from "lucide-react";
 import { Badge } from "@multica/ui/components/ui/badge";
 import type { RuntimeHealth } from "@multica/core/runtimes";
+import type { RuntimeHealthState } from "@multica/core/types";
 import { ProviderLogo } from "./provider-logo";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/use-t";
 
 export function RuntimeModeIcon({ mode }: { mode: string }) {
   return mode === "cloud" ? (
@@ -23,10 +24,6 @@ export function ProviderChip({ provider }: { provider: string }) {
   );
 }
 
-// Maps each derived 4-state runtime health to a semantic colour class.
-// The mapping intentionally reuses our existing tokens (success/warning/
-// muted-foreground/destructive) instead of introducing runtime-specific
-// colours — keeps the palette small and consistent with Skills.
 // Maps each derived 4-state runtime health to a semantic colour class.
 // Labels flow through useT — see useHealthLabel below.
 const HEALTH_VISUAL: Record<RuntimeHealth, { dot: string; tone: string }> = {
@@ -129,6 +126,43 @@ export function HealthBadge({
     );
   }
   const v = HEALTH_VISUAL[health];
+  return (
+    <Badge variant="secondary" className={v.tone}>
+      <span className={`h-1.5 w-1.5 rounded-full ${v.dot}`} />
+      {labelOf(health)}
+    </Badge>
+  );
+}
+
+const RUNTIME_HEALTH_STATE_VISUAL: Record<
+  RuntimeHealthState,
+  { dot: string; tone: string }
+> = {
+  ok: { dot: "bg-success", tone: "bg-success/10 text-success" },
+  update_available: { dot: "bg-warning", tone: "bg-warning/10 text-warning" },
+  updating: { dot: "bg-info", tone: "bg-info/10 text-info" },
+  awaiting_confirmation: {
+    dot: "bg-muted-foreground/40",
+    tone: "bg-muted text-muted-foreground",
+  },
+  failed: { dot: "bg-destructive", tone: "bg-destructive/10 text-destructive" },
+  offline: { dot: "bg-muted-foreground/40", tone: "bg-muted text-muted-foreground" },
+};
+
+export function useRuntimeHealthStateLabel(): (
+  health: RuntimeHealthState,
+) => string {
+  const { t } = useT("runtimes");
+  return (health) => t(($) => $.runtime_health[health]);
+}
+
+export function RuntimeHealthStateBadge({
+  health,
+}: {
+  health: RuntimeHealthState;
+}) {
+  const labelOf = useRuntimeHealthStateLabel();
+  const v = RUNTIME_HEALTH_STATE_VISUAL[health];
   return (
     <Badge variant="secondary" className={v.tone}>
       <span className={`h-1.5 w-1.5 rounded-full ${v.dot}`} />

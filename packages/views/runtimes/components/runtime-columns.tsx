@@ -10,6 +10,7 @@ import { deriveWorkload } from "@multica/core/agents";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import {
   deriveRuntimeHealth,
+  runtimeHealthState,
   runtimeUsageOptions,
 } from "@multica/core/runtimes";
 import { Button } from "@multica/ui/components/ui/button";
@@ -28,7 +29,11 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { useViewingTimezone } from "../../common/use-viewing-timezone";
 import { workloadConfig } from "../../agents/presence";
 import { ProviderLogo } from "./provider-logo";
-import { HealthIcon, useHealthLabel } from "./shared";
+import {
+  HealthIcon,
+  RuntimeHealthStateBadge,
+  useHealthLabel,
+} from "./shared";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
 import {
   computeCostInWindow,
@@ -37,7 +42,7 @@ import {
   pctChange,
 } from "../utils";
 import { splitRuntimeName } from "./runtime-machines";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/use-t";
 
 // Per-row data assembled at the page level. The columns reach into
 // `row.original` and never pull their own data — except for the per-runtime
@@ -239,7 +244,11 @@ function HealthCell({
 }) {
   const labelOf = useHealthLabel();
   const health = deriveRuntimeHealth(runtime, now);
+  const updateHealth = runtimeHealthState(runtime);
   const lastSeen = formatLastSeen(runtime.last_seen_at);
+  if (updateHealth !== "ok") {
+    return <RuntimeHealthStateBadge health={updateHealth} />;
+  }
   return (
     <div className="flex min-w-0 items-center gap-1.5">
       <HealthIcon health={health} />

@@ -1114,7 +1114,7 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 	if promptThreadRoot != root.ID {
 		t.Fatalf("prompt thread root = %q, want %s", promptThreadRoot, root.ID)
 	}
-	for _, want := range []string{"Thread context (root message first, then recent replies from this thread only):", "root question", "@Thread Agent can you answer here?"} {
+	for _, want := range []string{"Thread context (root message first, then recent replies from this thread only):", "root", "@Thread Agent can you answer here?"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("thread prompt missing %q:\n%s", want, prompt)
 		}

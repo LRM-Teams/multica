@@ -78,6 +78,18 @@ INSERT INTO issue (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
 ) RETURNING *;
 
+-- name: CreateIssueWithMetadata :one
+-- Same as CreateIssue but accepts a pre-built metadata JSONB object so the
+-- env-dispatch adapter can stamp acceptance_criteria / fail_to_pass /
+-- pass_to_pass in one round trip instead of three SetIssueMetadataKey calls.
+INSERT INTO issue (
+    workspace_id, title, description, status, priority,
+    assignee_type, assignee_id, creator_type, creator_id,
+    parent_issue_id, position, start_date, due_date, number, project_id, metadata
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+) RETURNING *;
+
 -- name: GetIssueByNumber :one
 SELECT * FROM issue
 WHERE workspace_id = $1 AND number = $2;

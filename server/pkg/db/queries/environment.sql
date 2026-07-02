@@ -9,3 +9,11 @@ WHERE id = $1 AND workspace_id = $2;
 
 -- name: DeleteEnvironment :exec
 DELETE FROM environment WHERE id = $1 AND workspace_id = $2;
+
+-- name: GetEnvDispatchRequest :one
+SELECT * FROM env_dispatch_request
+WHERE workspace_id = $1 AND idempotency_key = $2;
+
+-- name: CreateEnvDispatchRequest :exec
+INSERT INTO env_dispatch_request (workspace_id, idempotency_key, response)
+VALUES ($1, $2, $3);

@@ -4,11 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/cloudruntime"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // EnvDispatchRequest is the body of POST /api/v1/env-dispatch (spec §6.3).
@@ -157,63 +164,661 @@ func envDispatchConcurrency() int {
 	return 8
 }
 
-// newEnvDispatchDepsAdapter returns the production Deps adapter. Task 8 wires
-// real queries; until then, this returns a stub adapter that returns dummy values.
+// newEnvDispatchDepsAdapter returns the production Deps adapter wired to real
+// sqlc queries + cloud-runtime calls. When the handler has no Queries (test
+// fixtures that only exercise validation paths), it falls back to a stub so
+// construction does not crash; the service's validation gate happens before
+// any Deps method is invoked, so handler validation tests stay green without
+// a DB.
 func newEnvDispatchDepsAdapter(h *Handler) service.EnvDispatchDeps {
+	if h.Queries == nil {
+		return &stubEnvDispatchDeps{}
+	}
 	return &envDispatchDepsAdapter{h: h}
 }
 
+// envDispatchDepsAdapter bridges service.EnvDispatchDeps to *Handler.Queries
+// (DB) and *Handler.CloudRuntime (sandbox lifecycle). Each method maps the
+// service's string IDs to pgtype.UUID via parseUUID (trusted: these IDs are
+// either sqlc round-trips or already-validated request inputs by the time
+// they reach the adapter).
 type envDispatchDepsAdapter struct {
 	h *Handler
 }
 
-// All methods return stubs until Task 8 wires them to real queries.
+// fkViolation23503 reports whether err is a PostgreSQL FK violation
+// (SQLSTATE 23503). Used to surface ErrEnvInUse when ON DELETE RESTRICT
+// rejects an environment delete.
+func fkViolation23503(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
+// envRowToService converts a db.Environment row to the service-layer Env
+// snapshot. ParentEnvID stays zero-valued for base envs.
+func envRowToService(e db.Environment) service.Env {
+	out := service.Env{
+		ID:          util.UUIDToString(e.ID),
+		WorkspaceID: util.UUIDToString(e.WorkspaceID),
+		SandboxID:   e.SandboxID,
+		Mode:        service.EnvMode(e.Mode),
+	}
+	if e.ParentEnvID.Valid {
+		out.ParentEnvID = util.UUIDToString(e.ParentEnvID)
+	}
+	if e.Domain.Valid {
+		out.Domain = service.EnvDomain(e.Domain.String)
+	}
+	return out
+}
+
+// GetEnv resolves the env row, returning a service.Env snapshot. The service
+// uses SandboxID to fork and ParentEnvID for fork provenance.
 func (a *envDispatchDepsAdapter) GetEnv(ctx context.Context, envID, workspaceID string) (service.Env, error) {
+	row, err := a.h.Queries.GetEnvironment(ctx, db.GetEnvironmentParams{
+		ID:          parseUUID(envID),
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil {
+		return service.Env{}, fmt.Errorf("get env: %w", err)
+	}
+	return envRowToService(row), nil
+}
+
+// CreateEnv inserts an environment row. parentEnvID is empty for base envs.
+func (a *envDispatchDepsAdapter) CreateEnv(ctx context.Context, workspaceID, sandboxID, parentEnvID string, mode service.EnvMode, domain service.EnvDomain) (string, error) {
+	params := db.CreateEnvironmentParams{
+		WorkspaceID: parseUUID(workspaceID),
+		SandboxID:   sandboxID,
+		Mode:        string(mode),
+	}
+	if parentEnvID != "" {
+		params.ParentEnvID = parseUUID(parentEnvID)
+	}
+	if domain != "" {
+		params.Domain = pgtype.Text{String: string(domain), Valid: true}
+	}
+	row, err := a.h.Queries.CreateEnvironment(ctx, params)
+	if err != nil {
+		return "", fmt.Errorf("create env: %w", err)
+	}
+	return util.UUIDToString(row.ID), nil
+}
+
+// DeleteEnv deletes the env row. A FK violation (23503) is translated to
+// service.ErrEnvInUse so the handler can map it to 409; the service layer
+// also passes through ErrEnvInUse untouched. A missing row is treated as
+// success so the rollback path stays idempotent.
+func (a *envDispatchDepsAdapter) DeleteEnv(ctx context.Context, envID, workspaceID string) error {
+	err := a.h.Queries.DeleteEnvironment(ctx, db.DeleteEnvironmentParams{
+		ID:          parseUUID(envID),
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if fkViolation23503(err) {
+		return service.ErrEnvInUse
+	}
+	return fmt.Errorf("delete env: %w", err)
+}
+
+// ForkSandbox calls POST /api/v1/sandboxes/fork with the source sandbox id.
+// idx is included in the request body so Fleet can label the fork per-rollout
+// when desired; it is otherwise unused.
+func (a *envDispatchDepsAdapter) ForkSandbox(ctx context.Context, sourceSandboxID string, idx int) (string, error) {
+	body, err := json.Marshal(map[string]any{
+		"source_sandbox_id": sourceSandboxID,
+		"idx":               idx,
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal fork body: %w", err)
+	}
+	resp, err := a.h.CloudRuntime.Do(ctx, cloudruntime.Request{
+		Method: http.MethodPost,
+		Path:   "/api/v1/sandboxes/fork",
+		Body:   body,
+		Op:     "provision",
+	})
+	if err != nil {
+		return "", fmt.Errorf("fork sandbox: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("fork sandbox: status %d: %s", resp.StatusCode, string(resp.Body))
+	}
+	var out struct {
+		SandboxID string `json:"sandbox_id"`
+	}
+	if err := json.Unmarshal(resp.Body, &out); err != nil {
+		return "", fmt.Errorf("fork sandbox: decode: %w", err)
+	}
+	if out.SandboxID == "" {
+		return "", fmt.Errorf("fork sandbox: empty sandbox_id in response")
+	}
+	return out.SandboxID, nil
+}
+
+// DeleteSandbox calls DELETE /api/v1/sandboxes/{id}. Idempotent: a 404 is
+// treated as success so the rollback path tolerates races.
+func (a *envDispatchDepsAdapter) DeleteSandbox(ctx context.Context, sandboxID string) error {
+	resp, err := a.h.CloudRuntime.Do(ctx, cloudruntime.Request{
+		Method: http.MethodDelete,
+		Path:   "/api/v1/sandboxes/" + sandboxID,
+		Op:     "terminate",
+	})
+	if err != nil {
+		return fmt.Errorf("delete sandbox: %w", err)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("delete sandbox: status %d: %s", resp.StatusCode, string(resp.Body))
+	}
+	return nil
+}
+
+// BootSandbox calls POST /api/v1/sandboxes with image_ref. Used by
+// CreateBaseEnv to provision a fresh base env.
+func (a *envDispatchDepsAdapter) BootSandbox(ctx context.Context, imageRef string) (string, error) {
+	body, err := json.Marshal(map[string]string{"image_ref": imageRef})
+	if err != nil {
+		return "", fmt.Errorf("marshal boot body: %w", err)
+	}
+	resp, err := a.h.CloudRuntime.Do(ctx, cloudruntime.Request{
+		Method: http.MethodPost,
+		Path:   "/api/v1/sandboxes",
+		Body:   body,
+		Op:     "provision",
+	})
+	if err != nil {
+		return "", fmt.Errorf("boot sandbox: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("boot sandbox: status %d: %s", resp.StatusCode, string(resp.Body))
+	}
+	var out struct {
+		SandboxID string `json:"sandbox_id"`
+	}
+	if err := json.Unmarshal(resp.Body, &out); err != nil {
+		return "", fmt.Errorf("boot sandbox: decode: %w", err)
+	}
+	if out.SandboxID == "" {
+		return "", fmt.Errorf("boot sandbox: empty sandbox_id in response")
+	}
+	return out.SandboxID, nil
+}
+
+// CreateProject inserts a new project bound to envID. Used by the scratch
+// reset path (spec §7.2): every rollout gets a fresh project.
+func (a *envDispatchDepsAdapter) CreateProject(ctx context.Context, workspaceID, name, envID string) (string, error) {
+	row, err := a.h.Queries.CreateProjectWithEnv(ctx, db.CreateProjectWithEnvParams{
+		WorkspaceID: parseUUID(workspaceID),
+		Title:       name,
+		Status:      "active",
+		Priority:    "medium",
+		EnvID:       parseUUID(envID),
+	})
+	if err != nil {
+		return "", fmt.Errorf("create project: %w", err)
+	}
+	return util.UUIDToString(row.ID), nil
+}
+
+// GetProjectByEnvID resolves the 1:1 env→project invariant (partial UNIQUE
+// index on project(env_id)). Used by branch dispatch to find the source
+// project whose subtree must be copied.
+func (a *envDispatchDepsAdapter) GetProjectByEnvID(ctx context.Context, envID, workspaceID string) (string, error) {
+	row, err := a.h.Queries.GetProjectByEnvID(ctx, db.GetProjectByEnvIDParams{
+		EnvID:       parseUUID(envID),
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil {
+		return "", fmt.Errorf("get project by env: %w", err)
+	}
+	return util.UUIDToString(row.ID), nil
+}
+
+// DeleteProject deletes the project row; cascades to issues / chat / tasks
+// via FK. Idempotent: a missing row is treated as success.
+func (a *envDispatchDepsAdapter) DeleteProject(ctx context.Context, projectID, workspaceID string) error {
+	err := a.h.Queries.DeleteProject(ctx, db.DeleteProjectParams{
+		ID:          parseUUID(projectID),
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err == nil || errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	return fmt.Errorf("delete project: %w", err)
+}
+
+// ListIssuesByProject returns all issues under a project. Used during
+// CopyProjectSubtree to deep-copy the source project's issues.
+func (a *envDispatchDepsAdapter) ListIssuesByProject(ctx context.Context, projectID, workspaceID string) ([]service.IssueRow, error) {
+	rows, err := a.h.Queries.ListIssuesByProject(ctx, db.ListIssuesByProjectParams{
+		ProjectID:   parseUUID(projectID),
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list issues by project: %w", err)
+	}
+	out := make([]service.IssueRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, issueRowToService(r))
+	}
+	return out, nil
+}
+
+func issueRowToService(r db.Issue) service.IssueRow {
+	out := service.IssueRow{
+		ID:        util.UUIDToString(r.ID),
+		ProjectID: util.UUIDToString(r.ProjectID),
+		Title:     r.Title,
+	}
+	if r.Description.Valid {
+		out.Description = r.Description.String
+	}
+	return out
+}
+
+// CreateIssue inserts an issue with metadata pre-populated with
+// acceptance_criteria / fail_to_pass / pass_to_pass (swe_lego). issueNumber
+// is allocated via IncrementIssueCounter so the new issue gets a
+// workspace-scoped number; position is set to 1.0 (the source project's
+// issues are forked, not swimlane-ordered).
+func (a *envDispatchDepsAdapter) CreateIssue(ctx context.Context, projectID, workspaceID, creatorID, title, description string, acceptanceCriteria, failToPass, passToPass []string) (string, error) {
+	wsUUID := parseUUID(workspaceID)
+	number, err := a.h.Queries.IncrementIssueCounter(ctx, wsUUID)
+	if err != nil {
+		return "", fmt.Errorf("increment issue counter: %w", err)
+	}
+	metaJSON, err := buildIssueMetadata(acceptanceCriteria, failToPass, passToPass)
+	if err != nil {
+		return "", err
+	}
+	desc := pgtype.Text{}
+	if description != "" {
+		desc = pgtype.Text{String: description, Valid: true}
+	}
+	row, err := a.h.Queries.CreateIssueWithMetadata(ctx, db.CreateIssueWithMetadataParams{
+		WorkspaceID:   wsUUID,
+		Title:         title,
+		Description:   desc,
+		Status:        "backlog",
+		Priority:      "none",
+		CreatorType:   "member",
+		CreatorID:     parseUUID(creatorID),
+		Position:      1.0,
+		Number:        number,
+		ProjectID:     parseUUID(projectID),
+		Metadata:      metaJSON,
+	})
+	if err != nil {
+		return "", fmt.Errorf("create issue: %w", err)
+	}
+	return util.UUIDToString(row.ID), nil
+}
+
+// buildIssueMetadata assembles the JSONB metadata object for a swe_lego
+// issue. Empty arrays serialize as `[]` so the metadata stays a stable shape
+// downstream consumers can rely on.
+func buildIssueMetadata(acceptanceCriteria, failToPass, passToPass []string) ([]byte, error) {
+	if acceptanceCriteria == nil {
+		acceptanceCriteria = []string{}
+	}
+	if failToPass == nil {
+		failToPass = []string{}
+	}
+	if passToPass == nil {
+		passToPass = []string{}
+	}
+	m := map[string]any{
+		"acceptance_criteria": acceptanceCriteria,
+		"fail_to_pass":        failToPass,
+		"pass_to_pass":        passToPass,
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("marshal issue metadata: %w", err)
+	}
+	return b, nil
+}
+
+// CreateChatSession creates a chat session bound to a project. Used by
+// scratch+self_play (and CopyProjectSubtree via the SQL-level INSERT) for the
+// new session under the freshly-created project.
+func (a *envDispatchDepsAdapter) CreateChatSession(ctx context.Context, projectID, workspaceID, agentID, creatorID string) (string, error) {
+	row, err := a.h.Queries.CreateChatSessionForProject(ctx, db.CreateChatSessionForProjectParams{
+		WorkspaceID: parseUUID(workspaceID),
+		ProjectID:   parseUUID(projectID),
+		AgentID:     parseUUID(agentID),
+		CreatorID:   parseUUID(creatorID),
+		Title:       "env-dispatch",
+	})
+	if err != nil {
+		return "", fmt.Errorf("create chat session: %w", err)
+	}
+	return util.UUIDToString(row.ID), nil
+}
+
+// CreateChatMessage appends a (role, content) message to a chat session. The
+// dispatch path only ever inserts role='user' messages; assistant messages
+// arrive later from the agent runtime. task_id / failure_reason / elapsed_ms
+// are NULL on insert.
+func (a *envDispatchDepsAdapter) CreateChatMessage(ctx context.Context, sessionID, role, content string) (string, error) {
+	row, err := a.h.Queries.CreateChatMessage(ctx, db.CreateChatMessageParams{
+		ChatSessionID: parseUUID(sessionID),
+		Role:          role,
+		Content:       content,
+	})
+	if err != nil {
+		return "", fmt.Errorf("create chat message: %w", err)
+	}
+	return util.UUIDToString(row.ID), nil
+}
+
+// EnqueueAgentRun enqueues an agent task. issueID set → CreateAgentTask
+// (issue-bound; chat_session_id NULL). chatSessionID set → CreateChatTask
+// (chat-bound; issue_id NULL). Both paths need runtime_id, resolved via
+// GetAgent (issue path) or GetChatSession (chat path).
+//
+// initiator_user_id is left NULL: the service's EnqueueAgentRun signature
+// carries workspaceID/agentID/issue|chat but not the dispatch's UserID, and
+// threading UserID through would require an interface change touching the
+// service fake. The column is nullable, and the daemon resolves ownership
+// via agent_id + chat_session_id, so NULL is a safe intermediate state.
+// A follow-up task should extend the interface to pass UserID explicitly.
+func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceID, agentID, issueID, chatSessionID, sandboxID string, idx int) (string, error) {
+	agentUUID := parseUUID(agentID)
+	switch {
+	case issueID != "":
+		agent, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+			ID:          agentUUID,
+			WorkspaceID: parseUUID(workspaceID),
+		})
+		if err != nil {
+			return "", fmt.Errorf("get agent for run: %w", err)
+		}
+		task, err := a.h.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+			AgentID:   agentUUID,
+			RuntimeID: agent.RuntimeID,
+			IssueID:   parseUUID(issueID),
+			Priority:  envDispatchTaskPriority,
+		})
+		if err != nil {
+			return "", fmt.Errorf("create agent task: %w", err)
+		}
+		return util.UUIDToString(task.ID), nil
+	case chatSessionID != "":
+		session, err := a.h.Queries.GetChatSession(ctx, parseUUID(chatSessionID))
+		if err != nil {
+			return "", fmt.Errorf("get chat session for run: %w", err)
+		}
+		task, err := a.h.Queries.CreateChatTask(ctx, db.CreateChatTaskParams{
+			AgentID:       agentUUID,
+			RuntimeID:     session.RuntimeID,
+			Priority:      envDispatchTaskPriority,
+			ChatSessionID: session.ID,
+		})
+		if err != nil {
+			return "", fmt.Errorf("create chat task: %w", err)
+		}
+		return util.UUIDToString(task.ID), nil
+	default:
+		return "", fmt.Errorf("enqueue agent run: issueID or chatSessionID required")
+	}
+}
+
+// envDispatchTaskPriority is the priority assigned to every env-dispatch
+// enqueued task. Existing callers of CreateAgentTask default to 5; we mirror
+// that convention so dispatch tasks coexist with manual triggers without
+// jumping the queue.
+const envDispatchTaskPriority int32 = 5
+
+// CopyProjectSubtree deep-copies the source project's issues + chat sessions
+// + messages into a new project bound to envID. Returns source→new ID maps
+// for issues and chat sessions so the service can target the copied entities
+// during dispatch. The new project inherits the source's title with a
+// "-fork" suffix so it is distinguishable in the UI.
+//
+// Forked issues record forked_from_issue_id (but NOT forked_at_seq /
+// forked_at_task_id, since this is not a task-message branch point — those
+// stay NULL). Forked chat sessions/messages are straight copies under the
+// new project.
+func (a *envDispatchDepsAdapter) CopyProjectSubtree(ctx context.Context, sourceProjectID, workspaceID, envID string) (string, map[string]string, map[string]string, error) {
+	wsUUID := parseUUID(workspaceID)
+	srcProjectID := parseUUID(sourceProjectID)
+
+	src, err := a.h.Queries.GetProjectInWorkspace(ctx, db.GetProjectInWorkspaceParams{
+		ID:          srcProjectID,
+		WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("get source project: %w", err)
+	}
+
+	newProject, err := a.h.Queries.CreateProjectWithEnv(ctx, db.CreateProjectWithEnvParams{
+		WorkspaceID: wsUUID,
+		Title:       src.Title + "-fork",
+		Status:      src.Status,
+		Priority:    src.Priority,
+		EnvID:       parseUUID(envID),
+	})
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("create forked project: %w", err)
+	}
+	newProjectID := util.UUIDToString(newProject.ID)
+
+	issueIDMap, err := a.copyProjectIssues(ctx, wsUUID, srcProjectID, newProject.ID)
+	if err != nil {
+		return "", nil, nil, err
+	}
+
+	chatSessionIDMap, err := a.copyProjectChatSessions(ctx, wsUUID, srcProjectID, newProject.ID)
+	if err != nil {
+		return "", nil, nil, err
+	}
+
+	return newProjectID, issueIDMap, chatSessionIDMap, nil
+}
+
+// copyProjectIssues deep-copies every issue in the source project to the new
+// project, recording fork provenance via forked_from_issue_id. Returns a
+// source-issue-id → new-issue-id map.
+func (a *envDispatchDepsAdapter) copyProjectIssues(ctx context.Context, wsUUID, srcProjectID, newProjectID pgtype.UUID) (map[string]string, error) {
+	srcs, err := a.h.Queries.ListIssuesByProject(ctx, db.ListIssuesByProjectParams{
+		ProjectID:   srcProjectID,
+		WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list source issues: %w", err)
+	}
+	issueIDMap := make(map[string]string, len(srcs))
+	for _, src := range srcs {
+		number, err := a.h.Queries.IncrementIssueCounter(ctx, wsUUID)
+		if err != nil {
+			return nil, fmt.Errorf("increment issue counter: %w", err)
+		}
+		forked, err := a.h.Queries.CreateForkedIssue(ctx, db.CreateForkedIssueParams{
+			WorkspaceID:        src.WorkspaceID,
+			Title:              src.Title,
+			Description:        src.Description,
+			Status:             src.Status,
+			Priority:           src.Priority,
+			AssigneeType:       src.AssigneeType,
+			AssigneeID:         src.AssigneeID,
+			CreatorType:        src.CreatorType,
+			CreatorID:          src.CreatorID,
+			ParentIssueID:      src.ParentIssueID,
+			AcceptanceCriteria: src.AcceptanceCriteria,
+			ContextRefs:        src.ContextRefs,
+			Position:           src.Position,
+			StartDate:          src.StartDate,
+			DueDate:            src.DueDate,
+			Metadata:           src.Metadata,
+			Number:             number,
+			ProjectID:          newProjectID,
+			ForkedFromIssueID:  src.ID,
+			// forked_at_seq / forked_at_task_id intentionally left invalid:
+			// this is a project-level fork, not a task-message branch point.
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create forked issue: %w", err)
+		}
+		issueIDMap[util.UUIDToString(src.ID)] = util.UUIDToString(forked.ID)
+	}
+	return issueIDMap, nil
+}
+
+// copyProjectChatSessions deep-copies every chat session + its messages from
+// the source project to the new project. Returns a source-session-id →
+// new-session-id map. We use CreateChatSessionForProject so the new session
+// inherits the agent's runtime_id via the subquery, then re-link each
+// session's messages via CreateChatMessage.
+func (a *envDispatchDepsAdapter) copyProjectChatSessions(ctx context.Context, wsUUID, srcProjectID, newProjectID pgtype.UUID) (map[string]string, error) {
+	srcs, err := a.h.Queries.ListChatSessionsByProject(ctx, db.ListChatSessionsByProjectParams{
+		ProjectID:   srcProjectID,
+		WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list source chat sessions: %w", err)
+	}
+	chatSessionIDMap := make(map[string]string, len(srcs))
+	for _, src := range srcs {
+		newSession, err := a.h.Queries.CreateChatSessionForProject(ctx, db.CreateChatSessionForProjectParams{
+			WorkspaceID: wsUUID,
+			ProjectID:   newProjectID,
+			AgentID:     src.AgentID,
+			CreatorID:   src.CreatorID,
+			Title:       src.Title,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create forked chat session: %w", err)
+		}
+		if err := a.copyChatMessages(ctx, src.ID, newSession.ID); err != nil {
+			return nil, err
+		}
+		chatSessionIDMap[util.UUIDToString(src.ID)] = util.UUIDToString(newSession.ID)
+	}
+	return chatSessionIDMap, nil
+}
+
+// copyChatMessages copies every message from srcSessionID into newSessionID
+// in created_at order. task_id / failure_reason / elapsed_ms are not carried
+// over — the forked session starts with a clean task pointer; the new agent
+// run will write fresh task IDs as it appends.
+func (a *envDispatchDepsAdapter) copyChatMessages(ctx context.Context, srcSessionID, newSessionID pgtype.UUID) error {
+	msgs, err := a.h.Queries.ListChatMessages(ctx, srcSessionID)
+	if err != nil {
+		return fmt.Errorf("list source chat messages: %w", err)
+	}
+	for _, m := range msgs {
+		if _, err := a.h.Queries.CreateChatMessage(ctx, db.CreateChatMessageParams{
+			ChatSessionID: newSessionID,
+			Role:          m.Role,
+			Content:       m.Content,
+		}); err != nil {
+			return fmt.Errorf("create forked chat message: %w", err)
+		}
+	}
+	return nil
+}
+
+// GetIdempotentResponse looks up the env_dispatch_request row for the
+// (workspace, key) pair. A missing row returns ok=false so the service
+// proceeds with a fresh dispatch. The stored JSONB response is decoded into
+// service.EnvDispatchResult; a decode failure is surfaced as an error rather
+// than silently treated as a miss, since replaying a corrupt response would
+// hand the caller stale IDs.
+func (a *envDispatchDepsAdapter) GetIdempotentResponse(ctx context.Context, workspaceID, key string) (service.EnvDispatchResult, bool, error) {
+	row, err := a.h.Queries.GetEnvDispatchRequest(ctx, db.GetEnvDispatchRequestParams{
+		WorkspaceID:    parseUUID(workspaceID),
+		IdempotencyKey: parseUUID(key),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return service.EnvDispatchResult{}, false, nil
+		}
+		return service.EnvDispatchResult{}, false, fmt.Errorf("get idempotent response: %w", err)
+	}
+	var res service.EnvDispatchResult
+	if err := json.Unmarshal(row.Response, &res); err != nil {
+		return service.EnvDispatchResult{}, false, fmt.Errorf("decode idempotent response: %w", err)
+	}
+	return res, true, nil
+}
+
+// SaveIdempotentResponse persists the dispatch response JSONB for replay on
+// a retry with the same idempotency key. Best-effort per the spec; the
+// service swallows the error so a ledger write failure does not fail the
+// dispatch.
+func (a *envDispatchDepsAdapter) SaveIdempotentResponse(ctx context.Context, workspaceID, key string, res service.EnvDispatchResult) error {
+	body, err := json.Marshal(res)
+	if err != nil {
+		return fmt.Errorf("marshal idempotent response: %w", err)
+	}
+	if err := a.h.Queries.CreateEnvDispatchRequest(ctx, db.CreateEnvDispatchRequestParams{
+		WorkspaceID:    parseUUID(workspaceID),
+		IdempotencyKey: parseUUID(key),
+		Response:       body,
+	}); err != nil {
+		return fmt.Errorf("save idempotent response: %w", err)
+	}
+	return nil
+}
+
+// stubEnvDispatchDeps is a no-op Deps implementation used when the handler
+// is constructed without a *db.Queries (test fixtures that exercise only the
+// validation paths). Every method returns a zero value / nil error; the
+// service's validation gate runs before any of these are reached, so
+// handler validation tests stay green without a DB.
+type stubEnvDispatchDeps struct{}
+
+func (s *stubEnvDispatchDeps) GetEnv(context.Context, string, string) (service.Env, error) {
 	return service.Env{}, nil
 }
-func (a *envDispatchDepsAdapter) CreateEnv(ctx context.Context, workspaceID, sandboxID, parentEnvID string, mode service.EnvMode, domain service.EnvDomain) (string, error) {
+func (s *stubEnvDispatchDeps) CreateEnv(context.Context, string, string, string, service.EnvMode, service.EnvDomain) (string, error) {
 	return "stub-env", nil
 }
-func (a *envDispatchDepsAdapter) DeleteEnv(ctx context.Context, envID, workspaceID string) error {
-	return nil
-}
-func (a *envDispatchDepsAdapter) ForkSandbox(ctx context.Context, src string, idx int) (string, error) {
+func (s *stubEnvDispatchDeps) DeleteEnv(context.Context, string, string) error { return nil }
+func (s *stubEnvDispatchDeps) ForkSandbox(context.Context, string, int) (string, error) {
 	return "stub-fork", nil
 }
-func (a *envDispatchDepsAdapter) DeleteSandbox(ctx context.Context, sandboxID string) error {
-	return nil
-}
-func (a *envDispatchDepsAdapter) BootSandbox(ctx context.Context, imageRef string) (string, error) {
+func (s *stubEnvDispatchDeps) DeleteSandbox(context.Context, string) error { return nil }
+func (s *stubEnvDispatchDeps) BootSandbox(context.Context, string) (string, error) {
 	return "stub-boot", nil
 }
-func (a *envDispatchDepsAdapter) CreateProject(ctx context.Context, workspaceID, name, envID string) (string, error) {
+func (s *stubEnvDispatchDeps) CreateProject(context.Context, string, string, string) (string, error) {
 	return "stub-project", nil
 }
-func (a *envDispatchDepsAdapter) CopyProjectSubtree(ctx context.Context, src, ws, envID string) (string, map[string]string, map[string]string, error) {
+func (s *stubEnvDispatchDeps) CopyProjectSubtree(context.Context, string, string, string) (string, map[string]string, map[string]string, error) {
 	return "stub-copy", map[string]string{}, map[string]string{}, nil
 }
-func (a *envDispatchDepsAdapter) GetProjectByEnvID(ctx context.Context, envID, ws string) (string, error) {
+func (s *stubEnvDispatchDeps) GetProjectByEnvID(context.Context, string, string) (string, error) {
 	return "stub-project", nil
 }
-func (a *envDispatchDepsAdapter) GetIdempotentResponse(ctx context.Context, ws, key string) (service.EnvDispatchResult, bool, error) {
+func (s *stubEnvDispatchDeps) GetIdempotentResponse(context.Context, string, string) (service.EnvDispatchResult, bool, error) {
 	return service.EnvDispatchResult{}, false, nil
 }
-func (a *envDispatchDepsAdapter) SaveIdempotentResponse(ctx context.Context, ws, key string, res service.EnvDispatchResult) error {
+func (s *stubEnvDispatchDeps) SaveIdempotentResponse(context.Context, string, string, service.EnvDispatchResult) error {
 	return nil
 }
-func (a *envDispatchDepsAdapter) DeleteProject(ctx context.Context, pid, ws string) error { return nil }
-func (a *envDispatchDepsAdapter) ListIssuesByProject(ctx context.Context, pid, ws string) ([]service.IssueRow, error) {
+func (s *stubEnvDispatchDeps) DeleteProject(context.Context, string, string) error { return nil }
+func (s *stubEnvDispatchDeps) ListIssuesByProject(context.Context, string, string) ([]service.IssueRow, error) {
 	return nil, nil
 }
-func (a *envDispatchDepsAdapter) CreateIssue(ctx context.Context, pid, ws, creator, title, desc string, ac, f2p, p2p []string) (string, error) {
+func (s *stubEnvDispatchDeps) CreateIssue(context.Context, string, string, string, string, string, []string, []string, []string) (string, error) {
 	return "stub-issue", nil
 }
-func (a *envDispatchDepsAdapter) CreateChatSession(ctx context.Context, pid, ws, agent, creator string) (string, error) {
+func (s *stubEnvDispatchDeps) CreateChatSession(context.Context, string, string, string, string) (string, error) {
 	return "stub-session", nil
 }
-func (a *envDispatchDepsAdapter) CreateChatMessage(ctx context.Context, sid, role, content string) (string, error) {
+func (s *stubEnvDispatchDeps) CreateChatMessage(context.Context, string, string, string) (string, error) {
 	return "stub-msg", nil
 }
-func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, ws, agent, issue, sess, sbx string, idx int) (string, error) {
+func (s *stubEnvDispatchDeps) EnqueueAgentRun(context.Context, string, string, string, string, string, int) (string, error) {
 	return "stub-run", nil
 }

@@ -58,3 +58,8 @@ RETURNING *;
 -- name: SetProjectEnvID :exec
 UPDATE project SET env_id = $2, updated_at = now()
 WHERE id = $1 AND workspace_id = $3;
+
+-- name: GetProjectByEnvID :one
+-- The partial UNIQUE index on project(env_id) guarantees at most one row.
+SELECT * FROM project
+WHERE env_id = $1 AND workspace_id = $2;

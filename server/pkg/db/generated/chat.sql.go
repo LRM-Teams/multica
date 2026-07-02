@@ -655,6 +655,51 @@ func (q *Queries) ListChatSessionsByCreator(ctx context.Context, arg ListChatSes
 	return items, nil
 }
 
+const listChatSessionsByProject = `-- name: ListChatSessionsByProject :many
+SELECT id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, project_id FROM chat_session
+WHERE project_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC
+`
+
+type ListChatSessionsByProjectParams struct {
+	ProjectID   pgtype.UUID `json:"project_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListChatSessionsByProject(ctx context.Context, arg ListChatSessionsByProjectParams) ([]ChatSession, error) {
+	rows, err := q.db.Query(ctx, listChatSessionsByProject, arg.ProjectID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ChatSession{}
+	for rows.Next() {
+		var i ChatSession
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.AgentID,
+			&i.CreatorID,
+			&i.Title,
+			&i.SessionID,
+			&i.WorkDir,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.UnreadSince,
+			&i.RuntimeID,
+			&i.ProjectID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingChatTasksByCreator = `-- name: ListPendingChatTasksByCreator :many
 SELECT atq.id AS task_id, atq.status, atq.chat_session_id
 FROM agent_task_queue atq

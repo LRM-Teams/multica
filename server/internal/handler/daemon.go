@@ -1429,6 +1429,41 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			resp.WorkspaceID = uuidToString(cs.WorkspaceID)
 			resp.ChatSessionID = uuidToString(cs.ID)
 			resp.ThreadName = cs.Title
+
+			// Squad-leader briefing injection for chat tasks. env-dispatch
+			// squad dispatch stamps the chat task's context JSONB with
+			// {"squad_id": ...} and enqueues the squad's leader. When the
+			// claiming agent is that leader, append the same Operating
+			// Protocol + Roster + user Instructions that issue-bound squad
+			// tasks see (mirrors the issue-path and quick-create blocks), and
+			// surface the squad identity to the daemon.
+			if resp.Agent != nil && task.Context != nil {
+				var cc struct {
+					SquadID string `json:"squad_id"`
+				}
+				if json.Unmarshal(task.Context, &cc) == nil && cc.SquadID != "" {
+					if squadUUID, err := util.ParseUUID(cc.SquadID); err == nil {
+						if squad, err := h.Queries.GetSquadInWorkspace(r.Context(), db.GetSquadInWorkspaceParams{
+							ID:          squadUUID,
+							WorkspaceID: cs.WorkspaceID,
+						}); err == nil && uuidToString(squad.LeaderID) == resp.Agent.ID {
+							briefing := buildSquadLeaderBriefing(r.Context(), h.Queries, squad)
+							if strings.TrimSpace(resp.Agent.Instructions) == "" {
+								resp.Agent.Instructions = briefing
+							} else {
+								resp.Agent.Instructions = resp.Agent.Instructions + "\n\n" + briefing
+							}
+							resp.SquadID = uuidToString(squad.ID)
+							resp.SquadName = squad.Name
+							slog.Debug("injected squad leader briefing for chat task",
+								"squad_id", uuidToString(squad.ID),
+								"squad_name", squad.Name,
+								"leader_agent_id", resp.Agent.ID,
+							)
+						}
+					}
+				}
+			}
 			// Resolve the chat's bound project (the composer "current project").
 			// When set, the agent works in that project's directory exactly like
 			// an issue task does — so a group chat about a project sees the same

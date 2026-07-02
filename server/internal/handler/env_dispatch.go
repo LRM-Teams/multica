@@ -601,11 +601,9 @@ func (a *envDispatchDepsAdapter) GetDefaultSelfPlayEnv(ctx context.Context, work
 // A follow-up task should extend the interface to pass UserID explicitly.
 //
 // squadID threads through for team dispatch. The issue-path squad branch
-// (assignee=squad + leader task) is implemented below; the chat-path squad
-// branch (context hint + daemon briefing) is implemented in a later task, so
-// for chatSessionID dispatch squadID != "" still behaves as the current
-// single-agent path.
-// TODO(Task 5): resolve the squad leader + context hint on the chat path.
+// (assignee=squad + leader task) and the chat-path squad branch (leader
+// resolution + {"squad_id"} context hint) are implemented below. When
+// squadID == "" both paths behave exactly as the current single-agent path.
 func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceID, agentID, squadID, issueID, chatSessionID, sandboxID string, idx int) (string, error) {
 	switch {
 	case issueID != "":
@@ -656,17 +654,46 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 		}
 		return util.UUIDToString(task.ID), nil
 	case chatSessionID != "":
-		agentUUID := parseUUID(agentID)
 		session, err := a.h.Queries.GetChatSession(ctx, parseUUID(chatSessionID))
 		if err != nil {
 			return "", fmt.Errorf("get chat session for run: %w", err)
 		}
-		task, err := a.h.Queries.CreateChatTask(ctx, db.CreateChatTaskParams{
-			AgentID:       agentUUID,
+		params := db.CreateChatTaskParams{
 			RuntimeID:     session.RuntimeID,
 			Priority:      envDispatchTaskPriority,
 			ChatSessionID: session.ID,
-		})
+		}
+		if squadID != "" {
+			// Squad dispatch: run the chat task on the squad LEADER and stamp
+			// the task context with a {"squad_id": ...} hint. The daemon claim
+			// path consumes that hint to inject the squad-leader briefing when
+			// the leader claims the task. The leader's runtime_id (not the
+			// session's) is used so the task is delivered to the leader.
+			squad, err := a.h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
+				ID:          parseUUID(squadID),
+				WorkspaceID: parseUUID(workspaceID),
+			})
+			if err != nil {
+				return "", fmt.Errorf("get squad: %w", err)
+			}
+			leader, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+				ID:          squad.LeaderID,
+				WorkspaceID: parseUUID(workspaceID),
+			})
+			if err != nil {
+				return "", fmt.Errorf("get squad leader: %w", err)
+			}
+			contextJSON, err := json.Marshal(map[string]string{"squad_id": squadID})
+			if err != nil {
+				return "", fmt.Errorf("marshal squad chat context: %w", err)
+			}
+			params.AgentID = squad.LeaderID
+			params.RuntimeID = leader.RuntimeID
+			params.Context = contextJSON
+		} else {
+			params.AgentID = parseUUID(agentID)
+		}
+		task, err := a.h.Queries.CreateChatTask(ctx, params)
 		if err != nil {
 			return "", fmt.Errorf("create chat task: %w", err)
 		}

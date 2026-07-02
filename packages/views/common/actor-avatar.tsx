@@ -15,7 +15,7 @@ import { AgentLivePeekCard } from "../agents/components/agent-live-peek-card";
 import { MemberProfileCard } from "../members/member-profile-card";
 import { SquadProfileCard } from "../squads/components/squad-profile-card";
 import { availabilityConfig } from "../agents/presence";
-import { useNavigation } from "../navigation/context";
+import { useNavigation } from "../navigation";
 
 /**
  * Selects which agent hover-card payload to render when `enableHoverCard` is

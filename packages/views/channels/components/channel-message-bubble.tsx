@@ -13,6 +13,7 @@ import { MemoizedMarkdown } from "../../common/markdown";
 import { AttachmentList } from "../../issues/components/comment-card";
 import { agentColor } from "../../common/agent-color";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
+import { AgentStatusDot } from "../../common/actor-avatar";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
@@ -188,7 +189,7 @@ export function ChannelMessageBubble({
         ? "user"
         : null;
   const profileActorId = profileActorType ? message.author_id : null;
-  const avatar = (
+  const avatarNode = (
     <ActorAvatar
       name={displayName}
       initials={initialsOf(displayName)}
@@ -200,6 +201,18 @@ export function ChannelMessageBubble({
       tint={tint}
     />
   );
+  // Overlay the shared presence dot (breathing when the agent is actively
+  // running a task, static otherwise) on agent authors only — members have
+  // no presence backbone, system/lark authors aren't resolvable actors.
+  const avatar =
+    isAgent && message.author_id != null ? (
+      <span className="relative inline-flex">
+        {avatarNode}
+        <AgentStatusDot agentId={message.author_id} size={28} />
+      </span>
+    ) : (
+      avatarNode
+    );
   const nameLabel = (
     <span className="truncate font-medium text-foreground">{displayName}</span>
   );

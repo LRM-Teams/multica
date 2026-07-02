@@ -160,21 +160,17 @@
     "mode_label": "你会在哪里运行？",
     "modes": {
       "unix": "Mac / Linux",
-      "windows-powershell": "Windows",
-      "windows-wsl": "Windows + WSL"
+      "windows-powershell": "Windows"
     },
     "mode_hints": {
       "unix": "适用于 macOS、Linux、SSH 机器和大多数云端终端。",
-      "windows-powershell": "适用于 Windows PowerShell。",
-      "windows-wsl": "适用于 Multica 跑在 WSL 里、浏览器在 Windows 中打开的场景。"
+      "windows-powershell": "适用于 Windows PowerShell。"
     },
     "step1_label": "安装 Multica CLI",
     "step2_label": "启动守护进程",
     "step2_hint": "会打开浏览器登录，然后在后台保持守护进程运行。",
-    "step2_hint_wsl": "会打开 Windows 浏览器完成登录，并把授权回传给 WSL 中运行的守护进程。",
     "live_listening": "等待你的电脑上线",
     "live_listening_hint": "守护进程一启动就会被识别，通常不到一分钟。",
-    "live_listening_hint_wsl": "在 Windows 浏览器里完成登录；本页会自动识别 WSL 中的守护进程。",
     "troubleshooting": "那台电脑打不开浏览器？",
     "trouble_intro": "改用 token 登录替代第 2 步，适用于任何有终端的环境。",
     "trouble_token_hint_prefix": "在 ",
@@ -240,6 +236,8 @@
     "retry": "重试",
     "unknown_error": "未知错误",
     "initiate_failed": "启动更新失败",
+    "manual_hint_prefix": "要在终端更新这台本地守护进程，请在那台电脑上运行",
+    "manual_hint_suffix": "。更新完成后守护进程会自动重启。",
     "status": {
       "pending": "等待守护进程...",
       "running": "更新中...",

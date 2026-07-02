@@ -121,18 +121,15 @@
     "mode_label": "Where are you running this?",
     "modes": {
       "unix": "Mac / Linux",
-      "windows-powershell": "Windows",
-      "windows-wsl": "Windows + WSL"
+      "windows-powershell": "Windows"
     },
     "mode_hints": {
       "unix": "Use this for macOS, Linux, SSH boxes, and most hosted terminals.",
-      "windows-powershell": "Use this in PowerShell on Windows.",
-      "windows-wsl": "Use this when Multica runs inside WSL and the browser opens on Windows."
+      "windows-powershell": "Use this in PowerShell on Windows."
     },
     "step1_label": "Install the Multica CLI",
     "step2_label": "Start the daemon",
-    "step2_hint": "Opens a browser to sign in, then starts the daemon.",
-    "step2_hint_wsl": "Opens the Windows browser for sign-in, then returns the approval to the daemon running in WSL."
+    "step2_hint": "Opens a browser to sign in, then starts the daemon."
   },
   "cloud_waitlist": {
     "intro_main": "Cloud runtimes aren't live yet. Leave your email and we'll reach out when they are.",
@@ -387,8 +384,6 @@
     "stage_midway_suffix": " opened — it needs you to approve sign-in before your computer can connect.",
     "stage_slow_prefix": "Taking longer than usual. Check the terminal where you ran ",
     "stage_slow_suffix": " for errors.",
-    "stage_wsl_waiting": "Finish the sign-in tab that opened in Windows. When it approves the WSL daemon, this computer will appear here automatically.",
-    "stage_wsl_retry": "Still waiting. Go back to the WSL terminal, rerun the Windows + WSL command above, and finish the Windows browser sign-in it opens.",
     "stage_stalled_prefix": "Nothing coming through yet. If you're not comfortable with the terminal, ",
     "stage_stalled_term": "Desktop",
     "stage_stalled_suffix": " is the smoother path — one click and this computer is connected. Close this dialog and pick Desktop, or hit Skip to continue."

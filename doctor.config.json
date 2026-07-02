@@ -1,0 +1,7 @@
+{
+  "ignore": {
+    "rules": [
+      "react-doctor/no-barrel-import"
+    ]
+  }
+}

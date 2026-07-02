@@ -248,8 +248,19 @@
     "retry": "다시 시도",
     "unknown_error": "알 수 없는 오류",
     "initiate_failed": "업데이트를 시작하지 못했습니다",
-    "manual_hint_prefix": "터미널에서 이 로컬 데몬을 업데이트하려면 해당 컴퓨터에서 다음을 실행하세요:",
-    "manual_hint_suffix": ". 업데이트 후 데몬은 자동으로 재시작됩니다.",
+    "manual_hint": "자동 업데이트가 설치 위치에 쓸 수 없으면 해당 컴퓨터의 터미널에서 수동으로 업데이트하세요.",
+    "manual_action": "수동 명령",
+    "manual_dialog_title": "이 런타임 수동 업데이트",
+    "manual_dialog_description": "런타임 컴퓨터에 맞는 명령을 실행하세요. CLI를 Homebrew가 아닌 직접 설치 방식으로 설치한 Linux에서는 Linux 직접 설치 명령을 사용하세요.",
+    "manual_after_restart": "명령이 완료되면 데몬이 새 CLI 버전으로 다시 연결됩니다. 계속 오프라인이면 multica daemon restart를 한 번 더 실행하세요.",
+    "manual_close": "닫기",
+    "copy_command": "명령 복사",
+    "copied": "복사됨",
+    "manual_commands": {
+      "brew": "macOS 또는 Linux(Homebrew)",
+      "linux_script": "Linux 직접 설치",
+      "windows": "Windows PowerShell"
+    },
     "status": {
       "pending": "데몬 대기 중...",
       "running": "업데이트 중...",
@@ -335,5 +346,16 @@
     "table_cache_r": "캐시 R",
     "table_cache_w": "캐시 W",
     "no_data": "아직 사용량 데이터가 없습니다"
+  },
+  "update_prompt": {
+    "title": "로컬 데몬 업데이트",
+    "description": "로컬 Multica CLI는 {{current}}입니다. {{latest}}로 업데이트하면 이 런타임에서 최신 에이전트 기능을 사용할 수 있습니다.",
+    "more_runtimes": "이 컴퓨터에 같은 업데이트가 필요할 수 있는 런타임이 {{count}}개 더 있습니다.",
+    "note": "데몬은 heartbeat로 업데이트 작업을 받고, 이 컴퓨터에서 CLI 업데이트를 실행한 뒤 완료되면 자동으로 재시작합니다.",
+    "later": "나중에",
+    "update_now": "지금 업데이트",
+    "status": {
+      "completed": "업데이트가 전달되었습니다. 데몬이 새 CLI로 재시작됩니다."
+    }
   }
 }

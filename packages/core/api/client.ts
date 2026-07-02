@@ -1886,9 +1886,8 @@ export class ApiClient {
   }
 
   // ─── Direct messages (1-on-1) ─────────────────────────────────────────────
-  // The unified DM list unions kind='dm' channels with the caller's legacy
-  // chat_sessions; each item's `source` routes message read/send to either the
-  // channel stack or the chat stack. There is no dedicated DM-messages route.
+  // Visible DMs are kind='dm' channels. Legacy chat_sessions may still exist for
+  // history migration, but `/api/dm` does not expose them as a Messages source.
 
   async listDMs(): Promise<DMItem[]> {
     return this.fetch("/api/dm");
@@ -1901,13 +1900,11 @@ export class ApiClient {
     });
   }
 
-  // DM conversation operations (pin / mark-unread / close). `source` routes to
-  // the channel-backed or legacy-session-backed endpoint; the backend persists
-  // them as peer-level state so an action on one source covers the peer's other
-  // source too. All return `{ ok: true }`; callers refetch `/api/dm`.
+  // DM conversation operations (pin / mark-unread / close). All return
+  // `{ ok: true }`; callers refetch `/api/dm`.
   private dmOpsPath(source: DMItem["source"], id: string): string {
-    const seg = source === "dm_channel" ? "channels" : "sessions";
-    return `/api/dm/${seg}/${id}`;
+    void source;
+    return `/api/dm/channels/${id}`;
   }
 
   async pinDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {

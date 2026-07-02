@@ -23,8 +23,8 @@ type DMRef = Pick<DMItem, "id" | "source">;
 
 /**
  * Pin / unpin a DM. Persisted as peer-level state on the server, so pinning
- * dedupes across the peer's dm_channel + legacy_session sources. The list is
- * invalidated on success so the row re-sorts to/from the top.
+ * stays attached to the peer even if the underlying channel is recreated. The
+ * list is invalidated on success so the row re-sorts to/from the top.
  */
 export function useSetDMPinned() {
   const qc = useQueryClient();

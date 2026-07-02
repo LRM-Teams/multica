@@ -199,7 +199,6 @@
     "muted_label": "已静音",
     "close_chat": "关闭会话",
     "action_failed": "操作失败，请重试",
-    "legacy_unavailable": "这条旧私信正在迁移，不再通过当前消息界面打开。",
     "composer_placeholder": "发消息给 {{name}}…"
   },
   "quote": {

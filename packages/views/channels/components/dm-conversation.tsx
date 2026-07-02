@@ -56,23 +56,16 @@ import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 
 /**
  * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
- *  - `dm_channel`    — the DM IS a kind='dm' channel, so we reuse the exact
+ *  - `dm_channel` — the DM IS a kind='dm' channel, so we reuse the exact
  *    channel conversation stack (ChannelMessageBubble + ContentEditor composer
  *    + ConversationActivityStrip + channel queries/mutations +
  *    channel:message / channel:typing WS).
- *
- * `legacy_session` may still appear from old `/api/dm` responses until the
- * backend cleanup removes that source. Keep it fail-closed here so a stale
- * deep link or cached row never reopens the old Chat surface.
  *
  * The DM header chrome differs from the group header: peer avatar + name (+
  * agent presence dot) and Files only — no stats, no share, no member
  * management, no delete.
  */
 export function DmConversation({ dm, onBack }: { dm: DMItem; onBack: () => void }) {
-  if (dm.source === "legacy_session") {
-    return <DmLegacyUnavailableConversation dm={dm} onBack={onBack} />;
-  }
   return <DmChannelConversation dm={dm} onBack={onBack} />;
 }
 
@@ -812,20 +805,4 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   }
 
   return conversationPane;
-}
-
-// ─── legacy_session: fail closed until backend removes the legacy source ────
-
-function DmLegacyUnavailableConversation({ dm, onBack }: { dm: DMItem; onBack: () => void }) {
-  const { t } = useT("channels");
-  return (
-    <main className="flex flex-1 min-h-0 min-w-0 flex-col">
-      <DmHeader dm={dm} onBack={onBack} />
-      <div className="flex flex-1 items-center justify-center px-6 text-center">
-        <p className="max-w-sm text-sm text-muted-foreground">
-          {t(($) => $.dm.legacy_unavailable)}
-        </p>
-      </div>
-    </main>
-  );
 }

@@ -15,27 +15,21 @@ export interface DMPeer {
 /**
  * One row in the unified DM list and the create-or-find response.
  *
- * `source` routes everything downstream:
- *  - `"dm_channel"`  — the DM is a kind='dm' channel; use the channel message
- *    stack (GET/POST /api/channels/{id}/messages, channel:message WS).
- *  - `"legacy_session"` — a pre-existing standalone chat_session (the old Chat
- *    FAB conversations); use the chat stack (GET /api/chat/sessions/{id}/...).
- *
- * `unread` is a count for dm_channel items and 0/1 for legacy_session items
- * (legacy sessions only track a per-session has-unread flag, not a count).
+ * `source` is always `"dm_channel"` for the visible Messages surface. Legacy
+ * standalone chat_sessions may still exist for history migration, but they are
+ * not returned from `/api/dm`.
  */
 export interface DMItem {
-  /** dm channel id (source=dm_channel) OR legacy chat_session id (source=legacy_session). */
+  /** dm channel id. */
   id: string;
-  source: "dm_channel" | "legacy_session";
+  source: "dm_channel";
   peer: DMPeer;
   last_message?: ChannelLastMessage;
   unread: number;
   updated_at: string;
   /**
-   * Set when the conversation is pinned to the top of DIRECT MESSAGES. Backed by
-   * peer-level state (`dm_peer_state.pinned_at`) so pinning dedupes across a
-   * peer's dm_channel + legacy_session sources. Absent/undefined = not pinned.
+   * Set when the conversation is pinned to the top of DIRECT MESSAGES.
+   * Absent/undefined = not pinned.
    */
   pinned_at?: string;
   /** Set when the conversation is muted for the current user. */

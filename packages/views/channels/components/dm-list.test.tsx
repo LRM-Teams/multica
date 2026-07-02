@@ -131,17 +131,6 @@ function renderDmList() {
   );
 }
 
-function makeDm(overrides: Partial<DMItem>): DMItem {
-  return {
-    id: "dm-1",
-    source: "dm_channel",
-    peer: { type: "agent", id: "agent-1", name: "Product Manager" },
-    unread: 0,
-    updated_at: "2026-07-02T00:00:00Z",
-    ...overrides,
-  };
-}
-
 describe("DmList new-DM picker", () => {
   beforeEach(() => {
     mockViewport.isMobile = false;
@@ -171,25 +160,5 @@ describe("DmList new-DM picker", () => {
 
     expect(screen.getByTestId("dm-picker-drawer")).toBeInTheDocument();
     expect(screen.getByText("New message")).toBeInTheDocument();
-  });
-
-  it("hides legacy_session rows from the visible direct-message list", () => {
-    mockQueryData.dms = [
-      makeDm({
-        id: "legacy-1",
-        source: "legacy_session",
-        peer: { type: "agent", id: "agent-legacy", name: "Old Chat Surface" },
-      }),
-      makeDm({
-        id: "channel-1",
-        source: "dm_channel",
-        peer: { type: "agent", id: "agent-channel", name: "R2 DM Surface" },
-      }),
-    ];
-
-    renderDmList();
-
-    expect(screen.getByText("R2 DM Surface")).toBeInTheDocument();
-    expect(screen.queryByText("Old Chat Surface")).not.toBeInTheDocument();
   });
 });

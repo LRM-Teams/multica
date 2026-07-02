@@ -41,5 +41,22 @@
     "workspace_group": "工作区",
     "configure_group": "配置",
     "unread_overflow": "99+"
+  },
+  "sandboxes_page": {
+    "title": "沙箱",
+    "description": "通过共享沙箱节点连接器创建内部沙箱。",
+    "create_action": "创建沙箱",
+    "runtime_model_title": "运行时模型",
+    "runtime_model_hint": "创建沙箱时，模型设置会发送给沙箱运行时。",
+    "connected_nodes_title": "已连接节点",
+    "no_bound_node": "此工作区尚未绑定沙箱节点。",
+    "instances_title": "沙箱实例",
+    "loading": "正在加载沙箱...",
+    "empty_title": "还没有沙箱",
+    "empty_description": "创建一个沙箱，让内部沙箱节点配置隔离的本地环境。",
+    "waiting_local": "等待本地沙箱",
+    "resume_action": "恢复",
+    "stop_action": "停止",
+    "delete_action": "删除"
   }
 }

@@ -41,5 +41,22 @@
     "workspace_group": "ワークスペース",
     "configure_group": "設定",
     "unread_overflow": "99+"
+  },
+  "sandboxes_page": {
+    "title": "サンドボックス",
+    "description": "共有サンドボックスノードコネクターを通じて内部サンドボックスを作成します。",
+    "create_action": "サンドボックスを作成",
+    "runtime_model_title": "ランタイムモデル",
+    "runtime_model_hint": "モデル設定はサンドボックス作成時にサンドボックスランタイムへ送信されます。",
+    "connected_nodes_title": "接続済みノード",
+    "no_bound_node": "このワークスペースにはまだサンドボックスノードがバインドされていません。",
+    "instances_title": "サンドボックスインスタンス",
+    "loading": "サンドボックスを読み込み中...",
+    "empty_title": "サンドボックスはまだありません",
+    "empty_description": "作成すると、内部サンドボックスノードが隔離されたローカル環境をプロビジョニングします。",
+    "waiting_local": "ローカルサンドボックス待機中",
+    "resume_action": "再開",
+    "stop_action": "停止",
+    "delete_action": "削除"
   }
 }

@@ -16,9 +16,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@multica/ui/components
 import { Input } from "@multica/ui/components/ui/input";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useT } from "../../i18n/use-t";
 
 export function SandboxesPage() {
   const wsId = useWorkspaceId();
+  const { t } = useT("layout");
   const [modelConfig, setModelConfig] = useState({ apiKey: "", baseUrl: "", model: "" });
   const { data: instances = [], isLoading } = useQuery(sandboxListOptions(wsId));
   const { data: bindings = [] } = useQuery(sandboxBindingListOptions(wsId));
@@ -38,14 +40,12 @@ export function SandboxesPage() {
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex items-center justify-between border-b px-6 py-4">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Sandboxes</h1>
-          <p className="text-sm text-muted-foreground">
-            Create internal sandboxes through the shared sandbox node connector.
-          </p>
+          <h1 className="text-xl font-semibold tracking-tight">{t(($) => $.sandboxes_page.title)}</h1>
+          <p className="text-sm text-muted-foreground">{t(($) => $.sandboxes_page.description)}</p>
         </div>
         <Button onClick={() => create.mutate()} disabled={!hasOnlineNode || create.isPending || !modelConfig.apiKey.trim()}>
           {create.isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Play className="mr-2 size-4" />}
-          Create sandbox
+          {t(($) => $.sandboxes_page.create_action)}
         </Button>
       </div>
 
@@ -53,7 +53,7 @@ export function SandboxesPage() {
         <div className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Runtime model</CardTitle>
+              <CardTitle className="text-base">{t(($) => $.sandboxes_page.runtime_model_title)}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <Input
@@ -72,19 +72,17 @@ export function SandboxesPage() {
                 value={modelConfig.model}
                 onChange={(e) => setModelConfig((v) => ({ ...v, model: e.target.value }))}
               />
-              <p className="text-xs text-muted-foreground">
-                Model settings are sent to the sandbox runtime when a sandbox is created.
-              </p>
+              <p className="text-xs text-muted-foreground">{t(($) => $.sandboxes_page.runtime_model_hint)}</p>
             </CardContent>
           </Card>
 
           <Card>
           <CardHeader>
-            <CardTitle className="text-base">Connected nodes</CardTitle>
+            <CardTitle className="text-base">{t(($) => $.sandboxes_page.connected_nodes_title)}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             {bindings.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No sandbox node is bound to this workspace yet.</p>
+              <p className="text-sm text-muted-foreground">{t(($) => $.sandboxes_page.no_bound_node)}</p>
             ) : (
               bindings.map((binding) => (
                 <div key={binding.id} className="rounded-lg border p-3">
@@ -104,20 +102,18 @@ export function SandboxesPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Sandbox instances</CardTitle>
+            <CardTitle className="text-base">{t(($) => $.sandboxes_page.instances_title)}</CardTitle>
           </CardHeader>
           <CardContent>
             {isLoading ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" /> Loading sandboxes...
+                <Loader2 className="size-4 animate-spin" /> {t(($) => $.sandboxes_page.loading)}
               </div>
             ) : instances.length === 0 ? (
               <div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-16 text-center">
                 <Box className="mb-3 size-8 text-muted-foreground" />
-                <div className="font-medium">No sandboxes yet</div>
-                <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-                  Create one to ask the internal sandbox node to provision an isolated local environment.
-                </p>
+                <div className="font-medium">{t(($) => $.sandboxes_page.empty_title)}</div>
+                <p className="mt-1 max-w-sm text-sm text-muted-foreground">{t(($) => $.sandboxes_page.empty_description)}</p>
               </div>
             ) : (
               <div className="divide-y rounded-lg border">
@@ -159,6 +155,7 @@ function SandboxRow({
   onResume: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useT("layout");
   const canStop = instance.status === "running";
   const canResume = instance.status === "stopped";
   const canDelete = instance.status !== "stopping" && instance.status !== "resuming";
@@ -170,7 +167,7 @@ function SandboxRow({
           <StatusBadge status={instance.status} />
         </div>
         <div className="mt-1 text-xs text-muted-foreground">
-          {instance.node_name ?? instance.node_id} · {instance.local_ref ?? "waiting for local sandbox"}
+          {instance.node_name ?? instance.node_id} · {instance.local_ref ?? t(($) => $.sandboxes_page.waiting_local)}
         </div>
         {instance.error && <div className="mt-1 text-xs text-destructive">{instance.error}</div>}
       </div>
@@ -178,16 +175,16 @@ function SandboxRow({
         {canResume ? (
           <Button size="sm" variant="outline" disabled={resuming} onClick={onResume}>
             {resuming ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : <RotateCcw className="mr-2 size-3.5" />}
-            Resume
+            {t(($) => $.sandboxes_page.resume_action)}
           </Button>
         ) : (
           <Button size="sm" variant="outline" disabled={!canStop || stopping} onClick={onStop}>
             {stopping ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : <Square className="mr-2 size-3.5" />}
-            Stop
+            {t(($) => $.sandboxes_page.stop_action)}
           </Button>
         )}
         <Button size="sm" variant="ghost" disabled={!canDelete || deleting} onClick={onDelete}>
-          <Trash2 className="mr-2 size-3.5" /> Delete
+          <Trash2 className="mr-2 size-3.5" /> {t(($) => $.sandboxes_page.delete_action)}
         </Button>
       </div>
     </div>

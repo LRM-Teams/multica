@@ -41,5 +41,22 @@
     "workspace_group": "Workspace",
     "configure_group": "Configure",
     "unread_overflow": "99+"
+  },
+  "sandboxes_page": {
+    "title": "Sandboxes",
+    "description": "Create internal sandboxes through the shared sandbox node connector.",
+    "create_action": "Create sandbox",
+    "runtime_model_title": "Runtime model",
+    "runtime_model_hint": "Model settings are sent to the sandbox runtime when a sandbox is created.",
+    "connected_nodes_title": "Connected nodes",
+    "no_bound_node": "No sandbox node is bound to this workspace yet.",
+    "instances_title": "Sandbox instances",
+    "loading": "Loading sandboxes...",
+    "empty_title": "No sandboxes yet",
+    "empty_description": "Create one to ask the internal sandbox node to provision an isolated local environment.",
+    "waiting_local": "waiting for local sandbox",
+    "resume_action": "Resume",
+    "stop_action": "Stop",
+    "delete_action": "Delete"
   }
 }

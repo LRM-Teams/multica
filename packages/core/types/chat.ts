@@ -1,4 +1,5 @@
 import type { AgentTask } from "./agent";
+import type { MessagePart } from "./message-part";
 
 export interface ChatSession {
   id: string;
@@ -33,6 +34,7 @@ export interface ChatMessage {
   chat_session_id: string;
   role: "user" | "assistant";
   content: string;
+  parts?: MessagePart[];
   task_id: string | null;
   created_at: string;
   /**

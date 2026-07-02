@@ -13,6 +13,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // withChatTestWorkspaceCtx injects the workspace+member context that the
@@ -120,6 +121,45 @@ func TestSendChatMessage_LinksAttachments(t *testing.T) {
 	}
 	if *dbMessageID != sendResp.MessageID {
 		t.Fatalf("chat_message_id mismatch: want %s, got %s", sendResp.MessageID, *dbMessageID)
+	}
+}
+
+func TestSendChatMessageStoresStickerParts(t *testing.T) {
+	agentID := createHandlerTestAgent(t, "ChatStickerPartsAgent", []byte("[]"))
+	sessionID := createHandlerTestChatSession(t, agentID)
+
+	req := newRequest("POST", "/api/chat-sessions/"+sessionID+"/messages", map[string]any{
+		"parts": []protocol.MessagePart{{
+			Type:      protocol.MessagePartTypeSticker,
+			StickerID: "hi",
+		}},
+	})
+	req = withURLParam(req, "sessionId", sessionID)
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+	testHandler.SendChatMessage(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("SendChatMessage: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp SendChatMessageResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode send response: %v", err)
+	}
+	var content string
+	var rawParts []byte
+	if err := testPool.QueryRow(context.Background(), `SELECT content, parts FROM chat_message WHERE id = $1`, resp.MessageID).Scan(&content, &rawParts); err != nil {
+		t.Fatalf("load stored chat message: %v", err)
+	}
+	var parts []protocol.MessagePart
+	if err := json.Unmarshal(rawParts, &parts); err != nil {
+		t.Fatalf("decode stored parts: %v", err)
+	}
+	if len(parts) != 1 || parts[0].PackID != "builtin" || parts[0].StickerID != "hi" || parts[0].Alt == "" {
+		t.Fatalf("stored parts = %+v, want normalized builtin hi sticker", parts)
+	}
+	if content != parts[0].Alt {
+		t.Fatalf("stored content = %q, want sticker alt fallback %q", content, parts[0].Alt)
 	}
 }
 

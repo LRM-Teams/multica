@@ -393,6 +393,72 @@ func TestSendChannelMessageReplyReturnsSummary(t *testing.T) {
 	t.Fatalf("created message %s missing from list", created.ID)
 }
 
+func TestSendChannelMessageStoresStickerParts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	channelID := seedChannelForTest(t, "sticker-parts-"+uuid.NewString(), testUserID)
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages", map[string]any{
+		"content": "",
+		"parts": []protocol.MessagePart{{
+			Type:      protocol.MessagePartTypeSticker,
+			StickerID: "hi",
+		}},
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send sticker parts: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created message: %v", err)
+	}
+	if len(created.Parts) != 1 || created.Parts[0].Type != protocol.MessagePartTypeSticker || created.Parts[0].PackID != "builtin" || created.Parts[0].StickerID != "hi" || created.Parts[0].Alt == "" {
+		t.Fatalf("created parts = %+v, want normalized builtin sticker", created.Parts)
+	}
+	if created.Content != created.Parts[0].Alt {
+		t.Fatalf("created content = %q, want sticker alt fallback %q", created.Content, created.Parts[0].Alt)
+	}
+
+	var storedParts []byte
+	if err := testPool.QueryRow(context.Background(), `SELECT parts FROM channel_message WHERE id = $1`, created.ID).Scan(&storedParts); err != nil {
+		t.Fatalf("load stored parts: %v", err)
+	}
+	var decoded []protocol.MessagePart
+	if err := json.Unmarshal(storedParts, &decoded); err != nil {
+		t.Fatalf("decode stored parts: %v", err)
+	}
+	if len(decoded) != 1 || decoded[0].StickerID != "hi" || decoded[0].PackID != "builtin" {
+		t.Fatalf("stored parts = %+v, want builtin hi sticker", decoded)
+	}
+}
+
+func TestSendChannelMessageRejectsUnknownStickerPart(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	channelID := seedChannelForTest(t, "bad-sticker-parts-"+uuid.NewString(), testUserID)
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages", map[string]any{
+		"parts": []protocol.MessagePart{{
+			Type:      protocol.MessagePartTypeSticker,
+			StickerID: "does-not-exist",
+		}},
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("send bad sticker parts: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestChannelMessageReactionCanBeRemoved(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

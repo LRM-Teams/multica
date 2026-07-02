@@ -7,6 +7,7 @@ import type { Workspace, MemberWithUser, Invitation } from "./workspace";
 import type { Project } from "./project";
 import type { Label } from "./label";
 import type { ChannelMessage, ChannelReaction, ChannelTypingPayload } from "./channel";
+import type { MessagePart } from "./message-part";
 
 // WebSocket event types (matching Go server protocol/events.go)
 export type WSEventType =
@@ -327,6 +328,7 @@ export interface ChatMessageEventPayload {
   message_id: string;
   role: "user" | "assistant";
   content: string;
+  parts?: MessagePart[];
   task_id?: string;
   created_at: string;
 }
@@ -342,6 +344,7 @@ export interface ChatDonePayload {
    */
   message_id?: string;
   content?: string;
+  parts?: MessagePart[];
   elapsed_ms?: number;
   created_at?: string;
 }

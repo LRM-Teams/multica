@@ -12,15 +12,16 @@ import (
 )
 
 const createChatMessage = `-- name: CreateChatMessage :one
-INSERT INTO chat_message (chat_session_id, role, content, task_id, failure_reason, elapsed_ms)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, thread_id, trigger_depth
+INSERT INTO chat_message (chat_session_id, role, content, parts, task_id, failure_reason, elapsed_ms)
+VALUES ($1, $2, $3, COALESCE($4::jsonb, '[]'::jsonb), $5, $6, $7)
+RETURNING id, chat_session_id, role, content, parts, task_id, created_at, failure_reason, elapsed_ms, thread_id, trigger_depth
 `
 
 type CreateChatMessageParams struct {
 	ChatSessionID pgtype.UUID `json:"chat_session_id"`
 	Role          string      `json:"role"`
 	Content       string      `json:"content"`
+	Parts         []byte      `json:"parts"`
 	TaskID        pgtype.UUID `json:"task_id"`
 	FailureReason pgtype.Text `json:"failure_reason"`
 	ElapsedMs     pgtype.Int8 `json:"elapsed_ms"`
@@ -31,6 +32,7 @@ func (q *Queries) CreateChatMessage(ctx context.Context, arg CreateChatMessagePa
 		arg.ChatSessionID,
 		arg.Role,
 		arg.Content,
+		arg.Parts,
 		arg.TaskID,
 		arg.FailureReason,
 		arg.ElapsedMs,
@@ -41,6 +43,7 @@ func (q *Queries) CreateChatMessage(ctx context.Context, arg CreateChatMessagePa
 		&i.ChatSessionID,
 		&i.Role,
 		&i.Content,
+		&i.Parts,
 		&i.TaskID,
 		&i.CreatedAt,
 		&i.FailureReason,
@@ -171,7 +174,7 @@ func (q *Queries) DeleteChatSession(ctx context.Context, arg DeleteChatSessionPa
 const deleteUserChatMessageByTask = `-- name: DeleteUserChatMessageByTask :one
 DELETE FROM chat_message
 WHERE task_id = $1 AND role = 'user'
-RETURNING id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, thread_id, trigger_depth
+RETURNING id, chat_session_id, role, content, parts, task_id, created_at, failure_reason, elapsed_ms, thread_id, trigger_depth
 `
 
 func (q *Queries) DeleteUserChatMessageByTask(ctx context.Context, taskID pgtype.UUID) (ChatMessage, error) {
@@ -182,6 +185,7 @@ func (q *Queries) DeleteUserChatMessageByTask(ctx context.Context, taskID pgtype
 		&i.ChatSessionID,
 		&i.Role,
 		&i.Content,
+		&i.Parts,
 		&i.TaskID,
 		&i.CreatedAt,
 		&i.FailureReason,
@@ -193,7 +197,7 @@ func (q *Queries) DeleteUserChatMessageByTask(ctx context.Context, taskID pgtype
 }
 
 const getChatMessage = `-- name: GetChatMessage :one
-SELECT id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, thread_id, trigger_depth FROM chat_message
+SELECT id, chat_session_id, role, content, parts, task_id, created_at, failure_reason, elapsed_ms, thread_id, trigger_depth FROM chat_message
 WHERE id = $1
 `
 
@@ -205,6 +209,7 @@ func (q *Queries) GetChatMessage(ctx context.Context, id pgtype.UUID) (ChatMessa
 		&i.ChatSessionID,
 		&i.Role,
 		&i.Content,
+		&i.Parts,
 		&i.TaskID,
 		&i.CreatedAt,
 		&i.FailureReason,
@@ -309,7 +314,7 @@ func (q *Queries) GetLastChatTaskSession(ctx context.Context, chatSessionID pgty
 }
 
 const getMostRecentUserChatMessage = `-- name: GetMostRecentUserChatMessage :one
-SELECT id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, thread_id, trigger_depth FROM chat_message
+SELECT id, chat_session_id, role, content, parts, task_id, created_at, failure_reason, elapsed_ms, thread_id, trigger_depth FROM chat_message
 WHERE chat_session_id = $1 AND role = 'user'
 ORDER BY created_at DESC
 LIMIT 1
@@ -328,6 +333,7 @@ func (q *Queries) GetMostRecentUserChatMessage(ctx context.Context, chatSessionI
 		&i.ChatSessionID,
 		&i.Role,
 		&i.Content,
+		&i.Parts,
 		&i.TaskID,
 		&i.CreatedAt,
 		&i.FailureReason,
@@ -443,7 +449,7 @@ func (q *Queries) ListAllChatSessionsByCreator(ctx context.Context, arg ListAllC
 }
 
 const listChatMessages = `-- name: ListChatMessages :many
-SELECT id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, thread_id, trigger_depth FROM chat_message
+SELECT id, chat_session_id, role, content, parts, task_id, created_at, failure_reason, elapsed_ms, thread_id, trigger_depth FROM chat_message
 WHERE chat_session_id = $1
 ORDER BY created_at ASC
 `
@@ -462,6 +468,7 @@ func (q *Queries) ListChatMessages(ctx context.Context, chatSessionID pgtype.UUI
 			&i.ChatSessionID,
 			&i.Role,
 			&i.Content,
+			&i.Parts,
 			&i.TaskID,
 			&i.CreatedAt,
 			&i.FailureReason,
@@ -480,7 +487,7 @@ func (q *Queries) ListChatMessages(ctx context.Context, chatSessionID pgtype.UUI
 }
 
 const listChatMessagesPage = `-- name: ListChatMessagesPage :many
-SELECT id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, thread_id, trigger_depth FROM chat_message
+SELECT id, chat_session_id, role, content, parts, task_id, created_at, failure_reason, elapsed_ms, thread_id, trigger_depth FROM chat_message
 WHERE chat_session_id = $1
   AND (
     $3::timestamptz IS NULL
@@ -516,6 +523,7 @@ func (q *Queries) ListChatMessagesPage(ctx context.Context, arg ListChatMessages
 			&i.ChatSessionID,
 			&i.Role,
 			&i.Content,
+			&i.Parts,
 			&i.TaskID,
 			&i.CreatedAt,
 			&i.FailureReason,

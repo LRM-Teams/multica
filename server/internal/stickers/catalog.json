@@ -1,5 +1,5 @@
 {
-  "_comment": "Source of truth for the agent sticker library. Images live in ./assets/<file> and are embedded into the Go binary (see stickers.go), served at /api/stickers/<id>. Agents reference a sticker in chat/channel/DM content with the token :sticker:<id>:. Tags are bilingual (the zh caption + en gloss) so search works in both languages. Assets are from getActivity/EmojiPackage (Apache-2.0) — see ./NOTICE.",
+  "_comment": "Source of truth for the agent sticker library. Images live in ./assets/<file> and are embedded into the Go binary (see stickers.go), served at /api/stickers/<id>. Messages reference stickers through structured message parts using sticker_id. Tags are bilingual (the zh caption + en gloss) so search works in both languages. Assets are from getActivity/EmojiPackage (Apache-2.0) — see ./NOTICE.",
   "license": "Apache-2.0",
   "source": "getActivity/EmojiPackage",
   "stickers": [

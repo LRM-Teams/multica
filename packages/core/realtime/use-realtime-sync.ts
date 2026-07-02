@@ -116,6 +116,7 @@ export function applyChatDoneToCache(
       chat_session_id: sessionId,
       role: "assistant",
       content,
+      parts: payload.parts,
       task_id: taskId,
       created_at: payload.created_at ?? new Date().toISOString(),
       elapsed_ms: payload.elapsed_ms ?? null,

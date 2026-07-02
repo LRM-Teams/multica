@@ -21,6 +21,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/pkg/agent"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func createDaemonTestRepo(t *testing.T) string {
@@ -1798,8 +1799,14 @@ func TestReportTaskResult_CompletedHitsCompleteEndpoint(t *testing.T) {
 		Status:     "completed",
 		Comment:    "all good",
 		BranchName: "agent/foo",
-		SessionID:  "ses-1",
-		WorkDir:    "/tmp/foo",
+		Parts: []protocol.MessagePart{{
+			Type:      protocol.MessagePartTypeSticker,
+			PackID:    "builtin",
+			StickerID: "hi",
+			Alt:       "Hi",
+		}},
+		SessionID: "ses-1",
+		WorkDir:   "/tmp/foo",
 	}, slog.Default())
 
 	rec.mu.Lock()
@@ -1815,6 +1822,17 @@ func TestReportTaskResult_CompletedHitsCompleteEndpoint(t *testing.T) {
 	}
 	if rec.payload["session_id"] != "ses-1" {
 		t.Errorf("session_id: got %v", rec.payload["session_id"])
+	}
+	parts, ok := rec.payload["parts"].([]any)
+	if !ok || len(parts) != 1 {
+		t.Fatalf("parts: got %#v, want one structured part", rec.payload["parts"])
+	}
+	part, ok := parts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("parts[0]: got %#v", parts[0])
+	}
+	if part["type"] != "sticker" || part["sticker_id"] != "hi" || part["pack_id"] != "builtin" {
+		t.Errorf("parts[0]: got %#v, want builtin hi sticker", part)
 	}
 }
 

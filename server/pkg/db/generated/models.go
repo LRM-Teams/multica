@@ -219,6 +219,7 @@ type ChatMessage struct {
 	ChatSessionID pgtype.UUID        `json:"chat_session_id"`
 	Role          string             `json:"role"`
 	Content       string             `json:"content"`
+	Parts         []byte             `json:"parts"`
 	TaskID        pgtype.UUID        `json:"task_id"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	FailureReason pgtype.Text        `json:"failure_reason"`

@@ -29,11 +29,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/redact"
 )
 
-const (
-	chatResumeRecentMessageLimit = 10
-	chatFreshAfterMessageCount   = 40
-	chatFreshAfterTokenCount     = int64(180000)
-)
+const chatResumeRecentMessageLimit = 10
 
 // ---------------------------------------------------------------------------
 // Daemon workspace ownership helpers
@@ -1486,9 +1482,6 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					if reason, ok := h.latestChatTaskFailureReason(r.Context(), cs.ID, task.ID); ok && chatFailureResumeUnsafe(reason) {
 						freshReason = "the latest task failed because the saved native session is no longer safe to resume (" + reason + ")"
 					}
-					if freshReason == "" && shouldStartFreshChatSession(chatMessages, totalTokens) {
-						freshReason = fmt.Sprintf("the chat is long enough to risk context overflow (%d messages, %d recorded tokens)", len(chatMessages), totalTokens)
-					}
 					if freshReason != "" {
 						resp.PriorSessionID = ""
 					}
@@ -1789,10 +1782,6 @@ func trailingUserMessages(msgs []db.ChatMessage) []db.ChatMessage {
 		}
 	}
 	return msgs[start:]
-}
-
-func shouldStartFreshChatSession(msgs []db.ChatMessage, totalTokens int64) bool {
-	return len(msgs) >= chatFreshAfterMessageCount || totalTokens >= chatFreshAfterTokenCount
 }
 
 func hasPriorChatContext(msgs []db.ChatMessage, currentTaskID pgtype.UUID) bool {

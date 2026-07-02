@@ -42,14 +42,8 @@ func TestChatResumeSafetyHelpers(t *testing.T) {
 		msg("assistant", "old 2"),
 		msg("user", "new 3"),
 	}
-	if shouldStartFreshChatSession(msgs, 0) {
-		t.Fatal("short chat without high token usage should resume")
-	}
-	if !shouldStartFreshChatSession(make([]db.ChatMessage, chatFreshAfterMessageCount), 0) {
-		t.Fatal("long chat should start fresh")
-	}
-	if !shouldStartFreshChatSession(msgs, chatFreshAfterTokenCount) {
-		t.Fatal("high token usage should start fresh")
+	if len(recentChatMessages(msgs, 999)) != len(msgs) {
+		t.Fatal("large recent-message limits should preserve all messages")
 	}
 	if !chatFailureResumeUnsafe("agent_error.context_overflow") {
 		t.Fatal("context overflow must not resume the native session")

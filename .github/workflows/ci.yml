@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -38,6 +40,12 @@ jobs:
         run: |
           pnpm generate:reserved-slugs
           git diff --exit-code -- packages/core/paths/reserved-slugs.ts
+
+      - name: Fetch React Doctor base
+        run: git fetch --no-tags origin dev:refs/remotes/origin/dev
+
+      - name: React Doctor
+        run: pnpm react:doctor
 
       - name: Build, type check, lint, and test
         # Mobile lives in a parallel mobile-verify workflow (path-filtered

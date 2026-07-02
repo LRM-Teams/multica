@@ -910,6 +910,9 @@ func (h *Handler) processHeartbeat(ctx context.Context, rt db.AgentRuntime, supp
 				ID:            pending.ID,
 				TargetVersion: pending.TargetVersion,
 			}
+			h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{
+				"runtime": h.runtimeToResponse(ctx, rt),
+			})
 		}
 	case probeUpdateErr != nil:
 		if errors.Is(probeUpdateErr, context.DeadlineExceeded) || errors.Is(probeUpdateErr, context.Canceled) {

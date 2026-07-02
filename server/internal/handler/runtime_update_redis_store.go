@@ -21,12 +21,14 @@ const (
 	updateKeyPrefix          = "mul:update:req:"
 	updatePendingPrefix      = "mul:update:pending:"
 	updateActivePrefix       = "mul:update:active:"
+	updateHistoryPrefix      = "mul:update:history:"
 	updateRedisPopMaxRetries = 5
 )
 
 func updateKey(id string) string               { return updateKeyPrefix + id }
 func updatePendingKey(runtimeID string) string { return updatePendingPrefix + runtimeID }
 func updateActiveKey(runtimeID string) string  { return updateActivePrefix + runtimeID }
+func updateHistoryKey(runtimeID string) string { return updateHistoryPrefix + runtimeID }
 
 var deleteIfValueScript = redis.NewScript(`
 if redis.call('GET', KEYS[1]) == ARGV[1] then
@@ -73,11 +75,17 @@ func (s *RedisUpdateStore) Create(ctx context.Context, runtimeID, targetVersion 
 		Score:  float64(now.UnixNano()),
 		Member: req.ID,
 	})
+	pipe.ZAdd(ctx, updateHistoryKey(runtimeID), redis.Z{
+		Score:  float64(now.UnixNano()),
+		Member: req.ID,
+	})
 	pipe.Expire(ctx, updatePendingKey(runtimeID), updateStoreRetention*2)
+	pipe.Expire(ctx, updateHistoryKey(runtimeID), updateStoreRetention*2)
 	if _, err := pipe.Exec(ctx); err != nil {
 		_ = s.clearActiveIfMatches(ctx, runtimeID, req.ID)
 		_ = s.rdb.Del(ctx, updateKey(req.ID)).Err()
 		_ = s.rdb.ZRem(ctx, updatePendingKey(runtimeID), req.ID).Err()
+		_ = s.rdb.ZRem(ctx, updateHistoryKey(runtimeID), req.ID).Err()
 		return nil, fmt.Errorf("persist update request: %w", err)
 	}
 	return req, nil
@@ -85,6 +93,25 @@ func (s *RedisUpdateStore) Create(ctx context.Context, runtimeID, targetVersion 
 
 func (s *RedisUpdateStore) Get(ctx context.Context, id string) (*UpdateRequest, error) {
 	return s.loadRequest(ctx, id)
+}
+
+func (s *RedisUpdateStore) LatestForRuntime(ctx context.Context, runtimeID string) (*UpdateRequest, error) {
+	ids, err := s.rdb.ZRevRange(ctx, updateHistoryKey(runtimeID), 0, 8).Result()
+	if err != nil {
+		return nil, fmt.Errorf("zrevrange update history: %w", err)
+	}
+	for _, id := range ids {
+		req, err := s.loadRequest(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if req == nil || req.RuntimeID != runtimeID {
+			s.rdb.ZRem(ctx, updateHistoryKey(runtimeID), id)
+			continue
+		}
+		return req, nil
+	}
+	return nil, nil
 }
 
 func (s *RedisUpdateStore) loadRequest(ctx context.Context, id string) (*UpdateRequest, error) {
@@ -119,6 +146,11 @@ func (s *RedisUpdateStore) persistRequest(ctx context.Context, req *UpdateReques
 	if err := s.rdb.Set(ctx, updateKey(req.ID), data, updateStoreRetention).Err(); err != nil {
 		return fmt.Errorf("persist update request: %w", err)
 	}
+	_ = s.rdb.ZAdd(ctx, updateHistoryKey(req.RuntimeID), redis.Z{
+		Score:  float64(req.UpdatedAt.UnixNano()),
+		Member: req.ID,
+	}).Err()
+	_ = s.rdb.Expire(ctx, updateHistoryKey(req.RuntimeID), updateStoreRetention*2).Err()
 	return nil
 }
 

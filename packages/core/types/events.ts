@@ -1,5 +1,5 @@
 import type { Issue, IssueMetadata, IssueReaction } from "./issue";
-import type { Agent } from "./agent";
+import type { Agent, AgentRuntime } from "./agent";
 import type { InboxItem } from "./inbox";
 import type { Comment, Reaction } from "./comment";
 import type { TimelineEntry } from "./activity";
@@ -44,6 +44,7 @@ export type WSEventType =
   | "member:removed"
   | "daemon:heartbeat"
   | "daemon:register"
+  | "daemon:runtime_updated"
   | "skill:created"
   | "skill:updated"
   | "skill:deleted"
@@ -134,6 +135,10 @@ export interface AgentArchivedPayload {
 
 export interface AgentRestoredPayload {
   agent: Agent;
+}
+
+export interface DaemonRuntimeUpdatedPayload {
+  runtime: AgentRuntime;
 }
 
 export interface InboxNewPayload {
@@ -464,6 +469,7 @@ export interface WSEventPayloadMap {
   // currently consume as opaque triggers (refetch on receipt).
   "daemon:heartbeat": unknown;
   "daemon:register": unknown;
+  "daemon:runtime_updated": DaemonRuntimeUpdatedPayload;
   "skill:created": unknown;
   "skill:updated": unknown;
   "skill:deleted": unknown;

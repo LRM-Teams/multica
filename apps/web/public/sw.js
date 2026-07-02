@@ -1,5 +1,3 @@
-/* global self */
-
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const payload = event.notification.data || {};

@@ -326,7 +326,7 @@ export async function handleChannelMessageNotification(
 ): Promise<void> {
   const sourceWsId = message.workspace_id;
   if (!sourceWsId) return;
-  if (message.author_type === "user" && message.author_id === myUserId) return;
+  if (message.type === "user" && message.author_id === myUserId) return;
 
   const channels = qc.getQueryData<Channel[]>(channelKeys.list(sourceWsId)) ?? [];
   const channel = channels.find((c) => c.id === message.channel_id) ?? null;

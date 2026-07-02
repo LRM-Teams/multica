@@ -52,7 +52,14 @@ export function ChannelStatsPanel({ channelId }: { channelId: string }) {
   }
 
   const pieData = data.by_author.map((a, i) => ({
-    name: resolveChannelAuthorDisplayName(a, { getActorName }),
+    name: resolveChannelAuthorDisplayName(
+      {
+        type: a.author_type,
+        author_id: a.author_id,
+        author_name: a.author_name,
+      },
+      { getActorName },
+    ),
     value: a.count,
     fill: PALETTE[i % PALETTE.length],
   }));

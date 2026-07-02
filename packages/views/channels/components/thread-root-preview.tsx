@@ -38,16 +38,16 @@ export function ThreadRootPreview({
 }) {
   const { t } = useT("channels");
   const { getActorName } = useActorName();
-  const isAgent = message.author_type === "agent";
+  const isAgent = message.type === "agent";
   const displayName = resolveChannelAuthorDisplayName(message, {
     currentUserId,
     ownName,
     getActorName,
   });
   const profileActorType =
-    message.author_type === "agent"
+    message.type === "agent"
       ? "agent"
-      : message.author_type === "user"
+      : message.type === "user"
         ? "user"
         : null;
   const profileActorId = message.author_id ?? null;

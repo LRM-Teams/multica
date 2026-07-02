@@ -2135,22 +2135,8 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		structured = false
 	}
 	if structured {
-		migratedStructuredAction := ""
-		if strings.TrimSpace(envelope.Action) == "" {
-			legacyType, legacyErr := protocol.NormalizeChatOutputType(envelope.Type, strings.TrimSpace(firstNonEmpty(envelope.Output, envelope.Content)) != "" || len(envelope.Parts) > 0, envelope.Reaction != nil)
-			if legacyErr == nil {
-				switch legacyType {
-				case protocol.ChatOutputKindMessage:
-					migratedStructuredAction = protocol.ChatOutputActionSendChannelMessage
-				case protocol.ChatOutputKindReaction:
-					migratedStructuredAction = protocol.ChatOutputActionMessageReact
-				case protocol.ChatOutputKindNoReply:
-					migratedStructuredAction = protocol.ChatOutputActionNoReply
-				}
-			}
-		}
 		if strings.TrimSpace(envelope.Action) != "" || !explicitAction {
-			req.Action = firstNonEmpty(envelope.Action, migratedStructuredAction)
+			req.Action = envelope.Action
 			explicitAction = strings.TrimSpace(req.Action) != ""
 		}
 		if strings.TrimSpace(envelope.Type) != "" || strings.TrimSpace(req.Type) == "" {
@@ -2170,12 +2156,12 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		return fmt.Errorf("invalid message parts: %w", err)
 	}
 
-	if message, ok := protocol.ParseChannelSendCommand(output); ok {
+	if message, ok := protocol.ParseMessageSendCommand(output); ok {
 		output, parts, err = messageparts.Normalize(message, nil)
 		if err != nil {
 			return fmt.Errorf("invalid message parts: %w", err)
 		}
-		req.Action = protocol.ChatOutputActionSendChannelMessage
+		req.Action = protocol.ChatOutputActionMessageSend
 		req.Type = protocol.ChatOutputKindMessage
 		req.Reaction = nil
 		explicitAction = true

@@ -136,7 +136,7 @@ func channelContextMessagesExcludingTrigger(messages []ChannelMessageResponse, t
 }
 
 func formatChannelMessageLine(msg ChannelMessageResponse) string {
-	return fmt.Sprintf("[%s] %s (%s): %s", msg.CreatedAt, msg.AuthorName, msg.AuthorType, truncateChannelHistoryContent(msg.Content))
+	return fmt.Sprintf("[%s] %s (%s): %s", msg.CreatedAt, msg.AuthorName, msg.Type, truncateChannelHistoryContent(msg.Content))
 }
 
 func truncateChannelHistoryContent(content string) string {

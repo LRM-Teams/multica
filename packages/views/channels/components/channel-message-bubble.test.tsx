@@ -118,7 +118,7 @@ function makeMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
     id: "m1",
     channel_id: "c1",
     workspace_id: "w1",
-    author_type: "agent",
+    type: "agent",
     author_id: "agent-1",
     author_name: "Research Agent",
     content: "Here is the data.",
@@ -181,7 +181,7 @@ describe("ChannelMessageBubble", () => {
 
   it("renders the current user's own message right-aligned without an Agent pill", () => {
     const msg = makeMessage({
-      author_type: "user",
+      type: "user",
       author_id: "user-1",
       author_name: "alice",
       content: "Please summarize Q2.",
@@ -196,7 +196,7 @@ describe("ChannelMessageBubble", () => {
   });
 
   it("treats another user's message as not own", () => {
-    const msg = makeMessage({ author_type: "user", author_id: "user-2", author_name: "bob" });
+    const msg = makeMessage({ type: "user", author_id: "user-2", author_name: "bob" });
     render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
 
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
@@ -207,13 +207,13 @@ describe("ChannelMessageBubble", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({
-          author_type: "user",
+          type: "user",
           author_id: "user-2",
           author_name: "bob",
           reply_to_message_id: "m0",
           reply_to: {
             id: "m0",
-            author_type: "user",
+            type: "user",
             author_id: "user-1",
             author_name: "alice",
             content: "Earlier point",
@@ -491,7 +491,7 @@ describe("ChannelMessageBubble", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({
-          author_type: "system",
+          type: "system",
           author_id: null,
           author_name: "System",
           content: "Barry archived this channel.",
@@ -525,16 +525,15 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByRole("button", { name: /2 replies/ })).not.toBeInTheDocument();
   });
 
-  it("renders runtime system notices with a Runtimes CTA", async () => {
+  it("renders runtime system notices from message content without legacy subtype fields", async () => {
     const onOpenRuntimes = vi.fn();
     render(
       <ChannelMessageBubble
         message={makeMessage({
-          author_type: "system",
+          type: "system",
           author_id: null,
           author_name: "System",
-          content: "",
-          system_message_kind: "runtime_outdated",
+          content: "Local daemon is outdated.",
         })}
         currentUserId="user-1"
         onOpenRuntimes={onOpenRuntimes}
@@ -542,27 +541,7 @@ describe("ChannelMessageBubble", () => {
     );
 
     expect(screen.getByTestId("system-message-row")).toHaveTextContent("Local daemon is outdated.");
-
-    await userEvent.click(screen.getByRole("button", { name: /Open Runtimes/ }));
-
-    expect(onOpenRuntimes).toHaveBeenCalledTimes(1);
-  });
-
-  it("maps runtime notice copy from the notice state instead of raw content", () => {
-    render(
-      <ChannelMessageBubble
-        message={makeMessage({
-          author_type: "system",
-          author_id: null,
-          author_name: "System",
-          content: "daemon_outdated",
-          system_message_kind: "runtime_outdated",
-        })}
-        currentUserId="user-1"
-      />,
-    );
-
-    expect(screen.getByTestId("system-message-row")).toHaveTextContent("Local daemon is outdated.");
-    expect(screen.queryByText("daemon_outdated")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Open Runtimes/ })).not.toBeInTheDocument();
+    expect(onOpenRuntimes).not.toHaveBeenCalled();
   });
 });

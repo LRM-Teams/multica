@@ -2284,7 +2284,7 @@ func TestCompleteTask_GroupChannelSendActionWritesMessage(t *testing.T) {
 	const visibleReply = "Visible action reply"
 
 	w := completeTaskForTest(t, taskID, map[string]any{
-		"action": "send_channel_message",
+		"action": "message_send",
 		"output": visibleReply,
 	})
 	if w.Code != http.StatusOK {
@@ -2311,7 +2311,7 @@ func TestCompleteTask_GroupChannelSendActionWritesParts(t *testing.T) {
 	taskID, channelID := createChannelCompletionTask(t, "group")
 
 	w := completeTaskForTest(t, taskID, map[string]any{
-		"action": "send_channel_message",
+		"action": "message_send",
 		"parts": []map[string]any{
 			{"type": "sticker", "sticker_id": "hi"},
 		},
@@ -2348,7 +2348,7 @@ func TestCompleteTask_GroupChannelCommandSendWritesMessage(t *testing.T) {
 
 	w := completeTaskForTest(t, taskID, map[string]any{
 		"type":   "message",
-		"output": `multica channel send --message "` + visibleReply + `"`,
+		"output": `multica message send --message "` + visibleReply + `"`,
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
@@ -2366,13 +2366,13 @@ func TestCompleteTask_GroupChannelCommandSendWritesMessage(t *testing.T) {
 	}
 }
 
-func TestCompleteTask_GroupChannelLegacyStructuredMessageMigratesToSendAction(t *testing.T) {
+func TestCompleteTask_GroupChannelStructuredMessageWithoutActionIsSuppressed(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	taskID, channelID := createChannelCompletionTask(t, "group")
-	const visibleReply = "Legacy structured reply"
+	const visibleReply = "Structured reply without action"
 
 	w := completeTaskForTest(t, taskID, map[string]any{
 		"output": `{"type":"message","output":"` + visibleReply + `"}`,
@@ -2388,8 +2388,8 @@ func TestCompleteTask_GroupChannelLegacyStructuredMessageMigratesToSendAction(t 
 	`, channelID, visibleReply).Scan(&channelMessageCount); err != nil {
 		t.Fatalf("count bridged channel messages: %v", err)
 	}
-	if channelMessageCount != 1 {
-		t.Fatalf("channel message count = %d, want 1", channelMessageCount)
+	if channelMessageCount != 0 {
+		t.Fatalf("channel message count = %d, want 0", channelMessageCount)
 	}
 }
 

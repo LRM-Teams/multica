@@ -69,7 +69,7 @@ describe("resolveChannelAuthorDisplayName", () => {
   it("uses display_name from live member identity when only a legacy author_name snapshot is present", () => {
     expect(
       resolveChannelAuthorDisplayName(
-        { author_type: "user", author_name: "andong3" },
+        { type: "user", author_name: "andong3" },
         {
           members: [
             {
@@ -93,7 +93,7 @@ describe("resolveChannelAuthorDisplayName", () => {
   it("uses the actor-name resolver by id before falling back to the message snapshot", () => {
     expect(
       resolveChannelAuthorDisplayName(
-        { author_type: "agent", author_id: "agent-1", author_name: "agent_handle" },
+        { type: "agent", author_id: "agent-1", author_name: "agent_handle" },
         {
           getActorName: (type, id, fallback) =>
             type === "agent" && id === "agent-1" ? "Research Agent" : fallback,

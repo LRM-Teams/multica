@@ -138,10 +138,10 @@ const (
 )
 
 const (
-	ChatOutputActionSendChannelMessage = "send_channel_message"
-	ChatOutputActionMessageReact       = "message_react"
-	ChatOutputActionSendReaction       = ChatOutputActionMessageReact
-	ChatOutputActionNoReply            = "no_reply"
+	ChatOutputActionMessageSend  = "message_send"
+	ChatOutputActionMessageReact = "message_react"
+	ChatOutputActionSendReaction = ChatOutputActionMessageReact
+	ChatOutputActionNoReply      = "no_reply"
 )
 
 const (
@@ -168,8 +168,8 @@ func NormalizeChatOutputAction(action string) (string, error) {
 	switch normalized {
 	case "":
 		return "", nil
-	case ChatOutputActionSendChannelMessage, "channel_send", "send_message", "message_send":
-		return ChatOutputActionSendChannelMessage, nil
+	case ChatOutputActionMessageSend:
+		return ChatOutputActionMessageSend, nil
 	case ChatOutputActionMessageReact, "react_message", "message_reaction", "send_reaction":
 		return ChatOutputActionMessageReact, nil
 	case ChatOutputActionNoReply, "stay_silent":
@@ -187,7 +187,7 @@ func ChatOutputTypeForAction(action string) (string, error) {
 	switch normalized {
 	case "":
 		return "", nil
-	case ChatOutputActionSendChannelMessage:
+	case ChatOutputActionMessageSend:
 		return ChatOutputKindMessage, nil
 	case ChatOutputActionMessageReact:
 		return ChatOutputKindReaction, nil
@@ -220,8 +220,8 @@ func ErrInvalidChatOutputType(outputType string) error {
 	return fmt.Errorf("invalid chat output type %q", outputType)
 }
 
-func ParseChannelSendCommand(output string) (string, bool) {
-	const prefix = "multica channel send"
+func ParseMessageSendCommand(output string) (string, bool) {
+	const prefix = "multica message send"
 	body := strings.TrimSpace(output)
 	if body != prefix && !strings.HasPrefix(body, prefix+" ") {
 		return "", false
@@ -422,18 +422,6 @@ type ChannelTypingPayload struct {
 	ActorName   string `json:"actor_name"`
 	IsTyping    bool   `json:"is_typing"`
 	ExpiresInMS int    `json:"expires_in_ms,omitempty"`
-}
-
-// ChannelNoticePayload is a typed, non-message system row for group-chat
-// surfaces. It is not a channel_message and must not enter ordinary message
-// actions such as reply/thread/save/search.
-type ChannelNoticePayload struct {
-	ChannelID              string `json:"channel_id"`
-	ChatSessionID          string `json:"chat_session_id,omitempty"`
-	TaskID                 string `json:"task_id,omitempty"`
-	AgentID                string `json:"agent_id,omitempty"`
-	Kind                   string `json:"kind"`
-	OutputSuppressedReason string `json:"output_suppressed_reason,omitempty"`
 }
 
 // DaemonHeartbeatRequestPayload is sent from daemon to server over WebSocket

@@ -23,12 +23,12 @@ func parseStructuredMessageOutput(raw string) (string, []protocol.MessagePart, s
 		return raw, nil, "", "", nil, false, nil
 	}
 	if !strings.HasPrefix(trimmed, "{") {
-		if message, ok := protocol.ParseChannelSendCommand(trimmed); ok {
+		if message, ok := protocol.ParseMessageSendCommand(trimmed); ok {
 			content, parts, err := messageparts.Normalize(message, nil)
 			if err != nil {
 				return raw, nil, "", "", nil, true, err
 			}
-			return content, parts, protocol.ChatOutputKindMessage, protocol.ChatOutputActionSendChannelMessage, nil, true, nil
+			return content, parts, protocol.ChatOutputKindMessage, protocol.ChatOutputActionMessageSend, nil, true, nil
 		}
 		if reaction, ok := protocol.ParseMessageReactCommand(trimmed); ok {
 			return "", nil, protocol.ChatOutputKindReaction, protocol.ChatOutputActionMessageReact, reaction, true, nil
@@ -59,7 +59,7 @@ func parseStructuredMessageOutput(raw string) (string, []protocol.MessagePart, s
 		if err == nil && outputType == protocol.ChatOutputKindReaction {
 			action = protocol.ChatOutputActionMessageReact
 		} else if err == nil && outputType == protocol.ChatOutputKindMessage {
-			action = protocol.ChatOutputActionSendChannelMessage
+			action = protocol.ChatOutputActionMessageSend
 		} else if err == nil && outputType == protocol.ChatOutputKindNoReply {
 			action = protocol.ChatOutputActionNoReply
 		}

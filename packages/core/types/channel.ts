@@ -1,7 +1,7 @@
 import type { MessagePart } from "./message-part";
 
 export interface ChannelLastMessage {
-  author_type: "user" | "agent" | "lark" | "system";
+  type: "user" | "agent" | "lark" | "system";
   author_name: string;
   content: string;
   parts?: MessagePart[];
@@ -66,15 +66,13 @@ export interface ChannelMessage {
   id: string;
   channel_id: string;
   workspace_id: string;
-  author_type: "user" | "agent" | "lark" | "system";
+  type: "user" | "agent" | "lark" | "system";
   author_id: string | null;
   author_name: string;
   content: string;
   parts?: MessagePart[];
   source: "multica" | "lark";
   external_message_id: string | null;
-  /** Multica compatibility classifier for system messages. Separate from trace-only suppression reason. */
-  system_message_kind?: ChannelSystemMessageKind | string | null;
   reply_to_message_id?: string | null;
   reply_to?: ChannelMessageReply | null;
   thread_root_message_id?: string | null;
@@ -119,7 +117,7 @@ export interface ChannelThreadMessagesPage {
 
 export interface ChannelMessageReply {
   id: string;
-  author_type: "user" | "agent" | "lark" | "system";
+  type: "user" | "agent" | "lark" | "system";
   author_id: string | null;
   author_name: string;
   content: string;
@@ -131,7 +129,7 @@ export interface ChannelMessageSearchResult {
   message_id: string;
   channel_id: string;
   thread_root_message_id?: string | null;
-  author_type: "user" | "agent" | "lark" | "system";
+  type: "user" | "agent" | "lark" | "system";
   author_id: string | null;
   author_name: string;
   content: string;
@@ -209,8 +207,3 @@ export interface ChannelTypingPayload {
   is_typing: boolean;
   expires_in_ms?: number;
 }
-
-export type ChannelSystemMessageKind =
-  | "runtime_outdated"
-  | "runtime_missing"
-  | "runtime_disconnected";

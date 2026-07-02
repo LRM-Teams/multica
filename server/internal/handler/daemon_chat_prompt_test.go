@@ -63,6 +63,13 @@ func TestChatResumeSafetyHelpers(t *testing.T) {
 	if shouldIncludeChatContextSummary([]db.ChatMessage{msg("assistant", "好的，有需要随时叫我。"), msg("user", "好")}) {
 		t.Fatal("short acknowledgements after a non-question should not force extra handoff context")
 	}
+	currentTask := parseUUID("00000000-0000-0000-0000-000000000001")
+	if !hasPriorChatContext([]db.ChatMessage{{Role: "user", Content: "old", TaskID: pgtype.UUID{}}}, currentTask) {
+		t.Fatal("legacy or prior messages should force a fallback summary when native resume is unavailable")
+	}
+	if hasPriorChatContext([]db.ChatMessage{{Role: "user", Content: "current", TaskID: currentTask}}, currentTask) {
+		t.Fatal("a chat containing only the current task message should not claim prior context")
+	}
 	if got := contents(recentChatMessages(msgs, 2)); !eq(got, []string{"old 2", "new 3"}) {
 		t.Fatalf("recentChatMessages = %v", got)
 	}

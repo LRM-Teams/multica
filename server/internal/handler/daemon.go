@@ -1476,7 +1476,8 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				freshReason := ""
 				totalTokens := h.chatSessionTokenTotal(r.Context(), cs.ID)
 				channelID := h.channelIDForChatSession(r.Context(), cs.ID)
-				surface := buildConversationSurface(resp.WorkspaceID, uuidToString(task.AgentID), cs.ID, channelID, h.threadRootIDForChatSession(r.Context(), cs.ID), "")
+				threadRootID := h.threadRootIDForChatSession(r.Context(), cs.ID)
+				surface := buildConversationSurface(resp.WorkspaceID, uuidToString(task.AgentID), cs.ID, channelID, threadRootID, "")
 				if task.ForceFreshSession {
 					surface.SessionID = uuidToString(task.ID)
 				}
@@ -1490,6 +1491,8 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					if freshReason != "" {
 						resp.PriorSessionID = ""
 					}
+				} else if !task.ForceFreshSession && hasPriorChatContext(chatMessages, task.ID) {
+					freshReason = "there is no safe native session pointer for this surface on the claiming runtime"
 				}
 				if !task.ForceFreshSession && (freshReason != "" || shouldIncludeChatContextSummary(chatMessages)) {
 					resp.ChatContextSummary = buildChatContextSummary(chatMessages, totalTokens, freshReason, resp.WorkspaceID, uuidToString(task.AgentID), surface)
@@ -1789,6 +1792,18 @@ func trailingUserMessages(msgs []db.ChatMessage) []db.ChatMessage {
 
 func shouldStartFreshChatSession(msgs []db.ChatMessage, totalTokens int64) bool {
 	return len(msgs) >= chatFreshAfterMessageCount || totalTokens >= chatFreshAfterTokenCount
+}
+
+func hasPriorChatContext(msgs []db.ChatMessage, currentTaskID pgtype.UUID) bool {
+	if len(msgs) == 0 {
+		return false
+	}
+	for _, m := range msgs {
+		if !m.TaskID.Valid || !currentTaskID.Valid || m.TaskID != currentTaskID {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldIncludeChatContextSummary(msgs []db.ChatMessage) bool {

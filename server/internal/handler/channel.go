@@ -24,7 +24,7 @@ import (
 
 const channelNameMaxLen = 80
 const channelMessageMaxLen = 20000
-const channelContextMessageLimit = 5
+const channelContextMessageLimit = 12
 const channelRunTriggerLimit = 10
 const channelUserTypingExpiresInMS = 5000
 const channelAgentTypingExpiresInMS = 10 * 60 * 1000
@@ -2365,7 +2365,7 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are participating in the Multica group chat #%s.\n", ch.Name)
 	b.WriteString("Only respond as yourself. Do not impersonate other agents or users.\n")
-	b.WriteString("Use the recent channel context below, but answer the current mention directly.\n")
+	b.WriteString("Use the bounded channel context below, but answer the current mention directly. If key context seems missing, fetch or search more channel/thread history before guessing.\n")
 	b.WriteString("This is a collaborative discussion — keep it going until the topic is actually resolved, not just one exchange. ")
 	b.WriteString("If the discussion is not finished (you need input, have a follow-up question, disagree, or want to push the topic forward), END your reply by @-mentioning the specific member(s) you want to continue with, using their exact mention links as listed below. You may @ several members at once. ")
 	b.WriteString("Only stop @-mentioning when you have reached a final conclusion and there is genuinely nothing left to discuss — a one-line acknowledgement is not a conclusion.\n")
@@ -2389,18 +2389,39 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	}
 	if len(messages) > 0 {
 		if trigger.ThreadRootMessageID != nil {
-			b.WriteString("Thread context (root message first, then recent replies from this thread only):\n")
+			b.WriteString("Thread context (root message first, then bounded recent replies from this thread only):\n")
 		} else {
-			b.WriteString("Recent channel messages from this channel only:\n")
+			b.WriteString("Recent channel messages from this channel only (bounded window):\n")
 		}
 		for _, msg := range messages {
 			fmt.Fprintf(&b, "%s\n", formatChannelMessageLine(msg))
 		}
 		b.WriteString("\n")
 	}
+	if trigger.ReplyToMessageID != nil {
+		if parent, ok := h.channelMessageByID(ctx, ch.WorkspaceID, ch.ID, *trigger.ReplyToMessageID); ok {
+			b.WriteString("Direct reply target for the current message:\n")
+			fmt.Fprintf(&b, "%s\n\n", formatChannelMessageLine(parent))
+		}
+	}
 	b.WriteString("Current message to respond to:\n")
 	fmt.Fprintf(&b, "%s (%s): %s", trigger.AuthorName, trigger.AuthorType, trigger.Content)
 	return b.String()
+}
+
+func (h *Handler) channelMessageByID(ctx context.Context, workspaceID, channelID, messageID string) (ChannelMessageResponse, bool) {
+	if strings.TrimSpace(messageID) == "" {
+		return ChannelMessageResponse{}, false
+	}
+	row := h.DB.QueryRow(ctx, `
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
+		FROM channel_message
+		WHERE id = $1 AND channel_id = $2 AND workspace_id = $3`, parseUUID(messageID), parseUUID(channelID), parseUUID(workspaceID))
+	msg, err := scanChannelMessage(row)
+	if err != nil {
+		return ChannelMessageResponse{}, false
+	}
+	return msg, true
 }
 
 func (h *Handler) channelMemberSummaries(ctx context.Context, workspaceID, channelID string) []ChannelMemberResponse {

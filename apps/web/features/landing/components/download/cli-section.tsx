@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Check, Copy, Terminal } from "lucide-react";
 import { MULTICA_INSTALL_COMMAND } from "@multica/core/constants/repository";
 import { copyText } from "@multica/ui/lib/clipboard";
-import { useLocale } from "../../i18n";
+import { useLocale } from "../../i18n/context";
 
 const SETUP_CMD = "multica setup";
 

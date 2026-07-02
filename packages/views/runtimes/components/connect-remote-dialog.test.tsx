@@ -27,7 +27,7 @@ vi.mock("@multica/core/realtime", () => ({
   useWSEvent: vi.fn(),
 }));
 
-vi.mock("../../navigation", () => ({
+vi.mock("../../navigation/context", () => ({
   useNavigation: () => ({ push: vi.fn() }),
 }));
 

@@ -21,8 +21,8 @@ import { Button } from "@multica/ui/components/ui/button";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
-import { useNavigation } from "../../navigation";
-import { useT } from "../../i18n";
+import { useNavigation } from "../../navigation/context";
+import { useT } from "../../i18n/use-t";
 
 type Step = "instructions" | "success";
 

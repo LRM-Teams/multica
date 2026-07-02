@@ -10,7 +10,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { api } from "@multica/core/api";
 import { MULTICA_LATEST_RELEASE_API_URL } from "@multica/core/constants/repository";
 import type { RuntimeUpdateStatus } from "@multica/core/types";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/use-t";
 
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 

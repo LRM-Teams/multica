@@ -7,7 +7,7 @@ import { MULTICA_INSTALL_COMMAND } from "@multica/core/constants/repository";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/use-t";
 
 const SETUP_CMD = "multica setup";
 

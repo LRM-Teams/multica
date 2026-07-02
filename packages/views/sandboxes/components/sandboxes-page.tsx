@@ -1,10 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Box, Loader2, Play, RotateCcw, Square, Trash2 } from "lucide-react";
-import { api } from "@multica/core/api";
-import { sandboxBindingListOptions, sandboxKeys, sandboxListOptions } from "@multica/core/sandboxes/queries";
+import {
+  useCreateSandboxMutation,
+  useDeleteSandboxMutation,
+  useResumeSandboxMutation,
+  useStopSandboxMutation,
+} from "@multica/core/sandboxes/mutations";
+import { sandboxBindingListOptions, sandboxListOptions } from "@multica/core/sandboxes/queries";
 import type { SandboxInstance } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@multica/ui/components/ui/card";
@@ -14,36 +19,18 @@ import { useWorkspaceId } from "@multica/core/hooks";
 
 export function SandboxesPage() {
   const wsId = useWorkspaceId();
-  const qc = useQueryClient();
   const [modelConfig, setModelConfig] = useState({ apiKey: "", baseUrl: "", model: "" });
   const { data: instances = [], isLoading } = useQuery(sandboxListOptions(wsId));
   const { data: bindings = [] } = useQuery(sandboxBindingListOptions(wsId));
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: sandboxKeys.all(wsId) });
-  const create = useMutation({
-    mutationFn: () =>
-      api.createSandbox({
-        template: "default",
-        runtime: {
-          api_key: modelConfig.apiKey,
-          base_url: modelConfig.baseUrl,
-          model: modelConfig.model,
-        },
-      }),
-    onSuccess: invalidate,
-  });
-  const stop = useMutation({
-    mutationFn: (id: string) => api.stopSandbox(id),
-    onSuccess: invalidate,
-  });
-  const resume = useMutation({
-    mutationFn: (id: string) => api.resumeSandbox(id),
-    onSuccess: invalidate,
-  });
-  const del = useMutation({
-    mutationFn: (id: string) => api.deleteSandbox(id),
-    onSuccess: invalidate,
-  });
+  const create = useCreateSandboxMutation(wsId, () => ({
+    api_key: modelConfig.apiKey,
+    base_url: modelConfig.baseUrl,
+    model: modelConfig.model,
+  }));
+  const stop = useStopSandboxMutation(wsId);
+  const resume = useResumeSandboxMutation(wsId);
+  const del = useDeleteSandboxMutation(wsId);
 
   const hasOnlineNode = bindings.some((b) => b.enabled && b.node_status === "online");
 

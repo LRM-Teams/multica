@@ -3,7 +3,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@multica/ui/lib/utils";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
-import { AppLink, useNavigation } from "../navigation";
+import { AppLink } from "../navigation/app-link";
+import { useNavigation } from "../navigation/context";
 import { HelpLauncher } from "./help-launcher";
 import {
   DndContext,
@@ -83,9 +84,9 @@ import { useDeletePin, useReorderPins } from "@multica/core/pins/mutations";
 import { issueDetailOptions } from "@multica/core/issues/queries";
 import { projectDetailOptions } from "@multica/core/projects/queries";
 import type { PinnedItem } from "@multica/core/types";
-import { useLogout } from "../auth";
+import { useLogout } from "../auth/use-logout";
 import { ProjectIcon } from "../projects/components/project-icon";
-import { useT } from "../i18n";
+import { useT } from "../i18n/use-t";
 
 // Top-level nav items stay active when the user is on a child route
 // (e.g. "Projects" stays lit on /:slug/projects/:id). Pinned items keep

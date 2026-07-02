@@ -73,6 +73,8 @@ export interface ChannelMessage {
   parts?: MessagePart[];
   source: "multica" | "lark";
   external_message_id: string | null;
+  /** Multica compatibility classifier for system messages. Separate from trace-only suppression reason. */
+  system_message_kind?: ChannelSystemMessageKind | string | null;
   reply_to_message_id?: string | null;
   reply_to?: ChannelMessageReply | null;
   thread_root_message_id?: string | null;
@@ -207,3 +209,8 @@ export interface ChannelTypingPayload {
   is_typing: boolean;
   expires_in_ms?: number;
 }
+
+export type ChannelSystemMessageKind =
+  | "runtime_outdated"
+  | "runtime_missing"
+  | "runtime_disconnected";

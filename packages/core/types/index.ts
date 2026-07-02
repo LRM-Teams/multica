@@ -232,6 +232,7 @@ export type {
   ChannelAuthorStat,
   ChannelActiveTask,
   ChannelTypingPayload,
+  ChannelSystemMessageKind,
   ChannelProjectFile,
   ChannelProjectFilesStatus,
   ChannelProjectFiles,

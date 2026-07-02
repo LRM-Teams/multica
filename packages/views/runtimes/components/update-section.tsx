@@ -239,7 +239,7 @@ export function UpdateSection({
         <p className="text-[11px] leading-[1.55] text-muted-foreground">
           {t(($) => $.update.manual_hint_prefix)}{" "}
           <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-foreground">
-            multica update
+            {"multica update"}
           </code>{" "}
           {t(($) => $.update.manual_hint_suffix)}
         </p>

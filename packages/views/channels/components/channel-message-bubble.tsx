@@ -23,6 +23,8 @@ import {
 } from "./message-parts-preview";
 import { MessagePartsRenderer } from "./message-parts-renderer";
 
+type RuntimeNoticeState = "outdated" | "missing" | "disconnected";
+
 function formatTime(value: string): string {
   try {
     return new Intl.DateTimeFormat(undefined, {
@@ -32,6 +34,61 @@ function formatTime(value: string): string {
   } catch {
     return "";
   }
+}
+
+function runtimeNoticeStateFromMessage(message: ChannelMessage): RuntimeNoticeState | null {
+  switch (message.system_message_kind) {
+    case "runtime_outdated":
+      return "outdated";
+    case "runtime_missing":
+      return "missing";
+    case "runtime_disconnected":
+      return "disconnected";
+    default:
+      return null;
+  }
+}
+
+function ChannelSystemMessageRow({
+  message,
+  highlighted,
+  runtimeNoticeState,
+  systemText,
+  openRuntimesLabel,
+  onOpenRuntimes,
+}: {
+  message: ChannelMessage;
+  highlighted: boolean;
+  runtimeNoticeState: RuntimeNoticeState | null;
+  systemText: string;
+  openRuntimesLabel: string;
+  onOpenRuntimes?: () => void;
+}) {
+  return (
+    <div
+      id={`message-${message.id}`}
+      data-testid="system-message-row"
+      data-message-kind="system"
+      className={cn(
+        "mx-auto flex max-w-[min(720px,100%)] flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-md px-2 py-1.5 text-center text-xs text-muted-foreground outline-none transition-colors duration-1000",
+        highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0",
+      )}
+    >
+      <span className="min-w-0 break-words">{systemText}</span>
+      {runtimeNoticeState && onOpenRuntimes && (
+        <button
+          type="button"
+          className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-border/70 bg-background/80 px-2 text-[11px] font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={onOpenRuntimes}
+        >
+          <span>{openRuntimesLabel}</span>
+        </button>
+      )}
+      <span className="shrink-0 text-[11px] text-muted-foreground/70">
+        {formatTime(message.created_at)}
+      </span>
+    </div>
+  );
 }
 
 /**
@@ -47,6 +104,7 @@ export function ChannelMessageBubble({
   onOpenThread,
   onScrollTo,
   onReact,
+  onOpenRuntimes,
   searchHighlighted = false,
   searchQuery,
 }: {
@@ -62,6 +120,8 @@ export function ChannelMessageBubble({
   onScrollTo?: (messageId: string) => void;
   /** Toggle/add a lightweight emoji reaction on this message. */
   onReact?: (message: ChannelMessage, emoji: string) => void;
+  /** Opens the workspace runtime settings for actionable system notices. */
+  onOpenRuntimes?: () => void;
   /** Search hit: marks matching visible text while search is open. */
   searchHighlighted?: boolean;
   /** Trimmed conversation search phrase to mark inside this hit's visible text. */
@@ -69,6 +129,25 @@ export function ChannelMessageBubble({
 }) {
   const { t } = useT("channels");
   const { getActorAvatarUrl, getActorName } = useActorName();
+  const runtimeNoticeState = runtimeNoticeStateFromMessage(message);
+
+  if (message.author_type === "system") {
+    const systemText = runtimeNoticeState
+      ? t(($) => $.daemon_notice[runtimeNoticeState])
+      : message.content.trim() || message.author_name || "System";
+
+    return (
+      <ChannelSystemMessageRow
+        message={message}
+        highlighted={highlighted}
+        runtimeNoticeState={runtimeNoticeState}
+        systemText={systemText}
+        openRuntimesLabel={t(($) => $.daemon_notice.open_runtimes)}
+        onOpenRuntimes={onOpenRuntimes}
+      />
+    );
+  }
+
   const isOwn =
     message.author_type === "user" &&
     message.author_id != null &&
@@ -81,7 +160,7 @@ export function ChannelMessageBubble({
   // Resolve the avatar from the live members/agents cache (keyed by id) rather
   // than a value snapshotted into the message — so a settings avatar change
   // shows up here too. Falls back to the tinted/initials avatar when the author
-  // isn't a workspace member/agent (lark / system) or has no photo.
+  // isn't a workspace member/agent (lark) or has no photo.
   const avatarUrl =
     message.author_id == null
       ? null
@@ -115,7 +194,7 @@ export function ChannelMessageBubble({
       initials={initialsOf(displayName)}
       avatarUrl={avatarUrl ?? undefined}
       isAgent={isAgent}
-      isSystem={message.author_type === "system"}
+      isSystem={false}
       size={28}
       className="mt-0.5 select-none"
       tint={tint}
@@ -146,7 +225,6 @@ export function ChannelMessageBubble({
       id={`message-${message.id}`}
       data-testid="message-bubble"
       data-own={isOwn}
-      tabIndex={0}
       className={cn(
         "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 py-1.5 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35",
         highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0",

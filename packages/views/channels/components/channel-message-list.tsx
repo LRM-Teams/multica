@@ -54,6 +54,8 @@ type MessageViewportProps = {
   onScrollToMessage?: (messageId: string) => void;
   /** Toggle/add a lightweight emoji reaction on this message. */
   onReact?: (message: ChannelMessage, emoji: string) => void;
+  /** Opens runtime settings for actionable platform-authored system notices. */
+  onOpenRuntimes?: () => void;
   /** Search hit ids - all matching messages get inline keyword marks while search is open. */
   searchHitIds?: Set<string>;
   /** Conversation search phrase used for inline keyword marks within search hits. */
@@ -85,6 +87,7 @@ function MessageViewport({
   onOpenThread,
   onScrollToMessage,
   onReact,
+  onOpenRuntimes,
   searchHitIds,
   searchQuery,
   loading,
@@ -237,6 +240,7 @@ function MessageViewport({
           onOpenThread={onOpenThread}
           onScrollTo={onScrollToMessage}
           onReact={onReact}
+          onOpenRuntimes={onOpenRuntimes}
           searchHighlighted={searchHighlighted}
           searchQuery={searchHighlighted ? searchQuery : undefined}
         />

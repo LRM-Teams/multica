@@ -61,6 +61,12 @@ import {
 import { useAuthStore } from "@multica/core/auth";
 import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
+import {
+  deriveChannelOutputRuntimeStatus,
+  isActionableChannelOutputRuntimeStatus,
+  type ChannelOutputRuntimeStatus,
+  runtimeListOptions,
+} from "@multica/core/runtimes";
 import { api } from "@multica/core/api";
 import { useFileUpload, type UploadResult } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -347,9 +353,11 @@ function InitialChannelsShellSkeleton() {
 export function ConversationActivityStrip({
   typingActors = EMPTY_TYPING_ACTORS,
   tasks = EMPTY_ACTIVE_TASKS,
+  daemonStatuses,
 }: {
   typingActors?: TypingActor[];
   tasks?: ChannelActiveTask[];
+  daemonStatuses?: Map<string, ChannelOutputRuntimeStatus>;
 }) {
   const { t } = useT("channels");
   const typingNames = useMemo(
@@ -370,6 +378,16 @@ export function ConversationActivityStrip({
     }
     return unique;
   }, [tasks]);
+  const daemonStatus = useMemo(() => {
+    if (!daemonStatuses) return null;
+    for (const task of tasks) {
+      const status = daemonStatuses.get(task.agent_id);
+      if (status && isActionableChannelOutputRuntimeStatus(status)) {
+        return status;
+      }
+    }
+    return null;
+  }, [daemonStatuses, tasks]);
 
   const typingLabel =
     typingNames.length === 0
@@ -381,7 +399,9 @@ export function ConversationActivityStrip({
           : t(($) => $.typing.overflow, { a: typingNames[0]!, b: typingNames[1]!, count: typingNames.length });
 
   const agentLabel =
-    agentNames.length === 0
+    daemonStatus
+      ? t(($) => $.agent_status.daemon[daemonStatus])
+      : agentNames.length === 0
       ? null
       : agentNames.length === 1
         ? t(($) => $.agent_status.processing_single, { name: agentNames[0]! })
@@ -501,6 +521,9 @@ export function ChannelsPage() {
   const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
   const { data: workspaceMembers = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
+  const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
+  const runtimesById = useMemo(() => new Map(runtimes.map((runtime) => [runtime.id, runtime])), [runtimes]);
   const resolveMentionPreview = useMemo<MentionPreviewResolver>(
     () => (type, id, fallbackLabel) => {
       if (type === "agent") {
@@ -562,6 +585,19 @@ export function ChannelsPage() {
   const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
+  const activeTaskDaemonStatuses = useMemo(() => {
+    const statuses = new Map<string, ChannelOutputRuntimeStatus>();
+    for (const task of activeTasks) {
+      const agent = agentsById.get(task.agent_id);
+      const runtime = agent?.runtime_id ? runtimesById.get(agent.runtime_id) : null;
+      const status = deriveChannelOutputRuntimeStatus(agent, runtime);
+      if (isActionableChannelOutputRuntimeStatus(status)) {
+        statuses.set(task.agent_id, status);
+      }
+    }
+    return statuses;
+  }, [activeTasks, agentsById, runtimesById]);
+  const openRuntimes = useCallback(() => replace(wsPaths.runtimes()), [replace, wsPaths]);
   const setChannelProject = useSetChannelProject(wsId, active?.id ?? "");
   const createChannel = useCreateChannel();
   const deleteChannel = useDeleteChannel();
@@ -1814,6 +1850,7 @@ export function ChannelsPage() {
           loadErrorLabel={threadError ? t(($) => $.thread.load_failed) : undefined}
           onRetry={() => refetchThread()}
           onReact={handleReactToMessage}
+          onOpenRuntimes={openRuntimes}
         />
         {isActiveArchived ? (
           <ReadOnlyConversationBanner>
@@ -1822,7 +1859,7 @@ export function ChannelsPage() {
           </ReadOnlyConversationBanner>
         ) : (
           <>
-            <ConversationActivityStrip tasks={activeTasks} />
+            <ConversationActivityStrip tasks={activeTasks} daemonStatuses={activeTaskDaemonStatuses} />
             <ChannelComposer
               sendLabel={t(($) => $.composer.send)}
               sendDisabled={threadDraftEmpty}
@@ -2096,6 +2133,7 @@ export function ChannelsPage() {
                 onOpenThread={isActiveArchived ? undefined : handleOpenThread}
                 onScrollToMessage={setHighlightMessageId}
                 onReact={handleReactToMessage}
+                onOpenRuntimes={openRuntimes}
               />
 
               {isActiveArchived ? (
@@ -2132,7 +2170,11 @@ export function ChannelsPage() {
                 </ReadOnlyConversationBanner>
               ) : (
                 <>
-                  <ConversationActivityStrip typingActors={activeTypingActors} tasks={activeTasks} />
+                  <ConversationActivityStrip
+                    typingActors={activeTypingActors}
+                    tasks={activeTasks}
+                    daemonStatuses={activeTaskDaemonStatuses}
+                  />
                   <ChannelComposer
                     sendLabel={t(($) => $.composer.send)}
                     sendDisabled={draftEmpty}

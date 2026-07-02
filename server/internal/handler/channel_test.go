@@ -70,7 +70,7 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if threadID != "debate-thread" || depth != 2 {
 		t.Fatalf("prompt thread/depth = %q/%d, want debate-thread/2", threadID, depth)
 	}
-	if !strings.Contains(prompt, "Recent channel messages:") || !strings.Contains(prompt, "@Channel Helper please join") {
+	if !strings.Contains(prompt, "Recent channel messages from this channel only:") || !strings.Contains(prompt, "@Channel Helper please join") {
 		t.Fatalf("prompt missing channel context/current message:\n%s", prompt)
 	}
 
@@ -1102,17 +1102,22 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {
 		t.Fatalf("channel agent session not created: %v", err)
 	}
-	var promptThreadRoot string
+	var promptThreadRoot, prompt string
 	if err := testPool.QueryRow(ctx, `
-		SELECT channel_thread_root_message_id
+		SELECT channel_thread_root_message_id, content
 		FROM chat_message
 		WHERE chat_session_id = $1 AND role = 'user'
 		ORDER BY created_at DESC
-		LIMIT 1`, sessionID).Scan(&promptThreadRoot); err != nil {
+		LIMIT 1`, sessionID).Scan(&promptThreadRoot, &prompt); err != nil {
 		t.Fatalf("load prompt thread root: %v", err)
 	}
 	if promptThreadRoot != root.ID {
 		t.Fatalf("prompt thread root = %q, want %s", promptThreadRoot, root.ID)
+	}
+	for _, want := range []string{"Thread context (root message first, then recent replies from this thread only):", "root question", "@Thread Agent can you answer here?"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("thread prompt missing %q:\n%s", want, prompt)
+		}
 	}
 
 	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{ChatSessionID: sessionID, Content: "answer in thread"}})

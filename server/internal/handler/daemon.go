@@ -1475,6 +1475,11 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			if len(chatMessages) > 0 {
 				freshReason := ""
 				totalTokens := h.chatSessionTokenTotal(r.Context(), cs.ID)
+				channelID := h.channelIDForChatSession(r.Context(), cs.ID)
+				surface := buildConversationSurface(resp.WorkspaceID, uuidToString(task.AgentID), cs.ID, channelID, h.threadRootIDForChatSession(r.Context(), cs.ID), "")
+				if task.ForceFreshSession {
+					surface.SessionID = uuidToString(task.ID)
+				}
 				if resp.PriorSessionID != "" {
 					if reason, ok := h.latestChatTaskFailureReason(r.Context(), cs.ID, task.ID); ok && chatFailureResumeUnsafe(reason) {
 						freshReason = "the latest task failed because the saved native session is no longer safe to resume (" + reason + ")"
@@ -1486,8 +1491,8 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 						resp.PriorSessionID = ""
 					}
 				}
-				if freshReason != "" || shouldIncludeChatContextSummary(chatMessages) {
-					resp.ChatContextSummary = buildChatContextSummary(chatMessages, totalTokens, freshReason)
+				if !task.ForceFreshSession && (freshReason != "" || shouldIncludeChatContextSummary(chatMessages)) {
+					resp.ChatContextSummary = buildChatContextSummary(chatMessages, totalTokens, freshReason, resp.WorkspaceID, uuidToString(task.AgentID), surface)
 				}
 			}
 		}
@@ -1879,26 +1884,6 @@ func (h *Handler) chatSessionTokenTotal(ctx context.Context, chatSessionID pgtyp
 		return 0
 	}
 	return total
-}
-
-func buildChatContextSummary(msgs []db.ChatMessage, totalTokens int64, reason string) string {
-	var b strings.Builder
-	if strings.TrimSpace(reason) != "" {
-		fmt.Fprintf(&b, "Native session resume was intentionally skipped because %s.\n", reason)
-	}
-	fmt.Fprintf(&b, "Full chat history is preserved by Multica, but only the latest %d messages are included here to avoid carrying old tool outputs into every new turn.\n", chatResumeRecentMessageLimit)
-	if totalTokens > 0 {
-		fmt.Fprintf(&b, "Recorded token usage for this chat so far: %d.\n", totalTokens)
-	}
-	if len(msgs) == 0 {
-		return b.String()
-	}
-	b.WriteString("Recent messages:\n")
-	for _, m := range recentChatMessages(msgs, chatResumeRecentMessageLimit) {
-		fmt.Fprintf(&b, "- %s: %s\n", m.Role, compactChatLine(m.Content))
-	}
-	b.WriteString("Older tool outputs/log dumps are not included. If exact older details matter, re-read the referenced files/logs instead of assuming they are in context.\n")
-	return b.String()
 }
 
 func recentChatMessages(msgs []db.ChatMessage, limit int) []db.ChatMessage {

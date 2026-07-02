@@ -584,6 +584,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		// Chat task: interactive assistant mode
 		b.WriteString("**You are in chat mode.** A user is messaging you directly in a chat window.\n\n")
 		b.WriteString("- Respond conversationally and helpfully to the user's message\n")
+		b.WriteString("- Conversation context is scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
+		b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary. Do not load the entire parent channel/DM history by default.\n")
 		b.WriteString("- You have full access to the `multica` CLI to look up issues, workspace info, members, agents, etc.\n")
 		b.WriteString("- If asked about issues, use `multica issue list --output json` or `multica issue get <id> --output json`\n")
 		b.WriteString("- If asked about the workspace, use `multica workspace get --output json`\n")
@@ -689,6 +691,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 	if len(ctx.AgentSkills) > 0 {
 		b.WriteString("## Skills\n\n")
+		b.WriteString("Skill context is injected as a lightweight index only: name, description, and location. Do not assume the full `SKILL.md` is already in prompt context; load the complete skill file only when needed.\n\n")
 		switch provider {
 		case "claude", "codebuddy":
 			// Claude/CodeBuddy discovers skills natively from .claude/skills/ — just list names.
@@ -711,15 +714,34 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
 		}
 		for _, skill := range ctx.AgentSkills {
-			// Emit the skill's one-line description alongside its name so the
-			// brief carries a "when to load" trigger signal. Claude-family
-			// providers get this natively from frontmatter discovery; providers
-			// without native discovery (hermes/default) only ever see this
-			// list, so a bare name gives them no signal for on-demand loading.
+			// Emit only the index fields here; the full SKILL.md lives on disk.
+			location := fmt.Sprintf(".agent_context/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			switch provider {
+			case "claude", "codebuddy":
+				location = fmt.Sprintf(".claude/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "codex":
+				location = fmt.Sprintf("$CODEX_HOME/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "copilot":
+				location = fmt.Sprintf(".github/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "opencode":
+				location = fmt.Sprintf(".opencode/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "openclaw":
+				location = fmt.Sprintf("skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "pi":
+				location = fmt.Sprintf(".pi/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "cursor":
+				location = fmt.Sprintf(".cursor/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "kimi":
+				location = fmt.Sprintf(".kimi/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "kiro":
+				location = fmt.Sprintf(".kiro/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "antigravity":
+				location = fmt.Sprintf(".agents/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			}
 			if desc := strings.TrimSpace(skill.Description); desc != "" {
-				fmt.Fprintf(&b, "- **%s** — %s\n", skill.Name, desc)
+				fmt.Fprintf(&b, "- **%s** — %s (location: `%s`)\n", skill.Name, desc, location)
 			} else {
-				fmt.Fprintf(&b, "- **%s**\n", skill.Name)
+				fmt.Fprintf(&b, "- **%s** (location: `%s`)\n", skill.Name, location)
 			}
 		}
 		b.WriteString("\n")
@@ -744,6 +766,9 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("## Attachments\n\n")
 	b.WriteString("Issues and comments may include file attachments (images, documents, etc.).\n")
 	b.WriteString("When a task includes attachment IDs and you need the files, inspect `multica attachment --help` and use the authenticated CLI path. Do not open Multica resource URLs directly.\n\n")
+
+	b.WriteString("## Lazy Context\n\n")
+	b.WriteString("The default prompt intentionally contains only bounded, surface-scoped conversation context plus a lightweight skill index. Load these only when relevant: full issue timeline, full chat history, attachment contents, repository files, complete `SKILL.md` files, historical session summaries, long-term memory, and external web pages.\n\n")
 
 	b.WriteString("## Important: Always Use the `multica` CLI\n\n")
 	b.WriteString("All interactions with Multica platform resources — including issues, comments, attachments, images, files, and any other platform data — **must** go through the `multica` CLI. ")

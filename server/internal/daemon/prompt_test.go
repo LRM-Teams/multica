@@ -276,7 +276,7 @@ func TestBuildPromptIncludesChatContextSummary(t *testing.T) {
 		ChatContextSummary: "Native resume skipped.\nRecent messages:\n- user: old question",
 		ChatMessage:        "current question",
 	}, "codex")
-	for _, want := range []string{"Conversation handoff context:", "Native resume skipped.", "Recent messages:", "User message:\ncurrent question"} {
+	for _, want := range []string{"Conversation surface context:", "Native resume skipped.", "Recent messages:", "User message:\ncurrent question"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, out)
 		}

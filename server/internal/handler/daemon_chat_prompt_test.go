@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -69,8 +70,9 @@ func TestChatResumeSafetyHelpers(t *testing.T) {
 	if line != "a b c" {
 		t.Fatalf("compactChatLine = %q", line)
 	}
-	summary := buildChatContextSummary(msgs, 123, "test reason")
-	for _, want := range []string{"Native session resume was intentionally skipped", "test reason", "Recent messages", "Older tool outputs/log dumps are not included"} {
+	surface := buildConversationSurface("ws-1", "agent-1", pgtype.UUID{}, "", nil, "")
+	summary := buildChatContextSummary(msgs, 123, "test reason", "ws-1", "agent-1", surface)
+	for _, want := range []string{"Conversation context surface", "agent-run:ws-1:agent-1", "Native session resume was intentionally skipped", "test reason", "Recent surface messages", "Older tool outputs/log dumps are not included"} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary missing %q:\n%s", want, summary)
 		}
@@ -87,9 +89,10 @@ func TestShortConfirmationHandoffSummaryIncludesPreviousAgentQuestion(t *testing
 	if !shouldIncludeChatContextSummary(msgs) {
 		t.Fatal("short confirmation should force recent chat context even when native resume is available")
 	}
-	summary := buildChatContextSummary(msgs, 0, "")
+	surface := buildConversationSurface("ws-1", "agent-1", pgtype.UUID{}, "", nil, "")
+	summary := buildChatContextSummary(msgs, 0, "", "ws-1", "agent-1", surface)
 	for _, want := range []string{
-		"Recent messages:",
+		"Recent surface messages:",
 		"assistant: 为避免覆盖本地改动，我会用干净 worktree 合到 dev。确认继续吗？",
 		"user: 行",
 	} {

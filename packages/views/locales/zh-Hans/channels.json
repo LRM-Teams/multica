@@ -155,18 +155,7 @@
     "waiting_local_directory": "等待本地目录释放",
     "processing_single": "{{name}} 正在准备回复...",
     "processing_pair": "{{a}}、{{b}} 正在准备回复...",
-    "processing_overflow": "{{a}}、{{b}} 等 {{count}} 位正在准备回复...",
-    "daemon": {
-      "outdated": "守护进程需更新",
-      "missing": "需要启动守护进程",
-      "disconnected": "守护进程未连接"
-    }
-  },
-  "daemon_notice": {
-    "outdated": "本地守护进程已过期，需要更新。",
-    "missing": "需要安装 Multica CLI 并启动守护进程。",
-    "disconnected": "本地守护进程未连接。",
-    "open_runtimes": "打开运行时"
+    "processing_overflow": "{{a}}、{{b}} 等 {{count}} 位正在准备回复..."
   },
   "composer": {
     "placeholder": "描述你需要什么帮助...  @ 智能体名称会触发它回复。",

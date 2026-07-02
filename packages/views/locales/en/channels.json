@@ -155,18 +155,7 @@
     "waiting_local_directory": "Waiting for local directory",
     "processing_single": "{{name}} is preparing a reply...",
     "processing_pair": "{{a}} and {{b}} are preparing replies...",
-    "processing_overflow": "{{a}}, {{b}} and {{count}} agents are preparing replies...",
-    "daemon": {
-      "outdated": "Daemon needs update",
-      "missing": "Start daemon",
-      "disconnected": "Daemon disconnected"
-    }
-  },
-  "daemon_notice": {
-    "outdated": "Local daemon is outdated.",
-    "missing": "Install the Multica CLI and start the daemon.",
-    "disconnected": "Local daemon is disconnected.",
-    "open_runtimes": "Open Runtimes"
+    "processing_overflow": "{{a}}, {{b}} and {{count}} agents are preparing replies..."
   },
   "composer": {
     "placeholder": "Describe what you need…  @mention an agent to trigger its reply.",

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpCircle, CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { runtimeKeys, runtimeListOptions, latestCliVersionOptions } from "@multica/core/runtimes/queries";
@@ -18,13 +18,8 @@ import {
 import { useT } from "../../i18n/use-t";
 import { isVersionNewer } from "../utils";
 
-const statusIcon: Record<RuntimeUpdateStatus, typeof Loader2> = {
-  pending: Loader2,
-  running: Loader2,
-  completed: CheckCircle2,
-  failed: XCircle,
-  timeout: XCircle,
-};
+const runtimeRefreshIntervalMs = 2000;
+const runtimeRefreshTimeoutMs = 60_000;
 
 function runtimeCliVersion(runtime: AgentRuntime): string | null {
   const version = runtime.metadata?.cli_version;
@@ -70,6 +65,8 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
   const [output, setOutput] = useState("");
   const [starting, setStarting] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const runtimeRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const runtimeRefreshStartedAtRef = useRef(0);
 
   const updatableRuntimes = useMemo(() => {
     if (!latestVersion || !userId) return [];
@@ -97,14 +94,26 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
 
   const open = !!promptKey && dismissedHydrated && dismissedKey !== promptKey;
   const isActive = status === "pending" || status === "running" || starting;
-  const StatusIcon = status ? statusIcon[status] : ArrowUpCircle;
 
-  const cleanup = useCallback(() => {
+  const cleanupUpdatePoll = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
   }, []);
+
+  const cleanupRuntimeRefresh = useCallback(() => {
+    if (runtimeRefreshRef.current) {
+      clearInterval(runtimeRefreshRef.current);
+      runtimeRefreshRef.current = null;
+    }
+    runtimeRefreshStartedAtRef.current = 0;
+  }, []);
+
+  const cleanup = useCallback(() => {
+    cleanupUpdatePoll();
+    cleanupRuntimeRefresh();
+  }, [cleanupRuntimeRefresh, cleanupUpdatePoll]);
 
   useEffect(() => cleanup, [cleanup]);
 
@@ -145,23 +154,39 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
     }
   };
 
+  const refreshRuntimes = useCallback(() => {
+    if (!wsId) return;
+    qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+  }, [qc, wsId]);
+
+  const startRuntimeRefresh = useCallback(() => {
+    cleanupRuntimeRefresh();
+    runtimeRefreshStartedAtRef.current = Date.now();
+    refreshRuntimes();
+    runtimeRefreshRef.current = setInterval(() => {
+      if (Date.now() - runtimeRefreshStartedAtRef.current > runtimeRefreshTimeoutMs) {
+        cleanupRuntimeRefresh();
+        return;
+      }
+      refreshRuntimes();
+    }, runtimeRefreshIntervalMs);
+  }, [cleanupRuntimeRefresh, refreshRuntimes]);
+
   const pollUpdate = useCallback(
     (runtimeId: string, nextUpdateId: string) => {
-      cleanup();
+      cleanupUpdatePoll();
       pollRef.current = setInterval(async () => {
         try {
           const result = await api.getUpdateResult(runtimeId, nextUpdateId);
           setStatus(result.status);
           if (result.status === "completed") {
             setOutput(result.output ?? t(($) => $.update_prompt.status.completed));
-            cleanup();
+            cleanupUpdatePoll();
             setStarting(false);
-            setTimeout(() => {
-              qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId ?? "") });
-            }, 3000);
+            startRuntimeRefresh();
           } else if (result.status === "failed" || result.status === "timeout") {
             setError(result.error ?? t(($) => $.update.unknown_error));
-            cleanup();
+            cleanupUpdatePoll();
             setStarting(false);
           }
         } catch {
@@ -169,7 +194,7 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
         }
       }, 2000);
     },
-    [cleanup, qc, t, wsId],
+    [cleanupUpdatePoll, startRuntimeRefresh, t],
   );
 
   const startUpdate = async () => {
@@ -199,51 +224,44 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !isActive && dismiss()}>
-      <DialogContent className="sm:max-w-lg" showCloseButton={!isActive}>
-        <div className="flex items-start gap-3">
-          <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-info/10 text-info">
-            <StatusIcon
-              className={`h-5 w-5 ${status === "pending" || status === "running" || starting ? "animate-spin" : ""}`}
-            />
-          </div>
-          <div className="min-w-0 flex-1">
-            <DialogTitle>{t(($) => $.update_prompt.title)}</DialogTitle>
-            <DialogDescription className="mt-1 leading-relaxed">
-              {t(($) => $.update_prompt.description, {
-                current: runtimeCliVersion(activeRuntime) ?? t(($) => $.update.version_unknown),
-                latest: latestVersion,
-              })}
-            </DialogDescription>
-          </div>
+      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md" showCloseButton={!isActive}>
+        <div>
+          <DialogTitle>{t(($) => $.update_prompt.title)}</DialogTitle>
+          <DialogDescription className="mt-1">
+            {t(($) => $.update_prompt.description, {
+              current: runtimeCliVersion(activeRuntime) ?? t(($) => $.update.version_unknown),
+              latest: latestVersion,
+            })}
+          </DialogDescription>
         </div>
 
-        <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+        <div className="rounded-md bg-muted/40 px-3 py-2 text-sm">
           <div className="flex items-center justify-between gap-3">
             <span className="min-w-0 truncate font-medium">{activeRuntime.name}</span>
-            <span className="shrink-0 rounded bg-background px-2 py-1 font-mono text-xs">
+            <span className="shrink-0 font-mono text-xs text-muted-foreground">
               {runtimeCliVersion(activeRuntime) ?? "?"} → {latestVersion}
             </span>
           </div>
-          {updatableRuntimes.length > 1 && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              {t(($) => $.update_prompt.more_runtimes, {
-                count: updatableRuntimes.length - 1,
-              })}
-            </p>
-          )}
         </div>
 
-        {status && (
-          <div className="rounded-lg border px-3 py-2 text-sm">
-            <p className="font-medium">{t(($) => $.update.status[status])}</p>
-            {output && <p className="mt-1 text-xs text-success">{output}</p>}
-            {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
-          </div>
+        {updatableRuntimes.length > 1 && (
+          <p className="text-xs text-muted-foreground">
+            {t(($) => $.update_prompt.more_runtimes, {
+              count: updatableRuntimes.length - 1,
+            })}
+          </p>
         )}
 
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          {t(($) => $.update_prompt.note)}
-        </p>
+        {status === "completed" && (
+          <p className="text-xs leading-relaxed text-success">
+            {output || t(($) => $.update_prompt.status.completed)}
+          </p>
+        )}
+        {(status === "failed" || status === "timeout") && (
+          <p className="text-xs leading-relaxed text-destructive">
+            {error || t(($) => $.update.status[status])}
+          </p>
+        )}
 
         <DialogFooter>
           <Button variant="ghost" onClick={dismiss} disabled={isActive}>
@@ -251,7 +269,9 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
           </Button>
           <Button onClick={startUpdate} disabled={isActive || status === "completed"}>
             {isActive && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {status === "failed" || status === "timeout"
+            {isActive
+              ? t(($) => $.update.status.running)
+              : status === "failed" || status === "timeout"
               ? t(($) => $.update.retry)
               : t(($) => $.update_prompt.update_now)}
           </Button>

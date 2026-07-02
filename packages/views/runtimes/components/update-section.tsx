@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Loader2,
   CheckCircle2,
@@ -22,10 +23,13 @@ import { copyText } from "@multica/ui/lib/clipboard";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
 import { cn } from "@multica/ui/lib/utils";
 import { MULTICA_LATEST_RELEASE_API_URL } from "@multica/core/constants/repository";
+import { runtimeKeys } from "@multica/core/runtimes/queries";
 import type { RuntimeUpdateStatus } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
 
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const RUNTIME_REFRESH_INTERVAL_MS = 2000;
+const RUNTIME_REFRESH_TIMEOUT_MS = 60_000;
 
 const MANUAL_UPDATE_COMMANDS = [
   {
@@ -114,6 +118,7 @@ export function UpdateSection({
   canUpdate = true,
 }: UpdateSectionProps) {
   const { t } = useT("runtimes");
+  const qc = useQueryClient();
   const isManaged = launchedBy === "desktop";
   const [manualOpen, setManualOpen] = useState(false);
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
@@ -123,6 +128,8 @@ export function UpdateSection({
   const [updating, setUpdating] = useState(false);
   const [targetVersion, setTargetVersion] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const runtimeRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const runtimeRefreshStartedAtRef = useRef(0);
 
   const cleanup = useCallback(() => {
     if (pollRef.current) {
@@ -131,7 +138,39 @@ export function UpdateSection({
     }
   }, []);
 
-  useEffect(() => cleanup, [cleanup]);
+  const cleanupRuntimeRefresh = useCallback(() => {
+    if (runtimeRefreshRef.current) {
+      clearInterval(runtimeRefreshRef.current);
+      runtimeRefreshRef.current = null;
+    }
+    runtimeRefreshStartedAtRef.current = 0;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      cleanup();
+      cleanupRuntimeRefresh();
+    };
+  }, [cleanup, cleanupRuntimeRefresh]);
+
+  const refreshRuntimes = useCallback(() => {
+    qc.invalidateQueries({
+      predicate: (query) => query.queryKey[0] === runtimeKeys.latestVersion()[0],
+    });
+  }, [qc]);
+
+  const startRuntimeRefresh = useCallback(() => {
+    cleanupRuntimeRefresh();
+    runtimeRefreshStartedAtRef.current = Date.now();
+    refreshRuntimes();
+    runtimeRefreshRef.current = setInterval(() => {
+      if (Date.now() - runtimeRefreshStartedAtRef.current > RUNTIME_REFRESH_TIMEOUT_MS) {
+        cleanupRuntimeRefresh();
+        return;
+      }
+      refreshRuntimes();
+    }, RUNTIME_REFRESH_INTERVAL_MS);
+  }, [cleanupRuntimeRefresh, refreshRuntimes]);
 
   // Fetch latest version on mount.
   useEffect(() => {
@@ -145,19 +184,21 @@ export function UpdateSection({
       setUpdating(false);
       setTargetVersion(null);
       cleanup();
+      startRuntimeRefresh();
       // Auto-clear status after a few seconds so the UI refreshes to show the
       // new version from the re-fetched runtime data.
       setTimeout(() => setStatus(null), 5000);
     },
-    [cleanup],
+    [cleanup, startRuntimeRefresh],
   );
 
   useEffect(() => {
     if (!updating || !targetVersion || !currentVersion) return;
     if (!isNewer(targetVersion, currentVersion)) {
       markCompleted(`Updated to ${targetVersion}`);
+      cleanupRuntimeRefresh();
     }
-  }, [currentVersion, markCompleted, targetVersion, updating]);
+  }, [cleanupRuntimeRefresh, currentVersion, markCompleted, targetVersion, updating]);
 
   const handleUpdate = async () => {
     if (!latestVersion) return;

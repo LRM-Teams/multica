@@ -103,22 +103,50 @@ func configuredAppURL(cmd *cobra.Command) string {
 }
 
 func openBrowser(url string) error {
+	cmd, args, err := browserOpenCommand(runtime.GOOS, isWSL(), url)
+	if err != nil {
+		return err
+	}
+	return exec.Command(cmd, args...).Start()
+}
+
+func browserOpenCommand(goos string, wsl bool, url string) (string, []string, error) {
 	var cmd string
 	var args []string
-	switch runtime.GOOS {
+	switch goos {
 	case "darwin":
 		cmd = "open"
 		args = []string{url}
 	case "linux":
-		cmd = "xdg-open"
-		args = []string{url}
+		if wsl {
+			cmd = "cmd.exe"
+			args = []string{"/c", "start", "", `"` + strings.ReplaceAll(url, `"`, `\"`) + `"`}
+		} else {
+			cmd = "xdg-open"
+			args = []string{url}
+		}
 	case "windows":
 		cmd = "rundll32"
 		args = []string{"url.dll,FileProtocolHandler", url}
 	default:
-		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+		return "", nil, fmt.Errorf("unsupported platform: %s", goos)
 	}
-	return exec.Command(cmd, args...).Start()
+	return cmd, args, nil
+}
+
+func isWSL() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	if strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")) != "" || strings.TrimSpace(os.Getenv("WSL_INTEROP")) != "" {
+		return true
+	}
+	data, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	if err != nil {
+		return false
+	}
+	release := strings.ToLower(string(data))
+	return strings.Contains(release, "microsoft") || strings.Contains(release, "wsl")
 }
 
 func runAuthLogin(cmd *cobra.Command, args []string) error {

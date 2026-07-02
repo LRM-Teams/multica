@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { configStore } from "@multica/core/config";
@@ -96,6 +96,31 @@ describe("ConnectRemoteDialog", () => {
     );
     expect(baseElement).toHaveTextContent(
       "multica config set app_url https://app.example.com",
+    );
+  });
+
+  it("uses the WSL callback login flow for cloud setup", () => {
+    const { baseElement } = renderDialog();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Windows + WSL" }));
+
+    expect(baseElement).toHaveTextContent(
+      `multica login --callback-host "$(hostname -I | awk '{print $1}')"`,
+    );
+    expect(baseElement).toHaveTextContent("multica daemon start");
+    expect(baseElement).not.toHaveTextContent("multica setup --callback-host");
+  });
+
+  it("adds the WSL callback host to self-host setup", () => {
+    const { baseElement } = renderDialog({
+      daemonServerUrl: "https://api.example.com/",
+      daemonAppUrl: "https://app.example.com/",
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: "Windows + WSL" }));
+
+    expect(baseElement).toHaveTextContent(
+      `multica setup self-host --server-url https://api.example.com --app-url https://app.example.com --callback-host "$(hostname -I | awk '{print $1}')"`,
     );
   });
 

@@ -169,11 +169,24 @@
   "connect": {
     "title": "컴퓨터 추가",
     "description": "추가하려는 컴퓨터에서 아래 두 명령을 실행하세요. 데몬이 온라인이 되는 순간 감지합니다.",
+    "mode_label": "어디에서 실행하나요?",
+    "modes": {
+      "unix": "Mac / Linux",
+      "windows-powershell": "Windows",
+      "windows-wsl": "Windows + WSL"
+    },
+    "mode_hints": {
+      "unix": "macOS, Linux, SSH 기기, 대부분의 호스팅 터미널에 사용하세요.",
+      "windows-powershell": "Windows PowerShell에서 사용하세요.",
+      "windows-wsl": "Multica는 WSL 안에서 실행되고 브라우저는 Windows에서 열릴 때 사용하세요."
+    },
     "step1_label": "Multica CLI 설치",
     "step2_label": "데몬 시작",
     "step2_hint": "로그인을 위해 브라우저를 열고, 이후 데몬을 백그라운드에서 계속 실행합니다.",
+    "step2_hint_wsl": "Windows 브라우저에서 로그인하고 승인을 WSL에서 실행 중인 데몬으로 돌려보냅니다.",
     "live_listening": "컴퓨터를 기다리는 중",
     "live_listening_hint": "데몬이 시작되면 바로 감지합니다. 보통 1분 이내입니다.",
+    "live_listening_hint_wsl": "Windows 브라우저에서 로그인을 완료하세요. 이 페이지가 WSL 데몬을 자동으로 감지합니다.",
     "troubleshooting": "해당 컴퓨터에서 브라우저를 열 수 없나요?",
     "trouble_intro": "브라우저 로그인 대신 토큰을 사용하세요. 2단계를 대체하며 터미널이 있는 곳이면 어디서든 작동합니다.",
     "trouble_token_hint_prefix": "토큰은 ",

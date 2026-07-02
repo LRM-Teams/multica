@@ -3,13 +3,16 @@
 import { useState } from "react";
 import { Check, Copy, Terminal } from "lucide-react";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
-import { MULTICA_INSTALL_COMMAND } from "@multica/core/constants/repository";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { useT } from "../../i18n/use-t";
-
-const SETUP_CMD = "multica setup";
+import {
+  DAEMON_SETUP_MODES,
+  type DaemonSetupMode,
+  daemonSetupCommands,
+  defaultDaemonSetupMode,
+} from "../../common/daemon-setup-commands";
 
 function CopyButton({ text }: { text: string }) {
   const { t } = useT("onboarding");
@@ -69,17 +72,83 @@ function Step({ n, label, cmd }: { n: number; label: string; cmd: string }) {
  * typing the extended command directly in the terminal; no need to
  * thread env vars through React.
  */
-export function CliInstallInstructions() {
+export function CliInstallInstructions({
+  mode: controlledMode,
+  onModeChange,
+}: {
+  mode?: DaemonSetupMode;
+  onModeChange?: (mode: DaemonSetupMode) => void;
+} = {}) {
   const { t } = useT("onboarding");
+  const [uncontrolledMode, setUncontrolledMode] = useState<DaemonSetupMode>(() =>
+    defaultDaemonSetupMode(),
+  );
+  const mode = controlledMode ?? uncontrolledMode;
+  const setMode = (nextMode: DaemonSetupMode) => {
+    if (controlledMode === undefined) {
+      setUncontrolledMode(nextMode);
+    }
+    onModeChange?.(nextMode);
+  };
+  const { installCmd, setupCmd } = daemonSetupCommands(undefined, undefined, mode);
   return (
     <Card className="w-full">
       <CardContent className="space-y-4 pt-4">
         <p className="text-xs leading-[1.55] text-muted-foreground">
           {t(($) => $.cli_install.intro)}
         </p>
-        <Step n={1} label={t(($) => $.cli_install.step1_label)} cmd={MULTICA_INSTALL_COMMAND} />
-        <Step n={2} label={t(($) => $.cli_install.step2_label)} cmd={SETUP_CMD} />
+        <SetupModeSelector mode={mode} onChange={setMode} />
+        <Step n={1} label={t(($) => $.cli_install.step1_label)} cmd={installCmd} />
+        <div>
+          <Step n={2} label={t(($) => $.cli_install.step2_label)} cmd={setupCmd} />
+          <p className="mt-1.5 text-[11px] leading-[1.55] text-muted-foreground">
+            {mode === "windows-wsl"
+              ? t(($) => $.cli_install.step2_hint_wsl)
+              : t(($) => $.cli_install.step2_hint)}
+          </p>
+        </div>
       </CardContent>
     </Card>
+  );
+}
+
+function SetupModeSelector({
+  mode,
+  onChange,
+}: {
+  mode: DaemonSetupMode;
+  onChange: (mode: DaemonSetupMode) => void;
+}) {
+  const { t } = useT("onboarding");
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-medium text-foreground">
+        {t(($) => $.cli_install.mode_label)}
+      </div>
+      <div
+        className="grid grid-cols-1 gap-1 rounded-lg bg-muted p-1 sm:grid-cols-3"
+        role="radiogroup"
+        aria-label={t(($) => $.cli_install.mode_label)}
+      >
+        {DAEMON_SETUP_MODES.map((item) => (
+          <button
+            key={item}
+            type="button"
+            role="radio"
+            aria-checked={mode === item}
+            onClick={() => onChange(item)}
+            className={cn(
+              "rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors",
+              mode === item && "bg-background text-foreground shadow-sm",
+            )}
+          >
+            {t(($) => $.cli_install.modes[item])}
+          </button>
+        ))}
+      </div>
+      <p className="text-[11px] leading-[1.55] text-muted-foreground">
+        {t(($) => $.cli_install.mode_hints[mode])}
+      </p>
+    </div>
   );
 }

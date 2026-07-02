@@ -74,6 +74,21 @@ func TestPersistSelfHostConfigIfReachable(t *testing.T) {
 	})
 }
 
+func TestSetupCallbackHostFlagWiring(t *testing.T) {
+	for _, cmd := range []*cobra.Command{setupCmd, setupCloudCmd, setupSelfHostCmd} {
+		cmd := cmd
+		t.Run(cmd.Use, func(t *testing.T) {
+			flag := cmd.Flags().Lookup(callbackHostFlag)
+			if flag == nil {
+				t.Fatalf("%s is missing --%s", cmd.Use, callbackHostFlag)
+			}
+			if got := flag.Value.Type(); got != "string" {
+				t.Fatalf("%s --%s type = %q, want string", cmd.Use, callbackHostFlag, got)
+			}
+		})
+	}
+}
+
 // TestResolveSelfHostServerURL covers GitHub #3912: `setup self-host` must
 // honor MULTICA_SERVER_URL when --server-url is not passed, instead of always
 // defaulting to localhost (which left self-hosters stuck on an "unreachable"

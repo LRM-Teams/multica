@@ -118,8 +118,21 @@
   "cli_install": {
     "copy_aria": "复制",
     "intro": "这台电脑上需要装一个 agent 运行时（Claude Code、Codex、Cursor 等）才能运行你的智能体。也支持服务器和远程开发机。",
+    "mode_label": "你会在哪里运行？",
+    "modes": {
+      "unix": "Mac / Linux",
+      "windows-powershell": "Windows",
+      "windows-wsl": "Windows + WSL"
+    },
+    "mode_hints": {
+      "unix": "适用于 macOS、Linux、SSH 机器和大多数云端终端。",
+      "windows-powershell": "适用于 Windows PowerShell。",
+      "windows-wsl": "适用于 Multica 跑在 WSL 里、浏览器在 Windows 中打开的场景。"
+    },
     "step1_label": "安装 Multica CLI",
-    "step2_label": "启动守护进程"
+    "step2_label": "启动守护进程",
+    "step2_hint": "会打开浏览器登录，然后启动守护进程。",
+    "step2_hint_wsl": "会打开 Windows 浏览器完成登录，并把授权回传给 WSL 中运行的守护进程。"
   },
   "cloud_waitlist": {
     "intro_main": "云运行时尚未上线。留下邮箱，上线时通过邮件通知你。",
@@ -372,6 +385,8 @@
     "stage_midway_suffix": " 打开的浏览器标签页 —— 需要批准登录后，你的电脑才能连接。",
     "stage_slow_prefix": "比平时慢一些。请检查运行 ",
     "stage_slow_suffix": " 的终端是否有错误。",
+    "stage_wsl_waiting": "完成 Windows 中打开的登录标签页。授权 WSL 守护进程后，这台电脑会自动出现在这里。",
+    "stage_wsl_retry": "仍在等待。回到 WSL 终端，重新运行上方 Windows + WSL 命令，并完成它打开的 Windows 浏览器登录。",
     "stage_stalled_prefix": "还没有任何信号传来。如果你不太习惯终端，",
     "stage_stalled_term": "桌面端",
     "stage_stalled_suffix": " 更顺手 —— 一键搞定，这台电脑就连接好了。关闭这个对话框选择桌面端，或点跳过继续。"

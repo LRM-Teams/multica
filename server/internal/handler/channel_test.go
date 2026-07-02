@@ -96,6 +96,89 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	}
 }
 
+func TestChannelChatDoneNoReplyAndReactionCommandsAreNotPersisted(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Reaction Agent", nil)
+	channelID := seedChannelForTest(t, "no-reply-reaction-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Reaction Agent react only", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert trigger: %v", err)
+	}
+	testHandler.dispatchChannelMentions(ctx, ch, trigger, parseUUID(testUserID))
+
+	var sessionID string
+	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {
+		t.Fatalf("channel agent session not created: %v", err)
+	}
+
+	noReplyContent := "internal analysis should not become a channel reply"
+	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
+		ChatSessionID: sessionID,
+		Type:          protocol.ChatOutputKindNoReply,
+		Content:       noReplyContent,
+	}})
+	assertNoChannelMessageContent(t, channelID, noReplyContent)
+
+	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
+		ChatSessionID: sessionID,
+		Type:          protocol.ChatOutputKindReaction,
+		Reaction:      &protocol.ChatReactionPayload{MessageID: trigger.ID, Emoji: "👍"},
+	}})
+	assertNoChannelMessageContent(t, channelID, "👍")
+
+	var reactionCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message_reaction
+		WHERE channel_message_id = $1 AND actor_type = 'agent' AND actor_id = $2 AND emoji = '👍'`, trigger.ID, agentID).Scan(&reactionCount); err != nil {
+		t.Fatalf("count channel reaction: %v", err)
+	}
+	if reactionCount != 1 {
+		t.Fatalf("reaction count = %d, want 1", reactionCount)
+	}
+
+	reactionCommand := fmt.Sprintf("multica channel react %s 🎉", trigger.ID)
+	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
+		ChatSessionID: sessionID,
+		Type:          protocol.ChatOutputKindMessage,
+		Content:       reactionCommand,
+	}})
+	assertNoChannelMessageContent(t, channelID, reactionCommand)
+
+	var legacyReactionCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message_reaction
+		WHERE channel_message_id = $1 AND actor_type = 'agent' AND actor_id = $2 AND emoji = '🎉'`, trigger.ID, agentID).Scan(&legacyReactionCount); err != nil {
+		t.Fatalf("count legacy channel reaction: %v", err)
+	}
+	if legacyReactionCount != 1 {
+		t.Fatalf("legacy reaction count = %d, want 1", legacyReactionCount)
+	}
+
+	malformedReactionCommand := "multica channel react not-a-message-id 👍"
+	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
+		ChatSessionID: sessionID,
+		Type:          protocol.ChatOutputKindMessage,
+		Content:       malformedReactionCommand,
+	}})
+	assertNoChannelMessageContent(t, channelID, malformedReactionCommand)
+}
+
 func TestChannelRementionInterruptsRunningTaskWithFreshSession(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -1318,6 +1401,20 @@ func seedChannelForTest(t *testing.T, name string, memberIDs ...string) string {
 		}
 	}
 	return channelID
+}
+
+func assertNoChannelMessageContent(t *testing.T, channelID, content string) {
+	t.Helper()
+	var count int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND content = $2`, channelID, content).Scan(&count); err != nil {
+		t.Fatalf("count channel message content: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("channel message content %q was persisted %d time(s)", content, count)
+	}
 }
 
 func createChannelPlainMember(t *testing.T) string {

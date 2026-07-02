@@ -1,6 +1,10 @@
 package protocol
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
 
 const (
 	MessagePartTypeText    = "text"
@@ -117,10 +121,62 @@ type TaskProgressPayload struct {
 
 // TaskCompletedPayload is sent from daemon to server when a task finishes.
 type TaskCompletedPayload struct {
-	TaskID string        `json:"task_id"`
-	PRURL  string        `json:"pr_url,omitempty"`
-	Output string        `json:"output,omitempty"`
-	Parts  []MessagePart `json:"parts,omitempty"`
+	TaskID   string               `json:"task_id"`
+	PRURL    string               `json:"pr_url,omitempty"`
+	Type     string               `json:"type,omitempty"`
+	Output   string               `json:"output,omitempty"`
+	Parts    []MessagePart        `json:"parts,omitempty"`
+	Reaction *ChatReactionPayload `json:"reaction,omitempty"`
+}
+
+const (
+	ChatOutputKindMessage  = "message"
+	ChatOutputKindNoReply  = "no_reply"
+	ChatOutputKindReaction = "reaction"
+)
+
+type ChatReactionPayload struct {
+	MessageID string `json:"message_id,omitempty"`
+	Emoji     string `json:"emoji,omitempty"`
+}
+
+func NormalizeChatOutputType(outputType string, hasReplyBody, hasReactionPayload bool) (string, error) {
+	normalized := strings.TrimSpace(strings.ToLower(outputType))
+	switch normalized {
+	case "":
+		if hasReactionPayload {
+			return ChatOutputKindReaction, nil
+		}
+		if hasReplyBody {
+			return ChatOutputKindMessage, nil
+		}
+		return ChatOutputKindNoReply, nil
+	case ChatOutputKindMessage, ChatOutputKindNoReply, ChatOutputKindReaction:
+		return normalized, nil
+	default:
+		return "", ErrInvalidChatOutputType(normalized)
+	}
+}
+
+func ErrInvalidChatOutputType(outputType string) error {
+	return fmt.Errorf("invalid chat output type %q", outputType)
+}
+
+func ParseLegacyChatReactionCommand(output string) (*ChatReactionPayload, bool) {
+	const prefix = "multica channel react "
+	body := strings.TrimSpace(output)
+	if !strings.HasPrefix(body, prefix) {
+		return nil, false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(body, prefix))
+	messageID, emoji, ok := strings.Cut(rest, " ")
+	if !ok {
+		return &ChatReactionPayload{}, true
+	}
+	return &ChatReactionPayload{
+		MessageID: strings.TrimSpace(messageID),
+		Emoji:     strings.TrimSpace(emoji),
+	}, true
 }
 
 // TaskMessagePayload represents a single agent execution message (tool call, text, etc.)
@@ -167,13 +223,15 @@ type ChatMessagePayload struct {
 // during the live-timeline → AssistantMessage handoff that previously caused
 // a visible flicker (#2123).
 type ChatDonePayload struct {
-	ChatSessionID string        `json:"chat_session_id"`
-	TaskID        string        `json:"task_id"`
-	MessageID     string        `json:"message_id,omitempty"`
-	Content       string        `json:"content,omitempty"`
-	Parts         []MessagePart `json:"parts,omitempty"`
-	ElapsedMs     int64         `json:"elapsed_ms,omitempty"`
-	CreatedAt     string        `json:"created_at,omitempty"`
+	ChatSessionID string               `json:"chat_session_id"`
+	TaskID        string               `json:"task_id"`
+	Type          string               `json:"type,omitempty"`
+	MessageID     string               `json:"message_id,omitempty"`
+	Content       string               `json:"content,omitempty"`
+	Parts         []MessagePart        `json:"parts,omitempty"`
+	Reaction      *ChatReactionPayload `json:"reaction,omitempty"`
+	ElapsedMs     int64                `json:"elapsed_ms,omitempty"`
+	CreatedAt     string               `json:"created_at,omitempty"`
 }
 
 // ChatSessionReadPayload is broadcast when the creator marks a session as read.

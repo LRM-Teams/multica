@@ -26,6 +26,7 @@ type EnvDispatchRequest struct {
 	DispatchType   string                `json:"dispatch_type"`
 	GroupSize      int                   `json:"group_size"`
 	AgentID        string                `json:"agent_id"`
+	SquadID        string                `json:"squad_id,omitempty"`
 	IdempotencyKey string                `json:"idempotency_key,omitempty"`
 	Issue          *IssueDispatchInput   `json:"issue,omitempty"`
 	Message        *MessageDispatchInput `json:"message,omitempty"`
@@ -76,11 +77,24 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 
 	// UUID-shape validation (spec §6.3). Do it here so malformed IDs return a
 	// 400 instead of panicking deep in the adapter (parseUUID is MustParseUUID).
-	if _, ok := parseUUIDOrBadRequest(w, req.EnvID, "env_id"); !ok {
-		return
+	// env_id/agent_id may be empty now (empty env_id resolves a per-workspace
+	// default for scratch self_play; agent_id is optional when squad_id is set),
+	// so only shape-check them when present. The service enforces the
+	// conditional-required rules.
+	if req.EnvID != "" {
+		if _, ok := parseUUIDOrBadRequest(w, req.EnvID, "env_id"); !ok {
+			return
+		}
 	}
-	if _, ok := parseUUIDOrBadRequest(w, req.AgentID, "agent_id"); !ok {
-		return
+	if req.AgentID != "" {
+		if _, ok := parseUUIDOrBadRequest(w, req.AgentID, "agent_id"); !ok {
+			return
+		}
+	}
+	if req.SquadID != "" {
+		if _, ok := parseUUIDOrBadRequest(w, req.SquadID, "squad_id"); !ok {
+			return
+		}
 	}
 	if req.IdempotencyKey != "" {
 		if _, err := util.ParseUUID(req.IdempotencyKey); err != nil {
@@ -96,6 +110,7 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		Domain:       service.EnvDomain(req.Domain),
 		DispatchType: service.EnvDispatchType(req.DispatchType),
 		GroupSize:    req.GroupSize, AgentID: req.AgentID,
+		SquadID:        req.SquadID,
 		IdempotencyKey: req.IdempotencyKey,
 		Issue:          mapIssueInput(req.Issue),
 		Message:        mapMessageInput(req.Message),
@@ -558,6 +573,21 @@ func (a *envDispatchDepsAdapter) CreateChatMessage(ctx context.Context, sessionI
 	return util.UUIDToString(row.ID), nil
 }
 
+// GetDefaultSelfPlayEnv resolves the workspace's configured default self_play
+// base env. Returns "" (not an error) when the column is NULL/unset so the
+// service can map an empty result to a 400 validation_failed. Any real query
+// error is surfaced.
+func (a *envDispatchDepsAdapter) GetDefaultSelfPlayEnv(ctx context.Context, workspaceID string) (string, error) {
+	v, err := a.h.Queries.GetDefaultSelfPlayEnv(ctx, parseUUID(workspaceID))
+	if err != nil {
+		return "", fmt.Errorf("get default self_play env: %w", err)
+	}
+	if !v.Valid {
+		return "", nil // not configured; service maps to 400
+	}
+	return util.UUIDToString(v), nil
+}
+
 // EnqueueAgentRun enqueues an agent task. issueID set → CreateAgentTask
 // (issue-bound; chat_session_id NULL). chatSessionID set → CreateChatTask
 // (chat-bound; issue_id NULL). Both paths need runtime_id, resolved via
@@ -569,7 +599,15 @@ func (a *envDispatchDepsAdapter) CreateChatMessage(ctx context.Context, sessionI
 // service fake. The column is nullable, and the daemon resolves ownership
 // via agent_id + chat_session_id, so NULL is a safe intermediate state.
 // A follow-up task should extend the interface to pass UserID explicitly.
-func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceID, agentID, issueID, chatSessionID, sandboxID string, idx int) (string, error) {
+//
+// squadID threads through for team dispatch. The squad branches (issue-path
+// assignee=squad + leader task, chat-path context hint + daemon briefing) are
+// implemented in later tasks; for now squadID != "" behaves exactly as the
+// current single-agent path so existing behavior is byte-for-byte unchanged.
+// TODO(Tasks 4/5): resolve the squad leader and apply the leader signals when
+// squadID != "".
+func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceID, agentID, squadID, issueID, chatSessionID, sandboxID string, idx int) (string, error) {
+	_ = squadID // TODO(Tasks 4/5): squad-dispatch leader resolution + leader signals.
 	agentUUID := parseUUID(agentID)
 	switch {
 	case issueID != "":
@@ -860,6 +898,9 @@ func (s *stubEnvDispatchDeps) CreateChatSession(context.Context, string, string,
 func (s *stubEnvDispatchDeps) CreateChatMessage(context.Context, string, string, string) (string, error) {
 	return "stub-msg", nil
 }
-func (s *stubEnvDispatchDeps) EnqueueAgentRun(context.Context, string, string, string, string, string, int) (string, error) {
+func (s *stubEnvDispatchDeps) EnqueueAgentRun(context.Context, string, string, string, string, string, string, int) (string, error) {
 	return "stub-run", nil
+}
+func (s *stubEnvDispatchDeps) GetDefaultSelfPlayEnv(context.Context, string) (string, error) {
+	return "stub-env", nil
 }

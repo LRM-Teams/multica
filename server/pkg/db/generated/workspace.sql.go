@@ -14,7 +14,7 @@ import (
 const createWorkspace = `-- name: CreateWorkspace :one
 INSERT INTO workspace (name, slug, description, context, issue_prefix)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url
+RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url, default_self_play_env_id
 `
 
 type CreateWorkspaceParams struct {
@@ -47,6 +47,7 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 		&i.IssuePrefix,
 		&i.IssueCounter,
 		&i.AvatarUrl,
+		&i.DefaultSelfPlayEnvID,
 	)
 	return i, err
 }
@@ -60,8 +61,21 @@ func (q *Queries) DeleteWorkspace(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const getDefaultSelfPlayEnv = `-- name: GetDefaultSelfPlayEnv :one
+SELECT default_self_play_env_id
+  FROM workspace
+ WHERE id = $1
+`
+
+func (q *Queries) GetDefaultSelfPlayEnv(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getDefaultSelfPlayEnv, id)
+	var default_self_play_env_id pgtype.UUID
+	err := row.Scan(&default_self_play_env_id)
+	return default_self_play_env_id, err
+}
+
 const getWorkspace = `-- name: GetWorkspace :one
-SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url FROM workspace
+SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url, default_self_play_env_id FROM workspace
 WHERE id = $1
 `
 
@@ -81,12 +95,13 @@ func (q *Queries) GetWorkspace(ctx context.Context, id pgtype.UUID) (Workspace, 
 		&i.IssuePrefix,
 		&i.IssueCounter,
 		&i.AvatarUrl,
+		&i.DefaultSelfPlayEnvID,
 	)
 	return i, err
 }
 
 const getWorkspaceBySlug = `-- name: GetWorkspaceBySlug :one
-SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url FROM workspace
+SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url, default_self_play_env_id FROM workspace
 WHERE slug = $1
 `
 
@@ -106,6 +121,7 @@ func (q *Queries) GetWorkspaceBySlug(ctx context.Context, slug string) (Workspac
 		&i.IssuePrefix,
 		&i.IssueCounter,
 		&i.AvatarUrl,
+		&i.DefaultSelfPlayEnvID,
 	)
 	return i, err
 }
@@ -127,7 +143,8 @@ const listWorkspaces = `-- name: ListWorkspaces :many
 SELECT w.id, w.name, w.slug, w.description, w.settings,
        w.created_at, w.updated_at, w.context, w.repos,
        w.issue_prefix, w.issue_counter, w.avatar_url,
-       m.last_active_at
+       m.last_active_at,
+       w.default_self_play_env_id
 FROM member m
 JOIN workspace w ON w.id = m.workspace_id
 WHERE m.user_id = $1
@@ -173,6 +190,7 @@ func (q *Queries) ListWorkspaces(ctx context.Context, userID pgtype.UUID) ([]Lis
 			&i.IssueCounter,
 			&i.AvatarUrl,
 			&i.LastActiveAt,
+			&i.DefaultSelfPlayEnvID,
 		); err != nil {
 			return nil, err
 		}
@@ -195,7 +213,7 @@ UPDATE workspace SET
     avatar_url = COALESCE($8, avatar_url),
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url
+RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url, default_self_play_env_id
 `
 
 type UpdateWorkspaceParams struct {
@@ -234,6 +252,7 @@ func (q *Queries) UpdateWorkspace(ctx context.Context, arg UpdateWorkspaceParams
 		&i.IssuePrefix,
 		&i.IssueCounter,
 		&i.AvatarUrl,
+		&i.DefaultSelfPlayEnvID,
 	)
 	return i, err
 }

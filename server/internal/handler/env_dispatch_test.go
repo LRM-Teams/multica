@@ -4,11 +4,28 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+// doEnvDispatch builds an authenticated env-dispatch request with a workspace
+// context and invokes h.EnvDispatch, mirroring the inline setup the other
+// validation tests use. It relies on a DB-less handler (Queries == nil) so
+// only the handler's UUID-shape gate + the service's validation gate are
+// exercised; the stub deps short-circuit before any DB access.
+func doEnvDispatch(t *testing.T, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	h := newTestHandler(Config{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/env-dispatch", bytes.NewReader([]byte(body)))
+	r.Header.Set("X-User-ID", "u1")
+	r = r.WithContext(middleware.SetMemberContext(r.Context(), "ws1", db.Member{}))
+	h.EnvDispatch(w, r)
+	return w
+}
 
 func TestEnvDispatch_RequiresAuth(t *testing.T) {
 	h := newTestHandler(Config{})
@@ -85,5 +102,32 @@ func TestDeleteEnvDispatchProject_RequiresProjectID(t *testing.T) {
 	h.DeleteEnvDispatchProject(w, r)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestEnvDispatch_RejectsBothAgentAndSquad(t *testing.T) {
+	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","squad_id":"` + validUUID + `","message":{"content":"hi"}}`
+	rr := doEnvDispatch(t, body)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("both agent+squad: want 400, got %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestEnvDispatch_AcceptsEmptyEnvIDShape(t *testing.T) {
+	// empty env_id must not be rejected by the handler's UUID-shape gate
+	// (which would emit "invalid env_id"); the service decides whether an
+	// empty env_id is allowed (scratch self_play resolves a default).
+	body := `{"mode":"scratch","env_id":"","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"}}`
+	rr := doEnvDispatch(t, body)
+	if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "invalid env_id") {
+		t.Fatalf("empty env_id must pass the handler UUID gate, got %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestEnvDispatch_AcceptsResumeMode(t *testing.T) {
+	body := `{"mode":"resume","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
+	rr := doEnvDispatch(t, body)
+	if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "mode") {
+		t.Fatalf("resume must be accepted as a mode, got %d %s", rr.Code, rr.Body.String())
 	}
 }

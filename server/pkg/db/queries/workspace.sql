@@ -2,7 +2,8 @@
 SELECT w.id, w.name, w.slug, w.description, w.settings,
        w.created_at, w.updated_at, w.context, w.repos,
        w.issue_prefix, w.issue_counter, w.avatar_url,
-       m.last_active_at
+       m.last_active_at,
+       w.default_self_play_env_id
 FROM member m
 JOIN workspace w ON w.id = m.workspace_id
 WHERE m.user_id = $1
@@ -41,3 +42,8 @@ RETURNING issue_counter;
 
 -- name: DeleteWorkspace :exec
 DELETE FROM workspace WHERE id = $1;
+
+-- name: GetDefaultSelfPlayEnv :one
+SELECT default_self_play_env_id
+  FROM workspace
+ WHERE id = $1;

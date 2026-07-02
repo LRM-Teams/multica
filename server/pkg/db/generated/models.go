@@ -361,7 +361,7 @@ type EnvDispatchRequest struct {
 type Environment struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	SandboxID   string             `json:"sandbox_id"`
+	SandboxIds  []string           `json:"sandbox_ids"`
 	ParentEnvID pgtype.UUID        `json:"parent_env_id"`
 	Mode        string             `json:"mode"`
 	Domain      pgtype.Text        `json:"domain"`

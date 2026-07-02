@@ -20,10 +20,14 @@ func TestEnvDispatch_RequiresAuth(t *testing.T) {
 	}
 }
 
+// validUUID is a syntactically valid UUID used by handler tests that need to
+// pass the handler's UUID-shape gate and exercise deeper (service) validation.
+const validUUID = "11111111-1111-1111-1111-111111111111"
+
 func TestEnvDispatch_RejectsMissingMode(t *testing.T) {
 	h := newTestHandler(Config{})
 	w := httptest.NewRecorder()
-	body := `{"env_id":"x","dispatch_type":"issue","group_size":1,"agent_id":"a","issue":{"title":"t"}}`
+	body := `{"env_id":"` + validUUID + `","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","domain":"swe_lego","issue":{"title":"t"}}`
 	r := httptest.NewRequest("POST", "/api/v1/env-dispatch", bytes.NewReader([]byte(body)))
 	r.Header.Set("X-User-ID", "u1")
 	r = r.WithContext(middleware.SetMemberContext(r.Context(), "ws1", db.Member{}))
@@ -33,10 +37,23 @@ func TestEnvDispatch_RejectsMissingMode(t *testing.T) {
 	}
 }
 
+func TestEnvDispatch_RejectsMalformedEnvID(t *testing.T) {
+	h := newTestHandler(Config{})
+	w := httptest.NewRecorder()
+	body := `{"mode":"scratch","env_id":"not-a-uuid","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
+	r := httptest.NewRequest("POST", "/api/v1/env-dispatch", bytes.NewReader([]byte(body)))
+	r.Header.Set("X-User-ID", "u1")
+	r = r.WithContext(middleware.SetMemberContext(r.Context(), "ws1", db.Member{}))
+	h.EnvDispatch(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (malformed env_id must not panic)", w.Code)
+	}
+}
+
 func TestEnvDispatch_RejectsSweLegoMessage(t *testing.T) {
 	h := newTestHandler(Config{})
 	w := httptest.NewRecorder()
-	body := `{"mode":"scratch","env_id":"x","domain":"swe_lego","dispatch_type":"message","group_size":1,"agent_id":"a","message":{"content":"q"}}`
+	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"q"}}`
 	r := httptest.NewRequest("POST", "/api/v1/env-dispatch", bytes.NewReader([]byte(body)))
 	r.Header.Set("X-User-ID", "u1")
 	r = r.WithContext(middleware.SetMemberContext(r.Context(), "ws1", db.Member{}))
@@ -49,7 +66,7 @@ func TestEnvDispatch_RejectsSweLegoMessage(t *testing.T) {
 func TestEnvDispatch_SelfPlayIssue_Returns501(t *testing.T) {
 	h := newTestHandler(Config{})
 	w := httptest.NewRecorder()
-	body := `{"mode":"scratch","env_id":"x","domain":"self_play","dispatch_type":"issue","group_size":1,"agent_id":"a","issue":{"title":"t"}}`
+	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
 	r := httptest.NewRequest("POST", "/api/v1/env-dispatch", bytes.NewReader([]byte(body)))
 	r.Header.Set("X-User-ID", "u1")
 	r = r.WithContext(middleware.SetMemberContext(r.Context(), "ws1", db.Member{}))

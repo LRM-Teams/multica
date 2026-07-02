@@ -74,6 +74,21 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// UUID-shape validation (spec §6.3). Do it here so malformed IDs return a
+	// 400 instead of panicking deep in the adapter (parseUUID is MustParseUUID).
+	if _, ok := parseUUIDOrBadRequest(w, req.EnvID, "env_id"); !ok {
+		return
+	}
+	if _, ok := parseUUIDOrBadRequest(w, req.AgentID, "agent_id"); !ok {
+		return
+	}
+	if req.IdempotencyKey != "" {
+		if _, err := util.ParseUUID(req.IdempotencyKey); err != nil {
+			writeError(w, http.StatusBadRequest, "idempotency_key must be a valid UUID")
+			return
+		}
+	}
+
 	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), envDispatchConcurrency())
 	res, err := svc.Dispatch(r.Context(), service.EnvDispatchInput{
 		WorkspaceID: workspaceID, UserID: userID,
@@ -103,8 +118,7 @@ func (h *Handler) DeleteEnvDispatchProject(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	projectID := chi.URLParam(r, "projectID")
-	if projectID == "" {
-		writeError(w, http.StatusBadRequest, "projectID is required")
+	if _, ok := parseUUIDOrBadRequest(w, projectID, "projectID"); !ok {
 		return
 	}
 	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), 8)
@@ -124,6 +138,11 @@ func writeEnvDispatchError(w http.ResponseWriter, err error, res service.EnvDisp
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "validation_failed", "message": msg})
 	case strings.Contains(msg, "not_implemented"):
 		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "not_implemented", "message": msg})
+	case errors.Is(err, pgx.ErrNoRows):
+		// A bare GetEnv miss: env_id does not exist / not in workspace. (The
+		// source-project-resolve path wraps its ErrNoRows in "validation_failed"
+		// and is handled above, so this only fires for the top-level env lookup.)
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found", "message": msg})
 	case strings.Contains(msg, "reset_failed"):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "reset_failed", "message": msg})
 	default:
@@ -200,7 +219,7 @@ func envRowToService(e db.Environment) service.Env {
 	out := service.Env{
 		ID:          util.UUIDToString(e.ID),
 		WorkspaceID: util.UUIDToString(e.WorkspaceID),
-		SandboxID:   e.SandboxID,
+		SandboxIDs:  e.SandboxIds,
 		Mode:        service.EnvMode(e.Mode),
 	}
 	if e.ParentEnvID.Valid {
@@ -213,7 +232,7 @@ func envRowToService(e db.Environment) service.Env {
 }
 
 // GetEnv resolves the env row, returning a service.Env snapshot. The service
-// uses SandboxID to fork and ParentEnvID for fork provenance.
+// uses SandboxIDs to fork and ParentEnvID for fork provenance.
 func (a *envDispatchDepsAdapter) GetEnv(ctx context.Context, envID, workspaceID string) (service.Env, error) {
 	row, err := a.h.Queries.GetEnvironment(ctx, db.GetEnvironmentParams{
 		ID:          parseUUID(envID),
@@ -225,11 +244,12 @@ func (a *envDispatchDepsAdapter) GetEnv(ctx context.Context, envID, workspaceID 
 	return envRowToService(row), nil
 }
 
-// CreateEnv inserts an environment row. parentEnvID is empty for base envs.
-func (a *envDispatchDepsAdapter) CreateEnv(ctx context.Context, workspaceID, sandboxID, parentEnvID string, mode service.EnvMode, domain service.EnvDomain) (string, error) {
+// CreateEnv inserts an environment row with its sandbox set. parentEnvID is
+// empty for base envs.
+func (a *envDispatchDepsAdapter) CreateEnv(ctx context.Context, workspaceID string, sandboxIDs []string, parentEnvID string, mode service.EnvMode, domain service.EnvDomain) (string, error) {
 	params := db.CreateEnvironmentParams{
 		WorkspaceID: parseUUID(workspaceID),
-		SandboxID:   sandboxID,
+		SandboxIds:  sandboxIDs,
 		Mode:        string(mode),
 	}
 	if parentEnvID != "" {
@@ -424,6 +444,24 @@ func issueRowToService(r db.Issue) service.IssueRow {
 	return out
 }
 
+// ListChatSessionsByProject returns the chat session ids under a project.
+// Used by the service to enforce the branch+self_play "exactly one session"
+// rule (§7.4).
+func (a *envDispatchDepsAdapter) ListChatSessionsByProject(ctx context.Context, projectID, workspaceID string) ([]string, error) {
+	rows, err := a.h.Queries.ListChatSessionsByProject(ctx, db.ListChatSessionsByProjectParams{
+		ProjectID:   parseUUID(projectID),
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list chat sessions by project: %w", err)
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, util.UUIDToString(r.ID))
+	}
+	return out, nil
+}
+
 // CreateIssue inserts an issue with metadata pre-populated with
 // acceptance_criteria / fail_to_pass / pass_to_pass (swe_lego). issueNumber
 // is allocated via IncrementIssueCounter so the new issue gets a
@@ -444,17 +482,17 @@ func (a *envDispatchDepsAdapter) CreateIssue(ctx context.Context, projectID, wor
 		desc = pgtype.Text{String: description, Valid: true}
 	}
 	row, err := a.h.Queries.CreateIssueWithMetadata(ctx, db.CreateIssueWithMetadataParams{
-		WorkspaceID:   wsUUID,
-		Title:         title,
-		Description:   desc,
-		Status:        "backlog",
-		Priority:      "none",
-		CreatorType:   "member",
-		CreatorID:     parseUUID(creatorID),
-		Position:      1.0,
-		Number:        number,
-		ProjectID:     parseUUID(projectID),
-		Metadata:      metaJSON,
+		WorkspaceID: wsUUID,
+		Title:       title,
+		Description: desc,
+		Status:      "backlog",
+		Priority:    "none",
+		CreatorType: "member",
+		CreatorID:   parseUUID(creatorID),
+		Position:    1.0,
+		Number:      number,
+		ProjectID:   parseUUID(projectID),
+		Metadata:    metaJSON,
 	})
 	if err != nil {
 		return "", fmt.Errorf("create issue: %w", err)
@@ -780,7 +818,7 @@ type stubEnvDispatchDeps struct{}
 func (s *stubEnvDispatchDeps) GetEnv(context.Context, string, string) (service.Env, error) {
 	return service.Env{}, nil
 }
-func (s *stubEnvDispatchDeps) CreateEnv(context.Context, string, string, string, service.EnvMode, service.EnvDomain) (string, error) {
+func (s *stubEnvDispatchDeps) CreateEnv(context.Context, string, []string, string, service.EnvMode, service.EnvDomain) (string, error) {
 	return "stub-env", nil
 }
 func (s *stubEnvDispatchDeps) DeleteEnv(context.Context, string, string) error { return nil }
@@ -808,6 +846,9 @@ func (s *stubEnvDispatchDeps) SaveIdempotentResponse(context.Context, string, st
 }
 func (s *stubEnvDispatchDeps) DeleteProject(context.Context, string, string) error { return nil }
 func (s *stubEnvDispatchDeps) ListIssuesByProject(context.Context, string, string) ([]service.IssueRow, error) {
+	return nil, nil
+}
+func (s *stubEnvDispatchDeps) ListChatSessionsByProject(context.Context, string, string) ([]string, error) {
 	return nil, nil
 }
 func (s *stubEnvDispatchDeps) CreateIssue(context.Context, string, string, string, string, string, []string, []string, []string) (string, error) {

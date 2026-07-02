@@ -3,10 +3,15 @@
 -- project; scratch/branch envs are forked from a parent env and associated
 -- with projects via project.env_id (1:1 — a branch always forks, so a state
 -- env is never shared across projects).
+--
+-- sandbox_ids holds ONE OR MORE sandbox handles: an environment can host many
+-- agents, and each agent runs in its own sandbox. Base envs are booted with a
+-- single sandbox; branching an env forks every sandbox in the set so each
+-- agent's state is preserved independently.
 CREATE TABLE environment (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
-    sandbox_id TEXT NOT NULL,
+    sandbox_ids TEXT[] NOT NULL DEFAULT '{}',
     parent_env_id UUID REFERENCES environment(id) ON DELETE SET NULL,
     mode TEXT NOT NULL CHECK (mode IN ('base', 'scratch', 'branch')),
     domain TEXT CHECK (domain IN ('swe_lego', 'self_play')),

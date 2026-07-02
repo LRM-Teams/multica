@@ -26,9 +26,11 @@ import { AttachmentList } from "../../issues/components/comment-card";
 import type { AgentAvailability } from "@multica/core/agents";
 import type { ChatMessage, ChatPendingTask, TaskFailureReason } from "@multica/core/types";
 import type { ChatTimelineItem } from "@multica/core/chat";
+import { parseStickerMessage } from "@multica/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { buildTimeline } from "../../common/task-transcript";
 import { TaskStatusPill } from "./task-status-pill";
+import { StickerMessage } from "./sticker-message";
 import { formatElapsedMs } from "../lib/format";
 import { splitTimeline, extractCopyText } from "../lib/copy-text";
 import { useT } from "../../i18n";
@@ -323,9 +325,7 @@ function AssistantMessage({
       {timeline.length > 0 ? (
         <TimelineView items={timeline} attachments={message.attachments} />
       ) : (
-        <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
-          <Markdown attachments={message.attachments}>{message.content}</Markdown>
-        </div>
+        <MessageProse content={message.content} attachments={message.attachments} />
       )}
       <AttachmentList
         attachments={message.attachments}
@@ -487,6 +487,38 @@ function FailureBubble({
   );
 }
 
+/**
+ * Renders a block of assistant/user message text. If the body is a structured
+ * sticker-parts reply (e.g. `{"parts":[{"type":"sticker","sticker_id":"hi"}]}`)
+ * it renders the sticker(s) instead of the raw JSON; otherwise it falls back to
+ * the normal prose markdown pipeline. Shared by the no-timeline assistant path
+ * and the timeline "final" region so a sticker reply renders identically
+ * regardless of whether the task timeline has loaded (LRM-84).
+ */
+function MessageProse({
+  content,
+  attachments,
+}: {
+  content: string;
+  attachments?: import("@multica/core/types").Attachment[];
+}) {
+  const stickerIds = parseStickerMessage(content);
+  if (stickerIds) {
+    return (
+      <div className="flex flex-wrap gap-1.5 py-0.5">
+        {stickerIds.map((id, i) => (
+          <StickerMessage key={`${id}-${i}`} id={id} />
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
+      <Markdown attachments={attachments}>{content}</Markdown>
+    </div>
+  );
+}
+
 // ─── Timeline: outer process fold + final text (Conductor-style) ─────────
 //
 // splitTimeline (lib/copy-text.ts) carves the items into:
@@ -529,11 +561,10 @@ function TimelineView({
         />
       )}
       {final.length > 0 && (
-        <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
-          <Markdown attachments={attachments}>
-            {final.map((t) => t.content ?? "").join("")}
-          </Markdown>
-        </div>
+        <MessageProse
+          content={final.map((t) => t.content ?? "").join("")}
+          attachments={attachments}
+        />
       )}
     </>
   );

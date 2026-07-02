@@ -140,12 +140,13 @@ import {
 } from "@multica/ui/components/ui/alert-dialog";
 import { cn } from "@multica/ui/lib/utils";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
-import { ContentEditor, type ContentEditorRef } from "../../editor";
-import { useNavigation } from "../../navigation";
+import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
+import { useNavigation } from "../../navigation/context";
 import { agentColor } from "../../common/agent-color";
 import { ProjectPickerButton } from "../../common/project-picker-button";
 import { initialsOf } from "../../common/initials";
-import { useT, useTimeAgo } from "../../i18n";
+import { useT } from "../../i18n/use-t";
+import { useTimeAgo } from "../../i18n/use-time-ago";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { ChannelMessageList } from "./channel-message-list";
@@ -177,6 +178,8 @@ export interface TypingActor {
   expiresAt: number;
 }
 
+const EMPTY_TYPING_ACTORS: TypingActor[] = [];
+const EMPTY_ACTIVE_TASKS: ChannelActiveTask[] = [];
 const identitySearchOptions = { extendedMatch: matchesPinyin };
 
 // Overlapping avatar stack for the channel roster (agents tinted by identity
@@ -337,36 +340,22 @@ function InitialChannelsShellSkeleton() {
   );
 }
 
-export function TypingIndicator({ actors }: { actors: TypingActor[] }) {
+export function ConversationActivityStrip({
+  typingActors = EMPTY_TYPING_ACTORS,
+  tasks = EMPTY_ACTIVE_TASKS,
+}: {
+  typingActors?: TypingActor[];
+  tasks?: ChannelActiveTask[];
+}) {
   const { t } = useT("channels");
-  if (actors.length === 0) return null;
-  const names = actors.map((a) => a.actorName);
-  const label =
-    names.length === 1
-      ? t(($) => $.typing.single, { name: names[0]! })
-      : names.length === 2
-        ? t(($) => $.typing.pair, { a: names[0]!, b: names[1]! })
-        : t(($) => $.typing.overflow, { a: names[0]!, b: names[1]!, count: names.length });
-  return (
-    <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground" aria-live="polite">
-      <span className="flex h-7 items-center gap-1 rounded-full border bg-card px-3 shadow-sm">
-        <span>{label}</span>
-        <span className="ml-1 flex items-end gap-0.5" aria-hidden="true">
-          <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/70 [animation-delay:-0.24s]" />
-          <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/70 [animation-delay:-0.12s]" />
-          <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/70" />
-        </span>
-      </span>
-    </div>
+  const typingNames = useMemo(
+    () => typingActors.flatMap((a) => {
+      const name = a.actorName.trim();
+      return name ? [name] : [];
+    }),
+    [typingActors],
   );
-}
-
-// Query-authoritative, per-conversation processing indicator. Keep it visually
-// close to an IM typing indicator, not a task/status card in the message canvas.
-export function AgentWorkingIndicator({ tasks }: { tasks: ChannelActiveTask[] }) {
-  const { t } = useT("channels");
-  const [visible, setVisible] = useState(false);
-  const names = useMemo(() => {
+  const agentNames = useMemo(() => {
     const seen = new Set<string>();
     const unique: string[] = [];
     for (const task of tasks) {
@@ -378,33 +367,66 @@ export function AgentWorkingIndicator({ tasks }: { tasks: ChannelActiveTask[] })
     return unique;
   }, [tasks]);
 
-  useEffect(() => {
-    if (names.length === 0) {
-      setVisible(false);
-      return;
-    }
-    const timer = window.setTimeout(() => setVisible(true), 800);
-    return () => window.clearTimeout(timer);
-  }, [names.length]);
+  const typingLabel =
+    typingNames.length === 0
+      ? null
+      : typingNames.length === 1
+        ? t(($) => $.typing.single, { name: typingNames[0]! })
+        : typingNames.length === 2
+          ? t(($) => $.typing.pair, { a: typingNames[0]!, b: typingNames[1]! })
+          : t(($) => $.typing.overflow, { a: typingNames[0]!, b: typingNames[1]!, count: typingNames.length });
 
-  if (!visible || names.length === 0) return null;
+  const agentLabel =
+    agentNames.length === 0
+      ? null
+      : agentNames.length === 1
+        ? t(($) => $.agent_status.processing_single, { name: agentNames[0]! })
+        : agentNames.length === 2
+          ? t(($) => $.agent_status.processing_pair, { a: agentNames[0]!, b: agentNames[1]! })
+          : t(($) => $.agent_status.processing_overflow, {
+              a: agentNames[0]!,
+              b: agentNames[1]!,
+              count: agentNames.length,
+            });
 
-  const label =
-    names.length === 1
-      ? t(($) => $.agent_status.processing_single, { name: names[0]! })
-      : names.length === 2
-        ? t(($) => $.agent_status.processing_pair, { a: names[0]!, b: names[1]! })
-        : t(($) => $.agent_status.processing_overflow, {
-            a: names[0]!,
-            b: names[1]!,
-            count: names.length,
-          });
+  if (!typingLabel && !agentLabel) return null;
 
   return (
-    <div className="flex items-center gap-1.5 px-1 pb-2 text-xs text-muted-foreground" aria-live="polite">
-      <UnicodeSpinner className="text-muted-foreground/70" />
-      <span>{label}</span>
+    <div
+      className="flex min-h-6 items-center px-5 pb-2 text-xs text-muted-foreground"
+      aria-live="polite"
+      data-testid="conversation-activity-strip"
+    >
+      <div className="flex min-w-0 items-center gap-1.5">
+        {typingLabel ? (
+          <span className="flex min-w-0 items-center gap-1 truncate">
+            <span className="truncate">{typingLabel}</span>
+            <TypingDots />
+          </span>
+        ) : null}
+        {typingLabel && agentLabel ? (
+          <span className="shrink-0 text-muted-foreground/50" aria-hidden="true">
+            ·
+          </span>
+        ) : null}
+        {agentLabel ? (
+          <span className="flex min-w-0 items-center gap-1.5 truncate">
+            <UnicodeSpinner className="shrink-0 text-muted-foreground/60" />
+            <span className="truncate">{agentLabel}</span>
+          </span>
+        ) : null}
+      </div>
     </div>
+  );
+}
+
+function TypingDots() {
+  return (
+    <span className="flex shrink-0 items-end gap-0.5" aria-hidden="true">
+      <span className="size-1 animate-pulse rounded-full bg-muted-foreground/60 [animation-delay:-0.24s]" />
+      <span className="size-1 animate-pulse rounded-full bg-muted-foreground/60 [animation-delay:-0.12s]" />
+      <span className="size-1 animate-pulse rounded-full bg-muted-foreground/60" />
+    </span>
   );
 }
 
@@ -1798,49 +1820,52 @@ export function ChannelsPage() {
             <span>{t(($) => $.archive_dialog.readonly_notice)}</span>
           </ReadOnlyConversationBanner>
         ) : (
-          <ChannelComposer
-            sendLabel={t(($) => $.composer.send)}
-            sendDisabled={threadDraftEmpty}
-            sending={sendThreadMessage.isPending}
-            onSend={handleThreadSend}
-            isMobile={isMobile}
-            editor={
-              <ContentEditor
-                key={`thread-editor:${threadRoot.id}`}
-                ref={threadEditorRef}
-                placeholder={t(($) => $.thread.composer_placeholder)}
-                onUpdate={handleThreadEditorUpdate}
-                onSubmit={handleThreadSend}
-                onUploadFile={handleThreadUpload}
-                submitOnEnter
-                showBubbleMenu={false}
-                mentionAllowedActorIds={channelMemberIds}
-              />
-            }
-            leadingActions={
-              <>
-                <input
-                  ref={threadFileInputRef}
-                  type="file"
-                  multiple
-                  className="hidden"
-                  onChange={(e) => {
-                    handlePickThreadFiles(e.target.files);
-                    e.target.value = "";
-                  }}
+          <>
+            <ConversationActivityStrip tasks={activeTasks} />
+            <ChannelComposer
+              sendLabel={t(($) => $.composer.send)}
+              sendDisabled={threadDraftEmpty}
+              sending={sendThreadMessage.isPending}
+              onSend={handleThreadSend}
+              isMobile={isMobile}
+              editor={
+                <ContentEditor
+                  key={`thread-editor:${threadRoot.id}`}
+                  ref={threadEditorRef}
+                  placeholder={t(($) => $.thread.composer_placeholder)}
+                  onUpdate={handleThreadEditorUpdate}
+                  onSubmit={handleThreadSend}
+                  onUploadFile={handleThreadUpload}
+                  submitOnEnter
+                  showBubbleMenu={false}
+                  mentionAllowedActorIds={channelMemberIds}
                 />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn(isMobile ? "size-10" : "size-8")}
-                  aria-label={t(($) => $.composer.attach_aria)}
-                  onClick={() => threadFileInputRef.current?.click()}
-                >
-                  <Paperclip className={cn(isMobile ? "size-5" : "size-4")} />
-                </Button>
-              </>
-            }
-          />
+              }
+              leadingActions={
+                <>
+                  <input
+                    ref={threadFileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      handlePickThreadFiles(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={cn(isMobile ? "size-10" : "size-8")}
+                    aria-label={t(($) => $.composer.attach_aria)}
+                    onClick={() => threadFileInputRef.current?.click()}
+                  >
+                    <Paperclip className={cn(isMobile ? "size-5" : "size-4")} />
+                  </Button>
+                </>
+              }
+            />
+          </>
         )}
       </div>
     ) : null;
@@ -2070,9 +2095,6 @@ export function ChannelsPage() {
                 onOpenThread={isActiveArchived ? undefined : handleOpenThread}
                 onScrollToMessage={setHighlightMessageId}
                 onReact={handleReactToMessage}
-                footer={
-                  <TypingIndicator actors={activeTypingActors} />
-                }
               />
 
               {isActiveArchived ? (
@@ -2109,9 +2131,7 @@ export function ChannelsPage() {
                 </ReadOnlyConversationBanner>
               ) : (
                 <>
-                  <div className="px-5">
-                    <AgentWorkingIndicator tasks={activeTasks} />
-                  </div>
+                  <ConversationActivityStrip typingActors={activeTypingActors} tasks={activeTasks} />
                   <ChannelComposer
                     sendLabel={t(($) => $.composer.send)}
                     sendDisabled={draftEmpty}

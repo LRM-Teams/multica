@@ -8,7 +8,6 @@ import {
   useRef,
   useState,
   type Ref,
-  type ReactNode,
 } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";
@@ -25,10 +24,8 @@ import { ChannelMessageBubble } from "./channel-message-bubble";
  * mounts without producing item rows, we render direct rows rather than blanking
  * the conversation.
  *
- * The composer/agent-working/typing affordances stay in the caller; only the
- * scrolling message area is owned here. `footer` renders below the last message
- * (inside the scroll window) so the agent-working / typing indicators ride the
- * bottom-stick along with new messages.
+ * The composer and activity strip stay in the caller; only the scrolling
+ * message area is owned here.
  *
  * Opens scrolled to the latest message (chat convention), or to a deep-linked
  * `highlightMessageId` when present.
@@ -39,7 +36,6 @@ function MessageViewport({
   ownName,
   highlightMessageId,
   emptyLabel,
-  footer,
   onOpenThread,
   onScrollToMessage,
   onReact,
@@ -62,8 +58,6 @@ function MessageViewport({
   highlightMessageId?: string | null;
   /** Centered placeholder shown when there are no messages yet. */
   emptyLabel: string;
-  /** Live affordances (agent-working / typing) pinned beneath the last message. */
-  footer?: ReactNode;
   /** Called when the user opens the message's side thread. */
   onOpenThread?: (message: ChannelMessage) => void;
   /**
@@ -188,7 +182,6 @@ function MessageViewport({
             {loadErrorLabel}
           </button>
         </div>
-        {footer}
       </div>
     );
   }
@@ -201,17 +194,13 @@ function MessageViewport({
     );
   }
 
-  // Empty thread: render the placeholder + live affordances directly (no
-  // message rows). The previous plain-map rendering always kept the
-  // agent-working / typing indicators visible even before the first message -
-  // preserve that.
+  // Empty thread: render the placeholder directly (no message rows).
   if (messages.length === 0) {
     return (
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-5 pb-5 pt-3">
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
           {emptyLabel}
         </div>
-        {footer}
       </div>
     );
   }
@@ -289,7 +278,7 @@ function MessageViewport({
         <div className="virtuoso-item-list pt-3" data-testid="message-item-list">
           {renderLoadOlderAffordance()}
           {messages.map(renderRow)}
-          {footer ? <div className="px-5 pb-5 pt-2">{footer}</div> : <div className="pb-5" />}
+          <div className="pb-5" />
         </div>
       </div>
     );
@@ -322,7 +311,7 @@ function MessageViewport({
               {renderLoadOlderAffordance()}
             </div>
           ),
-          Footer: () => (footer ? <div className="px-5 pb-5 pt-2">{footer}</div> : <div className="pb-5" />),
+          Footer: () => <div className="pb-5" />,
         }}
         itemContent={(_, msg) => renderRow(msg)}
       />

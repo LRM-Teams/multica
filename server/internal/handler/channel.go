@@ -2388,9 +2388,13 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 		b.WriteString("\n")
 	}
 	if len(messages) > 0 {
-		b.WriteString("Recent channel messages:\n")
+		if trigger.ThreadRootMessageID != nil {
+			b.WriteString("Thread context (root message first, then recent replies from this thread only):\n")
+		} else {
+			b.WriteString("Recent channel messages from this channel only:\n")
+		}
 		for _, msg := range messages {
-			fmt.Fprintf(&b, "[%s] %s (%s): %s\n", msg.CreatedAt, msg.AuthorName, msg.AuthorType, msg.Content)
+			fmt.Fprintf(&b, "%s\n", formatChannelMessageLine(msg))
 		}
 		b.WriteString("\n")
 	}

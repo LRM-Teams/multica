@@ -68,7 +68,7 @@ type Task struct {
 	NewCommentsSince         string               `json:"new_comments_since,omitempty"`          // RFC3339 anchor (last run's started_at) the count is measured from; empty on cold start
 	ChatSessionID            string               `json:"chat_session_id,omitempty"`             // non-empty for chat tasks
 	ChatMessage              string               `json:"chat_message,omitempty"`                // user message content for chat tasks
-	ChatContextSummary       string               `json:"chat_context_summary,omitempty"`        // compact recent-context handoff when native resume is skipped
+	ChatContextSummary       string               `json:"chat_context_summary,omitempty"`        // compact surface-scoped context handoff when native resume is skipped
 	ChatMessageAttachments   []ChatAttachmentMeta `json:"chat_message_attachments,omitempty"`    // attachments linked to the chat message; agent uses these to `multica attachment download <id>`
 	AutopilotRunID           string               `json:"autopilot_run_id,omitempty"`            // non-empty for autopilot run_only tasks
 	AutopilotID              string               `json:"autopilot_id,omitempty"`                // autopilot that spawned this run

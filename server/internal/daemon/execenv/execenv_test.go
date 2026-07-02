@@ -912,7 +912,7 @@ func TestInjectRuntimeConfigCodex(t *testing.T) {
 
 	ctx := TaskContextForEnv{
 		IssueID:     "test-issue-id",
-		AgentSkills: []SkillContextForEnv{{Name: "Coding", Content: "Write good code."}},
+		AgentSkills: []SkillContextForEnv{{Name: "Coding", Description: "Use when writing code.", Content: "Write good code."}},
 	}
 
 	if _, err := InjectRuntimeConfig(dir, "codex", ctx); err != nil {
@@ -925,11 +925,17 @@ func TestInjectRuntimeConfigCodex(t *testing.T) {
 	}
 
 	s := string(content)
-	if !strings.Contains(s, "Multica Agent Runtime") {
-		t.Error("AGENTS.md missing meta skill header")
-	}
-	if !strings.Contains(s, "Coding") {
-		t.Error("AGENTS.md missing skill name")
+	for _, want := range []string{
+		"Multica Agent Runtime",
+		"Skill context is injected as a lightweight index only",
+		"Coding",
+		"Use when writing code.",
+		"location: `$CODEX_HOME/skills/coding/SKILL.md`",
+		"load the complete skill file only when needed",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("AGENTS.md missing %q", want)
+		}
 	}
 }
 

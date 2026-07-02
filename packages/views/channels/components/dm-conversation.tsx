@@ -17,23 +17,14 @@ import {
   useRemoveChannelReaction,
   useSetChannelTyping,
 } from "@multica/core/channels";
-import {
-  chatKeys,
-  chatMessagesPageOptions,
-  pendingChatTaskOptions,
-} from "@multica/core/chat/queries";
-import { useMarkChatSessionRead } from "@multica/core/chat/mutations";
-import { useChatStore } from "@multica/core/chat";
 import { dmKeys } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
-import { useAgentPresenceDetail } from "@multica/core/agents";
 import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
 import { useFileUpload, type UploadResult } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { useCurrentWorkspace } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
-import type { ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload, ChatMessage } from "@multica/core/types";
+import type { ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Drawer } from "@multica/ui/components/ui/drawer";
 import {
@@ -53,8 +44,6 @@ import { ContentEditor, type ContentEditorRef } from "../../editor/content-edito
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useT } from "../../i18n/use-t";
-import { ChatMessageList } from "../../chat/components/chat-message-list";
-import { ChatInput } from "../../chat/components/chat-input";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelComposer, ConversationHeader, MobileThreadDrawerContent } from "./conversation-surface";
@@ -66,14 +55,15 @@ import {
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 
 /**
- * DM detail pane. A DM routes entirely by `source`:
+ * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
  *  - `dm_channel`    — the DM IS a kind='dm' channel, so we reuse the exact
  *    channel conversation stack (ChannelMessageBubble + ContentEditor composer
  *    + ConversationActivityStrip + channel queries/mutations +
  *    channel:message / channel:typing WS).
- *  - `legacy_session` — a pre-existing standalone chat_session, so we reuse the
- *    chat-window internals (ChatMessageList + ChatInput + chat queries +
- *    chat:message WS, driven through the chat store).
+ *
+ * `legacy_session` may still appear from old `/api/dm` responses until the
+ * backend cleanup removes that source. Keep it fail-closed here so a stale
+ * deep link or cached row never reopens the old Chat surface.
  *
  * The DM header chrome differs from the group header: peer avatar + name (+
  * agent presence dot) and Files only — no stats, no share, no member
@@ -81,7 +71,7 @@ import { isConversationMuted, MutedIndicator } from "./conversation-muted";
  */
 export function DmConversation({ dm, onBack }: { dm: DMItem; onBack: () => void }) {
   if (dm.source === "legacy_session") {
-    return <DmLegacyConversation dm={dm} onBack={onBack} />;
+    return <DmLegacyUnavailableConversation dm={dm} onBack={onBack} />;
   }
   return <DmChannelConversation dm={dm} onBack={onBack} />;
 }
@@ -823,106 +813,18 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   return conversationPane;
 }
 
-// ─── legacy_session: reuse the chat-window internals via the chat store ────
+// ─── legacy_session: fail closed until backend removes the legacy source ────
 
-function DmLegacyConversation({ dm, onBack }: { dm: DMItem; onBack: () => void }) {
-  const wsId = useWorkspaceId();
-  const qc = useQueryClient();
-  const ws = useCurrentWorkspace();
-  const sessionId = dm.id;
-  const agentId = dm.peer.id;
-
-  const setActiveSession = useChatStore((s) => s.setActiveSession);
-  const setSelectedAgentId = useChatStore((s) => s.setSelectedAgentId);
-  const { mutate: markRead } = useMarkChatSessionRead();
-
-  // Drive the chat store so ChatInput's per-session draft keying and send path
-  // target this legacy session. The chat store is the single source of truth
-  // these reused pieces read from. We restore nothing on unmount — the chat
-  // window is no longer mounted as an open surface, so leaving activeSessionId
-  // set is harmless and keeps the legacy draft scoped to the session.
-  useEffect(() => {
-    setSelectedAgentId(agentId);
-    setActiveSession(sessionId);
-  }, [agentId, sessionId, setActiveSession, setSelectedAgentId]);
-
-  const {
-    data: rawMessagePages,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-  } = useInfiniteQuery(chatMessagesPageOptions(sessionId));
-  const messagePages = rawMessagePages?.pages ?? [];
-  const messages: ChatMessage[] = [...messagePages]
-    .reverse()
-    .flatMap((page) => page.messages);
-
-  const { data: pendingTask } = useQuery(pendingChatTaskOptions(sessionId));
-  const pendingTaskId = pendingTask?.task_id ?? null;
-
-  // Agent presence drives the header dot and could feed the status pill; pass
-  // undefined while loading so reused copy stays neutral.
-  const presenceDetail = useAgentPresenceDetail(ws?.id, agentId);
-  const availability =
-    presenceDetail === "loading" ? undefined : presenceDetail.availability;
-
-  // Mark read on open and on inbound replies.
-  useEffect(() => {
-    markRead(sessionId);
-  }, [sessionId, markRead]);
-
-  useWSEvent("chat:message", (payload) => {
-    const e = payload as { chat_session_id?: string };
-    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-    if (e.chat_session_id === sessionId) {
-      qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
-      qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
-      markRead(sessionId);
-    }
-  });
-
-  const { uploadWithToast } = useFileUpload(api);
-  const handleUploadFile = useCallback(
-    (file: File) => uploadWithToast(file, { chatSessionId: sessionId }),
-    [sessionId, uploadWithToast],
-  );
-
-  const handleSend = useCallback(
-    async (content: string, attachmentIds?: string[]): Promise<boolean> => {
-      try {
-        await api.sendChatMessage(sessionId, content, attachmentIds);
-      } catch {
-        toast.error("Failed to send");
-        return false;
-      }
-      qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
-      qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
-      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-      return true;
-    },
-    [sessionId, qc, wsId],
-  );
-
+function DmLegacyUnavailableConversation({ dm, onBack }: { dm: DMItem; onBack: () => void }) {
+  const { t } = useT("channels");
   return (
     <main className="flex flex-1 min-h-0 min-w-0 flex-col">
       <DmHeader dm={dm} onBack={onBack} />
-      <ChatMessageList
-        key={sessionId}
-        messages={messages}
-        pendingTask={pendingTask}
-        availability={availability}
-        hasOlderMessages={!!hasNextPage}
-        isFetchingOlderMessages={isFetchingNextPage}
-        onLoadOlderMessages={() => void fetchNextPage()}
-      />
-      <ChatInput
-        onSend={handleSend}
-        onUploadFile={handleUploadFile}
-        isRunning={!!pendingTaskId}
-        wsId={wsId}
-        sessionId={sessionId}
-        agentName={dm.peer.name}
-      />
+      <div className="flex flex-1 items-center justify-center px-6 text-center">
+        <p className="max-w-sm text-sm text-muted-foreground">
+          {t(($) => $.dm.legacy_unavailable)}
+        </p>
+      </div>
     </main>
   );
 }

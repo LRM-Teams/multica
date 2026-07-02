@@ -199,6 +199,7 @@
     "muted_label": "ミュート中",
     "close_chat": "チャットを閉じる",
     "action_failed": "操作に失敗しました。もう一度お試しください",
+    "legacy_unavailable": "この古いダイレクトメッセージは移行中のため、現在のメッセージ画面では開けません。",
     "composer_placeholder": "{{name}} にメッセージ…"
   },
   "quote": {

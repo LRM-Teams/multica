@@ -2235,8 +2235,9 @@ export function ChannelsPage() {
     channelConversationPane
   );
 
-  // DM detail pane — branches by source internally (dm_channel vs
-  // legacy_session). Rendered in place of the group detail when a DM is active.
+  // DM detail pane — rendered in place of the group detail when a DM is active.
+  // Visible direct messages use the R2 dm_channel surface; legacy sessions are
+  // fail-closed inside DmConversation until the backend source is removed.
   // When a `?dm=` deep link opens cold, `activeDmId` is set before the DM list
   // resolves the row — keep the conversation structure in place instead of
   // dropping to a blank pane during that window.

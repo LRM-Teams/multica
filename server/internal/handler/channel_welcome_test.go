@@ -30,7 +30,8 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 		"💯",
 		"🎉",
 		"multica-stickers",
-		":sticker:hi:",
+		"\"parts\"",
+		"\"sticker_id\":\"hi\"",
 		"全体总监以上欢迎一下新同事",
 	} {
 		if !strings.Contains(p, want) {
@@ -60,7 +61,8 @@ func TestBuildChannelMentionPromptIncludesStickerInstruction(t *testing.T) {
 		for _, want := range []string{
 			"Multica group chat #产品讨论",
 			"multica-stickers",
-			":sticker:hi:",
+			"\"parts\"",
+			"\"sticker_id\":\"hi\"",
 			"Current message to respond to",
 			trigger.Content,
 		} {
@@ -80,8 +82,8 @@ func TestBuildChannelWelcomePrompt(t *testing.T) {
 	if !strings.Contains(p, "产品讨论") {
 		t.Error("prompt should name the channel")
 	}
-	if !strings.Contains(p, ":sticker:") {
-		t.Error("prompt should instruct the agent to include a sticker token")
+	if !strings.Contains(p, "\"parts\"") || !strings.Contains(p, "\"sticker_id\":\"applause\"") {
+		t.Error("prompt should instruct the agent to include structured sticker parts")
 	}
 	if !strings.Contains(p, "multica-stickers") {
 		t.Error("prompt should point at the multica-stickers skill")

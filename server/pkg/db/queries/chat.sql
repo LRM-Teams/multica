@@ -74,8 +74,8 @@ UPDATE chat_session SET updated_at = now()
 WHERE id = $1;
 
 -- name: CreateChatMessage :one
-INSERT INTO chat_message (chat_session_id, role, content, task_id, failure_reason, elapsed_ms)
-VALUES ($1, $2, $3, sqlc.narg(task_id), sqlc.narg(failure_reason), sqlc.narg(elapsed_ms))
+INSERT INTO chat_message (chat_session_id, role, content, parts, task_id, failure_reason, elapsed_ms)
+VALUES ($1, $2, $3, COALESCE(sqlc.arg(parts)::jsonb, '[]'::jsonb), sqlc.narg(task_id), sqlc.narg(failure_reason), sqlc.narg(elapsed_ms))
 RETURNING *;
 
 -- name: LinkChatMessageToTask :exec

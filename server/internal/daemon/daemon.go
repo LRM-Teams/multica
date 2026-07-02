@@ -20,6 +20,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/pkg/agent"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
@@ -2523,7 +2524,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 	switch result.Status {
 	case "completed":
 		taskLog.Info("task completed", "status", result.Status)
-		err := d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.SessionID, result.WorkDir)
+		err := d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.SessionID, result.WorkDir, result.Parts)
 		if err == nil {
 			return
 		}
@@ -3137,9 +3138,20 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		})
 	}
 
+	output := result.Output
+	var parts []protocol.MessagePart
+	if normalizedOutput, normalizedParts, structured, err := parseStructuredMessageOutput(result.Output); structured {
+		if err != nil {
+			taskLog.Warn("agent structured message parts invalid; keeping raw output", "error", err)
+		} else {
+			output = normalizedOutput
+			parts = normalizedParts
+		}
+	}
+
 	switch result.Status {
 	case "completed":
-		if result.Output == "" {
+		if output == "" && len(parts) == 0 {
 			// The agent completed successfully but produced no text output.
 			// This is valid — the agent may have done all its work via tool
 			// calls (e.g. posting comments via CLI, pushing code). Treat as
@@ -3161,13 +3173,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// from the (agent_id, issue_id) resume lookup — otherwise a manual
 		// rerun would inherit the same poisoned session and reproduce the
 		// same bad output.
-		if reason, ok := classifyPoisonedOutput(result.Output); ok {
+		if reason, ok := classifyPoisonedOutput(output); ok {
 			taskLog.Warn("agent finished with poisoned fallback output, classifying as blocked",
 				"failure_reason", reason,
 			)
 			return TaskResult{
 				Status:        "blocked",
-				Comment:       result.Output,
+				Comment:       output,
 				SessionID:     result.SessionID,
 				WorkDir:       env.WorkDir,
 				EnvRoot:       env.RootDir,
@@ -3177,7 +3189,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 		return TaskResult{
 			Status:    "completed",
-			Comment:   result.Output,
+			Comment:   output,
+			Parts:     parts,
 			SessionID: result.SessionID,
 			WorkDir:   env.WorkDir,
 			EnvRoot:   env.RootDir,

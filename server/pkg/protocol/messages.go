@@ -2,6 +2,19 @@ package protocol
 
 import "encoding/json"
 
+const (
+	MessagePartTypeText    = "text"
+	MessagePartTypeSticker = "sticker"
+)
+
+type MessagePart struct {
+	Type      string `json:"type"`
+	Text      string `json:"text,omitempty"`
+	PackID    string `json:"pack_id,omitempty"`
+	StickerID string `json:"sticker_id,omitempty"`
+	Alt       string `json:"alt,omitempty"`
+}
+
 // Message is the envelope for all WebSocket messages.
 type Message struct {
 	Type    string          `json:"type"`
@@ -97,9 +110,10 @@ type TaskProgressPayload struct {
 
 // TaskCompletedPayload is sent from daemon to server when a task finishes.
 type TaskCompletedPayload struct {
-	TaskID string `json:"task_id"`
-	PRURL  string `json:"pr_url,omitempty"`
-	Output string `json:"output,omitempty"`
+	TaskID string        `json:"task_id"`
+	PRURL  string        `json:"pr_url,omitempty"`
+	Output string        `json:"output,omitempty"`
+	Parts  []MessagePart `json:"parts,omitempty"`
 }
 
 // TaskMessagePayload represents a single agent execution message (tool call, text, etc.)
@@ -131,12 +145,13 @@ type RuntimeInfo struct {
 
 // ChatMessagePayload is broadcast when a new chat message is created.
 type ChatMessagePayload struct {
-	ChatSessionID string `json:"chat_session_id"`
-	MessageID     string `json:"message_id"`
-	Role          string `json:"role"`
-	Content       string `json:"content"`
-	TaskID        string `json:"task_id,omitempty"`
-	CreatedAt     string `json:"created_at"`
+	ChatSessionID string        `json:"chat_session_id"`
+	MessageID     string        `json:"message_id"`
+	Role          string        `json:"role"`
+	Content       string        `json:"content"`
+	Parts         []MessagePart `json:"parts,omitempty"`
+	TaskID        string        `json:"task_id,omitempty"`
+	CreatedAt     string        `json:"created_at"`
 }
 
 // ChatDonePayload is broadcast when an agent finishes responding to a chat
@@ -145,12 +160,13 @@ type ChatMessagePayload struct {
 // during the live-timeline → AssistantMessage handoff that previously caused
 // a visible flicker (#2123).
 type ChatDonePayload struct {
-	ChatSessionID string `json:"chat_session_id"`
-	TaskID        string `json:"task_id"`
-	MessageID     string `json:"message_id,omitempty"`
-	Content       string `json:"content,omitempty"`
-	ElapsedMs     int64  `json:"elapsed_ms,omitempty"`
-	CreatedAt     string `json:"created_at,omitempty"`
+	ChatSessionID string        `json:"chat_session_id"`
+	TaskID        string        `json:"task_id"`
+	MessageID     string        `json:"message_id,omitempty"`
+	Content       string        `json:"content,omitempty"`
+	Parts         []MessagePart `json:"parts,omitempty"`
+	ElapsedMs     int64         `json:"elapsed_ms,omitempty"`
+	CreatedAt     string        `json:"created_at,omitempty"`
 }
 
 // ChatSessionReadPayload is broadcast when the creator marks a session as read.

@@ -2,23 +2,58 @@ package handler
 
 import (
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/messageparts"
 	"github.com/multica-ai/multica/server/internal/stickerimg"
 	"github.com/multica-ai/multica/server/internal/stickers"
 )
+
+type StickerPackResponse struct {
+	ID       string                 `json:"id"`
+	Name     string                 `json:"name"`
+	Source   string                 `json:"source"`
+	License  string                 `json:"license"`
+	Stickers []StickerAssetResponse `json:"stickers"`
+}
+
+type StickerAssetResponse struct {
+	PackID    string   `json:"pack_id"`
+	StickerID string   `json:"sticker_id"`
+	Name      string   `json:"name"`
+	NameEn    string   `json:"name_en"`
+	Emotion   string   `json:"emotion"`
+	AssetURL  string   `json:"asset_url"`
+	MimeType  string   `json:"mime_type"`
+	Alt       string   `json:"alt"`
+	Tags      []string `json:"tags"`
+	Animated  bool     `json:"animated"`
+}
 
 // ListStickers returns the full sticker catalog (the agent sticker library).
 // Public + unauthenticated on purpose: the catalog is non-sensitive embedded
 // metadata, and the images it points at are loaded by <img> tags that cannot
 // attach auth headers. The frontend uses this to power the (future) human
-// picker and to resolve :sticker:<id>: tokens to names for tooltips/alt text.
+// picker and to resolve structured sticker parts to assets, names, and alt
+// text for renderers.
 func (h *Handler) ListStickers(w http.ResponseWriter, r *http.Request) {
+	assets := make([]StickerAssetResponse, 0, len(stickers.All()))
+	for _, sticker := range stickers.All() {
+		assets = append(assets, stickerAssetResponse(sticker))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"stickers": stickers.All(),
 		"license":  stickers.License(),
 		"source":   stickers.Source(),
+		"packs": []StickerPackResponse{{
+			ID:       messageparts.BuiltinStickerPackID,
+			Name:     "Built-in stickers",
+			Source:   stickers.Source(),
+			License:  stickers.License(),
+			Stickers: assets,
+		}},
 	})
 }
 
@@ -52,5 +87,20 @@ func stickerContentType(file string) string {
 		return "image/gif"
 	default:
 		return "image/jpeg"
+	}
+}
+
+func stickerAssetResponse(sticker stickers.Sticker) StickerAssetResponse {
+	return StickerAssetResponse{
+		PackID:    messageparts.BuiltinStickerPackID,
+		StickerID: sticker.ID,
+		Name:      sticker.Name,
+		NameEn:    sticker.NameEn,
+		Emotion:   sticker.Emotion,
+		AssetURL:  "/api/stickers/" + sticker.ID,
+		MimeType:  stickerContentType(sticker.File),
+		Alt:       firstNonEmpty(sticker.Name, sticker.NameEn, sticker.ID),
+		Tags:      sticker.Tags,
+		Animated:  strings.EqualFold(filepath.Ext(sticker.File), ".gif"),
 	}
 }

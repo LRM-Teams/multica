@@ -1,3 +1,5 @@
+import type { MessagePart } from "./message-part";
+
 export interface ChannelLastMessage {
   author_type: "user" | "agent" | "lark" | "system";
   author_name: string;
@@ -67,6 +69,7 @@ export interface ChannelMessage {
   author_id: string | null;
   author_name: string;
   content: string;
+  parts?: MessagePart[];
   source: "multica" | "lark";
   external_message_id: string | null;
   reply_to_message_id?: string | null;

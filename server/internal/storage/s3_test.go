@@ -92,6 +92,34 @@ func TestS3StorageKeyFromURL_CustomEndpointWithTrailingSlash(t *testing.T) {
 	}
 }
 
+func TestS3StorageKeyFromURL_PublicBaseURLPreservesNestedKey(t *testing.T) {
+	s := &S3Storage{
+		bucket:        "test-bucket",
+		publicBaseURL: "https://cdn.example.com/assets",
+		endpointURL:   "https://cos.ap-beijing.myqcloud.com",
+	}
+
+	rawURL := "https://cdn.example.com/assets/uploads/abc/file.png"
+
+	if got := s.KeyFromURL(rawURL); got != "uploads/abc/file.png" {
+		t.Fatalf("KeyFromURL(%q) = %q, want %q", rawURL, got, "uploads/abc/file.png")
+	}
+}
+
+func TestS3StorageKeyFromURL_CustomEndpointVirtualHostedStyle(t *testing.T) {
+	s := &S3Storage{
+		bucket:         "multica-assets",
+		endpointURL:    "https://cos.ap-beijing.myqcloud.com",
+		forcePathStyle: false,
+	}
+
+	rawURL := "https://multica-assets.cos.ap-beijing.myqcloud.com/uploads/abc/file.png"
+
+	if got := s.KeyFromURL(rawURL); got != "uploads/abc/file.png" {
+		t.Fatalf("KeyFromURL(%q) = %q, want %q", rawURL, got, "uploads/abc/file.png")
+	}
+}
+
 func TestS3StorageKeyFromURL_VirtualHostedStylePreservesNestedKey(t *testing.T) {
 	s := &S3Storage{
 		bucket: "test-bucket",
@@ -159,12 +187,14 @@ func TestS3StorageUploadedURL(t *testing.T) {
 	const key = "uploads/abc/file.png"
 
 	cases := []struct {
-		name        string
-		bucket      string
-		region      string
-		cdnDomain   string
-		endpointURL string
-		want        string
+		name           string
+		bucket         string
+		region         string
+		cdnDomain      string
+		publicBaseURL  string
+		endpointURL    string
+		forcePathStyle bool
+		want           string
 	}{
 		{
 			name:   "default aws virtual hosted style",
@@ -186,18 +216,20 @@ func TestS3StorageUploadedURL(t *testing.T) {
 			want:      "https://cdn.example.com/uploads/abc/file.png",
 		},
 		{
-			name:        "endpoint only",
-			bucket:      "test-bucket",
-			region:      "us-east-1",
-			endpointURL: "http://localhost:9000",
-			want:        "http://localhost:9000/test-bucket/uploads/abc/file.png",
+			name:           "endpoint only",
+			bucket:         "test-bucket",
+			region:         "us-east-1",
+			endpointURL:    "http://localhost:9000",
+			forcePathStyle: true,
+			want:           "http://localhost:9000/test-bucket/uploads/abc/file.png",
 		},
 		{
-			name:        "endpoint with trailing slash",
-			bucket:      "test-bucket",
-			region:      "us-east-1",
-			endpointURL: "http://localhost:9000/",
-			want:        "http://localhost:9000/test-bucket/uploads/abc/file.png",
+			name:           "endpoint with trailing slash",
+			bucket:         "test-bucket",
+			region:         "us-east-1",
+			endpointURL:    "http://localhost:9000/",
+			forcePathStyle: true,
+			want:           "http://localhost:9000/test-bucket/uploads/abc/file.png",
 		},
 		{
 			name:        "endpoint and cdn both set prefers cdn",
@@ -207,19 +239,49 @@ func TestS3StorageUploadedURL(t *testing.T) {
 			endpointURL: "http://localhost:9000",
 			want:        "https://cdn.example.com/uploads/abc/file.png",
 		},
+		{
+			name:          "public base url wins over endpoint and cdn",
+			bucket:        "test-bucket",
+			region:        "us-east-1",
+			cdnDomain:     "cdn.example.com",
+			publicBaseURL: "https://assets.example.com/multica",
+			endpointURL:   "http://localhost:9000",
+			want:          "https://assets.example.com/multica/uploads/abc/file.png",
+		},
+		{
+			name:           "custom endpoint virtual hosted style",
+			bucket:         "multica-assets",
+			region:         "ap-beijing",
+			endpointURL:    "https://cos.ap-beijing.myqcloud.com",
+			forcePathStyle: false,
+			want:           "https://multica-assets.cos.ap-beijing.myqcloud.com/uploads/abc/file.png",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &S3Storage{
-				bucket:      tc.bucket,
-				region:      tc.region,
-				cdnDomain:   tc.cdnDomain,
-				endpointURL: tc.endpointURL,
+				bucket:         tc.bucket,
+				region:         tc.region,
+				cdnDomain:      tc.cdnDomain,
+				publicBaseURL:  tc.publicBaseURL,
+				endpointURL:    tc.endpointURL,
+				forcePathStyle: tc.forcePathStyle,
 			}
 			if got := s.uploadedURL(key); got != tc.want {
 				t.Fatalf("uploadedURL() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestS3StorageCdnDomainPrefersPublicBaseURL(t *testing.T) {
+	s := &S3Storage{
+		cdnDomain:     "legacy-cdn.example.com",
+		publicBaseURL: "https://assets.example.com/multica",
+	}
+
+	if got := s.CdnDomain(); got != "assets.example.com" {
+		t.Fatalf("CdnDomain() = %q, want %q", got, "assets.example.com")
 	}
 }

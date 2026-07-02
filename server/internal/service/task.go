@@ -16,6 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/mention"
+	"github.com/multica-ai/multica/server/internal/messageparts"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -1412,28 +1413,40 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	if task.ChatSessionID.Valid {
 		var assistantMsg *db.ChatMessage
 		var payload protocol.TaskCompletedPayload
-		if err := json.Unmarshal(result, &payload); err == nil && payload.Output != "" {
+		if err := json.Unmarshal(result, &payload); err == nil && (payload.Output != "" || len(payload.Parts) > 0) {
 			// Same unescape as the issue-comment path above: literal `\n` from
 			// agent stdout becomes a real newline so the chat panel renders
 			// paragraph breaks instead of one wall of prose.
 			body := util.UnescapeBackslashEscapes(payload.Output)
-			row, err := s.Queries.CreateChatMessage(ctx, db.CreateChatMessageParams{
-				ChatSessionID: task.ChatSessionID,
-				Role:          "assistant",
-				Content:       redact.Text(body),
-				TaskID:        task.ID,
-				ElapsedMs:     computeChatElapsedMs(task),
-			})
-			if err != nil {
-				slog.Error("failed to save assistant chat message", "task_id", util.UUIDToString(task.ID), "error", err)
+			parts := payload.Parts
+			var partsErr error
+			body, parts, partsErr = messageparts.Normalize(body, parts)
+			if partsErr != nil {
+				slog.Warn("dropping invalid chat message parts", "task_id", util.UUIDToString(task.ID), "error", partsErr)
+				parts = nil
+			}
+			if strings.TrimSpace(body) == "" {
+				slog.Warn("skipping empty assistant chat message", "task_id", util.UUIDToString(task.ID))
 			} else {
-				assistantMsg = &row
-				// Event-driven unread: stamp unread_since on the first unread
-				// assistant message. No-op if the session already has unread.
-				// If the user is actively viewing the session, the frontend's
-				// auto-mark-read effect will clear this within a tick.
-				if err := s.Queries.SetUnreadSinceIfNull(ctx, task.ChatSessionID); err != nil {
-					slog.Warn("failed to set unread_since", "chat_session_id", util.UUIDToString(task.ChatSessionID), "error", err)
+				row, err := s.Queries.CreateChatMessage(ctx, db.CreateChatMessageParams{
+					ChatSessionID: task.ChatSessionID,
+					Role:          "assistant",
+					Content:       redact.Text(body),
+					Parts:         messageparts.MustJSON(parts),
+					TaskID:        task.ID,
+					ElapsedMs:     computeChatElapsedMs(task),
+				})
+				if err != nil {
+					slog.Error("failed to save assistant chat message", "task_id", util.UUIDToString(task.ID), "error", err)
+				} else {
+					assistantMsg = &row
+					// Event-driven unread: stamp unread_since on the first unread
+					// assistant message. No-op if the session already has unread.
+					// If the user is actively viewing the session, the frontend's
+					// auto-mark-read effect will clear this within a tick.
+					if err := s.Queries.SetUnreadSinceIfNull(ctx, task.ChatSessionID); err != nil {
+						slog.Warn("failed to set unread_since", "chat_session_id", util.UUIDToString(task.ChatSessionID), "error", err)
+					}
 				}
 			}
 		}
@@ -2167,6 +2180,7 @@ func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQu
 	if msg != nil {
 		payload.MessageID = util.UUIDToString(msg.ID)
 		payload.Content = msg.Content
+		payload.Parts = messageparts.Decode(msg.Parts)
 		if msg.CreatedAt.Valid {
 			payload.CreatedAt = msg.CreatedAt.Time.UTC().Format(time.RFC3339Nano)
 		}

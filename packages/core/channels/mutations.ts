@@ -4,6 +4,7 @@ import { useWorkspaceId } from "../hooks";
 import { channelKeys, invalidateChannelMessages, upsertChannelMessageInCache } from "./queries";
 import { dmKeys } from "../dm/queries";
 import type { DMItem } from "../dm/types";
+import type { MessagePart } from "../types";
 
 export function useCreateChannel() {
   const qc = useQueryClient();
@@ -72,12 +73,14 @@ export function useSendChannelMessage() {
       content,
       attachmentIds,
       replyToMessageId,
+      parts,
     }: {
       channelId: string;
       content: string;
       attachmentIds?: string[];
       replyToMessageId?: string | null;
-    }) => api.sendChannelMessage(channelId, content, attachmentIds, replyToMessageId),
+      parts?: MessagePart[];
+    }) => api.sendChannelMessage(channelId, content, attachmentIds, replyToMessageId, parts),
     onSuccess: (msg) => {
       upsertChannelMessageInCache(qc, msg);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });

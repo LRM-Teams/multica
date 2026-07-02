@@ -72,6 +72,7 @@ import type {
   ChatMessage,
   ChatMessagesPage,
   ChatPendingTask,
+  MessagePart,
   PendingChatTasksResponse,
   SendChatMessageResponse,
   Channel,
@@ -1793,10 +1794,14 @@ export class ApiClient {
     sessionId: string,
     content: string,
     attachmentIds?: string[],
+    parts?: MessagePart[],
   ): Promise<SendChatMessageResponse> {
-    const body: { content: string; attachment_ids?: string[] } = { content };
+    const body: { content: string; attachment_ids?: string[]; parts?: MessagePart[] } = { content };
     if (attachmentIds && attachmentIds.length > 0) {
       body.attachment_ids = attachmentIds;
+    }
+    if (parts && parts.length > 0) {
+      body.parts = parts;
     }
     return this.fetch(`/api/chat/sessions/${sessionId}/messages`, {
       method: "POST",
@@ -2006,13 +2011,17 @@ export class ApiClient {
     content: string,
     attachmentIds?: string[],
     replyToMessageId?: string | null,
+    parts?: MessagePart[],
   ): Promise<ChannelMessage> {
-    const body: { content: string; attachment_ids?: string[]; reply_to_message_id?: string } = { content };
+    const body: { content: string; attachment_ids?: string[]; reply_to_message_id?: string; parts?: MessagePart[] } = { content };
     if (attachmentIds && attachmentIds.length > 0) {
       body.attachment_ids = attachmentIds;
     }
     if (replyToMessageId) {
       body.reply_to_message_id = replyToMessageId;
+    }
+    if (parts && parts.length > 0) {
+      body.parts = parts;
     }
     return this.fetch(`/api/channels/${channelId}/messages`, {
       method: "POST",
@@ -2040,13 +2049,17 @@ export class ApiClient {
     content: string,
     attachmentIds?: string[],
     replyToMessageId?: string | null,
+    parts?: MessagePart[],
   ): Promise<ChannelMessage> {
-    const body: { content: string; attachment_ids?: string[]; reply_to_message_id?: string } = { content };
+    const body: { content: string; attachment_ids?: string[]; reply_to_message_id?: string; parts?: MessagePart[] } = { content };
     if (attachmentIds && attachmentIds.length > 0) {
       body.attachment_ids = attachmentIds;
     }
     if (replyToMessageId) {
       body.reply_to_message_id = replyToMessageId;
+    }
+    if (parts && parts.length > 0) {
+      body.parts = parts;
     }
     return this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread`, {
       method: "POST",

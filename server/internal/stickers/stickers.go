@@ -1,7 +1,7 @@
 // Package stickers holds the platform sticker catalog (a curated set of
-// expressive images) and lookup + search over it. Agents reference a sticker in
-// chat/channel/DM content with the token :sticker:<id>: ; the frontend resolves
-// that token to GET /api/stickers/<id>.
+// expressive images) and lookup + search over it. Messages reference stickers
+// through structured message parts; renderers resolve sticker_id values to
+// GET /api/stickers/<id>.
 //
 // This package embeds only catalog.json (small) so it can be imported by the
 // CLI — which needs search but not the image bytes — without bloating that

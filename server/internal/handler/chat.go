@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
+	"github.com/multica-ai/multica/server/internal/messageparts"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -464,8 +465,9 @@ func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 type SendChatMessageRequest struct {
-	Content       string   `json:"content"`
-	AttachmentIDs []string `json:"attachment_ids"`
+	Content       string                 `json:"content"`
+	Parts         []protocol.MessagePart `json:"parts"`
+	AttachmentIDs []string               `json:"attachment_ids"`
 }
 
 type SendChatMessageResponse struct {
@@ -492,7 +494,12 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Content == "" {
+	content, parts, err := messageparts.Normalize(req.Content, req.Parts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
+		return
+	}
+	if content == "" {
 		writeError(w, http.StatusBadRequest, "content is required")
 		return
 	}
@@ -527,7 +534,8 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	msg, err := h.Queries.CreateChatMessage(r.Context(), db.CreateChatMessageParams{
 		ChatSessionID: session.ID,
 		Role:          "user",
-		Content:       req.Content,
+		Content:       content,
+		Parts:         messageparts.MustJSON(parts),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create chat message")
@@ -596,7 +604,8 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 		ChatSessionID: resolvedSessionID,
 		MessageID:     uuidToString(msg.ID),
 		Role:          "user",
-		Content:       req.Content,
+		Content:       content,
+		Parts:         parts,
 		TaskID:        uuidToString(task.ID),
 		CreatedAt:     timestampToString(msg.CreatedAt),
 	})
@@ -1024,8 +1033,7 @@ type ChatSessionResponse struct {
 	Title       string `json:"title"`
 	Status      string `json:"status"`
 	// ProjectID is the chat's bound project (composer "current project"), or
-	// empty. Filled separately from chat_session.project_id, a column the
-	// generated ChatSession struct doesn't carry.
+	// empty. Filled separately so single and list endpoints stay consistent.
 	ProjectID string `json:"project_id,omitempty"`
 	// Only populated by list endpoints — single-session fetches return false.
 	HasUnread bool   `json:"has_unread"`
@@ -1034,12 +1042,13 @@ type ChatSessionResponse struct {
 }
 
 type ChatMessageResponse struct {
-	ID            string  `json:"id"`
-	ChatSessionID string  `json:"chat_session_id"`
-	Role          string  `json:"role"`
-	Content       string  `json:"content"`
-	TaskID        *string `json:"task_id"`
-	CreatedAt     string  `json:"created_at"`
+	ID            string                 `json:"id"`
+	ChatSessionID string                 `json:"chat_session_id"`
+	Role          string                 `json:"role"`
+	Content       string                 `json:"content"`
+	Parts         []protocol.MessagePart `json:"parts,omitempty"`
+	TaskID        *string                `json:"task_id"`
+	CreatedAt     string                 `json:"created_at"`
 	// FailureReason flags an assistant row synthesized by FailTask's chat
 	// fallback. Front-end uses it to switch to the destructive bubble.
 	FailureReason *string `json:"failure_reason"`
@@ -1116,6 +1125,7 @@ func chatMessageToResponse(m db.ChatMessage, attachments []AttachmentResponse) C
 		ChatSessionID: uuidToString(m.ChatSessionID),
 		Role:          m.Role,
 		Content:       m.Content,
+		Parts:         messageparts.Decode(m.Parts),
 		TaskID:        uuidToPtr(m.TaskID),
 		CreatedAt:     timestampToString(m.CreatedAt),
 		FailureReason: textToPtr(m.FailureReason),

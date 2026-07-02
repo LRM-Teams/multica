@@ -12,17 +12,16 @@ import (
 	"github.com/multica-ai/multica/server/internal/stickers"
 )
 
-// sticker is the agent surface for discovering stickers to drop into a message.
-// The catalog is embedded in the binary, so search is local and instant — no
-// API call. Agents don't "send" a sticker via this command; they put the
-// printed token (:sticker:<id>:) into their dm / channel message content.
+// sticker is the agent surface for discovering stickers to reference from
+// structured message parts. The catalog is embedded in the binary, so search
+// is local and instant — no API call. Agents don't "send" a sticker via this
+// command; they use the printed id as a message part's sticker_id.
 var stickerCmd = &cobra.Command{
 	Use:   "sticker",
 	Short: "Find stickers to use in chat, channels, and direct messages",
 	Long: "Discover stickers from the platform sticker library. Search by mood " +
-		"or keyword (Chinese or English), then drop the printed token into any " +
-		"message you send — e.g. put :sticker:thumbs-up: in a `multica dm` or a " +
-		"channel message and it renders as the sticker.\n\n" +
+		"or keyword (Chinese or English), then use the printed id as a " +
+		"structured message part's sticker_id.\n\n" +
 		"Use stickers sparingly, to add a little emotion — not on every message.",
 }
 
@@ -31,8 +30,8 @@ var stickerSearchCmd = &cobra.Command{
 	Short: "Search stickers by mood or keyword (zh/en)",
 	Long: "Search the sticker library by mood or keyword in Chinese or English " +
 		"(e.g. `multica sticker search 开心`, `multica sticker search celebrate`).\n" +
-		"Prints each match's token, name, and mood. Put the token into your " +
-		"message content to send it.",
+		"Prints each match's id, name, and mood. Use the id in structured " +
+		"message parts to send it.",
 	Args: exactArgs(1),
 	RunE: runStickerSearch,
 }
@@ -75,12 +74,12 @@ func runStickerList(cmd *cobra.Command, _ []string) error {
 
 func printStickerTable(list []stickers.Sticker) {
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "TOKEN\tNAME\tMOOD")
+	fmt.Fprintln(tw, "ID\tNAME\tMOOD")
 	for _, s := range list {
-		fmt.Fprintf(tw, ":sticker:%s:\t%s\t%s\n", s.ID, stickerName(s), s.Emotion)
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", s.ID, stickerName(s), s.Emotion)
 	}
 	tw.Flush()
-	fmt.Fprintf(os.Stdout, "\n%d sticker(s). Put a token into your message to send it.\n", len(list))
+	fmt.Fprintf(os.Stdout, "\n%d sticker(s). Use an id as a structured message part sticker_id.\n", len(list))
 }
 
 func stickerName(s stickers.Sticker) string {
@@ -94,12 +93,13 @@ func stickersToJSON(list []stickers.Sticker) []map[string]any {
 	out := make([]map[string]any, 0, len(list))
 	for _, s := range list {
 		out = append(out, map[string]any{
-			"id":      s.ID,
-			"token":   fmt.Sprintf(":sticker:%s:", s.ID),
-			"name":    s.Name,
-			"name_en": s.NameEn,
-			"emotion": s.Emotion,
-			"tags":    s.Tags,
+			"id":         s.ID,
+			"sticker_id": s.ID,
+			"token":      fmt.Sprintf(":sticker:%s:", s.ID), // Deprecated: kept for older clients.
+			"name":       s.Name,
+			"name_en":    s.NameEn,
+			"emotion":    s.Emotion,
+			"tags":       s.Tags,
 		})
 	}
 	return out

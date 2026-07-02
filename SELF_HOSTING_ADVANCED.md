@@ -93,12 +93,20 @@ For file uploads and attachments, configure S3 and (optionally) CloudFront:
 | `S3_BUCKET` | Bucket name only (e.g. `my-bucket`). Do **not** include the `.s3.<region>.amazonaws.com` suffix — the server constructs the public URL from `S3_BUCKET` + `S3_REGION` |
 | `S3_REGION` | AWS region (default: `us-west-2`). Must match the bucket's actual region — used for both SDK signing and public URLs |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Static credentials. When both are unset, the AWS SDK default credential chain is used |
-| `AWS_ENDPOINT_URL` | Custom S3-compatible endpoint (e.g. MinIO, R2, B2). Setting this switches to path-style URLs |
+| `AWS_ENDPOINT_URL` | Custom S3-compatible endpoint (e.g. MinIO, R2, B2, Tencent COS) |
+| `S3_FORCE_PATH_STYLE` | Optional path-style override. Defaults to `true` when `AWS_ENDPOINT_URL` is set; set `false` for virtual-hosted providers such as Tencent COS |
+| `S3_PUBLIC_BASE_URL` | Optional public/CDN base URL for uploaded objects. Prefer this for COS/CDN/EdgeOne public delivery; it also lets the server parse object keys back from public URLs |
 | `ATTACHMENT_DOWNLOAD_MODE` | Attachment download behavior: `auto` (default), `cloudfront`, `presign`, or `proxy`. Use `proxy` for private buckets behind Docker/VPC-only endpoints such as `http://rustfs:9000` |
 | `ATTACHMENT_DOWNLOAD_URL_TTL` | TTL for CloudFront signed URLs and S3 presigned download URLs (default: `30m`) |
 | `CLOUDFRONT_DOMAIN` | CloudFront distribution domain — when set, public URLs use this host instead of the S3 host |
 | `CLOUDFRONT_KEY_PAIR_ID` | CloudFront key pair ID for signed URLs |
 | `CLOUDFRONT_PRIVATE_KEY` | CloudFront private key (PEM format) |
+
+When `S3_BUCKET` is unset, uploads use local storage at `LOCAL_UPLOAD_DIR`
+(default `./data/uploads`). For self-hosted deployments, mount that path on a
+Docker named volume or another persistent disk and back it up; normal image
+updates/container recreates should preserve it, while `docker compose down -v`
+or deleting the volume will remove uploaded files.
 
 ### Cookies
 

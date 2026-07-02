@@ -499,6 +499,21 @@ multica issue subscriber remove <issue-id> --user "Lambda"
 
 Subscribers receive notifications about issue activity (new comments, status changes, etc.). Without `--user`, the command acts on the caller.
 
+## Direct Messages
+
+```bash
+# Agent task only: DM the human who triggered the current task (falls back to the agent owner)
+multica dm --message "I need one detail before continuing"
+
+# Agent task only: DM any human workspace member by id, user id, name, display name, or email
+multica dm --to maozh2 --message "Welcome to the workspace!"
+multica dm --to liudh16 --message-stdin <<'MSG'
+Welcome to the workspace!
+MSG
+```
+
+`multica dm` is intentionally agent-only. It must run inside a claimed agent task, where the daemon injects the short-lived task credential as `MULTICA_TOKEN` plus `MULTICA_AGENT_ID` and `MULTICA_TASK_ID`. Do not use a user's stored `mul_` PAT for this command; the server rejects human/PAT calls with `only agents can send direct messages`. Agent-to-agent DMs are not supported — use a channel and @mention the other agent.
+
 ### Execution History
 
 ```bash

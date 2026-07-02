@@ -472,6 +472,24 @@ func TestWorkspaceContextHeadingSkippedWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestMetaSkillDocumentsAgentDMToExplicitHumanMember(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("claude", TaskContextForEnv{IssueID: "11111111-2222-3333-4444-555555555555"})
+
+	for _, want := range []string{
+		"### Direct messages",
+		"multica dm --to <member-id|user-id|name|display-name|email>",
+		"even when they did not trigger the current task",
+		"Omit `--to` only when you intentionally want the current task initiator",
+		"task-scoped `MULTICA_TOKEN`",
+		"Agent-to-agent DMs are not supported",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("runtime brief missing DM guidance %q", want)
+		}
+	}
+}
+
 func TestSubIssueCreationSectionSkippedForNonIssueModes(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

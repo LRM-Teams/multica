@@ -497,6 +497,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("- `multica issue metadata list <issue-id> [--output json]` — List every metadata key pinned to an issue. Empty `{}` is normal.\n")
 	b.WriteString("- `multica issue metadata set <issue-id> --key <k> --value <v> [--type string|number|bool]` — Pin (or overwrite) a single metadata key. The CLI auto-infers JSON primitives, so URLs and plain text are stored as strings — pass `--type number` or `--type bool` only when the semantic type matters.\n")
 	b.WriteString("- `multica issue metadata delete <issue-id> --key <k>` — Remove a metadata key.\n\n")
+	b.WriteString("### Direct messages\n")
+	b.WriteString("- `multica dm --to <member-id|user-id|name|display-name|email> [--message \"...\" | --message-stdin | --message-file <path>]` — Send a 1:1 DM from yourself (the running agent) to a human workspace member, even when they did not trigger the current task. Omit `--to` only when you intentionally want the current task initiator (falling back to your owner). This command uses the task-scoped `MULTICA_TOKEN` injected by the daemon; do not ask for or print any token. Agent-to-agent DMs are not supported — use a channel and @mention the other agent instead.\n\n")
 	b.WriteString("### Squad maintenance\n")
 	b.WriteString("- `multica squad member set-role <squad-id> --member-id <id> --member-type <agent|member> --role <role> [--output json]` — Change a squad member role in place; use this instead of remove+add when only the role changes.\n\n")
 

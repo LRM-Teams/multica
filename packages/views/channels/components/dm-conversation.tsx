@@ -50,10 +50,10 @@ import {
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
-import { ContentEditor, type ContentEditorRef } from "../../editor";
+import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/use-t";
 import { ChatMessageList } from "../../chat/components/chat-message-list";
 import { ChatInput } from "../../chat/components/chat-input";
 import { ChannelMessageList } from "./channel-message-list";
@@ -61,8 +61,7 @@ import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelComposer, ConversationHeader, MobileThreadDrawerContent } from "./conversation-surface";
 import { ThreadRootPreview } from "./thread-root-preview";
 import {
-  AgentWorkingIndicator,
-  TypingIndicator,
+  ConversationActivityStrip,
   type TypingActor,
 } from "./channels-page";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
@@ -71,7 +70,7 @@ import { isConversationMuted, MutedIndicator } from "./conversation-muted";
  * DM detail pane. A DM routes entirely by `source`:
  *  - `dm_channel`    — the DM IS a kind='dm' channel, so we reuse the exact
  *    channel conversation stack (ChannelMessageBubble + ContentEditor composer
- *    + AgentWorkingIndicator + TypingIndicator + channel queries/mutations +
+ *    + ConversationActivityStrip + channel queries/mutations +
  *    channel:message / channel:typing WS).
  *  - `legacy_session` — a pre-existing standalone chat_session, so we reuse the
  *    chat-window internals (ChatMessageList + ChatInput + chat queries +
@@ -590,6 +589,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
             onReact={handleReactToMessage}
           />
         )}
+        <ConversationActivityStrip tasks={activeTasks} />
         <ChannelComposer
           sendLabel={t(($) => $.composer.send)}
           sendDisabled={threadDraftEmpty}
@@ -736,13 +736,10 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         loadErrorLabel={messagesError ? t(($) => $.message_loading.load_failed_retry) : undefined}
         onRetry={() => refetchMessages()}
         emptyLabel={t(($) => $.dm.thread_empty)}
-        footer={<TypingIndicator actors={activeTypingActors} />}
         onOpenThread={handleOpenThread}
         onReact={handleReactToMessage}
       />
-      <div className="px-5">
-        <AgentWorkingIndicator tasks={activeTasks} />
-      </div>
+      <ConversationActivityStrip typingActors={activeTypingActors} tasks={activeTasks} />
       <ChannelComposer
         sendLabel={t(($) => $.composer.send)}
         sendDisabled={draftEmpty}

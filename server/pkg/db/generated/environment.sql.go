@@ -11,6 +11,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createEnvDispatchRequest = `-- name: CreateEnvDispatchRequest :exec
+INSERT INTO env_dispatch_request (workspace_id, idempotency_key, response)
+VALUES ($1, $2, $3)
+`
+
+type CreateEnvDispatchRequestParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	IdempotencyKey pgtype.UUID `json:"idempotency_key"`
+	Response       []byte      `json:"response"`
+}
+
+func (q *Queries) CreateEnvDispatchRequest(ctx context.Context, arg CreateEnvDispatchRequestParams) error {
+	_, err := q.db.Exec(ctx, createEnvDispatchRequest, arg.WorkspaceID, arg.IdempotencyKey, arg.Response)
+	return err
+}
+
 const createEnvironment = `-- name: CreateEnvironment :one
 INSERT INTO environment (workspace_id, sandbox_id, parent_env_id, mode, domain)
 VALUES ($1, $2, $3, $4, $5)
@@ -59,6 +75,29 @@ type DeleteEnvironmentParams struct {
 func (q *Queries) DeleteEnvironment(ctx context.Context, arg DeleteEnvironmentParams) error {
 	_, err := q.db.Exec(ctx, deleteEnvironment, arg.ID, arg.WorkspaceID)
 	return err
+}
+
+const getEnvDispatchRequest = `-- name: GetEnvDispatchRequest :one
+SELECT id, workspace_id, idempotency_key, response, created_at FROM env_dispatch_request
+WHERE workspace_id = $1 AND idempotency_key = $2
+`
+
+type GetEnvDispatchRequestParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	IdempotencyKey pgtype.UUID `json:"idempotency_key"`
+}
+
+func (q *Queries) GetEnvDispatchRequest(ctx context.Context, arg GetEnvDispatchRequestParams) (EnvDispatchRequest, error) {
+	row := q.db.QueryRow(ctx, getEnvDispatchRequest, arg.WorkspaceID, arg.IdempotencyKey)
+	var i EnvDispatchRequest
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.IdempotencyKey,
+		&i.Response,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const getEnvironment = `-- name: GetEnvironment :one

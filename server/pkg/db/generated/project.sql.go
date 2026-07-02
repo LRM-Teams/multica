@@ -160,6 +160,37 @@ func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, erro
 	return i, err
 }
 
+const getProjectByEnvID = `-- name: GetProjectByEnvID :one
+SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, env_id FROM project
+WHERE env_id = $1 AND workspace_id = $2
+`
+
+type GetProjectByEnvIDParams struct {
+	EnvID       pgtype.UUID `json:"env_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// The partial UNIQUE index on project(env_id) guarantees at most one row.
+func (q *Queries) GetProjectByEnvID(ctx context.Context, arg GetProjectByEnvIDParams) (Project, error) {
+	row := q.db.QueryRow(ctx, getProjectByEnvID, arg.EnvID, arg.WorkspaceID)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Icon,
+		&i.Status,
+		&i.LeadType,
+		&i.LeadID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Priority,
+		&i.EnvID,
+	)
+	return i, err
+}
+
 const getProjectInWorkspace = `-- name: GetProjectInWorkspace :one
 SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, env_id FROM project
 WHERE id = $1 AND workspace_id = $2

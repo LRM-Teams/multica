@@ -249,6 +249,90 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue
 	return i, err
 }
 
+const createIssueWithMetadata = `-- name: CreateIssueWithMetadata :one
+INSERT INTO issue (
+    workspace_id, title, description, status, priority,
+    assignee_type, assignee_id, creator_type, creator_id,
+    parent_issue_id, position, start_date, due_date, number, project_id, metadata
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id
+`
+
+type CreateIssueWithMetadataParams struct {
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	Title         string      `json:"title"`
+	Description   pgtype.Text `json:"description"`
+	Status        string      `json:"status"`
+	Priority      string      `json:"priority"`
+	AssigneeType  pgtype.Text `json:"assignee_type"`
+	AssigneeID    pgtype.UUID `json:"assignee_id"`
+	CreatorType   string      `json:"creator_type"`
+	CreatorID     pgtype.UUID `json:"creator_id"`
+	ParentIssueID pgtype.UUID `json:"parent_issue_id"`
+	Position      float64     `json:"position"`
+	StartDate     pgtype.Date `json:"start_date"`
+	DueDate       pgtype.Date `json:"due_date"`
+	Number        int32       `json:"number"`
+	ProjectID     pgtype.UUID `json:"project_id"`
+	Metadata      []byte      `json:"metadata"`
+}
+
+// Same as CreateIssue but accepts a pre-built metadata JSONB object so the
+// env-dispatch adapter can stamp acceptance_criteria / fail_to_pass /
+// pass_to_pass in one round trip instead of three SetIssueMetadataKey calls.
+func (q *Queries) CreateIssueWithMetadata(ctx context.Context, arg CreateIssueWithMetadataParams) (Issue, error) {
+	row := q.db.QueryRow(ctx, createIssueWithMetadata,
+		arg.WorkspaceID,
+		arg.Title,
+		arg.Description,
+		arg.Status,
+		arg.Priority,
+		arg.AssigneeType,
+		arg.AssigneeID,
+		arg.CreatorType,
+		arg.CreatorID,
+		arg.ParentIssueID,
+		arg.Position,
+		arg.StartDate,
+		arg.DueDate,
+		arg.Number,
+		arg.ProjectID,
+		arg.Metadata,
+	)
+	var i Issue
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.CreatorType,
+		&i.CreatorID,
+		&i.ParentIssueID,
+		&i.AcceptanceCriteria,
+		&i.ContextRefs,
+		&i.Position,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Number,
+		&i.ProjectID,
+		&i.OriginType,
+		&i.OriginID,
+		&i.FirstExecutedAt,
+		&i.StartDate,
+		&i.Metadata,
+		&i.ForkedFromIssueID,
+		&i.ForkedAtSeq,
+		&i.ForkedAtTaskID,
+	)
+	return i, err
+}
+
 const createIssueWithOrigin = `-- name: CreateIssueWithOrigin :one
 INSERT INTO issue (
     workspace_id, title, description, status, priority,

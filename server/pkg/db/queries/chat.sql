@@ -184,3 +184,8 @@ LIMIT 1;
 INSERT INTO chat_session (workspace_id, project_id, agent_id, creator_id, title, runtime_id)
 VALUES ($1, $2, $3, $4, $5, (SELECT runtime_id FROM agent WHERE id = $3))
 RETURNING *;
+
+-- name: ListChatSessionsByProject :many
+SELECT * FROM chat_session
+WHERE project_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC;

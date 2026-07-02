@@ -291,7 +291,7 @@ function MessageViewport({
       ? highlightIndex
       : initialScroll === "bottom"
         ? Math.max(0, messages.length - 1)
-        : undefined;
+        : 0;
 
   return (
     <div

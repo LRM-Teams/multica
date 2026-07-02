@@ -12,6 +12,8 @@
     "name_placeholder": "Channel name",
     "lark_placeholder": "Optional Feishu chat_id (oc_...)",
     "create_aria": "Create channel",
+    "open_aria": "Open conversation list",
+    "close_aria": "Hide conversation list",
     "empty": "No channels yet.",
     "menu_aria": "Channel actions",
     "delete": "Delete group",

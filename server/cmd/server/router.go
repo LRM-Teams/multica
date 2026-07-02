@@ -1025,15 +1025,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/sandboxes/fork", h.ForkCloudRuntimeSandbox)
 			})
 
-			// SWE-Lego per-issue orchestration (spec §4.1). Top-level under
-			// /api/v1 so the areal-side MulticaSweLegoClient hits the spec'd
-			// path; NOT nested under /api/cloud-runtime (that group proxies
-			// raw Fleet ops, while this endpoint orchestrates multica-owned
-			// project + issue + sandbox lifecycle).
-			r.Route("/api/v1/swe-lego", func(r chi.Router) {
-				r.Post("/issues", h.CreateSweLegoIssue)
-				r.Delete("/issues/{projectID}", h.DeleteSweLegoIssue)
-			})
+			// Unified env-dispatch API (spec §6). Replaces the SWE-Lego-only
+			// route group with the four endpoints backing the env-state model.
+			r.Post("/api/v1/env", h.CreateEnv)
+			r.Delete("/api/v1/env/{envID}", h.DeleteEnv)
+			r.Post("/api/v1/env-dispatch", h.EnvDispatch)
+			r.Delete("/api/v1/env-dispatch/{projectID}", h.DeleteEnvDispatchProject)
 
 			// Tasks (user-facing, with ownership check)
 			r.Post("/api/tasks/{taskId}/cancel", h.CancelTaskByUser)

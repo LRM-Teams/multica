@@ -43,6 +43,8 @@ type MessageViewportProps = {
   emptyLabel: string;
   /** Content rendered at the top of the scroll window, before messages. */
   header?: ReactNode;
+  /** Initial viewport anchor. Main conversations open at the latest message; threads open at root context. */
+  initialScroll?: "bottom" | "top";
   /** Called when the user opens the message's side thread. */
   onOpenThread?: (message: ChannelMessage) => void;
   /**
@@ -79,6 +81,7 @@ function MessageViewport({
   highlightMessageId,
   emptyLabel,
   header,
+  initialScroll = "bottom",
   onOpenThread,
   onScrollToMessage,
   onReact,
@@ -283,6 +286,13 @@ function MessageViewport({
     );
   }
 
+  const initialTopMostItemIndex =
+    highlightIndex >= 0
+      ? highlightIndex
+      : initialScroll === "bottom"
+        ? Math.max(0, messages.length - 1)
+        : undefined;
+
   return (
     <div
       ref={setScrollContainerRef}
@@ -297,7 +307,7 @@ function MessageViewport({
         ref={virtuosoRef}
         customScrollParent={scrollContainerEl}
         data={messages}
-        initialTopMostItemIndex={highlightIndex >= 0 ? highlightIndex : Math.max(0, messages.length - 1)}
+        initialTopMostItemIndex={initialTopMostItemIndex}
         increaseViewportBy={{ top: 320, bottom: 520 }}
         atBottomThreshold={120}
         atBottomStateChange={setIsNearBottom}

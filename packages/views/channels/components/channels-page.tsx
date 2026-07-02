@@ -1792,11 +1792,12 @@ export function ChannelsPage() {
           }
         />
         <ChannelMessageList
-          key={`thread:${threadRoot.id}`}
+          key={`thread:${threadRoot.id}:${threadLoading ? "loading" : "ready"}`}
           messages={threadReplies}
           currentUserId={currentUserId}
           ownName={currentUserName ?? undefined}
           emptyLabel={t(($) => $.thread.empty_replies)}
+          initialScroll="top"
           header={
             <ThreadRootPreview
               message={threadRoot}

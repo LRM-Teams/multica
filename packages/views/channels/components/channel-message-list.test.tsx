@@ -128,6 +128,27 @@ describe("MessageViewport", () => {
     expect(screen.getByTestId("message-item-list").children).toHaveLength(2);
   });
 
+  it("opens thread lists at the root context when requested", () => {
+    render(
+      <MessageViewport
+        messages={[
+          makeMessage("m1", "First thread reply"),
+          makeMessage("m2", "Second thread reply"),
+          makeMessage("m3", "Later thread reply"),
+        ]}
+        currentUserId="user-1"
+        emptyLabel="No replies"
+        initialScroll="top"
+        header={<div data-testid="thread-root-preview">Root preview</div>}
+      />,
+    );
+
+    expect(screen.getByTestId("thread-root-preview")).toBeInTheDocument();
+    expect(screen.getByText("First thread reply")).toBeInTheDocument();
+    expect(screen.getByText("Second thread reply")).toBeInTheDocument();
+    expect(screen.queryByText("Later thread reply")).not.toBeInTheDocument();
+  });
+
   it("does not render the full list while the custom scroller ref is being captured", () => {
     const messages = Array.from({ length: 700 }, (_, index) =>
       makeMessage(`m${index}`, `Message ${index}`),

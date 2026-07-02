@@ -24,7 +24,7 @@ export function ConversationHeader({
   return (
     <header
       className={cn(
-        "flex min-h-14 items-center justify-between gap-3 border-b border-border/25 bg-background/95 py-1.5",
+        "flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-border/25 bg-background/95 py-1.5",
         isMobile ? "px-2" : "px-5",
       )}
     >
@@ -65,7 +65,10 @@ export function ComposerShell({
         isMobile ? "px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]" : "px-5 pb-4",
       )}
     >
-      <div className="min-w-0 rounded-lg border border-border/35 bg-background shadow-none">
+      <div
+        className="composer-shell min-w-0 rounded-lg border border-border/35 bg-background shadow-none"
+        data-slot="composer-shell"
+      >
         {children}
       </div>
     </div>
@@ -160,13 +163,17 @@ export function ChannelComposer({
       {prefix}
       <div
         className={cn(
-          "min-h-16 overflow-y-auto px-4 pt-3 overscroll-contain",
+          "composer-editor-scroll min-h-16 overflow-y-auto px-4 pt-3 overscroll-contain",
           isMobile ? "max-h-[28dvh]" : "max-h-40",
         )}
+        data-slot="composer-editor-scroll"
       >
         {editor}
       </div>
-      <div className={cn("flex items-center justify-between px-2 pb-2", isMobile && "gap-2")}>
+      <div
+        className={cn("flex items-center justify-between px-2 pb-2", isMobile && "gap-2")}
+        data-slot="composer-action-row"
+      >
         <div className="flex min-h-8 min-w-0 flex-1 items-center gap-0.5 overflow-x-auto text-muted-foreground">
           {leadingActions}
         </div>

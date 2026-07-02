@@ -24,3 +24,27 @@
 .rich-text-editor .image-figure {
   max-width: min(100%, 640px);
 }
+
+/* Chat composers keep pending media in a compact tray-like preview above the
+ * action row. Message bodies and issue descriptions still use the normal image
+ * sizing above. */
+.composer-shell .rich-text-editor .image-node {
+  text-align: left;
+}
+
+.composer-shell .rich-text-editor .image-figure {
+  max-width: min(9rem, 100%);
+  margin: 0.25rem 0;
+}
+
+.composer-shell .rich-text-editor .image-content {
+  max-height: 5.5rem;
+  object-fit: contain;
+}
+
+.composer-shell .rich-text-editor .image-toolbar {
+  top: 0.25rem;
+  right: 0.25rem;
+  transform: scale(0.86);
+  transform-origin: top right;
+}

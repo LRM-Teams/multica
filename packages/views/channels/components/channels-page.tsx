@@ -549,7 +549,7 @@ export function ChannelsPage() {
     openThreadRoot && active?.id === openThreadRoot.channel_id
       ? messages.find((m) => m.id === openThreadRoot.id) ?? openThreadRoot
       : null;
-  const { data: threadPage, isLoading: threadLoading, isError: threadError } = useQuery(
+  const { data: threadPage, isLoading: threadLoading, isError: threadError, refetch: refetchThread } = useQuery(
     channelMessageThreadOptions(active?.id ?? "", threadRoot?.id ?? ""),
   );
   const threadReplies = useMemo(
@@ -1781,17 +1781,6 @@ export function ChannelsPage() {
             <>
               <Button
                 variant="ghost"
-                size="sm"
-                className="h-8 px-2 text-xs"
-                onClick={() => {
-                  setHighlightMessageId(threadRoot.id);
-                  if (isMobile) setOpenThreadRoot(null);
-                }}
-              >
-                {t(($) => $.thread.view_parent)}
-              </Button>
-              <Button
-                variant="ghost"
                 size="icon"
                 className="size-8"
                 aria-label={t(($) => $.thread.close_aria)}
@@ -1802,29 +1791,28 @@ export function ChannelsPage() {
             </>
           }
         />
-        <ThreadRootPreview
-          message={threadRoot}
+        <ChannelMessageList
+          key={`thread:${threadRoot.id}`}
+          messages={threadReplies}
           currentUserId={currentUserId}
           ownName={currentUserName ?? undefined}
+          emptyLabel={t(($) => $.thread.empty_replies)}
+          header={
+            <ThreadRootPreview
+              message={threadRoot}
+              currentUserId={currentUserId}
+              ownName={currentUserName ?? undefined}
+              onViewParent={() => {
+                setHighlightMessageId(threadRoot.id);
+                if (isMobile) setOpenThreadRoot(null);
+              }}
+            />
+          }
+          loading={threadLoading}
+          loadErrorLabel={threadError ? t(($) => $.thread.load_failed) : undefined}
+          onRetry={() => refetchThread()}
+          onReact={handleReactToMessage}
         />
-        {threadError ? (
-          <div className="flex flex-1 items-center justify-center px-5 text-sm text-muted-foreground">
-            {t(($) => $.thread.load_failed)}
-          </div>
-        ) : threadLoading ? (
-          <div className="flex flex-1 items-center justify-center">
-            <UnicodeSpinner className="size-5 text-muted-foreground" />
-          </div>
-        ) : (
-          <ChannelMessageList
-            key={`thread:${threadRoot.id}`}
-            messages={threadReplies}
-            currentUserId={currentUserId}
-            ownName={currentUserName ?? undefined}
-            emptyLabel={t(($) => $.thread.empty_replies)}
-            onReact={handleReactToMessage}
-          />
-        )}
         {isActiveArchived ? (
           <ReadOnlyConversationBanner>
             <Archive className="size-4 shrink-0" />

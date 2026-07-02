@@ -142,4 +142,20 @@ describe("MessageViewport", () => {
 
     expect(container.querySelectorAll('[data-testid="message-row"]').length).toBeLessThan(700);
   });
+
+  it("keeps thread header content inside the message scroller for empty threads", () => {
+    render(
+      <MessageViewport
+        messages={[]}
+        currentUserId="user-1"
+        emptyLabel="No replies"
+        header={<div data-testid="thread-root-preview">Long root message</div>}
+      />,
+    );
+
+    const scroller = screen.getByTestId("message-scroller");
+    const header = screen.getByTestId("thread-root-preview");
+    expect(scroller).toContainElement(header);
+    expect(screen.getByText("No replies")).toBeInTheDocument();
+  });
 });

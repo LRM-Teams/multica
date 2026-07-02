@@ -28,10 +28,12 @@ export function ThreadRootPreview({
   message,
   currentUserId,
   ownName,
+  onViewParent,
 }: {
   message: ChannelMessage;
   currentUserId: string | null;
   ownName?: string;
+  onViewParent?: () => void;
 }) {
   const { t } = useT("channels");
   const { getActorName } = useActorName();
@@ -109,16 +111,27 @@ export function ThreadRootPreview({
               {formatTime(message.created_at)}
             </span>
           </div>
-          <div
-            className="mt-1 min-w-0 text-sm leading-6 text-foreground"
-          >
-            <MemoizedMarkdown attachments={message.attachments}>{message.content}</MemoizedMarkdown>
-            <AttachmentList
-              attachments={message.attachments}
-              content={message.content}
-              className="mt-1.5"
-            />
+          <div className="mt-1 min-w-0 overflow-hidden text-sm leading-6 text-foreground">
+            <div className="line-clamp-3">
+              <MemoizedMarkdown attachments={message.attachments}>{message.content}</MemoizedMarkdown>
+            </div>
+            <div className="max-h-16 overflow-hidden opacity-80">
+              <AttachmentList
+                attachments={message.attachments}
+                content={message.content}
+                className="mt-1.5"
+              />
+            </div>
           </div>
+          {onViewParent && (
+            <button
+              type="button"
+              className="mt-2 rounded-md text-xs font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={onViewParent}
+            >
+              {t(($) => $.thread.view_parent)}
+            </button>
+          )}
         </div>
       </div>
     </div>

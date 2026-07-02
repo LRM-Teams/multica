@@ -1,7 +1,11 @@
 import type { CSSProperties, ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { getMobileVisualViewportStyle, MobileThreadDrawerContent } from "./conversation-surface";
+import {
+  ChannelComposer,
+  getMobileVisualViewportStyle,
+  MobileThreadDrawerContent,
+} from "./conversation-surface";
 
 vi.mock("@multica/ui/components/ui/drawer", () => ({
   DrawerContent: ({ children, style }: { children: ReactNode; style?: CSSProperties }) => (
@@ -25,5 +29,30 @@ describe("mobile thread drawer viewport sizing", () => {
     render(<MobileThreadDrawerContent open={false}>Thread</MobileThreadDrawerContent>);
 
     expect(screen.getByTestId("drawer-content")).not.toHaveStyle({ height: "512px" });
+  });
+});
+
+describe("ChannelComposer", () => {
+  it("keeps editor media in the scroll area while actions stay fixed below it", () => {
+    render(
+      <ChannelComposer
+        editor={<div data-testid="composer-editor">Editor</div>}
+        sendLabel="Send"
+        sendDisabled={false}
+        onSend={vi.fn()}
+        isMobile={false}
+        leadingActions={<button type="button">Attach</button>}
+      />,
+    );
+
+    const shell = screen.getByTestId("composer-editor").closest('[data-slot="composer-shell"]');
+    const editorScroll = screen.getByTestId("composer-editor").closest('[data-slot="composer-editor-scroll"]');
+    const actionRow = screen.getByText("Attach").closest('[data-slot="composer-action-row"]');
+
+    expect(shell).not.toBeNull();
+    expect(editorScroll).not.toBeNull();
+    expect(actionRow).not.toBeNull();
+    expect(editorScroll).not.toContainElement(actionRow as HTMLElement);
+    expect(shell).toContainElement(actionRow as HTMLElement);
   });
 });

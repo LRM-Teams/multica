@@ -27,11 +27,10 @@ import type {
 } from "@multica/core/types";
 import { ListTodo } from "lucide-react";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { agentColor } from "../../common/agent-color";
 import { StatusIcon } from "../../issues/components/status-icon";
 import { ProjectIcon } from "../../projects/components/project-icon";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/use-t";
 import { Badge } from "@multica/ui/components/ui/badge";
 import type { IssueStatus, ProjectStatus } from "@multica/core/types";
 import { PROJECT_STATUS_CONFIG } from "@multica/core/projects/config";
@@ -536,19 +535,7 @@ function MentionRow({
       }`}
       onClick={onSelect}
     >
-      {isActor ? (
-        <ActorProfileTrigger
-          memberType={item.type === "agent" ? "agent" : "user"}
-          memberId={item.id}
-          triggerElement="span"
-          className="min-w-0 flex-1 items-center gap-2.5"
-          onClickCapture={(event) => event.stopPropagation()}
-        >
-          {actorContent}
-        </ActorProfileTrigger>
-      ) : (
-        actorContent
-      )}
+      {actorContent}
       {item.type === "agent" && (
         // "Agent" is a glossary-protected product term — kept un-translated.
         // eslint-disable-next-line i18next/no-literal-string

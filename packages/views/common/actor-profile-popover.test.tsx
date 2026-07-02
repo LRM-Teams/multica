@@ -11,7 +11,7 @@ vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
 }));
 
-vi.mock("../i18n", () => ({
+vi.mock("../i18n/use-t", () => ({
   useT: () => ({
     t: (
       selector: (resources: {
@@ -55,6 +55,9 @@ vi.mock("../i18n", () => ({
         },
       }),
   }),
+}));
+
+vi.mock("../i18n/use-time-ago", () => ({
   useTimeAgo: () => () => "just now",
 }));
 

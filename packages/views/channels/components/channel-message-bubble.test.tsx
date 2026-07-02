@@ -73,12 +73,6 @@ vi.mock("../../i18n/use-t", () => ({
           sticker_failed: string;
           sticker_unavailable: string;
         };
-        daemon_notice: {
-          outdated: string;
-          missing: string;
-          disconnected: string;
-          open_runtimes: string;
-        };
         quote: { jump_to: string };
         thread: { reply: string; reply_count: string };
       }) => string,
@@ -95,12 +89,6 @@ vi.mock("../../i18n/use-t", () => ({
           sticker_loading: "Loading sticker",
           sticker_failed: "Sticker failed to load",
           sticker_unavailable: "Sticker unavailable",
-        },
-        daemon_notice: {
-          outdated: "Local daemon is outdated.",
-          missing: "Install the Multica CLI and start the daemon.",
-          disconnected: "Local daemon is disconnected.",
-          open_runtimes: "Open Runtimes",
         },
         quote: {
           jump_to: "Jump to original message",
@@ -511,7 +499,6 @@ describe("ChannelMessageBubble", () => {
         currentUserId="user-1"
         onOpenThread={vi.fn()}
         onReact={vi.fn()}
-        onOpenRuntimes={vi.fn()}
       />,
     );
 
@@ -525,9 +512,8 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByRole("button", { name: /2 replies/ })).not.toBeInTheDocument();
   });
 
-  it("renders runtime system notices from message content without legacy subtype fields", async () => {
-    const onOpenRuntimes = vi.fn();
-    render(
+  it("does not render runtime state as a conversation system row", () => {
+    const { container } = render(
       <ChannelMessageBubble
         message={makeMessage({
           type: "system",
@@ -536,12 +522,27 @@ describe("ChannelMessageBubble", () => {
           content: "Local daemon is outdated.",
         })}
         currentUserId="user-1"
-        onOpenRuntimes={onOpenRuntimes}
       />,
     );
 
-    expect(screen.getByTestId("system-message-row")).toHaveTextContent("Local daemon is outdated.");
-    expect(screen.queryByRole("button", { name: /Open Runtimes/ })).not.toBeInTheDocument();
-    expect(onOpenRuntimes).not.toHaveBeenCalled();
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByTestId("system-message-row")).not.toBeInTheDocument();
+  });
+
+  it("does not leak raw runtime notice content in the conversation", () => {
+    const { container } = render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "system",
+          author_id: null,
+          author_name: "System",
+          content: "daemon_outdated",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText("daemon_outdated")).not.toBeInTheDocument();
   });
 });

@@ -6,6 +6,7 @@ import { useAgentPresenceDetail } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
   deriveRuntimeHealth,
+  runtimeHealthState,
   type RuntimeHealth,
 } from "@multica/core/runtimes";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
@@ -17,12 +18,15 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { MessageSquare } from "lucide-react";
-import { AppLink } from "../../navigation";
+import { AppLink } from "../../navigation/app-link";
 import { useOpenDM } from "../../common/use-open-dm";
-import { HealthIcon } from "../../runtimes/components/shared";
+import {
+  HealthIcon,
+  useRuntimeHealthStateLabel,
+} from "../../runtimes/components/shared";
 import { availabilityConfig } from "../presence";
 import { VisibilityBadge } from "./visibility-badge";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/use-t";
 
 interface AgentProfileCardProps {
   agentId: string;
@@ -185,12 +189,14 @@ function RuntimeRow({
   runtime: AgentRuntime | null;
 }) {
   const { t } = useT("agents");
+  const runtimeHealthLabel = useRuntimeHealthStateLabel();
   const isCloud = agent.runtime_mode === "cloud";
   const health: RuntimeHealth = isCloud
     ? "online"
     : runtime
       ? deriveRuntimeHealth(runtime, Date.now())
       : "offline";
+  const updateHealth = !isCloud && runtime ? runtimeHealthState(runtime) : "ok";
   const label =
     runtime?.name ??
     (isCloud
@@ -203,6 +209,11 @@ function RuntimeRow({
       <span className="min-w-0 truncate" title={label}>
         {label}
       </span>
+      {updateHealth !== "ok" && (
+        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+          {runtimeHealthLabel(updateHealth)}
+        </span>
+      )}
     </div>
   );
 }

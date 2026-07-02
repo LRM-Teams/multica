@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
-import { MessageViewport } from "./channel-message-list";
+import { ChannelMessageList, MessageViewport } from "./channel-message-list";
 
 vi.mock("react-virtuoso", async () => {
   const React = await import("react");
@@ -109,6 +109,21 @@ function makeMessage(id: string, content: string): ChannelMessage {
   };
 }
 
+function makeRuntimeNotice(id: string): ChannelMessage {
+  return {
+    id,
+    channel_id: "c1",
+    workspace_id: "w1",
+    type: "system",
+    author_id: null,
+    author_name: "System",
+    content: "daemon_outdated",
+    source: "multica",
+    external_message_id: null,
+    created_at: "2026-06-17T09:15:00Z",
+  };
+}
+
 describe("MessageViewport", () => {
   it("renders the virtualized window when messages are present", async () => {
     render(
@@ -129,6 +144,26 @@ describe("MessageViewport", () => {
     expect(screen.getAllByTestId("message-bubble")).toHaveLength(2);
     expect(screen.getAllByTestId("message-row")).toHaveLength(2);
     expect(screen.getByTestId("message-item-list").children).toHaveLength(2);
+  });
+
+  it("filters runtime notices out of the conversation row list", () => {
+    render(
+      <ChannelMessageList
+        messages={[
+          makeRuntimeNotice("n1"),
+          makeMessage("m1", "First visible message"),
+          makeRuntimeNotice("n2"),
+          makeMessage("m2", "Second visible message"),
+        ]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+      />,
+    );
+
+    expect(screen.getAllByTestId("message-row")).toHaveLength(2);
+    expect(screen.getByText("First visible message")).toBeInTheDocument();
+    expect(screen.getByText("Second visible message")).toBeInTheDocument();
+    expect(screen.queryByText("daemon_outdated")).not.toBeInTheDocument();
   });
 
   it("opens thread lists at the root context when requested", () => {

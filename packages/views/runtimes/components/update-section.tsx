@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Loader2,
   CheckCircle2,
@@ -21,11 +22,12 @@ import { api } from "@multica/core/api";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
 import { cn } from "@multica/ui/lib/utils";
-import { MULTICA_LATEST_RELEASE_API_URL } from "@multica/core/constants/repository";
-import type { RuntimeUpdateStatus } from "@multica/core/types";
+import type {
+  RuntimeHealthState,
+  RuntimeUpdateState,
+  RuntimeUpdateStatus,
+} from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
-
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 const MANUAL_UPDATE_COMMANDS = [
   {
@@ -44,43 +46,6 @@ const MANUAL_UPDATE_COMMANDS = [
   },
 ] as const;
 
-let cachedLatestVersion: string | null = null;
-let cachedAt = 0;
-
-async function fetchLatestVersion(): Promise<string | null> {
-  if (cachedLatestVersion && Date.now() - cachedAt < CACHE_TTL_MS) {
-    return cachedLatestVersion;
-  }
-  try {
-    const resp = await fetch(MULTICA_LATEST_RELEASE_API_URL, {
-      headers: { Accept: "application/vnd.github+json" },
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    cachedLatestVersion = data.tag_name ?? null;
-    cachedAt = Date.now();
-    return cachedLatestVersion;
-  } catch {
-    return null;
-  }
-}
-
-function stripV(v: string): string {
-  return v.replace(/^v/, "");
-}
-
-function isNewer(latest: string, current: string): boolean {
-  const l = stripV(latest).split(".").map(Number);
-  const c = stripV(current).split(".").map(Number);
-  for (let i = 0; i < Math.max(l.length, c.length); i++) {
-    const lv = l[i] ?? 0;
-    const cv = c[i] ?? 0;
-    if (lv > cv) return true;
-    if (lv < cv) return false;
-  }
-  return false;
-}
-
 const statusConfig: Record<
   RuntimeUpdateStatus,
   { icon: typeof Loader2; color: string }
@@ -92,9 +57,29 @@ const statusConfig: Record<
   timeout: { icon: XCircle, color: "text-warning" },
 };
 
+function statusFromUpdateState(
+  state: RuntimeUpdateState | undefined,
+): RuntimeUpdateStatus | null {
+  switch (state) {
+    case "pending":
+    case "running":
+    case "completed":
+    case "failed":
+      return state;
+    case "timed_out":
+      return "timeout";
+    case "idle":
+    case undefined:
+      return null;
+  }
+}
+
 interface UpdateSectionProps {
   runtimeId: string;
   currentVersion: string | null;
+  targetVersion: string | null;
+  updateState?: RuntimeUpdateState;
+  runtimeHealth?: RuntimeHealthState;
   isOnline: boolean;
   /**
    * Non-null when the daemon process was spawned by a managed launcher
@@ -109,19 +94,21 @@ interface UpdateSectionProps {
 export function UpdateSection({
   runtimeId,
   currentVersion,
+  targetVersion,
+  updateState,
+  runtimeHealth = "ok",
   isOnline,
   launchedBy,
   canUpdate = true,
 }: UpdateSectionProps) {
   const { t } = useT("runtimes");
+  const qc = useQueryClient();
   const isManaged = launchedBy === "desktop";
   const [manualOpen, setManualOpen] = useState(false);
-  const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [status, setStatus] = useState<RuntimeUpdateStatus | null>(null);
   const [error, setError] = useState("");
   const [output, setOutput] = useState("");
   const [updating, setUpdating] = useState(false);
-  const [targetVersion, setTargetVersion] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const cleanup = useCallback(() => {
@@ -131,45 +118,39 @@ export function UpdateSection({
     }
   }, []);
 
-  useEffect(() => cleanup, [cleanup]);
-
-  // Fetch latest version on mount.
   useEffect(() => {
-    fetchLatestVersion().then(setLatestVersion);
-  }, []);
+    return () => {
+      cleanup();
+    };
+  }, [cleanup]);
+
+  const refreshRuntimes = useCallback(() => {
+    qc.invalidateQueries({
+      predicate: (query) => query.queryKey[0] === "runtimes",
+    });
+  }, [qc]);
 
   const markCompleted = useCallback(
     (message: string) => {
       setStatus("completed");
       setOutput(message);
       setUpdating(false);
-      setTargetVersion(null);
       cleanup();
-      // Auto-clear status after a few seconds so the UI refreshes to show the
-      // new version from the re-fetched runtime data.
-      setTimeout(() => setStatus(null), 5000);
+      refreshRuntimes();
     },
-    [cleanup],
+    [cleanup, refreshRuntimes],
   );
 
-  useEffect(() => {
-    if (!updating || !targetVersion || !currentVersion) return;
-    if (!isNewer(targetVersion, currentVersion)) {
-      markCompleted(`Updated to ${targetVersion}`);
-    }
-  }, [currentVersion, markCompleted, targetVersion, updating]);
-
   const handleUpdate = async () => {
-    if (!latestVersion) return;
+    if (!targetVersion) return;
     cleanup();
     setUpdating(true);
-    setTargetVersion(latestVersion);
     setStatus("pending");
     setError("");
     setOutput("");
 
     try {
-      const update = await api.initiateUpdate(runtimeId, latestVersion);
+      const update = await api.initiateUpdate(runtimeId, targetVersion);
 
       pollRef.current = setInterval(async () => {
         try {
@@ -178,7 +159,7 @@ export function UpdateSection({
 
           if (result.status === "completed") {
             markCompleted(
-              result.output ?? `Updated to ${targetVersion ?? latestVersion}`,
+              result.output ?? t(($) => $.update.status.completed),
             );
           } else if (
             result.status === "failed" ||
@@ -186,8 +167,8 @@ export function UpdateSection({
           ) {
             setError(result.error ?? t(($) => $.update.unknown_error));
             setUpdating(false);
-            setTargetVersion(null);
             cleanup();
+            refreshRuntimes();
           }
         } catch {
           // ignore poll errors
@@ -197,18 +178,47 @@ export function UpdateSection({
       setStatus("failed");
       setError(t(($) => $.update.initiate_failed));
       setUpdating(false);
-      setTargetVersion(null);
     }
   };
 
-  const hasUpdate =
-    currentVersion &&
-    latestVersion &&
-    isNewer(latestVersion, currentVersion);
-
-  const config = status ? statusConfig[status] : null;
+  const contractStatus = statusFromUpdateState(updateState);
+  const derivedStatus =
+    status ??
+    (runtimeHealth === "updating"
+      ? contractStatus === "pending"
+        ? "pending"
+        : "running"
+      : runtimeHealth === "awaiting_confirmation"
+        ? "completed"
+        : runtimeHealth === "failed"
+          ? contractStatus === "timeout"
+            ? "timeout"
+            : "failed"
+          : null);
+  const hasUpdate = runtimeHealth === "update_available" && !!targetVersion;
+  const config = derivedStatus ? statusConfig[derivedStatus] : null;
   const Icon = config?.icon;
-  const isActive = status === "pending" || status === "running";
+  const isActive =
+    updating || derivedStatus === "pending" || derivedStatus === "running";
+  const statusLabel =
+    runtimeHealth === "awaiting_confirmation"
+      ? t(($) => $.update.awaiting_confirmation)
+      : derivedStatus
+        ? t(($) => $.update.status[derivedStatus])
+        : null;
+  const healthOnlyLabel =
+    !derivedStatus && runtimeHealth === "offline"
+      ? t(($) => $.update.offline)
+      : null;
+  const canStartUpdate =
+    hasUpdate && isOnline && canUpdate && !isManaged && !isActive;
+  const canRetry =
+    !!targetVersion &&
+    isOnline &&
+    canUpdate &&
+    !isManaged &&
+    !isActive &&
+    (derivedStatus === "failed" || derivedStatus === "timeout");
 
   return (
     <div className="space-y-2">
@@ -227,29 +237,29 @@ export function UpdateSection({
           </span>
         ) : (
           <>
-            {!hasUpdate && currentVersion && latestVersion && !status && (
+            {runtimeHealth === "ok" && currentVersion && !derivedStatus && (
               <span className="inline-flex items-center gap-1 text-xs text-success">
                 <Check className="h-3 w-3" />
                 {t(($) => $.update.latest)}
               </span>
             )}
 
-            {hasUpdate && !status && (
+            {hasUpdate && !derivedStatus && (
               <>
                 <span className="text-xs text-muted-foreground">→</span>
                 <span className="text-xs font-mono text-info">
-                  {latestVersion}
+                  {targetVersion}
                 </span>
                 <span className="text-xs text-muted-foreground">{t(($) => $.update.available)}</span>
               </>
             )}
 
-            {hasUpdate && isOnline && canUpdate && !status && (
+            {canStartUpdate && (
               <Button
                 variant="outline"
                 size="xs"
                 onClick={handleUpdate}
-                disabled={updating}
+                disabled={isActive}
               >
                 <ArrowUpCircle className="h-3 w-3" />
                 {t(($) => $.update.action)}
@@ -258,12 +268,18 @@ export function UpdateSection({
           </>
         )}
 
-        {config && Icon && status && (
+        {config && Icon && statusLabel && (
           <span
             className={`inline-flex items-center gap-1 text-xs ${config.color}`}
           >
             <Icon className={`h-3 w-3 ${isActive ? "animate-spin" : ""}`} />
-            {t(($) => $.update.status[status])}
+            {statusLabel}
+          </span>
+        )}
+        {healthOnlyLabel && (
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+            <XCircle className="h-3 w-3" />
+            {healthOnlyLabel}
           </span>
         )}
       </div>
@@ -288,10 +304,12 @@ export function UpdateSection({
         </div>
       )}
 
-      {(status === "failed" || status === "timeout") && error && (
+      {(derivedStatus === "failed" || derivedStatus === "timeout") && (
         <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2">
-          <p className="text-xs text-destructive">{error}</p>
-          {status === "failed" && (
+          <p className="text-xs text-destructive">
+            {error || statusLabel || t(($) => $.update.unknown_error)}
+          </p>
+          {canRetry && (
             <div className="mt-1 flex flex-wrap gap-1">
               <Button variant="ghost" size="xs" onClick={handleUpdate}>
                 {t(($) => $.update.retry)}

@@ -15,6 +15,7 @@ import type { ChannelMessage } from "@multica/core/types";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { ChannelMessageBubble } from "./channel-message-bubble";
+import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 
 /**
  * Virtualized message list shared by the group conversation (channels-page)
@@ -54,8 +55,6 @@ type MessageViewportProps = {
   onScrollToMessage?: (messageId: string) => void;
   /** Toggle/add a lightweight emoji reaction on this message. */
   onReact?: (message: ChannelMessage, emoji: string) => void;
-  /** Opens runtime settings for actionable platform-authored system notices. */
-  onOpenRuntimes?: () => void;
   /** Search hit ids - all matching messages get inline keyword marks while search is open. */
   searchHitIds?: Set<string>;
   /** Conversation search phrase used for inline keyword marks within search hits. */
@@ -87,7 +86,6 @@ function MessageViewport({
   onOpenThread,
   onScrollToMessage,
   onReact,
-  onOpenRuntimes,
   searchHitIds,
   searchQuery,
   loading,
@@ -240,7 +238,6 @@ function MessageViewport({
           onOpenThread={onOpenThread}
           onScrollTo={onScrollToMessage}
           onReact={onReact}
-          onOpenRuntimes={onOpenRuntimes}
           searchHighlighted={searchHighlighted}
           searchQuery={searchHighlighted ? searchQuery : undefined}
         />
@@ -442,4 +439,12 @@ function MessageRowsSkeleton() {
   );
 }
 
-export { MessageViewport, MessageViewport as ChannelMessageList };
+function ChannelMessageList(props: MessageViewportProps) {
+  const messages = props.messages.some(isLegacyRuntimeSystemNotice)
+    ? props.messages.filter((message) => !isLegacyRuntimeSystemNotice(message))
+    : props.messages;
+
+  return <MessageViewport {...props} messages={messages} />;
+}
+
+export { MessageViewport, ChannelMessageList };

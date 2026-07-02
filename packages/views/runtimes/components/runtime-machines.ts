@@ -1,5 +1,10 @@
-import { deriveRuntimeHealth, type RuntimeHealth } from "@multica/core/runtimes";
-import type { AgentRuntime } from "@multica/core/types";
+import {
+  aggregateRuntimeHealthState,
+  deriveRuntimeHealth,
+  runtimeCurrentVersion,
+  type RuntimeHealth,
+} from "@multica/core/runtimes";
+import type { AgentRuntime, RuntimeHealthState } from "@multica/core/types";
 import { formatDeviceInfo } from "../utils";
 
 export type RuntimeMachineSection = "local" | "remote" | "cloud";
@@ -21,6 +26,7 @@ export interface RuntimeMachine {
   section: RuntimeMachineSection;
   isCurrent: boolean;
   health: RuntimeHealth;
+  runtimeHealth: RuntimeHealthState | null;
   runtimes: AgentRuntime[];
   onlineCount: number;
   issueCount: number;
@@ -123,6 +129,7 @@ function placeholderLocalMachine(
     section: "local",
     isCurrent: true,
     health: "offline",
+    runtimeHealth: null,
     runtimes: [],
     onlineCount: 0,
     issueCount: 0,
@@ -242,6 +249,7 @@ function finalizeRuntimeMachine(
     section: isCurrent ? "local" : draft.mode === "cloud" ? "cloud" : "remote",
     isCurrent,
     health,
+    runtimeHealth: aggregateRuntimeHealthState(runtimes),
     runtimes,
     onlineCount,
     issueCount,
@@ -353,9 +361,9 @@ function latestLastSeenAt(runtimes: AgentRuntime[]): string | null {
 function commonCliVersion(runtimes: AgentRuntime[]): string | null {
   const versions = new Set<string>();
   for (const runtime of runtimes) {
-    const version = runtime.metadata?.cli_version;
-    if (typeof version === "string" && version.trim()) {
-      versions.add(version.trim());
+    const version = runtimeCurrentVersion(runtime);
+    if (version) {
+      versions.add(version);
     }
   }
   return versions.size === 1 ? Array.from(versions)[0] ?? null : null;

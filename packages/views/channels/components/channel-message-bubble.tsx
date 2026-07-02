@@ -22,6 +22,7 @@ import {
   hasStructuredMessageParts,
 } from "./message-parts-preview";
 import { MessagePartsRenderer } from "./message-parts-renderer";
+import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 
 function formatTime(value: string): string {
   try {
@@ -37,17 +38,11 @@ function formatTime(value: string): string {
 function ChannelSystemMessageRow({
   message,
   highlighted,
-  runtimeNoticeState,
   systemText,
-  openRuntimesLabel,
-  onOpenRuntimes,
 }: {
   message: ChannelMessage;
   highlighted: boolean;
-  runtimeNoticeState: boolean;
   systemText: string;
-  openRuntimesLabel: string;
-  onOpenRuntimes?: () => void;
 }) {
   return (
     <div
@@ -60,15 +55,6 @@ function ChannelSystemMessageRow({
       )}
     >
       <span className="min-w-0 break-words">{systemText}</span>
-      {runtimeNoticeState && onOpenRuntimes && (
-        <button
-          type="button"
-          className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-border/70 bg-background/80 px-2 text-[11px] font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={onOpenRuntimes}
-        >
-          <span>{openRuntimesLabel}</span>
-        </button>
-      )}
       <span className="shrink-0 text-[11px] text-muted-foreground/70">
         {formatTime(message.created_at)}
       </span>
@@ -89,7 +75,6 @@ export function ChannelMessageBubble({
   onOpenThread,
   onScrollTo,
   onReact,
-  onOpenRuntimes,
   searchHighlighted = false,
   searchQuery,
 }: {
@@ -105,8 +90,6 @@ export function ChannelMessageBubble({
   onScrollTo?: (messageId: string) => void;
   /** Toggle/add a lightweight emoji reaction on this message. */
   onReact?: (message: ChannelMessage, emoji: string) => void;
-  /** Opens the workspace runtime settings for actionable system notices. */
-  onOpenRuntimes?: () => void;
   /** Search hit: marks matching visible text while search is open. */
   searchHighlighted?: boolean;
   /** Trimmed conversation search phrase to mark inside this hit's visible text. */
@@ -116,15 +99,14 @@ export function ChannelMessageBubble({
   const { getActorAvatarUrl, getActorName } = useActorName();
 
   if (message.type === "system") {
+    if (isLegacyRuntimeSystemNotice(message)) return null;
+
     const systemText = message.content.trim() || message.author_name || "System";
     return (
       <ChannelSystemMessageRow
         message={message}
         highlighted={highlighted}
-        runtimeNoticeState={false}
         systemText={systemText}
-        openRuntimesLabel={t(($) => $.daemon_notice.open_runtimes)}
-        onOpenRuntimes={onOpenRuntimes}
       />
     );
   }

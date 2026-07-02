@@ -59,6 +59,9 @@ vi.mock("@multica/core/auth", () => ({
 
 vi.mock("@multica/core/runtimes", () => ({
   deriveRuntimeHealth: () => "online",
+  runtimeCurrentVersion: () => "0.3.0",
+  runtimeLaunchedBy: () => null,
+  runtimeTargetVersion: () => null,
 }));
 
 vi.mock("@multica/core/agents", () => ({
@@ -102,8 +105,8 @@ vi.mock("../../agents/presence", () => ({
   workloadConfig: { idle: { icon: () => null, textClass: "" } },
 }));
 vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));
-vi.mock("../../navigation", () => ({
-  AppLink: () => null,
+vi.mock("../../navigation/app-link", () => ({ AppLink: () => null }));
+vi.mock("../../navigation/context", () => ({
   useNavigation: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
 

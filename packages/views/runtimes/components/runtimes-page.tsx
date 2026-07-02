@@ -39,8 +39,13 @@ import {
   type RuntimeMachine,
   type RuntimeMachineFilter,
 } from "./runtime-machines";
-import { HealthDot, HealthIcon, useHealthLabel } from "./shared";
-import { useT } from "../../i18n";
+import {
+  HealthDot,
+  HealthIcon,
+  RuntimeHealthStateBadge,
+  useHealthLabel,
+} from "./shared";
+import { useT } from "../../i18n/use-t";
 
 const MACHINE_FILTERS: RuntimeMachineFilter[] = ["all", "online", "issues"];
 
@@ -124,6 +129,7 @@ export function RuntimesPage({
     qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
   }, [qc, wsId]);
   useWSEvent("daemon:register", handleDaemonEvent);
+  useWSEvent("daemon:runtime_updated", handleDaemonEvent);
 
   const updatableIds = useUpdatableRuntimeIds(wsId);
   const now = useNowTick();
@@ -663,6 +669,9 @@ function MachineDetail({
                 <HealthIcon health={machine.health} />
                 {healthLabel(machine.health)}
               </span>
+              {machine.runtimeHealth && machine.runtimeHealth !== "ok" && (
+                <RuntimeHealthStateBadge health={machine.runtimeHealth} />
+              )}
               {machine.isCurrent && (
                 <span className="rounded-md bg-foreground px-2 py-0.5 text-xs font-medium text-background">
                   {t(($) => $.machine.local_badge)}

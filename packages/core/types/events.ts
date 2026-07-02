@@ -394,6 +394,10 @@ export interface InvitationRevokedPayload {
   invitee_email: string;
 }
 
+export interface DaemonRuntimeUpdatedPayload {
+  runtime: AgentRuntime;
+}
+
 /**
  * Maps every WSEventType to its payload interface. Events whose payload
  * shape isn't formally typed (server emits an object the client doesn't

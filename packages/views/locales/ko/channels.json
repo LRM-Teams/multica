@@ -155,18 +155,7 @@
     "waiting_local_directory": "로컬 디렉터리 대기 중",
     "processing_single": "{{name}}이(가) 답장을 준비 중...",
     "processing_pair": "{{a}}와(과) {{b}}이(가) 답장을 준비 중...",
-    "processing_overflow": "{{a}}, {{b}} 외 {{count}}명이 답장을 준비 중...",
-    "daemon": {
-      "outdated": "데몬 업데이트 필요",
-      "missing": "데몬 시작 필요",
-      "disconnected": "데몬 연결 끊김"
-    }
-  },
-  "daemon_notice": {
-    "outdated": "로컬 데몬이 오래되어 업데이트가 필요합니다.",
-    "missing": "Multica CLI를 설치하고 데몬을 시작하세요.",
-    "disconnected": "로컬 데몬이 연결되어 있지 않습니다.",
-    "open_runtimes": "런타임 열기"
+    "processing_overflow": "{{a}}, {{b}} 외 {{count}}명이 답장을 준비 중..."
   },
   "composer": {
     "placeholder": "필요한 내용을 입력하세요…  @에이전트이름 으로 답장을 요청하세요.",

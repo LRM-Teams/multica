@@ -77,6 +77,14 @@
       "description": "6 日以上オフラインです。再接続しない限り、7 日目に自動削除されます。"
     }
   },
+  "runtime_health": {
+    "ok": "正常",
+    "update_available": "更新あり",
+    "updating": "更新中",
+    "awaiting_confirmation": "確認待ち",
+    "failed": "更新失敗",
+    "offline": "オフライン"
+  },
   "detail": {
     "all_runtimes": "すべてのランタイム",
     "read_only": "読み取り専用",
@@ -236,6 +244,8 @@
     "retry": "再試行",
     "unknown_error": "不明なエラー",
     "initiate_failed": "更新を開始できませんでした",
+    "awaiting_confirmation": "更新しました。デーモンの確認を待っています。",
+    "offline": "デーモンはオフラインです",
     "manual_hint": "自動更新がインストール先に書き込めない場合は、そのコンピュータのターミナルで手動更新してください。",
     "manual_action": "手動コマンド",
     "manual_dialog_title": "このランタイムを手動で更新",
@@ -333,14 +343,13 @@
     "no_data": "まだ使用量データがありません"
   },
   "update_prompt": {
-    "title": "ローカルデーモンを更新",
-    "description": "ローカルの Multica CLI は {{current}} です。{{latest}} に更新すると、このランタイムで最新のエージェント機能を使えます。",
-    "more_runtimes": "このコンピュータには、同じ更新が必要なランタイムがあと {{count}} 個あります。",
-    "note": "デーモンは heartbeat 経由で更新を受け取り、このコンピュータで CLI 更新を実行し、完了後に自動で再起動します。",
+    "title": "Multica CLI を更新",
+    "description": "{{current}} → {{latest}}",
+    "more_runtimes": "このコンピュータでは、あと {{count}} 個のランタイムも更新される可能性があります。",
     "later": "後で",
     "update_now": "今すぐ更新",
     "status": {
-      "completed": "更新を送信しました。デーモンは新しい CLI で再起動します。"
+      "completed": "更新しました。デーモンの再接続を待っています。"
     }
   }
 }

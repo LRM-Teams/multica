@@ -77,10 +77,10 @@ const newDmTriggerCls =
 
 /**
  * DIRECT MESSAGES sidebar region — the top half of the unified Messages
- * sidebar (GROUPS sits below). Fed by `GET /api/dm`, which unions kind='dm'
- * channels with legacy chat_sessions and is already recency-sorted, so we
- * preserve the server order (unread / new float up). The header is collapsible
- * and, when collapsed, surfaces the aggregate unread count.
+ * sidebar (GROUPS sits below). Fed by `GET /api/dm`; the visible R2 surface is
+ * `dm_channel` only, so older `legacy_session` rows are filtered out here while
+ * backend cleanup removes that source. The header is collapsible and, when
+ * collapsed, surfaces the aggregate unread count.
  *
  * Selection is unified with groups by the parent: `activeId` is the currently
  * open conversation id regardless of region, so opening a DM clears the group
@@ -115,6 +115,10 @@ export function DmList({
   const closeDM = useCloseDM();
   const muteDM = useMuteDM();
 
+  const visibleDms = useMemo(
+    () => dms.filter((dm) => dm.source === "dm_channel"),
+    [dms],
+  );
   const onError = () => toast.error(t(($) => $.dm.action_failed));
   const handleTogglePin = (dm: DMItem) =>
     setPinned.mutate({ source: dm.source, id: dm.id, pinned: !dm.pinned_at }, { onError });
@@ -128,19 +132,19 @@ export function DmList({
   const aggregateUnread = useMemo(
     () =>
       sumUnmutedUnreadCounts(
-        dms,
+        visibleDms,
         (dm) => dm.real_unread ?? dm.unread ?? 0,
         (dm) => isConversationMuted(dm),
       ),
-    [dms],
+    [visibleDms],
   );
 
   // Pinned conversations float to the top of DIRECT MESSAGES; the server keeps
   // each group recency-sorted, so a stable sort preserves that order within the
   // pinned and unpinned groups.
   const sortedDms = useMemo(
-    () => [...dms].sort((a, b) => (b.pinned_at ? 1 : 0) - (a.pinned_at ? 1 : 0)),
-    [dms],
+    () => visibleDms.toSorted((a, b) => (b.pinned_at ? 1 : 0) - (a.pinned_at ? 1 : 0)),
+    [visibleDms],
   );
   const resolveMentionPreview = useMemo<MentionPreviewResolver>(
     () => (type, id, fallbackLabel) => {
@@ -160,7 +164,7 @@ export function DmList({
   }, [searchQuery, sortedDms]);
   const hasSearchQuery = searchQuery.trim().length > 0;
 
-  const showHeaderTrigger = isLoading || dms.length > 0;
+  const showHeaderTrigger = isLoading || visibleDms.length > 0;
   const openPicker = () => setPickerOpen(true);
   const closePicker = () => setPickerOpen(false);
 
@@ -178,7 +182,7 @@ export function DmList({
         </p>
         <p>{t(($) => $.sidebar.search_scope_hint)}</p>
       </div>
-    ) : dms.length === 0 ? (
+    ) : visibleDms.length === 0 ? (
       <div className="flex flex-col items-center gap-2 px-3 py-3">
         <p className="text-xs text-muted-foreground">{t(($) => $.dm.empty)}</p>
         {isMobile ? (

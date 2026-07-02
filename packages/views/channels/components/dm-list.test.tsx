@@ -5,10 +5,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enChannels from "../../locales/en/channels.json";
+import type { DMItem } from "@multica/core/dm";
 
 const TEST_RESOURCES = { en: { channels: enChannels } };
 
 const mockViewport = vi.hoisted(() => ({ isMobile: false }));
+const mockQueryData = vi.hoisted(() => ({
+  dms: [] as DMItem[],
+  agents: [],
+  members: [],
+  squads: [],
+}));
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useIsMobile: () => mockViewport.isMobile,
@@ -39,10 +46,17 @@ vi.mock("@multica/core/dm", () => ({
 vi.mock("@multica/core/workspace/queries", () => ({
   agentListOptions: () => ({ kind: "agents" as const }),
   memberListOptions: () => ({ kind: "members" as const }),
+  squadListOptions: () => ({ kind: "squads" as const }),
 }));
 
 vi.mock("../../common/use-open-dm", () => ({
   useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
+}));
+
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => (
+    <div data-testid={`avatar-${actorId}`} />
+  ),
 }));
 
 vi.mock("@tanstack/react-query", async () => {
@@ -52,7 +66,14 @@ vi.mock("@tanstack/react-query", async () => {
   return {
     ...actual,
     useQuery: (opts: { kind?: string }) => ({
-      data: opts?.kind === "dms" ? [] : [],
+      data:
+        opts?.kind === "dms"
+          ? mockQueryData.dms
+          : opts?.kind === "agents"
+            ? mockQueryData.agents
+            : opts?.kind === "squads"
+              ? mockQueryData.squads
+              : mockQueryData.members,
       isLoading: false,
     }),
   };
@@ -110,9 +131,24 @@ function renderDmList() {
   );
 }
 
+function makeDm(overrides: Partial<DMItem>): DMItem {
+  return {
+    id: "dm-1",
+    source: "dm_channel",
+    peer: { type: "agent", id: "agent-1", name: "Product Manager" },
+    unread: 0,
+    updated_at: "2026-07-02T00:00:00Z",
+    ...overrides,
+  };
+}
+
 describe("DmList new-DM picker", () => {
   beforeEach(() => {
     mockViewport.isMobile = false;
+    mockQueryData.dms = [];
+    mockQueryData.agents = [];
+    mockQueryData.members = [];
+    mockQueryData.squads = [];
   });
 
   it("opens the desktop picker from the empty-state CTA", () => {
@@ -135,5 +171,25 @@ describe("DmList new-DM picker", () => {
 
     expect(screen.getByTestId("dm-picker-drawer")).toBeInTheDocument();
     expect(screen.getByText("New message")).toBeInTheDocument();
+  });
+
+  it("hides legacy_session rows from the visible direct-message list", () => {
+    mockQueryData.dms = [
+      makeDm({
+        id: "legacy-1",
+        source: "legacy_session",
+        peer: { type: "agent", id: "agent-legacy", name: "Old Chat Surface" },
+      }),
+      makeDm({
+        id: "channel-1",
+        source: "dm_channel",
+        peer: { type: "agent", id: "agent-channel", name: "R2 DM Surface" },
+      }),
+    ];
+
+    renderDmList();
+
+    expect(screen.getByText("R2 DM Surface")).toBeInTheDocument();
+    expect(screen.queryByText("Old Chat Surface")).not.toBeInTheDocument();
   });
 });

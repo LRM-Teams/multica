@@ -199,6 +199,7 @@
     "muted_label": "음소거됨",
     "close_chat": "대화 닫기",
     "action_failed": "작업에 실패했습니다. 다시 시도해 주세요",
+    "legacy_unavailable": "이 이전 다이렉트 메시지는 마이그레이션 중이며 현재 메시지 화면에서 열 수 없습니다.",
     "composer_placeholder": "{{name}}에게 메시지…"
   },
   "quote": {

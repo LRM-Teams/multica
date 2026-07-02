@@ -320,5 +320,16 @@
     "table_cache_r": "缓存读",
     "table_cache_w": "缓存写",
     "no_data": "还没有使用数据"
+  },
+  "update_prompt": {
+    "title": "更新本地守护进程",
+    "description": "你的本地 Multica CLI 是 {{current}}。更新到 {{latest}} 后，这台运行时才能使用最新的智能体功能。",
+    "more_runtimes": "这台电脑上还有 {{count}} 个运行时可能也需要同样的更新。",
+    "note": "守护进程会通过 heartbeat 收到更新任务，在你的电脑上运行 CLI 更新器，完成后自动重启。",
+    "later": "稍后",
+    "update_now": "立即更新",
+    "status": {
+      "completed": "更新已下发。守护进程将使用新 CLI 重启。"
+    }
   }
 }

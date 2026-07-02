@@ -219,7 +219,12 @@ func (h *Handler) InitiateUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
+	member, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found")
+	if !ok {
+		return
+	}
+	if !canEditRuntime(member, rt) {
+		writeError(w, http.StatusForbidden, "only the runtime owner or a workspace admin can update this runtime")
 		return
 	}
 
@@ -257,7 +262,12 @@ func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "runtime not found")
 		return
 	}
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
+	member, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found")
+	if !ok {
+		return
+	}
+	if !canEditRuntime(member, rt) {
+		writeError(w, http.StatusForbidden, "only the runtime owner or a workspace admin can inspect this update")
 		return
 	}
 

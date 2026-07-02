@@ -335,5 +335,16 @@
     "table_cache_r": "Cache R",
     "table_cache_w": "Cache W",
     "no_data": "No usage data yet"
+  },
+  "update_prompt": {
+    "title": "Update your local daemon",
+    "description": "Your local Multica CLI is {{current}}. Update to {{latest}} so this runtime has the latest agent features.",
+    "more_runtimes": "{{count}} more runtime on this computer may also need the same update.",
+    "note": "The daemon receives the update over heartbeat, runs the CLI updater on your computer, then restarts itself after the update completes.",
+    "later": "Later",
+    "update_now": "Update now",
+    "status": {
+      "completed": "Update queued. The daemon is restarting with the new CLI."
+    }
   }
 }

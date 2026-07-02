@@ -40,8 +40,8 @@ vi.mock("../../issues/components/comment-card", () => ({
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorAvatarUrl: () => null,
-    getActorName: (_type: string, id: string) =>
-      id === "user-1" ? "Alice" : id === "user-2" ? "Bob" : null,
+    getActorName: (_type: string, id: string, fallback?: string) =>
+      id === "user-1" ? "Alice Display" : id === "user-2" ? "Bob Display" : fallback,
   }),
 }));
 
@@ -117,22 +117,49 @@ describe("ChannelMessageBubble", () => {
     const msg = makeMessage({
       author_type: "user",
       author_id: "user-1",
-      author_name: "Alice",
+      author_name: "alice",
       content: "Please summarize Q2.",
     });
     render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
 
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "true");
+    expect(screen.getByText("Alice Display")).toBeInTheDocument();
+    expect(screen.queryByText("alice")).not.toBeInTheDocument();
     expect(screen.queryByText("Agent")).not.toBeInTheDocument();
     expect(screen.getByText("Please summarize Q2.")).toBeInTheDocument();
   });
 
   it("treats another user's message as not own", () => {
-    const msg = makeMessage({ author_type: "user", author_id: "user-2", author_name: "Bob" });
+    const msg = makeMessage({ author_type: "user", author_id: "user-2", author_name: "bob" });
     render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
 
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
-    expect(screen.getByText("Bob")).toBeInTheDocument();
+    expect(screen.getByText("Bob Display")).toBeInTheDocument();
+  });
+
+  it("resolves quoted reply author names through live identity", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          author_type: "user",
+          author_id: "user-2",
+          author_name: "bob",
+          reply_to_message_id: "m0",
+          reply_to: {
+            id: "m0",
+            author_type: "user",
+            author_id: "user-1",
+            author_name: "alice",
+            content: "Earlier point",
+            created_at: "2026-06-17T09:10:00Z",
+          },
+        })}
+        currentUserId="user-2"
+      />,
+    );
+
+    expect(screen.getByText("Alice Display")).toBeInTheDocument();
+    expect(screen.queryByText("alice")).not.toBeInTheDocument();
   });
 
   it("passes the search query to markdown only for search hits", () => {
@@ -306,7 +333,7 @@ describe("ChannelMessageBubble", () => {
 
     expect(screen.getByRole("button", { name: "👍2" })).toHaveAttribute(
       "title",
-      "You, Bob",
+      "You, Bob Display",
     );
   });
 

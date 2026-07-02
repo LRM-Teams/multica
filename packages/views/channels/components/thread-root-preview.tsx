@@ -2,6 +2,7 @@
 
 import { Bot } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
 import { MemoizedMarkdown } from "../../common/markdown";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -10,6 +11,7 @@ import { agentColor } from "../../common/agent-color";
 import { initialsOf } from "../../common/initials";
 import { AttachmentList } from "../../issues/components/comment-card";
 import { useT } from "../../i18n/use-t";
+import { resolveChannelAuthorDisplayName } from "./message-preview";
 
 function formatTime(value: string): string {
   try {
@@ -32,12 +34,13 @@ export function ThreadRootPreview({
   ownName?: string;
 }) {
   const { t } = useT("channels");
-  const isOwn =
-    message.author_type === "user" &&
-    message.author_id != null &&
-    message.author_id === currentUserId;
+  const { getActorName } = useActorName();
   const isAgent = message.author_type === "agent";
-  const displayName = isOwn ? ownName ?? message.author_name : message.author_name;
+  const displayName = resolveChannelAuthorDisplayName(message, {
+    currentUserId,
+    ownName,
+    getActorName,
+  });
   const profileActorType =
     message.author_type === "agent"
       ? "agent"

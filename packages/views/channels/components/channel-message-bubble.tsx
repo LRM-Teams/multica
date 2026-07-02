@@ -15,6 +15,7 @@ import { agentColor } from "../../common/agent-color";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
+import { resolveChannelAuthorDisplayName } from "./message-preview";
 
 function formatTime(value: string): string {
   try {
@@ -83,7 +84,18 @@ export function ChannelMessageBubble({
         : message.author_type === "user"
           ? getActorAvatarUrl("member", message.author_id)
           : null;
-  const displayName = isOwn ? ownName ?? message.author_name : message.author_name;
+  const displayName = resolveChannelAuthorDisplayName(message, {
+    currentUserId,
+    ownName,
+    getActorName,
+  });
+  const replyAuthorName = message.reply_to
+    ? resolveChannelAuthorDisplayName(message.reply_to, {
+        currentUserId,
+        ownName,
+        getActorName,
+      })
+    : "";
   const profileActorType =
     message.author_type === "agent"
       ? "agent"
@@ -93,8 +105,8 @@ export function ChannelMessageBubble({
   const profileActorId = profileActorType ? message.author_id : null;
   const avatar = (
     <ActorAvatar
-      name={message.author_name}
-      initials={initialsOf(message.author_name)}
+      name={displayName}
+      initials={initialsOf(displayName)}
       avatarUrl={avatarUrl ?? undefined}
       isAgent={isAgent}
       isSystem={message.author_type === "system"}
@@ -226,7 +238,7 @@ export function ChannelMessageBubble({
               aria-label={t(($) => $.quote.jump_to)}
             >
               <p className="truncate text-[11px] font-semibold text-foreground/70">
-                {message.reply_to.author_name}
+                {replyAuthorName}
               </p>
               <p className="line-clamp-1 text-[11px] text-muted-foreground">
                 {message.reply_to.content}

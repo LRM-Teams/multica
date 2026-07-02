@@ -43,14 +43,14 @@ func (f *fakeEnvDispatchDeps) GetEnv(_ context.Context, envID, _ string) (Env, e
 	}
 	return e, nil
 }
-func (f *fakeEnvDispatchDeps) CreateEnv(_ context.Context, _, sandboxID, parentEnvID string, mode EnvMode, domain EnvDomain) (string, error) {
+func (f *fakeEnvDispatchDeps) CreateEnv(_ context.Context, _ string, sandboxIDs []string, parentEnvID string, mode EnvMode, domain EnvDomain) (string, error) {
 	if f.createEnvErr != nil {
 		return "", f.createEnvErr
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := fmt.Sprintf("env-%d", len(f.envs))
-	f.envs[id] = Env{ID: id, SandboxID: sandboxID, ParentEnvID: parentEnvID, Mode: mode, Domain: domain}
+	f.envs[id] = Env{ID: id, SandboxIDs: sandboxIDs, ParentEnvID: parentEnvID, Mode: mode, Domain: domain}
 	return id, nil
 }
 func (f *fakeEnvDispatchDeps) DeleteEnv(_ context.Context, envID, _ string) error {
@@ -130,6 +130,17 @@ func (f *fakeEnvDispatchDeps) ListIssuesByProject(_ context.Context, pid, _ stri
 	defer f.mu.Unlock()
 	return f.issues[pid], nil
 }
+func (f *fakeEnvDispatchDeps) ListChatSessionsByProject(_ context.Context, pid, _ string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for sid, p := range f.chatSess {
+		if p == pid {
+			out = append(out, sid)
+		}
+	}
+	return out, nil
+}
 func (f *fakeEnvDispatchDeps) CreateIssue(_ context.Context, pid, _, _, title, _ string, _, _, _ []string) (string, error) {
 	if f.createIssueErr != nil {
 		return "", f.createIssueErr
@@ -167,7 +178,7 @@ func (f *fakeEnvDispatchDeps) seedBaseEnv() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := "base-env-1"
-	f.envs[id] = Env{ID: id, SandboxID: "base-sbx", Mode: EnvModeBase, Domain: ""}
+	f.envs[id] = Env{ID: id, SandboxIDs: []string{"base-sbx"}, Mode: EnvModeBase, Domain: ""}
 	return id
 }
 
@@ -225,7 +236,7 @@ func TestDispatch_BranchSweLegoIssue_N1_Forks(t *testing.T) {
 	f := newFakeEnvDispatchDeps()
 	// seed a state env (mode != base) with a project + single swe_lego issue
 	stateEnv := "state-env-1"
-	f.envs[stateEnv] = Env{ID: stateEnv, SandboxID: "state-sbx", Mode: EnvModeBranch, Domain: EnvDomainSweLego}
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"state-sbx"}, Mode: EnvModeBranch, Domain: EnvDomainSweLego}
 	f.projects["source-proj-1"] = stateEnv
 	f.issues["source-proj-1"] = []IssueRow{{ID: "source-issue-1", ProjectID: "source-proj-1"}}
 
@@ -257,8 +268,12 @@ func TestDispatch_BranchSweLegoIssue_N1_Forks(t *testing.T) {
 func TestDispatch_BranchSelfPlayMessage_N2(t *testing.T) {
 	f := newFakeEnvDispatchDeps()
 	stateEnv := "state-env-1"
-	f.envs[stateEnv] = Env{ID: stateEnv, SandboxID: "state-sbx", Mode: EnvModeBranch, Domain: EnvDomainSelfPlay}
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"state-sbx"}, Mode: EnvModeBranch, Domain: EnvDomainSelfPlay}
 	f.projects["source-proj-1"] = stateEnv
+	// §7.4: branch+self_play requires the source project to have exactly one
+	// chat session. Seed it so validateBranchSource passes.
+	f.chatSess["source-sess-1"] = "source-proj-1"
+	sessionsBefore := len(f.chatSess)
 
 	svc := NewEnvDispatchService(f, 8)
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
@@ -282,9 +297,10 @@ func TestDispatch_BranchSelfPlayMessage_N2(t *testing.T) {
 			t.Fatalf("rollout %d: want copied session, got %s", i, r.ChatSessionID)
 		}
 	}
-	// No new "sess-*" session should be created for branch (append only).
-	if len(f.chatSess) != 0 {
-		t.Fatalf("branch must not create new sessions, got %d", len(f.chatSess))
+	// No new "sess-*" session should be created for branch (append only): the
+	// only session present is the seeded source session.
+	if len(f.chatSess) != sessionsBefore {
+		t.Fatalf("branch must not create new sessions, got %d (want %d)", len(f.chatSess), sessionsBefore)
 	}
 }
 
@@ -414,5 +430,119 @@ func TestDispatch_IdempotencyReplay(t *testing.T) {
 	}
 	if second.Rollouts[0].ProjectID != first.Rollouts[0].ProjectID {
 		t.Fatal("replay returned different rollouts")
+	}
+}
+
+func TestDispatch_RejectsMissingAgentID(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	svc := NewEnvDispatchService(f, 8)
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSweLego,
+		DispatchType: EnvDispatchIssue, GroupSize: 1, Issue: &IssueInput{Title: "t"},
+	})
+	if err == nil {
+		t.Fatal("want error (agent_id required)")
+	}
+}
+
+func TestDispatch_RejectsScratchNonBaseEnv(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	stateEnv := "state-env-1"
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"sbx"}, Mode: EnvModeBranch}
+	svc := NewEnvDispatchService(f, 8)
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeScratch, EnvID: stateEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag", Issue: &IssueInput{Title: "t"},
+	})
+	if err == nil {
+		t.Fatal("want error (scratch requires a base env)")
+	}
+}
+
+func TestDispatch_RejectsBranchBaseEnv(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 8)
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeBranch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag",
+	})
+	if err == nil {
+		t.Fatal("want error (branch requires a state env)")
+	}
+}
+
+func TestDispatch_RejectsBranchSweLegoZeroIssues(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	stateEnv := "state-env-1"
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"sbx"}, Mode: EnvModeBranch, Domain: EnvDomainSweLego}
+	f.projects["source-proj-1"] = stateEnv // no issues seeded → zero
+
+	svc := NewEnvDispatchService(f, 8)
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeBranch, EnvID: stateEnv,
+		SourceProjectID: "source-proj-1",
+		Domain:          EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag",
+	})
+	if err == nil {
+		t.Fatal("want error (branch source must have exactly one issue)")
+	}
+	// No fork/create work should have happened (validated upfront).
+	if len(f.sandboxes) != 0 {
+		t.Fatalf("want 0 forked sandboxes, got %d", len(f.sandboxes))
+	}
+}
+
+func TestDispatch_RejectsBranchSweLegoMultipleIssues(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	stateEnv := "state-env-1"
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"sbx"}, Mode: EnvModeBranch, Domain: EnvDomainSweLego}
+	f.projects["source-proj-1"] = stateEnv
+	f.issues["source-proj-1"] = []IssueRow{{ID: "a"}, {ID: "b"}}
+
+	svc := NewEnvDispatchService(f, 8)
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeBranch, EnvID: stateEnv,
+		SourceProjectID: "source-proj-1",
+		Domain:          EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag",
+	})
+	if err == nil {
+		t.Fatal("want error (branch source must have exactly one issue)")
+	}
+}
+
+// TestDispatch_ForksEverySandbox verifies the sandbox-list model: an env that
+// hosts several agents (several sandboxes) is branched by forking every one of
+// them into the new env.
+func TestDispatch_ForksEverySandbox(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	stateEnv := "state-env-1"
+	f.envs[stateEnv] = Env{
+		ID: stateEnv, SandboxIDs: []string{"sbx-a", "sbx-b", "sbx-c"},
+		Mode: EnvModeBranch, Domain: EnvDomainSweLego,
+	}
+	f.projects["source-proj-1"] = stateEnv
+	f.issues["source-proj-1"] = []IssueRow{{ID: "source-issue-1", ProjectID: "source-proj-1"}}
+
+	svc := NewEnvDispatchService(f, 8)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeBranch, EnvID: stateEnv,
+		SourceProjectID: "source-proj-1",
+		Domain:          EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag",
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	newEnv, ok := f.envs[res.Rollouts[0].EnvID]
+	if !ok {
+		t.Fatalf("new env %s not found", res.Rollouts[0].EnvID)
+	}
+	if len(newEnv.SandboxIDs) != 3 {
+		t.Fatalf("want 3 forked sandboxes in the new env, got %d", len(newEnv.SandboxIDs))
 	}
 }

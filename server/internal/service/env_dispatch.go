@@ -89,7 +89,7 @@ type EnvDispatchResult struct {
 type EnvDispatchDeps interface {
 	// Environment operations
 	GetEnv(ctx context.Context, envID, workspaceID string) (Env, error)
-	CreateEnv(ctx context.Context, workspaceID, sandboxID, parentEnvID string, mode EnvMode, domain EnvDomain) (envID string, err error)
+	CreateEnv(ctx context.Context, workspaceID string, sandboxIDs []string, parentEnvID string, mode EnvMode, domain EnvDomain) (envID string, err error)
 	DeleteEnv(ctx context.Context, envID, workspaceID string) error
 
 	// Sandbox operations (proxy to cloud-runtime/Fleet)
@@ -113,6 +113,9 @@ type EnvDispatchDeps interface {
 	// Chat operations
 	CreateChatSession(ctx context.Context, projectID, workspaceID, agentID, creatorID string) (sessionID string, err error)
 	CreateChatMessage(ctx context.Context, sessionID, role, content string) (messageID string, err error)
+	// ListChatSessionsByProject returns the chat session ids under a project.
+	// Used to enforce the branch+self_play "exactly one session" rule (§7.4).
+	ListChatSessionsByProject(ctx context.Context, projectID, workspaceID string) ([]string, error)
 
 	// Agent run
 	EnqueueAgentRun(ctx context.Context, workspaceID, agentID, issueID, chatSessionID, sandboxID string, idx int) (runID string, err error)
@@ -128,7 +131,10 @@ type EnvDispatchDeps interface {
 type Env struct {
 	ID          string
 	WorkspaceID string
-	SandboxID   string
+	// SandboxIDs holds one or more sandbox handles: an environment can host
+	// many agents, each running in its own sandbox. Base envs carry a single
+	// booted sandbox; branching an env forks every sandbox in the set.
+	SandboxIDs  []string
 	ParentEnvID string // empty for base
 	Mode        EnvMode
 	Domain      EnvDomain
@@ -180,6 +186,15 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		return EnvDispatchResult{}, fmt.Errorf("get env: %w", err)
 	}
 
+	// Mode ↔ env kind cross-check (spec §6.3): scratch forks a base env;
+	// branch forks a state env. Reject the mismatched combinations with a 400.
+	if in.Mode == EnvModeScratch && env.Mode != EnvModeBase {
+		return EnvDispatchResult{}, fmt.Errorf("validation_failed: scratch requires a base env (env_id is mode=%s)", env.Mode)
+	}
+	if in.Mode == EnvModeBranch && env.Mode == EnvModeBase {
+		return EnvDispatchResult{}, fmt.Errorf("validation_failed: branch requires a state env (env_id is a base env)")
+	}
+
 	// Branch: resolve the single source project on this env (spec §7.2 step 0).
 	// The 1:1 unique index guarantees exactly one; a base env has none → error.
 	if in.Mode == EnvModeBranch && in.SourceProjectID == "" {
@@ -188,6 +203,16 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 			return EnvDispatchResult{}, fmt.Errorf("validation_failed: resolve source project: %w", err)
 		}
 		in.SourceProjectID = pid
+	}
+
+	// Branch source shape (spec §7.4): v1 requires the source project to hold
+	// exactly one dispatch target. Check upfront so zero/multiple yields a 400
+	// before any fork/create work (and so dispatchOne never sees an empty
+	// target for a branch, which would otherwise nil-deref on in.Issue).
+	if in.Mode == EnvModeBranch {
+		if err := s.validateBranchSource(ctx, in); err != nil {
+			return EnvDispatchResult{}, err
+		}
 	}
 
 	rollouts := make([]EnvRollout, in.GroupSize)
@@ -273,6 +298,9 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 	if in.GroupSize < 1 || in.GroupSize > 64 {
 		return fmt.Errorf("validation_failed: group_size must be in [1, 64]")
 	}
+	if in.AgentID == "" {
+		return fmt.Errorf("validation_failed: agent_id is required")
+	}
 	if in.Domain != EnvDomainSweLego && in.Domain != EnvDomainSelfPlay {
 		return fmt.Errorf("validation_failed: domain is required (swe_lego or self_play)")
 	}
@@ -294,23 +322,48 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 	return nil
 }
 
+// validateBranchSource enforces the §7.4 v1 constraint that a branch source
+// project contains exactly one dispatch target: one swe_lego issue (issue
+// dispatch) or one chat session (message dispatch). Zero or multiple → 400.
+func (s *EnvDispatchService) validateBranchSource(ctx context.Context, in EnvDispatchInput) error {
+	switch in.Domain {
+	case EnvDomainSweLego:
+		issues, err := s.deps.ListIssuesByProject(ctx, in.SourceProjectID, in.WorkspaceID)
+		if err != nil {
+			return fmt.Errorf("validation_failed: list source issues: %w", err)
+		}
+		if len(issues) != 1 {
+			return fmt.Errorf("validation_failed: branch+swe_lego requires the source project to have exactly one issue (found %d)", len(issues))
+		}
+	case EnvDomainSelfPlay:
+		sessions, err := s.deps.ListChatSessionsByProject(ctx, in.SourceProjectID, in.WorkspaceID)
+		if err != nil {
+			return fmt.Errorf("validation_failed: list source chat sessions: %w", err)
+		}
+		if len(sessions) != 1 {
+			return fmt.Errorf("validation_failed: branch+self_play requires the source project to have exactly one chat session (found %d)", len(sessions))
+		}
+	}
+	return nil
+}
+
 // resetOne does the per-rollout reset (sandbox + env + project) per §7.2.
 func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, sourceEnv Env, idx int) (EnvRollout, error) {
-	// Branch always forks (spec §4.3): the source sandbox is never reused in
-	// place, so the source state stays re-branchable (MCTS). Scratch forks the
-	// base. Both paths create a fresh env row.
-	forked, err := s.deps.ForkSandbox(ctx, sourceEnv.SandboxID, idx)
+	// Branch always forks (spec §4.3): the source sandbox set is never reused
+	// in place, so the source state stays re-branchable (MCTS). Scratch forks
+	// the base. An env can hold many sandboxes (one per agent), so fork every
+	// one and carry the full set into the new env row.
+	forked, err := s.forkAll(ctx, sourceEnv.SandboxIDs, idx)
 	if err != nil {
 		return EnvRollout{}, fmt.Errorf("fork sandbox: %w", err)
 	}
-	sandboxID := forked
 	mode := EnvModeScratch
 	if in.Mode == EnvModeBranch {
 		mode = EnvModeBranch
 	}
-	envID, err := s.deps.CreateEnv(ctx, in.WorkspaceID, sandboxID, sourceEnv.ID, mode, in.Domain)
+	envID, err := s.deps.CreateEnv(ctx, in.WorkspaceID, forked, sourceEnv.ID, mode, in.Domain)
 	if err != nil {
-		_ = s.deps.DeleteSandbox(ctx, sandboxID)
+		s.deleteSandboxes(ctx, forked)
 		return EnvRollout{}, fmt.Errorf("create env: %w", err)
 	}
 
@@ -362,8 +415,15 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 	if in.DispatchType == EnvDispatchIssue {
 		issueID := r.IssueID // branch+swe_lego: copied issue id
 		if issueID == "" {
-			// scratch+swe_lego — create the new issue
+			// scratch+swe_lego — create the new issue. in.Issue is guaranteed
+			// non-nil here: validate() requires it for scratch+swe_lego, and
+			// validateBranchSource guarantees branch+swe_lego set r.IssueID
+			// above (so we never reach this branch with a nil in.Issue).
 			ii := in.Issue
+			if ii == nil {
+				r.Error = "internal: missing issue payload for issue dispatch"
+				return
+			}
 			newID, err := s.deps.CreateIssue(ctx, r.ProjectID, in.WorkspaceID, in.UserID, ii.Title, ii.Description, ii.AcceptanceCriteria, ii.FailToPass, ii.PassToPass)
 			if err != nil {
 				r.Error = fmt.Sprintf("create issue: %v", err)
@@ -407,8 +467,8 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 
 // rollbackRollout cleans up a partially-created rollout (reset phase only).
 // Order matters under ON DELETE RESTRICT: delete the project first (it
-// references env_id), then the env row, then its sandbox. Every rollout forks
-// its own sandbox, so this never touches a shared/source sandbox.
+// references env_id), then the env row, then its sandboxes. Every rollout
+// forks its own sandboxes, so this never touches a shared/source sandbox.
 func (s *EnvDispatchService) rollbackRollout(ctx context.Context, workspaceID string, r EnvRollout) {
 	if r.ProjectID != "" {
 		_ = s.deps.DeleteProject(ctx, r.ProjectID, workspaceID)
@@ -417,8 +477,32 @@ func (s *EnvDispatchService) rollbackRollout(ctx context.Context, workspaceID st
 		env, err := s.deps.GetEnv(ctx, r.EnvID, workspaceID)
 		_ = s.deps.DeleteEnv(ctx, r.EnvID, workspaceID)
 		if err == nil {
-			_ = s.deps.DeleteSandbox(ctx, env.SandboxID)
+			s.deleteSandboxes(ctx, env.SandboxIDs)
 		}
+	}
+}
+
+// forkAll forks every sandbox in src, returning the new sandbox ids. On the
+// first failure it best-effort deletes the sandboxes already forked so the
+// reset does not leak them, then returns the error.
+func (s *EnvDispatchService) forkAll(ctx context.Context, src []string, idx int) ([]string, error) {
+	forked := make([]string, 0, len(src))
+	for _, sid := range src {
+		newID, err := s.deps.ForkSandbox(ctx, sid, idx)
+		if err != nil {
+			s.deleteSandboxes(ctx, forked)
+			return nil, err
+		}
+		forked = append(forked, newID)
+	}
+	return forked, nil
+}
+
+// deleteSandboxes best-effort deletes every sandbox id; errors are ignored
+// (rollback is best-effort and the runtime GC is the backstop, spec §7.6).
+func (s *EnvDispatchService) deleteSandboxes(ctx context.Context, ids []string) {
+	for _, sid := range ids {
+		_ = s.deps.DeleteSandbox(ctx, sid)
 	}
 }
 
@@ -431,7 +515,7 @@ func (s *EnvDispatchService) CreateBaseEnv(ctx context.Context, workspaceID, ima
 	if err != nil {
 		return "", "", fmt.Errorf("boot sandbox: %w", err)
 	}
-	eid, err := s.deps.CreateEnv(ctx, workspaceID, sbx, "", EnvModeBase, "")
+	eid, err := s.deps.CreateEnv(ctx, workspaceID, []string{sbx}, "", EnvModeBase, "")
 	if err != nil {
 		_ = s.deps.DeleteSandbox(ctx, sbx)
 		return "", "", fmt.Errorf("create env: %w", err)
@@ -461,7 +545,7 @@ func (s *EnvDispatchService) DeleteEnv(ctx context.Context, envID, workspaceID s
 		}
 		return fmt.Errorf("delete env: %w", err)
 	}
-	_ = s.deps.DeleteSandbox(ctx, env.SandboxID)
+	s.deleteSandboxes(ctx, env.SandboxIDs) // idempotent on 404 in Fleet
 	return nil
 }
 

@@ -28,14 +28,14 @@ func (q *Queries) CreateEnvDispatchRequest(ctx context.Context, arg CreateEnvDis
 }
 
 const createEnvironment = `-- name: CreateEnvironment :one
-INSERT INTO environment (workspace_id, sandbox_id, parent_env_id, mode, domain)
+INSERT INTO environment (workspace_id, sandbox_ids, parent_env_id, mode, domain)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, workspace_id, sandbox_id, parent_env_id, mode, domain, created_at, updated_at
+RETURNING id, workspace_id, sandbox_ids, parent_env_id, mode, domain, created_at, updated_at
 `
 
 type CreateEnvironmentParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	SandboxID   string      `json:"sandbox_id"`
+	SandboxIds  []string    `json:"sandbox_ids"`
 	ParentEnvID pgtype.UUID `json:"parent_env_id"`
 	Mode        string      `json:"mode"`
 	Domain      pgtype.Text `json:"domain"`
@@ -44,7 +44,7 @@ type CreateEnvironmentParams struct {
 func (q *Queries) CreateEnvironment(ctx context.Context, arg CreateEnvironmentParams) (Environment, error) {
 	row := q.db.QueryRow(ctx, createEnvironment,
 		arg.WorkspaceID,
-		arg.SandboxID,
+		arg.SandboxIds,
 		arg.ParentEnvID,
 		arg.Mode,
 		arg.Domain,
@@ -53,7 +53,7 @@ func (q *Queries) CreateEnvironment(ctx context.Context, arg CreateEnvironmentPa
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
-		&i.SandboxID,
+		&i.SandboxIds,
 		&i.ParentEnvID,
 		&i.Mode,
 		&i.Domain,
@@ -101,7 +101,7 @@ func (q *Queries) GetEnvDispatchRequest(ctx context.Context, arg GetEnvDispatchR
 }
 
 const getEnvironment = `-- name: GetEnvironment :one
-SELECT id, workspace_id, sandbox_id, parent_env_id, mode, domain, created_at, updated_at FROM environment
+SELECT id, workspace_id, sandbox_ids, parent_env_id, mode, domain, created_at, updated_at FROM environment
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -116,7 +116,7 @@ func (q *Queries) GetEnvironment(ctx context.Context, arg GetEnvironmentParams) 
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
-		&i.SandboxID,
+		&i.SandboxIds,
 		&i.ParentEnvID,
 		&i.Mode,
 		&i.Domain,

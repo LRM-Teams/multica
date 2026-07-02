@@ -66,8 +66,7 @@ func (h *Handler) DeleteEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	envID := chi.URLParam(r, "envID")
-	if envID == "" {
-		writeError(w, http.StatusBadRequest, "envID is required")
+	if _, ok := parseUUIDOrBadRequest(w, envID, "envID"); !ok {
 		return
 	}
 	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), 8)

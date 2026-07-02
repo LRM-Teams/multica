@@ -1,5 +1,5 @@
 -- name: CreateEnvironment :one
-INSERT INTO environment (workspace_id, sandbox_id, parent_env_id, mode, domain)
+INSERT INTO environment (workspace_id, sandbox_ids, parent_env_id, mode, domain)
 VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 

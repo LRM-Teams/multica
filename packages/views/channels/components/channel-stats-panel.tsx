@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Cell, Pie, PieChart } from "recharts";
 import { channelStatsOptions } from "@multica/core/channels";
+import { useActorName } from "@multica/core/workspace/hooks";
 import {
   ChartContainer,
   ChartTooltip,
@@ -10,7 +11,8 @@ import {
   type ChartConfig,
 } from "@multica/ui/components/ui/chart";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
-import { useT } from "../../i18n";
+import { useT } from "../../i18n/use-t";
+import { resolveChannelAuthorDisplayName } from "./message-preview";
 
 const PALETTE = [
   "var(--chart-1)",
@@ -35,6 +37,7 @@ function Stat({ label, value }: { label: string; value: number }) {
  */
 export function ChannelStatsPanel({ channelId }: { channelId: string }) {
   const { t } = useT("channels");
+  const { getActorName } = useActorName();
   const { data, isPending, isError } = useQuery(channelStatsOptions(channelId));
 
   if (isPending) {
@@ -49,7 +52,7 @@ export function ChannelStatsPanel({ channelId }: { channelId: string }) {
   }
 
   const pieData = data.by_author.map((a, i) => ({
-    name: a.author_name,
+    name: resolveChannelAuthorDisplayName(a, { getActorName }),
     value: a.count,
     fill: PALETTE[i % PALETTE.length],
   }));

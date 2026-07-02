@@ -51,12 +51,18 @@ import {
   resolveActorIdentityPresentation,
   type ActorIdentityPresentation,
 } from "@multica/core/identity";
+import type { Agent, MemberWithUser } from "@multica/core/types";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
-import { useT, useTimeAgo } from "../../i18n";
+import { useT } from "../../i18n/use-t";
+import { useTimeAgo } from "../../i18n/use-time-ago";
 import { useOpenDM } from "../../common/use-open-dm";
-import { formatChannelMessagePreview, type MentionPreviewResolver } from "./message-preview";
+import {
+  formatChannelMessagePreview,
+  resolveChannelAuthorDisplayName,
+  type MentionPreviewResolver,
+} from "./message-preview";
 import {
   ConversationUnreadAffordance,
   isConversationMuted,
@@ -206,6 +212,8 @@ export function DmList({
           currentUserName={currentUserName}
           timeAgo={timeAgo}
           resolveMentionPreview={resolveMentionPreview}
+          members={members}
+          agents={agents}
           onSelect={() => onSelect(dm)}
           onTogglePin={() => handleTogglePin(dm)}
           onMarkUnread={() => handleMarkUnread(dm)}
@@ -407,6 +415,8 @@ function DmRow({
   currentUserName,
   timeAgo,
   resolveMentionPreview,
+  members,
+  agents,
   onSelect,
   onTogglePin,
   onMarkUnread,
@@ -418,6 +428,8 @@ function DmRow({
   currentUserName: string | null;
   timeAgo: (dateStr: string) => string;
   resolveMentionPreview: MentionPreviewResolver;
+  members: MemberWithUser[];
+  agents: Agent[];
   onSelect: () => void;
   /** Pin / unpin (toggles based on current pinned state). */
   onTogglePin: () => void;
@@ -431,7 +443,11 @@ function DmRow({
   const { t } = useT("channels");
   const last = dm.last_message;
   const preview = last
-    ? formatChannelMessagePreview(last.author_name, last.content, resolveMentionPreview)
+    ? formatChannelMessagePreview(
+        resolveChannelAuthorDisplayName(last, { members, agents }),
+        last.content,
+        resolveMentionPreview,
+      )
     : "";
   // Surface mentions of the viewer at full foreground weight (no bold) so an
   // @-mention reads as more salient than ordinary preview text.

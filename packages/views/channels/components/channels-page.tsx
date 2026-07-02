@@ -140,12 +140,13 @@ import {
 } from "@multica/ui/components/ui/alert-dialog";
 import { cn } from "@multica/ui/lib/utils";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
-import { ContentEditor, type ContentEditorRef } from "../../editor";
-import { useNavigation } from "../../navigation";
+import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
+import { useNavigation } from "../../navigation/context";
 import { agentColor } from "../../common/agent-color";
 import { ProjectPickerButton } from "../../common/project-picker-button";
 import { initialsOf } from "../../common/initials";
-import { useT, useTimeAgo } from "../../i18n";
+import { useT } from "../../i18n/use-t";
+import { useTimeAgo } from "../../i18n/use-time-ago";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { ChannelMessageList } from "./channel-message-list";
@@ -161,7 +162,11 @@ import {
 } from "./conversation-surface";
 import { DmList } from "./dm-list";
 import { DmConversation } from "./dm-conversation";
-import { formatChannelMessagePreview, type MentionPreviewResolver } from "./message-preview";
+import {
+  formatChannelMessagePreview,
+  resolveChannelAuthorDisplayName,
+  type MentionPreviewResolver,
+} from "./message-preview";
 import {
   ConversationUnreadAffordance,
   isConversationMuted,
@@ -1458,7 +1463,14 @@ export function ChannelsPage() {
                     const isMuted = isConversationMuted(channel);
                     const last = channel.last_message;
                     const preview = last
-                      ? formatChannelMessagePreview(last.author_name, last.content, resolveMentionPreview)
+                      ? formatChannelMessagePreview(
+                          resolveChannelAuthorDisplayName(last, {
+                            members: workspaceMembers,
+                            agents,
+                          }),
+                          last.content,
+                          resolveMentionPreview,
+                        )
                       : "";
                     const pinned = !!channel.pinned_at;
                     const archiveAllowed = canArchive(channel);

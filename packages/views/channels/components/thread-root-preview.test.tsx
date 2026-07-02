@@ -22,6 +22,13 @@ vi.mock("../../common/actor-profile-popover", () => ({
   ActorProfileTrigger: ({ children }: { children: ReactNode }) => children,
 }));
 
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({
+    getActorName: (_type: string, id: string, fallback?: string) =>
+      id === "user-1" ? "Frank An" : fallback,
+  }),
+}));
+
 vi.mock("../../i18n", () => ({
   useT: () => ({
     t: (
@@ -69,5 +76,21 @@ describe("ThreadRootPreview", () => {
     expect(screen.getByText("Thread root content")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Back to main chat" })).not.toBeInTheDocument();
+  });
+
+  it("uses the live display name for the root author label", () => {
+    render(
+      <ThreadRootPreview
+        message={makeMessage({
+          author_type: "user",
+          author_id: "user-1",
+          author_name: "andong3",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("Frank An")).toBeInTheDocument();
+    expect(screen.queryByText("andong3")).not.toBeInTheDocument();
   });
 });

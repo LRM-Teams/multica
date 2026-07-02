@@ -600,17 +600,43 @@ func (a *envDispatchDepsAdapter) GetDefaultSelfPlayEnv(ctx context.Context, work
 // via agent_id + chat_session_id, so NULL is a safe intermediate state.
 // A follow-up task should extend the interface to pass UserID explicitly.
 //
-// squadID threads through for team dispatch. The squad branches (issue-path
-// assignee=squad + leader task, chat-path context hint + daemon briefing) are
-// implemented in later tasks; for now squadID != "" behaves exactly as the
-// current single-agent path so existing behavior is byte-for-byte unchanged.
-// TODO(Tasks 4/5): resolve the squad leader and apply the leader signals when
-// squadID != "".
+// squadID threads through for team dispatch. The issue-path squad branch
+// (assignee=squad + leader task) is implemented below; the chat-path squad
+// branch (context hint + daemon briefing) is implemented in a later task, so
+// for chatSessionID dispatch squadID != "" still behaves as the current
+// single-agent path.
+// TODO(Task 5): resolve the squad leader + context hint on the chat path.
 func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceID, agentID, squadID, issueID, chatSessionID, sandboxID string, idx int) (string, error) {
-	_ = squadID // TODO(Tasks 4/5): squad-dispatch leader resolution + leader signals.
-	agentUUID := parseUUID(agentID)
 	switch {
 	case issueID != "":
+		var agentUUID pgtype.UUID
+		if agentID != "" {
+			agentUUID = parseUUID(agentID)
+		}
+		isLeaderTask := pgtype.Bool{}
+		if squadID != "" {
+			// Squad dispatch: stamp the issue with assignee_type='squad' and
+			// enqueue the squad LEADER's task with is_leader_task=true so the
+			// leader-task ownership rules apply. The agent_id is resolved to
+			// the squad leader (agentID is empty for squad dispatch).
+			squad, err := a.h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
+				ID:          parseUUID(squadID),
+				WorkspaceID: parseUUID(workspaceID),
+			})
+			if err != nil {
+				return "", fmt.Errorf("get squad: %w", err)
+			}
+			if err := a.h.Queries.SetIssueAssignee(ctx, db.SetIssueAssigneeParams{
+				ID:           parseUUID(issueID),
+				AssigneeType: pgtype.Text{String: "squad", Valid: true},
+				AssigneeID:   parseUUID(squadID),
+				WorkspaceID:  parseUUID(workspaceID),
+			}); err != nil {
+				return "", fmt.Errorf("set issue assignee to squad: %w", err)
+			}
+			agentUUID = squad.LeaderID
+			isLeaderTask = pgtype.Bool{Bool: true, Valid: true}
+		}
 		agent, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
 			ID:          agentUUID,
 			WorkspaceID: parseUUID(workspaceID),
@@ -619,16 +645,18 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 			return "", fmt.Errorf("get agent for run: %w", err)
 		}
 		task, err := a.h.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
-			AgentID:   agentUUID,
-			RuntimeID: agent.RuntimeID,
-			IssueID:   parseUUID(issueID),
-			Priority:  envDispatchTaskPriority,
+			AgentID:      agentUUID,
+			RuntimeID:    agent.RuntimeID,
+			IssueID:      parseUUID(issueID),
+			Priority:     envDispatchTaskPriority,
+			IsLeaderTask: isLeaderTask,
 		})
 		if err != nil {
 			return "", fmt.Errorf("create agent task: %w", err)
 		}
 		return util.UUIDToString(task.ID), nil
 	case chatSessionID != "":
+		agentUUID := parseUUID(agentID)
 		session, err := a.h.Queries.GetChatSession(ctx, parseUUID(chatSessionID))
 		if err != nil {
 			return "", fmt.Errorf("get chat session for run: %w", err)

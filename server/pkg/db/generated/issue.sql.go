@@ -1425,3 +1425,25 @@ func (q *Queries) UpdateIssueStatus(ctx context.Context, arg UpdateIssueStatusPa
 	)
 	return i, err
 }
+
+const setIssueAssignee = `-- name: SetIssueAssignee :exec
+UPDATE issue
+   SET assignee_type = $2, assignee_id = $3
+ WHERE id = $1 AND workspace_id = $4
+`
+
+type SetIssueAssigneeParams struct {
+	ID           pgtype.UUID `json:"id"`
+	AssigneeType pgtype.Text `json:"assignee_type"`
+	AssigneeID   pgtype.UUID `json:"assignee_id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+}
+
+// Sets an issue's assignee (type + id) within its workspace. Used by
+// env-dispatch squad dispatch to mark the issue assignee_type='squad' so the
+// squad-leader task ownership rules apply. The workspace_id predicate keeps
+// the tenant invariant a SQL-layer guarantee (see DeleteIssue).
+func (q *Queries) SetIssueAssignee(ctx context.Context, arg SetIssueAssigneeParams) error {
+	_, err := q.db.Exec(ctx, setIssueAssignee, arg.ID, arg.AssigneeType, arg.AssigneeID, arg.WorkspaceID)
+	return err
+}

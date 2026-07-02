@@ -331,3 +331,12 @@ RETURNING id, workspace_id, creator_type, creator_id, first_executed_at;
 SELECT * FROM issue
 WHERE project_id = $1 AND workspace_id = $2
 ORDER BY created_at ASC;
+
+-- name: SetIssueAssignee :exec
+-- Sets an issue's assignee (type + id) within its workspace. Used by
+-- env-dispatch squad dispatch to mark the issue assignee_type='squad' so the
+-- squad-leader task ownership rules apply. The workspace_id predicate keeps
+-- the tenant invariant a SQL-layer guarantee (see DeleteIssue).
+UPDATE issue
+   SET assignee_type = $2, assignee_id = $3
+ WHERE id = $1 AND workspace_id = $4;

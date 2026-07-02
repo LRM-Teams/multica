@@ -238,6 +238,7 @@ export function UpdateSection({
       {!isManaged && (
         <p className="text-[11px] leading-[1.55] text-muted-foreground">
           {t(($) => $.update.manual_hint_prefix)}{" "}
+          {/* eslint-disable-next-line i18next/no-literal-string -- literal CLI command name, not translatable */}
           <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-foreground">
             {"multica update"}
           </code>{" "}

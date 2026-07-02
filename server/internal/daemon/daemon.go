@@ -2672,11 +2672,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 
 	agentName := "agent"
-	var agentID string
+	agentID := resolvedTaskAgentID(task)
 	var skills []SkillData
 	var instructions string
 	if task.Agent != nil {
-		agentID = task.Agent.ID
 		agentName = task.Agent.Name
 		skills = append([]SkillData(nil), task.Agent.Skills...)
 		instructions = task.Agent.Instructions
@@ -2878,7 +2877,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		"MULTICA_DAEMON_PORT":     fmt.Sprintf("%d", d.cfg.HealthPort),
 		"MULTICA_WORKSPACE_ID":    task.WorkspaceID,
 		"MULTICA_AGENT_NAME":      agentName,
-		"MULTICA_AGENT_ID":        task.AgentID,
+		"MULTICA_AGENT_ID":        agentID,
 		"MULTICA_TASK_ID":         task.ID,
 		"MULTICA_RUN_ID":          task.ID,
 		"MULTICA_WORKSPACES_ROOT": d.cfg.WorkspacesRoot,
@@ -2887,16 +2886,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if task.InitiatorType == "member" {
 		agentEnv["MULTICA_MEMBER_ID"] = task.InitiatorID
 	}
-	if provider == "pi" && task.WorkspaceID != "" && task.AgentID != "" {
-		agentRoot := piAgentRoot(d.cfg, task.WorkspaceID, task.AgentID)
-		agentEnv["PI_AGENT_ROOT"] = agentRoot
-		agentEnv["PI_MEMORY_DIR"] = filepath.Join(agentRoot, "memory")
-		agentEnv["PI_SKILL_DRAFTS_DIR"] = piAgentSkillDraftsDir(agentRoot)
-		agentEnv["PI_AGENT_INBOX_DIR"] = filepath.Join(agentRoot, "inbox")
-		agentEnv["PI_AGENT_SHARED_CACHE_DIR"] = filepath.Join(agentRoot, "shared-cache")
-		agentEnv["PI_AGENT_PROFILE_DIR"] = filepath.Join(agentRoot, "profile")
-		agentEnv["PI_AGENT_FEEDBACK_DIR"] = filepath.Join(agentRoot, "feedback")
-		agentEnv["PI_AGENT_SYNC_QUEUE_DIR"] = piAgentSyncQueueDir(agentRoot)
+	if provider == "pi" {
+		addPiAgentEnv(agentEnv, d.cfg, task.WorkspaceID, agentID)
 	}
 	if task.AutopilotRunID != "" {
 		agentEnv["MULTICA_AUTOPILOT_RUN_ID"] = task.AutopilotRunID
@@ -3857,6 +3848,28 @@ func composeOpenclawIncludeRoots(addRoot, userValue string) (string, bool) {
 	return strings.Join(parts, string(os.PathListSeparator)), true
 }
 
+func resolvedTaskAgentID(task Task) string {
+	if task.Agent != nil && task.Agent.ID != "" {
+		return task.Agent.ID
+	}
+	return task.AgentID
+}
+
+func addPiAgentEnv(env map[string]string, cfg Config, workspaceID, agentID string) {
+	if workspaceID == "" || agentID == "" {
+		return
+	}
+	agentRoot := piAgentRoot(cfg, workspaceID, agentID)
+	env["PI_AGENT_ROOT"] = agentRoot
+	env["PI_MEMORY_DIR"] = filepath.Join(agentRoot, "memory")
+	env["PI_SKILL_DRAFTS_DIR"] = piAgentSkillDraftsDir(agentRoot)
+	env["PI_AGENT_INBOX_DIR"] = filepath.Join(agentRoot, "inbox")
+	env["PI_AGENT_SHARED_CACHE_DIR"] = filepath.Join(agentRoot, "shared-cache")
+	env["PI_AGENT_PROFILE_DIR"] = filepath.Join(agentRoot, "profile")
+	env["PI_AGENT_FEEDBACK_DIR"] = filepath.Join(agentRoot, "feedback")
+	env["PI_AGENT_SYNC_QUEUE_DIR"] = piAgentSyncQueueDir(agentRoot)
+}
+
 // isBlockedEnvKey returns true if the key must not be overridden by user-
 // configured custom_env. This prevents accidental or malicious override of
 // daemon-internal variables and critical system paths.
@@ -3866,7 +3879,9 @@ func isBlockedEnvKey(key string) bool {
 		return true
 	}
 	switch upper {
-	case "HOME", "PATH", "USER", "SHELL", "TERM", "CODEX_HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_INCLUDE_ROOTS":
+	case "HOME", "PATH", "USER", "SHELL", "TERM", "CODEX_HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_INCLUDE_ROOTS",
+		"PI_AGENT_ROOT", "PI_MEMORY_DIR", "PI_SKILL_DRAFTS_DIR", "PI_AGENT_INBOX_DIR", "PI_AGENT_SHARED_CACHE_DIR",
+		"PI_AGENT_PROFILE_DIR", "PI_AGENT_FEEDBACK_DIR", "PI_AGENT_SYNC_QUEUE_DIR":
 		return true
 	}
 	return false

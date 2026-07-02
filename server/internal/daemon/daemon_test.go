@@ -818,6 +818,68 @@ func TestWatchTaskCancellation_RunningTaskNotInterrupted(t *testing.T) {
 	}
 }
 
+func TestPiAgentEnvUsesNestedAgentIDFallback(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := filepath.Join(t.TempDir(), "multica_workspaces")
+	task := Task{
+		WorkspaceID: "workspace-1",
+		Agent:       &AgentData{ID: "agent-nested", Name: "Pi Agent"},
+	}
+	agentID := resolvedTaskAgentID(task)
+	if agentID != "agent-nested" {
+		t.Fatalf("resolvedTaskAgentID = %q, want nested agent id", agentID)
+	}
+
+	env := map[string]string{}
+	addPiAgentEnv(env, Config{WorkspacesRoot: workspaceRoot}, task.WorkspaceID, agentID)
+
+	agentRoot := filepath.Join(workspaceRoot, "workspace-1", ".pi", "agents", "agent-nested")
+	want := map[string]string{
+		"PI_AGENT_ROOT":             agentRoot,
+		"PI_MEMORY_DIR":             filepath.Join(agentRoot, "memory"),
+		"PI_SKILL_DRAFTS_DIR":       filepath.Join(agentRoot, "skills", "drafts"),
+		"PI_AGENT_INBOX_DIR":        filepath.Join(agentRoot, "inbox"),
+		"PI_AGENT_SHARED_CACHE_DIR": filepath.Join(agentRoot, "shared-cache"),
+		"PI_AGENT_PROFILE_DIR":      filepath.Join(agentRoot, "profile"),
+		"PI_AGENT_FEEDBACK_DIR":     filepath.Join(agentRoot, "feedback"),
+		"PI_AGENT_SYNC_QUEUE_DIR":   filepath.Join(agentRoot, "sync_queue"),
+	}
+	for key, value := range want {
+		if got := env[key]; got != value {
+			t.Fatalf("%s = %q, want %q", key, got, value)
+		}
+	}
+}
+
+func TestPiAgentEnvUsesTopLevelAgentIDFallback(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := filepath.Join(t.TempDir(), "multica_workspaces")
+	task := Task{WorkspaceID: "workspace-1", AgentID: "agent-top"}
+	agentID := resolvedTaskAgentID(task)
+	if agentID != "agent-top" {
+		t.Fatalf("resolvedTaskAgentID = %q, want top-level agent id", agentID)
+	}
+
+	env := map[string]string{}
+	addPiAgentEnv(env, Config{WorkspacesRoot: workspaceRoot}, task.WorkspaceID, agentID)
+	wantRoot := filepath.Join(workspaceRoot, "workspace-1", ".pi", "agents", "agent-top")
+	if got := env["PI_AGENT_ROOT"]; got != wantRoot {
+		t.Fatalf("PI_AGENT_ROOT = %q, want %q", got, wantRoot)
+	}
+}
+
+func TestBlockedEnvKeyBlocksPiMemoryOverrides(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{"PI_AGENT_ROOT", "PI_MEMORY_DIR", "PI_SKILL_DRAFTS_DIR", "PI_AGENT_SYNC_QUEUE_DIR"} {
+		if !isBlockedEnvKey(key) {
+			t.Fatalf("%s should be blocked from custom_env", key)
+		}
+	}
+}
+
 func TestMergeUsage(t *testing.T) {
 	t.Parallel()
 

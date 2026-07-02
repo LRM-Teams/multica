@@ -236,8 +236,19 @@
     "retry": "再試行",
     "unknown_error": "不明なエラー",
     "initiate_failed": "更新を開始できませんでした",
-    "manual_hint_prefix": "このローカルデーモンをターミナルから更新するには、そのコンピュータで次を実行してください:",
-    "manual_hint_suffix": "。更新後、デーモンは自動で再起動します。",
+    "manual_hint": "自動更新がインストール先に書き込めない場合は、そのコンピュータのターミナルで手動更新してください。",
+    "manual_action": "手動コマンド",
+    "manual_dialog_title": "このランタイムを手動で更新",
+    "manual_dialog_description": "ランタイムが動いているコンピュータに合うコマンドを実行してください。Homebrew 以外で CLI を直接インストールした Linux では Linux 直接インストールを使います。",
+    "manual_after_restart": "コマンド完了後、デーモンは新しい CLI バージョンで再接続します。オフラインのままなら、もう一度 multica daemon restart を実行してください。",
+    "manual_close": "閉じる",
+    "copy_command": "コマンドをコピー",
+    "copied": "コピーしました",
+    "manual_commands": {
+      "brew": "macOS または Linux（Homebrew）",
+      "linux_script": "Linux 直接インストール",
+      "windows": "Windows PowerShell"
+    },
     "status": {
       "pending": "デーモンを待っています...",
       "running": "更新中...",

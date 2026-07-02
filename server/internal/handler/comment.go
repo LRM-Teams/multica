@@ -1115,11 +1115,12 @@ func (h *Handler) enqueueCommentAgentTriggers(ctx context.Context, issue db.Issu
 					"agent_id", uuidToString(trigger.Agent.ID),
 					"error", err)
 			}
-		case commentTriggerSourceMentionAgent:
+		case commentTriggerSourceMentionAgent, commentTriggerSourceThreadRootAgent:
 			if _, err := h.TaskService.EnqueueTaskForMention(ctx, issue, trigger.Agent.ID, triggerCommentID); err != nil {
-				slog.Warn("enqueue mention agent task failed",
+				slog.Warn("enqueue comment agent task failed",
 					"issue_id", uuidToString(issue.ID),
 					"agent_id", uuidToString(trigger.Agent.ID),
+					"source", trigger.Source,
 					"error", err)
 			}
 		}
@@ -1142,9 +1143,9 @@ func (h *Handler) computeCommentAgentTriggers(ctx context.Context, issue db.Issu
 		triggers = append(triggers, trigger)
 	}
 	mentions := util.ParseMentions(content)
-	hasExplicitAgentTargets := commentHasAgentTargetMention(mentions)
+	hasExplicitAgentContext := commentHasExplicitAgentContext(mentions)
 	replyTargetsThreadRootAgent := actorType == "member" && parentComment != nil &&
-		threadRootComment != nil && threadRootComment.AuthorType == "agent" && !hasExplicitAgentTargets
+		threadRootComment != nil && threadRootComment.AuthorType == "agent" && !hasExplicitAgentContext
 
 	if replyTargetsThreadRootAgent {
 		if trigger, ok := h.computeThreadRootAgentCommentTrigger(ctx, issue, threadRootComment, actorType, actorID); ok {
@@ -1176,9 +1177,9 @@ func (h *Handler) computeCommentAgentTriggers(ctx context.Context, issue db.Issu
 	return triggers
 }
 
-func commentHasAgentTargetMention(mentions []util.Mention) bool {
+func commentHasExplicitAgentContext(mentions []util.Mention) bool {
 	for _, m := range mentions {
-		if m.Type == "agent" || m.Type == "squad" {
+		if m.Type == "agent" || m.Type == "squad" || m.IsMentionAll() {
 			return true
 		}
 	}

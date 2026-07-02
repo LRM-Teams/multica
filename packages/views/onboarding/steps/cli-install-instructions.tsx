@@ -102,9 +102,7 @@ export function CliInstallInstructions({
         <div>
           <Step n={2} label={t(($) => $.cli_install.step2_label)} cmd={setupCmd} />
           <p className="mt-1.5 text-[11px] leading-[1.55] text-muted-foreground">
-            {mode === "windows-wsl"
-              ? t(($) => $.cli_install.step2_hint_wsl)
-              : t(($) => $.cli_install.step2_hint)}
+            {t(($) => $.cli_install.step2_hint)}
           </p>
         </div>
       </CardContent>
@@ -126,7 +124,7 @@ function SetupModeSelector({
         {t(($) => $.cli_install.mode_label)}
       </div>
       <div
-        className="grid grid-cols-1 gap-1 rounded-lg bg-muted p-1 sm:grid-cols-3"
+        className="grid grid-cols-1 gap-1 rounded-lg bg-muted p-1 sm:grid-cols-2"
         role="radiogroup"
         aria-label={t(($) => $.cli_install.mode_label)}
       >

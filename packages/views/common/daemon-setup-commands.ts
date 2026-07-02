@@ -1,17 +1,11 @@
 import { MULTICA_INSTALL_COMMAND } from "@multica/core/constants/repository";
 
-export type DaemonSetupMode = "unix" | "windows-powershell" | "windows-wsl";
+export type DaemonSetupMode = "unix" | "windows-powershell";
 
-export const DAEMON_SETUP_MODES: DaemonSetupMode[] = [
-  "unix",
-  "windows-powershell",
-  "windows-wsl",
-];
+export const DAEMON_SETUP_MODES: DaemonSetupMode[] = ["unix", "windows-powershell"];
 
 export const POWERSHELL_INSTALL_COMMAND =
   "irm https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1 | iex";
-
-export const WSL_CALLBACK_HOST = `"$(hostname -I | awk '{print $1}')"`;
 
 const CLOUD_SERVER_URL = "https://api.multica.ai";
 const CLOUD_APP_URL = "https://multica.ai";
@@ -57,10 +51,7 @@ export function daemonSetupCommands(
         "multica setup self-host",
         `--server-url ${normalizedServerUrl}`,
         `--app-url ${normalizedAppUrl}`,
-        mode === "windows-wsl" ? `--callback-host ${WSL_CALLBACK_HOST}` : "",
-      ]
-        .filter(Boolean)
-        .join(" "),
+      ].join(" "),
       tokenCmd: `multica config set server_url ${normalizedServerUrl}
 multica config set app_url ${normalizedAppUrl}
 multica login --token <YOUR_TOKEN>
@@ -70,13 +61,7 @@ multica daemon start`,
 
   return {
     installCmd,
-    setupCmd:
-      mode === "windows-wsl"
-        ? `multica config set server_url ${CLOUD_SERVER_URL}
-multica config set app_url ${CLOUD_APP_URL}
-multica login --callback-host ${WSL_CALLBACK_HOST}
-multica daemon start`
-        : "multica setup",
+    setupCmd: "multica setup",
     tokenCmd: `multica config set server_url ${CLOUD_SERVER_URL}
 multica config set app_url ${CLOUD_APP_URL}
 multica login --token <YOUR_TOKEN>

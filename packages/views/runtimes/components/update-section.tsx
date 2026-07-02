@@ -235,6 +235,16 @@ export function UpdateSection({
         )}
       </div>
 
+      {!isManaged && (
+        <p className="text-[11px] leading-[1.55] text-muted-foreground">
+          {t(($) => $.update.manual_hint_prefix)}{" "}
+          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-foreground">
+            multica update
+          </code>{" "}
+          {t(($) => $.update.manual_hint_suffix)}
+        </p>
+      )}
+
       {status === "completed" && output && (
         <div className="rounded-lg border bg-success/5 px-3 py-2">
           <p className="text-xs text-success">{output}</p>

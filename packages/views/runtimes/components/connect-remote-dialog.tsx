@@ -203,13 +203,11 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
               copyAria={t(($) => $.connect.copy_aria)}
             />
             <p className="mt-1.5 text-[11px] leading-[1.55] text-muted-foreground">
-              {mode === "windows-wsl"
-                ? t(($) => $.connect.step2_hint_wsl)
-                : t(($) => $.connect.step2_hint)}
+              {t(($) => $.connect.step2_hint)}
             </p>
           </div>
 
-          <LiveListening mode={mode} />
+          <LiveListening />
 
           <TroubleshootingDetails tokenCmd={tokenCmd} />
         </div>
@@ -238,7 +236,7 @@ function SetupModeSelector({
         {t(($) => $.connect.mode_label)}
       </div>
       <div
-        className="grid grid-cols-1 gap-1 rounded-lg bg-muted p-1 sm:grid-cols-3"
+        className="grid grid-cols-1 gap-1 rounded-lg bg-muted p-1 sm:grid-cols-2"
         role="radiogroup"
         aria-label={t(($) => $.connect.mode_label)}
       >
@@ -326,7 +324,7 @@ function TroubleshootingDetails({ tokenCmd }: { tokenCmd: string }) {
 // Live-listening indicator
 // ---------------------------------------------------------------------------
 
-function LiveListening({ mode }: { mode: DaemonSetupMode }) {
+function LiveListening() {
   const { t } = useT("runtimes");
   return (
     <div
@@ -342,9 +340,7 @@ function LiveListening({ mode }: { mode: DaemonSetupMode }) {
         {t(($) => $.connect.live_listening)}
       </span>
       <span className="text-muted-foreground">
-        {mode === "windows-wsl"
-          ? t(($) => $.connect.live_listening_hint_wsl)
-          : t(($) => $.connect.live_listening_hint)}
+        {t(($) => $.connect.live_listening_hint)}
       </span>
     </div>
   );

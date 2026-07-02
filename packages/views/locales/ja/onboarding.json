@@ -121,18 +121,15 @@
     "mode_label": "どこで実行しますか?",
     "modes": {
       "unix": "Mac / Linux",
-      "windows-powershell": "Windows",
-      "windows-wsl": "Windows + WSL"
+      "windows-powershell": "Windows"
     },
     "mode_hints": {
       "unix": "macOS、Linux、SSH 接続先、ほとんどのホスト型ターミナルで使います。",
-      "windows-powershell": "Windows の PowerShell で使います。",
-      "windows-wsl": "Multica を WSL 内で実行し、ブラウザは Windows 側で開く場合に使います。"
+      "windows-powershell": "Windows の PowerShell で使います。"
     },
     "step1_label": "Multica CLI をインストール",
     "step2_label": "デーモンを起動",
-    "step2_hint": "ブラウザを開いてサインインし、その後デーモンを起動します。",
-    "step2_hint_wsl": "Windows のブラウザでサインインし、承認を WSL 内で動くデーモンに戻します。"
+    "step2_hint": "ブラウザを開いてサインインし、その後デーモンを起動します。"
   },
   "cloud_waitlist": {
     "intro_main": "クラウドランタイムはまだ提供されていません。メールアドレスを残していただければ、準備ができ次第ご連絡します。",
@@ -385,8 +382,6 @@
     "stage_midway_suffix": " が開いたブラウザタブを完了したか確認してください — コンピュータが接続される前にサインインの承認が必要です。",
     "stage_slow_prefix": "いつもより時間がかかっています。 ",
     "stage_slow_suffix": " を実行したターミナルにエラーがないか確認してください。",
-    "stage_wsl_waiting": "Windows で開いたサインインタブを完了してください。WSL のデーモンが承認されると、このコンピュータが自動でここに表示されます。",
-    "stage_wsl_retry": "まだ待っています。WSL ターミナルに戻り、上の Windows + WSL コマンドをもう一度実行して、開いた Windows ブラウザでサインインを完了してください。",
     "stage_stalled_prefix": "まだ何も届いていません。ターミナルに不慣れな場合は、",
     "stage_stalled_term": "デスクトップ",
     "stage_stalled_suffix": "のほうがスムーズです — ワンクリックでこのコンピュータが接続されます。このダイアログを閉じてデスクトップを選ぶか、スキップを押して続けてください。"

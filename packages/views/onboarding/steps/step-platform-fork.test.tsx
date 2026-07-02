@@ -150,18 +150,16 @@ describe("StepPlatformFork", () => {
     ).toBeDisabled();
   });
 
-  it("CLI dialog: Windows + WSL mode updates the waiting guidance", async () => {
+  it("CLI dialog: only shows the supported Mac/Linux and Windows modes", async () => {
     const user = userEvent.setup();
     renderFork({ cliInstructions: <CliInstallInstructions /> });
 
     await user.click(screen.getByRole("button", { name: /show steps/i }));
 
     const dialog = await screen.findByRole("dialog");
-    await user.click(within(dialog).getByRole("radio", { name: /windows \+ wsl/i }));
-
-    expect(
-      within(dialog).getByText(/finish the sign-in tab that opened in windows/i),
-    ).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: /mac \/ linux/i })).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: /^windows$/i })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("radio", { name: /windows \+ wsl/i })).toBeNull();
   });
 
   it("CLI dialog with a selected runtime: Connect enables and fires onNext(runtime)", async () => {

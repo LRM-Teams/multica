@@ -54,22 +54,16 @@ describe("CliInstallInstructions", () => {
     expect(screen.getByText("multica setup")).toBeTruthy();
   });
 
-  it("uses the WSL callback host command for Windows + WSL", () => {
+  it("does not render the legacy Windows + WSL mode", () => {
     render(
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
         <CliInstallInstructions />
       </I18nProvider>,
     );
 
-    fireEvent.click(screen.getByRole("radio", { name: "Windows + WSL" }));
-
-    expect(
-      screen.getByText((content) =>
-        content.includes(
-          `multica login --callback-host "$(hostname -I | awk '{print $1}')"`,
-        ),
-      ),
-    ).toBeTruthy();
-    expect(screen.queryByText(/multica setup --callback-host/)).toBeNull();
+    expect(screen.getByRole("radio", { name: "Mac / Linux" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "Windows" })).toBeTruthy();
+    expect(screen.queryByRole("radio", { name: "Windows + WSL" })).toBeNull();
+    expect(screen.queryByText(/callback-host/)).toBeNull();
   });
 });

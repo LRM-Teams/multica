@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { configStore } from "@multica/core/config";
@@ -99,29 +99,13 @@ describe("ConnectRemoteDialog", () => {
     );
   });
 
-  it("uses the WSL callback login flow for cloud setup", () => {
+  it("does not render the legacy Windows + WSL mode", () => {
     const { baseElement } = renderDialog();
 
-    fireEvent.click(screen.getByRole("radio", { name: "Windows + WSL" }));
-
-    expect(baseElement).toHaveTextContent(
-      `multica login --callback-host "$(hostname -I | awk '{print $1}')"`,
-    );
-    expect(baseElement).toHaveTextContent("multica daemon start");
-    expect(baseElement).not.toHaveTextContent("multica setup --callback-host");
-  });
-
-  it("adds the WSL callback host to self-host setup", () => {
-    const { baseElement } = renderDialog({
-      daemonServerUrl: "https://api.example.com/",
-      daemonAppUrl: "https://app.example.com/",
-    });
-
-    fireEvent.click(screen.getByRole("radio", { name: "Windows + WSL" }));
-
-    expect(baseElement).toHaveTextContent(
-      `multica setup self-host --server-url https://api.example.com --app-url https://app.example.com --callback-host "$(hostname -I | awk '{print $1}')"`,
-    );
+    expect(screen.getByRole("radio", { name: "Mac / Linux" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "Windows" })).toBeTruthy();
+    expect(screen.queryByRole("radio", { name: "Windows + WSL" })).toBeNull();
+    expect(baseElement).not.toHaveTextContent("callback-host");
   });
 
   it("disables font ligatures in setup command code", () => {

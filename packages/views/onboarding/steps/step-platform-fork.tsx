@@ -424,7 +424,7 @@ function CliInstallDialog({
               </div>
             </>
           ) : (
-            <CliWaitingStatus dialogOpen={open} mode={setupMode} />
+            <CliWaitingStatus dialogOpen={open} />
           )}
         </div>
 
@@ -486,13 +486,7 @@ function formatElapsed(seconds: number) {
  * Elapsed-time counter only ticks while the dialog is open so reopen
  * after closing resets the staging.
  */
-function CliWaitingStatus({
-  dialogOpen,
-  mode,
-}: {
-  dialogOpen: boolean;
-  mode: DaemonSetupMode;
-}) {
+function CliWaitingStatus({ dialogOpen }: { dialogOpen: boolean }) {
   const { t } = useT("onboarding");
   const [elapsed, setElapsed] = useState(0);
 
@@ -523,8 +517,6 @@ function CliWaitingStatus({
         : elapsed < 90
           ? "slow"
           : "stalled";
-  const isWsl = mode === "windows-wsl";
-
   return (
     <div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-4">
       <div className="flex items-center gap-2 text-sm">
@@ -547,34 +539,28 @@ function CliWaitingStatus({
         aria-live="polite"
         className="text-[12.5px] leading-[1.55] text-muted-foreground"
       >
-        {isWsl && (stage === "normal" || stage === "midway") && (
-          <>{t(($) => $.step_platform.stage_wsl_waiting)}</>
-        )}
-        {isWsl && (stage === "slow" || stage === "stalled") && (
-          <>{t(($) => $.step_platform.stage_wsl_retry)}</>
-        )}
-        {!isWsl && stage === "normal" && (
+        {stage === "normal" && (
           <>
             {t(($) => $.step_platform.stage_normal_prefix)}
             <span className="font-mono">{"multica setup"}</span>
             {t(($) => $.step_platform.stage_normal_suffix)}
           </>
         )}
-        {!isWsl && stage === "midway" && (
+        {stage === "midway" && (
           <>
             {t(($) => $.step_platform.stage_midway_prefix)}
             <span className="font-mono">{"multica setup"}</span>
             {t(($) => $.step_platform.stage_midway_suffix)}
           </>
         )}
-        {!isWsl && stage === "slow" && (
+        {stage === "slow" && (
           <>
             {t(($) => $.step_platform.stage_slow_prefix)}
             <span className="font-mono">{"multica setup"}</span>
             {t(($) => $.step_platform.stage_slow_suffix)}
           </>
         )}
-        {!isWsl && stage === "stalled" && (
+        {stage === "stalled" && (
           <>
             {t(($) => $.step_platform.stage_stalled_prefix)}
             <span className="font-medium text-foreground">{t(($) => $.step_platform.stage_stalled_term)}</span>

@@ -41,6 +41,28 @@ describe("formatChannelMessagePreview", () => {
       ),
     ).toBe("Atlas: see task");
   });
+
+  it("prefers structured message parts over fallback content", () => {
+    expect(
+      formatChannelMessagePreview(
+        "Atlas",
+        ":sticker:hi:",
+        resolveMention,
+        [{ type: "sticker", sticker_id: "hi", alt: "Hi sticker" }],
+      ),
+    ).toBe("Atlas: [Sticker] Hi sticker");
+  });
+
+  it("does not leak sticker ids when previewing unknown structured sticker parts", () => {
+    expect(
+      formatChannelMessagePreview(
+        "Atlas",
+        ":sticker:internal-id:",
+        resolveMention,
+        [{ type: "sticker", sticker_id: "internal-id" }],
+      ),
+    ).toBe("Atlas: [Sticker]");
+  });
 });
 
 describe("resolveChannelAuthorDisplayName", () => {

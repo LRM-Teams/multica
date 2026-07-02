@@ -42,7 +42,7 @@ vi.mock("@multica/core/paths", async (importOriginal) => {
   };
 });
 
-vi.mock("../navigation", () => ({
+vi.mock("../navigation/app-link", () => ({
   AppLink: ({
     href,
     children,
@@ -121,6 +121,15 @@ describe("Markdown", () => {
 
     const img = container.querySelector("img");
     expect(img).toHaveAttribute("src", "/api/stickers/thumbs-up");
+  });
+
+  it("can leave sticker shortcodes as literal text", () => {
+    const { container } = render(
+      <Markdown enableStickerShortcodes={false}>{"nice work :sticker:tada:"}</Markdown>,
+    );
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toContain("nice work :sticker:tada:");
   });
 
   it("does not treat a non-sticker word with colons as a sticker", () => {

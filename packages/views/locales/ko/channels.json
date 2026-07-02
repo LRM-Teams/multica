@@ -172,6 +172,10 @@
     "copy_action": "복사",
     "copied_toast": "복사했습니다",
     "copy_failed_toast": "복사 실패",
+    "sticker_alt": "스티커",
+    "sticker_loading": "스티커 로드 중",
+    "sticker_failed": "스티커를 불러오지 못했습니다",
+    "sticker_unavailable": "스티커를 사용할 수 없습니다",
     "agent_badge": "Agent",
     "feishu_badge": "Feishu"
   },

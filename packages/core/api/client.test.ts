@@ -6,6 +6,51 @@ afterEach(() => {
 });
 
 describe("ApiClient", () => {
+  it("parses the sticker catalog endpoint through the typed client", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        packs: [
+          {
+            id: "builtin",
+            name: "Built-in stickers",
+            stickers: [
+              {
+                pack_id: "builtin",
+                sticker_id: "hi",
+                asset_url: "/api/stickers/hi",
+                alt: "Hi sticker",
+                animated: false,
+              },
+            ],
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.listStickers()).resolves.toMatchObject({
+      packs: [
+        {
+          id: "builtin",
+          stickers: [
+            {
+              sticker_id: "hi",
+              asset_url: "/api/stickers/hi",
+              alt: "Hi sticker",
+              tags: [],
+            },
+          ],
+        },
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/stickers", expect.any(Object));
+  });
+
   it("preserves HTTP status on failed requests", async () => {
     vi.stubGlobal(
       "fetch",

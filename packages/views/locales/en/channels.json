@@ -172,6 +172,10 @@
     "copy_action": "Copy",
     "copied_toast": "Copied",
     "copy_failed_toast": "Copy failed",
+    "sticker_alt": "Sticker",
+    "sticker_loading": "Loading sticker",
+    "sticker_failed": "Sticker failed to load",
+    "sticker_unavailable": "Sticker unavailable",
     "agent_badge": "Agent",
     "feishu_badge": "Feishu"
   },

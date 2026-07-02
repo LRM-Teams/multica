@@ -17,6 +17,7 @@ import type {
   CreateBillingPortalSessionResponse,
   GroupedIssuesResponse,
   ChannelMessageSearchResponse,
+  StickerCatalogResponse,
   ListIssuesResponse,
   ListWebhookDeliveriesResponse,
   Squad,
@@ -272,6 +273,7 @@ const ChannelMessageSearchResultSchema = z.object({
   author_id: z.string().nullable().default(null),
   author_name: z.string().default(""),
   content: z.string().default(""),
+  parts: z.array(z.unknown()).optional(),
   created_at: z.string().default(""),
 }).loose();
 
@@ -285,6 +287,41 @@ export const EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE: ChannelMessageSearchResponse
   query: "",
   total: 0,
   results: [],
+};
+
+const StickerAssetSchema = z.object({
+  pack_id: z.string().default(""),
+  sticker_id: z.string().default(""),
+  name: z.string().default(""),
+  name_en: z.string().default(""),
+  emotion: z.string().default(""),
+  asset_url: z.string().default(""),
+  mime_type: z.string().default(""),
+  alt: z.string().default(""),
+  tags: z.array(z.string()).default([]),
+  animated: z.boolean().default(false),
+}).loose();
+
+const StickerPackSchema = z.object({
+  id: z.string().default(""),
+  name: z.string().default(""),
+  source: z.string().default(""),
+  license: z.string().default(""),
+  stickers: z.array(StickerAssetSchema).default([]),
+}).loose();
+
+export const StickerCatalogResponseSchema = z.object({
+  stickers: z.array(z.unknown()).default([]),
+  license: z.string().default(""),
+  source: z.string().default(""),
+  packs: z.array(StickerPackSchema).default([]),
+}).loose();
+
+export const EMPTY_STICKER_CATALOG_RESPONSE: StickerCatalogResponse = {
+  stickers: [],
+  license: "",
+  source: "",
+  packs: [],
 };
 
 // Metadata is primitive-only by API/DB contract. Stay lenient on shape:

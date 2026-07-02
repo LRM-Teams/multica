@@ -4,6 +4,7 @@ export interface ChannelLastMessage {
   author_type: "user" | "agent" | "lark" | "system";
   author_name: string;
   content: string;
+  parts?: MessagePart[];
   created_at: string;
 }
 
@@ -120,6 +121,7 @@ export interface ChannelMessageReply {
   author_id: string | null;
   author_name: string;
   content: string;
+  parts?: MessagePart[];
   created_at: string;
 }
 
@@ -131,6 +133,7 @@ export interface ChannelMessageSearchResult {
   author_id: string | null;
   author_name: string;
   content: string;
+  parts?: MessagePart[];
   created_at: string;
 }
 

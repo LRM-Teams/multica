@@ -1,8 +1,11 @@
 import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
+import { stickerCatalogKeys } from "@multica/core/stickers";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 
 const copyTextMock = vi.fn();
@@ -24,11 +27,20 @@ vi.mock("sonner", () => ({
 vi.mock("../../common/markdown", () => ({
   MemoizedMarkdown: ({
     children,
+    enableStickerShortcodes,
     highlightQuery,
   }: {
     children: string;
+    enableStickerShortcodes?: boolean;
     highlightQuery?: string;
-  }) => <span data-highlight-query={highlightQuery}>{children}</span>,
+  }) => (
+    <span
+      data-highlight-query={highlightQuery}
+      data-enable-sticker-shortcodes={String(enableStickerShortcodes ?? true)}
+    >
+      {children}
+    </span>
+  ),
 }));
 
 vi.mock("../../issues/components/comment-card", () => ({
@@ -56,6 +68,10 @@ vi.mock("../../i18n/use-t", () => ({
           copy_action: string;
           copied_toast: string;
           copy_failed_toast: string;
+          sticker_alt: string;
+          sticker_loading: string;
+          sticker_failed: string;
+          sticker_unavailable: string;
         };
         quote: { jump_to: string };
         thread: { reply: string; reply_count: string };
@@ -69,6 +85,10 @@ vi.mock("../../i18n/use-t", () => ({
           copy_action: "Copy",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
+          sticker_alt: "Sticker",
+          sticker_loading: "Loading sticker",
+          sticker_failed: "Sticker failed to load",
+          sticker_unavailable: "Sticker unavailable",
         },
         quote: {
           jump_to: "Jump to original message",
@@ -95,6 +115,40 @@ function makeMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
     created_at: "2026-06-17T09:15:00Z",
     ...overrides,
   };
+}
+
+function renderWithStickerCatalog(ui: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  queryClient.setQueryData(stickerCatalogKeys.catalog(), {
+    stickers: [],
+    license: "",
+    source: "",
+    packs: [
+      {
+        id: "builtin",
+        name: "Built-in stickers",
+        source: "",
+        license: "",
+        stickers: [
+          {
+            pack_id: "builtin",
+            sticker_id: "hi",
+            name: "Hi",
+            name_en: "Hi",
+            emotion: "greeting",
+            asset_url: "/api/stickers/hi",
+            mime_type: "image/jpeg",
+            alt: "Hi sticker",
+            tags: ["hi"],
+            animated: false,
+          },
+        ],
+      },
+    ],
+  });
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
 }
 
 describe("ChannelMessageBubble", () => {
@@ -186,6 +240,53 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByText("Here is the data.")).not.toHaveAttribute("data-highlight-query");
   });
 
+  it("renders sticker parts from the catalog without showing content fallback", () => {
+    renderWithStickerCatalog(
+      <ChannelMessageBubble
+        message={makeMessage({
+          content: ":sticker:hi:",
+          parts: [{ type: "sticker", sticker_id: "hi", alt: "Hi sticker" }],
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    const sticker = screen.getByTestId("message-sticker");
+    expect(sticker).toHaveAttribute("src", "/api/stickers/hi");
+    expect(sticker).toHaveAttribute("alt", "Hi sticker");
+    expect(screen.queryByText(":sticker:hi:")).not.toBeInTheDocument();
+  });
+
+  it("does not enable content shortcode fallback for messages without parts", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: ":sticker:hi:" })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText(":sticker:hi:")).toHaveAttribute(
+      "data-enable-sticker-shortcodes",
+      "false",
+    );
+  });
+
+  it("renders controlled unavailable state for unknown sticker parts", () => {
+    renderWithStickerCatalog(
+      <ChannelMessageBubble
+        message={makeMessage({
+          content: ":sticker:missing-sticker:",
+          parts: [{ type: "sticker", sticker_id: "missing-sticker" }],
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByTestId("message-sticker-placeholder")).toHaveTextContent("Sticker unavailable");
+    expect(screen.queryByText("missing-sticker")).not.toBeInTheDocument();
+    expect(screen.queryByText(":sticker:missing-sticker:")).not.toBeInTheDocument();
+  });
+
   it("allows native copy context menu when message body text is selected", () => {
     render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
 
@@ -214,6 +315,27 @@ describe("ChannelMessageBubble", () => {
 
     await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("Here is the data."));
     expect(toast.success).toHaveBeenCalledWith("Copied");
+  });
+
+  it("copies structured message parts instead of hidden fallback content", async () => {
+    copyTextMock.mockResolvedValue(true);
+
+    renderWithStickerCatalog(
+      <ChannelMessageBubble
+        message={makeMessage({
+          content: ":sticker:hi:",
+          parts: [
+            { type: "text", text: "Done" },
+            { type: "sticker", sticker_id: "hi", alt: "Hi sticker" },
+          ],
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("Done [Sticker] Hi sticker"));
   });
 
   it("does not open a custom message menu from the message body", () => {

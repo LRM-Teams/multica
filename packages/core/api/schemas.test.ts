@@ -15,6 +15,7 @@ import {
   RuntimeUsageListSchema,
   SquadListSchema,
   SquadSchema,
+  StickerCatalogResponseSchema,
   UserSchema,
 } from "./schemas";
 import { parseWithFallback } from "./schema";
@@ -289,6 +290,35 @@ describe("ChannelMessageSearchResponseSchema", () => {
 
   it("rejects a non-array result list so callers can fall back", () => {
     expect(ChannelMessageSearchResponseSchema.safeParse({ results: null }).success).toBe(false);
+  });
+});
+
+describe("StickerCatalogResponseSchema", () => {
+  it("keeps sticker pack assets and defaults optional metadata", () => {
+    const parsed = StickerCatalogResponseSchema.parse({
+      packs: [
+        {
+          id: "builtin",
+          stickers: [
+            {
+              pack_id: "builtin",
+              sticker_id: "hi",
+              asset_url: "/api/stickers/hi",
+              alt: "Hi sticker",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(parsed.packs[0]?.id).toBe("builtin");
+    expect(parsed.packs[0]?.stickers[0]?.sticker_id).toBe("hi");
+    expect(parsed.packs[0]?.stickers[0]?.tags).toEqual([]);
+    expect(parsed.packs[0]?.stickers[0]?.animated).toBe(false);
+  });
+
+  it("rejects a non-array pack list so callers can fall back", () => {
+    expect(StickerCatalogResponseSchema.safeParse({ packs: null }).success).toBe(false);
   });
 });
 

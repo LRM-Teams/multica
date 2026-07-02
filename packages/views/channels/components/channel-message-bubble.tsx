@@ -16,6 +16,12 @@ import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
+import {
+  formatMessagePartsCopyText,
+  formatMessagePartsPreview,
+  hasStructuredMessageParts,
+} from "./message-parts-preview";
+import { MessagePartsRenderer } from "./message-parts-renderer";
 
 function formatTime(value: string): string {
   try {
@@ -126,12 +132,14 @@ export function ChannelMessageBubble({
   const hasFeedback = (message.reactions?.length ?? 0) > 0 || hasThreadActivity;
   const quickReactionEmojis = ["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"];
   const handleCopy = async () => {
-    if (await copyText(message.content)) {
+    const copyPayload = formatMessagePartsCopyText(message.parts) ?? message.content;
+    if (await copyText(copyPayload)) {
       toast.success(t(($) => $.message.copied_toast));
     } else {
       toast.error(t(($) => $.message.copy_failed_toast));
     }
   };
+  const structuredParts = hasStructuredMessageParts(message.parts) ? message.parts : null;
 
   return (
     <div
@@ -241,19 +249,27 @@ export function ChannelMessageBubble({
                 {replyAuthorName}
               </p>
               <p className="line-clamp-1 text-[11px] text-muted-foreground">
-                {message.reply_to.content}
+                {formatMessagePartsPreview(message.reply_to.parts) ?? message.reply_to.content}
               </p>
             </button>
           )}
-          <MemoizedMarkdown
-            attachments={message.attachments}
-            highlightQuery={searchHighlighted ? searchQuery : undefined}
-          >
-            {message.content}
-          </MemoizedMarkdown>
+          {structuredParts ? (
+            <MessagePartsRenderer
+              parts={structuredParts}
+              highlightQuery={searchHighlighted ? searchQuery : undefined}
+            />
+          ) : (
+            <MemoizedMarkdown
+              attachments={message.attachments}
+              highlightQuery={searchHighlighted ? searchQuery : undefined}
+              enableStickerShortcodes={false}
+            >
+              {message.content}
+            </MemoizedMarkdown>
+          )}
           <AttachmentList
             attachments={message.attachments}
-            content={message.content}
+            content={structuredParts ? "" : message.content}
             className="mt-1.5"
           />
         </div>

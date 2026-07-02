@@ -12,6 +12,7 @@ import { initialsOf } from "../../common/initials";
 import { AttachmentList } from "../../issues/components/comment-card";
 import { useT } from "../../i18n/use-t";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
+import { formatMessagePartsPreview } from "./message-parts-preview";
 
 function formatTime(value: string): string {
   try {
@@ -83,6 +84,7 @@ export function ThreadRootPreview({
       avatar
     );
   const nameNode = <span className="font-medium text-foreground">{displayName}</span>;
+  const compactBody = formatMessagePartsPreview(message.parts);
 
   return (
     <div className="shrink-0 border-b border-border/40 bg-background px-5 py-3">
@@ -113,12 +115,18 @@ export function ThreadRootPreview({
           </div>
           <div className="mt-1 min-w-0 overflow-hidden text-sm leading-6 text-foreground">
             <div className="line-clamp-3">
-              <MemoizedMarkdown attachments={message.attachments}>{message.content}</MemoizedMarkdown>
+              {compactBody ? (
+                <span>{compactBody}</span>
+              ) : (
+                <MemoizedMarkdown attachments={message.attachments} enableStickerShortcodes={false}>
+                  {message.content}
+                </MemoizedMarkdown>
+              )}
             </div>
             <div className="max-h-16 overflow-hidden opacity-80">
               <AttachmentList
                 attachments={message.attachments}
-                content={message.content}
+                content={compactBody ? "" : message.content}
                 className="mt-1.5"
               />
             </div>

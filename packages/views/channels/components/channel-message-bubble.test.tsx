@@ -321,7 +321,9 @@ describe("ChannelMessageBubble", () => {
     );
 
     expect(screen.getByRole("button", { name: "Add reaction" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(1);
+    const copyButtons = screen.getAllByRole("button", { name: "Copy" });
+    expect(copyButtons).toHaveLength(1);
+    expect(copyButtons[0]).not.toHaveAttribute("title");
     expect(screen.getByRole("button", { name: "Reply in thread" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Quote reply" })).not.toBeInTheDocument();
   });

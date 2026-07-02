@@ -191,7 +191,6 @@ export function ChannelMessageBubble({
             onClick={handleCopy}
             className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
             aria-label={t(($) => $.message.copy_action)}
-            title={t(($) => $.message.copy_action)}
           >
             <Copy className="size-3.5" />
           </button>
@@ -201,7 +200,6 @@ export function ChannelMessageBubble({
               onClick={() => onOpenThread?.(message)}
               className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
               aria-label={t(($) => $.thread.reply)}
-              title={t(($) => $.thread.reply)}
             >
               <MessageSquare className="size-3.5" />
             </button>

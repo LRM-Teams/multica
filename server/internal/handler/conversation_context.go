@@ -9,13 +9,7 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-const (
-	conversationContextVersion = "ctx_v1"
-
-	dmRecentMessageLimit      = 20
-	channelRecentMessageLimit = 30
-	threadRecentReplyLimit    = 30
-)
+const conversationContextVersion = "ctx_v1"
 
 type conversationSurface struct {
 	Type       string

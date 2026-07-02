@@ -78,9 +78,8 @@ const newDmTriggerCls =
 /**
  * DIRECT MESSAGES sidebar region — the top half of the unified Messages
  * sidebar (GROUPS sits below). Fed by `GET /api/dm`; the visible R2 surface is
- * `dm_channel` only, so older `legacy_session` rows are filtered out here while
- * backend cleanup removes that source. The header is collapsible and, when
- * collapsed, surfaces the aggregate unread count.
+ * `dm_channel` only. The header is collapsible and, when collapsed, surfaces
+ * the aggregate unread count.
  *
  * Selection is unified with groups by the parent: `activeId` is the currently
  * open conversation id regardless of region, so opening a DM clears the group
@@ -115,10 +114,7 @@ export function DmList({
   const closeDM = useCloseDM();
   const muteDM = useMuteDM();
 
-  const visibleDms = useMemo(
-    () => dms.filter((dm) => dm.source === "dm_channel"),
-    [dms],
-  );
+  const visibleDms = dms;
   const onError = () => toast.error(t(($) => $.dm.action_failed));
   const handleTogglePin = (dm: DMItem) =>
     setPinned.mutate({ source: dm.source, id: dm.id, pinned: !dm.pinned_at }, { onError });

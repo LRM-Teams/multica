@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -78,9 +79,8 @@ func seedAgentDMChannel(t *testing.T, agentID string) string {
 	return channelID
 }
 
-// TestCreateOrFindAgentDM_Idempotent: the first call creates the standalone
-// chat_session used by the old Chat panel (201), and a repeat call returns the
-// same session (200). No parallel dm channel is created for agent DMs.
+// TestCreateOrFindAgentDM_Idempotent: the first call creates the visible
+// dm_channel (201), and a repeat call returns the same channel (200).
 func TestCreateOrFindAgentDM_Idempotent(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -93,26 +93,25 @@ func TestCreateOrFindAgentDM_Idempotent(t *testing.T) {
 	if rec1.Code != http.StatusCreated {
 		t.Fatalf("first create: status=%d body=%s", rec1.Code, rec1.Body.String())
 	}
-	if item1.Source != dmSourceLegacy || item1.Peer.Type != "agent" || item1.Peer.ID != agentID {
+	if item1.Source != dmSourceChannel || item1.Peer.Type != "agent" || item1.Peer.ID != agentID {
 		t.Fatalf("unexpected item1: %+v", item1)
 	}
 	rec2, item2 := postCreateOrFindDM(t, "agent", agentID)
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("second find: status=%d body=%s", rec2.Code, rec2.Body.String())
 	}
-	if item2.ID != item1.ID || item2.Source != dmSourceLegacy {
+	if item2.ID != item1.ID || item2.Source != dmSourceChannel {
 		t.Fatalf("not idempotent: first=%+v second=%+v", item1, item2)
 	}
 	var n int
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel WHERE workspace_id=$1 AND kind='dm'`, testWorkspaceID).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("agent DM must not create a channel, count=%d err=%v", n, err)
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel WHERE workspace_id=$1 AND kind='dm'`, testWorkspaceID).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("agent DM channel count=%d err=%v, want 1", n, err)
 	}
 }
 
-// TestCreateOrFindAgentDM_ReusesLegacySession proves legacy-first: with an
-// existing unbound chat_session for the agent, create-or-find returns that
-// session (source=legacy_session) instead of spawning a parallel dm channel.
-func TestCreateOrFindAgentDM_ReusesLegacySession(t *testing.T) {
+// TestCreateOrFindAgentDM_IgnoresLegacySession proves legacy sessions are kept
+// only for migration/history: they must not block a new visible dm_channel.
+func TestCreateOrFindAgentDM_IgnoresLegacySession(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -122,16 +121,17 @@ func TestCreateOrFindAgentDM_ReusesLegacySession(t *testing.T) {
 	sessionID := seedLegacySession(t, agentID)
 
 	rec, item := postCreateOrFindDM(t, "agent", agentID)
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if item.Source != dmSourceLegacy || item.ID != sessionID {
-		t.Fatalf("expected legacy reuse %s, got source=%q id=%s", sessionID, item.Source, item.ID)
+	if item.Source != dmSourceChannel || item.ID == sessionID {
+		t.Fatalf("expected dm_channel separate from legacy session %s, got %+v", sessionID, item)
 	}
-	var n int
-	testPool.QueryRow(ctx, `SELECT count(*) FROM channel WHERE workspace_id=$1 AND kind='dm'`, testWorkspaceID).Scan(&n)
-	if n != 0 {
-		t.Fatalf("legacy-first must not create a dm channel, found %d", n)
+	var channelCount, sessionCount int
+	testPool.QueryRow(ctx, `SELECT count(*) FROM channel WHERE workspace_id=$1 AND kind='dm'`, testWorkspaceID).Scan(&channelCount)
+	testPool.QueryRow(ctx, `SELECT count(*) FROM chat_session WHERE id=$1`, sessionID).Scan(&sessionCount)
+	if channelCount != 1 || sessionCount != 1 {
+		t.Fatalf("channelCount=%d sessionCount=%d, want both preserved", channelCount, sessionCount)
 	}
 }
 
@@ -145,7 +145,9 @@ func TestCreateOrFindUserDM(t *testing.T) {
 	cleanupDMArtifacts(t)
 
 	var peerUserID string
-	if err := testPool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ($1,$2) RETURNING id`, "DM Peer", "dm-peer-test@multica.ai").Scan(&peerUserID); err != nil {
+	peerName := "DM Peer " + uuid.NewString()
+	peerEmail := "dm-peer-test-" + uuid.NewString() + "@multica.ai"
+	if err := testPool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ($1,$2) RETURNING id`, peerName, peerEmail).Scan(&peerUserID); err != nil {
 		t.Fatalf("seed peer user: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1,$2,'member')`, testWorkspaceID, peerUserID); err != nil {
@@ -178,22 +180,20 @@ func TestCreateOrFindUserDM(t *testing.T) {
 	}
 }
 
-// TestListDirectMessages_UnionAndDedup: /api/dm merges dm channels and unbound
-// legacy sessions, and a peer present in both sources appears once.
-func TestListDirectMessages_UnionAndDedup(t *testing.T) {
+// TestListDirectMessages_ChannelsOnly: /api/dm only returns dm_channel rows.
+// Legacy chat_sessions are preserved for migration/history but are not visible
+// DM list sources and cannot block new agent DMs.
+func TestListDirectMessages_ChannelsOnly(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	cleanupDMArtifacts(t)
 	agentA := createHandlerTestAgent(t, "DM List A", []byte("[]")) // old dm channel only
 	agentB := createHandlerTestAgent(t, "DM List B", []byte("[]")) // legacy session only
-	agentC := createHandlerTestAgent(t, "DM List C", []byte("[]")) // both → dedup to session
+	agentC := createHandlerTestAgent(t, "DM List C", []byte("[]")) // both → channel only
 
-	// agentA: pre-unification dm channel only.
 	seedAgentDMChannel(t, agentA)
-	// agentB: legacy session only.
 	seedLegacySession(t, agentB)
-	// agentC: old dm channel and current chat_session coexist.
 	seedAgentDMChannel(t, agentC)
 	seedLegacySession(t, agentC)
 
@@ -220,11 +220,11 @@ func TestListDirectMessages_UnionAndDedup(t *testing.T) {
 	if source[agentA] != dmSourceChannel {
 		t.Fatalf("agentA source=%q, want dm_channel", source[agentA])
 	}
-	if source[agentB] != dmSourceLegacy {
-		t.Fatalf("agentB source=%q, want legacy_session", source[agentB])
+	if source[agentB] != "" || count[agentB] != 0 {
+		t.Fatalf("agentB legacy-only session should not be visible, source=%q count=%d", source[agentB], count[agentB])
 	}
-	if count[agentC] != 1 || source[agentC] != dmSourceLegacy {
-		t.Fatalf("agentC should be deduped to the legacy session, source=%q count=%d", source[agentC], count[agentC])
+	if count[agentC] != 1 || source[agentC] != dmSourceChannel {
+		t.Fatalf("agentC should keep visible dm_channel only, source=%q count=%d", source[agentC], count[agentC])
 	}
 }
 
@@ -327,8 +327,8 @@ func TestDMActionsApplyAtPeerLevelAcrossSources(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reopen hidden DM: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if item.ID != sessionID || item.Source != dmSourceLegacy {
-		t.Fatalf("reopen should return existing chat session %s, got %+v", sessionID, item)
+	if item.ID != channelID || item.Source != dmSourceChannel {
+		t.Fatalf("reopen should return dm channel %s, got %+v", channelID, item)
 	}
 	got = listDMItemsForTest(t)
 	found = false
@@ -343,7 +343,7 @@ func TestDMActionsApplyAtPeerLevelAcrossSources(t *testing.T) {
 	}
 }
 
-func TestLegacyDMSessionReturnsRealUnreadShape(t *testing.T) {
+func TestLegacyDMSessionIsNotVisibleInDMList(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -357,14 +357,10 @@ func TestLegacyDMSessionReturnsRealUnreadShape(t *testing.T) {
 
 	got := listDMItemsForTest(t)
 	for _, it := range got {
-		if it.Source == dmSourceLegacy && it.ID == sessionID {
-			if it.RealUnread != 1 || it.Unread != 1 || it.ManuallyUnread {
-				t.Fatalf("legacy unread shape = %+v, want real_unread=1 unread=1 manual=false", it)
-			}
-			return
+		if it.ID == sessionID || it.Source != dmSourceChannel {
+			t.Fatalf("legacy session should not be visible in DM list: %+v", it)
 		}
 	}
-	t.Fatalf("legacy session %s missing from DM list: %+v", sessionID, got)
 }
 
 func listDMItemsForTest(t *testing.T) []DMItem {

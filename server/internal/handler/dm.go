@@ -15,18 +15,14 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// Source discriminators for a unified DM list item. A 1-on-1 DM is either a
-// kind='dm' channel (used for human↔human DMs, plus older human↔agent rows
-// created before the chat unification) or a standalone chat_session (the
-// human↔agent "Chat" surface, shared by the old chat panel and Messages).
+// Source discriminator for visible DM list items. New Messages DMs are
+// kind='dm' channels; legacy chat_sessions may still exist for history
+// migration, but they are not a visible DM source.
 const (
 	dmSourceChannel = "dm_channel"
-	dmSourceLegacy  = "legacy_session"
 )
 
-// dmDefaultLimit / dmMaxLimit bound the unified DM page. The list is merged and
-// deduped in memory across the two sources, so pagination is applied after the
-// merge rather than per-source in SQL.
+// dmDefaultLimit / dmMaxLimit bound the DM page.
 const (
 	dmDefaultLimit = 50
 	dmMaxLimit     = 100
@@ -40,10 +36,9 @@ type DMPeer struct {
 }
 
 // DMItem is one row in the unified DM list and the create-or-find response.
-// Unread is a count for dm_channel items and 0/1 for legacy_session items
-// (legacy sessions only track a per-session has-unread flag, not a count).
+// Unread is a count for dm_channel items.
 type DMItem struct {
-	ID             string              `json:"id"` // dm channel id OR legacy chat_session id
+	ID             string              `json:"id"` // dm channel id
 	Source         string              `json:"source"`
 	Peer           DMPeer              `json:"peer"`
 	LastMessage    *ChannelLastMessage `json:"last_message,omitempty"`
@@ -76,10 +71,9 @@ func dmCanonicalName(typeA, idA, typeB, idB string) string {
 	return "dm:" + a + "|" + b
 }
 
-// CreateOrFindDirectMessage (POST /api/dm) returns the existing DM with the
-// peer or creates one, idempotently. Human↔human uses a dm channel. Human↔agent
-// uses the same standalone chat_session as the old Chat panel so Messages and
-// Chat share one message list, pending-task state, and resume context.
+// CreateOrFindDirectMessage (POST /api/dm) returns the existing dm_channel with
+// the peer or creates one, idempotently. Legacy chat_sessions are kept only for
+// history migration and must not block a new visible DM.
 func (h *Handler) CreateOrFindDirectMessage(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -145,26 +139,21 @@ func (h *Handler) createOrFindAgentDM(w http.ResponseWriter, r *http.Request, wo
 	}
 	peer := DMPeer{Type: "agent", ID: uuidToString(agent.ID), Name: agentDisplayName(agent), AvatarURL: textToPtr(agent.AvatarUrl)}
 
-	// Reuse or create the standalone chat_session that backs the old Chat panel.
-	// Returning that session here keeps the new Messages DM entry point and the
-	// old chat surface synchronized instead of forking agent DMs into channels.
-	if sessionID, updatedAt, found := h.findUnboundLegacySession(r.Context(), workspaceID, userID, agentID); found {
+	canonical := dmCanonicalName("user", userID, "agent", uuidToString(agentID))
+	if ch, found := h.findDMChannel(r.Context(), workspaceID, canonical); found {
 		h.clearDMPeerHidden(r.Context(), workspaceID, userID, dmPeerRef{Type: "agent", ID: agentID})
-		writeJSON(w, http.StatusOK, DMItem{ID: uuidToString(sessionID), Source: dmSourceLegacy, Peer: peer, UpdatedAt: updatedAt})
+		writeJSON(w, http.StatusOK, dmItemForChannel(ch, peer))
 		return
 	}
-	session, err := h.Queries.CreateChatSession(r.Context(), db.CreateChatSessionParams{
-		WorkspaceID: parseUUID(workspaceID),
-		AgentID:     agentID,
-		CreatorID:   parseUUID(userID),
-		Title:       "",
+	ch, created := h.createDMChannel(r.Context(), w, workspaceID, userID, canonical, []dmMember{
+		{memberType: "user", memberID: parseUUID(userID)},
+		{memberType: "agent", memberID: agentID},
 	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create chat session")
+	if !created {
 		return
 	}
 	h.clearDMPeerHidden(r.Context(), workspaceID, userID, dmPeerRef{Type: "agent", ID: agentID})
-	writeJSON(w, http.StatusCreated, DMItem{ID: uuidToString(session.ID), Source: dmSourceLegacy, Peer: peer, UpdatedAt: timestampToString(session.UpdatedAt)})
+	writeJSON(w, http.StatusCreated, dmItemForChannel(ch, peer))
 }
 
 type dmMember struct {
@@ -178,25 +167,6 @@ func (h *Handler) findDMChannel(ctx context.Context, workspaceID, canonical stri
 	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by FROM channel WHERE workspace_id = $1 AND name = $2 AND kind = 'dm' LIMIT 1`, parseUUID(workspaceID), canonical)
 	ch, err := scanChannel(row)
 	return ch, err == nil
-}
-
-// findUnboundLegacySession finds the most recent standalone chat_session the
-// caller created with an agent that is NOT bound to a channel (i.e. a genuine
-// 1:1 "Chat", not a channel agent session). Used by legacy-first agent DM
-// create-or-find so the same agent is never offered as two separate DMs.
-func (h *Handler) findUnboundLegacySession(ctx context.Context, workspaceID, userID string, agentID pgtype.UUID) (pgtype.UUID, string, bool) {
-	var id pgtype.UUID
-	var updatedAt pgtype.Timestamptz
-	err := h.DB.QueryRow(ctx, `
-		SELECT id, updated_at FROM chat_session
-		WHERE workspace_id = $1 AND creator_id = $2 AND agent_id = $3 AND status = 'active'
-		  AND id NOT IN (SELECT chat_session_id FROM channel_agent_session)
-		ORDER BY updated_at DESC
-		LIMIT 1`, parseUUID(workspaceID), parseUUID(userID), agentID).Scan(&id, &updatedAt)
-	if err != nil {
-		return pgtype.UUID{}, "", false
-	}
-	return id, timestampToString(updatedAt), true
 }
 
 // createDMChannel inserts a kind='dm' channel with the canonical name and its
@@ -529,9 +499,9 @@ func (h *Handler) CloseDMSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListDirectMessages (GET /api/dm) is the sole data source for the DM section.
-// It merges kind='dm' channels the caller is in with the caller's unbound
-// legacy chat_sessions, dedupes by peer (a peer never appears twice), filters
-// agent peers by accessibility, sorts by recency, and paginates.
+// It returns visible kind='dm' channels the caller is in, filters agent peers by
+// accessibility, sorts by recency, and paginates. Legacy chat_sessions are not
+// a visible source; they are reserved for migration/backfill only.
 func (h *Handler) ListDirectMessages(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -554,29 +524,10 @@ func (h *Handler) ListDirectMessages(w http.ResponseWriter, r *http.Request) {
 
 	items := []DMItem{}
 	items = append(items, h.listDMChannels(r.Context(), workspaceID, userID, allowed)...)
-	items = append(items, h.listLegacyDMSessions(r.Context(), workspaceID, userID, allowed)...)
-
-	// Dedupe by peer, keeping pinned entries first and then the freshest row. Legacy-first
-	// create-or-find normally keeps a peer in exactly one source, but a DM
-	// channel and an old session for the same agent can coexist if the channel
-	// was created before this unification.
-	byPeer := map[string]int{}
-	deduped := []DMItem{}
-	for _, it := range items {
-		key := it.Peer.Type + ":" + it.Peer.ID
-		if idx, seen := byPeer[key]; seen {
-			if preferDMItemForSamePeer(it, deduped[idx]) {
-				deduped[idx] = it
-			}
-			continue
-		}
-		byPeer[key] = len(deduped)
-		deduped = append(deduped, it)
-	}
-	sort.SliceStable(deduped, func(i, j int) bool { return preferDMItem(deduped[i], deduped[j]) })
+	sort.SliceStable(items, func(i, j int) bool { return preferDMItem(items[i], items[j]) })
 
 	limit, offset := dmPageParams(r)
-	total := len(deduped)
+	total := len(items)
 	if offset > total {
 		offset = total
 	}
@@ -584,7 +535,7 @@ func (h *Handler) ListDirectMessages(w http.ResponseWriter, r *http.Request) {
 	if end > total {
 		end = total
 	}
-	writeJSON(w, http.StatusOK, deduped[offset:end])
+	writeJSON(w, http.StatusOK, items[offset:end])
 }
 
 func dmPageParams(r *http.Request) (limit, offset int) {
@@ -621,17 +572,6 @@ func preferDMItem(a, b DMItem) bool {
 		return a.UpdatedAt > b.UpdatedAt
 	}
 	return a.Source < b.Source
-}
-
-func preferDMItemForSamePeer(a, b DMItem) bool {
-	// Human↔agent DMs are now chat_session-backed so the old Chat panel and the
-	// new Messages DM view share state. If a pre-unification agent dm_channel
-	// coexists with a chat_session, keep the chat_session visible in the unified
-	// list instead of re-opening the split channel surface.
-	if a.Peer.Type == "agent" && b.Peer.Type == "agent" && a.Source != b.Source {
-		return a.Source == dmSourceLegacy
-	}
-	return preferDMItem(a, b)
 }
 
 // listDMChannels returns the caller's kind='dm' channels as DM items, resolving
@@ -726,88 +666,6 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		if lastContent.Valid {
 			item.LastMessage = &ChannelLastMessage{
 				AuthorType: lastType.String, AuthorName: lastName.String,
-				Content: lastContent.String, CreatedAt: timestampToString(lastAt),
-			}
-		}
-		out = append(out, item)
-	}
-	return out
-}
-
-// listLegacyDMSessions returns the caller's standalone (non-channel-bound)
-// chat_sessions as DM items. Unread maps the per-session has-unread flag to
-// 0/1; the agent peer's name/avatar and last message come from joins.
-func (h *Handler) listLegacyDMSessions(ctx context.Context, workspaceID, userID string, allowed map[string]struct{}) []DMItem {
-	rows, err := h.DB.Query(ctx, `
-		SELECT cs.id, cs.agent_id, cs.updated_at,
-		       COALESCE(NULLIF(a.display_name, ''), a.name, '') AS agent_name, a.avatar_url,
-		       lm.role, lm.content, lm.created_at,
-		       (cs.unread_since IS NOT NULL)::bool AS has_unread,
-		       state.pinned_at, state.manual_unread_at, state.muted_at
-		FROM chat_session cs
-		JOIN agent a ON a.id = cs.agent_id
-		LEFT JOIN LATERAL (
-			SELECT role, content, created_at
-			FROM chat_message m WHERE m.chat_session_id = cs.id
-			ORDER BY m.created_at DESC LIMIT 1
-		) lm ON true
-		LEFT JOIN dm_peer_state state
-		  ON state.workspace_id = cs.workspace_id
-		 AND state.user_id = cs.creator_id
-		 AND state.peer_type = 'agent'
-		 AND state.peer_id = cs.agent_id
-		WHERE cs.workspace_id = $1 AND cs.creator_id = $2 AND cs.status = 'active'
-		  AND state.hidden_at IS NULL
-		  AND cs.id NOT IN (SELECT chat_session_id FROM channel_agent_session)
-		ORDER BY cs.updated_at DESC`, parseUUID(workspaceID), parseUUID(userID))
-	if err != nil {
-		slog.Warn("list legacy dm sessions failed", "workspace", workspaceID, "error", err)
-		return nil
-	}
-	defer rows.Close()
-	out := []DMItem{}
-	for rows.Next() {
-		var id, agentID pgtype.UUID
-		var updatedAt, lastAt, pinnedAt, manualUnreadAt, mutedAt pgtype.Timestamptz
-		var agentName string
-		var agentAvatar, lastRole, lastContent pgtype.Text
-		var hasUnread bool
-		if err := rows.Scan(&id, &agentID, &updatedAt, &agentName, &agentAvatar,
-			&lastRole, &lastContent, &lastAt, &hasUnread, &pinnedAt, &manualUnreadAt, &mutedAt); err != nil {
-			continue
-		}
-		if _, okAgent := allowed[uuidToString(agentID)]; !okAgent {
-			continue
-		}
-		realUnread := 0
-		if hasUnread {
-			realUnread = 1
-		}
-		unread := realUnread
-		if manualUnreadAt.Valid {
-			unread = 1
-		}
-		item := DMItem{
-			ID:             uuidToString(id),
-			Source:         dmSourceLegacy,
-			Peer:           DMPeer{Type: "agent", ID: uuidToString(agentID), Name: agentName, AvatarURL: textToPtr(agentAvatar)},
-			Unread:         unread,
-			RealUnread:     realUnread,
-			ManuallyUnread: manualUnreadAt.Valid,
-			PinnedAt:       timestampToPtr(pinnedAt),
-			MutedAt:        timestampToPtr(mutedAt),
-			Muted:          mutedAt.Valid,
-			UpdatedAt:      timestampToString(updatedAt),
-		}
-		if lastContent.Valid {
-			// chat_message has a role (user/assistant), not an author name —
-			// map it to the unified author shape so the list renders uniformly.
-			authorType, authorName := "user", "You"
-			if lastRole.String == "assistant" {
-				authorType, authorName = "agent", agentName
-			}
-			item.LastMessage = &ChannelLastMessage{
-				AuthorType: authorType, AuthorName: authorName,
 				Content: lastContent.String, CreatedAt: timestampToString(lastAt),
 			}
 		}

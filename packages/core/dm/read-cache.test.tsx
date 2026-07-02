@@ -1,8 +1,9 @@
 /**
  * @vitest-environment jsdom
  *
- * Verifies that marking a conversation read optimistically clears its unread
- * count and manually_unread flag in the dmKeys.list cache for both sources.
+ * Verifies that marking a channel-backed DM read optimistically clears its
+ * unread state in the dmKeys.list cache. Legacy chat sessions are no longer
+ * returned from /api/dm.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
@@ -97,7 +98,7 @@ describe("useMarkChannelRead — dm_channel optimistic clear", () => {
   });
 });
 
-describe("useMarkChatSessionRead — legacy_session optimistic clear", () => {
+describe("useMarkChatSessionRead — DM list isolation", () => {
   let qc: QueryClient;
   let markChatSessionRead: ReturnType<typeof vi.fn<(id: string) => Promise<void>>>;
 
@@ -112,9 +113,9 @@ describe("useMarkChatSessionRead — legacy_session optimistic clear", () => {
     vi.restoreAllMocks();
   });
 
-  it("clears unread and manually_unread optimistically for the matching legacy_session item", async () => {
-    const dmItem = makeDmItem({ id: "sess-1", source: "legacy_session", unread: 1, manually_unread: true });
-    const other = makeDmItem({ id: "sess-2", source: "legacy_session", unread: 0 });
+  it("does not mutate visible dm_channel rows while reading a legacy chat session", async () => {
+    const dmItem = makeDmItem({ id: "ch-1", source: "dm_channel", unread: 1, manually_unread: true });
+    const other = makeDmItem({ id: "ch-2", source: "dm_channel", unread: 0 });
     qc.setQueryData(dmKeys.list(WS_ID), [dmItem, other]);
     qc.setQueryData(["chat", "sessions", WS_ID], []);
 
@@ -126,7 +127,7 @@ describe("useMarkChatSessionRead — legacy_session optimistic clear", () => {
     });
 
     const cached = qc.getQueryData<DMItem[]>(dmKeys.list(WS_ID));
-    expect(cached?.find((d) => d.id === "sess-1")).toMatchObject({ unread: 0, manually_unread: false });
-    expect(cached?.find((d) => d.id === "sess-2")).toMatchObject({ unread: 0 });
+    expect(cached?.find((d) => d.id === "ch-1")).toMatchObject({ unread: 1, manually_unread: true });
+    expect(cached?.find((d) => d.id === "ch-2")).toMatchObject({ unread: 0 });
   });
 });

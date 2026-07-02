@@ -199,7 +199,6 @@
     "muted_label": "Muted",
     "close_chat": "Close chat",
     "action_failed": "Action failed, please try again",
-    "legacy_unavailable": "This older direct message is being migrated and is no longer available in the current Messages surface.",
     "composer_placeholder": "Message {{name}}…"
   },
   "quote": {

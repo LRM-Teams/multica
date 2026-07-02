@@ -947,6 +947,78 @@ type WebhookDelivery struct {
 	CreatedAt              pgtype.Timestamptz `json:"created_at"`
 }
 
+type SandboxNode struct {
+	ID             pgtype.UUID        `json:"id"`
+	NodeKey        string             `json:"node_key"`
+	Name           string             `json:"name"`
+	Status         string             `json:"status"`
+	Capabilities   []byte             `json:"capabilities"`
+	MaxConcurrency int32              `json:"max_concurrency"`
+	Metadata       []byte             `json:"metadata"`
+	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type SandboxNodeToken struct {
+	ID          pgtype.UUID        `json:"id"`
+	NodeID      pgtype.UUID        `json:"node_id"`
+	Name        string             `json:"name"`
+	TokenHash   string             `json:"token_hash"`
+	TokenPrefix string             `json:"token_prefix"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type SandboxWorkspaceBinding struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	NodeID      pgtype.UUID        `json:"node_id"`
+	Enabled     bool               `json:"enabled"`
+	Policy      []byte             `json:"policy"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type SandboxInstance struct {
+	ID            pgtype.UUID        `json:"id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	CreatorUserID pgtype.UUID        `json:"creator_user_id"`
+	NodeID        pgtype.UUID        `json:"node_id"`
+	Status        string             `json:"status"`
+	Template      string             `json:"template"`
+	LocalRef      pgtype.Text        `json:"local_ref"`
+	EndpointInfo  []byte             `json:"endpoint_info"`
+	Limits        []byte             `json:"limits"`
+	Metadata      []byte             `json:"metadata"`
+	Error         pgtype.Text        `json:"error"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type SandboxJob struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	InitiatorUserID   pgtype.UUID        `json:"initiator_user_id"`
+	NodeID            pgtype.UUID        `json:"node_id"`
+	InstanceID        pgtype.UUID        `json:"instance_id"`
+	Type              string             `json:"type"`
+	Status            string             `json:"status"`
+	Payload           []byte             `json:"payload"`
+	Result            []byte             `json:"result"`
+	Error             pgtype.Text        `json:"error"`
+	LeaseUntil        pgtype.Timestamptz `json:"lease_until"`
+	StartedAt         pgtype.Timestamptz `json:"started_at"`
+	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
+	JobTokenHash      pgtype.Text        `json:"job_token_hash"`
+	JobTokenExpiresAt pgtype.Timestamptz `json:"job_token_expires_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Workspace struct {
 	ID           pgtype.UUID        `json:"id"`
 	Name         string             `json:"name"`

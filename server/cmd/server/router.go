@@ -26,6 +26,7 @@ import (
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/realtime"
+	"github.com/multica-ai/multica/server/internal/sandboxws"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/storage"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -105,6 +106,7 @@ type RouterOptions struct {
 	HTTPMetrics     *obsmetrics.HTTPMetrics
 	BusinessMetrics *obsmetrics.BusinessMetrics
 	DaemonHub       *daemonws.Hub
+	SandboxHub      *sandboxws.Hub
 	DaemonWakeup    service.TaskWakeupNotifier
 	// HeartbeatScheduler, when non-nil, replaces the default synchronous
 	// passthrough scheduler on the constructed Handler. main.go injects a
@@ -126,6 +128,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	daemonHub := opts.DaemonHub
 	if daemonHub == nil {
 		daemonHub = daemonws.NewHub()
+	}
+	sandboxHub := opts.SandboxHub
+	if sandboxHub == nil {
+		sandboxHub = sandboxws.NewHub()
 	}
 
 	// Initialize storage with S3 as primary, fallback to local
@@ -158,6 +164,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		EvolutionReviewEnabled:   evolutionReviewEnabled,
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
+	h.SandboxHub = sandboxHub
 	h.StartChannelBridge()
 	h.Metrics = opts.BusinessMetrics
 	h.TaskService.Metrics = opts.BusinessMetrics
@@ -538,6 +545,22 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/tasks/{taskId}/session", h.PinTaskSession)
 	})
 
+	// Sandbox node API routes. Node tokens (msn_) identify shared sandbox
+	// infrastructure; job tokens (mst_) are scoped to a single claimed job.
+	r.Route("/api/sandbox/node", func(r chi.Router) {
+		r.Use(middleware.SandboxNodeAuth(queries))
+		r.Post("/register", h.SandboxNodeRegister)
+		r.Post("/heartbeat", h.SandboxNodeHeartbeat)
+		r.Get("/ws", h.SandboxNodeWebSocket)
+		r.Post("/jobs/claim", h.ClaimSandboxJobs)
+	})
+	r.Route("/api/sandbox/jobs", func(r chi.Router) {
+		r.Use(middleware.SandboxJobAuth(queries))
+		r.Post("/{jobId}/start", h.StartSandboxJob)
+		r.Post("/{jobId}/complete", h.CompleteSandboxJob)
+		r.Post("/{jobId}/fail", h.FailSandboxJob)
+	})
+
 	// Protected API routes
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(queries, patCache, cloudPATVerifier))
@@ -589,6 +612,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// the handler strips the management handle and adds a
 					// can_manage hint so the UI can gate connect/disconnect.
 					r.Get("/github/installations", h.ListGitHubInstallations)
+					r.Get("/sandbox/bindings", h.ListWorkspaceSandboxBindings)
 				})
 				// Admin-level access
 				r.Group(func(r chi.Router) {
@@ -601,6 +625,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Delete("/", h.DeleteMember)
 					})
 					r.Delete("/invitations/{invitationId}", h.RevokeInvitation)
+					r.Post("/sandbox/bindings", h.BindSandboxNodeToWorkspace)
 				})
 				// Owner-only access
 				r.With(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner")).Delete("/", h.DeleteWorkspace)
@@ -658,6 +683,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/current/renew", h.RenewCurrentPersonalAccessToken)
 			r.Delete("/{id}", h.RevokePersonalAccessToken)
 		})
+
+		// Sandbox node administration. MVP keeps this authenticated-only; workspace
+		// use still requires an explicit admin-created workspace binding.
+		r.Get("/api/sandbox/nodes", h.ListSandboxNodes)
+		r.Post("/api/sandbox/nodes", h.CreateSandboxNode)
+		r.Post("/api/sandbox/nodes/{nodeId}/tokens", h.CreateSandboxNodeToken)
 
 		// Cloud Billing proxy. Same upstream service / port as
 		// cloud-runtime — multica-cloud's Fleet and Billing share
@@ -745,6 +776,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
 				})
 			})
+
+			// Sandbox instances (workspace-facing control plane).
+			r.Get("/api/sandboxes", h.ListSandboxInstances)
+			r.Post("/api/sandboxes", h.CreateSandboxInstance)
+			r.Post("/api/sandboxes/{instanceId}/stop", h.StopSandboxInstance)
+			r.Post("/api/sandboxes/{instanceId}/resume", h.ResumeSandboxInstance)
+			r.Delete("/api/sandboxes/{instanceId}", h.DeleteSandboxInstance)
 
 			// Task messages (user-facing, not daemon auth)
 			r.Get("/api/tasks/{taskId}/messages", h.ListTaskMessagesByUser)

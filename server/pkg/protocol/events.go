@@ -123,6 +123,12 @@ const (
 	EventDaemonHeartbeatAck  = "daemon:heartbeat_ack"
 	EventDaemonRegister      = "daemon:register"
 	EventDaemonTaskAvailable = "daemon:task_available"
+
+	// Sandbox events. Node-facing events wake shared sandbox infrastructure;
+	// instance events are broadcast to workspace clients for UI refresh.
+	EventSandboxJobAvailable    = "sandbox:job_available"
+	EventSandboxInstanceCreated = "sandbox:instance_created"
+	EventSandboxInstanceUpdated = "sandbox:instance_updated"
 	// Workdir file-tree RPC over the daemon wakeup socket: the server pushes a
 	// request, the daemon walks the project's local workdir and replies with a
 	// flat node list. Correlated by RequestID. See protocol.ListWorkdirFiles*.

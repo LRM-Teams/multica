@@ -3,7 +3,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@multica/ui/lib/utils";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
-import { AppLink, useNavigation } from "../navigation";
+import { AppLink } from "../navigation/app-link";
+import { useNavigation } from "../navigation/context";
 import { HelpLauncher } from "./help-launcher";
 import {
   DndContext,
@@ -21,6 +22,7 @@ import {
   LayoutDashboard,
   Bot,
   Monitor,
+  Box,
   ChevronDown,
   ChevronRight,
   Settings,
@@ -82,9 +84,9 @@ import { useDeletePin, useReorderPins } from "@multica/core/pins/mutations";
 import { issueDetailOptions } from "@multica/core/issues/queries";
 import { projectDetailOptions } from "@multica/core/projects/queries";
 import type { PinnedItem } from "@multica/core/types";
-import { useLogout } from "../auth";
+import { useLogout } from "../auth/use-logout";
 import { ProjectIcon } from "../projects/components/project-icon";
-import { useT } from "../i18n";
+import { useT } from "../i18n/use-t";
 
 // Top-level nav items stay active when the user is on a child route
 // (e.g. "Projects" stays lit on /:slug/projects/:id). Pinned items keep
@@ -120,6 +122,7 @@ type NavKey =
   | "usage"
   | "evolution"
   | "runtimes"
+  | "sandboxes"
   | "skills"
   | "settings";
 
@@ -137,6 +140,7 @@ type NavLabelKey =
   | "usage"
   | "evolution"
   | "runtimes"
+  | "sandboxes"
   | "skills"
   | "settings";
 
@@ -159,6 +163,7 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[]
 
 const configureNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
   { key: "runtimes", labelKey: "runtimes", icon: Monitor },
+  { key: "sandboxes", labelKey: "sandboxes", icon: Box },
   { key: "skills", labelKey: "skills", icon: BookOpenText },
   { key: "settings", labelKey: "settings", icon: Settings },
 ];

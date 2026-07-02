@@ -79,10 +79,12 @@ vi.mock("@multica/ui/components/ui/tooltip", () => ({
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <button type="button">{children}</button>,
 }));
 vi.mock("./help-launcher", () => ({ HelpLauncher: () => null }));
-vi.mock("../auth", () => ({ useLogout: () => vi.fn() }));
+vi.mock("../auth/use-logout", () => ({ useLogout: () => vi.fn() }));
 vi.mock("../issues/components/status-icon", () => ({ StatusIcon: () => <span /> }));
-vi.mock("../navigation", () => ({
+vi.mock("../navigation/app-link", () => ({
   AppLink: ({ children, href }: { children: React.ReactNode; href: string }) => <a href={href}>{children}</a>,
+}));
+vi.mock("../navigation/context", () => ({
   useNavigation: () => ({ pathname: "/acme/issues", push: vi.fn() }),
 }));
 vi.mock("../projects/components/project-icon", () => ({ ProjectIcon: () => <span /> }));
@@ -108,6 +110,7 @@ vi.mock("@multica/core/paths", () => ({
     usage: () => "/acme/usage",
     evolution: () => "/acme/evolution",
     runtimes: () => "/acme/runtimes",
+    sandboxes: () => "/acme/sandboxes",
     skills: () => "/acme/skills",
     settings: () => "/acme/settings",
     issueDetail: (id: string) => `/acme/issues/${id}`,

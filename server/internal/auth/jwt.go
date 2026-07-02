@@ -59,6 +59,25 @@ func GenerateAgentTaskToken() (string, error) {
 	return "mat_" + hex.EncodeToString(b), nil
 }
 
+// GenerateSandboxNodeToken creates a machine credential for a shared sandbox
+// node. Unlike daemon tokens, it is node-scoped rather than workspace-scoped.
+func GenerateSandboxNodeToken() (string, error) {
+	b := make([]byte, 20)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate sandbox node token: %w", err)
+	}
+	return "msn_" + hex.EncodeToString(b), nil
+}
+
+// GenerateSandboxJobToken creates a short-lived token scoped to one sandbox job.
+func GenerateSandboxJobToken() (string, error) {
+	b := make([]byte, 20)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate sandbox job token: %w", err)
+	}
+	return "mst_" + hex.EncodeToString(b), nil
+}
+
 // HashToken returns the hex-encoded SHA-256 hash of a token string.
 func HashToken(token string) string {
 	h := sha256.Sum256([]byte(token))

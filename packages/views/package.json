@@ -28,6 +28,7 @@
     "./members": "./members/index.ts",
     "./inbox": "./inbox/index.ts",
     "./runtimes": "./runtimes/index.ts",
+    "./sandboxes": "./sandboxes/index.ts",
     "./billing": "./billing/index.ts",
     "./dashboard": "./dashboard/index.ts",
     "./overview": "./overview/index.ts",

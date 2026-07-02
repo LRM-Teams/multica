@@ -12,6 +12,7 @@
     "usage": "사용량",
     "evolution": "Evolution",
     "runtimes": "런타임",
+    "sandboxes": "샌드박스",
     "skills": "스킬",
     "settings": "설정"
   },
@@ -40,5 +41,22 @@
     "workspace_group": "워크스페이스",
     "configure_group": "설정",
     "unread_overflow": "99+"
+  },
+  "sandboxes_page": {
+    "title": "샌드박스",
+    "description": "공유 샌드박스 노드 커넥터를 통해 내부 샌드박스를 생성합니다.",
+    "create_action": "샌드박스 생성",
+    "runtime_model_title": "런타임 모델",
+    "runtime_model_hint": "샌드박스를 만들 때 모델 설정이 샌드박스 런타임으로 전송됩니다.",
+    "connected_nodes_title": "연결된 노드",
+    "no_bound_node": "이 워크스페이스에 바인딩된 샌드박스 노드가 아직 없습니다.",
+    "instances_title": "샌드박스 인스턴스",
+    "loading": "샌드박스를 불러오는 중...",
+    "empty_title": "아직 샌드박스가 없습니다",
+    "empty_description": "내부 샌드박스 노드가 격리된 로컬 환경을 프로비저닝하도록 샌드박스를 생성하세요.",
+    "waiting_local": "로컬 샌드박스 대기 중",
+    "resume_action": "재개",
+    "stop_action": "중지",
+    "delete_action": "삭제"
   }
 }

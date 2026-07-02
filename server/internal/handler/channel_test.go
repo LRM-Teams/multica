@@ -70,8 +70,11 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if threadID != "debate-thread" || depth != 2 {
 		t.Fatalf("prompt thread/depth = %q/%d, want debate-thread/2", threadID, depth)
 	}
-	if !strings.Contains(prompt, "Recent channel messages from this channel only (bounded window):") || !strings.Contains(prompt, "@Channel Helper please join") {
-		t.Fatalf("prompt missing channel context/current message:\n%s", prompt)
+	if strings.Contains(prompt, "Recent channel messages from this channel only (bounded window):") {
+		t.Fatalf("prompt should not repeat the trigger in recent channel context:\n%s", prompt)
+	}
+	if count := strings.Count(prompt, "@Channel Helper please join"); count != 1 {
+		t.Fatalf("current trigger should appear exactly once, got %d:\n%s", count, prompt)
 	}
 
 	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{ChatSessionID: sessionID, Content: "@Channel Helper says hi"}})

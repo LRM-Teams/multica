@@ -2377,6 +2377,7 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	if trigger.ThreadRootMessageID != nil {
 		messages = h.channelThreadContextMessages(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID, channelContextMessageLimit)
 	}
+	messages = channelContextMessagesExcludingTrigger(messages, trigger.ID)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are participating in the Multica group chat #%s.\n", ch.Name)

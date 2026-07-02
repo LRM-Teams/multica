@@ -74,6 +74,47 @@ func TestBuildChannelMentionPromptIncludesStickerInstruction(t *testing.T) {
 	}
 }
 
+func TestFormatChannelMessageLineTruncatesHistoryContent(t *testing.T) {
+	longContent := strings.Repeat("a", channelHistoryMessageMaxChars+50)
+	line := formatChannelMessageLine(ChannelMessageResponse{AuthorName: "Frank", AuthorType: "user", Content: longContent})
+	if strings.Contains(line, strings.Repeat("a", channelHistoryMessageMaxChars+1)) {
+		t.Fatalf("history line was not truncated: %d chars", len(line))
+	}
+	if !strings.Contains(line, "...[truncated]") {
+		t.Fatalf("history line missing truncation marker:\n%s", line)
+	}
+
+	manyLines := strings.Join([]string{
+		"01", "02", "03", "04", "05", "06", "07", "08", "09", "10",
+		"11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21",
+	}, "\n")
+	line = formatChannelMessageLine(ChannelMessageResponse{AuthorName: "Frank", AuthorType: "user", Content: manyLines})
+	if strings.Contains(line, "21") {
+		t.Fatalf("history line kept content past line cap:\n%s", line)
+	}
+	if !strings.Contains(line, "...[truncated]") {
+		t.Fatalf("line-capped history missing truncation marker:\n%s", line)
+	}
+}
+
+func TestChannelContextMessagesExcludingTrigger(t *testing.T) {
+	messages := []ChannelMessageResponse{
+		{ID: "older", Content: "keep"},
+		{ID: "trigger", Content: "drop"},
+		{ID: "newer", Content: "keep"},
+	}
+	filtered := channelContextMessagesExcludingTrigger(messages, "trigger")
+	if len(filtered) != 2 {
+		t.Fatalf("filtered len = %d, want 2", len(filtered))
+	}
+	if filtered[0].ID != "older" || filtered[1].ID != "newer" {
+		t.Fatalf("filtered messages = %#v", filtered)
+	}
+	if len(messages) != 3 || messages[1].ID != "trigger" {
+		t.Fatalf("filter should not mutate input slice: %#v", messages)
+	}
+}
+
 func TestBuildChannelWelcomePrompt(t *testing.T) {
 	p := buildChannelWelcomePrompt("产品讨论", "张三")
 

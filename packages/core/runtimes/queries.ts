@@ -1,5 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
+import { MULTICA_LATEST_RELEASE_API_URL } from "../constants/repository";
 
 export const runtimeKeys = {
   all: (wsId: string) => ["runtimes", wsId] as const,
@@ -55,15 +56,12 @@ export function runtimeListOptions(wsId: string, owner?: "me") {
   });
 }
 
-const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/multica-ai/multica/releases/latest";
-
 export function latestCliVersionOptions() {
   return queryOptions({
     queryKey: runtimeKeys.latestVersion(),
     queryFn: async (): Promise<string | null> => {
       try {
-        const resp = await fetch(GITHUB_RELEASES_URL, {
+        const resp = await fetch(MULTICA_LATEST_RELEASE_API_URL, {
           headers: { Accept: "application/vnd.github+json" },
         });
         if (!resp.ok) return null;

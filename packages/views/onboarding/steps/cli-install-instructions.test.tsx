@@ -13,6 +13,20 @@ const ligatureClasses = [
 ];
 
 describe("CliInstallInstructions", () => {
+  it("uses the current repository install script", () => {
+    render(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <CliInstallInstructions />
+      </I18nProvider>,
+    );
+
+    expect(
+      screen.getByText(
+        "curl -fsSL https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.sh | bash",
+      ),
+    ).toBeTruthy();
+  });
+
   it("disables font ligatures in CLI command code", () => {
     render(
       <I18nProvider locale="en" resources={TEST_RESOURCES}>

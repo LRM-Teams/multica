@@ -10,7 +10,7 @@ vi.mock("react-i18next", () => ({
   initReactI18next: { type: "3rdParty", init: vi.fn() },
 }));
 
-vi.mock("../i18n", () => ({
+vi.mock("../i18n/use-t", () => ({
   useT: () => ({
     t: (selector: (resources: any) => string) =>
       selector({
@@ -47,7 +47,7 @@ vi.mock("@multica/core/feedback", () => ({
   useFeedbackDraftStore: (selector: any) =>
     selector({ draft: { message: storedDraftMessage }, setDraft: vi.fn(), clearDraft: vi.fn() }),
 }));
-vi.mock("../editor", () => {
+vi.mock("../editor/content-editor", () => {
   const ContentEditor = forwardRef(({ defaultValue }: any, ref) => {
     useImperativeHandle(ref, () => ({
       hasActiveUploads: () => false,
@@ -59,11 +59,16 @@ vi.mock("../editor", () => {
   ContentEditor.displayName = "MockContentEditor";
   return {
     ContentEditor,
-    useFileDropZone: () => ({ isDragOver: false, dropZoneProps: {} }),
-    FileDropOverlay: () => null,
-    FileUploadButton: () => <button type="button">Upload</button>,
   };
 });
+
+vi.mock("../editor/use-file-drop-zone", () => ({
+  useFileDropZone: () => ({ isDragOver: false, dropZoneProps: {} }),
+}));
+
+vi.mock("../editor/file-drop-overlay", () => ({
+  FileDropOverlay: () => null,
+}));
 
 import { FeedbackModal } from "./feedback";
 

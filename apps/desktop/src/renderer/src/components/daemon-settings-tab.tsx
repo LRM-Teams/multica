@@ -3,6 +3,7 @@ import { AlertCircle, Info, LogIn } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Switch } from "@multica/ui/components/ui/switch";
 import { cn } from "@multica/ui/lib/utils";
+import { MULTICA_GITHUB_URL } from "@multica/core/constants/repository";
 import { reauthenticateDaemon } from "../platform/daemon-reauth";
 import type { DaemonPrefs, DaemonStatus } from "../../../shared/daemon-types";
 import {
@@ -177,7 +178,7 @@ export function DaemonSettingsTab() {
               className="mt-2"
               onClick={() =>
                 window.desktopAPI.openExternal(
-                  "https://github.com/multica-ai/multica#cli-installation",
+                  `${MULTICA_GITHUB_URL}#cli-installation`,
                 )
               }
             >

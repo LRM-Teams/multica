@@ -31,6 +31,7 @@ vi.mock("@multica/core/platform", () => ({
 // Mock the API so we control search responses + observe calls.
 const searchIssuesMock = vi.fn();
 const searchProjectsMock = vi.fn();
+const actorProfileTriggerMock = vi.hoisted(() => vi.fn());
 vi.mock("@multica/core/api", () => ({
   api: {
     get searchIssues() {
@@ -53,6 +54,13 @@ vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: ({ actorId }: { actorId: string }) => (
     <span data-testid="actor-avatar" data-actor-id={actorId} />
   ),
+}));
+
+vi.mock("../../common/actor-profile-popover", () => ({
+  ActorProfileTrigger: ({ children }: { children: ReactNode }) => {
+    actorProfileTriggerMock();
+    return <span data-testid="actor-profile-trigger">{children}</span>;
+  },
 }));
 
 import {
@@ -113,6 +121,7 @@ describe("createMentionSuggestion", () => {
   beforeEach(() => {
     searchIssuesMock.mockReset();
     searchProjectsMock.mockReset();
+    actorProfileTriggerMock.mockClear();
     Element.prototype.scrollIntoView = vi.fn();
   });
 
@@ -175,6 +184,26 @@ describe("createMentionSuggestion", () => {
     expect(screen.getByText("Aegis")).toBeInTheDocument();
     expect(screen.queryByText("All")).not.toBeInTheDocument();
     expect(screen.queryByText("Users")).not.toBeInTheDocument();
+  });
+
+  it("does not attach profile hover cards to member and agent picker rows", () => {
+    render(
+      <I18nWrapper>
+        <MentionList
+          items={[
+            { id: "u1", label: "Alice", type: "member", handle: "alice", secondaryLabel: "@alice" },
+            { id: "a1", label: "Aegis", type: "agent", handle: "agent_aegis", secondaryLabel: "@agent_aegis" },
+          ]}
+          query=""
+          command={vi.fn()}
+        />
+      </I18nWrapper>,
+    );
+
+    expect(actorProfileTriggerMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("actor-profile-trigger")).not.toBeInTheDocument();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(screen.getByText("Aegis")).toBeInTheDocument();
   });
 
   it("matches handles and ranks handle matches before display-name-only matches", () => {

@@ -335,5 +335,16 @@
     "table_cache_r": "캐시 R",
     "table_cache_w": "캐시 W",
     "no_data": "아직 사용량 데이터가 없습니다"
+  },
+  "update_prompt": {
+    "title": "로컬 데몬 업데이트",
+    "description": "로컬 Multica CLI는 {{current}}입니다. {{latest}}로 업데이트하면 이 런타임에서 최신 에이전트 기능을 사용할 수 있습니다.",
+    "more_runtimes": "이 컴퓨터에 같은 업데이트가 필요할 수 있는 런타임이 {{count}}개 더 있습니다.",
+    "note": "데몬은 heartbeat로 업데이트 작업을 받고, 이 컴퓨터에서 CLI 업데이트를 실행한 뒤 완료되면 자동으로 재시작합니다.",
+    "later": "나중에",
+    "update_now": "지금 업데이트",
+    "status": {
+      "completed": "업데이트가 전달되었습니다. 데몬이 새 CLI로 재시작됩니다."
+    }
   }
 }

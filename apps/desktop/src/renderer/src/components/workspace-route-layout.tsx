@@ -9,6 +9,7 @@ import {
 import { setCurrentWorkspace } from "@multica/core/platform";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceSeen } from "@multica/views/workspace/use-workspace-seen";
+import { RuntimeUpdateDialog } from "@multica/views/runtimes/runtime-update-dialog";
 import { WelcomeAfterOnboarding } from "@multica/views/workspace/welcome-after-onboarding";
 import { WorkspacePresencePrefetch } from "@multica/views/layout";
 import { SourceBackfillModal } from "@multica/views/onboarding";
@@ -105,6 +106,7 @@ export function WorkspaceRouteLayout() {
        *  Modal — unless the store signal has already been consumed, in
        *  which case the hook renders null. */}
       {!overlayActive && <WelcomeAfterOnboarding />}
+      {!overlayActive && <RuntimeUpdateDialog wsId={workspace.id} />}
       {/* Source-attribution backfill: same Dialog the web shell mounts
        *  inside DashboardLayout. Desktop's WorkspaceRouteLayout doesn't
        *  wrap DashboardLayout, so the modal has to be wired in directly

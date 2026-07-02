@@ -489,6 +489,7 @@ function DiagnosticsCard({
               currentVersion={cliVersion}
               isOnline={runtime.status === "online"}
               launchedBy={launchedBy}
+              canUpdate={canDelete}
             />
           </div>
         )}

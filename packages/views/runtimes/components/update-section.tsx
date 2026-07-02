@@ -73,6 +73,7 @@ interface UpdateSectionProps {
    * is disabled — upgrading would be clobbered on the next launch anyway.
    */
   launchedBy?: string | null;
+  canUpdate?: boolean;
 }
 
 export function UpdateSection({
@@ -80,6 +81,7 @@ export function UpdateSection({
   currentVersion,
   isOnline,
   launchedBy,
+  canUpdate = true,
 }: UpdateSectionProps) {
   const { t } = useT("runtimes");
   const isManaged = launchedBy === "desktop";
@@ -211,7 +213,7 @@ export function UpdateSection({
               </>
             )}
 
-            {hasUpdate && isOnline && !status && (
+            {hasUpdate && isOnline && canUpdate && !status && (
               <Button
                 variant="outline"
                 size="xs"
@@ -235,7 +237,7 @@ export function UpdateSection({
         )}
       </div>
 
-      {!isManaged && (
+      {!isManaged && canUpdate && (
         <p className="text-[11px] leading-[1.55] text-muted-foreground">
           {t(($) => $.update.manual_hint_prefix)}{" "}
           <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-foreground">

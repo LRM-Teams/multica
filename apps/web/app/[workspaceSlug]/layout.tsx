@@ -8,6 +8,7 @@ import { workspaceBySlugOptions } from "@multica/core/workspace";
 import { setCurrentWorkspace } from "@multica/core/platform";
 import { useAuthStore } from "@multica/core/auth";
 import { NoAccessPage } from "@multica/views/workspace/no-access-page";
+import { RuntimeUpdateDialog } from "@multica/views/runtimes/runtime-update-dialog";
 import { WelcomeAfterOnboarding } from "@multica/views/workspace/welcome-after-onboarding";
 import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
 import { useWorkspaceSeen } from "@multica/views/workspace/use-workspace-seen";
@@ -104,6 +105,7 @@ export default function WorkspaceLayout({
        *  blocking Modal with Helper + starter cards. Skip path → Modal
        *  with two seeded issues. No signal → null. */}
       <WelcomeAfterOnboarding />
+      <RuntimeUpdateDialog wsId={workspace.id} />
     </WorkspaceSlugProvider>
   );
 }

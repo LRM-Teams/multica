@@ -28,6 +28,7 @@
     "./members": "./members/index.ts",
     "./inbox": "./inbox/index.ts",
     "./runtimes": "./runtimes/index.ts",
+    "./runtimes/runtime-update-dialog": "./runtimes/components/runtime-update-dialog.tsx",
     "./sandboxes": "./sandboxes/index.ts",
     "./billing": "./billing/index.ts",
     "./dashboard": "./dashboard/index.ts",

@@ -13,15 +13,16 @@ import { FileUploadButton } from "@multica/ui/components/common/file-upload-butt
 import {
   ContentEditor,
   type ContentEditorRef,
-  useFileDropZone,
-  FileDropOverlay,
-} from "../editor";
+} from "../editor/content-editor";
+import { FileDropOverlay } from "../editor/file-drop-overlay";
+import { useFileDropZone } from "../editor/use-file-drop-zone";
 import { useCreateFeedback, useFeedbackDraftStore } from "@multica/core/feedback";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { api } from "@multica/core/api";
 import { captureFeedbackOpened } from "@multica/core/analytics";
-import { useT } from "../i18n";
+import { MULTICA_ISSUES_URL } from "@multica/core/constants/repository";
+import { useT } from "../i18n/use-t";
 import { formatShortcut, modKey, enterKey } from "@multica/core/platform";
 
 const MAX_MESSAGE_LEN = 10000;
@@ -120,7 +121,7 @@ export function FeedbackModal({
           <p className="mt-1 text-xs text-muted-foreground">
             {t(($) => $.feedback.github_hint_prefix)}
             <a
-              href="https://github.com/multica-ai/multica/issues"
+              href={MULTICA_ISSUES_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="text-brand underline decoration-brand/40 underline-offset-2 hover:decoration-brand"

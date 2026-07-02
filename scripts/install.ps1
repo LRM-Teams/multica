@@ -1,10 +1,10 @@
 # Multica installer for Windows — one command to get started.
 #
 # Install CLI (default): connects to multica.ai
-#   irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1 | iex
 #
 # Self-host: starts a local Multica server + installs CLI + configures
-#   $env:MULTICA_MODE="local"; irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex
+#   $env:MULTICA_MODE="local"; irm https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1 | iex
 #
 
 $ErrorActionPreference = "Stop"
@@ -12,8 +12,10 @@ $ErrorActionPreference = "Stop"
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-$RepoUrl       = "https://github.com/multica-ai/multica.git"
-$RepoWebUrl    = "https://github.com/multica-ai/multica"
+$RepoUrl       = "https://github.com/LRM-Teams/multica.git"
+$RepoWebUrl    = "https://github.com/LRM-Teams/multica"
+$ReleaseRepoWebUrl = if ($env:MULTICA_RELEASE_REPO_WEB_URL) { $env:MULTICA_RELEASE_REPO_WEB_URL } else { "https://github.com/multica-ai/multica" }
+$InstallScriptUrl = "https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1"
 $DefaultInstallDir = Join-Path $env:USERPROFILE ".multica\server"
 $InstallDir    = if ($env:MULTICA_INSTALL_DIR) { $env:MULTICA_INSTALL_DIR } else { $DefaultInstallDir }
 
@@ -85,10 +87,22 @@ function Get-SelfHostFrontendPort {
 
 function Get-LatestVersion {
     try {
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/multica-ai/multica/releases/latest" -ErrorAction Stop
+        $releasesApi = $ReleaseRepoWebUrl -replace "^https://github.com/", "https://api.github.com/repos/"
+        $release = Invoke-RestMethod -Uri "$releasesApi/releases/latest" -ErrorAction Stop
         return $release.tag_name
     } catch {
         return $null
+    }
+}
+
+function Test-SourceRepoTag {
+    param([string]$Tag)
+
+    try {
+        git ls-remote --exit-code --tags $RepoUrl "refs/tags/$Tag" *> $null
+        return $LASTEXITCODE -eq 0
+    } catch {
+        return $false
     }
 }
 
@@ -98,7 +112,7 @@ function Get-SelfHostRef {
     }
 
     $latest = Get-LatestVersion
-    if ($latest) {
+    if ($latest -and (Test-SourceRepoTag -Tag $latest)) {
         return $latest
     }
 
@@ -246,7 +260,7 @@ function Install-CliBinary {
     }
 
     $version = $latest.TrimStart('v')
-    $url = "https://github.com/multica-ai/multica/releases/download/$latest/multica-cli-$version-windows-$arch.zip"
+    $url = "$ReleaseRepoWebUrl/releases/download/$latest/multica-cli-$version-windows-$arch.zip"
     $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "multica-install"
 
     if (Test-Path $tmpDir) { Remove-Item $tmpDir -Recurse -Force }
@@ -261,7 +275,7 @@ function Install-CliBinary {
     }
 
     # Verify SHA256 checksum
-    $checksumUrl = "https://github.com/multica-ai/multica/releases/download/$latest/checksums.txt"
+    $checksumUrl = "$ReleaseRepoWebUrl/releases/download/$latest/checksums.txt"
     try {
         $checksums = Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing -ErrorAction Stop
         $checksumContent = if ($checksums.Content -is [byte[]]) {
@@ -488,7 +502,7 @@ function Start-DefaultInstall {
     Write-Host "     multica setup self-host      " -NoNewline; Write-Host "# Connect to a self-hosted server" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  Self-hosting? Install the server first:"
-    Write-Host '     $env:MULTICA_MODE="with-server"; irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex'
+    Write-Host "     `$env:MULTICA_MODE=`"with-server`"; irm $InstallScriptUrl | iex"
     Write-Host ""
 }
 
@@ -524,7 +538,7 @@ function Start-LocalInstall {
     Write-Host "  or read the generated code from backend logs when Resend is unset."
     Write-Host ""
     Write-Host "  To stop all services:"
-    Write-Host '     $env:MULTICA_MODE="stop"; irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex'
+    Write-Host "     `$env:MULTICA_MODE=`"stop`"; irm $InstallScriptUrl | iex"
     Write-Host ""
 }
 

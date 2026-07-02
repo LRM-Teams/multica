@@ -2,10 +2,10 @@
 # Multica installer — installs the CLI and optionally provisions a self-host server.
 #
 # Install / upgrade CLI only:
-#   curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.sh | bash
 #
 # Install CLI + provision self-host server:
-#   curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash -s -- --with-server
+#   curl -fsSL https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.sh | bash -s -- --with-server
 #
 # After installation, run `multica setup` to configure your environment.
 #
@@ -14,8 +14,11 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-REPO_URL="https://github.com/multica-ai/multica.git"
-REPO_WEB_URL="https://github.com/multica-ai/multica"  # without .git, for GitHub web APIs
+REPO_URL="https://github.com/LRM-Teams/multica.git"
+REPO_WEB_URL="https://github.com/LRM-Teams/multica"
+RELEASE_REPO_WEB_URL="${MULTICA_RELEASE_REPO_WEB_URL:-https://github.com/multica-ai/multica}"
+INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.sh"
+POWERSHELL_INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1"
 INSTALL_DIR="${MULTICA_INSTALL_DIR:-$HOME/.multica/server}"
 BREW_PACKAGE="multica-ai/tap/multica"
 
@@ -87,7 +90,7 @@ detect_os() {
     Linux)  OS="linux" ;;
     MINGW*|MSYS*|CYGWIN*)
             fail "This script does not support Windows. Use the PowerShell installer instead:
-  irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex" ;;
+  irm ${POWERSHELL_INSTALL_SCRIPT_URL} | iex" ;;
     *)      fail "Unsupported operating system: $(uname -s). Multica supports macOS, Linux, and Windows." ;;
   esac
 
@@ -143,13 +146,13 @@ install_cli_binary() {
 
   # Get latest release tag
   local latest
-  latest=$(curl -sI "$REPO_WEB_URL/releases/latest" 2>/dev/null | grep -i '^location:' | sed 's/.*tag\///' | tr -d '\r\n' || true)
+  latest=$(curl -sI "$RELEASE_REPO_WEB_URL/releases/latest" 2>/dev/null | grep -i '^location:' | sed 's/.*tag\///' | tr -d '\r\n' || true)
   if [ -z "$latest" ]; then
     fail "Could not determine latest release. Check your network connection."
   fi
 
   local version="${latest#v}"
-  local url="https://github.com/multica-ai/multica/releases/download/${latest}/multica-cli-${version}-${OS}-${ARCH}.tar.gz"
+  local url="${RELEASE_REPO_WEB_URL}/releases/download/${latest}/multica-cli-${version}-${OS}-${ARCH}.tar.gz"
   local tmp_dir
   tmp_dir=$(mktemp -d)
 
@@ -196,7 +199,7 @@ add_to_path() {
 
 get_latest_version() {
   # grep exits 1 when no match; use `|| true` to avoid triggering pipefail
-  curl -sI "$REPO_WEB_URL/releases/latest" 2>/dev/null | grep -i '^location:' | sed 's/.*tag\///' | tr -d '\r\n' || true
+  curl -sI "$RELEASE_REPO_WEB_URL/releases/latest" 2>/dev/null | grep -i '^location:' | sed 's/.*tag\///' | tr -d '\r\n' || true
 }
 
 get_selfhost_ref() {
@@ -207,7 +210,7 @@ get_selfhost_ref() {
 
   local latest
   latest=$(get_latest_version)
-  if [ -n "$latest" ]; then
+  if [ -n "$latest" ] && git ls-remote --exit-code --tags "$REPO_URL" "refs/tags/$latest" >/dev/null 2>&1; then
     printf '%s' "$latest"
     return
   fi
@@ -427,7 +430,7 @@ run_default() {
   printf "     ${CYAN}multica setup self-host${RESET}       # Connect to a self-hosted server\n"
   printf "\n"
   printf "  ${BOLD}Self-hosting?${RESET} Install the server first:\n"
-  printf "     curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash -s -- --with-server\n"
+  printf "     curl -fsSL ${INSTALL_SCRIPT_URL} | bash -s -- --with-server\n"
   printf "\n"
 }
 
@@ -465,7 +468,7 @@ run_with_server() {
   printf "  or read the generated code from backend logs when Resend is unset.\n"
   printf "\n"
   printf "  ${BOLD}To stop all services:${RESET}\n"
-  printf "     curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash -s -- --stop\n"
+  printf "     curl -fsSL ${INSTALL_SCRIPT_URL} | bash -s -- --stop\n"
   printf "\n"
 }
 

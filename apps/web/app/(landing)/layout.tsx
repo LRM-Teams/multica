@@ -1,4 +1,5 @@
 import { Instrument_Serif, Noto_Serif_SC } from "next/font/google";
+import { MULTICA_GITHUB_URL } from "@multica/core/constants/repository";
 import { LocaleProvider } from "@/features/landing/i18n";
 import { getRequestLocale } from "@/lib/request-locale";
 
@@ -21,7 +22,7 @@ const jsonLd = {
       "@type": "Organization",
       name: "Multica",
       url: "https://www.multica.ai",
-      sameAs: ["https://github.com/multica-ai/multica"],
+      sameAs: [MULTICA_GITHUB_URL],
     },
     {
       "@type": "SoftwareApplication",

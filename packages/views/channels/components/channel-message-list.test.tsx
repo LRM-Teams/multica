@@ -35,7 +35,10 @@ vi.mock("react-virtuoso", async () => {
       const windowedData = data.slice(start, start + 2);
 
       return (
-        <div data-testid="virtuoso-scroller">
+        <div
+          data-testid="virtuoso-scroller"
+          data-initial-index={initialTopMostItemIndex ?? "unset"}
+        >
           {Header ? <Header /> : null}
           <List>{windowedData.map((item, offset) => itemContent(start + offset, item))}</List>
           {Footer ? <Footer /> : null}
@@ -144,6 +147,7 @@ describe("MessageViewport", () => {
     );
 
     expect(screen.getByTestId("thread-root-preview")).toBeInTheDocument();
+    expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute("data-initial-index", "0");
     expect(screen.getByText("First thread reply")).toBeInTheDocument();
     expect(screen.getByText("Second thread reply")).toBeInTheDocument();
     expect(screen.queryByText("Later thread reply")).not.toBeInTheDocument();

@@ -21,6 +21,7 @@ import {
   LayoutDashboard,
   Bot,
   Monitor,
+  Box,
   ChevronDown,
   ChevronRight,
   Settings,
@@ -120,6 +121,7 @@ type NavKey =
   | "usage"
   | "evolution"
   | "runtimes"
+  | "sandboxes"
   | "skills"
   | "settings";
 
@@ -137,6 +139,7 @@ type NavLabelKey =
   | "usage"
   | "evolution"
   | "runtimes"
+  | "sandboxes"
   | "skills"
   | "settings";
 
@@ -159,6 +162,7 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[]
 
 const configureNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
   { key: "runtimes", labelKey: "runtimes", icon: Monitor },
+  { key: "sandboxes", labelKey: "sandboxes", icon: Box },
   { key: "skills", labelKey: "skills", icon: BookOpenText },
   { key: "settings", labelKey: "settings", icon: Settings },
 ];

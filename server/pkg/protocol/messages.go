@@ -23,6 +23,13 @@ type TaskAvailablePayload struct {
 	TaskID    string `json:"task_id,omitempty"`
 }
 
+// SandboxJobAvailablePayload is sent from server to a shared sandbox node as a
+// wakeup hint. The node still claims work through the HTTP claim endpoint.
+type SandboxJobAvailablePayload struct {
+	NodeID string `json:"node_id"`
+	JobID  string `json:"job_id,omitempty"`
+}
+
 // ListWorkdirFilesRequestPayload is pushed server→daemon to ask a specific
 // runtime's daemon to enumerate a project's local working directory. The
 // daemon replies with ListWorkdirFilesResponsePayload carrying the same

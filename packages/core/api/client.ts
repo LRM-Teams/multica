@@ -140,6 +140,11 @@ import type {
   AgentTaskFeedPage,
   AgentTaskStats,
   IssueReviewStats,
+  SandboxNode,
+  SandboxBinding,
+  SandboxInstance,
+  SandboxJob,
+  CreateSandboxRequest,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -1485,6 +1490,65 @@ export class ApiClient {
       method: "PATCH",
       body: JSON.stringify(data),
     });
+  }
+
+  // Sandboxes
+  async listSandboxNodes(): Promise<SandboxNode[]> {
+    return this.fetch("/api/sandbox/nodes");
+  }
+
+  async createSandboxNode(data: {
+    node_key: string;
+    name: string;
+    capabilities?: unknown[];
+    max_concurrency?: number;
+    metadata?: Record<string, unknown>;
+  }): Promise<SandboxNode> {
+    return this.fetch("/api/sandbox/nodes", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async createSandboxNodeToken(nodeId: string, data: { name?: string } = {}): Promise<{ token: string; token_prefix: string; expires_at: string }> {
+    return this.fetch(`/api/sandbox/nodes/${nodeId}/tokens`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async listSandboxBindings(workspaceId: string): Promise<SandboxBinding[]> {
+    return this.fetch(`/api/workspaces/${workspaceId}/sandbox/bindings`);
+  }
+
+  async bindSandboxNode(workspaceId: string, data: { node_id: string; policy?: Record<string, unknown> }): Promise<SandboxBinding> {
+    return this.fetch(`/api/workspaces/${workspaceId}/sandbox/bindings`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async listSandboxes(): Promise<SandboxInstance[]> {
+    return this.fetch("/api/sandboxes");
+  }
+
+  async createSandbox(data: CreateSandboxRequest): Promise<SandboxInstance> {
+    return this.fetch("/api/sandboxes", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async stopSandbox(instanceId: string): Promise<SandboxJob> {
+    return this.fetch(`/api/sandboxes/${instanceId}/stop`, { method: "POST" });
+  }
+
+  async resumeSandbox(instanceId: string): Promise<SandboxJob> {
+    return this.fetch(`/api/sandboxes/${instanceId}/resume`, { method: "POST" });
+  }
+
+  async deleteSandbox(instanceId: string): Promise<SandboxJob> {
+    return this.fetch(`/api/sandboxes/${instanceId}`, { method: "DELETE" });
   }
 
   // Members

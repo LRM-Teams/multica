@@ -14,6 +14,7 @@ import { projectKeys } from "../projects/queries";
 import { pinKeys } from "../pins/queries";
 import { autopilotKeys } from "../autopilots/queries";
 import { runtimeKeys } from "../runtimes/queries";
+import { sandboxKeys } from "../sandboxes/queries";
 import { labelKeys } from "../labels/queries";
 import {
   agentTaskSnapshotKeys,
@@ -527,6 +528,10 @@ export function useRealtimeSync(
           // working/idle/offline pill on the squad page.
           invalidateSquadMemberStatusQueries(qc, wsId);
         }
+      },
+      sandbox: () => {
+        const wsId = getCurrentWsId();
+        if (wsId) qc.invalidateQueries({ queryKey: sandboxKeys.all(wsId) });
       },
       autopilot: () => {
         const wsId = getCurrentWsId();

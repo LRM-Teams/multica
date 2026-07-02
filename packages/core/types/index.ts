@@ -143,6 +143,16 @@ export type {
   RedeemLarkBindingTokenResponse,
 } from "./lark";
 export type {
+  SandboxNode,
+  SandboxNodeStatus,
+  SandboxBinding,
+  SandboxInstance,
+  SandboxInstanceStatus,
+  SandboxJob,
+  SandboxJobStatus,
+  CreateSandboxRequest,
+} from "./sandbox";
+export type {
   Autopilot,
   AutopilotStatus,
   AutopilotExecutionMode,

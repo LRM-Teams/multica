@@ -143,6 +143,9 @@
     "rename_title": "エージェント名を変更",
     "rename_placeholder": "エージェント名",
     "rename_required": "名前は必須です",
+    "display_name_title": "表示名を編集",
+    "display_name_placeholder": "エージェントの表示名",
+    "display_name_required": "表示名は必須です",
     "edit_description_title": "説明を編集",
     "description_placeholder": "このエージェントは何をしますか？",
     "save": "保存",
@@ -209,6 +212,8 @@
     "description_create": "ワークスペースに新しい AI エージェントを作成します。",
     "description_duplicate": "\"{{name}}\" を基に新しいエージェントを作成します。指示、環境変数、スキルがコピーされます。",
     "name_label": "名前",
+    "display_name_label": "表示名",
+    "handle_auto_hint": "安定したユーザー名は自動生成され、ここでは変更できません。",
     "name_placeholder": "例: ディープリサーチエージェント",
     "description_label": "説明",
     "description_placeholder": "このエージェントは何をしますか？",
@@ -323,7 +328,20 @@
       "add_dialog_confirm_default": "追加",
       "add_dialog_confirm_other": "スキル {{count}} 件を追加",
       "add_dialog_cancel": "キャンセル",
-      "add_failed_toast": "スキルを追加できませんでした"
+      "add_failed_toast": "スキルを追加できませんでした",
+      "suggestion_title": "Evolution スキル提案",
+      "suggestion_intro": "昇格済みでこのエージェントに合いそうなワークスペース skill。承認でバインド、却下で無視します。",
+      "suggestion_count": "保留 {{count}} 件",
+      "suggestion_loading": "スキル提案を読み込み中…",
+      "suggestion_empty": "保留中のスキル提案はありません。",
+      "suggestion_decision_failed_toast": "スキル提案を更新できませんでした",
+      "suggestion_decision_saved_toast": "スキル提案を更新しました",
+      "suggestion_accept_action": "承認",
+      "suggestion_dismiss_action": "却下",
+      "suggestion_action": {
+        "add": "追加を提案",
+        "remove": "削除を提案"
+      }
     },
     "integrations": {
       "intro": "このエージェントを外部のチャットプラットフォームに接続し、普段使っているツールから直接やり取りできるようにします。",
@@ -374,7 +392,19 @@
       "empty_title": "同期済みメモリはありません",
       "empty_hint": "このエージェントのランタイムにあるメモリファイルは、次回の同期後にここへ表示されます。",
       "empty_content": "内容はありません",
-      "updated_at": "更新日時 {{value}}"
+      "updated_at": "更新日時 {{value}}",
+      "evolution_title": "生成されたメモリ",
+      "evolution_intro": "Pi evolution フローで配信されたメモリ系ユニットです。ローカルの Pi inbox に入り、確認や再利用に使えます。",
+      "evolution_loading": "生成されたメモリを読み込み中…",
+      "evolution_empty": "生成されたメモリはまだありません。",
+      "evolution_status": {
+        "pending": "保留中",
+        "delivered": "配信済み",
+        "accepted": "承認済み",
+        "ignored": "無視済み",
+        "rejected": "却下済み",
+        "failed": "失敗"
+      }
     }
   },
   "char_counter": {
@@ -396,6 +426,7 @@
   "profile_card": {
     "unavailable": "エージェントを利用できません",
     "detail_link": "詳細 →",
+    "send_message": "メッセージを送信",
     "runtime_label": "ランタイム",
     "skills_label": "スキル",
     "owner_label": "オーナー",

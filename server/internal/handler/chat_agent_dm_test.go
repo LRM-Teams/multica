@@ -65,6 +65,74 @@ func TestAgentDirectMessage_CreatesDMForInitiator(t *testing.T) {
 	}
 }
 
+func TestAgentDirectMessage_CreatesDMForExplicitWorkspaceMember(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Explicit DM Bot", []byte("[]"))
+
+	var recipientID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ('dm-target', 'dm-target@multica.test')
+		RETURNING id`).Scan(&recipientID); err != nil {
+		t.Fatalf("seed recipient user: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'member')`, testWorkspaceID, recipientID); err != nil {
+		t.Fatalf("seed recipient member: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM chat_session WHERE agent_id=$1 AND creator_id=$2`, agentID, recipientID)
+		testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id=$1`, recipientID)
+	})
+
+	body, _ := json.Marshal(map[string]string{"content": "你好，请看你的个人晨报", "to": "dm-target"})
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/agent-dm", bytes.NewReader(body))
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-Agent-ID", agentID)
+	req = withChatTestWorkspaceCtx(t, req)
+
+	rec := httptest.NewRecorder()
+	testHandler.AgentDirectMessage(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var content string
+	if err := testPool.QueryRow(ctx, `
+		SELECT cm.content
+		FROM chat_session cs JOIN chat_message cm ON cm.chat_session_id = cs.id
+		WHERE cs.agent_id=$1 AND cs.creator_id=$2
+		ORDER BY cm.created_at DESC LIMIT 1`, agentID, recipientID).Scan(&content); err != nil {
+		t.Fatalf("explicit recipient DM not created: %v", err)
+	}
+	if content != "dm-target，请看你的个人晨报" {
+		t.Fatalf("content = %q, want salutation for explicit recipient", content)
+	}
+}
+
+func TestAgentDirectMessage_RejectsUnknownExplicitRecipient(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	agentID := createHandlerTestAgent(t, "Missing Recipient DM Bot", []byte("[]"))
+
+	body, _ := json.Marshal(map[string]string{"content": "hi", "to": "not-a-workspace-member"})
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/agent-dm", bytes.NewReader(body))
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-Agent-ID", agentID)
+	req = withChatTestWorkspaceCtx(t, req)
+
+	rec := httptest.NewRecorder()
+	testHandler.AgentDirectMessage(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestListChatSessions_ExcludesChannelBackedSessions(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

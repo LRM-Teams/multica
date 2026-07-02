@@ -18,15 +18,15 @@ WHERE id = $1 AND workspace_id = $2;
 
 -- name: CreateAgent :one
 INSERT INTO agent (
-    workspace_id, name, description, avatar_url, runtime_mode,
+    workspace_id, name, display_name, description, avatar_url, runtime_mode,
     runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
     instructions, custom_env, custom_args, mcp_config, model, thinking_level
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 RETURNING *;
 
 -- name: UpdateAgent :one
 UPDATE agent SET
-    name = COALESCE(sqlc.narg('name'), name),
+    display_name = COALESCE(sqlc.narg('display_name'), display_name),
     description = COALESCE(sqlc.narg('description'), description),
     avatar_url = COALESCE(sqlc.narg('avatar_url'), avatar_url),
     runtime_config = COALESCE(sqlc.narg('runtime_config'), runtime_config),
@@ -184,10 +184,10 @@ INSERT INTO agent_task_queue (
 SELECT
     p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
     'queued', p.priority, p.trigger_comment_id, p.trigger_summary, p.context,
-    CASE WHEN p.failure_reason IS NOT DISTINCT FROM 'codex_semantic_inactivity' THEN NULL ELSE p.session_id END,
-    CASE WHEN p.failure_reason IS NOT DISTINCT FROM 'codex_semantic_inactivity' THEN NULL ELSE p.work_dir END,
+    CASE WHEN p.failure_reason IN ('codex_semantic_inactivity', 'agent_error.context_overflow') THEN NULL ELSE p.session_id END,
+    CASE WHEN p.failure_reason IN ('codex_semantic_inactivity', 'agent_error.context_overflow') THEN NULL ELSE p.work_dir END,
     p.attempt + 1, p.max_attempts, p.id,
-    p.failure_reason IS NOT DISTINCT FROM 'codex_semantic_inactivity',
+    COALESCE(p.failure_reason IN ('codex_semantic_inactivity', 'agent_error.context_overflow'), false),
     p.is_leader_task
 FROM agent_task_queue p
 WHERE p.id = $1
@@ -212,6 +212,23 @@ RETURNING *;
 UPDATE agent_task_queue
 SET status = 'cancelled', completed_at = now()
 WHERE issue_id = $1 AND agent_id = $2 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+RETURNING *;
+
+-- name: CancelInFlightTasksByIssueAndAgent :many
+-- Cancels only already-claimed/running work for a single (issue, agent) pair.
+-- Queued follow-up tasks are deliberately left alone so the daemon can pick up
+-- the latest human guidance immediately after interrupting the stale run.
+UPDATE agent_task_queue
+SET status = 'cancelled', completed_at = now(), failure_reason = 'followup_interrupt'
+WHERE issue_id = $1 AND agent_id = $2 AND id <> $3 AND status IN ('dispatched', 'running', 'waiting_local_directory')
+RETURNING *;
+
+-- name: CancelInFlightChatTasksBySessionAndAgent :many
+-- Same interrupt path for chat sessions: leave queued follow-up chat turns in
+-- place, but stop the currently claimed turn so fresh guidance can run next.
+UPDATE agent_task_queue
+SET status = 'cancelled', completed_at = now(), failure_reason = 'followup_interrupt'
+WHERE chat_session_id = $1 AND agent_id = $2 AND id <> $3 AND status IN ('dispatched', 'running', 'waiting_local_directory')
 RETURNING *;
 
 -- name: CancelAgentTasksByAgent :many
@@ -277,7 +294,7 @@ UPDATE agent_task_queue
 SET status = 'dispatched', dispatched_at = now()
 WHERE id = (
     SELECT atq.id FROM agent_task_queue atq
-    WHERE atq.agent_id = $1 AND atq.status = 'queued'
+    WHERE atq.agent_id = $1 AND atq.status = 'queued' AND atq.chat_session_id IS NULL
       AND NOT EXISTS (
           SELECT 1 FROM agent_task_queue active
           WHERE active.agent_id = atq.agent_id
@@ -294,6 +311,28 @@ WHERE id = (
                 AND active.autopilot_run_id IS NULL
               )
             )
+      )
+    ORDER BY atq.priority DESC, atq.created_at ASC
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING *;
+
+-- name: ClaimAgentChatTask :one
+-- Claims the next queued chat task for an agent without considering active
+-- issue/autopilot/quick-create work. Group-channel @mentions are bridged
+-- through chat_session rows, and must remain responsive even while an issue
+-- task is running. Chat tasks still serialize per chat_session here.
+UPDATE agent_task_queue
+SET status = 'dispatched', dispatched_at = now()
+WHERE id = (
+    SELECT atq.id FROM agent_task_queue atq
+    WHERE atq.agent_id = $1 AND atq.runtime_id = $2 AND atq.status = 'queued' AND atq.chat_session_id IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM agent_task_queue active
+          WHERE active.agent_id = atq.agent_id
+            AND active.status IN ('dispatched', 'running', 'waiting_local_directory')
+            AND active.chat_session_id = atq.chat_session_id
       )
     ORDER BY atq.priority DESC, atq.created_at ASC
     LIMIT 1
@@ -391,10 +430,12 @@ SELECT session_id, work_dir, runtime_id FROM agent_task_queue
 WHERE agent_id = $1 AND issue_id = $2
   AND (
     status = 'completed'
+    OR (status = 'cancelled' AND COALESCE(failure_reason, '') = 'followup_interrupt')
     OR (
       status = 'failed'
-      AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity')
+      AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity', 'agent_error.context_overflow')
       AND NOT (COALESCE(error, '') ILIKE '%400%' AND COALESCE(error, '') ILIKE '%invalid_request_error%')
+      AND NOT (COALESCE(error, '') ILIKE '%context window%' OR COALESCE(error, '') ILIKE '%context length%' OR COALESCE(error, '') ILIKE '%context_length_exceeded%' OR COALESCE(error, '') ILIKE '%maximum context%' OR COALESCE(error, '') ILIKE '%prompt is too long%' OR (COALESCE(error, '') ILIKE '%token%' AND COALESCE(error, '') ILIKE '%limit%'))
     )
   )
   AND session_id IS NOT NULL
@@ -525,7 +566,15 @@ RETURNING *;
 
 -- name: CountRunningTasks :one
 SELECT count(*) FROM agent_task_queue
-WHERE agent_id = $1 AND status IN ('dispatched', 'running', 'waiting_local_directory');
+WHERE agent_id = $1
+  AND chat_session_id IS NULL
+  AND status IN ('dispatched', 'running', 'waiting_local_directory');
+
+-- name: CountRunningChatTasks :one
+SELECT count(*) FROM agent_task_queue
+WHERE agent_id = $1
+  AND chat_session_id IS NOT NULL
+  AND status IN ('dispatched', 'running', 'waiting_local_directory');
 
 -- name: HasActiveTaskForIssue :one
 -- Returns true if there is any queued, dispatched, waiting_local_directory,

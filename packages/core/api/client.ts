@@ -17,6 +17,10 @@ import type {
   AgentTemplateSummary,
   CreateAgentFromTemplateRequest,
   CreateAgentFromTemplateResponse,
+  EvolutionReviewDecisionRequest,
+  EvolutionReviewSubmission,
+  EvolutionReviewSubmissionStatus,
+  PromoteEvolutionReviewSubmissionResponse,
   UpdateAgentRequest,
   AgentEnvResponse,
   UpdateAgentEnvRequest,
@@ -33,10 +37,13 @@ import type {
   Workspace,
   WorkspaceRepo,
   MemberWithUser,
+  MemberProfile,
   User,
   Skill,
   SkillSummary,
   AgentMemory,
+  ListAgentSkillSuggestionsResponse,
+  DecideAgentSkillSuggestionRequest,
   CreateSkillRequest,
   UpdateSkillRequest,
   SetAgentSkillsRequest,
@@ -71,6 +78,9 @@ import type {
   ChannelActiveTask,
   ChannelMember,
   ChannelMessage,
+  ChannelReaction,
+  ChannelMessageSearchResponse,
+  ChannelThreadMessagesPage,
   ChannelStats,
   ChannelProjectFiles,
   ChannelProjectFileContent,
@@ -107,6 +117,9 @@ import type {
   WebhookDelivery,
   NotificationPreferenceResponse,
   NotificationPreferences,
+  WebPushPublicKeyResponse,
+  WebPushSubscriptionPayload,
+  WebPushSubscriptionResponse,
   GitHubPullRequest,
   ListGitHubInstallationsResponse,
   GitHubConnectResponse,
@@ -131,6 +144,7 @@ import type {
   IssueReviewStats,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
+import type { DMItem, CreateOrFindDMBody } from "../dm/types";
 import type {
   CloudRuntimeNode,
   CreateCloudRuntimeNodeRequest,
@@ -162,6 +176,7 @@ import {
   EMPTY_CLOUD_RUNTIME_NODE,
   EMPTY_CLOUD_RUNTIME_NODE_LIST,
   EMPTY_CREATE_AGENT_FROM_TEMPLATE_RESPONSE,
+  EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE,
   EMPTY_GROUPED_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   EMPTY_SQUAD,
@@ -172,6 +187,7 @@ import {
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
   AppConfigSchema,
+  ChannelMessageSearchResponseSchema,
   type AppConfigResponse,
   GroupedIssuesResponseSchema,
   ListIssuesResponseSchema,
@@ -204,6 +220,13 @@ import {
   EMPTY_BILLING_CHECKOUT_SESSION_STATUS,
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
   EMPTY_CANCEL_TASK_RESPONSE,
+  EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
+  EvolutionReviewSubmissionListSchema,
+  EvolutionReviewSubmissionSchema,
+  EMPTY_WEB_PUSH_PUBLIC_KEY,
+  EMPTY_WEB_PUSH_SUBSCRIPTION,
+  WebPushPublicKeySchema,
+  WebPushSubscriptionSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1439,6 +1462,30 @@ export class ApiClient {
     });
   }
 
+  async getWebPushPublicKey(): Promise<WebPushPublicKeyResponse> {
+    const raw = await this.fetch<unknown>("/api/web-push/public-key");
+    return parseWithFallback<WebPushPublicKeyResponse>(raw, WebPushPublicKeySchema, EMPTY_WEB_PUSH_PUBLIC_KEY, {
+      endpoint: "GET /api/web-push/public-key",
+    });
+  }
+
+  async bindWebPushSubscription(subscription: WebPushSubscriptionPayload): Promise<WebPushSubscriptionResponse> {
+    const raw = await this.fetch<unknown>("/api/web-push/subscriptions", {
+      method: "POST",
+      body: JSON.stringify({ subscription }),
+    });
+    return parseWithFallback<WebPushSubscriptionResponse>(raw, WebPushSubscriptionSchema, EMPTY_WEB_PUSH_SUBSCRIPTION, {
+      endpoint: "POST /api/web-push/subscriptions",
+    });
+  }
+
+  async unbindWebPushSubscription(endpoint: string): Promise<{ ok: boolean }> {
+    return this.fetch("/api/web-push/subscriptions", {
+      method: "DELETE",
+      body: JSON.stringify({ endpoint }),
+    });
+  }
+
   // App Config
   async getConfig(): Promise<AppConfigResponse> {
     const raw = await this.fetch<unknown>("/api/config");
@@ -1473,6 +1520,10 @@ export class ApiClient {
   // Members
   async listMembers(workspaceId: string): Promise<MemberWithUser[]> {
     return this.fetch(`/api/workspaces/${workspaceId}/members`);
+  }
+
+  async getMemberProfile(memberType: "user" | "agent", memberId: string): Promise<MemberProfile> {
+    return this.fetch(`/api/member-profiles/${memberType}/${memberId}`);
   }
 
   async createMember(workspaceId: string, data: CreateMemberRequest): Promise<Invitation> {
@@ -1578,6 +1629,68 @@ export class ApiClient {
 
   async listAgentMemories(agentId: string): Promise<AgentMemory[]> {
     return this.fetch(`/api/agents/${agentId}/memories`);
+  }
+
+  async listAgentSkillSuggestions(agentId: string): Promise<ListAgentSkillSuggestionsResponse> {
+    return this.fetch(`/api/agents/${agentId}/skill-suggestions`);
+  }
+
+  async decideAgentSkillSuggestion(
+    agentId: string,
+    suggestionId: string,
+    data: DecideAgentSkillSuggestionRequest,
+  ): Promise<void> {
+    await this.fetch(`/api/agents/${agentId}/skill-suggestions/${suggestionId}/decision`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async listEvolutionReviewSubmissions(params?: {
+    status?: EvolutionReviewSubmissionStatus;
+    limit?: number;
+  }): Promise<EvolutionReviewSubmission[]> {
+    const search = new URLSearchParams();
+    if (params?.status) search.set("status", params.status);
+    if (params?.limit) search.set("limit", String(params.limit));
+    const suffix = search.toString();
+    const raw = await this.fetch<unknown>(`/api/evolution/submissions${suffix ? `?${suffix}` : ""}`);
+    return parseWithFallback(
+      raw,
+      EvolutionReviewSubmissionListSchema,
+      EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
+      { endpoint: "GET /api/evolution/submissions" },
+    );
+  }
+
+  async getEvolutionReviewSubmission(id: string): Promise<EvolutionReviewSubmission | null> {
+    const raw = await this.fetch<unknown>(`/api/evolution/submissions/${id}`);
+    return parseWithFallback(raw, EvolutionReviewSubmissionSchema, null, {
+      endpoint: "GET /api/evolution/submissions/{id}",
+    });
+  }
+
+  async promoteEvolutionReviewSubmission(
+    id: string,
+    data: EvolutionReviewDecisionRequest = {},
+  ): Promise<PromoteEvolutionReviewSubmissionResponse> {
+    return this.fetch(`/api/evolution/submissions/${id}/promote`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async rejectEvolutionReviewSubmission(
+    id: string,
+    data: EvolutionReviewDecisionRequest = {},
+  ): Promise<EvolutionReviewSubmission | null> {
+    const raw = await this.fetch<unknown>(`/api/evolution/submissions/${id}/reject`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, EvolutionReviewSubmissionSchema, null, {
+      endpoint: "POST /api/evolution/submissions/{id}/reject",
+    });
   }
 
   async setAgentSkills(agentId: string, data: SetAgentSkillsRequest): Promise<void> {
@@ -1733,8 +1846,58 @@ export class ApiClient {
     await this.fetch(`/api/chat/sessions/${sessionId}/read`, { method: "POST" });
   }
 
-  async listChannels(): Promise<Channel[]> {
-    return this.fetch("/api/channels");
+  // ─── Direct messages (1-on-1) ─────────────────────────────────────────────
+  // The unified DM list unions kind='dm' channels with the caller's legacy
+  // chat_sessions; each item's `source` routes message read/send to either the
+  // channel stack or the chat stack. There is no dedicated DM-messages route.
+
+  async listDMs(): Promise<DMItem[]> {
+    return this.fetch("/api/dm");
+  }
+
+  async createOrFindDM(body: CreateOrFindDMBody): Promise<DMItem> {
+    return this.fetch("/api/dm", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  // DM conversation operations (pin / mark-unread / close). `source` routes to
+  // the channel-backed or legacy-session-backed endpoint; the backend persists
+  // them as peer-level state so an action on one source covers the peer's other
+  // source too. All return `{ ok: true }`; callers refetch `/api/dm`.
+  private dmOpsPath(source: DMItem["source"], id: string): string {
+    const seg = source === "dm_channel" ? "channels" : "sessions";
+    return `/api/dm/${seg}/${id}`;
+  }
+
+  async pinDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
+    return this.fetch(`${this.dmOpsPath(source, id)}/pin`, { method: "PUT" });
+  }
+
+  async unpinDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
+    return this.fetch(`${this.dmOpsPath(source, id)}/pin`, { method: "DELETE" });
+  }
+
+  async muteDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
+    return this.fetch(`${this.dmOpsPath(source, id)}/mute`, { method: "PUT" });
+  }
+
+  async unmuteDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
+    return this.fetch(`${this.dmOpsPath(source, id)}/mute`, { method: "DELETE" });
+  }
+
+  async markDMUnread(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
+    return this.fetch(`${this.dmOpsPath(source, id)}/unread`, { method: "POST" });
+  }
+
+  /** Close Chat — soft-hides the conversation from the user's list (recoverable). */
+  async closeDM(source: DMItem["source"], id: string): Promise<{ ok: boolean }> {
+    return this.fetch(this.dmOpsPath(source, id), { method: "DELETE" });
+  }
+
+  async listChannels(options?: { archived?: boolean }): Promise<Channel[]> {
+    return this.fetch(options?.archived ? "/api/channels?archived=true" : "/api/channels");
   }
 
   async createChannel(data: { name: string; description?: string; lark_chat_id?: string }): Promise<Channel> {
@@ -1746,6 +1909,34 @@ export class ApiClient {
 
   async deleteChannel(channelId: string): Promise<void> {
     await this.fetch(`/api/channels/${channelId}`, { method: "DELETE" });
+  }
+
+  async archiveChannel(channelId: string): Promise<Channel> {
+    return this.fetch(`/api/channels/${channelId}/archive`, { method: "POST" });
+  }
+
+  async restoreChannel(channelId: string): Promise<Channel> {
+    return this.fetch(`/api/channels/${channelId}/restore`, { method: "POST" });
+  }
+
+  async pinChannel(channelId: string): Promise<{ ok: boolean }> {
+    return this.fetch(`/api/channels/${channelId}/pin`, { method: "PUT" });
+  }
+
+  async unpinChannel(channelId: string): Promise<{ ok: boolean }> {
+    return this.fetch(`/api/channels/${channelId}/pin`, { method: "DELETE" });
+  }
+
+  async muteChannel(channelId: string): Promise<{ ok: boolean }> {
+    return this.fetch(`/api/channels/${channelId}/mute`, { method: "PUT" });
+  }
+
+  async unmuteChannel(channelId: string): Promise<{ ok: boolean }> {
+    return this.fetch(`/api/channels/${channelId}/mute`, { method: "DELETE" });
+  }
+
+  async markChannelUnread(channelId: string): Promise<{ ok: boolean }> {
+    return this.fetch(`/api/channels/${channelId}/unread`, { method: "POST" });
   }
 
   async listChannelMembers(channelId: string): Promise<ChannelMember[]> {
@@ -1777,19 +1968,107 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/messages`);
   }
 
+  async listChannelMessageThread(
+    channelId: string,
+    messageId: string,
+    options?: { limit?: number; before?: string; beforeId?: string },
+  ): Promise<ChannelThreadMessagesPage> {
+    const params = new URLSearchParams();
+    if (options?.limit) {
+      params.set("limit", String(options.limit));
+    }
+    if (options?.before && options?.beforeId) {
+      params.set("before", options.before);
+      params.set("before_id", options.beforeId);
+    }
+    const suffix = params.toString();
+    const res = await this.fetchRaw(
+      `/api/channels/${channelId}/messages/${messageId}/thread${suffix ? `?${suffix}` : ""}`,
+      { extraHeaders: { "Content-Type": "application/json" } },
+    );
+    const messages = await res.json() as ChannelMessage[];
+    const before = res.headers.get("X-Next-Before");
+    const beforeId = res.headers.get("X-Next-Before-Id");
+    return {
+      messages,
+      next_cursor: before && beforeId ? { before, before_id: beforeId } : null,
+    };
+  }
+
+  async searchChannelMessages(channelId: string, query: string, limit?: number): Promise<ChannelMessageSearchResponse> {
+    const params = new URLSearchParams({ q: query });
+    if (limit) {
+      params.set("limit", String(limit));
+    }
+    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/messages/search?${params.toString()}`);
+    return parseWithFallback(raw, ChannelMessageSearchResponseSchema, EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE, {
+      endpoint: "GET /api/channels/{channelId}/messages/search",
+    });
+  }
+
   async sendChannelMessage(
     channelId: string,
     content: string,
     attachmentIds?: string[],
+    replyToMessageId?: string | null,
   ): Promise<ChannelMessage> {
-    const body: { content: string; attachment_ids?: string[] } = { content };
+    const body: { content: string; attachment_ids?: string[]; reply_to_message_id?: string } = { content };
     if (attachmentIds && attachmentIds.length > 0) {
       body.attachment_ids = attachmentIds;
+    }
+    if (replyToMessageId) {
+      body.reply_to_message_id = replyToMessageId;
     }
     return this.fetch(`/api/channels/${channelId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
     });
+  }
+
+  async addChannelReaction(channelId: string, messageId: string, emoji: string): Promise<ChannelReaction> {
+    return this.fetch(`/api/channels/${channelId}/messages/${messageId}/reactions`, {
+      method: "POST",
+      body: JSON.stringify({ emoji }),
+    });
+  }
+
+  async removeChannelReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/messages/${messageId}/reactions`, {
+      method: "DELETE",
+      body: JSON.stringify({ emoji }),
+    });
+  }
+
+  async sendChannelThreadMessage(
+    channelId: string,
+    messageId: string,
+    content: string,
+    attachmentIds?: string[],
+    replyToMessageId?: string | null,
+  ): Promise<ChannelMessage> {
+    const body: { content: string; attachment_ids?: string[]; reply_to_message_id?: string } = { content };
+    if (attachmentIds && attachmentIds.length > 0) {
+      body.attachment_ids = attachmentIds;
+    }
+    if (replyToMessageId) {
+      body.reply_to_message_id = replyToMessageId;
+    }
+    return this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async markChannelThreadRead(channelId: string, messageId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread/read`, { method: "POST" });
+  }
+
+  async followChannelThread(channelId: string, messageId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread/follow`, { method: "PUT" });
+  }
+
+  async unfollowChannelThread(channelId: string, messageId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread/follow`, { method: "DELETE" });
   }
 
   async listChannelAttachments(channelId: string): Promise<Attachment[]> {

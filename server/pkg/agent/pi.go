@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -202,7 +203,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 
 	runCtx, cancel := runContext(ctx, timeout)
 
-	args := buildPiArgs(prompt, sessionPath, opts, b.cfg.Logger)
+	args, stdinPrompt := buildPiArgsForExecution(prompt, sessionPath, opts, b.cfg.Logger)
 	argv0, cmdArgs := choosePiInvocation(execName, lookedUp, args, b.cfg.Logger)
 
 	cmd := exec.CommandContext(runCtx, argv0, cmdArgs...)
@@ -219,26 +220,33 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		cancel()
 		return nil, fmt.Errorf("pi stdout pipe: %w", err)
 	}
-	// Attach an explicit stdin pipe so we can close it ourselves. Pi reads
-	// its prompt from argv (positional, see buildPiArgs) and never expects
-	// interactive input, but when the parent leaves cmd.Stdin nil and the
-	// daemon is run under systemd, Pi has been observed to block in its
-	// event loop awaiting stdin events instead of progressing to "done"
-	// (#2188). Closing the pipe immediately after Start delivers an
-	// explicit EOF on a FIFO, which unblocks Pi's readable side.
+	// Attach an explicit stdin pipe. On Windows we write the prompt through
+	// stdin to avoid CreateProcess command-line limits; elsewhere we still
+	// close the pipe immediately so Pi sees EOF instead of blocking under
+	// systemd waiting for stdin events (#2188).
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("pi stdin pipe: %w", err)
 	}
-	cmd.Stderr = newLogWriter(b.cfg.Logger, "[pi:stderr] ")
+	stderrBuf := newStderrTail(newLogWriter(b.cfg.Logger, "[pi:stderr] "), agentStderrTailBytes)
+	cmd.Stderr = stderrBuf
 
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
 		cancel()
 		return nil, fmt.Errorf("start pi: %w", err)
 	}
-	_ = stdin.Close()
+	if stdinPrompt != "" {
+		go func() {
+			if _, err := io.WriteString(stdin, stdinPrompt); err != nil {
+				b.cfg.Logger.Warn("pi stdin prompt write failed", "error", err)
+			}
+			_ = stdin.Close()
+		}()
+	} else {
+		_ = stdin.Close()
+	}
 
 	b.cfg.Logger.Info("pi started", "pid", cmd.Process.Pid, "cwd", opts.Cwd, "model", opts.Model)
 
@@ -390,7 +398,9 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 			finalError = "execution cancelled"
 		} else if waitErr != nil && finalStatus == "completed" {
 			finalStatus = "failed"
-			finalError = fmt.Sprintf("pi exited with error: %v", waitErr)
+			finalError = withAgentStderr(fmt.Sprintf("pi exited with error: %v", waitErr), "pi", stderrBuf.Tail())
+		} else if finalStatus == "failed" {
+			finalError = withAgentStderr(finalError, "pi", stderrBuf.Tail())
 		}
 
 		b.cfg.Logger.Info("pi finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())
@@ -514,6 +524,13 @@ var piBlockedArgs = map[string]blockedArgMode{
 //
 // Custom args appended before the positional prompt. The prompt is a
 // positional argument and must be last.
+func buildPiArgsForExecution(prompt, sessionPath string, opts ExecOptions, logger *slog.Logger) ([]string, string) {
+	if piPromptViaStdin() {
+		return buildPiArgs("", sessionPath, opts, logger), prompt
+	}
+	return buildPiArgs(prompt, sessionPath, opts, logger), ""
+}
+
 func buildPiArgs(prompt, sessionPath string, opts ExecOptions, logger *slog.Logger) []string {
 	args := []string{
 		"-p",
@@ -540,7 +557,9 @@ func buildPiArgs(prompt, sessionPath string, opts ExecOptions, logger *slog.Logg
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}
 	args = append(args, filterCustomArgs(opts.CustomArgs, piBlockedArgs, logger)...)
-	args = append(args, prompt)
+	if prompt != "" {
+		args = append(args, prompt)
+	}
 	return args
 }
 

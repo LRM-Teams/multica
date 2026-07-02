@@ -42,6 +42,8 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { memberListOptions, invitationListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import { api } from "@multica/core/api";
+import { resolveActorDisplayName } from "@multica/core/identity";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { useT } from "../../i18n";
 
 const ROLE_ICONS: Record<MemberRole, typeof Crown> = {
@@ -100,12 +102,14 @@ function MemberRow({
   const canRemove = canManage && !isSelf && (member.role !== "owner" || canManageOwners);
   const isLastOwner = member.role === "owner" && ownerCount <= 1;
   const showMenu = canEditRole || canRemove;
-
   return (
     <div className="flex items-center gap-3 px-4 py-3">
       <ActorAvatar actorType="member" actorId={member.user_id} size={32} />
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium truncate">{member.name}</div>
+        <ActorIdentityRow
+          identity={member}
+          primaryClassName="truncate text-sm font-medium"
+        />
         <div className="text-xs text-muted-foreground truncate">{member.email}</div>
       </div>
       {showMenu && (
@@ -309,9 +313,10 @@ export function MembersTab() {
 
   const handleRemoveMember = (member: MemberWithUser) => {
     if (!workspace) return;
+    const displayName = resolveActorDisplayName(member, member.user_id);
     setConfirmAction({
-      title: t(($) => $.members.remove_member_title, { name: member.name }),
-      description: t(($) => $.members.remove_member_description, { name: member.name, workspace: workspace.name }),
+      title: t(($) => $.members.remove_member_title, { name: displayName }),
+      description: t(($) => $.members.remove_member_description, { name: displayName, workspace: workspace.name }),
       variant: "destructive",
       onConfirm: async () => {
         setMemberActionId(member.id);

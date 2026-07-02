@@ -8,20 +8,33 @@ export interface ChannelLastMessage {
 export interface ChannelMemberBrief {
   member_type: "user" | "agent";
   member_id: string;
+  /** Stable handle. */
   name: string;
+  /** Human-facing member label. */
+  display_name: string;
 }
 
 export interface Channel {
   id: string;
   workspace_id: string;
   name: string;
+  kind: "group" | "dm";
   description: string | null;
   lark_chat_id: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
+  archived_at?: string | null;
+  archived_by?: string | null;
   /** List-only enrichments (absent on create/update/get responses). */
   unread_count?: number;
+  /** True unread count excluding the manually-unread boost. Added by BE task #24.
+   *  Falls back to unread_count when absent so old API responses still work. */
+  real_unread_count?: number;
+  manually_unread?: boolean;
+  pinned_at?: string | null;
+  muted_at?: string | null;
+  muted?: boolean;
   last_message?: ChannelLastMessage | null;
   members?: ChannelMemberBrief[];
 }
@@ -29,7 +42,20 @@ export interface Channel {
 export interface ChannelMember {
   member_type: "user" | "agent";
   member_id: string;
+  /** Stable handle. */
   name: string;
+  /** Human-facing member label. */
+  display_name: string;
+  created_at: string;
+}
+
+export interface ChannelReaction {
+  id: string;
+  channel_id: string;
+  message_id: string;
+  actor_type: string;
+  actor_id: string;
+  emoji: string;
   created_at: string;
 }
 
@@ -43,6 +69,16 @@ export interface ChannelMessage {
   content: string;
   source: "multica" | "lark";
   external_message_id: string | null;
+  reply_to_message_id?: string | null;
+  reply_to?: ChannelMessageReply | null;
+  thread_root_message_id?: string | null;
+  thread_reply_count?: number;
+  thread_last_reply_at?: string | null;
+  thread_unread_count?: number;
+  thread_followed?: boolean;
+  thread_id?: string | null;
+  trigger_depth?: number;
+  reactions?: ChannelReaction[];
   /**
    * Attachments linked to this message via the attachment table's
    * channel_message_id FK. Populated by ListChannelMessages. The bubble
@@ -51,6 +87,42 @@ export interface ChannelMessage {
    */
   attachments?: import("./attachment").Attachment[];
   created_at: string;
+}
+
+export interface ChannelThreadMessagesCursor {
+  before: string;
+  before_id: string;
+}
+
+export interface ChannelThreadMessagesPage {
+  messages: ChannelMessage[];
+  next_cursor: ChannelThreadMessagesCursor | null;
+}
+
+export interface ChannelMessageReply {
+  id: string;
+  author_type: "user" | "agent" | "lark" | "system";
+  author_id: string | null;
+  author_name: string;
+  content: string;
+  created_at: string;
+}
+
+export interface ChannelMessageSearchResult {
+  message_id: string;
+  channel_id: string;
+  thread_root_message_id?: string | null;
+  author_type: "user" | "agent" | "lark" | "system";
+  author_id: string | null;
+  author_name: string;
+  content: string;
+  created_at: string;
+}
+
+export interface ChannelMessageSearchResponse {
+  query: string;
+  total: number;
+  results: ChannelMessageSearchResult[];
 }
 
 export interface ChannelAuthorStat {
@@ -87,6 +159,7 @@ export type ChannelProjectFilesStatus =
   | "no_project"
   | "offline"
   | "missing"
+  | "github_unlinked"
   | "error";
 
 export interface ChannelProjectFiles {

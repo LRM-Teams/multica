@@ -14,6 +14,7 @@ interface SubmitButtonProps {
   disabled?: boolean;
   loading?: boolean;
   running?: boolean;
+  allowSubmitWhileRunning?: boolean;
   onStop?: () => void;
   /**
    * Tooltip shown over the send button when idle. Pass a string or a node
@@ -31,11 +32,12 @@ function SubmitButton({
   disabled,
   loading,
   running,
+  allowSubmitWhileRunning,
   onStop,
   tooltip,
   stopTooltip,
 }: SubmitButtonProps) {
-  if (running) {
+  if (running && !allowSubmitWhileRunning) {
     const stopButton = (
       <Button size="icon-sm" onClick={onStop}>
         <Square className="fill-current" />

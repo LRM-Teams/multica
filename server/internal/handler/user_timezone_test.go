@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -12,9 +13,10 @@ func newTimezoneTestUser(t *testing.T, email string) string {
 	ctx := context.Background()
 
 	var userID string
+	handle := strings.ReplaceAll(strings.Split(email, "@")[0], "-", "_")
 	if err := testPool.QueryRow(ctx,
-		`INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id`,
-		"Timezone Test", email,
+		`INSERT INTO "user" (name, display_name, email) VALUES ($1, $2, $3) RETURNING id`,
+		handle, "Timezone Test", email,
 	).Scan(&userID); err != nil {
 		t.Fatalf("insert test user: %v", err)
 	}

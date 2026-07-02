@@ -1,6 +1,6 @@
 "use client";
 
-import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
+import { HoverCard, HoverCardTrigger, HoverCardContent } from "@multica/ui/components/ui/hover-card";
 import { QuickEmojiPicker } from "./quick-emoji-picker";
 
 interface ReactionItem {
@@ -41,6 +41,8 @@ interface ReactionBarProps {
   getActorName: (type: string, id: string) => string;
   className?: string;
   hideAddButton?: boolean;
+  quickEmojis?: string[];
+  showQuickReactions?: boolean;
 }
 
 function ReactionBar({
@@ -50,19 +52,41 @@ function ReactionBar({
   getActorName,
   className,
   hideAddButton,
+  quickEmojis = [],
+  showQuickReactions = true,
 }: ReactionBarProps) {
   const grouped = groupReactions(reactions, currentUserId);
+  const groupedEmojis = new Set(grouped.map((g) => g.emoji));
+  const quickOnly = showQuickReactions
+    ? quickEmojis.filter((emoji) => !groupedEmojis.has(emoji))
+    : [];
 
   return (
     <div className={`flex flex-wrap items-center gap-1.5 ${className ?? ""}`}>
-      {grouped.map((g) => (
-        <Tooltip key={g.emoji}>
-          <TooltipTrigger
+      {quickOnly.map((emoji) => (
+        <button
+          key={`quick-${emoji}`}
+          type="button"
+          onClick={() => onToggle(emoji)}
+          aria-label={`React with ${emoji}`}
+          className="inline-flex h-8 min-w-8 touch-manipulation items-center justify-center rounded-full border border-brand/10 bg-brand/4 px-2 text-sm text-muted-foreground transition-colors hover:bg-brand/15 hover:text-foreground active:scale-95 md:h-6 md:min-w-6 md:text-xs"
+        >
+          {emoji}
+        </button>
+      ))}
+      {grouped.map((g) => {
+        const actors = g.actors.map((a) => ({
+          ...a,
+          name: getActorName(a.type, a.id) || a.id,
+        }));
+        return (
+        <HoverCard key={g.emoji}>
+          <HoverCardTrigger
             render={
               <button
                 type="button"
                 onClick={() => onToggle(g.emoji)}
-                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:bg-brand/15 ${
+                className={`inline-flex h-8 touch-manipulation items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:bg-brand/15 active:scale-95 md:h-6 ${
                   g.reacted
                     ? "border-brand/30 bg-brand/8 text-brand"
                     : "border-brand/10 bg-brand/4 text-muted-foreground"
@@ -73,11 +97,25 @@ function ReactionBar({
               </button>
             }
           />
-          <TooltipContent side="top">
-            {g.actors.map((a) => getActorName(a.type, a.id)).join(", ")}
-          </TooltipContent>
-        </Tooltip>
-      ))}
+          <HoverCardContent
+            side="top"
+            align="start"
+            sideOffset={2}
+            className="w-auto min-w-40 max-w-56 rounded-md border border-border bg-popover p-2 shadow-none ring-0"
+          >
+            <div className="space-y-1">
+              {actors.map((actor) => (
+                <div key={`${actor.type}:${actor.id}`} className="flex min-w-0 items-center gap-2">
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded bg-muted text-[10px] font-medium text-muted-foreground">
+                    {actor.name.slice(0, 1).toUpperCase()}
+                  </span>
+                  <span className="truncate text-xs text-foreground">{actor.name}</span>
+                </div>
+              ))}
+            </div>
+          </HoverCardContent>
+        </HoverCard>
+      )})}
       {!hideAddButton && <QuickEmojiPicker onSelect={onToggle} />}
     </div>
   );

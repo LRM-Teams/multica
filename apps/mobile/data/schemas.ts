@@ -430,6 +430,7 @@ export const EMPTY_ACTIVE_TASKS_RESPONSE: ActiveTasksResponse = { tasks: [] };
 export const UserSchema: z.ZodType<User> = z.object({
   id: z.string(),
   name: z.string().default(""),
+  display_name: z.string().default(""),
   email: z.string().default(""),
   avatar_url: z.string().nullable().default(null),
   onboarded_at: z.string().nullable().default(null),
@@ -448,6 +449,7 @@ export const UserSchema: z.ZodType<User> = z.object({
 export const EMPTY_USER: User = {
   id: "",
   name: "",
+  display_name: "",
   email: "",
   avatar_url: null,
   onboarded_at: null,
@@ -538,8 +540,10 @@ export const MemberWithUserSchema: z.ZodType<MemberWithUser> = z.object({
   role: z.enum(["owner", "admin", "member"]).catch("member"),
   created_at: z.string().default(""),
   name: z.string().default(""),
+  display_name: z.string().default(""),
   email: z.string().default(""),
   avatar_url: z.string().nullable().default(null),
+  profile_description: z.string().default(""),
 }).loose();
 
 export const MemberListSchema = z.array(MemberWithUserSchema).default([]);
@@ -554,6 +558,7 @@ export const AgentSchema: z.ZodType<Agent> = z.object({
   workspace_id: z.string().default(""),
   runtime_id: z.string().default(""),
   name: z.string().default(""),
+  display_name: z.string().default(""),
   description: z.string().default(""),
   instructions: z.string().default(""),
   avatar_url: z.string().nullable().default(null),

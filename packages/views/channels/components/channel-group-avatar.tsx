@@ -1,6 +1,7 @@
 "use client";
 
 import { Hash } from "lucide-react";
+import { resolveActorDisplayName } from "@multica/core/identity";
 import type { ChannelMemberBrief } from "@multica/core/types";
 import { agentColor } from "../../common/agent-color";
 
@@ -16,6 +17,10 @@ const MAX_TILES = 9;
 function firstLetter(name: string): string {
   const c = name.trim().charAt(0);
   return c ? c.toUpperCase() : "?";
+}
+
+function memberLabel(member: ChannelMemberBrief): string {
+  return resolveActorDisplayName(member, "?");
 }
 
 export function ChannelGroupAvatar({
@@ -47,10 +52,11 @@ export function ChannelGroupAvatar({
     >
       {shown.map((m) => {
         const color = m.member_type === "agent" ? agentColor(m.member_id) : undefined;
+        const label = memberLabel(m);
         return (
           <span
             key={`${m.member_type}:${m.member_id}`}
-            title={m.name}
+            title={label}
             style={{
               width: tile,
               height: tile,
@@ -64,7 +70,7 @@ export function ChannelGroupAvatar({
                 : "flex items-center justify-center bg-muted font-medium text-muted-foreground"
             }
           >
-            {firstLetter(m.name)}
+            {firstLetter(label)}
           </span>
         );
       })}

@@ -418,6 +418,8 @@ func taskErrorType(reason string) string {
 		return "runtime"
 	case "timeout", "codex_semantic_inactivity":
 		return "timeout"
+	case taskfailure.ReasonAgentContextOverflow.String():
+		return "agent_error"
 	case "iteration_limit", "agent_fallback_message":
 		return "agent_output"
 	case "cancelled", "user_cancelled":
@@ -490,8 +492,50 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 	// before the queued one (rare but unsafe-by-construction). Publishing
 	// in the desired observe-order makes correctness independent of timing.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
+	s.interruptInFlightIssueTasksForFollowup(ctx, task)
 	s.NotifyTaskEnqueued(ctx, task)
 	return task, nil
+}
+
+func (s *TaskService) interruptInFlightIssueTasksForFollowup(ctx context.Context, task db.AgentTaskQueue) {
+	if !task.TriggerCommentID.Valid || !task.IssueID.Valid {
+		return
+	}
+	cancelled, err := s.Queries.CancelInFlightTasksByIssueAndAgent(ctx, db.CancelInFlightTasksByIssueAndAgentParams{
+		IssueID: task.IssueID,
+		AgentID: task.AgentID,
+		ID:      task.ID,
+	})
+	if err != nil {
+		slog.Warn("follow-up interrupt failed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID), "agent_id", util.UUIDToString(task.AgentID), "error", err)
+		return
+	}
+	s.broadcastFollowupInterruptedTasks(ctx, cancelled)
+}
+
+func (s *TaskService) interruptInFlightChatTasksForFollowup(ctx context.Context, task db.AgentTaskQueue) {
+	if !task.ChatSessionID.Valid {
+		return
+	}
+	cancelled, err := s.Queries.CancelInFlightChatTasksBySessionAndAgent(ctx, db.CancelInFlightChatTasksBySessionAndAgentParams{
+		ChatSessionID: task.ChatSessionID,
+		AgentID:       task.AgentID,
+		ID:            task.ID,
+	})
+	if err != nil {
+		slog.Warn("chat follow-up interrupt failed", "task_id", util.UUIDToString(task.ID), "chat_session_id", util.UUIDToString(task.ChatSessionID), "agent_id", util.UUIDToString(task.AgentID), "error", err)
+		return
+	}
+	s.broadcastFollowupInterruptedTasks(ctx, cancelled)
+}
+
+func (s *TaskService) broadcastFollowupInterruptedTasks(ctx context.Context, tasks []db.AgentTaskQueue) {
+	for _, t := range tasks {
+		slog.Info("task interrupted by newer guidance", "task_id", util.UUIDToString(t.ID), "issue_id", util.UUIDToString(t.IssueID), "chat_session_id", util.UUIDToString(t.ChatSessionID), "agent_id", util.UUIDToString(t.AgentID))
+		s.captureTaskCancelled(ctx, t)
+		s.ReconcileAgentStatus(ctx, t.AgentID)
+		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
+	}
 }
 
 // EnqueueTaskForMention creates a queued task for a mentioned agent on an issue.
@@ -544,6 +588,7 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 	slog.Info("mention task enqueued", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "is_leader_task", isLeader)
 	// See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
+	s.interruptInFlightIssueTasksForFollowup(ctx, task)
 	s.NotifyTaskEnqueued(ctx, task)
 	return task, nil
 }
@@ -709,6 +754,24 @@ var ErrChatTaskAgentNoRuntime = errors.New("chat task: agent has no runtime")
 // latest message in the silence window. Stored on the task so the daemon brief
 // can attribute the run to the right person. See MUL-2645.
 func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, false, 2, true)
+}
+
+// EnqueueFreshChatTask creates a chat task that must not resume the prior
+// session. Channel re-mentions use this after interrupting stale in-flight work
+// so the agent starts from the latest channel context instead of continuing the
+// previous mistaken execution path.
+func (s *TaskService) EnqueueFreshChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, true, 2, true)
+}
+
+// EnqueueAmbientChatTask is for low-priority channel observation runs where the
+// agent may stay silent or add a reaction instead of posting a full reply.
+func (s *TaskService) EnqueueAmbientChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, true, 1, false)
+}
+
+func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID, forceFreshSession bool, priority int32, interruptFollowup bool) (db.AgentTaskQueue, error) {
 	agent, err := s.Queries.GetAgent(ctx, chatSession.AgentID)
 	if err != nil {
 		slog.Error("chat task enqueue failed", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)
@@ -722,20 +785,24 @@ func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSe
 	}
 
 	task, err := s.Queries.CreateChatTask(ctx, db.CreateChatTaskParams{
-		AgentID:         chatSession.AgentID,
-		RuntimeID:       agent.RuntimeID,
-		Priority:        2, // medium priority for chat
-		ChatSessionID:   chatSession.ID,
-		InitiatorUserID: initiatorUserID,
+		AgentID:           chatSession.AgentID,
+		RuntimeID:         agent.RuntimeID,
+		Priority:          priority,
+		ChatSessionID:     chatSession.ID,
+		InitiatorUserID:   initiatorUserID,
+		ForceFreshSession: pgtype.Bool{Bool: forceFreshSession, Valid: forceFreshSession},
 	})
 	if err != nil {
 		slog.Error("chat task enqueue failed", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)
 		return db.AgentTaskQueue{}, fmt.Errorf("create chat task: %w", err)
 	}
 
-	slog.Info("chat task enqueued", "task_id", util.UUIDToString(task.ID), "chat_session_id", util.UUIDToString(chatSession.ID), "agent_id", util.UUIDToString(chatSession.AgentID))
+	slog.Info("chat task enqueued", "task_id", util.UUIDToString(task.ID), "chat_session_id", util.UUIDToString(chatSession.ID), "agent_id", util.UUIDToString(chatSession.AgentID), "force_fresh_session", forceFreshSession)
 	// See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
+	if interruptFollowup {
+		s.interruptInFlightChatTasksForFollowup(ctx, task)
+	}
 	s.NotifyTaskEnqueued(ctx, task)
 	return task, nil
 }
@@ -924,6 +991,17 @@ func (s *TaskService) finalizeCancelledChatMessage(ctx context.Context, task db.
 // ClaimTask atomically claims the next queued task for an agent,
 // respecting max_concurrent_tasks.
 func (s *TaskService) ClaimTask(ctx context.Context, agentID pgtype.UUID) (*db.AgentTaskQueue, error) {
+	return s.claimTask(ctx, agentID, pgtype.UUID{}, false)
+}
+
+// ClaimChatTask claims only chat-session-backed work for an agent. It is used
+// as a fallback when normal issue/autopilot/quick-create capacity is full so
+// channel @mentions stay responsive while long issue work is running.
+func (s *TaskService) ClaimChatTask(ctx context.Context, agentID, runtimeID pgtype.UUID) (*db.AgentTaskQueue, error) {
+	return s.claimTask(ctx, agentID, runtimeID, true)
+}
+
+func (s *TaskService) claimTask(ctx context.Context, agentID, runtimeID pgtype.UUID, chatOnly bool) (*db.AgentTaskQueue, error) {
 	start := time.Now()
 	var (
 		outcome                                                              = "unknown"
@@ -942,24 +1020,44 @@ func (s *TaskService) ClaimTask(ctx context.Context, agentID pgtype.UUID) (*db.A
 	}
 
 	t0 = time.Now()
-	running, err := s.Queries.CountRunningTasks(ctx, agentID)
+	var running int64
+	if chatOnly {
+		running, err = s.Queries.CountRunningChatTasks(ctx, agentID)
+	} else {
+		running, err = s.Queries.CountRunningTasks(ctx, agentID)
+	}
 	countRunningMs = time.Since(t0).Milliseconds()
 	if err != nil {
 		outcome = "error_count_running"
 		return nil, fmt.Errorf("count running tasks: %w", err)
 	}
-	if running >= int64(agent.MaxConcurrentTasks) {
-		slog.Debug("task claim: no capacity", "agent_id", util.UUIDToString(agentID), "running", running, "max", agent.MaxConcurrentTasks)
+	capacity := int64(agent.MaxConcurrentTasks)
+	if chatOnly {
+		// Chat bypass is intentionally a single interrupt lane, not another full
+		// max_concurrent_tasks pool. This keeps @mention replies responsive without
+		// allowing max issue work + max chat work to run at once.
+		capacity = 1
+	}
+	if running >= capacity {
+		slog.Debug("task claim: no capacity", "agent_id", util.UUIDToString(agentID), "running", running, "max", agent.MaxConcurrentTasks, "capacity", capacity, "chat_only", chatOnly)
 		outcome = "no_capacity"
 		return nil, nil // No capacity
 	}
 
 	t0 = time.Now()
-	task, err := s.Queries.ClaimAgentTask(ctx, agentID)
+	var task db.AgentTaskQueue
+	if chatOnly {
+		task, err = s.Queries.ClaimAgentChatTask(ctx, db.ClaimAgentChatTaskParams{
+			AgentID:   agentID,
+			RuntimeID: runtimeID,
+		})
+	} else {
+		task, err = s.Queries.ClaimAgentTask(ctx, agentID)
+	}
 	claimAgentMs = time.Since(t0).Milliseconds()
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			slog.Debug("task claim: no tasks available", "agent_id", util.UUIDToString(agentID))
+			slog.Debug("task claim: no tasks available", "agent_id", util.UUIDToString(agentID), "chat_only", chatOnly)
 			outcome = "no_tasks"
 			return nil, nil // No tasks available
 		}
@@ -1086,6 +1184,14 @@ func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.
 			loopMs = time.Since(loopStart).Milliseconds()
 			outcome = "error_claim"
 			return nil, err
+		}
+		if task == nil {
+			task, err = s.ClaimChatTask(ctx, candidate.AgentID, runtimeID)
+			if err != nil {
+				loopMs = time.Since(loopStart).Milliseconds()
+				outcome = "error_claim_chat"
+				return nil, err
+			}
 		}
 		if task != nil && task.RuntimeID == runtimeID {
 			claimed = task
@@ -1506,7 +1612,7 @@ func resumeUnsafeFailureReason(reason string) bool {
 	switch reason {
 	// Keep in sync with GetLastTaskSession / GetLastChatTaskSession and
 	// CreateRetryTask's fresh-session CASE WHEN.
-	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity":
+	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", taskfailure.ReasonAgentContextOverflow.String():
 		return true
 	default:
 		return false

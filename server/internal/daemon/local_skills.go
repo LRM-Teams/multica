@@ -110,11 +110,20 @@ func isIgnoredLocalSkillEntry(name string) bool {
 }
 
 func normalizeLocalSkillKey(key string) (string, error) {
-	if strings.TrimSpace(key) == "" {
+	key = strings.TrimSpace(key)
+	if key == "" {
 		return "", fmt.Errorf("skill key is required")
 	}
-	cleaned := filepath.Clean(filepath.FromSlash(strings.TrimSpace(key)))
-	if cleaned == "." || filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") {
+	if filepath.IsAbs(key) || strings.HasPrefix(key, "/") || strings.ContainsAny(key, "\\:") {
+		return "", fmt.Errorf("invalid skill key")
+	}
+	for _, segment := range strings.Split(key, "/") {
+		if segment == ".." {
+			return "", fmt.Errorf("invalid skill key")
+		}
+	}
+	cleaned := filepath.Clean(filepath.FromSlash(key))
+	if cleaned == "." {
 		return "", fmt.Errorf("invalid skill key")
 	}
 	return filepath.ToSlash(cleaned), nil

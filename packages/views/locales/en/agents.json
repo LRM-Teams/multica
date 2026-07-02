@@ -156,6 +156,9 @@
     "rename_title": "Rename agent",
     "rename_placeholder": "Agent name",
     "rename_required": "Name is required",
+    "display_name_title": "Edit display name",
+    "display_name_placeholder": "Agent display name",
+    "display_name_required": "Display name is required",
     "edit_description_title": "Edit description",
     "description_placeholder": "What does this agent do?",
     "save": "Save",
@@ -222,6 +225,8 @@
     "description_create": "Create a new AI agent for your workspace.",
     "description_duplicate": "Create a new agent based on \"{{name}}\". Instructions, env, and skills are copied for you.",
     "name_label": "Name",
+    "display_name_label": "Display name",
+    "handle_auto_hint": "A stable username is generated automatically and cannot be changed here.",
     "name_placeholder": "e.g. Deep Research Agent",
     "description_label": "Description",
     "description_placeholder": "What does this agent do?",
@@ -339,7 +344,20 @@
       "add_dialog_confirm_one": "Add {{count}} skill",
       "add_dialog_confirm_other": "Add {{count}} skills",
       "add_dialog_cancel": "Cancel",
-      "add_failed_toast": "Failed to add skill"
+      "add_failed_toast": "Failed to add skill",
+      "suggestion_title": "Evolution skill suggestions",
+      "suggestion_intro": "Promoted workspace skills that may fit this agent. Accept to bind or dismiss to ignore.",
+      "suggestion_count": "{{count}} pending",
+      "suggestion_loading": "Loading skill suggestions…",
+      "suggestion_empty": "No pending skill suggestions.",
+      "suggestion_decision_failed_toast": "Failed to update skill suggestion",
+      "suggestion_decision_saved_toast": "Skill suggestion updated",
+      "suggestion_accept_action": "Accept",
+      "suggestion_dismiss_action": "Dismiss",
+      "suggestion_action": {
+        "add": "Suggested add",
+        "remove": "Suggested remove"
+      }
     },
     "integrations": {
       "intro": "Connect this agent to external chat platforms so people can work with it where they already are.",
@@ -392,7 +410,19 @@
       "empty_title": "No memories synced",
       "empty_hint": "Memory files from this agent runtime will appear here after the next sync.",
       "empty_content": "No content",
-      "updated_at": "Updated {{value}}"
+      "updated_at": "Updated {{value}}",
+      "evolution_title": "Generated memories",
+      "evolution_intro": "Memory-like units delivered through the Pi evolution flow. They land in the local Pi inbox for review and reuse.",
+      "evolution_loading": "Loading generated memories…",
+      "evolution_empty": "No generated memories yet.",
+      "evolution_status": {
+        "pending": "Pending",
+        "delivered": "Delivered",
+        "accepted": "Accepted",
+        "ignored": "Ignored",
+        "rejected": "Rejected",
+        "failed": "Failed"
+      }
     }
   },
   "char_counter": {
@@ -414,6 +444,7 @@
   "profile_card": {
     "unavailable": "Agent unavailable",
     "detail_link": "Detail →",
+    "send_message": "Send message",
     "runtime_label": "Runtime",
     "skills_label": "Skills",
     "owner_label": "Owner",

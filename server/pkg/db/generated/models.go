@@ -44,6 +44,7 @@ type Agent struct {
 	McpConfig          []byte             `json:"mcp_config"`
 	Model              pgtype.Text        `json:"model"`
 	ThinkingLevel      pgtype.Text        `json:"thinking_level"`
+	DisplayName        string             `json:"display_name"`
 }
 
 type AgentMemory struct {
@@ -106,6 +107,7 @@ type AgentSharedSkillFile struct {
 type AgentSkill struct {
 	AgentID   pgtype.UUID        `json:"agent_id"`
 	SkillID   pgtype.UUID        `json:"skill_id"`
+	Source    string             `json:"source"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -667,15 +669,16 @@ type ProjectResource struct {
 }
 
 type Skill struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	Content     string             `json:"content"`
-	Config      []byte             `json:"config"`
-	CreatedBy   pgtype.UUID        `json:"created_by"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ID                    pgtype.UUID        `json:"id"`
+	WorkspaceID           pgtype.UUID        `json:"workspace_id"`
+	Name                  string             `json:"name"`
+	Description           string             `json:"description"`
+	Content               string             `json:"content"`
+	Config                []byte             `json:"config"`
+	CreatedBy             pgtype.UUID        `json:"created_by"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	SourceEvolutionUnitID pgtype.UUID        `json:"source_evolution_unit_id"`
 }
 
 type SkillFile struct {
@@ -687,6 +690,114 @@ type SkillFile struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type EvolutionUnitSubmission struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	SourceAgentID    pgtype.UUID        `json:"source_agent_id"`
+	SourceMemberID   pgtype.UUID        `json:"source_member_id"`
+	UnitType         string             `json:"unit_type"`
+	LocalUnitID      string             `json:"local_unit_id"`
+	Title            string             `json:"title"`
+	Summary          string             `json:"summary"`
+	Content          string             `json:"content"`
+	Payload          []byte             `json:"payload"`
+	SanitizedPayload []byte             `json:"sanitized_payload"`
+	ContentHash      string             `json:"content_hash"`
+	BundleHash       string             `json:"bundle_hash"`
+	BundleRef        string             `json:"bundle_ref"`
+	Sensitivity      string             `json:"sensitivity"`
+	Confidence       string             `json:"confidence"`
+	SuggestedScope   string             `json:"suggested_scope"`
+	Evidence         []byte             `json:"evidence"`
+	Applies          []byte             `json:"applies"`
+	Tags             []string           `json:"tags"`
+	Tools            []string           `json:"tools"`
+	TaskTypes        []string           `json:"task_types"`
+	ProjectTypes     []string           `json:"project_types"`
+	Languages        []string           `json:"languages"`
+	Frameworks       []string           `json:"frameworks"`
+	Status           string             `json:"status"`
+	RejectReason     string             `json:"reject_reason"`
+	ReviewDecision   string             `json:"review_decision"`
+	ReviewConfidence pgtype.Float8      `json:"review_confidence"`
+	ReviewRiskLevel  string             `json:"review_risk_level"`
+	ReviewReason     string             `json:"review_reason"`
+	ReviewMetadata   []byte             `json:"review_metadata"`
+	ReviewedAt       pgtype.Timestamptz `json:"reviewed_at"`
+	PromotedUnitID   pgtype.UUID        `json:"promoted_unit_id"`
+	SourceCreatedAt  pgtype.Timestamptz `json:"source_created_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+type EvolutionUnitSubmissionFile struct {
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	SubmissionID pgtype.UUID        `json:"submission_id"`
+	Path         string             `json:"path"`
+	Content      string             `json:"content"`
+	ContentHash  string             `json:"content_hash"`
+	MimeType     string             `json:"mime_type"`
+	SizeBytes    int64              `json:"size_bytes"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+type SharedEvolutionUnit struct {
+	ID                   pgtype.UUID        `json:"id"`
+	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
+	UnitType             string             `json:"unit_type"`
+	Title                string             `json:"title"`
+	CanonicalSummary     string             `json:"canonical_summary"`
+	Content              string             `json:"content"`
+	Metadata             []byte             `json:"metadata"`
+	Applies              []byte             `json:"applies"`
+	FailureCases         []byte             `json:"failure_cases"`
+	Scope                string             `json:"scope"`
+	Tags                 []string           `json:"tags"`
+	Tools                []string           `json:"tools"`
+	TaskTypes            []string           `json:"task_types"`
+	ProjectTypes         []string           `json:"project_types"`
+	Languages            []string           `json:"languages"`
+	Frameworks           []string           `json:"frameworks"`
+	ApplicableAgentTypes []string           `json:"applicable_agent_types"`
+	ApplicableProjects   []string           `json:"applicable_projects"`
+	Priority             int32              `json:"priority"`
+	Score                float64            `json:"score"`
+	SuccessCount         int32              `json:"success_count"`
+	FailureCount         int32              `json:"failure_count"`
+	IgnoredCount         int32              `json:"ignored_count"`
+	ConflictCount        int32              `json:"conflict_count"`
+	LastUsedAt           pgtype.Timestamptz `json:"last_used_at"`
+	Status               string             `json:"status"`
+	CurrentVersionID     pgtype.UUID        `json:"current_version_id"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+type SharedEvolutionUnitVersion struct {
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	UnitID              pgtype.UUID        `json:"unit_id"`
+	Version             int32              `json:"version"`
+	Title               string             `json:"title"`
+	Content             string             `json:"content"`
+	Metadata            []byte             `json:"metadata"`
+	Applies             []byte             `json:"applies"`
+	FailureCases        []byte             `json:"failure_cases"`
+	SourceSubmissionIds []pgtype.UUID      `json:"source_submission_ids"`
+	ChangeReason        string             `json:"change_reason"`
+	CreatedBy           string             `json:"created_by"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+type SharedEvolutionUnitFile struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	UnitID      pgtype.UUID        `json:"unit_id"`
+	VersionID   pgtype.UUID        `json:"version_id"`
+	Path        string             `json:"path"`
+	Content     string             `json:"content"`
+	ContentHash string             `json:"content_hash"`
+	MimeType    string             `json:"mime_type"`
+	SizeBytes   int64              `json:"size_bytes"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
 type Squad struct {
 	ID           pgtype.UUID        `json:"id"`
 	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
@@ -812,6 +923,7 @@ type TaskUsageHourlyRollupState struct {
 type User struct {
 	ID                      pgtype.UUID        `json:"id"`
 	Name                    string             `json:"name"`
+	DisplayName             string             `json:"display_name"`
 	Email                   string             `json:"email"`
 	AvatarUrl               pgtype.Text        `json:"avatar_url"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
@@ -860,6 +972,23 @@ type WebhookDelivery struct {
 	ReceivedAt             pgtype.Timestamptz `json:"received_at"`
 	LastAttemptAt          pgtype.Timestamptz `json:"last_attempt_at"`
 	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+}
+
+type WebPushSubscription struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	Endpoint       string             `json:"endpoint"`
+	P256dh         string             `json:"p256dh"`
+	Auth           string             `json:"auth"`
+	ExpirationTime pgtype.Timestamptz `json:"expiration_time"`
+	DeviceID       pgtype.Text        `json:"device_id"`
+	UserAgent      pgtype.Text        `json:"user_agent"`
+	LastActiveAt   pgtype.Timestamptz `json:"last_active_at"`
+	LastError      pgtype.Text        `json:"last_error"`
+	RevokedAt      pgtype.Timestamptz `json:"revoked_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Workspace struct {

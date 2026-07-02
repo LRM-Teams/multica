@@ -42,6 +42,9 @@
     "section_profile": "프로필",
     "click_avatar_hint": "클릭해서 아바타 업로드",
     "name_label": "이름",
+    "display_name_label": "표시 이름",
+    "handle_label": "사용자 이름",
+    "handle_hint": "사용자 이름은 정확한 @ 멘션에 사용되며 여기서는 변경할 수 없습니다.",
     "profile_description_label": "내 소개",
     "profile_description_hint": "나를 대신해 작업하는 에이전트에게 공유됩니다. 역할, 기술 스택, 선호 방식, 새 협업자에게 첫날 알려줄 만한 내용을 적어 주세요.",
     "profile_description_placeholder": "예: Go와 Postgres를 쓰는 백엔드 엔지니어. 간결한 PR과 변경사항에 맞춘 테스트를 선호합니다.",
@@ -91,6 +94,8 @@
       "enable": "사용",
       "granted": "이 브라우저에서 알림 배너를 표시할 수 있습니다.",
       "denied": "브라우저에서 차단되었습니다. 브라우저 설정에서 이 사이트의 알림을 허용하세요.",
+      "unsupported": "이 브라우저는 백그라운드 Web Push를 지원하지 않습니다. Multica가 열려 있는 동안에는 앱 내 알림이 계속 동작합니다.",
+      "ios_requires_pwa": "iOS에서는 먼저 Multica를 홈 화면에 추가한 뒤 홈 화면에서 열어 백그라운드 Push를 활성화하세요.",
       "enabled_badge": "사용 중"
     }
   },

@@ -6,9 +6,13 @@
     "pages": "ページ",
     "commands": "コマンド",
     "members": "メンバー",
+    "agents": "エージェント",
     "projects": "プロジェクト",
     "issues": "イシュー",
     "recent": "最近の項目"
+  },
+  "actions": {
+    "send_message": "メッセージを送信"
   },
   "pages": {
     "inbox": "インボックス",

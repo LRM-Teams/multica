@@ -270,6 +270,48 @@ func TestBuildChatPromptAttachmentIDsCanBeBoundToCreatedIssues(t *testing.T) {
 	}
 }
 
+func TestBuildPromptIncludesChatContextSummary(t *testing.T) {
+	out := BuildPrompt(Task{
+		ChatSessionID:      "chat-1",
+		ChatContextSummary: "Native resume skipped.\nRecent messages:\n- user: old question",
+		ChatMessage:        "current question",
+	}, "codex")
+	for _, want := range []string{"Conversation handoff context:", "Native resume skipped.", "Recent messages:", "User message:\ncurrent question"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestBuildPromptPiNativeSlashChatCommands(t *testing.T) {
+	tests := []string{
+		"/pet hi",
+		"  /goal fix tests  ",
+		"/autogoal status",
+		"/memory-review list",
+	}
+	for _, in := range tests {
+		out := BuildPrompt(Task{ChatSessionID: "sess-1", ChatMessage: in}, "pi")
+		if out != strings.TrimSpace(in) {
+			t.Fatalf("Pi slash command %q should pass through raw, got:\n%s", in, out)
+		}
+	}
+}
+
+func TestBuildPromptPiNativeSlashChatCommandsArePiOnly(t *testing.T) {
+	out := BuildPrompt(Task{ChatSessionID: "sess-1", ChatMessage: "/pet hi"}, "codex")
+	if !strings.Contains(out, "User message:\n/pet hi") {
+		t.Fatalf("non-Pi runtimes must keep slash text as normal chat, got:\n%s", out)
+	}
+}
+
+func TestBuildPromptPiUnknownSlashFallsBackToChat(t *testing.T) {
+	out := BuildPrompt(Task{ChatSessionID: "sess-1", ChatMessage: "/not-a-pi-command hi"}, "pi")
+	if !strings.Contains(out, "User message:\n/not-a-pi-command hi") {
+		t.Fatalf("unknown Pi slash command should fall back to normal chat, got:\n%s", out)
+	}
+}
+
 func TestBuildChatPromptSlashSkills(t *testing.T) {
 	t.Run("injects selected skills block", func(t *testing.T) {
 		task := Task{

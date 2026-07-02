@@ -5,11 +5,12 @@
     "my_issues": "マイイシュー",
     "issues": "イシュー",
     "projects": "プロジェクト",
-    "channels": "チャンネル",
+    "channels": "メッセージ",
     "autopilots": "オートパイロット",
     "agents": "エージェント",
     "squads": "スクワッド",
     "usage": "使用量",
+    "evolution": "Evolution",
     "runtimes": "ランタイム",
     "skills": "スキル",
     "settings": "設定"

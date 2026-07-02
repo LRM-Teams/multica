@@ -29,6 +29,11 @@ export type {
   AgentSkillSummary,
   SkillFile,
   AgentMemory,
+  AgentSkillSuggestionAction,
+  AgentSkillSuggestionStatus,
+  AgentSkillSuggestion,
+  ListAgentSkillSuggestionsResponse,
+  DecideAgentSkillSuggestionRequest,
   CreateSkillRequest,
   UpdateSkillRequest,
   SetAgentSkillsRequest,
@@ -59,9 +64,29 @@ export type {
   RuntimeLocalSkillImportResult,
   IssueUsageSummary,
 } from "./agent";
-export type { Workspace, WorkspaceRepo, Member, MemberRole, User, MemberWithUser, Invitation } from "./workspace";
+export type {
+  EvolutionReviewDecision,
+  EvolutionReviewDecisionRequest,
+  EvolutionReviewFile,
+  EvolutionReviewRiskLevel,
+  EvolutionReviewSubmission,
+  EvolutionReviewSubmissionStatus,
+  PromoteEvolutionReviewSubmissionResponse,
+} from "./evolution";
+export type {
+  Workspace,
+  WorkspaceRepo,
+  Member,
+  MemberRole,
+  User,
+  MemberWithUser,
+  MemberProfile,
+  MemberProfileActivityItem,
+  Invitation,
+} from "./workspace";
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
+export type { WebPushPublicKeyResponse, WebPushSubscriptionPayload, WebPushSubscriptionResponse } from "./web-push";
 export type { Comment, CommentType, CommentAuthorType, CommentTriggerPreview, CommentTriggerPreviewAgent, CommentTriggerSource, Reaction } from "./comment";
 export type { Label, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse } from "./label";
 export type {
@@ -184,6 +209,12 @@ export type {
   ChannelMemberBrief,
   ChannelLastMessage,
   ChannelMessage,
+  ChannelMessageReply,
+  ChannelReaction,
+  ChannelThreadMessagesCursor,
+  ChannelThreadMessagesPage,
+  ChannelMessageSearchResponse,
+  ChannelMessageSearchResult,
   ChannelStats,
   ChannelAuthorStat,
   ChannelActiveTask,

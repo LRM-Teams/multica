@@ -27,6 +27,7 @@ import type {
 } from "@multica/core/types";
 import { ListTodo } from "lucide-react";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { agentColor } from "../../common/agent-color";
 import { StatusIcon } from "../../issues/components/status-icon";
 import { ProjectIcon } from "../../projects/components/project-icon";
@@ -41,6 +42,14 @@ import {
   recordMentionUsage,
   sortUserItemsByRecency,
 } from "./mention-recency";
+import {
+  actorHandleSearchRank,
+  matchesActorIdentitySearch,
+  normalizeActorSearchQuery,
+  resolveActorDisplayName,
+  resolveActorHandle,
+  resolveActorIdentityPresentation,
+} from "@multica/core/identity";
 import { matchesPinyin } from "./pinyin-match";
 import { createSuggestionPopupRender } from "./suggestion-popup";
 
@@ -52,10 +61,14 @@ export interface MentionItem {
   id: string;
   label: string;
   type: "member" | "agent" | "squad" | "issue" | "project" | "all";
+  /** Stable handle for actor mentions. Shown only as weak identity help. */
+  handle?: string;
   /** Optional grouping hint for injected context items. */
   group?: "current" | "recent" | "search";
   /** Secondary text shown beside the label (e.g. issue title) */
   description?: string;
+  /** Secondary row for actor identity, e.g. @backend-engineer. */
+  secondaryLabel?: string;
   /** Issue status for StatusIcon rendering */
   status?: IssueStatus;
   /** Project emoji/icon snapshot for ProjectIcon rendering */
@@ -68,6 +81,10 @@ interface MentionListProps {
   items: MentionItem[];
   query: string;
   command: (item: MentionItem) => void;
+  searchIssues?: (
+    query: string,
+    signal: AbortSignal,
+  ) => Promise<{ issues: Array<Pick<Issue, "id" | "identifier" | "title" | "status">> }>;
   includeProjectSearch?: boolean;
 }
 
@@ -80,19 +97,22 @@ export interface MentionListRef {
 // ---------------------------------------------------------------------------
 
 interface MentionGroup {
-  label: string;
+  label: "Broadcast" | "Current" | "Recent" | "Search" | "Members" | "Issues";
   items: MentionItem[];
 }
 
 function groupItems(items: MentionItem[]): MentionGroup[] {
+  const broadcast: MentionItem[] = [];
   const current: MentionItem[] = [];
   const recent: MentionItem[] = [];
   const search: MentionItem[] = [];
-  const users: MentionItem[] = [];
+  const members: MentionItem[] = [];
   const issues: MentionItem[] = [];
 
   for (const item of items) {
-    if (item.group === "current") {
+    if (item.type === "all") {
+      broadcast.push(item);
+    } else if (item.group === "current") {
       current.push(item);
     } else if (item.group === "recent") {
       recent.push(item);
@@ -101,15 +121,16 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
     } else if (item.type === "issue" || item.type === "project") {
       issues.push(item);
     } else {
-      users.push(item);
+      members.push(item);
     }
   }
 
   const groups: MentionGroup[] = [];
+  if (broadcast.length > 0) groups.push({ label: "Broadcast", items: broadcast });
   if (current.length > 0) groups.push({ label: "Current", items: current });
   if (recent.length > 0) groups.push({ label: "Recent", items: recent });
   if (search.length > 0) groups.push({ label: "Search", items: search });
-  if (users.length > 0) groups.push({ label: "Users", items: users });
+  if (members.length > 0) groups.push({ label: "Members", items: members });
   if (issues.length > 0) groups.push({ label: "Issues", items: issues });
   return groups;
 }
@@ -119,9 +140,22 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
 // ---------------------------------------------------------------------------
 
 const MAX_ITEMS = 20;
-const SERVER_ISSUE_SEARCH_LIMIT = 20;
 const SERVER_CONTEXT_SEARCH_LIMIT = 8;
 const SERVER_SEARCH_DEBOUNCE_MS = 150;
+
+const identitySearchOptions = { extendedMatch: matchesPinyin };
+
+function sortActorItems(
+  items: MentionItem[],
+  recency: ReturnType<typeof getRecencyMap>,
+  query: string,
+): MentionItem[] {
+  return sortUserItemsByRecency(items, recency).toSorted(
+    (a, b) =>
+      actorHandleSearchRank(a.handle ?? "", query) -
+      actorHandleSearchRank(b.handle ?? "", query),
+  );
+}
 
 function mentionItemKey(item: MentionItem): string {
   return `${item.type}:${item.id}`;
@@ -144,7 +178,7 @@ function mergeMentionItems(
 }
 
 export const MentionList = forwardRef<MentionListRef, MentionListProps>(
-  function MentionList({ items, query, command, includeProjectSearch = false }, ref) {
+  function MentionList({ items, query, command, searchIssues, includeProjectSearch = false }, ref) {
     const { t } = useT("editor");
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [serverItems, setServerItems] = useState<MentionItem[]>([]);
@@ -163,6 +197,12 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
         return;
       }
 
+      if (!searchIssues && !includeProjectSearch) {
+        setIsSearching(false);
+        setSearchedQuery(q);
+        return;
+      }
+
       const wsId = getCurrentWsId();
       if (!wsId) {
         setIsSearching(false);
@@ -177,37 +217,29 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       const timer = setTimeout(() => {
         void (async () => {
           try {
-            if (includeProjectSearch) {
-              const [issues, projects] = await Promise.all([
-                api.searchIssues({
-                  q,
-                  limit: SERVER_CONTEXT_SEARCH_LIMIT,
-                  include_closed: true,
-                  signal: controller.signal,
-                }),
-                api.searchProjects({
-                  q,
-                  limit: SERVER_CONTEXT_SEARCH_LIMIT,
-                  include_closed: true,
-                  signal: controller.signal,
-                }),
+            const [issues, projects] = await Promise.all([
+              searchIssues
+                ? searchIssues(q, controller.signal)
+                : api.searchIssues({
+                    q,
+                    limit: SERVER_CONTEXT_SEARCH_LIMIT,
+                    include_closed: true,
+                    signal: controller.signal,
+                  }),
+              includeProjectSearch
+                ? api.searchProjects({
+                    q,
+                    limit: SERVER_CONTEXT_SEARCH_LIMIT,
+                    include_closed: true,
+                    signal: controller.signal,
+                  })
+                : Promise.resolve({ projects: [] }),
+            ]);
+            if (!cancelled && !controller.signal.aborted) {
+              setServerItems([
+                ...issues.issues.map((issue) => ({ ...issueToMention(issue), group: "search" as const })),
+                ...projects.projects.map((project) => ({ ...projectToMention(project), group: "search" as const })),
               ]);
-              if (!cancelled && !controller.signal.aborted) {
-                setServerItems([
-                  ...issues.issues.map((issue) => ({ ...issueToMention(issue), group: "search" as const })),
-                  ...projects.projects.map((project) => ({ ...projectToMention(project), group: "search" as const })),
-                ]);
-              }
-            } else {
-              const res = await api.searchIssues({
-                q,
-                limit: SERVER_ISSUE_SEARCH_LIMIT,
-                include_closed: true,
-                signal: controller.signal,
-              });
-              if (!cancelled && !controller.signal.aborted) {
-                setServerItems(res.issues.map(issueToMention));
-              }
             }
           } catch {
             // Aborted or network error: keep the synchronous cache results.
@@ -225,7 +257,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
         clearTimeout(timer);
         controller.abort();
       };
-    }, [includeProjectSearch, normalizedQuery]);
+    }, [includeProjectSearch, normalizedQuery, searchIssues]);
 
     const displayItems = useMemo(() => {
       const currentServerItems = searchedQuery === normalizedQuery ? serverItems : [];
@@ -294,25 +326,45 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
     const groups = groupItems(displayItems);
     const hasContextGroups = displayItems.some((item) => item.group === "current" || item.group === "recent");
     const contextLayout = hasContextGroups;
-    const groupLabel = (label: string): string => {
+    const groupLabel = (label: MentionGroup["label"]): string => {
+      if (label === "Broadcast") return "";
       if (label === "Current") return t(($) => $.mention.group_current);
       if (label === "Recent") return t(($) => $.mention.group_recent);
       if (label === "Search") return t(($) => $.mention.group_search);
-      if (label === "Users") return t(($) => $.mention.group_users);
+      if (label === "Members") return t(($) => $.mention.group_members);
       if (label === "Issues") return t(($) => $.mention.group_issues);
       return label;
     };
 
     // Build a flat index mapping: globalIndex → item
     let globalIndex = 0;
+    const duplicateActorLabels = new Set(
+      Object.entries(
+        displayItems.reduce<Record<string, number>>((acc, item) => {
+          if (item.type === "member" || item.type === "agent") {
+            const key = item.label.trim().toLowerCase();
+            if (key) acc[key] = (acc[key] ?? 0) + 1;
+          }
+          return acc;
+        }, {}),
+      )
+        .filter(([, count]) => count > 1)
+        .map(([label]) => label),
+    );
 
     const renderRows = (group: MentionGroup): ReactNode =>
       group.items.map((item) => {
         const idx = globalIndex++;
+        const duplicateLabel = duplicateActorLabels.has(item.label.trim().toLowerCase());
+        const showSecondary =
+          item.type === "agent" ||
+          duplicateLabel ||
+          actorHandleSearchRank(item.handle ?? "", normalizedQuery) < 3;
         return (
           <MentionRow
             key={`${item.type}-${item.id}`}
             item={item}
+            showSecondary={showSecondary}
             selected={idx === selectedIndex}
             onSelect={() => selectItem(idx)}
             buttonRef={(el) => { itemRefs.current[idx] = el; }}
@@ -327,9 +379,11 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
             const isRecent = group.label === "Recent";
             return (
               <section key={group.label} className={isRecent ? "min-h-0" : "shrink-0"}>
-                <div className="shrink-0 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
-                  {groupLabel(group.label)}
-                </div>
+                {group.label !== "Broadcast" && (
+                  <div className="shrink-0 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+                    {groupLabel(group.label)}
+                  </div>
+                )}
                 <div className={isRecent ? "max-h-64 overflow-y-auto overscroll-contain" : undefined}>
                   {renderRows(group)}
                 </div>
@@ -344,9 +398,11 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       <div className="w-72 max-h-[300px] overflow-y-auto rounded-md border bg-popover py-1 shadow-md">
         {groups.map((group) => (
           <div key={group.label}>
-            <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
-              {groupLabel(group.label)}
-            </div>
+            {group.label !== "Broadcast" && (
+              <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+                {groupLabel(group.label)}
+              </div>
+            )}
             {renderRows(group)}
           </div>
         ))}
@@ -361,11 +417,13 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
 
 function MentionRow({
   item,
+  showSecondary,
   selected,
   onSelect,
   buttonRef,
 }: {
   item: MentionItem;
+  showSecondary: boolean;
   selected: boolean;
   onSelect: () => void;
   buttonRef: (el: HTMLButtonElement | null) => void;
@@ -436,15 +494,11 @@ function MentionRow({
     );
   }
 
-  return (
-    <button
-      type="button"
-      ref={buttonRef}
-      className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs transition-colors ${
-        selected ? "bg-accent" : "hover:bg-accent/50"
-      }`}
-      onClick={onSelect}
-    >
+  const isActor = item.type === "member" || item.type === "agent";
+  const secondary = isActor && showSecondary ? item.secondaryLabel : undefined;
+  const allMembersHint = item.type === "all" ? t(($) => $.mention.all_members_hint) : null;
+  const actorContent = (
+    <>
       <ActorAvatar
         actorType={item.type === "all" ? "member" : item.type}
         actorId={item.id}
@@ -452,9 +506,49 @@ function MentionRow({
         showStatusDot
         tint={agentColor(item.id)}
       />
-      <span className="truncate font-medium" style={{ color: agentColor(item.id).fg }}>
-        {item.type === "all" ? t(($) => $.mention.all_members) : item.label}
+      <span className="min-w-0 flex-1">
+        <span
+          className="block truncate font-medium text-foreground"
+          style={item.type === "agent" ? { color: agentColor(item.id).fg } : undefined}
+        >
+          {item.type === "all" ? t(($) => $.mention.all_members) : item.label}
+        </span>
+        {allMembersHint && (
+          <span className="block truncate text-[11px] text-muted-foreground">
+            {allMembersHint}
+          </span>
+        )}
+        {secondary && (
+          <span className="block truncate text-[11px] text-muted-foreground">
+            {secondary}
+          </span>
+        )}
       </span>
+    </>
+  );
+
+  return (
+    <button
+      type="button"
+      ref={buttonRef}
+      className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors ${
+        selected ? "bg-accent" : "hover:bg-accent/50"
+      }`}
+      onClick={onSelect}
+    >
+      {isActor ? (
+        <ActorProfileTrigger
+          memberType={item.type === "agent" ? "agent" : "user"}
+          memberId={item.id}
+          triggerElement="span"
+          className="min-w-0 flex-1 items-center gap-2.5"
+          onClickCapture={(event) => event.stopPropagation()}
+        >
+          {actorContent}
+        </ActorProfileTrigger>
+      ) : (
+        actorContent
+      )}
       {item.type === "agent" && (
         // "Agent" is a glossary-protected product term — kept un-translated.
         // eslint-disable-next-line i18next/no-literal-string
@@ -497,6 +591,14 @@ function projectToMention(p: { id: string; title: string; description?: string |
 function matchesMentionQuery(item: MentionItem, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
+  if (item.type === "member" || item.type === "agent") {
+    return matchesActorIdentitySearch(
+      item.label,
+      item.handle ?? "",
+      query,
+      identitySearchOptions,
+    );
+  }
   return (
     item.label.toLowerCase().includes(q) ||
     item.description?.toLowerCase().includes(q) === true ||
@@ -548,7 +650,7 @@ export function createMentionSuggestion(
     const myRole =
       members.find((m) => m.user_id === userId)?.role ?? null;
 
-    const q = query.toLowerCase();
+    const q = normalizeActorSearchQuery(query);
     // When set (e.g. a channel's members), candidates are scoped to these ids.
     const allow = options.getAllowedActorIds?.();
 
@@ -566,24 +668,48 @@ export function createMentionSuggestion(
     const memberItems: MentionItem[] = members
       .filter(
         (m) =>
-          (m.name.toLowerCase().includes(q) || matchesPinyin(m.name, q)) &&
+          matchesActorIdentitySearch(
+            resolveActorDisplayName(m, m.name),
+            resolveActorHandle(m),
+            query,
+            identitySearchOptions,
+          ) &&
           (!allow || allow.has(m.user_id)),
       )
-      .map((m) => ({
-        id: m.user_id,
-        label: m.name,
-        type: "member" as const,
-      }));
+      .map((m) => {
+        const presentation = resolveActorIdentityPresentation(m, m.name);
+        return {
+          id: m.user_id,
+          label: presentation.displayName,
+          handle: presentation.handle,
+          secondaryLabel: presentation.handleLabel ?? undefined,
+          type: "member" as const,
+        };
+      });
 
     const agentItems: MentionItem[] = agents
       .filter(
         (a) =>
           !a.archived_at &&
-          (a.name.toLowerCase().includes(q) || matchesPinyin(a.name, q)) &&
+          matchesActorIdentitySearch(
+            resolveActorDisplayName(a, a.name),
+            resolveActorHandle(a),
+            query,
+            identitySearchOptions,
+          ) &&
           canAssignAgentToIssue(a, { userId, role: myRole }).allowed &&
           (!allow || allow.has(a.id)),
       )
-      .map((a) => ({ id: a.id, label: a.name, type: "agent" as const }));
+      .map((a) => {
+        const presentation = resolveActorIdentityPresentation(a, a.name);
+        return {
+          id: a.id,
+          label: presentation.displayName,
+          handle: presentation.handle,
+          secondaryLabel: presentation.handleLabel ?? undefined,
+          type: "agent" as const,
+        };
+      });
 
     const squadItems: MentionItem[] = squads
       .filter(
@@ -598,14 +724,15 @@ export function createMentionSuggestion(
     // targets come first regardless of type, with an alphabetical fallback
     // for everyone the user hasn't mentioned yet on this device.
     const recency = getRecencyMap(wsId);
-    const userItems = sortUserItemsByRecency(
+    const userItems = sortActorItems(
       [...memberItems, ...agentItems, ...squadItems],
       recency,
+      query,
     );
 
     // Cached issues give an instant first paint; MentionList adds server
     // matches for done/cancelled and any other issues not in this cache.
-    const issueItems: MentionItem[] = allow
+    const issueItems: MentionItem[] = options.mode !== "context" || allow
       ? []
       : cachedIssues
           .filter(
@@ -643,6 +770,13 @@ export function createMentionSuggestion(
         items: props.items,
         query: props.query,
         command: props.command,
+        searchIssues: (q, signal) =>
+          api.searchIssues({
+            q,
+            limit: SERVER_CONTEXT_SEARCH_LIMIT,
+            include_closed: true,
+            signal,
+          }),
         includeProjectSearch: options.mode === "context",
       }),
       onKeyDown: (ref, props) => ref?.onKeyDown(props) ?? false,

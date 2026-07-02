@@ -333,14 +333,16 @@ func (h *Handler) ListMembers(w http.ResponseWriter, r *http.Request) {
 }
 
 type MemberWithUserResponse struct {
-	ID          string  `json:"id"`
-	WorkspaceID string  `json:"workspace_id"`
-	UserID      string  `json:"user_id"`
-	Role        string  `json:"role"`
-	CreatedAt   string  `json:"created_at"`
-	Name        string  `json:"name"`
-	Email       string  `json:"email"`
-	AvatarURL   *string `json:"avatar_url"`
+	ID                 string  `json:"id"`
+	WorkspaceID        string  `json:"workspace_id"`
+	UserID             string  `json:"user_id"`
+	Role               string  `json:"role"`
+	CreatedAt          string  `json:"created_at"`
+	Name               string  `json:"name"`
+	DisplayName        string  `json:"display_name"`
+	Email              string  `json:"email"`
+	AvatarURL          *string `json:"avatar_url"`
+	ProfileDescription string  `json:"profile_description"`
 }
 
 func (h *Handler) ListMembersWithUser(w http.ResponseWriter, r *http.Request) {
@@ -359,14 +361,16 @@ func (h *Handler) ListMembersWithUser(w http.ResponseWriter, r *http.Request) {
 	resp := make([]MemberWithUserResponse, len(members))
 	for i, m := range members {
 		resp[i] = MemberWithUserResponse{
-			ID:          uuidToString(m.ID),
-			WorkspaceID: uuidToString(m.WorkspaceID),
-			UserID:      uuidToString(m.UserID),
-			Role:        m.Role,
-			CreatedAt:   timestampToString(m.CreatedAt),
-			Name:        m.UserName,
-			Email:       m.UserEmail,
-			AvatarURL:   textToPtr(m.UserAvatarUrl),
+			ID:                 uuidToString(m.ID),
+			WorkspaceID:        uuidToString(m.WorkspaceID),
+			UserID:             uuidToString(m.UserID),
+			Role:               m.Role,
+			CreatedAt:          timestampToString(m.CreatedAt),
+			Name:               m.UserName,
+			DisplayName:        firstNonEmpty(m.UserDisplayName, m.UserName),
+			Email:              m.UserEmail,
+			AvatarURL:          textToPtr(m.UserAvatarUrl),
+			ProfileDescription: m.UserProfileDescription,
 		}
 	}
 
@@ -380,14 +384,16 @@ type CreateMemberRequest struct {
 
 func memberWithUserResponse(member db.Member, user db.User) MemberWithUserResponse {
 	return MemberWithUserResponse{
-		ID:          uuidToString(member.ID),
-		WorkspaceID: uuidToString(member.WorkspaceID),
-		UserID:      uuidToString(member.UserID),
-		Role:        member.Role,
-		CreatedAt:   timestampToString(member.CreatedAt),
-		Name:        user.Name,
-		Email:       user.Email,
-		AvatarURL:   textToPtr(user.AvatarUrl),
+		ID:                 uuidToString(member.ID),
+		WorkspaceID:        uuidToString(member.WorkspaceID),
+		UserID:             uuidToString(member.UserID),
+		Role:               member.Role,
+		CreatedAt:          timestampToString(member.CreatedAt),
+		Name:               user.Name,
+		DisplayName:        userDisplayName(user),
+		Email:              user.Email,
+		AvatarURL:          textToPtr(user.AvatarUrl),
+		ProfileDescription: user.ProfileDescription,
 	}
 }
 
@@ -438,10 +444,7 @@ func (h *Handler) CreateMember(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if isNotFound(err) {
 			// Auto-create user with email so they can be invited before signing up
-			user, err = h.Queries.CreateUser(r.Context(), db.CreateUserParams{
-				Name:  email,
-				Email: email,
-			})
+			user, err = h.createUserWithIdentity(r.Context(), email, emailLocalPart(email), pgtype.Text{})
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to create user")
 				return

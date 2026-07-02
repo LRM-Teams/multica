@@ -10,10 +10,11 @@ type AgentEntry struct {
 
 // Runtime represents a registered daemon runtime.
 type Runtime struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Provider string `json:"provider"`
-	Status   string `json:"status"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	Name        string `json:"name"`
+	Provider    string `json:"provider"`
+	Status      string `json:"status"`
 }
 
 // RepoData holds repository information from the workspace.
@@ -67,6 +68,7 @@ type Task struct {
 	NewCommentsSince         string               `json:"new_comments_since,omitempty"`          // RFC3339 anchor (last run's started_at) the count is measured from; empty on cold start
 	ChatSessionID            string               `json:"chat_session_id,omitempty"`             // non-empty for chat tasks
 	ChatMessage              string               `json:"chat_message,omitempty"`                // user message content for chat tasks
+	ChatContextSummary       string               `json:"chat_context_summary,omitempty"`        // compact recent-context handoff when native resume is skipped
 	ChatMessageAttachments   []ChatAttachmentMeta `json:"chat_message_attachments,omitempty"`    // attachments linked to the chat message; agent uses these to `multica attachment download <id>`
 	AutopilotRunID           string               `json:"autopilot_run_id,omitempty"`            // non-empty for autopilot run_only tasks
 	AutopilotID              string               `json:"autopilot_id,omitempty"`                // autopilot that spawned this run
@@ -155,35 +157,6 @@ type SharedSkillSyncPayload struct {
 	PresentKeys []string            `json:"present_keys"`
 }
 
-type AgentSharedSkillSyncPayload struct {
-	Agents []AgentSharedSkillBundleSet `json:"agents"`
-}
-
-type AgentSharedSkillBundleSet struct {
-	AgentID     string              `json:"agent_id"`
-	Skills      []SharedSkillBundle `json:"skills"`
-	PresentKeys []string            `json:"present_keys"`
-}
-
-type AgentMemorySyncPayload struct {
-	Agents []AgentMemoryBundleSet `json:"agents"`
-}
-
-type AgentMemoryBundleSet struct {
-	AgentID     string              `json:"agent_id"`
-	Memories    []AgentMemoryBundle `json:"memories"`
-	PresentKeys []string            `json:"present_keys"`
-}
-
-type AgentMemoryBundle struct {
-	Key         string `json:"key"`
-	Name        string `json:"name"`
-	Content     string `json:"content"`
-	SourcePath  string `json:"source_path"`
-	Provider    string `json:"provider"`
-	ContentHash string `json:"content_hash,omitempty"`
-}
-
 type SharedSkillBundle struct {
 	Key         string          `json:"key"`
 	Name        string          `json:"name"`
@@ -193,6 +166,37 @@ type SharedSkillBundle struct {
 	Provider    string          `json:"provider"`
 	ContentHash string          `json:"content_hash,omitempty"`
 	Files       []SkillFileData `json:"files,omitempty"`
+}
+
+type EvolutionSubmissionSyncPayload struct {
+	Submissions []EvolutionSubmissionBundle `json:"submissions"`
+}
+
+type EvolutionSubmissionBundle struct {
+	WorkspaceID    string          `json:"workspace_id,omitempty"`
+	AgentID        string          `json:"agent_id"`
+	UnitType       string          `json:"unit_type"`
+	LocalUnitID    string          `json:"local_unit_id"`
+	Title          string          `json:"title"`
+	Summary        string          `json:"summary,omitempty"`
+	Content        string          `json:"content,omitempty"`
+	Payload        json.RawMessage `json:"payload,omitempty"`
+	ContentHash    string          `json:"content_hash,omitempty"`
+	BundleHash     string          `json:"bundle_hash,omitempty"`
+	BundleRef      string          `json:"bundle_ref,omitempty"`
+	Sensitivity    string          `json:"sensitivity,omitempty"`
+	Confidence     string          `json:"confidence,omitempty"`
+	SuggestedScope string          `json:"suggested_scope,omitempty"`
+	Evidence       json.RawMessage `json:"evidence,omitempty"`
+	Applies        json.RawMessage `json:"applies,omitempty"`
+	Tags           []string        `json:"tags,omitempty"`
+	Tools          []string        `json:"tools,omitempty"`
+	TaskTypes      []string        `json:"task_types,omitempty"`
+	ProjectTypes   []string        `json:"project_types,omitempty"`
+	Languages      []string        `json:"languages,omitempty"`
+	Frameworks     []string        `json:"frameworks,omitempty"`
+	SourceCreated  string          `json:"created_at,omitempty"`
+	Files          []SkillFileData `json:"files,omitempty"`
 }
 
 type SharedSkillSyncConflict struct {

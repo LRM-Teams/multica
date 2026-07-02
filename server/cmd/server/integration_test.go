@@ -36,6 +36,7 @@ var (
 
 const (
 	integrationTestEmail         = "integration-test@multica.ai"
+	integrationTestHandle        = "integration-test"
 	integrationTestName          = "Integration Tester"
 	integrationTestWorkspaceSlug = "integration-tests"
 )
@@ -103,10 +104,10 @@ func setupIntegrationTestFixture(ctx context.Context, pool *pgxpool.Pool) (strin
 
 	var userID string
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO "user" (name, email)
-		VALUES ($1, $2)
+		INSERT INTO "user" (name, display_name, email)
+		VALUES ($1, $2, $3)
 		RETURNING id
-	`, integrationTestName, integrationTestEmail).Scan(&userID); err != nil {
+	`, integrationTestHandle, integrationTestName, integrationTestEmail).Scan(&userID); err != nil {
 		return "", "", err
 	}
 

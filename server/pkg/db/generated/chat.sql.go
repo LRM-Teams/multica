@@ -132,17 +132,18 @@ func (q *Queries) CreateChatSessionForProject(ctx context.Context, arg CreateCha
 }
 
 const createChatTask = `-- name: CreateChatTask :one
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, chat_session_id, initiator_user_id)
-VALUES ($1, $2, NULL, 'queued', $3, $4, $5)
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, chat_session_id, initiator_user_id, force_fresh_session)
+VALUES ($1, $2, NULL, 'queued', $3, $4, $5, COALESCE($6::boolean, FALSE))
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `
 
 type CreateChatTaskParams struct {
-	AgentID         pgtype.UUID `json:"agent_id"`
-	RuntimeID       pgtype.UUID `json:"runtime_id"`
-	Priority        int32       `json:"priority"`
-	ChatSessionID   pgtype.UUID `json:"chat_session_id"`
-	InitiatorUserID pgtype.UUID `json:"initiator_user_id"`
+	AgentID           pgtype.UUID `json:"agent_id"`
+	RuntimeID         pgtype.UUID `json:"runtime_id"`
+	Priority          int32       `json:"priority"`
+	ChatSessionID     pgtype.UUID `json:"chat_session_id"`
+	InitiatorUserID   pgtype.UUID `json:"initiator_user_id"`
+	ForceFreshSession pgtype.Bool `json:"force_fresh_session"`
 }
 
 func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) (AgentTaskQueue, error) {
@@ -152,6 +153,7 @@ func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) 
 		arg.Priority,
 		arg.ChatSessionID,
 		arg.InitiatorUserID,
+		arg.ForceFreshSession,
 	)
 	var i AgentTaskQueue
 	err := row.Scan(
@@ -317,14 +319,16 @@ SELECT session_id, work_dir, runtime_id FROM agent_task_queue
 WHERE chat_session_id = $1
   AND (
     status = 'completed'
+    OR (status = 'cancelled' AND COALESCE(failure_reason, '') = 'followup_interrupt')
     OR (
       status = 'failed'
-      AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity')
+      AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity', 'agent_error.context_overflow')
       AND NOT (COALESCE(error, '') ILIKE '%400%' AND COALESCE(error, '') ILIKE '%invalid_request_error%')
+      AND NOT (COALESCE(error, '') ILIKE '%context window%' OR COALESCE(error, '') ILIKE '%context length%' OR COALESCE(error, '') ILIKE '%context_length_exceeded%' OR COALESCE(error, '') ILIKE '%maximum context%' OR COALESCE(error, '') ILIKE '%prompt is too long%' OR (COALESCE(error, '') ILIKE '%token%' AND COALESCE(error, '') ILIKE '%limit%'))
     )
   )
   AND session_id IS NOT NULL
-ORDER BY completed_at DESC
+ORDER BY COALESCE(completed_at, started_at, dispatched_at, created_at) DESC
 LIMIT 1
 `
 

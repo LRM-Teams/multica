@@ -18,6 +18,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { useT, useTimeAgo } from "../../i18n";
 import { availabilityConfig } from "../presence";
 import type { AgentAvailability } from "@multica/core/agents";
@@ -148,7 +149,6 @@ export function AgentDetailOverview({
   const recentTasks = useMemo(() => tasks.slice(0, 6), [tasks]);
 
   const availCfg = availability ? availabilityConfig[availability] : null;
-
   const costText = metric.cost === null ? "—" : `$${metric.cost.toFixed(2)}`;
   const successText = metric.successRate === null ? "—" : `${Math.round(metric.successRate)}%`;
 
@@ -160,7 +160,7 @@ export function AgentDetailOverview({
           <ActorAvatar actorType="agent" actorId={agent.id} size={40} className="shrink-0" />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h2 className="truncate text-base font-semibold">{agent.name}</h2>
+              <ActorIdentityRow identity={agent} primaryClassName="truncate text-base font-semibold" className="min-w-0 shrink" />
               {availCfg && (
                 <span className={cn("inline-flex items-center gap-1 text-xs", availCfg.textClass)}>
                   <span className={cn("size-1.5 rounded-full", availCfg.dotClass)} />

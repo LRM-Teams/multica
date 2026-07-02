@@ -27,6 +27,8 @@ import {
   PickerSection,
   PropertyPicker,
 } from "../../issues/components/pickers/property-picker";
+import { matchesActorIdentitySearch, resolveActorDisplayName } from "@multica/core/identity";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { OfflineBanner } from "./offline-banner";
 import { NoAgentBanner } from "./no-agent-banner";
@@ -863,10 +865,16 @@ export function AgentDropdown({
   }, [agents, userId]);
 
   const query = filter.trim().toLowerCase();
-  const matches = (name: string) =>
-    !query || name.toLowerCase().includes(query) || matchesPinyin(name, query);
-  const filteredMine = mine.filter((agent) => matches(agent.name));
-  const filteredOthers = others.filter((agent) => matches(agent.name));
+  const identitySearchOptions = { extendedMatch: matchesPinyin };
+  const matches = (agent: Agent) =>
+    matchesActorIdentitySearch(
+      resolveActorDisplayName(agent, agent.id),
+      agent.name,
+      query,
+      identitySearchOptions,
+    );
+  const filteredMine = mine.filter(matches);
+  const filteredOthers = others.filter(matches);
 
   const handlePick = (agent: Agent) => {
     onSelect(agent);
@@ -876,6 +884,7 @@ export function AgentDropdown({
   if (!activeAgent) {
     return <span className="text-xs text-muted-foreground">{t(($) => $.window.no_agents)}</span>;
   }
+  const activeAgentDisplayName = resolveActorDisplayName(activeAgent, activeAgent.id);
 
   return (
     <PropertyPicker
@@ -902,7 +911,7 @@ export function AgentDropdown({
             enableHoverCard
             showStatusDot
           />
-          <span className="text-xs font-medium max-w-28 truncate">{activeAgent.name}</span>
+          <span className="text-xs font-medium max-w-28 truncate">{activeAgentDisplayName}</span>
           <ChevronDown className="size-3 text-muted-foreground shrink-0" />
         </>
       }
@@ -962,7 +971,7 @@ function AgentPickerItem({
         enableHoverCard
         showStatusDot
       />
-      <span className="truncate flex-1">{agent.name}</span>
+      <ActorIdentityRow identity={agent} primaryClassName="truncate" />
     </PickerItem>
   );
 }

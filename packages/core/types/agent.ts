@@ -185,7 +185,10 @@ export interface Agent {
   id: string;
   workspace_id: string;
   runtime_id: string;
+  /** Stable unique handle used for routing and bare @handle fallback. */
   name: string;
+  /** Human-facing label. Falls back to `name` for older server payloads. */
+  display_name: string;
   description: string;
   instructions: string;
   avatar_url: string | null;
@@ -269,7 +272,10 @@ export interface AgentSkillSummary {
 }
 
 export interface CreateAgentRequest {
-  name: string;
+  /** Legacy display input; the server derives a stable handle from it. */
+  name?: string;
+  /** Preferred human-facing label for new clients. */
+  display_name?: string;
   description?: string;
   instructions?: string;
   avatar_url?: string;
@@ -324,7 +330,10 @@ export interface AgentTemplateSkillRef {
 
 export interface CreateAgentFromTemplateRequest {
   template_slug: string;
-  name: string;
+  /** Legacy display input; the server derives a stable handle from it. */
+  name?: string;
+  /** Preferred human-facing label for new clients. */
+  display_name?: string;
   runtime_id: string;
   model?: string;
   visibility?: AgentVisibility;
@@ -358,7 +367,10 @@ export interface CreateAgentFromTemplateFailure {
 }
 
 export interface UpdateAgentRequest {
+  /** Legacy rename input; updates display_name, not the stable handle. */
   name?: string;
+  /** Preferred human-facing label for new clients. */
+  display_name?: string;
   description?: string;
   instructions?: string;
   avatar_url?: string;
@@ -467,6 +479,34 @@ export interface AgentMemory {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type AgentSkillSuggestionAction = "add" | "remove";
+
+export type AgentSkillSuggestionStatus = "pending" | "accepted" | "dismissed";
+
+export interface AgentSkillSuggestion {
+  id: string;
+  workspace_id: string;
+  agent_id: string;
+  skill_id: string;
+  action: AgentSkillSuggestionAction;
+  reason: string;
+  matcher_score: number;
+  matcher_details?: Record<string, unknown>;
+  status: AgentSkillSuggestionStatus;
+  skill_name: string;
+  skill_description: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ListAgentSkillSuggestionsResponse {
+  suggestions: AgentSkillSuggestion[];
+}
+
+export interface DecideAgentSkillSuggestionRequest {
+  decision: "accept" | "dismiss";
 }
 
 export interface CreateSkillRequest {

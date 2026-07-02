@@ -28,7 +28,9 @@ import {
   type CostByKey,
 } from "../utils";
 import { KpiCard } from "./shared";
+import { resolveActorIdentityPresentation } from "@multica/core/identity";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import {
   DailyCostChart,
   DailyTokensChart,
@@ -665,12 +667,17 @@ function CostByBlock({
             rows={byAgent}
             renderKey={(key) => {
               const agent = agents.find((a) => a.id === key);
+              const presentation = resolveActorIdentityPresentation(agent, key);
               return (
                 <div className="flex min-w-0 items-center gap-2">
                   <ActorAvatar actorType="agent" actorId={key} size={22} enableHoverCard />
-                  <span className="cursor-pointer truncate text-sm font-medium">
-                    {agent?.name ?? key}
-                  </span>
+                  <ActorIdentityRow
+                    displayName={presentation.displayName}
+                    handle={presentation.handle}
+                    showHandle={presentation.showHandleLabel}
+                    primaryClassName="cursor-pointer truncate text-sm font-medium"
+                    secondaryClassName="truncate text-[11px] text-muted-foreground"
+                  />
                 </div>
               );
             }}
@@ -870,4 +877,3 @@ function computeTotals(rows: RuntimeUsage[]): UsageTotals {
     { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, cacheSavings: 0 },
   );
 }
-

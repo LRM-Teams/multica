@@ -7,6 +7,8 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
+import { resolveActorDisplayName } from "@multica/core/identity";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import {
   agentTaskSnapshotOptions,
   useAgentPresenceDetail,
@@ -66,7 +68,8 @@ export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
   const currentIssueId = runningTask?.issue_id ?? null;
   const lastTerminal = pickLatestTerminal(agentTasks);
 
-  const initials = agent.name
+  const displayName = resolveActorDisplayName(agent, agent.id);
+  const initials = displayName
     .split(" ")
     .map((w) => w[0])
     .join("")
@@ -87,7 +90,7 @@ export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
       {/* Header — avatar + name. */}
       <div className="flex items-start gap-3">
         <ActorAvatarBase
-          name={agent.name}
+          name={displayName}
           initials={initials}
           avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
           isAgent
@@ -95,7 +98,7 @@ export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
           className="rounded-md"
         />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold">{agent.name}</p>
+          <ActorIdentityRow identity={agent} primaryClassName="truncate text-sm font-semibold" />
           <div className="mt-0.5 inline-flex items-center gap-1.5">
             {isArchived ? (
               <>

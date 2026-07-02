@@ -7,7 +7,8 @@ import {
 
 const BASE_USER: User = {
   id: "u1",
-  name: "User",
+  name: "user",
+  display_name: "User",
   email: "u@example.com",
   avatar_url: null,
   onboarded_at: "2025-01-01T00:00:00Z",

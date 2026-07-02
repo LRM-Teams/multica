@@ -9,7 +9,13 @@ import { canAssignAgentToIssue } from "@multica/core/permissions";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { memberListOptions, agentListOptions, squadListOptions, assigneeFrequencyOptions } from "@multica/core/workspace/queries";
+import {
+  actorHandleSearchRank,
+  matchesActorIdentitySearch,
+  resolveActorDisplayName,
+} from "@multica/core/identity";
 import { ActorAvatar } from "../../../common/actor-avatar";
+import { ActorPickerItem } from "../../../common/actor-picker-item";
 import {
   PropertyPicker,
   PickerItem,
@@ -18,6 +24,8 @@ import {
 } from "./property-picker";
 import { useT } from "../../../i18n";
 import { matchesPinyin } from "../../../editor/extensions/pinyin-match";
+
+const identitySearchOptions = { extendedMatch: matchesPinyin };
 
 /**
  * Legacy boolean shape kept around for callers (e.g. `use-issue-actions.ts`)
@@ -83,13 +91,35 @@ export function AssigneePicker({
 
   const getFreq = (type: string, id: string) => freqMap.get(`${type}:${id}`) ?? 0;
 
-  const query = filter.trim().toLowerCase();
+  const query = filter.trim();
   const filteredMembers = members
-    .filter((m) => m.name.toLowerCase().includes(query) || matchesPinyin(m.name, query))
-    .sort((a, b) => getFreq("member", b.user_id) - getFreq("member", a.user_id));
+    .filter((m) =>
+      matchesActorIdentitySearch(
+        resolveActorDisplayName(m, m.name),
+        m.name,
+        query,
+        identitySearchOptions,
+      ),
+    )
+    .sort((a, b) => getFreq("member", b.user_id) - getFreq("member", a.user_id))
+    .toSorted(
+      (a, b) => actorHandleSearchRank(a.name, query) - actorHandleSearchRank(b.name, query),
+    );
   const filteredAgents = agents
-    .filter((a) => !a.archived_at && (a.name.toLowerCase().includes(query) || matchesPinyin(a.name, query)))
-    .sort((a, b) => getFreq("agent", b.id) - getFreq("agent", a.id));
+    .filter(
+      (a) =>
+        !a.archived_at &&
+        matchesActorIdentitySearch(
+          resolveActorDisplayName(a, a.name),
+          a.name,
+          query,
+          identitySearchOptions,
+        ),
+    )
+    .sort((a, b) => getFreq("agent", b.id) - getFreq("agent", a.id))
+    .toSorted(
+      (a, b) => actorHandleSearchRank(a.name, query) - actorHandleSearchRank(b.name, query),
+    );
   const filteredSquads = squads
     .filter((s) => !s.archived_at && (s.name.toLowerCase().includes(query) || matchesPinyin(s.name, query)))
     .sort((a, b) => getFreq("squad", b.id) - getFreq("squad", a.id));
@@ -144,8 +174,12 @@ export function AssigneePicker({
       {filteredMembers.length > 0 && (
         <PickerSection label={t(($) => $.pickers.assignee.members_group)}>
           {filteredMembers.map((m) => (
-            <PickerItem
+            <ActorPickerItem
               key={m.user_id}
+              actorType="member"
+              actorId={m.user_id}
+              identity={m}
+              fallback={m.user_id}
               selected={isSelected("member", m.user_id)}
               onClick={() => {
                 onUpdate({
@@ -154,10 +188,7 @@ export function AssigneePicker({
                 });
                 setOpen(false);
               }}
-            >
-              <ActorAvatar actorType="member" actorId={m.user_id} size={18} />
-              <span className="truncate">{m.name}</span>
-            </PickerItem>
+            />
           ))}
         </PickerSection>
       )}
@@ -177,11 +208,21 @@ export function AssigneePicker({
             });
             const allowed = decision.allowed;
             return (
-              <PickerItem
+              <ActorPickerItem
                 key={a.id}
+                actorType="agent"
+                actorId={a.id}
+                identity={a}
+                fallback={a.id}
                 selected={isSelected("agent", a.id)}
                 disabled={!allowed}
                 tooltip={!allowed ? decision.message : undefined}
+                labelClassName={allowed ? "" : "text-muted-foreground"}
+                trailing={
+                  a.visibility === "private" ? (
+                    <Lock className="ml-auto h-3 w-3 text-muted-foreground" />
+                  ) : undefined
+                }
                 onClick={() => {
                   if (!allowed) return;
                   onUpdate({
@@ -190,13 +231,7 @@ export function AssigneePicker({
                   });
                   setOpen(false);
                 }}
-              >
-                <ActorAvatar actorType="agent" actorId={a.id} size={18} showStatusDot />
-                <span className={`truncate ${allowed ? "" : "text-muted-foreground"}`}>{a.name}</span>
-                {a.visibility === "private" && (
-                  <Lock className="ml-auto h-3 w-3 text-muted-foreground" />
-                )}
-              </PickerItem>
+              />
             );
           })}
         </PickerSection>

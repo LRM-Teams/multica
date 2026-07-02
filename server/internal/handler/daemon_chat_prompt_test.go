@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"strings"
 	"testing"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -34,6 +35,73 @@ func eq(a, b []string) bool {
 // chat prompt: the agent must receive every user message since its last reply
 // (the MUL-2968 debounce can land several before one run fires), not just the
 // most recent one.
+func TestChatResumeSafetyHelpers(t *testing.T) {
+	msgs := []db.ChatMessage{
+		msg("user", "old 1"),
+		msg("assistant", "old 2"),
+		msg("user", "new 3"),
+	}
+	if shouldStartFreshChatSession(msgs, 0) {
+		t.Fatal("short chat without high token usage should resume")
+	}
+	if !shouldStartFreshChatSession(make([]db.ChatMessage, chatFreshAfterMessageCount), 0) {
+		t.Fatal("long chat should start fresh")
+	}
+	if !shouldStartFreshChatSession(msgs, chatFreshAfterTokenCount) {
+		t.Fatal("high token usage should start fresh")
+	}
+	if !chatFailureResumeUnsafe("agent_error.context_overflow") {
+		t.Fatal("context overflow must not resume the native session")
+	}
+	if !shouldIncludeChatContextSummary([]db.ChatMessage{msg("assistant", "确认继续吗？"), msg("user", "行")}) {
+		t.Fatal("short confirmations after an assistant question should include recent context")
+	}
+	if shouldIncludeChatContextSummary([]db.ChatMessage{msg("assistant", "确认继续吗？"), msg("user", "我想看看今天上海天气")}) {
+		t.Fatal("ordinary user messages should not force extra handoff context")
+	}
+	if shouldIncludeChatContextSummary([]db.ChatMessage{msg("assistant", "好的，有需要随时叫我。"), msg("user", "好")}) {
+		t.Fatal("short acknowledgements after a non-question should not force extra handoff context")
+	}
+	if got := contents(recentChatMessages(msgs, 2)); !eq(got, []string{"old 2", "new 3"}) {
+		t.Fatalf("recentChatMessages = %v", got)
+	}
+	line := compactChatLine("  a\n\t b   c  ")
+	if line != "a b c" {
+		t.Fatalf("compactChatLine = %q", line)
+	}
+	summary := buildChatContextSummary(msgs, 123, "test reason")
+	for _, want := range []string{"Native session resume was intentionally skipped", "test reason", "Recent messages", "Older tool outputs/log dumps are not included"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q:\n%s", want, summary)
+		}
+	}
+}
+
+func TestShortConfirmationHandoffSummaryIncludesPreviousAgentQuestion(t *testing.T) {
+	msgs := []db.ChatMessage{
+		msg("user", "帮我把 feature 分支合到 dev"),
+		msg("assistant", "为避免覆盖本地改动，我会用干净 worktree 合到 dev。确认继续吗？"),
+		msg("user", "行"),
+	}
+
+	if !shouldIncludeChatContextSummary(msgs) {
+		t.Fatal("short confirmation should force recent chat context even when native resume is available")
+	}
+	summary := buildChatContextSummary(msgs, 0, "")
+	for _, want := range []string{
+		"Recent messages:",
+		"assistant: 为避免覆盖本地改动，我会用干净 worktree 合到 dev。确认继续吗？",
+		"user: 行",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q:\n%s", want, summary)
+		}
+	}
+	if strings.Contains(summary, "Native session resume was intentionally skipped") {
+		t.Fatalf("resume-available handoff should not claim native resume was skipped:\n%s", summary)
+	}
+}
+
 func TestTrailingUserMessages(t *testing.T) {
 	cases := []struct {
 		name string

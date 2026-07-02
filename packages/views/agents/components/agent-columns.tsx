@@ -15,6 +15,7 @@ import {
   TooltipTrigger,
 } from "@multica/ui/components/ui/tooltip";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { availabilityConfig, workloadConfig } from "../presence";
 import { AgentRowActions } from "./agent-row-actions";
 import { Sparkline } from "./sparkline";
@@ -169,7 +170,6 @@ function AgentNameCell({ row }: { row: AgentRow }) {
   const { agent, ownerIdToShow, isOwnedByMe } = row;
   const isArchived = !!agent.archived_at;
   const isPrivate = agent.visibility === "private";
-
   return (
     <div className="flex min-w-0 items-center gap-3">
       <ActorAvatar
@@ -181,13 +181,13 @@ function AgentNameCell({ row }: { row: AgentRow }) {
       />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
-          <span
-            className={`min-w-0 truncate font-medium ${
+          <ActorIdentityRow
+            identity={agent}
+            primaryClassName={`truncate font-medium ${
               isArchived ? "text-muted-foreground" : ""
             }`}
-          >
-            {agent.name}
-          </span>
+            className="min-w-0 shrink"
+          />
           {isPrivate && !isArchived && (
             <Tooltip>
               <TooltipTrigger

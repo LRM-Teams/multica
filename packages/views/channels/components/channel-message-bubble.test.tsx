@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
 import { ChannelMessageBubble } from "./channel-message-bubble";
@@ -7,7 +7,13 @@ import { ChannelMessageBubble } from "./channel-message-bubble";
 // separately). Stub it to a passthrough so these tests focus on bubble layout
 // and identity styling, not markdown internals.
 vi.mock("../../common/markdown", () => ({
-  MemoizedMarkdown: ({ children }: { children: string }) => <span>{children}</span>,
+  MemoizedMarkdown: ({
+    children,
+    highlightQuery,
+  }: {
+    children: string;
+    highlightQuery?: string;
+  }) => <span data-highlight-query={highlightQuery}>{children}</span>,
 }));
 
 vi.mock("../../issues/components/comment-card", () => ({
@@ -17,13 +23,34 @@ vi.mock("../../issues/components/comment-card", () => ({
 // The bubble resolves the author's live avatar from the members/agents cache.
 // Stub it so these layout/identity tests don't need a QueryClient/workspace.
 vi.mock("@multica/core/workspace/hooks", () => ({
-  useActorName: () => ({ getActorAvatarUrl: () => null }),
+  useActorName: () => ({
+    getActorAvatarUrl: () => null,
+    getActorName: () => null,
+  }),
 }));
 
 vi.mock("../../i18n", () => ({
   useT: () => ({
-    t: (selector: (resources: { message: { agent_badge: string; feishu_badge: string } }) => string) =>
-      selector({ message: { agent_badge: "Agent", feishu_badge: "Feishu" } }),
+    t: (
+      selector: (resources: {
+        message: { add_reaction: string; agent_badge: string; feishu_badge: string };
+        quote: { jump_to: string; reply: string; reply_aria: string; more_aria: string };
+        thread: { reply: string; reply_count: string };
+      }) => string,
+    ) =>
+      selector({
+        message: { add_reaction: "Add reaction", agent_badge: "Agent", feishu_badge: "Feishu" },
+        quote: {
+          jump_to: "Jump to original message",
+          reply: "Reply",
+          reply_aria: "Reply to message",
+          more_aria: "More actions",
+        },
+        thread: {
+          reply: "Reply in thread",
+          reply_count: "{{count}} replies",
+        },
+      }),
   }),
 }));
 
@@ -73,5 +100,122 @@ describe("ChannelMessageBubble", () => {
 
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
     expect(screen.getByText("Bob")).toBeInTheDocument();
+  });
+
+  it("passes the search query to markdown only for search hits", () => {
+    const { rerender } = render(
+      <ChannelMessageBubble
+        message={makeMessage()}
+        currentUserId="user-1"
+        searchHighlighted
+        searchQuery="data"
+      />,
+    );
+
+    expect(screen.getByText("Here is the data.")).toHaveAttribute("data-highlight-query", "data");
+
+    rerender(
+      <ChannelMessageBubble
+        message={makeMessage()}
+        currentUserId="user-1"
+        searchHighlighted={false}
+        searchQuery="data"
+      />,
+    );
+
+    expect(screen.getByText("Here is the data.")).not.toHaveAttribute("data-highlight-query");
+  });
+
+  it("allows native copy context menu when message body text is selected", () => {
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+
+    const body = screen.getByTestId("message-body");
+    const text = screen.getByText("Here is the data.");
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      isCollapsed: false,
+      anchorNode: text.firstChild,
+      focusNode: text.firstChild,
+      toString: () => "data",
+    } as Selection);
+
+    const event = createEvent.contextMenu(text);
+    fireEvent(text, event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(body).toHaveClass("select-text");
+  });
+
+  it("keeps the message action menu available from blank bubble space", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage()}
+        currentUserId="user-1"
+        onQuote={vi.fn()}
+      />,
+    );
+
+    vi.spyOn(window, "getSelection").mockReturnValue(null);
+    const event = createEvent.contextMenu(screen.getByTestId("message-body"));
+    fireEvent(screen.getByTestId("message-body"), event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("does not open the message action menu from row padding", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage()}
+        currentUserId="user-1"
+        onQuote={vi.fn()}
+      />,
+    );
+
+    vi.spyOn(window, "getSelection").mockReturnValue(null);
+    const event = createEvent.contextMenu(screen.getByTestId("message-bubble"));
+    fireEvent(screen.getByTestId("message-bubble"), event);
+
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("only renders existing reaction chips in the footer", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          reactions: [
+            {
+              id: "reaction-1",
+              channel_id: "c1",
+              message_id: "m1",
+              actor_type: "member",
+              actor_id: "user-1",
+              emoji: "👍",
+              created_at: "2026-06-17T09:16:00Z",
+            },
+          ],
+        })}
+        currentUserId="user-1"
+        onReact={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "👍1" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "React with ❤️" })).not.toBeInTheDocument();
+  });
+
+  it("does not duplicate first-level actions inside a More menu", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage()}
+        currentUserId="user-1"
+        onQuote={vi.fn()}
+        onOpenThread={vi.fn()}
+        onReact={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Add reaction" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reply" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reply in thread" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
   });
 });

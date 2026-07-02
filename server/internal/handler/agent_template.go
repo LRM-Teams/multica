@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/agenttmpl"
@@ -120,6 +120,7 @@ func (h *Handler) GetAgentTemplate(w http.ResponseWriter, r *http.Request) {
 type CreateAgentFromTemplateRequest struct {
 	TemplateSlug       string `json:"template_slug"`
 	Name               string `json:"name"`
+	DisplayName        string `json:"display_name"`
 	RuntimeID          string `json:"runtime_id"`
 	Model              string `json:"model,omitempty"`
 	Visibility         string `json:"visibility,omitempty"`
@@ -161,8 +162,10 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+	nameSeed := strings.TrimSpace(req.Name)
+	displayName := strings.TrimSpace(req.DisplayName)
+	if nameSeed == "" && displayName == "" {
+		writeError(w, http.StatusBadRequest, "name or display_name is required")
 		return
 	}
 	if req.RuntimeID == "" {
@@ -431,9 +434,8 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		avatarURL = pgtype.Text{String: *req.AvatarURL, Valid: true}
 	}
 
-	agent, err := qtx.CreateAgent(r.Context(), db.CreateAgentParams{
+	agent, err := h.createAgentWithIdentity(r.Context(), qtx, db.CreateAgentParams{
 		WorkspaceID:        wsUUID,
-		Name:               req.Name,
 		Description:        description,
 		Instructions:       instructions,
 		AvatarUrl:          avatarURL,
@@ -447,22 +449,8 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		CustomArgs:         ca,
 		McpConfig:          nil,
 		Model:              pgtype.Text{String: req.Model, Valid: req.Model != ""},
-	})
+	}, nameSeed, firstNonEmpty(displayName, nameSeed))
 	if err != nil {
-		// Mirror handler/agent.go:CreateAgent: when the duplicate is the
-		// agent name UNIQUE in this workspace, return 409 with a clear
-		// message instead of leaking the raw PG error as 500. Frontend
-		// already knows how to render 409 from the manual create path.
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "agent_workspace_name_unique" {
-			slog.Info("agent-template create: agent name conflict",
-				append(logger.RequestAttrs(r),
-					"agent_name", req.Name,
-					"workspace_id", workspaceID,
-				)...)
-			writeError(w, http.StatusConflict, fmt.Sprintf("an agent named %q already exists in this workspace", req.Name))
-			return
-		}
 		slog.Error("agent-template create: failed to create agent",
 			append(logger.RequestAttrs(r),
 				"agent_name", req.Name,
@@ -552,6 +540,7 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
+	h.refreshAgentSkillSuggestions(r.Context(), agent)
 	h.publish(protocol.EventAgentCreated, workspaceID, actorType, actorID, map[string]any{"agent": resp})
 
 	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.AgentCreated(

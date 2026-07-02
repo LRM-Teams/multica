@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -55,11 +56,29 @@ func TestPlatformPiInvocation_RewritesCmdLauncherToPowerShellFile(t *testing.T) 
 		t.Errorf("argv mismatch:\n got  %#v\n want %#v", gotArgs, wantArgs)
 	}
 
-	// Explicit check: the last argv (the positional prompt) must still
-	// contain every line of the original multi-line prompt. This is the
-	// concrete property #3306 violates when cmd.exe re-tokenises %*.
+	// Explicit check: platformPiInvocation preserves whatever args it is
+	// handed. Production Windows Pi runs now keep large prompts off argv via
+	// buildPiArgsForExecution, but this still pins the cmd.exe retokenisation
+	// fix for callers that pass prompt-like custom argv through the rewrite.
 	if gotArgs[len(gotArgs)-1] != multiLinePrompt {
 		t.Errorf("multi-line prompt was mangled:\n got  %q\n want %q", gotArgs[len(gotArgs)-1], multiLinePrompt)
+	}
+}
+
+func TestBuildPiArgsForExecution_WindowsMovesPromptToStdin(t *testing.T) {
+	prompt := strings.Repeat("群聊上下文\n", 1000)
+	args, stdinPrompt := buildPiArgsForExecution(prompt, `C:\Users\X\.multica\pi-sessions\s.jsonl`, ExecOptions{}, slog.Default())
+	if stdinPrompt != prompt {
+		t.Fatalf("stdin prompt not preserved")
+	}
+	for _, arg := range args {
+		if strings.Contains(arg, "群聊上下文") {
+			t.Fatalf("prompt leaked into Windows argv: %#v", args)
+		}
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-p") || !strings.Contains(joined, "--mode json") || !strings.Contains(joined, "--session") {
+		t.Fatalf("expected Pi flags in argv, got %#v", args)
 	}
 }
 

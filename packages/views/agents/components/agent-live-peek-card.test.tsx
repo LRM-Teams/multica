@@ -108,6 +108,7 @@ function makeAgent(overrides: Record<string, unknown> = {}) {
     workspace_id: "ws-1",
     runtime_id: "rt-1",
     name: "Squirtle",
+    display_name: "Squirtle",
     description: "",
     instructions: "",
     avatar_url: null,

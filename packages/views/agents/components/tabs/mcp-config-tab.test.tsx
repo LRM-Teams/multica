@@ -24,6 +24,7 @@ const baseAgent: Agent = {
   workspace_id: "ws-1",
   runtime_id: "runtime-1",
   name: "Agent",
+  display_name: "Agent",
   description: "",
   instructions: "",
   avatar_url: null,

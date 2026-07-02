@@ -113,10 +113,33 @@ export function agentMemoryOptions(wsId: string, agentId: string) {
   });
 }
 
+export const agentSkillSuggestionKeys = {
+  all: (wsId: string) => ["workspaces", wsId, "agent-skill-suggestions"] as const,
+  list: (wsId: string, agentId: string) =>
+    [...agentSkillSuggestionKeys.all(wsId), agentId] as const,
+};
+
+export function agentSkillSuggestionOptions(wsId: string, agentId: string) {
+  return queryOptions({
+    queryKey: agentSkillSuggestionKeys.list(wsId, agentId),
+    queryFn: () => api.listAgentSkillSuggestions(agentId),
+    enabled: !!wsId && !!agentId,
+    staleTime: 15 * 1000,
+    gcTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: true,
+  });
+}
+
 export const agentTasksKeys = {
   all: (wsId: string) => ["workspaces", wsId, "agent-tasks"] as const,
   detail: (wsId: string, agentId: string) =>
     [...agentTasksKeys.all(wsId), agentId] as const,
+};
+
+export const memberProfileKeys = {
+  all: (wsId: string) => ["workspaces", wsId, "member-profile"] as const,
+  detail: (wsId: string, memberType: "user" | "agent", memberId: string) =>
+    [...memberProfileKeys.all(wsId), memberType, memberId] as const,
 };
 
 // All tasks for a single agent (the agent detail page consumer). Powers both
@@ -130,6 +153,22 @@ export function agentTasksOptions(wsId: string, agentId: string) {
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
     refetchOnWindowFocus: true,
+  });
+}
+
+export function memberProfileOptions(
+  wsId: string,
+  memberType: "user" | "agent",
+  memberId: string,
+) {
+  return queryOptions({
+    queryKey: memberProfileKeys.detail(wsId, memberType, memberId),
+    queryFn: () => api.getMemberProfile(memberType, memberId),
+    enabled: !!wsId && !!memberId,
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: true,
+    retry: false,
   });
 }
 

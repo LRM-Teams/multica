@@ -339,17 +339,9 @@ func (c *Client) SyncSharedSkills(ctx context.Context, runtimeID string, payload
 	return &result, nil
 }
 
-func (c *Client) SyncAgentSharedSkills(ctx context.Context, runtimeID string, payload AgentSharedSkillSyncPayload) (*SharedSkillSyncResult, error) {
+func (c *Client) SyncEvolutionSubmissions(ctx context.Context, runtimeID string, payload EvolutionSubmissionSyncPayload) (*SharedSkillSyncResult, error) {
 	var result SharedSkillSyncResult
-	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-shared-skills/sync", runtimeID), payload, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
-}
-
-func (c *Client) SyncAgentMemories(ctx context.Context, runtimeID string, payload AgentMemorySyncPayload) (*SharedSkillSyncResult, error) {
-	var result SharedSkillSyncResult
-	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-memories/sync", runtimeID), payload, &result); err != nil {
+	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/evolution/submissions", runtimeID), payload, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil

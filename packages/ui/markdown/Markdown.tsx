@@ -13,6 +13,7 @@ import { CodeBlock, InlineCode } from './CodeBlock'
 import { isAllowedFileCardHref, preprocessFileCards } from './file-cards'
 import { preprocessLinks, preprocessIssueRefs } from './linkify'
 import { preprocessMentionShortcodes } from './mentions'
+import { preprocessStickers } from './stickers'
 import 'katex/dist/katex.min.css'
 import './markdown.css'
 
@@ -81,6 +82,11 @@ export interface MarkdownProps {
    * this single prefix to avoid false positives. Omit to disable auto-linking.
    */
   issueRefPrefix?: string
+  /**
+   * Search phrase to highlight in rendered visible text. The match is
+   * case-insensitive and does not touch code/preformatted blocks.
+   */
+  highlightQuery?: string
 }
 
 // Sanitization schema — extends GitHub defaults to allow code highlighting classes
@@ -127,6 +133,111 @@ function urlTransform(url: string): string {
 const FILE_PATH_REGEX =
   /^(?:\/|~\/|\.\/)[\w\-./@]+\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|yaml|yml|py|go|rs|css|scss|less|html|htm|txt|log|sh|bash|zsh|swift|kt|java|c|cpp|h|hpp|rb|php|xml|toml|ini|cfg|conf|env|sql|graphql|vue|svelte|astro|prisma)$/i
 
+const SEARCH_HIGHLIGHT_CLASS =
+  'bg-primary/20 text-foreground rounded-[3px] px-0.5 box-decoration-clone'
+
+const HIGHLIGHT_SKIP_TAGS = new Set([
+  'button',
+  'code',
+  'img',
+  'input',
+  'mark',
+  'pre',
+  'select',
+  'textarea',
+])
+
+export function normalizeHighlightQuery(query?: string): string | undefined {
+  const trimmed = query?.trim()
+  return trimmed ? trimmed : undefined
+}
+
+function highlightTextWithQuery(text: string, query: string): React.ReactNode {
+  const lowerText = text.toLocaleLowerCase()
+  const lowerQuery = query.toLocaleLowerCase()
+  const nodes: React.ReactNode[] = []
+  let cursor = 0
+  let matchIndex = lowerText.indexOf(lowerQuery, cursor)
+
+  while (matchIndex !== -1) {
+    if (matchIndex > cursor) {
+      nodes.push(text.slice(cursor, matchIndex))
+    }
+
+    const end = matchIndex + query.length
+    nodes.push(
+      <mark key={`hit-${matchIndex}-${nodes.length}`} className={SEARCH_HIGHLIGHT_CLASS}>
+        {text.slice(matchIndex, end)}
+      </mark>,
+    )
+    cursor = end
+    matchIndex = lowerText.indexOf(lowerQuery, cursor)
+  }
+
+  if (nodes.length === 0) return text
+  if (cursor < text.length) nodes.push(text.slice(cursor))
+  return nodes
+}
+
+export function highlightSearchText(text: string, query?: string): React.ReactNode {
+  const normalizedQuery = normalizeHighlightQuery(query)
+  if (!normalizedQuery) return text
+  return highlightTextWithQuery(text, normalizedQuery)
+}
+
+function shouldSkipHighlight(element: React.ReactElement): boolean {
+  return typeof element.type === 'string' && HIGHLIGHT_SKIP_TAGS.has(element.type)
+}
+
+function highlightSearchChildren(children: React.ReactNode, query?: string): React.ReactNode {
+  const normalizedQuery = normalizeHighlightQuery(query)
+  if (!normalizedQuery) return children
+
+  return React.Children.map(children, (child) => {
+    if (typeof child === 'string') {
+      return highlightTextWithQuery(child, normalizedQuery)
+    }
+    if (typeof child === 'number') {
+      return highlightTextWithQuery(String(child), normalizedQuery)
+    }
+    if (!React.isValidElement<{ children?: React.ReactNode }>(child)) {
+      return child
+    }
+    if (typeof child.type !== 'string') {
+      return child
+    }
+    if (shouldSkipHighlight(child)) {
+      return child
+    }
+    if (child.props.children === undefined) {
+      return child
+    }
+    return React.cloneElement(
+      child,
+      undefined,
+      highlightSearchChildren(child.props.children, normalizedQuery),
+    )
+  })
+}
+
+function extractText(children: React.ReactNode): string | undefined {
+  let text = ''
+
+  React.Children.forEach(children, (child) => {
+    if (typeof child === 'string' || typeof child === 'number') {
+      text += child
+      return
+    }
+    if (!React.isValidElement<{ children?: React.ReactNode }>(child)) {
+      return
+    }
+    const childText = extractText(child.props.children)
+    if (childText) text += childText
+  })
+
+  return text || undefined
+}
+
 /**
  * Create custom components based on render mode
  */
@@ -137,7 +248,11 @@ function createComponents(
   renderMention?: (props: { type: string; id: string; label?: string }) => React.ReactNode,
   renderImage?: (props: { src: string; alt: string }) => React.ReactNode,
   renderFileCard?: (props: { href: string; filename: string }) => React.ReactNode,
+  highlightQuery?: string,
 ): Partial<Components> {
+  const highlight = (children: React.ReactNode): React.ReactNode =>
+    highlightSearchChildren(children, highlightQuery)
+
   const baseComponents: Partial<Components> = {
     // FileCard: intercept <div data-type="fileCard"> from preprocessFileCards
     div: ({ node, children, ...props }) => {
@@ -167,7 +282,7 @@ function createComponents(
           </div>
         )
       }
-      return <div {...props}>{children}</div>
+      return <div {...props}>{highlight(children)}</div>
     },
     // Images: render uploaded images with constrained sizing
     img: ({ src, alt }) => {
@@ -196,12 +311,7 @@ function createComponents(
             // Pass the link text as a label so the renderer can fall back to
             // the author's intended name when the id isn't resolvable (e.g. a
             // user who left the workspace) instead of rendering "Unknown".
-            const label =
-              typeof children === 'string'
-                ? children
-                : Array.isArray(children)
-                  ? children.filter((c): c is string => typeof c === 'string').join('')
-                  : undefined
+            const label = extractText(children)
             // Let the custom renderer opt out for types it doesn't handle
             // by returning null/undefined — we then fall through to the
             // default styled span so nothing ever disappears silently.
@@ -212,13 +322,13 @@ function createComponents(
           // Fallback: render as a simple styled span
           return (
             <span className="text-primary font-semibold mx-0.5">
-              {children}
+              {highlight(children)}
             </span>
           )
         }
         return (
           <span className="text-primary font-semibold mx-0.5">
-            {children}
+            {highlight(children)}
           </span>
         )
       }
@@ -226,7 +336,7 @@ function createComponents(
       if (href?.startsWith('slash://skill/')) {
         return (
           <span className="slash-command text-primary font-semibold mx-0.5">
-            {children}
+            {highlight(children)}
           </span>
         )
       }
@@ -252,7 +362,7 @@ function createComponents(
           onClick={handleClick}
           className="text-primary hover:underline cursor-pointer"
         >
-          {children}
+          {highlight(children)}
         </a>
       )
     }
@@ -270,15 +380,15 @@ function createComponents(
         </pre>
       ),
       // Minimal paragraph spacing
-      p: ({ children }) => <p className="my-1">{children}</p>,
+      p: ({ children }) => <p className="my-1">{highlight(children)}</p>,
       // Simple lists
-      ul: ({ children }) => <ul className="list-disc list-inside my-1">{children}</ul>,
-      ol: ({ children }) => <ol className="list-decimal list-inside my-1">{children}</ol>,
-      li: ({ children }) => <li className="my-0.5">{children}</li>,
+      ul: ({ children }) => <ul className="list-disc list-inside my-1">{highlight(children)}</ul>,
+      ol: ({ children }) => <ol className="list-decimal list-inside my-1">{highlight(children)}</ol>,
+      li: ({ children }) => <li className="my-0.5">{highlight(children)}</li>,
       // Plain tables
-      table: ({ children }) => <table className="my-2 font-mono text-sm">{children}</table>,
-      th: ({ children }) => <th className="text-left pr-4">{children}</th>,
-      td: ({ children }) => <td className="pr-4">{children}</td>
+      table: ({ children }) => <table className="my-2 font-mono text-sm">{highlight(children)}</table>,
+      th: ({ children }) => <th className="text-left pr-4">{highlight(children)}</th>,
+      td: ({ children }) => <td className="pr-4">{highlight(children)}</td>
     }
   }
 
@@ -303,45 +413,45 @@ function createComponents(
       },
       pre: ({ children }) => <>{children}</>,
       // Comfortable paragraph spacing
-      p: ({ children }) => <p className="my-2 leading-relaxed">{children}</p>,
+      p: ({ children }) => <p className="my-2 leading-relaxed">{highlight(children)}</p>,
       // Styled lists
       ul: ({ children }) => (
         <ul className="my-2 space-y-1 ps-4 pe-2 list-disc marker:text-muted-foreground">
-          {children}
+          {highlight(children)}
         </ul>
       ),
-      ol: ({ children }) => <ol className="my-2 space-y-1 pl-6 list-decimal">{children}</ol>,
-      li: ({ children }) => <li>{children}</li>,
+      ol: ({ children }) => <ol className="my-2 space-y-1 pl-6 list-decimal">{highlight(children)}</ol>,
+      li: ({ children }) => <li>{highlight(children)}</li>,
       // Clean tables
       table: ({ children }) => (
         <div className="my-3 overflow-x-auto">
-          <table className="min-w-full text-sm">{children}</table>
+          <table className="min-w-full text-sm">{highlight(children)}</table>
         </div>
       ),
-      thead: ({ children }) => <thead className="border-b">{children}</thead>,
+      thead: ({ children }) => <thead className="border-b">{highlight(children)}</thead>,
       th: ({ children }) => (
-        <th className="text-left py-2 px-3 font-semibold text-muted-foreground">{children}</th>
+        <th className="text-left py-2 px-3 font-semibold text-muted-foreground">{highlight(children)}</th>
       ),
-      td: ({ children }) => <td className="py-2 px-3 border-b border-border/50">{children}</td>,
+      td: ({ children }) => <td className="py-2 px-3 border-b border-border/50">{highlight(children)}</td>,
       // Headings - H1/H2 same size, differentiated by weight
-      h1: ({ children }) => <h1 className="font-sans text-base font-bold mt-5 mb-3">{children}</h1>,
+      h1: ({ children }) => <h1 className="font-sans text-base font-bold mt-5 mb-3">{highlight(children)}</h1>,
       h2: ({ children }) => (
-        <h2 className="font-sans text-base font-semibold mt-4 mb-3">{children}</h2>
+        <h2 className="font-sans text-base font-semibold mt-4 mb-3">{highlight(children)}</h2>
       ),
       h3: ({ children }) => (
-        <h3 className="font-sans text-sm font-semibold mt-4 mb-2">{children}</h3>
+        <h3 className="font-sans text-sm font-semibold mt-4 mb-2">{highlight(children)}</h3>
       ),
       // Blockquotes
       blockquote: ({ children }) => (
         <blockquote className="border-l-2 border-muted-foreground/30 pl-3 my-2 text-muted-foreground italic">
-          {children}
+          {highlight(children)}
         </blockquote>
       ),
       // Horizontal rules
       hr: () => <hr className="my-4 border-border" />,
       // Strong/emphasis
-      strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-      em: ({ children }) => <em className="italic">{children}</em>
+      strong: ({ children }) => <strong className="font-semibold">{highlight(children)}</strong>,
+      em: ({ children }) => <em className="italic">{highlight(children)}</em>
     }
   }
 
@@ -363,37 +473,49 @@ function createComponents(
     },
     pre: ({ children }) => <>{children}</>,
     // Rich paragraph spacing
-    p: ({ children }) => <p className="my-3 leading-relaxed">{children}</p>,
+    p: ({ children }) => <p className="my-3 leading-relaxed">{highlight(children)}</p>,
     // Styled lists
     ul: ({ children }) => (
       <ul className="my-3 space-y-1.5 ps-4 pe-2 list-disc marker:text-muted-foreground">
-        {children}
+        {highlight(children)}
       </ul>
     ),
-    ol: ({ children }) => <ol className="my-3 space-y-1.5 pl-6 list-decimal">{children}</ol>,
-    li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+    ol: ({ children }) => (
+      <ol className="my-3 space-y-1.5 pl-6 list-decimal">{highlight(children)}</ol>
+    ),
+    li: ({ children }) => <li className="leading-relaxed">{highlight(children)}</li>,
     // Beautiful tables
     table: ({ children }) => (
       <div className="my-4 overflow-x-auto rounded-md border">
-        <table className="min-w-full divide-y divide-border">{children}</table>
+        <table className="min-w-full divide-y divide-border">{highlight(children)}</table>
       </div>
     ),
-    thead: ({ children }) => <thead className="bg-muted/50">{children}</thead>,
-    tbody: ({ children }) => <tbody className="divide-y divide-border">{children}</tbody>,
-    th: ({ children }) => <th className="text-left py-3 px-4 font-semibold text-sm">{children}</th>,
-    td: ({ children }) => <td className="py-3 px-4 text-sm">{children}</td>,
-    tr: ({ children }) => <tr className="hover:bg-muted/30 transition-colors">{children}</tr>,
-    // Rich headings
-    h1: ({ children }) => <h1 className="font-sans text-base font-bold mt-7 mb-4">{children}</h1>,
-    h2: ({ children }) => (
-      <h2 className="font-sans text-base font-semibold mt-6 mb-3">{children}</h2>
+    thead: ({ children }) => <thead className="bg-muted/50">{highlight(children)}</thead>,
+    tbody: ({ children }) => <tbody className="divide-y divide-border">{highlight(children)}</tbody>,
+    th: ({ children }) => (
+      <th className="text-left py-3 px-4 font-semibold text-sm">{highlight(children)}</th>
     ),
-    h3: ({ children }) => <h3 className="font-sans text-sm font-semibold mt-5 mb-3">{children}</h3>,
-    h4: ({ children }) => <h4 className="text-sm font-semibold mt-3 mb-1">{children}</h4>,
+    td: ({ children }) => <td className="py-3 px-4 text-sm">{highlight(children)}</td>,
+    tr: ({ children }) => (
+      <tr className="hover:bg-muted/30 transition-colors">{highlight(children)}</tr>
+    ),
+    // Rich headings
+    h1: ({ children }) => (
+      <h1 className="font-sans text-base font-bold mt-7 mb-4">{highlight(children)}</h1>
+    ),
+    h2: ({ children }) => (
+      <h2 className="font-sans text-base font-semibold mt-6 mb-3">{highlight(children)}</h2>
+    ),
+    h3: ({ children }) => (
+      <h3 className="font-sans text-sm font-semibold mt-5 mb-3">{highlight(children)}</h3>
+    ),
+    h4: ({ children }) => (
+      <h4 className="text-sm font-semibold mt-3 mb-1">{highlight(children)}</h4>
+    ),
     // Styled blockquotes
     blockquote: ({ children }) => (
       <blockquote className="border-l-4 border-foreground/30 bg-muted/30 pl-4 pr-3 py-2 my-3 rounded-r-md">
-        {children}
+        {highlight(children)}
       </blockquote>
     ),
     // Task lists (GFM)
@@ -413,9 +535,11 @@ function createComponents(
     // Horizontal rules
     hr: () => <hr className="my-6 border-border" />,
     // Strong/emphasis
-    strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-    em: ({ children }) => <em className="italic">{children}</em>,
-    del: ({ children }) => <del className="line-through text-muted-foreground">{children}</del>
+    strong: ({ children }) => <strong className="font-semibold">{highlight(children)}</strong>,
+    em: ({ children }) => <em className="italic">{highlight(children)}</em>,
+    del: ({ children }) => (
+      <del className="line-through text-muted-foreground">{highlight(children)}</del>
+    )
   }
 }
 
@@ -440,11 +564,22 @@ export function Markdown({
   renderImage,
   renderFileCard,
   cdnDomain,
-  issueRefPrefix
+  issueRefPrefix,
+  highlightQuery
 }: MarkdownProps): React.JSX.Element {
+  const normalizedHighlightQuery = normalizeHighlightQuery(highlightQuery)
   const components = React.useMemo(
-    () => createComponents(mode, onUrlClick, onFileClick, renderMention, renderImage, renderFileCard),
-    [mode, onUrlClick, onFileClick, renderMention, renderImage, renderFileCard]
+    () =>
+      createComponents(
+        mode,
+        onUrlClick,
+        onFileClick,
+        renderMention,
+        renderImage,
+        renderFileCard,
+        normalizedHighlightQuery,
+      ),
+    [mode, onUrlClick, onFileClick, renderMention, renderImage, renderFileCard, normalizedHighlightQuery]
   )
 
   // Preprocess: convert mention shortcodes, bare issue identifiers, raw URLs,
@@ -452,6 +587,7 @@ export function Markdown({
   const processedContent = React.useMemo(
     () => {
       let result = preprocessMentionShortcodes(children)
+      result = preprocessStickers(result)
       if (issueRefPrefix) result = preprocessIssueRefs(result, issueRefPrefix)
       result = preprocessLinks(result)
       result = preprocessFileCards(result, cdnDomain ?? '')
@@ -486,10 +622,15 @@ export const MemoizedMarkdown = React.memo(Markdown, (prevProps, nextProps) => {
     return (
       prevProps.id === nextProps.id &&
       prevProps.children === nextProps.children &&
-      prevProps.mode === nextProps.mode
+      prevProps.mode === nextProps.mode &&
+      prevProps.highlightQuery === nextProps.highlightQuery
     )
   }
   // Otherwise compare content and mode
-  return prevProps.children === nextProps.children && prevProps.mode === nextProps.mode
+  return (
+    prevProps.children === nextProps.children &&
+    prevProps.mode === nextProps.mode &&
+    prevProps.highlightQuery === nextProps.highlightQuery
+  )
 })
 MemoizedMarkdown.displayName = 'MemoizedMarkdown'

@@ -12,15 +12,19 @@ import type {
   BillingTransactionsPage,
   CancelTaskResponse,
   CreateAgentFromTemplateResponse,
+  EvolutionReviewSubmission,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
   GroupedIssuesResponse,
+  ChannelMessageSearchResponse,
   ListIssuesResponse,
   ListWebhookDeliveriesResponse,
   Squad,
   TimelineEntry,
   User,
   WebhookDelivery,
+  WebPushPublicKeyResponse,
+  WebPushSubscriptionResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 
@@ -183,6 +187,35 @@ export const EMPTY_APP_CONFIG: AppConfigResponse = {
   workspace_creation_disabled: false,
 };
 
+export const WebPushPublicKeySchema = z.object({
+  public_key: z.string().default(""),
+  enabled: BooleanWithDefaultSchema(false),
+}).loose();
+
+export const EMPTY_WEB_PUSH_PUBLIC_KEY: WebPushPublicKeyResponse = {
+  public_key: "",
+  enabled: false,
+};
+
+export const WebPushSubscriptionSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  user_id: z.string().default(""),
+  endpoint: z.string().default(""),
+  expiration_time: OptionalStringSchema,
+  device_id: OptionalStringSchema,
+  user_agent: OptionalStringSchema,
+  last_active_at: z.string().default(""),
+}).loose();
+
+export const EMPTY_WEB_PUSH_SUBSCRIPTION: WebPushSubscriptionResponse = {
+  id: "",
+  workspace_id: "",
+  user_id: "",
+  endpoint: "",
+  last_active_at: "",
+};
+
 export const CommentSchema = z.object({
   id: z.string(),
   issue_id: z.string(),
@@ -210,6 +243,80 @@ const CommentTriggerPreviewAgentSchema = z.object({
 export const CommentTriggerPreviewSchema = z.object({
   agents: z.array(CommentTriggerPreviewAgentSchema).default([]),
 }).loose();
+
+const EvolutionReviewFileSchema = z.object({
+  id: z.string().default(""),
+  path: z.string().default(""),
+  content: z.string().optional(),
+  content_hash: z.string().default(""),
+  mime_type: z.string().default(""),
+  size_bytes: z.number().default(0),
+  created_at: z.string().nullable().optional(),
+}).loose();
+
+export const EvolutionReviewSubmissionSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string().default(""),
+  source_agent_id: z.string().default(""),
+  source_member_id: z.string().optional(),
+  unit_type: z.string().default(""),
+  local_unit_id: z.string().default(""),
+  title: z.string().default(""),
+  summary: z.string().default(""),
+  content: z.string().optional(),
+  content_hash: z.string().default(""),
+  bundle_hash: z.string().default(""),
+  bundle_ref: z.string().default(""),
+  sensitivity: z.string().default(""),
+  confidence: z.string().default(""),
+  suggested_scope: z.string().default(""),
+  tags: z.array(z.string()).default([]),
+  tools: z.array(z.string()).default([]),
+  task_types: z.array(z.string()).default([]),
+  project_types: z.array(z.string()).default([]),
+  languages: z.array(z.string()).default([]),
+  frameworks: z.array(z.string()).default([]),
+  status: z.string().default("needs_review"),
+  reject_reason: z.string().default(""),
+  review_decision: z.string().default(""),
+  review_confidence: z.number().nullable().optional(),
+  review_risk_level: z.string().default(""),
+  review_reason: z.string().default(""),
+  review_metadata: z.record(z.string(), z.unknown()).default({}),
+  reviewed_at: z.string().nullable().optional(),
+  promoted_unit_id: z.string().nullable().optional(),
+  source_created_at: z.string().nullable().optional(),
+  created_at: z.string().nullable().optional(),
+  updated_at: z.string().nullable().optional(),
+  files: z.array(EvolutionReviewFileSchema).optional(),
+}).loose();
+
+export const EvolutionReviewSubmissionListSchema = z.array(EvolutionReviewSubmissionSchema);
+
+export const EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST: EvolutionReviewSubmission[] = [];
+
+const ChannelMessageSearchResultSchema = z.object({
+  message_id: z.string().default(""),
+  channel_id: z.string().default(""),
+  thread_root_message_id: z.string().nullable().optional(),
+  author_type: z.string().default(""),
+  author_id: z.string().nullable().default(null),
+  author_name: z.string().default(""),
+  content: z.string().default(""),
+  created_at: z.string().default(""),
+}).loose();
+
+export const ChannelMessageSearchResponseSchema = z.object({
+  query: z.string().default(""),
+  total: z.number().default(0),
+  results: z.array(ChannelMessageSearchResultSchema).default([]),
+}).loose();
+
+export const EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE: ChannelMessageSearchResponse = {
+  query: "",
+  total: 0,
+  results: [],
+};
 
 // Metadata is primitive-only by API/DB contract. Stay lenient on shape:
 // unknown keys land as `unknown` to a caller, but the field itself defaults
@@ -764,6 +871,7 @@ export const EMPTY_WEBHOOK_DELIVERY: WebhookDelivery = {
 export const UserSchema = z.object({
   id: z.string(),
   name: z.string().default(""),
+  display_name: z.string().default(""),
   email: z.string().default(""),
   avatar_url: z.string().nullable().default(null),
   onboarded_at: z.string().nullable().default(null),
@@ -779,6 +887,7 @@ export const UserSchema = z.object({
 export const EMPTY_USER: User = {
   id: "",
   name: "",
+  display_name: "",
   email: "",
   avatar_url: null,
   onboarded_at: null,

@@ -25,7 +25,9 @@ import {
 } from "@multica/ui/components/ui/alert-dialog";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
+import { resolveActorIdentityPresentation } from "@multica/core/identity";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { availabilityConfig, workloadConfig } from "../../agents/presence";
 import { useT } from "../../i18n";
 import { isSelfHealingRuntime } from "../utils";
@@ -443,11 +445,15 @@ function AgentPlanTable({
           const ownerMember = agent.owner_id
             ? memberById.get(agent.owner_id) ?? null
             : null;
+          const ownerPresentation = ownerMember
+            ? resolveActorIdentityPresentation(ownerMember, ownerMember.user_id)
+            : null;
           const ownerLabel = ownerMember
             ? ownerMember.user_id === currentUserId
               ? t(($) => $.detail.delete_dialog.cascade.table.owner_self)
-              : ownerMember.name
+              : ownerPresentation!.displayName
             : t(($) => $.detail.delete_dialog.cascade.table.owner_unassigned);
+          const agentPresentation = resolveActorIdentityPresentation(agent, agent.id);
           const presence = presenceMap.get(agent.id);
           return (
             <div
@@ -461,9 +467,13 @@ function AgentPlanTable({
                   size={20}
                   enableHoverCard
                 />
-                <span className="truncate font-medium text-foreground">
-                  {agent.name}
-                </span>
+                <ActorIdentityRow
+                  displayName={agentPresentation.displayName}
+                  handle={agentPresentation.handle}
+                  showHandle={agentPresentation.showHandleLabel}
+                  primaryClassName="truncate font-medium text-foreground"
+                  secondaryClassName="truncate text-[11px] text-muted-foreground"
+                />
               </span>
               <span className="inline-flex min-w-0 items-center gap-1.5">
                 {ownerMember ? (
@@ -473,9 +483,17 @@ function AgentPlanTable({
                     size={16}
                   />
                 ) : null}
-                <span className="truncate text-muted-foreground">
-                  {ownerLabel}
-                </span>
+                {ownerPresentation ? (
+                  <ActorIdentityRow
+                    displayName={ownerLabel}
+                    handle={ownerPresentation.handle}
+                    showHandle={ownerPresentation.showHandleLabel}
+                    primaryClassName="truncate text-muted-foreground"
+                    secondaryClassName="truncate text-[11px] text-muted-foreground/80"
+                  />
+                ) : (
+                  <span className="truncate text-muted-foreground">{ownerLabel}</span>
+                )}
               </span>
               <PresenceCell presence={presence} />
               <VisibilityCell visibility={agent.visibility} />

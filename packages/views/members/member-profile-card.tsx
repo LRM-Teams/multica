@@ -6,6 +6,8 @@ import { useWorkspaceId } from "@multica/core";
 import { agentRunCounts30dOptions } from "@multica/core/agents";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
+import { resolveActorDisplayName } from "@multica/core/identity";
+import { ActorIdentityRow } from "../common/actor-identity-row";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -54,7 +56,8 @@ export function MemberProfileCard({ userId }: MemberProfileCardProps) {
     );
   }
 
-  const initials = member.name
+  const displayName = resolveActorDisplayName(member, member.user_id);
+  const initials = displayName
     .split(" ")
     .map((w) => w[0])
     .join("")
@@ -71,7 +74,7 @@ export function MemberProfileCard({ userId }: MemberProfileCardProps) {
       const ra = runCountById.get(a.id) ?? 0;
       const rb = runCountById.get(b.id) ?? 0;
       if (ra !== rb) return rb - ra;
-      return a.name.localeCompare(b.name);
+      return resolveActorDisplayName(a, a.id).localeCompare(resolveActorDisplayName(b, b.id));
     });
 
   return (
@@ -79,7 +82,7 @@ export function MemberProfileCard({ userId }: MemberProfileCardProps) {
       {/* Header */}
       <div className="flex items-start gap-3">
         <ActorAvatarBase
-          name={member.name}
+          name={displayName}
           initials={initials}
           avatarUrl={resolvePublicFileUrl(member.avatar_url)}
           size={40}
@@ -87,12 +90,13 @@ export function MemberProfileCard({ userId }: MemberProfileCardProps) {
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <p className="truncate text-sm font-semibold">{member.name}</p>
+            <ActorIdentityRow
+              identity={member}
+              primaryClassName="truncate text-sm font-semibold"
+            />
             <RoleBadge role={member.role} />
           </div>
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {member.email}
-          </p>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">{member.email}</p>
         </div>
       </div>
 
@@ -145,7 +149,7 @@ function OwnedAgentsSection({ agents }: { agents: Agent[] }) {
               className="mt-0.5 shrink-0 rounded-md"
             />
             <div className="min-w-0 flex-1">
-              <div className="truncate font-medium">{a.name}</div>
+              <ActorIdentityRow identity={a} primaryClassName="truncate font-medium" />
               {a.description && (
                 <div className="truncate text-muted-foreground">
                   {a.description}

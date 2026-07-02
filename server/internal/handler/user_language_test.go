@@ -14,9 +14,10 @@ func newLanguageTestUser(t *testing.T, email string) string {
 	ctx := context.Background()
 
 	var userID string
+	handle := strings.ReplaceAll(strings.Split(email, "@")[0], "-", "_")
 	if err := testPool.QueryRow(ctx,
-		`INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id`,
-		"Language Test", email,
+		`INSERT INTO "user" (name, display_name, email) VALUES ($1, $2, $3) RETURNING id`,
+		handle, "Language Test", email,
 	).Scan(&userID); err != nil {
 		t.Fatalf("insert test user: %v", err)
 	}
@@ -60,6 +61,34 @@ func TestUpdateMeAcceptsLanguage(t *testing.T) {
 	}
 	if got, _ := resp["language"].(string); got != "zh-Hans" {
 		t.Fatalf("expected response language=zh-Hans, got %v", resp["language"])
+	}
+}
+
+func TestUpdateMePreservesDisplayNameWhenNotProvided(t *testing.T) {
+	userID := newLanguageTestUser(t, "display-preserve@multica.ai")
+
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE "user" SET display_name = 'Existing Display' WHERE id = $1`, userID,
+	); err != nil {
+		t.Fatalf("preset display_name: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newPatchMeRequest(userID, `{"language":"en"}`)
+	testHandler.UpdateMe(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var displayName string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT display_name FROM "user" WHERE id = $1`, userID,
+	).Scan(&displayName); err != nil {
+		t.Fatalf("lookup user: %v", err)
+	}
+	if displayName != "Existing Display" {
+		t.Fatalf("expected display_name preserved, got %q", displayName)
 	}
 }
 

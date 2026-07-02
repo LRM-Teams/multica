@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TestListWorkspaceAgentTaskSnapshot covers the agent presence snapshot endpoint:
@@ -144,21 +146,178 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	}
 }
 
-func TestCreateAgent_RejectsDuplicateName(t *testing.T) {
+func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
-	// Clean up any agents created by this test.
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(),
-			`DELETE FROM agent WHERE workspace_id = $1 AND name = $2`,
-			testWorkspaceID, "duplicate-name-test-agent",
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "recent-activity-agent", []byte(`{}`))
+	longSummary := strings.Repeat("activity ", 30)
+
+	var olderID, newerID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, status, priority, trigger_summary,
+			created_at, started_at, completed_at, error
 		)
+		VALUES ($1, $2, 'failed', 0, $3, now() - interval '3 minutes',
+		        now() - interval '2 minutes', now() - interval '1 minute', 'raw stacktrace should not leak')
+		RETURNING id
+	`, agentID, handlerTestRuntimeID(t), longSummary).Scan(&olderID); err != nil {
+		t.Fatalf("insert older task: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO task_message (task_id, seq, type, tool, input, output)
+		VALUES ($1, 1, 'tool_use', 'exec_command',
+		        '{"cmd":"pnpm --filter @multica/web build --token sk-proj-abc123def456ghi789jkl012mno345"}',
+		        'raw command output should not leak')
+	`, olderID); err != nil {
+		t.Fatalf("insert command task message: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, status, priority, trigger_summary,
+			created_at, started_at
+		)
+		VALUES ($1, $2, 'running', 0, 'newer work item', now() - interval '30 seconds',
+		        now() - interval '10 seconds')
+		RETURNING id
+	`, agentID, handlerTestRuntimeID(t)).Scan(&newerID); err != nil {
+		t.Fatalf("insert newer task: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO task_message (task_id, seq, type, tool, input, output)
+		VALUES ($1, 1, 'tool_use', 'apply_patch',
+		        '{"path":"/repo/server/internal/handler/profile.go"}',
+		        'raw patch output should not leak')
+	`, newerID); err != nil {
+		t.Fatalf("insert file task message: %v", err)
+	}
+	extraIDs := make([]string, 0, 3)
+	for i := 0; i < 3; i++ {
+		var id string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO agent_task_queue (
+				agent_id, runtime_id, status, priority, trigger_summary,
+				created_at, completed_at
+			)
+			VALUES ($1, $2, 'completed', 0, $3, now() - ($4::int * interval '10 minutes'),
+			        now() - ($4::int * interval '10 minutes'))
+			RETURNING id
+		`, agentID, handlerTestRuntimeID(t), fmt.Sprintf("fallback task %d", i+1), i+1).Scan(&id); err != nil {
+			t.Fatalf("insert extra task %d: %v", i, err)
+		}
+		extraIDs = append(extraIDs, id)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id IN ($1, $2)`, olderID, newerID)
+		for _, id := range extraIDs {
+			testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, id)
+		}
 	})
 
+	w := httptest.NewRecorder()
+	req := withRouteParams(
+		newRequest(http.MethodGet, "/api/member-profiles/agent/"+agentID, nil),
+		"memberType", "agent",
+		"memberId", agentID,
+	)
+	testHandler.GetMemberProfile(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetMemberProfile: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var profile MemberProfileResponse
+	if err := json.NewDecoder(w.Body).Decode(&profile); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if profile.MemberType != "agent" || profile.MemberID != agentID {
+		t.Fatalf("profile identity = %#v, want agent %s", profile, agentID)
+	}
+	if profile.Role != "Agent" {
+		t.Fatalf("agent profile role = %q, want Agent", profile.Role)
+	}
+	items := profile.RecentActivity
+	if len(items) != 5 {
+		t.Fatalf("expected 5 activity items, got %d: %#v", len(items), items)
+	}
+	if items[0].ID != newerID || items[0].Kind != "tool_use" || items[0].Status != "running" {
+		t.Fatalf("newest activity = %#v, want running file activity %s", items[0], newerID)
+	}
+	if items[0].Label != "Editing file" {
+		t.Fatalf("newest activity projection = %#v, want Editing file", items[0])
+	}
+	if items[1].ID != olderID || items[1].Kind != "command" || items[1].Status != "failed" {
+		t.Fatalf("older activity = %#v, want command task %s", items[1], olderID)
+	}
+	if items[1].Label != "Ran command" {
+		t.Fatalf("command activity label = %q, want Ran command", items[1].Label)
+	}
+	body := w.Body.String()
+	for _, leak := range []string{
+		`"summary"`,
+		"newer work item",
+		"fallback task",
+		"profile.go",
+		"raw stacktrace",
+		"raw command output",
+		"raw patch output",
+		"exec_command",
+		"apply_patch",
+		"pnpm --filter @multica/web build",
+		"--token",
+		"sk-proj-abc123def456ghi789jkl012mno345",
+	} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("recent activity leaked %q: %s", leak, body)
+		}
+	}
+	if items[0].OccurredAt == "" || items[1].OccurredAt == "" {
+		t.Fatalf("expected occurred_at on every item: %#v", items)
+	}
+}
+
+func TestProjectTextActivity_ProjectsActionWithoutSummary(t *testing.T) {
+	for _, content := range []string{
+		"9a5-d69cd32e15e6)",
+		"550e8400-e29b-41d4-a716-446655440000",
+		"sk-proj-abc123def456",
+		"I finished updating the profile activity summary.",
+		"我已完成资料页活动摘要清理",
+	} {
+		item, ok := projectTextActivity(recentTaskActivityMessage{
+			Type:    "text",
+			Content: pgtype.Text{String: content, Valid: true},
+		}, "completed")
+		if !ok {
+			t.Fatalf("projectTextActivity returned ok=false for %q", content)
+		}
+		if item.Label != "Writing response" {
+			t.Fatalf("label = %q, want Writing response", item.Label)
+		}
+	}
+}
+
+func TestCreateAgent_GeneratesUniqueHandlesForDuplicateDisplayNames(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	displayName := "Duplicate Name Test Agent"
+	cleanup := func() {
+		testPool.Exec(context.Background(),
+			`DELETE FROM agent
+			 WHERE workspace_id = $1
+			   AND (display_name = $2 OR name LIKE 'duplicate_name_test_agent%')`,
+			testWorkspaceID, displayName,
+		)
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
 	body := map[string]any{
-		"name":                 "duplicate-name-test-agent",
+		"name":                 displayName,
 		"description":          "first description",
 		"runtime_id":           testRuntimeID,
 		"visibility":           "private",
@@ -171,22 +330,93 @@ func TestCreateAgent_RejectsDuplicateName(t *testing.T) {
 	if w1.Code != http.StatusCreated {
 		t.Fatalf("first CreateAgent: expected 201, got %d: %s", w1.Code, w1.Body.String())
 	}
-	var resp1 map[string]any
+	var resp1 AgentResponse
 	if err := json.NewDecoder(w1.Body).Decode(&resp1); err != nil {
 		t.Fatalf("decode first response: %v", err)
 	}
-	agentID1, _ := resp1["id"].(string)
-	if agentID1 == "" {
+	if resp1.ID == "" {
 		t.Fatalf("first CreateAgent: no id in response: %v", resp1)
 	}
+	if resp1.Name != "duplicate_name_test_agent" {
+		t.Fatalf("first handle = %q, want duplicate_name_test_agent", resp1.Name)
+	}
+	if resp1.DisplayName != displayName {
+		t.Fatalf("first display_name = %q, want %q", resp1.DisplayName, displayName)
+	}
 
-	// Second call — same name must be rejected with 409 Conflict.
-	// The unique constraint prevents silent duplicates; the UI shows a clear error.
+	// Second call — same legacy display input is allowed. The server keeps the
+	// display label and suffixes only the stable handle.
 	body["description"] = "updated description"
 	w2 := httptest.NewRecorder()
 	testHandler.CreateAgent(w2, newRequest(http.MethodPost, "/api/agents", body))
-	if w2.Code != http.StatusConflict {
-		t.Fatalf("second CreateAgent with duplicate name: expected 409, got %d: %s", w2.Code, w2.Body.String())
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("second CreateAgent with duplicate display name: expected 201, got %d: %s", w2.Code, w2.Body.String())
+	}
+	var resp2 AgentResponse
+	if err := json.NewDecoder(w2.Body).Decode(&resp2); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+	if resp2.DisplayName != displayName {
+		t.Fatalf("second display_name = %q, want %q", resp2.DisplayName, displayName)
+	}
+	if resp2.Name != "duplicate_name_test_agent_2" {
+		t.Fatalf("second handle = %q, want duplicate_name_test_agent_2", resp2.Name)
+	}
+}
+
+func TestUpdateAgent_LegacyNameRenamesDisplayOnly(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	displayName := "Legacy Rename Agent"
+	cleanup := func() {
+		testPool.Exec(context.Background(),
+			`DELETE FROM agent
+			 WHERE workspace_id = $1
+			   AND (display_name IN ($2, $3) OR name LIKE 'legacy_rename_agent%')`,
+			testWorkspaceID, displayName, "Renamed Legacy Display",
+		)
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	createBody := map[string]any{
+		"name":                 displayName,
+		"runtime_id":           testRuntimeID,
+		"visibility":           "private",
+		"max_concurrent_tasks": 1,
+	}
+	createRec := httptest.NewRecorder()
+	testHandler.CreateAgent(createRec, newRequest(http.MethodPost, "/api/agents", createBody))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("CreateAgent: expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+	var created AgentResponse
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.Name == "" {
+		t.Fatal("created agent missing generated handle")
+	}
+
+	req := withURLParam(newRequest(http.MethodPut, "/api/agents/"+created.ID, map[string]any{
+		"name": "Renamed Legacy Display",
+	}), "id", created.ID)
+	updateRec := httptest.NewRecorder()
+	testHandler.UpdateAgent(updateRec, req)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("UpdateAgent: expected 200, got %d: %s", updateRec.Code, updateRec.Body.String())
+	}
+	var updated AgentResponse
+	if err := json.NewDecoder(updateRec.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode update response: %v", err)
+	}
+	if updated.Name != created.Name {
+		t.Fatalf("legacy name patch changed handle: got %q, want %q", updated.Name, created.Name)
+	}
+	if updated.DisplayName != "Renamed Legacy Display" {
+		t.Fatalf("display_name = %q, want Renamed Legacy Display", updated.DisplayName)
 	}
 }
 

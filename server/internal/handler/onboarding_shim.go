@@ -207,15 +207,14 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 	var assistant db.Agent
 	assistantCreated := false
 	for _, existing := range agents {
-		if existing.Name == onboardingAssistantName && existing.Visibility == "workspace" {
+		if agentDisplayName(existing) == onboardingAssistantName && existing.Visibility == "workspace" {
 			assistant = existing
 			break
 		}
 	}
 	if !assistant.ID.Valid {
-		assistant, err = qtx.CreateAgent(r.Context(), db.CreateAgentParams{
+		assistant, err = h.createAgentWithIdentity(r.Context(), qtx, db.CreateAgentParams{
 			WorkspaceID:        wsUUID,
-			Name:               onboardingAssistantName,
 			Description:        onboardingAssistantDescription,
 			AvatarUrl:          pgtype.Text{String: onboardingAssistantAvatarURL, Valid: true},
 			RuntimeMode:        runtime.RuntimeMode,
@@ -229,7 +228,7 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 			CustomArgs:         []byte("[]"),
 			McpConfig:          nil,
 			Model:              pgtype.Text{},
-		})
+		}, onboardingAssistantName, onboardingAssistantName)
 		if err != nil {
 			slog.Warn("bootstrap onboarding (shim): create assistant failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", req.WorkspaceID)...)
 			writeError(w, http.StatusInternalServerError, "failed to create onboarding assistant")

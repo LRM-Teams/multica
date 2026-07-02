@@ -49,18 +49,26 @@ vi.mock("@multica/core/auth", () => ({
   useAuthStore: { getState: () => authState },
 }));
 
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => (
+    <span data-testid="actor-avatar" data-actor-id={actorId} />
+  ),
+}));
+
 import {
   createMentionSuggestion,
   MentionList,
   type MentionListRef,
   type MentionItem,
 } from "./mention-suggestion";
+import { createIssueReferenceSuggestion } from "./issue-reference-suggestion";
 
 function fakeQc(data: {
-  members?: Array<{ user_id: string; name: string; role?: string }>;
+  members?: Array<{ user_id: string; name: string; display_name?: string; role?: string }>;
   agents?: Array<{
     id: string;
     name: string;
+    display_name?: string;
     archived_at: string | null;
     visibility?: "workspace" | "private";
     owner_id?: string | null;
@@ -110,11 +118,12 @@ describe("createMentionSuggestion", () => {
 
   it("returns members and agents synchronously without waiting for the server search", () => {
     const qc = fakeQc({
-      members: [{ user_id: "u1", name: "Alice", role: "member" }],
+      members: [{ user_id: "u1", name: "alice", display_name: "Alice", role: "member" }],
       agents: [
         {
           id: "a1",
-          name: "Aegis",
+          name: "agent_aegis",
+          display_name: "Aegis",
           archived_at: null,
           visibility: "workspace",
           owner_id: null,
@@ -130,11 +139,78 @@ describe("createMentionSuggestion", () => {
     // Must be synchronous: a plain array, not a Promise.
     expect(Array.isArray(result)).toBe(true);
     const items = result as MentionItem[];
-    expect(items.some((i) => i.type === "member" && i.label === "Alice")).toBe(true);
-    expect(items.some((i) => i.type === "agent" && i.label === "Aegis")).toBe(true);
+    expect(items).toContainEqual(expect.objectContaining({
+      type: "member",
+      label: "Alice",
+      handle: "alice",
+      secondaryLabel: "@alice",
+    }));
+    expect(items).toContainEqual(expect.objectContaining({
+      type: "agent",
+      label: "Aegis",
+      handle: "agent_aegis",
+      secondaryLabel: "@agent_aegis",
+    }));
   });
 
-  it("loads server issue matches into the popup when the list cache misses", async () => {
+  it("renders broadcast as a top row and keeps members and agents in one section", () => {
+    render(
+      <I18nWrapper>
+        <MentionList
+          items={[
+            { id: "all", label: "All members", type: "all" },
+            { id: "u1", label: "Alice", type: "member", handle: "alice", secondaryLabel: "@alice" },
+            { id: "a1", label: "Aegis", type: "agent", handle: "agent_aegis", secondaryLabel: "@agent_aegis" },
+          ]}
+          query=""
+          command={vi.fn()}
+        />
+      </I18nWrapper>,
+    );
+
+    expect(screen.getByText("All members")).toBeInTheDocument();
+    expect(screen.getByText("Notify everyone in this conversation")).toBeInTheDocument();
+    expect(screen.getByText("Members")).toBeInTheDocument();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(screen.getByText("Aegis")).toBeInTheDocument();
+    expect(screen.queryByText("All")).not.toBeInTheDocument();
+    expect(screen.queryByText("Users")).not.toBeInTheDocument();
+  });
+
+  it("matches handles and ranks handle matches before display-name-only matches", () => {
+    const qc = fakeQc({
+      members: [{ user_id: "u1", name: "alice", display_name: "Alice", role: "member" }],
+      agents: [
+        {
+          id: "a-display",
+          name: "zeta",
+          display_name: "Atlas",
+          archived_at: null,
+          visibility: "workspace",
+          owner_id: null,
+        },
+        {
+          id: "a-handle",
+          name: "atlas",
+          display_name: "Support",
+          archived_at: null,
+          visibility: "workspace",
+          owner_id: null,
+        },
+      ],
+    });
+    searchIssuesMock.mockReturnValue(new Promise(() => {}));
+
+    const config = createMentionSuggestion(qc);
+    const items = config.items!({ query: "atlas", editor: {} as never }) as MentionItem[];
+
+    expect(items.filter((i) => i.type === "agent").map((i) => i.id)).toEqual([
+      "a-handle",
+      "a-display",
+    ]);
+  });
+
+  it("does not load server issue matches in the normal @ picker", async () => {
     searchIssuesMock.mockResolvedValue({
       issues: [
         {
@@ -149,19 +225,9 @@ describe("createMentionSuggestion", () => {
 
     render(<I18nWrapper><MentionList items={[]} query="协作" command={vi.fn()} /></I18nWrapper>);
 
-    expect(screen.getByText("Searching...")).toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(screen.getByText("MUL-1007")).toBeInTheDocument();
-    });
-    expect(screen.getByText("多 Agent 协作探索")).toBeInTheDocument();
-    expect(searchIssuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        q: "协作",
-        limit: 20,
-        include_closed: true,
-      }),
-    );
+    expect(screen.getByText("No results")).toBeInTheDocument();
+    expect(screen.queryByText("MUL-1007")).not.toBeInTheDocument();
+    expect(searchIssuesMock).not.toHaveBeenCalled();
   });
 
   it("loads server issue and project matches when project search is enabled", async () => {
@@ -190,6 +256,57 @@ describe("createMentionSuggestion", () => {
     });
     expect(searchIssuesMock).toHaveBeenCalledWith(expect.objectContaining({ q: "road", limit: 8 }));
     expect(searchProjectsMock).toHaveBeenCalledWith(expect.objectContaining({ q: "road", limit: 8 }));
+  });
+
+  it("loads server issues without project matches for the issue reference picker", async () => {
+    searchIssuesMock.mockResolvedValue({
+      issues: [
+        {
+          id: "i-roadmap",
+          identifier: "LRM-36",
+          title: "Roadmap blocker",
+          status: "todo",
+        },
+      ],
+      total: 1,
+    });
+    searchProjectsMock.mockResolvedValue({
+      projects: [
+        {
+          id: "p-roadmap",
+          title: "Roadmap",
+          description: "Q3",
+          icon: null,
+          status: "active",
+        },
+      ],
+      total: 1,
+    });
+
+    render(
+      <I18nWrapper>
+        <MentionList
+          items={[]}
+          query="road"
+          command={vi.fn()}
+          searchIssues={(q, signal) =>
+            searchIssuesMock({
+              q,
+              limit: 8,
+              include_closed: true,
+              signal,
+            })
+          }
+        />
+      </I18nWrapper>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("LRM-36")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Roadmap")).not.toBeInTheDocument();
+    expect(searchIssuesMock).toHaveBeenCalledWith(expect.objectContaining({ q: "road", limit: 8 }));
+    expect(searchProjectsMock).not.toHaveBeenCalled();
   });
 
   it("does not call searchIssues for an empty query", () => {
@@ -281,7 +398,7 @@ describe("createMentionSuggestion", () => {
     expect(items.some((i) => i.type === "agent" && i.label === "Atlas")).toBe(true);
   });
 
-  it("includes cached issues in the synchronous response", () => {
+  it("excludes cached issues from the normal @ response", () => {
     const qc = fakeQc({
       issues: [
         { id: "i1", identifier: "MUL-1", title: "Login bug", status: "todo" },
@@ -294,7 +411,38 @@ describe("createMentionSuggestion", () => {
     const result = config.items!({ query: "bug", editor: {} as never });
 
     const items = result as MentionItem[];
-    expect(items.some((i) => i.type === "issue" && i.id === "i1")).toBe(true);
+    expect(items.some((i) => i.type === "issue")).toBe(false);
+  });
+
+  it("returns only cached issue items from the # issue reference suggestion", () => {
+    const qc = fakeQc({
+      members: [{ user_id: "u1", name: "Alice", role: "member" }],
+      agents: [
+        {
+          id: "a1",
+          name: "Roadie",
+          archived_at: null,
+          visibility: "workspace",
+          owner_id: null,
+        },
+      ],
+      issues: [
+        { id: "i1", identifier: "LRM-36", title: "Roadmap blocker", status: "todo" },
+        { id: "i2", identifier: "LRM-40", title: "Other", status: "done" },
+      ],
+    });
+
+    const config = createIssueReferenceSuggestion(qc);
+    const items = config.items!({ query: "road", editor: {} as never }) as MentionItem[];
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        id: "i1",
+        label: "LRM-36",
+        type: "issue",
+        description: "Roadmap blocker",
+      }),
+    ]);
   });
 
   it("does not inject current/recent chat context into the normal @ results", () => {
@@ -309,7 +457,7 @@ describe("createMentionSuggestion", () => {
 
     expect(result.some((item) => item.group === "current" || item.group === "recent")).toBe(false);
     expect(result.map((item) => `${item.type}:${item.id}`)).toContain("member:u1");
-    expect(result.map((item) => `${item.type}:${item.id}`)).toContain("issue:i1");
+    expect(result.map((item) => `${item.type}:${item.id}`)).not.toContain("issue:i1");
   });
 
 

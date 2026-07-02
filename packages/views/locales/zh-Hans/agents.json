@@ -151,6 +151,9 @@
     "rename_title": "重命名智能体",
     "rename_placeholder": "智能体名称",
     "rename_required": "名称必填",
+    "display_name_title": "编辑显示名称",
+    "display_name_placeholder": "智能体显示名称",
+    "display_name_required": "显示名称必填",
     "edit_description_title": "编辑描述",
     "description_placeholder": "这个智能体做什么？",
     "save": "保存",
@@ -217,6 +220,8 @@
     "description_create": "为工作区创建一个新的 AI 智能体。",
     "description_duplicate": "基于\"{{name}}\"创建一个新智能体。指令、环境变量和 skill 会一并复制。",
     "name_label": "名称",
+    "display_name_label": "显示名称",
+    "handle_auto_hint": "系统会自动生成稳定用户名，这里不可修改。",
     "name_placeholder": "例如：深度研究智能体",
     "description_label": "描述",
     "description_placeholder": "这个智能体做什么？",
@@ -331,7 +336,20 @@
       "add_dialog_confirm_default": "添加",
       "add_dialog_confirm_other": "添加 {{count}} 个 skill",
       "add_dialog_cancel": "取消",
-      "add_failed_toast": "添加 skill 失败"
+      "add_failed_toast": "添加 skill 失败",
+      "suggestion_title": "Evolution skill 建议",
+      "suggestion_intro": "已晋升且可能适合此智能体的工作区 skill。接受即绑定，忽略则不再提示。",
+      "suggestion_count": "{{count}} 条待处理",
+      "suggestion_loading": "正在加载 skill 建议…",
+      "suggestion_empty": "暂无待处理的 skill 建议。",
+      "suggestion_decision_failed_toast": "更新 skill 建议失败",
+      "suggestion_decision_saved_toast": "已更新 skill 建议",
+      "suggestion_accept_action": "接受",
+      "suggestion_dismiss_action": "忽略",
+      "suggestion_action": {
+        "add": "建议添加",
+        "remove": "建议移除"
+      }
     },
     "integrations": {
       "intro": "把这个智能体连接到外部聊天平台，让大家在自己熟悉的工具里直接与它协作。",
@@ -382,7 +400,19 @@
       "empty_title": "暂无已同步记忆",
       "empty_hint": "该智能体运行时中的记忆文件会在下次同步后显示在这里。",
       "empty_content": "暂无内容",
-      "updated_at": "更新于 {{value}}"
+      "updated_at": "更新于 {{value}}",
+      "evolution_title": "生成的记忆",
+      "evolution_intro": "通过 Pi evolution 流程下发的记忆类单元，会进入本地 Pi inbox，供后续查看和复用。",
+      "evolution_loading": "正在加载生成的记忆…",
+      "evolution_empty": "还没有生成的记忆。",
+      "evolution_status": {
+        "pending": "待处理",
+        "delivered": "已送达",
+        "accepted": "已接受",
+        "ignored": "已忽略",
+        "rejected": "已拒绝",
+        "failed": "失败"
+      }
     }
   },
   "char_counter": {
@@ -404,6 +434,7 @@
   "profile_card": {
     "unavailable": "智能体不可用",
     "detail_link": "详情 →",
+    "send_message": "发消息",
     "runtime_label": "运行时",
     "skills_label": "Skills",
     "owner_label": "所有者",

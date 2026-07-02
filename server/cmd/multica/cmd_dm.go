@@ -11,14 +11,14 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 )
 
-// dm is the agent-only surface for proactively messaging the human behind the
-// current task. Sessions and recipient are resolved server-side from the task
-// context, so the agent only supplies the message body.
+// dm is the agent-only surface for proactively messaging a workspace member.
+// Without --to, the recipient is resolved server-side from the task context.
 var dmCmd = &cobra.Command{
 	Use:   "dm",
-	Short: "Send a 1:1 direct message to the human you're working for",
+	Short: "Send a 1:1 direct message to a workspace member",
 	Long: "Proactively send a private message to the human who triggered your " +
-		"current task (falls back to your owner). Use it when you need their " +
+		"current task (falls back to your owner), or pass --to to choose a " +
+		"specific workspace member by id/name/email. Use it when you need their " +
 		"input, have reached a conclusion, or are blocked — it lands in their " +
 		"agent DM panel with an unread badge.\n\n" +
 		"Direct messages are strictly human <-> agent. To reach ANOTHER agent, " +
@@ -31,6 +31,7 @@ var dmCmd = &cobra.Command{
 }
 
 func init() {
+	dmCmd.Flags().String("to", "", "Recipient workspace member id, user id, name, display name, or email (agents are not valid recipients)")
 	dmCmd.Flags().String("message", "", "Message to send (decodes \\n, \\r, \\t, \\\\; use --message-stdin to preserve literal backslashes)")
 	dmCmd.Flags().Bool("message-stdin", false, "Read the message from stdin (preserves multi-line content verbatim)")
 	dmCmd.Flags().String("message-file", "", "Read the message from a UTF-8 file")
@@ -54,8 +55,14 @@ func runDM(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
+	to, _ := cmd.Flags().GetString("to")
+	body := map[string]any{"content": content}
+	if strings.TrimSpace(to) != "" {
+		body["to"] = to
+	}
+
 	var out map[string]any
-	if err := client.PostJSON(ctx, "/api/chat/agent-dm", map[string]any{"content": content}, &out); err != nil {
+	if err := client.PostJSON(ctx, "/api/chat/agent-dm", body, &out); err != nil {
 		return fmt.Errorf("send direct message: %w", err)
 	}
 

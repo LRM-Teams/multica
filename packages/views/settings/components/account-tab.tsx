@@ -10,6 +10,7 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
+import { resolveActorDisplayName } from "@multica/core/identity";
 import { api } from "@multica/core/api";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
@@ -37,7 +38,9 @@ export function AccountTab() {
       predicate: (q) => q.queryKey[0] === "workspaces" && q.queryKey[2] === "members",
     });
 
-  const [profileName, setProfileName] = useState(user?.name ?? "");
+  const [profileDisplayName, setProfileDisplayName] = useState(
+    user ? resolveActorDisplayName(user, user.name) : "",
+  );
   const [profileDescription, setProfileDescription] = useState(
     user?.profile_description ?? "",
   );
@@ -46,13 +49,16 @@ export function AccountTab() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setProfileName(user?.name ?? "");
+    setProfileDisplayName(user ? resolveActorDisplayName(user, user.name) : "");
     setProfileDescription(user?.profile_description ?? "");
   }, [user]);
 
   const descriptionTooLong = profileDescription.length > MAX_PROFILE_DESCRIPTION_LEN;
 
-  const initials = (user?.name ?? "")
+  const displayName = user ? resolveActorDisplayName(user, user.name) : "";
+  const handle = user?.name ?? "";
+
+  const initials = displayName
     .split(" ")
     .map((w) => w[0])
     .join("")
@@ -81,7 +87,7 @@ export function AccountTab() {
     setProfileSaving(true);
     try {
       const updated = await api.updateMe({
-        name: profileName,
+        display_name: profileDisplayName,
         profile_description: profileDescription,
       });
       setUser(updated);
@@ -112,7 +118,7 @@ export function AccountTab() {
                 {user?.avatar_url ? (
                   <img
                     src={resolvePublicFileUrl(user.avatar_url) ?? undefined}
-                    alt={user.name}
+                    alt={displayName}
                     className="h-full w-full object-cover"
                   />
                 ) : (
@@ -141,13 +147,25 @@ export function AccountTab() {
             </div>
 
             <div>
-              <Label className="text-xs text-muted-foreground">{t(($) => $.account.name_label)}</Label>
+              <Label className="text-xs text-muted-foreground">{t(($) => $.account.display_name_label)}</Label>
               <Input
-                type="search"
-                value={profileName}
-                onChange={(e) => setProfileName(e.target.value)}
+                type="text"
+                value={profileDisplayName}
+                onChange={(e) => setProfileDisplayName(e.target.value)}
                 className="mt-1"
               />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">{t(($) => $.account.handle_label)}</Label>
+              <Input
+                type="text"
+                value={handle ? `@${handle.replace(/^@+/, "")}` : ""}
+                readOnly
+                className="mt-1 bg-muted/40 text-muted-foreground"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t(($) => $.account.handle_hint)}
+              </p>
             </div>
             <div>
               <Label className="text-xs text-muted-foreground">
@@ -183,7 +201,7 @@ export function AccountTab() {
               <Button
                 size="sm"
                 onClick={handleProfileSave}
-                disabled={profileSaving || !profileName.trim() || descriptionTooLong}
+                disabled={profileSaving || !profileDisplayName.trim() || descriptionTooLong}
               >
                 <Save className="h-3 w-3" />
                 {profileSaving ? t(($) => $.account.saving) : t(($) => $.account.save)}

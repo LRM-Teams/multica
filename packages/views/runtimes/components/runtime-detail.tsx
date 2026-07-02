@@ -27,7 +27,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@multica/ui/components/ui/tooltip";
+import { resolveActorDisplayName, resolveActorIdentityPresentation } from "@multica/core/identity";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
 import { AppLink, useNavigation } from "../../navigation";
 import { availabilityConfig, workloadConfig } from "../../agents/presence";
@@ -266,7 +268,9 @@ function HeroCard({
                 size={18}
                 enableHoverCard
               />
-              <span className="cursor-pointer truncate text-sm">{ownerMember.name}</span>
+              <span className="cursor-pointer truncate text-sm">
+                {resolveActorDisplayName(ownerMember, ownerMember.user_id)}
+              </span>
             </span>
           ) : (
             <span className="text-sm text-muted-foreground">—</span>
@@ -392,6 +396,7 @@ function ServingAgentsCard({
             const wl = detail ? workloadConfig[detail.workload] : null;
             const running = detail?.runningCount ?? 0;
             const queued = detail?.queuedCount ?? 0;
+            const presentation = resolveActorIdentityPresentation(agent, agent.id);
             return (
               <AppLink
                 key={agent.id}
@@ -400,9 +405,13 @@ function ServingAgentsCard({
               >
                 <ActorAvatar actorType="agent" actorId={agent.id} size={20} enableHoverCard showStatusDot />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-xs font-medium">
-                    {agent.name}
-                  </div>
+                  <ActorIdentityRow
+                    displayName={presentation.displayName}
+                    handle={presentation.handle}
+                    showHandle={presentation.showHandleLabel}
+                    primaryClassName="truncate text-xs font-medium"
+                    secondaryClassName="truncate text-[11px] text-muted-foreground"
+                  />
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
                     <span className="inline-flex items-center gap-1.5">
                       <span className={`h-1.5 w-1.5 rounded-full ${av.dotClass}`} />

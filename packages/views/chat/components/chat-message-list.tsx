@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { Virtuoso } from "react-virtuoso";
@@ -17,7 +17,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@multica/ui/components/ui/tooltip";
-import { ChevronRight, ChevronDown, Brain, AlertCircle, AlertTriangle, Copy } from "lucide-react";
+import { ChevronRight, ChevronDown, ChevronUp, Brain, AlertCircle, AlertTriangle, Copy } from "lucide-react";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { isTaskMessageTaskId, taskMessagesOptions } from "@multica/core/chat/queries";
 import { Markdown } from "@multica/views/common/markdown";
@@ -61,6 +61,7 @@ export function ChatMessageList({
 }: ChatMessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
+  const [isNearTop, setIsNearTop] = useState(true);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const setScrollContainerRef = useCallback((node: HTMLDivElement | null) => {
     scrollRef.current = node;
@@ -93,67 +94,129 @@ export function ChatMessageList({
 
   const totalCount = messages.length + (hasLive || showStatusPill ? 1 : 0);
   const firstIndex = totalCount > 0 ? firstItemIndex : 0;
+  const showScrollControls = totalCount > 0 && (!isNearTop || !isNearBottom);
+
+  const updateScrollPosition = useCallback(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+
+    const distanceFromBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+    setIsNearTop(scrollEl.scrollTop <= 120);
+    setIsNearBottom(distanceFromBottom <= 120);
+  }, []);
+
+  useEffect(() => {
+    if (!scrollContainerEl) return;
+
+    updateScrollPosition();
+    scrollContainerEl.addEventListener("scroll", updateScrollPosition, { passive: true });
+    return () => scrollContainerEl.removeEventListener("scroll", updateScrollPosition);
+  }, [scrollContainerEl, updateScrollPosition]);
+
+  useEffect(() => {
+    updateScrollPosition();
+  }, [totalCount, hasLive, showStatusPill, updateScrollPosition]);
+
+  const scrollToBoundary = useCallback((top: number) => {
+    scrollRef.current?.scrollTo({ top, behavior: "smooth" });
+  }, []);
 
   return (
-    <div
-      ref={setScrollContainerRef}
-      data-tab-scroll-root
-      style={fadeStyle}
-      className="flex-1 overflow-y-auto"
-    >
-      {!scrollContainerEl ? (
-        <div className="mx-auto w-full max-w-4xl px-5 pt-4 space-y-3">
-          <ChatMessageSkeleton />
-        </div>
-      ) : (
-      <Virtuoso
-        customScrollParent={scrollContainerEl}
-        data={messages}
-        firstItemIndex={firstIndex}
-        increaseViewportBy={{ top: 400, bottom: 600 }}
-        atBottomThreshold={120}
-        atBottomStateChange={setIsNearBottom}
-        followOutput={() => (!isFetchingOlderMessages && isNearBottom ? "smooth" : false)}
-        startReached={() => {
-          if (hasOlderMessages && !isFetchingOlderMessages) {
-            onLoadOlderMessages?.();
-          }
-        }}
-        computeItemKey={(_, msg) => msg.id}
-        components={{
-          Header: () => (
-            <div className="mx-auto w-full max-w-4xl px-5 pt-4">
-              {isFetchingOlderMessages && (
-                <div className="text-center text-xs text-muted-foreground">{t(($) => $.message_list.loading_older)}</div>
-              )}
-            </div>
-          ),
-          Footer: () => (
-            <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
-              {hasLive && (
-                <div className="w-full space-y-1.5">
-                  <TimelineView items={liveTimeline} isStreaming />
-                </div>
-              )}
-              {showStatusPill && pendingTask && (
-                <TaskStatusPill
-                  pendingTask={pendingTask}
-                  taskMessages={liveTaskMessages ?? []}
-                  availability={availability}
-                />
-              )}
-            </div>
-          ),
-        }}
-        itemContent={(_, msg) => (
-          <div className="mx-auto w-full max-w-4xl px-5 py-2">
-            <MessageBubble
-              message={msg}
-              isPending={!!pendingTaskId && msg.task_id === pendingTaskId}
-            />
+    <div className="relative flex-1 min-h-0">
+      <div
+        ref={setScrollContainerRef}
+        data-tab-scroll-root
+        style={fadeStyle}
+        className="h-full overflow-y-auto"
+      >
+        {!scrollContainerEl ? (
+          <div className="mx-auto w-full max-w-4xl px-5 pt-4 space-y-3">
+            <ChatMessageSkeleton />
           </div>
+        ) : (
+          <Virtuoso
+            customScrollParent={scrollContainerEl}
+            data={messages}
+            firstItemIndex={firstIndex}
+            increaseViewportBy={{ top: 400, bottom: 600 }}
+            atBottomThreshold={120}
+            atBottomStateChange={setIsNearBottom}
+            followOutput={() => (!isFetchingOlderMessages && isNearBottom ? "smooth" : false)}
+            startReached={() => {
+              if (hasOlderMessages && !isFetchingOlderMessages) {
+                onLoadOlderMessages?.();
+              }
+            }}
+            computeItemKey={(_, msg) => msg.id}
+            components={{
+              Header: () => (
+                <div className="mx-auto w-full max-w-4xl px-5 pt-4">
+                  {isFetchingOlderMessages && (
+                    <div className="text-center text-xs text-muted-foreground">{t(($) => $.message_list.loading_older)}</div>
+                  )}
+                </div>
+              ),
+              Footer: () => (
+                <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
+                  {hasLive && (
+                    <div className="w-full space-y-1.5">
+                      <TimelineView items={liveTimeline} isStreaming />
+                    </div>
+                  )}
+                  {showStatusPill && pendingTask && (
+                    <TaskStatusPill
+                      pendingTask={pendingTask}
+                      taskMessages={liveTaskMessages ?? []}
+                      availability={availability}
+                    />
+                  )}
+                </div>
+              ),
+            }}
+            itemContent={(_, msg) => (
+              <div className="mx-auto w-full max-w-4xl px-5 py-2">
+                <MessageBubble
+                  message={msg}
+                  isPending={!!pendingTaskId && msg.task_id === pendingTaskId}
+                />
+              </div>
+            )}
+          />
         )}
-      />
+      </div>
+      {showScrollControls && (
+        <div className="pointer-events-none absolute right-3 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-2 sm:right-4">
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            className={cn(
+              "pointer-events-auto size-9 rounded-full border bg-background/90 shadow-lg backdrop-blur transition-opacity hover:bg-accent sm:size-8",
+              isNearTop && "opacity-40",
+            )}
+            aria-label={t(($) => $.message_list.scroll_to_top)}
+            title={t(($) => $.message_list.scroll_to_top)}
+            disabled={isNearTop}
+            onClick={() => scrollToBoundary(0)}
+          >
+            <ChevronUp className="size-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            className={cn(
+              "pointer-events-auto size-9 rounded-full border bg-background/90 shadow-lg backdrop-blur transition-opacity hover:bg-accent sm:size-8",
+              isNearBottom && "opacity-40",
+            )}
+            aria-label={t(($) => $.message_list.scroll_to_bottom)}
+            title={t(($) => $.message_list.scroll_to_bottom)}
+            disabled={isNearBottom}
+            onClick={() => scrollToBoundary(scrollRef.current?.scrollHeight ?? 0)}
+          >
+            <ChevronDown className="size-4" />
+          </Button>
+        </div>
       )}
     </div>
   );
@@ -188,23 +251,30 @@ export function ChatMessageSkeleton() {
 
 // ─── Message bubbles ─────────────────────────────────────────────────────
 
+const selectableMessageTextClass = "select-text [-webkit-user-select:text] [-webkit-touch-callout:default]";
+
 function MessageBubble({ message, isPending }: { message: ChatMessage; isPending: boolean }) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="rounded-2xl bg-muted px-3.5 py-2 text-sm max-w-[80%] break-words">
-          {/* User messages are authored as markdown in ContentEditor, so
-           * render them through the same pipeline as assistant replies.
-           * Neutralise prose's leading/trailing margin so single-line
-           * bubbles stay as compact as the plain-text version used to. */}
-          <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-            <Markdown attachments={message.attachments}>{message.content}</Markdown>
+        <div className="max-w-[80%] space-y-1">
+          <div className={cn("rounded-2xl bg-muted px-3.5 py-2 text-sm break-words", selectableMessageTextClass)}>
+            {/* User messages are authored as markdown in ContentEditor, so
+             * render them through the same pipeline as assistant replies.
+             * Neutralise prose's leading/trailing margin so single-line
+             * bubbles stay as compact as the plain-text version used to. */}
+            <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+              <Markdown attachments={message.attachments}>{message.content}</Markdown>
+            </div>
+            <AttachmentList
+              attachments={message.attachments}
+              content={message.content}
+              className="mt-1.5"
+            />
           </div>
-          <AttachmentList
-            attachments={message.attachments}
-            content={message.content}
-            className="mt-1.5"
-          />
+          <div className="flex justify-end">
+            <MessageCopyButton message={message} timeline={[]} />
+          </div>
         </div>
       </div>
     );
@@ -253,7 +323,7 @@ function AssistantMessage({
       {timeline.length > 0 ? (
         <TimelineView items={timeline} attachments={message.attachments} />
       ) : (
-        <div className="text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none">
+        <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
           <Markdown attachments={message.attachments}>{message.content}</Markdown>
         </div>
       )}
@@ -401,7 +471,7 @@ function FailureBubble({
                 <span>{t(($) => $.message_list.show_details)}</span>
               </CollapsibleTrigger>
               <CollapsibleContent>
-                <pre className="mt-1 max-h-40 overflow-auto rounded bg-muted/40 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all">
+                <pre className={cn("mt-1 max-h-40 overflow-auto rounded bg-muted/40 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all", selectableMessageTextClass)}>
                   {rawError}
                 </pre>
               </CollapsibleContent>
@@ -445,7 +515,7 @@ function TimelineView({
   return (
     <>
       {preface.length > 0 && (
-        <div className="text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none">
+        <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
           <Markdown attachments={attachments}>
             {preface.map((t) => t.content ?? "").join("")}
           </Markdown>
@@ -459,7 +529,7 @@ function TimelineView({
         />
       )}
       {final.length > 0 && (
-        <div className="text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none">
+        <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
           <Markdown attachments={attachments}>
             {final.map((t) => t.content ?? "").join("")}
           </Markdown>
@@ -520,7 +590,7 @@ function MiddleTextRow({
   attachments?: import("@multica/core/types").Attachment[];
 }) {
   return (
-    <div className="py-0.5 text-xs text-muted-foreground prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+    <div className={cn("py-0.5 text-xs text-muted-foreground prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", selectableMessageTextClass)}>
       <Markdown attachments={attachments}>{item.content ?? ""}</Markdown>
     </div>
   );
@@ -592,7 +662,7 @@ function ToolCallRow({ item }: { item: ChatTimelineItem }) {
       </CollapsibleTrigger>
       {hasInput && (
         <CollapsibleContent>
-          <pre className="ml-[18px] mt-0.5 max-h-32 overflow-auto rounded bg-muted/50 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all">
+          <pre className={cn("ml-[18px] mt-0.5 max-h-32 overflow-auto rounded bg-muted/50 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all", selectableMessageTextClass)}>
             {JSON.stringify(item.input, null, 2)}
           </pre>
         </CollapsibleContent>
@@ -623,7 +693,7 @@ function ToolResultRow({ item }: { item: ChatTimelineItem }) {
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <pre className="ml-[18px] mt-0.5 max-h-40 overflow-auto rounded bg-muted/50 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all">
+        <pre className={cn("ml-[18px] mt-0.5 max-h-40 overflow-auto rounded bg-muted/50 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all", selectableMessageTextClass)}>
           {output.length > 4000 ? output.slice(0, 4000) + "\n... (truncated)" : output}
         </pre>
       </CollapsibleContent>
@@ -645,7 +715,7 @@ function ThinkingRow({ item }: { item: ChatTimelineItem }) {
         <span className="text-muted-foreground italic truncate">{preview}</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <pre className="ml-[18px] mt-0.5 max-h-40 overflow-auto rounded bg-muted/30 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-words">
+        <pre className={cn("ml-[18px] mt-0.5 max-h-40 overflow-auto rounded bg-muted/30 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-words", selectableMessageTextClass)}>
           {text}
         </pre>
       </CollapsibleContent>
@@ -657,7 +727,7 @@ function ErrorRow({ item }: { item: ChatTimelineItem }) {
   return (
     <div className="flex items-start gap-1.5 px-1 -mx-1 py-0.5 text-xs">
       <AlertCircle className="h-3 w-3 shrink-0 text-destructive mt-0.5" />
-      <span className="text-destructive">{item.content}</span>
+      <span className={cn("text-destructive", selectableMessageTextClass)}>{item.content}</span>
     </div>
   );
 }

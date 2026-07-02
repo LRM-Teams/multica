@@ -5,14 +5,36 @@
   },
   "sidebar": {
     "heading": "消息",
-    "search": "搜索对话...",
-    "groups": "群组",
+    "search": "搜索会话...",
+    "no_conversation_matches": "没有匹配会话",
+    "search_scope_hint": "左侧只过滤会话列表；要搜索消息正文，请打开会话后使用右上角消息搜索。",
+    "groups": "频道",
     "name_placeholder": "群聊名称",
     "lark_placeholder": "可选飞书群 chat_id (oc_...)",
     "create_aria": "新建群聊",
     "empty": "还没有群聊。",
     "menu_aria": "群组操作",
-    "delete": "删除群组"
+    "delete": "删除群组",
+    "mark_unread": "标为未读",
+    "pin": "置顶",
+    "unpin": "取消置顶",
+    "archive": "归档",
+    "mute": "静音通知",
+    "unmute": "取消静音",
+    "muted_label": "已静音",
+    "archived_section": "已归档",
+    "archived_restore": "取消归档",
+    "archive_permission": "只有创建者、所有者或管理员可归档",
+    "restore_permission": "只有创建者、所有者或管理员可取消归档"
+  },
+  "archive_dialog": {
+    "title": "归档此频道？",
+    "description": "「{{name}}」将从侧栏隐藏，所有历史记录保留，可随时恢复。",
+    "cancel": "取消",
+    "confirm": "归档",
+    "error": "归档频道失败",
+    "restore_error": "取消归档失败",
+    "readonly_notice": "此频道已归档"
   },
   "delete_dialog": {
     "title": "删除这个群组？",
@@ -35,7 +57,8 @@
     "stats_aria": "统计",
     "files_aria": "文件",
     "back": "返回",
-    "more_aria": "更多"
+    "more_aria": "更多",
+    "roster_summary": "{{members}} 人 · {{agents}} 个智能体"
   },
   "members": {
     "select_user": "选择人类成员",
@@ -52,6 +75,28 @@
     "search": "搜索…",
     "no_results": "没有匹配的结果"
   },
+  "profile_popover": {
+    "unknown": "未知",
+    "loading": "正在加载资料…",
+    "agent_unavailable": "智能体不可用",
+    "member_unavailable": "成员不可用",
+    "no_description": "暂无简介",
+    "recent_activity": "最近活动",
+    "no_recent_activity": "暂无最近活动",
+    "role": {
+      "owner": "所有者",
+      "admin": "管理员",
+      "member": "成员",
+      "agent": "智能体"
+    },
+    "activity": {
+      "queued": "排队中",
+      "working": "处理中",
+      "failed": "失败",
+      "cancelled": "已取消",
+      "task": "任务"
+    }
+  },
   "files": {
     "title": "文件",
     "empty": "暂无文件",
@@ -59,6 +104,7 @@
     "offline": "你的运行时离线，无法读取项目文件",
     "missing": "这台机器上还没有该项目的工作目录",
     "error": "加载文件失败",
+    "github_unlinked": "未连接 GitHub，无法读取仓库文件。请在工作区设置里连接 GitHub。",
     "truncated": "文件较多，仅显示部分",
     "preview_binary": "二进制文件，无法预览",
     "preview_truncated": "文件较大，仅预览前一部分",
@@ -80,7 +126,22 @@
     "copy_failed": "复制失败"
   },
   "thread": {
-    "empty": "开始聊天吧。把智能体加入成员后，输入 @智能体名称 触发回复。"
+    "empty": "开始聊天吧。把智能体加入成员后，输入 @智能体名称 触发回复。",
+    "title": "线程",
+    "reply": "在线程中回复",
+    "reply_aria": "在线程中回复",
+    "reply_count": "{{count}} 条回复",
+    "meta_count": "{{count}} 条回复",
+    "close_aria": "关闭线程",
+    "context_label": "原消息",
+    "view_parent": "返回主会话",
+    "show_full_message": "查看完整消息",
+    "collapse_message": "收起",
+    "jump_to_parent": "定位到原消息",
+    "empty_replies": "暂无回复。",
+    "load_failed": "线程加载失败。",
+    "send_failed": "发送线程回复失败。",
+    "composer_placeholder": "在线程中回复..."
   },
   "typing": {
     "single": "{{name}} 正在输入",
@@ -91,19 +152,71 @@
     "queued": "排队中",
     "dispatched": "启动中",
     "running": "思考中",
-    "waiting_local_directory": "等待本地目录释放"
+    "waiting_local_directory": "等待本地目录释放",
+    "processing_single": "{{name}} 正在准备回复...",
+    "processing_pair": "{{a}}、{{b}} 正在准备回复...",
+    "processing_overflow": "{{a}}、{{b}} 等 {{count}} 位正在准备回复..."
   },
   "composer": {
     "placeholder": "描述你需要什么帮助...  @ 智能体名称会触发它回复。",
     "attach_aria": "附件",
     "mention_aria": "提及智能体",
     "send": "发送",
+    "issue_ref_aria": "引用 Issue",
     "project_label": "项目",
     "project_none": "无项目",
     "project_tooltip": "设置该频道对应的项目"
   },
   "message": {
+    "add_reaction": "添加表情回应",
     "agent_badge": "Agent",
     "feishu_badge": "飞书"
+  },
+  "dm": {
+    "heading": "私信",
+    "empty": "还没有私信。",
+    "empty_cta": "开始私信",
+    "new_aria": "新建私信",
+    "menu_aria": "私信操作",
+    "agent_meta": "智能体",
+    "human_meta": "成员",
+    "new_title": "新建私信",
+    "search_placeholder": "搜索人或 agent…",
+    "no_results": "无匹配结果",
+    "send_message": "发消息",
+    "files": "文件",
+    "thread_empty": "还没有消息，打个招呼吧。",
+    "self_label": "你",
+    "open_failed": "无法打开会话",
+    "mark_unread": "标为未读",
+    "pin": "置顶",
+    "unpin": "取消置顶",
+    "mute": "静音通知",
+    "unmute": "取消静音",
+    "muted_label": "已静音",
+    "close_chat": "关闭会话",
+    "action_failed": "操作失败，请重试",
+    "composer_placeholder": "发消息给 {{name}}…"
+  },
+  "quote": {
+    "reply": "引用回复",
+    "reply_aria": "回复此消息",
+    "more_aria": "更多操作",
+    "cancel": "取消引用",
+    "replying_to": "回复 {{name}}",
+    "jump_to": "跳转到原消息"
+  },
+  "conv_search": {
+    "placeholder": "在 {{name}} 中搜索…",
+    "group_placeholder": "搜索此群聊的消息…",
+    "dm_placeholder": "搜索与 {{name}} 的消息…",
+    "scope_current_messages": "当前会话 · 消息",
+    "result_count": "{{current}} / {{total}}",
+    "no_results": "无匹配结果",
+    "prev_aria": "上一条结果",
+    "next_aria": "下一条结果",
+    "close_aria": "关闭搜索",
+    "search_aria": "在会话中搜索",
+    "error": "搜索失败"
   }
 }

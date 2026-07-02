@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,7 +15,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -38,6 +36,7 @@ type AgentResponse struct {
 	WorkspaceID   string          `json:"workspace_id"`
 	RuntimeID     string          `json:"runtime_id"`
 	Name          string          `json:"name"`
+	DisplayName   string          `json:"display_name"`
 	Description   string          `json:"description"`
 	Instructions  string          `json:"instructions"`
 	AvatarURL     *string         `json:"avatar_url"`
@@ -114,6 +113,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		WorkspaceID:        uuidToString(a.WorkspaceID),
 		RuntimeID:          uuidToString(a.RuntimeID),
 		Name:               a.Name,
+		DisplayName:        agentDisplayName(a),
 		Description:        a.Description,
 		Instructions:       a.Instructions,
 		AvatarURL:          textToPtr(a.AvatarUrl),
@@ -194,10 +194,10 @@ type AgentTaskResponse struct {
 	// these fields (omitempty) and fall back to an ephemeral per-task workdir.
 	ProvisionManagedWorkdir bool   `json:"provision_managed_workdir,omitempty"`
 	ManagedWorkdirRelPath   string `json:"managed_workdir_rel_path,omitempty"`
-	CreatedAt        string                `json:"created_at"`
-	PriorSessionID   string                `json:"prior_session_id,omitempty"` // session ID from a previous task on same issue
-	PriorWorkDir     string                `json:"prior_work_dir,omitempty"`   // work_dir from a previous task on same issue
-	WorkDir          string                `json:"work_dir,omitempty"`         // local working directory pinned for this task; populated once the daemon reports it
+	CreatedAt               string `json:"created_at"`
+	PriorSessionID          string `json:"prior_session_id,omitempty"` // session ID from a previous task on same issue
+	PriorWorkDir            string `json:"prior_work_dir,omitempty"`   // work_dir from a previous task on same issue
+	WorkDir                 string `json:"work_dir,omitempty"`         // local working directory pinned for this task; populated once the daemon reports it
 	// RelativeWorkDir is a privacy-safe display form of WorkDir intended for
 	// the UI. For standard tasks it strips the daemon's workspaces root so
 	// the user sees `<wsUUID>/<taskShort>/workdir`; for local_directory
@@ -219,6 +219,7 @@ type AgentTaskResponse struct {
 	NewCommentsSince         string               `json:"new_comments_since,omitempty"`          // RFC3339 anchor (last run's started_at) the count is measured from; omitempty so old daemons ignore it
 	ChatSessionID            string               `json:"chat_session_id,omitempty"`             // non-empty for chat tasks
 	ChatMessage              string               `json:"chat_message,omitempty"`                // user message for chat tasks
+	ChatContextSummary       string               `json:"chat_context_summary,omitempty"`        // compact recent-context handoff when native resume is skipped
 	ChatMessageAttachments   []ChatAttachmentMeta `json:"chat_message_attachments,omitempty"`    // attachments on the user message — agent calls `multica attachment download <id>` per entry
 	AutopilotRunID           string               `json:"autopilot_run_id,omitempty"`            // non-empty for autopilot-spawned tasks
 	AutopilotID              string               `json:"autopilot_id,omitempty"`                // autopilot that spawned this task
@@ -594,6 +595,7 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 
 type CreateAgentRequest struct {
 	Name               string            `json:"name"`
+	DisplayName        string            `json:"display_name"`
 	Description        string            `json:"description"`
 	Instructions       string            `json:"instructions"`
 	AvatarURL          *string           `json:"avatar_url"`
@@ -650,8 +652,10 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+	nameSeed := strings.TrimSpace(req.Name)
+	displayName := strings.TrimSpace(req.DisplayName)
+	if nameSeed == "" && displayName == "" {
+		writeError(w, http.StatusBadRequest, "name or display_name is required")
 		return
 	}
 	if utf8.RuneCountInString(req.Description) > maxAgentDescriptionLength {
@@ -735,9 +739,8 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		mc = append([]byte(nil), rawMcpConfig...)
 	}
 
-	created, err := h.Queries.CreateAgent(r.Context(), db.CreateAgentParams{
+	created, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
 		WorkspaceID:        wsUUID,
-		Name:               req.Name,
 		Description:        req.Description,
 		Instructions:       req.Instructions,
 		AvatarUrl:          ptrToText(req.AvatarURL),
@@ -752,20 +755,15 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		McpConfig:          mc,
 		Model:              pgtype.Text{String: req.Model, Valid: req.Model != ""},
 		ThinkingLevel:      pgtype.Text{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
-	})
+	}, nameSeed, firstNonEmpty(displayName, nameSeed))
 	if err != nil {
-		// Unique constraint on (workspace_id, name) — return a clear conflict error
-		// so the UI can show the right message instead of a generic 500.
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "agent_workspace_name_unique" {
-			writeError(w, http.StatusConflict, fmt.Sprintf("an agent named %q already exists in this workspace", req.Name))
-			return
-		}
 		slog.Warn("create agent failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to create agent: "+err.Error())
 		return
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
+
+	h.refreshAgentSkillSuggestions(r.Context(), created)
 
 	if runtime.Status == "online" {
 		h.TaskService.ReconcileAgentStatus(r.Context(), created.ID)
@@ -792,6 +790,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 
 type UpdateAgentRequest struct {
 	Name          *string `json:"name"`
+	DisplayName   *string `json:"display_name"`
 	Description   *string `json:"description"`
 	Instructions  *string `json:"instructions"`
 	AvatarURL     *string `json:"avatar_url"`
@@ -913,6 +912,17 @@ func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent d
 	return true
 }
 
+func agentUpdateAffectsEvolutionMatching(req UpdateAgentRequest) bool {
+	return req.Name != nil ||
+		req.DisplayName != nil ||
+		req.Description != nil ||
+		req.Instructions != nil ||
+		req.RuntimeConfig != nil ||
+		req.CustomArgs != nil ||
+		req.RuntimeID != nil ||
+		req.Model != nil
+}
+
 func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	existing, ok := h.loadAgentForUser(w, r, id)
@@ -946,7 +956,20 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		ID: existing.ID,
 	}
 	if req.Name != nil {
-		params.Name = pgtype.Text{String: *req.Name, Valid: true}
+		displayName := strings.TrimSpace(*req.Name)
+		if displayName == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		params.DisplayName = pgtype.Text{String: displayName, Valid: true}
+	}
+	if req.DisplayName != nil {
+		displayName := strings.TrimSpace(*req.DisplayName)
+		if displayName == "" {
+			writeError(w, http.StatusBadRequest, "display_name is required")
+			return
+		}
+		params.DisplayName = pgtype.Text{String: displayName, Valid: true}
 	}
 	if req.Description != nil {
 		if utf8.RuneCountInString(*req.Description) > maxAgentDescriptionLength {
@@ -1112,6 +1135,9 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("load agent skills after update failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
+	}
+	if agentUpdateAffectsEvolutionMatching(req) {
+		h.refreshAgentSkillSuggestions(r.Context(), updated)
 	}
 	slog.Info("agent updated", append(logger.RequestAttrs(r), "agent_id", id, "workspace_id", uuidToString(updated.WorkspaceID))...)
 	userID := requestUserID(r)

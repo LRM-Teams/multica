@@ -5,11 +5,12 @@
     "my_issues": "我的 issue",
     "issues": "Issues",
     "projects": "项目",
-    "channels": "群聊",
+    "channels": "消息",
     "autopilots": "自动化",
     "agents": "智能体",
     "squads": "小队",
     "usage": "用量",
+    "evolution": "自进化",
     "runtimes": "运行时",
     "skills": "Skills",
     "settings": "设置"

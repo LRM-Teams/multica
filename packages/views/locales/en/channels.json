@@ -6,13 +6,35 @@
   "sidebar": {
     "heading": "Messages",
     "search": "Search conversations...",
-    "groups": "Groups",
+    "no_conversation_matches": "No matching conversations",
+    "search_scope_hint": "This filters the conversation list only. Open a conversation and use the top-right message search to search message text.",
+    "groups": "Channels",
     "name_placeholder": "Channel name",
     "lark_placeholder": "Optional Feishu chat_id (oc_...)",
     "create_aria": "Create channel",
     "empty": "No channels yet.",
     "menu_aria": "Channel actions",
-    "delete": "Delete group"
+    "delete": "Delete group",
+    "mark_unread": "Mark as Unread",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "archive": "Archive",
+    "mute": "Mute notifications",
+    "unmute": "Unmute",
+    "muted_label": "Muted",
+    "archived_section": "Archived",
+    "archived_restore": "Unarchive",
+    "archive_permission": "Only the creator, owner, or admin can archive",
+    "restore_permission": "Only the creator, owner, or admin can unarchive"
+  },
+  "archive_dialog": {
+    "title": "Archive this channel?",
+    "description": "\"{{name}}\" will be hidden from the sidebar. All history is preserved — you can restore it anytime.",
+    "cancel": "Cancel",
+    "confirm": "Archive",
+    "error": "Failed to archive channel",
+    "restore_error": "Failed to restore channel",
+    "readonly_notice": "This channel is archived"
   },
   "delete_dialog": {
     "title": "Delete this group?",
@@ -35,7 +57,8 @@
     "stats_aria": "Stats",
     "files_aria": "Files",
     "back": "Back",
-    "more_aria": "More"
+    "more_aria": "More",
+    "roster_summary": "{{members}} members · {{agents}} agents"
   },
   "members": {
     "select_user": "Select a member",
@@ -52,6 +75,28 @@
     "search": "Search…",
     "no_results": "No matches"
   },
+  "profile_popover": {
+    "unknown": "Unknown",
+    "loading": "Loading profile…",
+    "agent_unavailable": "Agent unavailable",
+    "member_unavailable": "Member unavailable",
+    "no_description": "No description yet",
+    "recent_activity": "Recent activity",
+    "no_recent_activity": "No recent activity",
+    "role": {
+      "owner": "Owner",
+      "admin": "Admin",
+      "member": "Member",
+      "agent": "Agent"
+    },
+    "activity": {
+      "queued": "Queued",
+      "working": "Working",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "task": "Task"
+    }
+  },
   "files": {
     "title": "Files",
     "empty": "No files yet",
@@ -59,6 +104,7 @@
     "offline": "Your runtime is offline — can't read project files",
     "missing": "This project's folder isn't on your machine yet",
     "error": "Failed to load files",
+    "github_unlinked": "GitHub isn't connected — can't read repo files. Connect GitHub in workspace settings.",
     "truncated": "Showing a partial list (too many files)",
     "preview_binary": "Binary file — can't preview",
     "preview_truncated": "Large file — showing a partial preview",
@@ -80,7 +126,22 @@
     "copy_failed": "Copy failed"
   },
   "thread": {
-    "empty": "Start chatting. Add an agent to the members, then type @agent-name to trigger a reply."
+    "empty": "Start chatting. Add an agent to the members, then type @agent-name to trigger a reply.",
+    "title": "Thread",
+    "reply": "Reply in thread",
+    "reply_aria": "Reply in thread",
+    "reply_count": "{{count}} replies",
+    "meta_count": "{{count}} replies",
+    "close_aria": "Close thread",
+    "context_label": "Original message",
+    "view_parent": "Back to main chat",
+    "show_full_message": "Show full message",
+    "collapse_message": "Collapse",
+    "jump_to_parent": "Jump to original message",
+    "empty_replies": "No replies yet.",
+    "load_failed": "Failed to load thread.",
+    "send_failed": "Failed to send thread reply.",
+    "composer_placeholder": "Reply in thread..."
   },
   "typing": {
     "single": "{{name}} is typing",
@@ -91,19 +152,71 @@
     "queued": "Queued",
     "dispatched": "Starting up",
     "running": "Thinking",
-    "waiting_local_directory": "Waiting for local directory"
+    "waiting_local_directory": "Waiting for local directory",
+    "processing_single": "{{name}} is preparing a reply...",
+    "processing_pair": "{{a}} and {{b}} are preparing replies...",
+    "processing_overflow": "{{a}}, {{b}} and {{count}} agents are preparing replies..."
   },
   "composer": {
     "placeholder": "Describe what you need…  @mention an agent to trigger its reply.",
     "attach_aria": "Attach",
     "mention_aria": "Mention an agent",
     "send": "Send",
+    "issue_ref_aria": "Reference issue",
     "project_label": "Project",
     "project_none": "No project",
     "project_tooltip": "Set the project this channel works in"
   },
   "message": {
+    "add_reaction": "Add reaction",
     "agent_badge": "Agent",
     "feishu_badge": "Feishu"
+  },
+  "dm": {
+    "heading": "Direct messages",
+    "empty": "No direct messages yet.",
+    "empty_cta": "Start a chat",
+    "new_aria": "New direct message",
+    "menu_aria": "Direct message actions",
+    "agent_meta": "Agent",
+    "human_meta": "Human",
+    "new_title": "New message",
+    "search_placeholder": "Search people or agents…",
+    "no_results": "No matches",
+    "send_message": "Send message",
+    "files": "Files",
+    "thread_empty": "No messages yet. Say hello.",
+    "self_label": "you",
+    "open_failed": "Couldn't open conversation",
+    "mark_unread": "Mark as unread",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "mute": "Mute notifications",
+    "unmute": "Unmute",
+    "muted_label": "Muted",
+    "close_chat": "Close chat",
+    "action_failed": "Action failed, please try again",
+    "composer_placeholder": "Message {{name}}…"
+  },
+  "quote": {
+    "reply": "Reply",
+    "reply_aria": "Reply to this message",
+    "more_aria": "More actions",
+    "cancel": "Cancel reply",
+    "replying_to": "Replying to {{name}}",
+    "jump_to": "Jump to original message"
+  },
+  "conv_search": {
+    "placeholder": "Search in {{name}}…",
+    "group_placeholder": "Search this channel's messages…",
+    "dm_placeholder": "Search messages with {{name}}…",
+    "scope_current_messages": "Current conversation · Messages",
+    "result_count": "{{current}} / {{total}}",
+    "no_results": "No matches",
+    "prev_aria": "Previous result",
+    "next_aria": "Next result",
+    "close_aria": "Close search",
+    "search_aria": "Search in conversation",
+    "error": "Search failed"
   }
 }

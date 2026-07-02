@@ -6,13 +6,35 @@
   "sidebar": {
     "heading": "메시지",
     "search": "대화 검색...",
-    "groups": "그룹",
+    "no_conversation_matches": "일치하는 대화가 없습니다",
+    "search_scope_hint": "왼쪽은 대화 목록만 필터링합니다. 메시지 본문은 대화를 연 뒤 오른쪽 위 메시지 검색을 사용하세요.",
+    "groups": "채널",
     "name_placeholder": "채널 이름",
     "lark_placeholder": "선택 Feishu chat_id (oc_...)",
     "create_aria": "채널 만들기",
     "empty": "아직 채널이 없습니다.",
     "menu_aria": "채널 작업",
-    "delete": "그룹 삭제"
+    "delete": "그룹 삭제",
+    "mark_unread": "읽지 않음으로 표시",
+    "pin": "고정",
+    "unpin": "고정 해제",
+    "archive": "보관",
+    "mute": "알림 음소거",
+    "unmute": "음소거 해제",
+    "muted_label": "음소거됨",
+    "archived_section": "보관됨",
+    "archived_restore": "보관 해제",
+    "archive_permission": "채널 생성자, 소유자 또는 관리자만 보관할 수 있습니다",
+    "restore_permission": "채널 생성자, 소유자 또는 관리자만 보관 해제할 수 있습니다"
+  },
+  "archive_dialog": {
+    "title": "이 채널을 보관할까요?",
+    "description": "\"{{name}}\"이(가) 사이드바에서 숨겨집니다. 모든 기록은 보존되며 언제든 복원할 수 있습니다.",
+    "cancel": "취소",
+    "confirm": "보관",
+    "error": "채널 보관에 실패했습니다",
+    "restore_error": "보관 해제에 실패했습니다",
+    "readonly_notice": "이 채널은 보관되었습니다"
   },
   "delete_dialog": {
     "title": "이 그룹을 삭제할까요?",
@@ -35,7 +57,8 @@
     "stats_aria": "통계",
     "files_aria": "파일",
     "back": "뒤로",
-    "more_aria": "더 보기"
+    "more_aria": "더 보기",
+    "roster_summary": "멤버 {{members}}명 · 에이전트 {{agents}}개"
   },
   "members": {
     "select_user": "멤버 선택",
@@ -52,6 +75,28 @@
     "search": "검색…",
     "no_results": "일치하는 결과가 없습니다"
   },
+  "profile_popover": {
+    "unknown": "알 수 없음",
+    "loading": "프로필을 불러오는 중…",
+    "agent_unavailable": "에이전트를 사용할 수 없습니다",
+    "member_unavailable": "멤버를 사용할 수 없습니다",
+    "no_description": "아직 소개가 없습니다",
+    "recent_activity": "최근 활동",
+    "no_recent_activity": "최근 활동이 없습니다",
+    "role": {
+      "owner": "소유자",
+      "admin": "관리자",
+      "member": "멤버",
+      "agent": "에이전트"
+    },
+    "activity": {
+      "queued": "대기 중",
+      "working": "작업 중",
+      "failed": "실패",
+      "cancelled": "취소됨",
+      "task": "작업"
+    }
+  },
   "files": {
     "title": "파일",
     "empty": "파일 없음",
@@ -59,6 +104,7 @@
     "offline": "런타임이 오프라인이라 프로젝트 파일을 읽을 수 없습니다",
     "missing": "이 컴퓨터에 아직 프로젝트 폴더가 없습니다",
     "error": "파일을 불러오지 못했습니다",
+    "github_unlinked": "GitHub가 연결되지 않아 저장소 파일을 읽을 수 없습니다. 워크스페이스 설정에서 GitHub를 연결하세요.",
     "truncated": "파일이 많아 일부만 표시합니다",
     "preview_binary": "바이너리 파일이라 미리볼 수 없습니다",
     "preview_truncated": "큰 파일이라 일부만 미리봅니다",
@@ -80,7 +126,22 @@
     "copy_failed": "복사 실패"
   },
   "thread": {
-    "empty": "채팅을 시작하세요. 멤버에 에이전트를 추가한 뒤 @에이전트이름 을 입력하면 답장합니다."
+    "empty": "채팅을 시작하세요. 멤버에 에이전트를 추가한 뒤 @에이전트이름 을 입력하면 답장합니다.",
+    "title": "스레드",
+    "reply": "스레드에서 답장",
+    "reply_aria": "스레드에서 답장",
+    "reply_count": "답글 {{count}}개",
+    "meta_count": "답글 {{count}}개",
+    "close_aria": "스레드 닫기",
+    "context_label": "원본 메시지",
+    "view_parent": "메인 대화로 돌아가기",
+    "show_full_message": "전체 메시지 보기",
+    "collapse_message": "접기",
+    "jump_to_parent": "원본 메시지로 이동",
+    "empty_replies": "아직 답글이 없습니다.",
+    "load_failed": "스레드를 불러오지 못했습니다.",
+    "send_failed": "스레드 답글을 보내지 못했습니다.",
+    "composer_placeholder": "스레드에서 답장..."
   },
   "typing": {
     "single": "{{name}} 님이 입력 중",
@@ -91,19 +152,71 @@
     "queued": "대기 중",
     "dispatched": "시작 중",
     "running": "생각 중",
-    "waiting_local_directory": "로컬 디렉터리 대기 중"
+    "waiting_local_directory": "로컬 디렉터리 대기 중",
+    "processing_single": "{{name}}이(가) 답장을 준비 중...",
+    "processing_pair": "{{a}}와(과) {{b}}이(가) 답장을 준비 중...",
+    "processing_overflow": "{{a}}, {{b}} 외 {{count}}명이 답장을 준비 중..."
   },
   "composer": {
     "placeholder": "필요한 내용을 입력하세요…  @에이전트이름 으로 답장을 요청하세요.",
     "attach_aria": "첨부",
     "mention_aria": "에이전트 멘션",
     "send": "전송",
+    "issue_ref_aria": "이슈 참조",
     "project_label": "프로젝트",
     "project_none": "프로젝트 없음",
     "project_tooltip": "이 채널이 작업할 프로젝트 설정"
   },
   "message": {
+    "add_reaction": "반응 추가",
     "agent_badge": "Agent",
     "feishu_badge": "Feishu"
+  },
+  "dm": {
+    "heading": "다이렉트 메시지",
+    "empty": "아직 다이렉트 메시지가 없습니다.",
+    "empty_cta": "채팅 시작",
+    "new_aria": "새 다이렉트 메시지",
+    "menu_aria": "다이렉트 메시지 작업",
+    "agent_meta": "에이전트",
+    "human_meta": "멤버",
+    "new_title": "새 메시지",
+    "search_placeholder": "사람 또는 에이전트 검색…",
+    "no_results": "일치 없음",
+    "send_message": "메시지 보내기",
+    "files": "파일",
+    "thread_empty": "아직 메시지가 없습니다. 인사를 건네 보세요.",
+    "self_label": "나",
+    "open_failed": "대화를 열 수 없습니다",
+    "mark_unread": "읽지 않음으로 표시",
+    "pin": "고정",
+    "unpin": "고정 해제",
+    "mute": "알림 음소거",
+    "unmute": "음소거 해제",
+    "muted_label": "음소거됨",
+    "close_chat": "대화 닫기",
+    "action_failed": "작업에 실패했습니다. 다시 시도해 주세요",
+    "composer_placeholder": "{{name}}에게 메시지…"
+  },
+  "quote": {
+    "reply": "답장",
+    "reply_aria": "이 메시지에 답장",
+    "more_aria": "더 많은 작업",
+    "cancel": "답장 취소",
+    "replying_to": "{{name}}에게 답장",
+    "jump_to": "원본 메시지로 이동"
+  },
+  "conv_search": {
+    "placeholder": "{{name}} 검색…",
+    "group_placeholder": "이 채널의 메시지 검색…",
+    "dm_placeholder": "{{name}}와(과)의 메시지 검색…",
+    "scope_current_messages": "현재 대화 · 메시지",
+    "result_count": "{{current}} / {{total}}",
+    "no_results": "일치 없음",
+    "prev_aria": "이전 결과",
+    "next_aria": "다음 결과",
+    "close_aria": "검색 닫기",
+    "search_aria": "대화 내 검색",
+    "error": "검색 실패"
   }
 }

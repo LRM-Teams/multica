@@ -156,6 +156,9 @@
     "rename_title": "에이전트 이름 변경",
     "rename_placeholder": "에이전트 이름",
     "rename_required": "이름은 필수입니다",
+    "display_name_title": "표시 이름 편집",
+    "display_name_placeholder": "에이전트 표시 이름",
+    "display_name_required": "표시 이름은 필수입니다",
     "edit_description_title": "설명 수정",
     "description_placeholder": "이 에이전트는 무엇을 하나요?",
     "save": "저장",
@@ -222,6 +225,8 @@
     "description_create": "워크스페이스에 새 AI 에이전트를 만듭니다.",
     "description_duplicate": "\"{{name}}\"을(를) 바탕으로 새 에이전트를 만듭니다. 지침, 환경 변수, 스킬이 복사됩니다.",
     "name_label": "이름",
+    "display_name_label": "표시 이름",
+    "handle_auto_hint": "안정적인 사용자 이름은 자동으로 생성되며 여기서는 변경할 수 없습니다.",
     "name_placeholder": "예: 심층 리서치 에이전트",
     "description_label": "설명",
     "description_placeholder": "이 에이전트는 무엇을 하나요?",
@@ -339,7 +344,20 @@
       "add_dialog_confirm_one": "스킬 {{count}}개 추가",
       "add_dialog_confirm_other": "스킬 {{count}}개 추가",
       "add_dialog_cancel": "취소",
-      "add_failed_toast": "스킬을 추가하지 못했습니다"
+      "add_failed_toast": "스킬을 추가하지 못했습니다",
+      "suggestion_title": "Evolution 스킬 제안",
+      "suggestion_intro": "승격되어 이 에이전트에 맞을 수 있는 워크스페이스 skill입니다. 수락하면 바인딩하고, 무시하면 다시 표시하지 않습니다.",
+      "suggestion_count": "대기 {{count}}개",
+      "suggestion_loading": "스킬 제안을 불러오는 중…",
+      "suggestion_empty": "대기 중인 스킬 제안이 없습니다.",
+      "suggestion_decision_failed_toast": "스킬 제안을 업데이트하지 못했습니다",
+      "suggestion_decision_saved_toast": "스킬 제안을 업데이트했습니다",
+      "suggestion_accept_action": "수락",
+      "suggestion_dismiss_action": "무시",
+      "suggestion_action": {
+        "add": "추가 제안",
+        "remove": "제거 제안"
+      }
     },
     "integrations": {
       "intro": "이 에이전트를 외부 채팅 플랫폼에 연결해 팀원이 평소 사용하는 도구에서 바로 함께 작업할 수 있도록 합니다.",
@@ -392,7 +410,19 @@
       "empty_title": "동기화된 메모리가 없습니다",
       "empty_hint": "이 에이전트 런타임의 메모리 파일은 다음 동기화 후 여기에 표시됩니다.",
       "empty_content": "내용 없음",
-      "updated_at": "업데이트 {{value}}"
+      "updated_at": "업데이트 {{value}}",
+      "evolution_title": "생성된 메모리",
+      "evolution_intro": "Pi evolution 흐름으로 전달된 메모리 계열 유닛입니다. 로컬 Pi inbox에 들어가 검토와 재사용에 쓰입니다.",
+      "evolution_loading": "생성된 메모리를 불러오는 중…",
+      "evolution_empty": "아직 생성된 메모리가 없습니다.",
+      "evolution_status": {
+        "pending": "대기 중",
+        "delivered": "전달됨",
+        "accepted": "수락됨",
+        "ignored": "무시됨",
+        "rejected": "거부됨",
+        "failed": "실패"
+      }
     }
   },
   "char_counter": {
@@ -414,6 +444,7 @@
   "profile_card": {
     "unavailable": "에이전트를 사용할 수 없습니다",
     "detail_link": "자세히 →",
+    "send_message": "메시지 보내기",
     "runtime_label": "런타임",
     "skills_label": "스킬",
     "owner_label": "소유자",

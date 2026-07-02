@@ -1,0 +1,115 @@
+"use client";
+
+import type { ReactNode } from "react";
+import { Send } from "lucide-react";
+import { Button } from "@multica/ui/components/ui/button";
+import { cn } from "@multica/ui/lib/utils";
+
+export function ConversationHeader({
+  isMobile,
+  leading,
+  title,
+  meta,
+  badges,
+  actions,
+}: {
+  isMobile: boolean;
+  leading: ReactNode;
+  title: ReactNode;
+  meta?: ReactNode;
+  badges?: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <header
+      className={cn(
+        "flex min-h-14 items-center justify-between gap-3 border-b border-border/25 bg-background/95 py-1.5",
+        isMobile ? "px-2" : "px-5",
+      )}
+    >
+      <div className={cn("flex min-w-0 items-center", isMobile ? "gap-2" : "gap-2.5")}>
+        {leading}
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-1.5 text-sm font-semibold leading-5">
+            <span className="truncate">{title}</span>
+            {badges}
+          </div>
+          {meta && (
+            <p className="truncate text-[11px] leading-4 text-muted-foreground/75">
+              {meta}
+            </p>
+          )}
+        </div>
+      </div>
+      {actions && (
+        <div className="flex shrink-0 items-center gap-1 text-muted-foreground">
+          {actions}
+        </div>
+      )}
+    </header>
+  );
+}
+
+export function ComposerShell({ children }: { children: ReactNode }) {
+  return (
+    <div className="px-5 pb-4">
+      <div className="rounded-lg border border-border/35 bg-background shadow-none">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export function ChannelComposer({
+  editor,
+  sendLabel,
+  sendDisabled,
+  sending = false,
+  onSend,
+  isMobile,
+  prefix,
+  leadingActions,
+}: {
+  editor: ReactNode;
+  sendLabel: string;
+  sendDisabled: boolean;
+  sending?: boolean;
+  onSend: () => void;
+  isMobile: boolean;
+  prefix?: ReactNode;
+  leadingActions?: ReactNode;
+}) {
+  return (
+    <ComposerShell>
+      {prefix}
+      <div className="max-h-40 min-h-16 overflow-y-auto px-4 pt-3">
+        {editor}
+      </div>
+      <div className="flex items-center justify-between px-2 pb-2">
+        <div className="flex min-h-8 items-center gap-0.5 text-muted-foreground">
+          {leadingActions}
+        </div>
+        <Button
+          onClick={onSend}
+          disabled={sendDisabled || sending}
+          size="sm"
+          className={cn(isMobile && "min-h-10 px-4")}
+        >
+          <Send className="size-4" /> {sendLabel}
+        </Button>
+      </div>
+    </ComposerShell>
+  );
+}
+
+export function ReadOnlyConversationBanner({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2 border-t border-border/25 px-5 py-3 text-sm text-muted-foreground">
+      {children}
+    </div>
+  );
+}

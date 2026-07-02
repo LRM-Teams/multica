@@ -1,13 +1,16 @@
 package daemon
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -42,7 +45,7 @@ func (d *Daemon) syncSharedSkillsOnce(ctx context.Context) {
 }
 
 // sharedSkillSyncRuntimes returns one stable online runtime per workspace so
-// workspace-level skills are synced exactly once per poll.
+// workspace-level scans are synced exactly once per poll.
 func (d *Daemon) sharedSkillSyncRuntimes() []Runtime {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -86,17 +89,42 @@ func sharedSkillScanRoot(cfg Config, provider string) (string, bool) {
 	}
 }
 
-func agentSharedSkillScanBase(cfg Config, provider string) (string, bool) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", false
+func piAgentRoot(cfg Config, workspaceID, agentID string) string {
+	return filepath.Join(cfg.WorkspacesRoot, workspaceID, ".pi", "agents", agentID)
+}
+
+func piAgentSyncQueueDir(agentRoot string) string { return filepath.Join(agentRoot, "sync_queue") }
+func piAgentSkillDraftsDir(agentRoot string) string {
+	return filepath.Join(agentRoot, "skills", "drafts")
+}
+func piAgentMemoryCandidatesPath(agentRoot string) string {
+	return filepath.Join(piAgentSyncQueueDir(agentRoot), "memory-candidates.jsonl")
+}
+func piAgentSkillCandidatesPath(agentRoot string) string {
+	return filepath.Join(piAgentSyncQueueDir(agentRoot), "skill-candidates.jsonl")
+}
+
+func ensurePiAgentRoot(root string) error {
+	dirs := []string{
+		filepath.Join(root, "memory", "daily"),
+		filepath.Join(root, "memory", "audit"),
+		filepath.Join(root, "skills", "drafts"),
+		filepath.Join(root, "skills", "generated"),
+		filepath.Join(root, "skills", "enabled"),
+		filepath.Join(root, "inbox", "memory"),
+		filepath.Join(root, "inbox", "skills"),
+		filepath.Join(root, "shared-cache", "memory"),
+		filepath.Join(root, "shared-cache", "skills"),
+		filepath.Join(root, "profile"),
+		filepath.Join(root, "feedback"),
+		filepath.Join(root, "sync_queue"),
 	}
-	switch provider {
-	case "pi":
-		return filepath.Join(home, "multica_workspaces", "pi_demo_workspace", ".pi", "agents"), true
-	default:
-		return "", false
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (d *Daemon) syncSharedSkillsForRuntime(ctx context.Context, rt Runtime) error {
@@ -106,10 +134,7 @@ func (d *Daemon) syncSharedSkillsForRuntime(ctx context.Context, rt Runtime) err
 			return err
 		}
 	}
-	if err := d.syncAgentSharedSkillsForRuntime(ctx, rt); err != nil {
-		return err
-	}
-	return d.syncAgentMemoriesForRuntime(ctx, rt)
+	return d.syncEvolutionSubmissionsForRuntime(ctx, rt)
 }
 
 func (d *Daemon) syncWorkspaceSharedSkillsForRuntime(ctx context.Context, rt Runtime, scanRoot string) error {
@@ -183,240 +208,248 @@ func (d *Daemon) syncWorkspaceSharedSkillsForRuntime(ctx context.Context, rt Run
 	if err != nil {
 		return err
 	}
-	if len(result.Conflicts) > 0 {
-		for _, conflict := range result.Conflicts {
-			d.logger.Warn("shared skill sync conflict",
-				"runtime_id", rt.ID,
-				"key", conflict.Key,
-				"name", conflict.Name,
-				"skill_id", conflict.Skill,
-				"reason", conflict.Reason,
-			)
-		}
-	}
-	if len(result.Errors) > 0 {
-		for _, item := range result.Errors {
-			d.logger.Warn("shared skill sync item failed",
-				"runtime_id", rt.ID,
-				"key", item.Key,
-				"name", item.Name,
-				"error", item.Error,
-			)
-		}
-	}
-	d.logger.Debug("shared skills synced",
-		"runtime_id", rt.ID,
-		"scan_root", scanRoot,
-		"created", result.Created,
-		"updated", result.Updated,
-		"unchanged", result.Unchanged,
-		"deleted", result.Deleted,
-		"conflicts", len(result.Conflicts),
-		"errors", len(result.Errors),
-	)
+	d.logSharedSkillSyncResult(rt, "shared skills synced", result)
 	return nil
 }
 
-func (d *Daemon) syncAgentSharedSkillsForRuntime(ctx context.Context, rt Runtime) error {
-	base, ok := agentSharedSkillScanBase(d.cfg, rt.Provider)
-	if !ok {
+func (d *Daemon) syncEvolutionSubmissionsForRuntime(ctx context.Context, rt Runtime) error {
+	if rt.Provider != "pi" || strings.TrimSpace(rt.WorkspaceID) == "" {
 		return nil
 	}
+	base := filepath.Join(d.cfg.WorkspacesRoot, rt.WorkspaceID, ".pi", "agents")
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			d.logger.Warn("agent shared skills root unavailable", "path", base, "provider", rt.Provider, "error", err)
+			d.logger.Warn("pi agent root unavailable", "path", base, "provider", rt.Provider, "error", err)
 		}
 		return nil
 	}
 
-	payload := AgentSharedSkillSyncPayload{Agents: make([]AgentSharedSkillBundleSet, 0, len(entries))}
+	payload := EvolutionSubmissionSyncPayload{}
 	for _, entry := range entries {
 		if !entry.IsDir() || isIgnoredLocalSkillEntry(entry.Name()) {
 			continue
 		}
 		agentID := entry.Name()
-		scanRoot := filepath.Join(base, agentID, "shared-cache", "skills")
-		set, err := d.buildAgentSharedSkillBundleSet(rt, agentID, scanRoot)
-		if err != nil {
-			d.logger.Warn("agent shared skill scan failed", "runtime_id", rt.ID, "agent_id", agentID, "path", scanRoot, "error", err)
+		agentRoot := piAgentRoot(d.cfg, rt.WorkspaceID, agentID)
+		if err := ensurePiAgentRoot(agentRoot); err != nil {
+			d.logger.Warn("pi agent root creation failed", "runtime_id", rt.ID, "agent_id", agentID, "path", agentRoot, "error", err)
 			continue
 		}
-		payload.Agents = append(payload.Agents, set)
+		memorySubmissions, err := d.loadMemoryCandidateSubmissions(rt, agentID, agentRoot)
+		if err != nil {
+			d.logger.Warn("memory candidate scan failed", "runtime_id", rt.ID, "agent_id", agentID, "error", err)
+			continue
+		}
+		skillSubmissions, err := d.loadSkillCandidateSubmissions(rt, agentID, agentRoot)
+		if err != nil {
+			d.logger.Warn("skill candidate scan failed", "runtime_id", rt.ID, "agent_id", agentID, "error", err)
+			continue
+		}
+		payload.Submissions = append(payload.Submissions, memorySubmissions...)
+		payload.Submissions = append(payload.Submissions, skillSubmissions...)
 	}
-	if len(payload.Agents) == 0 {
+	if len(payload.Submissions) == 0 {
 		return nil
 	}
 
-	result, err := d.client.SyncAgentSharedSkills(ctx, rt.ID, payload)
+	result, err := d.client.SyncEvolutionSubmissions(ctx, rt.ID, payload)
 	if err != nil {
 		return err
 	}
-	d.logSharedSkillSyncResult(rt, "agent shared skills synced", result)
+	d.logSharedSkillSyncResult(rt, "evolution submissions synced", result)
 	return nil
 }
 
-func (d *Daemon) buildAgentSharedSkillBundleSet(rt Runtime, agentID, scanRoot string) (AgentSharedSkillBundleSet, error) {
-	summaries, _, err := listLocalSkillsFromRoot(rt.Provider, scanRoot)
+func (d *Daemon) loadMemoryCandidateSubmissions(rt Runtime, agentID, agentRoot string) ([]EvolutionSubmissionBundle, error) {
+	path := piAgentMemoryCandidatesPath(agentRoot)
+	items, err := readEvolutionCandidateJSONL(path)
 	if err != nil {
-		return AgentSharedSkillBundleSet{}, err
+		return nil, err
 	}
-
-	presentKeys := make([]string, 0, len(summaries))
-	bundles := make([]SharedSkillBundle, 0, len(summaries))
-	activeCacheKeys := make(map[string]struct{}, len(summaries))
-
-	d.sharedSkillScanMu.Lock()
-	defer d.sharedSkillScanMu.Unlock()
-
-	for _, summary := range summaries {
-		presentKeys = append(presentKeys, summary.Key)
-		skillDir := filepath.Join(scanRoot, filepath.FromSlash(summary.Key))
-		fingerprint, err := localSkillScanFingerprint(skillDir)
-		if err != nil {
-			d.logger.Warn("agent shared skill fingerprint skipped", "agent_id", agentID, "key", summary.Key, "error", err)
+	submissions := make([]EvolutionSubmissionBundle, 0, len(items))
+	for _, item := range items {
+		submission := evolutionCandidateToBundle(rt.WorkspaceID, agentID, item)
+		if submission.UnitType == "" {
+			submission.UnitType = "memory"
+		}
+		if submission.LocalUnitID == "" || submission.UnitType == "" {
 			continue
 		}
-		cacheKey := scanRoot + "\x00" + summary.Key
-		activeCacheKeys[cacheKey] = struct{}{}
-		if d.sharedSkillScanCache[cacheKey] == fingerprint {
-			continue
+		if submission.ContentHash == "" {
+			submission.ContentHash = sharedSkillHash(submission.Content, nil)
 		}
-
-		bundle, _, err := loadLocalSkillBundleFromRoot(rt.Provider, scanRoot, summary.Key)
-		if err != nil {
-			d.logger.Warn("agent shared skill bundle skipped", "agent_id", agentID, "key", summary.Key, "error", err)
-			continue
-		}
-		files := make([]SkillFileData, len(bundle.Files))
-		copy(files, bundle.Files)
-		sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-		d.sharedSkillScanCache[cacheKey] = fingerprint
-		bundles = append(bundles, SharedSkillBundle{
-			Key:         summary.Key,
-			Name:        bundle.Name,
-			Description: bundle.Description,
-			Content:     bundle.Content,
-			SourcePath:  bundle.SourcePath,
-			Provider:    rt.Provider,
-			ContentHash: sharedSkillHash(bundle.Content, files),
-			Files:       files,
-		})
+		submissions = append(submissions, submission)
 	}
-
-	for cacheKey := range d.sharedSkillScanCache {
-		if !strings.HasPrefix(cacheKey, scanRoot+"\x00") {
-			continue
-		}
-		if _, active := activeCacheKeys[cacheKey]; !active {
-			delete(d.sharedSkillScanCache, cacheKey)
-		}
-	}
-
-	return AgentSharedSkillBundleSet{AgentID: agentID, Skills: bundles, PresentKeys: presentKeys}, nil
+	return submissions, nil
 }
 
-func (d *Daemon) syncAgentMemoriesForRuntime(ctx context.Context, rt Runtime) error {
-	base, ok := agentSharedSkillScanBase(d.cfg, rt.Provider)
-	if !ok {
-		return nil
-	}
-	entries, err := os.ReadDir(base)
+func (d *Daemon) loadSkillCandidateSubmissions(rt Runtime, agentID, agentRoot string) ([]EvolutionSubmissionBundle, error) {
+	path := piAgentSkillCandidatesPath(agentRoot)
+	items, err := readEvolutionCandidateJSONL(path)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			d.logger.Warn("agent memory root unavailable", "path", base, "provider", rt.Provider, "error", err)
-		}
-		return nil
+		return nil, err
 	}
-
-	payload := AgentMemorySyncPayload{Agents: make([]AgentMemoryBundleSet, 0, len(entries))}
-	for _, entry := range entries {
-		if !entry.IsDir() || isIgnoredLocalSkillEntry(entry.Name()) {
+	submissions := make([]EvolutionSubmissionBundle, 0, len(items))
+	for _, item := range items {
+		submission := evolutionCandidateToBundle(rt.WorkspaceID, agentID, item)
+		if submission.UnitType == "" {
+			submission.UnitType = "skill"
+		}
+		if submission.LocalUnitID == "" || submission.UnitType == "" {
 			continue
 		}
-		agentID := entry.Name()
-		scanRoot := filepath.Join(base, agentID, "shared-cache", "memory")
-		set, err := d.buildAgentMemoryBundleSet(rt, agentID, scanRoot)
-		if err != nil {
-			d.logger.Warn("agent memory scan failed", "runtime_id", rt.ID, "agent_id", agentID, "path", scanRoot, "error", err)
-			continue
+		bundlePath := bundlePathFromCandidate(item)
+		if bundlePath != "" {
+			bundleDir := filepath.Clean(filepath.Join(piAgentSyncQueueDir(agentRoot), filepath.FromSlash(bundlePath)))
+			files, content, err := loadSkillDraftBundle(bundleDir)
+			if err != nil {
+				d.logger.Warn("skill candidate bundle skipped", "agent_id", agentID, "local_unit_id", submission.LocalUnitID, "bundle_path", bundlePath, "error", err)
+				continue
+			}
+			submission.Files = files
+			if submission.Content == "" {
+				submission.Content = content
+			}
+			if submission.BundleRef == "" {
+				submission.BundleRef = relativizeHomePath(bundleDir)
+			}
+			if submission.BundleHash == "" {
+				submission.BundleHash = sharedSkillHash(content, files)
+			}
 		}
-		payload.Agents = append(payload.Agents, set)
+		submissions = append(submissions, submission)
 	}
-	if len(payload.Agents) == 0 {
-		return nil
-	}
-
-	result, err := d.client.SyncAgentMemories(ctx, rt.ID, payload)
-	if err != nil {
-		return err
-	}
-	d.logSharedSkillSyncResult(rt, "agent memories synced", result)
-	return nil
+	return submissions, nil
 }
 
-func (d *Daemon) buildAgentMemoryBundleSet(rt Runtime, agentID, scanRoot string) (AgentMemoryBundleSet, error) {
-	entries, err := os.ReadDir(scanRoot)
+func readEvolutionCandidateJSONL(path string) ([]map[string]json.RawMessage, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return AgentMemoryBundleSet{AgentID: agentID}, nil
+			return nil, nil
 		}
-		return AgentMemoryBundleSet{}, err
+		return nil, err
 	}
+	defer f.Close()
 
-	presentKeys := make([]string, 0, len(entries))
-	memories := make([]AgentMemoryBundle, 0, len(entries))
-	activeCacheKeys := make(map[string]struct{}, len(entries))
-
-	d.sharedSkillScanMu.Lock()
-	defer d.sharedSkillScanMu.Unlock()
-
-	for _, entry := range entries {
-		if entry.IsDir() || isIgnoredLocalSkillEntry(entry.Name()) || !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
-			continue
+	reader := bufio.NewReader(f)
+	items := []map[string]json.RawMessage{}
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(strings.TrimSpace(string(line))) > 0 {
+			var item map[string]json.RawMessage
+			if unmarshalErr := json.Unmarshal(line, &item); unmarshalErr == nil {
+				items = append(items, item)
+			}
 		}
-		key, err := normalizeLocalSkillKey(entry.Name())
 		if err != nil {
-			continue
+			if err == io.EOF {
+				break
+			}
+			return nil, err
 		}
-		path := filepath.Join(scanRoot, entry.Name())
-		info, err := os.Stat(path)
-		if err != nil || info.Size() > maxLocalSkillFileSize {
-			continue
-		}
-		presentKeys = append(presentKeys, key)
-		fingerprint := info.ModTime().UTC().Format(time.RFC3339Nano) + "\x00" + info.Name() + "\x00" + strconv.FormatInt(info.Size(), 10)
-		cacheKey := scanRoot + "\x00" + key
-		activeCacheKeys[cacheKey] = struct{}{}
-		if d.sharedSkillScanCache[cacheKey] == fingerprint {
-			continue
-		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		d.sharedSkillScanCache[cacheKey] = fingerprint
-		memories = append(memories, AgentMemoryBundle{
-			Key:         key,
-			Name:        strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name())),
-			Content:     string(content),
-			SourcePath:  relativizeHomePath(path),
-			Provider:    rt.Provider,
-			ContentHash: sharedSkillHash(string(content), nil),
-		})
 	}
+	return items, nil
+}
 
-	for cacheKey := range d.sharedSkillScanCache {
-		if !strings.HasPrefix(cacheKey, scanRoot+"\x00") {
+func evolutionCandidateToBundle(workspaceID, agentID string, item map[string]json.RawMessage) EvolutionSubmissionBundle {
+	payload, _ := json.Marshal(item)
+	return EvolutionSubmissionBundle{
+		WorkspaceID:    workspaceID,
+		AgentID:        agentID,
+		UnitType:       jsonString(item, "unit_type"),
+		LocalUnitID:    jsonString(item, "local_unit_id"),
+		Title:          jsonString(item, "title"),
+		Summary:        jsonString(item, "summary"),
+		Content:        jsonString(item, "content"),
+		Payload:        payload,
+		ContentHash:    jsonString(item, "content_hash"),
+		BundleHash:     jsonString(item, "bundle_hash"),
+		BundleRef:      jsonString(item, "bundle_ref"),
+		Sensitivity:    jsonString(item, "sensitivity"),
+		Confidence:     jsonString(item, "confidence"),
+		SuggestedScope: jsonString(item, "suggested_scope"),
+		Evidence:       jsonRawOrEmptyObject(item, "evidence"),
+		Applies:        jsonRawOrEmptyObject(item, "applies"),
+		Tags:           jsonStringSlice(item, "tags"),
+		Tools:          jsonStringSlice(item, "tools"),
+		TaskTypes:      jsonStringSlice(item, "task_types"),
+		ProjectTypes:   jsonStringSlice(item, "project_types"),
+		Languages:      jsonStringSlice(item, "languages"),
+		Frameworks:     jsonStringSlice(item, "frameworks"),
+		SourceCreated:  jsonString(item, "created_at"),
+	}
+}
+
+func bundlePathFromCandidate(item map[string]json.RawMessage) string {
+	return strings.TrimSpace(jsonString(item, "bundle_path"))
+}
+
+func loadSkillDraftBundle(bundleDir string) ([]SkillFileData, string, error) {
+	info, err := os.Stat(bundleDir)
+	if err != nil {
+		return nil, "", err
+	}
+	if !info.IsDir() {
+		return nil, "", fmt.Errorf("bundle path is not a directory")
+	}
+	content, err := readLocalSkillMainFile(bundleDir)
+	if err != nil {
+		return nil, "", err
+	}
+	files, err := collectLocalSkillFiles(bundleDir, true)
+	if err != nil {
+		return nil, "", err
+	}
+	files = append([]SkillFileData{{Path: "SKILL.md", Content: content}}, files...)
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files, content, nil
+}
+
+func jsonString(item map[string]json.RawMessage, key string) string {
+	raw, ok := item[key]
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return strings.TrimSpace(s)
+	}
+	return ""
+}
+
+func jsonStringSlice(item map[string]json.RawMessage, key string) []string {
+	raw, ok := item[key]
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
 			continue
 		}
-		if _, active := activeCacheKeys[cacheKey]; !active {
-			delete(d.sharedSkillScanCache, cacheKey)
+		if _, ok := seen[value]; ok {
+			continue
 		}
+		seen[value] = struct{}{}
+		out = append(out, value)
 	}
-	sort.Strings(presentKeys)
-	sort.Slice(memories, func(i, j int) bool { return memories[i].Key < memories[j].Key })
-	return AgentMemoryBundleSet{AgentID: agentID, Memories: memories, PresentKeys: presentKeys}, nil
+	return out
+}
+
+func jsonRawOrEmptyObject(item map[string]json.RawMessage, key string) json.RawMessage {
+	raw, ok := item[key]
+	if !ok || len(raw) == 0 || !json.Valid(raw) {
+		return json.RawMessage(`{}`)
+	}
+	return raw
 }
 
 func (d *Daemon) logSharedSkillSyncResult(rt Runtime, msg string, result *SharedSkillSyncResult) {

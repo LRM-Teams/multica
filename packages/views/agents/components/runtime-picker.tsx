@@ -5,6 +5,7 @@ import { ChevronDown, Cloud, Loader2, Lock } from "lucide-react";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { ActorAvatar } from "../../common/actor-avatar";
 import type { MemberWithUser, RuntimeDevice } from "@multica/core/types";
+import { resolveActorDisplayName } from "@multica/core/identity";
 import {
   Popover,
   PopoverTrigger,
@@ -206,7 +207,9 @@ export function RuntimePicker({
                           actorId={ownerMember.user_id}
                           size={14}
                         />
-                        <span className="truncate">{ownerMember.name}</span>
+                        <span className="truncate">
+                          {resolveActorDisplayName(ownerMember, ownerMember.user_id)}
+                        </span>
                       </>
                     ) : (
                       <span className="truncate">{device.device_info}</span>

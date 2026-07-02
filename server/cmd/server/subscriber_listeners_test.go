@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/events"
@@ -38,12 +39,13 @@ func createTestIssue(t *testing.T, workspaceID, creatorID string) string {
 func createTestUser(t *testing.T, email string) string {
 	t.Helper()
 	ctx := context.Background()
+	handle := strings.Split(email, "@")[0]
 	var userID string
 	err := testPool.QueryRow(ctx, `
-		INSERT INTO "user" (name, email)
-		VALUES ($1, $2)
+		INSERT INTO "user" (name, display_name, email)
+		VALUES ($1, $2, $3)
 		RETURNING id
-	`, "Subscriber Test User", email).Scan(&userID)
+	`, handle, "Subscriber Test User", email).Scan(&userID)
 	if err != nil {
 		t.Fatalf("createTestUser: %v", err)
 	}

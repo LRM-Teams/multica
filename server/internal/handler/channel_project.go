@@ -97,8 +97,9 @@ func (h *Handler) resolveProjectWorkdirRuntime(ctx context.Context, workspaceID,
 
 // ChannelProjectFilesResponse is the file-tree listing for a channel's bound
 // project workdir. Status tells the frontend which empty/error state to show:
-//   ok | no_project | offline (no online daemon for the viewer) | missing
-//   (the project workdir doesn't exist on that daemon yet) | error
+//
+//	ok | no_project | offline (no online daemon for the viewer) | missing
+//	(the project workdir doesn't exist on that daemon yet) | error
 type ChannelProjectFilesResponse struct {
 	ProjectID string                     `json:"project_id"`
 	Status    string                     `json:"status"`
@@ -140,7 +141,18 @@ func (h *Handler) ListChannelProjectFiles(w http.ResponseWriter, r *http.Request
 	}
 	projectID := uuidToString(pid)
 
-	// Resolve the runtime that actually hosts the managed workdir (the shared/
+	// GitHub-backed projects: read the file tree read-only from the bound repo
+	// via the workspace's GitHub App token. Decoupled from any runtime and from
+	// where agents execute, and automatic for every github_repo project.
+	if owner, repo, okGH := h.projectGitHubRepo(r.Context(), projectID); okGH {
+		ghCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		nodes, truncated, status := h.githubProjectFiles(ghCtx, parseUUID(workspaceID), owner, repo)
+		reply(status, nodes, truncated, projectID)
+		return
+	}
+
+	// Otherwise: resolve the runtime that hosts the managed workdir (the shared/
 	// cloud daemon on the server, the viewer's own daemon locally).
 	runtimeID, ok := h.resolveProjectWorkdirRuntime(r.Context(), workspaceID, userID, projectID)
 	if !ok {
@@ -218,6 +230,19 @@ func (h *Handler) GetChannelProjectFile(w http.ResponseWriter, r *http.Request) 
 	}
 	projectID := uuidToString(pid)
 
+	// GitHub-backed projects: read the file content from the bound repo.
+	if owner, repo, okGH := h.projectGitHubRepo(r.Context(), projectID); okGH {
+		ghCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		out, found := h.githubProjectFileContent(ghCtx, parseUUID(workspaceID), owner, repo, filePath)
+		if !found {
+			writeError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+
 	runtimeID, ok := h.resolveProjectWorkdirRuntime(r.Context(), workspaceID, userID, projectID)
 	if !ok {
 		writeError(w, http.StatusServiceUnavailable, "runtime offline")
@@ -275,6 +300,9 @@ func (h *Handler) SetChannelProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
 		return
 	}
 	var req setChannelProjectRequest

@@ -42,6 +42,9 @@
     "section_profile": "プロフィール",
     "click_avatar_hint": "クリックしてアバターをアップロード",
     "name_label": "名前",
+    "display_name_label": "表示名",
+    "handle_label": "ユーザー名",
+    "handle_hint": "ユーザー名は正確な @ メンションに使用され、ここでは変更できません。",
     "profile_description_label": "自己紹介",
     "profile_description_hint": "あなたの代わりに作業するエージェントに共有されます。役割、技術スタック、好みなど、新しいコラボレーターに初日に伝えたいことを書いてください。",
     "profile_description_placeholder": "例: Go と Postgres を使うバックエンドエンジニア。簡潔な PR と変更に合わせたテストを好みます。",
@@ -91,6 +94,8 @@
       "enable": "有効にする",
       "granted": "このブラウザは通知バナーを表示できます。",
       "denied": "ブラウザによってブロックされています。ブラウザの設定でこのサイトの通知を許可してください。",
+      "unsupported": "このブラウザはバックグラウンド Web Push に対応していません。Multica を開いている間はアプリ内通知を受け取れます。",
+      "ios_requires_pwa": "iOS では、まず Multica をホーム画面に追加し、ホーム画面から開いてバックグラウンド Push を有効にしてください。",
       "enabled_badge": "有効"
     }
   },

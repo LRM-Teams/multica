@@ -58,14 +58,17 @@ const {
       role: "owner" | "admin" | "member";
       created_at: string;
       name: string;
+      display_name?: string;
       email: string;
       avatar_url: string | null;
+      profile_description: string;
     }>,
   },
   mockAgents: {
     current: [] as Array<{
       id: string;
       name: string;
+      display_name?: string;
       avatar_url: string | null;
     }>,
   },
@@ -136,6 +139,17 @@ vi.mock("@multica/core/issues/stores", () => {
 
 vi.mock("@multica/core", () => ({
   useWorkspaceId: () => "ws-test",
+}));
+
+// SearchCommand's "Send message" entry uses useOpenDM -> useCreateOrFindDM, which
+// (via @multica/core/hooks) pulls the real useWorkspaceId/workspace chain. Stub the
+// DM hook at its module boundary so the search test doesn't exercise DM internals.
+vi.mock("@multica/core/dm", () => ({
+  useCreateOrFindDM: () => ({
+    mutate: () => {},
+    mutateAsync: async () => ({}),
+    isPending: false,
+  }),
 }));
 
 vi.mock("@multica/core/paths", () => ({
@@ -315,9 +329,11 @@ describe("SearchCommand", () => {
         user_id: "user-1",
         role: "member",
         created_at: "2026-01-01T00:00:00Z",
-        name: "Alice Zhang",
+        name: "alice",
+        display_name: "Alice Zhang",
         email: "alice@example.com",
         avatar_url: null,
+        profile_description: "",
       },
       {
         id: "member-2",
@@ -325,9 +341,11 @@ describe("SearchCommand", () => {
         user_id: "user-2",
         role: "admin",
         created_at: "2026-01-01T00:00:00Z",
-        name: "Bob Liu",
+        name: "bob",
+        display_name: "Bob Liu",
         email: "bob@example.com",
         avatar_url: null,
+        profile_description: "",
       },
     ];
     renderSearch();
@@ -342,7 +360,7 @@ describe("SearchCommand", () => {
       ).toBeInTheDocument();
     });
     expect(
-      screen.getByText((_, el) => el?.textContent === "alice@example.com" && el?.tagName === "DIV"),
+      screen.getByText((_, el) => el?.textContent === "@alice · alice@example.com" && el?.tagName === "DIV"),
     ).toBeInTheDocument();
     expect(screen.queryByText("Bob Liu")).not.toBeInTheDocument();
 
@@ -536,8 +554,10 @@ describe("SearchCommand", () => {
         role: "member",
         created_at: "2026-01-01T00:00:00Z",
         name: "Alice Zhang",
+        display_name: "Alice Zhang",
         email: "alice@example.com",
         avatar_url: null,
+        profile_description: "",
       },
     ];
     mockSearchIssues.mockResolvedValue({

@@ -44,6 +44,7 @@ import {
 import type { Workspace } from "../types/workspace";
 import { chatKeys } from "../chat/queries";
 import { channelKeys } from "../channels/queries";
+import { dmKeys } from "../dm/queries";
 import { useChatStore } from "../chat";
 import { resolvePostAuthDestination, useHasOnboarded } from "../paths";
 import type {
@@ -130,8 +131,17 @@ export function applyChatDoneToCache(
       (old) => patchLatestChatMessagePage(old, assistant),
     );
   }
-  // Replacement is in the messages list now; safe to drop pending.
-  qc.setQueryData(chatKeys.pendingTask(sessionId), {});
+  // Replacement is in the messages list now; safe to drop pending unless a
+  // newer follow-up turn has already been queued for the same session.
+  qc.setQueryData<ChatPendingTask | Record<string, never>>(
+    chatKeys.pendingTask(sessionId),
+    (old) => {
+      if (old && "task_id" in old && old.task_id && old.task_id !== taskId) {
+        return old;
+      }
+      return {};
+    },
+  );
   // Authoritative refetch reconciles redaction / migrations / clients
   // that took the fallback branch above.
   invalidateChatMessageQueries(qc, sessionId);
@@ -854,9 +864,13 @@ export function useRealtimeSync(
       const id = getCurrentWsId();
       if (id) qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(id) });
     };
-    const invalidateSessionLists = () => {
+    const invalidateChatConversationLists = () => {
       const id = getCurrentWsId();
-      if (id) qc.invalidateQueries({ queryKey: chatKeys.sessions(id) });
+      if (!id) return;
+      qc.invalidateQueries({ queryKey: chatKeys.sessions(id) });
+      // The Messages view unions legacy chat_sessions into its DM list, so any
+      // chat lifecycle change can affect a row preview, unread badge, or order.
+      qc.invalidateQueries({ queryKey: dmKeys.list(id) });
     };
 
     const unsubChatMessage = ws.on("chat:message", (p) => {
@@ -868,7 +882,7 @@ export function useRealtimeSync(
       // A new message can flip has_unread and reorder the session list — e.g.
       // an agent-initiated DM arriving in a thread the user isn't viewing.
       // Refresh the lists so the contact row / FAB badge update live.
-      invalidateSessionLists();
+      invalidateChatConversationLists();
     });
 
     const unsubChatDone = ws.on("chat:done", (p) => {
@@ -893,7 +907,7 @@ export function useRealtimeSync(
       applyChatDoneToCache(qc, payload);
       invalidatePendingAggregate();
       // Assistant message just landed → has_unread may have flipped to true.
-      invalidateSessionLists();
+      invalidateChatConversationLists();
     });
 
     // Chat task lifecycle writethrough: keep `chatKeys.pendingTask(sessionId)`
@@ -990,7 +1004,15 @@ export function useRealtimeSync(
         task_id: payload.task_id,
         chat_session_id: payload.chat_session_id,
       });
-      qc.setQueryData(chatKeys.pendingTask(payload.chat_session_id), {});
+      qc.setQueryData<ChatPendingTask | Record<string, never>>(
+        chatKeys.pendingTask(payload.chat_session_id),
+        (old) => {
+          if (old && "task_id" in old && old.task_id && old.task_id !== payload.task_id) {
+            return old;
+          }
+          return {};
+        },
+      );
       invalidateChatMessageQueries(qc, payload.chat_session_id);
       invalidatePendingAggregate();
     });
@@ -1033,7 +1055,7 @@ export function useRealtimeSync(
     const unsubChatSessionRead = ws.on("chat:session_read", (p) => {
       const payload = p as { chat_session_id: string };
       chatWsLogger.info("chat:session_read (global)", payload);
-      invalidateSessionLists();
+      invalidateChatConversationLists();
     });
 
     // chat:session_updated fires after the creator renames a session in
@@ -1088,10 +1110,27 @@ export function useRealtimeSync(
     });
 
     const unsubChannelMessage = ws.on("channel:message", (p) => {
-      const payload = p as { channel_id: string };
+      const payload = p as { channel_id: string; thread_root_message_id?: string | null };
       qc.invalidateQueries({ queryKey: channelKeys.messages(payload.channel_id) });
+      if (payload.thread_root_message_id) {
+        qc.invalidateQueries({ queryKey: channelKeys.messageThread(payload.channel_id, payload.thread_root_message_id) });
+      }
       const id = getCurrentWsId();
       if (id) qc.invalidateQueries({ queryKey: channelKeys.list(id) });
+    });
+
+    const unsubChannelReactionAdded = ws.on("channel_reaction:added", (p) => {
+      const payload = p as { channel_id?: string; message_id?: string };
+      if (payload.channel_id) {
+        qc.invalidateQueries({ queryKey: channelKeys.messages(payload.channel_id) });
+      }
+    });
+
+    const unsubChannelReactionRemoved = ws.on("channel_reaction:removed", (p) => {
+      const payload = p as { channel_id?: string; message_id?: string };
+      if (payload.channel_id) {
+        qc.invalidateQueries({ queryKey: channelKeys.messages(payload.channel_id) });
+      }
     });
 
     const unsubChannelUpdated = ws.on("channel:updated", () => {
@@ -1141,6 +1180,8 @@ export function useRealtimeSync(
       unsubChatSessionDeleted();
       unsubChatSessionUpdated();
       unsubChannelMessage();
+      unsubChannelReactionAdded();
+      unsubChannelReactionRemoved();
       unsubChannelUpdated();
       timers.forEach(clearTimeout);
       timers.clear();

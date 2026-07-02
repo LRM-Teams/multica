@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect } from "react";
 import {
   User,
   SlidersHorizontal,
@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { GitHubMark } from "./github-mark";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@multica/ui/components/ui/tabs";
-import { useCurrentWorkspace } from "@multica/core/paths";
+import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useNavigation } from "../../navigation";
 import { AccountTab } from "./account-tab";
 import { PreferencesTab } from "./preferences-tab";
@@ -72,6 +72,9 @@ const LEGACY_WORKSPACE_TAB_REDIRECTS: Record<string, string> = {
   lark: "integrations",
 };
 
+// Evolution review moved from Settings to Skills; old bookmarks still use these tab values.
+const EVOLUTION_REVIEW_LEGACY_TABS = new Set(["evolution-review", "evolution_review"]);
+
 export interface ExtraSettingsTab {
   value: string;
   label: string;
@@ -88,6 +91,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
   const { t } = useT("settings");
   const workspaceName = useCurrentWorkspace()?.name;
   const navigation = useNavigation();
+  const paths = useWorkspacePaths();
 
   // Whitelist of valid tab values; unknown ?tab=… values silently fall back to
   // the default. Whitelisting also blocks junk like ?tab=<script> from
@@ -103,6 +107,13 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
   );
 
   const tabFromUrl = navigation.searchParams.get(TAB_QUERY_KEY);
+
+  useEffect(() => {
+    if (tabFromUrl && EVOLUTION_REVIEW_LEGACY_TABS.has(tabFromUrl)) {
+      navigation.replace(`${paths.skills()}?section=review`);
+    }
+  }, [navigation, paths, tabFromUrl]);
+
   const candidateTab = tabFromUrl
     ? LEGACY_WORKSPACE_TAB_REDIRECTS[tabFromUrl] ?? tabFromUrl
     : null;

@@ -141,6 +141,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	}
 
 	cfSigner := auth.NewCloudFrontSignerFromEnv()
+	evolutionReviewer, evolutionReviewEnabled := service.NewEvolutionReviewerFromEnv()
 
 	signupConfig := handler.Config{
 		AllowSignup:              os.Getenv("ALLOW_SIGNUP") != "false",
@@ -153,6 +154,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		CloudRuntimeFleetTimeout: envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
 		AttachmentDownloadMode:   os.Getenv("ATTACHMENT_DOWNLOAD_MODE"),
 		AttachmentDownloadURLTTL: envDuration("ATTACHMENT_DOWNLOAD_URL_TTL", 30*time.Minute),
+		EvolutionReviewer:        evolutionReviewer,
+		EvolutionReviewEnabled:   evolutionReviewEnabled,
+		WebPushVAPIDPublicKey:    strings.TrimSpace(os.Getenv("WEB_PUSH_VAPID_PUBLIC_KEY")),
+		WebPushVAPIDPrivateKey:   strings.TrimSpace(os.Getenv("WEB_PUSH_VAPID_PRIVATE_KEY")),
+		WebPushVAPIDSubject:      strings.TrimSpace(os.Getenv("WEB_PUSH_VAPID_SUBJECT")),
+		WebPushAppURL:            strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_APP_URL")), "/"),
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
 	h.StartChannelBridge()
@@ -475,6 +482,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r.Get("/api/config", h.GetConfig)
 	r.With(contactSalesRL).Post("/api/contact-sales", h.CreateContactSales)
 
+	// Sticker library — embedded, non-sensitive assets. Public + unauthenticated
+	// because the images are loaded by <img> tags (which can't send auth headers)
+	// and the catalog is global, not workspace-scoped.
+	r.Get("/api/stickers", h.ListStickers)
+	r.Get("/api/stickers/{id}", h.GetStickerAsset)
+
 	// Webhook ingress for autopilots. Outside the authenticated group on
 	// purpose: the bearer token in the URL path IS the credential. Workspace
 	// context is derived from the trigger row, never from request headers.
@@ -506,8 +519,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/local-skills/{requestId}/result", h.ReportLocalSkillListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
 		r.Post("/runtimes/{runtimeId}/shared-skills/sync", h.SyncRuntimeSharedSkills)
-		r.Post("/runtimes/{runtimeId}/agent-shared-skills/sync", h.SyncAgentSharedSkills)
-		r.Post("/runtimes/{runtimeId}/agent-memories/sync", h.SyncAgentMemories)
+		r.Post("/runtimes/{runtimeId}/evolution/submissions", h.SyncEvolutionSubmissions)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
 		r.Post("/tasks/{taskId}/start", h.StartTask)
@@ -638,6 +650,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// is combined with the logged-in user to create the mapping.
 		r.Post("/api/lark/binding/redeem", h.RedeemLarkBindingToken)
 
+		// Web Push VAPID public key and unbind. Authenticated but not workspace-
+		// scoped so logout can remove the browser/device binding reliably.
+		r.Get("/api/web-push/public-key", h.GetWebPushPublicKey)
+		r.Delete("/api/web-push/subscriptions", h.DeleteWebPushSubscription)
+
 		// User-scoped invitation routes (no workspace context required)
 		r.Get("/api/invitations", h.ListMyInvitations)
 		r.Get("/api/invitations/{id}", h.GetMyInvitation)
@@ -694,6 +711,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Assignee frequency
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)
+			r.Get("/api/member-profiles/{memberType}/{memberId}", h.GetMemberProfile)
 
 			// Issues
 			r.Route("/api/issues", func(r chi.Router) {
@@ -741,6 +759,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Task messages (user-facing, not daemon auth)
 			r.Get("/api/tasks/{taskId}/messages", h.ListTaskMessagesByUser)
+
+			r.Route("/api/evolution/submissions", func(r chi.Router) {
+				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
+				r.Get("/", h.ListEvolutionReviewSubmissions)
+				r.Get("/{submissionId}", h.GetEvolutionReviewSubmission)
+				r.Post("/{submissionId}/promote", h.PromoteEvolutionReviewSubmission)
+				r.Post("/{submissionId}/reject", h.RejectEvolutionReviewSubmission)
+			})
 
 			// Labels
 			r.Route("/api/labels", func(r chi.Router) {
@@ -858,6 +884,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/tasks", h.ListAgentTasks)
 					r.Get("/skills", h.ListAgentSkills)
 					r.Put("/skills", h.SetAgentSkills)
+					r.Get("/skill-suggestions", h.ListAgentSkillSuggestions)
+					r.Post("/skill-suggestions/{suggestionId}/decision", h.DecideAgentSkillSuggestion)
 					r.Get("/memories", h.ListAgentMemories)
 					r.Post("/skills/add", h.AddAgentSkills)
 					// Dedicated env-management endpoint. Owner/admin only;
@@ -992,6 +1020,24 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// (resolveActor must be "agent"); human callers get 403.
 			r.Post("/api/chat/agent-dm", h.AgentDirectMessage)
 
+			// Unified 1-on-1 DM list (kind='dm' channels ∪ legacy unbound chat
+			// sessions) plus idempotent create-or-find. Sole data source for the
+			// DM section; group channels stay on /api/channels.
+			r.Get("/api/dm", h.ListDirectMessages)
+			r.Post("/api/dm", h.CreateOrFindDirectMessage)
+			r.Put("/api/dm/channels/{channelId}/pin", h.PinDMChannel)
+			r.Delete("/api/dm/channels/{channelId}/pin", h.UnpinDMChannel)
+			r.Put("/api/dm/channels/{channelId}/mute", h.MuteDMChannel)
+			r.Delete("/api/dm/channels/{channelId}/mute", h.UnmuteDMChannel)
+			r.Post("/api/dm/channels/{channelId}/unread", h.MarkDMChannelUnread)
+			r.Delete("/api/dm/channels/{channelId}", h.CloseDMChannel)
+			r.Put("/api/dm/sessions/{sessionId}/pin", h.PinDMSession)
+			r.Delete("/api/dm/sessions/{sessionId}/pin", h.UnpinDMSession)
+			r.Put("/api/dm/sessions/{sessionId}/mute", h.MuteDMSession)
+			r.Delete("/api/dm/sessions/{sessionId}/mute", h.UnmuteDMSession)
+			r.Post("/api/dm/sessions/{sessionId}/unread", h.MarkDMSessionUnread)
+			r.Delete("/api/dm/sessions/{sessionId}", h.CloseDMSession)
+
 			r.Route("/api/channels", func(r chi.Router) {
 				r.Get("/", h.ListChannels)
 				r.Post("/", h.CreateChannel)
@@ -999,6 +1045,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Route("/{channelId}", func(r chi.Router) {
 					r.Patch("/", h.UpdateChannel)
 					r.Delete("/", h.DeleteChannel)
+					r.Post("/archive", h.ArchiveChannel)
+					r.Post("/restore", h.RestoreChannel)
+					r.Put("/pin", h.PinChannel)
+					r.Delete("/pin", h.UnpinChannel)
+					r.Put("/mute", h.MuteChannel)
+					r.Delete("/mute", h.UnmuteChannel)
+					r.Post("/unread", h.MarkChannelUnread)
 					r.Get("/project", h.GetChannelProject)
 					r.Put("/project", h.SetChannelProject)
 					r.Get("/project-files", h.ListChannelProjectFiles)
@@ -1009,7 +1062,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/members/batch", h.AddChannelMembers)
 					r.Delete("/members/{memberType}/{memberId}", h.RemoveChannelMember)
 					r.Get("/messages", h.ListChannelMessages)
+					r.Get("/messages/search", h.SearchChannelMessages)
 					r.Post("/messages", h.SendChannelMessage)
+					r.Get("/messages/{messageId}/thread", h.ListChannelMessageThread)
+					r.Post("/messages/{messageId}/reactions", h.AddChannelMessageReaction)
+					r.Delete("/messages/{messageId}/reactions", h.RemoveChannelMessageReaction)
+					r.Post("/messages/{messageId}/thread", h.SendChannelMessageThreadReply)
+					r.Post("/messages/{messageId}/thread/read", h.MarkChannelThreadRead)
+					r.Put("/messages/{messageId}/thread/follow", h.FollowChannelThread)
+					r.Delete("/messages/{messageId}/thread/follow", h.UnfollowChannelThread)
 					r.Get("/attachments", h.ListChannelAttachments)
 					r.Get("/stats", h.GetChannelStats)
 					r.Post("/read", h.MarkChannelRead)
@@ -1034,6 +1095,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/", h.GetNotificationPreferences)
 				r.Put("/", h.UpdateNotificationPreferences)
 			})
+
+			// Web Push device binding. POST is workspace-scoped so the subscription
+			// captures the current workspace while the route still enforces membership.
+			r.Post("/api/web-push/subscriptions", h.UpsertWebPushSubscription)
 		})
 	})
 

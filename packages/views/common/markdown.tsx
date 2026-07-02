@@ -3,14 +3,18 @@
 import * as React from "react";
 import {
   Markdown as MarkdownBase,
+  highlightSearchText,
   type MarkdownProps as MarkdownBaseProps,
   type RenderMode,
 } from "@multica/ui/markdown";
 import { useConfigStore } from "@multica/core/config";
+import { api } from "@multica/core/api";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
+import { MentionHoverCard } from "@multica/ui/components/common/mention-hover-card";
 import { useWorkspacePaths, useCurrentWorkspace } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { agentColor } from "./agent-color";
+import { useT } from "../i18n";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
 import { AppLink } from "../navigation";
@@ -57,18 +61,33 @@ function ActorMention({
   type,
   id,
   label,
+  highlightQuery,
 }: {
   type: string;
   id: string;
   label?: string;
+  highlightQuery?: string;
 }): React.JSX.Element {
-  const { getActorName } = useActorName();
+  const { t } = useT("editor");
+  const actorNames = useActorName();
+  const { getActorName } = actorNames;
   // The link text is usually "@Name"; strip the leading @ so we don't double
   // it, and use it as the fallback when the id isn't in the workspace cache.
   const fallback = label ? label.replace(/^@+/, "").trim() || undefined : undefined;
   const name = type === "all" ? "all" : getActorName(type, id, fallback);
+  const handle = "getActorHandle" in actorNames ? actorNames.getActorHandle(type, id) : undefined;
+  const typeLabel =
+    type === "agent"
+      ? t(($) => $.mention.type_agent)
+      : type === "member"
+        ? t(($) => $.mention.type_member)
+        : undefined;
+  const role = [
+    handle ? `@${handle.replace(/^@+/, "")}` : null,
+    typeLabel,
+  ].filter(Boolean).join(" · ");
   const color = agentColor(id);
-  return (
+  const chip = (
     <span
       className="not-prose font-semibold"
       style={{
@@ -78,30 +97,105 @@ function ActorMention({
         padding: "0.0625rem 0.3125rem",
       }}
     >
-      @{name}
+      {highlightSearchText(`@${name}`, highlightQuery)}
     </span>
+  );
+  return (
+    <MentionHoverCard
+      type={type}
+      id={id}
+      name={type === "all" ? "All members" : name}
+      initials={
+        type === "all"
+          ? ""
+          : "getActorInitials" in actorNames
+            ? actorNames.getActorInitials(type, id)
+            : name.slice(0, 2).toUpperCase()
+      }
+      avatarUrl={
+        type === "all"
+          ? null
+          : "getActorAvatarUrl" in actorNames
+            ? actorNames.getActorAvatarUrl(type, id)
+            : null
+      }
+      role={role || undefined}
+    >
+      {chip}
+    </MentionHoverCard>
   );
 }
 
-function defaultRenderMention({
-  type,
-  id,
-  label,
-}: {
-  type: string;
-  id: string;
-  label?: string;
-}): React.ReactNode {
+function defaultRenderMention(
+  {
+    type,
+    id,
+    label,
+  }: {
+    type: string;
+    id: string;
+    label?: string;
+  },
+  highlightQuery?: string,
+): React.ReactNode {
   if (type === "issue") {
     return <IssueMentionCard issueId={id} />;
   }
   if (type === "project") {
     return <ProjectMentionCard projectId={id} />;
   }
-  return <ActorMention type={type} id={id} label={label} />;
+  return (
+    <ActorMention
+      type={type}
+      id={id}
+      label={label}
+      highlightQuery={highlightQuery}
+    />
+  );
+}
+
+// A sticker token (:sticker:<id>:) is preprocessed into an image whose src is
+// the public sticker endpoint. Matching that exact shape lets us render it as a
+// lightweight inline sticker instead of the heavyweight attachment chrome.
+const STICKER_SRC = /^\/api\/stickers\/([a-z0-9-]+)$/;
+
+// absolutizeStickerURL pins the API base for surfaces whose document origin is
+// not the API host (Electron desktop). On web, getBaseUrl() is empty (the
+// Next.js rewrite proxies /api/*), so the site-relative path is left as-is. The
+// api singleton is a Proxy that yields undefined before init, hence optional
+// chaining.
+function absolutizeStickerURL(src: string): string {
+  const baseUrl = (api.getBaseUrl?.() ?? "").replace(/\/+$/, "");
+  return baseUrl ? `${baseUrl}${src}` : src;
+}
+
+/**
+ * Inline sticker. Sized like a chat sticker (not a full image), no lightbox or
+ * download chrome. A missing/unknown id 404s the endpoint, so on error we
+ * render nothing rather than a broken-image icon — the message text stays
+ * intact (graceful degradation per the API-compat rules).
+ */
+function StickerImage({ id, alt }: { id: string; alt: string }): React.ReactNode {
+  const [failed, setFailed] = React.useState(false);
+  if (failed) return null;
+  return (
+    <img
+      src={absolutizeStickerURL(`/api/stickers/${id}`)}
+      alt={alt || `:sticker:${id}:`}
+      className="not-prose my-1 inline-block select-none align-bottom"
+      style={{ width: "6.5rem", height: "6.5rem" }}
+      draggable={false}
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
 function renderImage({ src, alt }: { src: string; alt: string }): React.ReactNode {
+  const stickerMatch = STICKER_SRC.exec(src);
+  if (stickerMatch?.[1]) {
+    return <StickerImage id={stickerMatch[1]} alt={alt} />;
+  }
   return (
     <AttachmentRenderer
       attachment={{
@@ -145,15 +239,21 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
   // the current workspace's prefix so it can't false-positive on tokens like
   // "UTF-8". Empty/absent prefix disables it.
   const issueRefPrefix = useCurrentWorkspace()?.issue_prefix || undefined;
-  const { attachments, ...rest } = props;
+  const { attachments, highlightQuery, ...rest } = props;
+  const renderMention = React.useCallback(
+    (mention: { type: string; id: string; label?: string }) =>
+      defaultRenderMention(mention, highlightQuery),
+    [highlightQuery],
+  );
   return (
     <AttachmentDownloadProvider attachments={attachments}>
       <MarkdownBase
-        renderMention={defaultRenderMention}
+        renderMention={renderMention}
         renderImage={renderImage}
         renderFileCard={renderFileCard}
         cdnDomain={cdnDomain}
         issueRefPrefix={issueRefPrefix}
+        highlightQuery={highlightQuery}
         {...rest}
       />
     </AttachmentDownloadProvider>

@@ -4,10 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Brain, FileText } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { agentMemoryOptions } from "@multica/core/agents/queries";
-import type { Agent } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { Markdown } from "../../../common/markdown";
 import { useT } from "../../../i18n";
+import type { Agent } from "@multica/core/types";
 
 export function MemoryTab({ agent }: { agent: Agent }) {
   const { t } = useT("agents");

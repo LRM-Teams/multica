@@ -6,9 +6,13 @@
     "pages": "페이지",
     "commands": "명령어",
     "members": "멤버",
+    "agents": "에이전트",
     "projects": "프로젝트",
     "issues": "이슈",
     "recent": "최근 항목"
+  },
+  "actions": {
+    "send_message": "메시지 보내기"
   },
   "pages": {
     "inbox": "인박스",

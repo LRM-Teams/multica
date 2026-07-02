@@ -7,6 +7,7 @@ import type { User, Workspace, MemberWithUser, Agent } from "@multica/core/types
 export const mockUser: User = {
   id: "user-1",
   name: "Test User",
+  display_name: "Test User",
   email: "test@multica.ai",
   avatar_url: null,
   onboarded_at: "2026-01-01T00:00:00Z",
@@ -45,8 +46,10 @@ export const mockMembers: MemberWithUser[] = [
     role: "owner",
     created_at: "2026-01-01T00:00:00Z",
     name: "Test User",
+    display_name: "Test User",
     email: "test@multica.ai",
     avatar_url: null,
+    profile_description: "",
   },
 ];
 
@@ -57,6 +60,7 @@ export const mockAgents: Agent[] = [
     workspace_id: "ws-1",
     runtime_id: "runtime-1",
     name: "Claude Agent",
+    display_name: "Claude Agent",
     description: "",
     instructions: "",
     avatar_url: null,

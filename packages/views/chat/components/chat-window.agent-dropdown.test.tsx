@@ -16,6 +16,7 @@ import { AgentDropdown } from "./chat-window";
 const TEST_RESOURCES = { en: { chat: enChat, issues: enIssues } };
 
 function makeAgent(overrides: Partial<Agent> & Pick<Agent, "id" | "name" | "owner_id">): Agent {
+  const displayName = overrides.display_name ?? overrides.name;
   return {
     workspace_id: "ws-1",
     runtime_id: "runtime-1",
@@ -37,6 +38,7 @@ function makeAgent(overrides: Partial<Agent> & Pick<Agent, "id" | "name" | "owne
     ...overrides,
     id: overrides.id,
     name: overrides.name,
+    display_name: displayName,
     owner_id: overrides.owner_id,
   };
 }

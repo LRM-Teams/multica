@@ -5,11 +5,12 @@
     "my_issues": "내 이슈",
     "issues": "이슈",
     "projects": "프로젝트",
-    "channels": "채널",
+    "channels": "메시지",
     "autopilots": "오토파일럿",
     "agents": "에이전트",
     "squads": "스쿼드",
     "usage": "사용량",
+    "evolution": "Evolution",
     "runtimes": "런타임",
     "skills": "스킬",
     "settings": "설정"

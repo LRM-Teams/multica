@@ -6,13 +6,35 @@
   "sidebar": {
     "heading": "メッセージ",
     "search": "会話を検索...",
-    "groups": "グループ",
+    "no_conversation_matches": "一致する会話がありません",
+    "search_scope_hint": "左側は会話リストのみを絞り込みます。メッセージ本文を検索するには、会話を開いて右上のメッセージ検索を使ってください。",
+    "groups": "チャンネル",
     "name_placeholder": "チャンネル名",
     "lark_placeholder": "任意の Feishu chat_id (oc_...)",
     "create_aria": "チャンネルを作成",
     "empty": "まだチャンネルがありません。",
     "menu_aria": "チャンネル操作",
-    "delete": "グループを削除"
+    "delete": "グループを削除",
+    "mark_unread": "未読にする",
+    "pin": "ピン留め",
+    "unpin": "ピン留め解除",
+    "archive": "アーカイブ",
+    "mute": "通知をミュート",
+    "unmute": "ミュート解除",
+    "muted_label": "ミュート中",
+    "archived_section": "アーカイブ済み",
+    "archived_restore": "アーカイブ解除",
+    "archive_permission": "作成者、オーナー、または管理者のみアーカイブできます",
+    "restore_permission": "作成者、オーナー、または管理者のみアーカイブ解除できます"
+  },
+  "archive_dialog": {
+    "title": "このチャンネルをアーカイブしますか？",
+    "description": "「{{name}}」はサイドバーから非表示になります。すべての履歴は保持され、いつでも復元できます。",
+    "cancel": "キャンセル",
+    "confirm": "アーカイブ",
+    "error": "チャンネルのアーカイブに失敗しました",
+    "restore_error": "アーカイブ解除に失敗しました",
+    "readonly_notice": "このチャンネルはアーカイブされています"
   },
   "delete_dialog": {
     "title": "このグループを削除しますか？",
@@ -35,7 +57,8 @@
     "stats_aria": "統計",
     "files_aria": "ファイル",
     "back": "戻る",
-    "more_aria": "その他"
+    "more_aria": "その他",
+    "roster_summary": "メンバー {{members}} 人 · エージェント {{agents}} 体"
   },
   "members": {
     "select_user": "メンバーを選択",
@@ -52,6 +75,28 @@
     "search": "検索…",
     "no_results": "一致する結果がありません"
   },
+  "profile_popover": {
+    "unknown": "不明",
+    "loading": "プロフィールを読み込み中…",
+    "agent_unavailable": "エージェントを利用できません",
+    "member_unavailable": "メンバーを利用できません",
+    "no_description": "説明はまだありません",
+    "recent_activity": "最近のアクティビティ",
+    "no_recent_activity": "最近のアクティビティはありません",
+    "role": {
+      "owner": "オーナー",
+      "admin": "管理者",
+      "member": "メンバー",
+      "agent": "エージェント"
+    },
+    "activity": {
+      "queued": "キュー中",
+      "working": "作業中",
+      "failed": "失敗",
+      "cancelled": "キャンセル済み",
+      "task": "タスク"
+    }
+  },
   "files": {
     "title": "ファイル",
     "empty": "ファイルがありません",
@@ -59,6 +104,7 @@
     "offline": "ランタイムがオフラインのためプロジェクトファイルを読み込めません",
     "missing": "このマシンにまだプロジェクトのフォルダがありません",
     "error": "ファイルの読み込みに失敗しました",
+    "github_unlinked": "GitHub が未接続のためリポジトリのファイルを読み込めません。ワークスペース設定で GitHub を接続してください。",
     "truncated": "ファイルが多いため一部のみ表示しています",
     "preview_binary": "バイナリファイルのためプレビューできません",
     "preview_truncated": "大きいファイルのため一部のみプレビュー",
@@ -80,7 +126,22 @@
     "copy_failed": "コピーに失敗しました"
   },
   "thread": {
-    "empty": "チャットを始めましょう。メンバーにエージェントを追加し、@エージェント名 を入力すると返信します。"
+    "empty": "チャットを始めましょう。メンバーにエージェントを追加し、@エージェント名 を入力すると返信します。",
+    "title": "スレッド",
+    "reply": "スレッドで返信",
+    "reply_aria": "スレッドで返信",
+    "reply_count": "{{count}} 件の返信",
+    "meta_count": "{{count}} 件の返信",
+    "close_aria": "スレッドを閉じる",
+    "context_label": "元のメッセージ",
+    "view_parent": "メイン会話へ戻る",
+    "show_full_message": "全文を表示",
+    "collapse_message": "折りたたむ",
+    "jump_to_parent": "元のメッセージへ移動",
+    "empty_replies": "返信はまだありません。",
+    "load_failed": "スレッドの読み込みに失敗しました。",
+    "send_failed": "スレッド返信の送信に失敗しました。",
+    "composer_placeholder": "スレッドで返信..."
   },
   "typing": {
     "single": "{{name}} が入力中",
@@ -91,19 +152,71 @@
     "queued": "待機中",
     "dispatched": "起動中",
     "running": "考え中",
-    "waiting_local_directory": "ローカルディレクトリを待機中"
+    "waiting_local_directory": "ローカルディレクトリを待機中",
+    "processing_single": "{{name}} が返信を準備しています...",
+    "processing_pair": "{{a}} と {{b}} が返信を準備しています...",
+    "processing_overflow": "{{a}}、{{b}} ほか {{count}} 人が返信を準備しています..."
   },
   "composer": {
     "placeholder": "必要なことを入力してください…  @エージェント名 で返信を促します。",
     "attach_aria": "添付",
     "mention_aria": "エージェントをメンション",
     "send": "送信",
+    "issue_ref_aria": "Issue を参照",
     "project_label": "プロジェクト",
     "project_none": "プロジェクトなし",
     "project_tooltip": "このチャンネルが作業するプロジェクトを設定"
   },
   "message": {
+    "add_reaction": "リアクションを追加",
     "agent_badge": "Agent",
     "feishu_badge": "Feishu"
+  },
+  "dm": {
+    "heading": "ダイレクトメッセージ",
+    "empty": "ダイレクトメッセージはまだありません。",
+    "empty_cta": "チャットを始める",
+    "new_aria": "新しいダイレクトメッセージ",
+    "menu_aria": "ダイレクトメッセージの操作",
+    "agent_meta": "エージェント",
+    "human_meta": "メンバー",
+    "new_title": "新しいメッセージ",
+    "search_placeholder": "ユーザーまたはエージェントを検索…",
+    "no_results": "一致なし",
+    "send_message": "メッセージを送信",
+    "files": "ファイル",
+    "thread_empty": "まだメッセージがありません。あいさつしてみましょう。",
+    "self_label": "あなた",
+    "open_failed": "会話を開けませんでした",
+    "mark_unread": "未読にする",
+    "pin": "ピン留め",
+    "unpin": "ピン留めを解除",
+    "mute": "通知をミュート",
+    "unmute": "ミュート解除",
+    "muted_label": "ミュート中",
+    "close_chat": "チャットを閉じる",
+    "action_failed": "操作に失敗しました。もう一度お試しください",
+    "composer_placeholder": "{{name}} にメッセージ…"
+  },
+  "quote": {
+    "reply": "返信",
+    "reply_aria": "このメッセージに返信",
+    "more_aria": "その他の操作",
+    "cancel": "返信をキャンセル",
+    "replying_to": "{{name}} への返信",
+    "jump_to": "元のメッセージへジャンプ"
+  },
+  "conv_search": {
+    "placeholder": "{{name}} を検索…",
+    "group_placeholder": "このチャンネルのメッセージを検索…",
+    "dm_placeholder": "{{name}} とのメッセージを検索…",
+    "scope_current_messages": "現在の会話 · メッセージ",
+    "result_count": "{{current}} / {{total}}",
+    "no_results": "一致なし",
+    "prev_aria": "前の結果",
+    "next_aria": "次の結果",
+    "close_aria": "検索を閉じる",
+    "search_aria": "会話内を検索",
+    "error": "検索に失敗しました"
   }
 }

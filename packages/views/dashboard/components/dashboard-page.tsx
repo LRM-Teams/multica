@@ -35,7 +35,9 @@ import {
   WeeklyTasksChart,
 } from "../../runtimes/components/charts";
 import { ProjectIcon } from "../../projects/components/project-icon";
+import { resolveActorIdentityPresentation } from "@multica/core/identity";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
 import {
   addDaysIso,
   aggregateByWeek,
@@ -687,6 +689,7 @@ function Leaderboard({
           <div className="divide-y">
             {sortedRows.map((row) => {
               const agent = agents.find((a) => a.id === row.agentId);
+              const presentation = resolveActorIdentityPresentation(agent, row.agentId);
               const value = SORT_METRIC[sortBy](row);
               const pct = maxValue > 0 ? (value / maxValue) * 100 : 0;
               return (
@@ -701,9 +704,13 @@ function Leaderboard({
                       size={22}
                       enableHoverCard
                     />
-                    <span className="cursor-pointer truncate text-sm font-medium">
-                      {agent?.name ?? row.agentId}
-                    </span>
+                    <ActorIdentityRow
+                      displayName={presentation.displayName}
+                      handle={presentation.handle}
+                      showHandle={presentation.showHandleLabel}
+                      primaryClassName="cursor-pointer truncate text-sm font-medium"
+                      secondaryClassName="truncate text-[11px] text-muted-foreground"
+                    />
                   </div>
                   <div className="relative h-2 overflow-hidden rounded-full bg-muted">
                     <div

@@ -28,6 +28,12 @@ import (
 	"github.com/multica-ai/multica/server/pkg/redact"
 )
 
+const (
+	chatResumeRecentMessageLimit = 10
+	chatFreshAfterMessageCount   = 40
+	chatFreshAfterTokenCount     = int64(180000)
+)
+
 // ---------------------------------------------------------------------------
 // Daemon workspace ownership helpers
 // ---------------------------------------------------------------------------
@@ -1133,7 +1139,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.Agent = &TaskAgentData{
 			ID:            uuidToString(agent.ID),
-			Name:          agent.Name,
+			Name:          agentDisplayName(agent),
 			Instructions:  agent.Instructions,
 			Skills:        skills,
 			CustomEnv:     customEnv,
@@ -1151,7 +1157,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	// can still run without the user-context section.
 	if runtime.OwnerID.Valid {
 		if owner, err := h.Queries.GetUser(r.Context(), runtime.OwnerID); err == nil {
-			resp.RequestingUserName = owner.Name
+			resp.RequestingUserName = userDisplayName(owner)
 			resp.RequestingUserProfileDescription = owner.ProfileDescription
 		} else {
 			slog.Debug("failed to load runtime owner for brief injection",
@@ -1174,7 +1180,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		resp.InitiatorType = "member"
 		resp.InitiatorID = uuidToString(task.InitiatorUserID)
 		if u, err := h.Queries.GetUser(r.Context(), task.InitiatorUserID); err == nil {
-			resp.InitiatorName = u.Name
+			resp.InitiatorName = userDisplayName(u)
 			resp.InitiatorEmail = u.Email
 		}
 	}
@@ -1278,8 +1284,8 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				case "agent":
 					if comment.AuthorID.Valid {
 						if a, err := h.Queries.GetAgent(r.Context(), comment.AuthorID); err == nil {
-							resp.TriggerAuthorName = a.Name
-							resp.InitiatorName = a.Name
+							resp.TriggerAuthorName = agentDisplayName(a)
+							resp.InitiatorName = agentDisplayName(a)
 						}
 					}
 				case "member":
@@ -1287,8 +1293,8 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					// (see handler.resolveActor) — look up the user's display name.
 					if comment.AuthorID.Valid {
 						if u, err := h.Queries.GetUser(r.Context(), comment.AuthorID); err == nil {
-							resp.TriggerAuthorName = u.Name
-							resp.InitiatorName = u.Name
+							resp.TriggerAuthorName = userDisplayName(u)
+							resp.InitiatorName = userDisplayName(u)
 							resp.InitiatorEmail = u.Email
 						}
 					}
@@ -1417,6 +1423,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+			var chatMessages []db.ChatMessage
 			// Build the chat prompt from EVERY user message that has arrived
 			// since the agent's last reply — not just the most recent one. A
 			// short-window debounce (MUL-2968) can land several user messages
@@ -1431,7 +1438,17 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			// the agent can `multica attachment download <id>` — the markdown
 			// URL alone is signed and 30-min expiring on the private CDN.
 			if msgs, err := h.Queries.ListChatMessages(r.Context(), cs.ID); err == nil && len(msgs) > 0 {
+				chatMessages = msgs
 				unanswered := trailingUserMessages(msgs)
+				if task.ForceFreshSession {
+					for i := len(msgs) - 1; i >= 0; i-- {
+						m := msgs[i]
+						if m.Role == "user" && m.TaskID == task.ID {
+							unanswered = []db.ChatMessage{m}
+							break
+						}
+					}
+				}
 				parts := make([]string, 0, len(unanswered))
 				for _, m := range unanswered {
 					if strings.TrimSpace(m.Content) != "" {
@@ -1453,6 +1470,24 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				resp.ChatMessage = strings.Join(parts, "\n\n")
 				if strings.TrimSpace(resp.ThreadName) == "" {
 					resp.ThreadName = resp.ChatMessage
+				}
+			}
+			if len(chatMessages) > 0 {
+				freshReason := ""
+				totalTokens := h.chatSessionTokenTotal(r.Context(), cs.ID)
+				if resp.PriorSessionID != "" {
+					if reason, ok := h.latestChatTaskFailureReason(r.Context(), cs.ID, task.ID); ok && chatFailureResumeUnsafe(reason) {
+						freshReason = "the latest task failed because the saved native session is no longer safe to resume (" + reason + ")"
+					}
+					if freshReason == "" && shouldStartFreshChatSession(chatMessages, totalTokens) {
+						freshReason = fmt.Sprintf("the chat is long enough to risk context overflow (%d messages, %d recorded tokens)", len(chatMessages), totalTokens)
+					}
+					if freshReason != "" {
+						resp.PriorSessionID = ""
+					}
+				}
+				if freshReason != "" || shouldIncludeChatContextSummary(chatMessages) {
+					resp.ChatContextSummary = buildChatContextSummary(chatMessages, totalTokens, freshReason)
 				}
 			}
 		}
@@ -1745,6 +1780,141 @@ func trailingUserMessages(msgs []db.ChatMessage) []db.ChatMessage {
 		}
 	}
 	return msgs[start:]
+}
+
+func shouldStartFreshChatSession(msgs []db.ChatMessage, totalTokens int64) bool {
+	return len(msgs) >= chatFreshAfterMessageCount || totalTokens >= chatFreshAfterTokenCount
+}
+
+func shouldIncludeChatContextSummary(msgs []db.ChatMessage) bool {
+	if len(msgs) <= 1 || !isShortChatConfirmation(msgs[len(msgs)-1]) {
+		return false
+	}
+	prev := previousAssistantMessage(msgs)
+	return prev != nil && isAssistantFollowupPrompt(*prev)
+}
+
+func previousAssistantMessage(msgs []db.ChatMessage) *db.ChatMessage {
+	if len(msgs) < 2 {
+		return nil
+	}
+	for i := len(msgs) - 2; i >= 0; i-- {
+		if msgs[i].Role != "user" {
+			return &msgs[i]
+		}
+	}
+	return nil
+}
+
+func isShortChatConfirmation(m db.ChatMessage) bool {
+	if m.Role != "user" {
+		return false
+	}
+	text := strings.TrimSpace(m.Content)
+	if text == "" || len([]rune(text)) > 8 {
+		return false
+	}
+	text = strings.Trim(text, " \t\r\n.,!?;:，。！？；：~～")
+	switch strings.ToLower(text) {
+	case "行", "继续", "可以", "确认", "嗯", "好", "好的", "ok", "okay", "yes", "y", "go", "继续吧", "可以的", "没问题":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAssistantFollowupPrompt(m db.ChatMessage) bool {
+	if m.Role == "user" {
+		return false
+	}
+	text := strings.TrimSpace(m.Content)
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	if strings.ContainsAny(text, "?？") {
+		return true
+	}
+	for _, marker := range []string{"确认", "继续", "可以", "是否", "要不要", "选择", "哪个", "哪一个", "need me", "should i"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func chatFailureResumeUnsafe(reason string) bool {
+	switch reason {
+	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", "agent_error.context_overflow":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *Handler) latestChatTaskFailureReason(ctx context.Context, chatSessionID, currentTaskID pgtype.UUID) (string, bool) {
+	var status, reason string
+	err := h.DB.QueryRow(ctx, `
+		SELECT status, COALESCE(failure_reason, '')
+		FROM agent_task_queue
+		WHERE chat_session_id = $1
+		  AND id <> $2
+		  AND status IN ('completed', 'failed', 'cancelled')
+		ORDER BY COALESCE(completed_at, started_at, dispatched_at, created_at) DESC
+		LIMIT 1`, chatSessionID, currentTaskID).Scan(&status, &reason)
+	if err != nil || status != "failed" || strings.TrimSpace(reason) == "" {
+		return "", false
+	}
+	return reason, true
+}
+
+func (h *Handler) chatSessionTokenTotal(ctx context.Context, chatSessionID pgtype.UUID) int64 {
+	var total int64
+	err := h.DB.QueryRow(ctx, `
+		SELECT COALESCE(SUM(tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_write_tokens), 0)::bigint
+		FROM task_usage tu
+		JOIN agent_task_queue atq ON atq.id = tu.task_id
+		WHERE atq.chat_session_id = $1`, chatSessionID).Scan(&total)
+	if err != nil {
+		return 0
+	}
+	return total
+}
+
+func buildChatContextSummary(msgs []db.ChatMessage, totalTokens int64, reason string) string {
+	var b strings.Builder
+	if strings.TrimSpace(reason) != "" {
+		fmt.Fprintf(&b, "Native session resume was intentionally skipped because %s.\n", reason)
+	}
+	fmt.Fprintf(&b, "Full chat history is preserved by Multica, but only the latest %d messages are included here to avoid carrying old tool outputs into every new turn.\n", chatResumeRecentMessageLimit)
+	if totalTokens > 0 {
+		fmt.Fprintf(&b, "Recorded token usage for this chat so far: %d.\n", totalTokens)
+	}
+	if len(msgs) == 0 {
+		return b.String()
+	}
+	b.WriteString("Recent messages:\n")
+	for _, m := range recentChatMessages(msgs, chatResumeRecentMessageLimit) {
+		fmt.Fprintf(&b, "- %s: %s\n", m.Role, compactChatLine(m.Content))
+	}
+	b.WriteString("Older tool outputs/log dumps are not included. If exact older details matter, re-read the referenced files/logs instead of assuming they are in context.\n")
+	return b.String()
+}
+
+func recentChatMessages(msgs []db.ChatMessage, limit int) []db.ChatMessage {
+	if limit <= 0 || len(msgs) <= limit {
+		return msgs
+	}
+	return msgs[len(msgs)-limit:]
+}
+
+func compactChatLine(s string) string {
+	line := strings.Join(strings.Fields(s), " ")
+	const max = 500
+	if len(line) <= max {
+		return line
+	}
+	return line[:max] + "..."
 }
 
 // ListPendingTasksByRuntime returns queued/dispatched tasks for a runtime.

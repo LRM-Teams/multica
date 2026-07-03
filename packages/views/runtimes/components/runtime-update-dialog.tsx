@@ -22,6 +22,10 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { useT } from "../../i18n/use-t";
 
+// Bump this key when we intentionally want every eligible user to see the
+// daemon update prompt again even if they dismissed an earlier rollout.
+const RUNTIME_UPDATE_PROMPT_ROLLOUT = "force-20260703";
+
 interface RuntimeUpdateDialogProps {
   wsId: string | undefined;
 }
@@ -50,10 +54,12 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
 
   const promptKey = useMemo(() => {
     if (updatableRuntimes.length === 0) return null;
-    return updatableRuntimes
-      .map((runtime) => `${runtime.id}:${runtimeTargetVersion(runtime) ?? ""}`)
-      .sort()
-      .join(",");
+    return [
+      RUNTIME_UPDATE_PROMPT_ROLLOUT,
+      ...updatableRuntimes
+        .map((runtime) => `${runtime.id}:${runtimeTargetVersion(runtime) ?? ""}`)
+        .sort(),
+    ].join(",");
   }, [updatableRuntimes]);
   const dismissStorageKey = useMemo(() => {
     if (!wsId || !userId) return null;

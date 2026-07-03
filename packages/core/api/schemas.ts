@@ -793,6 +793,19 @@ export interface DuplicateIssueErrorBody {
   };
 }
 
+// Body returned with a 409 when creating a channel whose (workspace, name) pair
+// already exists. `code` is the stable, machine-readable branch key the FE keys
+// its i18n message off; `error` is a human string for logs/fallback only.
+export const ChannelCreateErrorBodySchema = z.object({
+  code: z.literal("channel_name_taken"),
+  error: z.string().optional(),
+}).loose();
+
+export interface ChannelCreateErrorBody {
+  code: "channel_name_taken";
+  error?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Webhook delivery schemas — backing the Autopilot Deliveries section. Enums
 // (`status`, `signature_status`, `provider`) are kept as `z.string()` so a

@@ -3,6 +3,7 @@ import {
   DashboardAgentRunTimeListSchema,
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
+  ChannelCreateErrorBodySchema,
   DuplicateIssueErrorBodySchema,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
   ChannelMessageSearchResponseSchema,
@@ -124,6 +125,30 @@ describe("DuplicateIssueErrorBodySchema", () => {
   it("accepts a missing error field (it is optional)", () => {
     const { error: _omit, ...without } = valid;
     expect(DuplicateIssueErrorBodySchema.safeParse(without).success).toBe(true);
+  });
+});
+
+describe("ChannelCreateErrorBodySchema", () => {
+  it("accepts a well-formed duplicate-name body", () => {
+    const valid = { code: "channel_name_taken", error: "channel name already exists" };
+    expect(ChannelCreateErrorBodySchema.safeParse(valid).success).toBe(true);
+  });
+
+  it("accepts a missing error field (it is optional)", () => {
+    expect(ChannelCreateErrorBodySchema.safeParse({ code: "channel_name_taken" }).success).toBe(true);
+  });
+
+  it("accepts unknown extra fields via .loose()", () => {
+    const forwardCompat = { code: "channel_name_taken", error: "x", workspace_id: "ws-1" };
+    expect(ChannelCreateErrorBodySchema.safeParse(forwardCompat).success).toBe(true);
+  });
+
+  it("rejects a renamed code (so renames degrade to the generic toast)", () => {
+    expect(ChannelCreateErrorBodySchema.safeParse({ code: "name_taken" }).success).toBe(false);
+  });
+
+  it("rejects a missing code", () => {
+    expect(ChannelCreateErrorBodySchema.safeParse({ error: "channel name already exists" }).success).toBe(false);
   });
 });
 

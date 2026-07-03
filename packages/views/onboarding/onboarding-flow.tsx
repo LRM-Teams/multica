@@ -219,7 +219,7 @@ export function OnboardingFlow({
       return;
     }
     onComplete(workspaces[0] ?? undefined);
-  }, [workspaces, onComplete]);
+  }, [t, workspaces, onComplete]);
 
   const handleWorkspaceCreated = useCallback(
     (ws: Workspace) => {

@@ -429,7 +429,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         projectStatus: project.status,
       });
     }
-  }, [project?.id, project?.title, project?.description, project?.icon, project?.status, recordRecentContext, wsId]);
+  }, [project, recordRecentContext, wsId]);
   const projectScope = `project:${projectId}`;
   const projectFilter = useMemo<MyIssuesFilter>(
     () => ({ project_id: projectId }),

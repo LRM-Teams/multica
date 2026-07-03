@@ -161,7 +161,7 @@ function FancyView({
       has_any_cli: runtimes.length > 0,
       detected_cli_count: runtimes.length,
     });
-  }, [phase, runtimes, onlineCount]);
+  }, [phase, runtimes, onlineCount, wsId]);
 
   const [submitting, setSubmitting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);

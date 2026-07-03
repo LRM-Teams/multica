@@ -65,6 +65,10 @@ const DEFAULT_DAYS_BY_DIM: Record<Exclude<WhenTab, "heatmap">, TimeRange> = {
   weekly: 90,
 };
 
+function pricingRevisionKey(pricings: Record<string, unknown>): string {
+  return JSON.stringify(pricings);
+}
+
 function rangesForDim(dim: Exclude<WhenTab, "heatmap">) {
   return TIME_RANGES.filter((r) =>
     (r.dims as readonly string[]).includes(dim),
@@ -326,25 +330,25 @@ function WhenChart({
   const [showHeatmap, setShowHeatmap] = useState(false);
   // Daily and Weekly share a Cost-vs-Tokens metric toggle.
   const [chartMetric, setChartMetric] = useState<DailyMetric>("cost");
-  // Memo dep — the aggregates below run `estimateCost`, which now consults
-  // the user override store. Without listing pricings here the memos cache
-  // pre-override totals when query data hasn't changed.
-  const pricings = useCustomPricingStore((s) => s.pricings);
+  // Memo dep — the aggregates below run `estimateCost`, which consults the
+  // custom pricing store outside React. Track a primitive revision so saving
+  // a rate recomputes cached totals even when usage rows stay unchanged.
+  const pricingRevision = useCustomPricingStore((s) => pricingRevisionKey(s.pricings));
 
-  const { dailyCostStack, dailyTokens } = useMemo(
-    () => aggregateByDate(filtered),
-    [filtered, pricings],
-  );
+  const { dailyCostStack, dailyTokens } = useMemo(() => {
+    void pricingRevision;
+    return aggregateByDate(filtered);
+  }, [filtered, pricingRevision]);
   // Weekly aggregation builds exactly N trailing calendar weeks anchored at
   // today (in the runtime tz). Buckets are pre-zeroed inside aggregateByWeek
   // so weeks with no usage render as empty bars; rows outside the window are
   // dropped. This avoids the earlier bug where slicing on a sparse 180-day
   // aggregate surfaced old populated weeks instead of in-range empty ones.
   const weekCount = Math.max(1, Math.ceil(days / 7));
-  const { weeklyTokens, weeklyCostStack } = useMemo(
-    () => aggregateByWeek(usage, tz, weekCount),
-    [usage, tz, weekCount, pricings],
-  );
+  const { weeklyTokens, weeklyCostStack } = useMemo(() => {
+    void pricingRevision;
+    return aggregateByWeek(usage, tz, weekCount);
+  }, [usage, tz, weekCount, pricingRevision]);
 
   const metricToggleVisible = !showHeatmap;
   const legendIncludesCacheRead = !showHeatmap && chartMetric === "tokens";
@@ -612,8 +616,8 @@ function CostByBlock({
   const { t } = useT("runtimes");
   const [tab, setTab] = useState<"agent" | "model">("agent");
   // Memo dep — same reason as WhenChart: aggregateCostBy{Agent,Model} call
-  // estimateCost, which now reads the override store.
-  const pricings = useCustomPricingStore((s) => s.pricings);
+  // estimateCost, which reads the custom pricing store outside React.
+  const pricingRevision = useCustomPricingStore((s) => pricingRevisionKey(s.pricings));
 
   // by-agent is server-side aggregation (fetched lazily on tab activation).
   // by-model derives from the daily cache the parent already has — free.
@@ -625,14 +629,14 @@ function CostByBlock({
   const wsId = useWorkspaceId();
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
 
-  const byAgent = useMemo(
-    () => aggregateCostByAgent(byAgentRows),
-    [byAgentRows, pricings],
-  );
-  const byModel = useMemo(
-    () => aggregateCostByModel(usage),
-    [usage, pricings],
-  );
+  const byAgent = useMemo(() => {
+    void pricingRevision;
+    return aggregateCostByAgent(byAgentRows);
+  }, [byAgentRows, pricingRevision]);
+  const byModel = useMemo(() => {
+    void pricingRevision;
+    return aggregateCostByModel(usage);
+  }, [usage, pricingRevision]);
 
   const caption =
     tab === "agent"

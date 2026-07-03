@@ -599,17 +599,21 @@ export function ChannelsPage() {
     hasNextPage: hasOlderMessages,
     isFetchingNextPage: isFetchingOlderMessages,
   } = useInfiniteQuery(channelMessagesPageOptions(active?.id ?? ""));
-  const messages = useMemo(() => flattenChannelMessagePages(active?.id ? messagePages : undefined), [active?.id, messagePages]);
+  const activeChannelId = active?.id ?? "";
+  const messages = useMemo(() => flattenChannelMessagePages(activeChannelId ? messagePages : undefined), [activeChannelId, messagePages]);
   const messagesFirstItemIndex = useMemo(
-    () => channelMessagesFirstItemIndex(active?.id ? messagePages : undefined, messages.length > 0),
-    [active?.id, messagePages, messages.length],
+    () => channelMessagesFirstItemIndex(activeChannelId ? messagePages : undefined, messages.length > 0),
+    [activeChannelId, messagePages, messages.length],
   );
-  const threadRoot =
-    openThreadRoot && active?.id === openThreadRoot.channel_id
-      ? messages.find((m) => m.id === openThreadRoot.id) ?? openThreadRoot
-      : null;
+  const threadRoot = useMemo(
+    () =>
+      openThreadRoot && activeChannelId === openThreadRoot.channel_id
+        ? messages.find((m) => m.id === openThreadRoot.id) ?? openThreadRoot
+        : null,
+    [activeChannelId, messages, openThreadRoot],
+  );
   const { data: threadPage, isLoading: threadLoading, isError: threadError, refetch: refetchThread } = useQuery(
-    channelMessageThreadOptions(active?.id ?? "", threadRoot?.id ?? ""),
+    channelMessageThreadOptions(activeChannelId, threadRoot?.id ?? ""),
   );
   const threadReplies = useMemo(
     () => {
@@ -882,7 +886,7 @@ export function ChannelsPage() {
       }
     }, 300);
     return () => clearTimeout(timer);
-  }, [convSearchQuery, active?.id, convSearchOpen]);
+  }, [convSearchQuery, active, convSearchOpen, t]);
 
   // Clear the unread badge when a channel becomes active (select / deep link /
   // auto-select). `markChannelRead` (mutate) is referentially stable.
@@ -913,9 +917,9 @@ export function ChannelsPage() {
   }, [active?.id, activeDmId]);
 
   useEffect(() => {
-    if (!active?.id || !threadRoot) return;
-    markThreadRead({ channelId: active.id, messageId: threadRoot.id });
-  }, [active?.id, threadRoot?.id, markThreadRead]);
+    if (!activeChannelId || !threadRoot) return;
+    markThreadRead({ channelId: activeChannelId, messageId: threadRoot.id });
+  }, [activeChannelId, threadRoot, markThreadRead]);
 
   useEffect(() => {
     if (!threadRoot || !focusThreadComposerOnOpenRef.current) return;
@@ -923,7 +927,7 @@ export function ChannelsPage() {
     requestAnimationFrame(() => {
       threadEditorRef.current?.focus();
     });
-  }, [threadRoot?.id]);
+  }, [threadRoot]);
 
   // Sync the DM selection from the `?dm=` deep link. The entry points outside
   // this view (Cmd+K, agent hover card) push(`...?dm=ID`); when the user is

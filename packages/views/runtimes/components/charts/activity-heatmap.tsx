@@ -40,6 +40,10 @@ function fmtDate(iso: string): string {
   });
 }
 
+function pricingRevisionKey(pricings: Record<string, unknown>): string {
+  return JSON.stringify(pricings);
+}
+
 interface Insights {
   busiestDay: { date: string; cost: number } | null;
   busyDayName: string | null;
@@ -58,10 +62,9 @@ export function ActivityHeatmap({
   tz: string;
 }) {
   const { t } = useT("runtimes");
-  // Memo dep — estimateCost (called inside the body below) consults the
-  // user-override store, so saving a custom rate must invalidate the cells.
-  const pricings = useCustomPricingStore((s) => s.pricings);
+  const pricingRevision = useCustomPricingStore((s) => pricingRevisionKey(s.pricings));
   const { cells, monthLabels, insights } = useMemo(() => {
+    void pricingRevision;
     // Sum priced cost per day. Cost (not tokens) gives the colour scale a
     // financial meaning that lines up with the rest of the page — a "hot"
     // square here means the same thing as a tall bar in Daily cost.
@@ -189,7 +192,7 @@ export function ActivityHeatmap({
     };
 
     return { cells: cellsWithLevel, monthLabels: months, insights };
-  }, [usage, pricings, tz]);
+  }, [usage, tz, pricingRevision]);
 
   const labelWidth = 28;
   const svgWidth = labelWidth + HEATMAP_WEEKS * (CELL_SIZE + CELL_GAP);

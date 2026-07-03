@@ -371,10 +371,13 @@ function DmChannelConversation({
     () => channelMessagesFirstItemIndex(messagePages, messages.length > 0),
     [messagePages, messages.length],
   );
-  const threadRoot =
-    openThreadRoot && openThreadRoot.channel_id === channelId
-      ? messages.find((m) => m.id === openThreadRoot.id) ?? openThreadRoot
-      : null;
+  const threadRoot = useMemo(
+    () =>
+      openThreadRoot && openThreadRoot.channel_id === channelId
+        ? messages.find((m) => m.id === openThreadRoot.id) ?? openThreadRoot
+        : null,
+    [channelId, messages, openThreadRoot],
+  );
   const { data: threadPage, isLoading: threadLoading, isError: threadError, refetch: refetchThread } = useQuery(
     channelMessageThreadOptions(channelId, threadRoot?.id ?? ""),
   );
@@ -478,7 +481,7 @@ function DmChannelConversation({
   useEffect(() => {
     if (!threadRoot) return;
     markThreadRead({ channelId, messageId: threadRoot.id });
-  }, [channelId, threadRoot?.id, markThreadRead]);
+  }, [channelId, threadRoot, markThreadRead]);
 
   useEffect(() => {
     if (!threadRoot || !focusThreadComposerOnOpenRef.current) return;
@@ -486,7 +489,7 @@ function DmChannelConversation({
     requestAnimationFrame(() => {
       threadEditorRef.current?.focus();
     });
-  }, [threadRoot?.id]);
+  }, [threadRoot]);
 
   // Expire stale typing pulses.
   useEffect(() => {

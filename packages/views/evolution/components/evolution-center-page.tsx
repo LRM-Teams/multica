@@ -32,6 +32,7 @@ import {
 import type {
   Agent,
   DashboardAgentRunTime,
+  DashboardUsageByAgent,
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
 } from "@multica/core/types";
@@ -138,6 +139,7 @@ const DAYS = 30;
 const VIEW_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 const EMPTY_AGENTS: Agent[] = [];
 const EMPTY_RUNTIME: DashboardAgentRunTime[] = [];
+const EMPTY_USAGE_BY_AGENT: DashboardUsageByAgent[] = [];
 const EMPTY_SUBMISSIONS: EvolutionReviewSubmission[] = [];
 
 type AgentEvolutionRow = {
@@ -269,17 +271,24 @@ export function EvolutionCenterPage() {
   const rejectedQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "rejected"));
 
   const agents = agentsQuery.data ?? EMPTY_AGENTS;
-  const usageRows = usageQuery.data ?? [];
+  const usageRows = usageQuery.data ?? EMPTY_USAGE_BY_AGENT;
   const runtimeRows = runtimeQuery.data ?? EMPTY_RUNTIME;
-  const submissionsByStatus = {
-    needs_review: needsReviewQuery.data ?? EMPTY_SUBMISSIONS,
-    candidate: candidateQuery.data ?? EMPTY_SUBMISSIONS,
-    promoted: promotedQuery.data ?? EMPTY_SUBMISSIONS,
-    rejected: rejectedQuery.data ?? EMPTY_SUBMISSIONS,
-  };
+  const needsReviewSubmissions = needsReviewQuery.data ?? EMPTY_SUBMISSIONS;
+  const candidateSubmissions = candidateQuery.data ?? EMPTY_SUBMISSIONS;
+  const promotedSubmissions = promotedQuery.data ?? EMPTY_SUBMISSIONS;
+  const rejectedSubmissions = rejectedQuery.data ?? EMPTY_SUBMISSIONS;
+  const submissionsByStatus = useMemo(
+    () => ({
+      needs_review: needsReviewSubmissions,
+      candidate: candidateSubmissions,
+      promoted: promotedSubmissions,
+      rejected: rejectedSubmissions,
+    }),
+    [candidateSubmissions, needsReviewSubmissions, promotedSubmissions, rejectedSubmissions],
+  );
   const submissions = useMemo(
     () => STATUSES.flatMap((status) => submissionsByStatus[status] ?? EMPTY_SUBMISSIONS),
-    [candidateQuery.data, needsReviewQuery.data, promotedQuery.data, rejectedQuery.data],
+    [submissionsByStatus],
   );
 
   const rows = useMemo(

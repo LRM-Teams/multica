@@ -967,19 +967,27 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if task.ChatSessionID.Valid {
-		// Chat privacy: only the member who opened the conversation may
-		// cancel its task, even though the workspace is shared.
-		cs, err := h.Queries.GetChatSessionInWorkspace(r.Context(), db.GetChatSessionInWorkspaceParams{
-			ID:          task.ChatSessionID,
-			WorkspaceID: wsUUID,
-		})
-		if err != nil {
-			writeError(w, http.StatusNotFound, "task not found")
-			return
-		}
-		if uuidToString(cs.CreatorID) != userID {
-			writeError(w, http.StatusForbidden, "not your task")
-			return
+		// Chat privacy: direct chats are creator-only, but channel-backed
+		// agent runs are shared channel work and may be stopped by any human
+		// member of that channel.
+		channelID := h.channelIDForChatSession(r.Context(), task.ChatSessionID)
+		if channelID != "" {
+			if !h.requireChannelUserMember(w, r.Context(), workspaceID, parseUUID(channelID), parseUUID(userID)) {
+				return
+			}
+		} else {
+			cs, err := h.Queries.GetChatSessionInWorkspace(r.Context(), db.GetChatSessionInWorkspaceParams{
+				ID:          task.ChatSessionID,
+				WorkspaceID: wsUUID,
+			})
+			if err != nil {
+				writeError(w, http.StatusNotFound, "task not found")
+				return
+			}
+			if uuidToString(cs.CreatorID) != userID {
+				writeError(w, http.StatusForbidden, "not your task")
+				return
+			}
 		}
 	} else {
 		// Issue / autopilot / quick_create tasks are all visible on the

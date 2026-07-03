@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ArrowLeft, ChevronDown, ChevronUp, FileText, Hash, MessageSquare, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -24,7 +24,7 @@ import { api } from "@multica/core/api";
 import { useFileUpload, type UploadResult } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWSEvent } from "@multica/core/realtime";
-import type { ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload } from "@multica/core/types";
+import type { ChannelActiveTask, ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Drawer } from "@multica/ui/components/ui/drawer";
 import {
@@ -333,6 +333,7 @@ function DmChannelConversation({
     threadParentHighlightId,
     typingActors,
   }, dispatch] = useReducer(dmChannelReducer, initialDmChannelState);
+  const [stoppingTaskId, setStoppingTaskId] = useState<string | null>(null);
 
   const { mutate: markChannelRead } = useMarkChannelRead();
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
@@ -486,6 +487,13 @@ function DmChannelConversation({
     markChannelRead(channelId);
   });
 
+  useWSEvent("task:cancelled", (payload) => {
+    const e = payload as { chat_session_id?: string };
+    if (!e.chat_session_id) return;
+    qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelId) });
+    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+  });
+
   useWSEvent("channel:typing", (payload) => {
     const event = payload as ChannelTypingPayload;
     if (!event.channel_id || event.channel_id !== channelId) return;
@@ -550,6 +558,20 @@ function DmChannelConversation({
   const handleThreadEditorUpdate = (value: string) => {
     dispatch({ type: "setThreadDraftEmpty", empty: !value.trim() });
   };
+
+  const handleStopTask = useCallback(async (task: ChannelActiveTask) => {
+    setStoppingTaskId(task.task_id);
+    try {
+      await api.cancelTaskById(task.task_id);
+      toast.success(t(($) => $.agent_status.stop_success, { name: task.agent_name }));
+      qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelId) });
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+    } catch {
+      toast.error(t(($) => $.agent_status.stop_failed));
+    } finally {
+      setStoppingTaskId((current) => (current === task.task_id ? null : current));
+    }
+  }, [channelId, qc, t, wsId]);
 
   const handleUpload = useCallback(
     async (file: File): Promise<UploadResult | null> => {
@@ -699,7 +721,11 @@ function DmChannelConversation({
           onRetry={() => refetchThread()}
           onReact={handleReactToMessage}
         />
-        <ConversationActivityStrip tasks={activeTasks} />
+        <ConversationActivityStrip
+          tasks={activeTasks}
+          stoppingTaskId={stoppingTaskId}
+          onStopTask={handleStopTask}
+        />
         <ChannelComposer
           sendLabel={t(($) => $.composer.send)}
           sendDisabled={threadDraftEmpty}
@@ -843,7 +869,12 @@ function DmChannelConversation({
         onOpenThread={handleOpenThread}
         onReact={handleReactToMessage}
       />
-      <ConversationActivityStrip typingActors={activeTypingActors} tasks={activeTasks} />
+      <ConversationActivityStrip
+        typingActors={activeTypingActors}
+        tasks={activeTasks}
+        stoppingTaskId={stoppingTaskId}
+        onStopTask={handleStopTask}
+      />
       <ChannelComposer
         sendLabel={t(($) => $.composer.send)}
         sendDisabled={draftEmpty}

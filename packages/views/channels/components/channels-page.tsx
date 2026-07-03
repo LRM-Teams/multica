@@ -25,6 +25,7 @@ import {
   Search,
   Share2,
   Smartphone,
+  Square,
   Users,
   X,
 } from "lucide-react";
@@ -354,9 +355,13 @@ function InitialChannelsShellSkeleton() {
 export function ConversationActivityStrip({
   typingActors = EMPTY_TYPING_ACTORS,
   tasks = EMPTY_ACTIVE_TASKS,
+  stoppingTaskId = null,
+  onStopTask,
 }: {
   typingActors?: TypingActor[];
   tasks?: ChannelActiveTask[];
+  stoppingTaskId?: string | null;
+  onStopTask?: (task: ChannelActiveTask) => void;
 }) {
   const { t } = useT("channels");
   const typingNames = useMemo(
@@ -403,7 +408,7 @@ export function ConversationActivityStrip({
 
   return (
     <div
-      className="flex min-h-6 items-center px-5 pb-2 text-xs text-muted-foreground"
+      className="flex min-h-6 items-center justify-between gap-2 px-5 pb-2 text-xs text-muted-foreground"
       aria-live="polite"
       data-testid="conversation-activity-strip"
     >
@@ -426,6 +431,25 @@ export function ConversationActivityStrip({
           </span>
         ) : null}
       </div>
+      {onStopTask && tasks.length > 0 ? (
+        <div className="flex shrink-0 items-center gap-1 overflow-x-auto">
+          {tasks.map((task) => (
+            <Button
+              key={task.task_id}
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+              disabled={stoppingTaskId === task.task_id}
+              onClick={() => onStopTask(task)}
+              aria-label={t(($) => $.agent_status.stop_aria, { name: task.agent_name })}
+            >
+              <Square className="size-2.5 fill-current" />
+              {tasks.length === 1 ? t(($) => $.agent_status.stop) : t(($) => $.agent_status.stop_named, { name: task.agent_name })}
+            </Button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -591,6 +615,7 @@ export function ChannelsPage() {
   const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
+  const [stoppingChannelTaskId, setStoppingChannelTaskId] = useState<string | null>(null);
   const setChannelProject = useSetChannelProject(wsId, active?.id ?? "");
   const createChannel = useCreateChannel();
   const deleteChannel = useDeleteChannel();
@@ -909,6 +934,14 @@ export function ChannelsPage() {
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });
 
+  useWSEvent("task:cancelled", (payload) => {
+    const e = payload as { chat_session_id?: string };
+    if (!e.chat_session_id || !active?.id) return;
+    qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
+    qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+  });
+
   // Another client deleted a channel — drop it from the list. If it was the
   // open one, `active` falls back to the first remaining channel via the memo.
   useWSEvent("channel:deleted", (payload) => {
@@ -1029,6 +1062,22 @@ export function ChannelsPage() {
       onError: () => toast.error(t(($) => $.archive_dialog.restore_error)),
     });
   };
+
+  const handleStopChannelTask = useCallback(async (task: ChannelActiveTask) => {
+    if (!active?.id) return;
+    setStoppingChannelTaskId(task.task_id);
+    try {
+      await api.cancelTaskById(task.task_id);
+      toast.success(t(($) => $.agent_status.stop_success, { name: task.agent_name }));
+      qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+    } catch {
+      toast.error(t(($) => $.agent_status.stop_failed));
+    } finally {
+      setStoppingChannelTaskId((current) => (current === task.task_id ? null : current));
+    }
+  }, [active?.id, qc, t, wsId]);
 
   const handleToggleChannelPin = (channel: Channel) => {
     setChannelPin.mutate(
@@ -1852,7 +1901,7 @@ export function ChannelsPage() {
           </ReadOnlyConversationBanner>
         ) : (
           <>
-            <ConversationActivityStrip tasks={activeTasks} />
+            <ConversationActivityStrip tasks={activeTasks} stoppingTaskId={stoppingChannelTaskId} onStopTask={handleStopChannelTask} />
             <ChannelComposer
               sendLabel={t(($) => $.composer.send)}
               sendDisabled={threadDraftEmpty}
@@ -2165,6 +2214,8 @@ export function ChannelsPage() {
                   <ConversationActivityStrip
                     typingActors={activeTypingActors}
                     tasks={activeTasks}
+                    stoppingTaskId={stoppingChannelTaskId}
+                    onStopTask={handleStopChannelTask}
                   />
                   <ChannelComposer
                     sendLabel={t(($) => $.composer.send)}

@@ -441,6 +441,110 @@ func TestCancelTaskByUser_ChatTaskWithoutTranscript_RestoresUserDraft(t *testing
 	}
 }
 
+func TestCancelTaskByUser_ChannelBoundChatTask_ChannelMemberSucceeds(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "CancelChannelBoundAgent", []byte("[]"))
+	sessionID := createHandlerTestChatSession(t, agentID) // creator = testUserID
+	otherUserID := createWorkspaceMemberUser(t, "Channel Stopper", "cancel-channel-stopper-"+randomID()+"@multica.test")
+	channelName := "cancel-channel-bound-" + randomID()
+
+	var channelID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO channel (workspace_id, name, created_by, kind)
+		VALUES ($1, $2, $3, 'group')
+		RETURNING id
+	`, testWorkspaceID, channelName, testUserID).Scan(&channelID); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'user', $3), ($1, $2, 'user', $4), ($1, $2, 'agent', $5)
+	`, channelID, testWorkspaceID, testUserID, otherUserID, agentID); err != nil {
+		t.Fatalf("seed channel members: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO channel_agent_session (channel_id, agent_id, chat_session_id)
+		VALUES ($1, $2, $3)
+	`, channelID, agentID, sessionID); err != nil {
+		t.Fatalf("bind channel agent session: %v", err)
+	}
+
+	var taskID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id, chat_session_id)
+		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, NULL, $2)
+		RETURNING id
+	`, agentID, sessionID).Scan(&taskID); err != nil {
+		t.Fatalf("create channel-bound chat task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	w := httptest.NewRecorder()
+	testHandler.CancelTaskByUser(w, cancelTaskByUserRequest(t, otherUserID, taskID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := taskStatus(t, taskID); got != "cancelled" {
+		t.Fatalf("task not cancelled: status = %q", got)
+	}
+}
+
+func TestCancelTaskByUser_ChannelBoundChatTask_NonMemberReturns403(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "CancelChannelNonMemberAgent", []byte("[]"))
+	sessionID := createHandlerTestChatSession(t, agentID)
+	outsiderID := createWorkspaceMemberUser(t, "Channel Outsider", "cancel-channel-outsider-"+randomID()+"@multica.test")
+	channelName := "cancel-channel-non-member-" + randomID()
+
+	var channelID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO channel (workspace_id, name, created_by, kind)
+		VALUES ($1, $2, $3, 'group')
+		RETURNING id
+	`, testWorkspaceID, channelName, testUserID).Scan(&channelID); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'user', $3), ($1, $2, 'agent', $4)
+	`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
+		t.Fatalf("seed channel members: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO channel_agent_session (channel_id, agent_id, chat_session_id)
+		VALUES ($1, $2, $3)
+	`, channelID, agentID, sessionID); err != nil {
+		t.Fatalf("bind channel agent session: %v", err)
+	}
+
+	var taskID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id, chat_session_id)
+		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, NULL, $2)
+		RETURNING id
+	`, agentID, sessionID).Scan(&taskID); err != nil {
+		t.Fatalf("create channel-bound chat task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	w := httptest.NewRecorder()
+	testHandler.CancelTaskByUser(w, cancelTaskByUserRequest(t, outsiderID, taskID))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := taskStatus(t, taskID); got != "running" {
+		t.Fatalf("task was mutated: status = %q", got)
+	}
+}
+
 // TestCancelTaskByUser_PrivateAgent_PlainMember_Returns403 verifies the cancel
 // endpoint mirrors the agent Activity / snapshot visibility gate: a plain
 // member who cannot see a private agent's tasks cannot cancel them either.

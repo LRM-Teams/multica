@@ -3,6 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
 import { ChannelMessageList, MessageViewport } from "./channel-message-list";
 
+// jsdom doesn't implement scrollIntoView; only the highlight-scroll test below
+// exercises this path (existing tests never set highlightMessageId).
+Element.prototype.scrollIntoView = vi.fn();
+
+const scrollToIndexMock = vi.fn();
+
 vi.mock("react-virtuoso", async () => {
   const React = await import("react");
 
@@ -13,6 +19,8 @@ vi.mock("react-virtuoso", async () => {
         data = [],
         itemContent,
         initialTopMostItemIndex,
+        firstItemIndex = 0,
+        startReached,
       }: {
         components?: {
           Footer?: React.ComponentType;
@@ -21,16 +29,19 @@ vi.mock("react-virtuoso", async () => {
         };
         data?: ChannelMessage[];
         initialTopMostItemIndex?: number;
+        firstItemIndex?: number;
+        startReached?: () => void;
         itemContent: (index: number, item: ChannelMessage) => React.ReactNode;
       },
-      ref: React.ForwardedRef<{ scrollToIndex: () => void }>,
+      ref: React.ForwardedRef<{ scrollToIndex: (...args: unknown[]) => void }>,
     ) => {
-      React.useImperativeHandle(ref, () => ({ scrollToIndex: vi.fn() }));
+      React.useImperativeHandle(ref, () => ({ scrollToIndex: scrollToIndexMock }));
 
       const Header = components.Header;
       const List = components.List ?? "div";
       const Footer = components.Footer;
-      const targetIndex = Math.max(0, Math.min(initialTopMostItemIndex ?? 0, data.length - 1));
+      const localTarget = Math.max(0, (initialTopMostItemIndex ?? firstItemIndex) - firstItemIndex);
+      const targetIndex = Math.max(0, Math.min(localTarget, data.length - 1));
       const start = Math.max(0, Math.min(targetIndex - 1, data.length - 2));
       const windowedData = data.slice(start, start + 2);
 
@@ -38,7 +49,11 @@ vi.mock("react-virtuoso", async () => {
         <div
           data-testid="virtuoso-scroller"
           data-initial-index={initialTopMostItemIndex ?? "unset"}
+          data-first-item-index={firstItemIndex}
         >
+          {startReached && (
+            <button type="button" data-testid="start-reached" onClick={() => startReached()} />
+          )}
           {Header ? <Header /> : null}
           <List>{windowedData.map((item, offset) => itemContent(start + offset, item))}</List>
           {Footer ? <Footer /> : null}
@@ -229,5 +244,60 @@ describe("MessageViewport", () => {
     const header = screen.getByTestId("thread-root-preview");
     expect(scroller).toContainElement(header);
     expect(screen.getByText("No replies")).toBeInTheDocument();
+  });
+
+  it("offsets initialTopMostItemIndex and the highlight scrollToIndex call by firstItemIndex", () => {
+    scrollToIndexMock.mockClear();
+    render(
+      <MessageViewport
+        messages={[
+          makeMessage("m1", "First visible message"),
+          makeMessage("m2", "Second visible message"),
+          makeMessage("m3", "Third visible message"),
+        ]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        firstItemIndex={999_998}
+        highlightMessageId="m2"
+      />,
+    );
+
+    // firstItemIndex + local index (1) of the highlighted message.
+    expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute(
+      "data-initial-index",
+      "999999",
+    );
+    expect(scrollToIndexMock).toHaveBeenCalledWith(
+      expect.objectContaining({ index: 999_999 }),
+    );
+  });
+
+  it("requests older history via startReached, but not while already loading or exhausted", () => {
+    const onLoadOlder = vi.fn();
+    const { rerender } = render(
+      <MessageViewport
+        messages={[makeMessage("m1", "Hello")]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        hasOlder
+        onLoadOlder={onLoadOlder}
+      />,
+    );
+
+    screen.getByTestId("start-reached").click();
+    expect(onLoadOlder).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <MessageViewport
+        messages={[makeMessage("m1", "Hello")]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        hasOlder
+        loadingOlder
+        onLoadOlder={onLoadOlder}
+      />,
+    );
+    screen.getByTestId("start-reached").click();
+    expect(onLoadOlder).toHaveBeenCalledTimes(1);
   });
 });

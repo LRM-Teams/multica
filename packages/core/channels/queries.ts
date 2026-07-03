@@ -60,6 +60,20 @@ export function flattenChannelMessagePages(data?: InfiniteData<ChannelMessagesPa
   return data ? [...data.pages].reverse().flatMap((page) => page.messages) : [];
 }
 
+// Virtuoso needs a stable, monotonically-decreasing `firstItemIndex` to prepend
+// older pages without a visual scroll jump (see react-virtuoso's prepend
+// pattern). Page 0 is the latest chronological window; later pages are older,
+// so everything past page 0 is "already-loaded older history" whose count we
+// subtract from a high stable base — mirrors chat's identical convention in
+// chat-window.tsx.
+export const CHANNEL_MESSAGES_VIRTUOSO_BASE_INDEX = 1_000_000;
+
+export function channelMessagesFirstItemIndex(data: InfiniteData<ChannelMessagesPage> | undefined, hasMessages: boolean): number {
+  if (!hasMessages) return 0;
+  const olderCount = (data?.pages ?? []).slice(1).reduce((sum, page) => sum + page.messages.length, 0);
+  return CHANNEL_MESSAGES_VIRTUOSO_BASE_INDEX - olderCount;
+}
+
 export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMessage) {
   qc.setQueryData<ChannelMessage[]>(channelKeys.messages(message.channel_id), (old) => upsertChannelMessage(old, message));
   qc.setQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage(message.channel_id), (old) => {

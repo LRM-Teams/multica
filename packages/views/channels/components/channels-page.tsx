@@ -17,7 +17,6 @@ import {
   MessageCircle,
   MessageSquare,
   MoreHorizontal,
-  PanelLeftIcon,
   Paperclip,
   PieChart,
   Pin,
@@ -477,7 +476,6 @@ export function ChannelsPage() {
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [channelsCollapsed, setChannelsCollapsed] = useState(false);
-  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
   const [deleteTarget, setDeleteTarget] = useState<Channel | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<Channel | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
@@ -975,28 +973,6 @@ export function ChannelsPage() {
     setMobilePanel(null);
     replace(wsPaths.channels());
   };
-
-  const openConversationList = () => {
-    if (isMobile) {
-      mobileBackToList();
-      return;
-    }
-    setDesktopSidebarOpen(true);
-  };
-
-  const desktopListOpenButton =
-    !isMobile && !desktopSidebarOpen ? (
-      <Button
-        variant="ghost"
-        size="icon"
-        className="size-8 shrink-0 text-muted-foreground"
-        aria-label={t(($) => $.sidebar.open_aria)}
-        title={t(($) => $.sidebar.open_aria)}
-        onClick={openConversationList}
-      >
-        <PanelLeftIcon className="size-4" />
-      </Button>
-    ) : null;
 
   const handleDelete = () => {
     const target = deleteTarget;
@@ -2313,26 +2289,15 @@ export function ChannelsPage() {
           detail={detailSurface}
         />
       ) : (
-        desktopSidebarOpen ? (
-          <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
-            <ResizablePanel id="list" defaultSize={280} minSize={240} maxSize={480} groupResizeBehavior="preserve-pixel-size" className="flex min-h-0 flex-col">
-              {listPane}
-            </ResizablePanel>
-            <ResizableHandle />
-            <ResizablePanel id="detail" minSize="40%" className="flex min-h-0 flex-col">
-              {detailSurface}
-            </ResizablePanel>
-          </ResizablePanelGroup>
-        ) : (
-          <div className="flex min-h-0 flex-1">
-            <div className="flex w-12 shrink-0 items-start justify-center border-r bg-background pt-3">
-              {desktopListOpenButton}
-            </div>
-            <div className="min-w-0 flex-1">
-              {detailSurface}
-            </div>
-          </div>
-        )
+        <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
+          <ResizablePanel id="list" defaultSize={280} minSize={240} maxSize={480} groupResizeBehavior="preserve-pixel-size" className="flex min-h-0 flex-col">
+            {listPane}
+          </ResizablePanel>
+          <ResizableHandle />
+          <ResizablePanel id="detail" minSize="40%" className="flex min-h-0 flex-col">
+            {detailSurface}
+          </ResizablePanel>
+        </ResizablePanelGroup>
       )}
 
       {/* Mobile overflow drawer. One bottom Drawer (vaul, with drag handle)

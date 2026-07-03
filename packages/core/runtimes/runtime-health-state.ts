@@ -1,7 +1,5 @@
 import type { AgentRuntime, RuntimeHealthState } from "../types";
 
-// `awaiting_confirmation` is intentionally omitted: it is the quiet
-// completed -> register confirmation window, not a fresh "needs update" prompt.
 const ATTENTION_HEALTH_STATES = new Set<RuntimeHealthState>([
   "update_available",
   "updating",
@@ -11,11 +9,10 @@ const ATTENTION_HEALTH_STATES = new Set<RuntimeHealthState>([
 
 const HEALTH_PRIORITY: Record<RuntimeHealthState, number> = {
   ok: 0,
-  awaiting_confirmation: 1,
-  update_available: 2,
-  updating: 3,
-  offline: 4,
-  failed: 5,
+  update_available: 1,
+  updating: 2,
+  offline: 3,
+  failed: 4,
 };
 
 export function runtimeHealthState(

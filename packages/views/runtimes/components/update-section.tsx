@@ -180,21 +180,18 @@ export function UpdateSection({
   };
 
   const contractStatus = statusFromUpdateState(updateState);
-  const publicRuntimeHealth =
-    runtimeHealth === "awaiting_confirmation" ? "updating" : runtimeHealth;
   const derivedStatus =
     status ??
-    (publicRuntimeHealth === "updating"
+    (runtimeHealth === "updating"
       ? contractStatus === "pending"
         ? "pending"
         : "running"
-      : publicRuntimeHealth === "failed"
+      : runtimeHealth === "failed"
         ? contractStatus === "timeout"
           ? "timeout"
           : "failed"
         : null);
-  const hasUpdate =
-    publicRuntimeHealth === "update_available" && !!targetVersion;
+  const hasUpdate = runtimeHealth === "update_available" && !!targetVersion;
   const config = derivedStatus ? statusConfig[derivedStatus] : null;
   const Icon = config?.icon;
   const isActive =
@@ -203,7 +200,7 @@ export function UpdateSection({
     ? t(($) => $.update.status[derivedStatus])
     : null;
   const healthOnlyLabel =
-    !derivedStatus && publicRuntimeHealth === "offline"
+    !derivedStatus && runtimeHealth === "offline"
       ? t(($) => $.update.offline)
       : null;
   const canStartUpdate =
@@ -233,7 +230,7 @@ export function UpdateSection({
           </span>
         ) : (
           <>
-            {publicRuntimeHealth === "ok" && currentVersion && !derivedStatus ? (
+            {runtimeHealth === "ok" && currentVersion && !derivedStatus ? (
               <span className="inline-flex items-center gap-1 text-xs text-success">
                 <Check className="h-3 w-3" />
                 {t(($) => $.update.latest)}

@@ -141,10 +141,6 @@ const RUNTIME_HEALTH_STATE_VISUAL: Record<
   ok: { dot: "bg-success", tone: "bg-success/10 text-success" },
   update_available: { dot: "bg-warning", tone: "bg-warning/10 text-warning" },
   updating: { dot: "bg-info", tone: "bg-info/10 text-info" },
-  awaiting_confirmation: {
-    dot: "bg-muted-foreground/40",
-    tone: "bg-muted text-muted-foreground",
-  },
   failed: { dot: "bg-destructive", tone: "bg-destructive/10 text-destructive" },
   offline: { dot: "bg-muted-foreground/40", tone: "bg-muted text-muted-foreground" },
 };
@@ -153,14 +149,7 @@ export function useRuntimeHealthStateLabel(): (
   health: RuntimeHealthState,
 ) => string {
   const { t } = useT("runtimes");
-  return (health) =>
-    t(($) => $.runtime_health[publicRuntimeHealthState(health)]);
-}
-
-function publicRuntimeHealthState(
-  health: RuntimeHealthState,
-): RuntimeHealthState {
-  return health === "awaiting_confirmation" ? "updating" : health;
+  return (health) => t(($) => $.runtime_health[health]);
 }
 
 export function RuntimeHealthStateBadge({
@@ -169,12 +158,11 @@ export function RuntimeHealthStateBadge({
   health: RuntimeHealthState;
 }) {
   const labelOf = useRuntimeHealthStateLabel();
-  const publicHealth = publicRuntimeHealthState(health);
-  const v = RUNTIME_HEALTH_STATE_VISUAL[publicHealth];
+  const v = RUNTIME_HEALTH_STATE_VISUAL[health];
   return (
     <Badge variant="secondary" className={v.tone}>
       <span className={`h-1.5 w-1.5 rounded-full ${v.dot}`} />
-      {labelOf(publicHealth)}
+      {labelOf(health)}
     </Badge>
   );
 }

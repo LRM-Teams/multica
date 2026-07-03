@@ -410,8 +410,9 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		// reassign agents + tasks onto the new UUID-keyed row, then delete
 		// the stale row so there's only ever one runtime per machine.
 		h.mergeLegacyRuntimes(r, registered, provider, req.LegacyDaemonIDs)
+		h.completeRuntimeUpdateOnTargetRegister(r, registered, req.CLIVersion)
 
-		resp = append(resp, runtimeToResponse(registered))
+		resp = append(resp, h.runtimeToResponse(r.Context(), registered))
 	}
 
 	slog.Info("daemon registered", "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID, "runtimes_count", len(resp))
@@ -428,6 +429,32 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		"repos_version": repoResp.ReposVersion,
 		"settings":      repoResp.Settings,
 	})
+}
+
+func (h *Handler) completeRuntimeUpdateOnTargetRegister(r *http.Request, rt db.AgentRuntime, cliVersion string) {
+	if h == nil || h.UpdateStore == nil {
+		return
+	}
+	version := strings.TrimSpace(cliVersion)
+	if version == "" {
+		return
+	}
+	runtimeID := uuidToString(rt.ID)
+	update, err := h.UpdateStore.LatestForRuntime(r.Context(), runtimeID)
+	if err != nil {
+		slog.Warn("failed to load runtime update during register", "error", err, "runtime_id", runtimeID)
+		return
+	}
+	if update == nil || (update.Status != UpdateRunning && update.Status != UpdateReady && update.Status != UpdateCompleted) {
+		return
+	}
+	target := update.TargetVersion
+	if !runtimeVersionAtLeastTarget(&version, &target) {
+		return
+	}
+	if err := h.UpdateStore.Complete(r.Context(), update.ID, "Daemon registered updated CLI "+version); err != nil {
+		slog.Warn("failed to complete runtime update during register", "error", err, "runtime_id", runtimeID, "update_id", update.ID)
+	}
 }
 
 func normalizeDaemonCapabilities(capabilities []string) []string {
@@ -907,8 +934,9 @@ func (h *Handler) processHeartbeat(ctx context.Context, rt db.AgentRuntime, supp
 			slog.Warn("update PopPending failed", "error", popUpdateErr, "runtime_id", runtimeID)
 		} else if pending != nil {
 			ack.PendingUpdate = &protocol.DaemonHeartbeatPendingUpdate{
-				ID:            pending.ID,
-				TargetVersion: pending.TargetVersion,
+				ID:                   pending.ID,
+				TargetVersion:        pending.TargetVersion,
+				SupportsReadyToApply: true,
 			}
 			h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{
 				"runtime": h.runtimeToResponse(ctx, rt),

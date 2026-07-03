@@ -29,6 +29,9 @@ func newAutoUpdateTestDaemon(t *testing.T, currentVersion string) (*Daemon, *ato
 		t.Fatalf("runUpdateFn called unexpectedly")
 		return "", nil
 	}
+	d.verifyUpdatedBinaryFn = func(targetVersion, _ string) (string, error) {
+		return targetVersion, nil
+	}
 	return d, &restartCalls
 }
 
@@ -127,6 +130,29 @@ func TestTryAutoUpdate_ReleasesBarrierOnUpgradeFailure(t *testing.T) {
 	}
 	if d.pauseClaims {
 		t.Fatalf("pauseClaims must be cleared after a failed upgrade so pollers resume claiming")
+	}
+}
+
+func TestTryAutoUpdate_ReleasesBarrierOnVerificationFailure(t *testing.T) {
+	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
+	withStubRelease(t, &cli.GitHubRelease{TagName: "v0.1.14"}, nil)
+	d.runUpdateFn = func(string) (string, error) {
+		return "Warning: multica-ai/tap/multica 0.1.13 already installed", nil
+	}
+	d.verifyUpdatedBinaryFn = func(string, string) (string, error) {
+		return "v0.1.13", errors.New("binary_version_mismatch_after_update")
+	}
+
+	d.tryAutoUpdate(context.Background())
+
+	if restartCalls.Load() != 0 {
+		t.Fatalf("triggerRestart fired despite verification failure")
+	}
+	if d.pauseClaims {
+		t.Fatalf("pauseClaims must be cleared after a failed verification so pollers resume claiming")
+	}
+	if d.updating.Load() {
+		t.Fatalf("updating flag must be released after verification failure so the next tick can retry")
 	}
 }
 

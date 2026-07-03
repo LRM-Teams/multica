@@ -21,6 +21,7 @@ INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/LRM-Teams/multica/main/scr
 POWERSHELL_INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1"
 INSTALL_DIR="${MULTICA_INSTALL_DIR:-$HOME/.multica/server}"
 BREW_PACKAGE="${MULTICA_BREW_PACKAGE:-}"
+LEGACY_BREW_PACKAGE="multica-ai/tap/multica"
 
 # Colors (disabled when not a terminal)
 if [ -t 1 ] || [ -t 2 ]; then
@@ -43,6 +44,14 @@ warn()  { printf "${BOLD}${YELLOW}⚠ %s${RESET}\n" "$*" >&2; }
 fail()  { printf "${BOLD}${RED}✗ %s${RESET}\n" "$*" >&2; exit 1; }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+legacy_brew_package_configured() {
+  [ "$BREW_PACKAGE" = "$LEGACY_BREW_PACKAGE" ]
+}
+
+valid_brew_package_configured() {
+  [ -n "$BREW_PACKAGE" ] && ! legacy_brew_package_configured
+}
 
 env_file_value() {
   local file="$1"
@@ -115,7 +124,11 @@ _dump_brew_log() {
 }
 
 install_cli_brew() {
-  if [ -z "$BREW_PACKAGE" ]; then
+  if legacy_brew_package_configured; then
+    warn "Ignoring legacy Homebrew package $BREW_PACKAGE; using LRM GitHub Releases binary install."
+    return 1
+  fi
+  if ! valid_brew_package_configured; then
     return 1
   fi
 
@@ -257,7 +270,11 @@ pull_official_selfhost_images() {
 }
 
 upgrade_cli_brew() {
-  if [ -z "$BREW_PACKAGE" ]; then
+  if legacy_brew_package_configured; then
+    warn "Ignoring legacy Homebrew package $BREW_PACKAGE; using LRM GitHub Releases binary install."
+    return 1
+  fi
+  if ! valid_brew_package_configured; then
     return 1
   fi
 
@@ -293,9 +310,12 @@ install_cli() {
     fi
 
     info "Multica CLI $current_ver installed, latest is $latest_ver — upgrading..."
-    if [ -n "$BREW_PACKAGE" ] && command_exists brew && brew list "$BREW_PACKAGE" >/dev/null 2>&1; then
-      upgrade_cli_brew
+    if valid_brew_package_configured && command_exists brew && brew list "$BREW_PACKAGE" >/dev/null 2>&1; then
+      upgrade_cli_brew || install_cli_binary
     else
+      if legacy_brew_package_configured; then
+        warn "Ignoring legacy Homebrew package $BREW_PACKAGE; using LRM GitHub Releases binary install."
+      fi
       install_cli_binary
     fi
 
@@ -305,9 +325,12 @@ install_cli() {
     return 0
   fi
 
-  if [ -n "$BREW_PACKAGE" ] && command_exists brew; then
+  if valid_brew_package_configured && command_exists brew; then
     install_cli_brew || install_cli_binary
   else
+    if legacy_brew_package_configured; then
+      warn "Ignoring legacy Homebrew package $BREW_PACKAGE; using LRM GitHub Releases binary install."
+    fi
     install_cli_binary
   fi
 
@@ -541,6 +564,7 @@ main() {
         echo "                        (default: $REPO_WEB_URL)"
         echo "  MULTICA_BREW_PACKAGE  Optional Homebrew formula (for example owner/tap/name)"
         echo "                        (unset by default; binary release install is used)"
+        echo "                        ($LEGACY_BREW_PACKAGE is ignored)"
         echo ""
         echo "After installation, run 'multica setup' to configure your environment."
         exit 0

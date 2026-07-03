@@ -30,6 +30,7 @@ const ChecksumManifestName = "checksums.txt"
 const DefaultUpdateDownloadTimeout = 120 * time.Second
 const ReleaseAPIBaseURL = "https://api.github.com/repos/LRM-Teams/multica/releases"
 const ReleaseWebURL = "https://github.com/LRM-Teams/multica/releases"
+const LegacyBrewPackage = "multica-ai/tap/multica"
 
 // BrewPackage returns the optional Homebrew package name to upgrade. It is
 // intentionally not defaulted: the public installer must not fall back to the
@@ -38,10 +39,18 @@ func BrewPackage() string {
 	return strings.TrimSpace(os.Getenv("MULTICA_BREW_PACKAGE"))
 }
 
+// IsLegacyBrewPackage reports whether pkg points at the old upstream tap that
+// is not authoritative for LRM-Teams/multica releases.
+func IsLegacyBrewPackage(pkg string) bool {
+	return strings.EqualFold(strings.TrimSpace(pkg), LegacyBrewPackage)
+}
+
 // IsBrewUpdateConfigured reports whether the current environment has an
-// explicit Homebrew package to use for CLI updates.
+// explicit Homebrew package to use for CLI updates. The old upstream tap is
+// intentionally ignored so LRM builds fall back to the repo release assets.
 func IsBrewUpdateConfigured() bool {
-	return BrewPackage() != ""
+	pkg := BrewPackage()
+	return pkg != "" && !IsLegacyBrewPackage(pkg)
 }
 
 // GitHubRelease is the subset of the GitHub releases API response we need.
@@ -332,12 +341,30 @@ func GetBrewPrefix() string {
 	return strings.TrimSpace(string(out))
 }
 
+func updateTargetPath(exePath string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(exePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlink: %w", err)
+	}
+	return updateTargetPathFromResolved(resolved), nil
+}
+
+func updateTargetPathFromResolved(resolved string) string {
+	if prefix := MatchKnownBrewPrefix(resolved); prefix != "" {
+		return filepath.Join(prefix, "bin", "multica")
+	}
+	return resolved
+}
+
 // UpdateViaBrew runs the explicitly configured Homebrew upgrade package.
 // Returns the combined output and any error.
 func UpdateViaBrew() (string, error) {
 	pkg := BrewPackage()
 	if pkg == "" {
 		return "", fmt.Errorf("Homebrew package is not configured; set MULTICA_BREW_PACKAGE or use direct download")
+	}
+	if IsLegacyBrewPackage(pkg) {
+		return "", fmt.Errorf("Homebrew package %q is the legacy upstream tap; use direct LRM release download", pkg)
 	}
 	cmd := exec.Command("brew", "upgrade", pkg)
 	out, err := cmd.CombinedOutput()
@@ -384,9 +411,9 @@ func UpdateViaDownloadWithTimeout(targetVersion string, downloadTimeout time.Dur
 	if err != nil {
 		return "", fmt.Errorf("resolve executable path: %w", err)
 	}
-	exePath, err = filepath.EvalSymlinks(exePath)
+	targetPath, err := updateTargetPath(exePath)
 	if err != nil {
-		return "", fmt.Errorf("resolve symlink: %w", err)
+		return "", err
 	}
 
 	tag := normalizeReleaseTag(targetVersion)
@@ -453,7 +480,7 @@ func UpdateViaDownloadWithTimeout(targetVersion string, downloadTimeout time.Dur
 	}
 
 	// Atomic replace: write to temp file, then rename over the original.
-	dir := filepath.Dir(exePath)
+	dir := filepath.Dir(targetPath)
 	tmpFile, err := os.CreateTemp(dir, "multica-update-*")
 	if err != nil {
 		return "", fmt.Errorf("create temp file: %w", err)
@@ -468,7 +495,7 @@ func UpdateViaDownloadWithTimeout(targetVersion string, downloadTimeout time.Dur
 	tmpFile.Close()
 
 	// Preserve original file permissions.
-	info, err := os.Stat(exePath)
+	info, err := os.Stat(targetPath)
 	if err != nil {
 		os.Remove(tmpPath)
 		return "", fmt.Errorf("stat original binary: %w", err)
@@ -480,12 +507,12 @@ func UpdateViaDownloadWithTimeout(targetVersion string, downloadTimeout time.Dur
 
 	// Replace the original binary. On Windows this moves the running executable
 	// aside first; on Unix a plain rename over the running inode is fine.
-	if err := replaceBinary(tmpPath, exePath); err != nil {
+	if err := replaceBinary(tmpPath, targetPath); err != nil {
 		os.Remove(tmpPath)
 		return "", fmt.Errorf("replace binary: %w", err)
 	}
 
-	return fmt.Sprintf("Downloaded %s and replaced %s", assetName, exePath), nil
+	return fmt.Sprintf("Downloaded %s and replaced %s", assetName, targetPath), nil
 }
 
 // extractBinaryFromTarGz reads a .tar.gz stream and returns the contents of the

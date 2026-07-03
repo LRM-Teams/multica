@@ -474,6 +474,7 @@ function DiagnosticsCard({
               targetVersion={runtimeTargetVersion(runtime)}
               updateState={runtime.update_state}
               runtimeHealth={runtime.runtime_health}
+              updateError={runtime.update_error}
               isOnline={runtime.status === "online"}
               launchedBy={launchedBy}
               canUpdate={canDelete}

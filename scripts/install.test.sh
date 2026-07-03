@@ -129,6 +129,45 @@ STUB
   fi
 }
 
+test_legacy_brew_package_uses_release_binary() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  _setup_sandbox "$tmp"
+  cat >"$tmp/stub-bin/brew" <<'STUB'
+#!/usr/bin/env bash
+echo "brew should not be called for the legacy upstream package" >&2
+exit 99
+STUB
+  chmod +x "$tmp/stub-bin/brew"
+
+  local out="$tmp/install.out"
+  local err="$tmp/install.err"
+  if ! PATH="$tmp/stub-bin:$tmp/install-bin:/usr/bin:/bin" \
+    MULTICA_BIN_DIR="$tmp/install-bin" \
+    MULTICA_BREW_PACKAGE="multica-ai/tap/multica" \
+    MULTICA_TEST_ARCHIVE="$tmp/multica.tar.gz" \
+    MULTICA_TEST_CURL_LOG="$tmp/curl.log" \
+    bash "$ROOT_DIR/scripts/install.sh" >"$out" 2>"$err"; then
+    echo "install.sh exited non-zero" >&2
+    cat "$out" >&2 || true
+    cat "$err" >&2 || true
+    return 1
+  fi
+
+  if ! grep -q "https://github.com/LRM-Teams/multica/releases/download/v0.3.2/multica-cli-0.3.2-" "$tmp/curl.log"; then
+    echo "expected direct download from LRM-Teams release URL" >&2
+    cat "$tmp/curl.log" >&2 || true
+    return 1
+  fi
+  if ! grep -q "Ignoring legacy Homebrew package multica-ai/tap/multica" "$err"; then
+    echo "expected legacy Homebrew warning" >&2
+    cat "$err" >&2 || true
+    return 1
+  fi
+}
+
 test_brew_install_failure_falls_back_to_release_binary() {
   local tmp
   tmp="$(mktemp -d)"
@@ -183,6 +222,7 @@ STUB
 }
 
 test_brew_present_without_package_uses_release_binary
+test_legacy_brew_package_uses_release_binary
 test_brew_install_failure_falls_back_to_release_binary
 test_brew_tap_failure_falls_back_to_release_binary
 echo "install.sh tests passed"

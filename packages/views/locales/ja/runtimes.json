@@ -243,6 +243,7 @@
     "retry": "再試行",
     "unknown_error": "不明なエラー",
     "initiate_failed": "更新を開始できませんでした",
+    "last_update_not_applied": "前回の更新は反映されませんでした。{{targetVersion}} への更新後も {{currentVersion}} のままです。再試行するか理由を確認してください。",
     "offline": "デーモンはオフラインです",
     "manual_hint": "自動更新がインストール先に書き込めない場合は、そのコンピュータのターミナルで手動更新してください。",
     "manual_action": "手動コマンド",
@@ -260,6 +261,7 @@
       "pending": "デーモンを待っています...",
       "running": "更新中...",
       "completed": "更新が完了しました。デーモンを再起動しています...",
+      "ready_to_apply": "更新の準備ができました。ランタイムがアイドルになると適用されます。",
       "failed": "更新に失敗しました",
       "timeout": "タイムアウト"
     }

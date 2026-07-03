@@ -58,7 +58,7 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 		return nil
 	}
 	if cli.IsBrewInstall() {
-		fmt.Fprintln(os.Stderr, "Homebrew install detected, but MULTICA_BREW_PACKAGE is not configured; using direct release download.")
+		fmt.Fprintln(os.Stderr, "Homebrew install detected, but MULTICA_BREW_PACKAGE is not configured or points at the legacy upstream tap; using direct release download.")
 	}
 
 	// Not installed via brew — download binary directly from GitHub Releases.

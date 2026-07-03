@@ -57,6 +57,42 @@ func TestInMemoryUpdateStore_LatestForRuntimeIncludesTerminalHistory(t *testing.
 	}
 }
 
+func TestInMemoryUpdateStore_RetainsTerminalHistoryBeyondActiveWindow(t *testing.T) {
+	ctx := context.Background()
+	store := NewInMemoryUpdateStore()
+	now := time.Now()
+	failed := &UpdateRequest{
+		ID:            "failed-update",
+		RuntimeID:     "rt-1",
+		Status:        UpdateFailed,
+		TargetVersion: "v1.2.3",
+		Error:         "binary_version_mismatch_after_update",
+		CreatedAt:     now.Add(-(updateStoreRetention + time.Minute)),
+		UpdatedAt:     now.Add(-(updateStoreRetention + time.Minute)),
+	}
+	store.requests[failed.ID] = failed
+
+	latest, err := store.LatestForRuntime(ctx, "rt-1")
+	if err != nil {
+		t.Fatalf("latest: %v", err)
+	}
+	if latest == nil || latest.ID != failed.ID {
+		t.Fatalf("terminal update should remain readable beyond active window, got %+v", latest)
+	}
+
+	failed.UpdatedAt = now.Add(-(updateTerminalRetention + time.Second))
+	if _, err := store.Create(ctx, "rt-other", "v1.2.4"); err != nil {
+		t.Fatalf("create unrelated update: %v", err)
+	}
+	latest, err = store.LatestForRuntime(ctx, "rt-1")
+	if err != nil {
+		t.Fatalf("latest after cleanup: %v", err)
+	}
+	if latest != nil {
+		t.Fatalf("expired terminal update should be pruned, got %+v", latest)
+	}
+}
+
 func TestInMemoryUpdateStore_PopPendingIgnoresTerminalHistory(t *testing.T) {
 	ctx := context.Background()
 	store := NewInMemoryUpdateStore()
@@ -241,6 +277,87 @@ func TestReportUpdateResult_CompletedLeavesCurrentVersionUntilRegisterConfirms(t
 	if resp.CurrentVersion == nil || *resp.CurrentVersion != "v0.3.1" {
 		t.Fatalf("current_version after reconnect = %v, want v0.3.1", resp.CurrentVersion)
 	}
+	if resp.UpdateState != "completed" {
+		t.Fatalf("update_state after reconnect = %q, want completed", resp.UpdateState)
+	}
+	if resp.RuntimeHealth != "ok" {
+		t.Fatalf("runtime_health after reconnect = %q, want ok", resp.RuntimeHealth)
+	}
+}
+
+func TestDaemonRegisterCompletesRunningUpdateOnTargetVersion(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	daemonID := "update-running-register"
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/register", map[string]any{
+		"workspace_id": testWorkspaceID,
+		"daemon_id":    daemonID,
+		"device_name":  "update-running-device",
+		"cli_version":  "v0.3.0",
+		"runtimes": []map[string]any{
+			{"name": "update-running-runtime", "type": "claude", "version": "1.0.0", "status": "online"},
+		},
+	}, testWorkspaceID, daemonID)
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var registerResp struct {
+		Runtimes []struct {
+			ID string `json:"id"`
+		} `json:"runtimes"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&registerResp); err != nil {
+		t.Fatalf("decode register response: %v", err)
+	}
+	if len(registerResp.Runtimes) != 1 {
+		t.Fatalf("registered runtimes = %d, want 1", len(registerResp.Runtimes))
+	}
+	runtimeID := registerResp.Runtimes[0].ID
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+
+	update, err := testHandler.UpdateStore.Create(context.Background(), runtimeID, "v0.3.1")
+	if err != nil {
+		t.Fatalf("create update: %v", err)
+	}
+	if _, err := testHandler.UpdateStore.PopPending(context.Background(), runtimeID); err != nil {
+		t.Fatalf("pop update: %v", err)
+	}
+
+	reconnectW := httptest.NewRecorder()
+	reconnectReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/register", map[string]any{
+		"workspace_id": testWorkspaceID,
+		"daemon_id":    daemonID,
+		"device_name":  "update-running-device",
+		"cli_version":  "v0.3.1",
+		"runtimes": []map[string]any{
+			{"name": "update-running-runtime", "type": "claude", "version": "1.0.0", "status": "online"},
+		},
+	}, testWorkspaceID, daemonID)
+	testHandler.DaemonRegister(reconnectW, reconnectReq)
+	if reconnectW.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister reconnect: expected 200, got %d: %s", reconnectW.Code, reconnectW.Body.String())
+	}
+
+	got, err := testHandler.UpdateStore.Get(context.Background(), update.ID)
+	if err != nil {
+		t.Fatalf("get update: %v", err)
+	}
+	if got == nil || got.Status != UpdateCompleted {
+		t.Fatalf("update after target register = %+v, want completed", got)
+	}
+
+	rt, err := testHandler.Queries.GetAgentRuntime(context.Background(), parseUUID(runtimeID))
+	if err != nil {
+		t.Fatalf("get runtime after reconnect: %v", err)
+	}
+	resp := testHandler.runtimeToResponse(context.Background(), rt)
 	if resp.UpdateState != "completed" {
 		t.Fatalf("update_state after reconnect = %q, want completed", resp.UpdateState)
 	}

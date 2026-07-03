@@ -154,7 +154,7 @@ func runtimeToResponseWithUpdateAndRelease(rt db.AgentRuntime, update *UpdateReq
 	targetVersion, updateState := runtimeUpdateState(update, currentVersion)
 	availableUpdateTarget := runtimeAvailableUpdateTarget(rt, metadata, currentVersion, targetVersion, updateState, release)
 	runtimeHealth := deriveRuntimeHealth(rt, currentVersion, targetVersion, updateState, availableUpdateTarget)
-	if runtimeHealth == "update_available" {
+	if runtimeHealth == "update_available" && availableUpdateTarget != nil {
 		targetVersion = availableUpdateTarget
 	}
 
@@ -239,9 +239,20 @@ func runtimeUpdateState(update *UpdateRequest, currentVersion *string) (*string,
 			return &targetVersion, "timed_out"
 		}
 		return &targetVersion, "completed"
+	case UpdateReady:
+		if runtimeVersionAtLeastTarget(currentVersion, &targetVersion) {
+			return &targetVersion, "completed"
+		}
+		return &targetVersion, "ready_to_apply"
 	case UpdateFailed:
+		if runtimeVersionAtLeastTarget(currentVersion, &targetVersion) {
+			return &targetVersion, "completed"
+		}
 		return &targetVersion, "failed"
 	case UpdateTimeout:
+		if runtimeVersionAtLeastTarget(currentVersion, &targetVersion) {
+			return &targetVersion, "completed"
+		}
 		return &targetVersion, "timed_out"
 	default:
 		return &targetVersion, "idle"
@@ -253,7 +264,7 @@ func completedUpdateConfirmationTimedOut(update *UpdateRequest, currentVersion *
 		return false
 	}
 	targetVersion := update.TargetVersion
-	if versionsMatch(currentVersion, &targetVersion) {
+	if runtimeVersionAtLeastTarget(currentVersion, &targetVersion) {
 		return false
 	}
 	return now.Sub(update.UpdatedAt) > updateConfirmTimeout
@@ -265,7 +276,7 @@ func runtimeUpdateError(update *UpdateRequest, currentVersion *string, updateSta
 	}
 	if updateState == "timed_out" && update.Status == UpdateCompleted {
 		targetVersion := update.TargetVersion
-		if !versionsMatch(currentVersion, &targetVersion) {
+		if !runtimeVersionAtLeastTarget(currentVersion, &targetVersion) {
 			reason := "old_version_reported_after_update"
 			return &reason
 		}
@@ -294,7 +305,7 @@ func runtimeShouldFetchLatestRelease(rt db.AgentRuntime, metadata any, currentVe
 	case "idle":
 		return true
 	case "completed":
-		return versionsMatch(currentVersion, targetVersion)
+		return runtimeVersionAtLeastTarget(currentVersion, targetVersion)
 	default:
 		return false
 	}
@@ -331,13 +342,15 @@ func deriveRuntimeHealth(rt db.AgentRuntime, currentVersion, targetVersion *stri
 	case "pending", "running":
 		return "updating"
 	case "completed":
-		if !versionsMatch(currentVersion, targetVersion) {
+		if !runtimeVersionAtLeastTarget(currentVersion, targetVersion) {
 			return "updating"
 		}
 		if availableUpdateTarget != nil {
 			return "update_available"
 		}
 		return "ok"
+	case "ready_to_apply":
+		return "update_available"
 	case "failed", "timed_out":
 		return "failed"
 	default:
@@ -356,6 +369,16 @@ func versionsMatch(left, right *string) bool {
 		return strings.TrimPrefix(strings.TrimSpace(value), "v")
 	}
 	return normalize(*left) != "" && normalize(*left) == normalize(*right)
+}
+
+func runtimeVersionAtLeastTarget(current, target *string) bool {
+	if versionsMatch(current, target) {
+		return true
+	}
+	if current == nil || target == nil {
+		return false
+	}
+	return cli.IsNewerVersion(*current, *target)
 }
 
 func runtimeCapabilities(metadata any) []string {

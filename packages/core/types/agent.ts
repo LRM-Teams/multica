@@ -9,6 +9,7 @@ export type RuntimeUpdateState =
   | "pending"
   | "running"
   | "completed"
+  | "ready_to_apply"
   | "failed"
   | "timed_out";
 
@@ -659,6 +660,7 @@ export type RuntimeUpdateStatus =
   | "pending"
   | "running"
   | "completed"
+  | "ready_to_apply"
   | "failed"
   | "timeout";
 

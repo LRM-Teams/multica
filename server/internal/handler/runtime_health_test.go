@@ -161,6 +161,29 @@ func TestRuntimeToResponseCompletedUpdateDoesNotTimeOutAfterTargetRegister(t *te
 	}
 }
 
+func TestRuntimeToResponseRetainedFailedUpdateDoesNotMaskTargetRegister(t *testing.T) {
+	rt := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "v0.3.1"})
+	update := &UpdateRequest{
+		ID:            "update-1",
+		RuntimeID:     "runtime-1",
+		TargetVersion: "v0.3.1",
+		Status:        UpdateFailed,
+		Error:         "binary_version_mismatch_after_update",
+		UpdatedAt:     time.Now().Add(-time.Hour),
+	}
+
+	resp := runtimeToResponseWithUpdateAndRelease(rt, update, &RuntimeRelease{TagName: "v0.3.1"})
+	if resp.RuntimeHealth != "ok" {
+		t.Fatalf("runtime_health = %q, want ok", resp.RuntimeHealth)
+	}
+	if resp.UpdateState != "completed" {
+		t.Fatalf("update_state = %q, want completed", resp.UpdateState)
+	}
+	if resp.UpdateError != nil {
+		t.Fatalf("update_error = %v, want nil", *resp.UpdateError)
+	}
+}
+
 func TestRuntimeToResponseCompletedMatchingUpdateCanOfferNextRelease(t *testing.T) {
 	rt := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "v0.3.1"})
 	update := &UpdateRequest{

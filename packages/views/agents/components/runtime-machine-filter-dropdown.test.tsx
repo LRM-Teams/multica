@@ -26,6 +26,8 @@ function makeMachine(
     isCurrent: true,
     health: "online",
     runtimeHealth: null,
+    updateError: null,
+    updateTargetVersion: null,
     runtimes: [],
     onlineCount: 1,
     issueCount: 0,

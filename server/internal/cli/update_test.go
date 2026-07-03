@@ -154,6 +154,38 @@ func TestIsNewerVersion(t *testing.T) {
 	}
 }
 
+func TestBrewUpdateConfiguredIgnoresLegacyUpstreamTap(t *testing.T) {
+	t.Setenv("MULTICA_BREW_PACKAGE", "")
+	if IsBrewUpdateConfigured() {
+		t.Fatal("empty MULTICA_BREW_PACKAGE should not configure brew updates")
+	}
+
+	t.Setenv("MULTICA_BREW_PACKAGE", "lrm-teams/tap/multica")
+	if !IsBrewUpdateConfigured() {
+		t.Fatal("LRM tap should configure brew updates")
+	}
+
+	t.Setenv("MULTICA_BREW_PACKAGE", "  "+LegacyBrewPackage+"  ")
+	if IsBrewUpdateConfigured() {
+		t.Fatal("legacy upstream tap must be ignored")
+	}
+}
+
+func TestUpdateViaBrewRejectsLegacyUpstreamTap(t *testing.T) {
+	t.Setenv("MULTICA_BREW_PACKAGE", LegacyBrewPackage)
+
+	out, err := UpdateViaBrew()
+	if err == nil {
+		t.Fatal("expected error for legacy upstream tap")
+	}
+	if out != "" {
+		t.Fatalf("output = %q, want empty", out)
+	}
+	if !strings.Contains(err.Error(), "legacy upstream tap") {
+		t.Fatalf("error = %v, want legacy upstream tap", err)
+	}
+}
+
 func TestFindChecksumManifestAsset(t *testing.T) {
 	t.Run("finds checksums.txt among assets", func(t *testing.T) {
 		assets := []GitHubReleaseAsset{
@@ -300,5 +332,21 @@ func TestUpdateDownloadTimeoutOrDefault(t *testing.T) {
 				t.Fatalf("timeout = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestUpdateTargetPathUsesStableBrewSymlink(t *testing.T) {
+	got := updateTargetPathFromResolved("/opt/homebrew/Cellar/multica/0.3.35/bin/multica")
+	want := "/opt/homebrew/bin/multica"
+	if got != want {
+		t.Fatalf("update target = %q, want %q", got, want)
+	}
+}
+
+func TestUpdateTargetPathKeepsNonBrewExecutable(t *testing.T) {
+	got := updateTargetPathFromResolved("/Users/frank/.local/bin/multica")
+	want := "/Users/frank/.local/bin/multica"
+	if got != want {
+		t.Fatalf("update target = %q, want %q", got, want)
 	}
 }

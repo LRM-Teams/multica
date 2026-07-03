@@ -87,6 +87,7 @@ type ChannelMessageResponse struct {
 	ID                  string                    `json:"id"`
 	ChannelID           string                    `json:"channel_id"`
 	WorkspaceID         string                    `json:"workspace_id"`
+	Seq                 int64                     `json:"seq"`
 	Type                string                    `json:"type"`
 	AuthorID            *string                   `json:"author_id"`
 	AuthorName          string                    `json:"author_name"`
@@ -113,6 +114,7 @@ type ChannelMessageResponse struct {
 type ChannelMessagesCursorResponse struct {
 	CreatedAt string `json:"created_at"`
 	ID        string `json:"id"`
+	Seq       int64  `json:"seq"`
 }
 
 type ChannelMessagesPageResponse struct {
@@ -222,24 +224,15 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN LATERAL (
 			SELECT author_type, author_name, content, created_at
 			FROM channel_message m WHERE m.channel_id = ch.id
-			ORDER BY m.created_at DESC LIMIT 1
+			ORDER BY m.seq DESC LIMIT 1
 		) lm ON true
 		LEFT JOIN channel_read cr ON cr.channel_id = ch.id AND cr.user_id = $2
 		LEFT JOIN LATERAL (
 			SELECT count(*) AS cnt FROM channel_message m
 			WHERE m.channel_id = ch.id
-			  AND m.created_at > COALESCE(cr.last_read_at, '-infinity'::timestamptz)
+			  AND m.seq > COALESCE(cr.last_read_seq, 0)
 			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
-			  AND (
-			    m.thread_root_message_id IS NULL
-			    OR EXISTS (
-			      SELECT 1
-			      FROM channel_thread_state cts
-			      WHERE cts.root_message_id = m.thread_root_message_id
-			        AND cts.user_id = $2
-			        AND cts.followed_at IS NOT NULL
-			    )
-			  )
+			  AND m.thread_root_message_id IS NULL
 		) uc ON true
 		WHERE ch.workspace_id = $1 AND ch.kind = 'group'
 		  AND (($3 AND ch.archived_at IS NOT NULL) OR (NOT $3 AND ch.archived_at IS NULL))
@@ -329,9 +322,23 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, err := h.DB.Exec(r.Context(), `
-		INSERT INTO channel_read (channel_id, user_id, last_read_at)
-		VALUES ($1, $2, now())
-		ON CONFLICT (channel_id, user_id) DO UPDATE SET last_read_at = now()`, channelID, parseUUID(userID))
+		WITH conv AS (
+		  SELECT id, workspace_id, last_seq
+		  FROM conversation
+		  WHERE channel_id = $1
+		),
+		read_state AS (
+		  INSERT INTO channel_read (channel_id, user_id, last_read_at, last_read_seq)
+		  SELECT $1, $2, now(), conv.last_seq FROM conv
+		  ON CONFLICT (channel_id, user_id)
+		  DO UPDATE SET last_read_at = now(), last_read_seq = EXCLUDED.last_read_seq
+		  RETURNING channel_id, user_id, last_read_seq
+		)
+		INSERT INTO conversation_member (conversation_id, workspace_id, member_type, member_id, last_read_seq, followed_at, updated_at)
+		SELECT conv.id, conv.workspace_id, 'user', $2, conv.last_seq, now(), now()
+		FROM conv
+		ON CONFLICT (conversation_id, member_type, member_id)
+		DO UPDATE SET last_read_seq = EXCLUDED.last_read_seq, updated_at = now()`, channelID, parseUUID(userID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to mark channel read")
 		return
@@ -793,18 +800,22 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	usePageResponse := hasChannelMessagesPageParams(r)
-	limit, beforeCreatedAt, beforeID, err := parseChannelMessagesPageParams(r)
+	limit, beforeSeq, beforeCreatedAt, beforeID, err := parseChannelMessagesPageParams(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at
 		FROM channel_message
 		WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id IS NULL
-		  AND (($3::timestamptz IS NULL AND $4::uuid IS NULL) OR (created_at, id) < ($3::timestamptz, $4::uuid))
-		ORDER BY created_at DESC, id DESC
-		LIMIT $5`, channelID, parseUUID(workspaceID), beforeCreatedAt, beforeID, limit+1)
+		  AND (
+		    ($3::bigint = 0 AND $4::timestamptz IS NULL AND $5::uuid IS NULL)
+		    OR ($3::bigint > 0 AND seq < $3::bigint)
+		    OR ($3::bigint = 0 AND (created_at, id) < ($4::timestamptz, $5::uuid))
+		  )
+		ORDER BY seq DESC
+		LIMIT $6`, channelID, parseUUID(workspaceID), beforeSeq, beforeCreatedAt, beforeID, limit+1)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channel messages")
 		return
@@ -829,6 +840,7 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		nextCursor = &ChannelMessagesCursorResponse{
 			CreatedAt: oldest.CreatedAt,
 			ID:        oldest.ID,
+			Seq:       oldest.Seq,
 		}
 	}
 	out := make([]ChannelMessageResponse, 0, len(desc))
@@ -891,7 +903,7 @@ func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) 
 		SELECT id, channel_id, thread_root_message_id, author_type, author_id, author_name, content, created_at
 		FROM channel_message
 		WHERE channel_id = $1 AND workspace_id = $2 AND author_type <> 'system' AND content ILIKE $3 ESCAPE '\'
-		ORDER BY created_at ASC, id ASC
+		ORDER BY seq ASC
 		LIMIT $4`, channelID, parseUUID(workspaceID), pattern, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to search channel messages")
@@ -1067,7 +1079,7 @@ func (h *Handler) attachChannelMessageThreadMetadata(ctx context.Context, worksp
 		       COALESCE(cts.followed_at IS NOT NULL, false) AS followed,
 		       CASE
 		         WHEN cts.followed_at IS NOT NULL THEN count(replies.id) FILTER (
-		           WHERE replies.created_at > COALESCE(cts.last_read_at, '-infinity'::timestamptz)
+		           WHERE replies.seq > COALESCE(cts.last_read_seq, 0)
 		             AND NOT (replies.author_type = 'user' AND replies.author_id = $3)
 		         )::int
 		         ELSE 0
@@ -1077,7 +1089,7 @@ func (h *Handler) attachChannelMessageThreadMetadata(ctx context.Context, worksp
 			AND replies.thread_root_message_id = roots.id
 		LEFT JOIN channel_thread_state cts ON cts.root_message_id = roots.id AND cts.user_id = $3
 		WHERE roots.workspace_id = $2 AND roots.id = ANY($1::uuid[])
-		GROUP BY roots.id, cts.followed_at, cts.last_read_at`,
+		GROUP BY roots.id, cts.followed_at, cts.last_read_seq`,
 		rootIDs, parseUUID(workspaceID), userID)
 	if err != nil {
 		slog.Warn("channel thread metadata: load failed", "workspace", workspaceID, "error", err)
@@ -1279,18 +1291,22 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	limit, before, beforeID, hasCursor, ok := parseChannelThreadPageParams(w, r)
+	limit, beforeSeq, before, beforeID, useSeqCursor, hasCursor, ok := parseChannelThreadPageParams(w, r)
 	if !ok {
 		return
 	}
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at
 		FROM channel_message
 		WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id = $3
-		  AND (NOT $4::boolean OR (created_at, id) < ($5::timestamptz, $6::uuid))
-		ORDER BY created_at DESC, id DESC
-		LIMIT $7`,
-		channelID, parseUUID(workspaceID), rootID, hasCursor, before, beforeID, limit+1)
+		  AND (
+		    NOT $4::boolean
+		    OR ($5::boolean AND seq < $6::bigint)
+		    OR (NOT $5::boolean AND (created_at, id) < ($7::timestamptz, $8::uuid))
+		)
+		ORDER BY seq DESC
+		LIMIT $9`,
+		channelID, parseUUID(workspaceID), rootID, hasCursor, useSeqCursor, beforeSeq, before, beforeID, limit+1)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channel thread messages")
 		return
@@ -1311,6 +1327,7 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	}
 	if hasMore && len(repliesDesc) > 0 {
 		oldest := repliesDesc[len(repliesDesc)-1]
+		w.Header().Set("X-Next-Before-Seq", strconv.FormatInt(oldest.Seq, 10))
 		w.Header().Set("X-Next-Before", oldest.CreatedAt)
 		w.Header().Set("X-Next-Before-Id", oldest.ID)
 	}
@@ -1470,9 +1487,18 @@ func (h *Handler) setChannelThreadReadOrFollow(w http.ResponseWriter, r *http.Re
 	if followed {
 		h.followChannelThreadUser(r.Context(), channelID, rootID, parseUUID(userID), markRead)
 	} else if _, err := h.DB.Exec(r.Context(), `
-		UPDATE channel_thread_state
-		SET followed_at = NULL, updated_at = now()
-		WHERE root_message_id = $1 AND user_id = $2`, rootID, parseUUID(userID)); err != nil {
+		WITH updated AS (
+		  UPDATE channel_thread_state
+		  SET followed_at = NULL, updated_at = now()
+		  WHERE root_message_id = $1 AND user_id = $2
+		  RETURNING root_message_id, user_id
+		)
+		UPDATE thread_participant tp
+		SET followed_at = NULL, wake_state = 'no_wake', updated_at = now()
+		FROM updated
+		WHERE tp.root_message_id = updated.root_message_id
+		  AND tp.member_type = 'user'
+		  AND tp.member_id = updated.user_id`, rootID, parseUUID(userID)); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to unfollow channel thread")
 		return
 	}
@@ -1481,7 +1507,7 @@ func (h *Handler) setChannelThreadReadOrFollow(w http.ResponseWriter, r *http.Re
 
 func (h *Handler) loadChannelThreadRoot(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID, rootID pgtype.UUID) (ChannelMessageResponse, bool) {
 	row := h.DB.QueryRow(ctx, `
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at
 		FROM channel_message
 		WHERE id = $1 AND channel_id = $2 AND workspace_id = $3`,
 		rootID, channelID, parseUUID(workspaceID))
@@ -1534,11 +1560,35 @@ func (h *Handler) validateChannelThreadReplyTarget(w http.ResponseWriter, ctx co
 
 func (h *Handler) followChannelThreadUser(ctx context.Context, channelID, rootID, userID pgtype.UUID, markRead bool) {
 	if _, err := h.DB.Exec(ctx, `
-		INSERT INTO channel_thread_state (channel_id, root_message_id, user_id, last_read_at, followed_at)
-		VALUES ($1, $2, $3, CASE WHEN $4 THEN now() ELSE NULL END, now())
-		ON CONFLICT (root_message_id, user_id) DO UPDATE
-		SET followed_at = COALESCE(channel_thread_state.followed_at, now()),
-		    last_read_at = CASE WHEN $4 THEN now() ELSE channel_thread_state.last_read_at END,
+		WITH root AS (
+		  SELECT conversation_id, workspace_id, seq
+		  FROM channel_message
+		  WHERE id = $2 AND channel_id = $1
+		),
+		thread_max AS (
+		  SELECT max(m.seq) AS max_seq
+		  FROM channel_message m
+		  WHERE m.channel_id = $1
+		    AND (m.id = $2 OR m.thread_root_message_id = $2)
+		),
+		upsert_state AS (
+		  INSERT INTO channel_thread_state (channel_id, root_message_id, user_id, last_read_at, last_read_seq, followed_at)
+		  SELECT $1, $2, $3, CASE WHEN $4 THEN now() ELSE NULL END, CASE WHEN $4 THEN COALESCE(thread_max.max_seq, root.seq) ELSE 0 END, now()
+		  FROM root, thread_max
+		  ON CONFLICT (root_message_id, user_id) DO UPDATE
+		  SET followed_at = COALESCE(channel_thread_state.followed_at, now()),
+		      last_read_at = CASE WHEN $4 THEN now() ELSE channel_thread_state.last_read_at END,
+		      last_read_seq = CASE WHEN $4 THEN EXCLUDED.last_read_seq ELSE channel_thread_state.last_read_seq END,
+		      updated_at = now()
+		  RETURNING root_message_id, user_id, last_read_seq, followed_at, updated_at
+		)
+		INSERT INTO thread_participant (conversation_id, root_message_id, member_type, member_id, last_read_seq, followed_at, updated_at)
+		SELECT root.conversation_id, upsert_state.root_message_id, 'user', upsert_state.user_id, upsert_state.last_read_seq, upsert_state.followed_at, upsert_state.updated_at
+		FROM root, upsert_state
+		ON CONFLICT (root_message_id, member_type, member_id) DO UPDATE
+		SET followed_at = EXCLUDED.followed_at,
+		    wake_state = 'active',
+		    last_read_seq = EXCLUDED.last_read_seq,
 		    updated_at = now()`,
 		channelID, rootID, userID, markRead); err != nil {
 		slog.Warn("channel thread follow failed", "root", uuidToString(rootID), "user", uuidToString(userID), "error", err)
@@ -1572,70 +1622,88 @@ func (h *Handler) followChannelThreadMentionedUsers(ctx context.Context, ch Chan
 	}
 }
 
-func parseChannelThreadPageParams(w http.ResponseWriter, r *http.Request) (int, pgtype.Timestamptz, pgtype.UUID, bool, bool) {
+func parseChannelThreadPageParams(w http.ResponseWriter, r *http.Request) (int, int64, pgtype.Timestamptz, pgtype.UUID, bool, bool, bool) {
 	limit := boundedQueryInt(r, "limit", channelThreadDefaultLimit, channelThreadMaxLimit)
+	beforeSeqRaw := strings.TrimSpace(r.URL.Query().Get("before_seq"))
+	if beforeSeqRaw != "" {
+		beforeSeq, err := strconv.ParseInt(beforeSeqRaw, 10, 64)
+		if err != nil || beforeSeq < 1 {
+			writeError(w, http.StatusBadRequest, "invalid before_seq parameter")
+			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, false, false, false
+		}
+		return limit, beforeSeq, pgtype.Timestamptz{}, pgtype.UUID{}, true, true, true
+	}
 	beforeRaw := strings.TrimSpace(r.URL.Query().Get("before"))
 	beforeIDRaw := strings.TrimSpace(r.URL.Query().Get("before_id"))
 	if beforeIDRaw == "" {
 		beforeIDRaw = strings.TrimSpace(r.URL.Query().Get("before-id"))
 	}
 	if beforeRaw == "" && beforeIDRaw == "" {
-		return limit, pgtype.Timestamptz{}, pgtype.UUID{}, false, true
+		return limit, 0, pgtype.Timestamptz{}, pgtype.UUID{}, false, false, true
 	}
 	if beforeRaw == "" || beforeIDRaw == "" {
 		writeError(w, http.StatusBadRequest, "before and before_id must be set together")
-		return 0, pgtype.Timestamptz{}, pgtype.UUID{}, false, false
+		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, false, false, false
 	}
 	t, err := time.Parse(time.RFC3339Nano, beforeRaw)
 	if err != nil {
 		t, err = time.Parse(time.RFC3339, beforeRaw)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid before parameter; expected RFC3339 format")
-			return 0, pgtype.Timestamptz{}, pgtype.UUID{}, false, false
+			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, false, false, false
 		}
 	}
 	id, err := util.ParseUUID(beforeIDRaw)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid before_id parameter; expected UUID")
-		return 0, pgtype.Timestamptz{}, pgtype.UUID{}, false, false
+		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, false, false, false
 	}
-	return limit, pgtype.Timestamptz{Time: t, Valid: true}, id, true, true
+	return limit, 0, pgtype.Timestamptz{Time: t, Valid: true}, id, false, true, true
 }
 
 func hasChannelMessagesPageParams(r *http.Request) bool {
 	q := r.URL.Query()
 	return strings.TrimSpace(q.Get("limit")) != "" ||
+		strings.TrimSpace(q.Get("before_seq")) != "" ||
 		strings.TrimSpace(q.Get("before_created_at")) != "" ||
 		strings.TrimSpace(q.Get("before_id")) != ""
 }
 
-func parseChannelMessagesPageParams(r *http.Request) (int, pgtype.Timestamptz, pgtype.UUID, error) {
+func parseChannelMessagesPageParams(r *http.Request) (int, int64, pgtype.Timestamptz, pgtype.UUID, error) {
 	limit := channelMessagesDefaultLimit
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 1 || parsed > channelMessagesMaxLimit {
-			return 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid limit")
+			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid limit")
 		}
 		limit = parsed
+	}
+
+	if rawBeforeSeq := strings.TrimSpace(r.URL.Query().Get("before_seq")); rawBeforeSeq != "" {
+		beforeSeq, err := strconv.ParseInt(rawBeforeSeq, 10, 64)
+		if err != nil || beforeSeq < 1 {
+			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+		}
+		return limit, beforeSeq, pgtype.Timestamptz{}, pgtype.UUID{}, nil
 	}
 
 	rawBeforeCreatedAt := strings.TrimSpace(r.URL.Query().Get("before_created_at"))
 	rawBeforeID := strings.TrimSpace(r.URL.Query().Get("before_id"))
 	if rawBeforeCreatedAt == "" && rawBeforeID == "" {
-		return limit, pgtype.Timestamptz{}, pgtype.UUID{}, nil
+		return limit, 0, pgtype.Timestamptz{}, pgtype.UUID{}, nil
 	}
 	if rawBeforeCreatedAt == "" || rawBeforeID == "" {
-		return 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
 	}
 	beforeTime, err := time.Parse(time.RFC3339Nano, rawBeforeCreatedAt)
 	if err != nil {
-		return 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
 	}
 	beforeID, err := util.ParseUUID(rawBeforeID)
 	if err != nil {
-		return 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
 	}
-	return limit, pgtype.Timestamptz{Time: beforeTime, Valid: true}, beforeID, nil
+	return limit, 0, pgtype.Timestamptz{Time: beforeTime, Valid: true}, beforeID, nil
 }
 
 type ChannelAuthorStat struct {
@@ -2335,7 +2403,7 @@ func (h *Handler) channelThreadTargetAgents(ctx context.Context, workspaceID, ch
 		  AND m.workspace_id = $2
 		  AND m.thread_root_message_id = $3
 		  AND a.archived_at IS NULL
-		ORDER BY m.created_at DESC, m.id DESC
+		ORDER BY m.seq DESC
 		LIMIT 1`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID))
 	if len(agents) > 0 {
 		return agents
@@ -2503,7 +2571,7 @@ func (h *Handler) channelMessageByID(ctx context.Context, workspaceID, channelID
 		return ChannelMessageResponse{}, false
 	}
 	row := h.DB.QueryRow(ctx, `
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at
 		FROM channel_message
 		WHERE id = $1 AND channel_id = $2 AND workspace_id = $3`, parseUUID(messageID), parseUUID(channelID), parseUUID(workspaceID))
 	msg, err := scanChannelMessage(row)
@@ -2543,15 +2611,15 @@ func (h *Handler) channelMemberSummaries(ctx context.Context, workspaceID, chann
 
 func (h *Handler) recentChannelMessages(ctx context.Context, workspaceID, channelID string, limit int) []ChannelMessageResponse {
 	rows, err := h.DB.Query(ctx, `
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at
 		FROM (
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at
 			FROM channel_message
 			WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id IS NULL AND author_type <> 'system'
-			ORDER BY created_at DESC
+			ORDER BY seq DESC
 			LIMIT $3
 		) recent
-		ORDER BY created_at ASC`, parseUUID(channelID), parseUUID(workspaceID), limit)
+		ORDER BY seq ASC`, parseUUID(channelID), parseUUID(workspaceID), limit)
 	if err != nil {
 		return nil
 	}
@@ -2573,22 +2641,22 @@ func (h *Handler) channelThreadContextMessages(ctx context.Context, workspaceID,
 	}
 	rows, err := h.DB.Query(ctx, `
 		WITH replies AS (
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at
 			FROM channel_message
 			WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id = $3 AND author_type <> 'system'
-			ORDER BY created_at DESC
+			ORDER BY seq DESC
 			LIMIT $4
 		)
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at
 		FROM (
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at
 			FROM channel_message
 			WHERE id = $3 AND channel_id = $1 AND workspace_id = $2 AND author_type <> 'system'
 			UNION ALL
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at
 			FROM replies
 		) thread_context
-		ORDER BY created_at ASC`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID), limit-1)
+		ORDER BY seq ASC`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID), limit-1)
 	if err != nil {
 		return nil
 	}
@@ -2936,7 +3004,7 @@ func (h *Handler) insertChannelMessageWithParts(ctx context.Context, channelID, 
 	row := h.DB.QueryRow(ctx, `
 		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth)
 		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13)
-		RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, created_at`,
+		RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at`,
 		channelID, workspaceID, authorType, nullableUUID(authorID), authorName, content, messageparts.MustJSON(parts), source, externalID, nullableUUID(replyToMessageID), nullableUUID(threadRootMessageID), threadID, triggerDepth)
 	return scanChannelMessage(row)
 }
@@ -3122,11 +3190,12 @@ func scanChannelMessage(row rowScanner) (ChannelMessageResponse, error) {
 	var parts []byte
 	var external, thread pgtype.Text
 	var triggerDepth int
+	var seq int64
 	var createdAt pgtype.Timestamptz
-	if err := row.Scan(&id, &channelID, &wsID, &authorType, &authorID, &authorName, &content, &parts, &source, &external, &replyToMessageID, &threadRootMessageID, &thread, &triggerDepth, &createdAt); err != nil {
+	if err := row.Scan(&id, &channelID, &wsID, &authorType, &authorID, &authorName, &content, &parts, &source, &external, &replyToMessageID, &threadRootMessageID, &thread, &triggerDepth, &seq, &createdAt); err != nil {
 		return ChannelMessageResponse{}, err
 	}
-	return ChannelMessageResponse{ID: uuidToString(id), ChannelID: uuidToString(channelID), WorkspaceID: uuidToString(wsID), Type: authorType, AuthorID: uuidToPtr(authorID), AuthorName: authorName, Content: content, Parts: messageparts.Decode(parts), Source: source, ExternalMessageID: textToPtr(external), ReplyToMessageID: uuidToPtr(replyToMessageID), ThreadRootMessageID: uuidToPtr(threadRootMessageID), ThreadID: textToPtr(thread), TriggerDepth: triggerDepth, CreatedAt: timestampToString(createdAt)}, nil
+	return ChannelMessageResponse{ID: uuidToString(id), ChannelID: uuidToString(channelID), WorkspaceID: uuidToString(wsID), Seq: seq, Type: authorType, AuthorID: uuidToPtr(authorID), AuthorName: authorName, Content: content, Parts: messageparts.Decode(parts), Source: source, ExternalMessageID: textToPtr(external), ReplyToMessageID: uuidToPtr(replyToMessageID), ThreadRootMessageID: uuidToPtr(threadRootMessageID), ThreadID: textToPtr(thread), TriggerDepth: triggerDepth, CreatedAt: timestampToString(createdAt)}, nil
 }
 
 func trimTextPtr(s *string) *string {

@@ -532,6 +532,78 @@ describe("ApiClient", () => {
     });
   });
 
+  describe("channel message sequence pagination", () => {
+    const channelMessage = {
+      id: "msg-1",
+      channel_id: "channel-1",
+      workspace_id: "ws-1",
+      seq: 42,
+      type: "user",
+      author_id: "user-1",
+      author_name: "User",
+      content: "hello",
+      source: "multica",
+      external_message_id: null,
+      created_at: "2026-07-03T00:00:00Z",
+    };
+
+    it("uses before_seq for channel message page cursors", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({
+          messages: [channelMessage],
+          limit: 50,
+          has_more: true,
+          next_cursor: { seq: 42, created_at: channelMessage.created_at, id: channelMessage.id },
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      const page = await client.listChannelMessagesPage("channel-1", {
+        before: { seq: 42, created_at: channelMessage.created_at, id: channelMessage.id },
+      });
+
+      expect(fetchMock.mock.calls[0]![0]).toBe(
+        "https://api.example.test/api/channels/channel-1/messages?limit=50&before_seq=42",
+      );
+      expect(page.next_cursor).toEqual({ seq: 42, created_at: channelMessage.created_at, id: channelMessage.id });
+    });
+
+    it("uses and returns before_seq for thread cursors", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify([channelMessage]), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Next-Before-Seq": "42",
+            "X-Next-Before": channelMessage.created_at,
+            "X-Next-Before-Id": channelMessage.id,
+          },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      const page = await client.listChannelMessageThread("channel-1", "root-1", {
+        beforeSeq: 42,
+        before: channelMessage.created_at,
+        beforeId: channelMessage.id,
+      });
+
+      expect(fetchMock.mock.calls[0]![0]).toBe(
+        "https://api.example.test/api/channels/channel-1/messages/root-1/thread?before_seq=42",
+      );
+      expect(page.next_cursor).toEqual({
+        before_seq: 42,
+        before: channelMessage.created_at,
+        before_id: channelMessage.id,
+      });
+    });
+  });
+
   describe("cancelTaskById response parsing", () => {
     const taskResponse = {
       id: "task-1",

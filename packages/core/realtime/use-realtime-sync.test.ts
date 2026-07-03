@@ -589,6 +589,7 @@ describe("handleInboxNew", () => {
   }
 
   function channelMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
+    const seq = overrides.seq ?? 1;
     return {
       id: "message-1",
       channel_id: "channel-1",
@@ -601,6 +602,7 @@ describe("handleInboxNew", () => {
       external_message_id: null,
       created_at: "2026-05-18T00:00:00Z",
       ...overrides,
+      seq,
     };
   }
 

@@ -48,7 +48,7 @@ export function channelMessagesPageOptions(channelId: string, limit = 50) {
         before: pageParam,
         limit,
       }),
-    initialPageParam: null as { created_at: string; id: string } | null,
+    initialPageParam: null as { seq?: number; created_at: string; id: string } | null,
     getNextPageParam: (lastPage) =>
       lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined,
     enabled: !!channelId,
@@ -112,9 +112,19 @@ function upsertChannelMessage(old: ChannelMessage[] | undefined, message: Channe
   return [...old, message];
 }
 
-export function channelMessageThreadOptions(channelId: string, messageId: string, options?: { limit?: number; before?: string; beforeId?: string }) {
+export function channelMessageThreadOptions(
+  channelId: string,
+  messageId: string,
+  options?: { limit?: number; beforeSeq?: number; before?: string; beforeId?: string },
+) {
   return queryOptions({
-    queryKey: [...channelKeys.messageThread(channelId, messageId), options?.limit, options?.before, options?.beforeId] as const,
+    queryKey: [
+      ...channelKeys.messageThread(channelId, messageId),
+      options?.limit,
+      options?.beforeSeq,
+      options?.before,
+      options?.beforeId,
+    ] as const,
     queryFn: () => api.listChannelMessageThread(channelId, messageId, options),
     enabled: !!channelId && !!messageId,
   });

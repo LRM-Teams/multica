@@ -628,24 +628,15 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		LEFT JOIN LATERAL (
 			SELECT author_type, author_name, content, created_at
 			FROM channel_message m WHERE m.channel_id = ch.id
-			ORDER BY m.created_at DESC LIMIT 1
+			ORDER BY m.seq DESC LIMIT 1
 		) lm ON true
 		LEFT JOIN channel_read cr ON cr.channel_id = ch.id AND cr.user_id = $2
 		LEFT JOIN LATERAL (
 			SELECT count(*) AS cnt FROM channel_message m
 			WHERE m.channel_id = ch.id
-			  AND m.created_at > COALESCE(cr.last_read_at, '-infinity'::timestamptz)
+			  AND m.seq > COALESCE(cr.last_read_seq, 0)
 			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
-			  AND (
-			    m.thread_root_message_id IS NULL
-			    OR EXISTS (
-			      SELECT 1
-			      FROM channel_thread_state cts
-			      WHERE cts.root_message_id = m.thread_root_message_id
-			        AND cts.user_id = $2
-			        AND cts.followed_at IS NOT NULL
-			    )
-			  )
+			  AND m.thread_root_message_id IS NULL
 		) uc ON true
 		LEFT JOIN dm_peer_state state
 		  ON state.workspace_id = ch.workspace_id

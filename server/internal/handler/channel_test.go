@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1129,8 +1129,8 @@ func TestChannelThreadReplyMetadataReadAndMainTimelineFiltering(t *testing.T) {
 		t.Fatalf("thread read metadata = %+v, want followed unread cleared", rootTimeline[0])
 	}
 	ch := listedChannelForTest(t, channelID)
-	if ch == nil || ch.RealUnreadCount == 0 {
-		t.Fatalf("thread read unexpectedly cleared channel unread: %+v", ch)
+	if ch == nil || ch.RealUnreadCount != 0 {
+		t.Fatalf("thread read leaked into channel unread: %+v", ch)
 	}
 }
 
@@ -1461,12 +1461,12 @@ func TestChannelThreadPaginationUsesOlderCursor(t *testing.T) {
 	if got := threadContents(page); fmt.Sprint(got) != "[root reply-2 reply-3]" {
 		t.Fatalf("page 1 contents = %v", got)
 	}
-	before, beforeID := rec.Header().Get("X-Next-Before"), rec.Header().Get("X-Next-Before-Id")
-	if before == "" || beforeID == "" {
-		t.Fatalf("page 1 missing cursor before=%q before_id=%q", before, beforeID)
+	beforeSeq, before, beforeID := rec.Header().Get("X-Next-Before-Seq"), rec.Header().Get("X-Next-Before"), rec.Header().Get("X-Next-Before-Id")
+	if beforeSeq == "" || before == "" || beforeID == "" {
+		t.Fatalf("page 1 missing cursor before_seq=%q before=%q before_id=%q", beforeSeq, before, beforeID)
 	}
 
-	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages/"+root.ID+"/thread?limit=2&before="+url.QueryEscape(before)+"&before_id="+beforeID, nil)
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages/"+root.ID+"/thread?limit=2&before_seq="+beforeSeq, nil)
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
 	req = withURLParams(req, "channelId", channelID, "messageId", root.ID)
 	rec = httptest.NewRecorder()
@@ -1518,11 +1518,14 @@ func TestChannelMessagesPaginationUsesOlderCursor(t *testing.T) {
 	if page.Limit != 2 || !page.HasMore || page.NextCursor == nil {
 		t.Fatalf("page 1 metadata = limit:%d has_more:%t cursor:%+v", page.Limit, page.HasMore, page.NextCursor)
 	}
+	if page.NextCursor.Seq == 0 {
+		t.Fatalf("page 1 cursor missing seq: %+v", page.NextCursor)
+	}
 	if got := threadContents(page.Messages); fmt.Sprint(got) != "[msg-3 msg-4]" {
 		t.Fatalf("page 1 contents = %v", got)
 	}
 
-	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages?limit=2&before_created_at="+url.QueryEscape(page.NextCursor.CreatedAt)+"&before_id="+page.NextCursor.ID, nil)
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages?limit=2&before_seq="+strconv.FormatInt(page.NextCursor.Seq, 10), nil)
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
 	req = withURLParam(req, "channelId", channelID)
 	rec = httptest.NewRecorder()
@@ -1553,6 +1556,7 @@ func TestChannelMessagesPaginationRejectsInvalidParams(t *testing.T) {
 		path string
 	}{
 		{name: "invalid limit", path: "/api/channels/" + channelID + "/messages?limit=0"},
+		{name: "invalid seq cursor", path: "/api/channels/" + channelID + "/messages?before_seq=bad"},
 		{name: "partial cursor", path: "/api/channels/" + channelID + "/messages?before_id=" + uuid.NewString()},
 		{name: "invalid cursor time", path: "/api/channels/" + channelID + "/messages?before_created_at=nope&before_id=" + uuid.NewString()},
 	} {
@@ -1566,6 +1570,90 @@ func TestChannelMessagesPaginationRejectsInvalidParams(t *testing.T) {
 				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestChannelMessagesExposeConversationSeq(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "message-seq-"+uuid.NewString(), testUserID)
+	first, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "first", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("message-seq-first"), 0)
+	if err != nil {
+		t.Fatalf("insert first: %v", err)
+	}
+	second, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "second", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("message-seq-second"), 0)
+	if err != nil {
+		t.Fatalf("insert second: %v", err)
+	}
+	if first.Seq < 1 || second.Seq != first.Seq+1 {
+		t.Fatalf("message seqs = %d, %d; want monotonic per conversation", first.Seq, second.Seq)
+	}
+
+	var conversationID string
+	var lastSeq int64
+	if err := testPool.QueryRow(ctx, `
+		SELECT id, last_seq
+		FROM conversation
+		WHERE channel_id = $1`, channelID).Scan(&conversationID, &lastSeq); err != nil {
+		t.Fatalf("load conversation: %v", err)
+	}
+	if conversationID != channelID || lastSeq != second.Seq {
+		t.Fatalf("conversation = id:%s last_seq:%d, want id:%s last_seq:%d", conversationID, lastSeq, channelID, second.Seq)
+	}
+}
+
+func TestChannelUnreadUsesConversationSeq(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	readerID := createChannelPlainMember(t)
+	writerID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "message-seq-unread-"+uuid.NewString(), readerID, writerID)
+	first, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(writerID), "Writer", "before read", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("message-seq-unread-1"), 0)
+	if err != nil {
+		t.Fatalf("insert first: %v", err)
+	}
+
+	req := newRequestAs(readerID, http.MethodPost, "/api/channels/"+channelID+"/read", nil)
+	req = withChannelTestWorkspaceCtx(t, req, readerID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.MarkChannelRead(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mark read: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	second, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(writerID), "Writer", "after read old timestamp", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("message-seq-unread-2"), 0)
+	if err != nil {
+		t.Fatalf("insert second: %v", err)
+	}
+	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := testPool.Exec(ctx, `UPDATE channel_message SET created_at = $1 WHERE id = $2`, oldTime, second.ID); err != nil {
+		t.Fatalf("pin second old timestamp: %v", err)
+	}
+
+	var lastReadSeq int64
+	if err := testPool.QueryRow(ctx, `
+		SELECT last_read_seq
+		FROM channel_read
+		WHERE channel_id = $1 AND user_id = $2`, channelID, readerID).Scan(&lastReadSeq); err != nil {
+		t.Fatalf("load channel read seq: %v", err)
+	}
+	if lastReadSeq != first.Seq {
+		t.Fatalf("last_read_seq = %d, want first seq %d", lastReadSeq, first.Seq)
+	}
+
+	ch := listedChannelForUser(t, channelID, readerID)
+	if ch == nil {
+		t.Fatal("channel missing from list")
+	}
+	if ch.RealUnreadCount != 1 || ch.UnreadCount != 1 {
+		t.Fatalf("seq unread = real:%d total:%d, want 1/1; second seq=%d", ch.RealUnreadCount, ch.UnreadCount, second.Seq)
 	}
 }
 

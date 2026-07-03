@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -121,6 +122,9 @@ func TestListRuntimeLocalSkills_FollowsSymlinkedSkillDirs(t *testing.T) {
 		t.Fatalf("mkdir skills root: %v", err)
 	}
 	if err := os.Symlink(target, filepath.Join(skillsRoot, "lark-doc")); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("creating directory symlinks on Windows requires elevated privileges: %v", err)
+		}
 		t.Fatalf("symlink: %v", err)
 	}
 
@@ -185,7 +189,7 @@ func TestListRuntimeLocalSkills_CodexUsesSharedCODEXHOME(t *testing.T) {
 	if skills[0].Key != "debugger" {
 		t.Fatalf("key = %q, want debugger", skills[0].Key)
 	}
-	if skills[0].SourcePath != filepath.Join(codexHome, "skills", "debugger") {
+	if skills[0].SourcePath != filepath.ToSlash(filepath.Join(codexHome, "skills", "debugger")) {
 		t.Fatalf("source_path = %q", skills[0].SourcePath)
 	}
 }

@@ -135,6 +135,27 @@ func TestBareDirName(t *testing.T) {
 // path segments differ only at a segment boundary flatten to the same string
 // once slashes become dashes. The '+' separator can't appear inside a
 // GitHub/GitLab path segment, so the boundary stays visible in the output.
+func TestBareDirNameShortensLongLocalPaths(t *testing.T) {
+	raw := filepath.Join(t.TempDir(), strings.Repeat("deep", 20), "repo")
+	got := bareDirName(raw)
+	if len(got) > 80 {
+		t.Fatalf("bareDirName length = %d, want <= 80: %q", len(got), got)
+	}
+	if !strings.HasSuffix(got, ".git") {
+		t.Fatalf("bareDirName = %q, want .git suffix", got)
+	}
+	if got == bareDirName(raw+"-other") {
+		t.Fatalf("distinct long paths produced same cache dir %q", got)
+	}
+}
+
+func TestRepoNameFromURLHandlesWindowsLocalPaths(t *testing.T) {
+	got := repoNameFromURL(`C:\Users\dev\repo.git`)
+	if got != "repo" {
+		t.Fatalf("repoNameFromURL = %q, want repo", got)
+	}
+}
+
 func TestBareDirNameDistinctsSegmentBoundaryColliders(t *testing.T) {
 	t.Parallel()
 	pairs := [][2]string{

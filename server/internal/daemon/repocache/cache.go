@@ -3,6 +3,8 @@
 package repocache
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -14,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 )
 
 // gitEnv returns an environment for git subprocesses that contact remotes.
@@ -170,7 +171,8 @@ func (c *Cache) Fetch(barePath string) error {
 // the bare clone of rawURL. The name is built from the host plus each
 // path segment, joined by '+'. '+' is disallowed in GitHub and GitLab
 // path segments, so two URLs produce the same name only if they point at
-// the same repository on the same host.
+// the same repository on the same host. Very long local paths get a stable
+// hash suffix so Windows paths stay below MAX_PATH during git object writes.
 //
 // Examples:
 //
@@ -213,7 +215,22 @@ func bareDirName(rawURL string) string {
 	if name == "" || name == ".git" {
 		name = "repo.git"
 	}
-	return name
+	return shortenCacheDirName(name, rawURL)
+}
+
+func shortenCacheDirName(name, rawURL string) string {
+	const maxCacheDirName = 80
+	if len(name) <= maxCacheDirName {
+		return name
+	}
+	sum := sha256.Sum256([]byte(rawURL))
+	suffix := "+" + hex.EncodeToString(sum[:])[:16] + ".git"
+	base := strings.TrimSuffix(name, ".git")
+	keep := maxCacheDirName - len(suffix)
+	if keep < 1 {
+		keep = 1
+	}
+	return strings.TrimRight(base[:keep], "+.-_") + suffix
 }
 
 // splitHostAndPath extracts the host and path-with-namespace from the
@@ -695,7 +712,7 @@ func getRemoteDefaultBranch(barePath string) string {
 	// 2) Common default branch names under the origin namespace.
 	for _, candidate := range []string{"refs/remotes/origin/main", "refs/remotes/origin/master"} {
 		cmd := exec.Command("git", "-C", barePath, "rev-parse", "--verify", candidate)
-	
+
 		if err := cmd.Run(); err == nil {
 			return candidate
 		}
@@ -710,7 +727,7 @@ func getRemoteDefaultBranch(barePath string) string {
 	if bareRef != "" {
 		originRef := "refs/remotes/origin/" + strings.TrimPrefix(bareRef, "refs/heads/")
 		cmd := exec.Command("git", "-C", barePath, "rev-parse", "--verify", originRef)
-	
+
 		if err := cmd.Run(); err == nil {
 			return originRef
 		}
@@ -940,7 +957,7 @@ func excludeFromGit(worktreePath, pattern string) error {
 // repoNameFromURL extracts a short directory name from a git remote URL.
 // e.g. "https://github.com/org/my-repo.git" → "my-repo"
 func repoNameFromURL(url string) string {
-	url = strings.TrimRight(url, "/")
+	url = filepath.ToSlash(strings.TrimRight(url, "/\\"))
 	url = strings.TrimSuffix(url, ".git")
 
 	if i := strings.LastIndex(url, "/"); i >= 0 {

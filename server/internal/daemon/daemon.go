@@ -342,7 +342,7 @@ func (d *Daemon) tryClaimRegisterSlot(workspaceID string, entryAt, now time.Time
 	if next, ok := d.reregisterNextAttempt[workspaceID]; ok && now.Before(next) {
 		return false
 	}
-	if last, ok := d.reregisterLastCompletedAt[workspaceID]; ok && !last.Before(entryAt) {
+	if last, ok := d.reregisterLastCompletedAt[workspaceID]; ok && last.After(entryAt) {
 		return false
 	}
 	d.reregisterNextAttempt[workspaceID] = now.Add(reregisterCoalesceWindow)

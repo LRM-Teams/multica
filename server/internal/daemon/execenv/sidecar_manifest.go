@@ -410,6 +410,16 @@ func removeReusedManagedSkillDirs(envRoot, skillsParent string) error {
 //     every readdir failure as "user content present" and hid the
 //     underlying rmdir error.
 func dirHasEntries(dir string) (hasEntries bool, ok bool) {
+	info, err := os.Stat(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, true
+		}
+		return false, false
+	}
+	if !info.IsDir() {
+		return false, false
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {

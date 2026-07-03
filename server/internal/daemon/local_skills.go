@@ -59,7 +59,7 @@ type runtimeLocalSkillBundle struct {
 // definitions under server/pkg/agent so adding a new runtime can't silently
 // miss the local-skills surface.
 func localSkillRootForProvider(provider string) (string, bool, error) {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return "", false, fmt.Errorf("resolve user home: %w", err)
 	}
@@ -130,7 +130,7 @@ func normalizeLocalSkillKey(key string) (string, error) {
 }
 
 func relativizeHomePath(path string) string {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return filepath.ToSlash(path)
 	}
@@ -140,6 +140,9 @@ func relativizeHomePath(path string) string {
 	prefix := home + string(filepath.Separator)
 	if strings.HasPrefix(path, prefix) {
 		return filepath.ToSlash("~" + string(filepath.Separator) + strings.TrimPrefix(path, prefix))
+	}
+	if rel, err := filepath.Rel(home, path); err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !strings.HasPrefix(rel, "../") {
+		return "~/" + filepath.ToSlash(rel)
 	}
 	return filepath.ToSlash(path)
 }
@@ -202,7 +205,7 @@ func collectLocalSkillFiles(skillDir string, includeContent bool) ([]SkillFileDa
 			return nil
 		}
 		rel = filepath.Clean(rel)
-		if rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, "..") {
+		if rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return nil
 		}
 
@@ -271,7 +274,7 @@ func localSkillScanFingerprint(skillDir string) (string, error) {
 			return nil
 		}
 		rel = filepath.Clean(rel)
-		if rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, "..") {
+		if rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return nil
 		}
 		info, err := entry.Info()
@@ -350,6 +353,10 @@ func enumerateLocalSkills(
 	if err != nil {
 		return
 	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return
+	}
 	if visited[resolved] {
 		return
 	}
@@ -366,6 +373,10 @@ func enumerateLocalSkills(
 			continue
 		}
 		path := filepath.Join(currentDir, name)
+		path, err := filepath.Abs(path)
+		if err != nil {
+			continue
+		}
 		info, statErr := os.Stat(path) // follows symlinks
 		if statErr != nil || !info.IsDir() {
 			continue
@@ -377,7 +388,7 @@ func enumerateLocalSkills(
 			if err != nil {
 				continue
 			}
-			key, err := normalizeLocalSkillKey(rel)
+			key, err := normalizeLocalSkillKey(filepath.ToSlash(rel))
 			if err != nil {
 				continue
 			}

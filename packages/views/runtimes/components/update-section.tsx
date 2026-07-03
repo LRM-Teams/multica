@@ -19,6 +19,10 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { api } from "@multica/core/api";
+import {
+  MULTICA_INSTALL_COMMAND,
+  MULTICA_POWERSHELL_INSTALL_COMMAND,
+} from "@multica/core/constants/repository";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
 import { cn } from "@multica/ui/lib/utils";
@@ -31,18 +35,12 @@ import { useT } from "../../i18n/use-t";
 
 const MANUAL_UPDATE_COMMANDS = [
   {
-    key: "brew",
-    command: "brew upgrade multica-ai/tap/multica && multica daemon restart",
-  },
-  {
-    key: "linux_script",
-    command:
-      "curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash && multica daemon restart",
+    key: "mac_linux",
+    command: `${MULTICA_INSTALL_COMMAND} && multica daemon restart`,
   },
   {
     key: "windows",
-    command:
-      "irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex; multica daemon restart",
+    command: `${MULTICA_POWERSHELL_INSTALL_COMMAND}; multica daemon restart`,
   },
 ] as const;
 

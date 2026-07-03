@@ -1707,13 +1707,16 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 // the restart — extracted so the server-triggered path (handleUpdate) and the
 // auto-update poller (autoUpdateLoop) share the exact same execution body.
 func (d *Daemon) runUpdate(targetVersion string) (string, error) {
-	if cli.IsBrewInstall() {
+	if cli.IsBrewInstall() && cli.IsBrewUpdateConfigured() {
 		d.logger.Info("updating CLI via Homebrew...")
 		out, err := cli.UpdateViaBrew()
 		if err != nil {
 			return out, fmt.Errorf("brew upgrade failed: %w", err)
 		}
 		return out, nil
+	}
+	if cli.IsBrewInstall() {
+		d.logger.Info("Homebrew install detected without MULTICA_BREW_PACKAGE; using direct release download")
 	}
 	d.logger.Info("updating CLI via direct download...", "target_version", targetVersion)
 	out, err := cli.UpdateViaDownload(targetVersion)

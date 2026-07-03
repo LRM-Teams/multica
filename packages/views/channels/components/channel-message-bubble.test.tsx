@@ -220,7 +220,7 @@ describe("ChannelMessageBubble", () => {
 
     rerender(
       <ChannelMessageBubble
-        message={makeMessage({ author_type: "user", author_id: "user-1", author_name: "alice" })}
+        message={makeMessage({ type: "user", author_id: "user-1", author_name: "alice" })}
         currentUserId="user-1"
       />,
     );

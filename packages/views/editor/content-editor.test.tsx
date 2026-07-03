@@ -57,9 +57,16 @@ vi.mock("./attachment-download-context", () => ({
 
 const editorRef = vi.hoisted<{ current: unknown }>(() => ({ current: null }));
 const onCreateFired = vi.hoisted(() => ({ value: false }));
+const editorOptions = vi.hoisted<{ current: { onUpdate?: (args: { editor: unknown }) => void } | null }>(
+  () => ({ current: null }),
+);
 
 vi.mock("@tiptap/react", () => ({
-  useEditor: (options: { onCreate?: (args: { editor: unknown }) => void }) => {
+  useEditor: (options: {
+    onCreate?: (args: { editor: unknown }) => void;
+    onUpdate?: (args: { editor: unknown }) => void;
+  }) => {
+    editorOptions.current = options;
     if (!editorRef.current) {
       editorRef.current = {
         get isFocused() {
@@ -103,6 +110,7 @@ describe("ContentEditor", () => {
     editorState.isDestroyed = false;
     editorState.markdown = "";
     editorRef.current = null;
+    editorOptions.current = null;
     onCreateFired.value = false;
     providerProps.attachments = undefined;
   });
@@ -209,6 +217,18 @@ describe("ContentEditor", () => {
     rerender(<ContentEditor defaultValue={"same content\n"} />);
 
     expect(mockSetContent).not.toHaveBeenCalled();
+  });
+
+  it("emits updates synchronously when debounce is disabled", () => {
+    const onUpdate = vi.fn();
+    render(<ContentEditor debounceMs={0} onUpdate={onUpdate} />);
+
+    editorState.markdown = "draft before switching";
+    act(() => {
+      editorOptions.current?.onUpdate?.({ editor: editorRef.current });
+    });
+
+    expect(onUpdate).toHaveBeenCalledWith("draft before switching");
   });
 });
 

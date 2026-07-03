@@ -480,7 +480,7 @@ export function ChannelsPage() {
   const [archiveTarget, setArchiveTarget] = useState<Channel | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const editorRef = useRef<ContentEditorRef>(null);
-  const [draftEmpty, setDraftEmpty] = useState(true);
+  const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
   const [newName, setNewName] = useState("");
   const [newLarkChatId, setNewLarkChatId] = useState("");
@@ -541,6 +541,29 @@ export function ChannelsPage() {
     return isMobile ? explicit : (explicit ?? channels[0] ?? null);
   }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
   const isActiveArchived = !!active?.archived_at;
+  const activeDraftKey = active ? `channel:${active.id}` : null;
+  const activeDraft = activeDraftKey ? (composerDrafts[activeDraftKey] ?? "") : "";
+  const activeDraftEmpty = !activeDraft.trim();
+  const setConversationDraft = useCallback((key: string, value: string) => {
+    setComposerDrafts((current) => {
+      if (!value.trim()) {
+        if (!(key in current)) return current;
+        const next = { ...current };
+        delete next[key];
+        return next;
+      }
+      if (current[key] === value) return current;
+      return { ...current, [key]: value };
+    });
+  }, []);
+  const clearConversationDraft = useCallback((key: string) => {
+    setComposerDrafts((current) => {
+      if (!(key in current)) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }, []);
   const {
     data: messagePages,
     isLoading: messagesLoading,
@@ -1066,8 +1089,8 @@ export function ChannelsPage() {
   };
 
   const handleEditorUpdate = (value: string) => {
-    setDraftEmpty(!value.trim());
-    if (!active) return;
+    if (!active || !activeDraftKey) return;
+    setConversationDraft(activeDraftKey, value);
     if (value.trim()) {
       if (!typingStartedRef.current) {
         typingStartedRef.current = true;
@@ -1155,7 +1178,7 @@ export function ChannelsPage() {
         onSuccess: () => {
           editorRef.current?.clearContent();
           uploadMapRef.current.clear();
-          setDraftEmpty(true);
+          if (activeDraftKey) clearConversationDraft(activeDraftKey);
         },
       },
     );
@@ -2145,7 +2168,7 @@ export function ChannelsPage() {
                   />
                   <ChannelComposer
                     sendLabel={t(($) => $.composer.send)}
-                    sendDisabled={draftEmpty}
+                    sendDisabled={activeDraftEmpty}
                     sending={sendMessage.isPending}
                     onSend={handleSend}
                     isMobile={isMobile}
@@ -2153,8 +2176,10 @@ export function ChannelsPage() {
                       <ContentEditor
                         key={active.id}
                         ref={editorRef}
+                        defaultValue={activeDraft}
                         placeholder={t(($) => $.composer.placeholder)}
                         onUpdate={handleEditorUpdate}
+                        debounceMs={0}
                         onSubmit={handleSend}
                         onUploadFile={handleUpload}
                         submitOnEnter
@@ -2253,8 +2278,20 @@ export function ChannelsPage() {
   // When a `?dm=` deep link opens cold, `activeDmId` is set before the DM list
   // resolves the row — keep the conversation structure in place instead of
   // dropping to a blank pane during that window.
+  const dmDraftKey = activeDm ? `dm:${activeDm.id}` : null;
   const dmDetailPane = activeDm ? (
-    <DmConversation key={`${activeDm.source}:${activeDm.id}`} dm={activeDm} onBack={mobileBackToList} />
+    <DmConversation
+      key={`${activeDm.source}:${activeDm.id}`}
+      dm={activeDm}
+      onBack={mobileBackToList}
+      draft={dmDraftKey ? (composerDrafts[dmDraftKey] ?? "") : ""}
+      onDraftChange={(value) => {
+        if (dmDraftKey) setConversationDraft(dmDraftKey, value);
+      }}
+      onDraftClear={() => {
+        if (dmDraftKey) clearConversationDraft(dmDraftKey);
+      }}
+    />
   ) : (
     <ConversationSwitchSkeleton isMobile={isMobile} />
   );

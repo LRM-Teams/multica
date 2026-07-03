@@ -112,6 +112,7 @@ function InlineCreateAgentDialog({
   onClose: () => void;
 }) {
   const { t } = useT("agents");
+  const { t: tModals } = useT("modals");
   const wsId = useWorkspaceId();
   const currentUser = useAuthStore((s) => s.user);
   const qc = useQueryClient();
@@ -182,7 +183,7 @@ function InlineCreateAgentDialog({
             }
           >
             <X className="size-4" />
-            <span className="sr-only">Close</span>
+            <span className="sr-only">{tModals(($) => $.common.close)}</span>
           </DialogClose>
           <div className="relative flex min-w-0 items-start gap-3 sm:gap-4">
             <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">

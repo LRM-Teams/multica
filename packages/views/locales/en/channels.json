@@ -216,7 +216,8 @@
   "message_loading": {
     "load_older": "Load older messages",
     "loading_older": "Loading older messages...",
-    "load_failed_retry": "Messages failed to load · Retry"
+    "load_failed_retry": "Messages failed to load · Retry",
+    "jump_not_found": "Couldn't find that message in this conversation's history"
   },
   "conv_search": {
     "placeholder": "Search in {{name}}…",

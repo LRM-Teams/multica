@@ -16,6 +16,10 @@ export {
   channelProjectFilesOptions,
 } from "./queries";
 export {
+  useEnsureMessageLoaded,
+  type EnsureMessageLoadedStatus,
+} from "./use-ensure-message-loaded";
+export {
   activeChannelTasksKeys,
   activeChannelTasksOptions,
 } from "./active-tasks";

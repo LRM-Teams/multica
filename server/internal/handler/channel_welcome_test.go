@@ -22,6 +22,8 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 	for _, want := range []string{
 		"ONLY the current message",
 		"stay silent",
+		"internal no_reply is allowed",
+		"directly addresses your agent name",
 		"全体",
 		"Do not stay silent",
 		"do not use a reaction-only command",
@@ -44,6 +46,9 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 	if strings.Contains(p, "Recent channel messages") {
 		t.Error("ambient prompt must not include channel history")
 	}
+	if strings.Contains(p, "Do not return no_reply") {
+		t.Error("ambient prompt must not use directed no-reply prohibition")
+	}
 }
 
 func TestBuildChannelMentionPromptIncludesStickerInstruction(t *testing.T) {
@@ -64,6 +69,8 @@ func TestBuildChannelMentionPromptIncludesStickerInstruction(t *testing.T) {
 		for _, want := range []string{
 			"Multica group chat #产品讨论",
 			"multica-stickers",
+			"directly addressed to you",
+			"Do not return no_reply",
 			"\"parts\"",
 			"\"sticker_id\":\"hi\"",
 			"Current message to respond to",
@@ -72,6 +79,9 @@ func TestBuildChannelMentionPromptIncludesStickerInstruction(t *testing.T) {
 			if !strings.Contains(p, want) {
 				t.Errorf("mention prompt missing %q:\n%s", want, p)
 			}
+		}
+		if strings.Contains(p, "internal no_reply is allowed") {
+			t.Errorf("direct mention prompt must not allow silent no_reply:\n%s", p)
 		}
 	}
 }

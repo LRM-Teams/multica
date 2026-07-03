@@ -33,7 +33,9 @@ const channelMessagesDefaultLimit = 50
 const channelMessagesMaxLimit = 100
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
-const channelOutputContractInstruction = "Channel action contract: create a visible group message only by calling the send action. Return exactly one action and nothing else: use {\"action\":\"message_send\",\"output\":\"...\"} or {\"action\":\"message_send\",\"parts\":[...]} for a visible message, or output exactly multica message send --message \"...\" for a plain-text message. To react, use {\"action\":\"message_react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}} or output exactly multica message react --message CURRENT_MESSAGE --emoji 👍. If you should not reply, do not call a send/reply action; internal no_reply is allowed only as a non-visible outcome. Never output analysis, thinking, plans, tool intent, raw completion text, or described commands as a chat message."
+const channelOutputContractInstruction = "Channel action contract: create a visible group message only by calling the send action. Return exactly one action and nothing else: use {\"action\":\"message_send\",\"output\":\"...\"} or {\"action\":\"message_send\",\"parts\":[...]} for a visible message, or output exactly multica message send --message \"...\" for a plain-text message. To react, use {\"action\":\"message_react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}} or output exactly multica message react --message CURRENT_MESSAGE --emoji 👍. Never output analysis, thinking, plans, tool intent, raw completion text, or described commands as a chat message."
+const channelDirectedReplyInstruction = "This run is directly addressed to you. You must produce a visible result: send a helpful reply, ask a follow-up question, or use a message_react action as an explicit acknowledgement. Do not return no_reply, stay_silent, or any other silent outcome for a direct mention, direct question, assigned task, or DM-style continuation."
+const channelAmbientNoReplyInstruction = "If you should not reply, do not call a send/reply action; internal no_reply is allowed only as a non-visible outcome."
 const channelStickerReplyInstruction = "Sticker replies: if the user explicitly asks for a sticker/表情包, or you intentionally choose a sticker-only social reply such as hi/ok/收到/thanks/praise, use the message_send action with structured parts, for example {\"action\":\"message_send\",\"output\":\"Welcome!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome!\"},{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}. Use a real sticker_id from the multica-stickers skill. Do not output :sticker:<id>: tokens, and do not add a sticker to substantive answers."
 
 type ChannelResponse struct {
@@ -2380,7 +2382,10 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString("You can see ONLY the current message below. Do not assume any prior channel context.\n")
 	b.WriteString(channelOutputContractInstruction)
 	b.WriteString("\n")
+	b.WriteString(channelAmbientNoReplyInstruction)
+	b.WriteString("\n")
 	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, do not call the send/reply action; an internal {\"action\":\"no_reply\"} outcome is acceptable but must not be visible.\n")
+	b.WriteString("If the message directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: send a visible reply or acknowledgement, and do not return no_reply.\n")
 	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and send one short visible message. Do not stay silent (do not return no_reply), and do not use a reaction-only command/result for that case.\n")
 	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
 	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, prefer a message-scoped reaction action instead of a text reply: return exactly one JSON object like {\"action\":\"message_react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}} and nothing else. Prefer 👍 for a simple like, ❤️ for warmth/welcome/support, 💯 for strong agreement or praise, and 🎉 for celebration/welcome.\n")
@@ -2412,6 +2417,8 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	b.WriteString("Only respond as yourself. Do not impersonate other agents or users.\n")
 	b.WriteString("Use the bounded channel context below, but answer the current mention directly. If key context seems missing, fetch or search more channel/thread history before guessing.\n")
 	b.WriteString(channelOutputContractInstruction)
+	b.WriteString("\n")
+	b.WriteString(channelDirectedReplyInstruction)
 	b.WriteString("\n")
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\n")

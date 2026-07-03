@@ -2061,13 +2061,17 @@ export class ApiClient {
 
   async listChannelMessagesPage(
     channelId: string,
-    options: { limit?: number; before?: { created_at: string; id: string } | null } = {},
+    options: { limit?: number; before?: { seq?: number; created_at: string; id: string } | null } = {},
   ): Promise<ChannelMessagesPage> {
     const limit = options.limit ?? 50;
     const params = new URLSearchParams({ limit: String(limit) });
     if (options.before) {
-      params.set("before_created_at", options.before.created_at);
-      params.set("before_id", options.before.id);
+      if (typeof options.before.seq === "number") {
+        params.set("before_seq", String(options.before.seq));
+      } else {
+        params.set("before_created_at", options.before.created_at);
+        params.set("before_id", options.before.id);
+      }
     }
     const raw = await this.fetch<ChannelMessage[] | Partial<ChannelMessagesPage>>(
       `/api/channels/${channelId}/messages?${params.toString()}`,
@@ -2086,13 +2090,15 @@ export class ApiClient {
   async listChannelMessageThread(
     channelId: string,
     messageId: string,
-    options?: { limit?: number; before?: string; beforeId?: string },
+    options?: { limit?: number; beforeSeq?: number; before?: string; beforeId?: string },
   ): Promise<ChannelThreadMessagesPage> {
     const params = new URLSearchParams();
     if (options?.limit) {
       params.set("limit", String(options.limit));
     }
-    if (options?.before && options?.beforeId) {
+    if (typeof options?.beforeSeq === "number") {
+      params.set("before_seq", String(options.beforeSeq));
+    } else if (options?.before && options?.beforeId) {
       params.set("before", options.before);
       params.set("before_id", options.beforeId);
     }
@@ -2102,11 +2108,18 @@ export class ApiClient {
       { extraHeaders: { "Content-Type": "application/json" } },
     );
     const messages = await res.json() as ChannelMessage[];
+    const beforeSeq = res.headers.get("X-Next-Before-Seq");
     const before = res.headers.get("X-Next-Before");
     const beforeId = res.headers.get("X-Next-Before-Id");
     return {
       messages,
-      next_cursor: before && beforeId ? { before, before_id: beforeId } : null,
+      next_cursor: before && beforeId
+        ? {
+            before,
+            before_id: beforeId,
+            before_seq: beforeSeq ? Number.parseInt(beforeSeq, 10) : undefined,
+          }
+        : null,
     };
   }
 

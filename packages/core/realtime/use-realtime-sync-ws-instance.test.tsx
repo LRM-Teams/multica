@@ -280,6 +280,7 @@ function channelMessage(
   id: string,
   overrides: Partial<ChannelMessage> = {},
 ): ChannelMessage {
+  const seq = overrides.seq ?? 1;
   return {
     id,
     channel_id: "channel-1",
@@ -298,5 +299,6 @@ function channelMessage(
     thread_followed: false,
     reactions: [],
     ...overrides,
+    seq,
   };
 }

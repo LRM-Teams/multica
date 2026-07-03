@@ -66,6 +66,7 @@ export interface ChannelMessage {
   id: string;
   channel_id: string;
   workspace_id: string;
+  seq: number;
   type: "user" | "agent" | "lark" | "system";
   author_id: string | null;
   author_name: string;
@@ -94,6 +95,7 @@ export interface ChannelMessage {
 }
 
 export interface ChannelMessagesCursor {
+  seq: number;
   created_at: string;
   id: string;
 }
@@ -106,6 +108,7 @@ export interface ChannelMessagesPage {
 }
 
 export interface ChannelThreadMessagesCursor {
+  before_seq?: number;
   before: string;
   before_id: string;
 }

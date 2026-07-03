@@ -123,6 +123,7 @@ vi.mock("../../i18n/use-t", () => ({
 }));
 
 function makeMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
+  const seq = overrides.seq ?? 1;
   return {
     id: "m1",
     channel_id: "c1",
@@ -135,6 +136,7 @@ function makeMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
     external_message_id: null,
     created_at: "2026-06-17T09:15:00Z",
     ...overrides,
+    seq,
   };
 }
 

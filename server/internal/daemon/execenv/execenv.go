@@ -230,7 +230,7 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 	// For Codex, set up a per-task CODEX_HOME seeded from ~/.codex/ with skills.
 	if params.Provider == "codex" {
 		codexHome := filepath.Join(envRoot, "codex-home")
-		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{CodexVersion: params.CodexVersion}, logger); err != nil {
+		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{CodexVersion: params.CodexVersion, WritableRoots: codexWritableRoots(params.Task)}, logger); err != nil {
 			return nil, fmt.Errorf("execenv: prepare codex-home: %w", err)
 		}
 		if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, logger); err != nil {
@@ -369,7 +369,7 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 	// config (especially sandbox/network access) is up to date.
 	if params.Provider == "codex" {
 		codexHome := filepath.Join(env.RootDir, "codex-home")
-		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{CodexVersion: params.CodexVersion}, logger); err != nil {
+		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{CodexVersion: params.CodexVersion, WritableRoots: codexWritableRoots(params.Task)}, logger); err != nil {
 			logger.Warn("execenv: refresh codex-home failed", "error", err)
 		} else {
 			env.CodexHome = codexHome
@@ -422,6 +422,13 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 // user's real ~/.codex/. Other runtimes leave HOME untouched and discover
 // user-level skills natively (see context.go for the workdir-local paths
 // they use for workspace skills).
+func codexWritableRoots(task TaskContextForEnv) []string {
+	if task.AgentMemoryDir == "" {
+		return nil
+	}
+	return []string{task.AgentMemoryDir}
+}
+
 func hydrateCodexSkills(codexHome string, workspaceSkills []SkillContextForEnv, logger *slog.Logger) error {
 	skillsDir := filepath.Join(codexHome, "skills")
 	if err := os.RemoveAll(skillsDir); err != nil {

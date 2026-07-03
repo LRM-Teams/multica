@@ -38,6 +38,9 @@ type codexSandboxPolicy struct {
 	// NetworkAccess controls `[sandbox_workspace_write] network_access`.
 	// Only meaningful when Mode is "workspace-write".
 	NetworkAccess bool
+	// WritableRoots are additional writeable paths outside the task workdir.
+	// Only meaningful when Mode is "workspace-write".
+	WritableRoots []string
 	// Reason is a short human-readable label used in warn-level logs.
 	Reason string
 }
@@ -134,10 +137,32 @@ func renderMulticaManagedBlock(policy codexSandboxPolicy) string {
 	b.WriteString(fmt.Sprintf("sandbox_mode = %q\n", policy.Mode))
 	if policy.Mode == "workspace-write" {
 		b.WriteString(fmt.Sprintf("sandbox_workspace_write.network_access = %t\n", policy.NetworkAccess))
+		if len(policy.WritableRoots) > 0 {
+			b.WriteString("sandbox_workspace_write.writable_roots = ")
+			b.WriteString(renderTOMLStringArray(policy.WritableRoots))
+			b.WriteString("\n")
+		}
 	}
 	b.WriteString(multicaManagedEndMarker)
 	b.WriteString("\n")
 	return b.String()
+}
+
+func renderTOMLStringArray(values []string) string {
+	items := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		items = append(items, strconv.Quote(value))
+	}
+	return "[" + strings.Join(items, ", ") + "]"
 }
 
 // managedBlockRe captures the daemon-owned block (including the surrounding

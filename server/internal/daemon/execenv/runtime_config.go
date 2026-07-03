@@ -467,22 +467,31 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("\n\n")
 	}
 
-	if provider == "pi" && (ctx.AgentRoot != "" || ctx.AgentMemoryDir != "" || ctx.AgentSkillDir != "" || ctx.AgentSkillDraftsDir != "") {
-		b.WriteString("## Pi Memory And Skills Scope\n\n")
-		b.WriteString("You are running as a Multica Pi agent with isolated local memory and skill directories. Treat these as your own Multica agent-local paths.\n\n")
+	if ctx.AgentRoot != "" || ctx.AgentMemoryDir != "" || ctx.AgentSkillDir != "" || ctx.AgentSkillDraftsDir != "" {
+		b.WriteString("## Multica Agent Memory Scope\n\n")
+		b.WriteString("You are running as a Multica-managed agent with isolated local memory and skill directories. Treat these as your own Multica agent-local paths. Live Multica agent instructions remain authoritative; managed memory supplements them and does not override task policy or user instructions.\n\n")
 		if ctx.AgentRoot != "" {
-			fmt.Fprintf(&b, "- Agent root (`PI_AGENT_ROOT`): `%s`\n", ctx.AgentRoot)
+			fmt.Fprintf(&b, "- Agent root (`MULTICA_AGENT_ROOT`): `%s`\n", ctx.AgentRoot)
+			if provider == "pi" {
+				fmt.Fprintf(&b, "- Pi agent root (`PI_AGENT_ROOT`): `%s`\n", ctx.AgentRoot)
+			}
 		}
 		if ctx.AgentMemoryDir != "" {
-			fmt.Fprintf(&b, "- Memory root (`PI_MEMORY_DIR`): `%s`\n", ctx.AgentMemoryDir)
+			fmt.Fprintf(&b, "- Memory root (`MULTICA_AGENT_MEMORY_DIR`): `%s`\n", ctx.AgentMemoryDir)
+			if provider == "pi" {
+				fmt.Fprintf(&b, "- Pi memory root (`PI_MEMORY_DIR`): `%s`\n", ctx.AgentMemoryDir)
+			}
 		}
 		if ctx.AgentSkillDir != "" {
 			fmt.Fprintf(&b, "- Skill root: `%s`\n", ctx.AgentSkillDir)
 		}
 		if ctx.AgentSkillDraftsDir != "" {
-			fmt.Fprintf(&b, "- Skill drafts root (`PI_SKILL_DRAFTS_DIR`): `%s`\n", ctx.AgentSkillDraftsDir)
+			fmt.Fprintf(&b, "- Skill drafts root: `%s`\n", ctx.AgentSkillDraftsDir)
+			if provider == "pi" {
+				fmt.Fprintf(&b, "- Pi skill drafts root (`PI_SKILL_DRAFTS_DIR`): `%s`\n", ctx.AgentSkillDraftsDir)
+			}
 		}
-		b.WriteString("\nWhen asked where your memory or skills live, report these Multica agent paths, not the host Pi user's global paths. Use Pi memory tools and the injected `PI_MEMORY_DIR` / `PI_AGENT_ROOT` values for memory changes. Do not read or write `~/.pi/agent/evolution/memory`, `~/.pi/agent/memory`, or other host-global Pi memory/evolution directories as your own memory unless the task explicitly asks you to inspect host Pi configuration.\n\n")
+		b.WriteString("\nWhen asked where your memory or skills live, report these Multica agent paths, not host-global runtime paths. Use `MULTICA_AGENT_MEMORY_DIR` / `MULTICA_AGENT_ROOT` for durable memory changes, and write review candidates to `MULTICA_AGENT_SYNC_QUEUE_DIR` when a fact should be curated instead of directly committed. Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`, `~/.claude`, or other provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
 	}
 
 	if ctx.ChatSessionID != "" {

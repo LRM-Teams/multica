@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -2551,6 +2552,43 @@ func TestPrepareCodexHomeEnsuresNetworkAccess(t *testing.T) {
 	}
 	if !strings.Contains(s, `sandbox_mode = "workspace-write"`) {
 		t.Error("config.toml missing sandbox_mode")
+	}
+}
+
+func TestPrepareCodexHomeAddsAgentMemoryWritableRoot(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv.
+
+	sharedHome := t.TempDir()
+	t.Setenv("CODEX_HOME", sharedHome)
+
+	workspacesRoot := t.TempDir()
+	agentMemoryDir := filepath.Join(workspacesRoot, "ws-codex-memory", ".multica", "agents", "agent-1", "memory")
+	env, err := Prepare(PrepareParams{
+		WorkspacesRoot: workspacesRoot,
+		WorkspaceID:    "ws-codex-memory",
+		TaskID:         "11111111-2222-3333-4444-555555555555",
+		AgentName:      "Codex Agent",
+		Provider:       "codex",
+		Task: TaskContextForEnv{
+			IssueID:        "memory-test",
+			AgentMemoryDir: agentMemoryDir,
+		},
+	}, testLogger())
+	if err != nil {
+		t.Fatalf("Prepare failed: %v", err)
+	}
+	defer env.Cleanup(true)
+
+	data, err := os.ReadFile(filepath.Join(env.CodexHome, "config.toml"))
+	if err != nil {
+		t.Fatalf("config.toml not created: %v", err)
+	}
+	s := string(data)
+	if !strings.Contains(s, "sandbox_workspace_write.writable_roots") {
+		t.Fatalf("config.toml missing writable_roots: %s", s)
+	}
+	if !strings.Contains(s, strconv.Quote(agentMemoryDir)) {
+		t.Fatalf("config.toml missing agent memory dir %q: %s", agentMemoryDir, s)
 	}
 }
 

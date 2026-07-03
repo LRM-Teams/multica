@@ -399,6 +399,128 @@ func TestChannelRementionInterruptsRunningTaskWithFreshSession(t *testing.T) {
 	}
 }
 
+func TestChannelAmbientGateBoundsRepeatedAmbientFanout(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	withChannelAmbientGateTestConfig(t)
+	channelID := seedChannelForTest(t, "ambient-gate-bounds-"+uuid.NewString(), testUserID)
+	agentIDs := make([]string, 0, 16)
+	for i := 0; i < 16; i++ {
+		agentID := createHandlerTestAgent(t, fmt.Sprintf("Ambient Gate Agent %02d %s", i, uuid.NewString()[:8]), nil)
+		agentIDs = append(agentIDs, agentID)
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+			VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+			t.Fatalf("seed agent member: %v", err)
+		}
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+
+	for i := 0; i < 3; i++ {
+		trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", fmt.Sprintf("ordinary ambient update %d", i), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ambient-gate-bounds"), 0)
+		if err != nil {
+			t.Fatalf("insert ambient trigger %d: %v", i, err)
+		}
+		testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+	}
+
+	var tasks int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_queue atq
+		JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
+		WHERE cas.channel_id = $1`, channelID).Scan(&tasks); err != nil {
+		t.Fatalf("count ambient tasks: %v", err)
+	}
+	if tasks != len(agentIDs) {
+		t.Fatalf("repeated ambient fanout created %d tasks, want %d", tasks, len(agentIDs))
+	}
+}
+
+func TestChannelAmbientGateSkipsObviousNoiseBeforeTaskCreation(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	withChannelAmbientGateTestConfig(t)
+	agentID := createHandlerTestAgent(t, "Ambient Noise Gate "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "ambient-noise-gate-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "!!!", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert noise trigger: %v", err)
+	}
+
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+	var sessions, tasks int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_agent_session
+		WHERE channel_id = $1`, channelID).Scan(&sessions); err != nil {
+		t.Fatalf("count channel agent sessions: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_queue atq
+		JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
+		WHERE cas.channel_id = $1`, channelID).Scan(&tasks); err != nil {
+		t.Fatalf("count ambient tasks: %v", err)
+	}
+	if sessions != 0 || tasks != 0 {
+		t.Fatalf("noise ambient created %d sessions and %d tasks, want none", sessions, tasks)
+	}
+}
+
+func TestChannelAmbientGateDoesNotBlockDirectMention(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	withChannelAmbientGateTestConfig(t)
+	agentName := "Ambient Direct Gate " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	channelID := seedChannelForTest(t, "ambient-direct-gate-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	ambient, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "ordinary ambient work", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert ambient trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, ambient, parseUUID(testUserID))
+
+	direct, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@"+agentName+" please answer", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert direct trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, direct, parseUUID(testUserID))
+
+	assertChannelAgentTaskPriorityCounts(t, channelID, agentID, 1, 1)
+}
+
 func TestChannelMentionedAgentsMatchesHandleDisplayAndStructuredID(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -1635,6 +1757,46 @@ func TestChannelThreadPlainReplyDispatchesRootMentionedAgent(t *testing.T) {
 	assertChannelAgentTaskCounts(t, channelID, participantID, bystanderID, 1, 0)
 }
 
+func TestChannelAmbientGateDoesNotBlockThreadDirectedContinuation(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	withChannelAmbientGateTestConfig(t)
+	participantID := createHandlerTestAgent(t, "Ambient Thread Helper "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "ambient-thread-gate-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, participantID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	ambient, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "ordinary ambient work", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert ambient trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, ambient, parseUUID(testUserID))
+
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ambient-thread-root"), 0)
+	if err != nil {
+		t.Fatalf("insert root: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(participantID), "Ambient Thread Helper", "agent answer", "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("ambient-thread-root"), 1); err != nil {
+		t.Fatalf("insert agent reply: %v", err)
+	}
+	followup, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "follow up", "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("ambient-thread-root"), 0)
+	if err != nil {
+		t.Fatalf("insert follow-up: %v", err)
+	}
+	testHandler.dispatchChannelThreadReplyMentions(ctx, ch, followup, parseUUID(testUserID))
+
+	assertChannelAgentTaskPriorityCounts(t, channelID, participantID, 1, 1)
+}
+
 func assertChannelAgentTaskCounts(t *testing.T, channelID, participantID, bystanderID string, wantParticipant, wantBystander int) {
 	t.Helper()
 	ctx := context.Background()
@@ -1656,6 +1818,40 @@ func assertChannelAgentTaskCounts(t *testing.T, channelID, participantID, bystan
 	if participantTasks != wantParticipant || bystanderTasks != wantBystander {
 		t.Fatalf("thread follow-up tasks = participant:%d bystander:%d, want %d/%d", participantTasks, bystanderTasks, wantParticipant, wantBystander)
 	}
+}
+
+func assertChannelAgentTaskPriorityCounts(t *testing.T, channelID, agentID string, wantAmbient, wantDirect int) {
+	t.Helper()
+	ctx := context.Background()
+	var ambientTasks, directTasks int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_queue atq
+		JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
+		WHERE cas.channel_id = $1 AND cas.agent_id = $2 AND atq.priority = 1`, channelID, agentID).Scan(&ambientTasks); err != nil {
+		t.Fatalf("count ambient tasks: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_queue atq
+		JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
+		WHERE cas.channel_id = $1 AND cas.agent_id = $2 AND atq.priority = 2`, channelID, agentID).Scan(&directTasks); err != nil {
+		t.Fatalf("count direct tasks: %v", err)
+	}
+	if ambientTasks != wantAmbient || directTasks != wantDirect {
+		t.Fatalf("channel agent tasks = ambient:%d direct:%d, want %d/%d", ambientTasks, directTasks, wantAmbient, wantDirect)
+	}
+}
+
+func withChannelAmbientGateTestConfig(t *testing.T) {
+	t.Helper()
+	prev := testHandler.cfg
+	testHandler.cfg.ChannelAmbientGateMode = channelAmbientGateModeGate
+	testHandler.cfg.ChannelAmbientGateWindow = time.Minute
+	testHandler.cfg.ChannelAmbientGateMaxRecentPerAgent = 1
+	testHandler.cfg.ChannelAmbientGateMaxRecentPerChannel = 32
+	testHandler.cfg.ChannelAmbientGateMaxRecentPerRuntime = 64
+	t.Cleanup(func() { testHandler.cfg = prev })
 }
 
 func TestChannelOfflineRuntimeDoesNotQueueOrShowActiveTask(t *testing.T) {

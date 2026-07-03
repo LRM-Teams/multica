@@ -2499,6 +2499,9 @@ func (h *Handler) dispatchChannelAmbientObservation(ctx context.Context, ch Chan
 		return
 	}
 	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
+		if !h.shouldDispatchChannelAmbientObservation(ctx, ch, trigger, agent) {
+			continue
+		}
 		h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, buildChannelAmbientObservationPrompt(ch, agent, trigger), "channel ambient observation", false, true, false, true)
 	}
 }

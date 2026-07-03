@@ -411,6 +411,44 @@ func TestSendChannelMessageDM_DispatchesAgent(t *testing.T) {
 	}
 }
 
+func TestSendChannelMessageDM_BypassesAmbientGateWithActiveAmbient(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	cleanupDMArtifacts(t)
+	withChannelAmbientGateTestConfig(t)
+	agentID := createHandlerTestAgent(t, "DM Ambient Gate Bypass "+uuid.NewString()[:8], nil)
+
+	ambientChannelID := seedChannelForTest(t, "dm-ambient-gate-bypass-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, ambientChannelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed ambient agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(ambientChannelID))
+	if !found {
+		t.Fatal("ambient channel not found after seed")
+	}
+	ambient, err := testHandler.insertChannelMessage(ctx, parseUUID(ambientChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "ordinary ambient work", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert ambient trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, ambient, parseUUID(testUserID))
+	assertChannelAgentTaskPriorityCounts(t, ambientChannelID, agentID, 1, 0)
+
+	dmChannelID := seedAgentDMChannel(t, agentID)
+	req := newRequest("POST", "/api/channels/"+dmChannelID+"/messages", map[string]string{"content": "hey, still direct"})
+	req = withChatTestWorkspaceCtx(t, req)
+	req = withURLParam(req, "channelId", dmChannelID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send dm: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertChannelAgentTaskPriorityCounts(t, dmChannelID, agentID, 0, 1)
+}
+
 func TestPrivateAgentDMChannelRejectsUnauthorizedMember(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -39,7 +39,7 @@ export function WindyCreateAgentLink({
   const [creatingDraft, setCreatingDraft] = React.useState(false);
   const [draft, setDraft] = React.useState<AgentCreationDraft | null>(null);
   const [createdAgentName, setCreatedAgentName] = React.useState<string | null>(null);
-  const fallbackAvatarUrl = React.useRef(randomAgentAvatarUrl());
+  const [fallbackAvatarUrl] = React.useState(randomAgentAvatarUrl);
 
   const handleClick = async () => {
     const url = parseWindyCreateAgentURL(href);
@@ -51,7 +51,7 @@ export function WindyCreateAgentLink({
         name,
         description: url.searchParams.get("description")?.trim() || "",
         instructions: url.searchParams.get("instructions")?.trim() || "",
-        avatar_url: url.searchParams.get("avatar_url") || fallbackAvatarUrl.current,
+        avatar_url: url.searchParams.get("avatar_url") || fallbackAvatarUrl,
         visibility: url.searchParams.get("visibility") === "workspace" ? "workspace" : "private",
         project_id: url.searchParams.get("project_id") || null,
         channel_id: url.searchParams.get("channel_id") || null,

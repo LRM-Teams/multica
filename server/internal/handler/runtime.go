@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -56,20 +57,23 @@ func (h *Handler) runtimeToResponse(ctx context.Context, rt db.AgentRuntime) Age
 			slog.Warn("failed to load runtime update state", "error", err, "runtime_id", uuidToString(rt.ID))
 		}
 	}
-	return runtimeToResponseWithUpdate(rt, update)
+	release := h.runtimeReleaseForResponse(ctx, rt, update)
+	return runtimeToResponseWithUpdateAndRelease(rt, update, release)
 }
 
 func runtimeToResponseWithUpdate(rt db.AgentRuntime, update *UpdateRequest) AgentRuntimeResponse {
-	var metadata any
-	if rt.Metadata != nil {
-		json.Unmarshal(rt.Metadata, &metadata)
-	}
-	if metadata == nil {
-		metadata = map[string]any{}
-	}
+	return runtimeToResponseWithUpdateAndRelease(rt, update, nil)
+}
+
+func runtimeToResponseWithUpdateAndRelease(rt db.AgentRuntime, update *UpdateRequest, release *RuntimeRelease) AgentRuntimeResponse {
+	metadata := runtimeMetadata(rt)
 	currentVersion := runtimeCurrentVersion(metadata)
 	targetVersion, updateState := runtimeUpdateState(update)
-	runtimeHealth := deriveRuntimeHealth(rt, currentVersion, targetVersion, updateState)
+	availableUpdateTarget := runtimeAvailableUpdateTarget(rt, metadata, currentVersion, targetVersion, updateState, release)
+	runtimeHealth := deriveRuntimeHealth(rt, currentVersion, targetVersion, updateState, availableUpdateTarget)
+	if runtimeHealth == "update_available" {
+		targetVersion = availableUpdateTarget
+	}
 
 	return AgentRuntimeResponse{
 		ID:             uuidToString(rt.ID),
@@ -93,6 +97,35 @@ func runtimeToResponseWithUpdate(rt db.AgentRuntime, update *UpdateRequest) Agen
 		CreatedAt:      timestampToString(rt.CreatedAt),
 		UpdatedAt:      timestampToString(rt.UpdatedAt),
 	}
+}
+
+func (h *Handler) runtimeReleaseForResponse(ctx context.Context, rt db.AgentRuntime, update *UpdateRequest) *RuntimeRelease {
+	if h == nil || h.RuntimeReleaseSource == nil {
+		return nil
+	}
+	metadata := runtimeMetadata(rt)
+	currentVersion := runtimeCurrentVersion(metadata)
+	targetVersion, updateState := runtimeUpdateState(update)
+	if !runtimeShouldFetchLatestRelease(rt, metadata, currentVersion, targetVersion, updateState) {
+		return nil
+	}
+	release, err := h.RuntimeReleaseSource.Latest(ctx)
+	if err != nil {
+		slog.Warn("failed to load latest runtime release", "error", err, "runtime_id", uuidToString(rt.ID))
+		return nil
+	}
+	return release
+}
+
+func runtimeMetadata(rt db.AgentRuntime) any {
+	var metadata any
+	if rt.Metadata != nil {
+		json.Unmarshal(rt.Metadata, &metadata)
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	return metadata
 }
 
 func runtimeCurrentVersion(metadata any) *string {
@@ -128,7 +161,50 @@ func runtimeUpdateState(update *UpdateRequest) (*string, string) {
 	}
 }
 
-func deriveRuntimeHealth(rt db.AgentRuntime, currentVersion, targetVersion *string, updateState string) string {
+func runtimeShouldFetchLatestRelease(rt db.AgentRuntime, metadata any, currentVersion, targetVersion *string, updateState string) bool {
+	if rt.Status != "online" || rt.RuntimeMode != "local" || currentVersion == nil {
+		return false
+	}
+	if launchedBy(metadata) == "desktop" {
+		return false
+	}
+	if !cli.IsReleaseVersion(*currentVersion) {
+		return false
+	}
+	switch updateState {
+	case "idle":
+		return true
+	case "completed":
+		return versionsMatch(currentVersion, targetVersion)
+	default:
+		return false
+	}
+}
+
+func runtimeAvailableUpdateTarget(rt db.AgentRuntime, metadata any, currentVersion, targetVersion *string, updateState string, release *RuntimeRelease) *string {
+	if release == nil || release.TagName == "" {
+		return nil
+	}
+	if !runtimeShouldFetchLatestRelease(rt, metadata, currentVersion, targetVersion, updateState) {
+		return nil
+	}
+	if currentVersion == nil || !cli.IsNewerVersion(release.TagName, *currentVersion) {
+		return nil
+	}
+	target := release.TagName
+	return &target
+}
+
+func launchedBy(metadata any) string {
+	metadataMap, ok := metadata.(map[string]any)
+	if !ok {
+		return ""
+	}
+	value, _ := metadataMap["launched_by"].(string)
+	return strings.TrimSpace(value)
+}
+
+func deriveRuntimeHealth(rt db.AgentRuntime, currentVersion, targetVersion *string, updateState string, availableUpdateTarget *string) string {
 	if rt.Status != "online" {
 		return "offline"
 	}
@@ -136,13 +212,19 @@ func deriveRuntimeHealth(rt db.AgentRuntime, currentVersion, targetVersion *stri
 	case "pending", "running":
 		return "updating"
 	case "completed":
-		if versionsMatch(currentVersion, targetVersion) {
-			return "ok"
+		if !versionsMatch(currentVersion, targetVersion) {
+			return "updating"
 		}
-		return "awaiting_confirmation"
+		if availableUpdateTarget != nil {
+			return "update_available"
+		}
+		return "ok"
 	case "failed", "timed_out":
 		return "failed"
 	default:
+		if availableUpdateTarget != nil {
+			return "update_available"
+		}
 		return "ok"
 	}
 }

@@ -132,6 +132,91 @@ func TestRuntimeToResponseCompletedMatchingUpdateCanOfferNextRelease(t *testing.
 	}
 }
 
+func TestRuntimeListCoalescesUpdateStateByDaemon(t *testing.T) {
+	now := time.Now()
+	rtA := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "0.3.35"})
+	rtA.ID = parseUUID("11111111-1111-1111-1111-111111111111")
+	rtA.DaemonID = pgtype.Text{String: "daemon-one", Valid: true}
+	rtB := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "0.3.35"})
+	rtB.ID = parseUUID("22222222-2222-2222-2222-222222222222")
+	rtB.DaemonID = pgtype.Text{String: "daemon-one", Valid: true}
+	rtC := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "0.3.35"})
+	rtC.ID = parseUUID("33333333-3333-3333-3333-333333333333")
+	rtC.DaemonID = pgtype.Text{String: "daemon-two", Valid: true}
+	update := &UpdateRequest{
+		ID:            "update-one",
+		RuntimeID:     uuidToString(rtA.ID),
+		TargetVersion: "v0.3.36",
+		Status:        UpdateCompleted,
+		CreatedAt:     now.Add(-time.Minute),
+		UpdatedAt:     now,
+	}
+
+	resolved := coalesceRuntimeUpdatesByDaemon([]db.AgentRuntime{rtA, rtB, rtC}, map[string]*UpdateRequest{
+		uuidToString(rtA.ID): update,
+	})
+
+	if resolved[uuidToString(rtB.ID)] != update {
+		t.Fatalf("sibling runtime update = %#v, want daemon update %#v", resolved[uuidToString(rtB.ID)], update)
+	}
+	resp := runtimeToResponseWithUpdateAndRelease(rtB, resolved[uuidToString(rtB.ID)], &RuntimeRelease{TagName: "v0.3.36"})
+	if resp.RuntimeHealth != "updating" {
+		t.Fatalf("sibling runtime_health = %q, want updating", resp.RuntimeHealth)
+	}
+	if resp.UpdateState != "completed" {
+		t.Fatalf("sibling update_state = %q, want completed", resp.UpdateState)
+	}
+	if resp.TargetVersion == nil || *resp.TargetVersion != "v0.3.36" {
+		t.Fatalf("sibling target_version = %v, want v0.3.36", resp.TargetVersion)
+	}
+
+	if resolved[uuidToString(rtC.ID)] != nil {
+		t.Fatalf("other daemon update = %#v, want nil", resolved[uuidToString(rtC.ID)])
+	}
+	other := runtimeToResponseWithUpdateAndRelease(rtC, resolved[uuidToString(rtC.ID)], &RuntimeRelease{TagName: "v0.3.36"})
+	if other.RuntimeHealth != "update_available" {
+		t.Fatalf("other daemon runtime_health = %q, want update_available", other.RuntimeHealth)
+	}
+}
+
+func TestRuntimeListCoalescesNewestUpdateByDaemon(t *testing.T) {
+	now := time.Now()
+	rtA := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "0.3.35"})
+	rtA.ID = parseUUID("11111111-1111-1111-1111-111111111111")
+	rtA.DaemonID = pgtype.Text{String: "daemon-one", Valid: true}
+	rtB := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "0.3.35"})
+	rtB.ID = parseUUID("22222222-2222-2222-2222-222222222222")
+	rtB.DaemonID = pgtype.Text{String: "daemon-one", Valid: true}
+	oldUpdate := &UpdateRequest{
+		ID:            "old-update",
+		RuntimeID:     uuidToString(rtA.ID),
+		TargetVersion: "v0.3.35",
+		Status:        UpdateCompleted,
+		CreatedAt:     now.Add(-2 * time.Minute),
+		UpdatedAt:     now.Add(-time.Minute),
+	}
+	newUpdate := &UpdateRequest{
+		ID:            "new-update",
+		RuntimeID:     uuidToString(rtB.ID),
+		TargetVersion: "v0.3.36",
+		Status:        UpdateRunning,
+		CreatedAt:     now.Add(-30 * time.Second),
+		UpdatedAt:     now,
+	}
+
+	resolved := coalesceRuntimeUpdatesByDaemon([]db.AgentRuntime{rtA, rtB}, map[string]*UpdateRequest{
+		uuidToString(rtA.ID): oldUpdate,
+		uuidToString(rtB.ID): newUpdate,
+	})
+
+	if resolved[uuidToString(rtA.ID)] != newUpdate {
+		t.Fatalf("runtime A update = %#v, want newest daemon update %#v", resolved[uuidToString(rtA.ID)], newUpdate)
+	}
+	if resolved[uuidToString(rtB.ID)] != newUpdate {
+		t.Fatalf("runtime B update = %#v, want newest daemon update %#v", resolved[uuidToString(rtB.ID)], newUpdate)
+	}
+}
+
 func TestRuntimeReleaseFromGitHubRequiresStableChecksummedCLIRelease(t *testing.T) {
 	valid := cli.GitHubRelease{
 		TagName: "v0.3.1",

@@ -153,7 +153,14 @@ export function useRuntimeHealthStateLabel(): (
   health: RuntimeHealthState,
 ) => string {
   const { t } = useT("runtimes");
-  return (health) => t(($) => $.runtime_health[health]);
+  return (health) =>
+    t(($) => $.runtime_health[publicRuntimeHealthState(health)]);
+}
+
+function publicRuntimeHealthState(
+  health: RuntimeHealthState,
+): RuntimeHealthState {
+  return health === "awaiting_confirmation" ? "updating" : health;
 }
 
 export function RuntimeHealthStateBadge({
@@ -162,11 +169,12 @@ export function RuntimeHealthStateBadge({
   health: RuntimeHealthState;
 }) {
   const labelOf = useRuntimeHealthStateLabel();
-  const v = RUNTIME_HEALTH_STATE_VISUAL[health];
+  const publicHealth = publicRuntimeHealthState(health);
+  const v = RUNTIME_HEALTH_STATE_VISUAL[publicHealth];
   return (
     <Badge variant="secondary" className={v.tone}>
       <span className={`h-1.5 w-1.5 rounded-full ${v.dot}`} />
-      {labelOf(health)}
+      {labelOf(publicHealth)}
     </Badge>
   );
 }

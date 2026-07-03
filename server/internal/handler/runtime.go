@@ -49,16 +49,98 @@ func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
 }
 
 func (h *Handler) runtimeToResponse(ctx context.Context, rt db.AgentRuntime) AgentRuntimeResponse {
-	var update *UpdateRequest
-	if h != nil && h.UpdateStore != nil {
-		var err error
-		update, err = h.UpdateStore.LatestForRuntime(ctx, uuidToString(rt.ID))
-		if err != nil {
-			slog.Warn("failed to load runtime update state", "error", err, "runtime_id", uuidToString(rt.ID))
-		}
-	}
+	update := h.latestRuntimeUpdate(ctx, rt)
+	return h.runtimeToResponseWithResolvedUpdate(ctx, rt, update)
+}
+
+func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db.AgentRuntime, update *UpdateRequest) AgentRuntimeResponse {
 	release := h.runtimeReleaseForResponse(ctx, rt, update)
 	return runtimeToResponseWithUpdateAndRelease(rt, update, release)
+}
+
+func (h *Handler) latestRuntimeUpdate(ctx context.Context, rt db.AgentRuntime) *UpdateRequest {
+	if h != nil && h.UpdateStore != nil {
+		runtimeID := uuidToString(rt.ID)
+		update, err := h.UpdateStore.LatestForRuntime(ctx, runtimeID)
+		if err != nil {
+			slog.Warn("failed to load runtime update state", "error", err, "runtime_id", runtimeID)
+			return nil
+		}
+		return update
+	}
+	return nil
+}
+
+func (h *Handler) runtimeUpdatesForList(ctx context.Context, runtimes []db.AgentRuntime) map[string]*UpdateRequest {
+	updates := make(map[string]*UpdateRequest, len(runtimes))
+	if h == nil || h.UpdateStore == nil {
+		return updates
+	}
+	for _, rt := range runtimes {
+		runtimeID := uuidToString(rt.ID)
+		update, err := h.UpdateStore.LatestForRuntime(ctx, runtimeID)
+		if err != nil {
+			slog.Warn("failed to load runtime update state", "error", err, "runtime_id", runtimeID)
+			continue
+		}
+		if update != nil {
+			updates[runtimeID] = update
+		}
+	}
+	return coalesceRuntimeUpdatesByDaemon(runtimes, updates)
+}
+
+func coalesceRuntimeUpdatesByDaemon(runtimes []db.AgentRuntime, updates map[string]*UpdateRequest) map[string]*UpdateRequest {
+	resolved := make(map[string]*UpdateRequest, len(runtimes))
+	for runtimeID, update := range updates {
+		resolved[runtimeID] = update
+	}
+
+	latestByDaemon := map[string]*UpdateRequest{}
+	for _, rt := range runtimes {
+		daemonID := runtimeDaemonKey(rt)
+		if daemonID == "" {
+			continue
+		}
+		update := updates[uuidToString(rt.ID)]
+		if newerRuntimeUpdate(update, latestByDaemon[daemonID]) {
+			latestByDaemon[daemonID] = update
+		}
+	}
+
+	for _, rt := range runtimes {
+		daemonID := runtimeDaemonKey(rt)
+		if daemonID == "" {
+			continue
+		}
+		if update := latestByDaemon[daemonID]; update != nil {
+			resolved[uuidToString(rt.ID)] = update
+		}
+	}
+	return resolved
+}
+
+func runtimeDaemonKey(rt db.AgentRuntime) string {
+	if !rt.DaemonID.Valid {
+		return ""
+	}
+	return strings.TrimSpace(rt.DaemonID.String)
+}
+
+func newerRuntimeUpdate(candidate, current *UpdateRequest) bool {
+	if candidate == nil {
+		return false
+	}
+	if current == nil {
+		return true
+	}
+	if candidate.UpdatedAt.After(current.UpdatedAt) {
+		return true
+	}
+	if candidate.UpdatedAt.Equal(current.UpdatedAt) && candidate.CreatedAt.After(current.CreatedAt) {
+		return true
+	}
+	return false
 }
 
 func runtimeToResponseWithUpdate(rt db.AgentRuntime, update *UpdateRequest) AgentRuntimeResponse {
@@ -724,8 +806,9 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := make([]AgentRuntimeResponse, len(runtimes))
+	updates := h.runtimeUpdatesForList(r.Context(), runtimes)
 	for i, rt := range runtimes {
-		resp[i] = h.runtimeToResponse(r.Context(), rt)
+		resp[i] = h.runtimeToResponseWithResolvedUpdate(r.Context(), rt, updates[uuidToString(rt.ID)])
 	}
 
 	writeJSON(w, http.StatusOK, resp)

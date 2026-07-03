@@ -17,6 +17,8 @@ import { preprocessStickers } from './stickers'
 import 'katex/dist/katex.min.css'
 import './markdown.css'
 
+type AppLinkRenderer = React.ComponentType<{ href: string; children: React.ReactNode }>
+
 /**
  * Render modes for markdown content:
  *
@@ -58,7 +60,7 @@ export interface MarkdownProps {
    */
   renderMention?: (props: { type: string; id: string; label?: string }) => React.ReactNode
   /** Custom renderer for non-http app links such as Joe's create-agent cards. */
-  renderAppLink?: (props: { href: string; children: React.ReactNode }) => React.ReactNode
+  renderAppLink?: AppLinkRenderer
   /**
    * CDN hostname for file card detection (e.g. "multica-static.copilothub.ai").
    * When provided, enables file card preprocessing and rendering.
@@ -254,7 +256,7 @@ function createComponents(
   onUrlClick?: (url: string) => void,
   onFileClick?: (path: string) => void,
   renderMention?: (props: { type: string; id: string; label?: string }) => React.ReactNode,
-  renderAppLink?: (props: { href: string; children: React.ReactNode }) => React.ReactNode,
+  renderAppLink?: AppLinkRenderer,
   renderImage?: (props: { src: string; alt: string }) => React.ReactNode,
   renderFileCard?: (props: { href: string; filename: string }) => React.ReactNode,
   highlightQuery?: string,
@@ -351,7 +353,8 @@ function createComponents(
       }
 
       if (href?.startsWith('multica://') && renderAppLink) {
-        return <>{renderAppLink({ href, children: highlight(children) })}</>
+        const AppLink = renderAppLink
+        return <AppLink href={href}>{highlight(children)}</AppLink>
       }
 
       const handleClick = (e: React.MouseEvent): void => {

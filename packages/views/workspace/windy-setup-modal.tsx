@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useReducer } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -33,8 +33,20 @@ import {
 
 const WINDY_SETUP_VERSION = "2026-07-03-windy-v1";
 
+type WindySetupState = {
+  configuredKey: string | null;
+  selectedRuntimeId: string;
+  model: string;
+  thinkingLevel: string;
+  saving: boolean;
+};
+
 function setupStorageKey(workspaceId: string, userId: string): string {
   return `multica:windy-setup:${WINDY_SETUP_VERSION}:${workspaceId}:${userId}`;
+}
+
+function isStorageKeyDone(storageKey: string | null): boolean {
+  return !!storageKey && typeof window !== "undefined" && window.localStorage.getItem(storageKey) === "done";
 }
 
 export function WindySetupModal() {
@@ -43,47 +55,43 @@ export function WindySetupModal() {
   const qc = useQueryClient();
   const { data: runtimes = [], isLoading: runtimesLoading, refetch: refetchRuntimes } = useQuery(runtimeListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const [localReady, setLocalReady] = useState(false);
-  const [configured, setConfigured] = useState(false);
-  const [selectedRuntimeId, setSelectedRuntimeId] = useState("");
-  const [model, setModel] = useState("");
-  const [thinkingLevel, setThinkingLevel] = useState("");
-  const [saving, setSaving] = useState(false);
-
   const storageKey = user ? setupStorageKey(wsId, user.id) : null;
-
-  useEffect(() => {
-    if (!storageKey) return;
-    setConfigured(window.localStorage.getItem(storageKey) === "done");
-    setLocalReady(true);
-  }, [storageKey]);
-
-  const selectedRuntime = useMemo(
-    () => runtimes.find((r) => r.id === selectedRuntimeId) ?? null,
-    [runtimes, selectedRuntimeId],
+  const [{ configuredKey, selectedRuntimeId, model, thinkingLevel, saving }, updateState] = useReducer(
+    (state: WindySetupState, patch: Partial<WindySetupState>) => ({ ...state, ...patch }),
+    {
+      configuredKey: isStorageKeyDone(storageKey) ? storageKey : null,
+      selectedRuntimeId: "",
+      model: "",
+      thinkingLevel: "",
+      saving: false,
+    },
   );
 
-  useEffect(() => {
-    if (selectedRuntimeId || runtimesLoading) return;
-    const firstUsable = runtimes.find((r) => isRuntimeUsableForUser(r, user?.id ?? null));
-    if (firstUsable) setSelectedRuntimeId(firstUsable.id);
-  }, [runtimes, runtimesLoading, selectedRuntimeId, user?.id]);
+  const firstUsableRuntimeId = useMemo(
+    () => runtimes.find((r) => isRuntimeUsableForUser(r, user?.id ?? null))?.id ?? "",
+    [runtimes, user?.id],
+  );
+  const effectiveRuntimeId = selectedRuntimeId || firstUsableRuntimeId;
+  const selectedRuntime = useMemo(
+    () => runtimes.find((r) => r.id === effectiveRuntimeId) ?? null,
+    [effectiveRuntimeId, runtimes],
+  );
 
-  if (!user || !localReady || configured) return null;
+  if (!user || !storageKey || configuredKey === storageKey || isStorageKeyDone(storageKey)) return null;
 
   const hasUsableRuntime = runtimes.some((r) => isRuntimeUsableForUser(r, user.id));
 
   const handleSubmit = async () => {
-    if (!storageKey || !selectedRuntimeId || saving) return;
-    setSaving(true);
+    if (!storageKey || !effectiveRuntimeId || saving) return;
+    updateState({ saving: true });
     try {
-      const ensured = await api.ensureJoe(selectedRuntimeId);
+      const ensured = await api.ensureJoe(effectiveRuntimeId);
       const updated = await api.updateAgent(ensured.agent.id, {
         display_name: JOE_AGENT_NAME,
         description: JOE_DESCRIPTION,
         instructions: JOE_INSTRUCTIONS,
         avatar_url: JOE_AVATAR_URL,
-        runtime_id: selectedRuntimeId,
+        runtime_id: effectiveRuntimeId,
         model: model.trim(),
         thinking_level: thinkingLevel,
         max_concurrent_tasks: 6,
@@ -100,12 +108,12 @@ export function WindySetupModal() {
       }
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
       window.localStorage.setItem(storageKey, "done");
-      setConfigured(true);
+      updateState({ configuredKey: storageKey });
       toast.success("Windy is ready and pinned in Direct Messages.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to set up Windy");
     } finally {
-      setSaving(false);
+      updateState({ saving: false });
     }
   };
 
@@ -158,24 +166,24 @@ export function WindySetupModal() {
                   runtimesLoading={runtimesLoading}
                   members={members}
                   currentUserId={user.id}
-                  selectedRuntimeId={selectedRuntimeId}
-                  onSelect={setSelectedRuntimeId}
+                  selectedRuntimeId={effectiveRuntimeId}
+                  onSelect={(runtimeId) => updateState({ selectedRuntimeId: runtimeId })}
                 />
               </div>
               <ModelDropdown
-                runtimeId={selectedRuntimeId || null}
+                runtimeId={effectiveRuntimeId || null}
                 runtimeOnline={selectedRuntime?.status === "online"}
                 value={model}
-                onChange={setModel}
-                disabled={!selectedRuntimeId}
+                onChange={(nextModel) => updateState({ model: nextModel })}
+                disabled={!effectiveRuntimeId}
               />
               <ThinkingDropdown
-                runtimeId={selectedRuntimeId || null}
+                runtimeId={effectiveRuntimeId || null}
                 runtimeOnline={selectedRuntime?.status === "online"}
                 model={model}
                 value={thinkingLevel}
-                onChange={setThinkingLevel}
-                disabled={!selectedRuntimeId}
+                onChange={(nextLevel) => updateState({ thinkingLevel: nextLevel })}
+                disabled={!effectiveRuntimeId}
               />
             </div>
           )}
@@ -188,7 +196,7 @@ export function WindySetupModal() {
           <Button
             type="button"
             onClick={handleSubmit}
-            disabled={!selectedRuntimeId || saving || !hasUsableRuntime}
+            disabled={!effectiveRuntimeId || saving || !hasUsableRuntime}
             className={cn("min-w-32", saving && "cursor-wait")}
           >
             {saving ? <Loader2 className="size-4 animate-spin" /> : null}

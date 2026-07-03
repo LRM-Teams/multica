@@ -23,28 +23,7 @@ import { RuntimePicker, isRuntimeUsableForUser } from "../agents/components/runt
 import { ModelDropdown } from "../agents/components/model-dropdown";
 import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
 import { cn } from "@multica/ui/lib/utils";
-
-function parseJoeCreateAgentURL(raw: string): URL | null {
-  try {
-    const url = new URL(raw);
-    if (url.protocol !== "multica:" || url.hostname !== "create-agent") return null;
-    return url;
-  } catch {
-    return null;
-  }
-}
-
-function listParam(url: URL, key: string): string[] {
-  return url.searchParams
-    .getAll(key)
-    .flatMap((value) => value.split(","))
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
-
-export function isJoeCreateAgentLink(href: string | undefined): boolean {
-  return !!href && parseJoeCreateAgentURL(href) != null;
-}
+import { listParam, parseJoeCreateAgentURL } from "./joe-create-agent-link-utils";
 
 export function JoeCreateAgentLink({
   href,
@@ -114,18 +93,21 @@ function InlineCreateAgentDialog({
   const qc = useQueryClient();
   const { data: runtimes = [], isLoading: runtimesLoading } = useQuery(runtimeListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const [selectedRuntimeId, setSelectedRuntimeId] = React.useState("");
+  const [selectedRuntimeId, setSelectedRuntimeId] = React.useState(() => {
+    const firstUsable = runtimes.find((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null));
+    return firstUsable?.id ?? "";
+  });
   const [model, setModel] = React.useState("");
   const [thinkingLevel, setThinkingLevel] = React.useState("");
   const [creating, setCreating] = React.useState(false);
 
-  React.useEffect(() => {
-    if (selectedRuntimeId || runtimesLoading) return;
-    const firstUsable = runtimes.find((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null));
-    if (firstUsable) setSelectedRuntimeId(firstUsable.id);
-  }, [currentUser?.id, runtimes, runtimesLoading, selectedRuntimeId]);
+  const handleOpenChange = (open: boolean) => {
+    if (!open) onClose();
+  };
 
-  const selectedRuntime = runtimes.find((r) => r.id === selectedRuntimeId) ?? null;
+  const firstUsableRuntimeId = runtimes.find((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null))?.id ?? "";
+  const effectiveRuntimeId = selectedRuntimeId || firstUsableRuntimeId;
+  const selectedRuntime = runtimes.find((r) => r.id === effectiveRuntimeId) ?? null;
   const hasUsableRuntime = runtimes.some((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null));
 
   const handleCreate = async () => {
@@ -157,7 +139,7 @@ function InlineCreateAgentDialog({
   };
 
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+    <Dialog open onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-lg gap-0 overflow-hidden p-0">
         <DialogHeader className="border-b px-5 py-4">
           <DialogTitle>Create Agent @{draft.name}</DialogTitle>
@@ -186,24 +168,24 @@ function InlineCreateAgentDialog({
                   runtimesLoading={runtimesLoading}
                   members={members}
                   currentUserId={currentUser?.id ?? null}
-                  selectedRuntimeId={selectedRuntimeId}
+                  selectedRuntimeId={effectiveRuntimeId}
                   onSelect={setSelectedRuntimeId}
                 />
               </div>
               <ModelDropdown
-                runtimeId={selectedRuntimeId || null}
+                runtimeId={effectiveRuntimeId || null}
                 runtimeOnline={selectedRuntime?.status === "online"}
                 value={model}
                 onChange={setModel}
-                disabled={!selectedRuntimeId}
+                disabled={!effectiveRuntimeId}
               />
               <ThinkingDropdown
-                runtimeId={selectedRuntimeId || null}
+                runtimeId={effectiveRuntimeId || null}
                 runtimeOnline={selectedRuntime?.status === "online"}
                 model={model}
                 value={thinkingLevel}
                 onChange={setThinkingLevel}
-                disabled={!selectedRuntimeId}
+                disabled={!effectiveRuntimeId}
               />
             </div>
           )}

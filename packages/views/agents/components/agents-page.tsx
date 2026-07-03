@@ -129,7 +129,6 @@ export function AgentsPage({
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const qc = useQueryClient();
-  const workspacePaths = useWorkspacePaths();
   const currentUser = useAuthStore((s) => s.user);
 
   const {
@@ -194,7 +193,7 @@ export function AgentsPage({
       });
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
       if (result.dm_id) {
-        navigation.push(`${workspacePaths.channels()}?dm=${encodeURIComponent(result.dm_id)}`);
+        navigation.push(`${paths.channels()}?dm=${encodeURIComponent(result.dm_id)}`);
       } else {
         navigation.push(paths.agentDetail(result.agent.id));
       }
@@ -203,7 +202,7 @@ export function AgentsPage({
     } finally {
       setEnsuringJoe(false);
     }
-  }, [ensuringJoe, navigation, qc, workspacePaths, wsId]);
+  }, [ensuringJoe, navigation, paths, qc, wsId]);
 
   useEffect(() => {
     const draftId = navigation.searchParams.get("draft");

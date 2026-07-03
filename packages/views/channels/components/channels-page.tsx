@@ -17,6 +17,7 @@ import {
   MessageCircle,
   MessageSquare,
   MoreHorizontal,
+  PanelLeftIcon,
   Paperclip,
   PieChart,
   Pin,
@@ -469,6 +470,7 @@ export function ChannelsPage() {
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [channelsCollapsed, setChannelsCollapsed] = useState(false);
+  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
   const [deleteTarget, setDeleteTarget] = useState<Channel | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<Channel | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
@@ -967,6 +969,28 @@ export function ChannelsPage() {
     replace(wsPaths.channels());
   };
 
+  const openConversationList = () => {
+    if (isMobile) {
+      mobileBackToList();
+      return;
+    }
+    setDesktopSidebarOpen(true);
+  };
+
+  const desktopListOpenButton =
+    !isMobile && !desktopSidebarOpen ? (
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-8 shrink-0 text-muted-foreground"
+        aria-label={t(($) => $.sidebar.open_aria)}
+        title={t(($) => $.sidebar.open_aria)}
+        onClick={openConversationList}
+      >
+        <PanelLeftIcon className="size-4" />
+      </Button>
+    ) : null;
+
   const handleDelete = () => {
     const target = deleteTarget;
     if (!target) return;
@@ -1385,20 +1409,32 @@ export function ChannelsPage() {
         isMobile ? "min-w-0" : "border-r",
       )}
     >
-          <div className="flex items-center px-4 pb-1 pt-4">
-            <h2 className="text-lg font-semibold">{t(($) => $.sidebar.heading)}</h2>
-          </div>
-          <div className="px-3 pb-2">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={t(($) => $.sidebar.search)}
-                className="h-9 pl-8"
-              />
-            </div>
-          </div>
+      <div className="flex items-center gap-2 px-4 pb-1 pt-4">
+        <h2 className="flex-1 text-lg font-semibold">{t(($) => $.sidebar.heading)}</h2>
+        {!isMobile && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8 shrink-0 text-muted-foreground"
+            aria-label={t(($) => $.sidebar.close_aria)}
+            title={t(($) => $.sidebar.close_aria)}
+            onClick={() => setDesktopSidebarOpen(false)}
+          >
+            <PanelLeftIcon className="size-4" />
+          </Button>
+        )}
+      </div>
+      <div className="px-3 pb-2">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t(($) => $.sidebar.search)}
+            className="h-9 pl-8"
+          />
+        </div>
+      </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
             <DmList
               activeId={activeDmId}
@@ -1870,133 +1906,133 @@ export function ChannelsPage() {
       </div>
     ) : null;
   const channelConversationPane = (
-        <main className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background">
-          {!active ? (
-            showChannelDetailSkeleton ? (
-              <ConversationSwitchSkeleton isMobile={isMobile} />
-            ) : (
-              <EmptyState onCreate={handleCreate} />
-            )
-          ) : (
-            <>
-              <ConversationHeader
-                isMobile={isMobile}
-                leading={
-                  <>
-                    {isMobile && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-10 shrink-0 text-muted-foreground"
-                        aria-label={t(($) => $.header.back)}
-                        onClick={mobileBackToList}
-                      >
-                        <ArrowLeft className="size-5" />
-                      </Button>
-                    )}
-                    <ChannelGroupAvatar members={channelMembers} size={34} />
-                  </>
-                }
-                title={active.name}
-                meta={
-                  <>
-                    {t(($) => $.header.running)}
-                    {rosterSummary ? ` · ${rosterSummary}` : ""}
-                  </>
-                }
-                badges={
-                  <>
-                    {isConversationMuted(active) && (
-                      <MutedIndicator label={t(($) => $.sidebar.muted_label)} />
-                    )}
-                    {isActiveArchived && (
-                      <Badge variant="secondary" className="shrink-0 uppercase tracking-wide">
-                        {t(($) => $.sidebar.archived_section)}
-                      </Badge>
-                    )}
-                    {active.lark_chat_id && (
-                      <Badge variant="secondary" className="shrink-0">
-                        {t(($) => $.header.feishu)}
-                      </Badge>
-                    )}
-                  </>
-                }
-                actions={isMobile ? (
-                  // Mobile: collapse members / share / stats / files into a
-                  // single "⋯" that opens the bottom Drawer's action menu.
-                  // size-10 keeps the tap target ≥44px.
+    <main className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background">
+      {!active ? (
+        showChannelDetailSkeleton ? (
+          <ConversationSwitchSkeleton isMobile={isMobile} />
+        ) : (
+          <EmptyState onCreate={handleCreate} />
+        )
+      ) : (
+        <>
+          <ConversationHeader
+            isMobile={isMobile}
+            leading={
+              <>
+                {isMobile && (
                   <Button
                     variant="ghost"
                     size="icon"
                     className="size-10 shrink-0 text-muted-foreground"
-                    aria-label={t(($) => $.header.more_aria)}
-                    onClick={() => setMobilePanel("menu")}
+                    aria-label={t(($) => $.header.back)}
+                    onClick={mobileBackToList}
                   >
-                    <MoreHorizontal className="size-5" />
+                    <ArrowLeft className="size-5" />
                   </Button>
-                ) : (
-                  <>
-                    <Popover>
-                      <PopoverTrigger
-                        className="flex items-center gap-1.5 rounded-full p-0.5 transition-colors hover:bg-accent"
-                        aria-label={t(($) => $.header.manage_members_aria)}
-                      >
-                        <MemberStack members={channelMembers} />
-                        <span className="flex size-7 items-center justify-center rounded-full border border-dashed text-muted-foreground">
-                          <Plus className="size-3.5" />
-                        </span>
-                      </PopoverTrigger>
-                      <PopoverContent align="end" className="w-80 p-0">
-                        {memberPanelBody}
-                      </PopoverContent>
-                    </Popover>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8"
-                        aria-label={t(($) => $.conv_search.search_aria)}
-                        onClick={() => setConvSearchOpen(true)}
-                      >
-                        <Search className="size-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8"
-                        aria-label={t(($) => $.header.share_aria)}
-                        onClick={handleShare}
-                      >
-                        <Share2 className="size-4" />
-                      </Button>
-                      <Popover>
-                        <PopoverTrigger
-                          className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
-                          aria-label={t(($) => $.header.stats_aria)}
-                        >
-                          <PieChart className="size-4" />
-                        </PopoverTrigger>
-                        <PopoverContent align="end" className="w-72">
-                          <p className="mb-3 text-sm font-medium">{t(($) => $.stats.title)}</p>
-                          <ChannelStatsPanel channelId={active.id} />
-                        </PopoverContent>
-                      </Popover>
-                      <Popover>
-                        <PopoverTrigger
-                          className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
-                          aria-label={t(($) => $.header.files_aria)}
-                        >
-                          <FileText className="size-4" />
-                        </PopoverTrigger>
-                        <PopoverContent align="end" className="w-80">
-                          <p className="mb-3 text-sm font-medium">{t(($) => $.files.title)}</p>
-                          <ChannelFilesPanel channelId={active.id} />
-                        </PopoverContent>
-                      </Popover>
-                    </div>
-                  </>
                 )}
-              />
+                <ChannelGroupAvatar members={channelMembers} size={34} />
+              </>
+            }
+            title={active.name}
+            meta={
+              <>
+                {t(($) => $.header.running)}
+                {rosterSummary ? ` · ${rosterSummary}` : ""}
+              </>
+            }
+            badges={
+              <>
+                {isConversationMuted(active) && (
+                  <MutedIndicator label={t(($) => $.sidebar.muted_label)} />
+                )}
+                {isActiveArchived && (
+                  <Badge variant="secondary" className="shrink-0 uppercase tracking-wide">
+                    {t(($) => $.sidebar.archived_section)}
+                  </Badge>
+                )}
+                {active.lark_chat_id && (
+                  <Badge variant="secondary" className="shrink-0">
+                    {t(($) => $.header.feishu)}
+                  </Badge>
+                )}
+              </>
+            }
+            actions={isMobile ? (
+              // Mobile: collapse members / share / stats / files into a
+              // single "⋯" that opens the bottom Drawer's action menu.
+              // size-10 keeps the tap target ≥44px.
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-10 shrink-0 text-muted-foreground"
+                aria-label={t(($) => $.header.more_aria)}
+                onClick={() => setMobilePanel("menu")}
+              >
+                <MoreHorizontal className="size-5" />
+              </Button>
+            ) : (
+              <>
+                <Popover>
+                  <PopoverTrigger
+                    className="flex items-center gap-1.5 rounded-full p-0.5 transition-colors hover:bg-accent"
+                    aria-label={t(($) => $.header.manage_members_aria)}
+                  >
+                    <MemberStack members={channelMembers} />
+                    <span className="flex size-7 items-center justify-center rounded-full border border-dashed text-muted-foreground">
+                      <Plus className="size-3.5" />
+                    </span>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="w-80 p-0">
+                    {memberPanelBody}
+                  </PopoverContent>
+                </Popover>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8"
+                    aria-label={t(($) => $.conv_search.search_aria)}
+                    onClick={() => setConvSearchOpen(true)}
+                  >
+                    <Search className="size-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8"
+                    aria-label={t(($) => $.header.share_aria)}
+                    onClick={handleShare}
+                  >
+                    <Share2 className="size-4" />
+                  </Button>
+                  <Popover>
+                    <PopoverTrigger
+                      className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
+                      aria-label={t(($) => $.header.stats_aria)}
+                    >
+                      <PieChart className="size-4" />
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="w-72">
+                      <p className="mb-3 text-sm font-medium">{t(($) => $.stats.title)}</p>
+                      <ChannelStatsPanel channelId={active.id} />
+                    </PopoverContent>
+                  </Popover>
+                  <Popover>
+                    <PopoverTrigger
+                      className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
+                      aria-label={t(($) => $.header.files_aria)}
+                    >
+                      <FileText className="size-4" />
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="w-80">
+                      <p className="mb-3 text-sm font-medium">{t(($) => $.files.title)}</p>
+                      <ChannelFilesPanel channelId={active.id} />
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              </>
+            )}
+          />
               {convSearchOpen && (
                 <div
                   className={cn(
@@ -2281,15 +2317,26 @@ export function ChannelsPage() {
           detail={detailSurface}
         />
       ) : (
-        <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
-          <ResizablePanel id="list" defaultSize={280} minSize={240} maxSize={480} groupResizeBehavior="preserve-pixel-size" className="flex min-h-0 flex-col">
-          {listPane}
-          </ResizablePanel>
-          <ResizableHandle />
-          <ResizablePanel id="detail" minSize="40%" className="flex min-h-0 flex-col">
-          {detailSurface}
-          </ResizablePanel>
-        </ResizablePanelGroup>
+        desktopSidebarOpen ? (
+          <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
+            <ResizablePanel id="list" defaultSize={280} minSize={240} maxSize={480} groupResizeBehavior="preserve-pixel-size" className="flex min-h-0 flex-col">
+              {listPane}
+            </ResizablePanel>
+            <ResizableHandle />
+            <ResizablePanel id="detail" minSize="40%" className="flex min-h-0 flex-col">
+              {detailSurface}
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        ) : (
+          <div className="flex min-h-0 flex-1">
+            <div className="flex w-12 shrink-0 items-start justify-center border-r bg-background pt-3">
+              {desktopListOpenButton}
+            </div>
+            <div className="min-w-0 flex-1">
+              {detailSurface}
+            </div>
+          </div>
+        )
       )}
 
       {/* Mobile overflow drawer. One bottom Drawer (vaul, with drag handle)

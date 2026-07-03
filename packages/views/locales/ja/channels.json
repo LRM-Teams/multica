@@ -12,6 +12,8 @@
     "name_placeholder": "チャンネル名",
     "lark_placeholder": "任意の Feishu chat_id (oc_...)",
     "create_aria": "チャンネルを作成",
+    "open_aria": "会話リストを開く",
+    "close_aria": "会話リストを隠す",
     "empty": "まだチャンネルがありません。",
     "menu_aria": "チャンネル操作",
     "delete": "グループを削除",

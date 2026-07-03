@@ -12,6 +12,8 @@
     "name_placeholder": "채널 이름",
     "lark_placeholder": "선택 Feishu chat_id (oc_...)",
     "create_aria": "채널 만들기",
+    "open_aria": "대화 목록 열기",
+    "close_aria": "대화 목록 숨기기",
     "empty": "아직 채널이 없습니다.",
     "menu_aria": "채널 작업",
     "delete": "그룹 삭제",

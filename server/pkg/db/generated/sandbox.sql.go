@@ -131,6 +131,24 @@ SELECT id, node_key, owner_user_id, name, status, capabilities, max_concurrency,
 WHERE id = $1 AND deleted_at IS NULL
 `
 
+const getSandboxNodeLiveness = `-- name: GetSandboxNodeLiveness :one
+SELECT status, last_seen_at, deleted_at FROM sandbox_node
+WHERE id = $1
+`
+
+type GetSandboxNodeLivenessRow struct {
+	Status     string             `json:"status"`
+	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
+	DeletedAt  pgtype.Timestamptz `json:"deleted_at"`
+}
+
+func (q *Queries) GetSandboxNodeLiveness(ctx context.Context, id pgtype.UUID) (GetSandboxNodeLivenessRow, error) {
+	row := q.db.QueryRow(ctx, getSandboxNodeLiveness, id)
+	var i GetSandboxNodeLivenessRow
+	err := row.Scan(&i.Status, &i.LastSeenAt, &i.DeletedAt)
+	return i, err
+}
+
 func (q *Queries) GetSandboxNode(ctx context.Context, id pgtype.UUID) (SandboxNode, error) {
 	row := q.db.QueryRow(ctx, getSandboxNode, id)
 	return scanSandboxNode(row)

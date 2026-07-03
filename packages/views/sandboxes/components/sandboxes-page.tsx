@@ -681,7 +681,7 @@ function SandboxRow({
   const { t } = useT("layout");
   const canStop = instance.status === "running";
   const canResume = instance.status === "stopped";
-  const canDelete = instance.status !== "stopping" && instance.status !== "resuming";
+  const canDelete = instance.status !== "reconfiguring" && instance.status !== "resuming";
   const displayName = sandboxDisplayName(instance);
 
   return (

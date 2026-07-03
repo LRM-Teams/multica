@@ -34,6 +34,10 @@ FROM sandbox_instance
 WHERE node_id = ANY(@node_ids::uuid[])
 GROUP BY node_id;
 
+-- name: GetSandboxNodeLiveness :one
+SELECT status, last_seen_at, deleted_at FROM sandbox_node
+WHERE id = $1;
+
 -- name: GetSandboxNode :one
 SELECT id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at FROM sandbox_node
 WHERE id = $1 AND deleted_at IS NULL;

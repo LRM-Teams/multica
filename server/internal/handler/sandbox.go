@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,6 +106,13 @@ func effectiveSandboxNodeStatus(storedStatus string, lastSeen pgtype.Timestamptz
 		return "offline"
 	}
 	return "online"
+}
+
+func sandboxNodeUnreachableForJobs(status string, lastSeen pgtype.Timestamptz, deletedAt pgtype.Timestamptz) bool {
+	if deletedAt.Valid {
+		return true
+	}
+	return effectiveSandboxNodeStatus(status, lastSeen) == "offline"
 }
 
 func sandboxNodeToResponse(n db.SandboxNode, instanceCount int64) SandboxNodeResponse {
@@ -890,8 +898,17 @@ func (h *Handler) enqueueSandboxInstanceJob(w http.ResponseWriter, r *http.Reque
 	}
 	inst, err := h.Queries.GetSandboxInstanceForWorkspace(r.Context(), db.GetSandboxInstanceForWorkspaceParams{ID: instanceID, WorkspaceID: wsUUID})
 	if err != nil {
-		writeError(w, http.StatusNotFound, "sandbox not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get sandbox")
 		return
+	}
+	if jobType == "delete" {
+		if h.forceDeleteSandboxWhenNodeUnreachable(w, r.Context(), wsUUID, instanceID, inst.NodeID) {
+			return
+		}
 	}
 	status := "stopping"
 	if jobType == "resume" {
@@ -927,6 +944,34 @@ func (h *Handler) enqueueSandboxInstanceJob(w http.ResponseWriter, r *http.Reque
 		h.SandboxHub.NotifyJobAvailable(uuidToString(inst.NodeID), uuidToString(job.ID))
 	}
 	writeJSON(w, http.StatusAccepted, sandboxJobToResponse(job, ""))
+}
+
+func (h *Handler) forceDeleteSandboxWhenNodeUnreachable(w http.ResponseWriter, ctx context.Context, wsUUID, instanceID, nodeID pgtype.UUID) bool {
+	liveness, err := h.Queries.GetSandboxNodeLiveness(ctx, nodeID)
+	unreachable := false
+	switch {
+	case err == nil:
+		unreachable = sandboxNodeUnreachableForJobs(liveness.Status, liveness.LastSeenAt, liveness.DeletedAt)
+	case errors.Is(err, pgx.ErrNoRows):
+		unreachable = true
+	default:
+		writeError(w, http.StatusInternalServerError, "failed to load sandbox node")
+		return true
+	}
+	if !unreachable {
+		return false
+	}
+	if err := h.Queries.DeleteSandboxInstance(ctx, instanceID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete sandbox")
+		return true
+	}
+	h.publish(protocol.EventSandboxInstanceUpdated, uuidToString(wsUUID), "user", "", map[string]any{
+		"instance_id": uuidToString(instanceID),
+		"deleted":     true,
+		"forced":      true,
+	})
+	w.WriteHeader(http.StatusNoContent)
+	return true
 }
 
 func (h *Handler) StopSandboxInstance(w http.ResponseWriter, r *http.Request) {

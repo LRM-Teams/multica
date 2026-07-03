@@ -120,7 +120,7 @@ func (h *Handler) AgentDirectMessage(w http.ResponseWriter, r *http.Request) {
 	h.clearDMPeerHiddenForChatSession(r.Context(), workspaceID, uuidToString(recipient), agentUUID)
 
 	resolvedSessionID := uuidToString(sessionID)
-	h.publishChat(protocol.EventChatMessage, workspaceID, "agent", actorID, resolvedSessionID, protocol.ChatMessagePayload{
+	h.publishChatToCreator(protocol.EventChatMessage, workspaceID, "agent", actorID, resolvedSessionID, uuidToString(recipient), protocol.ChatMessagePayload{
 		ChatSessionID: resolvedSessionID,
 		MessageID:     uuidToString(msg.ID),
 		Role:          "assistant",

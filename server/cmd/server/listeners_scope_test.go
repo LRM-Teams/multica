@@ -98,3 +98,54 @@ func TestRegisterListeners_TaskChatGoToWorkspace(t *testing.T) {
 		})
 	}
 }
+
+func TestRegisterListeners_RecipientScopedEventsSkipWorkspaceFanout(t *testing.T) {
+	bus := events.New()
+	fb := &fakeBroadcaster{}
+	registerListeners(bus, fb)
+
+	bus.Publish(events.Event{
+		Type:             protocol.EventChannelMessage,
+		WorkspaceID:      "ws-1",
+		ActorType:        "member",
+		ActorID:          "sender-1",
+		RecipientUserIDs: []string{"user-1", "user-2", "user-1", " "},
+		Payload:          map[string]any{"content": "private channel text"},
+	})
+
+	if len(fb.workspaceCalls) != 0 {
+		t.Fatalf("expected no BroadcastToWorkspace calls for recipient-scoped event, got %d", len(fb.workspaceCalls))
+	}
+	if len(fb.userCalls) != 2 {
+		t.Fatalf("expected 2 SendToUser calls, got %d", len(fb.userCalls))
+	}
+	got := map[string]bool{}
+	for _, call := range fb.userCalls {
+		got[call.userID] = true
+	}
+	for _, want := range []string{"user-1", "user-2"} {
+		if !got[want] {
+			t.Fatalf("missing SendToUser recipient %q; got %+v", want, got)
+		}
+	}
+}
+
+func TestRegisterListeners_RecipientScopedEmptyListFailsClosed(t *testing.T) {
+	bus := events.New()
+	fb := &fakeBroadcaster{}
+	registerListeners(bus, fb)
+
+	bus.Publish(events.Event{
+		Type:             protocol.EventChannelMessage,
+		WorkspaceID:      "ws-1",
+		RecipientUserIDs: []string{},
+		Payload:          map[string]any{"content": "unroutable private text"},
+	})
+
+	if len(fb.workspaceCalls) != 0 {
+		t.Fatalf("expected no BroadcastToWorkspace calls for empty recipient-scoped event, got %d", len(fb.workspaceCalls))
+	}
+	if len(fb.userCalls) != 0 {
+		t.Fatalf("expected no SendToUser calls for empty recipient-scoped event, got %d", len(fb.userCalls))
+	}
+}

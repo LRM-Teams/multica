@@ -620,6 +620,54 @@ func TestSendChannelMessageReplyReturnsSummary(t *testing.T) {
 	t.Fatalf("created message %s missing from list", created.ID)
 }
 
+func TestSendChannelMessagePublishesOnlyChannelMemberRecipients(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	memberID := createChannelPlainMember(t)
+	bystanderID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "recipient-scope-"+uuid.NewString(), testUserID, memberID)
+	content := "recipient scoped secret " + uuid.NewString()
+	eventsSeen := make(chan events.Event, 1)
+	testHandler.Bus.Subscribe(protocol.EventChannelMessage, func(e events.Event) {
+		msg, ok := e.Payload.(ChannelMessageResponse)
+		if ok && msg.Content == content {
+			eventsSeen <- e
+		}
+	})
+
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages", map[string]any{
+		"content": content,
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send message: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var ev events.Event
+	select {
+	case ev = <-eventsSeen:
+	default:
+		t.Fatal("expected channel message event")
+	}
+	got := map[string]bool{}
+	for _, recipientID := range ev.RecipientUserIDs {
+		got[recipientID] = true
+	}
+	for _, want := range []string{testUserID, memberID} {
+		if !got[want] {
+			t.Fatalf("missing recipient %s in %+v", want, ev.RecipientUserIDs)
+		}
+	}
+	if got[bystanderID] {
+		t.Fatalf("workspace bystander %s received channel-scoped event recipients %+v", bystanderID, ev.RecipientUserIDs)
+	}
+}
+
 func TestSendChannelMessageStoresStickerParts(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -2213,13 +2213,22 @@ func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQu
 			payload.ElapsedMs = msg.ElapsedMs.Int64
 		}
 	}
+	recipientUserIDs := []string{}
+	if s.Queries != nil && task.ChatSessionID.Valid {
+		if session, err := s.Queries.GetChatSession(ctx, task.ChatSessionID); err == nil {
+			recipientUserIDs = []string{util.UUIDToString(session.CreatorID)}
+		} else {
+			slog.Warn("chat done: resolve chat session creator failed", "chat_session_id", util.UUIDToString(task.ChatSessionID), "error", err)
+		}
+	}
 	s.Bus.Publish(events.Event{
-		Type:          protocol.EventChatDone,
-		WorkspaceID:   workspaceID,
-		ActorType:     "system",
-		ActorID:       "",
-		ChatSessionID: util.UUIDToString(task.ChatSessionID),
-		Payload:       payload,
+		Type:             protocol.EventChatDone,
+		WorkspaceID:      workspaceID,
+		ActorType:        "system",
+		ActorID:          "",
+		ChatSessionID:    util.UUIDToString(task.ChatSessionID),
+		RecipientUserIDs: recipientUserIDs,
+		Payload:          payload,
 	})
 }
 

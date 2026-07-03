@@ -165,6 +165,19 @@ func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
 			slog.Error("failed to marshal event", "event_type", e.Type, "error", err)
 			return
 		}
+		if e.RecipientUserIDs != nil {
+			seen := make(map[string]bool, len(e.RecipientUserIDs))
+			for _, recipientID := range e.RecipientUserIDs {
+				recipientID = strings.TrimSpace(recipientID)
+				if recipientID == "" || seen[recipientID] {
+					continue
+				}
+				seen[recipientID] = true
+				realtime.M.RecordEvent(e.Type)
+				b.SendToUser(recipientID, data)
+			}
+			return
+		}
 
 		// Phase 1 (MUL-1138): the per-resource scope routing for high-frequency
 		// task/chat events is intentionally NOT enabled yet. The server-side

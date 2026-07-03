@@ -163,7 +163,7 @@ async function findOrCreateHelper(
     const agents = await api.listAgents({ workspace_id: workspaceId });
     const found = agents.find(
       (a) =>
-        a.name === HELPER_AGENT_NAME &&
+        (a.display_name || a.name) === HELPER_AGENT_NAME &&
         a.visibility === "workspace" &&
         !a.archived_at,
     );

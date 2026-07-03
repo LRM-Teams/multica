@@ -501,5 +501,15 @@
     "empty_select": "选择左侧的一个智能体查看详情",
     "delete_success": "已删除智能体",
     "delete_failed": "删除智能体失败"
+  },
+  "windy": {
+    "ask_windy": "Ask Windy",
+    "draft_description": "Windy prepared this agent draft. Review the fields, choose a runtime, then create it.",
+    "create_title": "Create Agent @{{name}}",
+    "create_description": "Review Windy's hiring card, pick a runtime/model, then start the agent here.",
+    "runtime_required": "Connect or share a runtime before creating this agent.",
+    "cancel": "Cancel",
+    "create_agent": "Create Agent",
+    "created_toast": "{{name}} created"
   }
 }

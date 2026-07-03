@@ -20,6 +20,8 @@ import { ProjectChip } from "../projects/components/project-chip";
 import { AppLink } from "../navigation/app-link";
 import { Attachment as AttachmentRenderer } from "../editor/attachment";
 import { AttachmentDownloadProvider } from "../editor/attachment-download-context";
+import { WindyCreateAgentLink } from "./windy-create-agent-links";
+import { isWindyCreateAgentLink } from "./windy-create-agent-link-utils";
 
 export type { RenderMode };
 
@@ -250,10 +252,20 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
       defaultRenderMention(mention, highlightQuery),
     [highlightQuery],
   );
+  const RenderAppLink = React.useCallback(
+    ({ href, children }: { href: string; children: React.ReactNode }) => {
+      if (isWindyCreateAgentLink(href)) {
+        return <WindyCreateAgentLink href={href}>{children}</WindyCreateAgentLink>;
+      }
+      return null;
+    },
+    [],
+  );
   return (
     <AttachmentDownloadProvider attachments={attachments}>
       <MarkdownBase
         renderMention={renderMention}
+        renderAppLink={RenderAppLink}
         renderImage={renderAppImage}
         renderFileCard={renderFileCard}
         cdnDomain={cdnDomain}

@@ -19,6 +19,7 @@ import type {
   RuntimeDevice,
   MemberWithUser,
   CreateAgentRequest,
+  AgentCreationDraft,
 } from "@multica/core/types";
 import { isImeComposing } from "@multica/core/utils";
 import {
@@ -46,6 +47,7 @@ export function CreateAgentDialog({
   members,
   currentUserId,
   template,
+  draft,
   squadId,
   onClose,
   onCreate,
@@ -62,6 +64,9 @@ export function CreateAgentDialog({
   // Skills are copied separately by the caller after createAgent
   // succeeds — they're not part of CreateAgentRequest.
   template?: Agent | null;
+  // When provided by Windy, the dialog opens with a generated role draft
+  // and marks that draft as used after the agent is created.
+  draft?: AgentCreationDraft | null;
   // When set, every successful create is followed by
   // addSquadMember(squadId, agent) so the new agent joins this squad.
   // If the squad-join call fails the agent still exists and the dialog
@@ -77,21 +82,24 @@ export function CreateAgentDialog({
 }) {
   const { t } = useT("agents");
   const isDuplicate = !!template;
+  const isDraft = !!draft && !isDuplicate;
   const queryClient = useQueryClient();
   const wsId = useWorkspaceId();
 
   // Display-name defaults: duplicate uses "<original> copy". Manual-create starts blank.
   const [name, setName] = useState(
-    template ? `${resolveActorDisplayName(template, template.id)}${t(($) => $.create_dialog.duplicate_copy_suffix)}` : "",
+    template
+      ? `${resolveActorDisplayName(template, template.id)}${t(($) => $.create_dialog.duplicate_copy_suffix)}`
+      : draft?.name ?? "",
   );
-  const [description, setDescription] = useState(template?.description ?? "");
+  const [description, setDescription] = useState(template?.description ?? draft?.description ?? "");
   const [visibility, setVisibility] = useState<AgentVisibility>(
-    template?.visibility ?? "workspace",
+    template?.visibility ?? draft?.visibility ?? "workspace",
   );
   const [model, setModel] = useState(template?.model ?? "");
   const [thinkingLevel, setThinkingLevel] = useState(template?.thinking_level ?? "");
-  const [instructions, setInstructions] = useState(template?.instructions ?? "");
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(template?.avatar_url ?? null);
+  const [instructions, setInstructions] = useState(template?.instructions ?? draft?.instructions ?? "");
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(template?.avatar_url ?? draft?.avatar_url ?? null);
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(
     () => new Set(template?.skills.map((s) => s.id) ?? []),
   );
@@ -109,7 +117,8 @@ export function CreateAgentDialog({
     if (templateRuntime && isRuntimeUsableForUser(templateRuntime, currentUserId)) {
       return templateRuntime.id;
     }
-    return "";
+    const usableRuntime = runtimes.find((r) => isRuntimeUsableForUser(r, currentUserId));
+    return usableRuntime?.id ?? "";
   });
 
   const selectedRuntime = runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
@@ -166,6 +175,7 @@ export function CreateAgentDialog({
         thinking_level: thinkingLevel || undefined,
         instructions: trimmedInstructions || undefined,
         avatar_url: avatarUrl ?? undefined,
+        draft_id: draft?.id,
       };
       if (template) {
         // Duplicate path: forward the hidden config fields the source
@@ -223,7 +233,9 @@ export function CreateAgentDialog({
 
   const headerTitle = isDuplicate
     ? t(($) => $.create_dialog.title_duplicate)
-    : t(($) => $.create_dialog.title_create);
+    : isDraft
+      ? t(($) => $.windy.create_agent)
+      : t(($) => $.create_dialog.title_create);
 
   return (
     <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
@@ -235,9 +247,14 @@ export function CreateAgentDialog({
               {t(($) => $.create_dialog.description_duplicate, { name: resolveActorDisplayName(template, template.id) })}
             </DialogDescription>
           )}
-          {!isDuplicate && (
+          {!isDuplicate && !isDraft && (
             <DialogDescription className="mt-1 text-xs">
               {t(($) => $.create_dialog.description_create)}
+            </DialogDescription>
+          )}
+          {isDraft && draft && (
+            <DialogDescription className="mt-1 text-xs">
+              {t(($) => $.windy.draft_description)}
             </DialogDescription>
           )}
         </DialogHeader>

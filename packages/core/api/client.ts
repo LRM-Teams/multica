@@ -13,6 +13,9 @@ import type {
   ListGroupedIssuesParams,
   Agent,
   CreateAgentRequest,
+  CreateAgentDraftRequest,
+  AgentCreationDraft,
+  EnsureWindyResponse,
   AgentTemplate,
   AgentTemplateSummary,
   CreateAgentFromTemplateRequest,
@@ -816,6 +819,24 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+
+  async ensureWindy(runtimeId?: string): Promise<EnsureWindyResponse> {
+    const search = new URLSearchParams();
+    if (runtimeId) search.set("runtime_id", runtimeId);
+    const suffix = search.toString() ? `?${search}` : "";
+    return this.fetch(`/api/agents/windy${suffix}`, { method: "POST" });
+  }
+
+  async createAgentDraft(data: CreateAgentDraftRequest): Promise<AgentCreationDraft> {
+    return this.fetch("/api/agents/drafts", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getAgentDraft(id: string): Promise<AgentCreationDraft> {
+    return this.fetch(`/api/agents/drafts/${encodeURIComponent(id)}`);
   }
 
   async listAgentTemplates(): Promise<AgentTemplateSummary[]> {

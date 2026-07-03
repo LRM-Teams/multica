@@ -513,5 +513,15 @@
     "empty_select": "왼쪽에서 에이전트를 선택하면 상세 정보가 표시됩니다",
     "delete_success": "에이전트를 삭제했습니다",
     "delete_failed": "에이전트 삭제에 실패했습니다"
+  },
+  "windy": {
+    "ask_windy": "Ask Windy",
+    "draft_description": "Windy prepared this agent draft. Review the fields, choose a runtime, then create it.",
+    "create_title": "Create Agent @{{name}}",
+    "create_description": "Review Windy's hiring card, pick a runtime/model, then start the agent here.",
+    "runtime_required": "Connect or share a runtime before creating this agent.",
+    "cancel": "Cancel",
+    "create_agent": "Create Agent",
+    "created_toast": "{{name}} created"
   }
 }

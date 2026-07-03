@@ -27,6 +27,12 @@ export {
   type UserContextLabels,
   type QuestionnaireRaw,
 } from "./user-context";
+export {
+  WINDY_AGENT_NAME,
+  WINDY_DESCRIPTION,
+  WINDY_AVATAR_URL,
+  WINDY_INSTRUCTIONS,
+} from "./windy-instructions";
 
 type ContentLang = "en" | "zh" | "ko" | "ja";
 

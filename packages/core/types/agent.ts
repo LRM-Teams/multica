@@ -298,6 +298,46 @@ export interface AgentSkillSummary {
   description: string;
 }
 
+export interface AgentCreationDraft {
+  id: string;
+  workspace_id: string;
+  created_by_agent_id?: string | null;
+  target_user_id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  avatar_url?: string | null;
+  visibility: AgentVisibility;
+  project_id?: string | null;
+  channel_id?: string | null;
+  can_execute_code: boolean;
+  suggested_channels: string[];
+  recommended_tools: string[];
+  status: "draft" | "used" | "dismissed";
+  used_agent_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  used_at?: string | null;
+}
+
+export interface CreateAgentDraftRequest {
+  name: string;
+  description?: string;
+  instructions?: string;
+  avatar_url?: string | null;
+  visibility?: AgentVisibility;
+  project_id?: string | null;
+  channel_id?: string | null;
+  can_execute_code?: boolean;
+  suggested_channels?: string[];
+  recommended_tools?: string[];
+}
+
+export interface EnsureWindyResponse {
+  agent: Agent;
+  dm_id?: string;
+}
+
 export interface CreateAgentRequest {
   /** Legacy display input; the server derives a stable handle from it. */
   name?: string;
@@ -318,6 +358,8 @@ export interface CreateAgentRequest {
   /** Optional template slug used by the onboarding agent picker. Surfaced
    *  as the `template` property on the `agent_created` PostHog event. */
   template?: string;
+  /** Agent creation draft consumed by this create call, usually produced by Windy. */
+  draft_id?: string;
 }
 
 /** Agent template summary — fields needed by the picker grid. Does NOT

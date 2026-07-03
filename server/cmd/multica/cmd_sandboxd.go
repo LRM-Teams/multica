@@ -161,7 +161,7 @@ func (c *sandboxdClient) register(ctx context.Context) error {
 		"name":            c.cfg.Name,
 		"owner_user_id":   c.cfg.OwnerUserID,
 		"max_concurrency": c.cfg.Concurrency,
-		"capabilities":    []string{"create", "stop", "resume", "delete"},
+		"capabilities":    []string{"create", "stop", "resume", "delete", "reconfigure"},
 		"metadata": map[string]any{
 			"cube_api_url":     c.cfg.SandboxServer,
 			"cube_proxy_http":  c.cfg.CubeProxyHTTP,
@@ -280,7 +280,9 @@ func (c *sandboxdClient) callCube(ctx context.Context, job sandboxJob) (map[stri
 	case "stop":
 		return c.cubeLifecycle(ctx, sandboxID, "/pause", true)
 	case "resume":
-		return c.cubeLifecycle(ctx, sandboxID, "/resume", false)
+		return c.resumeCubeSandbox(ctx, sandboxID, payload)
+	case "reconfigure":
+		return c.reconfigureCubeSandbox(ctx, sandboxID, payload)
 	case "delete":
 		return c.deleteCubeSandbox(ctx, sandboxID)
 	default:
@@ -326,6 +328,67 @@ func (c *sandboxdClient) createCubeSandbox(ctx context.Context, job sandboxJob, 
 		"local_ref":     cube.SandboxID,
 		"endpoint_info": endpoint,
 	}, nil
+}
+
+func (c *sandboxdClient) resumeCubeSandbox(ctx context.Context, sandboxID string, payload sandboxJobPayload) (map[string]any, error) {
+	result, err := c.cubeLifecycle(ctx, sandboxID, "/resume", false)
+	if err != nil {
+		return nil, err
+	}
+	runtimeEnv := mergeRuntimeEnv(payload.RuntimeEnv, payload.Runtime)
+	if len(runtimeEnv) > 0 && runtimeEnv["MULTICA_TOKEN"] != "" && hasRuntimeModelConfig(payload.Runtime) {
+		if err := c.stopRuntimeInCube(ctx, sandboxID); err != nil {
+			return nil, err
+		}
+		if err := c.startRuntimeInCube(ctx, sandboxID, runtimeEnv); err != nil {
+			return nil, err
+		}
+		result["result"] = map[string]any{"resumed": true, "runtime_restarted": true}
+	}
+	return result, nil
+}
+
+func (c *sandboxdClient) reconfigureCubeSandbox(ctx context.Context, sandboxID string, payload sandboxJobPayload) (map[string]any, error) {
+	if sandboxID == "" {
+		return nil, fmt.Errorf("cube sandbox id is required")
+	}
+	runtimeEnv := mergeRuntimeEnv(payload.RuntimeEnv, payload.Runtime)
+	if runtimeEnv["MULTICA_TOKEN"] == "" {
+		return nil, fmt.Errorf("runtime_env missing MULTICA_TOKEN")
+	}
+	// Best-effort resume so /execute works when the cube sandbox was paused.
+	_ = c.cubeJSON(ctx, http.MethodPost, "/sandboxes/"+url.PathEscape(sandboxID)+"/resume", map[string]any{}, "", nil)
+	if err := c.stopRuntimeInCube(ctx, sandboxID); err != nil {
+		return nil, err
+	}
+	if err := c.startRuntimeInCube(ctx, sandboxID, runtimeEnv); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"local_ref": sandboxID,
+		"result": map[string]any{
+			"reconfigured": true,
+			"runtime_env":  redactedRuntimeEnv(runtimeEnv),
+		},
+	}, nil
+}
+
+func hasRuntimeModelConfig(runtime map[string]string) bool {
+	for _, key := range []string{"api_key", "base_url", "model", "TEAM_API_KEY", "TEAM_BASE_URL", "TEAM_MODEL"} {
+		if strings.TrimSpace(runtime[key]) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *sandboxdClient) stopRuntimeInCube(ctx context.Context, sandboxID string) error {
+	code := `import subprocess, time
+subprocess.run(["bash", "-lc", "pkill -f 'multica daemon' || pkill -f 'multica-daemon' || true"], check=False)
+time.sleep(2)
+print("runtime stopped")
+`
+	return c.cubeJSON(ctx, http.MethodPost, "/execute", map[string]any{"code": code, "language": "python"}, fmt.Sprintf("49999-%s.%s", sandboxID, c.cfg.CubeDomain), nil)
 }
 
 func (c *sandboxdClient) cubeLifecycle(ctx context.Context, sandboxID, suffix string, stopped bool) (map[string]any, error) {

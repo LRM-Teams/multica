@@ -24,6 +24,17 @@ type RuntimeFormState = {
   model: string;
 };
 
+function buildRuntimePayload(form: RuntimeFormState) {
+  const payload: Record<string, string> = {};
+  const apiKey = form.apiKey.trim();
+  const baseUrl = form.baseUrl.trim();
+  const model = form.model.trim();
+  if (apiKey) payload.api_key = apiKey;
+  if (baseUrl) payload.base_url = baseUrl;
+  if (model) payload.model = model;
+  return payload;
+}
+
 export function SandboxDetailPage({ instanceId }: { instanceId: string }) {
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
@@ -63,24 +74,27 @@ export function SandboxDetailPage({ instanceId }: { instanceId: string }) {
     );
   }
 
-  const canSave = name.trim().length > 0 && runtime.apiKey.trim().length > 0;
+  const canSave = name.trim().length > 0;
 
   const handleSave = async () => {
     if (!canSave) return;
     try {
+      const runtimePayload = buildRuntimePayload(runtime);
       await update.mutateAsync({
         name: name.trim(),
-        runtime: {
-          api_key: runtime.apiKey.trim(),
-          base_url: runtime.baseUrl.trim(),
-          model: runtime.model.trim(),
-        },
+        ...(Object.keys(runtimePayload).length > 0 ? { runtime: runtimePayload } : {}),
       });
-      toast.success(t(($) => $.sandboxes_page.save_success));
+      toast.success(
+        Object.keys(runtimePayload).length > 0
+          ? t(($) => $.sandboxes_page.save_reconfiguring)
+          : t(($) => $.sandboxes_page.save_success),
+      );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.save_failed));
     }
   };
+
+  const isReconfiguring = instance.status === "reconfiguring";
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -96,6 +110,12 @@ export function SandboxDetailPage({ instanceId }: { instanceId: string }) {
           {instance.status}
         </Badge>
       </div>
+
+      {isReconfiguring && (
+        <div className="border-b bg-muted/40 px-6 py-2 text-sm text-muted-foreground">
+          {t(($) => $.sandboxes_page.reconfiguring_hint)}
+        </div>
+      )}
 
       <div className="overflow-auto p-6">
         <Card className="max-w-2xl">
@@ -126,7 +146,7 @@ export function SandboxDetailPage({ instanceId }: { instanceId: string }) {
             <div className="space-y-3">
               <div>
                 <div className="text-sm font-medium">{t(($) => $.sandboxes_page.runtime_model_title)}</div>
-                <p className="text-xs text-muted-foreground">{t(($) => $.sandboxes_page.runtime_model_hint)}</p>
+                <p className="text-xs text-muted-foreground">{t(($) => $.sandboxes_page.runtime_model_optional_hint)}</p>
               </div>
               <Input
                 type="password"
@@ -147,7 +167,7 @@ export function SandboxDetailPage({ instanceId }: { instanceId: string }) {
             </div>
 
             <div className="flex justify-end">
-              <Button onClick={handleSave} disabled={!canSave || update.isPending}>
+              <Button onClick={handleSave} disabled={!canSave || update.isPending || isReconfiguring}>
                 {update.isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
                 {t(($) => $.sandboxes_page.save_action)}
               </Button>

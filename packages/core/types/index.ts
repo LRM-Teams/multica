@@ -19,7 +19,7 @@ export type {
   CreateAgentRequest,
   AgentCreationDraft,
   CreateAgentDraftRequest,
-  EnsureJoeResponse,
+  EnsureWindyResponse,
   AgentTemplate,
   AgentTemplateSummary,
   AgentTemplateSkillRef,

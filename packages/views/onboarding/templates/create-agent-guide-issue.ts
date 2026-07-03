@@ -1,10 +1,10 @@
 import {
-  JOE_AGENT_NAME,
-  JOE_DESCRIPTION,
-  JOE_INSTRUCTIONS,
-} from "./joe-instructions";
+  HELPER_DESCRIPTION,
+  HELPER_INSTRUCTIONS,
+  type HelperInstructionsLang,
+} from "./helper-instructions";
 
-const HELPER_AGENT_NAME = JOE_AGENT_NAME;
+const HELPER_AGENT_NAME = "Multica Helper";
 
 /**
  * Skip path, issue 2/2: "Create your first Multica Agent".
@@ -39,18 +39,18 @@ interface BodyOpts {
 export function getCreateAgentGuideBody(opts: BodyOpts): string {
   const mention = `[${opts.installRuntimeIdentifier}](mention://issue/${opts.installRuntimeId})`;
   if (opts.lang === "zh") {
-    return zhBody(mention);
+    return zhBody(mention, opts.lang);
   }
   if (opts.lang === "ko") {
-    return koBody(mention);
+    return koBody(mention, opts.lang);
   }
   if (opts.lang === "ja") {
-    return jaBody(mention);
+    return jaBody(mention, opts.lang);
   }
-  return enBody(mention);
+  return enBody(mention, opts.lang);
 }
 
-function enBody(installRuntimeMention: string): string {
+function enBody(installRuntimeMention: string, lang: HelperInstructionsLang): string {
   return `Once your runtime is online (see ${installRuntimeMention}), build your first agent — Multica Helper. The prompt below is pre-written; just copy.
 
 ## 1. Open the new-agent screen
@@ -70,12 +70,12 @@ ${HELPER_AGENT_NAME}
 
 **Description**
 \`\`\`md
-${JOE_DESCRIPTION}
+${HELPER_DESCRIPTION[lang]}
 \`\`\`
 
 **Instructions**
 \`\`\`md
-${JOE_INSTRUCTIONS}
+${HELPER_INSTRUCTIONS[lang]}
 \`\`\`
 
 ## 4. Save → assign an issue
@@ -92,7 +92,7 @@ Now create an issue (or reassign an existing one) → set assignee = Multica Hel
 - **Docs** — https://multica.ai/docs.`;
 }
 
-function zhBody(installRuntimeMention: string): string {
+function zhBody(installRuntimeMention: string, lang: HelperInstructionsLang): string {
   return `等运行时上线（见 ${installRuntimeMention}）之后，把第一个 agent —— Multica Helper —— 建出来。下面的提示词已经写好，直接复制即可。
 
 ## 1. 打开新建 agent 页
@@ -112,12 +112,12 @@ ${HELPER_AGENT_NAME}
 
 **描述**
 \`\`\`md
-${JOE_DESCRIPTION}
+${HELPER_DESCRIPTION[lang]}
 \`\`\`
 
 **指令**
 \`\`\`md
-${JOE_INSTRUCTIONS}
+${HELPER_INSTRUCTIONS[lang]}
 \`\`\`
 
 ## 4. 保存 → 分派 issue
@@ -134,7 +134,7 @@ ${JOE_INSTRUCTIONS}
 - **文档** —— https://multica.ai/docs。`;
 }
 
-function koBody(installRuntimeMention: string): string {
+function koBody(installRuntimeMention: string, lang: HelperInstructionsLang): string {
   return `runtime이 online 상태가 되면(${installRuntimeMention} 참고), 첫 agent인 Multica Helper를 만드세요. 아래 prompt는 미리 작성되어 있으니 그대로 복사하면 됩니다.
 
 ## 1. 새 agent 화면 열기
@@ -154,12 +154,12 @@ ${HELPER_AGENT_NAME}
 
 **Description**
 \`\`\`md
-${JOE_DESCRIPTION}
+${HELPER_DESCRIPTION[lang]}
 \`\`\`
 
 **Instructions**
 \`\`\`md
-${JOE_INSTRUCTIONS}
+${HELPER_INSTRUCTIONS[lang]}
 \`\`\`
 
 ## 4. 저장 → issue 배정
@@ -176,7 +176,7 @@ ${JOE_INSTRUCTIONS}
 - **Docs** — https://multica.ai/docs.`;
 }
 
-function jaBody(installRuntimeMention: string): string {
+function jaBody(installRuntimeMention: string, lang: HelperInstructionsLang): string {
   return `runtime が online になったら(${installRuntimeMention} を参照)、最初の agent である Multica Helper を作りましょう。下の prompt はあらかじめ書いてあるので、そのままコピーするだけです。
 
 ## 1. 新しい agent の画面を開く
@@ -196,12 +196,12 @@ ${HELPER_AGENT_NAME}
 
 **Description**
 \`\`\`md
-${JOE_DESCRIPTION}
+${HELPER_DESCRIPTION[lang]}
 \`\`\`
 
 **Instructions**
 \`\`\`md
-${JOE_INSTRUCTIONS}
+${HELPER_INSTRUCTIONS[lang]}
 \`\`\`
 
 ## 4. 保存 → issue を割り当てる

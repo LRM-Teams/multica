@@ -897,7 +897,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Route("/api/agents", func(r chi.Router) {
 				r.Get("/", h.ListAgents)
 				r.Post("/", h.CreateAgent)
-				r.Post("/joe", h.EnsureJoe)
+				r.Post("/windy", h.EnsureWindy)
 				r.Post("/drafts", h.CreateAgentDraft)
 				r.Get("/drafts/{draftId}", h.GetAgentDraft)
 				// Agent templates: pre-configured instructions + skill refs.

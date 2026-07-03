@@ -1,4 +1,4 @@
-export function parseJoeCreateAgentURL(raw: string): URL | null {
+export function parseWindyCreateAgentURL(raw: string): URL | null {
   try {
     const url = new URL(raw);
     if (url.protocol !== "multica:" || url.hostname !== "create-agent") return null;
@@ -19,6 +19,6 @@ export function listParam(url: URL, key: string): string[] {
   return values;
 }
 
-export function isJoeCreateAgentLink(href: string | undefined): boolean {
-  return !!href && parseJoeCreateAgentURL(href) != null;
+export function isWindyCreateAgentLink(href: string | undefined): boolean {
+  return !!href && parseWindyCreateAgentURL(href) != null;
 }

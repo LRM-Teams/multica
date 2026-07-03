@@ -20,8 +20,8 @@ import { ProjectChip } from "../projects/components/project-chip";
 import { AppLink } from "../navigation/app-link";
 import { Attachment as AttachmentRenderer } from "../editor/attachment";
 import { AttachmentDownloadProvider } from "../editor/attachment-download-context";
-import { JoeCreateAgentLink } from "./joe-create-agent-links";
-import { isJoeCreateAgentLink } from "./joe-create-agent-link-utils";
+import { WindyCreateAgentLink } from "./windy-create-agent-links";
+import { isWindyCreateAgentLink } from "./windy-create-agent-link-utils";
 
 export type { RenderMode };
 
@@ -254,8 +254,8 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
   );
   const RenderAppLink = React.useCallback(
     ({ href, children }: { href: string; children: React.ReactNode }) => {
-      if (isJoeCreateAgentLink(href)) {
-        return <JoeCreateAgentLink href={href}>{children}</JoeCreateAgentLink>;
+      if (isWindyCreateAgentLink(href)) {
+        return <WindyCreateAgentLink href={href}>{children}</WindyCreateAgentLink>;
       }
       return null;
     },

@@ -165,7 +165,7 @@ export function AgentsPage({
   const [sort, setSort] = useState<SortKey>("recent");
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
-  const [ensuringJoe, setEnsuringJoe] = useState(false);
+  const [ensuringWindy, setEnsuringWindy] = useState(false);
   const [createDraft, setCreateDraft] = useState<AgentCreationDraft | null>(null);
   // When set, the Create dialog opens pre-populated with this agent's
   // config — driven by the row-level "Duplicate" action. We keep this
@@ -180,11 +180,11 @@ export function AgentsPage({
     setShowCreate(true);
   }, []);
 
-  const handleEnsureJoe = useCallback(async () => {
-    if (ensuringJoe) return;
-    setEnsuringJoe(true);
+  const handleEnsureWindy = useCallback(async () => {
+    if (ensuringWindy) return;
+    setEnsuringWindy(true);
     try {
-      const result = await api.ensureJoe();
+      const result = await api.ensureWindy();
       qc.setQueryData<Agent[]>(workspaceKeys.agents(wsId), (current = []) => {
         const exists = current.some((a) => a.id === result.agent.id);
         return exists
@@ -200,9 +200,9 @@ export function AgentsPage({
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create Windy");
     } finally {
-      setEnsuringJoe(false);
+      setEnsuringWindy(false);
     }
-  }, [ensuringJoe, navigation, paths, qc, wsId]);
+  }, [ensuringWindy, navigation, paths, qc, wsId]);
 
   useEffect(() => {
     const draftId = navigation.searchParams.get("draft");
@@ -595,7 +595,7 @@ export function AgentsPage({
   if (isLoading) {
     return (
       <div className="flex flex-1 min-h-0 flex-col">
-        <PageHeaderBar totalCount={0} onCreate={openBlankCreate} onEnsureJoe={handleEnsureJoe} ensuringJoe={ensuringJoe} />
+        <PageHeaderBar totalCount={0} onCreate={openBlankCreate} onEnsureWindy={handleEnsureWindy} ensuringWindy={ensuringWindy} />
         <div className="flex flex-1 min-h-0 flex-col gap-4 p-6">
           <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-lg border">
             <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
@@ -625,8 +625,8 @@ export function AgentsPage({
         onCreate={openBlankCreate}
         listError={listError}
         onRetry={refetchList}
-        onEnsureJoe={handleEnsureJoe}
-        ensuringJoe={ensuringJoe}
+        onEnsureWindy={handleEnsureWindy}
+        ensuringWindy={ensuringWindy}
       />
     );
   }
@@ -638,8 +638,8 @@ export function AgentsPage({
       <PageHeaderBar
         totalCount={totalActiveCount}
         onCreate={openBlankCreate}
-        onEnsureJoe={handleEnsureJoe}
-        ensuringJoe={ensuringJoe}
+        onEnsureWindy={handleEnsureWindy}
+        ensuringWindy={ensuringWindy}
       />
 
       {showEmpty ? (
@@ -798,13 +798,13 @@ export function AgentsPage({
 function PageHeaderBar({
   totalCount,
   onCreate,
-  onEnsureJoe,
-  ensuringJoe,
+  onEnsureWindy,
+  ensuringWindy,
 }: {
   totalCount: number;
   onCreate: () => void;
-  onEnsureJoe: () => void;
-  ensuringJoe: boolean;
+  onEnsureWindy: () => void;
+  ensuringWindy: boolean;
 }) {
   const { t } = useT("agents");
   return (
@@ -831,8 +831,8 @@ function PageHeaderBar({
         </p>
       </div>
       <div className="flex items-center gap-2">
-        <Button type="button" size="sm" variant="outline" onClick={onEnsureJoe} disabled={ensuringJoe}>
-          {ensuringJoe ? <Loader2 className="h-3 w-3 animate-spin" /> : <Bot className="h-3 w-3" />}
+        <Button type="button" size="sm" variant="outline" onClick={onEnsureWindy} disabled={ensuringWindy}>
+          {ensuringWindy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Bot className="h-3 w-3" />}
           {t(($) => $.windy.ask_windy)}
         </Button>
         <Button type="button" size="sm" onClick={onCreate}>
@@ -848,19 +848,19 @@ function ListError({
   onCreate,
   listError,
   onRetry,
-  onEnsureJoe,
-  ensuringJoe,
+  onEnsureWindy,
+  ensuringWindy,
 }: {
   onCreate: () => void;
   listError: unknown;
   onRetry: () => void;
-  onEnsureJoe: () => void;
-  ensuringJoe: boolean;
+  onEnsureWindy: () => void;
+  ensuringWindy: boolean;
 }) {
   const { t } = useT("agents");
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <PageHeaderBar totalCount={0} onCreate={onCreate} onEnsureJoe={onEnsureJoe} ensuringJoe={ensuringJoe} />
+      <PageHeaderBar totalCount={0} onCreate={onCreate} onEnsureWindy={onEnsureWindy} ensuringWindy={ensuringWindy} />
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
         <AlertCircle className="h-8 w-8 text-destructive" />
         <div>

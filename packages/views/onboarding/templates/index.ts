@@ -28,11 +28,11 @@ export {
   type QuestionnaireRaw,
 } from "./user-context";
 export {
-  JOE_AGENT_NAME,
-  JOE_DESCRIPTION,
-  JOE_AVATAR_URL,
-  JOE_INSTRUCTIONS,
-} from "./joe-instructions";
+  WINDY_AGENT_NAME,
+  WINDY_DESCRIPTION,
+  WINDY_AVATAR_URL,
+  WINDY_INSTRUCTIONS,
+} from "./windy-instructions";
 
 type ContentLang = "en" | "zh" | "ko" | "ja";
 

@@ -24,9 +24,9 @@ import { ModelDropdown } from "../agents/components/model-dropdown";
 import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
-import { listParam, parseJoeCreateAgentURL } from "./joe-create-agent-link-utils";
+import { listParam, parseWindyCreateAgentURL } from "./windy-create-agent-link-utils";
 
-export function JoeCreateAgentLink({
+export function WindyCreateAgentLink({
   href,
   children,
   className,
@@ -39,7 +39,7 @@ export function JoeCreateAgentLink({
   const [draft, setDraft] = React.useState<AgentCreationDraft | null>(null);
 
   const handleClick = async () => {
-    const url = parseJoeCreateAgentURL(href);
+    const url = parseWindyCreateAgentURL(href);
     if (!url || creatingDraft) return;
     const name = url.searchParams.get("name")?.trim() || "New Agent";
     setCreatingDraft(true);

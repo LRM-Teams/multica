@@ -18,18 +18,18 @@ import (
 )
 
 const (
-	joeAgentName        = "Windy"
-	legacyJoeAgentName  = "Joe"
-	joeAgentTemplate    = "windy_hr"
-	joeDescription      = "Personal HR for building and updating your Multica agent team."
-	joeMaxDraftNameLen  = 80
-	joeMaxDraftTextLen  = 20000
-	joeMaxDraftListSize = 32
+	windyAgentName        = "Windy"
+	legacyWindyAgentName  = "Joe"
+	windyAgentTemplate    = "windy_hr"
+	windyDescription      = "Personal HR for building and updating your Multica agent team."
+	windyMaxDraftNameLen  = 80
+	windyMaxDraftTextLen  = 20000
+	windyMaxDraftListSize = 32
 )
 
-const joeAvatarURL = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%232BB3A3'/%3E%3Cstop offset='100%25' stop-color='%23F4C542'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='128' height='128' rx='30' fill='url(%23g)'/%3E%3Cpath d='M31 78c18-35 48-35 66 0' fill='none' stroke='%230F172A' stroke-width='10' stroke-linecap='round'/%3E%3Ccircle cx='47' cy='51' r='8' fill='%230F172A'/%3E%3Ccircle cx='81' cy='51' r='8' fill='%230F172A'/%3E%3Cpath d='M39 95h50' stroke='%23fff' stroke-width='9' stroke-linecap='round'/%3E%3C/svg%3E"
+const windyAvatarURL = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%232BB3A3'/%3E%3Cstop offset='100%25' stop-color='%23F4C542'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='128' height='128' rx='30' fill='url(%23g)'/%3E%3Cpath d='M31 78c18-35 48-35 66 0' fill='none' stroke='%230F172A' stroke-width='10' stroke-linecap='round'/%3E%3Ccircle cx='47' cy='51' r='8' fill='%230F172A'/%3E%3Ccircle cx='81' cy='51' r='8' fill='%230F172A'/%3E%3Cpath d='M39 95h50' stroke='%23fff' stroke-width='9' stroke-linecap='round'/%3E%3C/svg%3E"
 
-const joeInstructions = `Role
+const windyInstructions = `Role
 
 You are Windy, the user's personal HR and team-building lead for Multica. Your mission is to help this user start useful human-agent collaboration quickly by turning their real work into agents, channels, projects, and tasks.
 
@@ -89,7 +89,7 @@ Behavioral Invariant
 
 Success is not a long onboarding conversation. Success means the user gets a useful first team, a practical channel, and a clear next step toward real collaboration.`
 
-type JoeResponse struct {
+type WindyResponse struct {
 	Agent AgentResponse `json:"agent"`
 	DMID  string        `json:"dm_id,omitempty"`
 }
@@ -129,7 +129,7 @@ type CreateAgentDraftRequest struct {
 	RecommendedTools  []string `json:"recommended_tools"`
 }
 
-func (h *Handler) EnsureJoe(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
@@ -144,7 +144,7 @@ func (h *Handler) EnsureJoe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	runtime, ok := h.pickJoeRuntime(w, r, wsUUID, parseUUID(userID))
+	runtime, ok := h.pickWindyRuntime(w, r, wsUUID, parseUUID(userID))
 	if !ok {
 		return
 	}
@@ -153,9 +153,9 @@ func (h *Handler) EnsureJoe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agent, created, err := h.ensureJoeAgent(r, wsUUID, parseUUID(userID), runtime)
+	agent, created, err := h.ensureWindyAgent(r, wsUUID, parseUUID(userID), runtime)
 	if err != nil {
-		slog.Warn("ensure joe failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
+		slog.Warn("ensure Windy failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to create Windy")
 		return
 	}
@@ -173,22 +173,22 @@ func (h *Handler) EnsureJoe(w http.ResponseWriter, r *http.Request) {
 			uuidToString(agent.ID),
 			runtime.Provider,
 			runtime.RuntimeMode,
-			joeAgentTemplate,
+			windyAgentTemplate,
 			false,
 		))
 	}
 
 	dmID := ""
-	if ch, ok := h.ensureJoeDM(r, workspaceID, parseUUID(userID), agent.ID); ok {
+	if ch, ok := h.ensureWindyDM(r, workspaceID, parseUUID(userID), agent.ID); ok {
 		dmID = ch.ID
 	}
 
 	resp := agentToResponse(agent)
 	redactAgentResponseForActor(&resp, "member")
-	writeJSON(w, http.StatusOK, JoeResponse{Agent: resp, DMID: dmID})
+	writeJSON(w, http.StatusOK, WindyResponse{Agent: resp, DMID: dmID})
 }
 
-func (h *Handler) pickJoeRuntime(w http.ResponseWriter, r *http.Request, workspaceID, userID pgtype.UUID) (db.AgentRuntime, bool) {
+func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, workspaceID, userID pgtype.UUID) (db.AgentRuntime, bool) {
 	runtimeID := strings.TrimSpace(r.URL.Query().Get("runtime_id"))
 	if runtimeID != "" {
 		runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
@@ -225,23 +225,23 @@ func (h *Handler) pickJoeRuntime(w http.ResponseWriter, r *http.Request, workspa
 	return runtimes[0], true
 }
 
-func (h *Handler) ensureJoeAgent(r *http.Request, workspaceID, userID pgtype.UUID, runtime db.AgentRuntime) (db.Agent, bool, error) {
+func (h *Handler) ensureWindyAgent(r *http.Request, workspaceID, userID pgtype.UUID, runtime db.AgentRuntime) (db.Agent, bool, error) {
 	agents, err := h.Queries.ListAgents(r.Context(), workspaceID)
 	if err != nil {
 		return db.Agent{}, false, err
 	}
 	for _, existing := range agents {
 		name := agentDisplayName(existing)
-		if existing.OwnerID.Valid && uuidToString(existing.OwnerID) == uuidToString(userID) && (name == joeAgentName || name == legacyJoeAgentName) && existing.Visibility == "private" {
+		if existing.OwnerID.Valid && uuidToString(existing.OwnerID) == uuidToString(userID) && (name == windyAgentName || name == legacyWindyAgentName) && existing.Visibility == "private" {
 			return existing, false, nil
 		}
 	}
 
 	created, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
 		WorkspaceID:        workspaceID,
-		Description:        joeDescription,
-		Instructions:       joeInstructions,
-		AvatarUrl:          pgtype.Text{String: joeAvatarURL, Valid: true},
+		Description:        windyDescription,
+		Instructions:       windyInstructions,
+		AvatarUrl:          pgtype.Text{String: windyAvatarURL, Valid: true},
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      []byte("{}"),
 		RuntimeID:          runtime.ID,
@@ -253,20 +253,20 @@ func (h *Handler) ensureJoeAgent(r *http.Request, workspaceID, userID pgtype.UUI
 		McpConfig:          nil,
 		Model:              pgtype.Text{},
 		ThinkingLevel:      pgtype.Text{},
-	}, joeAgentName, joeAgentName)
+	}, windyAgentName, windyAgentName)
 	if err != nil {
 		return db.Agent{}, false, err
 	}
 	return created, true, nil
 }
 
-func (h *Handler) ensureJoeDM(r *http.Request, workspaceID string, userID, joeID pgtype.UUID) (ChannelResponse, bool) {
-	canonical := dmCanonicalName("user", uuidToString(userID), "agent", uuidToString(joeID))
+func (h *Handler) ensureWindyDM(r *http.Request, workspaceID string, userID, windyID pgtype.UUID) (ChannelResponse, bool) {
+	canonical := dmCanonicalName("user", uuidToString(userID), "agent", uuidToString(windyID))
 	if ch, found := h.findDMChannel(r.Context(), workspaceID, canonical); found {
-		h.clearDMPeerHidden(r.Context(), workspaceID, uuidToString(userID), dmPeerRef{Type: "agent", ID: joeID})
+		h.clearDMPeerHidden(r.Context(), workspaceID, uuidToString(userID), dmPeerRef{Type: "agent", ID: windyID})
 		return ch, true
 	}
-	return h.createDMChannel(r.Context(), nil, workspaceID, uuidToString(userID), canonical, []dmMember{{memberType: "user", memberID: userID}, {memberType: "agent", memberID: joeID}})
+	return h.createDMChannel(r.Context(), nil, workspaceID, uuidToString(userID), canonical, []dmMember{{memberType: "user", memberID: userID}, {memberType: "agent", memberID: windyID}})
 }
 
 func (h *Handler) GetAgentDraft(w http.ResponseWriter, r *http.Request) {
@@ -370,28 +370,28 @@ func (h *Handler) validateAgentDraftRequest(w http.ResponseWriter, req *CreateAg
 		writeError(w, http.StatusBadRequest, "name is required")
 		return false
 	}
-	if utf8.RuneCountInString(req.Name) > joeMaxDraftNameLen {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("name must be %d characters or fewer", joeMaxDraftNameLen))
+	if utf8.RuneCountInString(req.Name) > windyMaxDraftNameLen {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("name must be %d characters or fewer", windyMaxDraftNameLen))
 		return false
 	}
 	if utf8.RuneCountInString(req.Description) > maxAgentDescriptionLength {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("description must be %d characters or fewer", maxAgentDescriptionLength))
 		return false
 	}
-	if utf8.RuneCountInString(req.Instructions) > joeMaxDraftTextLen {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("instructions must be %d characters or fewer", joeMaxDraftTextLen))
+	if utf8.RuneCountInString(req.Instructions) > windyMaxDraftTextLen {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("instructions must be %d characters or fewer", windyMaxDraftTextLen))
 		return false
 	}
 	if req.Visibility != "workspace" && req.Visibility != "private" {
 		writeError(w, http.StatusBadRequest, "visibility must be workspace or private")
 		return false
 	}
-	req.SuggestedChannels = cleanJoeStringList(req.SuggestedChannels, joeMaxDraftListSize)
-	req.RecommendedTools = cleanJoeStringList(req.RecommendedTools, joeMaxDraftListSize)
+	req.SuggestedChannels = cleanWindyStringList(req.SuggestedChannels, windyMaxDraftListSize)
+	req.RecommendedTools = cleanWindyStringList(req.RecommendedTools, windyMaxDraftListSize)
 	return true
 }
 
-func cleanJoeStringList(in []string, max int) []string {
+func cleanWindyStringList(in []string, max int) []string {
 	out := make([]string, 0, len(in))
 	for _, item := range in {
 		trimmed := strings.TrimSpace(item)

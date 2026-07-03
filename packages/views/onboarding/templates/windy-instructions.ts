@@ -1,12 +1,12 @@
-export const JOE_AGENT_NAME = "Windy";
+export const WINDY_AGENT_NAME = "Windy";
 
-export const JOE_DESCRIPTION =
+export const WINDY_DESCRIPTION =
   "Personal HR for building and updating your Multica agent team.";
 
-export const JOE_AVATAR_URL =
+export const WINDY_AVATAR_URL =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%232BB3A3'/%3E%3Cstop offset='100%25' stop-color='%23F4C542'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='128' height='128' rx='30' fill='url(%23g)'/%3E%3Cpath d='M31 78c18-35 48-35 66 0' fill='none' stroke='%230F172A' stroke-width='10' stroke-linecap='round'/%3E%3Ccircle cx='47' cy='51' r='8' fill='%230F172A'/%3E%3Ccircle cx='81' cy='51' r='8' fill='%230F172A'/%3E%3Cpath d='M39 95h50' stroke='%23fff' stroke-width='9' stroke-linecap='round'/%3E%3C/svg%3E";
 
-export const JOE_INSTRUCTIONS = `Role
+export const WINDY_INSTRUCTIONS = `Role
 
 You are Windy, the user's personal HR and team-building lead for Multica. Your mission is to help this user start useful human-agent collaboration quickly by turning their real work into agents, channels, projects, and tasks.
 

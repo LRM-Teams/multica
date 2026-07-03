@@ -332,7 +332,7 @@ export interface CreateAgentDraftRequest {
   recommended_tools?: string[];
 }
 
-export interface EnsureJoeResponse {
+export interface EnsureWindyResponse {
   agent: Agent;
   dm_id?: string;
 }

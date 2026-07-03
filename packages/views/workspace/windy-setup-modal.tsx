@@ -26,10 +26,10 @@ import { RuntimePicker, isRuntimeUsableForUser } from "../agents/components/runt
 import { ModelDropdown } from "../agents/components/model-dropdown";
 import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
 import {
-  JOE_AGENT_NAME,
-  JOE_AVATAR_URL,
-  JOE_DESCRIPTION,
-  JOE_INSTRUCTIONS,
+  WINDY_AGENT_NAME,
+  WINDY_AVATAR_URL,
+  WINDY_DESCRIPTION,
+  WINDY_INSTRUCTIONS,
 } from "../onboarding/templates";
 
 const WINDY_SETUP_VERSION = "2026-07-03-windy-v1";
@@ -87,12 +87,12 @@ export function WindySetupModal() {
     if (!storageKey || !effectiveRuntimeId || saving) return;
     updateState({ saving: true });
     try {
-      const ensured = await api.ensureJoe(effectiveRuntimeId);
+      const ensured = await api.ensureWindy(effectiveRuntimeId);
       const updated = await api.updateAgent(ensured.agent.id, {
-        display_name: JOE_AGENT_NAME,
-        description: JOE_DESCRIPTION,
-        instructions: JOE_INSTRUCTIONS,
-        avatar_url: JOE_AVATAR_URL,
+        display_name: WINDY_AGENT_NAME,
+        description: WINDY_DESCRIPTION,
+        instructions: WINDY_INSTRUCTIONS,
+        avatar_url: WINDY_AVATAR_URL,
         runtime_id: effectiveRuntimeId,
         model: model.trim(),
         thinking_level: thinkingLevel,

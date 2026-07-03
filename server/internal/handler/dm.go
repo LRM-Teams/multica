@@ -270,6 +270,33 @@ func (h *Handler) resolveDMChannelPeer(w http.ResponseWriter, ctx context.Contex
 	return peer, true
 }
 
+func (h *Handler) requireDMChannelAgentAccess(w http.ResponseWriter, r *http.Request, workspaceID, userID string, ch ChannelResponse) bool {
+	if ch.Kind != "dm" {
+		return true
+	}
+	peer, ok := h.resolveDMChannelPeer(w, r.Context(), workspaceID, userID, parseUUID(ch.ID))
+	if !ok {
+		return false
+	}
+	if peer.Type != "agent" {
+		return true
+	}
+	agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
+		ID:          peer.ID,
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil || agent.ArchivedAt.Valid {
+		writeError(w, http.StatusNotFound, "direct message peer not found")
+		return false
+	}
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
+		writeError(w, http.StatusForbidden, "you do not have access to this agent")
+		return false
+	}
+	return true
+}
+
 func (h *Handler) resolveDMSessionPeer(w http.ResponseWriter, r *http.Request, userID, workspaceID, sessionID string) (db.ChatSession, dmPeerRef, bool) {
 	session, ok := h.gateChatSessionForUser(w, r, userID, workspaceID, sessionID)
 	if !ok {
@@ -680,6 +707,10 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 // live in dispatchChannelAgentReply, so an agent's own reply never re-triggers.
 func (h *Handler) dispatchDMAgentReply(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
 	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
+		if !h.canAccessPrivateAgent(ctx, agent, "user", uuidToString(initiatorUserID), ch.WorkspaceID) {
+			slog.Warn("skip dm agent dispatch after access check failed", "channel_id", ch.ID, "agent_id", uuidToString(agent.ID), "initiator_user_id", uuidToString(initiatorUserID))
+			continue
+		}
 		h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
 	}
 }

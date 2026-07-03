@@ -86,10 +86,9 @@ func (l *memoryWebhookRateLimiter) Allow(_ context.Context, key string) bool {
 
 // ── Redis implementation ────────────────────────────────────────────────────
 
-// webhookLimiterKey:<token> is the ZSET we keep timestamps in. Members are
-// nanosecond timestamps as strings. Score = same value, so ZREMRANGEBYSCORE
-// can drop everything older than the cutoff, then ZCARD tells us the
-// remaining count.
+// webhookLimiterKey:<token> is the ZSET we keep timestamps in. Score is the
+// request timestamp, while members include a Redis-side sequence so bursts
+// inside the same clock tick cannot overwrite each other and undercount.
 const (
 	webhookLimiterKeyPrefix   = "mul:webhook:rate:"
 	webhookIPLimiterKeyPrefix = "mul:webhook:ip:"
@@ -98,6 +97,7 @@ const (
 // webhookLimiterAllowSrc runs the slide-window check atomically on Redis:
 //
 //	KEYS[1] = ZSET key
+//	KEYS[2] = sequence key for unique ZSET members
 //	ARGV[1] = now (unix nanos as string)
 //	ARGV[2] = cutoff (unix nanos as string)
 //	ARGV[3] = limit
@@ -119,8 +119,10 @@ local count = redis.call('ZCARD', key)
 if count >= limit then
     return 0
 end
-redis.call('ZADD', key, now, tostring(now))
+local seq = redis.call('INCR', KEYS[2])
+redis.call('ZADD', key, now, tostring(now) .. ':' .. tostring(seq))
 redis.call('EXPIRE', key, ttl)
+redis.call('EXPIRE', KEYS[2], ttl)
 return 1
 `
 
@@ -172,7 +174,7 @@ func (l *redisWebhookRateLimiter) Allow(ctx context.Context, key string) bool {
 	res, err := webhookLimiterAllowScript.Run(
 		ctx,
 		l.rdb,
-		[]string{prefix + key},
+		[]string{prefix + key, prefix + key + ":seq"},
 		now, cutoff, l.cfg.Limit, ttlSeconds,
 	).Int()
 	if err != nil {

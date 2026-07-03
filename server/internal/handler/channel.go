@@ -748,8 +748,16 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+	if !h.requireGroupChannel(w, r.Context(), workspaceID, channelID) {
+		return
+	}
 	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
 		return
+	}
+	if !(memberType == "user" && uuidToString(memberID) == userID) {
+		if !h.requireChannelManager(w, r, workspaceID, channelID, parseUUID(userID)) {
+			return
+		}
 	}
 	_, err := h.DB.Exec(r.Context(), `
 		DELETE FROM channel_member
@@ -774,6 +782,14 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	ch, found := h.getChannel(r.Context(), workspaceID, channelID)
+	if !found {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
 		return
 	}
 	usePageResponse := hasChannelMessagesPageParams(r)
@@ -1251,6 +1267,14 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+	ch, found := h.getChannel(r.Context(), workspaceID, channelID)
+	if !found {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
+		return
+	}
 	root, ok := h.loadChannelThreadRoot(w, r.Context(), workspaceID, channelID, rootID)
 	if !ok {
 		return
@@ -1354,6 +1378,9 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		return
 	}
 	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
 		return
 	}
 	root, ok := h.loadChannelThreadRoot(w, r.Context(), workspaceID, channelID, rootID)
@@ -1774,6 +1801,9 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
 		return
 	}
+	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
+		return
+	}
 	replyToMessageID, ok := h.validateChannelReplyTarget(w, r.Context(), workspaceID, channelID, req.ReplyToMessageID)
 	if !ok {
 		return
@@ -1859,6 +1889,9 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 	}
 	if ch.ArchivedAt != nil {
 		writeError(w, http.StatusConflict, "channel is archived")
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, parseUUID(ch.ID), parseUUID(userID)) {
 		return
 	}
 	threadID := uuid.NewString()

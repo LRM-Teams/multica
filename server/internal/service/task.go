@@ -724,14 +724,9 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 var ErrChatTaskAgentArchived = errors.New("chat task: agent archived")
 
 // ErrChatTaskAgentNoRuntime signals that EnqueueChatTask refused to
-// queue work because the agent has never been associated with a
-// runtime (agent.runtime_id IS NULL). This is the "agent has no
-// daemon configured" case — productizable as "agent offline".
-//
-// IMPORTANT: this is NOT the same as "the daemon is currently
-// disconnected". When agent.runtime_id IS set, EnqueueChatTask
-// enqueues the task and the daemon claims it on next online; that
-// path returns a task row, not this error.
+// queue work because the destination agent has no currently online runtime.
+// This covers both "no daemon configured" and "bound daemon is offline" —
+// productizable as "agent offline".
 var ErrChatTaskAgentNoRuntime = errors.New("chat task: agent has no runtime")
 
 // EnqueueChatTask creates a queued task for a chat session.
@@ -739,7 +734,7 @@ var ErrChatTaskAgentNoRuntime = errors.New("chat task: agent has no runtime")
 //
 // Errors split into two layers:
 //
-//   - Productizable rejections (agent archived, no runtime) return
+//   - Productizable rejections (agent archived, no online runtime) return
 //     the sentinel errors above. Callers (e.g. the Lark dispatcher)
 //     can errors.Is them to decide a user-visible outcome.
 //
@@ -781,7 +776,13 @@ func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSe
 	if agent.ArchivedAt.Valid {
 		return db.AgentTaskQueue{}, ErrChatTaskAgentArchived
 	}
-	if !agent.RuntimeID.Valid {
+	ready, reason, err := AgentReadiness(ctx, s.Queries, agent)
+	if err != nil {
+		slog.Error("chat task enqueue failed", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)
+		return db.AgentTaskQueue{}, fmt.Errorf("load agent runtime: %w", err)
+	}
+	if !ready {
+		slog.Info("chat task enqueue refused: agent not ready", "chat_session_id", util.UUIDToString(chatSession.ID), "agent_id", util.UUIDToString(chatSession.AgentID), "reason", reason)
 		return db.AgentTaskQueue{}, ErrChatTaskAgentNoRuntime
 	}
 

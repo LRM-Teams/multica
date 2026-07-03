@@ -19,6 +19,7 @@ import (
 // This is the single source of truth shared by:
 //   - service.shouldSkipDispatch (autopilot admission gate)
 //   - service.dispatchRunOnly    (squad-leader runtime check, MUL-2429)
+//   - service.enqueueChatTask    (chat/channel reply admission gate)
 //   - handler.isSquadLeaderReady (issue-assign / comment-trigger path)
 //
 // Keeping these aligned matters because the three paths can otherwise drift

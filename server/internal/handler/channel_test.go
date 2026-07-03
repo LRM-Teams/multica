@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -225,14 +227,14 @@ func TestChannelChatDoneNoReplyAndReactionCommandsAreNotPersisted(t *testing.T) 
 	assertNoChannelMessageContent(t, channelID, malformedReactionCommand)
 }
 
-func TestChannelChatDoneSystemMessageWritesSystemMessage(t *testing.T) {
+func TestChannelChatDoneSuppressedDaemonOutdatedDoesNotWriteSystemMessage(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "System Message Agent", nil)
-	channelID := seedChannelForTest(t, "system-message-"+uuid.NewString(), testUserID)
+	agentID := createHandlerTestAgent(t, "Daemon Outdated Agent", nil)
+	channelID := seedChannelForTest(t, "daemon-outdated-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
@@ -243,7 +245,7 @@ func TestChannelChatDoneSystemMessageWritesSystemMessage(t *testing.T) {
 	if !found {
 		t.Fatal("channel not found after seed")
 	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@System Message Agent reply", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Daemon Outdated Agent reply", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
 	if err != nil {
 		t.Fatalf("insert trigger: %v", err)
 	}
@@ -261,27 +263,15 @@ func TestChannelChatDoneSystemMessageWritesSystemMessage(t *testing.T) {
 		OutputSuppressedReason: protocol.ChannelOutputSuppressedReasonDaemonOutdated,
 	}})
 
-	var authorType, authorName, content string
-	if err := testPool.QueryRow(ctx, `
-		SELECT author_type, author_name, content
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'system'
-	`, channelID).Scan(&authorType, &authorName, &content); err != nil {
-		t.Fatalf("load system message: %v", err)
-	}
-	if authorType != "system" || authorName != "system" || content != "本地守护进程已过期，需要更新。" {
-		t.Fatalf("system message = %q/%q/%q", authorType, authorName, content)
-	}
-
 	var messageCount int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*) FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent'
+		WHERE channel_id = $1 AND author_type IN ('agent', 'system')
 	`, channelID).Scan(&messageCount); err != nil {
-		t.Fatalf("count agent messages: %v", err)
+		t.Fatalf("count visible output messages: %v", err)
 	}
 	if messageCount != 0 {
-		t.Fatalf("agent channel message count = %d, want 0", messageCount)
+		t.Fatalf("visible output message count = %d, want 0", messageCount)
 	}
 }
 
@@ -1229,6 +1219,107 @@ func assertChannelAgentTaskCounts(t *testing.T, channelID, participantID, bystan
 	}
 	if participantTasks != wantParticipant || bystanderTasks != wantBystander {
 		t.Fatalf("thread follow-up tasks = participant:%d bystander:%d, want %d/%d", participantTasks, bystanderTasks, wantParticipant, wantBystander)
+	}
+}
+
+func TestChannelOfflineRuntimeDoesNotQueueOrShowActiveTask(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	suffix := uuid.NewString()
+	var runtimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status,
+			device_info, metadata, owner_id, last_seen_at
+		)
+		VALUES ($1, $2, 'Offline Channel Runtime', 'local', 'test-offline', 'offline', 'test runtime', '{}'::jsonb, $3, now())
+		RETURNING id
+	`, testWorkspaceID, "offline-channel-"+suffix, testUserID).Scan(&runtimeID); err != nil {
+		t.Fatalf("create offline runtime: %v", err)
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, visibility, max_concurrent_tasks, owner_id,
+			instructions, custom_env, custom_args, mcp_config
+		)
+		VALUES ($1, 'Offline Channel Agent', '', 'local', '{}'::jsonb, $2, 'private', 1, $3, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+		RETURNING id
+	`, testWorkspaceID, runtimeID, testUserID).Scan(&agentID); err != nil {
+		t.Fatalf("create offline agent: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+
+	channelID := seedChannelForTest(t, "offline-active-task-"+suffix, testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)
+	`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed offline agent member: %v", err)
+	}
+
+	var chatSessionID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, runtime_id)
+		VALUES ($1, $2, $3, 'offline channel session', $4)
+		RETURNING id
+	`, testWorkspaceID, agentID, testUserID, runtimeID).Scan(&chatSessionID); err != nil {
+		t.Fatalf("create chat session: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_agent_session (channel_id, agent_id, chat_session_id)
+		VALUES ($1, $2, $3)
+	`, channelID, agentID, chatSessionID); err != nil {
+		t.Fatalf("create channel agent session: %v", err)
+	}
+
+	session, err := testHandler.Queries.GetChatSession(ctx, parseUUID(chatSessionID))
+	if err != nil {
+		t.Fatalf("load chat session: %v", err)
+	}
+	if _, err := testHandler.TaskService.EnqueueChatTask(ctx, session, parseUUID(testUserID)); !errors.Is(err, service.ErrChatTaskAgentNoRuntime) {
+		t.Fatalf("enqueue offline chat task error = %v, want ErrChatTaskAgentNoRuntime", err)
+	}
+
+	var queuedCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_task_queue WHERE chat_session_id = $1
+	`, chatSessionID).Scan(&queuedCount); err != nil {
+		t.Fatalf("count queued tasks: %v", err)
+	}
+	if queuedCount != 0 {
+		t.Fatalf("offline enqueue created %d tasks, want 0", queuedCount)
+	}
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, initiator_user_id)
+		VALUES ($1, $2, $3, 'queued', 2, $4)
+	`, agentID, runtimeID, chatSessionID, testUserID); err != nil {
+		t.Fatalf("seed historical offline queued task: %v", err)
+	}
+
+	req := withURLParam(newRequest(http.MethodGet, "/api/channels/"+channelID+"/active-tasks", nil), "channelId", channelID)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	rec := httptest.NewRecorder()
+	testHandler.ListChannelActiveTasks(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list active tasks: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp ChannelActiveTasksResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode active tasks: %v", err)
+	}
+	if len(resp.Tasks) != 0 {
+		t.Fatalf("active tasks = %#v, want none for offline runtime", resp.Tasks)
 	}
 }
 

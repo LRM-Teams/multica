@@ -1962,9 +1962,16 @@ func (h *Handler) dispatchChannelAgentReply(ctx context.Context, ch ChannelRespo
 }
 
 func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, logScope string, showTyping, forceFresh, interruptActive, lowPriority bool) {
+	typingActive := false
 	if showTyping {
 		h.publishChannelAgentTyping(ch, agent, true)
+		typingActive = true
 	}
+	defer func() {
+		if typingActive {
+			h.publishChannelAgentTyping(ch, agent, false)
+		}
+	}()
 	session, err := h.ensureChannelAgentSession(ctx, ch, agent.ID, initiatorUserID)
 	if err != nil {
 		slog.Warn(logScope+": ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
@@ -1991,6 +1998,7 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 		slog.Warn(logScope+": enqueue chat task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
 	}
+	typingActive = false
 	if _, err := h.DB.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
 		slog.Warn(logScope+": tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
 	}
@@ -2024,16 +2032,19 @@ func (h *Handler) dispatchChannelMemberWelcome(ctx context.Context, workspaceID 
 		h.publishChannelAgentTyping(ch, agent, true)
 		session, err := h.ensureChannelAgentSession(ctx, ch, agent.ID, initiatorUserID)
 		if err != nil {
+			h.publishChannelAgentTyping(ch, agent, false)
 			slog.Warn("channel welcome: ensure session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 			continue
 		}
 		promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, synthetic)
 		if err != nil {
+			h.publishChannelAgentTyping(ch, agent, false)
 			slog.Warn("channel welcome: create prompt failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 			continue
 		}
 		task, err := h.TaskService.EnqueueChatTask(ctx, session, initiatorUserID)
 		if err != nil {
+			h.publishChannelAgentTyping(ch, agent, false)
 			slog.Warn("channel welcome: enqueue task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 			continue
 		}
@@ -2682,15 +2693,7 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 		return
 	}
 	if outputType == protocol.ChatOutputKindNoReply {
-		if payload.OutputSuppressedReason == protocol.ChannelOutputSuppressedReasonDaemonOutdated {
-			content := "本地守护进程已过期，需要更新。"
-			msg, err := h.insertChannelMessage(context.Background(), channelID, workspaceID, "system", pgtype.UUID{}, "system", content, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
-			if err != nil {
-				slog.Warn("channel bridge: insert system message failed", "chat_session_id", payload.ChatSessionID, "output_suppressed_reason", payload.OutputSuppressedReason, "error", err)
-				return
-			}
-			h.publish(protocol.EventChannelMessage, uuidToString(workspaceID), "system", "", msg)
-		}
+		slog.Debug("channel bridge: suppressed channel output", "chat_session_id", payload.ChatSessionID, "output_suppressed_reason", payload.OutputSuppressedReason)
 		return
 	}
 	if outputType != protocol.ChatOutputKindMessage {

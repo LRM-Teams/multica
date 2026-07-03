@@ -210,13 +210,32 @@ export function AgentStatusDot({ agentId, size }: { agentId: string; size?: numb
 
   const { dotClass, label } = availabilityConfig[detail.availability];
   const dotSize = (size ?? 24) >= 24 ? "h-1.5 w-1.5" : "h-1 w-1";
+  // "Working" is a motion cue layered on top of the online color, not a new
+  // color — amber is already taken by `unstable`. A slow breathing pulse
+  // communicates "online + actively running a task" without colliding with
+  // the availability palette. `idle` / `queued` / non-online stay static.
+  const isWorking = detail.availability === "online" && detail.workload === "working";
+  const statusLabel = isWorking ? `${label} · Working` : label;
 
   return (
-    <span
-      aria-label={`Status: ${label}`}
-      title={label}
-      className={`absolute bottom-0 right-0 rounded-full ring-1 ring-background ${dotClass} ${dotSize}`}
-    />
+    <span className="absolute bottom-0 right-0 inline-flex">
+      {isWorking && (
+        // Motion layer only — hidden under prefers-reduced-motion so the
+        // static dot below remains the sole (accessible) status signal.
+        // aria-hidden: the label on the static dot already conveys "Working".
+        <span
+          aria-hidden="true"
+          className={`absolute inline-flex ${dotSize} animate-ping rounded-full ${dotClass} opacity-60 motion-reduce:hidden`}
+        />
+      )}
+      <span
+        aria-label={`Status: ${statusLabel}`}
+        title={statusLabel}
+        className={`relative rounded-full ring-1 ring-background ${dotClass} ${dotSize} ${
+          isWorking ? "motion-reduce:ring-2 motion-reduce:ring-brand" : ""
+        }`}
+      />
+    </span>
   );
 }
 

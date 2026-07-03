@@ -47,6 +47,27 @@ vi.mock("../../issues/components/comment-card", () => ({
   AttachmentList: () => null,
 }));
 
+// Agent avatars now overlay the shared presence dot (AgentStatusDot), which
+// reads presence via useAgentPresenceDetail and the current workspace via
+// useCurrentWorkspace. Default to a concrete "online + idle" detail so the
+// dot renders in most tests; the dedicated presence test below overrides it
+// per-case via the mock's return value.
+const presenceDetailMock = vi.fn(() => ({
+  availability: "online" as const,
+  workload: "idle" as const,
+  runningCount: 0,
+  queuedCount: 0,
+  capacity: 1,
+}));
+
+vi.mock("@multica/core/agents", () => ({
+  useAgentPresenceDetail: () => presenceDetailMock(),
+}));
+
+vi.mock("@multica/core/paths", () => ({
+  useCurrentWorkspace: () => ({ id: "ws-1" }),
+}));
+
 // The bubble resolves the author's live avatar from the members/agents cache.
 // Stub it so these layout/identity tests don't need a QueryClient/workspace.
 vi.mock("@multica/core/workspace/hooks", () => ({
@@ -189,6 +210,21 @@ describe("ChannelMessageBubble", () => {
 
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
     expect(screen.getByText("Bob Display")).toBeInTheDocument();
+  });
+
+  it("shows a presence status dot on agent message avatars only", () => {
+    const { rerender } = render(
+      <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />,
+    );
+    expect(screen.getByLabelText(/^Status:/)).toBeInTheDocument();
+
+    rerender(
+      <ChannelMessageBubble
+        message={makeMessage({ author_type: "user", author_id: "user-1", author_name: "alice" })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.queryByLabelText(/^Status:/)).not.toBeInTheDocument();
   });
 
   it("resolves quoted reply author names through live identity", () => {

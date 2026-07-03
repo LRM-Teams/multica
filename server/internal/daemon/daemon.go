@@ -2837,21 +2837,19 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		instructions = task.Agent.Instructions
 	}
 
-	piAgentRootPath := ""
-	piAgentMemoryDir := ""
-	piAgentSkillDir := ""
-	piAgentSkillDraftsPath := ""
+	agentRootPath := ""
+	agentMemoryDir := ""
+	agentSkillDir := ""
+	agentSkillDraftsPath := ""
 	if task.WorkspaceID != "" && agentID != "" {
 		agentRoot := multicaAgentRoot(d.cfg, task.WorkspaceID, agentID)
 		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 			taskLog.Warn("multica agent root creation failed", "error", err)
 		}
-		if provider == "pi" {
-			piAgentRootPath = agentRoot
-			piAgentMemoryDir = filepath.Join(piAgentRootPath, "memory")
-			piAgentSkillDir = filepath.Join(piAgentRootPath, "skills")
-			piAgentSkillDraftsPath = piAgentSkillDraftsDir(piAgentRootPath)
-		}
+		agentRootPath = agentRoot
+		agentMemoryDir = filepath.Join(agentRootPath, "memory")
+		agentSkillDir = filepath.Join(agentRootPath, "skills")
+		agentSkillDraftsPath = piAgentSkillDraftsDir(agentRootPath)
 	}
 
 	// Prepare isolated execution environment.
@@ -2867,10 +2865,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentID:                          agentID,
 		AgentName:                        agentName,
 		AgentInstructions:                instructions,
-		AgentRoot:                        piAgentRootPath,
-		AgentMemoryDir:                   piAgentMemoryDir,
-		AgentSkillDir:                    piAgentSkillDir,
-		AgentSkillDraftsDir:              piAgentSkillDraftsPath,
+		AgentRoot:                        agentRootPath,
+		AgentMemoryDir:                   agentMemoryDir,
+		AgentSkillDir:                    agentSkillDir,
+		AgentSkillDraftsDir:              agentSkillDraftsPath,
 		AgentSkills:                      convertSkillsForEnv(skills),
 		Repos:                            convertReposForEnv(task.Repos),
 		ProjectID:                        task.ProjectID,

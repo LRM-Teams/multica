@@ -34,6 +34,7 @@ type AgentRuntimeResponse struct {
 	TargetVersion  *string  `json:"target_version,omitempty"`
 	UpdateState    string   `json:"update_state"`
 	RuntimeHealth  string   `json:"runtime_health"`
+	UpdateError    *string  `json:"update_error,omitempty"`
 	OwnerID        *string  `json:"owner_id"`
 	// Visibility is "private" (default — only the owner / workspace admins
 	// can bind agents) or "public" (any workspace member can). See migration
@@ -150,7 +151,7 @@ func runtimeToResponseWithUpdate(rt db.AgentRuntime, update *UpdateRequest) Agen
 func runtimeToResponseWithUpdateAndRelease(rt db.AgentRuntime, update *UpdateRequest, release *RuntimeRelease) AgentRuntimeResponse {
 	metadata := runtimeMetadata(rt)
 	currentVersion := runtimeCurrentVersion(metadata)
-	targetVersion, updateState := runtimeUpdateState(update)
+	targetVersion, updateState := runtimeUpdateState(update, currentVersion)
 	availableUpdateTarget := runtimeAvailableUpdateTarget(rt, metadata, currentVersion, targetVersion, updateState, release)
 	runtimeHealth := deriveRuntimeHealth(rt, currentVersion, targetVersion, updateState, availableUpdateTarget)
 	if runtimeHealth == "update_available" {
@@ -173,6 +174,7 @@ func runtimeToResponseWithUpdateAndRelease(rt db.AgentRuntime, update *UpdateReq
 		TargetVersion:  targetVersion,
 		UpdateState:    updateState,
 		RuntimeHealth:  runtimeHealth,
+		UpdateError:    runtimeUpdateError(update, currentVersion, updateState),
 		OwnerID:        uuidToPtr(rt.OwnerID),
 		Visibility:     rt.Visibility,
 		LastSeenAt:     timestampToPtr(rt.LastSeenAt),
@@ -187,7 +189,7 @@ func (h *Handler) runtimeReleaseForResponse(ctx context.Context, rt db.AgentRunt
 	}
 	metadata := runtimeMetadata(rt)
 	currentVersion := runtimeCurrentVersion(metadata)
-	targetVersion, updateState := runtimeUpdateState(update)
+	targetVersion, updateState := runtimeUpdateState(update, currentVersion)
 	if !runtimeShouldFetchLatestRelease(rt, metadata, currentVersion, targetVersion, updateState) {
 		return nil
 	}
@@ -222,7 +224,7 @@ func runtimeCurrentVersion(metadata any) *string {
 	return &value
 }
 
-func runtimeUpdateState(update *UpdateRequest) (*string, string) {
+func runtimeUpdateState(update *UpdateRequest, currentVersion *string) (*string, string) {
 	if update == nil {
 		return nil, "idle"
 	}
@@ -233,6 +235,9 @@ func runtimeUpdateState(update *UpdateRequest) (*string, string) {
 	case UpdateRunning:
 		return &targetVersion, "running"
 	case UpdateCompleted:
+		if completedUpdateConfirmationTimedOut(update, currentVersion, time.Now()) {
+			return &targetVersion, "timed_out"
+		}
 		return &targetVersion, "completed"
 	case UpdateFailed:
 		return &targetVersion, "failed"
@@ -241,6 +246,38 @@ func runtimeUpdateState(update *UpdateRequest) (*string, string) {
 	default:
 		return &targetVersion, "idle"
 	}
+}
+
+func completedUpdateConfirmationTimedOut(update *UpdateRequest, currentVersion *string, now time.Time) bool {
+	if update == nil || update.Status != UpdateCompleted || update.UpdatedAt.IsZero() {
+		return false
+	}
+	targetVersion := update.TargetVersion
+	if versionsMatch(currentVersion, &targetVersion) {
+		return false
+	}
+	return now.Sub(update.UpdatedAt) > updateConfirmTimeout
+}
+
+func runtimeUpdateError(update *UpdateRequest, currentVersion *string, updateState string) *string {
+	if update == nil {
+		return nil
+	}
+	if updateState == "timed_out" && update.Status == UpdateCompleted {
+		targetVersion := update.TargetVersion
+		if !versionsMatch(currentVersion, &targetVersion) {
+			reason := "old_version_reported_after_update"
+			return &reason
+		}
+	}
+	if updateState == "timed_out" || updateState == "failed" {
+		reason := strings.TrimSpace(update.Error)
+		if reason == "" {
+			reason = "runtime_update_failed"
+		}
+		return &reason
+	}
+	return nil
 }
 
 func runtimeShouldFetchLatestRelease(rt db.AgentRuntime, metadata any, currentVersion, targetVersion *string, updateState string) bool {

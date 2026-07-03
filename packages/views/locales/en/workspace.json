@@ -38,7 +38,7 @@
     "runtime_required_title": "Connect or share a runtime first",
     "runtime_required_description": "Windy needs an available runtime before it can recruit agents or update its own instructions.",
     "refresh_runtimes": "Refresh runtimes",
-    "one_time_note": "This prompt is one-time per member for the current Windy update.",
+    "one_time_note": "You'll only see this setup prompt once — you can always finish later.",
     "update": "Update Windy",
     "later": "Later",
     "badge_label": "Personal agent HR",

@@ -1,5 +1,6 @@
 import type { StateStorage } from "zustand/middleware";
 import type { StorageAdapter } from "../types/storage";
+import { defaultStorage } from "./storage";
 
 // Paired module vars — always set/cleared together by the workspace layout.
 // _currentSlug is the primary identifier (matches the URL segment).
@@ -7,6 +8,12 @@ import type { StorageAdapter } from "../types/storage";
 // query keys and path-embedded API calls where UUID is required.
 let _currentSlug: string | null = null;
 let _currentWsId: string | null = null;
+
+// Global (NOT workspace-namespaced) key recording the last workspace the user
+// actively opened, so re-login / recovery can route back to it instead of
+// landing in whichever workspace happens to sort first (#210). The in-memory
+// _currentSlug resets on every reload; this survives it.
+const LAST_WORKSPACE_SLUG_KEY = "multica:last-workspace";
 
 const _rehydrateFns: Array<() => void> = [];
 const _slugSubscribers = new Set<(slug: string | null) => void>();
@@ -41,6 +48,13 @@ export function setCurrentWorkspace(slug: string | null, wsId: string | null) {
   _currentSlug = slug;
   _currentWsId = wsId;
 
+  // Remember the last actively-opened workspace for post-auth routing. Only
+  // persist real slugs — a null (logout / workspace loss) must NOT wipe the
+  // memory, otherwise the next login loses the "return me where I was" signal.
+  if (slug) {
+    defaultStorage.setItem(LAST_WORKSPACE_SLUG_KEY, slug);
+  }
+
   if (!_pendingNotify) {
     _pendingNotify = true;
     queueMicrotask(() => {
@@ -71,6 +85,17 @@ export function getCurrentSlug(): string | null {
 /** Current workspace UUID (derived from slug + workspace list cache). */
 export function getCurrentWsId(): string | null {
   return _currentWsId;
+}
+
+/**
+ * The last workspace slug the user actively opened, persisted across reloads
+ * and re-logins. Callers pass this to `resolvePostAuthDestination` as the
+ * preferred landing target; the resolver only honours it when the slug is still
+ * in the user's accessible workspace list, so a stale or cross-account value
+ * simply falls back. Returns null when nothing has been recorded yet.
+ */
+export function getPersistedLastWorkspaceSlug(): string | null {
+  return defaultStorage.getItem(LAST_WORKSPACE_SLUG_KEY);
 }
 
 /**

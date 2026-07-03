@@ -10,6 +10,7 @@ import {
   useCurrentWorkspace,
   useHasOnboarded,
 } from "@multica/core/paths";
+import { getPersistedLastWorkspaceSlug } from "@multica/core/platform";
 import { workspaceListOptions } from "@multica/core/workspace";
 import { useRecentIssuesStore } from "@multica/core/issues/stores";
 import { useNavigation } from "../navigation";
@@ -63,7 +64,7 @@ export function useDashboardGuard() {
     }
     if (!workspaceListFetched) return;
     if (!workspace) {
-      replace(resolvePostAuthDestination(workspaces, hasOnboarded));
+      replace(resolvePostAuthDestination(workspaces, hasOnboarded, getPersistedLastWorkspaceSlug()));
     }
   }, [user, isLoading, workspaceListFetched, workspace, workspaces, hasOnboarded, replace]);
 

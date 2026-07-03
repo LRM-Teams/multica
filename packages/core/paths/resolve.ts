@@ -4,9 +4,10 @@ import { paths } from "./paths";
 
 /**
  * Priority (onboarded-first):
- *   !hasOnboarded               → /onboarding
- *   hasOnboarded + workspace[0] → /<first.slug>/issues
- *   hasOnboarded + no workspace → /workspaces/new
+ *   !hasOnboarded                          → /onboarding
+ *   preferredSlug still accessible         → /<preferred.slug>/issues
+ *   hasOnboarded + workspace[0]            → /<first.slug>/issues
+ *   hasOnboarded + no workspace            → /workspaces/new
  *
  * V3 invariant: `onboarded_at != null` is the single source of truth for
  * "may access /<slug>/*". The web workspace layout and the desktop App.tsx
@@ -30,9 +31,25 @@ import { paths } from "./paths";
 export function resolvePostAuthDestination(
   workspaces: Workspace[],
   hasOnboarded: boolean,
+  preferredSlug?: string | null,
 ): string {
   if (!hasOnboarded) {
     return paths.onboarding();
+  }
+  // Prefer the workspace the user last actively opened, when it's still in their
+  // accessible list — even if it's empty, because that was an explicit choice.
+  // This stops re-login / recovery from dropping the user into whichever
+  // workspace happens to sort first (e.g. an empty test workspace) (#210).
+  //
+  // We deliberately do NOT try to skip to a "first non-empty" workspace when
+  // there's no preferred slug: the workspace list carries no content signal and
+  // inferring emptiness would need a per-workspace query. That fallback is a
+  // separate follow-up gated on a backend field.
+  if (preferredSlug) {
+    const preferred = workspaces.find((w) => w.slug === preferredSlug);
+    if (preferred) {
+      return paths.workspace(preferred.slug).issues();
+    }
   }
   const first = workspaces[0];
   if (first) {

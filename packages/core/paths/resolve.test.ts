@@ -44,4 +44,51 @@ describe("resolvePostAuthDestination", () => {
     // re-onboarding and go straight to workspace creation.
     expect(resolvePostAuthDestination([], true)).toBe(paths.newWorkspace());
   });
+
+  it("onboarded + preferred slug still accessible → /<preferred.slug>/issues", () => {
+    // The everyday happy path (#210): route the user back to the workspace they
+    // last actively used, not whichever one sorts first.
+    const ws = [makeWs("acme"), makeWs("beta")];
+    expect(resolvePostAuthDestination(ws, true, "beta")).toBe(
+      paths.workspace("beta").issues(),
+    );
+  });
+
+  it("preferred slug wins even when a different workspace sorts first", () => {
+    // "Empty" is not a resolver concern: an accessible preferred slug is
+    // returned regardless of content, respecting the explicit choice — this is
+    // what stops re-login from dropping the user into an empty first workspace.
+    const ws = [makeWs("empty-first"), makeWs("mine")];
+    expect(resolvePostAuthDestination(ws, true, "mine")).toBe(
+      paths.workspace("mine").issues(),
+    );
+  });
+
+  it("preferred slug no longer accessible → falls back to workspace[0]", () => {
+    // Stale or cross-account persisted slug: not in the list → ignore it and
+    // use the existing first-workspace fallback.
+    const ws = [makeWs("acme"), makeWs("beta")];
+    expect(resolvePostAuthDestination(ws, true, "gone")).toBe(
+      paths.workspace("acme").issues(),
+    );
+  });
+
+  it("no preferred slug → workspace[0] (unchanged legacy behaviour)", () => {
+    const ws = [makeWs("acme"), makeWs("beta")];
+    expect(resolvePostAuthDestination(ws, true, null)).toBe(
+      paths.workspace("acme").issues(),
+    );
+    expect(resolvePostAuthDestination(ws, true, undefined)).toBe(
+      paths.workspace("acme").issues(),
+    );
+  });
+
+  it("preferred slug is ignored when !onboarded (onboarding takes priority)", () => {
+    const ws = [makeWs("acme")];
+    expect(resolvePostAuthDestination(ws, false, "acme")).toBe(paths.onboarding());
+  });
+
+  it("preferred slug with no accessible workspaces → /workspaces/new", () => {
+    expect(resolvePostAuthDestination([], true, "acme")).toBe(paths.newWorkspace());
+  });
 });

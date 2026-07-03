@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { workspaceListOptions } from "@multica/core/workspace";
 import { resolvePostAuthDestination, useHasOnboarded } from "@multica/core/paths";
+import { getPersistedLastWorkspaceSlug } from "@multica/core/platform";
 
 /**
  * Client-side fallback redirect for authenticated visitors on the landing page.
@@ -34,7 +35,7 @@ export function RedirectIfAuthenticated() {
 
   useEffect(() => {
     if (isLoading || !user || !isFetched) return;
-    router.replace(resolvePostAuthDestination(list, hasOnboarded));
+    router.replace(resolvePostAuthDestination(list, hasOnboarded, getPersistedLastWorkspaceSlug()));
   }, [isLoading, user, isFetched, list, hasOnboarded, router]);
 
   return null;

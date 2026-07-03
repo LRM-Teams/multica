@@ -1,7 +1,11 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+// @vitest-environment jsdom
+// jsdom gives us a real localStorage so the #210 last-workspace persistence
+// tests exercise the actual defaultStorage path.
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import {
   createWorkspaceAwareStorage,
   setCurrentWorkspace,
+  getPersistedLastWorkspaceSlug,
   registerForWorkspaceRehydration,
 } from "./workspace-storage";
 import type { StorageAdapter } from "../types/storage";
@@ -121,5 +125,36 @@ describe("setCurrentWorkspace — rehydrate side effect", () => {
     await flush();
 
     expect(fn).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("setCurrentWorkspace — last-workspace persistence (#210)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+  afterEach(() => {
+    localStorage.clear();
+    setCurrentWorkspace(null, null);
+  });
+
+  it("returns null when nothing has been recorded", () => {
+    expect(getPersistedLastWorkspaceSlug()).toBeNull();
+  });
+
+  it("persists the active slug and reads it back across a reset of the in-memory slug", () => {
+    setCurrentWorkspace("acme", "ws_a");
+    expect(getPersistedLastWorkspaceSlug()).toBe("acme");
+  });
+
+  it("updates the persisted slug on a real workspace switch", () => {
+    setCurrentWorkspace("acme", "ws_a");
+    setCurrentWorkspace("beta", "ws_b");
+    expect(getPersistedLastWorkspaceSlug()).toBe("beta");
+  });
+
+  it("does NOT wipe the persisted slug on logout (null) — survives for the next login", () => {
+    setCurrentWorkspace("acme", "ws_a");
+    setCurrentWorkspace(null, null);
+    expect(getPersistedLastWorkspaceSlug()).toBe("acme");
   });
 });

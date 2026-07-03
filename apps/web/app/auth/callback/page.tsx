@@ -6,6 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { sanitizeNextUrl, useAuthStore } from "@multica/core/auth";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { paths, resolvePostAuthDestination } from "@multica/core/paths";
+import { getPersistedLastWorkspaceSlug } from "@multica/core/platform";
 import { api } from "@multica/core/api";
 import {
   Card,
@@ -104,7 +105,7 @@ function CallbackContent() {
           //    backfill for onboarded users with no recorded source is
           //    handled by `<SourceBackfillModal />` inside the dashboard
           //    shell — not a route detour, so we route straight to dest.
-          router.push(resolvePostAuthDestination(wsList, onboarded));
+          router.push(resolvePostAuthDestination(wsList, onboarded, getPersistedLastWorkspaceSlug()));
         })
         .catch((err) => {
           setError(err instanceof Error ? err.message : "Login failed");

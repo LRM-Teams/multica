@@ -11,6 +11,7 @@ import {
   resolvePostAuthDestination,
   useHasOnboarded,
 } from "@multica/core/paths";
+import { getPersistedLastWorkspaceSlug } from "@multica/core/platform";
 import { api } from "@multica/core/api";
 import type { Workspace } from "@multica/core/types";
 import {
@@ -51,7 +52,7 @@ async function resolveLoggedInDestination(
       // fall through
     }
   }
-  return resolvePostAuthDestination(workspaces, hasOnboarded);
+  return resolvePostAuthDestination(workspaces, hasOnboarded, getPersistedLastWorkspaceSlug());
 }
 
 function LoginPageContent() {

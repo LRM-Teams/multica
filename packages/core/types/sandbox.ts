@@ -80,7 +80,13 @@ export interface SandboxJob {
 export interface CreateSandboxRequest {
   node_id?: string;
   template?: string;
+  name?: string;
   limits?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  runtime?: Record<string, string>;
+}
+
+export interface UpdateSandboxRequest {
+  name: string;
   runtime?: Record<string, string>;
 }

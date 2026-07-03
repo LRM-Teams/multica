@@ -38,6 +38,7 @@ function workspaceScoped(slug: string) {
     runtimes: () => `${ws}/runtimes`,
     runtimeDetail: (id: string) => `${ws}/runtimes/${encode(id)}`,
     sandboxes: () => `${ws}/sandboxes`,
+    sandboxDetail: (id: string) => `${ws}/sandboxes/${encode(id)}`,
     skills: () => `${ws}/skills`,
     skillDetail: (id: string) => `${ws}/skills/${encode(id)}`,
     settings: () => `${ws}/settings`,

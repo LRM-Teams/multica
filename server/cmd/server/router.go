@@ -782,9 +782,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Sandbox instances (workspace-facing control plane).
 			r.Get("/api/sandboxes", h.ListSandboxInstances)
 			r.Post("/api/sandboxes", h.CreateSandboxInstance)
-			r.Post("/api/sandboxes/{instanceId}/stop", h.StopSandboxInstance)
-			r.Post("/api/sandboxes/{instanceId}/resume", h.ResumeSandboxInstance)
-			r.Delete("/api/sandboxes/{instanceId}", h.DeleteSandboxInstance)
+			r.Route("/api/sandboxes/{instanceId}", func(r chi.Router) {
+				r.Get("/", h.GetSandboxInstance)
+				r.Patch("/", h.UpdateSandboxInstance)
+				r.Delete("/", h.DeleteSandboxInstance)
+				r.Post("/stop", h.StopSandboxInstance)
+				r.Post("/resume", h.ResumeSandboxInstance)
+			})
 
 			// Task messages (user-facing, not daemon auth)
 			r.Get("/api/tasks/{taskId}/messages", h.ListTaskMessagesByUser)

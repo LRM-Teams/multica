@@ -147,6 +147,7 @@ import type {
   SandboxInstance,
   SandboxJob,
   CreateSandboxRequest,
+  UpdateSandboxRequest,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -1554,9 +1555,20 @@ export class ApiClient {
     return this.fetch("/api/sandboxes");
   }
 
+  async getSandbox(instanceId: string): Promise<SandboxInstance> {
+    return this.fetch(`/api/sandboxes/${instanceId}`);
+  }
+
   async createSandbox(data: CreateSandboxRequest): Promise<SandboxInstance> {
     return this.fetch("/api/sandboxes", {
       method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateSandbox(instanceId: string, data: UpdateSandboxRequest): Promise<SandboxInstance> {
+    return this.fetch(`/api/sandboxes/${instanceId}`, {
+      method: "PATCH",
       body: JSON.stringify(data),
     });
   }

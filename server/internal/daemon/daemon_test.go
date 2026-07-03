@@ -1129,7 +1129,7 @@ func TestPiAgentEnvUsesNestedAgentIDFallback(t *testing.T) {
 	env := map[string]string{}
 	addPiAgentEnv(env, Config{WorkspacesRoot: workspaceRoot}, task.WorkspaceID, agentID)
 
-	agentRoot := filepath.Join(workspaceRoot, "workspace-1", ".pi", "agents", "agent-nested")
+	agentRoot := filepath.Join(workspaceRoot, "workspace-1", ".multica", "agents", "agent-nested")
 	want := map[string]string{
 		"PI_AGENT_ROOT":             agentRoot,
 		"PI_MEMORY_DIR":             filepath.Join(agentRoot, "memory"),
@@ -1159,16 +1159,40 @@ func TestPiAgentEnvUsesTopLevelAgentIDFallback(t *testing.T) {
 
 	env := map[string]string{}
 	addPiAgentEnv(env, Config{WorkspacesRoot: workspaceRoot}, task.WorkspaceID, agentID)
-	wantRoot := filepath.Join(workspaceRoot, "workspace-1", ".pi", "agents", "agent-top")
+	wantRoot := filepath.Join(workspaceRoot, "workspace-1", ".multica", "agents", "agent-top")
 	if got := env["PI_AGENT_ROOT"]; got != wantRoot {
 		t.Fatalf("PI_AGENT_ROOT = %q, want %q", got, wantRoot)
+	}
+}
+
+func TestMulticaAgentEnvUsesProviderNeutralRoot(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := filepath.Join(t.TempDir(), "multica_workspaces")
+	env := map[string]string{}
+	addMulticaAgentEnv(env, Config{WorkspacesRoot: workspaceRoot}, "workspace-1", "agent-1", "project-1")
+
+	agentRoot := filepath.Join(workspaceRoot, "workspace-1", ".multica", "agents", "agent-1")
+	want := map[string]string{
+		"MULTICA_AGENT_ROOT":           agentRoot,
+		"MULTICA_AGENT_MEMORY_DIR":     filepath.Join(agentRoot, "memory"),
+		"MULTICA_AGENT_NOTES_DIR":      filepath.Join(agentRoot, "notes"),
+		"MULTICA_AGENT_PROFILE_DIR":    filepath.Join(agentRoot, "profile"),
+		"MULTICA_AGENT_FEEDBACK_DIR":   filepath.Join(agentRoot, "feedback"),
+		"MULTICA_AGENT_SYNC_QUEUE_DIR": filepath.Join(agentRoot, "sync_queue"),
+		"MULTICA_PROJECT_MEMORY_DIR":   filepath.Join(agentRoot, "projects", "project-1"),
+	}
+	for key, value := range want {
+		if got := env[key]; got != value {
+			t.Fatalf("%s = %q, want %q", key, got, value)
+		}
 	}
 }
 
 func TestBlockedEnvKeyBlocksPiMemoryOverrides(t *testing.T) {
 	t.Parallel()
 
-	for _, key := range []string{"PI_AGENT_ROOT", "PI_MEMORY_DIR", "PI_SKILL_DRAFTS_DIR", "PI_AGENT_SYNC_QUEUE_DIR"} {
+	for _, key := range []string{"PI_AGENT_ROOT", "PI_MEMORY_DIR", "PI_SKILL_DRAFTS_DIR", "PI_AGENT_SYNC_QUEUE_DIR", "MULTICA_AGENT_ROOT", "MULTICA_AGENT_MEMORY_DIR", "MULTICA_PROJECT_MEMORY_DIR"} {
 		if !isBlockedEnvKey(key) {
 			t.Fatalf("%s should be blocked from custom_env", key)
 		}

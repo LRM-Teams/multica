@@ -20,6 +20,7 @@ import { ProjectChip } from "../projects/components/project-chip";
 import { AppLink } from "../navigation/app-link";
 import { Attachment as AttachmentRenderer } from "../editor/attachment";
 import { AttachmentDownloadProvider } from "../editor/attachment-download-context";
+import { JoeCreateAgentLink, isJoeCreateAgentLink } from "./joe-create-agent-links";
 
 export type { RenderMode };
 
@@ -250,10 +251,20 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
       defaultRenderMention(mention, highlightQuery),
     [highlightQuery],
   );
+  const renderAppLink = React.useCallback(
+    ({ href, children }: { href: string; children: React.ReactNode }) => {
+      if (isJoeCreateAgentLink(href)) {
+        return <JoeCreateAgentLink href={href}>{children}</JoeCreateAgentLink>;
+      }
+      return null;
+    },
+    [],
+  );
   return (
     <AttachmentDownloadProvider attachments={attachments}>
       <MarkdownBase
         renderMention={renderMention}
+        renderAppLink={renderAppLink}
         renderImage={renderAppImage}
         renderFileCard={renderFileCard}
         cdnDomain={cdnDomain}

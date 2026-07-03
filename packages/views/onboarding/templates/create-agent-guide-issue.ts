@@ -1,6 +1,10 @@
-import { HELPER_DESCRIPTION, HELPER_INSTRUCTIONS } from "./helper-instructions";
+import {
+  JOE_AGENT_NAME,
+  JOE_DESCRIPTION,
+  JOE_INSTRUCTIONS,
+} from "./joe-instructions";
 
-const HELPER_AGENT_NAME = "Multica Helper";
+const HELPER_AGENT_NAME = JOE_AGENT_NAME;
 
 /**
  * Skip path, issue 2/2: "Create your first Multica Agent".
@@ -66,12 +70,12 @@ ${HELPER_AGENT_NAME}
 
 **Description**
 \`\`\`md
-${HELPER_DESCRIPTION.en}
+${JOE_DESCRIPTION}
 \`\`\`
 
 **Instructions**
 \`\`\`md
-${HELPER_INSTRUCTIONS.en}
+${JOE_INSTRUCTIONS}
 \`\`\`
 
 ## 4. Save → assign an issue
@@ -108,12 +112,12 @@ ${HELPER_AGENT_NAME}
 
 **描述**
 \`\`\`md
-${HELPER_DESCRIPTION.zh}
+${JOE_DESCRIPTION}
 \`\`\`
 
 **指令**
 \`\`\`md
-${HELPER_INSTRUCTIONS.zh}
+${JOE_INSTRUCTIONS}
 \`\`\`
 
 ## 4. 保存 → 分派 issue
@@ -150,12 +154,12 @@ ${HELPER_AGENT_NAME}
 
 **Description**
 \`\`\`md
-${HELPER_DESCRIPTION.ko}
+${JOE_DESCRIPTION}
 \`\`\`
 
 **Instructions**
 \`\`\`md
-${HELPER_INSTRUCTIONS.ko}
+${JOE_INSTRUCTIONS}
 \`\`\`
 
 ## 4. 저장 → issue 배정
@@ -192,12 +196,12 @@ ${HELPER_AGENT_NAME}
 
 **Description**
 \`\`\`md
-${HELPER_DESCRIPTION.ja}
+${JOE_DESCRIPTION}
 \`\`\`
 
 **Instructions**
 \`\`\`md
-${HELPER_INSTRUCTIONS.ja}
+${JOE_INSTRUCTIONS}
 \`\`\`
 
 ## 4. 保存 → issue を割り当てる

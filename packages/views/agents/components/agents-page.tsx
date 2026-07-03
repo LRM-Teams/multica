@@ -6,11 +6,12 @@ import {
   ArrowLeft,
   ArrowUpDown,
   Bot,
+  Loader2,
   Plus,
   Search,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { Agent, AgentRuntime, CreateAgentRequest } from "@multica/core/types";
+import type { Agent, AgentRuntime, CreateAgentRequest, AgentCreationDraft } from "@multica/core/types";
 import {
   type AgentAvailability,
   agentRunCounts30dOptions,
@@ -128,6 +129,7 @@ export function AgentsPage({
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const qc = useQueryClient();
+  const workspacePaths = useWorkspacePaths();
   const currentUser = useAuthStore((s) => s.user);
 
   const {
@@ -164,6 +166,8 @@ export function AgentsPage({
   const [sort, setSort] = useState<SortKey>("recent");
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  const [ensuringJoe, setEnsuringJoe] = useState(false);
+  const [createDraft, setCreateDraft] = useState<AgentCreationDraft | null>(null);
   // When set, the Create dialog opens pre-populated with this agent's
   // config — driven by the row-level "Duplicate" action. We keep this
   // separate from `showCreate` so a stray null-template doesn't open the
@@ -171,6 +175,57 @@ export function AgentsPage({
   const [duplicateTemplate, setDuplicateTemplate] = useState<Agent | null>(
     null,
   );
+  const openBlankCreate = useCallback(() => {
+    setCreateDraft(null);
+    setDuplicateTemplate(null);
+    setShowCreate(true);
+  }, []);
+
+  const handleEnsureJoe = useCallback(async () => {
+    if (ensuringJoe) return;
+    setEnsuringJoe(true);
+    try {
+      const result = await api.ensureJoe();
+      qc.setQueryData<Agent[]>(workspaceKeys.agents(wsId), (current = []) => {
+        const exists = current.some((a) => a.id === result.agent.id);
+        return exists
+          ? current.map((a) => (a.id === result.agent.id ? result.agent : a))
+          : [...current, result.agent];
+      });
+      qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+      if (result.dm_id) {
+        navigation.push(`${workspacePaths.channels()}?dm=${encodeURIComponent(result.dm_id)}`);
+      } else {
+        navigation.push(paths.agentDetail(result.agent.id));
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create Windy");
+    } finally {
+      setEnsuringJoe(false);
+    }
+  }, [ensuringJoe, navigation, qc, workspacePaths, wsId]);
+
+  useEffect(() => {
+    const draftId = navigation.searchParams.get("draft");
+    if (!draftId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const draft = await api.getAgentDraft(draftId);
+        if (cancelled) return;
+        setCreateDraft(draft);
+        setDuplicateTemplate(null);
+        setShowCreate(true);
+      } catch (err) {
+        if (!cancelled) {
+          toast.error(err instanceof Error ? err.message : "Failed to load Windy draft");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [navigation.searchParams]);
 
   const runtimesById = useMemo(() => {
     const m = new Map<string, AgentRuntime>();
@@ -530,6 +585,7 @@ export function AgentsPage({
         : [...current, agent];
     });
     setShowCreate(false);
+    setCreateDraft(null);
     setDuplicateTemplate(null);
     navigation.push(paths.agentDetail(agent.id));
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
@@ -540,7 +596,7 @@ export function AgentsPage({
   if (isLoading) {
     return (
       <div className="flex flex-1 min-h-0 flex-col">
-        <PageHeaderBar totalCount={0} onCreate={() => setShowCreate(true)} />
+        <PageHeaderBar totalCount={0} onCreate={openBlankCreate} onEnsureJoe={handleEnsureJoe} ensuringJoe={ensuringJoe} />
         <div className="flex flex-1 min-h-0 flex-col gap-4 p-6">
           <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-lg border">
             <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
@@ -565,7 +621,15 @@ export function AgentsPage({
 
   // ---- List request error ----
   if (listError) {
-    return <ListError onCreate={() => setShowCreate(true)} listError={listError} onRetry={refetchList} />;
+    return (
+      <ListError
+        onCreate={openBlankCreate}
+        listError={listError}
+        onRetry={refetchList}
+        onEnsureJoe={handleEnsureJoe}
+        ensuringJoe={ensuringJoe}
+      />
+    );
   }
 
   const showEmpty = totalActiveCount === 0 && archivedCount === 0;
@@ -574,12 +638,14 @@ export function AgentsPage({
     <div className="flex flex-1 min-h-0 flex-col">
       <PageHeaderBar
         totalCount={totalActiveCount}
-        onCreate={() => setShowCreate(true)}
+        onCreate={openBlankCreate}
+        onEnsureJoe={handleEnsureJoe}
+        ensuringJoe={ensuringJoe}
       />
 
       {showEmpty ? (
         <div className="flex flex-1 items-center justify-center">
-          <EmptyState onCreate={() => setShowCreate(true)} />
+          <EmptyState onCreate={openBlankCreate} />
         </div>
       ) : (
         <div className="flex min-h-0 flex-1">
@@ -713,8 +779,10 @@ export function AgentsPage({
           members={members}
           currentUserId={currentUser?.id ?? null}
           template={duplicateTemplate}
+          draft={createDraft}
           onClose={() => {
             setShowCreate(false);
+            setCreateDraft(null);
             setDuplicateTemplate(null);
           }}
           onCreate={handleCreate}
@@ -731,9 +799,13 @@ export function AgentsPage({
 function PageHeaderBar({
   totalCount,
   onCreate,
+  onEnsureJoe,
+  ensuringJoe,
 }: {
   totalCount: number;
   onCreate: () => void;
+  onEnsureJoe: () => void;
+  ensuringJoe: boolean;
 }) {
   const { t } = useT("agents");
   return (
@@ -759,10 +831,16 @@ function PageHeaderBar({
           </a>
         </p>
       </div>
-      <Button type="button" size="sm" onClick={onCreate}>
-        <Plus className="h-3 w-3" />
-        {t(($) => $.page.new_agent)}
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button type="button" size="sm" variant="outline" onClick={onEnsureJoe} disabled={ensuringJoe}>
+          {ensuringJoe ? <Loader2 className="h-3 w-3 animate-spin" /> : <Bot className="h-3 w-3" />}
+          Ask Windy
+        </Button>
+        <Button type="button" size="sm" onClick={onCreate}>
+          <Plus className="h-3 w-3" />
+          {t(($) => $.page.new_agent)}
+        </Button>
+      </div>
     </PageHeader>
   );
 }
@@ -771,15 +849,19 @@ function ListError({
   onCreate,
   listError,
   onRetry,
+  onEnsureJoe,
+  ensuringJoe,
 }: {
   onCreate: () => void;
   listError: unknown;
   onRetry: () => void;
+  onEnsureJoe: () => void;
+  ensuringJoe: boolean;
 }) {
   const { t } = useT("agents");
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <PageHeaderBar totalCount={0} onCreate={onCreate} />
+      <PageHeaderBar totalCount={0} onCreate={onCreate} onEnsureJoe={onEnsureJoe} ensuringJoe={ensuringJoe} />
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
         <AlertCircle className="h-8 w-8 text-destructive" />
         <div>

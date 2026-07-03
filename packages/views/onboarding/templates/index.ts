@@ -27,6 +27,12 @@ export {
   type UserContextLabels,
   type QuestionnaireRaw,
 } from "./user-context";
+export {
+  JOE_AGENT_NAME,
+  JOE_DESCRIPTION,
+  JOE_AVATAR_URL,
+  JOE_INSTRUCTIONS,
+} from "./joe-instructions";
 
 type ContentLang = "en" | "zh" | "ko" | "ja";
 

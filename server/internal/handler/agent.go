@@ -739,6 +739,8 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		mc = append([]byte(nil), rawMcpConfig...)
 	}
 
+	draftID := extractDraftID(rawFields)
+
 	created, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
 		WorkspaceID:        wsUUID,
 		Description:        req.Description,
@@ -762,6 +764,9 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
+	if draftID.Valid {
+		h.MarkAgentDraftUsed(r, workspaceID, draftID, created.ID)
+	}
 
 	h.refreshAgentSkillSuggestions(r.Context(), created)
 

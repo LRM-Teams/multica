@@ -26,10 +26,12 @@ import {
   CREATE_AGENT_GUIDE_ISSUE_TITLE,
   FOLLOWUP_COMMENT_PREFIX,
   getCreateAgentGuideBody,
-  HELPER_DESCRIPTION,
-  HELPER_INSTRUCTIONS,
   HELPER_STARTER_PROMPTS,
   INSTALL_RUNTIME_ISSUE_BODY,
+  JOE_AGENT_NAME,
+  JOE_DESCRIPTION,
+  JOE_AVATAR_URL,
+  JOE_INSTRUCTIONS,
   INSTALL_RUNTIME_ISSUE_TITLE,
   pickContentLang,
   STARTER_CARD_IDS,
@@ -130,10 +132,8 @@ export function WelcomeAfterOnboarding() {
 // Runtime sub-template
 // ---------------------------------------------------------------------------
 
-const HELPER_AGENT_NAME = "Multica Helper";
-
-const HELPER_AVATAR_URL =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Cdefs%3E%3ClinearGradient id='t' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0%25' stop-color='%2323242C'/%3E%3Cstop offset='100%25' stop-color='%2313141A'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='128' height='128' rx='28' fill='url(%23t)'/%3E%3Cg stroke='%23FFFFFF' stroke-width='13' stroke-linecap='round'%3E%3Cline x1='64' y1='32' x2='64' y2='96'/%3E%3Cline x1='32' y1='64' x2='96' y2='64'/%3E%3Cline x1='41.4' y1='41.4' x2='86.6' y2='86.6'/%3E%3Cline x1='86.6' y1='41.4' x2='41.4' y2='86.6'/%3E%3C/g%3E%3C/svg%3E";
+const HELPER_AGENT_NAME = JOE_AGENT_NAME;
+const HELPER_AVATAR_URL = JOE_AVATAR_URL;
 
 /**
  * Module-level dedupe for in-flight Helper setup. Keyed on
@@ -153,7 +153,7 @@ const pendingHelperSetup = new Map<string, Promise<Agent>>();
 async function findOrCreateHelper(
   workspaceId: string,
   runtimeId: string,
-  language: string | null,
+  _language: string | null,
 ): Promise<Agent> {
   const key = `${workspaceId}:${runtimeId}`;
   const existing = pendingHelperSetup.get(key);
@@ -163,21 +163,20 @@ async function findOrCreateHelper(
     const agents = await api.listAgents({ workspace_id: workspaceId });
     const found = agents.find(
       (a) =>
-        a.name === HELPER_AGENT_NAME &&
+        (a.display_name || a.name) === HELPER_AGENT_NAME &&
         a.visibility === "workspace" &&
         !a.archived_at,
     );
     if (found) return found;
-    const lang = pickContentLang(language);
     return api.createAgent({
       name: HELPER_AGENT_NAME,
-      description: HELPER_DESCRIPTION[lang],
-      instructions: HELPER_INSTRUCTIONS[lang],
+      description: JOE_DESCRIPTION,
+      instructions: JOE_INSTRUCTIONS,
       avatar_url: HELPER_AVATAR_URL,
       runtime_id: runtimeId,
       visibility: "workspace",
       max_concurrent_tasks: 6,
-      template: "multica_helper",
+      template: "windy_hr",
     });
   })();
 

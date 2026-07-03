@@ -57,6 +57,8 @@ export interface MarkdownProps {
    * When not provided, mentions render as a simple styled span.
    */
   renderMention?: (props: { type: string; id: string; label?: string }) => React.ReactNode
+  /** Custom renderer for non-http app links such as Joe's create-agent cards. */
+  renderAppLink?: (props: { href: string; children: React.ReactNode }) => React.ReactNode
   /**
    * CDN hostname for file card detection (e.g. "multica-static.copilothub.ai").
    * When provided, enables file card preprocessing and rendering.
@@ -100,7 +102,7 @@ const sanitizeSchema = {
   ...defaultSchema,
   protocols: {
     ...defaultSchema.protocols,
-    href: [...(defaultSchema.protocols?.href ?? []), 'mention', 'slash'],
+    href: [...(defaultSchema.protocols?.href ?? []), 'mention', 'slash', 'multica'],
   },
   attributes: {
     ...defaultSchema.attributes,
@@ -130,6 +132,7 @@ const sanitizeSchema = {
 function urlTransform(url: string): string {
   if (url.startsWith('mention://')) return url
   if (url.startsWith('slash://skill/')) return url
+  if (url.startsWith('multica://')) return url
   return defaultUrlTransform(url)
 }
 
@@ -251,6 +254,7 @@ function createComponents(
   onUrlClick?: (url: string) => void,
   onFileClick?: (path: string) => void,
   renderMention?: (props: { type: string; id: string; label?: string }) => React.ReactNode,
+  renderAppLink?: (props: { href: string; children: React.ReactNode }) => React.ReactNode,
   renderImage?: (props: { src: string; alt: string }) => React.ReactNode,
   renderFileCard?: (props: { href: string; filename: string }) => React.ReactNode,
   highlightQuery?: string,
@@ -344,6 +348,10 @@ function createComponents(
             {highlight(children)}
           </span>
         )
+      }
+
+      if (href?.startsWith('multica://') && renderAppLink) {
+        return <>{renderAppLink({ href, children: highlight(children) })}</>
       }
 
       const handleClick = (e: React.MouseEvent): void => {
@@ -566,6 +574,7 @@ export function Markdown({
   onUrlClick,
   onFileClick,
   renderMention,
+  renderAppLink,
   renderImage,
   renderFileCard,
   cdnDomain,
@@ -581,11 +590,12 @@ export function Markdown({
         onUrlClick,
         onFileClick,
         renderMention,
+        renderAppLink,
         renderImage,
         renderFileCard,
         normalizedHighlightQuery,
       ),
-    [mode, onUrlClick, onFileClick, renderMention, renderImage, renderFileCard, normalizedHighlightQuery]
+    [mode, onUrlClick, onFileClick, renderMention, renderAppLink, renderImage, renderFileCard, normalizedHighlightQuery]
   )
 
   // Preprocess: convert mention shortcodes, bare issue identifiers, raw URLs,

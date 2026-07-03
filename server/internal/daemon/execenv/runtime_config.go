@@ -467,6 +467,24 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("\n\n")
 	}
 
+	if provider == "pi" && (ctx.AgentRoot != "" || ctx.AgentMemoryDir != "" || ctx.AgentSkillDir != "" || ctx.AgentSkillDraftsDir != "") {
+		b.WriteString("## Pi Memory And Skills Scope\n\n")
+		b.WriteString("You are running as a Multica Pi agent with isolated local memory and skill directories. Treat these as your own Multica agent-local paths.\n\n")
+		if ctx.AgentRoot != "" {
+			fmt.Fprintf(&b, "- Agent root (`PI_AGENT_ROOT`): `%s`\n", ctx.AgentRoot)
+		}
+		if ctx.AgentMemoryDir != "" {
+			fmt.Fprintf(&b, "- Memory root (`PI_MEMORY_DIR`): `%s`\n", ctx.AgentMemoryDir)
+		}
+		if ctx.AgentSkillDir != "" {
+			fmt.Fprintf(&b, "- Skill root: `%s`\n", ctx.AgentSkillDir)
+		}
+		if ctx.AgentSkillDraftsDir != "" {
+			fmt.Fprintf(&b, "- Skill drafts root (`PI_SKILL_DRAFTS_DIR`): `%s`\n", ctx.AgentSkillDraftsDir)
+		}
+		b.WriteString("\nWhen asked where your memory or skills live, report these Multica agent paths, not the host Pi user's global paths. Use Pi memory tools and the injected `PI_MEMORY_DIR` / `PI_AGENT_ROOT` values for memory changes. Do not read or write `~/.pi/agent/evolution/memory`, `~/.pi/agent/memory`, or other host-global Pi memory/evolution directories as your own memory unless the task explicitly asks you to inspect host Pi configuration.\n\n")
+	}
+
 	if ctx.ChatSessionID != "" {
 		renderChatRuntimeBrief(&b, provider, ctx)
 		return b.String()

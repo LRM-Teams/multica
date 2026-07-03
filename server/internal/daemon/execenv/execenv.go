@@ -66,6 +66,10 @@ type TaskContextForEnv struct {
 	AgentID                 string // unique ID of the dispatched agent
 	AgentName               string
 	AgentInstructions       string // agent identity/persona instructions, injected into CLAUDE.md
+	AgentRoot               string // Multica-scoped local root for agent state (PI_AGENT_ROOT), when available
+	AgentMemoryDir          string // Multica-scoped memory root (PI_MEMORY_DIR), when available
+	AgentSkillDir           string // Multica-scoped skill root ({PI_AGENT_ROOT}/skills), when available
+	AgentSkillDraftsDir     string // Multica-scoped skill drafts root (PI_SKILL_DRAFTS_DIR), when available
 	AgentSkills             []SkillContextForEnv
 	Repos                   []RepoContextForEnv     // workspace repos available for checkout
 	ProjectID               string                  // issue's project, when present

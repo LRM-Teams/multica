@@ -5,10 +5,10 @@ description: まだ App Store にないオープンソースの Multica iOS ア�
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-Multica の iOS クライアントはオープンソースで、web、desktop、バックエンドとともに[メインリポジトリ](https://github.com/multica-ai/multica)に含まれています。まだ App Store にはなく、その状況が変わるまでは、iPhone で使いたい人がソースから自分でビルドします。ビルドは初回は約 10〜20 分、それ以降は約 2 分かかり、[multica.ai](https://multica.ai) と同じバックエンドと通信するため、既存のアカウントがそのまま使えます。
+Multica の iOS クライアントはオープンソースで、web、desktop、バックエンドとともに[メインリポジトリ](https://github.com/LRM-Teams/multica)に含まれています。まだ App Store にはなく、その状況が変わるまでは、iPhone で使いたい人がソースから自分でビルドします。ビルドは初回は約 10〜20 分、それ以降は約 2 分かかり、[multica.ai](https://multica.ai) と同じバックエンドと通信するため、既存のアカウントがそのまま使えます。
 
 <Callout type="info">
-このページは**個人利用**向けです。アプリ開発者はリポジトリの [`apps/mobile/README.md`](https://github.com/multica-ai/multica/blob/main/apps/mobile/README.md) を読んでください — dev / staging のバリアントと全スクリプト一覧を扱っています。
+このページは**個人利用**向けです。アプリ開発者はリポジトリの [`apps/mobile/README.md`](https://github.com/LRM-Teams/multica/blob/main/apps/mobile/README.md) を読んでください — dev / staging のバリアントと全スクリプト一覧を扱っています。
 </Callout>
 
 ## 必要なもの
@@ -19,7 +19,7 @@ Multica の iOS クライアントはオープンソースで、web、desktop、
 - チェックアウトした Multica のソースコード:
 
   ```bash
-  git clone https://github.com/multica-ai/multica.git
+  git clone https://github.com/LRM-Teams/multica.git
   cd multica
   pnpm install
   ```
@@ -62,7 +62,7 @@ Xcode がネイティブコンパイルをキャッシュするため、以降�
 
 iOS アプリはまだ速いペースで動いています — チームは今のところ App Store の審査サイクルよりも、リリースして反復改善することを好んでいます。正式な App Store リリースの前に TestFlight ベータが最も可能性の高い次のステップです。それまでは、上記の自前ビルドが iOS で Multica を使う唯一の方法です。
 
-TestFlight が公開されたときに通知を受け取りたい場合は、[GitHub リポジトリ](https://github.com/multica-ai/multica)を watch してください。
+TestFlight が公開されたときに通知を受け取りたい場合は、[GitHub リポジトリ](https://github.com/LRM-Teams/multica)を watch してください。
 
 ## トラブルシューティング
 

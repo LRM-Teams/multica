@@ -23,7 +23,7 @@ import { Callout } from "fumadocs-ui/components/callout";
 </Callout>
 
 ```bash
-git clone https://github.com/multica-ai/multica.git
+git clone https://github.com/LRM-Teams/multica.git
 cd multica
 make selfhost
 ```
@@ -215,7 +215,7 @@ SELECT cron.unschedule('rollup_task_usage_hourly')
 
 **`v0.3.4 → v0.3.5+` からのアップグレード。** 以前のリリースでは、migration 103 を適用する前にオペレーターが手動で `cmd/backfill_task_usage_hourly` を実行する必要があり、そうしないと migration の fail-closed ガードが `migrate up` を中断していました。MUL-2957 以降、これは自動化されました — migrate コマンドが migration 103 を適用する直前に冪等な月単位スライスのバックフィル（advisory lock 4246 の下）を実行してから処理を続行します。忙しい DB では `--sleep-between-slices=2s` で読み取り負荷を絞るためにスタンドアロンの backfill を実行することもできますが、もはや必須ではありません。
 
-完全なリファレンス（運用ノートと Kubernetes デプロイ形態を含む）は、リポジトリの [`SELF_HOSTING_ADVANCED.md → Usage Dashboard Rollup`](https://github.com/multica-ai/multica/blob/main/SELF_HOSTING_ADVANCED.md#usage-dashboard-rollup) にあります。
+完全なリファレンス（運用ノートと Kubernetes デプロイ形態を含む）は、リポジトリの [`SELF_HOSTING_ADVANCED.md → Usage Dashboard Rollup`](https://github.com/LRM-Teams/multica/blob/main/SELF_HOSTING_ADVANCED.md#usage-dashboard-rollup) にあります。
 
 ## Kubernetes デプロイ（代替手段）
 
@@ -238,7 +238,7 @@ kubectl -n multica create secret generic multica-secrets \
 その後、チャートをインストールします。
 
 ```bash
-git clone https://github.com/multica-ai/multica.git
+git clone https://github.com/LRM-Teams/multica.git
 cd multica
 helm install multica deploy/helm/multica -n multica
 ```
@@ -262,7 +262,7 @@ multica setup self-host \
 
 チャートを変更せずに最新のイメージだけを取得するには、`kubectl -n multica rollout restart deploy/multica-backend deploy/multica-frontend` を実行してください。特定の Multica リリースに固定するには、values ファイルで `images.backend.tag` / `images.frontend.tag` を設定して `helm upgrade` を実行してください。`helm -n multica uninstall multica` はワークロードを削除しますが、PVC と Secret は保持します。`kubectl delete namespace multica` はすべてを消去します。
 
-完全なリファレンス — 3つのログインモード、web イメージにビルド時に焼き込まれた `REMOTE_API_URL` に対する `backend` ExternalName の回避策、リソース制限、TLS — は、リポジトリの [`SELF_HOSTING.md`](https://github.com/multica-ai/multica/blob/main/SELF_HOSTING.md#kubernetes-deployment-alternative) にあります。
+完全なリファレンス — 3つのログインモード、web イメージにビルド時に焼き込まれた `REMOTE_API_URL` に対する `backend` ExternalName の回避策、リソース制限、TLS — は、リポジトリの [`SELF_HOSTING.md`](https://github.com/LRM-Teams/multica/blob/main/SELF_HOSTING.md#kubernetes-deployment-alternative) にあります。
 
 ## よくある問題
 

@@ -28,6 +28,21 @@ import (
 const ChecksumManifestName = "checksums.txt"
 
 const DefaultUpdateDownloadTimeout = 120 * time.Second
+const ReleaseAPIBaseURL = "https://api.github.com/repos/LRM-Teams/multica/releases"
+const ReleaseWebURL = "https://github.com/LRM-Teams/multica/releases"
+
+// BrewPackage returns the optional Homebrew package name to upgrade. It is
+// intentionally not defaulted: the public installer must not fall back to the
+// old upstream tap when the LRM repo is the release source.
+func BrewPackage() string {
+	return strings.TrimSpace(os.Getenv("MULTICA_BREW_PACKAGE"))
+}
+
+// IsBrewUpdateConfigured reports whether the current environment has an
+// explicit Homebrew package to use for CLI updates.
+func IsBrewUpdateConfigured() bool {
+	return BrewPackage() != ""
+}
 
 // GitHubRelease is the subset of the GitHub releases API response we need.
 type GitHubRelease struct {
@@ -223,7 +238,7 @@ func verifyAssetSHA256(data []byte, expectedHex, assetName string) error {
 
 func fetchReleaseByTag(tag string) (*GitHubRelease, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/multica-ai/multica/releases/tags/"+tag, nil)
+	req, err := http.NewRequest(http.MethodGet, ReleaseAPIBaseURL+"/tags/"+tag, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -246,10 +261,10 @@ func fetchReleaseByTag(tag string) (*GitHubRelease, error) {
 	return &release, nil
 }
 
-// FetchLatestRelease fetches the latest release tag from the multica GitHub repo.
+// FetchLatestRelease fetches the latest release tag from the Multica GitHub repo.
 func FetchLatestRelease() (*GitHubRelease, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/multica-ai/multica/releases/latest", nil)
+	req, err := http.NewRequest(http.MethodGet, ReleaseAPIBaseURL+"/latest", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -317,10 +332,14 @@ func GetBrewPrefix() string {
 	return strings.TrimSpace(string(out))
 }
 
-// UpdateViaBrew runs `brew upgrade multica-ai/tap/multica`.
+// UpdateViaBrew runs the explicitly configured Homebrew upgrade package.
 // Returns the combined output and any error.
 func UpdateViaBrew() (string, error) {
-	cmd := exec.Command("brew", "upgrade", "multica-ai/tap/multica")
+	pkg := BrewPackage()
+	if pkg == "" {
+		return "", fmt.Errorf("Homebrew package is not configured; set MULTICA_BREW_PACKAGE or use direct download")
+	}
+	cmd := exec.Command("brew", "upgrade", pkg)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("brew upgrade failed: %w", err)

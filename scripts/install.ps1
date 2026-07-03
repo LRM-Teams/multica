@@ -14,7 +14,7 @@ $ErrorActionPreference = "Stop"
 # ---------------------------------------------------------------------------
 $RepoUrl       = "https://github.com/LRM-Teams/multica.git"
 $RepoWebUrl    = "https://github.com/LRM-Teams/multica"
-$ReleaseRepoWebUrl = if ($env:MULTICA_RELEASE_REPO_WEB_URL) { $env:MULTICA_RELEASE_REPO_WEB_URL } else { "https://github.com/multica-ai/multica" }
+$ReleaseRepoWebUrl = if ($env:MULTICA_RELEASE_REPO_WEB_URL) { $env:MULTICA_RELEASE_REPO_WEB_URL } else { $RepoWebUrl }
 $InstallScriptUrl = "https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1"
 $DefaultInstallDir = Join-Path $env:USERPROFILE ".multica\server"
 $InstallDir    = if ($env:MULTICA_INSTALL_DIR) { $env:MULTICA_INSTALL_DIR } else { $DefaultInstallDir }
@@ -349,17 +349,17 @@ function Install-Cli {
     if (Test-CommandExists "multica") {
         $currentVer = Get-InstalledCliVersion
         $latestVer = Get-LatestVersion
+        if (-not $latestVer) {
+            Write-Fail "Could not determine latest release from $ReleaseRepoWebUrl/releases/latest. Refusing to assume the installed CLI is current."
+        }
 
         $currentCmp = if ($currentVer) { $currentVer -replace '^v','' } else { $null }
         $latestCmp = if ($latestVer) { $latestVer -replace '^v','' } else { $null }
 
-        $isUpToDate = $currentCmp -and -not $latestCmp
-        if (-not $isUpToDate) {
-            try {
-                $isUpToDate = $currentCmp -and $latestCmp -and ([System.Version]$currentCmp -ge [System.Version]$latestCmp)
-            } catch {
-                $isUpToDate = $currentCmp -and $latestCmp -and ($currentCmp -eq $latestCmp)
-            }
+        try {
+            $isUpToDate = $currentCmp -and $latestCmp -and ([System.Version]$currentCmp -ge [System.Version]$latestCmp)
+        } catch {
+            $isUpToDate = $currentCmp -and $latestCmp -and ($currentCmp -eq $latestCmp)
         }
 
         if ($isUpToDate) {

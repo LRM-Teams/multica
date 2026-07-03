@@ -6,10 +6,12 @@ export const MULTICA_INSTALL_SCRIPT_URL =
   `https://raw.githubusercontent.com/${MULTICA_REPOSITORY}/main/scripts/install.sh`;
 export const MULTICA_INSTALL_COMMAND =
   `curl -fsSL ${MULTICA_INSTALL_SCRIPT_URL} | bash`;
+export const MULTICA_POWERSHELL_INSTALL_SCRIPT_URL =
+  `https://raw.githubusercontent.com/${MULTICA_REPOSITORY}/main/scripts/install.ps1`;
+export const MULTICA_POWERSHELL_INSTALL_COMMAND =
+  `irm ${MULTICA_POWERSHELL_INSTALL_SCRIPT_URL} | iex`;
 
-// Binary artifacts are still published from the existing release channel.
-// Source/help/install links use MULTICA_REPOSITORY above.
-export const MULTICA_RELEASE_REPOSITORY = "multica-ai/multica";
+export const MULTICA_RELEASE_REPOSITORY = MULTICA_REPOSITORY;
 export const MULTICA_RELEASE_GITHUB_URL =
   `https://github.com/${MULTICA_RELEASE_REPOSITORY}`;
 export const MULTICA_LATEST_RELEASE_API_URL =

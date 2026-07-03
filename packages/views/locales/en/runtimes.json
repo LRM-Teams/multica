@@ -261,14 +261,13 @@
     "manual_hint": "If the automatic update cannot write to the install location, update from a terminal on that computer.",
     "manual_action": "Manual commands",
     "manual_dialog_title": "Update this runtime manually",
-    "manual_dialog_description": "Run the command that matches the runtime computer. Use the Linux script if the CLI was installed directly instead of through Homebrew.",
+    "manual_dialog_description": "Run the command that matches the runtime computer. The macOS/Linux command reinstalls the CLI from the current Multica release source.",
     "manual_after_restart": "After the command finishes, the daemon reconnects with the new CLI version. If it stays offline, run multica daemon restart once more.",
     "manual_close": "Close",
     "copy_command": "Copy command",
     "copied": "Copied",
     "manual_commands": {
-      "brew": "macOS or Linux with Homebrew",
-      "linux_script": "Linux direct install",
+      "mac_linux": "macOS or Linux",
       "windows": "Windows PowerShell"
     },
     "status": {

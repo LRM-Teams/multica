@@ -12,6 +12,9 @@ permissions:
   contents: write
   packages: write
 
+env:
+  GHCR_OWNER: lrm-teams
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -56,12 +59,9 @@ jobs:
 
   release:
     needs: verify
-    # Only run on the canonical upstream repo. Forks don't have the
-    # HOMEBREW_TAP_GITHUB_TOKEN secret and should not be publishing to
-    # `multica-ai/homebrew-tap` anyway. Without this guard, every fork's
-    # tag push fails this job (401 against the upstream tap), which makes
-    # downstream CI go red without affecting the actual artifact pipeline.
-    if: github.repository_owner == 'multica-ai'
+    # Only run on the canonical LRM repo. Forks should not publish release
+    # artifacts for the default install/update channel.
+    if: github.repository == 'LRM-Teams/multica'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -82,7 +82,6 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
 
   # Multi-arch images are built natively per platform on dedicated runners
   # (amd64 on ubuntu-latest, arm64 on ubuntu-24.04-arm) and merged into a
@@ -90,6 +89,7 @@ jobs:
   # arm64 build run for 30+ minutes per release.
   docker-backend-build:
     needs: verify
+    if: github.repository == 'LRM-Teams/multica'
     strategy:
       fail-fast: false
       matrix:
@@ -112,7 +112,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/multica-backend
+          images: ghcr.io/${{ env.GHCR_OWNER }}/multica-backend
           labels: |
             org.opencontainers.image.title=Multica Backend
             org.opencontainers.image.description=Multica self-hosted backend
@@ -141,7 +141,7 @@ jobs:
           build-args: |
             VERSION=${{ needs.verify.outputs.tag_name }}
             COMMIT=${{ github.sha }}
-          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/multica-backend,push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/${{ env.GHCR_OWNER }}/multica-backend,push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
         run: |
@@ -159,6 +159,7 @@ jobs:
 
   docker-backend-merge:
     needs: [verify, docker-backend-build]
+    if: github.repository == 'LRM-Teams/multica'
     runs-on: ubuntu-latest
     concurrency:
       group: release-docker-backend-${{ github.ref }}
@@ -178,7 +179,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/multica-backend
+          images: ghcr.io/${{ env.GHCR_OWNER }}/multica-backend
           flavor: |
             latest=false
           tags: |
@@ -198,15 +199,16 @@ jobs:
         run: |
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/${{ github.repository_owner }}/multica-backend@sha256:%s ' *)
+            $(printf 'ghcr.io/${{ env.GHCR_OWNER }}/multica-backend@sha256:%s ' *)
 
       - name: Inspect image
         run: |
           docker buildx imagetools inspect \
-            ghcr.io/${{ github.repository_owner }}/multica-backend:${{ steps.meta.outputs.version }}
+            ghcr.io/${{ env.GHCR_OWNER }}/multica-backend:${{ steps.meta.outputs.version }}
 
   docker-web-build:
     needs: verify
+    if: github.repository == 'LRM-Teams/multica'
     strategy:
       fail-fast: false
       matrix:
@@ -229,7 +231,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/multica-web
+          images: ghcr.io/${{ env.GHCR_OWNER }}/multica-web
           labels: |
             org.opencontainers.image.title=Multica Web
             org.opencontainers.image.description=Multica self-hosted web frontend
@@ -258,7 +260,7 @@ jobs:
           build-args: |
             REMOTE_API_URL=http://backend:8080
             NEXT_PUBLIC_APP_VERSION=${{ needs.verify.outputs.tag_name }}
-          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/multica-web,push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/${{ env.GHCR_OWNER }}/multica-web,push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
         run: |
@@ -276,6 +278,7 @@ jobs:
 
   docker-web-merge:
     needs: [verify, docker-web-build]
+    if: github.repository == 'LRM-Teams/multica'
     runs-on: ubuntu-latest
     concurrency:
       group: release-docker-web-${{ github.ref }}
@@ -295,7 +298,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/multica-web
+          images: ghcr.io/${{ env.GHCR_OWNER }}/multica-web
           flavor: |
             latest=false
           tags: |
@@ -315,23 +318,23 @@ jobs:
         run: |
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/${{ github.repository_owner }}/multica-web@sha256:%s ' *)
+            $(printf 'ghcr.io/${{ env.GHCR_OWNER }}/multica-web@sha256:%s ' *)
 
       - name: Inspect image
         run: |
           docker buildx imagetools inspect \
-            ghcr.io/${{ github.repository_owner }}/multica-web:${{ steps.meta.outputs.version }}
+            ghcr.io/${{ env.GHCR_OWNER }}/multica-web:${{ steps.meta.outputs.version }}
 
   helm-chart:
     needs: [verify, docker-backend-merge, docker-web-merge]
-    if: github.repository_owner == 'multica-ai'
+    if: github.repository == 'LRM-Teams/multica'
     runs-on: ubuntu-latest
     concurrency:
       group: release-helm-chart-${{ github.ref }}
       cancel-in-progress: true
     env:
       CHART_DIR: deploy/helm/multica
-      OCI_REGISTRY: oci://ghcr.io/${{ github.repository_owner }}/charts
+      OCI_REGISTRY: oci://ghcr.io/${{ env.GHCR_OWNER }}/charts
     steps:
       - name: Checkout
         uses: actions/checkout@v4

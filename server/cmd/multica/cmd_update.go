@@ -44,21 +44,26 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 		fmt.Fprintf(os.Stderr, "Latest version:  %s\n\n", latest.TagName)
 	}
 
-	// Detect installation method and update accordingly.
-	if cli.IsBrewInstall() {
+	// Detect installation method and update accordingly. Homebrew is only used
+	// when an explicit package is configured; otherwise direct release download
+	// keeps the default source on LRM-Teams/multica instead of the old tap.
+	if cli.IsBrewInstall() && cli.IsBrewUpdateConfigured() {
 		fmt.Fprintln(os.Stderr, "Updating via Homebrew...")
 		output, err := cli.UpdateViaBrew()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s\n", output)
-			return fmt.Errorf("brew upgrade failed: %w\nYou can try manually: brew upgrade multica-ai/tap/multica", err)
+			return fmt.Errorf("brew upgrade failed: %w\nSet MULTICA_BREW_PACKAGE to a valid Multica tap/package or use direct release downloads from %s", err, cli.ReleaseWebURL)
 		}
 		fmt.Fprintln(os.Stderr, "Update complete.")
 		return nil
 	}
+	if cli.IsBrewInstall() {
+		fmt.Fprintln(os.Stderr, "Homebrew install detected, but MULTICA_BREW_PACKAGE is not configured; using direct release download.")
+	}
 
 	// Not installed via brew — download binary directly from GitHub Releases.
 	if latest == nil {
-		return fmt.Errorf("could not determine latest version; check https://github.com/multica-ai/multica/releases/latest")
+		return fmt.Errorf("could not determine latest version; check %s/latest", cli.ReleaseWebURL)
 	}
 	targetVersion := latest.TagName
 	fmt.Fprintf(os.Stderr, "Downloading %s from GitHub Releases...\n", targetVersion)

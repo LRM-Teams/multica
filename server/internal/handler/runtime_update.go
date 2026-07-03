@@ -42,6 +42,7 @@ type UpdateRequest struct {
 const (
 	updatePendingTimeout = 120 * time.Second
 	updateRunningTimeout = 150 * time.Second
+	updateConfirmTimeout = 120 * time.Second
 	updateStoreRetention = 5 * time.Minute
 )
 

@@ -48,6 +48,7 @@ export interface RuntimeDevice {
   target_version?: string | null;
   update_state: RuntimeUpdateState;
   runtime_health: RuntimeHealthState;
+  update_error?: string | null;
   owner_id: string | null;
   /** Defaults to "private" when the backend predates the visibility flag. */
   visibility: RuntimeVisibility;

@@ -114,6 +114,53 @@ func TestRuntimeToResponseCompletedUpdateWaitsAsUpdating(t *testing.T) {
 	}
 }
 
+func TestRuntimeToResponseCompletedUpdateTimesOutWithoutTargetRegister(t *testing.T) {
+	rt := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "v0.3.0"})
+	update := &UpdateRequest{
+		ID:            "update-1",
+		RuntimeID:     "runtime-1",
+		TargetVersion: "v0.3.1",
+		Status:        UpdateCompleted,
+		UpdatedAt:     time.Now().Add(-(updateConfirmTimeout + time.Second)),
+	}
+
+	resp := runtimeToResponseWithUpdateAndRelease(rt, update, &RuntimeRelease{TagName: "v0.3.1"})
+	if resp.RuntimeHealth != "failed" {
+		t.Fatalf("runtime_health = %q, want failed", resp.RuntimeHealth)
+	}
+	if resp.UpdateState != "timed_out" {
+		t.Fatalf("update_state = %q, want timed_out", resp.UpdateState)
+	}
+	if resp.UpdateError == nil || *resp.UpdateError != "old_version_reported_after_update" {
+		t.Fatalf("update_error = %v, want old_version_reported_after_update", resp.UpdateError)
+	}
+	if resp.TargetVersion == nil || *resp.TargetVersion != "v0.3.1" {
+		t.Fatalf("target_version = %v, want v0.3.1", resp.TargetVersion)
+	}
+}
+
+func TestRuntimeToResponseCompletedUpdateDoesNotTimeOutAfterTargetRegister(t *testing.T) {
+	rt := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "v0.3.1"})
+	update := &UpdateRequest{
+		ID:            "update-1",
+		RuntimeID:     "runtime-1",
+		TargetVersion: "v0.3.1",
+		Status:        UpdateCompleted,
+		UpdatedAt:     time.Now().Add(-(updateConfirmTimeout + time.Second)),
+	}
+
+	resp := runtimeToResponseWithUpdateAndRelease(rt, update, &RuntimeRelease{TagName: "v0.3.1"})
+	if resp.RuntimeHealth != "ok" {
+		t.Fatalf("runtime_health = %q, want ok", resp.RuntimeHealth)
+	}
+	if resp.UpdateState != "completed" {
+		t.Fatalf("update_state = %q, want completed", resp.UpdateState)
+	}
+	if resp.UpdateError != nil {
+		t.Fatalf("update_error = %v, want nil", *resp.UpdateError)
+	}
+}
+
 func TestRuntimeToResponseCompletedMatchingUpdateCanOfferNextRelease(t *testing.T) {
 	rt := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "v0.3.1"})
 	update := &UpdateRequest{

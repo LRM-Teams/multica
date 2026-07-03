@@ -1,4 +1,19 @@
-import type { SandboxInstance } from "../types";
+import type { SandboxInstance, SandboxNodeStatus } from "../types";
+
+/** Must stay in sync with sandboxNodeStaleThreshold in server/internal/handler/sandbox.go */
+export const SANDBOX_NODE_STALE_MS = 30_000;
+
+export function effectiveSandboxNodeStatus(
+  status: SandboxNodeStatus,
+  lastSeenAt: string | null | undefined,
+  now = Date.now(),
+): SandboxNodeStatus {
+  if (status !== "online") return status;
+  if (!lastSeenAt) return "offline";
+  const lastSeenMs = new Date(lastSeenAt).getTime();
+  if (Number.isNaN(lastSeenMs)) return "offline";
+  return now - lastSeenMs > SANDBOX_NODE_STALE_MS ? "offline" : "online";
+}
 
 export function sandboxDisplayName(instance: SandboxInstance): string {
   const name = instance.metadata?.name;

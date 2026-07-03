@@ -59,6 +59,8 @@ export function TokensTab() {
   const [editingNodeName, setEditingNodeName] = useState("");
   const [savingNodeId, setSavingNodeId] = useState<string | null>(null);
   const [deletingNodeId, setDeletingNodeId] = useState<string | null>(null);
+  const [deleteConfirmNode, setDeleteConfirmNode] = useState<SandboxNode | null>(null);
+  const [deleteBlockedNode, setDeleteBlockedNode] = useState<SandboxNode | null>(null);
 
   const loadTokens = useCallback(async () => {
     try {
@@ -149,6 +151,14 @@ export function TokensTab() {
     } finally {
       setSavingNodeId(null);
     }
+  };
+
+  const handleDeleteSandboxNodeClick = (node: SandboxNode) => {
+    if ((node.instance_count ?? 0) > 0) {
+      setDeleteBlockedNode(node);
+      return;
+    }
+    setDeleteConfirmNode(node);
   };
 
   const handleDeleteSandboxNode = async (id: string) => {
@@ -329,7 +339,7 @@ export function TokensTab() {
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      onClick={() => handleDeleteSandboxNode(node.id)}
+                      onClick={() => handleDeleteSandboxNodeClick(node)}
                       disabled={deletingNodeId === node.id}
                       aria-label={t(($) => $.tokens.sandbox_keys.delete_aria, { name: node.name })}
                     >
@@ -361,6 +371,48 @@ export function TokensTab() {
               }}
             >
               {t(($) => $.tokens.revoke_dialog.confirm)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!deleteConfirmNode} onOpenChange={(open) => { if (!open) setDeleteConfirmNode(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t(($) => $.tokens.sandbox_keys.delete_dialog.title)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(($) => $.tokens.sandbox_keys.delete_dialog.description, { name: deleteConfirmNode?.name ?? "" })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t(($) => $.tokens.sandbox_keys.delete_dialog.cancel)}</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={async () => {
+                if (deleteConfirmNode) await handleDeleteSandboxNode(deleteConfirmNode.id);
+                setDeleteConfirmNode(null);
+              }}
+            >
+              {t(($) => $.tokens.sandbox_keys.delete_dialog.confirm)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!deleteBlockedNode} onOpenChange={(open) => { if (!open) setDeleteBlockedNode(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t(($) => $.tokens.sandbox_keys.delete_blocked_dialog.title)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(($) => $.tokens.sandbox_keys.delete_blocked_dialog.description, {
+                name: deleteBlockedNode?.name ?? "",
+                count: deleteBlockedNode?.instance_count ?? 0,
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setDeleteBlockedNode(null)}>
+              {t(($) => $.tokens.sandbox_keys.delete_blocked_dialog.confirm)}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

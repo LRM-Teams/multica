@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
 import { Box, Check, Copy, Loader2, Monitor, Plus, RotateCcw, Search, Server, Square, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,7 +11,7 @@ import {
   useStopSandboxMutation,
 } from "@multica/core/sandboxes/mutations";
 import { sandboxBindingListOptions, sandboxKeys, sandboxListOptions } from "@multica/core/sandboxes/queries";
-import { defaultSandboxName, sandboxDisplayName } from "@multica/core/sandboxes/utils";
+import { defaultSandboxName, effectiveSandboxNodeStatus, sandboxDisplayName } from "@multica/core/sandboxes/utils";
 import type { SandboxBinding, SandboxInstance } from "@multica/core/types";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
@@ -113,6 +113,22 @@ function buildRuntimePayload(form: Pick<CreateFormState, "apiKey" | "baseUrl" | 
   return runtime;
 }
 
+function useNowTick(intervalMs = 10_000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
+function bindingWithEffectiveStatus(binding: SandboxBinding, now: number): SandboxBinding {
+  return {
+    ...binding,
+    node_status: effectiveSandboxNodeStatus(binding.node_status, binding.node_last_seen_at, now),
+  };
+}
+
 export function SandboxesPage() {
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
@@ -131,10 +147,18 @@ export function SandboxesPage() {
   const [addNode, dispatchAddNode] = useReducer(addNodeReducer, initialAddNodeState);
   const { dialogOpen: addDialogOpen, setupCommand, setupCopied, creating: creatingNode } = addNode;
 
+  const now = useNowTick();
+
   const { data: instances = [], isLoading } = useQuery(sandboxListOptions(wsId));
   const { data: bindings = [], isLoading: bindingsLoading } = useQuery(sandboxBindingListOptions(wsId));
 
-  const connectedBindings = useMemo(() => bindings.filter((binding) => binding.enabled), [bindings]);
+  const connectedBindings = useMemo(
+    () =>
+      bindings
+        .filter((binding) => binding.enabled)
+        .map((binding) => bindingWithEffectiveStatus(binding, now)),
+    [bindings, now],
+  );
   const hasConnectedNode = connectedBindings.length > 0;
 
   const instancesByNode = useMemo(() => {
@@ -377,10 +401,7 @@ multica sandboxd`,
               </Select>
             </div>
             <div className="space-y-3">
-              <div>
-                <div className="text-sm font-medium">{t(($) => $.sandboxes_page.runtime_model_title)}</div>
-                <p className="text-xs text-muted-foreground">{t(($) => $.sandboxes_page.runtime_model_optional_hint)}</p>
-              </div>
+              <div className="text-sm font-medium">{t(($) => $.sandboxes_page.runtime_model_title)}</div>
               <Input
                 type="password"
                 placeholder={t(($) => $.sandboxes_page.api_key_placeholder)}

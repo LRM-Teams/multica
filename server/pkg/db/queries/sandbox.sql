@@ -24,6 +24,16 @@ SELECT id, node_key, owner_user_id, name, status, capabilities, max_concurrency,
 WHERE owner_user_id = $1 AND deleted_at IS NULL
 ORDER BY created_at ASC;
 
+-- name: CountSandboxInstancesByNode :one
+SELECT COUNT(*)::bigint FROM sandbox_instance
+WHERE node_id = $1;
+
+-- name: CountSandboxInstancesGroupedByNode :many
+SELECT node_id, COUNT(*)::bigint AS instance_count
+FROM sandbox_instance
+WHERE node_id = ANY(@node_ids::uuid[])
+GROUP BY node_id;
+
 -- name: GetSandboxNode :one
 SELECT id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at FROM sandbox_node
 WHERE id = $1 AND deleted_at IS NULL;
@@ -58,6 +68,18 @@ UPDATE sandbox_node
 SET status = 'online', last_seen_at = now(), updated_at = now(), metadata = @metadata
 WHERE id = @id AND deleted_at IS NULL
 RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at;
+
+-- name: TouchSandboxNodeLiveness :exec
+UPDATE sandbox_node
+SET status = 'online', last_seen_at = now(), updated_at = now()
+WHERE id = @id AND deleted_at IS NULL;
+
+-- name: MarkStaleSandboxNodesOffline :exec
+UPDATE sandbox_node
+SET status = 'offline', updated_at = now()
+WHERE status = 'online'
+  AND deleted_at IS NULL
+  AND (last_seen_at IS NULL OR last_seen_at < now() - make_interval(secs => @stale_seconds::double precision));
 
 -- name: SetSandboxNodeOffline :exec
 UPDATE sandbox_node

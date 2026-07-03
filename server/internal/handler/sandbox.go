@@ -24,6 +24,10 @@ const (
 	defaultSandboxTokenTTL = 180 * 24 * time.Hour
 	defaultSandboxJobTTL   = 24 * time.Hour
 	defaultSandboxLeaseSec = 300
+	// sandboxNodeStaleThreshold marks a node offline when last_seen_at is
+	// older than this. sandboxd polls jobs every 5s by default; 30s tolerates
+	// brief network hiccups without showing a dead node as online for long.
+	sandboxNodeStaleThreshold = 30 * time.Second
 )
 
 type SandboxNodeResponse struct {
@@ -36,6 +40,7 @@ type SandboxNodeResponse struct {
 	MaxConcurrency int32           `json:"max_concurrency"`
 	Metadata       json.RawMessage `json:"metadata"`
 	LastSeenAt     *string         `json:"last_seen_at"`
+	InstanceCount  int64           `json:"instance_count"`
 	CreatedAt      string          `json:"created_at"`
 	UpdatedAt      string          `json:"updated_at"`
 }
@@ -48,6 +53,7 @@ type SandboxBindingResponse struct {
 	NodeOwnerUserID string          `json:"node_owner_user_id"`
 	NodeName        string          `json:"node_name"`
 	NodeStatus      string          `json:"node_status"`
+	NodeLastSeenAt  *string         `json:"node_last_seen_at"`
 	Enabled         bool            `json:"enabled"`
 	Policy          json.RawMessage `json:"policy"`
 	CreatedAt       string          `json:"created_at"`
@@ -88,17 +94,31 @@ type SandboxJobResponse struct {
 	UpdatedAt       string          `json:"updated_at"`
 }
 
-func sandboxNodeToResponse(n db.SandboxNode) SandboxNodeResponse {
+func effectiveSandboxNodeStatus(storedStatus string, lastSeen pgtype.Timestamptz) string {
+	if storedStatus != "online" {
+		return storedStatus
+	}
+	if !lastSeen.Valid {
+		return "offline"
+	}
+	if time.Since(lastSeen.Time) > sandboxNodeStaleThreshold {
+		return "offline"
+	}
+	return "online"
+}
+
+func sandboxNodeToResponse(n db.SandboxNode, instanceCount int64) SandboxNodeResponse {
 	return SandboxNodeResponse{
 		ID:             uuidToString(n.ID),
 		NodeKey:        n.NodeKey,
 		OwnerUserID:    uuidToString(n.OwnerUserID),
 		Name:           n.Name,
-		Status:         n.Status,
+		Status:         effectiveSandboxNodeStatus(n.Status, n.LastSeenAt),
 		Capabilities:   rawOrEmptyArray(n.Capabilities),
 		MaxConcurrency: n.MaxConcurrency,
 		Metadata:       rawOrEmptyObject(n.Metadata),
 		LastSeenAt:     timestampPtr(n.LastSeenAt),
+		InstanceCount:  instanceCount,
 		CreatedAt:      timestampToString(n.CreatedAt),
 		UpdatedAt:      timestampToString(n.UpdatedAt),
 	}
@@ -226,7 +246,7 @@ func (h *Handler) CreateSandboxNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create sandbox node")
 		return
 	}
-	writeJSON(w, http.StatusCreated, sandboxNodeToResponse(node))
+	writeJSON(w, http.StatusCreated, sandboxNodeToResponse(node, 0))
 }
 
 func (h *Handler) ListSandboxNodes(w http.ResponseWriter, r *http.Request) {
@@ -234,14 +254,30 @@ func (h *Handler) ListSandboxNodes(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	nodes, err := h.Queries.ListSandboxNodesByOwner(r.Context(), parseUUID(userID))
+	ownerUUID := parseUUID(userID)
+	nodes, err := h.Queries.ListSandboxNodesByOwner(r.Context(), ownerUUID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list sandbox nodes")
 		return
 	}
+	instanceCounts := map[string]int64{}
+	if len(nodes) > 0 {
+		nodeIDs := make([]pgtype.UUID, 0, len(nodes))
+		for _, node := range nodes {
+			nodeIDs = append(nodeIDs, node.ID)
+		}
+		rows, err := h.Queries.CountSandboxInstancesGroupedByNode(r.Context(), nodeIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to count sandbox instances")
+			return
+		}
+		for _, row := range rows {
+			instanceCounts[uuidToString(row.NodeID)] = row.InstanceCount
+		}
+	}
 	resp := make([]SandboxNodeResponse, 0, len(nodes))
 	for _, n := range nodes {
-		resp = append(resp, sandboxNodeToResponse(n))
+		resp = append(resp, sandboxNodeToResponse(n, instanceCounts[uuidToString(n.ID)]))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -276,7 +312,7 @@ func (h *Handler) UpdateSandboxNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to update sandbox node")
 		return
 	}
-	writeJSON(w, http.StatusOK, sandboxNodeToResponse(node))
+	writeJSON(w, http.StatusOK, sandboxNodeToResponse(node, 0))
 }
 
 func (h *Handler) DeleteSandboxNode(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +324,25 @@ func (h *Handler) DeleteSandboxNode(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.Queries.DeleteSandboxNodeForOwner(r.Context(), db.DeleteSandboxNodeForOwnerParams{ID: nodeID, OwnerUserID: parseUUID(userID)}); err != nil {
+	ownerUUID := parseUUID(userID)
+	if _, err := h.Queries.GetSandboxNodeForOwner(r.Context(), db.GetSandboxNodeForOwnerParams{ID: nodeID, OwnerUserID: ownerUUID}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox node not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load sandbox node")
+		return
+	}
+	instanceCount, err := h.Queries.CountSandboxInstancesByNode(r.Context(), nodeID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to count sandbox instances")
+		return
+	}
+	if instanceCount > 0 {
+		writeError(w, http.StatusConflict, "delete sandboxes on this node before deleting the node")
+		return
+	}
+	if err := h.Queries.DeleteSandboxNodeForOwner(r.Context(), db.DeleteSandboxNodeForOwnerParams{ID: nodeID, OwnerUserID: ownerUUID}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete sandbox node")
 		return
 	}
@@ -409,7 +463,8 @@ func (h *Handler) ListWorkspaceSandboxBindings(w http.ResponseWriter, r *http.Re
 			NodeKey:         row.NodeKey,
 			NodeOwnerUserID: uuidToString(row.OwnerUserID),
 			NodeName:        row.Name,
-			NodeStatus:      row.Status,
+			NodeStatus:      effectiveSandboxNodeStatus(row.Status, row.LastSeenAt),
+			NodeLastSeenAt:  timestampPtr(row.LastSeenAt),
 			Enabled:         row.Enabled,
 			Policy:          rawOrEmptyObject(row.Policy),
 			CreatedAt:       timestampToString(row.CreatedAt),
@@ -935,7 +990,7 @@ func (h *Handler) SandboxNodeRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "sandbox node token does not match node_key")
 		return
 	}
-	writeJSON(w, http.StatusOK, sandboxNodeToResponse(node))
+	writeJSON(w, http.StatusOK, sandboxNodeToResponse(node, 0))
 }
 
 func (h *Handler) SandboxNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -952,7 +1007,7 @@ func (h *Handler) SandboxNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to record sandbox node heartbeat")
 		return
 	}
-	writeJSON(w, http.StatusOK, sandboxNodeToResponse(node))
+	writeJSON(w, http.StatusOK, sandboxNodeToResponse(node, 0))
 }
 
 func (h *Handler) SandboxNodeWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -979,6 +1034,10 @@ func (h *Handler) ClaimSandboxJobs(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	if req.Capacity <= 0 || req.Capacity > 16 {
 		req.Capacity = 1
+	}
+	if err := h.Queries.TouchSandboxNodeLiveness(r.Context(), nodeUUID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record sandbox node liveness")
+		return
 	}
 	jobs, err := h.Queries.ClaimSandboxJobsForNode(r.Context(), db.ClaimSandboxJobsForNodeParams{
 		NodeID:       nodeUUID,

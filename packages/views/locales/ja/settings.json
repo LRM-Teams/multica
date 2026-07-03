@@ -149,7 +149,18 @@
       "toast_updated": "Sandboxd key updated",
       "toast_update_failed": "Failed to update sandboxd key",
       "toast_deleted": "Sandboxd key deleted",
-      "toast_delete_failed": "Failed to delete sandboxd key"
+      "toast_delete_failed": "Failed to delete sandboxd key",
+      "delete_dialog": {
+        "title": "Sandboxd キーを削除しますか？",
+        "description": "「{{name}}」のすべてのトークンを失効させ、ノード接続を切断します。この操作は元に戻せません。",
+        "cancel": "キャンセル",
+        "confirm": "削除"
+      },
+      "delete_blocked_dialog": {
+        "title": "ノードを削除できません",
+        "description": "「{{name}}」にはまだ {{count}} 件のサンドボックスがあります。先にサンドボックスページでこのノード上のサンドボックスをすべて削除してから、再度お試しください。",
+        "confirm": "了解"
+      }
     }
   },
   "workspace": {

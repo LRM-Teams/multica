@@ -443,6 +443,106 @@ func TestChannelAmbientGateBoundsRepeatedAmbientFanout(t *testing.T) {
 	}
 }
 
+func TestChannelAmbientGateSerializesConcurrentSameAgentAmbient(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	withChannelAmbientGateTestConfig(t)
+	agentID := createHandlerTestAgent(t, "Ambient Concurrent Gate "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "ambient-concurrent-gate-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+
+	lockTx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin lock tx: %v", err)
+	}
+	if _, err := lockTx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, channelID, agentID); err != nil {
+		t.Fatalf("hold gate lock: %v", err)
+	}
+
+	start := make(chan struct{})
+	const sends = 8
+	var wg sync.WaitGroup
+	for i := 0; i < sends; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", fmt.Sprintf("ordinary concurrent ambient update %d", i), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ambient-concurrent-gate"), 0)
+			if err != nil {
+				t.Errorf("insert ambient trigger %d: %v", i, err)
+				return
+			}
+			testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+		}()
+	}
+	close(start)
+	time.Sleep(50 * time.Millisecond)
+	if err := lockTx.Commit(ctx); err != nil {
+		t.Fatalf("release gate lock: %v", err)
+	}
+	wg.Wait()
+
+	var tasks int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_queue atq
+		JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
+		WHERE cas.channel_id = $1 AND cas.agent_id = $2 AND atq.priority = 1`, channelID, agentID).Scan(&tasks); err != nil {
+		t.Fatalf("count ambient tasks: %v", err)
+	}
+	if tasks != 1 {
+		t.Fatalf("concurrent same-agent ambient created %d tasks, want 1", tasks)
+	}
+}
+
+func TestChannelAmbientGateFailsClosedOnStatsError(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	withChannelAmbientGateTestConfig(t)
+	agentID := createHandlerTestAgent(t, "Ambient Fail Closed Gate "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "ambient-fail-closed-gate-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	agent, err := testHandler.Queries.GetAgent(ctx, parseUUID(agentID))
+	if err != nil {
+		t.Fatalf("load agent: %v", err)
+	}
+	trigger := ChannelMessageResponse{
+		ID:        uuid.NewString(),
+		Content:   "ordinary ambient update",
+		Type:      "user",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if testHandler.shouldDispatchChannelAmbientObservation(cancelledCtx, ch, trigger, agent) {
+		t.Fatal("ambient gate allowed dispatch after stats query error; want fail-closed")
+	}
+}
+
 func TestChannelAmbientGateSkipsObviousNoiseBeforeTaskCreation(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

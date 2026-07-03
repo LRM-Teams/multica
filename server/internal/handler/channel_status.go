@@ -23,9 +23,10 @@ type ChannelActiveTasksResponse struct {
 }
 
 // ListChannelActiveTasks returns the latest non-terminal task per agent in the
-// channel (queued / dispatched / running / waiting_local_directory). Channel
-// agents run through per-agent chat sessions (channel_agent_session), so we
-// join the channel's sessions to their queued tasks.
+// channel (queued / dispatched / running / waiting_local_directory) whose
+// runtime is still online. Channel agents run through per-agent chat sessions
+// (channel_agent_session), so we join the channel's sessions to their queued
+// tasks.
 func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -45,6 +46,7 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 		FROM channel_agent_session cas
 		JOIN chat_session cs ON cs.id = cas.chat_session_id
 		JOIN agent_task_queue atq ON atq.chat_session_id = cs.id
+		JOIN agent_runtime ar ON ar.id = atq.runtime_id AND ar.status = 'online'
 		JOIN agent a ON a.id = cas.agent_id
 		WHERE cas.channel_id = $1
 		  AND atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')

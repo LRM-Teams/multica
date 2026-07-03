@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Bot, CheckCircle2, Loader2, Sparkles } from "lucide-react";
+import { Bot, CheckCircle2, Loader2, Sparkles, X } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
@@ -13,6 +13,7 @@ import type { Agent, AgentCreationDraft, CreateAgentRequest } from "@multica/cor
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -111,6 +112,7 @@ function InlineCreateAgentDialog({
   onClose: () => void;
 }) {
   const { t } = useT("agents");
+  const { t: tModals } = useT("modals");
   const wsId = useWorkspaceId();
   const currentUser = useAuthStore((s) => s.user);
   const qc = useQueryClient();
@@ -164,38 +166,54 @@ function InlineCreateAgentDialog({
 
   return (
     <Dialog open onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-[min(940px,calc(100vw-2rem))] gap-0 overflow-hidden border-0 bg-background p-0 shadow-2xl sm:rounded-3xl">
-        <DialogHeader className="relative overflow-hidden border-b bg-[radial-gradient(circle_at_top_right,hsl(var(--primary)/0.15),transparent_32%),linear-gradient(135deg,hsl(var(--muted)/0.72),hsl(var(--background))_62%)] px-6 py-5">
+      <DialogContent
+        showCloseButton={false}
+        className="bottom-2 top-auto flex max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-[min(940px,calc(100vw-1rem))] translate-y-0 flex-col gap-0 overflow-hidden border-0 bg-background p-0 shadow-2xl sm:top-1/2 sm:bottom-auto sm:max-h-[90vh] sm:w-full sm:max-w-[min(940px,calc(100vw-2rem))] sm:-translate-y-1/2 sm:rounded-3xl"
+      >
+        <DialogHeader className="relative shrink-0 overflow-hidden border-b bg-[radial-gradient(circle_at_top_right,hsl(var(--primary)/0.15),transparent_32%),linear-gradient(135deg,hsl(var(--muted)/0.72),hsl(var(--background))_62%)] px-4 py-4 pr-14 sm:px-6 sm:py-5">
           <div className="pointer-events-none absolute -right-12 -top-16 size-40 rounded-full bg-primary/10 blur-3xl" />
-          <div className="relative flex items-start gap-4">
+          <DialogClose
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="absolute right-3 top-3 z-10 rounded-full bg-background/80 text-muted-foreground shadow-sm ring-1 ring-border/70 backdrop-blur hover:bg-background hover:text-foreground"
+              />
+            }
+          >
+            <X className="size-4" />
+            <span className="sr-only">{tModals(($) => $.common.close)}</span>
+          </DialogClose>
+          <div className="relative flex min-w-0 items-start gap-3 sm:gap-4">
             <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
               <Bot className="size-5" />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border bg-background/75 px-2.5 py-1 text-[11px] font-medium text-muted-foreground shadow-sm">
                 <Sparkles className="size-3 text-primary" />
                 {t(($) => $.windy.hiring_card_badge)}
               </div>
-              <DialogTitle className="text-xl font-semibold tracking-tight">{t(($) => $.windy.create_title, { name: draft.name })}</DialogTitle>
+              <DialogTitle className="break-words text-lg font-semibold tracking-tight sm:text-xl">{t(($) => $.windy.create_title, { name: draft.name })}</DialogTitle>
               <DialogDescription className="mt-2 max-w-2xl text-sm leading-6">
                 {t(($) => $.windy.create_description)}
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
-        <div className="max-h-[calc(90vh-11rem)] space-y-5 overflow-y-auto px-6 py-5">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:space-y-5 sm:px-6 sm:py-5">
           <div className="rounded-2xl border bg-card p-4 shadow-sm">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold">{draft.description || draft.name}</p>
+            <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <p className="break-words text-sm font-semibold">{draft.description || draft.name}</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">{t(($) => $.windy.generated_hint)}</p>
               </div>
-              <span className="shrink-0 rounded-full border bg-muted/40 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+              <span className="w-fit shrink-0 rounded-full border bg-muted/40 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
                 {draft.visibility === "workspace" ? "Workspace" : "Private"}
               </span>
             </div>
             {draft.instructions && (
-              <p className="max-h-40 overflow-y-auto rounded-xl border bg-muted/25 px-3 py-2 text-xs leading-5 text-muted-foreground">
+              <p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border bg-muted/25 px-3 py-2 text-xs leading-5 text-muted-foreground">
                 {draft.instructions}
               </p>
             )}
@@ -234,11 +252,11 @@ function InlineCreateAgentDialog({
             </div>
           )}
         </div>
-        <DialogFooter className="border-t bg-muted/25 px-6 py-4">
-          <Button type="button" variant="outline" onClick={onClose} disabled={creating}>
+        <DialogFooter className="mx-0 mb-0 shrink-0 border-t bg-muted/25 px-4 py-3 sm:px-6 sm:py-4">
+          <Button type="button" variant="outline" onClick={onClose} disabled={creating} className="w-full sm:w-auto">
             {t(($) => $.windy.cancel)}
           </Button>
-          <Button type="button" onClick={handleCreate} disabled={!selectedRuntime || creating || !hasUsableRuntime}>
+          <Button type="button" onClick={handleCreate} disabled={!selectedRuntime || creating || !hasUsableRuntime} className="w-full sm:w-auto">
             {creating ? <Loader2 className="size-4 animate-spin" /> : null}
             {t(($) => $.windy.create_agent)}
           </Button>

@@ -149,6 +149,12 @@ SET status = @status, error = @error, updated_at = now()
 WHERE id = @id
 RETURNING *;
 
+-- name: UpdateSandboxInstanceMetadata :one
+UPDATE sandbox_instance
+SET metadata = @metadata, updated_at = now()
+WHERE id = @id
+RETURNING *;
+
 -- name: CompleteSandboxInstanceCreate :one
 UPDATE sandbox_instance
 SET status = 'running', local_ref = @local_ref, endpoint_info = @endpoint_info, error = NULL, updated_at = now()

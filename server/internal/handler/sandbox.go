@@ -421,9 +421,117 @@ func (h *Handler) ListWorkspaceSandboxBindings(w http.ResponseWriter, r *http.Re
 type CreateSandboxRequest struct {
 	NodeID   string          `json:"node_id"`
 	Template string          `json:"template"`
+	Name     string          `json:"name"`
 	Limits   json.RawMessage `json:"limits"`
 	Metadata json.RawMessage `json:"metadata"`
 	Runtime  json.RawMessage `json:"runtime"`
+}
+
+type UpdateSandboxRequest struct {
+	Name    string          `json:"name"`
+	Runtime json.RawMessage `json:"runtime"`
+}
+
+func buildSandboxMetadata(base json.RawMessage, name string, runtime json.RawMessage) json.RawMessage {
+	meta := map[string]any{}
+	if len(base) > 0 {
+		_ = json.Unmarshal(base, &meta)
+	}
+	if strings.TrimSpace(name) != "" {
+		meta["name"] = strings.TrimSpace(name)
+	}
+	if len(runtime) > 0 && string(runtime) != "null" {
+		var rt map[string]any
+		if json.Unmarshal(runtime, &rt) == nil && len(rt) > 0 {
+			meta["runtime"] = rt
+		}
+	}
+	b, _ := json.Marshal(meta)
+	return b
+}
+
+func mergeRuntimeEnvMetadata(base json.RawMessage, runtimeEnv map[string]string) json.RawMessage {
+	meta := map[string]any{}
+	if len(base) > 0 {
+		_ = json.Unmarshal(base, &meta)
+	}
+	if len(runtimeEnv) > 0 {
+		meta["runtime_env"] = runtimeEnv
+	}
+	b, _ := json.Marshal(meta)
+	return b
+}
+
+func runtimeEnvFromMetadata(raw []byte) map[string]string {
+	meta := map[string]any{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &meta)
+	}
+	re, ok := meta["runtime_env"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := map[string]string{}
+	for k, v := range re {
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			out[k] = strings.TrimSpace(s)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func runtimeFromMetadata(raw []byte) json.RawMessage {
+	meta := map[string]any{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &meta)
+	}
+	rt, ok := meta["runtime"]
+	if !ok {
+		return nil
+	}
+	b, err := json.Marshal(rt)
+	if err != nil || len(b) == 0 || string(b) == "null" || string(b) == "{}" {
+		return nil
+	}
+	return b
+}
+
+func shouldEnqueueSandboxReconfigure(localRef pgtype.Text, runtime json.RawMessage) bool {
+	if !localRef.Valid || strings.TrimSpace(localRef.String) == "" {
+		return false
+	}
+	if len(runtime) == 0 || string(runtime) == "null" {
+		return false
+	}
+	var rt map[string]any
+	if json.Unmarshal(runtime, &rt) != nil || len(rt) == 0 {
+		return false
+	}
+	return true
+}
+
+func sandboxInstanceRowToResponse(row db.ListSandboxInstancesByWorkspaceRow) SandboxInstanceResponse {
+	return SandboxInstanceResponse{
+		ID:            uuidToString(row.ID),
+		WorkspaceID:   uuidToString(row.WorkspaceID),
+		CreatorUserID: uuidToString(row.CreatorUserID),
+		NodeID:        uuidToString(row.NodeID),
+		NodeKey:       row.NodeKey,
+		NodeName:      row.NodeName,
+		NodeStatus:    row.NodeStatus,
+		Status:        row.Status,
+		Template:      row.Template,
+		LocalRef:      textToPtr(row.LocalRef),
+		EndpointInfo:  rawOrEmptyObject(row.EndpointInfo),
+		Limits:        rawOrEmptyObject(row.Limits),
+		Metadata:      rawOrEmptyObject(row.Metadata),
+		Error:         textToPtr(row.Error),
+		CreatedAt:     timestampToString(row.CreatedAt),
+		UpdatedAt:     timestampToString(row.UpdatedAt),
+	}
 }
 
 func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) {
@@ -468,6 +576,7 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	userUUID := parseUUID(userID)
+	metadata := buildSandboxMetadata(req.Metadata, req.Name, req.Runtime)
 	inst, err := h.Queries.CreateSandboxInstance(r.Context(), db.CreateSandboxInstanceParams{
 		WorkspaceID:   wsUUID,
 		CreatorUserID: userUUID,
@@ -475,7 +584,7 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 		Status:        "pending",
 		Template:      req.Template,
 		Limits:        jsonBytesOrDefault(req.Limits, "{}"),
-		Metadata:      jsonBytesOrDefault(req.Metadata, "{}"),
+		Metadata:      jsonBytesOrDefault(metadata, "{}"),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create sandbox")
@@ -486,10 +595,18 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to prepare sandbox runtime")
 		return
 	}
+	metadata = mergeRuntimeEnvMetadata(metadata, runtimeEnv)
+	if _, err := h.Queries.UpdateSandboxInstanceMetadata(r.Context(), db.UpdateSandboxInstanceMetadataParams{
+		ID:       inst.ID,
+		Metadata: jsonBytesOrDefault(metadata, "{}"),
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to persist sandbox runtime env")
+		return
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"template":    req.Template,
 		"limits":      json.RawMessage(jsonBytesOrDefault(req.Limits, "{}")),
-		"metadata":    json.RawMessage(jsonBytesOrDefault(req.Metadata, "{}")),
+		"metadata":    json.RawMessage(jsonBytesOrDefault(metadata, "{}")),
 		"runtime":     json.RawMessage(jsonBytesOrDefault(req.Runtime, "{}")),
 		"runtime_env": runtimeEnv,
 		"instance_id": uuidToString(inst.ID),
@@ -575,27 +692,131 @@ func (h *Handler) ListSandboxInstances(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := make([]SandboxInstanceResponse, 0, len(rows))
 	for _, row := range rows {
-		item := SandboxInstanceResponse{
-			ID:            uuidToString(row.ID),
-			WorkspaceID:   uuidToString(row.WorkspaceID),
-			CreatorUserID: uuidToString(row.CreatorUserID),
-			NodeID:        uuidToString(row.NodeID),
-			NodeKey:       row.NodeKey,
-			NodeName:      row.NodeName,
-			NodeStatus:    row.NodeStatus,
-			Status:        row.Status,
-			Template:      row.Template,
-			LocalRef:      textToPtr(row.LocalRef),
-			EndpointInfo:  rawOrEmptyObject(row.EndpointInfo),
-			Limits:        rawOrEmptyObject(row.Limits),
-			Metadata:      rawOrEmptyObject(row.Metadata),
-			Error:         textToPtr(row.Error),
-			CreatedAt:     timestampToString(row.CreatedAt),
-			UpdatedAt:     timestampToString(row.UpdatedAt),
-		}
-		resp = append(resp, item)
+		resp = append(resp, sandboxInstanceRowToResponse(row))
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) GetSandboxInstance(w http.ResponseWriter, r *http.Request) {
+	workspaceID := ctxWorkspaceID(r.Context())
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	instanceID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "instanceId"), "instance_id")
+	if !ok {
+		return
+	}
+	row, err := h.Queries.GetSandboxInstanceForWorkspace(r.Context(), db.GetSandboxInstanceForWorkspaceParams{ID: instanceID, WorkspaceID: wsUUID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get sandbox")
+		return
+	}
+	writeJSON(w, http.StatusOK, sandboxInstanceRowToResponse(row))
+}
+
+func (h *Handler) UpdateSandboxInstance(w http.ResponseWriter, r *http.Request) {
+	workspaceID := ctxWorkspaceID(r.Context())
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	instanceID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "instanceId"), "instance_id")
+	if !ok {
+		return
+	}
+	row, err := h.Queries.GetSandboxInstanceForWorkspace(r.Context(), db.GetSandboxInstanceForWorkspaceParams{ID: instanceID, WorkspaceID: wsUUID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get sandbox")
+		return
+	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	var req UpdateSandboxRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	metadata := buildSandboxMetadata(row.Metadata, req.Name, req.Runtime)
+	inst, err := h.Queries.UpdateSandboxInstanceMetadata(r.Context(), db.UpdateSandboxInstanceMetadataParams{
+		ID:       instanceID,
+		Metadata: jsonBytesOrDefault(metadata, "{}"),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update sandbox")
+		return
+	}
+	if shouldEnqueueSandboxReconfigure(row.LocalRef, req.Runtime) {
+		if err := h.enqueueSandboxReconfigureJob(r, wsUUID, parseUUID(userID), row, metadata); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to enqueue sandbox reconfigure")
+			return
+		}
+	}
+	resp := sandboxInstanceToResponse(inst)
+	resp.NodeKey = row.NodeKey
+	resp.NodeName = row.NodeName
+	resp.NodeStatus = row.NodeStatus
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) enqueueSandboxReconfigureJob(r *http.Request, wsUUID, userUUID pgtype.UUID, row db.GetSandboxInstanceForWorkspaceRow, metadata json.RawMessage) error {
+	runtimeEnv := runtimeEnvFromMetadata(metadata)
+	if runtimeEnv == nil {
+		var err error
+		runtimeEnv, err = h.sandboxRuntimeEnv(r, wsUUID, userUUID, uuidToString(row.ID))
+		if err != nil {
+			return err
+		}
+		metadata = mergeRuntimeEnvMetadata(metadata, runtimeEnv)
+		if _, err := h.Queries.UpdateSandboxInstanceMetadata(r.Context(), db.UpdateSandboxInstanceMetadataParams{
+			ID:       row.ID,
+			Metadata: jsonBytesOrDefault(metadata, "{}"),
+		}); err != nil {
+			return err
+		}
+	}
+	_, _ = h.Queries.UpdateSandboxInstanceStatus(r.Context(), db.UpdateSandboxInstanceStatusParams{
+		ID:     row.ID,
+		Status: "reconfiguring",
+		Error:  pgtype.Text{},
+	})
+	payload, _ := json.Marshal(map[string]any{
+		"instance_id": uuidToString(row.ID),
+		"local_ref":   textValue(row.LocalRef),
+		"metadata":    json.RawMessage(jsonBytesOrDefault(metadata, "{}")),
+		"runtime":     json.RawMessage(jsonBytesOrDefault(runtimeFromMetadata(metadata), "{}")),
+		"runtime_env": runtimeEnv,
+	})
+	job, err := h.Queries.CreateSandboxJob(r.Context(), db.CreateSandboxJobParams{
+		WorkspaceID:     wsUUID,
+		InitiatorUserID: userUUID,
+		NodeID:          row.NodeID,
+		InstanceID:      row.ID,
+		Type:            "reconfigure",
+		Payload:         payload,
+	})
+	if err != nil {
+		return err
+	}
+	if h.SandboxHub != nil {
+		h.SandboxHub.NotifyJobAvailable(uuidToString(row.NodeID), uuidToString(job.ID))
+	}
+	return nil
 }
 
 func (h *Handler) enqueueSandboxInstanceJob(w http.ResponseWriter, r *http.Request, jobType string) {
@@ -622,17 +843,26 @@ func (h *Handler) enqueueSandboxInstanceJob(w http.ResponseWriter, r *http.Reque
 		status = "resuming"
 	}
 	_, _ = h.Queries.UpdateSandboxInstanceStatus(r.Context(), db.UpdateSandboxInstanceStatusParams{ID: instanceID, Status: status, Error: pgtype.Text{}})
-	payload, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"instance_id": uuidToString(instanceID),
 		"local_ref":   textValue(inst.LocalRef),
-	})
+	}
+	if jobType == "resume" {
+		if rt := runtimeFromMetadata(inst.Metadata); len(rt) > 0 {
+			payload["runtime"] = json.RawMessage(rt)
+		}
+		if env := runtimeEnvFromMetadata(inst.Metadata); len(env) > 0 {
+			payload["runtime_env"] = env
+		}
+	}
+	rawPayload, _ := json.Marshal(payload)
 	job, err := h.Queries.CreateSandboxJob(r.Context(), db.CreateSandboxJobParams{
 		WorkspaceID:     wsUUID,
 		InitiatorUserID: parseUUID(userID),
 		NodeID:          inst.NodeID,
 		InstanceID:      instanceID,
 		Type:            jobType,
-		Payload:         payload,
+		Payload:         rawPayload,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to enqueue sandbox job")
@@ -774,6 +1004,9 @@ func (h *Handler) ClaimSandboxJobs(w http.ResponseWriter, r *http.Request) {
 		if job.Type == "create" {
 			_, _ = h.Queries.UpdateSandboxInstanceStatus(r.Context(), db.UpdateSandboxInstanceStatusParams{ID: job.InstanceID, Status: "creating", Error: pgtype.Text{}})
 		}
+		if job.Type == "reconfigure" {
+			_, _ = h.Queries.UpdateSandboxInstanceStatus(r.Context(), db.UpdateSandboxInstanceStatusParams{ID: job.InstanceID, Status: "reconfiguring", Error: pgtype.Text{}})
+		}
 		resp = append(resp, sandboxJobToResponse(job, rawToken))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": resp})
@@ -819,6 +1052,8 @@ func (h *Handler) CompleteSandboxJob(w http.ResponseWriter, r *http.Request) {
 		inst, err = h.Queries.MarkSandboxInstanceStopped(r.Context(), job.InstanceID)
 	case "resume":
 		inst, err = h.Queries.MarkSandboxInstanceRunning(r.Context(), job.InstanceID)
+	case "reconfigure":
+		inst, err = h.Queries.MarkSandboxInstanceRunning(r.Context(), job.InstanceID)
 	case "delete":
 		err = h.Queries.DeleteSandboxInstance(r.Context(), job.InstanceID)
 	default:
@@ -854,7 +1089,17 @@ func (h *Handler) FailSandboxJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to mark sandbox job failed")
 		return
 	}
-	inst, instErr := h.Queries.MarkSandboxInstanceFailed(r.Context(), db.MarkSandboxInstanceFailedParams{ID: job.InstanceID, Error: pgtype.Text{String: errMsg, Valid: true}})
+	var inst db.SandboxInstance
+	var instErr error
+	if job.Type == "reconfigure" {
+		inst, instErr = h.Queries.UpdateSandboxInstanceStatus(r.Context(), db.UpdateSandboxInstanceStatusParams{
+			ID:     job.InstanceID,
+			Status: "running",
+			Error:  pgtype.Text{String: errMsg, Valid: true},
+		})
+	} else {
+		inst, instErr = h.Queries.MarkSandboxInstanceFailed(r.Context(), db.MarkSandboxInstanceFailedParams{ID: job.InstanceID, Error: pgtype.Text{String: errMsg, Valid: true}})
+	}
 	if instErr == nil {
 		h.publish(protocol.EventSandboxInstanceUpdated, uuidToString(inst.WorkspaceID), "sandbox_node", uuidToString(job.NodeID), map[string]any{"instance": sandboxInstanceToResponse(inst)})
 	}

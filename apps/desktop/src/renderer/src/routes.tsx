@@ -24,6 +24,7 @@ import { SkillsPage } from "@multica/views/skills";
 import { DesktopRuntimesPage } from "./components/desktop-runtimes-page";
 import { DesktopAgentsPage } from "./components/desktop-agents-page";
 import { SandboxesPage } from "@multica/views/sandboxes";
+import { SandboxDetailPage } from "./pages/sandbox-detail-page";
 import { SquadsPage, SquadDetailPage as SquadDetailPageView } from "@multica/views/squads/components";
 import { InboxPage } from "@multica/views/inbox";
 import { SettingsPage } from "@multica/views/settings";
@@ -170,6 +171,11 @@ export const appRoutes: RouteObject[] = [
             handle: { title: "Runtime" },
           },
           { path: "sandboxes", element: <SandboxesPage />, handle: { title: "Sandboxes" } },
+          {
+            path: "sandboxes/:instanceId",
+            element: <SandboxDetailPage />,
+            handle: { title: "Sandbox" },
+          },
           { path: "skills", element: <SkillsPage />, handle: { title: "Skills" } },
           {
             path: "skills/:id",

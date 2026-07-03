@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
+import type { CreateSandboxRequest, UpdateSandboxRequest } from "../types";
 import { sandboxKeys } from "./queries";
 
 function useInvalidateSandboxes(wsId: string) {
@@ -7,21 +8,21 @@ function useInvalidateSandboxes(wsId: string) {
   return () => queryClient.invalidateQueries({ queryKey: sandboxKeys.all(wsId) });
 }
 
-export function useCreateSandboxMutation(
-  wsId: string,
-  payload: () => { node_id?: string; runtime: Record<string, string> },
-) {
+export function useCreateSandboxMutation(wsId: string) {
   const invalidate = useInvalidateSandboxes(wsId);
   return useMutation({
-    mutationFn: () => {
-      const next = payload();
-      return api.createSandbox({
-        node_id: next.node_id,
-        template: "default",
-        runtime: next.runtime,
-      });
-    },
+    mutationFn: (data: CreateSandboxRequest) => api.createSandbox(data),
     onSuccess: invalidate,
+  });
+}
+
+export function useUpdateSandboxMutation(wsId: string, instanceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: UpdateSandboxRequest) => api.updateSandbox(instanceId, data),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: sandboxKeys.all(wsId) });
+    },
   });
 }
 

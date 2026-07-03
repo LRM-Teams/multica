@@ -471,6 +471,23 @@ func (q *Queries) UpdateSandboxInstanceStatus(ctx context.Context, arg UpdateSan
 	return scanSandboxInstance(row)
 }
 
+const updateSandboxInstanceMetadata = `-- name: UpdateSandboxInstanceMetadata :one
+UPDATE sandbox_instance
+SET metadata = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, creator_user_id, node_id, status, template, local_ref, endpoint_info, limits, metadata, error, created_at, updated_at
+`
+
+type UpdateSandboxInstanceMetadataParams struct {
+	ID       pgtype.UUID `json:"id"`
+	Metadata []byte      `json:"metadata"`
+}
+
+func (q *Queries) UpdateSandboxInstanceMetadata(ctx context.Context, arg UpdateSandboxInstanceMetadataParams) (SandboxInstance, error) {
+	row := q.db.QueryRow(ctx, updateSandboxInstanceMetadata, arg.ID, arg.Metadata)
+	return scanSandboxInstance(row)
+}
+
 const completeSandboxInstanceCreate = `-- name: CompleteSandboxInstanceCreate :one
 UPDATE sandbox_instance
 SET status = 'running', local_ref = $2, endpoint_info = $3, error = NULL, updated_at = now()

@@ -158,6 +158,7 @@ export type {
   SandboxJob,
   SandboxJobStatus,
   CreateSandboxRequest,
+  UpdateSandboxRequest,
 } from "./sandbox";
 export type {
   Autopilot,

@@ -219,6 +219,61 @@ describe("useRealtimeSync — ws instance change", () => {
       queryKey: channelKeys.messagesPage("channel-1"),
     });
   });
+
+  it("invalidates the paged (and thread) channel message cache when a reaction changes", () => {
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+
+    const reactionAddedHandler = (ws.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([eventName]) => eventName === "channel_reaction:added",
+    )?.[1] as ((payload: { channel_id: string; message_id: string }) => void) | undefined;
+    const reactionRemovedHandler = (ws.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([eventName]) => eventName === "channel_reaction:removed",
+    )?.[1] as ((payload: { channel_id: string; message_id: string }) => void) | undefined;
+    expect(reactionAddedHandler).toBeDefined();
+    expect(reactionRemovedHandler).toBeDefined();
+
+    invalidateSpy.mockClear();
+    reactionAddedHandler?.({ channel_id: "channel-1", message_id: "msg-1" });
+
+    // Before the fix this only invalidated channelKeys.messages, which nothing
+    // renders from — the UI reads channelKeys.messagesPage, so another user's
+    // reaction never showed up live.
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: channelKeys.messagesPage("channel-1") });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["channel-message-thread", "channel-1"] });
+
+    invalidateSpy.mockClear();
+    reactionRemovedHandler?.({ channel_id: "channel-1", message_id: "msg-1" });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: channelKeys.messagesPage("channel-1") });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["channel-message-thread", "channel-1"] });
+  });
+
+  it("does not seed a fake-fresh page cache for a channel that has never been opened", () => {
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+
+    const channelMessageHandler = (ws.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([eventName]) => eventName === "channel:message",
+    )?.[1] as ((payload: ChannelMessage) => void) | undefined;
+
+    channelMessageHandler?.(
+      channelMessage("msg-in-unopened-channel", { channel_id: "channel-never-opened" }),
+    );
+
+    // Seeding a single-message page here would mark the query "fresh" under
+    // staleTime: Infinity, so opening the channel later would skip the real
+    // fetch and permanently show only the message(s) caught by this upsert.
+    expect(
+      qc.getQueryData<InfiniteData<ChannelMessagesPage>>(
+        channelKeys.messagesPage("channel-never-opened"),
+      ),
+    ).toBeUndefined();
+  });
 });
 
 function channelMessage(

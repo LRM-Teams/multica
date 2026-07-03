@@ -30,8 +30,9 @@ import (
 var ErrRepoNotConfigured = errors.New("repo is not configured for this workspace")
 
 const (
-	taskSlotWaitTimeout     = 2 * time.Second
-	taskSlotCapacityBackoff = 5 * time.Second
+	taskSlotWaitTimeout      = 2 * time.Second
+	taskSlotCapacityBackoff  = 5 * time.Second
+	taskMessageFlushInterval = 200 * time.Millisecond
 )
 
 // taskRunner executes a single agent task and returns the result.
@@ -1998,11 +1999,15 @@ func (d *Daemon) runRuntimePoller(
 	wakeup <-chan struct{},
 	taskWG *sync.WaitGroup,
 ) {
+	nextIdleSleep := d.cfg.PollInterval
 	if offset := runtimePollOffset(rid, d.cfg.PollInterval); offset > 0 {
-		d.logger.Debug("poll: initial offset", "runtime_id", rid, "offset", offset)
-		if err := sleepWithContextOrWakeup(pollerCtx, offset, wakeup); err != nil {
-			return
-		}
+		d.logger.Debug("poll: initial offset deferred", "runtime_id", rid, "offset", offset)
+		nextIdleSleep = offset
+	}
+	sleepAfterIdleClaim := func() error {
+		wait := nextIdleSleep
+		nextIdleSleep = d.cfg.PollInterval
+		return sleepWithContextOrWakeup(pollerCtx, wait, wakeup)
 	}
 
 	for {
@@ -2035,7 +2040,7 @@ func (d *Daemon) runRuntimePoller(
 		// handed the task off (or given up).
 		if !d.tryEnterClaim() {
 			sem <- slot
-			if err := sleepWithContextOrWakeup(pollerCtx, d.cfg.PollInterval, wakeup); err != nil {
+			if err := sleepAfterIdleClaim(); err != nil {
 				return
 			}
 			continue
@@ -2056,7 +2061,7 @@ func (d *Daemon) runRuntimePoller(
 				}
 				d.logger.Warn("claim task failed", "runtime_id", rid, "error", err)
 			}
-			if err := sleepWithContextOrWakeup(pollerCtx, d.cfg.PollInterval, wakeup); err != nil {
+			if err := sleepAfterIdleClaim(); err != nil {
 				return
 			}
 			continue
@@ -2065,7 +2070,7 @@ func (d *Daemon) runRuntimePoller(
 		if task == nil {
 			d.exitClaim()
 			sem <- slot
-			if err := sleepWithContextOrWakeup(pollerCtx, d.cfg.PollInterval, wakeup); err != nil {
+			if err := sleepAfterIdleClaim(); err != nil {
 				return
 			}
 			continue
@@ -3411,7 +3416,7 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 			}
 		}
 
-		ticker := time.NewTicker(500 * time.Millisecond)
+		ticker := time.NewTicker(taskMessageFlushInterval)
 		defer ticker.Stop()
 
 		done := make(chan struct{})

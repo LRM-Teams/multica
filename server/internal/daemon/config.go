@@ -19,7 +19,7 @@ import (
 
 const (
 	DefaultServerURL         = "ws://localhost:8080/ws"
-	DefaultPollInterval      = 30 * time.Second
+	DefaultPollInterval      = 2 * time.Second
 	DefaultHeartbeatInterval = 15 * time.Second
 	// DefaultAgentTimeout is the optional absolute wall-clock cap on a single
 	// agent run. 0 = no cap: a run is bounded only by the inactivity watchdogs

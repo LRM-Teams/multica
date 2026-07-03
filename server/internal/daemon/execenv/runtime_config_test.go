@@ -293,6 +293,83 @@ func TestAssignmentTriggeredProtocolHonorsAgentIdentity(t *testing.T) {
 	}
 }
 
+func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
+	t.Parallel()
+	ctx := TaskContextForEnv{
+		ChatSessionID: "chat-1",
+		AgentSkills: []SkillContextForEnv{{
+			Name:        "Issue Triage",
+			Description: "Use when organizing issue work.",
+			Content:     "Full skill body should live on disk.",
+		}},
+		Repos:        []RepoContextForEnv{{URL: "https://github.com/acme/app.git", Description: "main app"}},
+		ProjectTitle: "Launch Project",
+		ProjectResources: []ProjectResourceForEnv{{
+			ResourceType: "github_repo",
+			ResourceRef:  []byte(`{"url":"https://github.com/acme/app.git"}`),
+		}},
+	}
+	out := buildMetaSkillContent("codex", ctx)
+
+	for _, want := range []string{
+		"## Chat Mode",
+		"your final assistant output is sent back to the chat",
+		"Context boundaries:",
+		"Use `multica --help`",
+		"Issues: list/get/create/update issues",
+		"including `multica issue comment add`",
+		"Issue metadata: inspect or update issue-specific persistent facts",
+		"multica repo checkout <url>",
+		"multica attachment download <id>",
+		"## Repositories",
+		"## Project Context",
+		"## Skills",
+		"$CODEX_HOME/skills/issue-triage/SKILL.md",
+		"## Mention Safety",
+		"Reply directly in your final assistant output",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("chat brief missing %q\n---\n%s", want, out)
+		}
+	}
+
+	for _, banned := range []string{
+		"## Comment Formatting",
+		"## Issue Metadata",
+		"## Sub-issue Creation",
+		"## Mentions\n\n",
+		"### Workflow",
+		"You are responsible for managing the issue status throughout your work",
+		"Run `multica issue status ",
+		"Final results MUST be delivered",
+		"For issue comments, always use `--content-stdin` with a HEREDOC",
+		"Post your final results as a comment",
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("chat brief should not contain issue-task contract text %q\n---\n%s", banned, out)
+		}
+	}
+}
+
+func TestIssueRuntimeBriefKeepsIssueWorkflowContract(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("claude", TaskContextForEnv{IssueID: "11111111-2222-3333-4444-555555555555"})
+	for _, want := range []string{
+		"## Available Commands",
+		"multica issue comment add",
+		"## Comment Formatting",
+		"## Issue Metadata",
+		"## Sub-issue Creation",
+		"## Mentions",
+		"Final results MUST be delivered via `multica issue comment add`",
+		"You are responsible for managing the issue status throughout your work",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("issue brief missing %q", want)
+		}
+	}
+}
+
 func TestInstructionPrecedenceOnlyAppliesToAssignmentWorkflow(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

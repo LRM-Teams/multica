@@ -467,6 +467,11 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("\n\n")
 	}
 
+	if ctx.ChatSessionID != "" {
+		renderChatRuntimeBrief(&b, provider, ctx)
+		return b.String()
+	}
+
 	b.WriteString("## Available Commands\n\n")
 	b.WriteString("**Use `--output json` for structured data.** Human table output now prints routable issue keys (for example `MUL-123`) and short UUID prefixes for workspace resources; use `--full-id` on list commands when you need canonical UUIDs.\n\n")
 	b.WriteString("The default brief includes the commands needed for the core agent loop and common issue create/update tasks. For everything else, run `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help`; prefer `--output json` when the command supports it.\n\n")
@@ -691,63 +696,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("**Choosing `--status` when creating sub-issues.** `--status todo` = **start now** (the default — an agent assignee fires immediately). `--status backlog` = **wait** (assignee is set but no trigger fires; promote later with `multica issue status <child-id> todo`). Parallel children: all `--status todo`. Strict serial Step 1→2→3: only Step 1 is `todo`; Steps 2/3 are `--status backlog` from the start, promoted in turn.\n\n")
 	}
 
-	if len(ctx.AgentSkills) > 0 {
-		b.WriteString("## Skills\n\n")
-		b.WriteString("Skill context is injected as a lightweight index only: name, description, and location. Do not assume the full `SKILL.md` is already in prompt context; load the complete skill file only when needed.\n\n")
-		switch provider {
-		case "claude", "codebuddy":
-			// Claude/CodeBuddy discovers skills natively from .claude/skills/ — just list names.
-			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
-		case "codex", "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro", "antigravity":
-			// Codex, Copilot, OpenCode, OpenClaw, Pi, Cursor, Kimi, Kiro, and
-			// Antigravity discover skills natively from their respective paths.
-			// For OpenClaw, the daemon also writes a per-task openclaw-config.json
-			// (exported via OPENCLAW_CONFIG_PATH) that pins agents.defaults.workspace
-			// to the task workdir so the CLI's scanner picks up {workDir}/skills/.
-			// Antigravity inherits Gemini CLI's workspace skill layout —
-			// {workDir}/.agents/skills/ — see resolveSkillsDir.
-			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
-		case "gemini", "hermes":
-			// Gemini reads GEMINI.md directly. Hermes has no native skill
-			// discovery path wired up in resolveSkillsDir; both fall back to
-			// referencing the files explicitly under .agent_context/skills/.
-			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
-		default:
-			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
-		}
-		for _, skill := range ctx.AgentSkills {
-			// Emit only the index fields here; the full SKILL.md lives on disk.
-			location := fmt.Sprintf(".agent_context/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			switch provider {
-			case "claude", "codebuddy":
-				location = fmt.Sprintf(".claude/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "codex":
-				location = fmt.Sprintf("$CODEX_HOME/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "copilot":
-				location = fmt.Sprintf(".github/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "opencode":
-				location = fmt.Sprintf(".opencode/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "openclaw":
-				location = fmt.Sprintf("skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "pi":
-				location = fmt.Sprintf(".pi/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "cursor":
-				location = fmt.Sprintf(".cursor/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "kimi":
-				location = fmt.Sprintf(".kimi/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "kiro":
-				location = fmt.Sprintf(".kiro/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			case "antigravity":
-				location = fmt.Sprintf(".agents/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
-			}
-			if desc := strings.TrimSpace(skill.Description); desc != "" {
-				fmt.Fprintf(&b, "- **%s** — %s (location: `%s`)\n", skill.Name, desc, location)
-			} else {
-				fmt.Fprintf(&b, "- **%s** (location: `%s`)\n", skill.Name, location)
-			}
-		}
-		b.WriteString("\n")
-	}
+	renderSkillIndex(&b, provider, ctx.AgentSkills)
 
 	b.WriteString("## Mentions\n\n")
 	b.WriteString("Mention links are **side-effecting actions**, not just formatting:\n\n")
@@ -801,4 +750,139 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	}
 
 	return b.String()
+}
+
+func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
+	b.WriteString("## Chat Mode\n\n")
+	b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Reply conversationally and directly; your final assistant output is sent back to the chat. Do not post issue comments or change issue status unless the user explicitly asks you to operate on an issue.\n\n")
+	b.WriteString("Context boundaries:\n")
+	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
+	b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary; do not load the entire parent channel/DM history by default.\n")
+	b.WriteString("- Load broader chat history, issue timelines, repositories, attachments, complete `SKILL.md` files, memories, or web pages only when relevant to the user's request.\n\n")
+
+	b.WriteString("## Available Commands\n\n")
+	b.WriteString("Use `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help` to discover exact flags. Prefer `--output json` when reading data.\n\n")
+	b.WriteString("Common capabilities available when the user asks or the answer needs platform data:\n")
+	b.WriteString("- Issues: list/get/create/update issues, including status, assignee, parent/sub-issue, project, and due-date changes.\n")
+	b.WriteString("- Comments: read or add issue comments, including `multica issue comment add`, when the user explicitly asks you to work on an issue.\n")
+	b.WriteString("- Issue metadata: inspect or update issue-specific persistent facts when explicitly working on an issue: `multica issue metadata list <issue-id>`, `multica issue metadata set <issue-id> --key <k> --value <v> [--type string|number|bool]`, `multica issue metadata delete <issue-id> --key <k>`.\n")
+	b.WriteString("- Projects/repos: inspect project resources and check out code with `multica repo checkout <url>`; use `--ref <branch-or-sha>` when you need an exact revision.\n")
+	b.WriteString("- Attachments: download chat or issue attachments with `multica attachment download <id>`.\n")
+	b.WriteString("- Workspace: inspect workspace info, members, agents, and squads when needed.\n\n")
+	b.WriteString("Do not run issue commands just because you are in chat. Use them only when the user asks about an issue/task/project/repo or the answer needs that platform data.\n\n")
+
+	renderRepositoryContext(b, ctx)
+	renderProjectContext(b, ctx)
+	renderSkillIndex(b, provider, ctx.AgentSkills)
+
+	b.WriteString("## Mention Safety\n\n")
+	b.WriteString("Mention links are side-effecting actions, not just formatting: `mention://member/...` notifies a human and `mention://agent/...` enqueues a new agent run. Use plain names in prose. Only include a mention link when you are intentionally notifying, escalating, or delegating.\n\n")
+
+	b.WriteString("## Attachments\n\n")
+	b.WriteString("When a message includes attachment IDs and you need the files, use the authenticated CLI path: `multica attachment download <id>`. Do not open Multica resource URLs directly.\n\n")
+
+	b.WriteString("## Important: Always Use the `multica` CLI\n\n")
+	b.WriteString("All interactions with Multica platform resources — issues, comments, attachments, images, files, and platform data — must go through the `multica` CLI. Do NOT use `curl`, `wget`, or other HTTP clients to access Multica URLs or APIs directly.\n\n")
+
+	b.WriteString("## Output\n\n")
+	b.WriteString("Reply directly in your final assistant output. The platform sends that output to the chat. Keep responses concise and natural, and state the outcome rather than the process.\n")
+}
+
+func renderRepositoryContext(b *strings.Builder, ctx TaskContextForEnv) {
+	if len(ctx.Repos) == 0 {
+		return
+	}
+	b.WriteString("## Repositories\n\n")
+	b.WriteString("The following code repositories are available in this workspace. Use `multica repo checkout <url>` when code access is relevant to the user's request. Add `--ref <branch-or-sha>` when a task or handoff names an exact revision.\n\n")
+	for _, repo := range ctx.Repos {
+		if repo.Description != "" {
+			fmt.Fprintf(b, "- %s — %s\n", repo.URL, repo.Description)
+		} else {
+			fmt.Fprintf(b, "- %s\n", repo.URL)
+		}
+	}
+	b.WriteString("\n")
+}
+
+func renderProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
+	if ctx.ProjectID == "" && len(ctx.ProjectResources) == 0 {
+		return
+	}
+	b.WriteString("## Project Context\n\n")
+	if ctx.ProjectTitle != "" {
+		fmt.Fprintf(b, "This conversation is associated with **%s**.\n\n", ctx.ProjectTitle)
+	}
+	if len(ctx.ProjectResources) > 0 {
+		b.WriteString("Project resources (also written to `.multica/project/resources.json`):\n\n")
+		for _, r := range ctx.ProjectResources {
+			fmt.Fprintf(b, "- %s\n", formatProjectResource(r))
+		}
+		b.WriteString("\nResources are pointers — open them only when relevant to the chat request. For `github_repo` resources, use `multica repo checkout <url>` to fetch the code.\n\n")
+	} else {
+		b.WriteString("This project has no resources attached yet.\n\n")
+	}
+}
+
+func renderSkillIndex(b *strings.Builder, provider string, skills []SkillContextForEnv) {
+	if len(skills) == 0 {
+		return
+	}
+	{
+		b.WriteString("## Skills\n\n")
+		b.WriteString("Skill context is injected as a lightweight index only: name, description, and location. Do not assume the full `SKILL.md` is already in prompt context; load the complete skill file only when needed.\n\n")
+		switch provider {
+		case "claude", "codebuddy":
+			// Claude/CodeBuddy discovers skills natively from .claude/skills/ — just list names.
+			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
+		case "codex", "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro", "antigravity":
+			// Codex, Copilot, OpenCode, OpenClaw, Pi, Cursor, Kimi, Kiro, and
+			// Antigravity discover skills natively from their respective paths.
+			// For OpenClaw, the daemon also writes a per-task openclaw-config.json
+			// (exported via OPENCLAW_CONFIG_PATH) that pins agents.defaults.workspace
+			// to the task workdir so the CLI's scanner picks up {workDir}/skills/.
+			// Antigravity inherits Gemini CLI's workspace skill layout —
+			// {workDir}/.agents/skills/ — see resolveSkillsDir.
+			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
+		case "gemini", "hermes":
+			// Gemini reads GEMINI.md directly. Hermes has no native skill
+			// discovery path wired up in resolveSkillsDir; both fall back to
+			// referencing the files explicitly under .agent_context/skills/.
+			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
+		default:
+			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
+		}
+		for _, skill := range skills {
+			// Emit only the index fields here; the full SKILL.md lives on disk.
+			location := fmt.Sprintf(".agent_context/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			switch provider {
+			case "claude", "codebuddy":
+				location = fmt.Sprintf(".claude/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "codex":
+				location = fmt.Sprintf("$CODEX_HOME/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "copilot":
+				location = fmt.Sprintf(".github/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "opencode":
+				location = fmt.Sprintf(".opencode/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "openclaw":
+				location = fmt.Sprintf("skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "pi":
+				location = fmt.Sprintf(".pi/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "cursor":
+				location = fmt.Sprintf(".cursor/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "kimi":
+				location = fmt.Sprintf(".kimi/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "kiro":
+				location = fmt.Sprintf(".kiro/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "antigravity":
+				location = fmt.Sprintf(".agents/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			}
+			if desc := strings.TrimSpace(skill.Description); desc != "" {
+				fmt.Fprintf(b, "- **%s** — %s (location: `%s`)\n", skill.Name, desc, location)
+			} else {
+				fmt.Fprintf(b, "- **%s** (location: `%s`)\n", skill.Name, location)
+			}
+		}
+		b.WriteString("\n")
+	}
+
 }

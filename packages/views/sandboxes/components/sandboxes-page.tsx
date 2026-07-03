@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useReducer, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Box, Check, Copy, Loader2, Plus, Play, RotateCcw, Square, Trash2 } from "lucide-react";
 import {
@@ -23,16 +23,59 @@ import { api } from "@multica/core/api";
 import { toast } from "sonner";
 import { useT } from "../../i18n/use-t";
 
+type AddNodeState = {
+  selectedNodeId: string;
+  dialogOpen: boolean;
+  setupCommand: string;
+  setupCopied: boolean;
+  creating: boolean;
+};
+
+type AddNodeAction =
+  | { type: "selectNode"; nodeId: string }
+  | { type: "startCreating" }
+  | { type: "setupReady"; command: string }
+  | { type: "createFinished" }
+  | { type: "setDialogOpen"; open: boolean }
+  | { type: "copySuccess" }
+  | { type: "copyReset" };
+
+const initialAddNodeState: AddNodeState = {
+  selectedNodeId: "",
+  dialogOpen: false,
+  setupCommand: "",
+  setupCopied: false,
+  creating: false,
+};
+
+function addNodeReducer(state: AddNodeState, action: AddNodeAction): AddNodeState {
+  switch (action.type) {
+    case "selectNode":
+      return { ...state, selectedNodeId: action.nodeId };
+    case "startCreating":
+      return { ...state, creating: true, setupCopied: false };
+    case "setupReady":
+      return { ...state, creating: false, setupCommand: action.command, dialogOpen: true };
+    case "createFinished":
+      return { ...state, creating: false };
+    case "setDialogOpen":
+      return { ...state, dialogOpen: action.open };
+    case "copySuccess":
+      return { ...state, setupCopied: true };
+    case "copyReset":
+      return { ...state, setupCopied: false };
+    default:
+      return state;
+  }
+}
+
 export function SandboxesPage() {
   const wsId = useWorkspaceId();
   const { t } = useT("layout");
   const queryClient = useQueryClient();
   const [modelConfig, setModelConfig] = useState({ apiKey: "", baseUrl: "", model: "" });
-  const [selectedNodeId, setSelectedNodeId] = useState("");
-  const [addDialogOpen, setAddDialogOpen] = useState(false);
-  const [setupCommand, setSetupCommand] = useState("");
-  const [setupCopied, setSetupCopied] = useState(false);
-  const [creatingNode, setCreatingNode] = useState(false);
+  const [addNode, dispatchAddNode] = useReducer(addNodeReducer, initialAddNodeState);
+  const { selectedNodeId, dialogOpen: addDialogOpen, setupCommand, setupCopied, creating: creatingNode } = addNode;
   const { data: instances = [], isLoading } = useQuery(sandboxListOptions(wsId));
   const { data: bindings = [] } = useQuery(sandboxBindingListOptions(wsId));
 
@@ -53,8 +96,7 @@ export function SandboxesPage() {
   const del = useDeleteSandboxMutation(wsId);
 
   const handleAddNode = async () => {
-    setCreatingNode(true);
-    setSetupCopied(false);
+    dispatchAddNode({ type: "startCreating" });
     try {
       const suffix = Math.random().toString(36).slice(2, 8);
       const node = await api.createSandboxNode({ name: `sandboxd-${suffix}` });
@@ -74,22 +116,23 @@ export function SandboxesPage() {
         concurrency: 1,
         poll_interval: "5s",
       };
-      setSetupCommand(`mkdir -p .multica && cat > .multica/sandboxd.json <<'EOF'
+      dispatchAddNode({
+        type: "setupReady",
+        command: `mkdir -p .multica && cat > .multica/sandboxd.json <<'EOF'
 ${JSON.stringify(config, null, 2)}
 EOF
-multica sandboxd`);
-      setAddDialogOpen(true);
+multica sandboxd`,
+      });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.add_node_failed));
-    } finally {
-      setCreatingNode(false);
+      dispatchAddNode({ type: "createFinished" });
     }
   };
 
   const handleCopySetup = async () => {
     if (await copyText(setupCommand)) {
-      setSetupCopied(true);
-      setTimeout(() => setSetupCopied(false), 2000);
+      dispatchAddNode({ type: "copySuccess" });
+      setTimeout(() => dispatchAddNode({ type: "copyReset" }), 2000);
     }
   };
 
@@ -148,7 +191,7 @@ multica sandboxd`);
                 <p className="text-sm text-muted-foreground">{t(($) => $.sandboxes_page.no_bound_node)}</p>
               ) : (
                 <>
-                  <Select value={activeNodeId} onValueChange={(value) => setSelectedNodeId(value ?? "")}>
+                  <Select value={activeNodeId} onValueChange={(value) => dispatchAddNode({ type: "selectNode", nodeId: value ?? "" })}>
                     <SelectTrigger>
                       <SelectValue placeholder={t(($) => $.sandboxes_page.select_node_placeholder)} />
                     </SelectTrigger>
@@ -202,7 +245,7 @@ multica sandboxd`);
         </Card>
       </div>
 
-      <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+      <Dialog open={addDialogOpen} onOpenChange={(open) => dispatchAddNode({ type: "setDialogOpen", open })}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t(($) => $.sandboxes_page.add_node_dialog_title)}</DialogTitle>

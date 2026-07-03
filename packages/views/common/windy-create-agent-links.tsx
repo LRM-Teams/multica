@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Bot, Loader2 } from "lucide-react";
+import { Bot, CheckCircle2, Loader2, Sparkles } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
@@ -25,6 +25,7 @@ import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
 import { listParam, parseWindyCreateAgentURL } from "./windy-create-agent-link-utils";
+import { randomAgentAvatarUrl } from "./agent-avatar-presets";
 
 export function WindyCreateAgentLink({
   href,
@@ -37,10 +38,12 @@ export function WindyCreateAgentLink({
 }) {
   const [creatingDraft, setCreatingDraft] = React.useState(false);
   const [draft, setDraft] = React.useState<AgentCreationDraft | null>(null);
+  const [createdAgentName, setCreatedAgentName] = React.useState<string | null>(null);
+  const fallbackAvatarUrl = React.useRef(randomAgentAvatarUrl());
 
   const handleClick = async () => {
     const url = parseWindyCreateAgentURL(href);
-    if (!url || creatingDraft) return;
+    if (!url || creatingDraft || createdAgentName) return;
     const name = url.searchParams.get("name")?.trim() || "New Agent";
     setCreatingDraft(true);
     try {
@@ -48,7 +51,7 @@ export function WindyCreateAgentLink({
         name,
         description: url.searchParams.get("description")?.trim() || "",
         instructions: url.searchParams.get("instructions")?.trim() || "",
-        avatar_url: url.searchParams.get("avatar_url") || null,
+        avatar_url: url.searchParams.get("avatar_url") || fallbackAvatarUrl.current,
         visibility: url.searchParams.get("visibility") === "workspace" ? "workspace" : "private",
         project_id: url.searchParams.get("project_id") || null,
         channel_id: url.searchParams.get("channel_id") || null,
@@ -70,23 +73,41 @@ export function WindyCreateAgentLink({
         type="button"
         size="sm"
         variant="outline"
-        disabled={creatingDraft}
+        disabled={creatingDraft || !!createdAgentName}
         onClick={handleClick}
-        className={cn("not-prose my-1 inline-flex max-w-full gap-2", className)}
+        className={cn(
+          "not-prose my-1 inline-flex max-w-full gap-2 transition-all",
+          createdAgentName && "border-muted bg-muted/60 text-muted-foreground shadow-none opacity-80",
+          className,
+        )}
       >
-        {creatingDraft ? <Loader2 className="size-3.5 animate-spin" /> : <Bot className="size-3.5" />}
-        <span className="truncate">{children}</span>
+        {creatingDraft ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : createdAgentName ? (
+          <CheckCircle2 className="size-3.5 text-success" />
+        ) : (
+          <Bot className="size-3.5" />
+        )}
+        <span className="truncate">{createdAgentName ? `Created: ${createdAgentName}` : children}</span>
       </Button>
-      {draft && <InlineCreateAgentDialog draft={draft} onClose={() => setDraft(null)} />}
+      {draft && (
+        <InlineCreateAgentDialog
+          draft={draft}
+          onCreated={(name) => setCreatedAgentName(name)}
+          onClose={() => setDraft(null)}
+        />
+      )}
     </>
   );
 }
 
 function InlineCreateAgentDialog({
   draft,
+  onCreated,
   onClose,
 }: {
   draft: AgentCreationDraft;
+  onCreated: (name: string) => void;
   onClose: () => void;
 }) {
   const { t } = useT("agents");
@@ -132,6 +153,7 @@ function InlineCreateAgentDialog({
       qc.setQueryData<Agent[]>(workspaceKeys.agents(wsId), (current = []) => [...current, created]);
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
       toast.success(t(($) => $.windy.created_toast, { name: draft.name }));
+      onCreated(created.display_name || draft.name);
       onClose();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create agent");
@@ -142,24 +164,44 @@ function InlineCreateAgentDialog({
 
   return (
     <Dialog open onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-lg gap-0 overflow-hidden p-0">
-        <DialogHeader className="border-b px-5 py-4">
-          <DialogTitle>{t(($) => $.windy.create_title, { name: draft.name })}</DialogTitle>
-          <DialogDescription>
-            {t(($) => $.windy.create_description)}
-          </DialogDescription>
+      <DialogContent className="max-h-[90vh] max-w-[min(940px,calc(100vw-2rem))] gap-0 overflow-hidden border-0 bg-background p-0 shadow-2xl sm:rounded-3xl">
+        <DialogHeader className="relative overflow-hidden border-b bg-[radial-gradient(circle_at_top_right,hsl(var(--primary)/0.15),transparent_32%),linear-gradient(135deg,hsl(var(--muted)/0.72),hsl(var(--background))_62%)] px-6 py-5">
+          <div className="pointer-events-none absolute -right-12 -top-16 size-40 rounded-full bg-primary/10 blur-3xl" />
+          <div className="relative flex items-start gap-4">
+            <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+              <Bot className="size-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border bg-background/75 px-2.5 py-1 text-[11px] font-medium text-muted-foreground shadow-sm">
+                <Sparkles className="size-3 text-primary" />
+                Windy hiring card
+              </div>
+              <DialogTitle className="text-xl font-semibold tracking-tight">{t(($) => $.windy.create_title, { name: draft.name })}</DialogTitle>
+              <DialogDescription className="mt-2 max-w-2xl text-sm leading-6">
+                {t(($) => $.windy.create_description)}
+              </DialogDescription>
+            </div>
+          </div>
         </DialogHeader>
-        <div className="space-y-4 px-5 py-4">
-          <div className="rounded-lg border bg-muted/30 px-3 py-2">
-            <p className="text-sm font-medium">{draft.description || draft.name}</p>
+        <div className="max-h-[calc(90vh-11rem)] space-y-5 overflow-y-auto px-6 py-5">
+          <div className="rounded-2xl border bg-card p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold">{draft.description || draft.name}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">Generated by Windy from the current conversation.</p>
+              </div>
+              <span className="shrink-0 rounded-full border bg-muted/40 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+                {draft.visibility === "workspace" ? "Workspace" : "Private"}
+              </span>
+            </div>
             {draft.instructions && (
-              <p className="mt-1 line-clamp-4 text-xs text-muted-foreground">
+              <p className="max-h-40 overflow-y-auto rounded-xl border bg-muted/25 px-3 py-2 text-xs leading-5 text-muted-foreground">
                 {draft.instructions}
               </p>
             )}
           </div>
           {!hasUsableRuntime && !runtimesLoading ? (
-            <div className="rounded-lg border border-dashed px-4 py-5 text-center text-sm text-muted-foreground">
+            <div className="rounded-2xl border border-dashed bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground">
               {t(($) => $.windy.runtime_required)}
             </div>
           ) : (
@@ -192,7 +234,7 @@ function InlineCreateAgentDialog({
             </div>
           )}
         </div>
-        <DialogFooter>
+        <DialogFooter className="border-t bg-muted/25 px-6 py-4">
           <Button type="button" variant="outline" onClick={onClose} disabled={creating}>
             {t(($) => $.windy.cancel)}
           </Button>

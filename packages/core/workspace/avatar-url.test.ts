@@ -26,6 +26,12 @@ describe("resolvePublicFileUrlWithBase", () => {
     );
   });
 
+  it("keeps bundled agent avatars on the web origin", () => {
+    expect(resolvePublicFileUrlWithBase("/agent-avatars/human-11.jpg", "http://127.0.0.1:8080")).toBe(
+      "/agent-avatars/human-11.jpg",
+    );
+  });
+
   it("returns null for empty values", () => {
     expect(resolvePublicFileUrlWithBase(null, "http://127.0.0.1:8080")).toBeNull();
     expect(resolvePublicFileUrlWithBase(undefined, "http://127.0.0.1:8080")).toBeNull();

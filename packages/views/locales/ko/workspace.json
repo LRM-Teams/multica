@@ -40,6 +40,7 @@
     "refresh_runtimes": "Refresh runtimes",
     "one_time_note": "This prompt is one-time per member for the current Windy update.",
     "update": "Update Windy",
+    "later": "나중에",
     "badge_label": "Personal agent HR",
     "intro_title": "Windy turns conversations into hires",
     "one_time_label": "One-time update",

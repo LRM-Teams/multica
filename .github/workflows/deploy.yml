@@ -119,6 +119,12 @@ jobs:
 
   deploy:
     needs: build
+    # Bind the `s89` Environment so `secrets.POSTGRES_PASSWORD` is available.
+    # That secret is the single source of truth for the DB password; injecting
+    # it here (see the Pull & restart step) stops the server's /data/multica/.env
+    # from silently drifting out of sync with the Postgres role and crash-looping
+    # the backend on every deploy.
+    environment: s89
     # Run after a successful build (push / dispatch-without-tag), OR straight
     # away on a dispatch that names an existing tag to roll back to.
     if: >-
@@ -140,8 +146,10 @@ jobs:
             || needs.build.outputs.tag }}
     steps:
       # Pull only the compose file from the deployed commit, so the running
-      # topology always matches the repo. Secrets/config come from the server's
-      # own /data/multica/.env, which is never in git.
+      # topology always matches the repo. Non-secret config comes from the
+      # server's own /data/multica/.env (never in git); the DB password is
+      # injected from the `s89` Environment secret below and overrides whatever
+      # /data/multica/.env holds, so it can never drift.
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.ref }}
@@ -155,12 +163,25 @@ jobs:
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
       - name: Pull & restart backend + frontend
+        # POSTGRES_PASSWORD comes from the s89 Environment secret and is the
+        # single source of truth for the DB password. Docker Compose gives shell
+        # env vars precedence over --env-file, so this value overrides the one in
+        # /data/multica/.env for the `${POSTGRES_PASSWORD}` interpolation the
+        # compose file uses to build the backend's DATABASE_URL. GitHub masks the
+        # secret in logs; never echo it. Keep the secret URL-safe — it is used
+        # verbatim inside postgres://user:PASSWORD@host, which is not URL-encoded.
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
           set -euo pipefail
           owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
           export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
           export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
           export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
+          if [ -z "${POSTGRES_PASSWORD:-}" ]; then
+            echo "::error::POSTGRES_PASSWORD secret is empty — s89 Environment secret not wired. Aborting to avoid deploying with the wrong DB password."
+            exit 1
+          fi
           echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) on $(hostname)"
           compose() {
             docker compose \

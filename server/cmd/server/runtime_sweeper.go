@@ -60,6 +60,10 @@ const (
 	// ticks and 500 rows/tick we drain 60k rows/hour worst case — plenty
 	// of headroom for the documented backlog without monopolising DB CPU.
 	queuedExpireBatchSize = 500
+	// sandboxNodeStaleThresholdSeconds mirrors handler/sandbox.go
+	// sandboxNodeStaleThreshold. sandboxd polls jobs every 5s; 30s marks a
+	// node offline after several missed polls.
+	sandboxNodeStaleThresholdSeconds = 30.0
 )
 
 // runRuntimeSweeper periodically marks runtimes as offline if their
@@ -83,6 +87,7 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handle
 			return
 		case <-ticker.C:
 			sweepStaleRuntimes(ctx, queries, liveness, taskSvc, bus)
+			sweepStaleSandboxNodes(ctx, queries)
 			sweepStaleTasks(ctx, queries, taskSvc, bus)
 			sweepExpiredQueuedTasks(ctx, queries, taskSvc)
 			gcRuntimes(ctx, queries, bus)
@@ -169,6 +174,13 @@ func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, liveness handl
 				"action": "stale_sweep",
 			},
 		})
+	}
+}
+
+func sweepStaleSandboxNodes(ctx context.Context, queries *db.Queries) {
+	if err := queries.MarkStaleSandboxNodesOffline(ctx, sandboxNodeStaleThresholdSeconds); err != nil {
+		slog.Warn("sandbox node sweeper: failed to mark stale nodes offline", "error", err)
+		return
 	}
 }
 

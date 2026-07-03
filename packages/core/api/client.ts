@@ -1602,8 +1602,8 @@ export class ApiClient {
     return this.fetch(`/api/sandboxes/${instanceId}/resume`, { method: "POST" });
   }
 
-  async deleteSandbox(instanceId: string): Promise<SandboxJob> {
-    return this.fetch(`/api/sandboxes/${instanceId}`, { method: "DELETE" });
+  async deleteSandbox(instanceId: string): Promise<void> {
+    await this.fetch(`/api/sandboxes/${instanceId}`, { method: "DELETE" });
   }
 
   // Members

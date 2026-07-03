@@ -122,10 +122,7 @@ function SandboxDetailEditor({
             </div>
 
             <div className="space-y-3">
-              <div>
-                <div className="text-sm font-medium">{t(($) => $.sandboxes_page.runtime_model_title)}</div>
-                <p className="text-xs text-muted-foreground">{t(($) => $.sandboxes_page.runtime_model_optional_hint)}</p>
-              </div>
+              <div className="text-sm font-medium">{t(($) => $.sandboxes_page.runtime_model_title)}</div>
               <Input
                 type="password"
                 placeholder={t(($) => $.sandboxes_page.api_key_placeholder)}

@@ -149,7 +149,18 @@
       "toast_updated": "Sandboxd key updated",
       "toast_update_failed": "Failed to update sandboxd key",
       "toast_deleted": "Sandboxd key deleted",
-      "toast_delete_failed": "Failed to delete sandboxd key"
+      "toast_delete_failed": "Failed to delete sandboxd key",
+      "delete_dialog": {
+        "title": "Delete sandboxd key?",
+        "description": "This will revoke all tokens for \"{{name}}\" and disconnect the node. This cannot be undone.",
+        "cancel": "Cancel",
+        "confirm": "Delete"
+      },
+      "delete_blocked_dialog": {
+        "title": "Cannot delete node",
+        "description": "\"{{name}}\" still has {{count}} sandbox(es). Delete all sandboxes on this node from the Sandboxes page first, then try again.",
+        "confirm": "Got it"
+      }
     }
   },
   "workspace": {

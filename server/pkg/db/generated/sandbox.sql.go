@@ -85,10 +85,69 @@ func (q *Queries) ListSandboxNodesByOwner(ctx context.Context, ownerUserID pgtyp
 	return items, rows.Err()
 }
 
+const countSandboxInstancesByNode = `-- name: CountSandboxInstancesByNode :one
+SELECT COUNT(*)::bigint FROM sandbox_instance
+WHERE node_id = $1
+`
+
+func (q *Queries) CountSandboxInstancesByNode(ctx context.Context, nodeID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countSandboxInstancesByNode, nodeID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSandboxInstancesGroupedByNode = `-- name: CountSandboxInstancesGroupedByNode :many
+SELECT node_id, COUNT(*)::bigint AS instance_count
+FROM sandbox_instance
+WHERE node_id = ANY($1::uuid[])
+GROUP BY node_id
+`
+
+type CountSandboxInstancesGroupedByNodeRow struct {
+	NodeID        pgtype.UUID `json:"node_id"`
+	InstanceCount int64       `json:"instance_count"`
+}
+
+func (q *Queries) CountSandboxInstancesGroupedByNode(ctx context.Context, nodeIds []pgtype.UUID) ([]CountSandboxInstancesGroupedByNodeRow, error) {
+	rows, err := q.db.Query(ctx, countSandboxInstancesGroupedByNode, nodeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountSandboxInstancesGroupedByNodeRow{}
+	for rows.Next() {
+		var i CountSandboxInstancesGroupedByNodeRow
+		if err := rows.Scan(&i.NodeID, &i.InstanceCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
 const getSandboxNode = `-- name: GetSandboxNode :one
 SELECT id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at FROM sandbox_node
 WHERE id = $1 AND deleted_at IS NULL
 `
+
+const getSandboxNodeLiveness = `-- name: GetSandboxNodeLiveness :one
+SELECT status, last_seen_at, deleted_at FROM sandbox_node
+WHERE id = $1
+`
+
+type GetSandboxNodeLivenessRow struct {
+	Status     string             `json:"status"`
+	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
+	DeletedAt  pgtype.Timestamptz `json:"deleted_at"`
+}
+
+func (q *Queries) GetSandboxNodeLiveness(ctx context.Context, id pgtype.UUID) (GetSandboxNodeLivenessRow, error) {
+	row := q.db.QueryRow(ctx, getSandboxNodeLiveness, id)
+	var i GetSandboxNodeLivenessRow
+	err := row.Scan(&i.Status, &i.LastSeenAt, &i.DeletedAt)
+	return i, err
+}
 
 func (q *Queries) GetSandboxNode(ctx context.Context, id pgtype.UUID) (SandboxNode, error) {
 	row := q.db.QueryRow(ctx, getSandboxNode, id)
@@ -175,6 +234,30 @@ type TouchSandboxNodeHeartbeatParams struct {
 func (q *Queries) TouchSandboxNodeHeartbeat(ctx context.Context, arg TouchSandboxNodeHeartbeatParams) (SandboxNode, error) {
 	row := q.db.QueryRow(ctx, touchSandboxNodeHeartbeat, arg.ID, arg.Metadata)
 	return scanSandboxNode(row)
+}
+
+const touchSandboxNodeLiveness = `-- name: TouchSandboxNodeLiveness :exec
+UPDATE sandbox_node
+SET status = 'online', last_seen_at = now(), updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+`
+
+func (q *Queries) TouchSandboxNodeLiveness(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, touchSandboxNodeLiveness, id)
+	return err
+}
+
+const markStaleSandboxNodesOffline = `-- name: MarkStaleSandboxNodesOffline :exec
+UPDATE sandbox_node
+SET status = 'offline', updated_at = now()
+WHERE status = 'online'
+  AND deleted_at IS NULL
+  AND (last_seen_at IS NULL OR last_seen_at < now() - make_interval(secs => $1::double precision))
+`
+
+func (q *Queries) MarkStaleSandboxNodesOffline(ctx context.Context, staleSeconds float64) error {
+	_, err := q.db.Exec(ctx, markStaleSandboxNodesOffline, staleSeconds)
+	return err
 }
 
 const setSandboxNodeOffline = `-- name: SetSandboxNodeOffline :exec

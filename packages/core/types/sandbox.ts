@@ -26,6 +26,7 @@ export interface SandboxNode {
   max_concurrency: number;
   metadata: Record<string, unknown>;
   last_seen_at: string | null;
+  instance_count?: number;
   created_at: string;
   updated_at: string;
 }
@@ -38,6 +39,7 @@ export interface SandboxBinding {
   node_owner_user_id: string;
   node_name: string;
   node_status: SandboxNodeStatus;
+  node_last_seen_at?: string | null;
   enabled: boolean;
   policy: Record<string, unknown>;
   created_at: string;

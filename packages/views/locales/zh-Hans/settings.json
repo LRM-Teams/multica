@@ -149,7 +149,18 @@
       "toast_updated": "Sandboxd key updated",
       "toast_update_failed": "Failed to update sandboxd key",
       "toast_deleted": "Sandboxd key deleted",
-      "toast_delete_failed": "Failed to delete sandboxd key"
+      "toast_delete_failed": "Failed to delete sandboxd key",
+      "delete_dialog": {
+        "title": "确定删除此 Sandboxd Key？",
+        "description": "将撤销「{{name}}」的所有 token 并断开节点连接，此操作无法撤销。",
+        "cancel": "取消",
+        "confirm": "删除"
+      },
+      "delete_blocked_dialog": {
+        "title": "无法删除节点",
+        "description": "「{{name}}」下仍有 {{count}} 个沙箱。请先在沙箱页删除该节点上的所有沙箱，再删除节点。",
+        "confirm": "知道了"
+      }
     }
   },
   "workspace": {

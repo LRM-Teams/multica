@@ -1171,14 +1171,16 @@ export function useRealtimeSync(
     const unsubChannelReactionAdded = ws.on("channel_reaction:added", (p) => {
       const payload = p as { channel_id?: string; message_id?: string };
       if (payload.channel_id) {
-        qc.invalidateQueries({ queryKey: channelKeys.messages(payload.channel_id) });
+        invalidateChannelMessages(qc, payload.channel_id);
+        qc.invalidateQueries({ queryKey: ["channel-message-thread", payload.channel_id] });
       }
     });
 
     const unsubChannelReactionRemoved = ws.on("channel_reaction:removed", (p) => {
       const payload = p as { channel_id?: string; message_id?: string };
       if (payload.channel_id) {
-        qc.invalidateQueries({ queryKey: channelKeys.messages(payload.channel_id) });
+        invalidateChannelMessages(qc, payload.channel_id);
+        qc.invalidateQueries({ queryKey: ["channel-message-thread", payload.channel_id] });
       }
     });
 

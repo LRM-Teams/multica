@@ -63,12 +63,10 @@ export function flattenChannelMessagePages(data?: InfiniteData<ChannelMessagesPa
 export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMessage) {
   qc.setQueryData<ChannelMessage[]>(channelKeys.messages(message.channel_id), (old) => upsertChannelMessage(old, message));
   qc.setQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage(message.channel_id), (old) => {
-    if (!old) {
-      return {
-        pageParams: [null],
-        pages: [{ messages: [message], limit: 1, next_cursor: null, has_more: false }],
-      };
-    }
+    // A channel the user has never opened has no cached page to append to. Seeding one
+    // here would mark it "fresh" under staleTime: Infinity, so opening the channel later
+    // skips the real fetch and only ever shows the messages caught by this upsert.
+    if (!old?.pages.length) return old;
     const existingPageIndex = old.pages.findIndex((page: ChannelMessagesPage) =>
       page.messages.some((existing: ChannelMessage) => existing.id === message.id),
     );

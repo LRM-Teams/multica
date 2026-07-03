@@ -516,6 +516,52 @@ func TestWorkspaceContextRenderedAcrossTaskKinds(t *testing.T) {
 	}
 }
 
+func TestPiMemoryScopeRenderedForPiProvider(t *testing.T) {
+	t.Parallel()
+	ctx := TaskContextForEnv{
+		ChatSessionID:       "chat-1",
+		AgentRoot:           "/tmp/multica/workspace-1/.pi/agents/agent-1",
+		AgentMemoryDir:      "/tmp/multica/workspace-1/.pi/agents/agent-1/memory",
+		AgentSkillDir:       "/tmp/multica/workspace-1/.pi/agents/agent-1/skills",
+		AgentSkillDraftsDir: "/tmp/multica/workspace-1/.pi/agents/agent-1/skills/drafts",
+	}
+	out := buildMetaSkillContent("pi", ctx)
+
+	for _, want := range []string{
+		"## Pi Memory And Skills Scope",
+		"Agent root (`PI_AGENT_ROOT`): `/tmp/multica/workspace-1/.pi/agents/agent-1`",
+		"Memory root (`PI_MEMORY_DIR`): `/tmp/multica/workspace-1/.pi/agents/agent-1/memory`",
+		"Skill root: `/tmp/multica/workspace-1/.pi/agents/agent-1/skills`",
+		"Skill drafts root (`PI_SKILL_DRAFTS_DIR`): `/tmp/multica/workspace-1/.pi/agents/agent-1/skills/drafts`",
+		"report these Multica agent paths, not the host Pi user's global paths",
+		"Do not read or write `~/.pi/agent/evolution/memory`",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Pi memory scope missing %q\n%s", want, out)
+		}
+	}
+
+	scopeIdx := strings.Index(out, "## Pi Memory And Skills Scope")
+	cmdsIdx := strings.Index(out, "## Available Commands")
+	if scopeIdx == -1 || cmdsIdx == -1 || scopeIdx > cmdsIdx {
+		t.Errorf("Pi memory scope must appear above Available Commands (scope=%d, cmds=%d)", scopeIdx, cmdsIdx)
+	}
+}
+
+func TestPiMemoryScopeSkippedForNonPiProvider(t *testing.T) {
+	t.Parallel()
+	ctx := TaskContextForEnv{
+		AgentRoot:           "/tmp/multica/workspace-1/.pi/agents/agent-1",
+		AgentMemoryDir:      "/tmp/multica/workspace-1/.pi/agents/agent-1/memory",
+		AgentSkillDir:       "/tmp/multica/workspace-1/.pi/agents/agent-1/skills",
+		AgentSkillDraftsDir: "/tmp/multica/workspace-1/.pi/agents/agent-1/skills/drafts",
+	}
+	out := buildMetaSkillContent("claude", ctx)
+	if strings.Contains(out, "## Pi Memory And Skills Scope") {
+		t.Errorf("non-Pi provider must not emit Pi memory scope guidance")
+	}
+}
+
 func TestWorkspaceContextHeadingSkippedWhenEmpty(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

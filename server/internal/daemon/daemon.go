@@ -2837,9 +2837,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		instructions = task.Agent.Instructions
 	}
 
+	piAgentRootPath := ""
+	piAgentMemoryDir := ""
+	piAgentSkillDir := ""
+	piAgentSkillDraftsPath := ""
 	if provider == "pi" && task.WorkspaceID != "" && agentID != "" {
-		agentRoot := piAgentRoot(d.cfg, task.WorkspaceID, agentID)
-		if err := ensurePiAgentRoot(agentRoot); err != nil {
+		piAgentRootPath = piAgentRoot(d.cfg, task.WorkspaceID, agentID)
+		piAgentMemoryDir = filepath.Join(piAgentRootPath, "memory")
+		piAgentSkillDir = filepath.Join(piAgentRootPath, "skills")
+		piAgentSkillDraftsPath = piAgentSkillDraftsDir(piAgentRootPath)
+		if err := ensurePiAgentRoot(piAgentRootPath); err != nil {
 			taskLog.Warn("pi agent root creation failed", "error", err)
 		}
 	}
@@ -2857,6 +2864,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentID:                          agentID,
 		AgentName:                        agentName,
 		AgentInstructions:                instructions,
+		AgentRoot:                        piAgentRootPath,
+		AgentMemoryDir:                   piAgentMemoryDir,
+		AgentSkillDir:                    piAgentSkillDir,
+		AgentSkillDraftsDir:              piAgentSkillDraftsPath,
 		AgentSkills:                      convertSkillsForEnv(skills),
 		Repos:                            convertReposForEnv(task.Repos),
 		ProjectID:                        task.ProjectID,

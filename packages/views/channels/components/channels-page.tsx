@@ -155,6 +155,7 @@ import { useTimeAgo } from "../../i18n/use-time-ago";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { composePayloadKey, useComposeSendIntent } from "../hooks/use-compose-send-intent";
+import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
@@ -512,6 +513,10 @@ export function ChannelsPage() {
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
   const [newName, setNewName] = useState("");
   const [newLarkChatId, setNewLarkChatId] = useState("");
+  // Inline "name required" hint for the create popover. Empty names used to
+  // silently default to "general", which collided with an existing general
+  // channel and surfaced as an opaque failure (#216).
+  const [createNameError, setCreateNameError] = useState(false);
   // Multi-select invite: keys are `${type}:${id}` so users and agents share one set.
   const [selectedInvites, setSelectedInvites] = useState<Set<string>>(new Set());
   const [memberTab, setMemberTab] = useState<"invite" | "members">("invite");
@@ -1017,7 +1022,12 @@ export function ChannelsPage() {
   });
 
   const handleCreate = () => {
-    const name = newName.trim() || "general";
+    // Require an explicit name — no silent "general" fallback (#216).
+    const name = newName.trim();
+    if (!name) {
+      setCreateNameError(true);
+      return;
+    }
     createChannel.mutate(
       { name, lark_chat_id: newLarkChatId.trim() || undefined },
       {
@@ -1025,7 +1035,17 @@ export function ChannelsPage() {
           selectChannel(channel.id);
           setNewName("");
           setNewLarkChatId("");
+          setCreateNameError(false);
           setCreateOpen(false);
+        },
+        onError: (err) => {
+          // Duplicate (workspace, name) comes back as a 409 with a stable code;
+          // localise off the code, not the server's English string.
+          toast.error(
+            isChannelNameTakenError(err)
+              ? t(($) => $.sidebar.create_name_taken)
+              : t(($) => $.sidebar.create_failed),
+          );
         },
       },
     );
@@ -1571,7 +1591,13 @@ export function ChannelsPage() {
                   )}
                 </button>
                 {/* Create channel "+" moved from top heading to here */}
-                <Popover open={createOpen} onOpenChange={setCreateOpen}>
+                <Popover
+                  open={createOpen}
+                  onOpenChange={(open) => {
+                    setCreateOpen(open);
+                    if (!open) setCreateNameError(false);
+                  }}
+                >
                   <PopoverTrigger
                     render={
                       <button
@@ -1587,11 +1613,18 @@ export function ChannelsPage() {
                     <Input
                       placeholder={t(($) => $.sidebar.name_placeholder)}
                       value={newName}
-                      onChange={(e) => setNewName(e.target.value)}
+                      aria-invalid={createNameError}
+                      onChange={(e) => {
+                        setNewName(e.target.value);
+                        if (createNameError) setCreateNameError(false);
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") handleCreate();
                       }}
                     />
+                    {createNameError && (
+                      <p className="text-xs text-destructive">{t(($) => $.sidebar.name_required)}</p>
+                    )}
                     <Input
                       placeholder={t(($) => $.sidebar.lark_placeholder)}
                       value={newLarkChatId}
@@ -2018,7 +2051,7 @@ export function ChannelsPage() {
         showChannelDetailSkeleton ? (
           <ConversationSwitchSkeleton isMobile={isMobile} />
         ) : (
-          <EmptyState onCreate={handleCreate} />
+          <EmptyState onCreate={() => setCreateOpen(true)} />
         )
       ) : (
         <>

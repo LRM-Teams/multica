@@ -74,13 +74,15 @@ export function useSendChannelMessage() {
       attachmentIds,
       replyToMessageId,
       parts,
+      clientMessageId,
     }: {
       channelId: string;
       content: string;
       attachmentIds?: string[];
       replyToMessageId?: string | null;
       parts?: MessagePart[];
-    }) => api.sendChannelMessage(channelId, content, attachmentIds, replyToMessageId, parts),
+      clientMessageId?: string | null;
+    }) => api.sendChannelMessage(channelId, content, attachmentIds, replyToMessageId, parts, clientMessageId),
     onSuccess: (msg) => {
       upsertChannelMessageInCache(qc, msg);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
@@ -120,13 +122,17 @@ export function useSendChannelThreadMessage() {
       content,
       attachmentIds,
       replyToMessageId,
+      parts,
+      clientMessageId,
     }: {
       channelId: string;
       messageId: string;
       content: string;
       attachmentIds?: string[];
       replyToMessageId?: string | null;
-    }) => api.sendChannelThreadMessage(channelId, messageId, content, attachmentIds, replyToMessageId),
+      parts?: MessagePart[];
+      clientMessageId?: string | null;
+    }) => api.sendChannelThreadMessage(channelId, messageId, content, attachmentIds, replyToMessageId, parts, clientMessageId),
     onSuccess: (msg) => {
       const rootId = msg.thread_root_message_id;
       if (rootId) {

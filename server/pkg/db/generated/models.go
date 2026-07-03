@@ -951,12 +951,14 @@ type WebhookDelivery struct {
 type SandboxNode struct {
 	ID             pgtype.UUID        `json:"id"`
 	NodeKey        string             `json:"node_key"`
+	OwnerUserID    pgtype.UUID        `json:"owner_user_id"`
 	Name           string             `json:"name"`
 	Status         string             `json:"status"`
 	Capabilities   []byte             `json:"capabilities"`
 	MaxConcurrency int32              `json:"max_concurrency"`
 	Metadata       []byte             `json:"metadata"`
 	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
+	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }

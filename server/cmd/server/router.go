@@ -688,6 +688,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// use still requires an explicit admin-created workspace binding.
 		r.Get("/api/sandbox/nodes", h.ListSandboxNodes)
 		r.Post("/api/sandbox/nodes", h.CreateSandboxNode)
+		r.Patch("/api/sandbox/nodes/{nodeId}", h.UpdateSandboxNode)
+		r.Delete("/api/sandbox/nodes/{nodeId}", h.DeleteSandboxNode)
 		r.Post("/api/sandbox/nodes/{nodeId}/tokens", h.CreateSandboxNodeToken)
 
 		// Cloud Billing proxy. Same upstream service / port as

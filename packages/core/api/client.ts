@@ -1509,7 +1509,7 @@ export class ApiClient {
   }
 
   async createSandboxNode(data: {
-    node_key: string;
+    node_key?: string;
     name: string;
     capabilities?: unknown[];
     max_concurrency?: number;
@@ -1519,6 +1519,17 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+
+  async updateSandboxNode(nodeId: string, data: { name: string }): Promise<SandboxNode> {
+    return this.fetch(`/api/sandbox/nodes/${nodeId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteSandboxNode(nodeId: string): Promise<void> {
+    await this.fetch(`/api/sandbox/nodes/${nodeId}`, { method: "DELETE" });
   }
 
   async createSandboxNodeToken(nodeId: string, data: { name?: string } = {}): Promise<{ token: string; token_prefix: string; expires_at: string }> {

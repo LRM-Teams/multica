@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -29,16 +30,18 @@ var sandboxdCmd = &cobra.Command{
 }
 
 type sandboxdConfig struct {
-	ServerURL     string
-	NodeToken     string
-	NodeKey       string
-	Name          string
-	SandboxServer string // Cube API URL.
-	CubeProxyHTTP string
-	CubeDomain    string
-	TemplateID    string
-	Concurrency   int
-	PollInterval  time.Duration
+	ServerURL     string        `json:"server_url"`
+	NodeToken     string        `json:"node_token"`
+	NodeKey       string        `json:"node_key"`
+	Name          string        `json:"name"`
+	OwnerUserID   string        `json:"owner_user_id"`
+	SandboxServer string        `json:"sandbox_server"`
+	CubeProxyHTTP string        `json:"cube_proxy_http"`
+	CubeDomain    string        `json:"cube_domain"`
+	TemplateID    string        `json:"cube_template_id"`
+	Concurrency   int           `json:"concurrency"`
+	PollInterval  time.Duration `json:"-"`
+	PollIntervalS string        `json:"poll_interval"`
 }
 
 type sandboxdClient struct {
@@ -82,33 +85,55 @@ type cubeSandbox struct {
 
 func init() {
 	f := sandboxdCmd.Flags()
-	f.String("server-url", "", "Multica server URL (env: MULTICA_SERVER_URL)")
-	f.String("node-token", "", "Sandbox node token, msn_... (env: MULTICA_SANDBOX_NODE_TOKEN)")
-	f.String("node-key", "", "Stable sandbox node key (env: MULTICA_SANDBOX_NODE_KEY)")
-	f.String("name", "", "Human-readable sandbox node name (env: MULTICA_SANDBOX_NODE_NAME)")
-	f.String("sandbox-server", "", "Cube API URL (env: MULTICA_SANDBOX_SERVER_URL or CUBE_API_URL)")
-	f.String("cube-proxy-http", "", "Cube proxy HTTP URL for /execute (env: CUBE_PROXY_HTTP)")
-	f.String("cube-domain", "", "Cube sandbox domain (env: CUBE_SANDBOX_DOMAIN)")
-	f.String("cube-template-id", "", "Default Cube template id (env: CUBE_TEMPLATE_ID)")
-	f.Int("concurrency", 1, "Max jobs claimed per poll (env: MULTICA_SANDBOX_CONCURRENCY)")
+	f.String("config", "", "sandboxd config file (default: ./.multica/sandboxd.json, then ~/.multica/sandboxd.json)")
+	f.String("server-url", "", "Multica server URL (overrides config)")
+	f.String("node-token", "", "Sandbox node token, msn_... (overrides config)")
+	f.String("node-key", "", "Stable sandbox node key (overrides config)")
+	f.String("name", "", "Human-readable sandbox node name (overrides config)")
+	f.String("owner-user-id", "", "Multica user id that owns this sandbox node (overrides config)")
+	f.String("sandbox-server", "", "Cube API URL (overrides config)")
+	f.String("cube-proxy-http", "", "Cube proxy HTTP URL for /execute (overrides config)")
+	f.String("cube-domain", "", "Cube sandbox domain (overrides config)")
+	f.String("cube-template-id", "", "Default Cube template id (overrides config)")
+	f.Int("concurrency", 1, "Max jobs claimed per poll")
 	f.Duration("poll-interval", 5*time.Second, "Fallback job poll interval")
 }
 
 func runSandboxd(cmd *cobra.Command, _ []string) error {
-	cfg := sandboxdConfig{
-		ServerURL:     firstNonEmpty(flagString(cmd, "server-url"), os.Getenv("MULTICA_SERVER_URL")),
-		NodeToken:     firstNonEmpty(flagString(cmd, "node-token"), os.Getenv("MULTICA_SANDBOX_NODE_TOKEN")),
-		NodeKey:       firstNonEmpty(flagString(cmd, "node-key"), os.Getenv("MULTICA_SANDBOX_NODE_KEY")),
-		Name:          firstNonEmpty(flagString(cmd, "name"), os.Getenv("MULTICA_SANDBOX_NODE_NAME")),
-		SandboxServer: firstNonEmpty(flagString(cmd, "sandbox-server"), os.Getenv("MULTICA_SANDBOX_SERVER_URL"), os.Getenv("CUBE_API_URL")),
-		CubeProxyHTTP: firstNonEmpty(flagString(cmd, "cube-proxy-http"), os.Getenv("CUBE_PROXY_HTTP"), "http://127.0.0.1"),
-		CubeDomain:    firstNonEmpty(flagString(cmd, "cube-domain"), os.Getenv("CUBE_SANDBOX_DOMAIN"), "cube.app"),
-		TemplateID:    firstNonEmpty(flagString(cmd, "cube-template-id"), os.Getenv("CUBE_TEMPLATE_ID")),
-		Concurrency:   sandboxFlagInt(cmd, "concurrency"),
-		PollInterval:  sandboxFlagDuration(cmd, "poll-interval"),
+	cfg, err := loadSandboxdConfig(flagString(cmd, "config"))
+	if err != nil {
+		return err
 	}
-	if cfg.ServerURL == "" || cfg.NodeToken == "" || cfg.NodeKey == "" || cfg.SandboxServer == "" {
-		return fmt.Errorf("server-url, node-token, node-key, and sandbox-server/CUBE_API_URL are required")
+	overrideStringFlag(cmd, "server-url", &cfg.ServerURL)
+	overrideStringFlag(cmd, "node-token", &cfg.NodeToken)
+	overrideStringFlag(cmd, "node-key", &cfg.NodeKey)
+	overrideStringFlag(cmd, "name", &cfg.Name)
+	overrideStringFlag(cmd, "owner-user-id", &cfg.OwnerUserID)
+	overrideStringFlag(cmd, "sandbox-server", &cfg.SandboxServer)
+	overrideStringFlag(cmd, "cube-proxy-http", &cfg.CubeProxyHTTP)
+	overrideStringFlag(cmd, "cube-domain", &cfg.CubeDomain)
+	overrideStringFlag(cmd, "cube-template-id", &cfg.TemplateID)
+	if cmd.Flags().Changed("concurrency") {
+		cfg.Concurrency = sandboxFlagInt(cmd, "concurrency")
+	}
+	if cmd.Flags().Changed("poll-interval") {
+		cfg.PollInterval = sandboxFlagDuration(cmd, "poll-interval")
+	}
+	if cfg.PollInterval <= 0 && strings.TrimSpace(cfg.PollIntervalS) != "" {
+		parsed, err := time.ParseDuration(strings.TrimSpace(cfg.PollIntervalS))
+		if err != nil {
+			return fmt.Errorf("invalid poll_interval: %w", err)
+		}
+		cfg.PollInterval = parsed
+	}
+	if cfg.CubeProxyHTTP == "" {
+		cfg.CubeProxyHTTP = "http://127.0.0.1"
+	}
+	if cfg.CubeDomain == "" {
+		cfg.CubeDomain = "cube.app"
+	}
+	if cfg.ServerURL == "" || cfg.NodeToken == "" || cfg.NodeKey == "" || cfg.OwnerUserID == "" || cfg.SandboxServer == "" {
+		return fmt.Errorf("server_url, node_token, node_key, owner_user_id, and sandbox_server are required in sandboxd config")
 	}
 	if cfg.Name == "" {
 		cfg.Name = cfg.NodeKey
@@ -134,6 +159,7 @@ func (c *sandboxdClient) register(ctx context.Context) error {
 	body := map[string]any{
 		"node_key":        c.cfg.NodeKey,
 		"name":            c.cfg.Name,
+		"owner_user_id":   c.cfg.OwnerUserID,
 		"max_concurrency": c.cfg.Concurrency,
 		"capabilities":    []string{"create", "stop", "resume", "delete"},
 		"metadata": map[string]any{
@@ -523,6 +549,39 @@ func intValueFromRaw(raw json.RawMessage, key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func loadSandboxdConfig(path string) (sandboxdConfig, error) {
+	candidates := []string{}
+	if strings.TrimSpace(path) != "" {
+		candidates = append(candidates, strings.TrimSpace(path))
+	} else {
+		candidates = append(candidates, filepath.Join(".multica", "sandboxd.json"))
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			candidates = append(candidates, filepath.Join(home, ".multica", "sandboxd.json"))
+		}
+	}
+	for _, candidate := range candidates {
+		raw, err := os.ReadFile(candidate)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return sandboxdConfig{}, err
+		}
+		var cfg sandboxdConfig
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return sandboxdConfig{}, fmt.Errorf("parse sandboxd config %s: %w", candidate, err)
+		}
+		return cfg, nil
+	}
+	return sandboxdConfig{}, fmt.Errorf("sandboxd config not found; create .multica/sandboxd.json or pass --config")
+}
+
+func overrideStringFlag(cmd *cobra.Command, name string, target *string) {
+	if cmd.Flags().Changed(name) {
+		*target = strings.TrimSpace(flagString(cmd, name))
+	}
 }
 
 func sandboxFlagInt(cmd *cobra.Command, name string) int { v, _ := cmd.Flags().GetInt(name); return v }

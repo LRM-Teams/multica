@@ -29,6 +29,7 @@ const (
 type SandboxNodeResponse struct {
 	ID             string          `json:"id"`
 	NodeKey        string          `json:"node_key"`
+	OwnerUserID    string          `json:"owner_user_id"`
 	Name           string          `json:"name"`
 	Status         string          `json:"status"`
 	Capabilities   json.RawMessage `json:"capabilities"`
@@ -40,15 +41,16 @@ type SandboxNodeResponse struct {
 }
 
 type SandboxBindingResponse struct {
-	ID          string          `json:"id"`
-	WorkspaceID string          `json:"workspace_id"`
-	NodeID      string          `json:"node_id"`
-	NodeKey     string          `json:"node_key"`
-	NodeName    string          `json:"node_name"`
-	NodeStatus  string          `json:"node_status"`
-	Enabled     bool            `json:"enabled"`
-	Policy      json.RawMessage `json:"policy"`
-	CreatedAt   string          `json:"created_at"`
+	ID              string          `json:"id"`
+	WorkspaceID     string          `json:"workspace_id"`
+	NodeID          string          `json:"node_id"`
+	NodeKey         string          `json:"node_key"`
+	NodeOwnerUserID string          `json:"node_owner_user_id"`
+	NodeName        string          `json:"node_name"`
+	NodeStatus      string          `json:"node_status"`
+	Enabled         bool            `json:"enabled"`
+	Policy          json.RawMessage `json:"policy"`
+	CreatedAt       string          `json:"created_at"`
 }
 
 type SandboxInstanceResponse struct {
@@ -90,6 +92,7 @@ func sandboxNodeToResponse(n db.SandboxNode) SandboxNodeResponse {
 	return SandboxNodeResponse{
 		ID:             uuidToString(n.ID),
 		NodeKey:        n.NodeKey,
+		OwnerUserID:    uuidToString(n.OwnerUserID),
 		Name:           n.Name,
 		Status:         n.Status,
 		Capabilities:   rawOrEmptyArray(n.Capabilities),
@@ -182,6 +185,10 @@ type CreateSandboxNodeRequest struct {
 }
 
 func (h *Handler) CreateSandboxNode(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
 	var req CreateSandboxNodeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -189,9 +196,16 @@ func (h *Handler) CreateSandboxNode(w http.ResponseWriter, r *http.Request) {
 	}
 	req.NodeKey = strings.TrimSpace(req.NodeKey)
 	req.Name = strings.TrimSpace(req.Name)
-	if req.NodeKey == "" || req.Name == "" {
-		writeError(w, http.StatusBadRequest, "node_key and name are required")
-		return
+	if req.NodeKey == "" {
+		generated, err := auth.GenerateSandboxNodeKey()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to generate sandbox node key")
+			return
+		}
+		req.NodeKey = generated
+	}
+	if req.Name == "" {
+		req.Name = req.NodeKey
 	}
 	if req.MaxConcurrency <= 0 {
 		req.MaxConcurrency = 1
@@ -199,6 +213,7 @@ func (h *Handler) CreateSandboxNode(w http.ResponseWriter, r *http.Request) {
 	node, err := h.Queries.CreateSandboxNode(r.Context(), db.CreateSandboxNodeParams{
 		NodeKey:        req.NodeKey,
 		Name:           req.Name,
+		OwnerUserID:    parseUUID(userID),
 		Capabilities:   jsonBytesOrDefault(req.Capabilities, "[]"),
 		MaxConcurrency: req.MaxConcurrency,
 		Metadata:       jsonBytesOrDefault(req.Metadata, "{}"),
@@ -215,7 +230,11 @@ func (h *Handler) CreateSandboxNode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListSandboxNodes(w http.ResponseWriter, r *http.Request) {
-	nodes, err := h.Queries.ListSandboxNodes(r.Context())
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	nodes, err := h.Queries.ListSandboxNodesByOwner(r.Context(), parseUUID(userID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list sandbox nodes")
 		return
@@ -227,6 +246,55 @@ func (h *Handler) ListSandboxNodes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (h *Handler) UpdateSandboxNode(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	nodeID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "nodeId"), "node_id")
+	if !ok {
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	node, err := h.Queries.UpdateSandboxNodeNameForOwner(r.Context(), db.UpdateSandboxNodeNameForOwnerParams{ID: nodeID, OwnerUserID: parseUUID(userID), Name: req.Name})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox node not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to update sandbox node")
+		return
+	}
+	writeJSON(w, http.StatusOK, sandboxNodeToResponse(node))
+}
+
+func (h *Handler) DeleteSandboxNode(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	nodeID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "nodeId"), "node_id")
+	if !ok {
+		return
+	}
+	if err := h.Queries.DeleteSandboxNodeForOwner(r.Context(), db.DeleteSandboxNodeForOwnerParams{ID: nodeID, OwnerUserID: parseUUID(userID)}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete sandbox node")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) CreateSandboxNodeToken(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -234,6 +302,14 @@ func (h *Handler) CreateSandboxNodeToken(w http.ResponseWriter, r *http.Request)
 	}
 	nodeID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "nodeId"), "node_id")
 	if !ok {
+		return
+	}
+	if _, err := h.Queries.GetSandboxNodeForOwner(r.Context(), db.GetSandboxNodeForOwnerParams{ID: nodeID, OwnerUserID: parseUUID(userID)}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox node not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get sandbox node")
 		return
 	}
 	var req struct {
@@ -327,21 +403,23 @@ func (h *Handler) ListWorkspaceSandboxBindings(w http.ResponseWriter, r *http.Re
 	resp := make([]SandboxBindingResponse, 0, len(rows))
 	for _, row := range rows {
 		resp = append(resp, SandboxBindingResponse{
-			ID:          uuidToString(row.ID),
-			WorkspaceID: uuidToString(row.WorkspaceID),
-			NodeID:      uuidToString(row.NodeID),
-			NodeKey:     row.NodeKey,
-			NodeName:    row.Name,
-			NodeStatus:  row.Status,
-			Enabled:     row.Enabled,
-			Policy:      rawOrEmptyObject(row.Policy),
-			CreatedAt:   timestampToString(row.CreatedAt),
+			ID:              uuidToString(row.ID),
+			WorkspaceID:     uuidToString(row.WorkspaceID),
+			NodeID:          uuidToString(row.NodeID),
+			NodeKey:         row.NodeKey,
+			NodeOwnerUserID: uuidToString(row.OwnerUserID),
+			NodeName:        row.Name,
+			NodeStatus:      row.Status,
+			Enabled:         row.Enabled,
+			Policy:          rawOrEmptyObject(row.Policy),
+			CreatedAt:       timestampToString(row.CreatedAt),
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 type CreateSandboxRequest struct {
+	NodeID   string          `json:"node_id"`
 	Template string          `json:"template"`
 	Limits   json.RawMessage `json:"limits"`
 	Metadata json.RawMessage `json:"metadata"`
@@ -370,7 +448,17 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 	if req.Template == "" {
 		req.Template = "default"
 	}
-	node, err := h.Queries.PickAvailableSandboxNodeForWorkspace(r.Context(), wsUUID)
+	var node db.SandboxNode
+	var err error
+	if strings.TrimSpace(req.NodeID) != "" {
+		nodeID, ok := parseUUIDOrBadRequest(w, req.NodeID, "node_id")
+		if !ok {
+			return
+		}
+		node, err = h.Queries.PickSandboxNodeForWorkspace(r.Context(), db.PickSandboxNodeForWorkspaceParams{WorkspaceID: wsUUID, NodeID: nodeID})
+	} else {
+		node, err = h.Queries.PickAvailableSandboxNodeForWorkspace(r.Context(), wsUUID)
+	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusConflict, "no online sandbox node is bound to this workspace")
@@ -577,6 +665,7 @@ func (h *Handler) SandboxNodeRegister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		NodeKey        string          `json:"node_key"`
 		Name           string          `json:"name"`
+		OwnerUserID    string          `json:"owner_user_id"`
 		Capabilities   json.RawMessage `json:"capabilities"`
 		MaxConcurrency int32           `json:"max_concurrency"`
 		Metadata       json.RawMessage `json:"metadata"`
@@ -593,12 +682,17 @@ func (h *Handler) SandboxNodeRegister(w http.ResponseWriter, r *http.Request) {
 	if req.Name == "" {
 		req.Name = req.NodeKey
 	}
+	ownerUserID, ok := parseUUIDOrBadRequest(w, strings.TrimSpace(req.OwnerUserID), "owner_user_id")
+	if !ok {
+		return
+	}
 	if req.MaxConcurrency <= 0 {
 		req.MaxConcurrency = 1
 	}
 	node, err := h.Queries.UpsertSandboxNodeRegistration(r.Context(), db.UpsertSandboxNodeRegistrationParams{
 		NodeKey:        req.NodeKey,
 		Name:           req.Name,
+		OwnerUserID:    ownerUserID,
 		Capabilities:   jsonBytesOrDefault(req.Capabilities, "[]"),
 		MaxConcurrency: req.MaxConcurrency,
 		Metadata:       jsonBytesOrDefault(req.Metadata, "{}"),

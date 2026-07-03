@@ -1,53 +1,82 @@
 -- name: CreateSandboxNode :one
-INSERT INTO sandbox_node (node_key, name, capabilities, max_concurrency, metadata)
-VALUES (@node_key, @name, @capabilities, @max_concurrency, @metadata)
-RETURNING *;
+INSERT INTO sandbox_node (node_key, name, owner_user_id, capabilities, max_concurrency, metadata)
+VALUES (@node_key, @name, @owner_user_id, @capabilities, @max_concurrency, @metadata)
+RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at;
 
 -- name: UpsertSandboxNodeRegistration :one
-INSERT INTO sandbox_node (node_key, name, status, capabilities, max_concurrency, metadata, last_seen_at)
-VALUES (@node_key, @name, 'online', @capabilities, @max_concurrency, @metadata, now())
+INSERT INTO sandbox_node (node_key, name, owner_user_id, status, capabilities, max_concurrency, metadata, last_seen_at)
+VALUES (@node_key, @name, @owner_user_id, 'online', @capabilities, @max_concurrency, @metadata, now())
 ON CONFLICT (node_key)
 DO UPDATE SET
     name = EXCLUDED.name,
+    owner_user_id = COALESCE(sandbox_node.owner_user_id, EXCLUDED.owner_user_id),
     status = 'online',
     capabilities = EXCLUDED.capabilities,
     max_concurrency = EXCLUDED.max_concurrency,
     metadata = EXCLUDED.metadata,
     last_seen_at = now(),
     updated_at = now()
-RETURNING *;
+WHERE sandbox_node.deleted_at IS NULL
+RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at;
 
--- name: ListSandboxNodes :many
-SELECT * FROM sandbox_node
+-- name: ListSandboxNodesByOwner :many
+SELECT id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at FROM sandbox_node
+WHERE owner_user_id = $1 AND deleted_at IS NULL
 ORDER BY created_at ASC;
 
 -- name: GetSandboxNode :one
-SELECT * FROM sandbox_node
-WHERE id = $1;
+SELECT id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at FROM sandbox_node
+WHERE id = $1 AND deleted_at IS NULL;
+
+-- name: GetSandboxNodeForOwner :one
+SELECT id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at FROM sandbox_node
+WHERE id = @id AND owner_user_id = @owner_user_id AND deleted_at IS NULL;
 
 -- name: GetSandboxNodeByKey :one
-SELECT * FROM sandbox_node
-WHERE node_key = $1;
+SELECT id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at FROM sandbox_node
+WHERE node_key = $1 AND deleted_at IS NULL;
+
+-- name: UpdateSandboxNodeNameForOwner :one
+UPDATE sandbox_node
+SET name = @name, updated_at = now()
+WHERE id = @id AND owner_user_id = @owner_user_id AND deleted_at IS NULL
+RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at;
+
+-- name: DeleteSandboxNodeForOwner :exec
+WITH deleted AS (
+    UPDATE sandbox_node
+    SET deleted_at = now(), status = 'offline', updated_at = now()
+    WHERE id = @id AND owner_user_id = @owner_user_id AND deleted_at IS NULL
+    RETURNING id
+)
+UPDATE sandbox_node_token
+SET revoked_at = now()
+WHERE node_id IN (SELECT id FROM deleted) AND revoked_at IS NULL;
 
 -- name: TouchSandboxNodeHeartbeat :one
 UPDATE sandbox_node
 SET status = 'online', last_seen_at = now(), updated_at = now(), metadata = @metadata
-WHERE id = @id
-RETURNING *;
+WHERE id = @id AND deleted_at IS NULL
+RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at;
 
 -- name: SetSandboxNodeOffline :exec
 UPDATE sandbox_node
 SET status = 'offline', updated_at = now()
-WHERE id = $1;
+WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: CreateSandboxNodeToken :one
 INSERT INTO sandbox_node_token (node_id, name, token_hash, token_prefix, expires_at, created_by)
-VALUES (@node_id, @name, @token_hash, @token_prefix, @expires_at, @created_by)
+SELECT @node_id, @name, @token_hash, @token_prefix, @expires_at, @created_by
+WHERE EXISTS (
+    SELECT 1 FROM sandbox_node
+    WHERE id = @node_id AND owner_user_id = @created_by AND deleted_at IS NULL
+)
 RETURNING *;
 
 -- name: GetSandboxNodeTokenByHash :one
-SELECT * FROM sandbox_node_token
-WHERE token_hash = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now());
+SELECT snt.* FROM sandbox_node_token snt
+JOIN sandbox_node sn ON sn.id = snt.node_id
+WHERE snt.token_hash = $1 AND snt.revoked_at IS NULL AND (snt.expires_at IS NULL OR snt.expires_at > now()) AND sn.deleted_at IS NULL;
 
 -- name: RevokeSandboxNodeToken :exec
 UPDATE sandbox_node_token
@@ -56,16 +85,20 @@ WHERE id = $1;
 
 -- name: UpsertSandboxWorkspaceBinding :one
 INSERT INTO sandbox_workspace_binding (workspace_id, node_id, enabled, policy, created_by)
-VALUES (@workspace_id, @node_id, true, @policy, @created_by)
+SELECT @workspace_id, @node_id, true, @policy, @created_by
+WHERE EXISTS (
+    SELECT 1 FROM sandbox_node
+    WHERE id = @node_id AND owner_user_id = @created_by AND deleted_at IS NULL
+)
 ON CONFLICT (workspace_id, node_id)
 DO UPDATE SET enabled = true, policy = EXCLUDED.policy, updated_at = now()
 RETURNING *;
 
 -- name: ListSandboxWorkspaceBindings :many
-SELECT swb.*, sn.node_key, sn.name, sn.status, sn.capabilities, sn.max_concurrency, sn.last_seen_at
+SELECT swb.*, sn.node_key, sn.owner_user_id, sn.name, sn.status, sn.capabilities, sn.max_concurrency, sn.last_seen_at
 FROM sandbox_workspace_binding swb
 JOIN sandbox_node sn ON sn.id = swb.node_id
-WHERE swb.workspace_id = $1
+WHERE swb.workspace_id = $1 AND sn.deleted_at IS NULL
 ORDER BY swb.created_at ASC;
 
 -- name: GetEnabledSandboxBinding :one
@@ -78,11 +111,18 @@ SET enabled = false, updated_at = now()
 WHERE workspace_id = @workspace_id AND node_id = @node_id;
 
 -- name: PickAvailableSandboxNodeForWorkspace :one
-SELECT sn.*
+SELECT sn.id, sn.node_key, sn.owner_user_id, sn.name, sn.status, sn.capabilities, sn.max_concurrency, sn.metadata, sn.last_seen_at, sn.deleted_at, sn.created_at, sn.updated_at
 FROM sandbox_workspace_binding swb
 JOIN sandbox_node sn ON sn.id = swb.node_id
-WHERE swb.workspace_id = $1 AND swb.enabled = true AND sn.status = 'online'
+WHERE swb.workspace_id = $1 AND swb.enabled = true AND sn.status = 'online' AND sn.deleted_at IS NULL
 ORDER BY sn.last_seen_at DESC NULLS LAST, sn.created_at ASC
+LIMIT 1;
+
+-- name: PickSandboxNodeForWorkspace :one
+SELECT sn.id, sn.node_key, sn.owner_user_id, sn.name, sn.status, sn.capabilities, sn.max_concurrency, sn.metadata, sn.last_seen_at, sn.deleted_at, sn.created_at, sn.updated_at
+FROM sandbox_workspace_binding swb
+JOIN sandbox_node sn ON sn.id = swb.node_id
+WHERE swb.workspace_id = @workspace_id AND swb.node_id = @node_id AND swb.enabled = true AND sn.status = 'online' AND sn.deleted_at IS NULL
 LIMIT 1;
 
 -- name: CreateSandboxInstance :one

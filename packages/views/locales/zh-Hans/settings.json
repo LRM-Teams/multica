@@ -133,6 +133,23 @@
       "description": "立即复制你的个人访问 token——它不会再次显示。",
       "copy_tooltip": "复制 token",
       "done": "完成"
+    },
+    "sandbox_keys": {
+      "title": "Sandboxd Keys",
+      "description": "Keys identify sandboxd nodes you own. Only you can see, rename, and delete these keys.",
+      "name_placeholder": "Node name (e.g. GPU sandbox)",
+      "create": "Create sandboxd key",
+      "creating": "Creating...",
+      "save": "Save",
+      "rename_aria": "Rename {{name}}",
+      "delete_aria": "Delete {{name}}",
+      "toast_load_failed": "Failed to load sandboxd keys",
+      "toast_created": "Sandboxd key created",
+      "toast_create_failed": "Failed to create sandboxd key",
+      "toast_updated": "Sandboxd key updated",
+      "toast_update_failed": "Failed to update sandboxd key",
+      "toast_deleted": "Sandboxd key deleted",
+      "toast_delete_failed": "Failed to delete sandboxd key"
     }
   },
   "workspace": {

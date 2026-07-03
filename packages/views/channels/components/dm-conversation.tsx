@@ -9,6 +9,7 @@ import {
   channelMessageThreadOptions,
   channelMessagesPageOptions,
   flattenChannelMessagePages,
+  channelMessagesFirstItemIndex,
   useMarkChannelThreadRead,
   useMarkChannelRead,
   useSendChannelMessage,
@@ -365,6 +366,10 @@ function DmChannelConversation({
     isFetchingNextPage: isFetchingOlderMessages,
   } = useInfiniteQuery(channelMessagesPageOptions(channelId));
   const messages = useMemo(() => flattenChannelMessagePages(messagePages), [messagePages]);
+  const messagesFirstItemIndex = useMemo(
+    () => channelMessagesFirstItemIndex(messagePages, messages.length > 0),
+    [messagePages, messages.length],
+  );
   const threadRoot =
     openThreadRoot && openThreadRoot.channel_id === channelId
       ? messages.find((m) => m.id === openThreadRoot.id) ?? openThreadRoot
@@ -855,6 +860,7 @@ function DmChannelConversation({
         currentUserId={currentUserId}
         ownName={currentUserName ?? undefined}
         highlightMessageId={highlightMessageId}
+        firstItemIndex={messagesFirstItemIndex}
         searchHitIds={searchHitIds}
         searchQuery={searchHighlightQuery}
         loading={messagesLoading}

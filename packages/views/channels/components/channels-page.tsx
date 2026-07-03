@@ -36,6 +36,7 @@ import {
   channelMessageThreadOptions,
   channelKeys,
   channelMessagesPageOptions,
+  channelMessagesFirstItemIndex,
   flattenChannelMessagePages,
   channelsOptions,
   archivedChannelsOptions,
@@ -598,6 +599,10 @@ export function ChannelsPage() {
     isFetchingNextPage: isFetchingOlderMessages,
   } = useInfiniteQuery(channelMessagesPageOptions(active?.id ?? ""));
   const messages = useMemo(() => flattenChannelMessagePages(active?.id ? messagePages : undefined), [active?.id, messagePages]);
+  const messagesFirstItemIndex = useMemo(
+    () => channelMessagesFirstItemIndex(active?.id ? messagePages : undefined, messages.length > 0),
+    [active?.id, messagePages, messages.length],
+  );
   const threadRoot =
     openThreadRoot && active?.id === openThreadRoot.channel_id
       ? messages.find((m) => m.id === openThreadRoot.id) ?? openThreadRoot
@@ -2161,6 +2166,7 @@ export function ChannelsPage() {
                 currentUserId={currentUserId}
                 ownName={currentUserName ?? undefined}
                 highlightMessageId={effectiveHighlightId}
+                firstItemIndex={messagesFirstItemIndex}
                 searchHitIds={searchHitIds}
                 searchQuery={searchHighlightQuery}
                 loading={messagesLoading}

@@ -3,8 +3,7 @@ export const WINDY_AGENT_NAME = "Windy";
 export const WINDY_DESCRIPTION =
   "Personal HR for building and updating your Multica agent team.";
 
-export const WINDY_AVATAR_URL =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%232BB3A3'/%3E%3Cstop offset='100%25' stop-color='%23F4C542'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='128' height='128' rx='30' fill='url(%23g)'/%3E%3Cpath d='M31 78c18-35 48-35 66 0' fill='none' stroke='%230F172A' stroke-width='10' stroke-linecap='round'/%3E%3Ccircle cx='47' cy='51' r='8' fill='%230F172A'/%3E%3Ccircle cx='81' cy='51' r='8' fill='%230F172A'/%3E%3Cpath d='M39 95h50' stroke='%23fff' stroke-width='9' stroke-linecap='round'/%3E%3C/svg%3E";
+export const WINDY_AVATAR_URL = "/agent-avatars/human-11.jpg";
 
 export const WINDY_INSTRUCTIONS = `Role
 
@@ -41,6 +40,8 @@ When the user describes a goal, produce agent draft cards instead of asking them
 Use this exact markdown shape for a draft card so the UI can open a prefilled Create Agent page:
 
 [Create Agent: <agent name>](multica://create-agent?name=<urlencoded name>&description=<urlencoded short description>&instructions=<urlencoded generated instructions>&visibility=private&can_execute_code=<true-or-false>)
+
+Leave avatar_url empty unless the user explicitly provides an image. The Multica UI will assign a random human avatar automatically.
 
 Do not silently create agents. Always let the user confirm by clicking a create card or creation action.
 

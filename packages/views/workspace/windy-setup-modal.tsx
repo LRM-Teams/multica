@@ -2,7 +2,7 @@
 
 import { useMemo, useReducer } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Loader2 } from "lucide-react";
+import { Bot, CheckCircle2, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
@@ -123,29 +123,46 @@ export function WindySetupModal() {
     <Dialog open onOpenChange={() => {}}>
       <DialogContent
         showCloseButton={false}
-        className="max-w-xl gap-0 overflow-hidden p-0"
+        className="max-h-[90vh] max-w-[min(920px,calc(100vw-2rem))] gap-0 overflow-hidden border-0 bg-background p-0 shadow-2xl sm:rounded-3xl"
       >
-        <DialogHeader className="border-b px-5 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+        <DialogHeader className="relative overflow-hidden border-b bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.16),transparent_34%),linear-gradient(135deg,hsl(var(--muted)/0.78),hsl(var(--background))_58%)] px-6 py-5">
+          <div className="pointer-events-none absolute right-6 top-5 h-24 w-24 rounded-full border border-primary/10 bg-primary/5 blur-xl" />
+          <div className="relative flex items-start gap-4">
+            <div className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
               <Bot className="size-5" />
             </div>
             <div className="min-w-0">
-              <DialogTitle>{t(($) => $.windy_setup.title)}</DialogTitle>
-              <DialogDescription className="mt-1">
+              <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border bg-background/75 px-2.5 py-1 text-[11px] font-medium text-muted-foreground shadow-sm">
+                <Sparkles className="size-3 text-primary" />
+                {t(($) => $.windy_setup.badge_label)}
+              </div>
+              <DialogTitle className="text-xl font-semibold tracking-tight">{t(($) => $.windy_setup.title)}</DialogTitle>
+              <DialogDescription className="mt-2 max-w-2xl text-sm leading-6">
                 {t(($) => $.windy_setup.description)}
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
-        <div className="space-y-4 px-5 py-4">
-          <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-            {t(($) => $.windy_setup.intro)}
+        <div className="max-h-[calc(90vh-11rem)] space-y-5 overflow-y-auto px-6 py-5">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-2xl border bg-card p-3 shadow-sm sm:col-span-2">
+              <p className="text-sm font-medium">{t(($) => $.windy_setup.intro_title)}</p>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                {t(($) => $.windy_setup.intro)}
+              </p>
+            </div>
+            <div className="rounded-2xl border bg-muted/35 p-3 text-xs leading-5 text-muted-foreground">
+              <div className="mb-1 flex items-center gap-1.5 font-medium text-foreground">
+                <CheckCircle2 className="size-3.5 text-success" />
+                {t(($) => $.windy_setup.one_time_label)}
+              </div>
+              {t(($) => $.windy_setup.one_time_note)}
+            </div>
           </div>
 
           {!hasUsableRuntime && !runtimesLoading ? (
-            <div className="rounded-lg border border-dashed px-4 py-5 text-center">
+            <div className="rounded-2xl border border-dashed bg-muted/20 px-4 py-6 text-center">
               <p className="text-sm font-medium">{t(($) => $.windy_setup.runtime_required_title)}</p>
               <p className="mt-1 text-xs text-muted-foreground">
                 {t(($) => $.windy_setup.runtime_required_description)}
@@ -191,9 +208,9 @@ export function WindySetupModal() {
           )}
         </div>
 
-        <DialogFooter className="items-center justify-between gap-3 sm:flex-row">
+        <DialogFooter className="border-t bg-muted/25 px-6 py-4 sm:items-center sm:justify-between sm:flex-row">
           <p className="text-xs text-muted-foreground">
-            {t(($) => $.windy_setup.one_time_note)}
+            {t(($) => $.windy_setup.runtime_move_note)}
           </p>
           <Button
             type="button"

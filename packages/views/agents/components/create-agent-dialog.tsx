@@ -40,6 +40,7 @@ import {
 } from "@multica/core/agents";
 import { CharCounter } from "./char-counter";
 import { useT } from "../../i18n";
+import { randomAgentAvatarUrl } from "../../common/agent-avatar-presets";
 
 export function CreateAgentDialog({
   runtimes,
@@ -99,7 +100,11 @@ export function CreateAgentDialog({
   const [model, setModel] = useState(template?.model ?? "");
   const [thinkingLevel, setThinkingLevel] = useState(template?.thinking_level ?? "");
   const [instructions, setInstructions] = useState(template?.instructions ?? draft?.instructions ?? "");
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(template?.avatar_url ?? draft?.avatar_url ?? null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(() => {
+    if (template?.avatar_url) return template.avatar_url;
+    if (draft) return draft.avatar_url ?? randomAgentAvatarUrl();
+    return null;
+  });
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(
     () => new Set(template?.skills.map((s) => s.id) ?? []),
   );

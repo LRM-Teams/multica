@@ -153,6 +153,11 @@
     "dispatched": "启动中",
     "running": "思考中",
     "waiting_local_directory": "等待本地目录释放",
+    "stop": "停止",
+    "stop_named": "停止 {{name}}",
+    "stop_aria": "停止 {{name}} 当前任务",
+    "stop_success": "已停止 {{name}}",
+    "stop_failed": "停止 Agent 任务失败",
     "processing_single": "{{name}} 正在准备回复...",
     "processing_pair": "{{a}}、{{b}} 正在准备回复...",
     "processing_overflow": "{{a}}、{{b}} 等 {{count}} 位正在准备回复..."

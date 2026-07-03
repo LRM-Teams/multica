@@ -153,6 +153,11 @@
     "dispatched": "起動中",
     "running": "考え中",
     "waiting_local_directory": "ローカルディレクトリを待機中",
+    "stop": "停止",
+    "stop_named": "{{name}}を停止",
+    "stop_aria": "{{name}}の現在のタスクを停止",
+    "stop_success": "{{name}}を停止しました",
+    "stop_failed": "エージェントタスクの停止に失敗しました",
     "processing_single": "{{name}} が返信を準備しています...",
     "processing_pair": "{{a}} と {{b}} が返信を準備しています...",
     "processing_overflow": "{{a}}、{{b}} ほか {{count}} 人が返信を準備しています..."

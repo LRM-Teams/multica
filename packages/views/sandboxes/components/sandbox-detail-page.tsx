@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ArrowLeft, Box, Loader2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { sandboxDetailOptions } from "@multica/core/sandboxes/queries";
 import { useUpdateSandboxMutation } from "@multica/core/sandboxes/mutations";
 import { sandboxDisplayName, sandboxRuntime } from "@multica/core/sandboxes/utils";
+import type { SandboxInstance } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
@@ -35,46 +36,25 @@ function buildRuntimePayload(form: RuntimeFormState) {
   return payload;
 }
 
-export function SandboxDetailPage({ instanceId }: { instanceId: string }) {
-  const wsId = useWorkspaceId();
+function SandboxDetailEditor({
+  instance,
+  wsId,
+  instanceId,
+}: {
+  instance: SandboxInstance;
+  wsId: string;
+  instanceId: string;
+}) {
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const { t } = useT("layout");
-  const { data: instance, isLoading } = useQuery(sandboxDetailOptions(wsId, instanceId));
   const update = useUpdateSandboxMutation(wsId, instanceId);
 
-  const [name, setName] = useState("");
-  const [runtime, setRuntime] = useState<RuntimeFormState>({ apiKey: "", baseUrl: "", model: "" });
-
-  useEffect(() => {
-    if (!instance) return;
-    setName(sandboxDisplayName(instance));
-    const currentRuntime = sandboxRuntime(instance);
-    setRuntime(currentRuntime);
-  }, [instance]);
-
-  if (isLoading) {
-    return (
-      <div className="flex h-full min-h-0 flex-col bg-background p-6">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="mt-6 h-64 w-full max-w-2xl" />
-      </div>
-    );
-  }
-
-  if (!instance) {
-    return (
-      <div className="flex h-full min-h-0 flex-col items-center justify-center bg-background text-muted-foreground">
-        <Box className="mb-3 size-10 text-muted-foreground/40" />
-        <p className="text-sm">{t(($) => $.sandboxes_page.detail_not_found)}</p>
-        <Button className="mt-4" variant="outline" onClick={() => navigation.push(paths.sandboxes())}>
-          {t(($) => $.sandboxes_page.back_to_list)}
-        </Button>
-      </div>
-    );
-  }
+  const [name, setName] = useState(() => sandboxDisplayName(instance));
+  const [runtime, setRuntime] = useState<RuntimeFormState>(() => sandboxRuntime(instance));
 
   const canSave = name.trim().length > 0;
+  const isReconfiguring = instance.status === "reconfiguring";
 
   const handleSave = async () => {
     if (!canSave) return;
@@ -93,8 +73,6 @@ export function SandboxDetailPage({ instanceId }: { instanceId: string }) {
       toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.save_failed));
     }
   };
-
-  const isReconfiguring = instance.status === "reconfiguring";
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -176,5 +154,43 @@ export function SandboxDetailPage({ instanceId }: { instanceId: string }) {
         </Card>
       </div>
     </div>
+  );
+}
+
+export function SandboxDetailPage({ instanceId }: { instanceId: string }) {
+  const wsId = useWorkspaceId();
+  const paths = useWorkspacePaths();
+  const navigation = useNavigation();
+  const { t } = useT("layout");
+  const { data: instance, isLoading } = useQuery(sandboxDetailOptions(wsId, instanceId));
+
+  if (isLoading) {
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-background p-6">
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="mt-6 h-64 w-full max-w-2xl" />
+      </div>
+    );
+  }
+
+  if (!instance) {
+    return (
+      <div className="flex h-full min-h-0 flex-col items-center justify-center bg-background text-muted-foreground">
+        <Box className="mb-3 size-10 text-muted-foreground/40" />
+        <p className="text-sm">{t(($) => $.sandboxes_page.detail_not_found)}</p>
+        <Button className="mt-4" variant="outline" onClick={() => navigation.push(paths.sandboxes())}>
+          {t(($) => $.sandboxes_page.back_to_list)}
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <SandboxDetailEditor
+      key={`${instance.id}-${instance.updated_at}`}
+      instance={instance}
+      wsId={wsId}
+      instanceId={instanceId}
+    />
   );
 }

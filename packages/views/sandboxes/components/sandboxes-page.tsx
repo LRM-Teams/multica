@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useMemo, useReducer, useState } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
 import { Box, Check, Copy, Loader2, Monitor, Plus, RotateCcw, Search, Server, Square, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -126,7 +126,6 @@ export function SandboxesPage() {
 
   const [nodeSearch, setNodeSearch] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const userSelectedRef = useRef(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateFormState>(() => buildDefaultCreateForm(""));
   const [addNode, dispatchAddNode] = useReducer(addNodeReducer, initialAddNodeState);
@@ -158,27 +157,21 @@ export function SandboxesPage() {
     );
   }, [connectedBindings, nodeSearch]);
 
-  const handleSelectNode = useCallback((nodeId: string) => {
-    userSelectedRef.current = true;
-    setSelectedNodeId(nodeId);
-  }, []);
-
-  useEffect(() => {
-    if (filteredBindings.length === 0) {
-      if (selectedNodeId !== null) setSelectedNodeId(null);
-      return;
+  const resolvedNodeId = useMemo(() => {
+    if (filteredBindings.length === 0) return null;
+    if (
+      selectedNodeId !== null &&
+      filteredBindings.some((binding) => binding.node_id === selectedNodeId)
+    ) {
+      return selectedNodeId;
     }
-    const stillValid =
-      !!selectedNodeId && filteredBindings.some((binding) => binding.node_id === selectedNodeId);
-    if (userSelectedRef.current && stillValid) return;
     const preferred =
       filteredBindings.find((binding) => binding.node_status === "online") ?? filteredBindings[0];
-    const nextId = preferred?.node_id ?? null;
-    if (nextId !== selectedNodeId) setSelectedNodeId(nextId);
+    return preferred?.node_id ?? null;
   }, [filteredBindings, selectedNodeId]);
 
   const selectedBinding =
-    connectedBindings.find((binding) => binding.node_id === selectedNodeId) ?? filteredBindings[0] ?? null;
+    connectedBindings.find((binding) => binding.node_id === resolvedNodeId) ?? null;
   const selectedInstances = selectedBinding
     ? (instancesByNode.get(selectedBinding.node_id) ?? [])
     : [];
@@ -248,7 +241,7 @@ multica sandboxd`,
         ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
       });
       setCreateDialogOpen(false);
-      handleSelectNode(createForm.nodeId);
+      setSelectedNodeId(createForm.nodeId);
       toast.success(t(($) => $.sandboxes_page.create_success));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.create_failed));
@@ -287,11 +280,11 @@ multica sandboxd`,
         <div className="flex min-h-0 flex-1 flex-col border-t bg-background">
           <NodeSidebar
             bindings={filteredBindings}
-            selectedNodeId={selectedBinding?.node_id ?? null}
+            selectedNodeId={resolvedNodeId}
             search={nodeSearch}
             setSearch={setNodeSearch}
             instancesByNode={instancesByNode}
-            onSelect={handleSelectNode}
+            onSelect={setSelectedNodeId}
           />
           <NodeDetail
             binding={selectedBinding}
@@ -323,11 +316,11 @@ multica sandboxd`,
             >
               <NodeSidebar
                 bindings={filteredBindings}
-                selectedNodeId={selectedBinding?.node_id ?? null}
+                selectedNodeId={resolvedNodeId}
                 search={nodeSearch}
                 setSearch={setNodeSearch}
                 instancesByNode={instancesByNode}
-                onSelect={handleSelectNode}
+                onSelect={setSelectedNodeId}
                 className="h-full border-b-0 border-r"
               />
             </ResizablePanel>

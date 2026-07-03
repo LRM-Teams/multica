@@ -88,6 +88,10 @@ func (h *Handler) channelAmbientGateConfig() channelAmbientGateConfig {
 }
 
 func (h *Handler) shouldDispatchChannelAmbientObservation(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, agent db.Agent) bool {
+	return h.shouldDispatchChannelAmbientObservationWithDB(ctx, h.DB, ch, trigger, agent)
+}
+
+func (h *Handler) shouldDispatchChannelAmbientObservationWithDB(ctx context.Context, exec db.DBTX, ch ChannelResponse, trigger ChannelMessageResponse, agent db.Agent) bool {
 	cfg := h.channelAmbientGateConfig()
 	if cfg.mode == channelAmbientGateModeOff {
 		h.recordChannelAmbientGateDecision(channelAmbientGateActionEnqueued, channelAmbientGateReasonGateOff, ch, agent, trigger)
@@ -97,7 +101,7 @@ func (h *Handler) shouldDispatchChannelAmbientObservation(ctx context.Context, c
 		h.recordChannelAmbientGateDecision(channelAmbientGateActionRelevanceSkipped, reason, ch, agent, trigger)
 		return false
 	}
-	stats, err := h.channelAmbientGateStats(ctx, parseUUID(ch.ID), agent.ID, agent.RuntimeID, cfg.window)
+	stats, err := h.channelAmbientGateStatsWithDB(ctx, exec, parseUUID(ch.ID), agent.ID, agent.RuntimeID, cfg.window)
 	if err != nil {
 		slog.Warn("channel ambient gate: stats query failed; dropping ambient dispatch", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		h.recordChannelAmbientGateDecision(channelAmbientGateActionDropped, channelAmbientGateReasonGateError, ch, agent, trigger)
@@ -156,7 +160,7 @@ func (h *Handler) dispatchSingleChannelAmbientObservation(ctx context.Context, c
 		h.recordChannelAmbientGateDecision(channelAmbientGateActionDropped, channelAmbientGateReasonGateError, ch, agent, trigger)
 		return
 	}
-	if !h.shouldDispatchChannelAmbientObservation(ctx, ch, trigger, agent) {
+	if !h.shouldDispatchChannelAmbientObservationWithDB(ctx, tx, ch, trigger, agent) {
 		_ = tx.Commit(ctx)
 		return
 	}
@@ -227,8 +231,12 @@ func deterministicChannelAmbientRelevanceSkip(content string) (bool, string) {
 }
 
 func (h *Handler) channelAmbientGateStats(ctx context.Context, channelID, agentID, runtimeID pgtype.UUID, window time.Duration) (channelAmbientGateStats, error) {
+	return h.channelAmbientGateStatsWithDB(ctx, h.DB, channelID, agentID, runtimeID, window)
+}
+
+func (h *Handler) channelAmbientGateStatsWithDB(ctx context.Context, exec db.DBTX, channelID, agentID, runtimeID pgtype.UUID, window time.Duration) (channelAmbientGateStats, error) {
 	var stats channelAmbientGateStats
-	err := h.DB.QueryRow(ctx, `
+	err := exec.QueryRow(ctx, `
 		SELECT
 			COALESCE((
 				SELECT count(*)

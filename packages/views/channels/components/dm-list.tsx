@@ -469,9 +469,16 @@ function DmRow({
       <ContextMenuTrigger
         render={
           <div
+            data-pinned={pinned ? "true" : undefined}
             className={cn(
               "group/row relative mb-0.5 rounded-lg transition-colors",
-              active ? "bg-primary/[0.08]" : "hover:bg-accent",
+              pinned
+                ? active
+                  ? "bg-muted/80 ring-1 ring-border/70 hover:bg-muted/80 dark:bg-muted/45 dark:ring-border/60 dark:hover:bg-muted/55"
+                  : "bg-muted/55 hover:bg-muted/75 dark:bg-muted/25 dark:hover:bg-muted/35"
+                : active
+                  ? "bg-primary/[0.08]"
+                  : "hover:bg-accent",
             )}
           />
         }

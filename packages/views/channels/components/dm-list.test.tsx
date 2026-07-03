@@ -123,10 +123,21 @@ vi.mock("@multica/ui/components/ui/drawer", () => ({
 
 import { DmList } from "./dm-list";
 
-function renderDmList() {
+function makeDm(overrides: Partial<DMItem> = {}): DMItem {
+  return {
+    id: "dm-1",
+    source: "dm_channel",
+    peer: { type: "user", id: "peer-1", name: "Pinned Person" },
+    unread: 0,
+    updated_at: "2026-07-03T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function renderDmList(props: Partial<Parameters<typeof DmList>[0]> = {}) {
   return render(
     <I18nProvider resources={TEST_RESOURCES} locale="en">
-      <DmList activeId={null} currentUserName="Test User" onSelect={vi.fn()} />
+      <DmList activeId={null} currentUserName="Test User" onSelect={vi.fn()} {...props} />
     </I18nProvider>,
   );
 }
@@ -160,5 +171,38 @@ describe("DmList new-DM picker", () => {
 
     expect(screen.getByTestId("dm-picker-drawer")).toBeInTheDocument();
     expect(screen.getByText("New message")).toBeInTheDocument();
+  });
+
+  it("gives pinned DM rows a full-row neutral background in light and dark themes", () => {
+    mockQueryData.dms = [
+      makeDm({ pinned_at: "2026-07-03T00:00:00Z" }),
+    ];
+
+    renderDmList();
+
+    const row = screen
+      .getByRole("button", { name: /Pinned Person/i })
+      .closest("[data-pinned='true']");
+
+    expect(row).toHaveClass("bg-muted/55");
+    expect(row).toHaveClass("hover:bg-muted/75");
+    expect(row).toHaveClass("dark:bg-muted/25");
+    expect(row).toHaveClass("dark:hover:bg-muted/35");
+  });
+
+  it("keeps a distinct selected style when the pinned DM is active", () => {
+    mockQueryData.dms = [
+      makeDm({ pinned_at: "2026-07-03T00:00:00Z" }),
+    ];
+
+    renderDmList({ activeId: "dm-1" });
+
+    const row = screen
+      .getByRole("button", { name: /Pinned Person/i })
+      .closest("[data-pinned='true']");
+
+    expect(row).toHaveClass("bg-muted/80");
+    expect(row).toHaveClass("ring-1");
+    expect(row).toHaveClass("dark:bg-muted/45");
   });
 });

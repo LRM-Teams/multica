@@ -1154,7 +1154,7 @@ func (h *Handler) AddChannelMessageReaction(w http.ResponseWriter, r *http.Reque
 	reaction.MessageID = uuidToString(msgID)
 	reaction.ActorID = uuidToString(actorID)
 	reaction.CreatedAt = timestampToString(createdAt)
-	h.publish(protocol.EventChannelReactionAdded, workspaceID, "member", userID, map[string]any{"reaction": reaction, "channel_id": uuidToString(channelID), "message_id": uuidToString(messageID)})
+	h.publishChannelToMembers(r.Context(), protocol.EventChannelReactionAdded, workspaceID, "member", userID, channelID, map[string]any{"reaction": reaction, "channel_id": uuidToString(channelID), "message_id": uuidToString(messageID)})
 	writeJSON(w, http.StatusCreated, reaction)
 }
 
@@ -1222,7 +1222,7 @@ func (h *Handler) RemoveChannelMessageReaction(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	h.publish(protocol.EventChannelReactionRemoved, workspaceID, "member", userID, map[string]any{
+	h.publishChannelToMembers(r.Context(), protocol.EventChannelReactionRemoved, workspaceID, "member", userID, channelID, map[string]any{
 		"channel_id": uuidToString(channelID),
 		"message_id": uuidToString(messageID),
 		"emoji":      emoji,
@@ -1396,7 +1396,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if ch.Kind == "dm" {
 		h.clearDMHiddenForChannelMembers(r.Context(), workspaceID, channelID)
 	}
-	h.publish(protocol.EventChannelMessage, workspaceID, "member", userID, msg)
+	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, msg)
 	if ch.Kind == "dm" {
 		h.dispatchDMAgentReply(r.Context(), ch, msg, parseUUID(userID))
 	} else {
@@ -1715,7 +1715,7 @@ func (h *Handler) SetChannelTyping(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
 		return
 	}
-	h.publish(protocol.EventChannelTyping, workspaceID, "member", userID, protocol.ChannelTypingPayload{
+	h.publishChannelToMembers(r.Context(), protocol.EventChannelTyping, workspaceID, "member", userID, channelID, protocol.ChannelTypingPayload{
 		ChannelID:   uuidToString(channelID),
 		ActorType:   "user",
 		ActorID:     userID,
@@ -1807,7 +1807,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if ch.Kind == "dm" {
 		h.clearDMHiddenForChannelMembers(r.Context(), workspaceID, channelID)
 	}
-	h.publish(protocol.EventChannelMessage, workspaceID, "member", userID, msg)
+	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, msg)
 	if ch.Kind == "dm" {
 		// 1-on-1 DM: the agent peer (if any) replies to every user message
 		// without an @-mention. Human↔human DMs have no agent member → no-op.
@@ -1870,7 +1870,7 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, parseUUID(msg.ChannelID))
-	h.publish(protocol.EventChannelMessage, workspaceID, "member", userID, msg)
+	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, parseUUID(ch.ID), msg)
 	h.dispatchChannelMessageToAgents(r.Context(), ch, msg, parseUUID(userID))
 	writeJSON(w, http.StatusCreated, msg)
 }
@@ -1964,12 +1964,12 @@ func (h *Handler) dispatchChannelAgentReply(ctx context.Context, ch ChannelRespo
 func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, logScope string, showTyping, forceFresh, interruptActive, lowPriority bool) {
 	typingActive := false
 	if showTyping {
-		h.publishChannelAgentTyping(ch, agent, true)
+		h.publishChannelAgentTyping(ctx, ch, agent, true)
 		typingActive = true
 	}
 	defer func() {
 		if typingActive {
-			h.publishChannelAgentTyping(ch, agent, false)
+			h.publishChannelAgentTyping(ctx, ch, agent, false)
 		}
 	}()
 	session, err := h.ensureChannelAgentSession(ctx, ch, agent.ID, initiatorUserID)
@@ -2029,22 +2029,22 @@ func (h *Handler) dispatchChannelMemberWelcome(ctx context.Context, workspaceID 
 	// is its own short run rather than a reply within an existing thread.
 	synthetic := ChannelMessageResponse{TriggerDepth: 0}
 	for _, agent := range agents {
-		h.publishChannelAgentTyping(ch, agent, true)
+		h.publishChannelAgentTyping(ctx, ch, agent, true)
 		session, err := h.ensureChannelAgentSession(ctx, ch, agent.ID, initiatorUserID)
 		if err != nil {
-			h.publishChannelAgentTyping(ch, agent, false)
+			h.publishChannelAgentTyping(ctx, ch, agent, false)
 			slog.Warn("channel welcome: ensure session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 			continue
 		}
 		promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, synthetic)
 		if err != nil {
-			h.publishChannelAgentTyping(ch, agent, false)
+			h.publishChannelAgentTyping(ctx, ch, agent, false)
 			slog.Warn("channel welcome: create prompt failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 			continue
 		}
 		task, err := h.TaskService.EnqueueChatTask(ctx, session, initiatorUserID)
 		if err != nil {
-			h.publishChannelAgentTyping(ch, agent, false)
+			h.publishChannelAgentTyping(ctx, ch, agent, false)
 			slog.Warn("channel welcome: enqueue task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 			continue
 		}
@@ -2223,8 +2223,13 @@ func (h *Handler) channelHumanMemberIDs(ctx context.Context, workspaceID, channe
 	return out
 }
 
-func (h *Handler) publishChannelAgentTyping(ch ChannelResponse, agent db.Agent, isTyping bool) {
-	h.publish(protocol.EventChannelTyping, ch.WorkspaceID, "agent", uuidToString(agent.ID), protocol.ChannelTypingPayload{
+func (h *Handler) publishChannelToMembers(ctx context.Context, eventType, workspaceID, actorType, actorID string, channelID pgtype.UUID, payload any) {
+	recipientIDs := recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, workspaceID, uuidToString(channelID)))
+	h.publishToUsers(eventType, workspaceID, actorType, actorID, recipientIDs, payload)
+}
+
+func (h *Handler) publishChannelAgentTyping(ctx context.Context, ch ChannelResponse, agent db.Agent, isTyping bool) {
+	h.publishChannelToMembers(ctx, protocol.EventChannelTyping, ch.WorkspaceID, "agent", uuidToString(agent.ID), parseUUID(ch.ID), protocol.ChannelTypingPayload{
 		ChannelID:   ch.ID,
 		ActorType:   "agent",
 		ActorID:     uuidToString(agent.ID),
@@ -2645,7 +2650,7 @@ func (h *Handler) handleChannelChatStopped(e events.Event) {
 	if !ok {
 		return
 	}
-	h.publish(protocol.EventChannelTyping, uuidToString(workspaceID), "agent", uuidToString(agentID), protocol.ChannelTypingPayload{
+	h.publishChannelToMembers(context.Background(), protocol.EventChannelTyping, uuidToString(workspaceID), "agent", uuidToString(agentID), channelID, protocol.ChannelTypingPayload{
 		ChannelID: uuidToString(channelID),
 		ActorType: "agent",
 		ActorID:   uuidToString(agentID),
@@ -2669,7 +2674,7 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 		return
 	}
 	agentName := h.agentName(context.Background(), agentID)
-	h.publish(protocol.EventChannelTyping, uuidToString(workspaceID), "agent", uuidToString(agentID), protocol.ChannelTypingPayload{
+	h.publishChannelToMembers(context.Background(), protocol.EventChannelTyping, uuidToString(workspaceID), "agent", uuidToString(agentID), channelID, protocol.ChannelTypingPayload{
 		ChannelID: uuidToString(channelID),
 		ActorType: "agent",
 		ActorID:   uuidToString(agentID),
@@ -2718,7 +2723,7 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 	}
 	_, _ = h.DB.Exec(context.Background(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
 	h.clearDMHiddenForChannelMembers(context.Background(), uuidToString(workspaceID), channelID)
-	h.publish(protocol.EventChannelMessage, uuidToString(workspaceID), "agent", uuidToString(agentID), msg)
+	h.publishChannelToMembers(context.Background(), protocol.EventChannelMessage, uuidToString(workspaceID), "agent", uuidToString(agentID), channelID, msg)
 	ch, found := h.getChannel(context.Background(), uuidToString(workspaceID), channelID)
 	if found {
 		initiatorID := h.channelInitiatorForChatSession(context.Background(), parseUUID(payload.ChatSessionID))
@@ -2802,7 +2807,7 @@ func (h *Handler) insertChannelReactionCommand(ctx context.Context, channelID, w
 		Emoji:     emoji,
 		CreatedAt: timestampToString(createdAt),
 	}
-	h.publish(protocol.EventChannelReactionAdded, uuidToString(workspaceID), "agent", uuidToString(agentID), map[string]any{"reaction": reaction, "channel_id": uuidToString(channelID), "message_id": uuidToString(messageID)})
+	h.publishChannelToMembers(ctx, protocol.EventChannelReactionAdded, uuidToString(workspaceID), "agent", uuidToString(agentID), channelID, map[string]any{"reaction": reaction, "channel_id": uuidToString(channelID), "message_id": uuidToString(messageID)})
 	return true
 }
 

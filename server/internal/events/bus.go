@@ -19,6 +19,11 @@ type Event struct {
 	// without re-deserializing Payload. See MUL-1138 phase 1.
 	TaskID        string
 	ChatSessionID string
+
+	// RecipientUserIDs scopes sensitive payloads to specific user rooms. A nil
+	// slice means "use the default workspace routing"; a non-nil empty slice is
+	// intentional fail-closed routing and must not fall back to workspace fanout.
+	RecipientUserIDs []string
 }
 
 // Handler is a function that processes an event.

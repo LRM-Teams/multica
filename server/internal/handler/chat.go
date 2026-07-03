@@ -377,7 +377,7 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resolvedSessionID := uuidToString(updated.ID)
-	h.publishChat(protocol.EventChatSessionUpdated, workspaceID, "member", userID, resolvedSessionID, protocol.ChatSessionUpdatedPayload{
+	h.publishChatToCreator(protocol.EventChatSessionUpdated, workspaceID, "member", userID, resolvedSessionID, uuidToString(session.CreatorID), protocol.ChatSessionUpdatedPayload{
 		ChatSessionID: resolvedSessionID,
 		Title:         updated.Title,
 		UpdatedAt:     timestampToString(updated.UpdatedAt),
@@ -453,7 +453,7 @@ func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 	h.TaskService.BroadcastCancelledTasks(r.Context(), cancelled)
 
 	resolvedSessionID := uuidToString(session.ID)
-	h.publishChat(protocol.EventChatSessionDeleted, workspaceID, "member", userID, resolvedSessionID, protocol.ChatSessionDeletedPayload{
+	h.publishChatToCreator(protocol.EventChatSessionDeleted, workspaceID, "member", userID, resolvedSessionID, uuidToString(session.CreatorID), protocol.ChatSessionDeletedPayload{
 		ChatSessionID: resolvedSessionID,
 	})
 
@@ -600,7 +600,7 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Broadcast the user message.
 	resolvedSessionID := uuidToString(session.ID)
-	h.publishChat(protocol.EventChatMessage, workspaceID, "member", userID, resolvedSessionID, protocol.ChatMessagePayload{
+	h.publishChatToCreator(protocol.EventChatMessage, workspaceID, "member", userID, resolvedSessionID, uuidToString(session.CreatorID), protocol.ChatMessagePayload{
 		ChatSessionID: resolvedSessionID,
 		MessageID:     uuidToString(msg.ID),
 		Role:          "user",
@@ -791,7 +791,7 @@ func (h *Handler) MarkChatSessionRead(w http.ResponseWriter, r *http.Request) {
 	h.clearDMPeerManualUnread(r.Context(), workspaceID, userID, dmPeerRef{Type: "agent", ID: session.AgentID})
 
 	resolvedSessionID := uuidToString(session.ID)
-	h.publishChat(protocol.EventChatSessionRead, workspaceID, "member", userID, resolvedSessionID, protocol.ChatSessionReadPayload{
+	h.publishChatToCreator(protocol.EventChatSessionRead, workspaceID, "member", userID, resolvedSessionID, uuidToString(session.CreatorID), protocol.ChatSessionReadPayload{
 		ChatSessionID: resolvedSessionID,
 	})
 

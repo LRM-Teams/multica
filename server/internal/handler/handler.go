@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -317,6 +319,54 @@ func (h *Handler) publishChat(eventType, workspaceID, actorType, actorID, chatSe
 		ChatSessionID: chatSessionID,
 		Payload:       payload,
 	})
+}
+
+func (h *Handler) publishToUsers(eventType, workspaceID, actorType, actorID string, recipientUserIDs []string, payload any) {
+	h.Bus.Publish(events.Event{
+		Type:             eventType,
+		WorkspaceID:      workspaceID,
+		ActorType:        actorType,
+		ActorID:          actorID,
+		RecipientUserIDs: uniqueRecipientUserIDs(recipientUserIDs),
+		Payload:          payload,
+	})
+}
+
+func (h *Handler) publishChatToCreator(eventType, workspaceID, actorType, actorID, chatSessionID, creatorUserID string, payload any) {
+	h.Bus.Publish(events.Event{
+		Type:             eventType,
+		WorkspaceID:      workspaceID,
+		ActorType:        actorType,
+		ActorID:          actorID,
+		ChatSessionID:    chatSessionID,
+		RecipientUserIDs: uniqueRecipientUserIDs([]string{creatorUserID}),
+		Payload:          payload,
+	})
+}
+
+func recipientUserIDsFromSet(ids map[string]bool) []string {
+	out := make([]string, 0, len(ids))
+	for id, ok := range ids {
+		if ok {
+			out = append(out, id)
+		}
+	}
+	return uniqueRecipientUserIDs(out)
+}
+
+func uniqueRecipientUserIDs(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func isNotFound(err error) bool {

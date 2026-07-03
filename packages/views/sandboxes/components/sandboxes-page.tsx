@@ -1,40 +1,97 @@
 "use client";
 
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Box, Loader2, Play, RotateCcw, Square, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Box, Check, Copy, Loader2, Plus, Play, RotateCcw, Square, Trash2 } from "lucide-react";
 import {
   useCreateSandboxMutation,
   useDeleteSandboxMutation,
   useResumeSandboxMutation,
   useStopSandboxMutation,
 } from "@multica/core/sandboxes/mutations";
-import { sandboxBindingListOptions, sandboxListOptions } from "@multica/core/sandboxes/queries";
-import type { SandboxInstance } from "@multica/core/types";
+import { sandboxBindingListOptions, sandboxKeys, sandboxListOptions } from "@multica/core/sandboxes/queries";
+import type { SandboxBinding, SandboxInstance } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@multica/ui/components/ui/card";
 import { Input } from "@multica/ui/components/ui/input";
 import { Badge } from "@multica/ui/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@multica/ui/components/ui/select";
+import { copyText } from "@multica/ui/lib/clipboard";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { api } from "@multica/core/api";
+import { toast } from "sonner";
 import { useT } from "../../i18n/use-t";
 
 export function SandboxesPage() {
   const wsId = useWorkspaceId();
   const { t } = useT("layout");
+  const queryClient = useQueryClient();
   const [modelConfig, setModelConfig] = useState({ apiKey: "", baseUrl: "", model: "" });
+  const [selectedNodeId, setSelectedNodeId] = useState("");
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [setupCommand, setSetupCommand] = useState("");
+  const [setupCopied, setSetupCopied] = useState(false);
+  const [creatingNode, setCreatingNode] = useState(false);
   const { data: instances = [], isLoading } = useQuery(sandboxListOptions(wsId));
   const { data: bindings = [] } = useQuery(sandboxBindingListOptions(wsId));
 
+  const onlineBindings = useMemo(() => bindings.filter((b) => b.enabled && b.node_status === "online"), [bindings]);
+  const hasOnlineNode = onlineBindings.length > 0;
+  const activeNodeId = onlineBindings.some((b) => b.node_id === selectedNodeId) ? selectedNodeId : (onlineBindings[0]?.node_id ?? "");
+
   const create = useCreateSandboxMutation(wsId, () => ({
-    api_key: modelConfig.apiKey,
-    base_url: modelConfig.baseUrl,
-    model: modelConfig.model,
+    node_id: activeNodeId || undefined,
+    runtime: {
+      api_key: modelConfig.apiKey,
+      base_url: modelConfig.baseUrl,
+      model: modelConfig.model,
+    },
   }));
   const stop = useStopSandboxMutation(wsId);
   const resume = useResumeSandboxMutation(wsId);
   const del = useDeleteSandboxMutation(wsId);
 
-  const hasOnlineNode = bindings.some((b) => b.enabled && b.node_status === "online");
+  const handleAddNode = async () => {
+    setCreatingNode(true);
+    setSetupCopied(false);
+    try {
+      const suffix = Math.random().toString(36).slice(2, 8);
+      const node = await api.createSandboxNode({ name: `sandboxd-${suffix}` });
+      const token = await api.createSandboxNodeToken(node.id, { name: "sandboxd setup" });
+      await api.bindSandboxNode(wsId, { node_id: node.id });
+      await queryClient.invalidateQueries({ queryKey: sandboxKeys.bindings(wsId) });
+      const config = {
+        server_url: api.getBaseUrl?.() || window.location.origin,
+        node_token: token.token,
+        node_key: node.node_key,
+        name: node.name,
+        owner_user_id: node.owner_user_id || node.node_key,
+        sandbox_server: "http://127.0.0.1:8000",
+        cube_proxy_http: "http://127.0.0.1",
+        cube_domain: "cube.app",
+        cube_template_id: "YOUR_CUBE_TEMPLATE_ID",
+        concurrency: 1,
+        poll_interval: "5s",
+      };
+      setSetupCommand(`mkdir -p .multica && cat > .multica/sandboxd.json <<'EOF'
+${JSON.stringify(config, null, 2)}
+EOF
+multica sandboxd`);
+      setAddDialogOpen(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.add_node_failed));
+    } finally {
+      setCreatingNode(false);
+    }
+  };
+
+  const handleCopySetup = async () => {
+    if (await copyText(setupCommand)) {
+      setSetupCopied(true);
+      setTimeout(() => setSetupCopied(false), 2000);
+    }
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -43,10 +100,16 @@ export function SandboxesPage() {
           <h1 className="text-xl font-semibold tracking-tight">{t(($) => $.sandboxes_page.title)}</h1>
           <p className="text-sm text-muted-foreground">{t(($) => $.sandboxes_page.description)}</p>
         </div>
-        <Button onClick={() => create.mutate()} disabled={!hasOnlineNode || create.isPending || !modelConfig.apiKey.trim()}>
-          {create.isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Play className="mr-2 size-4" />}
-          {t(($) => $.sandboxes_page.create_action)}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={handleAddNode} disabled={creatingNode}>
+            {creatingNode ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Plus className="mr-2 size-4" />}
+            {t(($) => $.sandboxes_page.add_node_action)}
+          </Button>
+          <Button onClick={() => create.mutate()} disabled={!hasOnlineNode || create.isPending || !modelConfig.apiKey.trim()}>
+            {create.isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Play className="mr-2 size-4" />}
+            {t(($) => $.sandboxes_page.create_action)}
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-4 overflow-auto p-6 lg:grid-cols-[320px_1fr]">
@@ -77,27 +140,31 @@ export function SandboxesPage() {
           </Card>
 
           <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t(($) => $.sandboxes_page.connected_nodes_title)}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {bindings.length === 0 ? (
-              <p className="text-sm text-muted-foreground">{t(($) => $.sandboxes_page.no_bound_node)}</p>
-            ) : (
-              bindings.map((binding) => (
-                <div key={binding.id} className="rounded-lg border p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{binding.node_name}</div>
-                      <div className="truncate text-xs text-muted-foreground">{binding.node_key}</div>
-                    </div>
-                    <StatusBadge status={binding.node_status} />
-                  </div>
-                </div>
-              ))
-            )}
-          </CardContent>
-        </Card>
+            <CardHeader>
+              <CardTitle className="text-base">{t(($) => $.sandboxes_page.connected_nodes_title)}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {bindings.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t(($) => $.sandboxes_page.no_bound_node)}</p>
+              ) : (
+                <>
+                  <Select value={activeNodeId} onValueChange={(value) => setSelectedNodeId(value ?? "")}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={t(($) => $.sandboxes_page.select_node_placeholder)} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {onlineBindings.map((binding) => (
+                        <SelectItem key={binding.id} value={binding.node_id}>{binding.node_name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {bindings.map((binding) => (
+                    <NodeCard key={binding.id} binding={binding} />
+                  ))}
+                </>
+              )}
+            </CardContent>
+          </Card>
         </div>
 
         <Card>
@@ -133,6 +200,36 @@ export function SandboxesPage() {
             )}
           </CardContent>
         </Card>
+      </div>
+
+      <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t(($) => $.sandboxes_page.add_node_dialog_title)}</DialogTitle>
+            <DialogDescription>{t(($) => $.sandboxes_page.add_node_dialog_description)}</DialogDescription>
+          </DialogHeader>
+          <code className="max-h-64 overflow-auto rounded-md border bg-muted/50 p-3 text-xs break-all select-all">{setupCommand}</code>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleCopySetup}>
+              {setupCopied ? <Check className="mr-2 size-4" /> : <Copy className="mr-2 size-4" />}
+              {setupCopied ? t(($) => $.sandboxes_page.copied_action) : t(($) => $.sandboxes_page.copy_command_action)}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function NodeCard({ binding }: { binding: SandboxBinding }) {
+  return (
+    <div className="rounded-lg border p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium">{binding.node_name}</div>
+          <div className="truncate text-xs text-muted-foreground">{binding.node_key}</div>
+        </div>
+        <StatusBadge status={binding.node_status} />
       </div>
     </div>
   );

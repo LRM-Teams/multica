@@ -18,6 +18,7 @@ export type SandboxJobStatus =
 export interface SandboxNode {
   id: string;
   node_key: string;
+  owner_user_id: string;
   name: string;
   status: SandboxNodeStatus;
   capabilities: unknown[];
@@ -33,6 +34,7 @@ export interface SandboxBinding {
   workspace_id: string;
   node_id: string;
   node_key: string;
+  node_owner_user_id: string;
   node_name: string;
   node_status: SandboxNodeStatus;
   enabled: boolean;
@@ -76,6 +78,7 @@ export interface SandboxJob {
 }
 
 export interface CreateSandboxRequest {
+  node_id?: string;
   template?: string;
   limits?: Record<string, unknown>;
   metadata?: Record<string, unknown>;

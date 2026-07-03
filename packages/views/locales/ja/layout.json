@@ -57,6 +57,13 @@
     "waiting_local": "ローカルサンドボックス待機中",
     "resume_action": "再開",
     "stop_action": "停止",
-    "delete_action": "削除"
+    "delete_action": "削除",
+    "add_node_action": "Add node",
+    "add_node_failed": "Failed to add sandbox node",
+    "select_node_placeholder": "Select a sandbox node",
+    "add_node_dialog_title": "Run this command on the sandbox server",
+    "add_node_dialog_description": "The command writes .multica/sandboxd.json and starts sandboxd with the new node key.",
+    "copy_command_action": "Copy command",
+    "copied_action": "Copied"
   }
 }

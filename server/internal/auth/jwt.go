@@ -59,6 +59,15 @@ func GenerateAgentTaskToken() (string, error) {
 	return "mat_" + hex.EncodeToString(b), nil
 }
 
+// GenerateSandboxNodeKey creates a stable user-visible key for one sandboxd node.
+func GenerateSandboxNodeKey() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate sandbox node key: %w", err)
+	}
+	return "msk_" + hex.EncodeToString(b), nil
+}
+
 // GenerateSandboxNodeToken creates a machine credential for a shared sandbox
 // node. Unlike daemon tokens, it is node-scoped rather than workspace-scoped.
 func GenerateSandboxNodeToken() (string, error) {

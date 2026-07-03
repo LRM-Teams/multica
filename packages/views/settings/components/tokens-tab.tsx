@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Key, Trash2, Copy, Check } from "lucide-react";
+import { Check, Copy, Key, Pencil, Save, Server, Trash2 } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
-import type { PersonalAccessToken } from "@multica/core/types";
+import type { PersonalAccessToken, SandboxNode } from "@multica/core/types";
 import { Input } from "@multica/ui/components/ui/input";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
@@ -51,6 +51,14 @@ export function TokensTab() {
   const [tokenRevoking, setTokenRevoking] = useState<string | null>(null);
   const [revokeConfirmId, setRevokeConfirmId] = useState<string | null>(null);
   const [tokensLoading, setTokensLoading] = useState(true);
+  const [sandboxNodes, setSandboxNodes] = useState<SandboxNode[]>([]);
+  const [sandboxNodesLoading, setSandboxNodesLoading] = useState(true);
+  const [sandboxNodeName, setSandboxNodeName] = useState("");
+  const [sandboxNodeCreating, setSandboxNodeCreating] = useState(false);
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+  const [editingNodeName, setEditingNodeName] = useState("");
+  const [savingNodeId, setSavingNodeId] = useState<string | null>(null);
+  const [deletingNodeId, setDeletingNodeId] = useState<string | null>(null);
 
   const loadTokens = useCallback(async () => {
     try {
@@ -63,7 +71,19 @@ export function TokensTab() {
     }
   }, [t]);
 
+  const loadSandboxNodes = useCallback(async () => {
+    try {
+      const list = await api.listSandboxNodes();
+      setSandboxNodes(list);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t(($) => $.tokens.sandbox_keys.toast_load_failed));
+    } finally {
+      setSandboxNodesLoading(false);
+    }
+  }, [t]);
+
   useEffect(() => { loadTokens(); }, [loadTokens]);
+  useEffect(() => { loadSandboxNodes(); }, [loadSandboxNodes]);
 
   const handleCreateToken = async () => {
     setTokenCreating(true);
@@ -99,6 +119,48 @@ export function TokensTab() {
     if (await copyText(newToken)) {
       setTokenCopied(true);
       setTimeout(() => setTokenCopied(false), 2000);
+    }
+  };
+
+  const handleCreateSandboxNode = async () => {
+    setSandboxNodeCreating(true);
+    try {
+      await api.createSandboxNode({ name: sandboxNodeName });
+      setSandboxNodeName("");
+      await loadSandboxNodes();
+      toast.success(t(($) => $.tokens.sandbox_keys.toast_created));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t(($) => $.tokens.sandbox_keys.toast_create_failed));
+    } finally {
+      setSandboxNodeCreating(false);
+    }
+  };
+
+  const handleSaveSandboxNode = async (id: string) => {
+    setSavingNodeId(id);
+    try {
+      await api.updateSandboxNode(id, { name: editingNodeName });
+      setEditingNodeId(null);
+      setEditingNodeName("");
+      await loadSandboxNodes();
+      toast.success(t(($) => $.tokens.sandbox_keys.toast_updated));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t(($) => $.tokens.sandbox_keys.toast_update_failed));
+    } finally {
+      setSavingNodeId(null);
+    }
+  };
+
+  const handleDeleteSandboxNode = async (id: string) => {
+    setDeletingNodeId(id);
+    try {
+      await api.deleteSandboxNode(id);
+      await loadSandboxNodes();
+      toast.success(t(($) => $.tokens.sandbox_keys.toast_deleted));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t(($) => $.tokens.sandbox_keys.toast_delete_failed));
+    } finally {
+      setDeletingNodeId(null);
     }
   };
 
@@ -192,6 +254,91 @@ export function TokensTab() {
                 </CardContent>
               </Card>
             ))}
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Server className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-semibold">{t(($) => $.tokens.sandbox_keys.title)}</h2>
+        </div>
+
+        <Card>
+          <CardContent className="space-y-3">
+            <p className="text-xs text-muted-foreground">{t(($) => $.tokens.sandbox_keys.description)}</p>
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+              <Input
+                type="text"
+                value={sandboxNodeName}
+                onChange={(e) => setSandboxNodeName(e.target.value)}
+                placeholder={t(($) => $.tokens.sandbox_keys.name_placeholder)}
+              />
+              <Button onClick={handleCreateSandboxNode} disabled={sandboxNodeCreating || !sandboxNodeName.trim()}>
+                {sandboxNodeCreating ? t(($) => $.tokens.sandbox_keys.creating) : t(($) => $.tokens.sandbox_keys.create)}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {sandboxNodesLoading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 2 }).map((_, i) => (
+              <Card key={i}>
+                <CardContent className="flex items-center gap-3">
+                  <div className="flex-1 space-y-1.5">
+                    <Skeleton className="h-4 w-32" />
+                    <Skeleton className="h-3 w-48" />
+                  </div>
+                  <Skeleton className="h-8 w-20 rounded" />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : sandboxNodes.length > 0 && (
+          <div className="space-y-2">
+            {sandboxNodes.map((node) => {
+              const isEditing = editingNodeId === node.id;
+              return (
+                <Card key={node.id}>
+                  <CardContent className="flex items-center gap-3">
+                    <div className="min-w-0 flex-1">
+                      {isEditing ? (
+                        <Input value={editingNodeName} onChange={(e) => setEditingNodeName(e.target.value)} />
+                      ) : (
+                        <>
+                          <div className="truncate text-sm font-medium">{node.name}</div>
+                          <div className="truncate text-xs text-muted-foreground">{node.node_key} · {node.status}</div>
+                        </>
+                      )}
+                    </div>
+                    {isEditing ? (
+                      <Button size="sm" onClick={() => handleSaveSandboxNode(node.id)} disabled={savingNodeId === node.id || !editingNodeName.trim()}>
+                        <Save className="mr-2 h-3.5 w-3.5" />{t(($) => $.tokens.sandbox_keys.save)}
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => { setEditingNodeId(node.id); setEditingNodeName(node.name); }}
+                        aria-label={t(($) => $.tokens.sandbox_keys.rename_aria, { name: node.name })}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => handleDeleteSandboxNode(node.id)}
+                      disabled={deletingNodeId === node.id}
+                      aria-label={t(($) => $.tokens.sandbox_keys.delete_aria, { name: node.name })}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         )}
       </section>

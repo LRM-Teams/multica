@@ -7,14 +7,20 @@ function useInvalidateSandboxes(wsId: string) {
   return () => queryClient.invalidateQueries({ queryKey: sandboxKeys.all(wsId) });
 }
 
-export function useCreateSandboxMutation(wsId: string, runtime: () => Record<string, string>) {
+export function useCreateSandboxMutation(
+  wsId: string,
+  payload: () => { node_id?: string; runtime: Record<string, string> },
+) {
   const invalidate = useInvalidateSandboxes(wsId);
   return useMutation({
-    mutationFn: () =>
-      api.createSandbox({
+    mutationFn: () => {
+      const next = payload();
+      return api.createSandbox({
+        node_id: next.node_id,
         template: "default",
-        runtime: runtime(),
-      }),
+        runtime: next.runtime,
+      });
+    },
     onSuccess: invalidate,
   });
 }

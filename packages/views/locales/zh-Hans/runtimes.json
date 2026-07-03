@@ -243,6 +243,7 @@
     "retry": "重试",
     "unknown_error": "未知错误",
     "initiate_failed": "启动更新失败",
+    "last_update_not_applied": "上次更新未生效，当前仍是 {{currentVersion}}，目标版本 {{targetVersion}}。可以重试或查看原因。",
     "offline": "守护进程离线",
     "manual_hint": "如果自动更新无法写入安装位置，请在那台电脑的终端手动更新。",
     "manual_action": "手动命令",
@@ -260,6 +261,7 @@
       "pending": "等待守护进程...",
       "running": "更新中...",
       "completed": "更新完成。守护进程正在重启...",
+      "ready_to_apply": "更新已准备好，空闲后自动生效。",
       "failed": "更新失败",
       "timeout": "超时"
     }

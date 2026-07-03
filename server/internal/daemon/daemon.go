@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -157,10 +158,14 @@ type Daemon struct {
 
 	runner             taskRunner    // executes agent tasks; set to d.runTask by New(), overridable in tests
 	cancelPollInterval time.Duration // how often handleTask polls for server-side cancellation; overridable in tests
-	// runUpdateFn executes the brew-or-download upgrade. Set to d.runUpdate by
+	// runUpdateFn executes the release-download upgrade. Set to d.runUpdate by
 	// New() and overridable in tests so the auto-update poller can be exercised
-	// without touching the real network or the brew CLI.
+	// without touching the real network.
 	runUpdateFn func(targetVersion string) (string, error)
+	// verifyUpdatedBinaryFn checks the stable binary path that triggerRestart
+	// would re-exec and confirms it already reports targetVersion. Set to
+	// d.verifyUpdatedBinary by New() and overridable in tests.
+	verifyUpdatedBinaryFn func(targetVersion, updateOutput string) (string, error)
 
 	sharedSkillScanMu    sync.Mutex
 	sharedSkillScanCache map[string]string // scanRoot\x00skillKey -> fingerprint
@@ -193,6 +198,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	}
 	d.runner = taskRunnerFunc(d.runTask)
 	d.runUpdateFn = d.runUpdate
+	d.verifyUpdatedBinaryFn = d.verifyUpdatedBinary
 	return d
 }
 
@@ -1671,7 +1677,12 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 		d.logger.Warn("update already in progress, ignoring", "runtime_id", runtimeID, "update_id", update.ID)
 		return
 	}
-	defer d.updating.Store(false)
+	restartTriggered := false
+	defer func() {
+		if !restartTriggered {
+			d.updating.Store(false)
+		}
+	}()
 
 	d.logger.Info("CLI update requested", "runtime_id", runtimeID, "update_id", update.ID, "target_version", update.TargetVersion)
 
@@ -1690,33 +1701,62 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 		return
 	}
 
-	d.logger.Info("CLI update completed successfully", "output", output)
-	d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-		"status": "completed",
-		"output": fmt.Sprintf("Updated to %s", update.TargetVersion),
-	})
+	verifiedVersion, err := d.verifyUpdatedBinaryVersion(update.TargetVersion, output)
+	if err != nil {
+		d.logger.Error("CLI update verification failed", "error", err, "output", output)
+		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "failed",
+			"error":  err.Error(),
+		})
+		return
+	}
 
-	// Trigger daemon restart with the new binary.
+	d.logger.Info("CLI update staged successfully", "output", output, "verified_version", verifiedVersion)
+	stagedOutput := fmt.Sprintf("Staged %s (verified stable binary %s)", update.TargetVersion, verifiedVersion)
+	if !d.trySetClaimBarrier() {
+		if !update.SupportsReadyToApply {
+			d.logger.Warn("CLI update staged but server does not support deferred apply; refusing to restart a busy daemon", "runtime_id", runtimeID, "update_id", update.ID)
+			d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+				"status": "failed",
+				"error":  "update_ready_to_apply_but_server_does_not_support_deferred_restart",
+			})
+			return
+		}
+		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "ready_to_apply",
+			"output": stagedOutput,
+		})
+		restartCtx := d.rootCtx
+		if restartCtx == nil {
+			restartCtx = context.Background()
+		}
+		d.logger.Info("CLI update ready; waiting for idle daemon before restart", "runtime_id", runtimeID, "update_id", update.ID)
+		restartTriggered = d.waitForSafeRestart(restartCtx, runtimeID, update.ID, stagedOutput)
+		return
+	}
+	if !update.SupportsReadyToApply {
+		// Older servers do not complete a still-running update when the daemon
+		// re-registers on the target version. Preserve the old idle-only wire
+		// behavior for that mixed-version window, while still refusing to send
+		// completed from a busy daemon above.
+		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "completed",
+			"output": stagedOutput,
+		})
+	}
+	restartTriggered = true
 	d.triggerRestart()
 }
 
-// runUpdate executes the brew-or-download upgrade against targetVersion and
+// runUpdate executes the direct LRM release-download upgrade against targetVersion and
 // returns the human-readable output (always populated, even on failure when
-// brew gives us a useful diagnostic). The caller is responsible for the
+// the updater gives us a useful diagnostic). The caller is responsible for the
 // `updating` CAS guard and for reporting status back to the server / triggering
-// the restart — extracted so the server-triggered path (handleUpdate) and the
-// auto-update poller (autoUpdateLoop) share the exact same execution body.
+// the restart. Daemon self-update intentionally bypasses Homebrew taps so the
+// authoritative source is always LRM-Teams/multica release assets.
 func (d *Daemon) runUpdate(targetVersion string) (string, error) {
-	if cli.IsBrewInstall() && cli.IsBrewUpdateConfigured() {
-		d.logger.Info("updating CLI via Homebrew...")
-		out, err := cli.UpdateViaBrew()
-		if err != nil {
-			return out, fmt.Errorf("brew upgrade failed: %w", err)
-		}
-		return out, nil
-	}
 	if cli.IsBrewInstall() {
-		d.logger.Info("Homebrew install detected without MULTICA_BREW_PACKAGE; using direct release download")
+		d.logger.Info("Homebrew install detected; daemon self-update uses direct LRM release download")
 	}
 	d.logger.Info("updating CLI via direct download...", "target_version", targetVersion)
 	out, err := cli.UpdateViaDownload(targetVersion)
@@ -1724,6 +1764,105 @@ func (d *Daemon) runUpdate(targetVersion string) (string, error) {
 		return out, fmt.Errorf("download update failed: %w", err)
 	}
 	return out, nil
+}
+
+func (d *Daemon) waitForSafeRestart(ctx context.Context, runtimeID, updateID, output string) bool {
+	interval := d.cfg.PollInterval
+	if interval <= 0 || interval > 15*time.Second {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			d.logger.Warn("CLI update ready but restart wait ended before daemon became idle", "runtime_id", runtimeID, "update_id", updateID, "error", ctx.Err())
+			return false
+		case <-ticker.C:
+			if !d.trySetClaimBarrier() {
+				continue
+			}
+			d.logger.Info("CLI update ready; daemon is idle, restarting", "runtime_id", runtimeID, "update_id", updateID, "output", output)
+			d.triggerRestart()
+			return true
+		}
+	}
+}
+
+const (
+	updatedBinaryVersionCheckTimeout = 10 * time.Second
+	updateFailureOutputLimit         = 1200
+)
+
+func (d *Daemon) verifyUpdatedBinaryVersion(targetVersion, updateOutput string) (string, error) {
+	if d.verifyUpdatedBinaryFn != nil {
+		return d.verifyUpdatedBinaryFn(targetVersion, updateOutput)
+	}
+	return d.verifyUpdatedBinary(targetVersion, updateOutput)
+}
+
+func (d *Daemon) verifyUpdatedBinary(targetVersion, updateOutput string) (string, error) {
+	binaryPath, err := d.restartBinaryPath()
+	if err != nil {
+		return "", fmt.Errorf("resolve updated binary for version check: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), updatedBinaryVersionCheckTimeout)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, binaryPath, "--version").CombinedOutput()
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("updated binary version check timed out for %s", binaryPath)
+	}
+	if err != nil {
+		return "", fmt.Errorf("updated binary version check failed for %s: %w: %s", binaryPath, err, compactUpdateOutput(string(out)))
+	}
+
+	actualVersion, err := parseMulticaVersionOutput(string(out))
+	if err != nil {
+		return "", fmt.Errorf("updated binary version check failed for %s: %w: %s", binaryPath, err, compactUpdateOutput(string(out)))
+	}
+	if !versionStringsMatch(actualVersion, targetVersion) {
+		msg := fmt.Sprintf(
+			"binary_version_mismatch_after_update: %s --version reported %s, expected %s",
+			binaryPath,
+			actualVersion,
+			targetVersion,
+		)
+		if updateSummary := compactUpdateOutput(updateOutput); updateSummary != "" {
+			msg += "; updater output: " + updateSummary
+		}
+		return actualVersion, errors.New(msg)
+	}
+	return actualVersion, nil
+}
+
+func parseMulticaVersionOutput(output string) (string, error) {
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) >= 2 && fields[0] == "multica" {
+			return fields[1], nil
+		}
+	}
+	return "", errors.New("could not parse multica version output")
+}
+
+func versionStringsMatch(left, right string) bool {
+	normalize := func(value string) string {
+		return strings.TrimPrefix(strings.TrimSpace(value), "v")
+	}
+	left = normalize(left)
+	right = normalize(right)
+	return left != "" && left == right
+}
+
+func compactUpdateOutput(output string) string {
+	compact := strings.Join(strings.Fields(strings.TrimSpace(output)), " ")
+	if len(compact) <= updateFailureOutputLimit {
+		return compact
+	}
+	return compact[:updateFailureOutputLimit] + "...(truncated)"
 }
 
 // updateReportBackoffs defines the retry schedule for delivering CLI update
@@ -1837,10 +1976,25 @@ func (d *Daemon) releaseClaimBarrier() {
 // For non-brew installs, it resolves to the absolute path of the replaced binary.
 // The caller (cmd_daemon.go) checks RestartBinary() and launches the new process.
 func (d *Daemon) triggerRestart() {
-	newBin, err := os.Executable()
+	newBin, err := d.restartBinaryPath()
 	if err != nil {
 		d.logger.Error("could not resolve executable path for restart", "error", err)
 		return
+	}
+
+	d.logger.Info("scheduling daemon restart", "new_binary", newBin)
+	d.restartBinary = newBin
+
+	// Cancel the main context to trigger graceful shutdown.
+	if d.cancelFunc != nil {
+		d.cancelFunc()
+	}
+}
+
+func (d *Daemon) restartBinaryPath() (string, error) {
+	newBin, err := os.Executable()
+	if err != nil {
+		return "", err
 	}
 	// On Linux, os.Executable() reads /proc/self/exe, which the kernel resolves
 	// to the Cellar path. brew cleanup deletes that path after upgrade, so we
@@ -1859,14 +2013,7 @@ func (d *Daemon) triggerRestart() {
 			newBin = resolved
 		}
 	}
-
-	d.logger.Info("scheduling daemon restart", "new_binary", newBin)
-	d.restartBinary = newBin
-
-	// Cancel the main context to trigger graceful shutdown.
-	if d.cancelFunc != nil {
-		d.cancelFunc()
-	}
+	return newBin, nil
 }
 
 // pollLoop supervises one runtimePoller goroutine per registered runtime,

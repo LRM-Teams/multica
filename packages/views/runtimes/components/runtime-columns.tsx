@@ -10,7 +10,9 @@ import { deriveWorkload } from "@multica/core/agents";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import {
   deriveRuntimeHealth,
+  runtimeCurrentVersion,
   runtimeHealthState,
+  runtimeTargetVersion,
   runtimeUsageOptions,
 } from "@multica/core/runtimes";
 import { Button } from "@multica/ui/components/ui/button";
@@ -35,6 +37,7 @@ import {
   useHealthLabel,
 } from "./shared";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
+import { formatRuntimeUpdateError } from "./update-error";
 import {
   computeCostInWindow,
   formatLastSeen,
@@ -243,11 +246,27 @@ function HealthCell({
   now: number;
 }) {
   const labelOf = useHealthLabel();
+  const { t } = useT("runtimes");
   const health = deriveRuntimeHealth(runtime, now);
   const updateHealth = runtimeHealthState(runtime);
   const lastSeen = formatLastSeen(runtime.last_seen_at);
   if (updateHealth !== "ok") {
-    return <RuntimeHealthStateBadge health={updateHealth} />;
+    const updateIssue = formatRuntimeUpdateError({
+      rawError: runtime.update_error,
+      currentVersion: runtimeCurrentVersion(runtime),
+      targetVersion: runtimeTargetVersion(runtime),
+      t,
+    });
+    return (
+      <div className="flex min-w-0 flex-col gap-1">
+        <RuntimeHealthStateBadge health={updateHealth} />
+        {updateIssue && (
+          <span className="block truncate text-xs text-destructive">
+            {updateIssue}
+          </span>
+        )}
+      </div>
+    );
   }
   return (
     <div className="flex min-w-0 items-center gap-1.5">

@@ -70,6 +70,12 @@ func TestRedisUpdateStore_CreateGetComplete(t *testing.T) {
 	if got.Status != UpdateCompleted || got.Output != "updated" {
 		t.Fatalf("completed request mismatch: %+v", got)
 	}
+	if ttl := rdb.TTL(ctx, updateKey(req.ID)).Val(); ttl <= updateStoreRetention {
+		t.Fatalf("terminal update TTL = %s, want longer than active retention %s", ttl, updateStoreRetention)
+	}
+	if ttl := rdb.TTL(ctx, updateHistoryKey("runtime-1")).Val(); ttl <= updateStoreRetention {
+		t.Fatalf("update history TTL = %s, want longer than active retention %s", ttl, updateStoreRetention)
+	}
 
 	if _, err := store.Create(ctx, "runtime-1", "v1.2.4"); err != nil {
 		t.Fatalf("create after complete should be allowed: %v", err)
@@ -205,6 +211,42 @@ func TestRedisUpdateStore_FailAcrossInstances(t *testing.T) {
 	}
 	if got.Status != UpdateFailed || got.Error != "download failed" {
 		t.Fatalf("failed request mismatch: %+v", got)
+	}
+}
+
+func TestRedisUpdateStore_ReadyToApplyBlocksUntilComplete(t *testing.T) {
+	rdb := newRedisTestClient(t)
+	ctx := context.Background()
+	store := NewRedisUpdateStore(rdb)
+
+	req, err := store.Create(ctx, "runtime-ready", "v1.2.3")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := store.PopPending(ctx, "runtime-ready"); err != nil {
+		t.Fatalf("pop: %v", err)
+	}
+	if err := store.ReadyToApply(ctx, req.ID, "staged"); err != nil {
+		t.Fatalf("ready: %v", err)
+	}
+	got, err := store.Get(ctx, req.ID)
+	if err != nil {
+		t.Fatalf("get after ready: %v", err)
+	}
+	if got.Status != UpdateReady || got.Output != "staged" {
+		t.Fatalf("ready request mismatch: %+v", got)
+	}
+	if ttl := rdb.TTL(ctx, updateActiveKey("runtime-ready")).Val(); ttl <= updateStoreRetention {
+		t.Fatalf("ready active TTL = %s, want longer than active retention %s", ttl, updateStoreRetention)
+	}
+	if _, err := store.Create(ctx, "runtime-ready", "v1.2.4"); err != errUpdateInProgress {
+		t.Fatalf("create while ready error = %v, want errUpdateInProgress", err)
+	}
+	if err := store.Complete(ctx, req.ID, "registered target"); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if _, err := store.Create(ctx, "runtime-ready", "v1.2.4"); err != nil {
+		t.Fatalf("create after complete should succeed: %v", err)
 	}
 }
 

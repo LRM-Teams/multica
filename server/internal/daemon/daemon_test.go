@@ -142,6 +142,301 @@ func TestTriggerRestart_BrewPrefixUnavailable_NoKnownPrefix_KeepsExecutable(t *t
 	}
 }
 
+func TestHandleUpdateReportsFailedWhenStableBinaryStillOld(t *testing.T) {
+	withFastUpdateReportBackoffs(t)
+
+	originalIsBrewInstall := isBrewInstall
+	originalGetBrewPrefix := getBrewPrefix
+	t.Cleanup(func() {
+		isBrewInstall = originalIsBrewInstall
+		getBrewPrefix = originalGetBrewPrefix
+	})
+
+	prefix := filepath.Join(t.TempDir(), "homebrew")
+	binDir := filepath.Join(prefix, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir brew bin: %v", err)
+	}
+	binaryPath := filepath.Join(binDir, "multica")
+	if err := os.WriteFile(binaryPath, []byte("#!/usr/bin/env sh\necho 'multica 0.3.35 (commit: test)'\n"), 0o755); err != nil {
+		t.Fatalf("write fake multica: %v", err)
+	}
+	isBrewInstall = func() bool { return true }
+	getBrewPrefix = func() string { return prefix }
+
+	var reports []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.URL.Path, "/api/daemon/runtimes/rt-1/update/upd-1/result"; got != want {
+			t.Fatalf("report path = %q, want %q", got, want)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode report payload: %v", err)
+		}
+		reports = append(reports, payload)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var restartCalls atomic.Int32
+	d := &Daemon{
+		client: NewClient(srv.URL),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runUpdateFn: func(target string) (string, error) {
+			if target != "v0.3.36" {
+				t.Fatalf("target = %q, want v0.3.36", target)
+			}
+			return "Warning: multica-ai/tap/multica 0.3.35 already installed", nil
+		},
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+
+	d.handleUpdate(context.Background(), "rt-1", &PendingUpdate{ID: "upd-1", TargetVersion: "v0.3.36"})
+
+	if restartCalls.Load() != 0 {
+		t.Fatalf("restart called despite version mismatch")
+	}
+	if len(reports) != 2 {
+		t.Fatalf("reports = %d, want running + failed: %#v", len(reports), reports)
+	}
+	if got := reports[0]["status"]; got != "running" {
+		t.Fatalf("first status = %v, want running", got)
+	}
+	if got := reports[1]["status"]; got != "failed" {
+		t.Fatalf("second status = %v, want failed", got)
+	}
+	errMsg, _ := reports[1]["error"].(string)
+	for _, want := range []string{
+		"binary_version_mismatch_after_update",
+		"reported 0.3.35",
+		"expected v0.3.36",
+		"multica-ai/tap/multica 0.3.35 already installed",
+	} {
+		if !strings.Contains(errMsg, want) {
+			t.Fatalf("error = %q, want substring %q", errMsg, want)
+		}
+	}
+}
+
+func TestHandleUpdateRestartsWhenStableBinaryVerifiedAndIdle(t *testing.T) {
+	withFastUpdateReportBackoffs(t)
+
+	var reports []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.URL.Path, "/api/daemon/runtimes/rt-1/update/upd-1/result"; got != want {
+			t.Fatalf("report path = %q, want %q", got, want)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode report payload: %v", err)
+		}
+		reports = append(reports, payload)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var restartCalls atomic.Int32
+	d := &Daemon{
+		client: NewClient(srv.URL),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runUpdateFn: func(target string) (string, error) {
+			if target != "v0.3.36" {
+				t.Fatalf("target = %q, want v0.3.36", target)
+			}
+			return "updated", nil
+		},
+		verifyUpdatedBinaryFn: func(targetVersion, updateOutput string) (string, error) {
+			if targetVersion != "v0.3.36" {
+				t.Fatalf("verify target = %q, want v0.3.36", targetVersion)
+			}
+			if updateOutput != "updated" {
+				t.Fatalf("verify output = %q, want updated", updateOutput)
+			}
+			return "0.3.36", nil
+		},
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+
+	d.handleUpdate(context.Background(), "rt-1", &PendingUpdate{
+		ID:                   "upd-1",
+		TargetVersion:        "v0.3.36",
+		SupportsReadyToApply: true,
+	})
+
+	if restartCalls.Load() != 1 {
+		t.Fatalf("restart calls = %d, want 1", restartCalls.Load())
+	}
+	if len(reports) != 1 {
+		t.Fatalf("reports = %d, want running only before re-register: %#v", len(reports), reports)
+	}
+	if got := reports[0]["status"]; got != "running" {
+		t.Fatalf("status = %v, want running", got)
+	}
+}
+
+func TestHandleUpdateReportsCompletedBeforeRestartForOldServerWhenIdle(t *testing.T) {
+	withFastUpdateReportBackoffs(t)
+
+	var reports []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode report payload: %v", err)
+		}
+		reports = append(reports, payload)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var restartCalls atomic.Int32
+	d := &Daemon{
+		client: NewClient(srv.URL),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runUpdateFn: func(string) (string, error) {
+			return "updated", nil
+		},
+		verifyUpdatedBinaryFn: func(string, string) (string, error) {
+			return "0.3.36", nil
+		},
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+
+	d.handleUpdate(context.Background(), "rt-1", &PendingUpdate{
+		ID:            "upd-1",
+		TargetVersion: "v0.3.36",
+	})
+
+	if restartCalls.Load() != 1 {
+		t.Fatalf("restart calls = %d, want 1", restartCalls.Load())
+	}
+	if len(reports) != 2 {
+		t.Fatalf("reports = %d, want running + completed for old server: %#v", len(reports), reports)
+	}
+	if got := reports[0]["status"]; got != "running" {
+		t.Fatalf("first status = %v, want running", got)
+	}
+	if got := reports[1]["status"]; got != "completed" {
+		t.Fatalf("second status = %v, want completed", got)
+	}
+}
+
+func TestHandleUpdateReportsReadyToApplyWhenBusyAndServerSupportsIt(t *testing.T) {
+	withFastUpdateReportBackoffs(t)
+
+	var reports []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode report payload: %v", err)
+		}
+		reports = append(reports, payload)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	rootCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var restartCalls atomic.Int32
+	d := &Daemon{
+		cfg: Config{
+			PollInterval: time.Millisecond,
+		},
+		client:  NewClient(srv.URL),
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		rootCtx: rootCtx,
+		runUpdateFn: func(string) (string, error) {
+			return "updated", nil
+		},
+		verifyUpdatedBinaryFn: func(string, string) (string, error) {
+			return "0.3.36", nil
+		},
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+	d.activeTasks.Store(1)
+
+	d.handleUpdate(context.Background(), "rt-1", &PendingUpdate{
+		ID:                   "upd-1",
+		TargetVersion:        "v0.3.36",
+		SupportsReadyToApply: true,
+	})
+
+	if restartCalls.Load() != 0 {
+		t.Fatalf("restart calls = %d, want 0 while busy", restartCalls.Load())
+	}
+	if len(reports) != 2 {
+		t.Fatalf("reports = %d, want running + ready_to_apply: %#v", len(reports), reports)
+	}
+	if got := reports[0]["status"]; got != "running" {
+		t.Fatalf("first status = %v, want running", got)
+	}
+	if got := reports[1]["status"]; got != "ready_to_apply" {
+		t.Fatalf("second status = %v, want ready_to_apply", got)
+	}
+}
+
+func TestHandleUpdateFailsSafelyWhenBusyAndServerDoesNotSupportReadyToApply(t *testing.T) {
+	withFastUpdateReportBackoffs(t)
+
+	var reports []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode report payload: %v", err)
+		}
+		reports = append(reports, payload)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var restartCalls atomic.Int32
+	d := &Daemon{
+		client: NewClient(srv.URL),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runUpdateFn: func(string) (string, error) {
+			return "updated", nil
+		},
+		verifyUpdatedBinaryFn: func(string, string) (string, error) {
+			return "0.3.36", nil
+		},
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+	d.activeTasks.Store(1)
+
+	d.handleUpdate(context.Background(), "rt-1", &PendingUpdate{ID: "upd-1", TargetVersion: "v0.3.36"})
+
+	if restartCalls.Load() != 0 {
+		t.Fatalf("restart calls = %d, want 0 while busy", restartCalls.Load())
+	}
+	if len(reports) != 2 {
+		t.Fatalf("reports = %d, want running + failed: %#v", len(reports), reports)
+	}
+	if got := reports[0]["status"]; got != "running" {
+		t.Fatalf("first status = %v, want running", got)
+	}
+	if got := reports[1]["status"]; got != "failed" {
+		t.Fatalf("second status = %v, want failed", got)
+	}
+	errMsg, _ := reports[1]["error"].(string)
+	if !strings.Contains(errMsg, "server_does_not_support_deferred_restart") {
+		t.Fatalf("error = %q, want deferred restart compatibility reason", errMsg)
+	}
+}
+
 func TestNewTaskSlotSemaphoreReturnsStableSlotIndexes(t *testing.T) {
 	t.Parallel()
 

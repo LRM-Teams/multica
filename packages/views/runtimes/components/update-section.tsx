@@ -32,6 +32,7 @@ import type {
   RuntimeUpdateStatus,
 } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
+import { formatRuntimeUpdateError } from "./update-error";
 
 const MANUAL_UPDATE_COMMANDS = [
   {
@@ -51,6 +52,7 @@ const statusConfig: Record<
   pending: { icon: Loader2, color: "text-muted-foreground" },
   running: { icon: Loader2, color: "text-info" },
   completed: { icon: CheckCircle2, color: "text-success" },
+  ready_to_apply: { icon: CheckCircle2, color: "text-warning" },
   failed: { icon: XCircle, color: "text-destructive" },
   timeout: { icon: XCircle, color: "text-warning" },
 };
@@ -62,6 +64,7 @@ function statusFromUpdateState(
     case "pending":
     case "running":
     case "completed":
+    case "ready_to_apply":
     case "failed":
       return state;
     case "timed_out":
@@ -78,6 +81,7 @@ interface UpdateSectionProps {
   targetVersion: string | null;
   updateState?: RuntimeUpdateState;
   runtimeHealth?: RuntimeHealthState;
+  updateError?: string | null;
   isOnline: boolean;
   /**
    * Non-null when the daemon process was spawned by a managed launcher
@@ -95,6 +99,7 @@ export function UpdateSection({
   targetVersion,
   updateState,
   runtimeHealth = "ok",
+  updateError,
   isOnline,
   launchedBy,
   canUpdate = true,
@@ -159,11 +164,24 @@ export function UpdateSection({
             markCompleted(
               result.output ?? t(($) => $.update.status.completed),
             );
+          } else if (result.status === "ready_to_apply") {
+            setOutput(result.output ?? t(($) => $.update.status.ready_to_apply));
+            setUpdating(false);
+            cleanup();
+            refreshRuntimes();
           } else if (
             result.status === "failed" ||
             result.status === "timeout"
           ) {
-            setError(result.error ?? t(($) => $.update.unknown_error));
+            setError(
+              formatRuntimeUpdateError({
+                rawError: result.error,
+                currentVersion,
+                targetVersion,
+                t,
+              }) ||
+                t(($) => $.update.unknown_error),
+            );
             setUpdating(false);
             cleanup();
             refreshRuntimes();
@@ -182,7 +200,9 @@ export function UpdateSection({
   const contractStatus = statusFromUpdateState(updateState);
   const derivedStatus =
     status ??
-    (runtimeHealth === "updating"
+    (contractStatus === "ready_to_apply"
+      ? "ready_to_apply"
+      : runtimeHealth === "updating"
       ? contractStatus === "pending"
         ? "pending"
         : "running"
@@ -192,6 +212,19 @@ export function UpdateSection({
           : "failed"
         : null);
   const hasUpdate = runtimeHealth === "update_available" && !!targetVersion;
+  const rawContractError =
+    runtimeHealth === "failed" ? (updateError?.trim() ?? "") : "";
+  const contractError =
+    runtimeHealth === "failed"
+      ? formatRuntimeUpdateError({
+          rawError: updateError,
+          currentVersion,
+          targetVersion,
+          t,
+        })
+      : "";
+  const showRawReason =
+    !!rawContractError && !!contractError && rawContractError !== contractError;
   const config = derivedStatus ? statusConfig[derivedStatus] : null;
   const Icon = config?.icon;
   const isActive =
@@ -204,7 +237,12 @@ export function UpdateSection({
       ? t(($) => $.update.offline)
       : null;
   const canStartUpdate =
-    hasUpdate && isOnline && canUpdate && !isManaged && !isActive;
+    hasUpdate &&
+    !derivedStatus &&
+    isOnline &&
+    canUpdate &&
+    !isManaged &&
+    !isActive;
   const canRetry =
     !!targetVersion &&
     isOnline &&
@@ -297,11 +335,39 @@ export function UpdateSection({
         </div>
       )}
 
+      {derivedStatus === "ready_to_apply" && (
+        <div className="rounded-lg border border-warning/20 bg-warning/5 px-3 py-2">
+          <p className="text-xs text-warning">
+            {statusLabel || t(($) => $.update.status.ready_to_apply)}
+          </p>
+          <div className="mt-1 flex flex-wrap gap-1">
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => setManualOpen(true)}
+            >
+              {t(($) => $.update.manual_action)}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {(derivedStatus === "failed" || derivedStatus === "timeout") && (
         <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2">
-          <p className="text-xs text-destructive">
-            {error || statusLabel || t(($) => $.update.unknown_error)}
+          <p
+            className="text-xs text-destructive"
+            title={updateError ?? undefined}
+          >
+            {error ||
+              contractError ||
+              statusLabel ||
+              t(($) => $.update.unknown_error)}
           </p>
+          {showRawReason && (
+            <p className="mt-1 break-all text-[11px] leading-snug text-muted-foreground">
+              {rawContractError}
+            </p>
+          )}
           {canRetry && (
             <div className="mt-1 flex flex-wrap gap-1">
               <Button variant="ghost" size="xs" onClick={handleUpdate}>

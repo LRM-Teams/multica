@@ -30,6 +30,10 @@ func updatePendingKey(runtimeID string) string { return updatePendingPrefix + ru
 func updateActiveKey(runtimeID string) string  { return updateActivePrefix + runtimeID }
 func updateHistoryKey(runtimeID string) string { return updateHistoryPrefix + runtimeID }
 
+func updateHistoryRetention() time.Duration {
+	return updateTerminalRetention + updateStoreRetention
+}
+
 var deleteIfValueScript = redis.NewScript(`
 if redis.call('GET', KEYS[1]) == ARGV[1] then
     return redis.call('DEL', KEYS[1])
@@ -80,7 +84,7 @@ func (s *RedisUpdateStore) Create(ctx context.Context, runtimeID, targetVersion 
 		Member: req.ID,
 	})
 	pipe.Expire(ctx, updatePendingKey(runtimeID), updateStoreRetention*2)
-	pipe.Expire(ctx, updateHistoryKey(runtimeID), updateStoreRetention*2)
+	pipe.Expire(ctx, updateHistoryKey(runtimeID), updateHistoryRetention())
 	if _, err := pipe.Exec(ctx); err != nil {
 		_ = s.clearActiveIfMatches(ctx, runtimeID, req.ID)
 		_ = s.rdb.Del(ctx, updateKey(req.ID)).Err()
@@ -143,14 +147,14 @@ func (s *RedisUpdateStore) persistRequest(ctx context.Context, req *UpdateReques
 	if err != nil {
 		return err
 	}
-	if err := s.rdb.Set(ctx, updateKey(req.ID), data, updateStoreRetention).Err(); err != nil {
+	if err := s.rdb.Set(ctx, updateKey(req.ID), data, updateRequestRetention(req.Status)).Err(); err != nil {
 		return fmt.Errorf("persist update request: %w", err)
 	}
 	_ = s.rdb.ZAdd(ctx, updateHistoryKey(req.RuntimeID), redis.Z{
 		Score:  float64(req.UpdatedAt.UnixNano()),
 		Member: req.ID,
 	}).Err()
-	_ = s.rdb.Expire(ctx, updateHistoryKey(req.RuntimeID), updateStoreRetention*2).Err()
+	_ = s.rdb.Expire(ctx, updateHistoryKey(req.RuntimeID), updateHistoryRetention()).Err()
 	return nil
 }
 
@@ -256,6 +260,25 @@ func (s *RedisUpdateStore) Complete(ctx context.Context, id string, output strin
 	if err := s.clearActiveIfMatches(ctx, req.RuntimeID, req.ID); err != nil {
 		return err
 	}
+	s.rdb.ZRem(ctx, updatePendingKey(req.RuntimeID), req.ID)
+	return nil
+}
+
+func (s *RedisUpdateStore) ReadyToApply(ctx context.Context, id string, output string) error {
+	req, err := s.loadRequest(ctx, id)
+	if err != nil {
+		return err
+	}
+	if req == nil || updateRequestTerminal(req.Status) {
+		return nil
+	}
+	req.Status = UpdateReady
+	req.Output = output
+	req.UpdatedAt = time.Now()
+	if err := s.persistRequest(ctx, req); err != nil {
+		return err
+	}
+	_ = s.rdb.Set(ctx, updateActiveKey(req.RuntimeID), req.ID, updateRequestRetention(req.Status)).Err()
 	s.rdb.ZRem(ctx, updatePendingKey(req.RuntimeID), req.ID)
 	return nil
 }

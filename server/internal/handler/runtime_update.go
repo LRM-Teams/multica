@@ -22,6 +22,7 @@ const (
 	UpdatePending   UpdateStatus = "pending"
 	UpdateRunning   UpdateStatus = "running"
 	UpdateCompleted UpdateStatus = "completed"
+	UpdateReady     UpdateStatus = "ready_to_apply"
 	UpdateFailed    UpdateStatus = "failed"
 	UpdateTimeout   UpdateStatus = "timeout"
 )
@@ -44,6 +45,9 @@ const (
 	updateRunningTimeout = 150 * time.Second
 	updateConfirmTimeout = 120 * time.Second
 	updateStoreRetention = 5 * time.Minute
+	// Keep the last terminal update around long enough for a backend deploy /
+	// restart to preserve the user's "I just clicked Update" result and reason.
+	updateTerminalRetention = 6 * time.Hour
 )
 
 type UpdateStore interface {
@@ -53,11 +57,23 @@ type UpdateStore interface {
 	HasPending(ctx context.Context, runtimeID string) (bool, error)
 	PopPending(ctx context.Context, runtimeID string) (*UpdateRequest, error)
 	Complete(ctx context.Context, id string, output string) error
+	ReadyToApply(ctx context.Context, id string, output string) error
 	Fail(ctx context.Context, id string, errMsg string) error
 }
 
 func updateRequestTerminal(status UpdateStatus) bool {
 	return status == UpdateCompleted || status == UpdateFailed || status == UpdateTimeout
+}
+
+func updateRequestBlocksNewRequest(status UpdateStatus) bool {
+	return status == UpdatePending || status == UpdateRunning || status == UpdateReady
+}
+
+func updateRequestRetention(status UpdateStatus) time.Duration {
+	if updateRequestTerminal(status) || status == UpdateReady {
+		return updateTerminalRetention
+	}
+	return updateStoreRetention
 }
 
 func applyUpdateTimeout(req *UpdateRequest, now time.Time) bool {
@@ -99,15 +115,16 @@ func (s *InMemoryUpdateStore) Create(_ context.Context, runtimeID, targetVersion
 	defer s.mu.Unlock()
 
 	// Clean up old requests.
+	now := time.Now()
 	for id, req := range s.requests {
-		if time.Since(req.CreatedAt) > updateStoreRetention {
+		if now.Sub(req.UpdatedAt) > updateRequestRetention(req.Status) {
 			delete(s.requests, id)
 		}
 	}
 
 	// Reject if there is already a pending or running update for this runtime.
 	for _, req := range s.requests {
-		if req.RuntimeID == runtimeID && (req.Status == UpdatePending || req.Status == UpdateRunning) {
+		if req.RuntimeID == runtimeID && updateRequestBlocksNewRequest(req.Status) {
 			return nil, errUpdateInProgress
 		}
 	}
@@ -117,8 +134,8 @@ func (s *InMemoryUpdateStore) Create(_ context.Context, runtimeID, targetVersion
 		RuntimeID:     runtimeID,
 		Status:        UpdatePending,
 		TargetVersion: targetVersion,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 	s.requests[req.ID] = req
 	return req, nil
@@ -204,6 +221,18 @@ func (s *InMemoryUpdateStore) Complete(_ context.Context, id string, output stri
 
 	if req, ok := s.requests[id]; ok {
 		req.Status = UpdateCompleted
+		req.Output = output
+		req.UpdatedAt = time.Now()
+	}
+	return nil
+}
+
+func (s *InMemoryUpdateStore) ReadyToApply(_ context.Context, id string, output string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if req, ok := s.requests[id]; ok {
+		req.Status = UpdateReady
 		req.Output = output
 		req.UpdatedAt = time.Now()
 	}
@@ -339,7 +368,7 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Status string `json:"status"` // "running", "completed", or "failed"
+		Status string `json:"status"` // "running", "completed", "ready_to_apply", or "failed"
 		Output string `json:"output"`
 		Error  string `json:"error"`
 	}
@@ -353,6 +382,15 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 		if err := h.UpdateStore.Complete(r.Context(), updateID, req.Output); err != nil {
 			slog.Error("UpdateStore Complete failed", "error", err, "update_id", updateID)
 			writeError(w, http.StatusInternalServerError, "failed to persist completion")
+			return
+		}
+		h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{
+			"runtime": h.runtimeToResponse(r.Context(), rt),
+		})
+	case "ready_to_apply":
+		if err := h.UpdateStore.ReadyToApply(r.Context(), updateID, req.Output); err != nil {
+			slog.Error("UpdateStore ReadyToApply failed", "error", err, "update_id", updateID)
+			writeError(w, http.StatusInternalServerError, "failed to persist ready-to-apply state")
 			return
 		}
 		h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{

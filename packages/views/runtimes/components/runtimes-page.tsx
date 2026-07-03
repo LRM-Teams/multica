@@ -31,6 +31,7 @@ import { PageHeader } from "../../layout/page-header";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
 import { ProviderLogo } from "./provider-logo";
+import { formatRuntimeUpdateError } from "./update-error";
 import { RuntimeList, buildWorkloadIndex } from "./runtime-list";
 import {
   buildRuntimeMachines,
@@ -501,6 +502,14 @@ function MachineRow({
   const runtimeCount = t(($) => $.machine.runtime_count, {
     count: machine.runtimes.length,
   });
+  const updateIssue = machine.updateError
+    ? formatRuntimeUpdateError({
+        rawError: machine.updateError,
+        currentVersion: machine.cliVersion,
+        targetVersion: machine.updateTargetVersion,
+        t,
+      })
+    : "";
   return (
     <button
       type="button"
@@ -547,6 +556,11 @@ function MachineRow({
             </span>
           )}
         </span>
+        {updateIssue && (
+          <span className="mt-1 block truncate text-xs text-destructive">
+            {updateIssue}
+          </span>
+        )}
       </span>
     </button>
   );
@@ -655,6 +669,14 @@ function MachineDetail({
       </span>,
     );
   }
+  const updateIssue = machine.updateError
+    ? formatRuntimeUpdateError({
+        rawError: machine.updateError,
+        currentVersion: machine.cliVersion,
+        targetVersion: machine.updateTargetVersion,
+        t,
+      })
+    : "";
 
   return (
     <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -688,6 +710,11 @@ function MachineDetail({
                 </React.Fragment>
               ))}
             </div>
+            {updateIssue && (
+              <p className="mt-2 max-w-2xl break-words text-xs text-destructive">
+                {updateIssue}
+              </p>
+            )}
           </div>
           {actions && <div className="shrink-0">{actions}</div>}
         </div>

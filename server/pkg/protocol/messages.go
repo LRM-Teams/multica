@@ -465,8 +465,9 @@ const HeartbeatStatusRuntimeGone = "runtime_gone"
 // DaemonHeartbeatPendingUpdate describes a CLI-update action the daemon
 // should run for the runtime.
 type DaemonHeartbeatPendingUpdate struct {
-	ID            string `json:"id"`
-	TargetVersion string `json:"target_version"`
+	ID                   string `json:"id"`
+	TargetVersion        string `json:"target_version"`
+	SupportsReadyToApply bool   `json:"supports_ready_to_apply,omitempty"`
 }
 
 // DaemonHeartbeatPendingModelList describes a request for the daemon to

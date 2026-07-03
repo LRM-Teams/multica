@@ -2,6 +2,7 @@ import {
   aggregateRuntimeHealthState,
   deriveRuntimeHealth,
   runtimeCurrentVersion,
+  runtimeTargetVersion,
   type RuntimeHealth,
 } from "@multica/core/runtimes";
 import type { AgentRuntime, RuntimeHealthState } from "@multica/core/types";
@@ -27,6 +28,8 @@ export interface RuntimeMachine {
   isCurrent: boolean;
   health: RuntimeHealth;
   runtimeHealth: RuntimeHealthState | null;
+  updateError: string | null;
+  updateTargetVersion: string | null;
   runtimes: AgentRuntime[];
   onlineCount: number;
   issueCount: number;
@@ -130,6 +133,8 @@ function placeholderLocalMachine(
     isCurrent: true,
     health: "offline",
     runtimeHealth: null,
+    updateError: null,
+    updateTargetVersion: null,
     runtimes: [],
     onlineCount: 0,
     issueCount: 0,
@@ -156,6 +161,7 @@ export function filterRuntimeMachines(
       machine.subtitle,
       machine.deviceInfo,
       machine.daemonId,
+      machine.updateError,
       machine.providerNames.join(" "),
       machine.runtimes.map((runtime) => runtime.name).join(" "),
     ]
@@ -227,6 +233,10 @@ function finalizeRuntimeMachine(
             HEALTH_SEVERITY[current] > HEALTH_SEVERITY[worst] ? current : worst,
           "recently_lost",
         );
+  const updateIssueRuntime =
+    runtimes.find(
+      (runtime) => runtime.runtime_health === "failed" && runtime.update_error,
+    ) ?? runtimes.find((runtime) => runtime.update_error);
   const workload = runtimes.reduce(
     (sum, runtime) => {
       const entry = options.workloadByRuntimeId?.get(runtime.id);
@@ -250,6 +260,10 @@ function finalizeRuntimeMachine(
     isCurrent,
     health,
     runtimeHealth: aggregateRuntimeHealthState(runtimes),
+    updateError: updateIssueRuntime?.update_error?.trim() || null,
+    updateTargetVersion: updateIssueRuntime
+      ? runtimeTargetVersion(updateIssueRuntime)
+      : null,
     runtimes,
     onlineCount,
     issueCount,

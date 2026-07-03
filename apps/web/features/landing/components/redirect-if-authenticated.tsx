@@ -35,6 +35,10 @@ export function RedirectIfAuthenticated() {
 
   useEffect(() => {
     if (isLoading || !user || !isFetched) return;
+    // Redirect is gated by the async auth store + workspace query (no
+    // event-handler equivalent), so the client-side-redirect rule is a false
+    // positive. Pre-existing pattern; #210 only changed the destination.
+    // oxlint-disable-next-line react-doctor/nextjs-no-client-side-redirect
     router.replace(resolvePostAuthDestination(list, hasOnboarded, getPersistedLastWorkspaceSlug()));
   }, [isLoading, user, isFetched, list, hasOnboarded, router]);
 

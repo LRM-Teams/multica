@@ -105,6 +105,11 @@ function CallbackContent() {
           //    backfill for onboarded users with no recorded source is
           //    handled by `<SourceBackfillModal />` inside the dashboard
           //    shell — not a route detour, so we route straight to dest.
+          // This redirect is gated by the async login + workspace/invite lookup
+          // above (no event-handler equivalent), so the client-side-redirect
+          // rule is a false positive here. Pre-existing pattern; #210 only
+          // changed the destination selection.
+          // oxlint-disable-next-line react-doctor/nextjs-no-client-side-redirect
           router.push(resolvePostAuthDestination(wsList, onboarded, getPersistedLastWorkspaceSlug()));
         })
         .catch((err) => {

@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
@@ -38,6 +39,8 @@ const channelOutputContractInstruction = "Channel action contract: create a visi
 const channelDirectedReplyInstruction = "This run is directly addressed to you. You must produce a visible result: send a helpful reply, ask a follow-up question, or use a message_react action as an explicit acknowledgement. Do not return no_reply, stay_silent, or any other silent outcome for a direct mention, direct question, assigned task, or DM-style continuation."
 const channelAmbientNoReplyInstruction = "If you should not reply, do not call a send/reply action; internal no_reply is allowed only as a non-visible outcome."
 const channelStickerReplyInstruction = "Sticker replies: if the user explicitly asks for a sticker/表情包, or you intentionally choose a sticker-only social reply such as hi/ok/收到/thanks/praise, use the message_send action with structured parts, for example {\"action\":\"message_send\",\"output\":\"Welcome!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome!\"},{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}. Use a real sticker_id from the multica-stickers skill. Do not output :sticker:<id>: tokens, and do not add a sticker to substantive answers."
+const channelNameTakenCode = "channel_name_taken"
+const channelNameUniqueConstraint = "channel_workspace_id_name_key"
 
 var errChannelClientMessageConflict = errors.New("client_message_id already used for different channel message payload")
 
@@ -491,6 +494,10 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 		parseUUID(workspaceID), name, desc, larkChatID, parseUUID(userID))
 	ch, err := scanChannel(row)
 	if err != nil {
+		if isChannelNameTakenError(err) {
+			writeCodedError(w, http.StatusConflict, channelNameTakenCode, "channel name already exists")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to create channel")
 		return
 	}
@@ -500,6 +507,13 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 		ON CONFLICT DO NOTHING`, parseUUID(ch.ID), parseUUID(workspaceID), parseUUID(userID))
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, ch)
 	writeJSON(w, http.StatusCreated, ch)
+}
+
+func isChannelNameTakenError(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) &&
+		pgErr.Code == "23505" &&
+		pgErr.ConstraintName == channelNameUniqueConstraint
 }
 
 func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {

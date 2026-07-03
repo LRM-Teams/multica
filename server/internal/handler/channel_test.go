@@ -47,6 +47,46 @@ func TestChannelMessageResponseUsesRaftTypeField(t *testing.T) {
 	}
 }
 
+func TestCreateChannelDuplicateNameReturnsCodedConflict(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	name := "duplicate-channel-" + uuid.NewString()
+	first := httptest.NewRecorder()
+	req := withChannelTestWorkspaceCtx(t, newRequest(http.MethodPost, "/api/channels", map[string]any{"name": name}), testUserID)
+	testHandler.CreateChannel(first, req)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("initial create: status=%d body=%s", first.Code, first.Body.String())
+	}
+
+	var created ChannelResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created channel: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, created.ID)
+	})
+
+	duplicate := httptest.NewRecorder()
+	req = withChannelTestWorkspaceCtx(t, newRequest(http.MethodPost, "/api/channels", map[string]any{"name": name}), testUserID)
+	testHandler.CreateChannel(duplicate, req)
+	if duplicate.Code != http.StatusConflict {
+		t.Fatalf("duplicate create: status=%d body=%s", duplicate.Code, duplicate.Body.String())
+	}
+
+	var body map[string]string
+	if err := json.Unmarshal(duplicate.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode duplicate error body: %v", err)
+	}
+	if body["code"] != channelNameTakenCode {
+		t.Fatalf("duplicate error code = %q, want %q; body=%v", body["code"], channelNameTakenCode, body)
+	}
+	if body["error"] != "channel name already exists" {
+		t.Fatalf("duplicate error message = %q", body["error"])
+	}
+}
+
 func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

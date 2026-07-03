@@ -63,17 +63,22 @@ func cleanupDMArtifacts(t *testing.T) {
 
 func seedAgentDMChannel(t *testing.T, agentID string) string {
 	t.Helper()
+	return seedAgentDMChannelForUser(t, testUserID, agentID)
+}
+
+func seedAgentDMChannelForUser(t *testing.T, userID, agentID string) string {
+	t.Helper()
 	ctx := context.Background()
 	var channelID string
-	canonical := dmCanonicalName("user", testUserID, "agent", agentID)
+	canonical := dmCanonicalName("user", userID, "agent", agentID)
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO channel (workspace_id, name, created_by, kind)
-		VALUES ($1,$2,$3,'dm') RETURNING id`, testWorkspaceID, canonical, testUserID).Scan(&channelID); err != nil {
+		VALUES ($1,$2,$3,'dm') RETURNING id`, testWorkspaceID, canonical, userID).Scan(&channelID); err != nil {
 		t.Fatalf("seed dm channel: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1,$2,'user',$3),($1,$2,'agent',$4)`, channelID, testWorkspaceID, testUserID, agentID); err != nil {
+		VALUES ($1,$2,'user',$3),($1,$2,'agent',$4)`, channelID, testWorkspaceID, userID, agentID); err != nil {
 		t.Fatalf("seed members: %v", err)
 	}
 	return channelID
@@ -403,6 +408,45 @@ func TestSendChannelMessageDM_DispatchesAgent(t *testing.T) {
 	var sessionID string
 	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id=$1 AND agent_id=$2`, channelID, agentID).Scan(&sessionID); err != nil {
 		t.Fatalf("DM did not auto-dispatch to the agent (no channel_agent_session): %v", err)
+	}
+}
+
+func TestPrivateAgentDMChannelRejectsUnauthorizedMember(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID, _, memberID := privateAgentTestFixture(t)
+	cleanupDMArtifacts(t)
+	channelID := seedAgentDMChannelForUser(t, memberID, agentID)
+
+	listReq := newRequestAs(memberID, http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
+	listReq = withChannelTestWorkspaceCtx(t, listReq, memberID)
+	listReq = withURLParam(listReq, "channelId", channelID)
+	listRec := httptest.NewRecorder()
+	testHandler.ListChannelMessages(listRec, listReq)
+	if listRec.Code != http.StatusForbidden {
+		t.Fatalf("list private-agent dm as unauthorized member: status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+
+	sendReq := newRequestAs(memberID, http.MethodPost, "/api/channels/"+channelID+"/messages", map[string]string{"content": "hello private agent"})
+	sendReq = withChannelTestWorkspaceCtx(t, sendReq, memberID)
+	sendReq = withURLParam(sendReq, "channelId", channelID)
+	sendRec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(sendRec, sendReq)
+	if sendRec.Code != http.StatusForbidden {
+		t.Fatalf("send private-agent dm as unauthorized member: status=%d body=%s", sendRec.Code, sendRec.Body.String())
+	}
+
+	var sessions int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_agent_session
+		WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessions); err != nil {
+		t.Fatalf("count channel agent sessions: %v", err)
+	}
+	if sessions != 0 {
+		t.Fatalf("unauthorized private-agent dm dispatch created %d session(s)", sessions)
 	}
 }
 

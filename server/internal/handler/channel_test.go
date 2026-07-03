@@ -1730,6 +1730,126 @@ func TestAddChannelMembersRejectsDMChannel(t *testing.T) {
 	}
 }
 
+func TestRemoveChannelMemberRejectsDMChannel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	cleanupDMArtifacts(t)
+	agentID := createHandlerTestAgent(t, "DM Remove Guard", nil)
+	channelID := seedAgentDMChannel(t, agentID)
+
+	req := newRequest(http.MethodDelete, "/api/channels/"+channelID+"/members/agent/"+agentID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withRouteParams(req, "channelId", channelID, "memberType", "agent", "memberId", agentID)
+	rec := httptest.NewRecorder()
+	testHandler.RemoveChannelMember(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("remove member from dm: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var count int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'agent' AND member_id = $3`, channelID, testWorkspaceID, agentID).Scan(&count); err != nil {
+		t.Fatalf("count dm agent member: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("dm channel agent member count=%d, want 1", count)
+	}
+}
+
+func TestRemoveChannelMemberRequiresManagerForOtherMembers(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	memberID := createChannelPlainMember(t)
+	targetID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "remove-member-permission-"+uuid.NewString(), testUserID, memberID, targetID)
+
+	req := newRequestAs(memberID, http.MethodDelete, "/api/channels/"+channelID+"/members/user/"+targetID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withRouteParams(req, "channelId", channelID, "memberType", "user", "memberId", targetID)
+	rec := httptest.NewRecorder()
+	testHandler.RemoveChannelMember(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("plain member removed another member: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var count int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`, channelID, testWorkspaceID, targetID).Scan(&count); err != nil {
+		t.Fatalf("count target member: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("target member count=%d, want 1", count)
+	}
+
+	selfReq := newRequestAs(memberID, http.MethodDelete, "/api/channels/"+channelID+"/members/user/"+memberID, nil)
+	selfReq = withChannelTestWorkspaceCtx(t, selfReq, memberID)
+	selfReq = withRouteParams(selfReq, "channelId", channelID, "memberType", "user", "memberId", memberID)
+	selfRec := httptest.NewRecorder()
+	testHandler.RemoveChannelMember(selfRec, selfReq)
+	if selfRec.Code != http.StatusOK {
+		t.Fatalf("plain member self-remove: status=%d body=%s", selfRec.Code, selfRec.Body.String())
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`, channelID, testWorkspaceID, memberID).Scan(&count); err != nil {
+		t.Fatalf("count self member: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("self member count=%d, want 0", count)
+	}
+}
+
+func TestImportLarkChannelMessageRequiresChannelMember(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	memberID := createChannelPlainMember(t)
+	larkChatID := "oc_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	channelID := seedChannelForTest(t, "lark-import-permission-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE channel
+		SET lark_chat_id = $1
+		WHERE id = $2 AND workspace_id = $3`, larkChatID, channelID, testWorkspaceID); err != nil {
+		t.Fatalf("set lark chat id: %v", err)
+	}
+
+	req := newRequestAs(memberID, http.MethodPost, "/api/lark/channel-messages/import", ImportLarkChannelMessageRequest{
+		LarkChatID: larkChatID,
+		AuthorName: "Feishu",
+		Content:    "imported private content",
+	})
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	rec := httptest.NewRecorder()
+	testHandler.ImportLarkChannelMessage(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("lark import by non-channel member: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var count int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND workspace_id = $2 AND source = 'lark'`, channelID, testWorkspaceID).Scan(&count); err != nil {
+		t.Fatalf("count imported lark messages: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("non-member lark import persisted %d message(s)", count)
+	}
+}
+
 func seedChannelForTest(t *testing.T, name string, memberIDs ...string) string {
 	t.Helper()
 	ctx := context.Background()

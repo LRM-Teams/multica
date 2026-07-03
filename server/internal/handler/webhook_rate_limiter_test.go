@@ -106,6 +106,33 @@ func TestRedisWebhookRateLimiter_RejectsAboveLimit(t *testing.T) {
 	}
 }
 
+func TestRedisWebhookRateLimiter_CountsSameTimestampRequests(t *testing.T) {
+	rdb := newRedisTestClient(t)
+	defer rdb.Close()
+
+	ctx := context.Background()
+	key := "mul:webhook:rate:same-timestamp"
+	seqKey := key + ":seq"
+	now := time.Now().UnixNano()
+	cutoff := now - int64(time.Minute)
+	for i := 0; i < 3; i++ {
+		got, err := webhookLimiterAllowScript.Run(ctx, rdb, []string{key, seqKey}, now, cutoff, 3, int64(120)).Int()
+		if err != nil {
+			t.Fatalf("script request %d: %v", i, err)
+		}
+		if got != 1 {
+			t.Fatalf("script request %d result=%d, want allowed", i, got)
+		}
+	}
+	got, err := webhookLimiterAllowScript.Run(ctx, rdb, []string{key, seqKey}, now, cutoff, 3, int64(120)).Int()
+	if err != nil {
+		t.Fatalf("script fourth request: %v", err)
+	}
+	if got != 0 {
+		t.Fatalf("fourth same-timestamp request result=%d, want rejected", got)
+	}
+}
+
 func TestRedisWebhookIPRateLimiter_HasSeparateBudgetFromTokenLimiter(t *testing.T) {
 	// Per-IP and per-token use the SAME Lua script but DIFFERENT key
 	// prefixes. Exhausting one budget must not affect the other —

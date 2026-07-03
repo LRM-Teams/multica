@@ -167,6 +167,7 @@
     "attach_aria": "添付",
     "mention_aria": "エージェントをメンション",
     "send": "送信",
+    "send_failed": "メッセージの送信に失敗しました。もう一度お試しください。",
     "issue_ref_aria": "Issue を参照",
     "project_label": "プロジェクト",
     "project_none": "プロジェクトなし",

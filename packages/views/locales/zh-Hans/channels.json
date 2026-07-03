@@ -167,6 +167,7 @@
     "attach_aria": "附件",
     "mention_aria": "提及智能体",
     "send": "发送",
+    "send_failed": "消息发送失败，请重试。",
     "issue_ref_aria": "引用 Issue",
     "project_label": "项目",
     "project_none": "无项目",

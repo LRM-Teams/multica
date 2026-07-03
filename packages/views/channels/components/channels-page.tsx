@@ -62,6 +62,7 @@ import {
   useSetChannelTyping,
 } from "@multica/core/channels";
 import { useAuthStore } from "@multica/core/auth";
+import { ApiError } from "@multica/core/api";
 import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
 import { api } from "@multica/core/api";
@@ -153,6 +154,7 @@ import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
+import { composePayloadKey, useComposeSendIntent } from "../hooks/use-compose-send-intent";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
@@ -517,6 +519,11 @@ export function ChannelsPage() {
   const typingStartedRef = useRef(false);
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Send idempotency + send lock (#207). Channel top-level and thread reply each
+  // own an independent intent so an in-flight channel send never blocks a thread
+  // reply, and vice versa.
+  const channelSend = useComposeSendIntent();
+  const threadSend = useComposeSendIntent();
   const [openThreadRoot, setOpenThreadRoot] = useState<ChannelMessage | null>(null);
   const threadEditorRef = useRef<ContentEditorRef>(null);
   const focusThreadComposerOnOpenRef = useRef(false);
@@ -1234,6 +1241,9 @@ export function ChannelsPage() {
 
   const handleSend = () => {
     const content = editorRef.current?.getMarkdown()?.trim();
+    // Empty-content early-return runs BEFORE the in-flight guard: after a send
+    // succeeds, onSuccess clears the editor and onSettled releases the guard —
+    // a still-held Enter in that gap grabs empty content and stops here.
     if (!content || !active) return;
     // Block while an upload is still in flight — otherwise the attachment id
     // isn't in uploadMapRef yet and the file would only bind to the channel,
@@ -1245,6 +1255,10 @@ export function ChannelsPage() {
     for (const [url, id] of uploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
+    // Send lock + payload-bound client_message_id in one step. null means a send
+    // is already running (held / auto-repeat Enter) → abort.
+    const clientMessageId = channelSend.beginSend(composePayloadKey(content, attachmentIds));
+    if (clientMessageId === null) return;
     if (typingStartedRef.current) {
       typingStartedRef.current = false;
       publishTyping(false);
@@ -1254,13 +1268,24 @@ export function ChannelsPage() {
         channelId: active.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        clientMessageId,
       },
       {
         onSuccess: () => {
           editorRef.current?.clearContent();
           uploadMapRef.current.clear();
           if (activeDraftKey) clearConversationDraft(activeDraftKey);
+          channelSend.finishSend();
         },
+        onError: (err) => {
+          // 409 = same id, conflicting payload already committed. Retire the
+          // intent so the next attempt is fresh instead of a permanent lock.
+          if (err instanceof ApiError && err.status === 409) channelSend.resetIntent();
+          // Always surface failure — the draft is kept, but the user must know
+          // this send did NOT land (a silent 409 reads as a sent message).
+          toast.error(t(($) => $.composer.send_failed));
+        },
+        onSettled: () => channelSend.settleSend(),
       },
     );
   };
@@ -1273,22 +1298,28 @@ export function ChannelsPage() {
     for (const [url, id] of threadUploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
+    const clientMessageId = threadSend.beginSend(composePayloadKey(content, attachmentIds, threadRoot.id));
+    if (clientMessageId === null) return;
     sendThreadMessage.mutate(
       {
         channelId: active.id,
         messageId: threadRoot.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        clientMessageId,
       },
       {
         onSuccess: () => {
           threadEditorRef.current?.clearContent();
           threadUploadMapRef.current.clear();
           setThreadDraftEmpty(true);
+          threadSend.finishSend();
         },
-        onError: () => {
+        onError: (err) => {
+          if (err instanceof ApiError && err.status === 409) threadSend.resetIntent();
           toast.error(t(($) => $.thread.send_failed));
         },
+        onSettled: () => threadSend.settleSend(),
       },
     );
   };

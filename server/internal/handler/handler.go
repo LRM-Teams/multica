@@ -87,8 +87,15 @@ type Config struct {
 	CloudRuntimeFleetTimeout time.Duration
 	AttachmentDownloadMode   string
 	AttachmentDownloadURLTTL time.Duration
-	EvolutionReviewer        service.EvolutionReviewer
-	EvolutionReviewEnabled   bool
+	// ChannelAmbientGateMode controls the Phase 0 ambient stopgap. Empty and
+	// "gate" enable the bounded ambient queue gate; "off" is the rollback path.
+	ChannelAmbientGateMode                string
+	ChannelAmbientGateWindow              time.Duration
+	ChannelAmbientGateMaxRecentPerAgent   int
+	ChannelAmbientGateMaxRecentPerChannel int
+	ChannelAmbientGateMaxRecentPerRuntime int
+	EvolutionReviewer                     service.EvolutionReviewer
+	EvolutionReviewEnabled                bool
 }
 
 type cloudRuntimeProxy interface {

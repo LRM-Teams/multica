@@ -31,8 +31,9 @@ type BusinessMetrics struct {
 	llmUnpricedTokens *prometheus.CounterVec
 	llmRequests       *prometheus.CounterVec
 
-	taskQueuedExpired *prometheus.CounterVec
-	taskLeaseExpired  *prometheus.CounterVec
+	taskQueuedExpired           *prometheus.CounterVec
+	taskLeaseExpired            *prometheus.CounterVec
+	channelAmbientGateDecisions *prometheus.CounterVec
 
 	activeMu    sync.Mutex
 	activeTasks map[string]activeTaskLabels
@@ -145,6 +146,12 @@ func NewBusinessMetrics() *BusinessMetrics {
 			Name:      "lease_expired_total",
 			Help:      "Total dispatched or running task leases expired by the scheduler.",
 		}, metricLabels("multica_task_lease_expired_total")),
+		channelAmbientGateDecisions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "multica",
+			Subsystem: "channel_ambient_gate",
+			Name:      "decisions_total",
+			Help:      "Total Phase 0 channel ambient gate decisions by low-cardinality action and reason.",
+		}, metricLabels("multica_channel_ambient_gate_decisions_total")),
 		activeTasks: map[string]activeTaskLabels{},
 		events:      newBusinessEventMetrics(),
 	}
@@ -170,6 +177,7 @@ func (m *BusinessMetrics) Collectors() []prometheus.Collector {
 		m.llmRequests,
 		m.taskQueuedExpired,
 		m.taskLeaseExpired,
+		m.channelAmbientGateDecisions,
 	}, m.events.collectors()...)
 }
 
@@ -178,6 +186,16 @@ func (m *BusinessMetrics) RecordTaskEnqueued(source, runtimeMode string) {
 		return
 	}
 	m.taskEnqueued.WithLabelValues(NormalizeTaskSource(source), NormalizeRuntimeMode(runtimeMode)).Inc()
+}
+
+func (m *BusinessMetrics) RecordChannelAmbientGateDecision(action, reason string) {
+	if m == nil {
+		return
+	}
+	m.channelAmbientGateDecisions.WithLabelValues(
+		NormalizeAmbientGateAction(action),
+		NormalizeAmbientGateReason(reason),
+	).Inc()
 }
 
 func (m *BusinessMetrics) RecordTaskDispatched(taskID, source, runtimeMode string, queueWaitSeconds float64) {

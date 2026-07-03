@@ -34,22 +34,23 @@ const (
 )
 
 var businessMetricLabels = map[string][]string{
-	"multica_agent_task_enqueued_total":     {labelSource, labelRuntimeMode},
-	"multica_agent_task_dispatched_total":   {labelSource, labelRuntimeMode},
-	"multica_agent_task_started_total":      {labelSource, labelRuntimeMode, labelProvider},
-	"multica_agent_task_terminal_total":     {labelSource, labelRuntimeMode, labelTerminalStatus},
-	"multica_agent_task_failed_total":       {labelSource, labelRuntimeMode, labelFailureReason},
-	"multica_agent_task_queue_wait_seconds": {labelSource, labelRuntimeMode},
-	"multica_agent_task_run_seconds":        {labelSource, labelRuntimeMode, labelTerminalStatus},
-	"multica_agent_task_total_seconds":      {labelSource, labelRuntimeMode, labelTerminalStatus},
-	"multica_agent_task_in_progress":        {labelSource, labelRuntimeMode},
-	"multica_agent_task_iteration_count":    {labelSource, labelTerminalStatus},
-	"multica_llm_tokens_total":              {labelProvider, labelModel, labelTokenType, labelRuntimeMode, labelSource},
-	"multica_llm_cost_usd_total":            {labelProvider, labelModel, labelTokenType, labelRuntimeMode, labelSource},
-	"multica_llm_unpriced_tokens_total":     {labelProvider, labelModelAlias, labelTokenType},
-	"multica_llm_request_total":             {labelProvider, labelModel, labelRuntimeMode},
-	"multica_task_queued_expired_total":     {labelSource, labelRuntimeMode},
-	"multica_task_lease_expired_total":      {labelSource},
+	"multica_agent_task_enqueued_total":            {labelSource, labelRuntimeMode},
+	"multica_agent_task_dispatched_total":          {labelSource, labelRuntimeMode},
+	"multica_agent_task_started_total":             {labelSource, labelRuntimeMode, labelProvider},
+	"multica_agent_task_terminal_total":            {labelSource, labelRuntimeMode, labelTerminalStatus},
+	"multica_agent_task_failed_total":              {labelSource, labelRuntimeMode, labelFailureReason},
+	"multica_agent_task_queue_wait_seconds":        {labelSource, labelRuntimeMode},
+	"multica_agent_task_run_seconds":               {labelSource, labelRuntimeMode, labelTerminalStatus},
+	"multica_agent_task_total_seconds":             {labelSource, labelRuntimeMode, labelTerminalStatus},
+	"multica_agent_task_in_progress":               {labelSource, labelRuntimeMode},
+	"multica_agent_task_iteration_count":           {labelSource, labelTerminalStatus},
+	"multica_llm_tokens_total":                     {labelProvider, labelModel, labelTokenType, labelRuntimeMode, labelSource},
+	"multica_llm_cost_usd_total":                   {labelProvider, labelModel, labelTokenType, labelRuntimeMode, labelSource},
+	"multica_llm_unpriced_tokens_total":            {labelProvider, labelModelAlias, labelTokenType},
+	"multica_llm_request_total":                    {labelProvider, labelModel, labelRuntimeMode},
+	"multica_task_queued_expired_total":            {labelSource, labelRuntimeMode},
+	"multica_task_lease_expired_total":             {labelSource},
+	"multica_channel_ambient_gate_decisions_total": {labelAction, labelReason},
 
 	// PR3 funnel / community / commercial.
 	"multica_signup_total":                             {labelSignupSource},
@@ -141,6 +142,25 @@ var (
 		"cache_read":  "cache_read",
 		"cache_write": "cache_write",
 	}
+	knownAmbientGateActions = map[string]string{
+		"enqueued":          "enqueued",
+		"coalesced":         "coalesced",
+		"dropped":           "dropped",
+		"fused":             "fused",
+		"relevance_skipped": "relevance_skipped",
+		"other":             "other",
+	}
+	knownAmbientGateReasons = map[string]string{
+		"accepted":             "accepted",
+		"gate_off":             "gate_off",
+		"gate_error":           "gate_error",
+		"non_text_noise":       "non_text_noise",
+		"agent_active_ambient": "agent_active_ambient",
+		"agent_window_cap":     "agent_window_cap",
+		"channel_window_cap":   "channel_window_cap",
+		"runtime_window_cap":   "runtime_window_cap",
+		"other":                "other",
+	}
 	knownFailureReasons = map[string]string{}
 	modelAliasUnsafeRe  = regexp.MustCompile(`[^a-z0-9._:/+-]+`)
 )
@@ -215,6 +235,22 @@ func NormalizeTokenType(value string) string {
 		return normalized
 	}
 	return "input"
+}
+
+func NormalizeAmbientGateAction(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if normalized, ok := knownAmbientGateActions[value]; ok {
+		return normalized
+	}
+	return "other"
+}
+
+func NormalizeAmbientGateReason(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if normalized, ok := knownAmbientGateReasons[value]; ok {
+		return normalized
+	}
+	return "other"
 }
 
 func NormalizeModelAlias(value string) string {

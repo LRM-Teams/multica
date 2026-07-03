@@ -150,18 +150,23 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	evolutionReviewer, evolutionReviewEnabled := service.NewEvolutionReviewerFromEnv()
 
 	signupConfig := handler.Config{
-		AllowSignup:              os.Getenv("ALLOW_SIGNUP") != "false",
-		AllowedEmails:            splitAndTrim(os.Getenv("ALLOWED_EMAILS")),
-		AllowedEmailDomains:      splitAndTrim(os.Getenv("ALLOWED_EMAIL_DOMAINS")),
-		DisableWorkspaceCreation: os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
-		PublicURL:                strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_PUBLIC_URL")), "/"),
-		TrustedProxies:           parseTrustedProxies(os.Getenv("MULTICA_TRUSTED_PROXIES")),
-		CloudRuntimeFleetURL:     cloudRuntimeFleetURLFromEnv(),
-		CloudRuntimeFleetTimeout: envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
-		AttachmentDownloadMode:   os.Getenv("ATTACHMENT_DOWNLOAD_MODE"),
-		AttachmentDownloadURLTTL: envDuration("ATTACHMENT_DOWNLOAD_URL_TTL", 30*time.Minute),
-		EvolutionReviewer:        evolutionReviewer,
-		EvolutionReviewEnabled:   evolutionReviewEnabled,
+		AllowSignup:                           os.Getenv("ALLOW_SIGNUP") != "false",
+		AllowedEmails:                         splitAndTrim(os.Getenv("ALLOWED_EMAILS")),
+		AllowedEmailDomains:                   splitAndTrim(os.Getenv("ALLOWED_EMAIL_DOMAINS")),
+		DisableWorkspaceCreation:              os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
+		PublicURL:                             strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_PUBLIC_URL")), "/"),
+		TrustedProxies:                        parseTrustedProxies(os.Getenv("MULTICA_TRUSTED_PROXIES")),
+		CloudRuntimeFleetURL:                  cloudRuntimeFleetURLFromEnv(),
+		CloudRuntimeFleetTimeout:              envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
+		AttachmentDownloadMode:                os.Getenv("ATTACHMENT_DOWNLOAD_MODE"),
+		AttachmentDownloadURLTTL:              envDuration("ATTACHMENT_DOWNLOAD_URL_TTL", 30*time.Minute),
+		ChannelAmbientGateMode:                strings.TrimSpace(os.Getenv("MULTICA_AMBIENT_QUEUE_GATE_MODE")),
+		ChannelAmbientGateWindow:              envDuration("MULTICA_AMBIENT_QUEUE_GATE_WINDOW", 1*time.Minute),
+		ChannelAmbientGateMaxRecentPerAgent:   envPositiveInt("MULTICA_AMBIENT_QUEUE_GATE_AGENT_CAP", 1),
+		ChannelAmbientGateMaxRecentPerChannel: envPositiveInt("MULTICA_AMBIENT_QUEUE_GATE_CHANNEL_CAP", 32),
+		ChannelAmbientGateMaxRecentPerRuntime: envPositiveInt("MULTICA_AMBIENT_QUEUE_GATE_RUNTIME_CAP", 64),
+		EvolutionReviewer:                     evolutionReviewer,
+		EvolutionReviewEnabled:                evolutionReviewEnabled,
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
 	h.SandboxHub = sandboxHub

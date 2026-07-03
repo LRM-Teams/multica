@@ -2841,13 +2841,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	piAgentMemoryDir := ""
 	piAgentSkillDir := ""
 	piAgentSkillDraftsPath := ""
-	if provider == "pi" && task.WorkspaceID != "" && agentID != "" {
-		piAgentRootPath = piAgentRoot(d.cfg, task.WorkspaceID, agentID)
-		piAgentMemoryDir = filepath.Join(piAgentRootPath, "memory")
-		piAgentSkillDir = filepath.Join(piAgentRootPath, "skills")
-		piAgentSkillDraftsPath = piAgentSkillDraftsDir(piAgentRootPath)
-		if err := ensurePiAgentRoot(piAgentRootPath); err != nil {
-			taskLog.Warn("pi agent root creation failed", "error", err)
+	if task.WorkspaceID != "" && agentID != "" {
+		agentRoot := multicaAgentRoot(d.cfg, task.WorkspaceID, agentID)
+		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
+			taskLog.Warn("multica agent root creation failed", "error", err)
+		}
+		if provider == "pi" {
+			piAgentRootPath = agentRoot
+			piAgentMemoryDir = filepath.Join(piAgentRootPath, "memory")
+			piAgentSkillDir = filepath.Join(piAgentRootPath, "skills")
+			piAgentSkillDraftsPath = piAgentSkillDraftsDir(piAgentRootPath)
 		}
 	}
 
@@ -3053,6 +3056,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if task.InitiatorType == "member" {
 		agentEnv["MULTICA_MEMBER_ID"] = task.InitiatorID
 	}
+	addMulticaAgentEnv(agentEnv, d.cfg, task.WorkspaceID, agentID, task.ProjectID)
 	if provider == "pi" {
 		addPiAgentEnv(agentEnv, d.cfg, task.WorkspaceID, agentID)
 	}
@@ -4033,6 +4037,22 @@ func resolvedTaskAgentID(task Task) string {
 	return task.AgentID
 }
 
+func addMulticaAgentEnv(env map[string]string, cfg Config, workspaceID, agentID, projectID string) {
+	if workspaceID == "" || agentID == "" {
+		return
+	}
+	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	env["MULTICA_AGENT_ROOT"] = agentRoot
+	env["MULTICA_AGENT_MEMORY_DIR"] = filepath.Join(agentRoot, "memory")
+	env["MULTICA_AGENT_NOTES_DIR"] = filepath.Join(agentRoot, "notes")
+	env["MULTICA_AGENT_PROFILE_DIR"] = filepath.Join(agentRoot, "profile")
+	env["MULTICA_AGENT_FEEDBACK_DIR"] = filepath.Join(agentRoot, "feedback")
+	env["MULTICA_AGENT_SYNC_QUEUE_DIR"] = piAgentSyncQueueDir(agentRoot)
+	if projectID != "" {
+		env["MULTICA_PROJECT_MEMORY_DIR"] = filepath.Join(agentRoot, "projects", projectID)
+	}
+}
+
 func addPiAgentEnv(env map[string]string, cfg Config, workspaceID, agentID string) {
 	if workspaceID == "" || agentID == "" {
 		return
@@ -4059,7 +4079,9 @@ func isBlockedEnvKey(key string) bool {
 	switch upper {
 	case "HOME", "PATH", "USER", "SHELL", "TERM", "CODEX_HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_INCLUDE_ROOTS",
 		"PI_AGENT_ROOT", "PI_MEMORY_DIR", "PI_SKILL_DRAFTS_DIR", "PI_AGENT_INBOX_DIR", "PI_AGENT_SHARED_CACHE_DIR",
-		"PI_AGENT_PROFILE_DIR", "PI_AGENT_FEEDBACK_DIR", "PI_AGENT_SYNC_QUEUE_DIR":
+		"PI_AGENT_PROFILE_DIR", "PI_AGENT_FEEDBACK_DIR", "PI_AGENT_SYNC_QUEUE_DIR",
+		"MULTICA_AGENT_ROOT", "MULTICA_AGENT_MEMORY_DIR", "MULTICA_AGENT_NOTES_DIR", "MULTICA_AGENT_PROFILE_DIR",
+		"MULTICA_AGENT_FEEDBACK_DIR", "MULTICA_AGENT_SYNC_QUEUE_DIR", "MULTICA_PROJECT_MEMORY_DIR":
 		return true
 	}
 	return false

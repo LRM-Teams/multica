@@ -90,6 +90,14 @@ func sharedSkillScanRoot(cfg Config, provider string) (string, bool) {
 }
 
 func piAgentRoot(cfg Config, workspaceID, agentID string) string {
+	return multicaAgentRoot(cfg, workspaceID, agentID)
+}
+
+func multicaAgentRoot(cfg Config, workspaceID, agentID string) string {
+	return filepath.Join(cfg.WorkspacesRoot, workspaceID, ".multica", "agents", agentID)
+}
+
+func legacyPiAgentRoot(cfg Config, workspaceID, agentID string) string {
 	return filepath.Join(cfg.WorkspacesRoot, workspaceID, ".pi", "agents", agentID)
 }
 
@@ -105,9 +113,19 @@ func piAgentSkillCandidatesPath(agentRoot string) string {
 }
 
 func ensurePiAgentRoot(root string) error {
+	return ensureMulticaAgentRoot(root)
+}
+
+func ensureMulticaAgentRoot(root string) error {
 	dirs := []string{
 		filepath.Join(root, "memory", "daily"),
 		filepath.Join(root, "memory", "audit"),
+		filepath.Join(root, "notes"),
+		filepath.Join(root, "projects"),
+		filepath.Join(root, "runtime", "pi"),
+		filepath.Join(root, "runtime", "openclaw"),
+		filepath.Join(root, "runtime", "codex"),
+		filepath.Join(root, "runtime", "claude"),
 		filepath.Join(root, "skills", "drafts"),
 		filepath.Join(root, "skills", "generated"),
 		filepath.Join(root, "skills", "enabled"),
@@ -118,13 +136,43 @@ func ensurePiAgentRoot(root string) error {
 		filepath.Join(root, "profile"),
 		filepath.Join(root, "feedback"),
 		filepath.Join(root, "sync_queue"),
+		filepath.Join(root, "sessions"),
+		filepath.Join(root, "repos"),
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
+	files := map[string]string{
+		filepath.Join(root, "memory", "MEMORY.md"):          "# Agent Memory\n\nSource of truth: Multica agent settings. This file supplements live agent instructions; it does not override them.\n",
+		filepath.Join(root, "memory", "USER.md"):            "# User Preferences\n\nDurable user preferences relevant to this Multica agent.\n",
+		filepath.Join(root, "memory", "STATE.md"):           "# Agent State\n\nCurrent dated state, temporary facts, and active initiatives.\n",
+		filepath.Join(root, "memory", "REVIEW.md"):          "# Memory Review\n\nPending memory candidates, conflicts, and curator review notes.\n",
+		filepath.Join(root, "memory", "SCRATCHPAD.md"):      "# Scratchpad\n\nTransient notes that should not be treated as durable memory.\n",
+		filepath.Join(root, "notes", "agents.md"):           "# Agents\n\nKnown teammates, roles, and collaboration boundaries.\n",
+		filepath.Join(root, "notes", "channels.md"):         "# Channels\n\nChannel and DM purpose, participants, language, and routing context.\n",
+		filepath.Join(root, "notes", "project-map.md"):      "# Project Map\n\nWorkspace/project orientation, repos, commands, risks, and conventions.\n",
+		filepath.Join(root, "notes", "relationship-map.md"): "# Relationship Map\n\nDurable collaboration preferences and relationship context.\n",
+		filepath.Join(root, "notes", "role-playbook.md"):    "# Role Playbook\n\nRole-specific operating methods. Live Multica agent instructions remain authoritative.\n",
+		filepath.Join(root, "notes", "work-log.md"):         "# Work Log\n\nConcise task history and handoffs.\n",
+		filepath.Join(root, "notes", "decisions.md"):        "# Decisions\n\nDurable decisions relevant to this agent.\n",
+	}
+	for path, content := range files {
+		if err := ensureFile(path, content); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func ensureFile(path, content string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
 }
 
 func (d *Daemon) syncSharedSkillsForRuntime(ctx context.Context, rt Runtime) error {
@@ -216,24 +264,50 @@ func (d *Daemon) syncEvolutionSubmissionsForRuntime(ctx context.Context, rt Runt
 	if rt.Provider != "pi" || strings.TrimSpace(rt.WorkspaceID) == "" {
 		return nil
 	}
-	base := filepath.Join(d.cfg.WorkspacesRoot, rt.WorkspaceID, ".pi", "agents")
-	entries, err := os.ReadDir(base)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			d.logger.Warn("pi agent root unavailable", "path", base, "provider", rt.Provider, "error", err)
+
+	payload := EvolutionSubmissionSyncPayload{}
+	roots := []string{
+		filepath.Join(d.cfg.WorkspacesRoot, rt.WorkspaceID, ".multica", "agents"),
+		filepath.Join(d.cfg.WorkspacesRoot, rt.WorkspaceID, ".pi", "agents"),
+	}
+	for _, base := range roots {
+		submissions, err := d.scanEvolutionSubmissionsRoot(rt, base)
+		if err != nil {
+			d.logger.Warn("agent evolution root unavailable", "path", base, "provider", rt.Provider, "error", err)
+			continue
 		}
+		payload.Submissions = append(payload.Submissions, submissions...)
+	}
+	if len(payload.Submissions) == 0 {
 		return nil
 	}
 
-	payload := EvolutionSubmissionSyncPayload{}
+	result, err := d.client.SyncEvolutionSubmissions(ctx, rt.ID, payload)
+	if err != nil {
+		return err
+	}
+	d.logSharedSkillSyncResult(rt, "evolution submissions synced", result)
+	return nil
+}
+
+func (d *Daemon) scanEvolutionSubmissionsRoot(rt Runtime, base string) ([]EvolutionSubmissionBundle, error) {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var submissions []EvolutionSubmissionBundle
 	for _, entry := range entries {
 		if !entry.IsDir() || isIgnoredLocalSkillEntry(entry.Name()) {
 			continue
 		}
 		agentID := entry.Name()
-		agentRoot := piAgentRoot(d.cfg, rt.WorkspaceID, agentID)
-		if err := ensurePiAgentRoot(agentRoot); err != nil {
-			d.logger.Warn("pi agent root creation failed", "runtime_id", rt.ID, "agent_id", agentID, "path", agentRoot, "error", err)
+		agentRoot := filepath.Join(base, agentID)
+		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
+			d.logger.Warn("agent root creation failed", "runtime_id", rt.ID, "agent_id", agentID, "path", agentRoot, "error", err)
 			continue
 		}
 		memorySubmissions, err := d.loadMemoryCandidateSubmissions(rt, agentID, agentRoot)
@@ -246,19 +320,10 @@ func (d *Daemon) syncEvolutionSubmissionsForRuntime(ctx context.Context, rt Runt
 			d.logger.Warn("skill candidate scan failed", "runtime_id", rt.ID, "agent_id", agentID, "error", err)
 			continue
 		}
-		payload.Submissions = append(payload.Submissions, memorySubmissions...)
-		payload.Submissions = append(payload.Submissions, skillSubmissions...)
+		submissions = append(submissions, memorySubmissions...)
+		submissions = append(submissions, skillSubmissions...)
 	}
-	if len(payload.Submissions) == 0 {
-		return nil
-	}
-
-	result, err := d.client.SyncEvolutionSubmissions(ctx, rt.ID, payload)
-	if err != nil {
-		return err
-	}
-	d.logSharedSkillSyncResult(rt, "evolution submissions synced", result)
-	return nil
+	return submissions, nil
 }
 
 func (d *Daemon) loadMemoryCandidateSubmissions(rt Runtime, agentID, agentRoot string) ([]EvolutionSubmissionBundle, error) {

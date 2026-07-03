@@ -22,9 +22,15 @@ func TestSharedSkillScanRootUsesProviderDefault(t *testing.T) {
 
 	workspaceRoot := filepath.Join(home, "multica_workspaces")
 	agentRoot := piAgentRoot(Config{WorkspacesRoot: workspaceRoot}, "workspace-1", "agent-1")
-	agentWant := filepath.Join(workspaceRoot, "workspace-1", ".pi", "agents", "agent-1")
+	agentWant := filepath.Join(workspaceRoot, "workspace-1", ".multica", "agents", "agent-1")
 	if agentRoot != agentWant {
 		t.Fatalf("got %q want %q", agentRoot, agentWant)
+	}
+
+	legacyRoot := legacyPiAgentRoot(Config{WorkspacesRoot: workspaceRoot}, "workspace-1", "agent-1")
+	legacyWant := filepath.Join(workspaceRoot, "workspace-1", ".pi", "agents", "agent-1")
+	if legacyRoot != legacyWant {
+		t.Fatalf("got legacy %q want %q", legacyRoot, legacyWant)
 	}
 
 	skillQueue := piAgentSkillCandidatesPath(agentRoot)
@@ -42,6 +48,45 @@ func TestSharedSkillScanRootGlobalOverride(t *testing.T) {
 	root, ok := sharedSkillScanRoot(Config{SharedSkillsDir: "/custom/shared"}, "pi")
 	if !ok || root != "/custom/shared" {
 		t.Fatalf("expected global override, got %q ok=%v", root, ok)
+	}
+}
+
+func TestEnsureMulticaAgentRootSeedsManagedFiles(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace-1", ".multica", "agents", "agent-1")
+	if err := ensureMulticaAgentRoot(root); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{
+		filepath.Join(root, "memory", "MEMORY.md"),
+		filepath.Join(root, "memory", "USER.md"),
+		filepath.Join(root, "memory", "REVIEW.md"),
+		filepath.Join(root, "notes", "channels.md"),
+		filepath.Join(root, "notes", "relationship-map.md"),
+		filepath.Join(root, "notes", "role-playbook.md"),
+		filepath.Join(root, "runtime", "pi"),
+		filepath.Join(root, "runtime", "openclaw"),
+		filepath.Join(root, "sync_queue"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected %s to exist: %v", path, err)
+		}
+	}
+
+	memoryPath := filepath.Join(root, "memory", "MEMORY.md")
+	custom := []byte("custom memory\n")
+	if err := os.WriteFile(memoryPath, custom, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureMulticaAgentRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(memoryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(custom) {
+		t.Fatalf("ensureMulticaAgentRoot overwrote existing memory: %q", got)
 	}
 }
 

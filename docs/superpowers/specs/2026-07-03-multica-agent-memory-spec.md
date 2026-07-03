@@ -1,60 +1,81 @@
-# Multica Agent Memory Spec
+# Multica Agent Workspace Memory Spec
 
 Created: 2026-07-03
+Updated: 2026-07-03
 Status: Draft
-Scope: Multica agent-local long-term memory, notes, project maps, and Pi-memory compatibility.
+Scope: Isolated default memory for Multica agents across Pi, OpenClaw, Codex, Claude, and future runtimes.
 
-## Goal
+## Problem
 
-Give every Multica agent persistent, file-backed memory comparable to Pi memory while preserving Multica-specific collaboration context:
+Multica agents are persistent teammates, but runtime-native memory is fragmented:
 
-- Agent personal memory: stable role, preferences, durable facts, current focus.
-- Daily logs: append-only session/task handoffs.
-- Review-first learning: most candidates enter review and curator promotes only high-value facts.
-- Channel notes: lightweight routing/collaboration map for channels and DMs.
-- Agent notes: known teammates, responsibilities, boundaries, and collaboration rules.
-- Project maps: concise per-project working maps and repo command notes.
-- Background curator: local daemon processes dirty agent roots and compacts/promotes memory.
+- Pi has a rich memory/curator/skill-draft system.
+- OpenClaw and other runtimes may have their own context, skills, or workspace state.
+- Codex/Claude mainly consume injected files, prompts, or runtime-specific homes.
+- Slock-style role agents need more than one `MEMORY.md`: project maps, channel notes, relationship notes, work logs, and role playbooks.
+
+If Multica lets every runtime write its own global memory, the same agent can diverge across providers and pollute the user's personal runtime state. If Multica treats Pi memory as the only source of truth, non-Pi runtimes become second-class.
+
+## Goals
+
+- Give every Multica agent a stable, isolated workspace memory rooted by `workspace_id + agent_id`.
+- Keep Multica agent instructions as the authoritative identity and behavior source.
+- Let Pi/OpenClaw keep their complex native memory behavior when launched by Multica, but pointed at the isolated Multica agent root.
+- Provide role-aware initial scaffolds for HR/onboarding, manager, engineering, and generic agents without overriding user-written instructions.
+- Preserve project maps, channel context, teammate/relationship notes, work logs, preferences, memory candidates, and skill candidates.
+- Avoid writing provider-global memory by default.
 
 ## Non-Goals
 
-- Do not inject full memory, daily logs, review queues, or all project maps into every task prompt.
-- Do not solve concurrent file-write locking in the first version.
-- Do not make Pi the authority for Multica platform context.
-- Do not store chat history transcripts in notes files; Multica DB remains the source of message history.
+- No automatic two-way sync with `~/.pi`, `~/.openclaw`, `~/.claude`, `~/.codex`, or other provider-global memory in v1.
+- No attempt to make Pi the universal memory abstraction.
+- No full chat transcript export into memory files; Multica DB remains the source of message history.
+- No automatic overwriting of user-authored agent instructions from role templates.
+- No broad curator UI in v1; file-backed queues and existing server sync are enough.
 
-## Pi Change Decision
+## Default Mode
 
-No Pi core change is required for v1.
+V1 uses **Isolated Default Mode**:
 
-Pi memory already supports the needed file model when Multica sets the right environment variables:
+- Direct local runtime use is unaffected. Running `pi`, `openclaw`, `codex`, or `claude` outside Multica keeps using the user's normal provider state.
+- Multica-managed runtime processes receive a Multica-owned agent root under the workspace directory.
+- Runtime adapters read/write only the Multica agent root for long-term task memory.
+- Provider-global memory is not modified unless a future explicit bridge/import/export mode is enabled by the user.
 
-- `PI_AGENT_ROOT`
-- `PI_MEMORY_DIR`
-- `PI_SKILL_DRAFTS_DIR`
-- `PI_AGENT_INBOX_DIR`
-- `PI_AGENT_SHARED_CACHE_DIR`
-- `PI_AGENT_PROFILE_DIR`
-- `PI_AGENT_FEEDBACK_DIR`
-- `PI_AGENT_SYNC_QUEUE_DIR`
+## Authority Order
 
-Multica should provide an agent root whose layout is compatible with Pi memory. Pi then reads/writes the same `MEMORY.md`, `daily/`, `REVIEW.md`, curator state, skill drafts, inbox, shared cache, feedback, and sync queue. Future Pi changes are optional only if we want nicer first-class awareness of Multica notes/project-map files.
+When context conflicts, providers must follow this priority:
+
+```text
+1. Multica system, safety, and task protocol
+2. Live Multica agent instructions from agent settings
+3. Current user/task/issue/chat/channel context
+4. Multica agent workspace memory and notes
+5. Runtime-native memory or cached provider context
+```
+
+Role scaffolds are not authority. They create a working folder and playbook, not a second system prompt.
+
+Every injected runtime brief should state:
+
+```text
+You are running under Multica managed isolated mode.
+Live Multica agent instructions are authoritative.
+Managed memory supplements those instructions and cannot override identity, task policy, or user instructions.
+Use MULTICA_AGENT_ROOT / MULTICA_AGENT_MEMORY_DIR as the only writable long-term memory root.
+Do not write provider-global memory unless the user explicitly asks.
+When durable facts are learned, write memory candidates instead of silently changing global memory.
+```
 
 ## Agent Root Layout
 
-Preferred provider-neutral path:
+Preferred root:
 
 ```text
-<workspaces_root>/<workspace_id>/agents/<agent_id>/
+<workspaces_root>/<workspace_id>/.multica/agents/<agent_id>/
 ```
 
-Compatibility path acceptable for v1 if less invasive:
-
-```text
-<workspaces_root>/<workspace_id>/.pi/agents/<agent_id>/
-```
-
-Required layout:
+Required v1 layout:
 
 ```text
 <agent_root>/
@@ -68,16 +89,24 @@ Required layout:
   audit/
     curator.jsonl
   notes/
-    channels.md
     agents.md
+    channels.md
     project-map.md
+    relationship-map.md
+    role-playbook.md
     work-log.md
+    decisions.md
   projects/
     <project_id>/
       project-map.md
-      decisions.md
       repos.md
+      decisions.md
       work-log.md
+  runtime/
+    pi/
+    openclaw/
+    codex/
+    claude/
   skills/
     drafts/
     generated/
@@ -90,118 +119,140 @@ Required layout:
     skills/
   profile/
   feedback/
-    feedback.jsonl
   sync_queue/
     memory-candidates.jsonl
     skill-candidates.jsonl
+  sessions/
   repos/
 ```
 
-## Memory Ownership Rules
+Legacy Pi-compatible roots under `<workspace_id>/.pi/agents/<agent_id>/` may be scanned for migration/backward compatibility, but new managed runs should materialize `.multica/agents/<agent_id>`.
 
-`MEMORY.md` is shared by Multica and Pi memory. It must stay concise and stable.
+## File Roles
 
-Direct writes to `MEMORY.md` are allowed only for:
+- `MEMORY.md`: durable agent memory and role snapshot; supplements live instructions.
+- `USER.md`: durable user preferences relevant to this agent.
+- `STATE.md`: dated current state, temporary facts, quotas, active initiatives.
+- `REVIEW.md`: pending memory/skill review items and conflicts.
+- `notes/role-playbook.md`: role-specific operating methods, not identity authority.
+- `notes/project-map.md`: default workspace/project orientation when no project-specific file exists.
+- `projects/<project_id>/project-map.md`: project-specific structure, repos, commands, CI gates, risks.
+- `notes/channels.md`: channel/DM purpose, members, language/norms, routing context.
+- `notes/agents.md`: teammate roles, collaboration boundaries, squads.
+- `notes/relationship-map.md`: human/agent relationship and collaboration preferences.
+- `notes/work-log.md`: concise task history and handoffs.
+- `sync_queue/*.jsonl`: runtime-produced candidates for Multica/curator review.
 
-- Agent role or responsibility changes.
-- Explicit user instruction to remember something.
-- Durable collaboration rules.
-- Facts promoted by curator/reviewer.
+## Role-Aware Initialization
 
-Default writes go elsewhere:
+Agent creation or first managed run initializes files without overwriting live instructions.
 
-- Task/session details -> `daily/YYYY-MM-DD.md`.
-- Candidate facts -> `REVIEW.md` or `sync_queue/memory-candidates.jsonl`.
-- Channel/DM routing -> `notes/channels.md`.
-- Teammate roles -> `notes/agents.md`.
-- Project structure/commands -> `projects/<project_id>/project-map.md`.
+### Generic Agent
 
-Use managed markers where Multica updates platform-owned sections:
+- `MEMORY.md` with a source-of-truth notice and current role snapshot placeholder.
+- `USER.md`, `STATE.md`, `REVIEW.md`, `notes/work-log.md`, `notes/decisions.md`.
 
-```md
-<!-- multica-managed:start -->
-...
-<!-- multica-managed:end -->
+### HR / Onboarding Agent, e.g. Windy/Cindy
 
-<!-- agent-maintained:start -->
-...
-<!-- agent-maintained:end -->
-```
+Additional notes:
 
-Multica may overwrite only `multica-managed` blocks. Agent and curator should avoid overwriting managed blocks.
+- `notes/onboarding_playbook.md`
+- `notes/onboarding_knowledge_faq.md`
+- `notes/channels.md`
+- `notes/relationship-map.md`
 
-## File Size Targets
+Memory focus:
 
-- `MEMORY.md`: 2-8 KB target, compact above 12 KB.
-- `notes/channels.md`: 3-8 lines per channel/DM.
-- `notes/agents.md`: 3-6 lines per known agent.
-- `projects/<project_id>/project-map.md`: 5-15 KB target, compact above 20 KB.
-- `daily/*.md`: append-only, may be large, not injected by default.
-- `REVIEW.md`: may be large, curator/reviewer only, not injected by default.
+- onboarding flow
+- member preferences
+- channel silence vs active-elsewhere behavior
+- human-agent relationship context
 
-## Prompt Injection Policy
+### Manager Agent
 
-Default prompt injects a small snapshot plus paths, not full files.
+Additional notes:
 
-Inject:
+- `notes/project-map.md`
+- `notes/agents.md`
+- `notes/channels.md`
+- `notes/assignment-board.md`
+- `notes/risk-log.md`
 
-- Agent memory snapshot from `MEMORY.md` core sections, 1-2 KB.
-- Current channel/DM entry from `notes/channels.md`, up to 1 KB.
-- Current project map summary/top section, 2-4 KB.
-- File index with paths to full memory/notes/project files.
+Memory focus:
 
-Do not inject by default:
+- project orientation
+- task breakdown
+- assignment/review status
+- coordination rules and owner-facing report style
 
-- Full `daily/`.
-- Full `REVIEW.md`.
-- Full `notes/channels.md`.
-- Full `notes/agents.md`.
-- All project maps.
-- Historical chat messages beyond current bounded surface.
+### Engineering Agent
 
-Example prompt block:
+Additional notes:
+
+- `notes/project-map.md`
+- `notes/decisions.md`
+- `notes/handoffs.md`
+
+Memory focus:
+
+- owned areas
+- repo commands
+- testing gates
+- implementation decisions and handoffs
+
+## Instruction Conflict Handling
+
+Role templates must not write hard identity or behavior requirements that can conflict with `agent.instructions`.
+
+Bad scaffold:
 
 ```text
-## Agent Memory Snapshot
-- Role: ...
-- Stable rules: ...
-- Current focus: ...
-
-## Current Surface
-- Channel/DM: ...
-- Participants: ...
-- Norms: ...
-
-## Current Project
-- Project: ...
-- Repos: ...
-- Commands: ...
-- Important paths: ...
-
-## Available Local Memory
-- Full memory: $MULTICA_AGENT_ROOT/MEMORY.md
-- Daily logs: $MULTICA_AGENT_ROOT/daily/
-- Channel notes: $MULTICA_AGENT_ROOT/notes/channels.md
-- Agent notes: $MULTICA_AGENT_ROOT/notes/agents.md
-- Project map: $MULTICA_AGENT_ROOT/projects/<project_id>/project-map.md
+You are Windy. You must always do X. Never do Y.
 ```
+
+Good scaffold:
+
+```text
+# Agent Profile
+
+Source of truth: Multica agent settings.
+This file supplements live agent instructions; it does not override them.
+
+## Current Role Snapshot
+- Name: Windy
+- Role category: HR / onboarding
+
+## Knowledge Index
+- notes/onboarding_playbook.md
+- notes/channels.md
+- notes/relationship-map.md
+```
+
+If memory conflicts with live instructions:
+
+- follow live instructions;
+- append a conflict item to `REVIEW.md` or `sync_queue/memory-candidates.jsonl`;
+- do not silently rewrite instructions.
 
 ## Runtime Environment
 
-All providers receive:
+All Multica-managed providers receive:
 
 ```text
 MULTICA_AGENT_ROOT=<agent_root>
-MULTICA_MEMORY_DIR=<agent_root>
-MULTICA_NOTES_DIR=<agent_root>/notes
-MULTICA_PROJECT_MEMORY_DIR=<agent_root>/projects/<project_id>
+MULTICA_AGENT_MEMORY_DIR=<agent_root>/memory
+MULTICA_AGENT_NOTES_DIR=<agent_root>/notes
+MULTICA_AGENT_PROFILE_DIR=<agent_root>/profile
+MULTICA_AGENT_FEEDBACK_DIR=<agent_root>/feedback
+MULTICA_AGENT_SYNC_QUEUE_DIR=<agent_root>/sync_queue
+MULTICA_PROJECT_MEMORY_DIR=<agent_root>/projects/<project_id>   # when project_id is known
 ```
 
-Pi provider additionally receives:
+Pi additionally receives its native env mapped into the isolated root:
 
 ```text
 PI_AGENT_ROOT=<agent_root>
-PI_MEMORY_DIR=<agent_root>
+PI_MEMORY_DIR=<agent_root>/memory
 PI_SKILL_DRAFTS_DIR=<agent_root>/skills/drafts
 PI_AGENT_INBOX_DIR=<agent_root>/inbox
 PI_AGENT_SHARED_CACHE_DIR=<agent_root>/shared-cache
@@ -210,60 +261,87 @@ PI_AGENT_FEEDBACK_DIR=<agent_root>/feedback
 PI_AGENT_SYNC_QUEUE_DIR=<agent_root>/sync_queue
 ```
 
-## Platform Notes Sync
+Provider-specific caches live under `runtime/<provider>/` when needed.
 
-On task preparation, Multica should ensure/update platform-owned summaries:
+## Prompt Injection Policy
 
-- `notes/channels.md`: current channel/DM, purpose, project binding, members/agents summary, language/default norms when known.
-- `notes/agents.md`: visible teammates, roles, squads, recent collaborators.
-- `projects/<project_id>/project-map.md`: project title, resources, repos, local_directory binding if known.
+Inject bounded summaries and file paths, not full memory trees.
 
-These updates should be bounded and marker-based.
+Default injected context:
 
-## Agent Workflow Rules
+- live agent instructions from DB;
+- managed isolated mode rule;
+- concise memory snapshot from `MEMORY.md`;
+- current channel/DM entry from `notes/channels.md` when available;
+- current project map summary from project-specific map when available;
+- file path index for deeper reads.
 
-At task start:
+Do not inject by default:
 
-1. Read the injected snapshot.
-2. If task requires deeper context, read the referenced full file(s) on demand.
-3. For project/code work, inspect the repo/workspace and update the project map when useful.
+- full daily logs;
+- full `REVIEW.md`;
+- all channel or relationship notes;
+- all project maps;
+- provider runtime cache files.
 
-At task end:
+## Write Policy
 
-1. Append a concise daily handoff.
-2. Add review candidates for durable facts instead of directly growing `MEMORY.md`.
-3. Update current channel/agent/project notes if the task changed routing or project understanding.
+Direct writes:
 
-## Curator Model
+- `notes/work-log.md`: append concise task handoffs.
+- `sync_queue/memory-candidates.jsonl`: durable facts/preferences for review.
+- `sync_queue/skill-candidates.jsonl`: skill proposals for review.
+- `runtime/<provider>/`: provider adapter cache.
 
-V1 local curator:
+Curated or managed writes:
 
-- Multica daemon marks an agent root dirty after task completion or platform notes update.
-- A daemon-local curator manager scans dirty roots periodically.
-- If Pi memory curator is available, run it against `PI_MEMORY_DIR=<agent_root>`.
-- Curator promotes only stable facts to `MEMORY.md`, compacts oversized files, and keeps ambiguous facts in `REVIEW.md`.
+- `MEMORY.md`, `USER.md`, `STATE.md`: curator or explicit user remember requests.
+- `notes/project-map.md`, `projects/<project_id>/project-map.md`: manager/engineering agent or curator updates.
+- `notes/channels.md`, `notes/relationship-map.md`: HR/manager agent or platform notes sync.
 
-Future server/team curator:
+Use managed markers for platform-updated sections:
 
-- Upload governed candidates, profiles, and feedback from `sync_queue/`, `profile/`, and `feedback/`.
-- Server aggregates team-level reusable memory/skills.
-- Deliveries are written to `inbox/`, `shared-cache/`, or `skills/generated/`; never overwrite formal memory directly.
+```md
+<!-- multica-managed:start -->
+...
+<!-- multica-managed:end -->
+```
+
+Runtime agents should not overwrite managed blocks.
+
+## Server Sync
+
+Multica server remains the durable source of formal agent memory. Existing `agent_memory`, `agent_shared_skill`, and evolution submission paths can be extended.
+
+Suggested future fields:
+
+```text
+type: role | preference | project_map | channel_map | relationship | work_log | decision | skill_note
+scope: agent | project | channel | workspace
+source: human | runtime | curator | import
+status: active | candidate | archived
+visibility: private | workspace | channel
+```
+
+V1 can continue syncing candidate JSONL through the existing daemon/server evolution path.
 
 ## Implementation Plan
 
-1. Add provider-neutral agent root helpers in Multica daemon.
-2. Extend agent root initialization to create Pi-compatible memory files plus Multica `notes/`, `projects/`, and `repos/` directories.
-3. Inject `MULTICA_AGENT_ROOT` for every provider and Pi memory env vars for Pi provider.
-4. Add bounded memory snapshot and path index to `execenv` runtime config.
-5. Add platform-owned notes sync for current channel/DM, agents, and project metadata.
-6. Add daemon dirty-root tracking and local curator manager.
-7. Add optional CLI helpers for agent memory inspection and manual curate.
+1. Add provider-neutral `.multica/agents/<agent_id>` root helpers in the daemon.
+2. Initialize required directories and seed markdown files on every managed run when `workspace_id` and `agent_id` are known.
+3. Inject `MULTICA_AGENT_*` env vars for every provider.
+4. Map Pi's native memory env vars into the same isolated root.
+5. Keep legacy `.pi/agents` scan as fallback for existing candidate queues.
+6. Add runtime prompt/brief text for managed isolated mode and authority order.
+7. Add platform notes sync for channels, agents, and project maps.
+8. Extend server memory item typing/scope when the product UI needs structured editing.
 
-## First Version Acceptance Criteria
+## V1 Acceptance Criteria
 
-- A newly created/running agent has an initialized root with `MEMORY.md`, `daily/`, `REVIEW.md`, `notes/`, `projects/`, and Pi memory subdirectories.
-- A Pi-backed Multica agent uses that root for `memory_write`, `memory_read`, daily logs, curator, and skill drafts.
-- Non-Pi providers receive the same memory paths in prompt/env and can read/write files manually.
-- Default task prompt stays bounded and does not include full daily/review/channel/project history.
-- Current channel/DM and project context produce bounded notes files.
-- After a task, daily handoff and review-first candidate workflow work locally.
+- New managed runs create `.multica/agents/<agent_id>` with `MEMORY.md`, `USER.md`, `STATE.md`, `REVIEW.md`, `notes/`, `projects/`, `skills/`, `inbox/`, `shared-cache/`, `feedback/`, and `sync_queue/`.
+- All providers receive `MULTICA_AGENT_ROOT` and related env vars.
+- Pi receives `PI_*` memory env vars pointing to the isolated Multica root.
+- Direct local Pi/OpenClaw/Codex/Claude usage is unaffected.
+- Agent instructions remain authoritative over role scaffold and memory files.
+- Runtime-generated durable facts go to candidate queues or review, not provider-global memory.
+- Legacy `.pi/agents` roots can still be scanned for existing Pi candidate submissions.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { ArrowLeft, ChevronDown, ChevronUp, FileText, Hash, MessageSquare, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -65,8 +65,155 @@ import { isConversationMuted, MutedIndicator } from "./conversation-muted";
  * agent presence dot) and Files only — no stats, no share, no member
  * management, no delete.
  */
-export function DmConversation({ dm, onBack }: { dm: DMItem; onBack: () => void }) {
-  return <DmChannelConversation dm={dm} onBack={onBack} />;
+interface DmConversationProps {
+  dm: DMItem;
+  onBack: () => void;
+  draft?: string;
+  onDraftChange?: (value: string) => void;
+  onDraftClear?: () => void;
+}
+
+interface ConversationSearchState {
+  open: boolean;
+  query: string;
+  results: ChannelMessageSearchResult[];
+  total: number;
+  index: number;
+}
+
+interface DmChannelState {
+  openThreadRoot: ChannelMessage | null;
+  threadDraftEmpty: boolean;
+  convSearch: ConversationSearchState;
+  threadParentHighlightId: string | null;
+  typingActors: Record<string, TypingActor>;
+}
+
+type DmChannelAction =
+  | { type: "openThread"; message: ChannelMessage }
+  | { type: "closeThread" }
+  | { type: "resetForChannel" }
+  | { type: "setThreadDraftEmpty"; empty: boolean }
+  | { type: "setThreadParentHighlightId"; id: string | null }
+  | { type: "openSearch" }
+  | { type: "closeSearch" }
+  | { type: "setSearchQuery"; query: string }
+  | { type: "setSearchResults"; query: string; results: ChannelMessageSearchResult[]; total: number }
+  | { type: "previousSearchResult" }
+  | { type: "nextSearchResult" }
+  | { type: "expireTypingActors"; now: number }
+  | { type: "removeTypingActor"; actorKey: string }
+  | { type: "upsertTypingActor"; actor: TypingActor };
+
+const initialConversationSearchState: ConversationSearchState = {
+  open: false,
+  query: "",
+  results: [],
+  total: 0,
+  index: 0,
+};
+
+const initialDmChannelState: DmChannelState = {
+  openThreadRoot: null,
+  threadDraftEmpty: true,
+  convSearch: initialConversationSearchState,
+  threadParentHighlightId: null,
+  typingActors: {},
+};
+
+function dmChannelReducer(state: DmChannelState, action: DmChannelAction): DmChannelState {
+  switch (action.type) {
+    case "openThread":
+      return { ...state, openThreadRoot: action.message };
+    case "closeThread":
+      return { ...state, openThreadRoot: null };
+    case "resetForChannel":
+      return initialDmChannelState;
+    case "setThreadDraftEmpty":
+      return state.threadDraftEmpty === action.empty ? state : { ...state, threadDraftEmpty: action.empty };
+    case "setThreadParentHighlightId":
+      return state.threadParentHighlightId === action.id ? state : { ...state, threadParentHighlightId: action.id };
+    case "openSearch":
+      return { ...state, convSearch: { ...state.convSearch, open: true } };
+    case "closeSearch":
+      return { ...state, convSearch: initialConversationSearchState };
+    case "setSearchQuery": {
+      const trimmedQuery = action.query.trim();
+      const nextSearch = trimmedQuery
+        ? { ...state.convSearch, query: action.query }
+        : { ...state.convSearch, query: action.query, results: [], total: 0, index: 0 };
+      return { ...state, convSearch: nextSearch };
+    }
+    case "setSearchResults":
+      if (!state.convSearch.open || state.convSearch.query.trim() !== action.query) return state;
+      return {
+        ...state,
+        convSearch: {
+          ...state.convSearch,
+          results: action.results,
+          total: action.total,
+          index: 0,
+        },
+      };
+    case "previousSearchResult":
+      return {
+        ...state,
+        convSearch: {
+          ...state.convSearch,
+          index: Math.max(0, state.convSearch.index - 1),
+        },
+      };
+    case "nextSearchResult":
+      return {
+        ...state,
+        convSearch: {
+          ...state.convSearch,
+          index: state.convSearch.total === 0
+            ? 0
+            : Math.min(state.convSearch.total - 1, state.convSearch.index + 1),
+        },
+      };
+    case "expireTypingActors": {
+      const next = Object.fromEntries(
+        Object.entries(state.typingActors).filter(([, actor]) => actor.expiresAt > action.now),
+      );
+      return Object.keys(next).length === Object.keys(state.typingActors).length
+        ? state
+        : { ...state, typingActors: next };
+    }
+    case "removeTypingActor": {
+      if (!state.typingActors[action.actorKey]) return state;
+      const next = { ...state.typingActors };
+      delete next[action.actorKey];
+      return { ...state, typingActors: next };
+    }
+    case "upsertTypingActor":
+      return {
+        ...state,
+        typingActors: {
+          ...state.typingActors,
+          [action.actor.key]: action.actor,
+        },
+      };
+  }
+}
+
+export function DmConversation({
+  dm,
+  onBack,
+  draft = "",
+  onDraftChange,
+  onDraftClear,
+}: DmConversationProps) {
+  return (
+    <DmChannelConversation
+      dm={dm}
+      onBack={onBack}
+      draft={draft}
+      onDraftChange={onDraftChange}
+      onDraftClear={onDraftClear}
+    />
+  );
 }
 
 // Shared peer header: avatar (presence dot for agents) + name + optional search + Files popover.
@@ -165,7 +312,13 @@ function DmHeader({
 
 // ─── dm_channel: reuse the channel conversation stack ──────────────────────
 
-function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void }) {
+function DmChannelConversation({
+  dm,
+  onBack,
+  draft = "",
+  onDraftChange,
+  onDraftClear,
+}: DmConversationProps) {
   const { t } = useT("channels");
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
@@ -173,6 +326,13 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   const channelId = dm.id;
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const currentUserName = useAuthStore((s) => s.user?.name ?? null);
+  const [{
+    openThreadRoot,
+    threadDraftEmpty,
+    convSearch,
+    threadParentHighlightId,
+    typingActors,
+  }, dispatch] = useReducer(dmChannelReducer, initialDmChannelState);
 
   const { mutate: markChannelRead } = useMarkChannelRead();
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
@@ -204,7 +364,6 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     isFetchingNextPage: isFetchingOlderMessages,
   } = useInfiniteQuery(channelMessagesPageOptions(channelId));
   const messages = useMemo(() => flattenChannelMessagePages(messagePages), [messagePages]);
-  const [openThreadRoot, setOpenThreadRoot] = useState<ChannelMessage | null>(null);
   const threadRoot =
     openThreadRoot && openThreadRoot.channel_id === channelId
       ? messages.find((m) => m.id === openThreadRoot.id) ?? openThreadRoot
@@ -224,15 +383,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   const editorRef = useRef<ContentEditorRef>(null);
   const threadEditorRef = useRef<ContentEditorRef>(null);
   const focusThreadComposerOnOpenRef = useRef(false);
-  const [draftEmpty, setDraftEmpty] = useState(true);
-  const [threadDraftEmpty, setThreadDraftEmpty] = useState(true);
-  const [convSearchOpen, setConvSearchOpen] = useState(false);
-  const [convSearchQuery, setConvSearchQuery] = useState("");
-  const [convSearchResults, setConvSearchResults] = useState<ChannelMessageSearchResult[]>([]);
-  const [convSearchTotal, setConvSearchTotal] = useState(0);
-  const [convSearchIndex, setConvSearchIndex] = useState(0);
-  const [threadParentHighlightId, setThreadParentHighlightId] = useState<string | null>(null);
-  const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
+  const draftEmpty = !draft.trim();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const threadFileInputRef = useRef<HTMLInputElement | null>(null);
   const uploadMapRef = useRef<Map<string, string>>(new Map());
@@ -255,39 +406,37 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
 
   const searchHitIds = useMemo(
     () =>
-      convSearchOpen && convSearchResults.length > 0
-        ? new Set(convSearchResults.map((r) => r.message_id))
+      convSearch.open && convSearch.results.length > 0
+        ? new Set(convSearch.results.map((r) => r.message_id))
         : undefined,
-    [convSearchOpen, convSearchResults],
+    [convSearch.open, convSearch.results],
   );
-  const searchHighlightQuery = convSearchOpen ? convSearchQuery.trim() : "";
-  const searchHighlightId = convSearchOpen
-    ? (convSearchResults[convSearchIndex]?.message_id ?? null)
+  const searchQuery = convSearch.query.trim();
+  const searchHighlightQuery = convSearch.open ? searchQuery : "";
+  const searchHighlightId = convSearch.open
+    ? (convSearch.results[convSearch.index]?.message_id ?? null)
     : null;
   const highlightMessageId = threadParentHighlightId ?? searchHighlightId;
 
   // Debounced in-conversation search.
   useEffect(() => {
-    if (!convSearchOpen) return;
-    const q = convSearchQuery.trim();
-    if (!q) {
-      setConvSearchResults([]);
-      setConvSearchTotal(0);
-      setConvSearchIndex(0);
-      return;
-    }
+    if (!convSearch.open) return;
+    if (!searchQuery) return;
     const timer = setTimeout(async () => {
       try {
-        const res = await api.searchChannelMessages(channelId, q);
-        setConvSearchResults(res.results);
-        setConvSearchTotal(res.total);
-        setConvSearchIndex(0);
+        const res = await api.searchChannelMessages(channelId, searchQuery);
+        dispatch({
+          type: "setSearchResults",
+          query: searchQuery,
+          results: res.results,
+          total: res.total,
+        });
       } catch {
         toast.error(t(($) => $.conv_search.error));
       }
     }, 300);
     return () => clearTimeout(timer);
-  }, [convSearchQuery, channelId, convSearchOpen]);
+  }, [convSearch.open, searchQuery, channelId, t]);
 
   // Bottom-stick on new messages and open-at-latest on switch are handled by
   // ChannelMessageList (react-virtuoso). No manual scrollIntoView needed.
@@ -298,9 +447,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   }, [channelId, markChannelRead]);
 
   useEffect(() => {
-    setOpenThreadRoot(null);
-    setThreadDraftEmpty(true);
-    setThreadParentHighlightId(null);
+    dispatch({ type: "resetForChannel" });
   }, [channelId]);
 
   useEffect(() => {
@@ -320,12 +467,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   useEffect(() => {
     const timer = window.setInterval(() => {
       const now = Date.now();
-      setTypingActors((current) => {
-        const next = Object.fromEntries(
-          Object.entries(current).filter(([, a]) => a.expiresAt > now),
-        );
-        return Object.keys(next).length === Object.keys(current).length ? current : next;
-      });
+      dispatch({ type: "expireTypingActors", now });
     }, 1000);
     return () => window.clearInterval(timer);
   }, []);
@@ -350,22 +492,19 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
     qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelId) });
     const actorKey = `${event.actor_type}:${event.actor_id ?? event.actor_name}`;
     if (event.actor_type === "user" && event.actor_id && event.actor_id === currentUserId) return;
-    setTypingActors((current) => {
-      if (!event.is_typing) {
-        const next = { ...current };
-        delete next[actorKey];
-        return next;
-      }
-      return {
-        ...current,
-        [actorKey]: {
-          key: actorKey,
-          channelId: event.channel_id,
-          actorName: event.actor_name,
-          actorType: event.actor_type,
-          expiresAt: Date.now() + (event.expires_in_ms ?? 5000),
-        },
-      };
+    if (!event.is_typing) {
+      dispatch({ type: "removeTypingActor", actorKey });
+      return;
+    }
+    dispatch({
+      type: "upsertTypingActor",
+      actor: {
+        key: actorKey,
+        channelId: event.channel_id,
+        actorName: event.actor_name,
+        actorType: event.actor_type,
+        expiresAt: Date.now() + (event.expires_in_ms ?? 5000),
+      },
     });
   });
 
@@ -392,7 +531,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   };
 
   const handleEditorUpdate = (value: string) => {
-    setDraftEmpty(!value.trim());
+    onDraftChange?.(value);
     if (value.trim()) {
       if (!typingStartedRef.current) {
         typingStartedRef.current = true;
@@ -409,7 +548,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
   };
 
   const handleThreadEditorUpdate = (value: string) => {
-    setThreadDraftEmpty(!value.trim());
+    dispatch({ type: "setThreadDraftEmpty", empty: !value.trim() });
   };
 
   const handleUpload = useCallback(
@@ -466,7 +605,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         onSuccess: () => {
           editorRef.current?.clearContent();
           uploadMapRef.current.clear();
-          setDraftEmpty(true);
+          onDraftClear?.();
         },
       },
     );
@@ -491,7 +630,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         onSuccess: () => {
           threadEditorRef.current?.clearContent();
           threadUploadMapRef.current.clear();
-          setThreadDraftEmpty(true);
+          dispatch({ type: "setThreadDraftEmpty", empty: true });
         },
         onError: () => {
           toast.error(t(($) => $.thread.send_failed));
@@ -502,7 +641,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
 
   const handleOpenThread = (message: ChannelMessage) => {
     focusThreadComposerOnOpenRef.current = true;
-    setOpenThreadRoot(message);
+    dispatch({ type: "openThread", message });
   };
 
   const threadPanel =
@@ -530,7 +669,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
                 size="icon"
                 className="size-8"
                 aria-label={t(($) => $.thread.close_aria)}
-                onClick={() => setOpenThreadRoot(null)}
+                onClick={() => dispatch({ type: "closeThread" })}
               >
                 <X className="size-4" />
               </Button>
@@ -550,8 +689,8 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
               currentUserId={currentUserId}
               ownName={currentUserName ?? undefined}
               onViewParent={() => {
-                setThreadParentHighlightId(threadRoot.id);
-                if (isMobile) setOpenThreadRoot(null);
+                dispatch({ type: "setThreadParentHighlightId", id: threadRoot.id });
+                if (isMobile) dispatch({ type: "closeThread" });
               }}
             />
           }
@@ -613,9 +752,9 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         dm={dm}
         onBack={onBack}
         filesChannelId={channelId}
-        onSearchOpen={() => setConvSearchOpen(true)}
+        onSearchOpen={() => dispatch({ type: "openSearch" })}
       />
-      {convSearchOpen && (
+      {convSearch.open && (
         <div
           className={cn(
             "flex items-center gap-2 border-b border-border/40 bg-muted/15 py-2",
@@ -629,27 +768,25 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
           <input
             type="search"
             autoFocus
-            value={convSearchQuery}
-            onChange={(e) => setConvSearchQuery(e.target.value)}
+            value={convSearch.query}
+            onChange={(e) =>
+              dispatch({ type: "setSearchQuery", query: e.target.value })
+            }
             onKeyDown={(e) => {
               if (e.key === "Escape") {
-                setConvSearchOpen(false);
-                setConvSearchQuery("");
-                setConvSearchResults([]);
-                setConvSearchTotal(0);
-                setConvSearchIndex(0);
+                dispatch({ type: "closeSearch" });
               }
             }}
             placeholder={t(($) => $.conv_search.dm_placeholder, { name: dm.peer.name })}
             className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
-          {convSearchQuery.trim() && (
+          {searchQuery && (
             <span className="shrink-0 text-xs text-muted-foreground">
-              {convSearchTotal === 0
+              {convSearch.total === 0
                 ? t(($) => $.conv_search.no_results)
                 : t(($) => $.conv_search.result_count, {
-                    current: convSearchIndex + 1,
-                    total: convSearchTotal,
+                    current: convSearch.index + 1,
+                    total: convSearch.total,
                   })}
             </span>
           )}
@@ -658,8 +795,8 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
             size="icon"
             className="size-7"
             aria-label={t(($) => $.conv_search.prev_aria)}
-            onClick={() => setConvSearchIndex((i) => Math.max(0, i - 1))}
-            disabled={convSearchTotal === 0 || convSearchIndex === 0}
+            onClick={() => dispatch({ type: "previousSearchResult" })}
+            disabled={convSearch.total === 0 || convSearch.index === 0}
           >
             <ChevronUp className="size-4" />
           </Button>
@@ -668,8 +805,8 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
             size="icon"
             className="size-7"
             aria-label={t(($) => $.conv_search.next_aria)}
-            onClick={() => setConvSearchIndex((i) => Math.min(convSearchTotal - 1, i + 1))}
-            disabled={convSearchTotal === 0 || convSearchIndex >= convSearchTotal - 1}
+            onClick={() => dispatch({ type: "nextSearchResult" })}
+            disabled={convSearch.total === 0 || convSearch.index >= convSearch.total - 1}
           >
             <ChevronDown className="size-4" />
           </Button>
@@ -679,11 +816,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
             className="size-7"
             aria-label={t(($) => $.conv_search.close_aria)}
             onClick={() => {
-              setConvSearchOpen(false);
-              setConvSearchQuery("");
-              setConvSearchResults([]);
-              setConvSearchTotal(0);
-              setConvSearchIndex(0);
+              dispatch({ type: "closeSearch" });
             }}
           >
             <X className="size-4" />
@@ -721,8 +854,10 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
             <ContentEditor
               key={channelId}
               ref={editorRef}
+              defaultValue={draft}
               placeholder={t(($) => $.dm.composer_placeholder, { name: dm.peer.name })}
               onUpdate={handleEditorUpdate}
+              debounceMs={0}
               onSubmit={handleSend}
               onUploadFile={handleUpload}
               disableMentions
@@ -768,7 +903,7 @@ function DmChannelConversation({ dm, onBack }: { dm: DMItem; onBack: () => void 
         <Drawer
           open={!!threadPanel}
           onOpenChange={(open) => {
-            if (!open) setOpenThreadRoot(null);
+            if (!open) dispatch({ type: "closeThread" });
           }}
         >
           <MobileThreadDrawerContent open={!!threadPanel}>

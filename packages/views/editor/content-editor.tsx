@@ -312,12 +312,19 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       }),
       onUpdate: ({ editor: ed }) => {
         if (!onUpdateRef.current) return;
-        if (debounceRef.current) clearTimeout(debounceRef.current);
-        debounceRef.current = setTimeout(() => {
+        const emitUpdate = () => {
           const md = stripBlobUrls(ed.getMarkdown()).trimEnd();
           if (md === lastEmittedRef.current) return;
           lastEmittedRef.current = md;
           onUpdateRef.current?.(md);
+        };
+        if (debounceMs <= 0) {
+          emitUpdate();
+          return;
+        }
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(() => {
+          emitUpdate();
         }, debounceMs);
       },
       onBlur: () => {

@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { api } from "@multica/core/api";
@@ -11,7 +18,7 @@ import {
   runtimeTargetVersion,
 } from "@multica/core/runtimes";
 import { runtimeKeys, runtimeListOptions } from "@multica/core/runtimes/queries";
-import type { RuntimeUpdateStatus } from "@multica/core/types";
+import type { AgentRuntime, RuntimeUpdateStatus } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -21,13 +28,54 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { useT } from "../../i18n/use-t";
-
-// Bump this key when we intentionally want every eligible user to see the
-// daemon update prompt again even if they dismissed an earlier rollout.
-const RUNTIME_UPDATE_PROMPT_ROLLOUT = "force-20260703";
+import {
+  parseDismissedPromptKeys,
+  runtimeUpdatePrompts,
+  serializeDismissedPromptKeys,
+} from "./runtime-update-prompt";
 
 interface RuntimeUpdateDialogProps {
   wsId: string | undefined;
+}
+
+interface PromptUpdateState {
+  promptKey: string | null;
+  status: RuntimeUpdateStatus | null;
+  error: string;
+  output: string;
+  starting: boolean;
+}
+
+const DISMISSED_PROMPT_KEYS_EVENT = "multica:runtime-update-prompts-dismissed";
+const EMPTY_RUNTIMES: AgentRuntime[] = [];
+const EMPTY_PROMPT_UPDATE_STATE: PromptUpdateState = {
+  promptKey: null,
+  status: null,
+  error: "",
+  output: "",
+  starting: false,
+};
+
+function dismissedPromptStorageSnapshot(storageKey: string | null): string {
+  if (!storageKey || typeof window === "undefined") return "";
+  return window.localStorage.getItem(storageKey) ?? "";
+}
+
+function subscribeDismissedPromptStorage(
+  storageKey: string | null,
+  onStoreChange: () => void,
+): () => void {
+  if (!storageKey || typeof window === "undefined") return () => {};
+
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === storageKey) onStoreChange();
+  };
+  window.addEventListener("storage", onStorage);
+  window.addEventListener(DISMISSED_PROMPT_KEYS_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", onStorage);
+    window.removeEventListener(DISMISSED_PROMPT_KEYS_EVENT, onStoreChange);
+  };
 }
 
 export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
@@ -38,13 +86,9 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
     ...runtimeListOptions(wsId ?? ""),
     enabled: !!wsId,
   });
-  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
-  const [dismissedHydrated, setDismissedHydrated] = useState(false);
-  const [activeRuntimeId, setActiveRuntimeId] = useState<string | null>(null);
-  const [status, setStatus] = useState<RuntimeUpdateStatus | null>(null);
-  const [error, setError] = useState("");
-  const [output, setOutput] = useState("");
-  const [starting, setStarting] = useState(false);
+  const [updateState, setUpdateState] = useState<PromptUpdateState>(
+    EMPTY_PROMPT_UPDATE_STATE,
+  );
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const updatableRuntimes = useMemo(() => {
@@ -52,29 +96,48 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
     return runtimes.filter((runtime) => runtimeCanStartSelfUpdate(runtime, userId));
   }, [runtimes, userId]);
 
-  const promptKey = useMemo(() => {
-    if (updatableRuntimes.length === 0) return null;
-    return [
-      RUNTIME_UPDATE_PROMPT_ROLLOUT,
-      ...updatableRuntimes
-        .map((runtime) => `${runtime.id}:${runtimeTargetVersion(runtime) ?? ""}`)
-        .sort(),
-    ].join(",");
-  }, [updatableRuntimes]);
+  const prompts = useMemo(
+    () => runtimeUpdatePrompts(updatableRuntimes),
+    [updatableRuntimes],
+  );
   const dismissStorageKey = useMemo(() => {
     if (!wsId || !userId) return null;
     return `multica_runtime_update_prompt:${wsId}:${userId}`;
   }, [userId, wsId]);
-
-  const activeRuntime = useMemo(
-    () =>
-      updatableRuntimes.find((runtime) => runtime.id === activeRuntimeId) ??
-      updatableRuntimes[0] ??
-      null,
-    [activeRuntimeId, updatableRuntimes],
+  const dismissedRaw = useSyncExternalStore(
+    useCallback(
+      (onStoreChange) =>
+        subscribeDismissedPromptStorage(dismissStorageKey, onStoreChange),
+      [dismissStorageKey],
+    ),
+    useCallback(
+      () => dismissedPromptStorageSnapshot(dismissStorageKey),
+      [dismissStorageKey],
+    ),
+    () => "",
   );
+  const dismissedKeys = useMemo(
+    () => parseDismissedPromptKeys(dismissedRaw),
+    [dismissedRaw],
+  );
+  const prompt = useMemo(
+    () => prompts.find((item) => !dismissedKeys.has(item.key)) ?? null,
+    [dismissedKeys, prompts],
+  );
+  const promptKey = prompt?.key ?? null;
+  const promptRuntimes = prompt?.runtimes ?? EMPTY_RUNTIMES;
 
-  const open = !!promptKey && dismissedHydrated && dismissedKey !== promptKey;
+  const activeRuntime = promptRuntimes[0] ?? null;
+
+  const promptUpdateState =
+    updateState.promptKey === promptKey
+      ? updateState
+      : EMPTY_PROMPT_UPDATE_STATE;
+  const status = promptUpdateState.status;
+  const error = promptUpdateState.error;
+  const output = promptUpdateState.output;
+  const starting = promptUpdateState.starting;
+  const open = !!prompt;
   const isActive = status === "pending" || status === "running" || starting;
   const activeTargetVersion = activeRuntime
     ? runtimeTargetVersion(activeRuntime)
@@ -87,48 +150,25 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
     }
   }, []);
 
-  const cleanup = useCallback(() => {
-    cleanupUpdatePoll();
-  }, [cleanupUpdatePoll]);
+  useEffect(() => cleanupUpdatePoll, [cleanupUpdatePoll]);
 
-  useEffect(() => cleanup, [cleanup]);
-
-  useEffect(() => {
-    setDismissedHydrated(false);
-    setDismissedKey(null);
-    if (!dismissStorageKey || typeof window === "undefined") {
-      setDismissedHydrated(true);
-      return;
-    }
-    setDismissedKey(window.localStorage.getItem(dismissStorageKey));
-    setDismissedHydrated(true);
+  const rememberDismissedKey = useCallback((key: string) => {
+    if (!dismissStorageKey || typeof window === "undefined") return;
+    const next = parseDismissedPromptKeys(
+      window.localStorage.getItem(dismissStorageKey),
+    );
+    next.add(key);
+    window.localStorage.setItem(
+      dismissStorageKey,
+      serializeDismissedPromptKeys(next),
+    );
+    window.dispatchEvent(new Event(DISMISSED_PROMPT_KEYS_EVENT));
   }, [dismissStorageKey]);
 
-  useEffect(() => {
-    if (!open) {
-      cleanup();
-      setActiveRuntimeId(null);
-      setStatus(null);
-      setError("");
-      setOutput("");
-      setStarting(false);
-    }
-  }, [cleanup, open]);
-
-  useEffect(() => {
-    if (activeRuntimeId && updatableRuntimes.some((r) => r.id === activeRuntimeId)) {
-      return;
-    }
-    setActiveRuntimeId(updatableRuntimes[0]?.id ?? null);
-  }, [activeRuntimeId, updatableRuntimes]);
-
-  const dismiss = () => {
+  const dismiss = useCallback(() => {
     if (!promptKey) return;
-    setDismissedKey(promptKey);
-    if (dismissStorageKey && typeof window !== "undefined") {
-      window.localStorage.setItem(dismissStorageKey, promptKey);
-    }
-  };
+    rememberDismissedKey(promptKey);
+  }, [promptKey, rememberDismissedKey]);
 
   const refreshRuntimes = useCallback(() => {
     if (!wsId) return;
@@ -136,21 +176,36 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
   }, [qc, wsId]);
 
   const pollUpdate = useCallback(
-    (runtimeId: string, nextUpdateId: string) => {
+    (key: string, runtimeId: string, nextUpdateId: string) => {
       cleanupUpdatePoll();
       pollRef.current = setInterval(async () => {
         try {
           const result = await api.getUpdateResult(runtimeId, nextUpdateId);
-          setStatus(result.status);
+          setUpdateState((current) => ({
+            ...current,
+            promptKey: key,
+            status: result.status,
+          }));
           if (result.status === "completed") {
-            setOutput(result.output ?? t(($) => $.update_prompt.status.completed));
+            setUpdateState((current) => ({
+              ...current,
+              promptKey: key,
+              status: result.status,
+              output:
+                result.output ?? t(($) => $.update_prompt.status.completed),
+              starting: false,
+            }));
             cleanupUpdatePoll();
-            setStarting(false);
             refreshRuntimes();
           } else if (result.status === "failed" || result.status === "timeout") {
-            setError(result.error ?? t(($) => $.update.unknown_error));
+            setUpdateState((current) => ({
+              ...current,
+              promptKey: key,
+              status: result.status,
+              error: result.error ?? t(($) => $.update.unknown_error),
+              starting: false,
+            }));
             cleanupUpdatePoll();
-            setStarting(false);
           }
         } catch {
           // Keep polling through transient network or restart gaps.
@@ -161,25 +216,39 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
   );
 
   const startUpdate = async () => {
-    if (!activeRuntime || !activeTargetVersion) return;
-    cleanup();
-    setStarting(true);
-    setStatus("pending");
-    setError("");
-    setOutput("");
+    if (!activeRuntime || !activeTargetVersion || !promptKey) return;
+    cleanupUpdatePoll();
+    setUpdateState({
+      promptKey,
+      status: "pending",
+      error: "",
+      output: "",
+      starting: true,
+    });
     try {
       const update = await api.initiateUpdate(activeRuntime.id, activeTargetVersion);
-      setStatus(update.status);
-      pollUpdate(activeRuntime.id, update.id);
+      // The operation has started; keep subsequent status in AppShell/Runtimes
+      // instead of reopening this blocking prompt for the same daemon+target.
+      rememberDismissedKey(promptKey);
+      setUpdateState({
+        promptKey,
+        status: update.status,
+        error: "",
+        output: "",
+        starting: false,
+      });
+      pollUpdate(promptKey, activeRuntime.id, update.id);
     } catch (err) {
-      setStatus("failed");
-      setError(
-        err instanceof Error && err.message
-          ? err.message
-          : t(($) => $.update.initiate_failed),
-      );
-    } finally {
-      setStarting(false);
+      setUpdateState({
+        promptKey,
+        status: "failed",
+        error:
+          err instanceof Error && err.message
+            ? err.message
+            : t(($) => $.update.initiate_failed),
+        output: "",
+        starting: false,
+      });
     }
   };
 
@@ -207,10 +276,10 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
           </div>
         </div>
 
-        {updatableRuntimes.length > 1 && (
+        {promptRuntimes.length > 1 && (
           <p className="text-xs text-muted-foreground">
             {t(($) => $.update_prompt.more_runtimes, {
-              count: updatableRuntimes.length - 1,
+              count: promptRuntimes.length - 1,
             })}
           </p>
         )}

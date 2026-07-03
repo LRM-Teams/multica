@@ -180,32 +180,30 @@ export function UpdateSection({
   };
 
   const contractStatus = statusFromUpdateState(updateState);
+  const publicRuntimeHealth =
+    runtimeHealth === "awaiting_confirmation" ? "updating" : runtimeHealth;
   const derivedStatus =
     status ??
-    (runtimeHealth === "updating"
+    (publicRuntimeHealth === "updating"
       ? contractStatus === "pending"
         ? "pending"
         : "running"
-      : runtimeHealth === "awaiting_confirmation"
-        ? "completed"
-        : runtimeHealth === "failed"
-          ? contractStatus === "timeout"
-            ? "timeout"
-            : "failed"
-          : null);
-  const hasUpdate = runtimeHealth === "update_available" && !!targetVersion;
+      : publicRuntimeHealth === "failed"
+        ? contractStatus === "timeout"
+          ? "timeout"
+          : "failed"
+        : null);
+  const hasUpdate =
+    publicRuntimeHealth === "update_available" && !!targetVersion;
   const config = derivedStatus ? statusConfig[derivedStatus] : null;
   const Icon = config?.icon;
   const isActive =
     updating || derivedStatus === "pending" || derivedStatus === "running";
-  const statusLabel =
-    runtimeHealth === "awaiting_confirmation"
-      ? t(($) => $.update.awaiting_confirmation)
-      : derivedStatus
-        ? t(($) => $.update.status[derivedStatus])
-        : null;
+  const statusLabel = derivedStatus
+    ? t(($) => $.update.status[derivedStatus])
+    : null;
   const healthOnlyLabel =
-    !derivedStatus && runtimeHealth === "offline"
+    !derivedStatus && publicRuntimeHealth === "offline"
       ? t(($) => $.update.offline)
       : null;
   const canStartUpdate =
@@ -235,12 +233,12 @@ export function UpdateSection({
           </span>
         ) : (
           <>
-            {runtimeHealth === "ok" && currentVersion && !derivedStatus && (
+            {publicRuntimeHealth === "ok" && currentVersion && !derivedStatus ? (
               <span className="inline-flex items-center gap-1 text-xs text-success">
                 <Check className="h-3 w-3" />
                 {t(($) => $.update.latest)}
               </span>
-            )}
+            ) : null}
 
             {hasUpdate && !derivedStatus && (
               <>

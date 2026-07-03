@@ -2699,6 +2699,10 @@ func (h *Handler) channelThreadContextMessages(ctx context.Context, workspaceID,
 }
 
 func (h *Handler) createChannelAgentPromptMessage(ctx context.Context, chatSessionID pgtype.UUID, prompt string, trigger ChannelMessageResponse) (db.ChatMessage, error) {
+	return h.createChannelAgentPromptMessageWithDB(ctx, h.DB, chatSessionID, prompt, trigger)
+}
+
+func (h *Handler) createChannelAgentPromptMessageWithDB(ctx context.Context, exec db.DBTX, chatSessionID pgtype.UUID, prompt string, trigger ChannelMessageResponse) (db.ChatMessage, error) {
 	threadID := trigger.ThreadID
 	if threadID == nil || strings.TrimSpace(*threadID) == "" {
 		fresh := uuid.NewString()
@@ -2708,7 +2712,7 @@ func (h *Handler) createChannelAgentPromptMessage(ctx context.Context, chatSessi
 	if trigger.ThreadRootMessageID != nil {
 		threadRootMessageID = parseUUID(*trigger.ThreadRootMessageID)
 	}
-	row := h.DB.QueryRow(ctx, `
+	row := exec.QueryRow(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, thread_id, channel_thread_root_message_id, trigger_depth)
 		VALUES ($1, 'user', $2, $3, $4, $5)
 		RETURNING id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, thread_id, trigger_depth, parts`,
@@ -2748,15 +2752,19 @@ func (h *Handler) interruptInFlightChannelAgentTasks(ctx context.Context, chatSe
 }
 
 func (h *Handler) ensureChannelAgentSession(ctx context.Context, ch ChannelResponse, agentID pgtype.UUID, creatorID pgtype.UUID) (db.ChatSession, error) {
+	return h.ensureChannelAgentSessionWithDB(ctx, h.Queries, h.DB, ch, agentID, creatorID)
+}
+
+func (h *Handler) ensureChannelAgentSessionWithDB(ctx context.Context, q *db.Queries, exec db.DBTX, ch ChannelResponse, agentID pgtype.UUID, creatorID pgtype.UUID) (db.ChatSession, error) {
 	var sessionID pgtype.UUID
-	err := h.DB.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, parseUUID(ch.ID), agentID).Scan(&sessionID)
+	err := exec.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, parseUUID(ch.ID), agentID).Scan(&sessionID)
 	if err == nil {
-		return h.Queries.GetChatSession(ctx, sessionID)
+		return q.GetChatSession(ctx, sessionID)
 	}
 	if !errorsIsNoRows(err) {
 		return db.ChatSession{}, err
 	}
-	session, err := h.Queries.CreateChatSession(ctx, db.CreateChatSessionParams{
+	session, err := q.CreateChatSession(ctx, db.CreateChatSessionParams{
 		WorkspaceID: parseUUID(ch.WorkspaceID),
 		AgentID:     agentID,
 		CreatorID:   creatorID,
@@ -2765,7 +2773,7 @@ func (h *Handler) ensureChannelAgentSession(ctx context.Context, ch ChannelRespo
 	if err != nil {
 		return db.ChatSession{}, err
 	}
-	_, err = h.DB.Exec(ctx, `
+	_, err = exec.Exec(ctx, `
 		INSERT INTO channel_agent_session (channel_id, agent_id, chat_session_id)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (channel_id, agent_id) DO NOTHING`, parseUUID(ch.ID), agentID, session.ID)

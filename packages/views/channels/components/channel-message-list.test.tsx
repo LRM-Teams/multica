@@ -133,6 +133,7 @@ function makeMessage(id: string, content: string): ChannelMessage {
     content,
     source: "multica",
     external_message_id: null,
+    client_message_id: null,
     created_at: "2026-06-17T09:15:00Z",
   };
 }
@@ -149,6 +150,7 @@ function makeRuntimeNotice(id: string): ChannelMessage {
     content: "daemon_outdated",
     source: "multica",
     external_message_id: null,
+    client_message_id: null,
     created_at: "2026-06-17T09:15:00Z",
   };
 }

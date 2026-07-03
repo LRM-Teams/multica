@@ -60,6 +60,7 @@ function makeMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
     content: "Thread root content",
     source: "multica",
     external_message_id: null,
+    client_message_id: null,
     created_at: "2026-06-17T09:15:00Z",
     ...overrides,
     seq,

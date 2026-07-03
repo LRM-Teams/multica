@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -665,6 +666,393 @@ func TestSendChannelMessagePublishesOnlyChannelMemberRecipients(t *testing.T) {
 	}
 	if got[bystanderID] {
 		t.Fatalf("workspace bystander %s received channel-scoped event recipients %+v", bystanderID, ev.RecipientUserIDs)
+	}
+}
+
+func TestSendChannelMessageClientMessageIDDedupesTopLevelWithSideEffects(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Idempotency Group Bot", nil)
+	channelID := seedChannelForTest(t, "client-id-group-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+
+	content := "@Idempotency Group Bot please handle " + uuid.NewString()
+	clientID := "client-" + uuid.NewString()
+	eventsSeen := make(chan events.Event, 4)
+	testHandler.Bus.Subscribe(protocol.EventChannelMessage, func(e events.Event) {
+		msg, ok := e.Payload.(ChannelMessageResponse)
+		if ok && msg.Content == content {
+			eventsSeen <- e
+		}
+	})
+
+	first := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content":           content,
+		"client_message_id": clientID,
+	})
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first send: status=%d body=%s", first.Code, first.Body.String())
+	}
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created: %v", err)
+	}
+	if created.ClientMessageID == nil || *created.ClientMessageID != clientID {
+		t.Fatalf("client_message_id = %v, want %s", created.ClientMessageID, clientID)
+	}
+
+	second := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content":           content,
+		"client_message_id": clientID,
+	})
+	if second.Code != http.StatusOK {
+		t.Fatalf("duplicate send: status=%d body=%s", second.Code, second.Body.String())
+	}
+	var duplicate ChannelMessageResponse
+	if err := json.Unmarshal(second.Body.Bytes(), &duplicate); err != nil {
+		t.Fatalf("decode duplicate: %v", err)
+	}
+	if duplicate.ID != created.ID || duplicate.Seq != created.Seq {
+		t.Fatalf("duplicate response = %s/%d, want existing %s/%d", duplicate.ID, duplicate.Seq, created.ID, created.Seq)
+	}
+
+	var rows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND client_message_id = $2`, channelID, clientID).Scan(&rows); err != nil {
+		t.Fatalf("count channel messages: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("channel_message rows = %d, want 1", rows)
+	}
+	if got := len(eventsSeen); got != 1 {
+		t.Fatalf("published channel message events = %d, want 1", got)
+	}
+	var tasks int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_queue q
+		JOIN channel_agent_session cas ON cas.chat_session_id = q.chat_session_id
+		WHERE cas.channel_id = $1 AND cas.agent_id = $2`, channelID, agentID).Scan(&tasks); err != nil {
+		t.Fatalf("count dispatched tasks: %v", err)
+	}
+	if tasks != 1 {
+		t.Fatalf("agent dispatch tasks = %d, want 1", tasks)
+	}
+}
+
+func TestSendChannelMessageClientMessageIDConflictOnChangedPayload(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "client-id-conflict-"+uuid.NewString(), testUserID)
+	replyTarget, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "reply target", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("reply-target-thread"), 0)
+	if err != nil {
+		t.Fatalf("insert reply target: %v", err)
+	}
+	clientID := "client-" + uuid.NewString()
+	base := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content":           "stable payload",
+		"client_message_id": clientID,
+	})
+	if base.Code != http.StatusCreated {
+		t.Fatalf("base send: status=%d body=%s", base.Code, base.Body.String())
+	}
+
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{
+			name: "content",
+			body: map[string]any{"content": "changed payload", "client_message_id": clientID},
+		},
+		{
+			name: "parts",
+			body: map[string]any{
+				"content":           "stable payload",
+				"parts":             []protocol.MessagePart{{Type: protocol.MessagePartTypeText, Text: "client side structured copy"}},
+				"client_message_id": clientID,
+			},
+		},
+		{
+			name: "reply target",
+			body: map[string]any{
+				"content":             "stable payload",
+				"reply_to_message_id": replyTarget.ID,
+				"client_message_id":   clientID,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := sendChannelMessageForTest(t, channelID, testUserID, tc.body)
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("conflicting %s send: status=%d body=%s", tc.name, rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	var rows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND client_message_id = $2`, channelID, clientID).Scan(&rows); err != nil {
+		t.Fatalf("count channel messages: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("channel_message rows after conflicts = %d, want 1", rows)
+	}
+}
+
+func TestSendChannelMessageClientMessageIDDedupesDMDispatch(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	cleanupDMArtifacts(t)
+	agentID := createHandlerTestAgent(t, "DM Idempotency Bot", nil)
+	channelID := seedAgentDMChannel(t, agentID)
+	content := "dm retry " + uuid.NewString()
+	clientID := "client-" + uuid.NewString()
+
+	first := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content":           content,
+		"client_message_id": clientID,
+	})
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first DM send: status=%d body=%s", first.Code, first.Body.String())
+	}
+	second := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content":           content,
+		"client_message_id": clientID,
+	})
+	if second.Code != http.StatusOK {
+		t.Fatalf("duplicate DM send: status=%d body=%s", second.Code, second.Body.String())
+	}
+
+	var rows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND client_message_id = $2`, channelID, clientID).Scan(&rows); err != nil {
+		t.Fatalf("count DM channel messages: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("DM channel_message rows = %d, want 1", rows)
+	}
+	var tasks int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_queue q
+		JOIN channel_agent_session cas ON cas.chat_session_id = q.chat_session_id
+		WHERE cas.channel_id = $1 AND cas.agent_id = $2`, channelID, agentID).Scan(&tasks); err != nil {
+		t.Fatalf("count DM dispatched tasks: %v", err)
+	}
+	if tasks != 1 {
+		t.Fatalf("DM agent dispatch tasks = %d, want 1", tasks)
+	}
+}
+
+func TestSendChannelMessageThreadReplyClientMessageIDDedupes(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "client-id-thread-"+uuid.NewString(), testUserID)
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Root Author", "thread root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("root-thread-"+uuid.NewString()), 0)
+	if err != nil {
+		t.Fatalf("insert root: %v", err)
+	}
+	content := "thread retry " + uuid.NewString()
+	clientID := "client-" + uuid.NewString()
+
+	first := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{
+		"content":           content,
+		"client_message_id": clientID,
+	})
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first thread reply: status=%d body=%s", first.Code, first.Body.String())
+	}
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode thread reply: %v", err)
+	}
+	second := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{
+		"content":           content,
+		"client_message_id": clientID,
+	})
+	if second.Code != http.StatusOK {
+		t.Fatalf("duplicate thread reply: status=%d body=%s", second.Code, second.Body.String())
+	}
+	var duplicate ChannelMessageResponse
+	if err := json.Unmarshal(second.Body.Bytes(), &duplicate); err != nil {
+		t.Fatalf("decode duplicate thread reply: %v", err)
+	}
+	if duplicate.ID != created.ID {
+		t.Fatalf("duplicate thread reply id = %s, want %s", duplicate.ID, created.ID)
+	}
+
+	var replies int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND thread_root_message_id = $2 AND client_message_id = $3`, channelID, root.ID, clientID).Scan(&replies); err != nil {
+		t.Fatalf("count thread replies: %v", err)
+	}
+	if replies != 1 {
+		t.Fatalf("thread replies = %d, want 1", replies)
+	}
+	rootTimeline := listedMessagesForUser(t, channelID, testUserID)
+	if len(rootTimeline) != 1 || rootTimeline[0].ThreadReplyCount != 1 {
+		t.Fatalf("root timeline = %+v, want exactly one thread reply counted", rootTimeline)
+	}
+}
+
+func TestSendChannelMessageClientMessageIDDedupesAttachmentsAndParts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "client-id-attachments-"+uuid.NewString(), testUserID)
+	var attachmentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (workspace_id, channel_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+		VALUES ($1, $2, 'member', $3, 'retry.txt', 's3://retry.txt', 'text/plain', 7)
+		RETURNING id`, testWorkspaceID, channelID, testUserID).Scan(&attachmentID); err != nil {
+		t.Fatalf("seed attachment: %v", err)
+	}
+	content := "with parts " + uuid.NewString()
+	clientID := "client-" + uuid.NewString()
+	body := map[string]any{
+		"content": content,
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: content},
+			{Type: protocol.MessagePartTypeSticker, StickerID: "hi"},
+		},
+		"attachment_ids":    []string{attachmentID},
+		"client_message_id": clientID,
+	}
+	first := sendChannelMessageForTest(t, channelID, testUserID, body)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first send with attachment: status=%d body=%s", first.Code, first.Body.String())
+	}
+	second := sendChannelMessageForTest(t, channelID, testUserID, body)
+	if second.Code != http.StatusOK {
+		t.Fatalf("duplicate send with attachment: status=%d body=%s", second.Code, second.Body.String())
+	}
+	var duplicate ChannelMessageResponse
+	if err := json.Unmarshal(second.Body.Bytes(), &duplicate); err != nil {
+		t.Fatalf("decode duplicate response: %v", err)
+	}
+	if len(duplicate.Attachments) != 1 || duplicate.Attachments[0].ID != attachmentID {
+		t.Fatalf("duplicate attachments = %+v, want seeded attachment", duplicate.Attachments)
+	}
+	if len(duplicate.Parts) != 2 || duplicate.Parts[0].Type != protocol.MessagePartTypeText || duplicate.Parts[1].Type != protocol.MessagePartTypeSticker || duplicate.Parts[1].PackID != "builtin" || duplicate.Parts[1].StickerID != "hi" {
+		t.Fatalf("duplicate parts = %+v, want text plus normalized builtin sticker", duplicate.Parts)
+	}
+
+	var bound int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM attachment
+		WHERE id = $1 AND channel_message_id = $2`, attachmentID, duplicate.ID).Scan(&bound); err != nil {
+		t.Fatalf("count attachment bindings: %v", err)
+	}
+	if bound != 1 {
+		t.Fatalf("attachment binding rows = %d, want 1", bound)
+	}
+	var messages int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND client_message_id = $2`, channelID, clientID).Scan(&messages); err != nil {
+		t.Fatalf("count messages: %v", err)
+	}
+	if messages != 1 {
+		t.Fatalf("channel_message rows = %d, want 1", messages)
+	}
+}
+
+func TestSendChannelMessageClientMessageIDConcurrentDuplicates(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "client-id-concurrent-"+uuid.NewString(), testUserID)
+	content := "concurrent retry " + uuid.NewString()
+	clientID := "client-" + uuid.NewString()
+	const attempts = 6
+	var wg sync.WaitGroup
+	statuses := make(chan int, attempts)
+	ids := make(chan string, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+				"content":           content,
+				"client_message_id": clientID,
+			})
+			statuses <- rec.Code
+			var msg ChannelMessageResponse
+			if rec.Code == http.StatusCreated || rec.Code == http.StatusOK {
+				if err := json.Unmarshal(rec.Body.Bytes(), &msg); err == nil {
+					ids <- msg.ID
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(statuses)
+	close(ids)
+
+	created := 0
+	ok := 0
+	for status := range statuses {
+		switch status {
+		case http.StatusCreated:
+			created++
+		case http.StatusOK:
+			ok++
+		default:
+			t.Fatalf("unexpected status from concurrent duplicate send: %d", status)
+		}
+	}
+	if created != 1 || ok != attempts-1 {
+		t.Fatalf("statuses created=%d ok=%d, want 1/%d", created, ok, attempts-1)
+	}
+	seenIDs := map[string]struct{}{}
+	for id := range ids {
+		seenIDs[id] = struct{}{}
+	}
+	if len(seenIDs) != 1 {
+		t.Fatalf("response ids = %+v, want one shared message id", seenIDs)
+	}
+
+	var rows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND client_message_id = $2`, channelID, clientID).Scan(&rows); err != nil {
+		t.Fatalf("count messages: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("channel_message rows = %d, want 1", rows)
 	}
 }
 
@@ -1958,6 +2346,26 @@ func seedChannelForTest(t *testing.T, name string, memberIDs ...string) string {
 		}
 	}
 	return channelID
+}
+
+func sendChannelMessageForTest(t *testing.T, channelID, userID string, body map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	req := newRequestAs(userID, http.MethodPost, "/api/channels/"+channelID+"/messages", body)
+	req = withChannelTestWorkspaceCtx(t, req, userID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(rec, req)
+	return rec
+}
+
+func sendChannelThreadReplyForTest(t *testing.T, channelID, rootID, userID string, body map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	req := newRequestAs(userID, http.MethodPost, "/api/channels/"+channelID+"/messages/"+rootID+"/thread", body)
+	req = withChannelTestWorkspaceCtx(t, req, userID)
+	req = withURLParams(req, "channelId", channelID, "messageId", rootID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessageThreadReply(rec, req)
+	return rec
 }
 
 func assertNoChannelMessageContent(t *testing.T, channelID, content string) {

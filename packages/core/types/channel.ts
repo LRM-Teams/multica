@@ -74,6 +74,7 @@ export interface ChannelMessage {
   parts?: MessagePart[];
   source: "multica" | "lark";
   external_message_id: string | null;
+  client_message_id: string | null;
   reply_to_message_id?: string | null;
   reply_to?: ChannelMessageReply | null;
   thread_root_message_id?: string | null;

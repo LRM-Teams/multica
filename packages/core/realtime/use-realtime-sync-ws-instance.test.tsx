@@ -291,6 +291,7 @@ function channelMessage(
     content: id,
     source: "multica",
     external_message_id: null,
+    client_message_id: null,
     created_at: "2026-07-01T00:00:00Z",
     thread_root_message_id: null,
     thread_reply_count: 0,

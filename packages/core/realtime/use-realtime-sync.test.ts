@@ -600,6 +600,7 @@ describe("handleInboxNew", () => {
       content: "I finished the work",
       source: "multica",
       external_message_id: null,
+      client_message_id: null,
       created_at: "2026-05-18T00:00:00Z",
       ...overrides,
       seq,

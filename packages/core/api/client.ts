@@ -2140,8 +2140,15 @@ export class ApiClient {
     attachmentIds?: string[],
     replyToMessageId?: string | null,
     parts?: MessagePart[],
+    clientMessageId?: string | null,
   ): Promise<ChannelMessage> {
-    const body: { content: string; attachment_ids?: string[]; reply_to_message_id?: string; parts?: MessagePart[] } = { content };
+    const body: {
+      content: string;
+      attachment_ids?: string[];
+      reply_to_message_id?: string;
+      parts?: MessagePart[];
+      client_message_id?: string;
+    } = { content };
     if (attachmentIds && attachmentIds.length > 0) {
       body.attachment_ids = attachmentIds;
     }
@@ -2150,6 +2157,9 @@ export class ApiClient {
     }
     if (parts && parts.length > 0) {
       body.parts = parts;
+    }
+    if (clientMessageId) {
+      body.client_message_id = clientMessageId;
     }
     return this.fetch(`/api/channels/${channelId}/messages`, {
       method: "POST",
@@ -2178,8 +2188,15 @@ export class ApiClient {
     attachmentIds?: string[],
     replyToMessageId?: string | null,
     parts?: MessagePart[],
+    clientMessageId?: string | null,
   ): Promise<ChannelMessage> {
-    const body: { content: string; attachment_ids?: string[]; reply_to_message_id?: string; parts?: MessagePart[] } = { content };
+    const body: {
+      content: string;
+      attachment_ids?: string[];
+      reply_to_message_id?: string;
+      parts?: MessagePart[];
+      client_message_id?: string;
+    } = { content };
     if (attachmentIds && attachmentIds.length > 0) {
       body.attachment_ids = attachmentIds;
     }
@@ -2188,6 +2205,9 @@ export class ApiClient {
     }
     if (parts && parts.length > 0) {
       body.parts = parts;
+    }
+    if (clientMessageId) {
+      body.client_message_id = clientMessageId;
     }
     return this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread`, {
       method: "POST",

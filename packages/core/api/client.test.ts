@@ -544,6 +544,7 @@ describe("ApiClient", () => {
       content: "hello",
       source: "multica",
       external_message_id: null,
+      client_message_id: null,
       created_at: "2026-07-03T00:00:00Z",
     };
 

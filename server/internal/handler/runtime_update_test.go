@@ -214,8 +214,8 @@ func TestReportUpdateResult_CompletedLeavesCurrentVersionUntilRegisterConfirms(t
 	if resp.UpdateState != "completed" {
 		t.Fatalf("update_state = %q, want completed", resp.UpdateState)
 	}
-	if resp.RuntimeHealth != "awaiting_confirmation" {
-		t.Fatalf("runtime_health = %q, want awaiting_confirmation", resp.RuntimeHealth)
+	if resp.RuntimeHealth != "updating" {
+		t.Fatalf("runtime_health = %q, want updating", resp.RuntimeHealth)
 	}
 
 	reconnectW := httptest.NewRecorder()

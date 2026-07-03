@@ -107,6 +107,7 @@ type Handler struct {
 	AutopilotService      *service.AutopilotService
 	EmailService          *service.EmailService
 	UpdateStore           UpdateStore
+	RuntimeReleaseSource  RuntimeReleaseSource
 	ModelListStore        ModelListStore
 	LocalSkillListStore   LocalSkillListStore
 	LocalSkillImportStore LocalSkillImportStore
@@ -200,6 +201,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		AutopilotService:      service.NewAutopilotService(queries, txStarter, bus, taskSvc),
 		EmailService:          emailService,
 		UpdateStore:           NewInMemoryUpdateStore(),
+		RuntimeReleaseSource:  NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),
 		ModelListStore:        NewInMemoryModelListStore(),
 		LocalSkillListStore:   NewInMemoryLocalSkillListStore(),
 		LocalSkillImportStore: NewInMemoryLocalSkillImportStore(),

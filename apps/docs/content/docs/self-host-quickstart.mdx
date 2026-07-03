@@ -23,7 +23,7 @@ Agent **execution** still relies on the [daemon](/daemon-runtimes) you run local
 </Callout>
 
 ```bash
-git clone https://github.com/multica-ai/multica.git
+git clone https://github.com/LRM-Teams/multica.git
 cd multica
 make selfhost
 ```
@@ -214,7 +214,7 @@ SELECT cron.unschedule('rollup_task_usage_hourly')
 
 **Upgrade from `v0.3.4 → v0.3.5+`.** The previous release asked operators to run `cmd/backfill_task_usage_hourly` manually before applying migration 103, otherwise the migration's fail-closed guard would abort `migrate up`. As of MUL-2957 this is automatic: the migrate command runs an idempotent monthly-slice backfill (under advisory lock 4246) immediately before applying migration 103, then continues. You may still run the standalone backfill on a busy DB to throttle read pressure with `--sleep-between-slices=2s`, but it is no longer required.
 
-Full reference — including operations notes and the Kubernetes deployment shape — lives in the repo's [`SELF_HOSTING_ADVANCED.md → Usage Dashboard Rollup`](https://github.com/multica-ai/multica/blob/main/SELF_HOSTING_ADVANCED.md#usage-dashboard-rollup).
+Full reference — including operations notes and the Kubernetes deployment shape — lives in the repo's [`SELF_HOSTING_ADVANCED.md → Usage Dashboard Rollup`](https://github.com/LRM-Teams/multica/blob/main/SELF_HOSTING_ADVANCED.md#usage-dashboard-rollup).
 
 ## Kubernetes deployment (alternative)
 
@@ -237,7 +237,7 @@ kubectl -n multica create secret generic multica-secrets \
 Then install the chart:
 
 ```bash
-git clone https://github.com/multica-ai/multica.git
+git clone https://github.com/LRM-Teams/multica.git
 cd multica
 helm install multica deploy/helm/multica -n multica
 ```
@@ -261,7 +261,7 @@ multica setup self-host \
 
 To pull the latest images without changing the chart, `kubectl -n multica rollout restart deploy/multica-backend deploy/multica-frontend`. To pin a specific Multica release, set `images.backend.tag` / `images.frontend.tag` in your values file and `helm upgrade`. `helm -n multica uninstall multica` removes the workloads but keeps the PVCs and Secret; `kubectl delete namespace multica` wipes everything.
 
-The full reference — three login modes, the `backend` ExternalName workaround for the build-time-baked `REMOTE_API_URL` in the web image, resource limits, and TLS — lives in the repo's [`SELF_HOSTING.md`](https://github.com/multica-ai/multica/blob/main/SELF_HOSTING.md#kubernetes-deployment-alternative).
+The full reference — three login modes, the `backend` ExternalName workaround for the build-time-baked `REMOTE_API_URL` in the web image, resource limits, and TLS — lives in the repo's [`SELF_HOSTING.md`](https://github.com/LRM-Teams/multica/blob/main/SELF_HOSTING.md#kubernetes-deployment-alternative).
 
 ## Common issues
 

@@ -1,11 +1,13 @@
-import { MULTICA_INSTALL_COMMAND } from "@multica/core/constants/repository";
+import {
+  MULTICA_INSTALL_COMMAND,
+  MULTICA_POWERSHELL_INSTALL_COMMAND,
+} from "@multica/core/constants/repository";
 
 export type DaemonSetupMode = "unix" | "windows-powershell";
 
 export const DAEMON_SETUP_MODES: DaemonSetupMode[] = ["unix", "windows-powershell"];
 
-export const POWERSHELL_INSTALL_COMMAND =
-  "irm https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.ps1 | iex";
+export const POWERSHELL_INSTALL_COMMAND = MULTICA_POWERSHELL_INSTALL_COMMAND;
 
 const CLOUD_SERVER_URL = "https://api.multica.ai";
 const CLOUD_APP_URL = "https://multica.ai";

@@ -5,16 +5,16 @@ description: Install the Multica CLI and start the agent daemon.
 
 ## Installation
 
-### Homebrew (macOS/Linux)
+### 安装脚本 (macOS/Linux)
 
 ```bash
-brew install multica-ai/tap/multica
+curl -fsSL https://raw.githubusercontent.com/LRM-Teams/multica/main/scripts/install.sh | bash
 ```
 
 ### Build from Source
 
 ```bash
-git clone https://github.com/multica-ai/multica.git
+git clone https://github.com/LRM-Teams/multica.git
 cd multica
 make build
 cp server/bin/multica /usr/local/bin/multica
@@ -34,11 +34,12 @@ if [ "$ARCH" = "x86_64" ]; then
 fi
 
 # Get the latest release tag from GitHub
-LATEST=$(curl -sI https://github.com/multica-ai/multica/releases/latest \
+LATEST=$(curl -sI https://github.com/LRM-Teams/multica/releases/latest \
   | grep -i '^location:' | sed 's/.*tag\///' | tr -d '\r\n')
 
 # Download and extract
-curl -sL "https://github.com/multica-ai/multica/releases/download/${LATEST}/multica_${OS}_${ARCH}.tar.gz" \
+VERSION="${LATEST#v}"
+curl -sL "https://github.com/LRM-Teams/multica/releases/download/${LATEST}/multica-cli-${VERSION}-${OS}-${ARCH}.tar.gz" \
   -o /tmp/multica.tar.gz
 tar -xzf /tmp/multica.tar.gz -C /tmp multica
 sudo mv /tmp/multica /usr/local/bin/multica
@@ -48,16 +49,10 @@ rm /tmp/multica.tar.gz
 ### Update
 
 ```bash
-brew upgrade multica-ai/tap/multica
-```
-
-For install script or manual installs, use:
-
-```bash
 multica update
 ```
 
-`multica update` auto-detects your installation method and upgrades accordingly.
+`multica update` downloads the current CLI from the Multica GitHub Releases channel. If you maintain a Homebrew tap, set `MULTICA_BREW_PACKAGE=<owner/tap/package>` before running update.
 
 ## Quick Start
 

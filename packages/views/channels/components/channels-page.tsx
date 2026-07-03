@@ -140,6 +140,7 @@ import {
   AlertDialogTitle,
 } from "@multica/ui/components/ui/alert-dialog";
 import { cn } from "@multica/ui/lib/utils";
+import { SidebarTrigger, useSidebarSafe } from "@multica/ui/components/ui/sidebar";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
 import { useNavigation } from "../../navigation/context";
@@ -326,6 +327,12 @@ function ConversationSwitchSkeleton({ isMobile }: { isMobile: boolean }) {
       </div>
     </div>
   );
+}
+
+function MobileSidebarTrigger() {
+  const sidebar = useSidebarSafe();
+  if (!sidebar) return null;
+  return <SidebarTrigger className="mr-2 md:hidden" />;
 }
 
 function InitialChannelsShellSkeleton() {
@@ -1409,32 +1416,21 @@ export function ChannelsPage() {
         isMobile ? "min-w-0" : "border-r",
       )}
     >
-      <div className="flex items-center gap-2 px-4 pb-1 pt-4">
-        <h2 className="flex-1 text-lg font-semibold">{t(($) => $.sidebar.heading)}</h2>
-        {!isMobile && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8 shrink-0 text-muted-foreground"
-            aria-label={t(($) => $.sidebar.close_aria)}
-            title={t(($) => $.sidebar.close_aria)}
-            onClick={() => setDesktopSidebarOpen(false)}
-          >
-            <PanelLeftIcon className="size-4" />
-          </Button>
-        )}
-      </div>
-      <div className="px-3 pb-2">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t(($) => $.sidebar.search)}
-            className="h-9 pl-8"
-          />
-        </div>
-      </div>
+          <div className="flex items-center gap-2 px-4 pb-1 pt-4">
+            <MobileSidebarTrigger />
+            <h2 className="flex-1 text-lg font-semibold">{t(($) => $.sidebar.heading)}</h2>
+          </div>
+          <div className="px-3 pb-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t(($) => $.sidebar.search)}
+                className="h-9 pl-8"
+              />
+            </div>
+          </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
             <DmList
               activeId={activeDmId}

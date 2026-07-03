@@ -152,13 +152,14 @@ export function SandboxesPage() {
   const { data: instances = [], isLoading } = useQuery(sandboxListOptions(wsId));
   const { data: bindings = [], isLoading: bindingsLoading } = useQuery(sandboxBindingListOptions(wsId));
 
-  const connectedBindings = useMemo(
-    () =>
-      bindings
-        .filter((binding) => binding.enabled)
-        .map((binding) => bindingWithEffectiveStatus(binding, now)),
-    [bindings, now],
-  );
+  const connectedBindings = useMemo(() => {
+    const result: SandboxBinding[] = [];
+    for (const binding of bindings) {
+      if (!binding.enabled) continue;
+      result.push(bindingWithEffectiveStatus(binding, now));
+    }
+    return result;
+  }, [bindings, now]);
   const hasConnectedNode = connectedBindings.length > 0;
 
   const instancesByNode = useMemo(() => {

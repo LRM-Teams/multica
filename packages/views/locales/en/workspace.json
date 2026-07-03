@@ -39,6 +39,10 @@
     "runtime_required_description": "Windy needs an available runtime before it can recruit agents or update its own instructions.",
     "refresh_runtimes": "Refresh runtimes",
     "one_time_note": "This prompt is one-time per member for the current Windy update.",
-    "update": "Update Windy"
+    "update": "Update Windy",
+    "badge_label": "Personal agent HR",
+    "intro_title": "Windy turns conversations into hires",
+    "one_time_label": "One-time update",
+    "runtime_move_note": "Pick any usable runtime now; Windy can be moved later from its agent settings."
   }
 }

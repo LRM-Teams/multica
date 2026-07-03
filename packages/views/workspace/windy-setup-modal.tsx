@@ -134,7 +134,7 @@ export function WindySetupModal() {
             <div className="min-w-0">
               <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border bg-background/75 px-2.5 py-1 text-[11px] font-medium text-muted-foreground shadow-sm">
                 <Sparkles className="size-3 text-primary" />
-                Personal agent HR
+                {t(($) => $.windy_setup.badge_label)}
               </div>
               <DialogTitle className="text-xl font-semibold tracking-tight">{t(($) => $.windy_setup.title)}</DialogTitle>
               <DialogDescription className="mt-2 max-w-2xl text-sm leading-6">
@@ -147,7 +147,7 @@ export function WindySetupModal() {
         <div className="max-h-[calc(90vh-11rem)] space-y-5 overflow-y-auto px-6 py-5">
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="rounded-2xl border bg-card p-3 shadow-sm sm:col-span-2">
-              <p className="text-sm font-medium">Windy turns conversations into hires</p>
+              <p className="text-sm font-medium">{t(($) => $.windy_setup.intro_title)}</p>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
                 {t(($) => $.windy_setup.intro)}
               </p>
@@ -155,7 +155,7 @@ export function WindySetupModal() {
             <div className="rounded-2xl border bg-muted/35 p-3 text-xs leading-5 text-muted-foreground">
               <div className="mb-1 flex items-center gap-1.5 font-medium text-foreground">
                 <CheckCircle2 className="size-3.5 text-success" />
-                One-time update
+                {t(($) => $.windy_setup.one_time_label)}
               </div>
               {t(($) => $.windy_setup.one_time_note)}
             </div>
@@ -210,7 +210,7 @@ export function WindySetupModal() {
 
         <DialogFooter className="border-t bg-muted/25 px-6 py-4 sm:items-center sm:justify-between sm:flex-row">
           <p className="text-xs text-muted-foreground">
-            Pick any usable runtime now; Windy can be moved later from its agent settings.
+            {t(($) => $.windy_setup.runtime_move_note)}
           </p>
           <Button
             type="button"

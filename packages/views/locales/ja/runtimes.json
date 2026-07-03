@@ -346,7 +346,7 @@
     "title": "Multica CLI を更新",
     "description": "{{current}} → {{latest}}",
     "more_runtimes": "このコンピュータでは、あと {{count}} 個のランタイムも更新される可能性があります。",
-    "later": "後で",
+    "later": "今はしない",
     "update_now": "今すぐ更新",
     "status": {
       "completed": "更新しました。デーモンの再接続を待っています。"

@@ -14,6 +14,15 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 )
 
+func TestLatencyDefaults(t *testing.T) {
+	if DefaultPollInterval != 2*time.Second {
+		t.Fatalf("DefaultPollInterval = %s, want 2s", DefaultPollInterval)
+	}
+	if taskMessageFlushInterval != 200*time.Millisecond {
+		t.Fatalf("taskMessageFlushInterval = %s, want 200ms", taskMessageFlushInterval)
+	}
+}
+
 func TestPatternsFromEnv_DefaultsWhenUnset(t *testing.T) {
 	t.Setenv("MULTICA_GC_ARTIFACT_PATTERNS", "")
 	defaults := []string{"node_modules", ".next", ".turbo"}

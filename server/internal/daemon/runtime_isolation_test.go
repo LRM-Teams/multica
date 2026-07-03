@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -60,6 +61,58 @@ func TestRuntimeSetWatcherFanOut(t *testing.T) {
 	case <-chB:
 		t.Fatal("unsubscribed channel must not receive a nudge")
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestRunRuntimePollerClaimsImmediatelyBeforeInitialOffset(t *testing.T) {
+	t.Parallel()
+
+	interval := time.Hour
+	runtimeID := ""
+	for i := 0; i < 1000; i++ {
+		candidate := fmt.Sprintf("runtime-immediate-%d", i)
+		if runtimePollOffset(candidate, interval) > time.Second {
+			runtimeID = candidate
+			break
+		}
+	}
+	if runtimeID == "" {
+		t.Fatal("failed to find runtime id with non-zero poll offset")
+	}
+
+	firstClaim := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/runtimes/"+runtimeID+"/tasks/claim") {
+			select {
+			case firstClaim <- struct{}{}:
+			default:
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"task":null}`))
+			return
+		}
+		http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	d := New(Config{
+		ServerBaseURL:      srv.URL,
+		HeartbeatInterval:  time.Hour,
+		PollInterval:       interval,
+		MaxConcurrentTasks: 1,
+	}, slog.New(slog.NewTextHandler(noopWriter{}, nil)))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sem := newTaskSlotSemaphore(d.cfg.MaxConcurrentTasks)
+	var taskWG sync.WaitGroup
+	go d.runRuntimePoller(ctx, ctx, runtimeID, sem, make(chan struct{}, 1), &taskWG)
+
+	select {
+	case <-firstClaim:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("poller waited for initial runtime offset before first claim")
 	}
 }
 

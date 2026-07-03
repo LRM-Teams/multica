@@ -28,7 +28,7 @@ These are the core variables you must think about before deploying — some have
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_MAX_CONNS` | `25` | pgxpool max connections. The daemon polls frequently (every 3s) and uses connections; larger deployments may need a higher value |
+| `DATABASE_MAX_CONNS` | `25` | pgxpool max connections. The daemon polls frequently (every 2s) and uses connections; larger deployments may need a higher value |
 | `DATABASE_MIN_CONNS` | `5` | Minimum idle connections |
 
 **When unset**, the values above are used — **not** pgx's built-in 4/NumCPU defaults, which previously caused pool exhaustion in production.
@@ -177,7 +177,7 @@ The daemon runs on the user's local machine, and its config is read from local e
 |---|---|---|
 | `MULTICA_SERVER_URL` | `ws://localhost:8080/ws` | Server address (self-host: replace with your domain) |
 | `MULTICA_DAEMON_HEARTBEAT_INTERVAL` | `15s` | Heartbeat interval |
-| `MULTICA_DAEMON_POLL_INTERVAL` | `3s` | Task polling interval |
+| `MULTICA_DAEMON_POLL_INTERVAL` | `2s` | Task polling interval |
 | `MULTICA_DAEMON_MAX_CONCURRENT_TASKS` | `20` | Max concurrent tasks |
 | `MULTICA_<PROVIDER>_PATH` | matches the CLI name | Path to each AI coding tool's executable (for example `MULTICA_CLAUDE_PATH`) |
 | `MULTICA_<PROVIDER>_MODEL` | empty | Default model for each AI coding tool |

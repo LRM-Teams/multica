@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { cn } from "@multica/ui/lib/utils";
+import { useT } from "../i18n";
 import { RuntimePicker, isRuntimeUsableForUser } from "../agents/components/runtime-picker";
 import { ModelDropdown } from "../agents/components/model-dropdown";
 import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
@@ -50,6 +51,7 @@ function isStorageKeyDone(storageKey: string | null): boolean {
 }
 
 export function WindySetupModal() {
+  const { t } = useT("workspace");
   const wsId = useWorkspaceId();
   const user = useAuthStore((s) => s.user);
   const qc = useQueryClient();
@@ -129,9 +131,9 @@ export function WindySetupModal() {
               <Bot className="size-5" />
             </div>
             <div className="min-w-0">
-              <DialogTitle>Set up Windy HR</DialogTitle>
+              <DialogTitle>{t(($) => $.windy_setup.title)}</DialogTitle>
               <DialogDescription className="mt-1">
-                Required update for every member: choose where Windy runs, then we will refresh its runtime, model, and instructions.
+                {t(($) => $.windy_setup.description)}
               </DialogDescription>
             </div>
           </div>
@@ -139,14 +141,14 @@ export function WindySetupModal() {
 
         <div className="space-y-4 px-5 py-4">
           <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-            Windy recruits useful agents from your chat and keeps the generated hiring card in the current conversation. Its Direct Message is pinned after setup.
+            {t(($) => $.windy_setup.intro)}
           </div>
 
           {!hasUsableRuntime && !runtimesLoading ? (
             <div className="rounded-lg border border-dashed px-4 py-5 text-center">
-              <p className="text-sm font-medium">Connect or share a runtime first</p>
+              <p className="text-sm font-medium">{t(($) => $.windy_setup.runtime_required_title)}</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Windy needs an available runtime before it can recruit agents or update its own instructions.
+                {t(($) => $.windy_setup.runtime_required_description)}
               </p>
               <Button
                 type="button"
@@ -155,7 +157,7 @@ export function WindySetupModal() {
                 className="mt-3"
                 onClick={() => refetchRuntimes()}
               >
-                Refresh runtimes
+                {t(($) => $.windy_setup.refresh_runtimes)}
               </Button>
             </div>
           ) : (
@@ -191,7 +193,7 @@ export function WindySetupModal() {
 
         <DialogFooter className="items-center justify-between gap-3 sm:flex-row">
           <p className="text-xs text-muted-foreground">
-            This prompt is one-time per member for the current Windy update.
+            {t(($) => $.windy_setup.one_time_note)}
           </p>
           <Button
             type="button"
@@ -200,7 +202,7 @@ export function WindySetupModal() {
             className={cn("min-w-32", saving && "cursor-wait")}
           >
             {saving ? <Loader2 className="size-4 animate-spin" /> : null}
-            Update Windy
+            {t(($) => $.windy_setup.update)}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -23,6 +23,7 @@ import { RuntimePicker, isRuntimeUsableForUser } from "../agents/components/runt
 import { ModelDropdown } from "../agents/components/model-dropdown";
 import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
 import { cn } from "@multica/ui/lib/utils";
+import { useT } from "../i18n";
 import { listParam, parseJoeCreateAgentURL } from "./joe-create-agent-link-utils";
 
 export function JoeCreateAgentLink({
@@ -88,6 +89,7 @@ function InlineCreateAgentDialog({
   draft: AgentCreationDraft;
   onClose: () => void;
 }) {
+  const { t } = useT("agents");
   const wsId = useWorkspaceId();
   const currentUser = useAuthStore((s) => s.user);
   const qc = useQueryClient();
@@ -129,7 +131,7 @@ function InlineCreateAgentDialog({
       const created = await api.createAgent(payload);
       qc.setQueryData<Agent[]>(workspaceKeys.agents(wsId), (current = []) => [...current, created]);
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
-      toast.success(`${draft.name} created`);
+      toast.success(t(($) => $.windy.created_toast, { name: draft.name }));
       onClose();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create agent");
@@ -142,9 +144,9 @@ function InlineCreateAgentDialog({
     <Dialog open onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-lg gap-0 overflow-hidden p-0">
         <DialogHeader className="border-b px-5 py-4">
-          <DialogTitle>Create Agent @{draft.name}</DialogTitle>
+          <DialogTitle>{t(($) => $.windy.create_title, { name: draft.name })}</DialogTitle>
           <DialogDescription>
-            Review Windy's hiring card, pick a runtime/model, then start the agent here.
+            {t(($) => $.windy.create_description)}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 px-5 py-4">
@@ -158,7 +160,7 @@ function InlineCreateAgentDialog({
           </div>
           {!hasUsableRuntime && !runtimesLoading ? (
             <div className="rounded-lg border border-dashed px-4 py-5 text-center text-sm text-muted-foreground">
-              Connect or share a runtime before creating this agent.
+              {t(($) => $.windy.runtime_required)}
             </div>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2">
@@ -192,11 +194,11 @@ function InlineCreateAgentDialog({
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose} disabled={creating}>
-            Cancel
+            {t(($) => $.windy.cancel)}
           </Button>
           <Button type="button" onClick={handleCreate} disabled={!selectedRuntime || creating || !hasUsableRuntime}>
             {creating ? <Loader2 className="size-4 animate-spin" /> : null}
-            Create Agent
+            {t(($) => $.windy.create_agent)}
           </Button>
         </DialogFooter>
       </DialogContent>

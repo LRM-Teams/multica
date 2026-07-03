@@ -234,7 +234,7 @@ export function CreateAgentDialog({
   const headerTitle = isDuplicate
     ? t(($) => $.create_dialog.title_duplicate)
     : isDraft
-      ? "Create Agent from Windy Draft"
+      ? t(($) => $.windy.create_agent)
       : t(($) => $.create_dialog.title_create);
 
   return (
@@ -254,7 +254,7 @@ export function CreateAgentDialog({
           )}
           {isDraft && draft && (
             <DialogDescription className="mt-1 text-xs">
-              Windy prepared this agent draft. Review the fields, choose a runtime, then create it.
+              {t(($) => $.windy.draft_description)}
             </DialogDescription>
           )}
         </DialogHeader>

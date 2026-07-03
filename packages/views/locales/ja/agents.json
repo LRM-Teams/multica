@@ -501,5 +501,15 @@
     "empty_select": "左のエージェントを選択すると詳細が表示されます",
     "delete_success": "エージェントを削除しました",
     "delete_failed": "エージェントの削除に失敗しました"
+  },
+  "windy": {
+    "ask_windy": "Ask Windy",
+    "draft_description": "Windy prepared this agent draft. Review the fields, choose a runtime, then create it.",
+    "create_title": "Create Agent @{{name}}",
+    "create_description": "Review Windy's hiring card, pick a runtime/model, then start the agent here.",
+    "runtime_required": "Connect or share a runtime before creating this agent.",
+    "cancel": "Cancel",
+    "create_agent": "Create Agent",
+    "created_toast": "{{name}} created"
   }
 }

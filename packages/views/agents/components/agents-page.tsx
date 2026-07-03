@@ -833,7 +833,7 @@ function PageHeaderBar({
       <div className="flex items-center gap-2">
         <Button type="button" size="sm" variant="outline" onClick={onEnsureJoe} disabled={ensuringJoe}>
           {ensuringJoe ? <Loader2 className="h-3 w-3 animate-spin" /> : <Bot className="h-3 w-3" />}
-          Ask Windy
+          {t(($) => $.windy.ask_windy)}
         </Button>
         <Button type="button" size="sm" onClick={onCreate}>
           <Plus className="h-3 w-3" />

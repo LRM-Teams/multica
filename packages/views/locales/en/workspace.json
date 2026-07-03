@@ -30,5 +30,15 @@
     "description": "This workspace doesn't exist or you don't have access.",
     "go_to_workspaces": "Go to my workspaces",
     "sign_in_different": "Sign in as a different user"
+  },
+  "windy_setup": {
+    "title": "Set up Windy HR",
+    "description": "Required update for every member: choose where Windy runs, then we will refresh its runtime, model, and instructions.",
+    "intro": "Windy recruits useful agents from your chat and keeps the generated hiring card in the current conversation. Its Direct Message is pinned after setup.",
+    "runtime_required_title": "Connect or share a runtime first",
+    "runtime_required_description": "Windy needs an available runtime before it can recruit agents or update its own instructions.",
+    "refresh_runtimes": "Refresh runtimes",
+    "one_time_note": "This prompt is one-time per member for the current Windy update.",
+    "update": "Update Windy"
   }
 }

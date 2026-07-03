@@ -30,5 +30,15 @@
     "description": "존재하지 않는 워크스페이스이거나 접근 권한이 없습니다.",
     "go_to_workspaces": "내 워크스페이스로 이동",
     "sign_in_different": "다른 계정으로 로그인"
+  },
+  "windy_setup": {
+    "title": "Set up Windy HR",
+    "description": "Required update for every member: choose where Windy runs, then we will refresh its runtime, model, and instructions.",
+    "intro": "Windy recruits useful agents from your chat and keeps the generated hiring card in the current conversation. Its Direct Message is pinned after setup.",
+    "runtime_required_title": "Connect or share a runtime first",
+    "runtime_required_description": "Windy needs an available runtime before it can recruit agents or update its own instructions.",
+    "refresh_runtimes": "Refresh runtimes",
+    "one_time_note": "This prompt is one-time per member for the current Windy update.",
+    "update": "Update Windy"
   }
 }

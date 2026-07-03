@@ -22,6 +22,7 @@ import {
 import { dmKeys } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
 import { useAuthStore } from "@multica/core/auth";
+import { ApiError } from "@multica/core/api";
 import { api } from "@multica/core/api";
 import { useFileUpload, type UploadResult } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -46,6 +47,7 @@ import { ContentEditor, type ContentEditorRef } from "../../editor/content-edito
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useT } from "../../i18n/use-t";
+import { composePayloadKey, useComposeSendIntent } from "../hooks/use-compose-send-intent";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelComposer, ConversationHeader, MobileThreadDrawerContent } from "./conversation-surface";
@@ -398,6 +400,10 @@ function DmChannelConversation({
   const typingStartedRef = useRef(false);
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Send idempotency + send lock (#207) — see use-compose-send-intent. DM
+  // top-level and thread reply each own an independent intent.
+  const dmSend = useComposeSendIntent();
+  const threadSend = useComposeSendIntent();
 
   // Agents surface lifecycle via the query-driven working indicator, so filter
   // them out of the transient typing render (same rule as the group thread).
@@ -631,12 +637,16 @@ function DmChannelConversation({
 
   const handleSend = () => {
     const content = editorRef.current?.getMarkdown()?.trim();
+    // Empty-content early-return before the send lock: after a send succeeds the
+    // editor is cleared, so a still-held Enter grabs empty content and stops here.
     if (!content) return;
     if (editorRef.current?.hasActiveUploads()) return;
     const attachmentIds: string[] = [];
     for (const [url, id] of uploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
+    const clientMessageId = dmSend.beginSend(composePayloadKey(content, attachmentIds));
+    if (clientMessageId === null) return;
     if (typingStartedRef.current) {
       typingStartedRef.current = false;
       publishTyping(false);
@@ -646,13 +656,19 @@ function DmChannelConversation({
         channelId,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        clientMessageId,
       },
       {
         onSuccess: () => {
           editorRef.current?.clearContent();
           uploadMapRef.current.clear();
           onDraftClear?.();
+          dmSend.finishSend();
         },
+        onError: (err) => {
+          if (err instanceof ApiError && err.status === 409) dmSend.resetIntent();
+        },
+        onSettled: () => dmSend.settleSend(),
       },
     );
   };
@@ -665,22 +681,28 @@ function DmChannelConversation({
     for (const [url, id] of threadUploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
+    const clientMessageId = threadSend.beginSend(composePayloadKey(content, attachmentIds));
+    if (clientMessageId === null) return;
     sendThreadMessage.mutate(
       {
         channelId,
         messageId: threadRoot.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        clientMessageId,
       },
       {
         onSuccess: () => {
           threadEditorRef.current?.clearContent();
           threadUploadMapRef.current.clear();
           dispatch({ type: "setThreadDraftEmpty", empty: true });
+          threadSend.finishSend();
         },
-        onError: () => {
-          toast.error(t(($) => $.thread.send_failed));
+        onError: (err) => {
+          if (err instanceof ApiError && err.status === 409) threadSend.resetIntent();
+          else toast.error(t(($) => $.thread.send_failed));
         },
+        onSettled: () => threadSend.settleSend(),
       },
     );
   };

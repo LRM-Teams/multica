@@ -66,11 +66,16 @@ export function useComposeSendIntent(): ComposeSendIntent {
 
 /**
  * Stable key for the current compose payload. The intent id is re-minted
- * whenever this changes, so editing the text OR the bound attachments after a
- * failed send counts as a new intent (fresh id) rather than a 409-conflicting
- * retry of the previous one.
+ * whenever this changes, so editing the text, the bound attachments, OR the
+ * `scope` (e.g. the thread root a reply targets) counts as a new intent (fresh
+ * id) rather than a 409-conflicting retry of the previous one — the backend
+ * treats a differing reply-thread as a same-id / different-payload 409.
  */
-export function composePayloadKey(content: string, attachmentIds: readonly string[] = []): string {
-  // NUL separator so no content/attachment combination can alias another.
-  return content + "\u0000" + attachmentIds.join(",");
+export function composePayloadKey(
+  content: string,
+  attachmentIds: readonly string[] = [],
+  scope = "",
+): string {
+  // NUL separator so no scope/content/attachment combination can alias another.
+  return [scope, content, attachmentIds.join(",")].join("\u0000");
 }

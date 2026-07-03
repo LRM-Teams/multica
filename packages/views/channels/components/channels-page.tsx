@@ -1294,7 +1294,7 @@ export function ChannelsPage() {
     for (const [url, id] of threadUploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
-    const clientMessageId = threadSend.beginSend(composePayloadKey(content, attachmentIds));
+    const clientMessageId = threadSend.beginSend(composePayloadKey(content, attachmentIds, threadRoot.id));
     if (clientMessageId === null) return;
     sendThreadMessage.mutate(
       {

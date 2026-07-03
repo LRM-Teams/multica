@@ -30,6 +30,13 @@ describe("composePayloadKey", () => {
     // Without a separator, ("a","b"+"c") could collide with ("a"+"b","c").
     expect(composePayloadKey("a", ["bc"])).not.toBe(composePayloadKey("ab", ["c"]));
   });
+
+  it("differs by scope so the same text in a different thread is a new intent", () => {
+    // Backend treats a differing reply-thread as same-id / different-payload 409.
+    expect(composePayloadKey("hi", [], "thread-A")).not.toBe(
+      composePayloadKey("hi", [], "thread-B"),
+    );
+  });
 });
 
 describe("useComposeSendIntent", () => {

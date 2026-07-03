@@ -216,7 +216,8 @@
   "message_loading": {
     "load_older": "過去のメッセージを読み込む",
     "loading_older": "過去のメッセージを読み込み中...",
-    "load_failed_retry": "メッセージを読み込めませんでした · 再試行"
+    "load_failed_retry": "メッセージを読み込めませんでした · 再試行",
+    "jump_not_found": "この会話の履歴にそのメッセージが見つかりませんでした"
   },
   "conv_search": {
     "placeholder": "{{name}} を検索…",

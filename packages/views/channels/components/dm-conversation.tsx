@@ -10,6 +10,7 @@ import {
   channelMessagesPageOptions,
   flattenChannelMessagePages,
   channelMessagesFirstItemIndex,
+  useEnsureMessageLoaded,
   useMarkChannelThreadRead,
   useMarkChannelRead,
   useSendChannelMessage,
@@ -423,6 +424,24 @@ function DmChannelConversation({
     ? (convSearch.results[convSearch.index]?.message_id ?? null)
     : null;
   const highlightMessageId = threadParentHighlightId ?? searchHighlightId;
+
+  // A search hit or "view parent" jump can target a message in an older,
+  // not-yet-fetched page. Page older history until it loads (found) or history
+  // is exhausted, so the viewport can actually scroll to it instead of the jump
+  // silently doing nothing.
+  const jumpTargetLoaded = useMemo(
+    () => !!highlightMessageId && messages.some((m) => m.id === highlightMessageId),
+    [highlightMessageId, messages],
+  );
+  // `exhausted` (target not anywhere in history) is surfaced declaratively as
+  // an inline notice below, so the jump never fails silently.
+  const jumpStatus = useEnsureMessageLoaded({
+    targetId: highlightMessageId,
+    targetLoaded: jumpTargetLoaded,
+    hasOlder: !!hasOlderMessages,
+    isFetchingOlder: isFetchingOlderMessages,
+    fetchOlder: fetchOlderMessages,
+  });
 
   // Debounced in-conversation search.
   useEffect(() => {
@@ -853,6 +872,11 @@ function DmChannelConversation({
             <X className="size-4" />
           </Button>
         </div>
+      )}
+      {jumpStatus === "exhausted" && (
+        <output className="block border-b bg-muted/40 px-5 py-1.5 text-center text-xs text-muted-foreground">
+          {t(($) => $.message_loading.jump_not_found)}
+        </output>
       )}
       <ChannelMessageList
         key={channelId}

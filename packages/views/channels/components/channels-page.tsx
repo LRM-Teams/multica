@@ -38,6 +38,7 @@ import {
   channelMessagesPageOptions,
   channelMessagesFirstItemIndex,
   flattenChannelMessagePages,
+  useEnsureMessageLoaded,
   channelsOptions,
   archivedChannelsOptions,
   channelMembersOptions,
@@ -822,12 +823,34 @@ export function ChannelsPage() {
     ? (convSearchResults[convSearchIndex]?.message_id ?? null)
     : highlightMessageId;
 
+  // A search hit or quote back-reference can point at a message that lives in
+  // an older, not-yet-fetched page. The viewport can only scroll to a message
+  // it has loaded, so drive the infinite query to page older history until the
+  // target loads (found) or history is exhausted (not found).
+  const jumpTargetLoaded = useMemo(
+    () => !!effectiveHighlightId && messages.some((m) => m.id === effectiveHighlightId),
+    [effectiveHighlightId, messages],
+  );
+  // `exhausted` (target not anywhere in history) is surfaced declaratively as
+  // an inline notice below, so the jump never fails silently.
+  const jumpStatus = useEnsureMessageLoaded({
+    targetId: effectiveHighlightId,
+    targetLoaded: jumpTargetLoaded,
+    hasOlder: !!hasOlderMessages,
+    isFetchingOlder: isFetchingOlderMessages,
+    fetchOlder: fetchOlderMessages,
+  });
+
   useEffect(() => {
     if (convSearchOpen) return;
-    if (!highlightMessageId || messages.length === 0) return;
+    // Only flash-then-clear a quote highlight once its target is actually on
+    // screen — while older pages are still being paged toward it, keep it set
+    // so the scroll lands when it loads. The timer's cleanup keeps this a
+    // reactive flash, not a state-driven event handler.
+    if (!highlightMessageId || !jumpTargetLoaded) return;
     const clear = setTimeout(() => setHighlightMessageId(null), 2500);
     return () => clearTimeout(clear);
-  }, [highlightMessageId, messages.length, convSearchOpen]);
+  }, [highlightMessageId, convSearchOpen, jumpTargetLoaded]);
 
   // Clear search state when the active channel changes.
   useEffect(() => {
@@ -2158,6 +2181,12 @@ export function ChannelsPage() {
                     </Button>
                   </div>
                 </div>
+              )}
+
+              {jumpStatus === "exhausted" && (
+                <output className="block border-b bg-muted/40 px-5 py-1.5 text-center text-xs text-muted-foreground">
+                  {t(($) => $.message_loading.jump_not_found)}
+                </output>
               )}
 
               <ChannelMessageList

@@ -216,7 +216,8 @@
   "message_loading": {
     "load_older": "加载更早消息",
     "loading_older": "正在加载更早消息...",
-    "load_failed_retry": "消息加载失败 · 重试"
+    "load_failed_retry": "消息加载失败 · 重试",
+    "jump_not_found": "在该会话的历史消息中未找到这条消息"
   },
   "conv_search": {
     "placeholder": "在 {{name}} 中搜索…",

@@ -1277,6 +1277,9 @@ export function ChannelsPage() {
           // 409 = same id, conflicting payload already committed. Retire the
           // intent so the next attempt is fresh instead of a permanent lock.
           if (err instanceof ApiError && err.status === 409) channelSend.resetIntent();
+          // Always surface failure — the draft is kept, but the user must know
+          // this send did NOT land (a silent 409 reads as a sent message).
+          toast.error(t(($) => $.composer.send_failed));
         },
         onSettled: () => channelSend.settleSend(),
       },
@@ -1310,7 +1313,7 @@ export function ChannelsPage() {
         },
         onError: (err) => {
           if (err instanceof ApiError && err.status === 409) threadSend.resetIntent();
-          else toast.error(t(($) => $.thread.send_failed));
+          toast.error(t(($) => $.thread.send_failed));
         },
         onSettled: () => threadSend.settleSend(),
       },

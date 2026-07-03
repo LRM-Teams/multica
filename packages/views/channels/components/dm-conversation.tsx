@@ -667,6 +667,8 @@ function DmChannelConversation({
         },
         onError: (err) => {
           if (err instanceof ApiError && err.status === 409) dmSend.resetIntent();
+          // Always surface failure so a silent 409 isn't mistaken for a sent message.
+          toast.error(t(($) => $.composer.send_failed));
         },
         onSettled: () => dmSend.settleSend(),
       },
@@ -700,7 +702,7 @@ function DmChannelConversation({
         },
         onError: (err) => {
           if (err instanceof ApiError && err.status === 409) threadSend.resetIntent();
-          else toast.error(t(($) => $.thread.send_failed));
+          toast.error(t(($) => $.thread.send_failed));
         },
         onSettled: () => threadSend.settleSend(),
       },

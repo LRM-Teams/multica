@@ -89,6 +89,10 @@ describe("useComposeSendIntent", () => {
     expect(attempt2).not.toBe(attempt1); // new intent → new id
   });
 
+  // Paired UX contract (asserted at the component layer): on a 409 the four send
+  // handlers ALSO surface a failure toast — a silent 409 reads to the user as a
+  // sent message. The hook's job is the recovery below: the NEXT send is a fresh
+  // intent, so the user can simply resend.
   it("409 → resetIntent recovers with a fresh id", () => {
     const { result } = renderHook(() => useComposeSendIntent());
     const key = composePayloadKey("hello");

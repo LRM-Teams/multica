@@ -167,6 +167,7 @@
     "attach_aria": "첨부",
     "mention_aria": "에이전트 멘션",
     "send": "전송",
+    "send_failed": "메시지 전송에 실패했습니다. 다시 시도해 주세요.",
     "issue_ref_aria": "이슈 참조",
     "project_label": "프로젝트",
     "project_none": "프로젝트 없음",

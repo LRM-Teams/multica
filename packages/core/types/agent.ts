@@ -16,7 +16,6 @@ export type RuntimeHealthState =
   | "ok"
   | "update_available"
   | "updating"
-  | "awaiting_confirmation"
   | "failed"
   | "offline";
 

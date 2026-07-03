@@ -44,7 +44,7 @@ describe("runtime health contract helpers", () => {
     expect(
       runtimeCanStartSelfUpdate(
         makeRuntime({
-          runtime_health: "awaiting_confirmation",
+          runtime_health: "updating",
           update_state: "completed",
         }),
         "user-1",
@@ -59,20 +59,20 @@ describe("runtime health contract helpers", () => {
     ).toBe(false);
   });
 
-  it("does not escalate awaiting confirmation into an AppShell attention prompt", () => {
+  it("keeps updating visible without allowing duplicate starts", () => {
     expect(
       runtimeHasHealthAttention(
-        makeRuntime({ runtime_health: "awaiting_confirmation" }),
-        "user-1",
-      ),
-    ).toBe(false);
-
-    expect(
-      runtimeHasHealthAttention(
-        makeRuntime({ runtime_health: "update_available" }),
+        makeRuntime({ runtime_health: "updating" }),
         "user-1",
       ),
     ).toBe(true);
+
+    expect(
+      runtimeCanStartSelfUpdate(
+        makeRuntime({ runtime_health: "updating" }),
+        "user-1",
+      ),
+    ).toBe(false);
   });
 
   it("uses current_version as the confirmed display version", () => {

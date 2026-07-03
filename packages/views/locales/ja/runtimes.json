@@ -81,7 +81,6 @@
     "ok": "正常",
     "update_available": "更新あり",
     "updating": "更新中",
-    "awaiting_confirmation": "確認待ち",
     "failed": "更新失敗",
     "offline": "オフライン"
   },
@@ -244,7 +243,6 @@
     "retry": "再試行",
     "unknown_error": "不明なエラー",
     "initiate_failed": "更新を開始できませんでした",
-    "awaiting_confirmation": "更新しました。デーモンの確認を待っています。",
     "offline": "デーモンはオフラインです",
     "manual_hint": "自動更新がインストール先に書き込めない場合は、そのコンピュータのターミナルで手動更新してください。",
     "manual_action": "手動コマンド",

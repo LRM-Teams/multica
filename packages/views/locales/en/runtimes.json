@@ -85,7 +85,6 @@
     "ok": "OK",
     "update_available": "Update available",
     "updating": "Updating",
-    "awaiting_confirmation": "Waiting for confirmation",
     "failed": "Update failed",
     "offline": "Offline"
   },
@@ -256,7 +255,6 @@
     "retry": "Retry",
     "unknown_error": "Unknown error",
     "initiate_failed": "Failed to initiate update",
-    "awaiting_confirmation": "Updated. Waiting for daemon confirmation.",
     "offline": "Daemon offline",
     "manual_hint": "If the automatic update cannot write to the install location, update from a terminal on that computer.",
     "manual_action": "Manual commands",

@@ -359,11 +359,14 @@ jobs:
       - name: Login to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
 
+      - name: Configure OCI registry
+        run: echo "OCI_REGISTRY=oci://ghcr.io/${GHCR_OWNER}/charts" >> "$GITHUB_ENV"
+
       - name: Push chart to GHCR
-        run: helm push ".chart-packages/multica-${CHART_VERSION}.tgz" "oci://ghcr.io/${GHCR_OWNER}/charts"
+        run: helm push ".chart-packages/multica-${CHART_VERSION}.tgz" "$OCI_REGISTRY"
 
       - name: Verify published chart
-        run: helm show chart "oci://ghcr.io/${GHCR_OWNER}/charts/multica" --version "$CHART_VERSION"
+        run: helm show chart "$OCI_REGISTRY/multica" --version "$CHART_VERSION"
 
   # Build the Desktop installers for Linux and Windows and upload them to
   # the GitHub Release that the `release` job above just published. macOS

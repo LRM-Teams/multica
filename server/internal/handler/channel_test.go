@@ -507,6 +507,83 @@ func TestChannelAmbientGateSerializesConcurrentSameAgentAmbient(t *testing.T) {
 	}
 }
 
+type recordingTaskWakeup struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *recordingTaskWakeup) NotifyTaskAvailable(_, _ string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+}
+
+func (r *recordingTaskWakeup) Count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+func TestChannelAmbientGateTxPathDoesNotWakeBeforeCommit(t *testing.T) {
+	if testHandler == nil || testPool == nil || testHandler.TaskService == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	withChannelAmbientGateTestConfig(t)
+	agentID := createHandlerTestAgent(t, "Ambient Tx No Wake Gate "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "ambient-tx-no-wake-gate-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	agent, err := testHandler.Queries.GetAgent(ctx, parseUUID(agentID))
+	if err != nil {
+		t.Fatalf("load agent: %v", err)
+	}
+	trigger := ChannelMessageResponse{
+		ID:        uuid.NewString(),
+		Content:   "ordinary ambient update",
+		Type:      "user",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	recorder := &recordingTaskWakeup{}
+	oldWakeup := testHandler.TaskService.Wakeup
+	testHandler.TaskService.Wakeup = recorder
+	t.Cleanup(func() {
+		testHandler.TaskService.Wakeup = oldWakeup
+	})
+
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	task, ok := testHandler.createChannelAmbientPromptTaskTx(ctx, tx, ch, agent, trigger, parseUUID(testUserID))
+	if !ok {
+		t.Fatal("create ambient prompt task in tx failed")
+	}
+	if got := recorder.Count(); got != 0 {
+		t.Fatalf("ambient tx helper woke daemon before commit: got %d wakeups, want 0", got)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+	if got := recorder.Count(); got != 0 {
+		t.Fatalf("ambient tx helper woke daemon during commit: got %d wakeups, want 0", got)
+	}
+	testHandler.TaskService.PublishChatTaskQueued(ctx, task, false)
+	if got := recorder.Count(); got != 1 {
+		t.Fatalf("post-commit publish wakeups = %d, want 1", got)
+	}
+}
+
 func TestChannelAmbientGateFailsClosedOnStatsError(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

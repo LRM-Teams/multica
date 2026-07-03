@@ -767,8 +767,25 @@ func (s *TaskService) EnqueueAmbientChatTask(ctx context.Context, chatSession db
 	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, true, 1, false)
 }
 
+// CreateAmbientChatTaskRow inserts the low-priority ambient chat task row using
+// the supplied query handle without publishing realtime or daemon wake side
+// effects. Callers that pass transaction-bound queries must call
+// PublishChatTaskQueued only after the transaction commits successfully.
+func (s *TaskService) CreateAmbientChatTaskRow(ctx context.Context, q *db.Queries, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.createChatTaskRow(ctx, q, chatSession, initiatorUserID, true, 1)
+}
+
 func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID, forceFreshSession bool, priority int32, interruptFollowup bool) (db.AgentTaskQueue, error) {
-	agent, err := s.Queries.GetAgent(ctx, chatSession.AgentID)
+	task, err := s.createChatTaskRow(ctx, s.Queries, chatSession, initiatorUserID, forceFreshSession, priority)
+	if err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	s.PublishChatTaskQueued(ctx, task, interruptFollowup)
+	return task, nil
+}
+
+func (s *TaskService) createChatTaskRow(ctx context.Context, q *db.Queries, chatSession db.ChatSession, initiatorUserID pgtype.UUID, forceFreshSession bool, priority int32) (db.AgentTaskQueue, error) {
+	agent, err := q.GetAgent(ctx, chatSession.AgentID)
 	if err != nil {
 		slog.Error("chat task enqueue failed", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)
 		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
@@ -776,7 +793,7 @@ func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSe
 	if agent.ArchivedAt.Valid {
 		return db.AgentTaskQueue{}, ErrChatTaskAgentArchived
 	}
-	ready, reason, err := AgentReadiness(ctx, s.Queries, agent)
+	ready, reason, err := AgentReadiness(ctx, q, agent)
 	if err != nil {
 		slog.Error("chat task enqueue failed", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)
 		return db.AgentTaskQueue{}, fmt.Errorf("load agent runtime: %w", err)
@@ -786,7 +803,7 @@ func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSe
 		return db.AgentTaskQueue{}, ErrChatTaskAgentNoRuntime
 	}
 
-	task, err := s.Queries.CreateChatTask(ctx, db.CreateChatTaskParams{
+	task, err := q.CreateChatTask(ctx, db.CreateChatTaskParams{
 		AgentID:           chatSession.AgentID,
 		RuntimeID:         agent.RuntimeID,
 		Priority:          priority,
@@ -798,15 +815,20 @@ func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSe
 		slog.Error("chat task enqueue failed", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)
 		return db.AgentTaskQueue{}, fmt.Errorf("create chat task: %w", err)
 	}
+	return task, nil
+}
 
-	slog.Info("chat task enqueued", "task_id", util.UUIDToString(task.ID), "chat_session_id", util.UUIDToString(chatSession.ID), "agent_id", util.UUIDToString(chatSession.AgentID), "force_fresh_session", forceFreshSession)
+// PublishChatTaskQueued emits the side effects for a committed chat task row.
+// Transactional callers must invoke this only after a successful commit so
+// realtime clients and daemons never observe a rolled-back task.
+func (s *TaskService) PublishChatTaskQueued(ctx context.Context, task db.AgentTaskQueue, interruptFollowup bool) {
+	slog.Info("chat task enqueued", "task_id", util.UUIDToString(task.ID), "chat_session_id", util.UUIDToString(task.ChatSessionID), "agent_id", util.UUIDToString(task.AgentID), "force_fresh_session", task.ForceFreshSession)
 	// See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
 	if interruptFollowup {
 		s.interruptInFlightChatTasksForFollowup(ctx, task)
 	}
 	s.NotifyTaskEnqueued(ctx, task)
-	return task, nil
 }
 
 // CancelTasksForIssue cancels every active task on the issue, reconciles each

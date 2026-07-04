@@ -56,6 +56,7 @@ import { CommentCard } from "./comment-card";
 import { CommentInput } from "./comment-input";
 import { ResolvedThreadBar } from "./resolved-thread-bar";
 import { collectThreadReplies, deriveThreadResolution } from "./thread-utils";
+import { isActivityLaneEntry, isReactableComment, activityRunPointer } from "./timeline-isolation";
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
 import { ExecutionLogSection } from "./execution-log-section";
 import { PullRequestList } from "./pull-request-list";
@@ -265,6 +266,14 @@ function formatActivity(
 }
 
 
+// Label for an execution-result comment (status_change / progress_update /
+// system) rendered in the Activity lane. Its content is the label; a blank
+// body falls back to a generic label so the row is never empty (#243 / E1).
+function executionResultLabel(entry: TimelineEntry, t: ActivityT): string {
+  const text = (entry.content ?? "").replace(/\s+/g, " ").trim();
+  return text || t(($) => $.activity.execution_result);
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -406,6 +415,7 @@ function ActivityBlock({
   showOlder,
   onToggleShowOlder,
   getActorName,
+  runHrefFor,
   t,
   timeAgo,
 }: {
@@ -419,6 +429,9 @@ function ActivityBlock({
   showOlder: boolean;
   onToggleShowOlder: () => void;
   getActorName: (type: string, id: string) => string;
+  // Resolve an explicit href to an entry's #236 Activity run, or null when the
+  // entry carries no run pointer.
+  runHrefFor: (entry: TimelineEntry) => string | null;
   t: ActivityT;
   timeAgo: (dateStr: string) => string;
 }) {
@@ -478,6 +491,12 @@ function ActivityBlock({
         const isPriorityChange = entry.action === "priority_changed";
         const isStartDateChange = entry.action === "start_date_changed";
         const isDueDateChange = entry.action === "due_date_changed";
+        // Execution-result comments (status_change / progress_update / system)
+        // are routed here as Activity entries. They carry `content`, not an
+        // `action`, so their label is the content itself — never empty, never
+        // a reactable Message row (#243 / E1).
+        const isExecutionResult = entry.type === "comment";
+        const runHref = runHrefFor(entry);
 
         let leadIcon: React.ReactNode;
         if (isStatusChange && details.to) {
@@ -492,6 +511,10 @@ function ActivityBlock({
           leadIcon = <ActorAvatar actorType={entry.actor_type} actorId={entry.actor_id} size={16} />;
         }
 
+        const label = isExecutionResult
+          ? executionResultLabel(entry, t)
+          : formatActivity(entry, t, getActorName);
+
         return (
           <div key={entry.id} className="flex items-center text-xs text-muted-foreground">
             <div className="mr-2 flex w-4 shrink-0 justify-center">
@@ -499,7 +522,15 @@ function ActivityBlock({
             </div>
             <div className="flex min-w-0 flex-1 items-center gap-1">
               <span className="shrink-0 font-medium">{getActorName(entry.actor_type, entry.actor_id)}</span>
-              <span className="truncate">{formatActivity(entry, t, getActorName)}</span>
+              <span className="truncate">{label}</span>
+              {runHref && (
+                <AppLink
+                  href={runHref}
+                  className="shrink-0 font-medium text-brand underline-offset-2 hover:underline"
+                >
+                  {t(($) => $.activity.view_activity_run)}
+                </AppLink>
+              )}
               {(entry.coalesced_count ?? 1) > 1 &&
                 entry.action !== "task_completed" &&
                 entry.action !== "task_failed" && (
@@ -895,12 +926,15 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     // bucketed under their parent's id and rendered nested inside CommentCard.
     // No orphan rescue needed: the timeline is fetched in full, so every
     // reply's parent is always in the same array.
+    // Execution-result comments (status_change / progress_update / system) are
+    // Activity-lane entries, not Message rows — they are never nested as thread
+    // replies and never collect replies of their own (#243 / E1).
     const topLevel = timeline.filter(
-      (e) => e.type === "activity" || !e.parent_id,
+      (e) => isActivityLaneEntry(e) || !e.parent_id,
     );
     const repliesByParent = new Map<string, TimelineEntry[]>();
     for (const e of timeline) {
-      if (e.type === "comment" && e.parent_id) {
+      if (isReactableComment(e) && e.parent_id) {
         const list = repliesByParent.get(e.parent_id) ?? [];
         list.push(e);
         repliesByParent.set(e.parent_id, list);
@@ -913,7 +947,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     const prevThreadReplies = prevThreadRepliesRef.current;
     const threadReplies = new Map<string, TimelineEntry[]>();
     for (const root of topLevel) {
-      if (root.type !== "comment") continue;
+      if (!isReactableComment(root)) continue;
       const fresh = collectThreadReplies(root.id, repliesByParent);
       const previous = prevThreadReplies.get(root.id);
       threadReplies.set(
@@ -950,10 +984,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       coalesced.push(entry);
     }
 
-    // Group consecutive activities together so the connector line works
+    // Group consecutive activity-lane entries together so the connector line
+    // works. Execution-result comments join the activities lane here so they
+    // render as Activity entries, never as reactable Message rows (#243 / E1).
     const groups: { type: "activities" | "comment"; entries: TimelineEntry[] }[] = [];
     for (const entry of coalesced) {
-      if (entry.type === "activity") {
+      if (isActivityLaneEntry(entry)) {
         const last = groups[groups.length - 1];
         if (last?.type === "activities") {
           last.entries.push(entry);
@@ -1286,6 +1322,20 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     if (panel.isCollapsed()) panel.expand();
     else panel.collapse();
   }, [isMobile, sidebarRef]);
+
+  // Resolve an explicit href to an execution entry's #236 Activity run. Agent
+  // runs live on the agent detail surface; the run pointer id rides along as a
+  // query param so the Activity lane can deep-link the exact run. Returns null
+  // when the entry carries no pointer or isn't agent-authored, so no dead link
+  // is rendered — but the row still shows its content (never an empty row).
+  const runHrefFor = useCallback(
+    (entry: TimelineEntry): string | null => {
+      const runId = activityRunPointer(entry);
+      if (!runId || entry.actor_type !== "agent") return null;
+      return `${paths.agentDetail(entry.actor_id)}?run=${encodeURIComponent(runId)}`;
+    },
+    [paths],
+  );
 
   if (loading) {
     return (
@@ -1667,6 +1717,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         showOlder={showOlder}
         onToggleShowOlder={() => showOlderActivities(item.id)}
         getActorName={getActorName}
+        runHrefFor={runHrefFor}
         t={t}
         timeAgo={timeAgo}
       />

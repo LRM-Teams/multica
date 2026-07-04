@@ -12,7 +12,10 @@ import { initialsOf } from "../../common/initials";
 import { AttachmentList } from "../../issues/components/comment-card";
 import { useT } from "../../i18n/use-t";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
-import { formatMessagePartsPreview } from "./message-parts-preview";
+import {
+  formatMessagePartsPreview,
+  unwrapStructuredPreviewContent,
+} from "./message-parts-preview";
 
 function formatTime(value: string): string {
   try {
@@ -84,7 +87,9 @@ export function ThreadRootPreview({
       avatar
     );
   const nameNode = <span className="font-medium text-foreground">{displayName}</span>;
-  const compactBody = formatMessagePartsPreview(message.parts);
+  const compactBody =
+    formatMessagePartsPreview(message.parts) ??
+    unwrapStructuredPreviewContent(message.content);
 
   return (
     <div className="shrink-0 border-b border-border/40 bg-background px-5 py-3">

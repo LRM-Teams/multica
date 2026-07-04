@@ -1,7 +1,10 @@
 import { preprocessMentionShortcodes } from "@multica/ui/markdown";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import type { Agent, MemberWithUser, MessagePart } from "@multica/core/types";
-import { formatMessagePartsPreview } from "./message-parts-preview";
+import {
+  formatMessagePartsPreview,
+  unwrapStructuredPreviewContent,
+} from "./message-parts-preview";
 
 type MentionType = "member" | "agent";
 type ChannelAuthorType = "user" | "agent" | "lark" | "system";
@@ -77,7 +80,8 @@ export function formatChannelMessagePreview(
   resolveMention: MentionPreviewResolver,
   parts?: MessagePart[] | null,
 ) {
-  const source = formatMessagePartsPreview(parts) ?? content;
+  const source =
+    formatMessagePartsPreview(parts) ?? unwrapStructuredPreviewContent(content) ?? content;
   const readableContent = preprocessMentionShortcodes(source)
     .replace(mentionLinkPattern, (_match: string, label: string, type: MentionType, id: string) => {
       const resolved = resolveMention(type, id, label);

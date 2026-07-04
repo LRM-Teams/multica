@@ -128,4 +128,25 @@ describe("ThreadRootPreview", () => {
     expect(screen.getByText("[Sticker] Hi sticker")).toBeInTheDocument();
     expect(screen.queryByText(":sticker:hi:")).not.toBeInTheDocument();
   });
+
+  // GAP 2 — load-bearing invariant. A structured-action envelope with no
+  // renderable text parts and no output must unwrap to the neutral "…"
+  // placeholder, which keeps `compactBody` truthy so the compact body NEVER
+  // falls through to rendering the raw envelope JSON as markdown. If a future
+  // change made the placeholder empty, `compactBody` would become falsy and the
+  // raw JSON would leak — this test would then fail.
+  it("shows the neutral placeholder, never raw envelope JSON, for a root with no renderable text", () => {
+    const raw = '{"action":"message_send","parts":[{"type":"image","url":"x"}]}';
+    const { container } = render(
+      <ThreadRootPreview
+        message={makeMessage({ content: raw, parts: [] })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("…")).toBeInTheDocument();
+    expect(container.textContent).not.toContain('"action"');
+    expect(container.textContent).not.toContain("{");
+    expect(container.textContent).not.toContain("image");
+  });
 });

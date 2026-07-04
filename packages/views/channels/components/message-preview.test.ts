@@ -4,6 +4,7 @@ import {
   resolveChannelAuthorDisplayName,
   type MentionPreviewResolver,
 } from "./message-preview";
+import { extractEnvelopeParts } from "./message-parts-preview";
 
 const resolveMention: MentionPreviewResolver = (type, id, fallback) => {
   if (type === "agent" && id === "agent-1") return "Frontend Engineer";
@@ -62,6 +63,92 @@ describe("formatChannelMessagePreview", () => {
         [{ type: "sticker", sticker_id: "internal-id" }],
       ),
     ).toBe("Atlas: [Sticker]");
+  });
+
+  it("unwraps a raw structured-action envelope in content when parts are empty (never leaks JSON)", () => {
+    const raw =
+      '{"action":"message_send","output":"hi","parts":[{"type":"text","text":"hi there"}]}';
+    const result = formatChannelMessagePreview("Atlas", raw, resolveMention, []);
+    expect(result).toBe("Atlas: hi there");
+    expect(result).not.toContain('"action"');
+    expect(result).not.toContain("{");
+  });
+
+  it("unwraps a raw structured-action envelope when parts arg is undefined", () => {
+    const raw =
+      '{"action":"message_send","output":"hi","parts":[{"type":"text","text":"hi there"}]}';
+    const result = formatChannelMessagePreview("Atlas", raw, resolveMention);
+    expect(result).toBe("Atlas: hi there");
+    expect(result).not.toContain('"action"');
+  });
+
+  it("leaves normal text content unchanged when parts are empty", () => {
+    expect(
+      formatChannelMessagePreview("Atlas", "just a message", resolveMention, []),
+    ).toBe("Atlas: just a message");
+  });
+
+  it("falls back to the envelope output when structured parts have no renderable text", () => {
+    const raw =
+      '{"action":"message_send","output":"fallback summary","parts":[{"type":"image","url":"x"}]}';
+    const result = formatChannelMessagePreview("Atlas", raw, resolveMention, []);
+    expect(result).toBe("Atlas: fallback summary");
+    expect(result).not.toContain('"action"');
+    expect(result).not.toContain("{");
+  });
+
+  it("never leaks raw JSON when a structured envelope has neither text parts nor output", () => {
+    const raw = '{"action":"message_send","parts":[{"type":"image","url":"x"}]}';
+    const result = formatChannelMessagePreview("Atlas", raw, resolveMention, []);
+    expect(result).not.toContain('"action"');
+    expect(result).not.toContain("{");
+    expect(result).not.toContain("image");
+  });
+
+  it("treats malformed JSON that is not a real envelope as normal text (no crash)", () => {
+    const almost = '{"parts": [oops not json';
+    const result = formatChannelMessagePreview("Atlas", almost, resolveMention, []);
+    expect(result).toBe(`Atlas: ${almost}`);
+  });
+
+  it("does not unwrap plain JSON-looking text that has no parts array", () => {
+    const jsonish = '{"status":"ok"}';
+    expect(
+      formatChannelMessagePreview("Atlas", jsonish, resolveMention, []),
+    ).toBe(`Atlas: ${jsonish}`);
+  });
+
+  // GAP 3 — the discriminator requires a top-level `action` key. A user pasting
+  // legit JSON that merely has a `parts` array must render as normal text, not
+  // be intercepted and mangled by the envelope unwrap.
+  it("does not intercept legit JSON with a parts array but no action key", () => {
+    const jsonish = '{"parts":["a","b"]}';
+    expect(
+      formatChannelMessagePreview("Atlas", jsonish, resolveMention, []),
+    ).toBe(`Atlas: ${jsonish}`);
+  });
+});
+
+describe("extractEnvelopeParts", () => {
+  it("returns the envelope parts for a raw structured-action envelope", () => {
+    const raw =
+      '{"action":"message_send","output":"hi","parts":[{"type":"text","text":"hi there"}]}';
+    expect(extractEnvelopeParts(raw)).toEqual([{ type: "text", text: "hi there" }]);
+  });
+
+  it("returns an empty array (not null) for an envelope with an empty parts array", () => {
+    expect(extractEnvelopeParts('{"action":"message_send","parts":[]}')).toEqual([]);
+  });
+
+  // GAP 3 — require the top-level `action` key so legit `{"parts":[...]}` JSON
+  // is NOT treated as an envelope (returns null → caller renders it as-is).
+  it("returns null for JSON with a parts array but no action key", () => {
+    expect(extractEnvelopeParts('{"parts":["a","b"]}')).toBeNull();
+  });
+
+  it("returns null for ordinary text and malformed JSON (no crash)", () => {
+    expect(extractEnvelopeParts("just a message")).toBeNull();
+    expect(extractEnvelopeParts('{"action":"x","parts": [oops')).toBeNull();
   });
 });
 

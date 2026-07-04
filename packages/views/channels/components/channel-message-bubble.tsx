@@ -19,9 +19,11 @@ import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
 import {
+  extractEnvelopeParts,
   formatMessagePartsCopyText,
   formatMessagePartsPreview,
   hasStructuredMessageParts,
+  unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
 import { MessagePartsRenderer } from "./message-parts-renderer";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
@@ -283,15 +285,26 @@ export function ChannelMessageBubble({
   const hasThreadActivity = threadReplyCount > 0 || threadUnreadCount > 0;
   const hasFeedback = (message.reactions?.length ?? 0) > 0 || hasThreadActivity;
   const quickReactionEmojis = ["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"];
+  // Prefer the message's own denormalized parts. For historical agent messages
+  // whose `parts` were never backfilled, the raw `content` is the structured-
+  // action envelope JSON — unwrap it to its real parts so the body renders them
+  // (stickers etc.) through MessagePartsRenderer and copy yields real text,
+  // instead of leaking raw JSON. `effectiveParts` is null ONLY for ordinary,
+  // non-envelope content, which is left completely unchanged. An envelope with
+  // an empty `parts` array yields `[]` (truthy) so the raw JSON is never shown.
+  const ownParts = hasStructuredMessageParts(message.parts) ? message.parts : null;
+  const effectiveParts = ownParts ?? extractEnvelopeParts(message.content);
   const handleCopy = async () => {
-    const copyPayload = formatMessagePartsCopyText(message.parts) ?? message.content;
+    const copyPayload =
+      formatMessagePartsCopyText(effectiveParts) ??
+      unwrapStructuredPreviewContent(message.content) ??
+      message.content;
     if (await copyText(copyPayload)) {
       toast.success(t(($) => $.message.copied_toast));
     } else {
       toast.error(t(($) => $.message.copy_failed_toast));
     }
   };
-  const structuredParts = hasStructuredMessageParts(message.parts) ? message.parts : null;
 
   // Edit / delete are viewer-own affordances only. H5: saving an edit routes
   // through onEdit (a PATCH), never a re-send — it cannot produce a new wake.
@@ -460,13 +473,15 @@ export function ChannelMessageBubble({
                 {replyAuthorName}
               </p>
               <p className="line-clamp-1 text-[11px] text-muted-foreground">
-                {formatMessagePartsPreview(message.reply_to.parts) ?? message.reply_to.content}
+                {formatMessagePartsPreview(message.reply_to.parts) ??
+                  unwrapStructuredPreviewContent(message.reply_to.content) ??
+                  message.reply_to.content}
               </p>
             </button>
           )}
-          {structuredParts ? (
+          {effectiveParts ? (
             <MessagePartsRenderer
-              parts={structuredParts}
+              parts={effectiveParts}
               highlightQuery={searchHighlighted ? searchQuery : undefined}
             />
           ) : (
@@ -480,7 +495,7 @@ export function ChannelMessageBubble({
           )}
           <AttachmentList
             attachments={message.attachments}
-            content={structuredParts ? "" : message.content}
+            content={effectiveParts ? "" : message.content}
             className="mt-1.5"
           />
         </div>

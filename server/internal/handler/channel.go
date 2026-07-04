@@ -68,10 +68,11 @@ type ChannelResponse struct {
 }
 
 type ChannelLastMessage struct {
-	Type       string `json:"type"`
-	AuthorName string `json:"author_name"`
-	Content    string `json:"content"`
-	CreatedAt  string `json:"created_at"`
+	Type       string                 `json:"type"`
+	AuthorName string                 `json:"author_name"`
+	Content    string                 `json:"content"`
+	Parts      []protocol.MessagePart `json:"parts,omitempty"`
+	CreatedAt  string                 `json:"created_at"`
 }
 
 type ChannelMemberBrief struct {
@@ -235,7 +236,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT ch.id, ch.workspace_id, ch.name, ch.description, ch.lark_chat_id, ch.created_by, ch.created_at, ch.updated_at, ch.kind,
 		       ch.archived_at, ch.archived_by, cm.pinned_at, cm.manual_unread_at, COALESCE(vcm.muted_at, cm.muted_at),
-		       lm.author_type, lm.author_name, lm.content, lm.created_at,
+		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
 		       COALESCE(uc.cnt, 0),
 		       GREATEST(COALESCE(uc.cnt, 0), CASE WHEN cm.manual_unread_at IS NOT NULL THEN 1 ELSE 0 END)
 		FROM channel ch
@@ -246,7 +247,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		 AND vcm.member_type = 'user'
 		 AND vcm.member_id = $2
 		LEFT JOIN LATERAL (
-			SELECT author_type, author_name, content, created_at
+			SELECT author_type, author_name, content, parts, created_at
 			FROM channel_message m WHERE m.channel_id = ch.id
 			ORDER BY m.seq DESC LIMIT 1
 		) lm ON true
@@ -272,11 +273,12 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		var id, wsID, createdBy, archivedBy pgtype.UUID
 		var name string
 		var desc, lark, lastType, lastName, lastContent pgtype.Text
+		var lastParts []byte
 		var createdAt, updatedAt, archivedAt, pinnedAt, manualUnreadAt, mutedAt, lastAt pgtype.Timestamptz
 		var realUnread, unread int
 		var kind string
 		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt, &kind,
-			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &mutedAt, &lastType, &lastName, &lastContent, &lastAt, &realUnread, &unread); err != nil {
+			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &mutedAt, &lastType, &lastName, &lastContent, &lastParts, &lastAt, &realUnread, &unread); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channels")
 			return
 		}
@@ -289,10 +291,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid, Members: []ChannelMemberBrief{},
 		}
 		if lastContent.Valid {
-			ch.LastMessage = &ChannelLastMessage{
-				Type: lastType.String, AuthorName: lastName.String,
-				Content: lastContent.String, CreatedAt: timestampToString(lastAt),
-			}
+			ch.LastMessage = channelLastMessage(lastType.String, lastName.String, lastContent.String, lastParts, lastAt)
 		}
 		out = append(out, ch)
 		channelIDs = append(channelIDs, id)
@@ -3458,6 +3457,23 @@ func scanChannel(row rowScanner) (ChannelResponse, error) {
 		ArchivedAt:  timestampToPtr(archivedAt),
 		ArchivedBy:  uuidToPtr(archivedBy),
 	}, nil
+}
+
+func channelLastMessage(authorType, authorName, content string, rawParts []byte, createdAt pgtype.Timestamptz) *ChannelLastMessage {
+	parts := messageparts.Decode(rawParts)
+	if authorType == "agent" {
+		if unwrappedContent, unwrappedParts, unwrapped, err := messageparts.UnwrapStructuredMessageSend(content, parts); err == nil && unwrapped {
+			content = unwrappedContent
+			parts = unwrappedParts
+		}
+	}
+	return &ChannelLastMessage{
+		Type:       authorType,
+		AuthorName: authorName,
+		Content:    content,
+		Parts:      parts,
+		CreatedAt:  timestampToString(createdAt),
+	}
 }
 
 func scanChannelMessage(row rowScanner) (ChannelMessageResponse, error) {

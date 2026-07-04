@@ -703,7 +703,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		       peer.member_type, peer.member_id,
 		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '') AS peer_name,
 		       a.avatar_url AS peer_avatar,
-		       lm.author_type, lm.author_name, lm.content, lm.created_at,
+		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
 		       COALESCE(uc.cnt, 0) AS real_unread,
 		       state.pinned_at, state.manual_unread_at, COALESCE(vcm.muted_at, state.muted_at)
 		FROM channel ch
@@ -723,7 +723,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		LEFT JOIN "user" u ON peer.member_type = 'user' AND u.id = peer.member_id
 		LEFT JOIN agent a ON peer.member_type = 'agent' AND a.id = peer.member_id
 		LEFT JOIN LATERAL (
-			SELECT author_type, author_name, content, created_at
+			SELECT author_type, author_name, content, parts, created_at
 			FROM channel_message m WHERE m.channel_id = ch.id
 			ORDER BY m.seq DESC LIMIT 1
 		) lm ON true
@@ -753,9 +753,10 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		var updatedAt, lastAt, pinnedAt, manualUnreadAt, mutedAt pgtype.Timestamptz
 		var peerType, peerName string
 		var peerAvatar, lastType, lastName, lastContent pgtype.Text
+		var lastParts []byte
 		var unread int
 		if err := rows.Scan(&id, &updatedAt, &peerType, &peerID, &peerName, &peerAvatar,
-			&lastType, &lastName, &lastContent, &lastAt, &unread, &pinnedAt, &manualUnreadAt, &mutedAt); err != nil {
+			&lastType, &lastName, &lastContent, &lastParts, &lastAt, &unread, &pinnedAt, &manualUnreadAt, &mutedAt); err != nil {
 			continue
 		}
 		if peerType == "agent" {
@@ -779,10 +780,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 			item.Unread = 1
 		}
 		if lastContent.Valid {
-			item.LastMessage = &ChannelLastMessage{
-				Type: lastType.String, AuthorName: lastName.String,
-				Content: lastContent.String, CreatedAt: timestampToString(lastAt),
-			}
+			item.LastMessage = channelLastMessage(lastType.String, lastName.String, lastContent.String, lastParts, lastAt)
 		}
 		out = append(out, item)
 	}

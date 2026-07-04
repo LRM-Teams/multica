@@ -11,6 +11,12 @@ WHERE id = $1;
 SELECT * FROM member
 WHERE user_id = $1 AND workspace_id = $2;
 
+-- name: TouchMemberLastActiveWorkspace :one
+UPDATE member
+SET last_active_at = now()
+WHERE user_id = $1 AND workspace_id = $2
+RETURNING *;
+
 -- name: CreateMember :one
 INSERT INTO member (workspace_id, user_id, role)
 VALUES ($1, $2, $3)

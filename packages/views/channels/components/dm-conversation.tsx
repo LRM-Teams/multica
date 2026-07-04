@@ -22,7 +22,6 @@ import {
 import { dmKeys } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
 import { useAuthStore } from "@multica/core/auth";
-import { ApiError } from "@multica/core/api";
 import { api } from "@multica/core/api";
 import { useFileUpload, type UploadResult } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -47,10 +46,11 @@ import { ContentEditor, type ContentEditorRef } from "../../editor/content-edito
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useT } from "../../i18n/use-t";
-import { composePayloadKey, useComposeSendIntent } from "../hooks/use-compose-send-intent";
+import { composePayloadKey } from "../hooks/use-compose-send-intent";
+import { useComposerSend } from "../hooks/use-composer-send";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
-import { ChannelComposer, ConversationHeader, MobileThreadDrawerContent } from "./conversation-surface";
+import { Composer, ConversationHeader, MobileThreadDrawerContent } from "./conversation-surface";
 import { ThreadRootPreview } from "./thread-root-preview";
 import {
   ConversationActivityStrip,
@@ -405,8 +405,8 @@ function DmChannelConversation({
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Send idempotency + send lock (#207) — see use-compose-send-intent. DM
   // top-level and thread reply each own an independent intent.
-  const dmSend = useComposeSendIntent();
-  const threadSend = useComposeSendIntent();
+  const dmSend = useComposerSend();
+  const threadSend = useComposerSend();
 
   // Agents surface lifecycle via the query-driven working indicator, so filter
   // them out of the transient typing render (same rule as the group thread).
@@ -648,34 +648,30 @@ function DmChannelConversation({
     for (const [url, id] of uploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
-    const clientMessageId = dmSend.beginSend(composePayloadKey(content, attachmentIds));
-    if (clientMessageId === null) return;
-    if (typingStartedRef.current) {
-      typingStartedRef.current = false;
-      publishTyping(false);
-    }
-    sendMessage.mutate(
-      {
+    // Stop typing before the send lock so a dropped (held-Enter) trigger still
+    // clears the indicator.
+    const dispatched = dmSend.send({
+      payloadKey: composePayloadKey(content, attachmentIds),
+      buildVars: (clientMessageId) => ({
         channelId,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
         clientMessageId,
+      }),
+      mutate: sendMessage.mutate,
+      onCommitted: () => {
+        editorRef.current?.clearContent();
+        uploadMapRef.current.clear();
+        onDraftClear?.();
       },
-      {
-        onSuccess: () => {
-          editorRef.current?.clearContent();
-          uploadMapRef.current.clear();
-          onDraftClear?.();
-          dmSend.finishSend();
-        },
-        onError: (err) => {
-          if (err instanceof ApiError && err.status === 409) dmSend.resetIntent();
-          // Always surface failure so a silent 409 isn't mistaken for a sent message.
-          toast.error(t(($) => $.composer.send_failed));
-        },
-        onSettled: () => dmSend.settleSend(),
-      },
-    );
+      // 200-dedup is silent (handled by onCommitted); 409/other always surface,
+      // so a silent conflict isn't mistaken for a sent message.
+      onVisibleError: () => toast.error(t(($) => $.composer.send_failed)),
+    });
+    if (dispatched && typingStartedRef.current) {
+      typingStartedRef.current = false;
+      publishTyping(false);
+    }
   };
 
   const handleThreadSend = () => {
@@ -686,30 +682,23 @@ function DmChannelConversation({
     for (const [url, id] of threadUploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
-    const clientMessageId = threadSend.beginSend(composePayloadKey(content, attachmentIds, threadRoot.id));
-    if (clientMessageId === null) return;
-    sendThreadMessage.mutate(
-      {
+    threadSend.send({
+      payloadKey: composePayloadKey(content, attachmentIds, threadRoot.id),
+      buildVars: (clientMessageId) => ({
         channelId,
         messageId: threadRoot.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
         clientMessageId,
+      }),
+      mutate: sendThreadMessage.mutate,
+      onCommitted: () => {
+        threadEditorRef.current?.clearContent();
+        threadUploadMapRef.current.clear();
+        dispatch({ type: "setThreadDraftEmpty", empty: true });
       },
-      {
-        onSuccess: () => {
-          threadEditorRef.current?.clearContent();
-          threadUploadMapRef.current.clear();
-          dispatch({ type: "setThreadDraftEmpty", empty: true });
-          threadSend.finishSend();
-        },
-        onError: (err) => {
-          if (err instanceof ApiError && err.status === 409) threadSend.resetIntent();
-          toast.error(t(($) => $.thread.send_failed));
-        },
-        onSettled: () => threadSend.settleSend(),
-      },
-    );
+      onVisibleError: () => toast.error(t(($) => $.thread.send_failed)),
+    });
   };
 
   const handleOpenThread = (message: ChannelMessage) => {
@@ -777,7 +766,8 @@ function DmChannelConversation({
           stoppingTaskId={stoppingTaskId}
           onStopTask={handleStopTask}
         />
-        <ChannelComposer
+        <Composer
+          surface="thread"
           sendLabel={t(($) => $.composer.send)}
           sendDisabled={threadDraftEmpty}
           sending={sendThreadMessage.isPending}
@@ -932,7 +922,8 @@ function DmChannelConversation({
         stoppingTaskId={stoppingTaskId}
         onStopTask={handleStopTask}
       />
-      <ChannelComposer
+      <Composer
+        surface="dm_channel"
         sendLabel={t(($) => $.composer.send)}
         sendDisabled={draftEmpty}
         sending={sendMessage.isPending}

@@ -62,7 +62,6 @@ import {
   useSetChannelTyping,
 } from "@multica/core/channels";
 import { useAuthStore } from "@multica/core/auth";
-import { ApiError } from "@multica/core/api";
 import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
 import { api } from "@multica/core/api";
@@ -154,7 +153,8 @@ import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
-import { composePayloadKey, useComposeSendIntent } from "../hooks/use-compose-send-intent";
+import { composePayloadKey } from "../hooks/use-compose-send-intent";
+import { useComposerSend } from "../hooks/use-composer-send";
 import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
@@ -162,7 +162,7 @@ import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadRootPreview } from "./thread-root-preview";
 import {
-  ChannelComposer,
+  Composer,
   ConversationHeader,
   MobileThreadDrawerContent,
   ReadOnlyConversationBanner,
@@ -527,8 +527,8 @@ export function ChannelsPage() {
   // Send idempotency + send lock (#207). Channel top-level and thread reply each
   // own an independent intent so an in-flight channel send never blocks a thread
   // reply, and vice versa.
-  const channelSend = useComposeSendIntent();
-  const threadSend = useComposeSendIntent();
+  const channelSend = useComposerSend();
+  const threadSend = useComposerSend();
   const [openThreadRoot, setOpenThreadRoot] = useState<ChannelMessage | null>(null);
   const threadEditorRef = useRef<ContentEditorRef>(null);
   const focusThreadComposerOnOpenRef = useRef(false);
@@ -1275,39 +1275,31 @@ export function ChannelsPage() {
     for (const [url, id] of uploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
-    // Send lock + payload-bound client_message_id in one step. null means a send
-    // is already running (held / auto-repeat Enter) → abort.
-    const clientMessageId = channelSend.beginSend(composePayloadKey(content, attachmentIds));
-    if (clientMessageId === null) return;
-    if (typingStartedRef.current) {
-      typingStartedRef.current = false;
-      publishTyping(false);
-    }
-    sendMessage.mutate(
-      {
+    // Send lock (N held/auto-repeat Enter → 1 request) + payload-bound
+    // client_message_id + the 3-way outcome, all owned by useComposerSend.
+    const dispatched = channelSend.send({
+      payloadKey: composePayloadKey(content, attachmentIds),
+      buildVars: (clientMessageId) => ({
         channelId: active.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
         clientMessageId,
+      }),
+      mutate: sendMessage.mutate,
+      onCommitted: () => {
+        editorRef.current?.clearContent();
+        uploadMapRef.current.clear();
+        if (activeDraftKey) clearConversationDraft(activeDraftKey);
       },
-      {
-        onSuccess: () => {
-          editorRef.current?.clearContent();
-          uploadMapRef.current.clear();
-          if (activeDraftKey) clearConversationDraft(activeDraftKey);
-          channelSend.finishSend();
-        },
-        onError: (err) => {
-          // 409 = same id, conflicting payload already committed. Retire the
-          // intent so the next attempt is fresh instead of a permanent lock.
-          if (err instanceof ApiError && err.status === 409) channelSend.resetIntent();
-          // Always surface failure — the draft is kept, but the user must know
-          // this send did NOT land (a silent 409 reads as a sent message).
-          toast.error(t(($) => $.composer.send_failed));
-        },
-        onSettled: () => channelSend.settleSend(),
-      },
-    );
+      // 200-dedup is silent (onCommitted); a 409 or any other failure always
+      // surfaces — the draft is kept, but the user must know this send did NOT
+      // land (a silent 409 reads as a sent message).
+      onVisibleError: () => toast.error(t(($) => $.composer.send_failed)),
+    });
+    if (dispatched && typingStartedRef.current) {
+      typingStartedRef.current = false;
+      publishTyping(false);
+    }
   };
 
   const handleThreadSend = () => {
@@ -1318,30 +1310,23 @@ export function ChannelsPage() {
     for (const [url, id] of threadUploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
-    const clientMessageId = threadSend.beginSend(composePayloadKey(content, attachmentIds, threadRoot.id));
-    if (clientMessageId === null) return;
-    sendThreadMessage.mutate(
-      {
+    threadSend.send({
+      payloadKey: composePayloadKey(content, attachmentIds, threadRoot.id),
+      buildVars: (clientMessageId) => ({
         channelId: active.id,
         messageId: threadRoot.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
         clientMessageId,
+      }),
+      mutate: sendThreadMessage.mutate,
+      onCommitted: () => {
+        threadEditorRef.current?.clearContent();
+        threadUploadMapRef.current.clear();
+        setThreadDraftEmpty(true);
       },
-      {
-        onSuccess: () => {
-          threadEditorRef.current?.clearContent();
-          threadUploadMapRef.current.clear();
-          setThreadDraftEmpty(true);
-          threadSend.finishSend();
-        },
-        onError: (err) => {
-          if (err instanceof ApiError && err.status === 409) threadSend.resetIntent();
-          toast.error(t(($) => $.thread.send_failed));
-        },
-        onSettled: () => threadSend.settleSend(),
-      },
-    );
+      onVisibleError: () => toast.error(t(($) => $.thread.send_failed)),
+    });
   };
 
   const handleOpenThread = (message: ChannelMessage) => {
@@ -1998,7 +1983,8 @@ export function ChannelsPage() {
         ) : (
           <>
             <ConversationActivityStrip tasks={activeTasks} stoppingTaskId={stoppingChannelTaskId} onStopTask={handleStopChannelTask} />
-            <ChannelComposer
+            <Composer
+              surface="thread"
               sendLabel={t(($) => $.composer.send)}
               sendDisabled={threadDraftEmpty}
               sending={sendThreadMessage.isPending}
@@ -2320,7 +2306,8 @@ export function ChannelsPage() {
                     stoppingTaskId={stoppingChannelTaskId}
                     onStopTask={handleStopChannelTask}
                   />
-                  <ChannelComposer
+                  <Composer
+                    surface="channel"
                     sendLabel={t(($) => $.composer.send)}
                     sendDisabled={activeDraftEmpty}
                     sending={sendMessage.isPending}

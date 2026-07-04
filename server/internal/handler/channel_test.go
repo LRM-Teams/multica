@@ -1179,11 +1179,11 @@ func TestSendChannelMessageReplyReturnsSummary(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list messages: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var messages []ChannelMessageResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &messages); err != nil {
+	var page ChannelMessagesPageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 		t.Fatalf("decode listed messages: %v", err)
 	}
-	for _, msg := range messages {
+	for _, msg := range page.Messages {
 		if msg.ID == created.ID {
 			if msg.ReplyTo == nil || msg.ReplyTo.ID != root.ID {
 				t.Fatalf("listed reply summary = %+v, want root", msg.ReplyTo)
@@ -1724,10 +1724,11 @@ func TestChannelMessageReactionCanBeRemoved(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list messages after add: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var messages []ChannelMessageResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &messages); err != nil {
+	var page ChannelMessagesPageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 		t.Fatalf("decode messages after add: %v", err)
 	}
+	messages := page.Messages
 	if len(messages) != 1 || len(messages[0].Reactions) != 1 {
 		t.Fatalf("expected one reaction after add, got %#v", messages)
 	}
@@ -1749,10 +1750,11 @@ func TestChannelMessageReactionCanBeRemoved(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list messages after remove: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	messages = nil
-	if err := json.Unmarshal(rec.Body.Bytes(), &messages); err != nil {
+	page = ChannelMessagesPageResponse{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 		t.Fatalf("decode messages after remove: %v", err)
 	}
+	messages = page.Messages
 	if len(messages) != 1 || len(messages[0].Reactions) != 0 {
 		t.Fatalf("expected no reactions after remove, got %#v", messages)
 	}
@@ -1926,10 +1928,11 @@ func TestChannelArchiveHidesFromListFreezesWritesAndRestores(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list archived channel messages: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var messages []ChannelMessageResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &messages); err != nil {
+	var page ChannelMessagesPageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 		t.Fatalf("decode archived channel messages: %v", err)
 	}
+	messages := page.Messages
 	if len(messages) != 1 || messages[0].Content != "before archive" {
 		t.Fatalf("archived channel history = %+v, want seeded message", messages)
 	}
@@ -2489,12 +2492,15 @@ func TestChannelThreadPaginationUsesOlderCursor(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list thread page 1: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var page []ChannelMessageResponse
+	var page ChannelThreadMessagesPageResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 		t.Fatalf("decode page 1: %v", err)
 	}
-	if got := threadContents(page); fmt.Sprint(got) != "[root reply-2 reply-3]" {
+	if got := threadContents(page.Messages); fmt.Sprint(got) != "[root reply-2 reply-3]" {
 		t.Fatalf("page 1 contents = %v", got)
+	}
+	if page.NextCursor == nil || page.NextCursor.BeforeSeq == 0 || page.NextCursor.Before == "" || page.NextCursor.BeforeID == "" {
+		t.Fatalf("page 1 body cursor = %+v, want seq/time/id", page.NextCursor)
 	}
 	beforeSeq, before, beforeID := rec.Header().Get("X-Next-Before-Seq"), rec.Header().Get("X-Next-Before"), rec.Header().Get("X-Next-Before-Id")
 	if beforeSeq == "" || before == "" || beforeID == "" {
@@ -2512,8 +2518,11 @@ func TestChannelThreadPaginationUsesOlderCursor(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 		t.Fatalf("decode page 2: %v", err)
 	}
-	if got := threadContents(page); fmt.Sprint(got) != "[root reply-1]" {
+	if got := threadContents(page.Messages); fmt.Sprint(got) != "[root reply-1]" {
 		t.Fatalf("page 2 contents = %v", got)
+	}
+	if page.NextCursor != nil {
+		t.Fatalf("page 2 should not emit body cursor, got %+v", page.NextCursor)
 	}
 	if rec.Header().Get("X-Next-Before") != "" || rec.Header().Get("X-Next-Before-Id") != "" {
 		t.Fatalf("page 2 should not emit cursor, headers=%v", rec.Header())
@@ -2577,6 +2586,37 @@ func TestChannelMessagesPaginationUsesOlderCursor(t *testing.T) {
 	}
 	if got := threadContents(page.Messages); fmt.Sprint(got) != "[msg-1 msg-2]" {
 		t.Fatalf("page 2 contents = %v", got)
+	}
+}
+
+func TestChannelMessagesAlwaysReturnsPageEnvelope(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "message-page-envelope-"+uuid.NewString(), testUserID)
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "enveloped", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("message-page-envelope"), 0); err != nil {
+		t.Fatalf("insert message: %v", err)
+	}
+
+	req := newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.ListChannelMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list messages: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var page ChannelMessagesPageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode page envelope: %v", err)
+	}
+	if page.Limit != channelMessagesDefaultLimit || page.HasMore || page.NextCursor != nil {
+		t.Fatalf("page metadata = limit:%d has_more:%t cursor:%+v", page.Limit, page.HasMore, page.NextCursor)
+	}
+	if len(page.Messages) != 1 || page.Messages[0].Content != "enveloped" {
+		t.Fatalf("page messages = %+v, want one enveloped message", page.Messages)
 	}
 }
 
@@ -3111,11 +3151,11 @@ func listedMessagesForUser(t *testing.T, channelID, userID string) []ChannelMess
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list channel messages: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var messages []ChannelMessageResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &messages); err != nil {
+	var page ChannelMessagesPageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 		t.Fatalf("decode messages: %v", err)
 	}
-	return messages
+	return page.Messages
 }
 
 func threadContents(messages []ChannelMessageResponse) []string {

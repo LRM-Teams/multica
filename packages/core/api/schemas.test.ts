@@ -6,6 +6,8 @@ import {
   ChannelCreateErrorBodySchema,
   DuplicateIssueErrorBodySchema,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
+  ChannelMessagesPageSchema,
+  ChannelThreadMessagesPageSchema,
   ChannelMessageSearchResponseSchema,
   EMPTY_USER,
   EvolutionReviewSubmissionListSchema,
@@ -315,6 +317,38 @@ describe("ChannelMessageSearchResponseSchema", () => {
 
   it("rejects a non-array result list so callers can fall back", () => {
     expect(ChannelMessageSearchResponseSchema.safeParse({ results: null }).success).toBe(false);
+  });
+});
+
+describe("Channel message pagination schemas", () => {
+  it("keeps page cursor metadata and unknown future fields", () => {
+    const parsed = ChannelMessagesPageSchema.parse({
+      messages: [
+        {
+          id: "msg-1",
+          channel_id: "channel-1",
+          workspace_id: "ws-1",
+          type: "user",
+          author_id: null,
+          author_name: "Ada",
+          content: "hello",
+          source: "multica",
+          external_message_id: null,
+          created_at: "2026-07-03T00:00:00Z",
+          future: "kept",
+        },
+      ],
+      limit: 50,
+      has_more: true,
+      next_cursor: { seq: 42, created_at: "2026-07-03T00:00:00Z", id: "msg-1" },
+    });
+    expect(parsed.messages[0]?.future).toBe("kept");
+    expect(parsed.next_cursor?.seq).toBe(42);
+  });
+
+  it("rejects malformed message lists so callers can fall back", () => {
+    expect(ChannelMessagesPageSchema.safeParse({ messages: null }).success).toBe(false);
+    expect(ChannelThreadMessagesPageSchema.safeParse({ messages: null }).success).toBe(false);
   });
 });
 

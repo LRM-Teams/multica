@@ -203,7 +203,9 @@
     "edited_label": "（已编辑）",
     "deleted_placeholder": "此消息已删除",
     "save_edit": "保存",
-    "cancel_edit": "取消"
+    "cancel_edit": "取消",
+    "edit_failed_toast": "无法编辑消息",
+    "delete_failed_toast": "无法删除消息"
   },
   "dm": {
     "heading": "私信",

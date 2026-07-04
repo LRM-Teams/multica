@@ -62,6 +62,15 @@ type MessageViewportProps = {
   onScrollToMessage?: (messageId: string) => void;
   /** Toggle/add a lightweight emoji reaction on this message. */
   onReact?: (message: ChannelMessage, emoji: string) => void;
+  /**
+   * Save an inline edit of the viewer's own message. H5: this is an edit (a
+   * PATCH), never a re-send — it must not go through a send/dispatch path.
+   * Threaded to the bubble, which only exposes the edit affordance on own
+   * messages when this is provided.
+   */
+  onEditMessage?: (message: ChannelMessage, content: string) => void;
+  /** Soft-delete the viewer's own message; the bubble then renders a tombstone. */
+  onDeleteMessage?: (message: ChannelMessage) => void;
   /** Search hit ids - all matching messages get inline keyword marks while search is open. */
   searchHitIds?: Set<string>;
   /** Conversation search phrase used for inline keyword marks within search hits. */
@@ -94,6 +103,8 @@ function MessageViewport({
   onOpenThread,
   onScrollToMessage,
   onReact,
+  onEditMessage,
+  onDeleteMessage,
   searchHitIds,
   searchQuery,
   loading,
@@ -245,6 +256,8 @@ function MessageViewport({
           onOpenThread={onOpenThread}
           onScrollTo={onScrollToMessage}
           onReact={onReact}
+          onEdit={onEditMessage}
+          onDelete={onDeleteMessage}
           searchHighlighted={searchHighlighted}
           searchQuery={searchHighlighted ? searchQuery : undefined}
         />

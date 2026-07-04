@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
 import { ChannelMessageList, MessageViewport } from "./channel-message-list";
@@ -117,6 +118,52 @@ vi.mock("../../i18n", () => ({
           reply: "Reply in thread",
           reply_count: "{{count}} replies",
         },
+      }),
+  }),
+}));
+
+// The bubble (rendered inside every row) reads its labels from
+// `../../i18n/use-t`; stub it so the edit/delete affordances have concrete
+// accessible names to query by in the composition tests below.
+vi.mock("../../i18n/use-t", () => ({
+  useT: () => ({
+    t: (
+      selector: (resources: {
+        message: {
+          add_reaction: string;
+          agent_badge: string;
+          feishu_badge: string;
+          copy_action: string;
+          copied_toast: string;
+          copy_failed_toast: string;
+          edit_action: string;
+          delete_action: string;
+          edited_label: string;
+          deleted_placeholder: string;
+          save_edit: string;
+          cancel_edit: string;
+        };
+        quote: { jump_to: string };
+        thread: { reply: string; reply_count: string };
+      }) => string,
+    ) =>
+      selector({
+        message: {
+          add_reaction: "Add reaction",
+          agent_badge: "Agent",
+          feishu_badge: "Feishu",
+          copy_action: "Copy",
+          copied_toast: "Copied",
+          copy_failed_toast: "Copy failed",
+          edit_action: "Edit",
+          delete_action: "Delete",
+          edited_label: "(edited)",
+          deleted_placeholder: "This message was deleted",
+          save_edit: "Save",
+          cancel_edit: "Cancel",
+        },
+        quote: { jump_to: "Jump to original message" },
+        thread: { reply: "Reply in thread", reply_count: "2 replies" },
       }),
   }),
 }));
@@ -303,5 +350,136 @@ describe("MessageViewport", () => {
     );
     screen.getByTestId("start-reached").click();
     expect(onLoadOlder).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A viewer-authored user message: only these expose edit/delete affordances.
+function makeOwnUserMessage(
+  overrides: Partial<ChannelMessage> = {},
+): ChannelMessage {
+  return {
+    id: "own-1",
+    channel_id: "c1",
+    workspace_id: "w1",
+    seq: 1,
+    type: "user",
+    author_id: "user-1",
+    author_name: "Alice",
+    content: "Original",
+    source: "multica",
+    external_message_id: null,
+    client_message_id: null,
+    created_at: "2026-06-17T09:15:00Z",
+    ...overrides,
+  };
+}
+
+// B3 (#241) parent→bubble composition: the prior unit tests passed onEdit /
+// onDelete straight to the bubble, so they never caught that the message list
+// (the bubble's real parent) forwarded neither — leaving the affordances dead
+// on every live row. These render the real list → bubble and assert the
+// composed DOM, so the wiring can't silently regress again.
+describe("ChannelMessageList message edit / delete wiring", () => {
+  it("surfaces edit and delete affordances on the viewer's own message when the list is wired", () => {
+    render(
+      <ChannelMessageList
+        messages={[makeOwnUserMessage()]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        onEditMessage={vi.fn()}
+        onDeleteMessage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+  });
+
+  it("hides edit and delete on a message the viewer does not own, even when wired", () => {
+    render(
+      <ChannelMessageList
+        messages={[
+          makeOwnUserMessage({
+            id: "peer-1",
+            author_id: "user-2",
+            author_name: "Bob",
+            content: "Not mine",
+          }),
+        ]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        onEditMessage={vi.fn()}
+        onDeleteMessage={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+  });
+
+  it("saves an inline edit through onEditMessage (PATCH) and never a send/dispatch path (H5)", async () => {
+    const onEditMessage = vi.fn();
+    const onReact = vi.fn();
+    const onOpenThread = vi.fn();
+    const message = makeOwnUserMessage();
+    render(
+      <ChannelMessageList
+        messages={[message]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        onEditMessage={onEditMessage}
+        onDeleteMessage={vi.fn()}
+        onReact={onReact}
+        onOpenThread={onOpenThread}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const editor = screen.getByRole("textbox", { name: "Edit" });
+    await userEvent.clear(editor);
+    await userEvent.type(editor, "Corrected");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    // Edit is a PATCH of the existing row — it must route only through
+    // onEditMessage, never a reaction / thread (wake) path.
+    expect(onEditMessage).toHaveBeenCalledTimes(1);
+    expect(onEditMessage).toHaveBeenCalledWith(message, "Corrected");
+    expect(onReact).not.toHaveBeenCalled();
+    expect(onOpenThread).not.toHaveBeenCalled();
+  });
+
+  it("deletes through onDeleteMessage and renders a tombstone (non-empty row) for a deleted message", async () => {
+    const onDeleteMessage = vi.fn();
+    const message = makeOwnUserMessage();
+    const { rerender } = render(
+      <ChannelMessageList
+        messages={[message]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        onEditMessage={vi.fn()}
+        onDeleteMessage={onDeleteMessage}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(onDeleteMessage).toHaveBeenCalledTimes(1);
+    expect(onDeleteMessage).toHaveBeenCalledWith(message);
+
+    // A soft-deleted message renders the tombstone placeholder, not a blank row.
+    rerender(
+      <ChannelMessageList
+        messages={[
+          makeOwnUserMessage({ deleted_at: "2026-06-17T09:25:00Z", content: "gone" }),
+        ]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        onEditMessage={vi.fn()}
+        onDeleteMessage={onDeleteMessage}
+      />,
+    );
+
+    const tombstone = screen.getByTestId("message-tombstone");
+    expect(tombstone).toHaveTextContent("This message was deleted");
+    expect(screen.queryByText("gone")).not.toBeInTheDocument();
   });
 });

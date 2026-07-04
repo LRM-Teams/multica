@@ -6,11 +6,8 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { sanitizeNextUrl, useAuthStore } from "@multica/core/auth";
 import { useConfigStore } from "@multica/core/config";
 import { workspaceKeys } from "@multica/core/workspace/queries";
-import {
-  paths,
-  resolvePostAuthDestination,
-  useHasOnboarded,
-} from "@multica/core/paths";
+import { paths, useHasOnboarded } from "@multica/core/paths";
+import { resolveLoggedInDestination } from "@/features/auth/resolve-logged-in-destination";
 import { api } from "@multica/core/api";
 import type { Workspace } from "@multica/core/types";
 import {
@@ -35,25 +32,6 @@ import { useT } from "@multica/views/i18n";
  * resolver. A network blip on listMyInvitations is non-fatal — we fall
  * through rather than trap the user on an error screen.
  */
-async function resolveLoggedInDestination(
-  qc: QueryClient,
-  hasOnboarded: boolean,
-  workspaces: Workspace[],
-): Promise<string> {
-  if (!hasOnboarded) {
-    try {
-      const invites = await api.listMyInvitations();
-      if (invites.length > 0) {
-        qc.setQueryData(workspaceKeys.myInvitations(), invites);
-        return paths.invitations();
-      }
-    } catch {
-      // fall through
-    }
-  }
-  return resolvePostAuthDestination(workspaces, hasOnboarded);
-}
-
 function LoginPageContent() {
   const router = useRouter();
   const qc = useQueryClient();

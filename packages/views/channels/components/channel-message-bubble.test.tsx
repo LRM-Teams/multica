@@ -368,6 +368,76 @@ describe("ChannelMessageBubble", () => {
     expect(toast.success).toHaveBeenCalledWith("Copied");
   });
 
+  // #250 — historical agent messages whose denormalized `parts` were never
+  // backfilled carry the structured-action envelope JSON in `content`. The body
+  // must unwrap it to its REAL parts (never render raw JSON) and copy the real
+  // text, while ordinary non-envelope content stays completely unchanged.
+  const ENVELOPE_CONTENT =
+    '{"action":"message_send","output":"hi","parts":[{"type":"text","text":"hi there"}]}';
+
+  it("renders unwrapped envelope parts for a historical message, never raw JSON", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: ENVELOPE_CONTENT, parts: [] })}
+        currentUserId="user-1"
+      />,
+    );
+
+    const body = screen.getByTestId("message-body");
+    expect(body).toHaveTextContent("hi there");
+    expect(body.textContent).not.toContain('"action"');
+    expect(body.textContent).not.toContain("{");
+    expect(screen.queryByText(ENVELOPE_CONTENT)).not.toBeInTheDocument();
+  });
+
+  it("copies the unwrapped envelope text for a historical message, not raw JSON", async () => {
+    copyTextMock.mockResolvedValue(true);
+
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: ENVELOPE_CONTENT, parts: [] })}
+        currentUserId="user-1"
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("hi there"));
+    const copied = copyTextMock.mock.calls[0]?.[0] as string;
+    expect(copied).not.toContain('"action"');
+    expect(copied).not.toContain("{");
+  });
+
+  it("leaves body and copy unchanged for ordinary non-envelope content", async () => {
+    copyTextMock.mockResolvedValue(true);
+
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: "just a plain message" })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("just a plain message")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("just a plain message"));
+  });
+
+  // GAP 3 — legit user-pasted JSON with a `parts` array but no top-level
+  // `action` key must NOT be intercepted; it renders as normal markdown text.
+  it("does not intercept legit JSON content lacking an action key", () => {
+    const jsonish = '{"parts":["a","b"]}';
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ type: "user", author_id: "user-1", content: jsonish })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText(jsonish)).toBeInTheDocument();
+  });
+
   it("copies structured message parts instead of hidden fallback content", async () => {
     copyTextMock.mockResolvedValue(true);
 

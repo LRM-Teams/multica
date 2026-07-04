@@ -8,7 +8,8 @@ import { useConfigStore } from "@multica/core/config";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import {
   paths,
-  resolvePostAuthDestination,
+  chooseWorkspaceDestination,
+  pickLastActiveSlug,
   useHasOnboarded,
 } from "@multica/core/paths";
 import { api } from "@multica/core/api";
@@ -51,7 +52,23 @@ async function resolveLoggedInDestination(
       // fall through
     }
   }
-  return resolvePostAuthDestination(workspaces, hasOnboarded);
+  // Recover the last-active workspace like the landing page and OAuth callback
+  // do (#223): the `last_workspace_slug` cookie (client-readable) if accessible,
+  // else the newest `last_active_at` (#225). Without this, an email/code re-login
+  // lands on the deterministic default — the exact drop-into-an-empty-workspace
+  // bug, just via the login form instead of `/` or the Google callback.
+  const cookieSlug = readCookie("last_workspace_slug");
+  return chooseWorkspaceDestination(
+    workspaces,
+    hasOnboarded,
+    pickLastActiveSlug(workspaces, cookieSlug),
+  );
+}
+
+function readCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
 }
 
 function LoginPageContent() {

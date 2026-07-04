@@ -299,6 +299,24 @@ const ChannelMessageReplySchema = z.object({
   created_at: z.string().default(""),
 }).loose();
 
+const ChannelThreadParticipantSchema = z.object({
+  key: z.string().default(""),
+  member_type: z.string().default(""),
+  member_id: z.string().default(""),
+  name: z.string().default(""),
+  display_name: z.string().default(""),
+  followed: z.boolean().default(false),
+}).loose();
+
+const ChannelThreadWakeAnnotationSchema = z.object({
+  key: z.string().default(""),
+  member_type: z.string().default(""),
+  member_id: z.string().default(""),
+  display_name: z.string().default(""),
+  state: z.string().default(""),
+  reason: z.string().nullable().optional(),
+}).loose();
+
 const ChannelMessageSchema = z.object({
   id: z.string().default(""),
   channel_id: z.string().default(""),
@@ -318,6 +336,8 @@ const ChannelMessageSchema = z.object({
   thread_last_reply_at: z.string().nullable().optional(),
   thread_unread_count: z.number().default(0).optional(),
   thread_followed: z.boolean().default(false).optional(),
+  thread_participants: z.array(ChannelThreadParticipantSchema).nullish().transform((value) => value ?? []).optional(),
+  thread_wake_annotations: z.array(ChannelThreadWakeAnnotationSchema).nullish().transform((value) => value ?? []).optional(),
   thread_id: z.string().nullable().optional(),
   trigger_depth: z.number().default(0).optional(),
   seq: z.number().default(0).optional(),

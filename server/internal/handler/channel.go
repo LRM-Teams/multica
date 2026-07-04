@@ -90,32 +90,52 @@ type ChannelMemberResponse struct {
 }
 
 type ChannelMessageResponse struct {
-	ID                  string                    `json:"id"`
-	ChannelID           string                    `json:"channel_id"`
-	WorkspaceID         string                    `json:"workspace_id"`
-	Seq                 int64                     `json:"seq"`
-	Type                string                    `json:"type"`
-	AuthorID            *string                   `json:"author_id"`
-	AuthorName          string                    `json:"author_name"`
-	Content             string                    `json:"content"`
-	Parts               []protocol.MessagePart    `json:"parts,omitempty"`
-	Source              string                    `json:"source"`
-	ExternalMessageID   *string                   `json:"external_message_id"`
-	ClientMessageID     *string                   `json:"client_message_id"`
-	ReplyToMessageID    *string                   `json:"reply_to_message_id,omitempty"`
-	ReplyTo             *ChannelMessageReply      `json:"reply_to,omitempty"`
-	ThreadRootMessageID *string                   `json:"thread_root_message_id,omitempty"`
-	ThreadReplyCount    int                       `json:"thread_reply_count,omitempty"`
-	ThreadLastReplyAt   *string                   `json:"thread_last_reply_at,omitempty"`
-	ThreadUnreadCount   int                       `json:"thread_unread_count,omitempty"`
-	ThreadFollowed      bool                      `json:"thread_followed,omitempty"`
-	ThreadID            *string                   `json:"thread_id,omitempty"`
-	TriggerDepth        int                       `json:"trigger_depth"`
-	Reactions           []ChannelReactionResponse `json:"reactions,omitempty"`
-	CreatedAt           string                    `json:"created_at"`
+	ID                    string                        `json:"id"`
+	ChannelID             string                        `json:"channel_id"`
+	WorkspaceID           string                        `json:"workspace_id"`
+	Seq                   int64                         `json:"seq"`
+	Type                  string                        `json:"type"`
+	AuthorID              *string                       `json:"author_id"`
+	AuthorName            string                        `json:"author_name"`
+	Content               string                        `json:"content"`
+	Parts                 []protocol.MessagePart        `json:"parts,omitempty"`
+	Source                string                        `json:"source"`
+	ExternalMessageID     *string                       `json:"external_message_id"`
+	ClientMessageID       *string                       `json:"client_message_id"`
+	ReplyToMessageID      *string                       `json:"reply_to_message_id,omitempty"`
+	ReplyTo               *ChannelMessageReply          `json:"reply_to,omitempty"`
+	ThreadRootMessageID   *string                       `json:"thread_root_message_id,omitempty"`
+	ThreadReplyCount      int                           `json:"thread_reply_count,omitempty"`
+	ThreadLastReplyAt     *string                       `json:"thread_last_reply_at,omitempty"`
+	ThreadUnreadCount     int                           `json:"thread_unread_count,omitempty"`
+	ThreadFollowed        bool                          `json:"thread_followed,omitempty"`
+	ThreadParticipants    []ChannelThreadParticipant    `json:"thread_participants,omitempty"`
+	ThreadWakeAnnotations []ChannelThreadWakeAnnotation `json:"thread_wake_annotations,omitempty"`
+	ThreadID              *string                       `json:"thread_id,omitempty"`
+	TriggerDepth          int                           `json:"trigger_depth"`
+	Reactions             []ChannelReactionResponse     `json:"reactions,omitempty"`
+	CreatedAt             string                        `json:"created_at"`
 	// Attachments linked to this message via channel_message_id. The chat
 	// bubble renders file/image cards from these.
 	Attachments []AttachmentResponse `json:"attachments,omitempty"`
+}
+
+type ChannelThreadParticipant struct {
+	Key         string `json:"key"`
+	MemberType  string `json:"member_type"`
+	MemberID    string `json:"member_id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Followed    bool   `json:"followed"`
+}
+
+type ChannelThreadWakeAnnotation struct {
+	Key         string  `json:"key"`
+	MemberType  string  `json:"member_type"`
+	MemberID    string  `json:"member_id"`
+	DisplayName string  `json:"display_name"`
+	State       string  `json:"state"`
+	Reason      *string `json:"reason,omitempty"`
 }
 
 type ChannelMessagesCursorResponse struct {
@@ -904,6 +924,7 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	h.attachChannelMessageReactions(r.Context(), workspaceID, out)
 	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
 	h.attachChannelMessageThreadMetadata(r.Context(), workspaceID, parseUUID(userID), out)
+	h.attachChannelMessageThreadReadModel(r.Context(), workspaceID, out)
 	writeJSON(w, http.StatusOK, ChannelMessagesPageResponse{
 		Messages:   out,
 		Limit:      limit,
@@ -1175,6 +1196,174 @@ func (h *Handler) attachChannelMessageThreadMetadata(ctx context.Context, worksp
 	}
 }
 
+func (h *Handler) attachChannelMessageThreadReadModel(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
+	rootIDs := []pgtype.UUID{}
+	for _, msg := range messages {
+		if msg.ThreadRootMessageID != nil {
+			continue
+		}
+		rootIDs = append(rootIDs, parseUUID(msg.ID))
+	}
+	if len(rootIDs) == 0 {
+		return
+	}
+	rows, err := h.DB.Query(ctx, `
+		WITH latest_task AS (
+		  SELECT DISTINCT ON (cm.channel_thread_root_message_id, atq.agent_id)
+		         cm.channel_thread_root_message_id AS root_message_id,
+		         atq.agent_id,
+		         atq.status,
+		         COALESCE(atq.result::text, '{}') AS result,
+		         cm.created_at AS prompt_created_at
+		  FROM chat_message cm
+		  JOIN agent_task_queue atq ON atq.id = cm.task_id
+		  WHERE cm.channel_thread_root_message_id = ANY($1::uuid[])
+		    AND cm.role = 'user'
+		    AND cm.task_id IS NOT NULL
+		  ORDER BY cm.channel_thread_root_message_id, atq.agent_id, atq.created_at DESC, atq.id DESC
+		),
+		latest_agent_reply AS (
+		  SELECT DISTINCT ON (thread_root_message_id, author_id)
+		         thread_root_message_id AS root_message_id,
+		         author_id AS agent_id
+		  FROM channel_message reply
+		  LEFT JOIN latest_task lt
+		    ON lt.root_message_id = reply.thread_root_message_id
+		   AND lt.agent_id = reply.author_id
+		  WHERE reply.workspace_id = $2
+		    AND reply.thread_root_message_id = ANY($1::uuid[])
+		    AND reply.author_type = 'agent'
+		    AND (lt.prompt_created_at IS NULL OR reply.created_at > lt.prompt_created_at)
+		  ORDER BY reply.thread_root_message_id, reply.author_id, reply.seq DESC
+		)
+		SELECT tp.root_message_id,
+		       tp.member_type,
+		       tp.member_id,
+		       COALESCE(u.name, a.name, '') AS name,
+		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '') AS display_name,
+		       COALESCE(tp.followed_at IS NOT NULL, false) AS followed,
+		       COALESCE(lt.status, '') AS task_status,
+		       COALESCE(lt.result, '{}') AS task_result,
+		       (lar.agent_id IS NOT NULL) AS has_agent_reply
+		FROM thread_participant tp
+		LEFT JOIN "user" u ON tp.member_type = 'user' AND u.id = tp.member_id
+		LEFT JOIN agent a ON tp.member_type = 'agent' AND a.id = tp.member_id
+		LEFT JOIN latest_task lt
+		  ON tp.member_type = 'agent'
+		 AND lt.root_message_id = tp.root_message_id
+		 AND lt.agent_id = tp.member_id
+		LEFT JOIN latest_agent_reply lar
+		  ON tp.member_type = 'agent'
+		 AND lar.root_message_id = tp.root_message_id
+		 AND lar.agent_id = tp.member_id
+		WHERE tp.root_message_id = ANY($1::uuid[])
+		  AND tp.wake_state <> 'removed'
+		ORDER BY tp.root_message_id, tp.created_at ASC`,
+		rootIDs, parseUUID(workspaceID))
+	if err != nil {
+		slog.Warn("channel thread read-model: load failed", "workspace", workspaceID, "error", err)
+		return
+	}
+	defer rows.Close()
+
+	participantsByRoot := map[string][]ChannelThreadParticipant{}
+	wakeByRoot := map[string][]ChannelThreadWakeAnnotation{}
+	for rows.Next() {
+		var rootID, memberID pgtype.UUID
+		var memberType, name, displayName string
+		var followed bool
+		var taskStatus, taskResult string
+		var hasAgentReply bool
+		if err := rows.Scan(&rootID, &memberType, &memberID, &name, &displayName, &followed, &taskStatus, &taskResult, &hasAgentReply); err != nil {
+			continue
+		}
+		memberIDText := uuidToString(memberID)
+		key := channelThreadParticipantKey(memberType, memberIDText)
+		rootKey := uuidToString(rootID)
+		displayName = firstNonEmpty(displayName, name, memberIDText)
+		participantsByRoot[rootKey] = append(participantsByRoot[rootKey], ChannelThreadParticipant{
+			Key:         key,
+			MemberType:  memberType,
+			MemberID:    memberIDText,
+			Name:        firstNonEmpty(name, displayName),
+			DisplayName: displayName,
+			Followed:    followed,
+		})
+		if state, reason, ok := channelThreadWakeAnnotationState(memberType, taskStatus, taskResult, hasAgentReply); ok {
+			wakeByRoot[rootKey] = append(wakeByRoot[rootKey], ChannelThreadWakeAnnotation{
+				Key:         key,
+				MemberType:  memberType,
+				MemberID:    memberIDText,
+				DisplayName: displayName,
+				State:       state,
+				Reason:      reason,
+			})
+		}
+	}
+	for i := range messages {
+		if messages[i].ThreadRootMessageID != nil {
+			continue
+		}
+		if participants := participantsByRoot[messages[i].ID]; len(participants) > 0 {
+			messages[i].ThreadParticipants = participants
+		}
+		if wake := wakeByRoot[messages[i].ID]; len(wake) > 0 {
+			messages[i].ThreadWakeAnnotations = wake
+		}
+	}
+}
+
+func channelThreadParticipantKey(memberType, memberID string) string {
+	return memberType + ":" + memberID
+}
+
+func channelThreadWakeAnnotationState(memberType, taskStatus, taskResult string, hasAgentReply bool) (string, *string, bool) {
+	if memberType != "agent" {
+		return "", nil, false
+	}
+	switch taskStatus {
+	case "queued":
+		return "pending", nil, true
+	case "dispatched", "running", "waiting_local_directory":
+		return "delivered", nil, true
+	case "completed":
+		action, outputType, reason := channelTaskResultAction(taskResult)
+		switch {
+		case action == protocol.ChatOutputActionNoReply || outputType == protocol.ChatOutputKindNoReply:
+			return "no_reply", reason, true
+		case hasAgentReply:
+			return "replied", nil, true
+		case action == protocol.ChatOutputActionMessageReact || outputType == protocol.ChatOutputKindReaction:
+			return "acked", nil, true
+		case action == protocol.ChatOutputActionMessageSend || outputType == protocol.ChatOutputKindMessage:
+			return "acked", nil, true
+		default:
+			return "", nil, false
+		}
+	default:
+		if hasAgentReply {
+			return "replied", nil, true
+		}
+		return "", nil, false
+	}
+}
+
+func channelTaskResultAction(raw string) (string, string, *string) {
+	var result struct {
+		Action                 string `json:"action"`
+		Type                   string `json:"type"`
+		OutputSuppressedReason string `json:"output_suppressed_reason"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return "", "", nil
+	}
+	var reason *string
+	if trimmed := strings.TrimSpace(result.OutputSuppressedReason); trimmed != "" {
+		reason = &trimmed
+	}
+	return strings.TrimSpace(result.Action), strings.TrimSpace(result.Type), reason
+}
+
 func (h *Handler) AddChannelMessageReaction(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -1398,6 +1587,7 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	h.attachChannelMessageReactions(r.Context(), workspaceID, out)
 	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
 	h.attachChannelMessageThreadMetadata(r.Context(), workspaceID, parseUUID(userID), out[:1])
+	h.attachChannelMessageThreadReadModel(r.Context(), workspaceID, out[:1])
 	writeJSON(w, http.StatusOK, ChannelThreadMessagesPageResponse{
 		Messages:   out,
 		NextCursor: nextCursor,

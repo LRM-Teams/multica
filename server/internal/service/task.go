@@ -1453,6 +1453,16 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 			// paragraph breaks instead of one wall of prose.
 			body := util.UnescapeBackslashEscapes(payload.Output)
 			parts := payload.Parts
+			if unwrappedBody, unwrappedParts, unwrapped, unwrapErr := messageparts.UnwrapStructuredMessageSend(body, parts); unwrapErr != nil {
+				if unwrapped {
+					slog.Warn("dropping invalid structured assistant chat output", "task_id", util.UUIDToString(task.ID), "error", unwrapErr)
+					body = ""
+					parts = nil
+				}
+			} else if unwrapped {
+				body = unwrappedBody
+				parts = unwrappedParts
+			}
 			var partsErr error
 			body, parts, partsErr = messageparts.Normalize(body, parts)
 			if partsErr != nil {

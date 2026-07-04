@@ -2719,6 +2719,82 @@ func TestCompleteTask_DMChannelKeepsPlainTextReply(t *testing.T) {
 	}
 }
 
+func TestCompleteTask_DMChannelUnwrapsStructuredMessageSendOutput(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTask(t, "dm")
+	const dmReply = "Structured DM reply"
+
+	w := completeTaskForTest(t, taskID, map[string]any{
+		"output": `{"action":"message_send","output":"` + dmReply + `","parts":[{"type":"text","text":"` + dmReply + `"}]}`,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var content string
+	var storedParts []byte
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT content, parts FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'agent'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, channelID).Scan(&content, &storedParts); err != nil {
+		t.Fatalf("load bridged dm message: %v", err)
+	}
+	if content != dmReply {
+		t.Fatalf("dm content = %q, want %q", content, dmReply)
+	}
+	var decoded []protocol.MessagePart
+	if err := json.Unmarshal(storedParts, &decoded); err != nil {
+		t.Fatalf("decode stored parts: %v", err)
+	}
+	if len(decoded) != 1 || decoded[0].Type != protocol.MessagePartTypeText || decoded[0].Text != dmReply {
+		t.Fatalf("stored parts = %+v, want one text part", decoded)
+	}
+}
+
+func TestTaskServiceCompleteTask_UnwrapsStructuredMessageSendBeforePersist(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, _ := createChannelCompletionTask(t, "dm")
+	const dmReply = "Structured service reply"
+	rawOutput := `{"action":"message_send","output":"` + dmReply + `","parts":[{"type":"text","text":"` + dmReply + `"}]}`
+	result, err := json.Marshal(protocol.TaskCompletedPayload{Output: rawOutput})
+	if err != nil {
+		t.Fatalf("marshal task result: %v", err)
+	}
+
+	if _, err := testHandler.TaskService.CompleteTask(context.Background(), parseUUID(taskID), result, "", ""); err != nil {
+		t.Fatalf("TaskService.CompleteTask: %v", err)
+	}
+
+	var content string
+	var storedParts []byte
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT content, parts FROM chat_message
+		WHERE task_id = $1 AND role = 'assistant'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, taskID).Scan(&content, &storedParts); err != nil {
+		t.Fatalf("load assistant chat message: %v", err)
+	}
+	if content != dmReply {
+		t.Fatalf("chat content = %q, want %q", content, dmReply)
+	}
+	var decoded []protocol.MessagePart
+	if err := json.Unmarshal(storedParts, &decoded); err != nil {
+		t.Fatalf("decode stored parts: %v", err)
+	}
+	if len(decoded) != 1 || decoded[0].Type != protocol.MessagePartTypeText || decoded[0].Text != dmReply {
+		t.Fatalf("stored parts = %+v, want one text part", decoded)
+	}
+}
+
 // Regression test for MUL-1198: comment-triggered tasks that finish without
 // the agent posting any comment must still deliver a synthesized result
 // comment, threaded under the trigger. Before the fix, CompleteTask exempted

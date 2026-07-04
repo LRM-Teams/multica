@@ -1128,12 +1128,20 @@ func (h *Handler) fillChatSessionProjects(ctx context.Context, resp []ChatSessio
 }
 
 func chatMessageToResponse(m db.ChatMessage, attachments []AttachmentResponse) ChatMessageResponse {
+	content := m.Content
+	parts := messageparts.Decode(m.Parts)
+	if m.Role == "assistant" {
+		if unwrappedContent, unwrappedParts, unwrapped, err := messageparts.UnwrapStructuredMessageSend(content, parts); err == nil && unwrapped {
+			content = unwrappedContent
+			parts = unwrappedParts
+		}
+	}
 	return ChatMessageResponse{
 		ID:            uuidToString(m.ID),
 		ChatSessionID: uuidToString(m.ChatSessionID),
 		Role:          m.Role,
-		Content:       m.Content,
-		Parts:         messageparts.Decode(m.Parts),
+		Content:       content,
+		Parts:         parts,
 		TaskID:        uuidToPtr(m.TaskID),
 		CreatedAt:     timestampToString(m.CreatedAt),
 		FailureReason: textToPtr(m.FailureReason),

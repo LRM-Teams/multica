@@ -11,6 +11,15 @@ import (
 
 const BuiltinStickerPackID = "builtin"
 
+type structuredVisibleMessage struct {
+	Action   string                 `json:"action"`
+	Type     string                 `json:"type"`
+	Output   string                 `json:"output"`
+	Content  string                 `json:"content"`
+	Parts    []protocol.MessagePart `json:"parts"`
+	Reaction any                    `json:"reaction"`
+}
+
 func Normalize(content string, parts []protocol.MessagePart) (string, []protocol.MessagePart, error) {
 	normalizedContent := strings.TrimSpace(content)
 	if len(parts) == 0 {
@@ -28,6 +37,54 @@ func Normalize(content string, parts []protocol.MessagePart) (string, []protocol
 		normalizedContent = FallbackContent(out)
 	}
 	return normalizedContent, out, nil
+}
+
+// UnwrapStructuredMessageSend recovers visible text/parts from an agent action
+// JSON payload that accidentally reached a message display or persistence path.
+func UnwrapStructuredMessageSend(content string, parts []protocol.MessagePart) (string, []protocol.MessagePart, bool, error) {
+	if len(parts) > 0 {
+		return content, parts, false, nil
+	}
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
+		return content, parts, false, nil
+	}
+	var payload structuredVisibleMessage
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return content, parts, false, nil
+	}
+	if strings.TrimSpace(payload.Action) == "" &&
+		strings.TrimSpace(payload.Type) == "" &&
+		len(payload.Parts) == 0 &&
+		payload.Reaction == nil {
+		return content, parts, false, nil
+	}
+	if strings.TrimSpace(payload.Action) != "" {
+		action, err := protocol.NormalizeChatOutputAction(payload.Action)
+		if err != nil {
+			return content, parts, true, err
+		}
+		if action != protocol.ChatOutputActionMessageSend {
+			return content, parts, false, nil
+		}
+	} else {
+		outputType, err := protocol.NormalizeChatOutputType(payload.Type, strings.TrimSpace(payload.Output) != "" || strings.TrimSpace(payload.Content) != "" || len(payload.Parts) > 0, payload.Reaction != nil)
+		if err != nil {
+			return content, parts, true, err
+		}
+		if outputType != protocol.ChatOutputKindMessage {
+			return content, parts, false, nil
+		}
+	}
+	output := payload.Output
+	if output == "" {
+		output = payload.Content
+	}
+	normalizedContent, normalizedParts, err := Normalize(output, payload.Parts)
+	if err != nil {
+		return content, parts, true, err
+	}
+	return normalizedContent, normalizedParts, true, nil
 }
 
 func MustJSON(parts []protocol.MessagePart) []byte {

@@ -64,12 +64,17 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 - **③ Agent↔Agent DM（P3）**：同一套 dm + 治理（§9）。
 - **④ Reaction 覆盖 issue（已满足 + 统一 channel/dm）**：issue/comment reaction 用现有两张表（不迁）；channel/dm 统一 `Reaction`；行为口径三处一致（谁能 react、通知、**reaction 不唤醒 agent**）。
 
-## 4. 动作合约（复用 #157 / Raft）
-- `send(conversation_id, parts[])` → 顶层 Message
-- `reply(root_message_id, parts[], also_send_to_channel=false)` → thread 回复；flag 置真则同时进主时间线
-- `react(message_id, emoji)` → Reaction（**不触发 agent run**）
-- `send-to(member_ref, parts[])` → 解析或新建 {me, target} 的 dm 再 send；**禁 self-DM**；仅同 workspace
-规则：reply 生成可见行；react 是 message-scoped；no_reply = 无动作无可见行；parts[] 只作 send/reply 正文。issue 侧动作沿用现有 comment/issue_reaction API（策略对齐见 §7）。
+## 4. 动作合约（v2.4.3 对齐 Raft target 语法，动词 4→3；Frank 拍"naming/调用方式对齐"）
+**Agent 可见层只有三个动词，寻址靠统一 target 语法**（与 Raft `raft message send --target ...` 一字位对齐）：
+- **`send(target, parts[], options?)`** —— target ∈：
+  - `#channel` → 频道顶层 Message；
+  - `dm:@name` → Human DM：**自动 find-or-create** {me, target} 的 1:1 会话再发（**禁 self-DM**；仅同 workspace；权限/存在性错误码 non-leaky）；`@name` 用成员唯一 handle（#42），**UUID 不进模型可见层**；
+  - `#channel:<msgid>` → thread 回复（扁平；options 可带 `also_send_to_channel=false`，**只在 thread 分支显式处理**，不得变隐式 fanout；root/thread 可见性 server 校验）。
+- **`react(message_id, emoji)`** → Reaction（**不触发 agent run**）。
+- **`no_reply`** → 无动作无可见行（合法性见 §6 must-reply）。
+
+**`reply` 与 `send-to` 不再是独立动词——是 target 的两种形态。** server 只有一个 target parser，解析后分 channel/dm/thread 三支。direct/must-reply 语义仍走 durable queue/可见回复路径，不被 ambient coalescing 吞。agent↔agent DM（`dm:@agent`）仍 P3，不在 #247。落地=task #247。
+规则：thread 回复生成可见行；react 是 message-scoped；parts[] 只作 send 正文。issue 侧动作沿用现有 comment/issue_reaction API（策略对齐见 §7）。
 
 ### 4.2 send/reply 幂等（事故驱动，#207；BE 契约已由 Barry 锁定）
 每个 send/reply 带 **client-generated `client_message_id`**（idempotency key）。server 按 `(conversation, sender, client_message_id)` 去重。三支结果分流（FE 必须区分，不能混成一个"失败提示"）：
@@ -236,6 +241,7 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 **待拍点：无。**
 
 ## 14. 变更记录
+- v2.4.3（7-4 晚，Frank 拍"DM 命令 naming/调用方式对齐 Raft"）：§4 动作合约改 **target-based**——动词 4→3（`send(target,parts,options?)`/`react`/`no_reply`），`reply`/`send-to` 收敛为 target 形态（`#channel:<msgid>` / `dm:@name` find-or-create）；统一 server target parser；`dm:@name` 用 handle 不用 UUID；agent 主动 Human DM=task #247（agent↔agent 仍 P3）。Barry BE schema gate 已 PASS。
 - v2.4.2（7-4，Frank DM 拍定 5 项 proactive gap 裁决）：①§6 加**编辑/删除 vs agent 已读竞态**三句口径（run 读执行时最新版 / context_pack 钉版本 / **edit·delete 绝不产生新 wake** 防新放大器）；②新增 **§4.3 陈旧发送保护 freshness hold**（P2 候选：send API 前置 seq 校验+有界 delta 补投+draft 暂存+显式二次决定）；③新增 **§6.4 时间驱动唤醒/Reminder**（P2 候选：Wake matrix 第四行 time trigger，author-owned，数量上限防自我放大）；④§6.3⑥ **成本护栏**（先视图后预算上限，observability follow-up）；⑤§6.2 基准#9：**Activity=只读观察面**，retry 不做进 backlog，Copy Diagnostic 保留。
 - v2.4.1（7-4）：§6.2 四面→**五面**：新增「Agent runtime lifecycle」事件源（runtime error 显式化·禁静默卡死 / restart·resume 含 replay 计数 / 版本变更），run 之外的 agent 级事件入 Activity 低噪层（Frank 由 Raft 0.67.0 dogfood 点出 run 锚定 Activity 的盲区：起不了 run 时什么都看不见）。§13#8 验收随之含 lifecycle 事件。
 - v2.4（7-4 刷新）：**并入 7-3 队列风暴事故硬化**——新增 §6.3 合并唤醒/relevance pre-gate/熔断/队列背压（#194，产品不变量：系统自动产生的负载必须有背压/上限）；标注已落地基座（#197 schema=migration 144 已 done+产品 PASS、#194 Phase 0 ambient 门已 PASS、§4.2 #207 契约已锁）；§12 加"已落地基座"段 + §6.3 后续阶段；§13 补验收 #10（send 幂等）/#11（有界 ambient）；**新增 §16 v2.3→v2.4 Delta / Implementation Map**（Miles 排期 + Iris #201 QA reconcile 用：A 已落地基座/B 本次 delta/C P1 继续项/D 未决 gate，每行带 task+验收锚）。目的=给 Miles 单一最新 canonical 版拆实施，消除散在各 thread 的增量。

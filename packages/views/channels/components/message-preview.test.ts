@@ -63,6 +63,59 @@ describe("formatChannelMessagePreview", () => {
       ),
     ).toBe("Atlas: [Sticker]");
   });
+
+  it("unwraps a raw structured-action envelope in content when parts are empty (never leaks JSON)", () => {
+    const raw =
+      '{"action":"message_send","output":"hi","parts":[{"type":"text","text":"hi there"}]}';
+    const result = formatChannelMessagePreview("Atlas", raw, resolveMention, []);
+    expect(result).toBe("Atlas: hi there");
+    expect(result).not.toContain('"action"');
+    expect(result).not.toContain("{");
+  });
+
+  it("unwraps a raw structured-action envelope when parts arg is undefined", () => {
+    const raw =
+      '{"action":"message_send","output":"hi","parts":[{"type":"text","text":"hi there"}]}';
+    const result = formatChannelMessagePreview("Atlas", raw, resolveMention);
+    expect(result).toBe("Atlas: hi there");
+    expect(result).not.toContain('"action"');
+  });
+
+  it("leaves normal text content unchanged when parts are empty", () => {
+    expect(
+      formatChannelMessagePreview("Atlas", "just a message", resolveMention, []),
+    ).toBe("Atlas: just a message");
+  });
+
+  it("falls back to the envelope output when structured parts have no renderable text", () => {
+    const raw =
+      '{"action":"message_send","output":"fallback summary","parts":[{"type":"image","url":"x"}]}';
+    const result = formatChannelMessagePreview("Atlas", raw, resolveMention, []);
+    expect(result).toBe("Atlas: fallback summary");
+    expect(result).not.toContain('"action"');
+    expect(result).not.toContain("{");
+  });
+
+  it("never leaks raw JSON when a structured envelope has neither text parts nor output", () => {
+    const raw = '{"action":"message_send","parts":[{"type":"image","url":"x"}]}';
+    const result = formatChannelMessagePreview("Atlas", raw, resolveMention, []);
+    expect(result).not.toContain('"action"');
+    expect(result).not.toContain("{");
+    expect(result).not.toContain("image");
+  });
+
+  it("treats malformed JSON that is not a real envelope as normal text (no crash)", () => {
+    const almost = '{"parts": [oops not json';
+    const result = formatChannelMessagePreview("Atlas", almost, resolveMention, []);
+    expect(result).toBe(`Atlas: ${almost}`);
+  });
+
+  it("does not unwrap plain JSON-looking text that has no parts array", () => {
+    const jsonish = '{"status":"ok"}';
+    expect(
+      formatChannelMessagePreview("Atlas", jsonish, resolveMention, []),
+    ).toBe(`Atlas: ${jsonish}`);
+  });
 });
 
 describe("resolveChannelAuthorDisplayName", () => {

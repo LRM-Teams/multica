@@ -22,6 +22,7 @@ import {
   formatMessagePartsCopyText,
   formatMessagePartsPreview,
   hasStructuredMessageParts,
+  unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
 import { MessagePartsRenderer } from "./message-parts-renderer";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
@@ -460,7 +461,9 @@ export function ChannelMessageBubble({
                 {replyAuthorName}
               </p>
               <p className="line-clamp-1 text-[11px] text-muted-foreground">
-                {formatMessagePartsPreview(message.reply_to.parts) ?? message.reply_to.content}
+                {formatMessagePartsPreview(message.reply_to.parts) ??
+                  unwrapStructuredPreviewContent(message.reply_to.content) ??
+                  message.reply_to.content}
               </p>
             </button>
           )}

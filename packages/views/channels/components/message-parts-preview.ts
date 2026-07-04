@@ -37,3 +37,45 @@ export function formatMessagePartsPreview(parts?: MessagePart[] | null): string 
 export function formatMessagePartsCopyText(parts?: MessagePart[] | null): string | null {
   return formatMessagePartsPreview(parts);
 }
+
+// Neutral, non-empty placeholder used when a structured-action envelope carries
+// no renderable text and no output. Kept non-empty so downstream truthiness
+// checks (e.g. thread-root-preview's compact-body fallback) never fall back to
+// rendering the raw content JSON.
+const STRUCTURED_ENVELOPE_PLACEHOLDER = "…";
+
+/**
+ * Defense-in-depth guard for historical agent messages whose denormalized
+ * `parts` were never backfilled: their raw content is the structured-action
+ * envelope JSON (e.g. `{"action":"message_send","output":"…","parts":[…]}`).
+ *
+ * When `content` looks like such an envelope, unwrap it to human text so the
+ * raw JSON is NEVER rendered as a preview. Returns null for anything that is
+ * not a recognizable envelope, so normal text content renders unchanged.
+ */
+export function unwrapStructuredPreviewContent(content: string): string | null {
+  const trimmed = content.trim();
+  // Cheap guard before JSON.parse: must look like a JSON object mentioning parts.
+  if (!trimmed.startsWith("{") || !trimmed.includes('"parts"')) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const envelope = parsed as { parts?: unknown; output?: unknown };
+  if (!Array.isArray(envelope.parts)) return null;
+
+  const fromParts = formatMessagePartsPreview(envelope.parts as MessagePart[]);
+  if (fromParts) return fromParts;
+
+  if (typeof envelope.output === "string") {
+    const output = normalizeText(envelope.output);
+    if (output) return output;
+  }
+
+  return STRUCTURED_ENVELOPE_PLACEHOLDER;
+}

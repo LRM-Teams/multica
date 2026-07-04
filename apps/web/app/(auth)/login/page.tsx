@@ -6,12 +6,8 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { sanitizeNextUrl, useAuthStore } from "@multica/core/auth";
 import { useConfigStore } from "@multica/core/config";
 import { workspaceKeys } from "@multica/core/workspace/queries";
-import {
-  paths,
-  chooseWorkspaceDestination,
-  pickLastActiveSlug,
-  useHasOnboarded,
-} from "@multica/core/paths";
+import { paths, useHasOnboarded } from "@multica/core/paths";
+import { resolveLoggedInDestination } from "@/features/auth/resolve-logged-in-destination";
 import { api } from "@multica/core/api";
 import type { Workspace } from "@multica/core/types";
 import {
@@ -36,41 +32,6 @@ import { useT } from "@multica/views/i18n";
  * resolver. A network blip on listMyInvitations is non-fatal — we fall
  * through rather than trap the user on an error screen.
  */
-async function resolveLoggedInDestination(
-  qc: QueryClient,
-  hasOnboarded: boolean,
-  workspaces: Workspace[],
-): Promise<string> {
-  if (!hasOnboarded) {
-    try {
-      const invites = await api.listMyInvitations();
-      if (invites.length > 0) {
-        qc.setQueryData(workspaceKeys.myInvitations(), invites);
-        return paths.invitations();
-      }
-    } catch {
-      // fall through
-    }
-  }
-  // Recover the last-active workspace like the landing page and OAuth callback
-  // do (#223): the `last_workspace_slug` cookie (client-readable) if accessible,
-  // else the newest `last_active_at` (#225). Without this, an email/code re-login
-  // lands on the deterministic default — the exact drop-into-an-empty-workspace
-  // bug, just via the login form instead of `/` or the Google callback.
-  const cookieSlug = readCookie("last_workspace_slug");
-  return chooseWorkspaceDestination(
-    workspaces,
-    hasOnboarded,
-    pickLastActiveSlug(workspaces, cookieSlug),
-  );
-}
-
-function readCookie(name: string): string | null {
-  if (typeof document === "undefined") return null;
-  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
-  return match?.[1] ? decodeURIComponent(match[1]) : null;
-}
-
 function LoginPageContent() {
   const router = useRouter();
   const qc = useQueryClient();

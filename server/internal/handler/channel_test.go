@@ -2128,6 +2128,123 @@ func TestChannelThreadReplyMetadataReadAndMainTimelineFiltering(t *testing.T) {
 	}
 }
 
+func TestChannelThreadReadModelExposesParticipantsAndPendingWake(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Thread Contract Helper", nil)
+	channelID := seedChannelForTest(t, "thread-read-model-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("thread-read-model"), 0)
+	if err != nil {
+		t.Fatalf("insert root: %v", err)
+	}
+	rec := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{"content": "[@Thread Contract Helper](mention://agent/" + agentID + ") can you take this?"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send thread mention: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	page, raw := listedThreadForUser(t, channelID, root.ID, testUserID)
+	if len(page.Messages) == 0 {
+		t.Fatal("thread response missing root")
+	}
+	gotRoot := page.Messages[0]
+	timeline := listedMessagesForUser(t, channelID, testUserID)
+	if len(timeline) != 1 || len(timeline[0].ThreadParticipants) == 0 || len(timeline[0].ThreadWakeAnnotations) == 0 {
+		t.Fatalf("main timeline root missing thread read-model fields: %+v", timeline)
+	}
+	if len(gotRoot.ThreadParticipants) != 2 {
+		t.Fatalf("thread participants = %+v, want root user + mentioned agent", gotRoot.ThreadParticipants)
+	}
+	participants := map[string]ChannelThreadParticipant{}
+	for _, participant := range gotRoot.ThreadParticipants {
+		participants[participant.Key] = participant
+	}
+	if _, ok := participants["user:"+testUserID]; !ok {
+		t.Fatalf("participants missing root user: %+v", gotRoot.ThreadParticipants)
+	}
+	agentParticipant, ok := participants["agent:"+agentID]
+	if !ok || !agentParticipant.Followed {
+		t.Fatalf("participants missing followed agent: %+v", gotRoot.ThreadParticipants)
+	}
+	if len(gotRoot.ThreadWakeAnnotations) != 1 {
+		t.Fatalf("wake annotations = %+v, want one pending agent", gotRoot.ThreadWakeAnnotations)
+	}
+	annotation := gotRoot.ThreadWakeAnnotations[0]
+	if annotation.Key != "agent:"+agentID || annotation.State != "pending" || annotation.MemberID != agentID || annotation.Reason != nil {
+		t.Fatalf("pending wake annotation = %+v, want non-leaky pending agent", annotation)
+	}
+	for _, forbidden := range []string{"task_id", "pending_from_seq", "pending_to_seq", "delivered_to_seq", "channel_ambient_pending_wake"} {
+		if strings.Contains(raw, forbidden) {
+			t.Fatalf("thread read-model response leaked %q: %s", forbidden, raw)
+		}
+	}
+}
+
+func TestChannelThreadReadModelSurfacesReplyAndNoReplyStates(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Thread State Helper", nil)
+	channelID := seedChannelForTest(t, "thread-state-model-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+
+	replyRoot, replyTaskID := dispatchThreadMentionForTest(t, channelID, agentID, "thread-state-reply")
+	completeChannelAgentTaskForTest(t, replyTaskID, protocol.TaskCompletedPayload{
+		Action: protocol.ChatOutputActionMessageSend,
+		Type:   protocol.ChatOutputKindMessage,
+		Output: "visible answer",
+	})
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "Thread State Helper", "visible answer", "multica", nil, pgtype.UUID{}, parseUUID(replyRoot.ID), replyRoot.ThreadID, 1); err != nil {
+		t.Fatalf("insert visible agent reply: %v", err)
+	}
+	replyPage, _ := listedThreadForUser(t, channelID, replyRoot.ID, testUserID)
+	if got := wakeStateForAgent(t, replyPage.Messages[0], agentID); got.State != "replied" || got.Reason != nil {
+		t.Fatalf("reply wake state = %+v, want replied", got)
+	}
+
+	rec := sendChannelThreadReplyForTest(t, channelID, replyRoot.ID, testUserID, map[string]any{"content": "[@Thread State Helper](mention://agent/" + agentID + ") react if done"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send follow-up thread mention: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	ackTaskID := latestChannelAgentTaskForRootForTest(t, replyRoot.ID, agentID)
+	completeChannelAgentTaskForTest(t, ackTaskID, protocol.TaskCompletedPayload{
+		Action: protocol.ChatOutputActionMessageReact,
+		Type:   protocol.ChatOutputKindReaction,
+	})
+	ackPage, _ := listedThreadForUser(t, channelID, replyRoot.ID, testUserID)
+	if got := wakeStateForAgent(t, ackPage.Messages[0], agentID); got.State != "acked" || got.Reason != nil {
+		t.Fatalf("follow-up ack wake state = %+v, want acked despite older visible reply", got)
+	}
+
+	noReplyRoot, noReplyTaskID := dispatchThreadMentionForTest(t, channelID, agentID, "thread-state-no-reply")
+	completeChannelAgentTaskForTest(t, noReplyTaskID, protocol.TaskCompletedPayload{
+		Action:                 protocol.ChatOutputActionNoReply,
+		Type:                   protocol.ChatOutputKindNoReply,
+		OutputSuppressedReason: "not_relevant",
+	})
+	noReplyPage, _ := listedThreadForUser(t, channelID, noReplyRoot.ID, testUserID)
+	gotNoReply := wakeStateForAgent(t, noReplyPage.Messages[0], agentID)
+	if gotNoReply.State != "no_reply" || gotNoReply.Reason == nil || *gotNoReply.Reason != "not_relevant" {
+		t.Fatalf("no_reply wake state = %+v, want no_reply with reason", gotNoReply)
+	}
+	if len(noReplyPage.Messages) != 2 {
+		t.Fatalf("no_reply should not create visible agent reply, thread messages=%v", threadContents(noReplyPage.Messages))
+	}
+}
+
 func TestChannelThreadReplyWithoutMentionDoesNotAmbientDispatch(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -3186,6 +3303,80 @@ func listedMessagesForUser(t *testing.T, channelID, userID string) []ChannelMess
 		t.Fatalf("decode messages: %v", err)
 	}
 	return page.Messages
+}
+
+func listedThreadForUser(t *testing.T, channelID, rootID, userID string) (ChannelThreadMessagesPageResponse, string) {
+	t.Helper()
+	req := newRequestAs(userID, http.MethodGet, "/api/channels/"+channelID+"/messages/"+rootID+"/thread", nil)
+	req = withChannelTestWorkspaceCtx(t, req, userID)
+	req = withURLParams(req, "channelId", channelID, "messageId", rootID)
+	rec := httptest.NewRecorder()
+	testHandler.ListChannelMessageThread(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list channel thread: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var page ChannelThreadMessagesPageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode thread page: %v", err)
+	}
+	return page, rec.Body.String()
+}
+
+func dispatchThreadMentionForTest(t *testing.T, channelID, agentID, threadID string) (ChannelMessageResponse, string) {
+	t.Helper()
+	ctx := context.Background()
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root "+threadID, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr(threadID), 0)
+	if err != nil {
+		t.Fatalf("insert root: %v", err)
+	}
+	rec := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{"content": "[@Thread State Helper](mention://agent/" + agentID + ") please check"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send thread mention: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	return root, latestChannelAgentTaskForRootForTest(t, root.ID, agentID)
+}
+
+func latestChannelAgentTaskForRootForTest(t *testing.T, rootID, agentID string) string {
+	t.Helper()
+	var taskID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT atq.id
+		FROM agent_task_queue atq
+		JOIN chat_message cm ON cm.task_id = atq.id
+		WHERE cm.channel_thread_root_message_id = $1
+		  AND cm.role = 'user'
+		  AND atq.agent_id = $2
+		ORDER BY atq.created_at DESC, atq.id DESC
+		LIMIT 1`, rootID, agentID).Scan(&taskID); err != nil {
+		t.Fatalf("load latest channel agent task for root: %v", err)
+	}
+	return taskID
+}
+
+func completeChannelAgentTaskForTest(t *testing.T, taskID string, payload protocol.TaskCompletedPayload) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `UPDATE agent_task_queue SET status = 'running', started_at = now() WHERE id = $1`, taskID); err != nil {
+		t.Fatalf("mark task running: %v", err)
+	}
+	result, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal task payload: %v", err)
+	}
+	if _, err := testHandler.TaskService.CompleteTask(ctx, parseUUID(taskID), result, "", ""); err != nil {
+		t.Fatalf("complete channel agent task: %v", err)
+	}
+}
+
+func wakeStateForAgent(t *testing.T, root ChannelMessageResponse, agentID string) ChannelThreadWakeAnnotation {
+	t.Helper()
+	for _, annotation := range root.ThreadWakeAnnotations {
+		if annotation.MemberType == "agent" && annotation.MemberID == agentID {
+			return annotation
+		}
+	}
+	t.Fatalf("missing wake annotation for agent %s in %+v", agentID, root.ThreadWakeAnnotations)
+	return ChannelThreadWakeAnnotation{}
 }
 
 func threadContents(messages []ChannelMessageResponse) []string {

@@ -346,6 +346,51 @@ describe("Channel message pagination schemas", () => {
     expect(parsed.next_cursor?.seq).toBe(42);
   });
 
+  it("keeps thread participant and wake annotations with defensive defaults", () => {
+    const parsed = ChannelThreadMessagesPageSchema.parse({
+      messages: [
+        {
+          id: "root-1",
+          channel_id: "channel-1",
+          workspace_id: "ws-1",
+          type: "user",
+          author_id: "user-1",
+          author_name: "Ada",
+          content: "root",
+          source: "multica",
+          external_message_id: null,
+          created_at: "2026-07-03T00:00:00Z",
+          thread_participants: [
+            {
+              key: "agent:agent-1",
+              member_type: "agent",
+              member_id: "agent-1",
+              display_name: "Ronan",
+            },
+          ],
+          thread_wake_annotations: [
+            {
+              key: "agent:agent-1",
+              member_type: "agent",
+              member_id: "agent-1",
+              display_name: "Ronan",
+              state: "no_reply",
+            },
+          ],
+        },
+      ],
+    });
+    expect(parsed.messages[0]?.thread_participants?.[0]).toMatchObject({
+      key: "agent:agent-1",
+      name: "",
+      followed: false,
+    });
+    expect(parsed.messages[0]?.thread_wake_annotations?.[0]).toMatchObject({
+      key: "agent:agent-1",
+      state: "no_reply",
+    });
+  });
+
   it("rejects malformed message lists so callers can fall back", () => {
     expect(ChannelMessagesPageSchema.safeParse({ messages: null }).success).toBe(false);
     expect(ChannelThreadMessagesPageSchema.safeParse({ messages: null }).success).toBe(false);

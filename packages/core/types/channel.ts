@@ -62,6 +62,24 @@ export interface ChannelReaction {
   created_at: string;
 }
 
+export interface ChannelThreadParticipant {
+  key: string;
+  member_type: string;
+  member_id: string;
+  name: string;
+  display_name: string;
+  followed: boolean;
+}
+
+export interface ChannelThreadWakeAnnotation {
+  key: string;
+  member_type: string;
+  member_id: string;
+  display_name: string;
+  state: "pending" | "replied" | "acked" | "delivered" | "no_reply" | (string & {});
+  reason?: string | null;
+}
+
 export interface ChannelMessage {
   id: string;
   channel_id: string;
@@ -82,6 +100,8 @@ export interface ChannelMessage {
   thread_last_reply_at?: string | null;
   thread_unread_count?: number;
   thread_followed?: boolean;
+  thread_participants?: ChannelThreadParticipant[];
+  thread_wake_annotations?: ChannelThreadWakeAnnotation[];
   thread_id?: string | null;
   trigger_depth?: number;
   reactions?: ChannelReaction[];

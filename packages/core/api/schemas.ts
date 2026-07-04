@@ -324,6 +324,8 @@ const ChannelMessageSchema = z.object({
   reactions: z.array(ChannelReactionSchema).default([]).optional(),
   attachments: z.array(AttachmentSchema).default([]).optional(),
   created_at: z.string().default(""),
+  edited_at: z.string().nullable().optional(),
+  deleted_at: z.string().nullable().optional(),
 }).loose();
 
 const ChannelMessagesCursorSchema = z.object({

@@ -2159,6 +2159,26 @@ export class ApiClient {
     });
   }
 
+  async editChannelMessage(
+    channelId: string,
+    messageId: string,
+    content: string,
+    parts?: MessagePart[],
+  ): Promise<ChannelMessage> {
+    const body: { content: string; parts?: MessagePart[] } = { content };
+    if (parts && parts.length > 0) {
+      body.parts = parts;
+    }
+    return this.fetch(`/api/channels/${channelId}/messages/${messageId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async deleteChannelMessage(channelId: string, messageId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/messages/${messageId}`, { method: "DELETE" });
+  }
+
   async addChannelReaction(channelId: string, messageId: string, emoji: string): Promise<ChannelReaction> {
     return this.fetch(`/api/channels/${channelId}/messages/${messageId}/reactions`, {
       method: "POST",

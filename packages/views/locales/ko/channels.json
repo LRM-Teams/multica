@@ -186,7 +186,13 @@
     "sticker_failed": "스티커를 불러오지 못했습니다",
     "sticker_unavailable": "스티커를 사용할 수 없습니다",
     "agent_badge": "Agent",
-    "feishu_badge": "Feishu"
+    "feishu_badge": "Feishu",
+    "edit_action": "편집",
+    "delete_action": "삭제",
+    "edited_label": "(편집됨)",
+    "deleted_placeholder": "이 메시지는 삭제되었습니다",
+    "save_edit": "저장",
+    "cancel_edit": "취소"
   },
   "dm": {
     "heading": "다이렉트 메시지",

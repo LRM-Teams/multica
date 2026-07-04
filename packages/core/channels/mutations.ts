@@ -90,6 +90,38 @@ export function useSendChannelMessage() {
   });
 }
 
+export function useEditChannelMessage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      channelId,
+      messageId,
+      content,
+      parts,
+    }: {
+      channelId: string;
+      messageId: string;
+      content: string;
+      parts?: MessagePart[];
+    }) => api.editChannelMessage(channelId, messageId, content, parts),
+    onSuccess: (msg) => {
+      upsertChannelMessageInCache(qc, msg);
+      invalidateChannelMessages(qc, msg.channel_id);
+    },
+  });
+}
+
+export function useDeleteChannelMessage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ channelId, messageId }: { channelId: string; messageId: string }) =>
+      api.deleteChannelMessage(channelId, messageId),
+    onSuccess: (_data, vars) => {
+      invalidateChannelMessages(qc, vars.channelId);
+    },
+  });
+}
+
 export function useAddChannelReaction() {
   const qc = useQueryClient();
   return useMutation({

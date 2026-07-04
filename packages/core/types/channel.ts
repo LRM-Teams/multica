@@ -93,6 +93,13 @@ export interface ChannelMessage {
    */
   attachments?: import("./attachment").Attachment[];
   created_at: string;
+  /** Set once the author has edited the message; drives the "(edited)" label. */
+  edited_at?: string | null;
+  /**
+   * Set once the message is soft-deleted; the bubble renders a tombstone
+   * placeholder ("message deleted") in its place — never an empty row.
+   */
+  deleted_at?: string | null;
 }
 
 export interface ChannelMessagesCursor {

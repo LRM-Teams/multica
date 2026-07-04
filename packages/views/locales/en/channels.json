@@ -186,7 +186,13 @@
     "sticker_failed": "Sticker failed to load",
     "sticker_unavailable": "Sticker unavailable",
     "agent_badge": "Agent",
-    "feishu_badge": "Feishu"
+    "feishu_badge": "Feishu",
+    "edit_action": "Edit",
+    "delete_action": "Delete",
+    "edited_label": "(edited)",
+    "deleted_placeholder": "This message was deleted",
+    "save_edit": "Save",
+    "cancel_edit": "Cancel"
   },
   "dm": {
     "heading": "Direct messages",

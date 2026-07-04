@@ -139,9 +139,6 @@ func (h *Handler) resolveChannelOutputTarget(ctx context.Context, origin chatOut
 		}
 		return resolvedChatOutputTarget{kind: chatOutputTargetChannel, channel: ch}, nil
 	}
-	if options != nil && options.AlsoSendToChannel != nil && *options.AlsoSendToChannel {
-		return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
-	}
 	rootID, err := util.ParseUUID(strings.TrimSpace(rawMessageID))
 	if err != nil {
 		return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
@@ -223,21 +220,32 @@ func (h *Handler) handleTargetedChannelChatDone(ctx context.Context, origin chat
 			fresh := uuid.NewString()
 			threadID = &fresh
 		}
-		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, parseUUID(target.threadRoot.ID), threadID, target.threadRoot.TriggerDepth+1, initiatorID)
+		msg, ok := h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, parseUUID(target.threadRoot.ID), threadID, target.threadRoot.TriggerDepth+1, initiatorID)
+		if ok && payload.Options != nil && payload.Options.AlsoSendToChannel != nil && *payload.Options.AlsoSendToChannel {
+			mirror, created, err := h.ensureChannelThreadMirrorMessage(ctx, target.channel.WorkspaceID, parseUUID(target.channel.ID), origin.agentID, "agent", msg.AuthorName, msg)
+			if err != nil {
+				slog.Warn("channel bridge: insert thread mirror carrier failed", "channel_id", target.channel.ID, "agent_id", uuidToString(origin.agentID), "message_id", msg.ID, "error", err)
+				return true
+			}
+			if created {
+				_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, parseUUID(target.channel.ID))
+				h.publishChannelToMembers(ctx, protocol.EventChannelMessage, target.channel.WorkspaceID, "agent", uuidToString(origin.agentID), parseUUID(target.channel.ID), mirror)
+			}
+		}
 	case chatOutputTargetChannel:
 		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, pgtype.UUID{}, nil, 0, initiatorID)
 	}
 	return true
 }
 
-func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelResponse, agentID pgtype.UUID, content string, parts []protocol.MessagePart, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int, initiatorID pgtype.UUID) {
+func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelResponse, agentID pgtype.UUID, content string, parts []protocol.MessagePart, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int, initiatorID pgtype.UUID) (ChannelMessageResponse, bool) {
 	channelID := parseUUID(ch.ID)
 	workspaceID := parseUUID(ch.WorkspaceID)
 	agentName := h.agentName(ctx, agentID)
 	msg, err := h.insertChannelMessageWithParts(ctx, channelID, workspaceID, "agent", agentID, agentName, content, parts, "multica", nil, pgtype.UUID{}, threadRootMessageID, threadID, triggerDepth)
 	if err != nil {
 		slog.Warn("channel bridge: insert targeted agent message failed", "channel_id", ch.ID, "agent_id", uuidToString(agentID), "error", err)
-		return
+		return ChannelMessageResponse{}, false
 	}
 	_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
 	if ch.Kind == "dm" {
@@ -252,4 +260,5 @@ func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelRe
 		}
 		h.sendChannelMessageToFeishu(ctx, ch, agentName, content)
 	}
+	return msg, true
 }

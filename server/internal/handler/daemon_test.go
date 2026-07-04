@@ -2503,6 +2503,78 @@ func TestCompleteTask_GroupChannelThreadTargetAllowsFalseAlsoSendOption(t *testi
 	}
 }
 
+func TestCompleteTask_GroupChannelThreadTargetAlsoSendCreatesCarrier(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	targetAgentID := createHandlerTestAgent(t, "Thread Mirror Completion Target", nil)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, targetAgentID); err != nil {
+		t.Fatalf("seed target agent member: %v", err)
+	}
+	var rootID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, trigger_depth)
+		VALUES ($1, $2, 'user', $3, 'Tester', 'thread root', 'multica', $4, 0)
+		RETURNING id
+	`, channelID, testWorkspaceID, testUserID, "thread-target-mirror-"+uuid.NewString()).Scan(&rootID); err != nil {
+		t.Fatalf("seed thread root: %v", err)
+	}
+	var channelName string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, channelID).Scan(&channelName); err != nil {
+		t.Fatalf("load channel name: %v", err)
+	}
+	visibleReply := "please [@Thread Mirror Completion Target](mention://agent/" + targetAgentID + ") review from the thread"
+
+	w := completeTaskForTest(t, taskID, map[string]any{
+		"action":  "send",
+		"target":  "#" + channelName + ":" + rootID,
+		"options": map[string]any{"also_send_to_channel": true},
+		"output":  visibleReply,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var replyID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id
+		FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'agent' AND content = $2 AND thread_root_message_id = $3
+	`, channelID, visibleReply, rootID).Scan(&replyID); err != nil {
+		t.Fatalf("load targeted thread reply: %v", err)
+	}
+	var carrierCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND author_type = 'agent'
+		  AND thread_root_message_id IS NULL
+		  AND reply_to_message_id = $2
+		  AND content = $3`, channelID, replyID, channelThreadMirrorContent).Scan(&carrierCount); err != nil {
+		t.Fatalf("count thread mirror carriers: %v", err)
+	}
+	if carrierCount != 1 {
+		t.Fatalf("thread mirror carrier count = %d, want 1", carrierCount)
+	}
+	var targetTasks int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_queue q
+		JOIN channel_agent_session cas ON cas.chat_session_id = q.chat_session_id
+		WHERE cas.channel_id = $1 AND cas.agent_id = $2`, channelID, targetAgentID).Scan(&targetTasks); err != nil {
+		t.Fatalf("count target agent tasks: %v", err)
+	}
+	if targetTasks != 1 {
+		t.Fatalf("target agent task count = %d, want 1", targetTasks)
+	}
+}
+
 func TestCompleteTask_GroupChannelSendActionWritesParts(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

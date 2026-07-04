@@ -35,7 +35,8 @@ const channelMessagesMaxLimit = 100
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
-const channelOutputContractInstruction = "Channel action contract: create visible output only by returning exactly one action and nothing else. Use {\"action\":\"send\",\"output\":\"...\"} or {\"action\":\"send\",\"parts\":[...]} for a visible message in the current channel; use {\"action\":\"send\",\"target\":\"dm:@name\",\"output\":\"...\"} to send a Human DM to a same-workspace member by handle; use {\"action\":\"send\",\"target\":\"#channel:<message_id>\",\"output\":\"...\",\"options\":{\"also_send_to_channel\":false}} to reply in a thread. To react, use {\"action\":\"react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}}. Never output analysis, thinking, plans, tool intent, raw completion text, or described commands as a chat message."
+const channelThreadMirrorContent = "From thread"
+const channelOutputContractInstruction = "Channel action contract: create visible output only by returning exactly one action and nothing else. Use {\"action\":\"send\",\"output\":\"...\"} or {\"action\":\"send\",\"parts\":[...]} for a visible message in the current channel; use {\"action\":\"send\",\"target\":\"dm:@name\",\"output\":\"...\"} to send a Human DM to a same-workspace member by handle; use {\"action\":\"send\",\"target\":\"#channel:<message_id>\",\"output\":\"...\",\"options\":{\"also_send_to_channel\":false}} to reply in a thread, or set also_send_to_channel true only when the group thread reply also needs a main-channel carrier. To react, use {\"action\":\"react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}}. Never output analysis, thinking, plans, tool intent, raw completion text, or described commands as a chat message."
 const channelDirectedReplyInstruction = "This run is directly addressed to you. You must produce a visible result: send a helpful reply, ask a follow-up question, or use a react action as an explicit acknowledgement. Do not return no_reply, stay_silent, or any other silent outcome for a direct mention, direct question, assigned task, or DM-style continuation."
 const channelAmbientNoReplyInstruction = "If you should not reply, do not call a send action; internal no_reply is allowed only as a non-visible outcome."
 const channelStickerReplyInstruction = "Sticker replies: if the user explicitly asks for a sticker/表情包, or you intentionally choose a sticker-only social reply such as hi/ok/收到/thanks/praise, use the send action with structured parts, for example {\"action\":\"send\",\"output\":\"Welcome!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome!\"},{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}. Use a real sticker_id from the multica-stickers skill. Do not output :sticker:<id>: tokens, and do not add a sticker to substantive answers."
@@ -218,11 +219,12 @@ type AddChannelMemberRequest struct {
 }
 
 type SendChannelMessageRequest struct {
-	Content          string                 `json:"content"`
-	Parts            []protocol.MessagePart `json:"parts"`
-	AttachmentIDs    []string               `json:"attachment_ids"`
-	ReplyToMessageID *string                `json:"reply_to_message_id"`
-	ClientMessageID  *string                `json:"client_message_id"`
+	Content           string                 `json:"content"`
+	Parts             []protocol.MessagePart `json:"parts"`
+	AttachmentIDs     []string               `json:"attachment_ids"`
+	ReplyToMessageID  *string                `json:"reply_to_message_id"`
+	ClientMessageID   *string                `json:"client_message_id"`
+	AlsoSendToChannel *bool                  `json:"also_send_to_channel,omitempty"`
 }
 
 type ChannelTypingRequest struct {
@@ -1647,6 +1649,11 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
 		return
 	}
+	alsoSendToChannel := req.AlsoSendToChannel != nil && *req.AlsoSendToChannel
+	if alsoSendToChannel && ch.Kind != "group" {
+		writeError(w, http.StatusBadRequest, "also_send_to_channel is only supported for group channels")
+		return
+	}
 	root, ok := h.loadChannelThreadRoot(w, r.Context(), workspaceID, channelID, rootID)
 	if !ok {
 		return
@@ -1686,7 +1693,22 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		msg = h.attachChannelMessageReplySummary(r.Context(), workspaceID, msg)
 	}
 	msg.Attachments = h.groupChannelMessageAttachments(r.Context(), workspaceID, []pgtype.UUID{parseUUID(msg.ID)})[msg.ID]
+	var mirrored *ChannelMessageResponse
+	if alsoSendToChannel {
+		mirror, created, err := h.ensureChannelThreadMirrorMessage(r.Context(), workspaceID, channelID, parseUUID(userID), "user", authorName, msg)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to mirror channel thread message")
+			return
+		}
+		if created {
+			mirrored = &mirror
+		}
+	}
 	if !result.Created {
+		if mirrored != nil {
+			_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
+			h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, *mirrored)
+		}
 		writeJSON(w, http.StatusOK, msg)
 		return
 	}
@@ -1705,8 +1727,57 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	} else {
 		h.dispatchChannelThreadReplyMentions(r.Context(), ch, msg, parseUUID(userID))
 	}
+	if mirrored != nil {
+		h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, *mirrored)
+	}
 	h.sendChannelMessageToFeishu(r.Context(), ch, authorName, content)
 	writeJSON(w, http.StatusCreated, msg)
+}
+
+func (h *Handler) ensureChannelThreadMirrorMessage(ctx context.Context, workspaceID string, channelID, authorID pgtype.UUID, authorType, authorName string, reply ChannelMessageResponse) (ChannelMessageResponse, bool, error) {
+	replyID := parseUUID(reply.ID)
+	if existing, found, err := h.findChannelThreadMirrorMessage(ctx, parseUUID(workspaceID), channelID, authorType, authorID, replyID); err != nil {
+		return ChannelMessageResponse{}, false, err
+	} else if found {
+		existing = h.attachChannelMessageReplySummary(ctx, workspaceID, existing)
+		return existing, false, nil
+	}
+	threadID := uuid.NewString()
+	content, parts, err := messageparts.Normalize(channelThreadMirrorContent, []protocol.MessagePart{
+		{Type: protocol.MessagePartTypeText, Text: channelThreadMirrorContent},
+	})
+	if err != nil {
+		return ChannelMessageResponse{}, false, err
+	}
+	mirror, err := h.insertChannelMessageWithParts(ctx, channelID, parseUUID(workspaceID), authorType, authorID, authorName, content, parts, "multica", nil, replyID, pgtype.UUID{}, &threadID, 0)
+	if err != nil {
+		return ChannelMessageResponse{}, false, err
+	}
+	mirror = h.attachChannelMessageReplySummary(ctx, workspaceID, mirror)
+	return mirror, true, nil
+}
+
+func (h *Handler) findChannelThreadMirrorMessage(ctx context.Context, workspaceID, channelID pgtype.UUID, authorType string, authorID, replyID pgtype.UUID) (ChannelMessageResponse, bool, error) {
+	row := h.DB.QueryRow(ctx, `
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at
+		FROM channel_message
+		WHERE workspace_id = $1
+		  AND channel_id = $2
+		  AND author_type = $3
+		  AND author_id = $4
+		  AND reply_to_message_id = $5
+		  AND thread_root_message_id IS NULL
+		  AND content = $6
+		ORDER BY seq ASC
+		LIMIT 1`, workspaceID, channelID, authorType, authorID, replyID, channelThreadMirrorContent)
+	msg, err := scanChannelMessage(row)
+	if err != nil {
+		if errorsIsNoRows(err) {
+			return ChannelMessageResponse{}, false, nil
+		}
+		return ChannelMessageResponse{}, false, err
+	}
+	return msg, true, nil
 }
 
 func (h *Handler) MarkChannelThreadRead(w http.ResponseWriter, r *http.Request) {

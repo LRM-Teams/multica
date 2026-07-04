@@ -127,6 +127,45 @@ describe("formatChannelMessagePreview", () => {
       formatChannelMessagePreview("Atlas", jsonish, resolveMention, []),
     ).toBe(`Atlas: ${jsonish}`);
   });
+
+  // #250 — the real leaking historical content is reasoning text prefix + the
+  // envelope JSON concatenated, so a whole-string parse throws. The preview must
+  // still surface only the agent's intended message, never the prefix or JSON.
+  it("unwraps a text-prefixed embedded envelope, dropping the reasoning prefix and raw JSON", () => {
+    const raw =
+      'Repo isn\'t checked out this turn either — consistent with prior. {"action":"message_send","output":"x","parts":[{"type":"text","text":"the real message"}]}';
+    const result = formatChannelMessagePreview("Atlas", raw, resolveMention, []);
+    expect(result).toBe("Atlas: the real message");
+    expect(result).not.toContain('"action"');
+    expect(result).not.toContain("Repo isn't checked out");
+    expect(result).not.toContain("{");
+  });
+
+  it("extracts an embedded envelope even when a part text value contains braces", () => {
+    const raw =
+      'thinking about it… {"action":"message_send","output":"y","parts":[{"type":"text","text":"use {curly} and }brace{ here"}]}';
+    const result = formatChannelMessagePreview("Atlas", raw, resolveMention, []);
+    expect(result).toBe("Atlas: use {curly} and }brace{ here");
+    expect(result).not.toContain('"action"');
+    expect(result).not.toContain("thinking about it");
+  });
+
+  it("leaves prose that merely mentions a stray JSON object unchanged", () => {
+    const prose = "here is {\"foo\":1} in my note";
+    expect(
+      formatChannelMessagePreview("Atlas", prose, resolveMention, []),
+    ).toBe(`Atlas: ${prose}`);
+  });
+
+  it("falls back to the embedded envelope output when it carries no text parts", () => {
+    const raw =
+      'reasoning prefix here {"action":"message_send","output":"fallback summary","parts":[{"type":"image","url":"x"}]}';
+    const result = formatChannelMessagePreview("Atlas", raw, resolveMention, []);
+    expect(result).toBe("Atlas: fallback summary");
+    expect(result).not.toContain('"action"');
+    expect(result).not.toContain("reasoning prefix");
+    expect(result).not.toContain("{");
+  });
 });
 
 describe("extractEnvelopeParts", () => {
@@ -149,6 +188,30 @@ describe("extractEnvelopeParts", () => {
   it("returns null for ordinary text and malformed JSON (no crash)", () => {
     expect(extractEnvelopeParts("just a message")).toBeNull();
     expect(extractEnvelopeParts('{"action":"x","parts": [oops')).toBeNull();
+  });
+
+  // #250 — embedded envelope: reasoning-text prefix concatenated ahead of the
+  // envelope JSON. The whole-string parse throws, so a brace-matched scan must
+  // locate the envelope and return its real parts.
+  it("extracts parts from a text-prefixed embedded envelope", () => {
+    const raw =
+      'Repo isn\'t checked out. {"action":"message_send","output":"x","parts":[{"type":"text","text":"the real message"}]}';
+    expect(extractEnvelopeParts(raw)).toEqual([
+      { type: "text", text: "the real message" },
+    ]);
+  });
+
+  it("extracts an embedded envelope whose part text contains braces", () => {
+    const raw =
+      'prefix {"action":"message_send","parts":[{"type":"text","text":"a { b } c"}]} suffix';
+    expect(extractEnvelopeParts(raw)).toEqual([{ type: "text", text: "a { b } c" }]);
+  });
+
+  // GAP 3 — an embedded object without a top-level `action` key (or prose that
+  // merely mentions JSON) must NOT be intercepted.
+  it("returns null for prose mentioning a stray JSON object without an action envelope", () => {
+    expect(extractEnvelopeParts('here is {"foo":1} in my note')).toBeNull();
+    expect(extractEnvelopeParts('note: {"parts":["a","b"]} pasted')).toBeNull();
   });
 });
 

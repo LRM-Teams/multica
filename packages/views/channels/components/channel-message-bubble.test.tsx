@@ -438,6 +438,94 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByText(jsonish)).toBeInTheDocument();
   });
 
+  // #250 (round 3) — the real leaking historical content is reasoning-text
+  // prefix + the envelope JSON concatenated, so a whole-string parse throws and
+  // the raw string (prefix + JSON) would otherwise render. The body must unwrap
+  // the embedded envelope's real parts; copy must yield the real text.
+  const EMBEDDED_ENVELOPE_CONTENT =
+    'Repo isn\'t checked out this turn either — consistent with prior. {"action":"message_send","output":"x","parts":[{"type":"text","text":"the real message"}]}';
+
+  it("renders the embedded envelope's real message, dropping the reasoning prefix and raw JSON", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: EMBEDDED_ENVELOPE_CONTENT, parts: [] })}
+        currentUserId="user-1"
+      />,
+    );
+
+    const body = screen.getByTestId("message-body");
+    expect(body).toHaveTextContent("the real message");
+    expect(body.textContent).not.toContain('"action"');
+    expect(body.textContent).not.toContain("{");
+    expect(body.textContent).not.toContain("Repo isn't checked out");
+  });
+
+  it("copies only the embedded envelope's real text, not the prefix or JSON", async () => {
+    copyTextMock.mockResolvedValue(true);
+
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: EMBEDDED_ENVELOPE_CONTENT, parts: [] })}
+        currentUserId="user-1"
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("the real message"));
+    const copied = copyTextMock.mock.calls[0]?.[0] as string;
+    expect(copied).not.toContain('"action"');
+    expect(copied).not.toContain("Repo isn't checked out");
+  });
+
+  it("extracts an embedded envelope even when a part text value contains braces", () => {
+    const raw =
+      'thinking… {"action":"message_send","parts":[{"type":"text","text":"use {curly} braces"}]}';
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: raw, parts: [] })}
+        currentUserId="user-1"
+      />,
+    );
+
+    const body = screen.getByTestId("message-body");
+    expect(body).toHaveTextContent("use {curly} braces");
+    expect(body.textContent).not.toContain('"action"');
+    expect(body.textContent).not.toContain("thinking");
+  });
+
+  // GAP 3 — prose that merely mentions a stray JSON object (no action+parts
+  // envelope) must render intact, never blanked or mangled.
+  it("leaves prose that mentions a stray JSON object intact", () => {
+    const prose = 'here is {"foo":1} in my note';
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ type: "user", author_id: "user-1", content: prose })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText(prose)).toBeInTheDocument();
+  });
+
+  // #250 — embedded envelope with no renderable text parts: body must fall back
+  // to the envelope output, never the raw JSON or reasoning prefix.
+  it("renders the embedded envelope output when it carries no text parts", () => {
+    const raw =
+      'some reasoning here {"action":"message_send","output":"fallback summary","parts":[{"type":"image","url":"x"}]}';
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: raw, parts: [] })}
+        currentUserId="user-1"
+      />,
+    );
+
+    const body = screen.getByTestId("message-body");
+    expect(body.textContent).not.toContain('"action"');
+    expect(body.textContent).not.toContain("some reasoning here");
+    expect(body.textContent).not.toContain("{");
+  });
+
   it("copies structured message parts instead of hidden fallback content", async () => {
     copyTextMock.mockResolvedValue(true);
 

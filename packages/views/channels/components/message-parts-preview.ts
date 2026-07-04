@@ -50,44 +50,128 @@ interface StructuredActionEnvelope {
 }
 
 /**
+ * Validate that a parsed JSON value is a structured-action envelope: an object
+ * with BOTH a top-level string `action` AND an array `parts`. This is the GAP 3
+ * discriminator — legit JSON that merely has a `parts` array (e.g.
+ * `{"parts":["a","b"]}`) has no `action` and is rejected, so it stays as text.
+ */
+function validateStructuredActionEnvelope(parsed: unknown): StructuredActionEnvelope | null {
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const envelope = parsed as { action?: unknown; parts?: unknown; output?: unknown };
+  // The structured-action envelope always carries a top-level string `action`;
+  // require it so legit JSON with only a `parts` array is left as normal text.
+  if (typeof envelope.action !== "string") return null;
+  if (!Array.isArray(envelope.parts)) return null;
+
+  return { parts: envelope.parts as MessagePart[], output: envelope.output };
+}
+
+/**
+ * Given `content[start] === "{"`, return the index of the matching closing
+ * `}`, tracking JSON string literals so that braces INSIDE string values do not
+ * affect nesting depth. Escaped characters inside strings are skipped so an
+ * escaped quote (`\"`) never ends a string early. Returns -1 when no balanced
+ * closing brace is found (e.g. a stray `{` in a reasoning prefix).
+ */
+function matchBraceEnd(content: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < content.length; i++) {
+    const ch = content[i];
+    if (inString) {
+      if (ch === "\\") {
+        i++; // skip the escaped character (incl. an escaped quote)
+        continue;
+      }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Locate a structured-action envelope object embedded WITHIN `content`,
+ * tolerating a reasoning-text prefix and/or suffix. Historical agent messages
+ * sometimes carry `content` shaped as `reasoning text … {"action":…,"parts":…}`
+ * (agent prose concatenated with the envelope JSON), so a whole-string
+ * JSON.parse throws and the raw string would otherwise leak.
+ *
+ * Scans each `{` position with a string-literal-aware brace matcher, slices the
+ * balanced candidate, JSON-parses it, and returns the FIRST candidate that
+ * validates as an action+parts envelope. Conservative by construction: a
+ * candidate must genuinely parse to an object with a top-level `action` key and
+ * an array `parts`, so ordinary prose or a stray `{...}` is never intercepted.
+ */
+function findEmbeddedStructuredActionEnvelope(content: string): StructuredActionEnvelope | null {
+  for (let i = 0; i < content.length; i++) {
+    if (content[i] !== "{") continue;
+    const end = matchBraceEnd(content, i);
+    if (end === -1) continue;
+    const candidate = content.slice(i, end + 1);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    const envelope = validateStructuredActionEnvelope(parsed);
+    if (envelope) return envelope;
+  }
+  return null;
+}
+
+/**
  * Parse a raw structured-action envelope out of message content. Historical
  * agent messages whose denormalized `parts` were never backfilled carry the
- * envelope JSON in `content` (e.g.
- * `{"action":"message_send","output":"…","parts":[…]}`).
+ * envelope JSON in `content` — either as a PURE envelope
+ * (`{"action":"message_send","output":"…","parts":[…]}`) or, when the agent's
+ * reasoning text was concatenated ahead of it, as a text-prefixed EMBEDDED
+ * envelope (`Repo isn't checked out … {"action":…,"parts":[…]}`).
  *
- * The discriminator REQUIRES a top-level `action` key: the structured-action
- * envelope always has one, whereas legit user-pasted JSON that merely happens
- * to have a `parts` array (e.g. `{"parts":["a","b"]}`) must NOT be intercepted.
- * A cheap substring pre-parse guard avoids JSON.parse on ordinary text.
+ * Two-stage detection:
+ *   1. Fast path — a whole-string parse of the trimmed content that validates
+ *      as an envelope (the pure-envelope case).
+ *   2. Embedded scan — a brace-matched sweep locating an envelope object within
+ *      content, tolerating a reasoning prefix and/or suffix.
+ *
+ * The discriminator REQUIRES a top-level string `action`, so legit user-pasted
+ * JSON that merely happens to have a `parts` array (e.g. `{"parts":["a","b"]}`)
+ * or prose that mentions a stray `{"foo":1}` is NEVER intercepted. A cheap
+ * substring pre-parse guard avoids scanning ordinary text.
  *
  * Returns null for anything that is not a recognizable envelope, so normal
  * content flows through unchanged.
  */
 function parseStructuredActionEnvelope(content: string): StructuredActionEnvelope | null {
+  // Cheap pre-parse guard: a structured-action envelope always carries both an
+  // `"action"` and a `"parts"` key. Ordinary prose (and GAP-3 JSON like
+  // `here is {"foo":1}`) lacks these, so bail before any parse/scan work.
+  if (!content.includes('"parts"') || !content.includes('"action"')) {
+    return null;
+  }
+
+  // Fast path: whole-string pure envelope.
   const trimmed = content.trim();
-  if (
-    !trimmed.startsWith("{") ||
-    !trimmed.includes('"parts"') ||
-    !trimmed.includes('"action"')
-  ) {
-    return null;
+  if (trimmed.startsWith("{")) {
+    try {
+      const envelope = validateStructuredActionEnvelope(JSON.parse(trimmed));
+      if (envelope) return envelope;
+    } catch {
+      // Not a pure envelope — fall through to the embedded scan.
+    }
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return null;
-  }
-
-  if (typeof parsed !== "object" || parsed === null) return null;
-  const envelope = parsed as { action?: unknown; parts?: unknown; output?: unknown };
-  // The structured-action envelope always carries a top-level `action`; require
-  // it so legit JSON with only a `parts` array is left as normal text.
-  if (!("action" in envelope)) return null;
-  if (!Array.isArray(envelope.parts)) return null;
-
-  return { parts: envelope.parts as MessagePart[], output: envelope.output };
+  // Embedded envelope: reasoning-text prefix and/or suffix around the JSON.
+  return findEmbeddedStructuredActionEnvelope(content);
 }
 
 /**

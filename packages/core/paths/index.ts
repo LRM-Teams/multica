@@ -5,6 +5,7 @@ export {
   resolvePostAuthDestination,
   chooseWorkspaceDestination,
   chooseDefaultWorkspace,
+  pickLastActiveSlug,
   useHasOnboarded,
 } from "./resolve";
 export {

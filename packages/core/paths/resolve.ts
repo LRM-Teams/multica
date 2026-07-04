@@ -42,6 +42,33 @@ export function chooseDefaultWorkspace(workspaces: Workspace[]): Workspace | nul
 }
 
 /**
+ * The slug to treat as the user's last-active workspace, or null if none can be
+ * determined (#225). Precedence:
+ *   1. the `last_workspace_slug` cookie, if it's still an accessible workspace
+ *      (fast local signal, written client-side on workspace open);
+ *   2. otherwise the accessible workspace with the newest non-null
+ *      `last_active_at` (server-tracked per-member recovery signal — restores
+ *      last-active after a logout that cleared the cookie);
+ *   3. otherwise null → the caller falls back to `chooseDefaultWorkspace`.
+ * `workspaces[0]` is NEVER treated as last-active here — the list is
+ * `created_at ASC`, so that would just resurrect the empty-`111` bug.
+ */
+export function pickLastActiveSlug(
+  workspaces: Workspace[],
+  cookieSlug: string | null | undefined,
+): string | null {
+  if (cookieSlug && workspaces.some((w) => w.slug === cookieSlug)) {
+    return cookieSlug;
+  }
+  let best: Workspace | null = null;
+  for (const w of workspaces) {
+    if (!w.last_active_at) continue;
+    if (!best || w.last_active_at > (best.last_active_at as string)) best = w;
+  }
+  return best?.slug ?? null;
+}
+
+/**
  * Pure post-auth destination chooser. Precedence (`next` / invite are resolved
  * by callers before this): last-active `preferredSlug` if still accessible →
  * `chooseDefaultWorkspace` → /workspaces/new. `!hasOnboarded` short-circuits to

@@ -52,6 +52,24 @@ function LoginPageContent() {
   // cannot bounce the user off-origin after a successful login.
   const nextUrl = sanitizeNextUrl(searchParams.get("next"));
 
+  // The OAuth callback route redirects failures back to /login?error=<code>
+  // (confined to missing_code / access_denied / login_failed). Map the known
+  // codes to localized copy and fall back to a generic message for anything
+  // else — never render a raw provider string. Seeds the LoginPage error line
+  // so a bounced sign-in explains itself instead of showing a blank form.
+  const errorParam = searchParams.get("error");
+  const initialError = errorParam
+    ? t(($) =>
+        errorParam === "access_denied"
+          ? $.errors.oauth_access_denied
+          : errorParam === "missing_code"
+            ? $.errors.oauth_missing_code
+            : errorParam === "login_failed"
+              ? $.errors.oauth_login_failed
+              : $.errors.oauth_generic,
+      )
+    : undefined;
+
   const [desktopToken, setDesktopToken] = useState<string | null>(null);
   const [desktopError, setDesktopError] = useState("");
   const hasOnboarded = useHasOnboarded();
@@ -165,6 +183,7 @@ function LoginPageContent() {
   return (
     <LoginPage
       onSuccess={handleSuccess}
+      initialError={initialError}
       google={
         googleClientId
           ? {

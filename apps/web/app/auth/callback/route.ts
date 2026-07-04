@@ -32,7 +32,9 @@ export async function GET(request: NextRequest) {
 
   const errorParam = params.get("error");
   if (errorParam) {
-    return toLogin(errorParam === "access_denied" ? "access_denied" : errorParam);
+    // Confine the `?error=` surface to a known set — never reflect a raw
+    // provider string into the URL. /login maps these to localized copy (#227).
+    return toLogin(errorParam === "access_denied" ? "access_denied" : "login_failed");
   }
   const code = params.get("code");
   if (!code) return toLogin("missing_code");

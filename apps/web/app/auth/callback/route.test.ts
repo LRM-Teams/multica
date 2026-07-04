@@ -66,6 +66,11 @@ describe("GET /auth/callback", () => {
     expect(loc(res)).toBe(`${paths.login()}?error=access_denied`);
   });
 
+  it("normalizes an unknown provider error to login_failed (no raw string reflected)", async () => {
+    const res = await GET(req("error=some_provider_error"));
+    expect(loc(res)).toBe(`${paths.login()}?error=login_failed`);
+  });
+
   it("desktop → redirects to the client desktop page, no exchange/cookies", async () => {
     const fetchSpy = mockFetch();
     global.fetch = fetchSpy as unknown as typeof fetch;

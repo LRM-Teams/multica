@@ -223,12 +223,17 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	archivedOnly := queryBool(r, "archived")
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT ch.id, ch.workspace_id, ch.name, ch.description, ch.lark_chat_id, ch.created_by, ch.created_at, ch.updated_at, ch.kind,
-		       ch.archived_at, ch.archived_by, cm.pinned_at, cm.manual_unread_at, cm.muted_at,
+		       ch.archived_at, ch.archived_by, cm.pinned_at, cm.manual_unread_at, COALESCE(vcm.muted_at, cm.muted_at),
 		       lm.author_type, lm.author_name, lm.content, lm.created_at,
 		       COALESCE(uc.cnt, 0),
 		       GREATEST(COALESCE(uc.cnt, 0), CASE WHEN cm.manual_unread_at IS NOT NULL THEN 1 ELSE 0 END)
 		FROM channel ch
 		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
+		JOIN conversation conv ON conv.channel_id = ch.id
+		LEFT JOIN conversation_member vcm
+		  ON vcm.conversation_id = conv.id
+		 AND vcm.member_type = 'user'
+		 AND vcm.member_id = $2
 		LEFT JOIN LATERAL (
 			SELECT author_type, author_name, content, created_at
 			FROM channel_message m WHERE m.channel_id = ch.id
@@ -238,7 +243,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN LATERAL (
 			SELECT count(*) AS cnt FROM channel_message m
 			WHERE m.channel_id = ch.id
-			  AND m.seq > COALESCE(cr.last_read_seq, 0)
+			  AND m.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
 			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
 			  AND m.thread_root_message_id IS NULL
 		) uc ON true
@@ -422,15 +427,27 @@ func (h *Handler) setChannelMuted(w http.ResponseWriter, r *http.Request, muted 
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, userUUID) {
 		return
 	}
-	value := "now()"
-	if !muted {
-		value = "NULL"
-	}
-	if _, err := h.DB.Exec(r.Context(), fmt.Sprintf(`
-		UPDATE channel_member
-		SET muted_at = %s
-		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`, value),
-		channelID, parseUUID(workspaceID), userUUID); err != nil {
+	if _, err := h.DB.Exec(r.Context(), `
+		WITH updated_channel_member AS (
+		  UPDATE channel_member
+		  SET muted_at = CASE WHEN $4 THEN now() ELSE NULL END
+		  WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3
+		  RETURNING channel_id, workspace_id, member_id, muted_at
+		),
+		conv AS (
+		  SELECT id
+		  FROM conversation
+		  WHERE channel_id = $1
+		)
+		UPDATE conversation_member cm
+		SET muted_at = updated_channel_member.muted_at,
+		    updated_at = now()
+		FROM updated_channel_member, conv
+		WHERE cm.conversation_id = conv.id
+		  AND cm.workspace_id = updated_channel_member.workspace_id
+		  AND cm.member_type = 'user'
+		  AND cm.member_id = updated_channel_member.member_id`,
+		channelID, parseUUID(workspaceID), userUUID, muted); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update channel mute")
 		return
 	}
@@ -1095,10 +1112,10 @@ func (h *Handler) attachChannelMessageThreadMetadata(ctx context.Context, worksp
 		SELECT roots.id,
 		       count(replies.id)::int AS reply_count,
 		       max(replies.created_at) AS last_reply_at,
-		       COALESCE(cts.followed_at IS NOT NULL, false) AS followed,
+		       COALESCE(tp.followed_at IS NOT NULL, false) AS followed,
 		       CASE
-		         WHEN cts.followed_at IS NOT NULL THEN count(replies.id) FILTER (
-		           WHERE replies.seq > COALESCE(cts.last_read_seq, 0)
+		         WHEN tp.followed_at IS NOT NULL THEN count(replies.id) FILTER (
+		           WHERE replies.seq > COALESCE(tp.last_read_seq, 0)
 		             AND NOT (replies.author_type = 'user' AND replies.author_id = $3)
 		         )::int
 		         ELSE 0
@@ -1106,9 +1123,12 @@ func (h *Handler) attachChannelMessageThreadMetadata(ctx context.Context, worksp
 		FROM channel_message roots
 		LEFT JOIN channel_message replies ON replies.channel_id = roots.channel_id
 			AND replies.thread_root_message_id = roots.id
-		LEFT JOIN channel_thread_state cts ON cts.root_message_id = roots.id AND cts.user_id = $3
+		LEFT JOIN thread_participant tp
+		  ON tp.root_message_id = roots.id
+		 AND tp.member_type = 'user'
+		 AND tp.member_id = $3
 		WHERE roots.workspace_id = $2 AND roots.id = ANY($1::uuid[])
-		GROUP BY roots.id, cts.followed_at, cts.last_read_seq`,
+		GROUP BY roots.id, tp.followed_at, tp.last_read_seq`,
 		rootIDs, parseUUID(workspaceID), userID)
 	if err != nil {
 		slog.Warn("channel thread metadata: load failed", "workspace", workspaceID, "error", err)
@@ -1628,6 +1648,25 @@ func (h *Handler) followChannelThreadUser(ctx context.Context, channelID, rootID
 	}
 }
 
+func (h *Handler) followChannelThreadAgent(ctx context.Context, channelID, rootID, agentID pgtype.UUID) {
+	if _, err := h.DB.Exec(ctx, `
+		WITH root AS (
+		  SELECT conversation_id
+		  FROM channel_message
+		  WHERE id = $2 AND channel_id = $1
+		)
+		INSERT INTO thread_participant (conversation_id, root_message_id, member_type, member_id, followed_at, updated_at)
+		SELECT root.conversation_id, $2, 'agent', $3, now(), now()
+		FROM root
+		ON CONFLICT (root_message_id, member_type, member_id) DO UPDATE
+		SET followed_at = COALESCE(thread_participant.followed_at, EXCLUDED.followed_at),
+		    wake_state = 'active',
+		    updated_at = now()`,
+		channelID, rootID, agentID); err != nil {
+		slog.Warn("channel thread agent follow failed", "root", uuidToString(rootID), "agent", uuidToString(agentID), "error", err)
+	}
+}
+
 func (h *Handler) followChannelThreadMentionedUsers(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse) {
 	if msg.ThreadRootMessageID == nil {
 		return
@@ -2100,6 +2139,9 @@ func (h *Handler) dispatchChannelAgentReply(ctx context.Context, ch ChannelRespo
 	}
 	if trigger.Type == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == uuidToString(agent.ID) {
 		return
+	}
+	if trigger.ThreadRootMessageID != nil {
+		h.followChannelThreadAgent(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
 	}
 	h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger), "channel agent reply", true, true, true, false)
 }
@@ -2798,9 +2840,13 @@ func (h *Handler) ensureChannelAgentSessionWithDB(ctx context.Context, q *db.Que
 }
 
 func (h *Handler) handleChannelChatStopped(e events.Event) {
-	chatSessionID, _ := e.Payload.(map[string]any)["chat_session_id"].(string)
+	payload, _ := e.Payload.(map[string]any)
+	chatSessionID, _ := payload["chat_session_id"].(string)
 	if chatSessionID == "" {
 		return
+	}
+	if rawTaskID, _ := payload["task_id"].(string); strings.TrimSpace(rawTaskID) != "" {
+		h.settleChannelAmbientWakeForTask(context.Background(), parseUUID(rawTaskID), false)
 	}
 	channelID, workspaceID, agentID, ok := h.channelAgentForChatSession(context.Background(), chatSessionID)
 	if !ok {
@@ -2840,6 +2886,9 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 	var taskID pgtype.UUID
 	if strings.TrimSpace(payload.TaskID) != "" {
 		taskID = parseUUID(payload.TaskID)
+	}
+	if taskID.Valid {
+		defer h.settleChannelAmbientWakeForTask(context.Background(), taskID, true)
 	}
 	threadID, threadRootMessageID, triggerDepth := h.channelThreadForChatTask(context.Background(), parseUUID(payload.ChatSessionID), taskID)
 	if archived, found := h.channelIsArchived(context.Background(), uuidToString(workspaceID), channelID); !found || archived {

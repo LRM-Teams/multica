@@ -481,6 +481,24 @@ func TestChannelAmbientGateBoundsRepeatedAmbientFanout(t *testing.T) {
 	if tasks != len(agentIDs) {
 		t.Fatalf("repeated ambient fanout created %d tasks, want %d", tasks, len(agentIDs))
 	}
+	var lastSeq int64
+	if err := testPool.QueryRow(ctx, `
+		SELECT last_seq
+		FROM conversation
+		WHERE channel_id = $1`, channelID).Scan(&lastSeq); err != nil {
+		t.Fatalf("load conversation last_seq: %v", err)
+	}
+	var pendingRows int
+	var minPendingSeq, maxPendingSeq int64
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*), COALESCE(min(pending_to_seq), 0), COALESCE(max(pending_to_seq), 0)
+		FROM channel_ambient_pending_wake
+		WHERE channel_id = $1`, channelID).Scan(&pendingRows, &minPendingSeq, &maxPendingSeq); err != nil {
+		t.Fatalf("count ambient pending wake rows: %v", err)
+	}
+	if pendingRows != len(agentIDs) || minPendingSeq != lastSeq || maxPendingSeq != lastSeq {
+		t.Fatalf("pending wake rows=%d min=%d max=%d, want rows=%d seq=%d", pendingRows, minPendingSeq, maxPendingSeq, len(agentIDs), lastSeq)
+	}
 }
 
 func TestChannelAmbientGateSerializesConcurrentSameAgentAmbient(t *testing.T) {
@@ -545,6 +563,224 @@ func TestChannelAmbientGateSerializesConcurrentSameAgentAmbient(t *testing.T) {
 	if tasks != 1 {
 		t.Fatalf("concurrent same-agent ambient created %d tasks, want 1", tasks)
 	}
+	var lastSeq, pendingSeq int64
+	if err := testPool.QueryRow(ctx, `
+		SELECT c.last_seq, w.pending_to_seq
+		FROM conversation c
+		JOIN channel_ambient_pending_wake w ON w.conversation_id = c.id
+		WHERE c.channel_id = $1 AND w.agent_id = $2`, channelID, agentID).Scan(&lastSeq, &pendingSeq); err != nil {
+		t.Fatalf("load coalesced pending wake: %v", err)
+	}
+	if pendingSeq != lastSeq {
+		t.Fatalf("coalesced pending_to_seq=%d, want last_seq=%d", pendingSeq, lastSeq)
+	}
+}
+
+func TestChannelAmbientPendingWakeDrainsCoalescedMessages(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	withChannelAmbientGateTestConfig(t)
+	agentID := createHandlerTestAgent(t, "Ambient Drain Gate "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "ambient-drain-gate-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+
+	first, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "ordinary ambient one", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ambient-drain-1"), 0)
+	if err != nil {
+		t.Fatalf("insert first ambient trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, first, parseUUID(testUserID))
+
+	var firstTaskID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT atq.id
+		FROM agent_task_queue atq
+		JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
+		WHERE cas.channel_id = $1 AND cas.agent_id = $2 AND atq.priority = 1`, channelID, agentID).Scan(&firstTaskID); err != nil {
+		t.Fatalf("load first ambient task: %v", err)
+	}
+	var memberDeliveredSeq int64
+	if err := testPool.QueryRow(ctx, `
+		SELECT last_delivered_seq
+		FROM conversation_member cm
+		JOIN conversation c ON c.id = cm.conversation_id
+		WHERE c.channel_id = $1
+		  AND cm.member_type = 'agent'
+		  AND cm.member_id = $2`, channelID, agentID).Scan(&memberDeliveredSeq); err != nil {
+		t.Fatalf("load member delivered seq before success: %v", err)
+	}
+	if memberDeliveredSeq != 0 {
+		t.Fatalf("member delivered seq advanced while first task only queued: got %d, want 0", memberDeliveredSeq)
+	}
+
+	second, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "ordinary ambient two", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ambient-drain-2"), 0)
+	if err != nil {
+		t.Fatalf("insert second ambient trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, second, parseUUID(testUserID))
+
+	var tasksBefore int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_queue atq
+		JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
+		WHERE cas.channel_id = $1 AND cas.agent_id = $2 AND atq.priority = 1`, channelID, agentID).Scan(&tasksBefore); err != nil {
+		t.Fatalf("count coalesced ambient tasks: %v", err)
+	}
+	if tasksBefore != 1 {
+		t.Fatalf("coalesced ambient task count=%d, want 1 before drain", tasksBefore)
+	}
+
+	testHandler.settleChannelAmbientWakeForTask(ctx, parseUUID(firstTaskID), true)
+
+	var tasksAfter int
+	var activeTaskID string
+	var pendingFromSeq, pendingToSeq, deliveredToSeq int64
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*), max(w.task_id::text), max(w.pending_from_seq), max(w.pending_to_seq), max(w.delivered_to_seq)
+		FROM agent_task_queue atq
+		JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
+		JOIN channel_ambient_pending_wake w ON w.channel_id = cas.channel_id AND w.agent_id = cas.agent_id
+		WHERE cas.channel_id = $1 AND cas.agent_id = $2 AND atq.priority = 1`,
+		channelID, agentID).Scan(&tasksAfter, &activeTaskID, &pendingFromSeq, &pendingToSeq, &deliveredToSeq); err != nil {
+		t.Fatalf("load drained ambient wake: %v", err)
+	}
+	if tasksAfter != 2 {
+		t.Fatalf("ambient task count after drain=%d, want 2", tasksAfter)
+	}
+	if activeTaskID == firstTaskID {
+		t.Fatalf("pending wake still points at completed task %s", firstTaskID)
+	}
+	if pendingFromSeq != first.Seq+1 || pendingToSeq != second.Seq || deliveredToSeq != second.Seq {
+		t.Fatalf("pending wake seqs from=%d to=%d delivered=%d, want from=%d to/delivered=%d", pendingFromSeq, pendingToSeq, deliveredToSeq, first.Seq+1, second.Seq)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT last_delivered_seq
+		FROM conversation_member cm
+		JOIN conversation c ON c.id = cm.conversation_id
+		WHERE c.channel_id = $1
+		  AND cm.member_type = 'agent'
+		  AND cm.member_id = $2`, channelID, agentID).Scan(&memberDeliveredSeq); err != nil {
+		t.Fatalf("load member delivered seq after first success: %v", err)
+	}
+	if memberDeliveredSeq != first.Seq {
+		t.Fatalf("member delivered seq after first success=%d, want first seq %d", memberDeliveredSeq, first.Seq)
+	}
+}
+
+func TestChannelAmbientPendingWakeSettlementIsIdempotent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	withChannelAmbientGateTestConfig(t)
+
+	seedAmbientTask := func(t *testing.T, suffix string) (string, string, string, ChannelMessageResponse) {
+		t.Helper()
+		agentID := createHandlerTestAgent(t, "Ambient Idempotent "+suffix+" "+uuid.NewString()[:8], nil)
+		channelID := seedChannelForTest(t, "ambient-idempotent-"+suffix+"-"+uuid.NewString(), testUserID)
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+			VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+			t.Fatalf("seed agent member: %v", err)
+		}
+		ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+		if !found {
+			t.Fatal("channel not found after seed")
+		}
+		trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "ordinary ambient "+suffix, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ambient-idempotent-"+suffix), 0)
+		if err != nil {
+			t.Fatalf("insert ambient trigger: %v", err)
+		}
+		testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+		var taskID string
+		if err := testPool.QueryRow(ctx, `
+			SELECT atq.id
+			FROM agent_task_queue atq
+			JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
+			WHERE cas.channel_id = $1 AND cas.agent_id = $2 AND atq.priority = 1`, channelID, agentID).Scan(&taskID); err != nil {
+			t.Fatalf("load ambient task: %v", err)
+		}
+		return channelID, agentID, taskID, trigger
+	}
+
+	t.Run("complete", func(t *testing.T) {
+		channelID, agentID, taskID, trigger := seedAmbientTask(t, "complete")
+		testHandler.settleChannelAmbientWakeForTask(ctx, parseUUID(taskID), true)
+		testHandler.settleChannelAmbientWakeForTask(ctx, parseUUID(taskID), true)
+
+		var status string
+		var deliveredSeq int64
+		if err := testPool.QueryRow(ctx, `
+			SELECT w.status, cm.last_delivered_seq
+			FROM channel_ambient_pending_wake w
+			JOIN conversation_member cm ON cm.conversation_id = w.conversation_id
+			 AND cm.member_type = 'agent'
+			 AND cm.member_id = w.agent_id
+			WHERE w.channel_id = $1 AND w.agent_id = $2`, channelID, agentID).Scan(&status, &deliveredSeq); err != nil {
+			t.Fatalf("load completed pending wake: %v", err)
+		}
+		if status != "completed" || deliveredSeq != trigger.Seq {
+			t.Fatalf("completed wake = (%q, delivered %d), want completed delivered %d", status, deliveredSeq, trigger.Seq)
+		}
+
+		var tasks int
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM agent_task_queue atq
+			JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
+			WHERE cas.channel_id = $1 AND cas.agent_id = $2 AND atq.priority = 1`, channelID, agentID).Scan(&tasks); err != nil {
+			t.Fatalf("count completed ambient tasks: %v", err)
+		}
+		if tasks != 1 {
+			t.Fatalf("duplicate complete created %d ambient tasks, want 1", tasks)
+		}
+	})
+
+	t.Run("fail", func(t *testing.T) {
+		channelID, agentID, taskID, _ := seedAmbientTask(t, "fail")
+		testHandler.settleChannelAmbientWakeForTask(ctx, parseUUID(taskID), false)
+		testHandler.settleChannelAmbientWakeForTask(ctx, parseUUID(taskID), false)
+
+		var status string
+		var deliveredSeq int64
+		if err := testPool.QueryRow(ctx, `
+			SELECT w.status, cm.last_delivered_seq
+			FROM channel_ambient_pending_wake w
+			JOIN conversation_member cm ON cm.conversation_id = w.conversation_id
+			 AND cm.member_type = 'agent'
+			 AND cm.member_id = w.agent_id
+			WHERE w.channel_id = $1 AND w.agent_id = $2`, channelID, agentID).Scan(&status, &deliveredSeq); err != nil {
+			t.Fatalf("load failed pending wake: %v", err)
+		}
+		if status != "failed" || deliveredSeq != 0 {
+			t.Fatalf("failed wake = (%q, delivered %d), want failed delivered 0", status, deliveredSeq)
+		}
+
+		var tasks int
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM agent_task_queue atq
+			JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
+			WHERE cas.channel_id = $1 AND cas.agent_id = $2 AND atq.priority = 1`, channelID, agentID).Scan(&tasks); err != nil {
+			t.Fatalf("count failed ambient tasks: %v", err)
+		}
+		if tasks != 1 {
+			t.Fatalf("duplicate fail created %d ambient tasks, want 1", tasks)
+		}
+	})
 }
 
 type recordingTaskWakeup struct {
@@ -586,11 +822,9 @@ func TestChannelAmbientGateTxPathDoesNotWakeBeforeCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load agent: %v", err)
 	}
-	trigger := ChannelMessageResponse{
-		ID:        uuid.NewString(),
-		Content:   "ordinary ambient update",
-		Type:      "user",
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "ordinary ambient update", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ambient-tx-no-wake"), 0)
+	if err != nil {
+		t.Fatalf("insert ambient trigger: %v", err)
 	}
 
 	recorder := &recordingTaskWakeup{}
@@ -2448,6 +2682,12 @@ func TestChannelUnreadUsesConversationSeq(t *testing.T) {
 	if lastReadSeq != first.Seq {
 		t.Fatalf("last_read_seq = %d, want first seq %d", lastReadSeq, first.Seq)
 	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE channel_read
+		SET last_read_seq = $3
+		WHERE channel_id = $1 AND user_id = $2`, channelID, readerID, second.Seq); err != nil {
+		t.Fatalf("make legacy channel_read stale: %v", err)
+	}
 
 	ch := listedChannelForUser(t, channelID, readerID)
 	if ch == nil {
@@ -2484,6 +2724,21 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 		t.Fatal("channel not found after seed")
 	}
 	testHandler.dispatchChannelThreadReplyMentions(ctx, ch, trigger, parseUUID(testUserID))
+
+	var agentParticipants int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM thread_participant
+		WHERE root_message_id = $1
+		  AND member_type = 'agent'
+		  AND member_id = $2
+		  AND followed_at IS NOT NULL
+		  AND wake_state = 'active'`, root.ID, agentID).Scan(&agentParticipants); err != nil {
+		t.Fatalf("count agent thread participant: %v", err)
+	}
+	if agentParticipants != 1 {
+		t.Fatalf("agent thread participant count=%d, want 1", agentParticipants)
+	}
 
 	var sessionID string
 	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {

@@ -108,8 +108,7 @@ func (h *Handler) shouldDispatchChannelAmbientObservationWithDB(ctx context.Cont
 		return false
 	}
 	if stats.activeForAgent > 0 {
-		h.recordChannelAmbientGateDecision(channelAmbientGateActionCoalesced, channelAmbientGateReasonAgentActive, ch, agent, trigger)
-		return false
+		return true
 	}
 	if stats.recentForAgent >= int64(cfg.maxRecentPerAgent) {
 		h.recordChannelAmbientGateDecision(channelAmbientGateActionDropped, channelAmbientGateReasonAgentWindowCap, ch, agent, trigger)
@@ -164,7 +163,7 @@ func (h *Handler) dispatchSingleChannelAmbientObservation(ctx context.Context, c
 		_ = tx.Commit(ctx)
 		return
 	}
-	task, ok := h.createChannelAmbientPromptTaskTx(ctx, tx, ch, agent, trigger, initiatorUserID)
+	task, queued, ok := h.createOrCoalesceChannelAmbientWakeTx(ctx, tx, ch, agent, trigger, initiatorUserID)
 	if !ok {
 		return
 	}
@@ -172,35 +171,45 @@ func (h *Handler) dispatchSingleChannelAmbientObservation(ctx context.Context, c
 		slog.Warn("channel ambient gate: advisory lock transaction commit failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
 	}
-	h.TaskService.PublishChatTaskQueued(ctx, task, false)
+	if queued {
+		h.TaskService.PublishChatTaskQueued(ctx, task, false)
+	}
 }
 
 func (h *Handler) createChannelAmbientPromptTaskTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, bool) {
+	task, queued, ok := h.createOrCoalesceChannelAmbientWakeTx(ctx, tx, ch, agent, trigger, initiatorUserID)
+	if !ok || !queued {
+		return db.AgentTaskQueue{}, false
+	}
+	return task, true
+}
+
+func (h *Handler) createChannelAmbientPromptTaskRowTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt string) (db.ChatSession, db.AgentTaskQueue, bool) {
 	if h.TaskService == nil {
 		slog.Warn("channel ambient observation: task service missing", "channel", ch.ID, "agent", uuidToString(agent.ID))
-		return db.AgentTaskQueue{}, false
+		return db.ChatSession{}, db.AgentTaskQueue{}, false
 	}
 	txQueries := h.Queries.WithTx(tx)
 	session, err := h.ensureChannelAgentSessionWithDB(ctx, txQueries, tx, ch, agent.ID, initiatorUserID)
 	if err != nil {
 		slog.Warn("channel ambient observation: ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return db.AgentTaskQueue{}, false
+		return db.ChatSession{}, db.AgentTaskQueue{}, false
 	}
-	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, buildChannelAmbientObservationPrompt(ch, agent, trigger), trigger)
+	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, trigger)
 	if err != nil {
 		slog.Warn("channel ambient observation: create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return db.AgentTaskQueue{}, false
+		return db.ChatSession{}, db.AgentTaskQueue{}, false
 	}
 	task, err := h.TaskService.CreateAmbientChatTaskRow(ctx, txQueries, session, initiatorUserID)
 	if err != nil {
 		slog.Warn("channel ambient observation: enqueue chat task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return db.AgentTaskQueue{}, false
+		return db.ChatSession{}, db.AgentTaskQueue{}, false
 	}
 	if _, err := tx.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
 		slog.Warn("channel ambient observation: tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
-		return db.AgentTaskQueue{}, false
+		return db.ChatSession{}, db.AgentTaskQueue{}, false
 	}
-	return task, true
+	return session, task, true
 }
 
 func (h *Handler) lockChannelAmbientGate(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent) error {

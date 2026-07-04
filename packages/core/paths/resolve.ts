@@ -60,10 +60,18 @@ export function pickLastActiveSlug(
   if (cookieSlug && workspaces.some((w) => w.slug === cookieSlug)) {
     return cookieSlug;
   }
+  // Compare by parsed epoch (not string order) so a future change in the
+  // timestamp's textual form — e.g. a different timezone offset — can't reorder
+  // "most recent". Unparseable/absent values are skipped.
   let best: Workspace | null = null;
+  let bestTime = -Infinity;
   for (const w of workspaces) {
-    if (!w.last_active_at) continue;
-    if (!best || w.last_active_at > (best.last_active_at as string)) best = w;
+    const t = w.last_active_at ? Date.parse(w.last_active_at) : NaN;
+    if (Number.isNaN(t)) continue;
+    if (t > bestTime) {
+      best = w;
+      bestTime = t;
+    }
   }
   return best?.slug ?? null;
 }

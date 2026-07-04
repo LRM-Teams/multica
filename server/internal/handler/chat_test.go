@@ -39,7 +39,7 @@ func TestChatMessageToResponseUnwrapsAssistantStructuredMessageSend(t *testing.T
 		ID:            util.MustParseUUID("11111111-1111-1111-1111-111111111111"),
 		ChatSessionID: util.MustParseUUID("22222222-2222-2222-2222-222222222222"),
 		Role:          "assistant",
-		Content:       `{"action":"message_send","output":"` + visible + `","parts":[{"type":"text","text":"` + visible + `"}]}`,
+		Content:       `Assistant reply: {"action":"message_send","output":"` + visible + `","parts":[{"type":"text","text":"` + visible + `"}]}`,
 	}, nil)
 
 	if resp.Content != visible {

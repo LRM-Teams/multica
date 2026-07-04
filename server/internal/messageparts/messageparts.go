@@ -46,12 +46,22 @@ func UnwrapStructuredMessageSend(content string, parts []protocol.MessagePart) (
 		return content, parts, false, nil
 	}
 	trimmed := strings.TrimSpace(content)
-	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
+	if trimmed == "" {
 		return content, parts, false, nil
 	}
 	var payload structuredVisibleMessage
-	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
-		return content, parts, false, nil
+	embedded := false
+	if strings.HasPrefix(trimmed, "{") {
+		if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+			return content, parts, false, nil
+		}
+	} else {
+		var ok bool
+		payload, ok = findEmbeddedStructuredMessageSend(trimmed)
+		if !ok {
+			return content, parts, false, nil
+		}
+		embedded = true
 	}
 	if strings.TrimSpace(payload.Action) == "" &&
 		strings.TrimSpace(payload.Type) == "" &&
@@ -67,12 +77,18 @@ func UnwrapStructuredMessageSend(content string, parts []protocol.MessagePart) (
 		if action != protocol.ChatOutputActionMessageSend {
 			return content, parts, false, nil
 		}
+		if embedded && len(payload.Parts) == 0 {
+			return content, parts, false, nil
+		}
 	} else {
 		outputType, err := protocol.NormalizeChatOutputType(payload.Type, strings.TrimSpace(payload.Output) != "" || strings.TrimSpace(payload.Content) != "" || len(payload.Parts) > 0, payload.Reaction != nil)
 		if err != nil {
 			return content, parts, true, err
 		}
 		if outputType != protocol.ChatOutputKindMessage {
+			return content, parts, false, nil
+		}
+		if embedded {
 			return content, parts, false, nil
 		}
 	}
@@ -85,6 +101,63 @@ func UnwrapStructuredMessageSend(content string, parts []protocol.MessagePart) (
 		return content, parts, true, err
 	}
 	return normalizedContent, normalizedParts, true, nil
+}
+
+func findEmbeddedStructuredMessageSend(content string) (structuredVisibleMessage, bool) {
+	for start := 0; start < len(content); {
+		idx := strings.Index(content[start:], "{")
+		if idx < 0 {
+			return structuredVisibleMessage{}, false
+		}
+		idx += start
+		end := matchingJSONObjectEnd(content, idx)
+		if end < 0 {
+			start = idx + 1
+			continue
+		}
+		var payload structuredVisibleMessage
+		if err := json.Unmarshal([]byte(content[idx:end]), &payload); err == nil {
+			if strings.TrimSpace(payload.Action) != "" && len(payload.Parts) > 0 {
+				return payload, true
+			}
+		}
+		start = idx + 1
+	}
+	return structuredVisibleMessage{}, false
+}
+
+func matchingJSONObjectEnd(content string, start int) int {
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(content); i++ {
+		ch := content[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch ch {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return -1
 }
 
 func MustJSON(parts []protocol.MessagePart) []byte {

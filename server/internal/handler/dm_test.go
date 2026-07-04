@@ -242,7 +242,7 @@ func TestListDirectMessages_UnwrapsStructuredAgentLastMessagePreview(t *testing.
 	cleanupDMArtifacts(t)
 	agentID := createHandlerTestAgent(t, "DM Preview Bot "+uuid.NewString()[:8], []byte("[]"))
 	channelID := seedAgentDMChannel(t, agentID)
-	raw := `{"action":"message_send","output":"Clean DM preview","parts":[{"type":"text","text":"Clean DM preview"}]}`
+	raw := `Assistant reply: {"action":"message_send","output":"Clean DM preview","parts":[{"type":"text","text":"Clean DM preview"}]}`
 	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "DM Preview Bot", raw, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
 		t.Fatalf("seed structured agent dm message: %v", err)
 	}

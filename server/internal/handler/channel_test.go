@@ -2214,7 +2214,7 @@ func TestListChannels_UnwrapsStructuredAgentLastMessagePreview(t *testing.T) {
 		ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed channel agent member: %v", err)
 	}
-	raw := `{"action":"message_send","output":"Clean channel preview","parts":[{"type":"text","text":"Clean channel preview"}]}`
+	raw := `Assistant reply: {"action":"message_send","output":"Clean channel preview","parts":[{"type":"text","text":"Clean channel preview"}]}`
 	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "Channel Preview Bot", raw, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
 		t.Fatalf("seed structured agent channel message: %v", err)
 	}

@@ -2680,7 +2680,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 	switch result.Status {
 	case "completed":
 		taskLog.Info("task completed", "status", result.Status)
-		err := d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Type, result.SessionID, result.WorkDir, result.Parts, result.Reaction)
+		err := d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Target, result.Options, result.Type, result.SessionID, result.WorkDir, result.Parts, result.Reaction)
 		if err == nil {
 			return
 		}
@@ -3302,8 +3302,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	var parts []protocol.MessagePart
 	var reaction *protocol.ChatReactionPayload
 	outputAction := ""
+	outputTarget := ""
+	var outputOptions *protocol.ChatOutputOptions
 	outputType := ""
-	if normalizedOutput, normalizedParts, normalizedOutputType, normalizedOutputAction, normalizedReaction, structured, err := parseStructuredMessageOutput(result.Output); structured {
+	if normalizedOutput, normalizedParts, normalizedOutputType, normalizedOutputAction, normalizedOutputTarget, normalizedOptions, normalizedReaction, structured, err := parseStructuredMessageOutput(result.Output); structured {
 		if err != nil {
 			taskLog.Warn("agent structured message parts invalid; keeping raw output", "error", err)
 		} else {
@@ -3311,6 +3313,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			parts = normalizedParts
 			outputType = normalizedOutputType
 			outputAction = normalizedOutputAction
+			outputTarget = normalizedOutputTarget
+			outputOptions = normalizedOptions
 			reaction = normalizedReaction
 		}
 	}
@@ -3359,6 +3363,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Status:    "completed",
 			Comment:   output,
 			Action:    outputAction,
+			Target:    outputTarget,
+			Options:   outputOptions,
 			Type:      outputType,
 			Parts:     parts,
 			Reaction:  reaction,

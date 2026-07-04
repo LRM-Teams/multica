@@ -242,6 +242,8 @@ type TaskResult struct {
 	Comment       string                        `json:"comment"`
 	BranchName    string                        `json:"branch_name,omitempty"`
 	Action        string                        `json:"action,omitempty"`
+	Target        string                        `json:"target,omitempty"`
+	Options       *protocol.ChatOutputOptions   `json:"options,omitempty"`
 	Type          string                        `json:"type,omitempty"`
 	Parts         []protocol.MessagePart        `json:"parts,omitempty"`
 	Reaction      *protocol.ChatReactionPayload `json:"reaction,omitempty"`

@@ -498,6 +498,87 @@ describe("ChannelMessageBubble", () => {
     );
   });
 
+  // B4 (#242) — reaction 4-carrier consistency. Channel / dm_channel / thread
+  // all render their reactions through this same bubble, so its picker→pill
+  // aggregate (emoji + count, self-highlight) is the shared contract the issue
+  // carrier (CommentCard) also delegates to via the same ReactionBar primitive.
+  it("self-highlights the viewer's own reaction pill but not a peer-only pill", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          reactions: [
+            {
+              id: "reaction-own",
+              channel_id: "c1",
+              message_id: "m1",
+              actor_type: "member",
+              actor_id: "user-1",
+              emoji: "👍",
+              created_at: "2026-06-17T09:16:00Z",
+            },
+            {
+              id: "reaction-peer",
+              channel_id: "c1",
+              message_id: "m1",
+              actor_type: "member",
+              actor_id: "user-2",
+              emoji: "🎉",
+              created_at: "2026-06-17T09:17:00Z",
+            },
+          ],
+        })}
+        currentUserId="user-1"
+        onReact={vi.fn()}
+      />,
+    );
+
+    // Own reaction → brand-highlighted; peer-only reaction → muted, not brand.
+    expect(screen.getByRole("button", { name: "👍1" })).toHaveClass("text-brand");
+    const peerPill = screen.getByRole("button", { name: "🎉1" });
+    expect(peerPill).not.toHaveClass("text-brand");
+    expect(peerPill).toHaveClass("text-muted-foreground");
+  });
+
+  it("toggles through onReact when an existing reaction pill is clicked (no send/dispatch path)", async () => {
+    const onReact = vi.fn();
+    const message = makeMessage({
+      reactions: [
+        {
+          id: "reaction-own",
+          channel_id: "c1",
+          message_id: "m1",
+          actor_type: "member",
+          actor_id: "user-1",
+          emoji: "👍",
+          created_at: "2026-06-17T09:16:00Z",
+        },
+      ],
+    });
+    render(
+      <ChannelMessageBubble message={message} currentUserId="user-1" onReact={onReact} />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "👍1" }));
+
+    // The bubble surfaces reactions only through onReact — it has no send /
+    // dispatch affordance, so a react can never produce a wake here.
+    expect(onReact).toHaveBeenCalledTimes(1);
+    expect(onReact).toHaveBeenCalledWith(message, "👍");
+  });
+
+  it("reacts through onReact when an emoji is chosen from the picker", async () => {
+    const onReact = vi.fn();
+    const message = makeMessage();
+    render(
+      <ChannelMessageBubble message={message} currentUserId="user-1" onReact={onReact} />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Add reaction" }));
+    await userEvent.click(screen.getByRole("button", { name: "🎉" }));
+
+    expect(onReact).toHaveBeenCalledWith(message, "🎉");
+  });
+
   it("keeps first-level actions on the visible action surface only", () => {
     render(
       <ChannelMessageBubble

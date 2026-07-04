@@ -37,7 +37,8 @@ const qc = { setQueryData: mockSetQueryData } as unknown as QueryClient;
 
 function clearCookies() {
   for (const c of document.cookie.split(";")) {
-    document.cookie = `${c.split("=")[0].trim()}=; max-age=0; path=/`;
+    const name = c.split("=")[0]?.trim();
+    if (name) document.cookie = `${name}=; max-age=0; path=/`;
   }
 }
 

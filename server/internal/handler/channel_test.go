@@ -259,6 +259,33 @@ func TestChannelChatDoneNoReplyAndReactionCommandsAreNotPersisted(t *testing.T) 
 		t.Fatalf("legacy channel reaction count = %d, want 1", legacyChannelReactionCount)
 	}
 
+	if _, err := testPool.Exec(ctx, `
+		UPDATE channel_message
+		SET content = '', parts = '[]'::jsonb, deleted_at = now()
+		WHERE id = $1`, trigger.ID); err != nil {
+		t.Fatalf("soft delete trigger message: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `DELETE FROM channel_message_reaction WHERE channel_message_id = $1`, trigger.ID); err != nil {
+		t.Fatalf("clear trigger reactions: %v", err)
+	}
+	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
+		ChatSessionID: sessionID,
+		Type:          protocol.ChatOutputKindReaction,
+		Reaction:      &protocol.ChatReactionPayload{MessageID: trigger.ID, Emoji: "🧯"},
+	}})
+	assertNoChannelMessageContent(t, channelID, "🧯")
+
+	var deletedReactionCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message_reaction
+		WHERE channel_message_id = $1 AND actor_type = 'agent' AND actor_id = $2`, trigger.ID, agentID).Scan(&deletedReactionCount); err != nil {
+		t.Fatalf("count deleted-message channel reaction: %v", err)
+	}
+	if deletedReactionCount != 0 {
+		t.Fatalf("deleted-message reaction count = %d, want 0", deletedReactionCount)
+	}
+
 	malformedReactionCommand := "multica channel react not-a-message-id 👍"
 	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
 		ChatSessionID: sessionID,
@@ -1925,6 +1952,125 @@ func TestChannelMessageReactionCanBeRemoved(t *testing.T) {
 	}
 }
 
+func TestChannelMessageEditDeleteOwnOnlyKeepsTombstoneNoWake(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	otherUserID := createWorkspaceMemberUser(t, "Message Editor Other", "message-editor-other-"+randomID()+"@multica.test")
+	agentID := createHandlerTestAgent(t, "Message Edit Delete Agent "+randomID(), nil)
+	channelID := seedChannelForTest(t, "message-edit-delete-"+uuid.NewString(), testUserID, otherUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)
+		ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed channel agent member: %v", err)
+	}
+	msg, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "original", []protocol.MessagePart{
+		{Type: protocol.MessagePartTypeText, Text: "original"},
+	}, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("edit-delete-thread"), 0)
+	if err != nil {
+		t.Fatalf("insert channel message: %v", err)
+	}
+
+	sessionsBefore, tasksBefore := channelAgentRunCountsForTest(t, channelID)
+
+	req := newRequestAs(otherUserID, http.MethodPatch, "/api/channels/"+channelID+"/messages/"+msg.ID, map[string]any{"content": "stolen"})
+	req = withChannelTestWorkspaceCtx(t, req, otherUserID)
+	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
+	rec := httptest.NewRecorder()
+	testHandler.UpdateChannelMessage(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("non-owner edit: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = newRequest(http.MethodPatch, "/api/channels/"+channelID+"/messages/"+msg.ID, map[string]any{
+		"content": "corrected",
+		"parts": []protocol.MessagePart{{
+			Type: protocol.MessagePartTypeText,
+			Text: "corrected",
+		}},
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
+	rec = httptest.NewRecorder()
+	testHandler.UpdateChannelMessage(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("owner edit: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var edited ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &edited); err != nil {
+		t.Fatalf("decode edited message: %v", err)
+	}
+	if edited.Content != "corrected" || edited.EditedAt == nil || edited.DeletedAt != nil {
+		t.Fatalf("edited message = %#v, want corrected with edited_at only", edited)
+	}
+
+	req = newRequestAs(otherUserID, http.MethodDelete, "/api/channels/"+channelID+"/messages/"+msg.ID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, otherUserID)
+	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
+	rec = httptest.NewRecorder()
+	testHandler.DeleteChannelMessage(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("non-owner delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages/"+msg.ID+"/reactions", map[string]string{"emoji": "👍"})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
+	rec = httptest.NewRecorder()
+	testHandler.AddChannelMessageReaction(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("add reaction before delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = newRequest(http.MethodDelete, "/api/channels/"+channelID+"/messages/"+msg.ID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
+	rec = httptest.NewRecorder()
+	testHandler.DeleteChannelMessage(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("owner delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages/"+msg.ID+"/reactions", map[string]string{"emoji": "👍"})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
+	rec = httptest.NewRecorder()
+	testHandler.AddChannelMessageReaction(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("add reaction after delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list messages after delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var page ChannelMessagesPageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode messages after delete: %v", err)
+	}
+	if len(page.Messages) != 1 {
+		t.Fatalf("messages after delete = %#v, want one tombstone", page.Messages)
+	}
+	tombstone := page.Messages[0]
+	if tombstone.ID != msg.ID || tombstone.Content != "" || len(tombstone.Parts) != 0 || tombstone.EditedAt == nil || tombstone.DeletedAt == nil {
+		t.Fatalf("tombstone message = %#v, want empty content/parts with edited_at and deleted_at", tombstone)
+	}
+	if len(tombstone.Reactions) != 0 {
+		t.Fatalf("tombstone reactions = %#v, want cleared", tombstone.Reactions)
+	}
+	sessionsAfter, tasksAfter := channelAgentRunCountsForTest(t, channelID)
+	if sessionsAfter != sessionsBefore || tasksAfter != tasksBefore {
+		t.Fatalf("edit/delete should not enqueue or open agent sessions: sessions %d->%d tasks %d->%d", sessionsBefore, sessionsAfter, tasksBefore, tasksAfter)
+	}
+}
+
 func TestSystemChannelMessageRejectsOrdinaryAbilities(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -3366,6 +3512,25 @@ func seedChannelForTest(t *testing.T, name string, memberIDs ...string) string {
 		}
 	}
 	return channelID
+}
+
+func channelAgentRunCountsForTest(t *testing.T, channelID string) (int, int) {
+	t.Helper()
+	ctx := context.Background()
+	var sessions int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_agent_session WHERE channel_id = $1`, channelID).Scan(&sessions); err != nil {
+		t.Fatalf("count channel agent sessions: %v", err)
+	}
+	var tasks int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_queue atq
+		JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
+		WHERE cas.channel_id = $1`, channelID).Scan(&tasks); err != nil {
+		t.Fatalf("count channel agent tasks: %v", err)
+	}
+	return sessions, tasks
 }
 
 func sendChannelMessageForTest(t *testing.T, channelID, userID string, body map[string]any) *httptest.ResponseRecorder {

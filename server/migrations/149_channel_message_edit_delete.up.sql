@@ -1,0 +1,3 @@
+ALTER TABLE channel_message
+    ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;

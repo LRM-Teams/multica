@@ -2036,6 +2036,36 @@ func TestChannelPinAndManualUnreadArePerUserListState(t *testing.T) {
 	}
 }
 
+func TestListChannels_UnwrapsStructuredAgentLastMessagePreview(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Channel Preview Bot "+uuid.NewString()[:8], []byte("[]"))
+	channelID := seedChannelForTest(t, "structured-preview-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)
+		ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed channel agent member: %v", err)
+	}
+	raw := `{"action":"message_send","output":"Clean channel preview","parts":[{"type":"text","text":"Clean channel preview"}]}`
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "Channel Preview Bot", raw, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed structured agent channel message: %v", err)
+	}
+
+	ch := listedChannelForTest(t, channelID)
+	if ch == nil || ch.LastMessage == nil {
+		t.Fatalf("listed channel preview missing for %s: %+v", channelID, ch)
+	}
+	if ch.LastMessage.Content != "Clean channel preview" {
+		t.Fatalf("last message content = %q, want clean preview", ch.LastMessage.Content)
+	}
+	if len(ch.LastMessage.Parts) != 1 || ch.LastMessage.Parts[0].Type != protocol.MessagePartTypeText || ch.LastMessage.Parts[0].Text != "Clean channel preview" {
+		t.Fatalf("last message parts = %+v, want one clean text part", ch.LastMessage.Parts)
+	}
+}
+
 func TestChannelThreadReplyMetadataReadAndMainTimelineFiltering(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

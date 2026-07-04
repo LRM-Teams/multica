@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // TestDMCanonicalName locks in the deterministic, order-independent, lowercased
@@ -230,6 +231,38 @@ func TestListDirectMessages_ChannelsOnly(t *testing.T) {
 	}
 	if count[agentC] != 1 || source[agentC] != dmSourceChannel {
 		t.Fatalf("agentC should keep visible dm_channel only, source=%q count=%d", source[agentC], count[agentC])
+	}
+}
+
+func TestListDirectMessages_UnwrapsStructuredAgentLastMessagePreview(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	cleanupDMArtifacts(t)
+	agentID := createHandlerTestAgent(t, "DM Preview Bot "+uuid.NewString()[:8], []byte("[]"))
+	channelID := seedAgentDMChannel(t, agentID)
+	raw := `{"action":"message_send","output":"Clean DM preview","parts":[{"type":"text","text":"Clean DM preview"}]}`
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "DM Preview Bot", raw, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed structured agent dm message: %v", err)
+	}
+
+	var item *DMItem
+	items := listDMItemsForTest(t)
+	for i := range items {
+		if items[i].Peer.Type == "agent" && items[i].Peer.ID == agentID {
+			item = &items[i]
+			break
+		}
+	}
+	if item == nil || item.LastMessage == nil {
+		t.Fatalf("listed dm preview missing for agent %s: %+v", agentID, items)
+	}
+	if item.LastMessage.Content != "Clean DM preview" {
+		t.Fatalf("last message content = %q, want clean preview", item.LastMessage.Content)
+	}
+	if len(item.LastMessage.Parts) != 1 || item.LastMessage.Parts[0].Type != protocol.MessagePartTypeText || item.LastMessage.Parts[0].Text != "Clean DM preview" {
+		t.Fatalf("last message parts = %+v, want one clean text part", item.LastMessage.Parts)
 	}
 }
 

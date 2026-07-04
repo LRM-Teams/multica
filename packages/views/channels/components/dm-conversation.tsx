@@ -17,6 +17,8 @@ import {
   useSendChannelThreadMessage,
   useAddChannelReaction,
   useRemoveChannelReaction,
+  useEditChannelMessage,
+  useDeleteChannelMessage,
   useSetChannelTyping,
 } from "@multica/core/channels";
 import { dmKeys } from "@multica/core/dm";
@@ -346,6 +348,24 @@ function DmChannelConversation({
   const sendThreadMessage = useSendChannelThreadMessage();
   const addChannelReaction = useAddChannelReaction();
   const removeChannelReaction = useRemoveChannelReaction();
+  const editChannelMessage = useEditChannelMessage();
+  const deleteChannelMessage = useDeleteChannelMessage();
+  // Edit is a PATCH of an existing message (H5) — it routes through
+  // editChannelMessage, never the send path, so it can never produce a new wake.
+  // DMs are never archived/closed, so (like onReact) edit/delete are always wired;
+  // the bubble still gates the affordance on the message being the viewer's own.
+  const handleEditMessage = useCallback((message: ChannelMessage, content: string) => {
+    editChannelMessage.mutate(
+      { channelId: message.channel_id, messageId: message.id, content },
+      { onError: () => toast.error(t(($) => $.message.edit_failed_toast)) },
+    );
+  }, [editChannelMessage, t]);
+  const handleDeleteMessage = useCallback((message: ChannelMessage) => {
+    deleteChannelMessage.mutate(
+      { channelId: message.channel_id, messageId: message.id },
+      { onError: () => toast.error(t(($) => $.message.delete_failed_toast)) },
+    );
+  }, [deleteChannelMessage, t]);
   const handleReactToMessage = useCallback((message: ChannelMessage, emoji: string) => {
     const hasReacted = message.reactions?.some(
       (reaction) => reaction.actor_type === "member" && reaction.actor_id === currentUserId && reaction.emoji === emoji,
@@ -761,6 +781,8 @@ function DmChannelConversation({
           loadErrorLabel={threadError ? t(($) => $.thread.load_failed) : undefined}
           onRetry={() => refetchThread()}
           onReact={handleReactToMessage}
+          onEditMessage={handleEditMessage}
+          onDeleteMessage={handleDeleteMessage}
         />
         <ConversationActivityStrip
           tasks={activeTasks}
@@ -916,6 +938,8 @@ function DmChannelConversation({
         emptyLabel={t(($) => $.dm.thread_empty)}
         onOpenThread={handleOpenThread}
         onReact={handleReactToMessage}
+        onEditMessage={handleEditMessage}
+        onDeleteMessage={handleDeleteMessage}
       />
       <ConversationActivityStrip
         typingActors={activeTypingActors}

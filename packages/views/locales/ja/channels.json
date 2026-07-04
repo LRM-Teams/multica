@@ -203,7 +203,9 @@
     "edited_label": "（編集済み）",
     "deleted_placeholder": "このメッセージは削除されました",
     "save_edit": "保存",
-    "cancel_edit": "キャンセル"
+    "cancel_edit": "キャンセル",
+    "edit_failed_toast": "メッセージを編集できませんでした",
+    "delete_failed_toast": "メッセージを削除できませんでした"
   },
   "dm": {
     "heading": "ダイレクトメッセージ",

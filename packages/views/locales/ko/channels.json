@@ -203,7 +203,9 @@
     "edited_label": "(편집됨)",
     "deleted_placeholder": "이 메시지는 삭제되었습니다",
     "save_edit": "저장",
-    "cancel_edit": "취소"
+    "cancel_edit": "취소",
+    "edit_failed_toast": "메시지를 편집하지 못했습니다",
+    "delete_failed_toast": "메시지를 삭제하지 못했습니다"
   },
   "dm": {
     "heading": "다이렉트 메시지",

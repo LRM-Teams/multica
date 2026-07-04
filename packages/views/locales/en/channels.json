@@ -203,7 +203,9 @@
     "edited_label": "(edited)",
     "deleted_placeholder": "This message was deleted",
     "save_edit": "Save",
-    "cancel_edit": "Cancel"
+    "cancel_edit": "Cancel",
+    "edit_failed_toast": "Couldn't edit message",
+    "delete_failed_toast": "Couldn't delete message"
   },
   "dm": {
     "heading": "Direct messages",

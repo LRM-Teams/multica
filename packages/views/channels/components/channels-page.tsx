@@ -56,6 +56,8 @@ import {
   useRemoveChannelMember,
   useSendChannelMessage,
   useSendChannelThreadMessage,
+  useEditChannelMessage,
+  useDeleteChannelMessage,
   useAddChannelReaction,
   useRemoveChannelReaction,
   useMarkChannelThreadRead,
@@ -649,8 +651,24 @@ export function ChannelsPage() {
   const sendThreadMessage = useSendChannelThreadMessage();
   const addChannelReaction = useAddChannelReaction();
   const removeChannelReaction = useRemoveChannelReaction();
+  const editChannelMessage = useEditChannelMessage();
+  const deleteChannelMessage = useDeleteChannelMessage();
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
   const setTyping = useSetChannelTyping();
+  // Edit is a PATCH of an existing message (H5) — it routes through
+  // editChannelMessage, never the send path, so it can never produce a new wake.
+  const handleEditMessage = useCallback((message: ChannelMessage, content: string) => {
+    editChannelMessage.mutate(
+      { channelId: message.channel_id, messageId: message.id, content },
+      { onError: () => toast.error(t(($) => $.message.edit_failed_toast)) },
+    );
+  }, [editChannelMessage, t]);
+  const handleDeleteMessage = useCallback((message: ChannelMessage) => {
+    deleteChannelMessage.mutate(
+      { channelId: message.channel_id, messageId: message.id },
+      { onError: () => toast.error(t(($) => $.message.delete_failed_toast)) },
+    );
+  }, [deleteChannelMessage, t]);
   const handleReactToMessage = useCallback((message: ChannelMessage, emoji: string) => {
     const hasReacted = message.reactions?.some(
       (reaction) => reaction.actor_type === "member" && reaction.actor_id === currentUserId && reaction.emoji === emoji,
@@ -2264,6 +2282,8 @@ export function ChannelsPage() {
                 onOpenThread={isActiveArchived ? undefined : handleOpenThread}
                 onScrollToMessage={setHighlightMessageId}
                 onReact={handleReactToMessage}
+                onEditMessage={isActiveArchived ? undefined : handleEditMessage}
+                onDeleteMessage={isActiveArchived ? undefined : handleDeleteMessage}
               />
 
               {isActiveArchived ? (

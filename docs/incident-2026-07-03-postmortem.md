@@ -49,6 +49,7 @@
 3. **凭据单源 + hygiene**：密码/密钥单一真值源(GitHub Environment);URL-safe;绝不进 chat/log/PR/CI 输出。
 4. **P0 可逆止血预授权 runbook**：可逆、限范围的止血动作(如频道级 ambient-off/移成员/清队列)应有预授权,别让服务在等一个人点头时持续降级。
 5. **系统不该"猜"出无界负载**：凡系统自动产生(ambient)的东西必须有背压/上限,作为不变量。
+6. **事故修复类收口必须含一次"事故形状"live 复现验证**（2026-07-04 #223 收口补）：单测 mock 与顺手数据会天然掩盖缺陷——#223 两例：route 单测 mock `https://app.test` 隐藏了 proxied callback-origin 反射（unit 绿、live 空白页）；测试账号 default==last-active 使修复"不可分辨"，差点掩盖邮箱登录路径漏接。收口证据 = 构造与事故同构的数据形状 + 真实环境走查；**unit 绿 ≠ 修好**。auth/routing 类改动默认适用。
 
 ## 7. 经验教训
 - **先查最朴素解释**（workspace 选错、密码打错）再跳复杂根因——我一度过度假设 migration 144 回填失败,实际是选错工作区。

@@ -32,18 +32,18 @@
     "sign_in_different": "다른 계정으로 로그인"
   },
   "windy_setup": {
-    "title": "Set up Windy HR",
-    "description": "이 워크스페이스에 Windy HR을 설정하세요. 실행 위치를 선택하면 runtime·모델·지침을 구성합니다. 나중에 Windy 설정에서 완료할 수도 있습니다.",
-    "intro": "Windy recruits useful agents from your chat and keeps the generated hiring card in the current conversation. Its Direct Message is pinned after setup.",
+    "title": "Set up Wendy HR",
+    "description": "이 워크스페이스에 Wendy HR을 설정하세요. 실행 위치를 선택하면 runtime·모델·지침을 구성합니다. 나중에 Wendy 설정에서 완료할 수도 있습니다.",
+    "intro": "Wendy recruits useful agents from your chat and keeps the generated hiring card in the current conversation. Its Direct Message is pinned after setup.",
     "runtime_required_title": "Connect or share a runtime first",
-    "runtime_required_description": "Windy needs an available runtime before it can recruit agents or update its own instructions.",
+    "runtime_required_description": "Wendy needs an available runtime before it can recruit agents or update its own instructions.",
     "refresh_runtimes": "Refresh runtimes",
     "one_time_note": "이 설정 안내는 한 번만 표시됩니다. 나중에 완료할 수도 있습니다.",
-    "update": "Update Windy",
+    "update": "Update Wendy",
     "later": "나중에",
     "badge_label": "Personal agent HR",
-    "intro_title": "Windy turns conversations into hires",
+    "intro_title": "Wendy turns conversations into hires",
     "one_time_label": "One-time update",
-    "runtime_move_note": "Pick any usable runtime now; Windy can be moved later from its agent settings."
+    "runtime_move_note": "Pick any usable runtime now; Wendy can be moved later from its agent settings."
   }
 }

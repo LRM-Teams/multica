@@ -32,18 +32,18 @@
     "sign_in_different": "別のユーザーでログイン"
   },
   "windy_setup": {
-    "title": "Set up Windy HR",
-    "description": "このワークスペースに Windy HR を設定します。実行場所を選ぶと、runtime・モデル・指示を構成します。Windy の設定から後で完了することもできます。",
-    "intro": "Windy recruits useful agents from your chat and keeps the generated hiring card in the current conversation. Its Direct Message is pinned after setup.",
+    "title": "Set up Wendy HR",
+    "description": "このワークスペースに Wendy HR を設定します。実行場所を選ぶと、runtime・モデル・指示を構成します。Wendy の設定から後で完了することもできます。",
+    "intro": "Wendy recruits useful agents from your chat and keeps the generated hiring card in the current conversation. Its Direct Message is pinned after setup.",
     "runtime_required_title": "Connect or share a runtime first",
-    "runtime_required_description": "Windy needs an available runtime before it can recruit agents or update its own instructions.",
+    "runtime_required_description": "Wendy needs an available runtime before it can recruit agents or update its own instructions.",
     "refresh_runtimes": "Refresh runtimes",
     "one_time_note": "このセットアップ案内は一度だけ表示されます。後で完了することもできます。",
-    "update": "Update Windy",
+    "update": "Update Wendy",
     "later": "後で",
     "badge_label": "Personal agent HR",
-    "intro_title": "Windy turns conversations into hires",
+    "intro_title": "Wendy turns conversations into hires",
     "one_time_label": "One-time update",
-    "runtime_move_note": "Pick any usable runtime now; Windy can be moved later from its agent settings."
+    "runtime_move_note": "Pick any usable runtime now; Wendy can be moved later from its agent settings."
   }
 }

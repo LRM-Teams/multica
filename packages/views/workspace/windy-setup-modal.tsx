@@ -60,9 +60,9 @@ export function WindySetupModal() {
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const storageKey = user ? setupStorageKey(wsId, user.id) : null;
-  // An account that already has a Windy agent with a runtime configured has
+  // An account that already has a Wendy agent with a runtime configured has
   // been through setup — a WINDY_SETUP_VERSION bump must not re-block it (#219).
-  const hasConfiguredWindy = useMemo(() => accountHasConfiguredWindy(agents), [agents]);
+  const hasConfiguredWendy = useMemo(() => accountHasConfiguredWindy(agents), [agents]);
   const [{ configuredKey, selectedRuntimeId, model, thinkingLevel, saving }, updateState] = useReducer(
     (state: WindySetupState, patch: Partial<WindySetupState>) => ({ ...state, ...patch }),
     {
@@ -89,7 +89,7 @@ export function WindySetupModal() {
     !storageKey ||
     configuredKey === storageKey ||
     isStorageKeyDone(storageKey) ||
-    hasConfiguredWindy
+    hasConfiguredWendy
   ) {
     return null;
   }
@@ -132,9 +132,9 @@ export function WindySetupModal() {
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
       window.localStorage.setItem(storageKey, "done");
       updateState({ configuredKey: storageKey });
-      toast.success("Windy is ready and pinned in Direct Messages.");
+      toast.success("Wendy is ready and pinned in Direct Messages.");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to set up Windy");
+      toast.error(err instanceof Error ? err.message : "Failed to set up Wendy");
     } finally {
       updateState({ saving: false });
     }

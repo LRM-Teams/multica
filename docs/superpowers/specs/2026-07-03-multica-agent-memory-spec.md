@@ -152,7 +152,7 @@ Agent creation or first managed run initializes files without overwriting live i
 - `MEMORY.md` with a source-of-truth notice and current role snapshot placeholder.
 - `USER.md`, `STATE.md`, `REVIEW.md`, `notes/work-log.md`, `notes/decisions.md`.
 
-### HR / Onboarding Agent, e.g. Windy/Cindy
+### HR / Onboarding Agent, e.g. Wendy/Cindy
 
 Additional notes:
 
@@ -207,7 +207,7 @@ Role templates must not write hard identity or behavior requirements that can co
 Bad scaffold:
 
 ```text
-You are Windy. You must always do X. Never do Y.
+You are Wendy. You must always do X. Never do Y.
 ```
 
 Good scaffold:
@@ -219,7 +219,7 @@ Source of truth: Multica agent settings.
 This file supplements live agent instructions; it does not override them.
 
 ## Current Role Snapshot
-- Name: Windy
+- Name: Wendy
 - Role category: HR / onboarding
 
 ## Knowledge Index

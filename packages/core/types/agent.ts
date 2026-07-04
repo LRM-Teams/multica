@@ -358,7 +358,7 @@ export interface CreateAgentRequest {
   /** Optional template slug used by the onboarding agent picker. Surfaced
    *  as the `template` property on the `agent_created` PostHog event. */
   template?: string;
-  /** Agent creation draft consumed by this create call, usually produced by Windy. */
+  /** Agent creation draft consumed by this create call, usually produced by Wendy. */
   draft_id?: string;
 }
 

@@ -65,7 +65,7 @@ export function CreateAgentDialog({
   // Skills are copied separately by the caller after createAgent
   // succeeds — they're not part of CreateAgentRequest.
   template?: Agent | null;
-  // When provided by Windy, the dialog opens with a generated role draft
+  // When provided by Wendy, the dialog opens with a generated role draft
   // and marks that draft as used after the agent is created.
   draft?: AgentCreationDraft | null;
   // When set, every successful create is followed by

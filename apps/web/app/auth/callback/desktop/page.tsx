@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useReducer } from "react";
 import { useSearchParams } from "next/navigation";
 import { paths } from "@multica/core/paths";
 import { api } from "@multica/core/api";
@@ -13,6 +13,11 @@ import {
 } from "@multica/ui/components/ui/card";
 import { Button } from "@multica/ui/components/ui/button";
 
+type DesktopState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "handoff"; token: string };
+
 // Desktop OAuth handoff (#223 Phase 2). The web callback Route Handler bounces
 // `platform:desktop` here so the token exchange + `multica://` deep-link stay on
 // the client — the token never touches a server Location/log. `redirect_uri`
@@ -20,13 +25,17 @@ import { Button } from "@multica/ui/components/ui/button";
 // NOT this `/auth/callback/desktop` page.
 function DesktopCallbackContent() {
   const searchParams = useSearchParams();
-  const [error, setError] = useState("");
-  const [desktopToken, setDesktopToken] = useState<string | null>(null);
+  // One reducer for the whole handoff state — a single dispatch per outcome
+  // keeps the effect to one state update on each path.
+  const [state, dispatch] = useReducer(
+    (_prev: DesktopState, next: DesktopState) => next,
+    { status: "loading" },
+  );
 
   useEffect(() => {
     const code = searchParams.get("code");
     if (!code) {
-      setError("Missing authorization code");
+      dispatch({ status: "error", message: "Missing authorization code" });
       return;
     }
     // redirect_uri MUST stay the public /auth/callback the code was issued for.
@@ -35,15 +44,15 @@ function DesktopCallbackContent() {
     api
       .googleLogin(code, redirectUri)
       .then(({ token }) => {
-        setDesktopToken(token);
+        dispatch({ status: "handoff", token });
         window.location.href = `multica://auth/callback?token=${encodeURIComponent(token)}`;
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "Login failed");
+        dispatch({ status: "error", message: err instanceof Error ? err.message : "Login failed" });
       });
   }, [searchParams]);
 
-  if (desktopToken) {
+  if (state.status === "handoff") {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <Card className="w-full max-w-sm">
@@ -58,7 +67,7 @@ function DesktopCallbackContent() {
             <Button
               variant="outline"
               onClick={() => {
-                window.location.href = `multica://auth/callback?token=${encodeURIComponent(desktopToken)}`;
+                window.location.href = `multica://auth/callback?token=${encodeURIComponent(state.token)}`;
               }}
             >
               Open Multica Desktop
@@ -69,13 +78,13 @@ function DesktopCallbackContent() {
     );
   }
 
-  if (error) {
+  if (state.status === "error") {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <Card className="w-full max-w-sm">
           <CardHeader className="text-center">
             <CardTitle className="text-2xl">Login Failed</CardTitle>
-            <CardDescription>{error}</CardDescription>
+            <CardDescription>{state.message}</CardDescription>
           </CardHeader>
           <CardContent className="flex justify-center">
             <a href={paths.login()} className="text-primary underline-offset-4 hover:underline">

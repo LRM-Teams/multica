@@ -17,18 +17,41 @@ function cookieValueFromSetCookies(setCookies: string[], name: string): string |
 }
 
 /**
+ * The PUBLIC origin the browser used, reconstructed from proxy headers. Behind
+ * the reverse proxy `request.url`'s origin is the internal one (e.g.
+ * `http://0.0.0.0:3000`); using that for the OAuth `redirect_uri` would not match
+ * the public `redirect_uri` the browser sent to Google and the code exchange
+ * would hard-fail with `redirect_uri_mismatch`. Prefer the standard forwarded
+ * headers, then the (proxy-preserved) Host header, then the request URL.
+ */
+function publicOrigin(request: NextRequest): string {
+  const proto =
+    request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ||
+    request.nextUrl.protocol.replace(/:$/, "");
+  const host =
+    request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ||
+    request.headers.get("host") ||
+    request.nextUrl.host;
+  return `${proto}://${host}`;
+}
+
+// App redirects use a RELATIVE Location (same-origin destinations only), so no
+// origin — internal or otherwise — is ever reflected into the response.
+function relativeRedirect(path: string): NextResponse {
+  return new NextResponse(null, { status: 307, headers: { location: path } });
+}
+
+/**
  * OAuth callback as a server-side Route Handler (#223 Phase 2). Replaces the old
  * client page that exchanged the code in a `useEffect` then `router.push`ed —
  * that flashed the "Signing in…" screen and tripped the client-side-redirect
  * rule. Here the code exchange, session-cookie issuance, and redirect all happen
- * server-side; the browser only ever sees a 302 to the final app destination.
+ * server-side; the browser only ever sees a 307 to the final app destination.
  */
 export async function GET(request: NextRequest) {
-  const url = new URL(request.url);
-  const params = url.searchParams;
-  const origin = url.origin;
+  const params = request.nextUrl.searchParams;
   const toLogin = (error: string) =>
-    NextResponse.redirect(new URL(`${paths.login()}?error=${encodeURIComponent(error)}`, origin));
+    relativeRedirect(`${paths.login()}?error=${encodeURIComponent(error)}`);
 
   const errorParam = params.get("error");
   if (errorParam) {
@@ -39,24 +62,23 @@ export async function GET(request: NextRequest) {
   const code = params.get("code");
   if (!code) return toLogin("missing_code");
 
-  const stateParts = (params.get("state") ?? "").split(",");
+  const state = params.get("state") ?? "";
+  const stateParts = state.split(",");
 
   // Desktop: keep the token exchange + `multica://` deep-link on the CLIENT so
   // the token never touches a server Location/log. The single-use OAuth code is
   // already public in this callback URL, so handing it to the client page is safe.
   if (stateParts.includes("platform:desktop")) {
-    const desktopUrl = new URL("/auth/callback/desktop", origin);
-    desktopUrl.searchParams.set("code", code);
-    const state = params.get("state");
-    if (state) desktopUrl.searchParams.set("state", state);
-    return NextResponse.redirect(desktopUrl);
+    const q = new URLSearchParams({ code });
+    if (state) q.set("state", state);
+    return relativeRedirect(`/auth/callback/desktop?${q.toString()}`);
   }
 
-  // Web: exchange the code server-to-server. `redirect_uri` MUST be the public
-  // callback the user started authorization with (RFC 6749) — not this handler's
-  // internal URL and not the desktop deep-link.
+  // Web: exchange the code server-to-server. `redirect_uri` MUST be the PUBLIC
+  // callback the user started authorization with (RFC 6749) — never the internal
+  // request origin and never the desktop deep-link.
   const base = resolveRemoteApiUrl(process.env);
-  const redirectUri = `${origin}/auth/callback`;
+  const redirectUri = `${publicOrigin(request)}/auth/callback`;
   let loginRes: Response;
   try {
     loginRes = await fetch(`${base}/auth/google`, {
@@ -116,8 +138,9 @@ export async function GET(request: NextRequest) {
     destination = inviteDest ?? postAuthDestination(ctx, cookieSlug);
   }
 
-  // Location carries ONLY the final app path — never token/code/cookie value.
-  const res = NextResponse.redirect(new URL(destination, origin));
+  // Relative Location — carries ONLY the final app path, never an origin (so no
+  // internal host can leak) and never the token/code/cookie value.
+  const res = relativeRedirect(destination);
   // Forward every backend cookie + the Next-side sentinel through the SAME
   // header path. Do NOT mix in `res.cookies.set()` — NextResponse's cookie store
   // re-serialises the set-cookie header and would drop these appended cookies.

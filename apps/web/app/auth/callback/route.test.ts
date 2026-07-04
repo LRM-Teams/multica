@@ -23,7 +23,7 @@ function mockFetch(opts: {
     workspaces = [{ slug: "acme", last_active_at: null }, { slug: "beta", last_active_at: "2026-01-05" }],
     invitations = [],
   } = opts;
-  return vi.fn((input: RequestInfo | URL) => {
+  return vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
     const u = String(input);
     if (u.endsWith("/auth/google")) {
       return Promise.resolve({
@@ -51,7 +51,16 @@ function req(query: string, cookies: Record<string, string> = {}) {
   return r;
 }
 
-const loc = (res: Response) => new URL(res.headers.get("location")!).pathname + new URL(res.headers.get("location")!).search;
+// A request as it arrives behind the reverse proxy: the URL origin is internal,
+// the public host/proto come via forwarded headers.
+function proxyReq(query: string) {
+  return new NextRequest(`http://0.0.0.0:3000/auth/callback?${query}`, {
+    headers: { "x-forwarded-proto": "https", "x-forwarded-host": "app.multica.ai" },
+  });
+}
+
+// Location is now a relative path — return it verbatim.
+const loc = (res: Response) => res.headers.get("location")!;
 
 beforeEach(() => vi.restoreAllMocks());
 
@@ -75,8 +84,9 @@ describe("GET /auth/callback", () => {
     const fetchSpy = mockFetch();
     global.fetch = fetchSpy as unknown as typeof fetch;
     const res = await GET(req("code=abc&state=platform:desktop,next:/x"));
-    expect(new URL(res.headers.get("location")!).pathname).toBe("/auth/callback/desktop");
-    expect(new URL(res.headers.get("location")!).searchParams.get("code")).toBe("abc");
+    const l = res.headers.get("location")!;
+    expect(l.startsWith("/auth/callback/desktop?")).toBe(true);
+    expect(new URLSearchParams(l.split("?")[1]).get("code")).toBe("abc");
     expect(fetchSpy).not.toHaveBeenCalled(); // token exchange stays on the client
     expect(res.headers.getSetCookie()).toHaveLength(0);
   });
@@ -113,5 +123,33 @@ describe("GET /auth/callback", () => {
     global.fetch = mockFetch({ loginOk: false }) as unknown as typeof fetch;
     const res = await GET(req("code=abc"));
     expect(loc(res)).toBe(`${paths.login()}?error=login_failed`);
+  });
+
+  // --- proxy-shape regression: internal request URL + forwarded public host ---
+
+  it("behind the proxy, the redirect Location is relative and never leaks the internal origin", async () => {
+    global.fetch = mockFetch() as unknown as typeof fetch;
+    const res = await GET(proxyReq("code=abc"));
+    const l = res.headers.get("location")!;
+    expect(l.startsWith("/")).toBe(true); // relative
+    expect(l).not.toContain("0.0.0.0");
+    expect(l).not.toMatch(/^https?:/);
+  });
+
+  it("behind the proxy, the OAuth redirect_uri is the PUBLIC origin, not the internal request origin", async () => {
+    const fetchSpy = mockFetch();
+    global.fetch = fetchSpy as unknown as typeof fetch;
+    await GET(proxyReq("code=abc"));
+    const googleCall = fetchSpy.mock.calls.find(([u]) => String(u).endsWith("/auth/google"));
+    const init = googleCall?.[1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    expect(body.redirect_uri).toBe("https://app.multica.ai/auth/callback");
+    expect(body.redirect_uri).not.toContain("0.0.0.0");
+  });
+
+  it("error path behind the proxy also stays relative", async () => {
+    const res = await GET(proxyReq("error=access_denied"));
+    expect(loc(res)).toBe(`${paths.login()}?error=access_denied`);
+    expect(res.headers.get("location")).not.toContain("0.0.0.0");
   });
 });

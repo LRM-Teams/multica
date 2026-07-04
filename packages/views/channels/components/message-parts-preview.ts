@@ -49,18 +49,25 @@ interface StructuredActionEnvelope {
   output?: unknown;
 }
 
+const MESSAGE_SEND_ACTION = "message_send";
+
 /**
- * Validate that a parsed JSON value is a structured-action envelope: an object
- * with BOTH a top-level string `action` AND an array `parts`. This is the GAP 3
- * discriminator — legit JSON that merely has a `parts` array (e.g.
- * `{"parts":["a","b"]}`) has no `action` and is rejected, so it stays as text.
+ * Validate that a parsed JSON value is a `message_send` structured-action
+ * envelope: an object with a top-level `action === "message_send"` AND an array
+ * `parts`. Requiring the SPECIFIC `message_send` action (not merely any string
+ * `action`) is what keeps this narrow:
+ *   - GAP 2 — prose that merely embeds a NON-message_send action object (e.g.
+ *     `{"action":"navigate","parts":["home"]}`, a tool-call) is rejected, so the
+ *     surrounding prose is never intercepted and blanked.
+ *   - GAP 3 — legit JSON that merely has a `parts` array (e.g.
+ *     `{"parts":["a","b"]}`) has no `action` and is likewise rejected.
  */
 function validateStructuredActionEnvelope(parsed: unknown): StructuredActionEnvelope | null {
   if (typeof parsed !== "object" || parsed === null) return null;
   const envelope = parsed as { action?: unknown; parts?: unknown; output?: unknown };
-  // The structured-action envelope always carries a top-level string `action`;
-  // require it so legit JSON with only a `parts` array is left as normal text.
-  if (typeof envelope.action !== "string") return null;
+  // Only a `message_send` envelope represents a real message to unwrap; any
+  // other action (or a missing/non-string action) is left as normal text.
+  if (envelope.action !== MESSAGE_SEND_ACTION) return null;
   if (!Array.isArray(envelope.parts)) return null;
 
   return { parts: envelope.parts as MessagePart[], output: envelope.output };
@@ -106,12 +113,22 @@ function matchBraceEnd(content: string, start: number): number {
  * JSON.parse throws and the raw string would otherwise leak.
  *
  * Scans each `{` position with a string-literal-aware brace matcher, slices the
- * balanced candidate, JSON-parses it, and returns the FIRST candidate that
- * validates as an action+parts envelope. Conservative by construction: a
- * candidate must genuinely parse to an object with a top-level `action` key and
- * an array `parts`, so ordinary prose or a stray `{...}` is never intercepted.
+ * balanced candidate, and JSON-parses it. Conservative by construction: a
+ * candidate must parse to a `message_send` envelope (top-level
+ * `action === "message_send"` + array `parts`), so ordinary prose, a stray
+ * `{...}`, or a non-message_send action object (e.g. a tool-call) is never
+ * intercepted.
+ *
+ * Because leaking historical content can carry MULTIPLE envelopes (e.g. an
+ * earlier tool-call or an empty-`parts` envelope BEFORE the real message), the
+ * scan does not stop at the first match. It collects every `message_send`
+ * candidate in scan order and PREFERS the first whose `parts` yield renderable
+ * text; if none has text it falls back to the first candidate (so its `output`
+ * / placeholder path still runs). This is what surfaces the real message
+ * instead of an earlier empty envelope.
  */
 function findEmbeddedStructuredActionEnvelope(content: string): StructuredActionEnvelope | null {
+  let firstCandidate: StructuredActionEnvelope | null = null;
   for (let i = 0; i < content.length; i++) {
     if (content[i] !== "{") continue;
     const end = matchBraceEnd(content, i);
@@ -124,9 +141,13 @@ function findEmbeddedStructuredActionEnvelope(content: string): StructuredAction
       continue;
     }
     const envelope = validateStructuredActionEnvelope(parsed);
-    if (envelope) return envelope;
+    if (!envelope) continue;
+    if (firstCandidate === null) firstCandidate = envelope;
+    // Prefer the first message_send envelope with renderable text; an earlier
+    // empty-`parts` envelope must not shadow a later real message.
+    if (formatMessagePartsPreview(envelope.parts) !== null) return envelope;
   }
-  return null;
+  return firstCandidate;
 }
 
 /**
@@ -143,19 +164,21 @@ function findEmbeddedStructuredActionEnvelope(content: string): StructuredAction
  *   2. Embedded scan — a brace-matched sweep locating an envelope object within
  *      content, tolerating a reasoning prefix and/or suffix.
  *
- * The discriminator REQUIRES a top-level string `action`, so legit user-pasted
- * JSON that merely happens to have a `parts` array (e.g. `{"parts":["a","b"]}`)
- * or prose that mentions a stray `{"foo":1}` is NEVER intercepted. A cheap
+ * The discriminator REQUIRES `action === "message_send"`, so legit user-pasted
+ * JSON with only a `parts` array (`{"parts":["a","b"]}`), prose that mentions a
+ * stray `{"foo":1}`, or a non-message_send action object embedded in prose
+ * (`{"action":"navigate","parts":["home"]}`) is NEVER intercepted. A cheap
  * substring pre-parse guard avoids scanning ordinary text.
  *
- * Returns null for anything that is not a recognizable envelope, so normal
- * content flows through unchanged.
+ * Returns null for anything that is not a recognizable `message_send` envelope,
+ * so normal content flows through unchanged.
  */
 function parseStructuredActionEnvelope(content: string): StructuredActionEnvelope | null {
-  // Cheap pre-parse guard: a structured-action envelope always carries both an
-  // `"action"` and a `"parts"` key. Ordinary prose (and GAP-3 JSON like
-  // `here is {"foo":1}`) lacks these, so bail before any parse/scan work.
-  if (!content.includes('"parts"') || !content.includes('"action"')) {
+  // Cheap pre-parse guard: a message_send envelope always carries both the
+  // literal `"message_send"` action value and a `"parts"` key. Ordinary prose
+  // (and GAP-2/GAP-3 JSON like `here is {"foo":1}` or a `navigate` action)
+  // lacks these, so bail before any parse/scan work.
+  if (!content.includes('"message_send"') || !content.includes('"parts"')) {
     return null;
   }
 

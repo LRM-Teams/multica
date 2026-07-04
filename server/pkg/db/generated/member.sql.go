@@ -14,7 +14,7 @@ import (
 const createMember = `-- name: CreateMember :one
 INSERT INTO member (workspace_id, user_id, role)
 VALUES ($1, $2, $3)
-RETURNING id, workspace_id, user_id, role, created_at
+RETURNING id, workspace_id, user_id, role, created_at, last_active_at
 `
 
 type CreateMemberParams struct {
@@ -32,6 +32,7 @@ func (q *Queries) CreateMember(ctx context.Context, arg CreateMemberParams) (Mem
 		&i.UserID,
 		&i.Role,
 		&i.CreatedAt,
+		&i.LastActiveAt,
 	)
 	return i, err
 }
@@ -46,7 +47,7 @@ func (q *Queries) DeleteMember(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getMember = `-- name: GetMember :one
-SELECT id, workspace_id, user_id, role, created_at FROM member
+SELECT id, workspace_id, user_id, role, created_at, last_active_at FROM member
 WHERE id = $1
 `
 
@@ -59,12 +60,13 @@ func (q *Queries) GetMember(ctx context.Context, id pgtype.UUID) (Member, error)
 		&i.UserID,
 		&i.Role,
 		&i.CreatedAt,
+		&i.LastActiveAt,
 	)
 	return i, err
 }
 
 const getMemberByUserAndWorkspace = `-- name: GetMemberByUserAndWorkspace :one
-SELECT id, workspace_id, user_id, role, created_at FROM member
+SELECT id, workspace_id, user_id, role, created_at, last_active_at FROM member
 WHERE user_id = $1 AND workspace_id = $2
 `
 
@@ -82,12 +84,13 @@ func (q *Queries) GetMemberByUserAndWorkspace(ctx context.Context, arg GetMember
 		&i.UserID,
 		&i.Role,
 		&i.CreatedAt,
+		&i.LastActiveAt,
 	)
 	return i, err
 }
 
 const listMembers = `-- name: ListMembers :many
-SELECT id, workspace_id, user_id, role, created_at FROM member
+SELECT id, workspace_id, user_id, role, created_at, last_active_at FROM member
 WHERE workspace_id = $1
 ORDER BY created_at ASC
 `
@@ -107,6 +110,7 @@ func (q *Queries) ListMembers(ctx context.Context, workspaceID pgtype.UUID) ([]M
 			&i.UserID,
 			&i.Role,
 			&i.CreatedAt,
+			&i.LastActiveAt,
 		); err != nil {
 			return nil, err
 		}
@@ -116,6 +120,32 @@ func (q *Queries) ListMembers(ctx context.Context, workspaceID pgtype.UUID) ([]M
 		return nil, err
 	}
 	return items, nil
+}
+
+const touchMemberLastActiveWorkspace = `-- name: TouchMemberLastActiveWorkspace :one
+UPDATE member
+SET last_active_at = now()
+WHERE user_id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, user_id, role, created_at, last_active_at
+`
+
+type TouchMemberLastActiveWorkspaceParams struct {
+	UserID      pgtype.UUID `json:"user_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) TouchMemberLastActiveWorkspace(ctx context.Context, arg TouchMemberLastActiveWorkspaceParams) (Member, error) {
+	row := q.db.QueryRow(ctx, touchMemberLastActiveWorkspace, arg.UserID, arg.WorkspaceID)
+	var i Member
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.Role,
+		&i.CreatedAt,
+		&i.LastActiveAt,
+	)
+	return i, err
 }
 
 const listMembersWithUser = `-- name: ListMembersWithUser :many
@@ -176,7 +206,7 @@ func (q *Queries) ListMembersWithUser(ctx context.Context, workspaceID pgtype.UU
 const updateMemberRole = `-- name: UpdateMemberRole :one
 UPDATE member SET role = $2
 WHERE id = $1
-RETURNING id, workspace_id, user_id, role, created_at
+RETURNING id, workspace_id, user_id, role, created_at, last_active_at
 `
 
 type UpdateMemberRoleParams struct {
@@ -193,6 +223,7 @@ func (q *Queries) UpdateMemberRole(ctx context.Context, arg UpdateMemberRolePara
 		&i.UserID,
 		&i.Role,
 		&i.CreatedAt,
+		&i.LastActiveAt,
 	)
 	return i, err
 }

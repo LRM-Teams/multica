@@ -34,46 +34,95 @@ func generateIssuePrefix(name string) string {
 }
 
 type WorkspaceResponse struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Slug        string  `json:"slug"`
-	Description *string `json:"description"`
-	Context     *string `json:"context"`
-	Settings    any     `json:"settings"`
-	Repos       any     `json:"repos"`
-	IssuePrefix string  `json:"issue_prefix"`
-	AvatarURL   *string `json:"avatar_url"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	Slug         string  `json:"slug"`
+	Description  *string `json:"description"`
+	Context      *string `json:"context"`
+	Settings     any     `json:"settings"`
+	Repos        any     `json:"repos"`
+	IssuePrefix  string  `json:"issue_prefix"`
+	AvatarURL    *string `json:"avatar_url"`
+	LastActiveAt *string `json:"last_active_at"`
+	CreatedAt    string  `json:"created_at"`
+	UpdatedAt    string  `json:"updated_at"`
 }
 
 func workspaceToResponse(w db.Workspace) WorkspaceResponse {
+	return workspaceFieldsToResponse(
+		w.ID,
+		w.Name,
+		w.Slug,
+		w.Description,
+		w.Context,
+		w.Settings,
+		w.Repos,
+		w.IssuePrefix,
+		w.AvatarUrl,
+		pgtype.Timestamptz{},
+		w.CreatedAt,
+		w.UpdatedAt,
+	)
+}
+
+func listedWorkspaceToResponse(w db.ListWorkspacesRow) WorkspaceResponse {
+	return workspaceFieldsToResponse(
+		w.ID,
+		w.Name,
+		w.Slug,
+		w.Description,
+		w.Context,
+		w.Settings,
+		w.Repos,
+		w.IssuePrefix,
+		w.AvatarUrl,
+		w.LastActiveAt,
+		w.CreatedAt,
+		w.UpdatedAt,
+	)
+}
+
+func workspaceFieldsToResponse(
+	id pgtype.UUID,
+	name string,
+	slug string,
+	description pgtype.Text,
+	context pgtype.Text,
+	settingsBytes []byte,
+	reposBytes []byte,
+	issuePrefix string,
+	avatarURL pgtype.Text,
+	lastActiveAt pgtype.Timestamptz,
+	createdAt pgtype.Timestamptz,
+	updatedAt pgtype.Timestamptz,
+) WorkspaceResponse {
 	var settings any
-	if w.Settings != nil {
-		json.Unmarshal(w.Settings, &settings)
+	if settingsBytes != nil {
+		json.Unmarshal(settingsBytes, &settings)
 	}
 	if settings == nil {
 		settings = map[string]any{}
 	}
 	var repos any
-	if w.Repos != nil {
-		json.Unmarshal(w.Repos, &repos)
+	if reposBytes != nil {
+		json.Unmarshal(reposBytes, &repos)
 	}
 	if repos == nil {
 		repos = []any{}
 	}
 	return WorkspaceResponse{
-		ID:          uuidToString(w.ID),
-		Name:        w.Name,
-		Slug:        w.Slug,
-		Description: textToPtr(w.Description),
-		Context:     textToPtr(w.Context),
-		Settings:    settings,
-		Repos:       repos,
-		IssuePrefix: w.IssuePrefix,
-		AvatarURL:   textToPtr(w.AvatarUrl),
-		CreatedAt:   timestampToString(w.CreatedAt),
-		UpdatedAt:   timestampToString(w.UpdatedAt),
+		ID:           uuidToString(id),
+		Name:         name,
+		Slug:         slug,
+		Description:  textToPtr(description),
+		Context:      textToPtr(context),
+		Settings:     settings,
+		Repos:        repos,
+		IssuePrefix:  issuePrefix,
+		AvatarURL:    textToPtr(avatarURL),
+		LastActiveAt: timestampToPtr(lastActiveAt),
+		CreatedAt:    timestampToString(createdAt),
+		UpdatedAt:    timestampToString(updatedAt),
 	}
 }
 
@@ -109,7 +158,7 @@ func (h *Handler) ListWorkspaces(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]WorkspaceResponse, len(workspaces))
 	for i, ws := range workspaces {
-		resp[i] = workspaceToResponse(ws)
+		resp[i] = listedWorkspaceToResponse(ws)
 	}
 
 	writeJSON(w, http.StatusOK, resp)

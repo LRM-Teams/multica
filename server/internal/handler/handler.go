@@ -561,7 +561,24 @@ func (h *Handler) requireWorkspaceMember(w http.ResponseWriter, r *http.Request,
 		return db.Member{}, false
 	}
 
+	member = h.touchMemberLastActiveWorkspace(r.Context(), member)
 	return member, true
+}
+
+func (h *Handler) touchMemberLastActiveWorkspace(ctx context.Context, member db.Member) db.Member {
+	touched, err := h.Queries.TouchMemberLastActiveWorkspace(ctx, db.TouchMemberLastActiveWorkspaceParams{
+		UserID:      member.UserID,
+		WorkspaceID: member.WorkspaceID,
+	})
+	if err != nil {
+		slog.Warn("workspace: failed to touch member last active workspace",
+			"error", err,
+			"user_id", uuidToString(member.UserID),
+			"workspace_id", uuidToString(member.WorkspaceID),
+		)
+		return member
+	}
+	return touched
 }
 
 func (h *Handler) requireWorkspaceRole(w http.ResponseWriter, r *http.Request, workspaceID, notFoundMsg string, roles ...string) (db.Member, bool) {

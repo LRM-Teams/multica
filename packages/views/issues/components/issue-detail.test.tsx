@@ -763,6 +763,113 @@ describe("IssueDetail (shared)", () => {
     expect(screen.getByText("I can help with this")).toBeInTheDocument();
   });
 
+  // #243 / E1 — execution-result isolation: a real comment renders as a
+  // reactable Message bubble; a status_change / progress_update / system row
+  // renders as an Activity entry (never a Message row, never an empty row,
+  // never reactable). Message bodies flow through the mocked ReadonlyContent
+  // (data-testid="readonly-content"); Activity rows render their label as
+  // plain text, so the presence/absence of readonly-content discriminates the
+  // two lanes cleanly.
+  describe("execution-result isolation (#243 / E1)", () => {
+    it("renders a real comment as a reactable Message bubble", async () => {
+      mockApiObj.listTimeline.mockResolvedValue([
+        {
+          type: "comment",
+          id: "comment-1",
+          actor_type: "member",
+          actor_id: "user-1",
+          content: "A real reply",
+          parent_id: null,
+          created_at: "2026-01-16T00:00:00Z",
+          updated_at: "2026-01-16T00:00:00Z",
+          comment_type: "comment",
+        },
+      ]);
+
+      renderIssueDetail();
+
+      // Message bubble body flows through ReadonlyContent.
+      await waitFor(() => {
+        expect(screen.getByTestId("readonly-content")).toHaveTextContent("A real reply");
+      });
+    });
+
+    it("renders progress_update / status_change / system as an Activity entry, never a Message row", async () => {
+      mockApiObj.listTimeline.mockResolvedValue([
+        {
+          type: "comment",
+          id: "exec-1",
+          actor_type: "agent",
+          actor_id: "agent-1",
+          content: "Ran build: 3 tests passed",
+          parent_id: null,
+          created_at: "2026-01-16T00:00:00Z",
+          updated_at: "2026-01-16T00:00:00Z",
+          comment_type: "progress_update",
+        },
+      ]);
+
+      renderIssueDetail();
+
+      // The execution content is visible (never an empty row) ...
+      await waitFor(() => {
+        expect(screen.getByText("Ran build: 3 tests passed")).toBeInTheDocument();
+      });
+      // ... but it is NOT a Message bubble — no ReadonlyContent body, so it is
+      // not reactable/quotable/copyable/searchable like a real comment.
+      expect(screen.queryByTestId("readonly-content")).not.toBeInTheDocument();
+    });
+
+    it("renders an execution-result row with no content as an Activity entry, never an empty row", async () => {
+      mockApiObj.listTimeline.mockResolvedValue([
+        {
+          type: "comment",
+          id: "exec-empty",
+          actor_type: "agent",
+          actor_id: "agent-1",
+          content: "",
+          parent_id: null,
+          created_at: "2026-01-16T00:00:00Z",
+          updated_at: "2026-01-16T00:00:00Z",
+          comment_type: "system",
+        },
+      ]);
+
+      renderIssueDetail();
+
+      // A generic Activity label stands in for empty content (never blank).
+      await waitFor(() => {
+        expect(screen.getByText("Activity update")).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId("readonly-content")).not.toBeInTheDocument();
+    });
+
+    it("renders an explicit link to the Activity run when the entry carries a run pointer", async () => {
+      mockApiObj.listTimeline.mockResolvedValue([
+        {
+          type: "comment",
+          id: "exec-ptr",
+          actor_type: "agent",
+          actor_id: "agent-1",
+          content: "Build complete",
+          parent_id: null,
+          created_at: "2026-01-16T00:00:00Z",
+          updated_at: "2026-01-16T00:00:00Z",
+          comment_type: "progress_update",
+          details: { run_id: "run-9" },
+        },
+      ]);
+
+      renderIssueDetail();
+
+      const link = await screen.findByRole("link", { name: /activity/i });
+      // Explicit pointer to the agent's Activity run surface (#236), carrying
+      // the run id — never rendered as an empty message row.
+      expect(link).toHaveAttribute("href", expect.stringContaining("/agents/agent-1"));
+      expect(link.getAttribute("href")).toContain("run-9");
+    });
+  });
+
   it("collapses non-trailing activity blocks and expands the last one by default", async () => {
     // Timeline shape:
     //   [activities: status_changed, priority_changed] ← block A (older)

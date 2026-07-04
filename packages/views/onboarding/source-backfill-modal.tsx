@@ -96,12 +96,27 @@ export function SourceBackfillModal() {
   // cleared, leaving the dialog forever closed.
   const [open, setOpen] = useState(false);
   const openedForUserRef = useRef<string | null>(null);
+  // Once the user commits an answer (Submit or Skip — both PATCH a terminal
+  // questionnaire), never reopen this session. This is belt-and-suspenders
+  // over `openedForUserRef`: the id check can be slipped if the auth-store
+  // user momentarily changes identity (e.g. a parse-fallback EMPTY_USER with
+  // an empty id) right after the write, which would otherwise let a still-
+  // stale `needsSourceBackfill` re-corner a user who already answered
+  // (task #230). The dismissed-via-X/ESC path deliberately does NOT set this
+  // (that path is capped by dismissCount instead).
+  const terminatedRef = useRef(false);
   useEffect(() => {
     if (!user) {
       openedForUserRef.current = null;
+      // A genuine logout clears the session; a later different user (or the
+      // same user on a fresh session) is eligible to be asked again, so the
+      // terminal latch resets here. (EMPTY_USER from a parse fallback is a
+      // truthy object, not null, so it does NOT reset this — the whole point.)
+      terminatedRef.current = false;
       setOpen(false);
       return;
     }
+    if (terminatedRef.current) return;
     if (openedForUserRef.current === user.id) return;
     if (!needsSourceBackfill(user, dismissCount)) return;
     // Soft entrance: let the user see the workspace for a beat before
@@ -140,7 +155,11 @@ export function SourceBackfillModal() {
     >
       <SourceBackfillDialogBody
         open={open}
-        onComplete={() => setOpen(false)}
+        onComplete={() => {
+          // Terminal: a committed answer must never be reopened this session.
+          terminatedRef.current = true;
+          setOpen(false);
+        }}
       />
     </Dialog>
   );

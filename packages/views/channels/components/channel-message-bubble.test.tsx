@@ -93,6 +93,12 @@ vi.mock("../../i18n/use-t", () => ({
           sticker_loading: string;
           sticker_failed: string;
           sticker_unavailable: string;
+          edit_action: string;
+          delete_action: string;
+          edited_label: string;
+          deleted_placeholder: string;
+          save_edit: string;
+          cancel_edit: string;
         };
         quote: { jump_to: string };
         thread: { reply: string; reply_count: string };
@@ -110,6 +116,12 @@ vi.mock("../../i18n/use-t", () => ({
           sticker_loading: "Loading sticker",
           sticker_failed: "Sticker failed to load",
           sticker_unavailable: "Sticker unavailable",
+          edit_action: "Edit",
+          delete_action: "Delete",
+          edited_label: "(edited)",
+          deleted_placeholder: "This message was deleted",
+          save_edit: "Save",
+          cancel_edit: "Cancel",
         },
         quote: {
           jump_to: "Jump to original message",
@@ -664,5 +676,166 @@ describe("ChannelMessageBubble", () => {
 
     expect(container).toBeEmptyDOMElement();
     expect(screen.queryByText("daemon_outdated")).not.toBeInTheDocument();
+  });
+
+  // B3 (#241) — Edit / Delete + H5 FE guard.
+  const ownMessage = () =>
+    makeMessage({ type: "user", author_id: "user-1", author_name: "alice", content: "Original" });
+
+  it("shows edit/delete affordances only on the viewer's own message", () => {
+    const { rerender } = render(
+      <ChannelMessageBubble
+        message={ownMessage()}
+        currentUserId="user-1"
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+
+    // A peer / agent message from another author exposes no edit or delete.
+    rerender(
+      <ChannelMessageBubble
+        message={makeMessage({ type: "user", author_id: "user-2", author_name: "bob" })}
+        currentUserId="user-1"
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+  });
+
+  it("edits inline and saves through onEdit without a send/dispatch path", async () => {
+    const onEdit = vi.fn();
+    const onReact = vi.fn();
+    const onOpenThread = vi.fn();
+    const message = ownMessage();
+    render(
+      <ChannelMessageBubble
+        message={message}
+        currentUserId="user-1"
+        onEdit={onEdit}
+        onDelete={vi.fn()}
+        onReact={onReact}
+        onOpenThread={onOpenThread}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    const editor = screen.getByRole("textbox", { name: "Edit" });
+    expect(editor).toHaveValue("Original");
+
+    await userEvent.clear(editor);
+    await userEvent.type(editor, "Corrected");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    // Edit routes only through onEdit — never a reaction / thread (wake) path.
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    expect(onEdit).toHaveBeenCalledWith(message, "Corrected");
+    expect(onReact).not.toHaveBeenCalled();
+    expect(onOpenThread).not.toHaveBeenCalled();
+
+    // Editor closes back to the read view after saving.
+    expect(screen.queryByRole("textbox", { name: "Edit" })).not.toBeInTheDocument();
+  });
+
+  it("cancels an inline edit without calling onEdit", async () => {
+    const onEdit = vi.fn();
+    render(
+      <ChannelMessageBubble
+        message={ownMessage()}
+        currentUserId="user-1"
+        onEdit={onEdit}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Edit" }), " changed");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onEdit).not.toHaveBeenCalled();
+    expect(screen.queryByRole("textbox", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.getByText("Original")).toBeInTheDocument();
+  });
+
+  it("marks an edited message with an edited label", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-1",
+          author_name: "alice",
+          content: "Fixed typo",
+          edited_at: "2026-06-17T09:20:00Z",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("(edited)")).toBeInTheDocument();
+  });
+
+  it("renders a tombstone placeholder for a deleted message, not an empty row", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-1",
+          author_name: "alice",
+          content: "secret text",
+          deleted_at: "2026-06-17T09:25:00Z",
+          reactions: [
+            {
+              id: "reaction-1",
+              channel_id: "c1",
+              message_id: "m1",
+              actor_type: "member",
+              actor_id: "user-1",
+              emoji: "👍",
+              created_at: "2026-06-17T09:16:00Z",
+            },
+          ],
+        })}
+        currentUserId="user-1"
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onReact={vi.fn()}
+        onOpenThread={vi.fn()}
+      />,
+    );
+
+    const tombstone = screen.getByTestId("message-tombstone");
+    expect(tombstone).toHaveTextContent("This message was deleted");
+    // Original content is gone and no message actions survive a delete.
+    expect(screen.queryByText("secret text")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("message-body")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "👍1" })).not.toBeInTheDocument();
+  });
+
+  it("deletes through onDelete without a send/dispatch path", async () => {
+    const onDelete = vi.fn();
+    const onReact = vi.fn();
+    const message = ownMessage();
+    render(
+      <ChannelMessageBubble
+        message={message}
+        currentUserId="user-1"
+        onEdit={vi.fn()}
+        onDelete={onDelete}
+        onReact={onReact}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(onDelete).toHaveBeenCalledWith(message);
+    expect(onReact).not.toHaveBeenCalled();
   });
 });

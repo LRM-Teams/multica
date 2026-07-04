@@ -1,6 +1,7 @@
 "use client";
 
-import { Copy, MessageSquare } from "lucide-react";
+import { useCallback, useState } from "react";
+import { Copy, MessageSquare, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
@@ -64,6 +65,73 @@ function ChannelSystemMessageRow({
 }
 
 /**
+ * Inline single-message editor. Enter (without Shift) saves, Escape cancels —
+ * a save calls back into the bubble's onEdit (a PATCH), never a re-send, so an
+ * edit can never produce a new agent wake (H5).
+ */
+function MessageInlineEditor({
+  value,
+  onChange,
+  onSave,
+  onCancel,
+  editLabel,
+  saveLabel,
+  cancelLabel,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  editLabel: string;
+  saveLabel: string;
+  cancelLabel: string;
+}) {
+  // Move focus into the editor the user just opened (the Edit trigger it
+  // replaced has unmounted). A stable ref callback focuses once on mount —
+  // no autoFocus prop, no effect.
+  const focusOnMount = useCallback((node: HTMLTextAreaElement | null) => {
+    node?.focus();
+  }, []);
+  return (
+    <div data-testid="message-editor" className="mt-0.5">
+      <textarea
+        ref={focusOnMount}
+        aria-label={editLabel}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            onSave();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            onCancel();
+          }
+        }}
+        rows={2}
+        className="w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-sm leading-6 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      />
+      <div className="mt-1.5 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onSave}
+          className="inline-flex h-7 items-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          {saveLabel}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="inline-flex h-7 items-center rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          {cancelLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * One message in the shared Channel/DM/Thread timeline. Ordinary text renders
  * as an IM-style message item, while quote/attachment/code-like content keeps
  * local structure inside the shared Markdown pipeline.
@@ -76,6 +144,8 @@ export function ChannelMessageBubble({
   onOpenThread,
   onScrollTo,
   onReact,
+  onEdit,
+  onDelete,
   searchHighlighted = false,
   searchQuery,
 }: {
@@ -91,6 +161,13 @@ export function ChannelMessageBubble({
   onScrollTo?: (messageId: string) => void;
   /** Toggle/add a lightweight emoji reaction on this message. */
   onReact?: (message: ChannelMessage, emoji: string) => void;
+  /**
+   * Save an inline edit of the viewer's own message. H5: this is an edit, never
+   * a re-send — it must not go through a send/dispatch path (no new wake).
+   */
+  onEdit?: (message: ChannelMessage, content: string) => void;
+  /** Soft-delete the viewer's own message; the bubble then renders a tombstone. */
+  onDelete?: (message: ChannelMessage) => void;
   /** Search hit: marks matching visible text while search is open. */
   searchHighlighted?: boolean;
   /** Trimmed conversation search phrase to mark inside this hit's visible text. */
@@ -98,6 +175,26 @@ export function ChannelMessageBubble({
 }) {
   const { t } = useT("channels");
   const { getActorAvatarUrl, getActorName } = useActorName();
+  const [editDraft, setEditDraft] = useState<string | null>(null);
+
+  if (message.deleted_at) {
+    return (
+      <div
+        id={`message-${message.id}`}
+        data-testid="message-tombstone"
+        data-message-kind="deleted"
+        className={cn(
+          "mx-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm italic text-muted-foreground outline-none transition-colors duration-1000",
+          highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0",
+        )}
+      >
+        <Trash2 className="size-3.5 shrink-0" />
+        <span className="min-w-0 break-words">
+          {t(($) => $.message.deleted_placeholder)}
+        </span>
+      </div>
+    );
+  }
 
   if (message.type === "system") {
     if (isLegacyRuntimeSystemNotice(message)) return null;
@@ -196,6 +293,23 @@ export function ChannelMessageBubble({
   };
   const structuredParts = hasStructuredMessageParts(message.parts) ? message.parts : null;
 
+  // Edit / delete are viewer-own affordances only. H5: saving an edit routes
+  // through onEdit (a PATCH), never a re-send — it cannot produce a new wake.
+  const isEditing = editDraft !== null;
+  const canEdit = isOwn && !!onEdit;
+  const canDelete = isOwn && !!onDelete;
+  const isEdited = !!message.edited_at;
+  const handleStartEdit = () => setEditDraft(message.content);
+  const handleCancelEdit = () => setEditDraft(null);
+  const handleSaveEdit = () => {
+    const next = (editDraft ?? "").trim();
+    if (next && next !== message.content) {
+      onEdit?.(message, next);
+    }
+    setEditDraft(null);
+  };
+  const handleDelete = () => onDelete?.(message);
+
   return (
     <div
       id={`message-${message.id}`}
@@ -245,7 +359,16 @@ export function ChannelMessageBubble({
           <span className="shrink-0 text-[11px] text-muted-foreground">
             {formatTime(message.created_at)}
           </span>
+          {isEdited && (
+            <span
+              data-testid="message-edited"
+              className="shrink-0 text-[11px] text-muted-foreground/70"
+            >
+              {t(($) => $.message.edited_label)}
+            </span>
+          )}
         </div>
+        {!isEditing && (
         <div className="pointer-events-none absolute right-3 top-2 z-10 flex items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
           {onReact && (
             <QuickEmojiPicker
@@ -280,7 +403,41 @@ export function ChannelMessageBubble({
               <MessageSquare className="size-3.5" />
             </button>
           )}
+          {canEdit && (
+            <button
+              type="button"
+              onClick={handleStartEdit}
+              className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+              aria-label={t(($) => $.message.edit_action)}
+              title={t(($) => $.message.edit_action)}
+            >
+              <Pencil className="size-3.5" />
+            </button>
+          )}
+          {canDelete && (
+            <button
+              type="button"
+              onClick={handleDelete}
+              className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive"
+              aria-label={t(($) => $.message.delete_action)}
+              title={t(($) => $.message.delete_action)}
+            >
+              <Trash2 className="size-3.5" />
+            </button>
+          )}
         </div>
+        )}
+        {isEditing ? (
+          <MessageInlineEditor
+            value={editDraft ?? ""}
+            onChange={setEditDraft}
+            onSave={handleSaveEdit}
+            onCancel={handleCancelEdit}
+            editLabel={t(($) => $.message.edit_action)}
+            saveLabel={t(($) => $.message.save_edit)}
+            cancelLabel={t(($) => $.message.cancel_edit)}
+          />
+        ) : (
         <div
           className={cn(
             "min-w-0 max-w-full select-text overflow-hidden break-words text-sm leading-6 text-foreground",
@@ -327,7 +484,8 @@ export function ChannelMessageBubble({
             className="mt-1.5"
           />
         </div>
-        {hasFeedback && (
+        )}
+        {!isEditing && hasFeedback && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             {hasThreadActivity && onOpenThread && (
               <button

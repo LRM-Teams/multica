@@ -186,7 +186,13 @@
     "sticker_failed": "ステッカーを読み込めませんでした",
     "sticker_unavailable": "ステッカーは利用できません",
     "agent_badge": "Agent",
-    "feishu_badge": "Feishu"
+    "feishu_badge": "Feishu",
+    "edit_action": "編集",
+    "delete_action": "削除",
+    "edited_label": "（編集済み）",
+    "deleted_placeholder": "このメッセージは削除されました",
+    "save_edit": "保存",
+    "cancel_edit": "キャンセル"
   },
   "dm": {
     "heading": "ダイレクトメッセージ",

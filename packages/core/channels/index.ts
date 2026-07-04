@@ -38,6 +38,8 @@ export {
   useSetChannelMuted,
   useSendChannelMessage,
   useSendChannelThreadMessage,
+  useEditChannelMessage,
+  useDeleteChannelMessage,
   useAddChannelReaction,
   useRemoveChannelReaction,
   useMarkChannelRead,

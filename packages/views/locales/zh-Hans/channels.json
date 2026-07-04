@@ -186,7 +186,13 @@
     "sticker_failed": "表情包加载失败",
     "sticker_unavailable": "表情包暂不可用",
     "agent_badge": "Agent",
-    "feishu_badge": "飞书"
+    "feishu_badge": "飞书",
+    "edit_action": "编辑",
+    "delete_action": "删除",
+    "edited_label": "（已编辑）",
+    "deleted_placeholder": "此消息已删除",
+    "save_edit": "保存",
+    "cancel_edit": "取消"
   },
   "dm": {
     "heading": "私信",

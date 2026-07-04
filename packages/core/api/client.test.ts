@@ -78,6 +78,31 @@ describe("ApiClient", () => {
     }
   });
 
+  it("sends explicit also_send_to_channel only for thread mirror requests", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ id: "m-1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+
+    await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-1");
+    await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-2", false);
+    await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-3", true);
+
+    const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+    expect(bodies[0]).not.toHaveProperty("also_send_to_channel");
+    expect(bodies[1]).not.toHaveProperty("also_send_to_channel");
+    expect(bodies[2]).toMatchObject({
+      content: "hello",
+      client_message_id: "client-3",
+      also_send_to_channel: true,
+    });
+  });
+
   it("uses the expected HTTP contract for autopilot endpoints", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({ autopilots: [], runs: [], total: 0 }), {

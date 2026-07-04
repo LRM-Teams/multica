@@ -292,6 +292,19 @@ func TestDMActionsApplyAtPeerLevelAcrossSources(t *testing.T) {
 	if !peer.Muted || peer.MutedAt == nil {
 		t.Fatalf("peer-level mute missing on listed source %+v", peer)
 	}
+	var mutedAt *string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT cm.muted_at::text
+		FROM conversation_member cm
+		JOIN conversation c ON c.id = cm.conversation_id
+		WHERE c.channel_id = $1
+		  AND cm.member_type = 'user'
+		  AND cm.member_id = $2`, channelID, testUserID).Scan(&mutedAt); err != nil {
+		t.Fatalf("load conversation_member muted_at: %v", err)
+	}
+	if mutedAt == nil {
+		t.Fatal("conversation_member muted_at not set for muted DM peer")
+	}
 
 	req = newRequest(http.MethodPost, "/api/channels/"+channelID+"/read", nil)
 	req = withChatTestWorkspaceCtx(t, req)
@@ -320,6 +333,19 @@ func TestDMActionsApplyAtPeerLevelAcrossSources(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("close channel-backed DM: status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	var closedAt *string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT cm.closed_at::text
+		FROM conversation_member cm
+		JOIN conversation c ON c.id = cm.conversation_id
+		WHERE c.channel_id = $1
+		  AND cm.member_type = 'user'
+		  AND cm.member_id = $2`, channelID, testUserID).Scan(&closedAt); err != nil {
+		t.Fatalf("load conversation_member closed_at: %v", err)
+	}
+	if closedAt == nil {
+		t.Fatal("conversation_member closed_at not set for closed DM peer")
+	}
 
 	got = listDMItemsForTest(t)
 	for _, it := range got {
@@ -334,6 +360,18 @@ func TestDMActionsApplyAtPeerLevelAcrossSources(t *testing.T) {
 	}
 	if item.ID != channelID || item.Source != dmSourceChannel {
 		t.Fatalf("reopen should return dm channel %s, got %+v", channelID, item)
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT cm.closed_at::text
+		FROM conversation_member cm
+		JOIN conversation c ON c.id = cm.conversation_id
+		WHERE c.channel_id = $1
+		  AND cm.member_type = 'user'
+		  AND cm.member_id = $2`, channelID, testUserID).Scan(&closedAt); err != nil {
+		t.Fatalf("reload conversation_member closed_at: %v", err)
+	}
+	if closedAt != nil {
+		t.Fatalf("conversation_member closed_at still set after reopen: %v", *closedAt)
 	}
 	got = listDMItemsForTest(t)
 	found = false

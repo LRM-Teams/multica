@@ -18,23 +18,34 @@ import type { OnboardingCompletionPath, QuestionnaireAnswers } from "./types";
 export async function saveQuestionnaire(
   answers: Partial<QuestionnaireAnswers>,
 ): Promise<void> {
+  // The PATCH is the only essential step: once it resolves the answers are
+  // persisted. Everything after it (store sync, analytics mirroring) is
+  // best-effort and MUST NOT reject — several callers gate UI on this
+  // promise resolving. The source-backfill modal dismisses only when this
+  // resolves, so a throw here (e.g. an analytics/store hiccup) after a 2xx
+  // PATCH would trap the user behind the modal even though their answer was
+  // already saved (task #230).
   const user = await api.patchOnboarding({ questionnaire: answers });
-  useAuthStore.getState().setUser(user);
-  // Mirror the three cohort signals into person properties so every
-  // PostHog event on this user can be broken down by source / role /
-  // use_case without re-joining the DB. `source` is single-select but
-  // shipped as a one-element array for v2 back-compat with the JSONB
-  // column; `use_case` is multi-select. PostHog accepts array property
-  // values, and breakdowns split each element into its own group — so
-  // single-element source still slices cleanly.
-  const sourceList = answers.source ?? [];
-  const useCaseList = answers.use_case ?? [];
-  if (sourceList.length > 0 || answers.role || useCaseList.length > 0) {
-    setPersonProperties({
-      ...(sourceList.length > 0 ? { source: sourceList } : {}),
-      ...(answers.role ? { role: answers.role } : {}),
-      ...(useCaseList.length > 0 ? { use_case: useCaseList } : {}),
-    });
+  try {
+    useAuthStore.getState().setUser(user);
+    // Mirror the three cohort signals into person properties so every
+    // PostHog event on this user can be broken down by source / role /
+    // use_case without re-joining the DB. `source` is single-select but
+    // shipped as a one-element array for v2 back-compat with the JSONB
+    // column; `use_case` is multi-select. PostHog accepts array property
+    // values, and breakdowns split each element into its own group — so
+    // single-element source still slices cleanly.
+    const sourceList = answers.source ?? [];
+    const useCaseList = answers.use_case ?? [];
+    if (sourceList.length > 0 || answers.role || useCaseList.length > 0) {
+      setPersonProperties({
+        ...(sourceList.length > 0 ? { source: sourceList } : {}),
+        ...(answers.role ? { role: answers.role } : {}),
+        ...(useCaseList.length > 0 ? { use_case: useCaseList } : {}),
+      });
+    }
+  } catch {
+    /* best-effort post-persist sync — the answer is already saved */
   }
 }
 

@@ -57,6 +57,7 @@ import {
   type TypingActor,
 } from "./channels-page";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
+import { isTypingActorVisible } from "./conversation-typing";
 
 /**
  * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
@@ -411,7 +412,7 @@ function DmChannelConversation({
   // Agents surface lifecycle via the query-driven working indicator, so filter
   // them out of the transient typing render (same rule as the group thread).
   const activeTypingActors = useMemo(
-    () => Object.values(typingActors).filter((a) => a.actorType !== "agent"),
+    () => Object.values(typingActors).filter((a) => isTypingActorVisible(a.actorType)),
     [typingActors],
   );
 

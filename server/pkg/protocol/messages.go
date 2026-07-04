@@ -124,6 +124,8 @@ type TaskCompletedPayload struct {
 	TaskID                 string               `json:"task_id"`
 	PRURL                  string               `json:"pr_url,omitempty"`
 	Action                 string               `json:"action,omitempty"`
+	Target                 string               `json:"target,omitempty"`
+	Options                *ChatOutputOptions   `json:"options,omitempty"`
 	Type                   string               `json:"type,omitempty"`
 	Output                 string               `json:"output,omitempty"`
 	Parts                  []MessagePart        `json:"parts,omitempty"`
@@ -156,7 +158,12 @@ const (
 	ChannelOutputSuppressedReasonEmptyMessage         = "empty_message"
 	ChannelOutputSuppressedReasonInvalidReaction      = "invalid_reaction"
 	ChannelOutputSuppressedReasonMessageMissingAction = "message_missing_action"
+	ChannelOutputSuppressedReasonInvalidTarget        = "invalid_target"
 )
+
+type ChatOutputOptions struct {
+	AlsoSendToChannel *bool `json:"also_send_to_channel,omitempty"`
+}
 
 type ChatReactionPayload struct {
 	MessageID string `json:"message_id,omitempty"`
@@ -168,9 +175,9 @@ func NormalizeChatOutputAction(action string) (string, error) {
 	switch normalized {
 	case "":
 		return "", nil
-	case ChatOutputActionMessageSend:
+	case ChatOutputActionMessageSend, "send":
 		return ChatOutputActionMessageSend, nil
-	case ChatOutputActionMessageReact, "react_message", "message_reaction", "send_reaction":
+	case ChatOutputActionMessageReact, "react", "react_message", "message_reaction", "send_reaction":
 		return ChatOutputActionMessageReact, nil
 	case ChatOutputActionNoReply, "stay_silent":
 		return ChatOutputActionNoReply, nil
@@ -381,6 +388,8 @@ type ChatDonePayload struct {
 	ChatSessionID          string               `json:"chat_session_id"`
 	TaskID                 string               `json:"task_id"`
 	Type                   string               `json:"type,omitempty"`
+	Target                 string               `json:"target,omitempty"`
+	Options                *ChatOutputOptions   `json:"options,omitempty"`
 	MessageID              string               `json:"message_id,omitempty"`
 	Content                string               `json:"content,omitempty"`
 	Parts                  []MessagePart        `json:"parts,omitempty"`

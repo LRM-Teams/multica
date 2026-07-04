@@ -35,10 +35,10 @@ const channelMessagesMaxLimit = 100
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
-const channelOutputContractInstruction = "Channel action contract: create a visible group message only by calling the send action. Return exactly one action and nothing else: use {\"action\":\"message_send\",\"output\":\"...\"} or {\"action\":\"message_send\",\"parts\":[...]} for a visible message, or output exactly multica message send --message \"...\" for a plain-text message. To react, use {\"action\":\"message_react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}} or output exactly multica message react --message CURRENT_MESSAGE --emoji 👍. Never output analysis, thinking, plans, tool intent, raw completion text, or described commands as a chat message."
-const channelDirectedReplyInstruction = "This run is directly addressed to you. You must produce a visible result: send a helpful reply, ask a follow-up question, or use a message_react action as an explicit acknowledgement. Do not return no_reply, stay_silent, or any other silent outcome for a direct mention, direct question, assigned task, or DM-style continuation."
-const channelAmbientNoReplyInstruction = "If you should not reply, do not call a send/reply action; internal no_reply is allowed only as a non-visible outcome."
-const channelStickerReplyInstruction = "Sticker replies: if the user explicitly asks for a sticker/表情包, or you intentionally choose a sticker-only social reply such as hi/ok/收到/thanks/praise, use the message_send action with structured parts, for example {\"action\":\"message_send\",\"output\":\"Welcome!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome!\"},{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}. Use a real sticker_id from the multica-stickers skill. Do not output :sticker:<id>: tokens, and do not add a sticker to substantive answers."
+const channelOutputContractInstruction = "Channel action contract: create visible output only by returning exactly one action and nothing else. Use {\"action\":\"send\",\"output\":\"...\"} or {\"action\":\"send\",\"parts\":[...]} for a visible message in the current channel; use {\"action\":\"send\",\"target\":\"dm:@name\",\"output\":\"...\"} to send a Human DM to a same-workspace member by handle; use {\"action\":\"send\",\"target\":\"#channel:<message_id>\",\"output\":\"...\",\"options\":{\"also_send_to_channel\":false}} to reply in a thread. To react, use {\"action\":\"react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}}. Never output analysis, thinking, plans, tool intent, raw completion text, or described commands as a chat message."
+const channelDirectedReplyInstruction = "This run is directly addressed to you. You must produce a visible result: send a helpful reply, ask a follow-up question, or use a react action as an explicit acknowledgement. Do not return no_reply, stay_silent, or any other silent outcome for a direct mention, direct question, assigned task, or DM-style continuation."
+const channelAmbientNoReplyInstruction = "If you should not reply, do not call a send action; internal no_reply is allowed only as a non-visible outcome."
+const channelStickerReplyInstruction = "Sticker replies: if the user explicitly asks for a sticker/表情包, or you intentionally choose a sticker-only social reply such as hi/ok/收到/thanks/praise, use the send action with structured parts, for example {\"action\":\"send\",\"output\":\"Welcome!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome!\"},{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}. Use a real sticker_id from the multica-stickers skill. Do not output :sticker:<id>: tokens, and do not add a sticker to substantive answers."
 const channelNameTakenCode = "channel_name_taken"
 const channelNameUniqueConstraint = "channel_workspace_id_name_key"
 
@@ -2258,7 +2258,7 @@ func buildChannelWelcomePrompt(channelName, joinedName string) string {
 	b.WriteString(channelOutputContractInstruction)
 	b.WriteString("\n")
 	b.WriteString("- Keep it to ONE short line, in the language the channel uses (Chinese if the member's name is Chinese).\n")
-	fmt.Fprintf(&b, "- Include exactly one sticker via the multica-stickers skill by returning a message_send action with structured parts, e.g. {\"action\":\"message_send\",\"output\":\"Welcome %s!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome %s!\"},{\"type\":\"sticker\",\"sticker_id\":\"applause\"}]}. The sticker is the point of welcoming %s.\n", joinedName, joinedName, joinedName)
+	fmt.Fprintf(&b, "- Include exactly one sticker via the multica-stickers skill by returning a send action with structured parts, e.g. {\"action\":\"send\",\"output\":\"Welcome %s!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome %s!\"},{\"type\":\"sticker\",\"sticker_id\":\"applause\"}]}. The sticker is the point of welcoming %s.\n", joinedName, joinedName, joinedName)
 	b.WriteString("- Do NOT @-mention anyone — not the new member, not other agents. This is a one-off greeting, not a discussion.\n")
 	b.WriteString("- Do not ask questions, assign work, or start a conversation. Just welcome them in one line and stop.\n")
 	return b.String()
@@ -2574,11 +2574,11 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString("\n")
 	b.WriteString(channelAmbientNoReplyInstruction)
 	b.WriteString("\n")
-	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, do not call the send/reply action; an internal {\"action\":\"no_reply\"} outcome is acceptable but must not be visible.\n")
+	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, do not call the send action; an internal {\"action\":\"no_reply\"} outcome is acceptable but must not be visible.\n")
 	b.WriteString("If the message directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: send a visible reply or acknowledgement, and do not return no_reply.\n")
 	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and send one short visible message. Do not stay silent (do not return no_reply), and do not use a reaction-only command/result for that case.\n")
 	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
-	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, prefer a message-scoped reaction action instead of a text reply: return exactly one JSON object like {\"action\":\"message_react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}} and nothing else. Prefer 👍 for a simple like, ❤️ for warmth/welcome/support, 💯 for strong agreement or praise, and 🎉 for celebration/welcome.\n")
+	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, prefer a message-scoped reaction action instead of a text reply: return exactly one JSON object like {\"action\":\"react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}} and nothing else. Prefer 👍 for a simple like, ❤️ for warmth/welcome/support, 💯 for strong agreement or praise, and 🎉 for celebration/welcome.\n")
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
@@ -2873,17 +2873,18 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 	if !ok || payload.ChatSessionID == "" {
 		return
 	}
+	ctx := context.Background()
 	outputType, err := protocol.NormalizeChatOutputType(payload.Type, strings.TrimSpace(payload.Content) != "" || len(payload.Parts) > 0, payload.Reaction != nil)
 	if err != nil {
 		slog.Warn("channel bridge: invalid chat output type", "chat_session_id", payload.ChatSessionID, "error", err)
 		return
 	}
-	channelID, workspaceID, agentID, ok := h.channelAgentForChatSession(context.Background(), payload.ChatSessionID)
+	channelID, workspaceID, agentID, ok := h.channelAgentForChatSession(ctx, payload.ChatSessionID)
 	if !ok {
 		return
 	}
-	agentName := h.agentName(context.Background(), agentID)
-	h.publishChannelToMembers(context.Background(), protocol.EventChannelTyping, uuidToString(workspaceID), "agent", uuidToString(agentID), channelID, protocol.ChannelTypingPayload{
+	agentName := h.agentName(ctx, agentID)
+	h.publishChannelToMembers(ctx, protocol.EventChannelTyping, uuidToString(workspaceID), "agent", uuidToString(agentID), channelID, protocol.ChannelTypingPayload{
 		ChannelID: uuidToString(channelID),
 		ActorType: "agent",
 		ActorID:   uuidToString(agentID),
@@ -2895,18 +2896,18 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 		taskID = parseUUID(payload.TaskID)
 	}
 	if taskID.Valid {
-		defer h.settleChannelAmbientWakeForTask(context.Background(), taskID, true)
+		defer h.settleChannelAmbientWakeForTask(ctx, taskID, true)
 	}
-	threadID, threadRootMessageID, triggerDepth := h.channelThreadForChatTask(context.Background(), parseUUID(payload.ChatSessionID), taskID)
-	if archived, found := h.channelIsArchived(context.Background(), uuidToString(workspaceID), channelID); !found || archived {
+	threadID, threadRootMessageID, triggerDepth := h.channelThreadForChatTask(ctx, parseUUID(payload.ChatSessionID), taskID)
+	if archived, found := h.channelIsArchived(ctx, uuidToString(workspaceID), channelID); !found || archived {
 		return
 	}
-	reactionTargetID := h.channelReactionTargetFromPrompt(context.Background(), parseUUID(payload.ChatSessionID), taskID)
+	reactionTargetID := h.channelReactionTargetFromPrompt(ctx, parseUUID(payload.ChatSessionID), taskID)
 	if !reactionTargetID.Valid {
 		reactionTargetID = threadRootMessageID
 	}
 	if outputType == protocol.ChatOutputKindReaction {
-		h.handleChannelReactionPayload(context.Background(), channelID, workspaceID, agentID, reactionTargetID, payload.Reaction)
+		h.handleChannelReactionPayload(ctx, channelID, workspaceID, agentID, reactionTargetID, payload.Reaction)
 		return
 	}
 	if outputType == protocol.ChatOutputKindNoReply {
@@ -2924,27 +2925,30 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 	if strings.TrimSpace(content) == "" {
 		return
 	}
-	if h.handleChannelReactionCommand(context.Background(), channelID, workspaceID, agentID, reactionTargetID, content) {
+	initiatorID := h.channelInitiatorForChatSession(ctx, parseUUID(payload.ChatSessionID))
+	if h.handleTargetedChannelChatDone(ctx, chatOutputOrigin{channelID: channelID, workspaceID: workspaceID, agentID: agentID}, payload, content, parts, initiatorID) {
+		return
+	}
+	if h.handleChannelReactionCommand(ctx, channelID, workspaceID, agentID, reactionTargetID, content) {
 		return
 	}
 	nextDepth := triggerDepth + 1
-	msg, err := h.insertChannelMessageWithParts(context.Background(), channelID, workspaceID, "agent", agentID, agentName, content, parts, "multica", nil, pgtype.UUID{}, threadRootMessageID, threadID, nextDepth)
+	msg, err := h.insertChannelMessageWithParts(ctx, channelID, workspaceID, "agent", agentID, agentName, content, parts, "multica", nil, pgtype.UUID{}, threadRootMessageID, threadID, nextDepth)
 	if err != nil {
 		slog.Warn("channel bridge: insert agent reply failed", "chat_session_id", payload.ChatSessionID, "error", err)
 		return
 	}
-	_, _ = h.DB.Exec(context.Background(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
-	h.clearDMHiddenForChannelMembers(context.Background(), uuidToString(workspaceID), channelID)
-	h.publishChannelToMembers(context.Background(), protocol.EventChannelMessage, uuidToString(workspaceID), "agent", uuidToString(agentID), channelID, msg)
-	ch, found := h.getChannel(context.Background(), uuidToString(workspaceID), channelID)
+	_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
+	h.clearDMHiddenForChannelMembers(ctx, uuidToString(workspaceID), channelID)
+	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, uuidToString(workspaceID), "agent", uuidToString(agentID), channelID, msg)
+	ch, found := h.getChannel(ctx, uuidToString(workspaceID), channelID)
 	if found {
-		initiatorID := h.channelInitiatorForChatSession(context.Background(), parseUUID(payload.ChatSessionID))
 		if threadRootMessageID.Valid {
-			h.dispatchChannelThreadReplyMentions(context.Background(), ch, msg, initiatorID)
+			h.dispatchChannelThreadReplyMentions(ctx, ch, msg, initiatorID)
 		} else {
-			h.dispatchChannelMentions(context.Background(), ch, msg, initiatorID)
+			h.dispatchChannelMentions(ctx, ch, msg, initiatorID)
 		}
-		h.sendChannelMessageToFeishu(context.Background(), ch, agentName, content)
+		h.sendChannelMessageToFeishu(ctx, ch, agentName, content)
 	}
 }
 

@@ -2092,6 +2092,8 @@ type TaskCompleteRequest struct {
 	PRURL                  string                        `json:"pr_url"`
 	Output                 string                        `json:"output"`
 	Action                 string                        `json:"action"`
+	Target                 string                        `json:"target"`
+	Options                *protocol.ChatOutputOptions   `json:"options"`
 	Type                   string                        `json:"type"`
 	Parts                  []protocol.MessagePart        `json:"parts"`
 	Reaction               *protocol.ChatReactionPayload `json:"reaction"`
@@ -2102,6 +2104,8 @@ type TaskCompleteRequest struct {
 
 type taskCompleteOutputEnvelope struct {
 	Action   string                        `json:"action"`
+	Target   string                        `json:"target"`
+	Options  *protocol.ChatOutputOptions   `json:"options"`
 	Type     string                        `json:"type"`
 	Output   string                        `json:"output"`
 	Content  string                        `json:"content"`
@@ -2169,6 +2173,12 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		if strings.TrimSpace(envelope.Action) != "" || !explicitAction {
 			req.Action = envelope.Action
 			explicitAction = strings.TrimSpace(req.Action) != ""
+		}
+		if strings.TrimSpace(envelope.Target) != "" || strings.TrimSpace(req.Target) == "" {
+			req.Target = envelope.Target
+		}
+		if envelope.Options != nil || req.Options == nil {
+			req.Options = envelope.Options
 		}
 		if strings.TrimSpace(envelope.Type) != "" || strings.TrimSpace(req.Type) == "" {
 			req.Type = envelope.Type
@@ -2277,6 +2287,17 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	req.Output = output
 	req.Type = outputType
 	req.Parts = parts
+	req.Target = strings.TrimSpace(req.Target)
+	if groupChannelTask && outputType == protocol.ChatOutputKindMessage {
+		if err := h.validateChatOutputTarget(ctx, task, req.Target, req.Options); err != nil {
+			slog.Warn("complete task: suppressing invalid group channel output target", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "target", req.Target, "error", err)
+			suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidTarget)
+			return nil
+		}
+	} else if strings.TrimSpace(req.Target) != "" || chatOutputOptionsPresent(req.Options) {
+		req.Target = ""
+		req.Options = nil
+	}
 	return nil
 }
 
@@ -2285,6 +2306,8 @@ func suppressTaskCompleteOutput(req *TaskCompleteRequest, reason string) {
 	req.Type = protocol.ChatOutputKindNoReply
 	req.Output = ""
 	req.Parts = nil
+	req.Target = ""
+	req.Options = nil
 	req.Reaction = nil
 	req.OutputSuppressedReason = reason
 }
@@ -2300,6 +2323,8 @@ func parseTaskCompleteOutputEnvelope(raw string) (taskCompleteOutputEnvelope, bo
 	}
 	if strings.TrimSpace(envelope.Type) == "" &&
 		strings.TrimSpace(envelope.Action) == "" &&
+		strings.TrimSpace(envelope.Target) == "" &&
+		envelope.Options == nil &&
 		len(envelope.Parts) == 0 &&
 		envelope.Reaction == nil {
 		return taskCompleteOutputEnvelope{}, false, nil

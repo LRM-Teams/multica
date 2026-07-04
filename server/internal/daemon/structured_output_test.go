@@ -3,10 +3,12 @@ package daemon
 import (
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestParseStructuredMessageOutputStickerParts(t *testing.T) {
-	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`{"parts":[{"type":"sticker","sticker_id":"hi"}]}`)
+	content, parts, outputType, action, _, _, reaction, structured, err := parseStructuredMessageOutput(`{"parts":[{"type":"sticker","sticker_id":"hi"}]}`)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -31,7 +33,7 @@ func TestParseStructuredMessageOutputStickerParts(t *testing.T) {
 }
 
 func TestParseStructuredMessageOutputTextPlusSticker(t *testing.T) {
-	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`{"output":"收到","parts":[{"type":"text","text":"收到"},{"type":"sticker","sticker_id":"got-it"}]}`)
+	content, parts, outputType, action, _, _, reaction, structured, err := parseStructuredMessageOutput(`{"output":"收到","parts":[{"type":"text","text":"收到"},{"type":"sticker","sticker_id":"got-it"}]}`)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -56,7 +58,7 @@ func TestParseStructuredMessageOutputTextPlusSticker(t *testing.T) {
 }
 
 func TestParseStructuredMessageOutputPlainTextIsUnchanged(t *testing.T) {
-	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput("hello")
+	content, parts, outputType, action, _, _, reaction, structured, err := parseStructuredMessageOutput("hello")
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -79,7 +81,7 @@ func TestParseStructuredMessageOutputPlainTextIsUnchanged(t *testing.T) {
 
 func TestParseStructuredMessageOutputJSONWithoutPartsIsUnchanged(t *testing.T) {
 	raw := `{"output":"hello"}`
-	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(raw)
+	content, parts, outputType, action, _, _, reaction, structured, err := parseStructuredMessageOutput(raw)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -101,7 +103,7 @@ func TestParseStructuredMessageOutputJSONWithoutPartsIsUnchanged(t *testing.T) {
 }
 
 func TestParseStructuredMessageOutputNoReply(t *testing.T) {
-	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`{"type":"no_reply","output":"internal reason"}`)
+	content, parts, outputType, action, _, _, reaction, structured, err := parseStructuredMessageOutput(`{"type":"no_reply","output":"internal reason"}`)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -120,7 +122,7 @@ func TestParseStructuredMessageOutputNoReply(t *testing.T) {
 }
 
 func TestParseStructuredMessageOutputReaction(t *testing.T) {
-	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`{"type":"reaction","reaction":{"message_id":"CURRENT_MESSAGE","emoji":"👍"}}`)
+	content, parts, outputType, action, _, _, reaction, structured, err := parseStructuredMessageOutput(`{"type":"reaction","reaction":{"message_id":"CURRENT_MESSAGE","emoji":"👍"}}`)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -142,7 +144,7 @@ func TestParseStructuredMessageOutputReaction(t *testing.T) {
 }
 
 func TestParseStructuredMessageOutputChannelSendCommand(t *testing.T) {
-	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`multica message send --message "hello team"`)
+	content, parts, outputType, action, _, _, reaction, structured, err := parseStructuredMessageOutput(`multica message send --message "hello team"`)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -158,7 +160,7 @@ func TestParseStructuredMessageOutputChannelSendCommand(t *testing.T) {
 }
 
 func TestParseStructuredMessageOutputMessageReactCommand(t *testing.T) {
-	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`multica message react --message 11111111-1111-1111-1111-111111111111 --emoji 👍`)
+	content, parts, outputType, action, _, _, reaction, structured, err := parseStructuredMessageOutput(`multica message react --message 11111111-1111-1111-1111-111111111111 --emoji 👍`)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -174,7 +176,7 @@ func TestParseStructuredMessageOutputMessageReactCommand(t *testing.T) {
 }
 
 func TestParseStructuredMessageOutputLegacyChannelReactionCommand(t *testing.T) {
-	content, parts, outputType, action, reaction, structured, err := parseStructuredMessageOutput(`multica channel react 11111111-1111-1111-1111-111111111111 👍`)
+	content, parts, outputType, action, _, _, reaction, structured, err := parseStructuredMessageOutput(`multica channel react 11111111-1111-1111-1111-111111111111 👍`)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -190,11 +192,30 @@ func TestParseStructuredMessageOutputLegacyChannelReactionCommand(t *testing.T) 
 }
 
 func TestParseStructuredMessageOutputRejectsUnknownType(t *testing.T) {
-	_, _, _, _, _, structured, err := parseStructuredMessageOutput(`{"type":"thinking","output":"internal"}`)
+	_, _, _, _, _, _, _, structured, err := parseStructuredMessageOutput(`{"type":"thinking","output":"internal"}`)
 	if !structured {
 		t.Fatal("expected structured output")
 	}
 	if err == nil {
 		t.Fatal("expected invalid type error")
+	}
+}
+
+func TestParseStructuredMessageOutputCarriesTargetAndOptions(t *testing.T) {
+	content, parts, outputType, action, target, options, reaction, structured, err := parseStructuredMessageOutput(`{"action":"send","target":"#general:11111111-1111-1111-1111-111111111111","output":"reply here","options":{"also_send_to_channel":false}}`)
+	if err != nil {
+		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
+	}
+	if !structured {
+		t.Fatal("expected structured output")
+	}
+	if outputType != protocol.ChatOutputKindMessage || action != protocol.ChatOutputActionMessageSend || target != "#general:11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("content=%q outputType=%q action=%q target=%q, want send to thread target", content, outputType, action, target)
+	}
+	if content != "reply here" || len(parts) != 0 || reaction != nil {
+		t.Fatalf("content=%q parts=%+v reaction=%+v, want plain message output", content, parts, reaction)
+	}
+	if options == nil || options.AlsoSendToChannel == nil || *options.AlsoSendToChannel {
+		t.Fatalf("options = %+v, want also_send_to_channel=false carried through", options)
 	}
 }

@@ -1,6 +1,6 @@
 ---
 name: multica-stickers
-description: "Send a sticker (表情包) instead of typing a short reply. When your whole reply would be a short social beat — hi/你好, ok/好的/没问题, 收到/明白, 谢谢, 赞/厉害/牛逼, 完美, 欢迎, 哈哈, 安排/这就办 — return a message_send action with structured parts JSON such as {\"action\":\"message_send\",\"parts\":[{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}. Sticker ids you can use right now with zero lookup: hi, ok, got-it, nod-yes, thumbs-up, impressive, perfect, thanks, applause, on-it, huaji. For anything else run `multica sticker search <mood>` ONCE and use only the id, never paste a :sticker:<id>: token as your final message. Don't put stickers on substantive/technical messages."
+description: "Send a sticker (表情包) instead of typing a short reply. When your whole reply would be a short social beat — hi/你好, ok/好的/没问题, 收到/明白, 谢谢, 赞/厉害/牛逼, 完美, 欢迎, 哈哈, 安排/这就办 — return a send action with structured parts JSON such as {\"action\":\"send\",\"parts\":[{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}. Sticker ids you can use right now with zero lookup: hi, ok, got-it, nod-yes, thumbs-up, impressive, perfect, thanks, applause, on-it, huaji. For anything else run `multica sticker search <mood>` ONCE and use only the id, never paste a :sticker:<id>: token as your final message. Don't put stickers on substantive/technical messages."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
@@ -9,11 +9,11 @@ allowed-tools: Bash(multica *)
 
 When your reply is just a short social beat — a greeting, an acknowledgement,
 praise, agreement, thanks — **send a sticker instead of typing it.** The sticker
-IS the reply. Return a `message_send` action with structured message
+IS the reply. Return a `send` action with structured message
 parts JSON, not a text token:
 
 ```json
-{"action":"message_send","parts":[{"type":"sticker","sticker_id":"got-it"}]}
+{"action":"send","parts":[{"type":"sticker","sticker_id":"got-it"}]}
 ```
 
 ## Fast path — common replies (use these tokens directly, no command)
@@ -35,7 +35,7 @@ These ids are stable; use them straight from this table — do **not** look them
 | 安排 / 这就办 | `on-it` |
 | 哈哈 / 笑死 | `huaji` |
 
-Put the id into `parts[]` inside the `message_send` action. That's it:
+Put the id into `parts[]` inside the `send` action. That's it:
 no command, no file read.
 
 ## Need something more specific?
@@ -47,7 +47,7 @@ do not read any files:
     multica sticker search celebrate
 
 If the command prints a `:sticker:<id>:` token, extract only the `<id>` and use
-that id in structured parts JSON inside `message_send`. Do not paste
+that id in structured parts JSON inside `send`. Do not paste
 the token as your final message.
 
 ## When to use it — and when not
@@ -58,5 +58,5 @@ the token as your final message.
   status report, a code explanation, an actual answer. At most one sticker per
   message, and never as filler on top of real content.
 - **Don't** output `:sticker:<id>:` as message content. The formal protocol is
-  `message_send` with `parts`, for example
-  `{"action":"message_send","parts":[{"type":"sticker","sticker_id":"hi"}]}`.
+  `send` with `parts`, for example
+  `{"action":"send","parts":[{"type":"sticker","sticker_id":"hi"}]}`.

@@ -1440,10 +1440,14 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 		var assistantMsg *db.ChatMessage
 		outputType := protocol.ChatOutputKindNoReply
 		var reaction *protocol.ChatReactionPayload
-		outputSuppressedReason := ""
 		var payload protocol.TaskCompletedPayload
+		var visibleContent string
+		var visibleParts []protocol.MessagePart
+		outputSuppressedReason := ""
+
 		if err := json.Unmarshal(result, &payload); err == nil {
 			outputSuppressedReason = payload.OutputSuppressedReason
+			target := strings.TrimSpace(payload.Target)
 			// Same unescape as the issue-comment path above: literal `\n` from
 			// agent stdout becomes a real newline so the chat panel renders
 			// paragraph breaks instead of one wall of prose.
@@ -1463,6 +1467,10 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 			} else if normalizedOutputType == protocol.ChatOutputKindReaction {
 				outputType = protocol.ChatOutputKindReaction
 				reaction = payload.Reaction
+			} else if target != "" {
+				outputType = protocol.ChatOutputKindMessage
+				visibleContent = redact.Text(body)
+				visibleParts = parts
 			} else if strings.TrimSpace(body) == "" {
 				slog.Warn("skipping empty assistant chat message", "task_id", util.UUIDToString(task.ID))
 			} else {
@@ -1489,7 +1497,8 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 				}
 			}
 		}
-		s.broadcastChatDone(ctx, task, assistantMsg, outputType, reaction, outputSuppressedReason)
+
+		s.broadcastChatDone(ctx, task, assistantMsg, outputType, payload.Target, payload.Options, visibleContent, visibleParts, reaction, outputSuppressedReason)
 	}
 
 	// Reconcile agent status
@@ -2207,7 +2216,7 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 	return ""
 }
 
-func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQueue, msg *db.ChatMessage, outputType string, reaction *protocol.ChatReactionPayload, outputSuppressedReason string) {
+func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQueue, msg *db.ChatMessage, outputType, target string, options *protocol.ChatOutputOptions, content string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload, outputSuppressedReason string) {
 	workspaceID := s.ResolveTaskWorkspaceID(ctx, task)
 	if workspaceID == "" {
 		return
@@ -2219,6 +2228,8 @@ func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQu
 		ChatSessionID:          util.UUIDToString(task.ChatSessionID),
 		TaskID:                 util.UUIDToString(task.ID),
 		Type:                   outputType,
+		Target:                 strings.TrimSpace(target),
+		Options:                options,
 		Reaction:               reaction,
 		OutputSuppressedReason: outputSuppressedReason,
 	}
@@ -2234,6 +2245,9 @@ func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQu
 		if msg.ElapsedMs.Valid {
 			payload.ElapsedMs = msg.ElapsedMs.Int64
 		}
+	} else if outputType == protocol.ChatOutputKindMessage {
+		payload.Content = content
+		payload.Parts = parts
 	}
 	recipientUserIDs := []string{}
 	if s.Queries != nil && task.ChatSessionID.Valid {

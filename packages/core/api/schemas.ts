@@ -17,6 +17,8 @@ import type {
   CreateBillingPortalSessionResponse,
   GroupedIssuesResponse,
   ChannelMessageSearchResponse,
+  ChannelMessagesPage,
+  ChannelThreadMessagesPage,
   StickerCatalogResponse,
   ListIssuesResponse,
   ListWebhookDeliveriesResponse,
@@ -276,6 +278,89 @@ const ChannelMessageSearchResultSchema = z.object({
   parts: z.array(z.unknown()).optional(),
   created_at: z.string().default(""),
 }).loose();
+
+const ChannelReactionSchema = z.object({
+  id: z.string().default(""),
+  channel_id: z.string().default(""),
+  message_id: z.string().default(""),
+  actor_type: z.string().default(""),
+  actor_id: z.string().default(""),
+  emoji: z.string().default(""),
+  created_at: z.string().default(""),
+}).loose();
+
+const ChannelMessageReplySchema = z.object({
+  id: z.string().default(""),
+  type: z.string().default(""),
+  author_id: z.string().nullable().default(null),
+  author_name: z.string().default(""),
+  content: z.string().default(""),
+  parts: z.array(z.unknown()).optional(),
+  created_at: z.string().default(""),
+}).loose();
+
+const ChannelMessageSchema = z.object({
+  id: z.string().default(""),
+  channel_id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  type: z.string().default(""),
+  author_id: z.string().nullable().default(null),
+  author_name: z.string().default(""),
+  content: z.string().default(""),
+  parts: z.array(z.unknown()).optional(),
+  source: z.string().default(""),
+  external_message_id: z.string().nullable().default(null),
+  client_message_id: z.string().nullable().optional(),
+  reply_to_message_id: z.string().nullable().optional(),
+  reply_to: ChannelMessageReplySchema.nullable().optional(),
+  thread_root_message_id: z.string().nullable().optional(),
+  thread_reply_count: z.number().default(0).optional(),
+  thread_last_reply_at: z.string().nullable().optional(),
+  thread_unread_count: z.number().default(0).optional(),
+  thread_followed: z.boolean().default(false).optional(),
+  thread_id: z.string().nullable().optional(),
+  trigger_depth: z.number().default(0).optional(),
+  seq: z.number().default(0).optional(),
+  reactions: z.array(ChannelReactionSchema).default([]).optional(),
+  attachments: z.array(AttachmentSchema).default([]).optional(),
+  created_at: z.string().default(""),
+}).loose();
+
+const ChannelMessagesCursorSchema = z.object({
+  seq: z.number().default(0),
+  created_at: z.string().default(""),
+  id: z.string().default(""),
+}).loose();
+
+export const ChannelMessagesPageSchema = z.object({
+  messages: z.array(ChannelMessageSchema).default([]),
+  limit: z.number().default(50),
+  has_more: z.boolean().default(false),
+  next_cursor: ChannelMessagesCursorSchema.nullable().optional().default(null),
+}).loose();
+
+export const EMPTY_CHANNEL_MESSAGES_PAGE: ChannelMessagesPage = {
+  messages: [],
+  limit: 50,
+  has_more: false,
+  next_cursor: null,
+};
+
+const ChannelThreadMessagesCursorSchema = z.object({
+  before_seq: z.number().optional(),
+  before: z.string().default(""),
+  before_id: z.string().default(""),
+}).loose();
+
+export const ChannelThreadMessagesPageSchema = z.object({
+  messages: z.array(ChannelMessageSchema).default([]),
+  next_cursor: ChannelThreadMessagesCursorSchema.nullable().optional().default(null),
+}).loose();
+
+export const EMPTY_CHANNEL_THREAD_MESSAGES_PAGE: ChannelThreadMessagesPage = {
+  messages: [],
+  next_cursor: null,
+};
 
 export const ChannelMessageSearchResponseSchema = z.object({
   query: z.string().default(""),

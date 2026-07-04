@@ -197,7 +197,11 @@ import {
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
   AppConfigSchema,
+  ChannelMessagesPageSchema,
+  ChannelThreadMessagesPageSchema,
   ChannelMessageSearchResponseSchema,
+  EMPTY_CHANNEL_MESSAGES_PAGE,
+  EMPTY_CHANNEL_THREAD_MESSAGES_PAGE,
   StickerCatalogResponseSchema,
   type AppConfigResponse,
   GroupedIssuesResponseSchema,
@@ -2073,18 +2077,15 @@ export class ApiClient {
         params.set("before_id", options.before.id);
       }
     }
-    const raw = await this.fetch<ChannelMessage[] | Partial<ChannelMessagesPage>>(
+    const raw = await this.fetch<unknown>(
       `/api/channels/${channelId}/messages?${params.toString()}`,
     );
-    if (Array.isArray(raw)) {
-      return { messages: raw, limit, has_more: false, next_cursor: null };
-    }
-    return {
-      messages: raw.messages ?? [],
-      limit: raw.limit ?? limit,
-      has_more: raw.has_more ?? false,
-      next_cursor: raw.next_cursor ?? null,
-    };
+    return parseWithFallback(
+      raw,
+      ChannelMessagesPageSchema,
+      { ...EMPTY_CHANNEL_MESSAGES_PAGE, limit },
+      { endpoint: "GET /api/channels/{channelId}/messages" },
+    );
   }
 
   async listChannelMessageThread(
@@ -2103,24 +2104,15 @@ export class ApiClient {
       params.set("before_id", options.beforeId);
     }
     const suffix = params.toString();
-    const res = await this.fetchRaw(
+    const raw = await this.fetch<unknown>(
       `/api/channels/${channelId}/messages/${messageId}/thread${suffix ? `?${suffix}` : ""}`,
-      { extraHeaders: { "Content-Type": "application/json" } },
     );
-    const messages = await res.json() as ChannelMessage[];
-    const beforeSeq = res.headers.get("X-Next-Before-Seq");
-    const before = res.headers.get("X-Next-Before");
-    const beforeId = res.headers.get("X-Next-Before-Id");
-    return {
-      messages,
-      next_cursor: before && beforeId
-        ? {
-            before,
-            before_id: beforeId,
-            before_seq: beforeSeq ? Number.parseInt(beforeSeq, 10) : undefined,
-          }
-        : null,
-    };
+    return parseWithFallback(
+      raw,
+      ChannelThreadMessagesPageSchema,
+      EMPTY_CHANNEL_THREAD_MESSAGES_PAGE,
+      { endpoint: "GET /api/channels/{channelId}/messages/{messageId}/thread" },
+    );
   }
 
   async searchChannelMessages(channelId: string, query: string, limit?: number): Promise<ChannelMessageSearchResponse> {

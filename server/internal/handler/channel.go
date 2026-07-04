@@ -131,6 +131,17 @@ type ChannelMessagesPageResponse struct {
 	NextCursor *ChannelMessagesCursorResponse `json:"next_cursor,omitempty"`
 }
 
+type ChannelThreadMessagesCursorResponse struct {
+	BeforeSeq int64  `json:"before_seq,omitempty"`
+	Before    string `json:"before"`
+	BeforeID  string `json:"before_id"`
+}
+
+type ChannelThreadMessagesPageResponse struct {
+	Messages   []ChannelMessageResponse             `json:"messages"`
+	NextCursor *ChannelThreadMessagesCursorResponse `json:"next_cursor"`
+}
+
 type ChannelMessageReply struct {
 	ID         string                 `json:"id"`
 	Type       string                 `json:"type"`
@@ -818,7 +829,6 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
 		return
 	}
-	usePageResponse := hasChannelMessagesPageParams(r)
 	limit, beforeSeq, beforeCreatedAt, beforeID, err := parseChannelMessagesPageParams(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -877,16 +887,12 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	h.attachChannelMessageReactions(r.Context(), workspaceID, out)
 	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
 	h.attachChannelMessageThreadMetadata(r.Context(), workspaceID, parseUUID(userID), out)
-	if usePageResponse {
-		writeJSON(w, http.StatusOK, ChannelMessagesPageResponse{
-			Messages:   out,
-			Limit:      limit,
-			HasMore:    hasMore,
-			NextCursor: nextCursor,
-		})
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, ChannelMessagesPageResponse{
+		Messages:   out,
+		Limit:      limit,
+		HasMore:    hasMore,
+		NextCursor: nextCursor,
+	})
 }
 
 func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) {
@@ -1344,8 +1350,14 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	if hasMore {
 		repliesDesc = repliesDesc[:limit]
 	}
+	var nextCursor *ChannelThreadMessagesCursorResponse
 	if hasMore && len(repliesDesc) > 0 {
 		oldest := repliesDesc[len(repliesDesc)-1]
+		nextCursor = &ChannelThreadMessagesCursorResponse{
+			BeforeSeq: oldest.Seq,
+			Before:    oldest.CreatedAt,
+			BeforeID:  oldest.ID,
+		}
 		w.Header().Set("X-Next-Before-Seq", strconv.FormatInt(oldest.Seq, 10))
 		w.Header().Set("X-Next-Before", oldest.CreatedAt)
 		w.Header().Set("X-Next-Before-Id", oldest.ID)
@@ -1366,7 +1378,10 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	h.attachChannelMessageReactions(r.Context(), workspaceID, out)
 	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
 	h.attachChannelMessageThreadMetadata(r.Context(), workspaceID, parseUUID(userID), out[:1])
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, ChannelThreadMessagesPageResponse{
+		Messages:   out,
+		NextCursor: nextCursor,
+	})
 }
 
 func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.Request) {
@@ -1692,14 +1707,6 @@ func parseChannelThreadPageParams(w http.ResponseWriter, r *http.Request) (int, 
 		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, false, false, false
 	}
 	return limit, 0, pgtype.Timestamptz{Time: t, Valid: true}, id, false, true, true
-}
-
-func hasChannelMessagesPageParams(r *http.Request) bool {
-	q := r.URL.Query()
-	return strings.TrimSpace(q.Get("limit")) != "" ||
-		strings.TrimSpace(q.Get("before_seq")) != "" ||
-		strings.TrimSpace(q.Get("before_created_at")) != "" ||
-		strings.TrimSpace(q.Get("before_id")) != ""
 }
 
 func parseChannelMessagesPageParams(r *http.Request) (int, int64, pgtype.Timestamptz, pgtype.UUID, error) {

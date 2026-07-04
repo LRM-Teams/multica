@@ -4,10 +4,11 @@ import { paths } from "./paths";
 import {
   chooseDefaultWorkspace,
   chooseWorkspaceDestination,
+  pickLastActiveSlug,
   resolvePostAuthDestination,
 } from "./resolve";
 
-function makeWs(slug: string): Workspace {
+function makeWs(slug: string, lastActiveAt: string | null = null): Workspace {
   return {
     id: `id-${slug}`,
     name: slug,
@@ -18,6 +19,7 @@ function makeWs(slug: string): Workspace {
     repos: [],
     issue_prefix: slug.toUpperCase(),
     avatar_url: null,
+    last_active_at: lastActiveAt,
     created_at: "",
     updated_at: "",
   };
@@ -101,5 +103,36 @@ describe("chooseWorkspaceDestination", () => {
 
   it("onboarded + no workspace → /workspaces/new", () => {
     expect(chooseWorkspaceDestination([], true, "acme")).toBe(paths.newWorkspace());
+  });
+});
+
+describe("pickLastActiveSlug (#225)", () => {
+  it("prefers the cookie slug when it is an accessible workspace", () => {
+    const ws = [makeWs("acme", "2026-01-02"), makeWs("beta", "2026-01-05")];
+    // Cookie wins even though beta has a newer last_active_at.
+    expect(pickLastActiveSlug(ws, "acme")).toBe("acme");
+  });
+
+  it("falls back to the newest last_active_at when the cookie is missing", () => {
+    const ws = [makeWs("acme", "2026-01-02"), makeWs("beta", "2026-01-05")];
+    // This is the logout→re-login recovery: cookie was cleared, server signal wins.
+    expect(pickLastActiveSlug(ws, null)).toBe("beta");
+  });
+
+  it("falls back to the newest last_active_at when the cookie is no longer accessible", () => {
+    const ws = [makeWs("acme", "2026-01-02"), makeWs("beta", "2026-01-05")];
+    expect(pickLastActiveSlug(ws, "gone")).toBe("beta");
+  });
+
+  it("returns null when no workspace has a last_active_at (→ caller uses default)", () => {
+    const ws = [makeWs("acme", null), makeWs("beta", null)];
+    expect(pickLastActiveSlug(ws, null)).toBeNull();
+  });
+
+  it("never treats workspaces[0] as last-active (list is created_at ASC)", () => {
+    // acme sorts first (earliest created) but has no activity; beta is active.
+    const ws = [makeWs("acme", null), makeWs("beta", "2026-01-05")];
+    expect(pickLastActiveSlug(ws, null)).toBe("beta");
+    expect(pickLastActiveSlug([], null)).toBeNull();
   });
 });

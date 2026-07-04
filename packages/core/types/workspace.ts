@@ -17,6 +17,13 @@ export interface Workspace {
   avatar_url: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * When the current user was last active in this workspace (server-tracked,
+   * per-member). Null until they've opened it since the feature shipped. Used
+   * to route a returning user back to their last-active workspace when the
+   * client `last_workspace_slug` cookie is missing (e.g. after logout) (#225).
+   */
+  last_active_at?: string | null;
 }
 
 export interface Member {

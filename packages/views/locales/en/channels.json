@@ -144,7 +144,18 @@
     "empty_replies": "No replies yet.",
     "load_failed": "Failed to load thread.",
     "send_failed": "Failed to send thread reply.",
-    "composer_placeholder": "Reply in thread..."
+    "composer_placeholder": "Reply in thread...",
+    "back_to_conversation": "Back to conversation",
+    "participants_label": "Participants",
+    "follow": "Follow thread",
+    "following": "Following",
+    "also_send_label": "Also send to channel",
+    "from_thread_badge": "From thread",
+    "wake_pending": "Awaiting reply",
+    "wake_replied": "Replied",
+    "wake_acked": "Acknowledged",
+    "wake_delivered": "Delivered",
+    "wake_no_reply": "No reply"
   },
   "typing": {
     "single": "{{name}} is typing",

@@ -144,7 +144,18 @@
     "empty_replies": "아직 답글이 없습니다.",
     "load_failed": "스레드를 불러오지 못했습니다.",
     "send_failed": "스레드 답글을 보내지 못했습니다.",
-    "composer_placeholder": "스레드에서 답장..."
+    "composer_placeholder": "스레드에서 답장...",
+    "back_to_conversation": "대화로 돌아가기",
+    "participants_label": "참여자",
+    "follow": "스레드 팔로우",
+    "following": "팔로우 중",
+    "also_send_label": "채널에도 전송",
+    "from_thread_badge": "스레드에서",
+    "wake_pending": "답장 대기 중",
+    "wake_replied": "답장함",
+    "wake_acked": "확인함",
+    "wake_delivered": "전달됨",
+    "wake_no_reply": "답장 없음"
   },
   "typing": {
     "single": "{{name}} 님이 입력 중",

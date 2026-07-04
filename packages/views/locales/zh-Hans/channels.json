@@ -144,7 +144,18 @@
     "empty_replies": "暂无回复。",
     "load_failed": "线程加载失败。",
     "send_failed": "发送线程回复失败。",
-    "composer_placeholder": "在线程中回复..."
+    "composer_placeholder": "在线程中回复...",
+    "back_to_conversation": "返回对话",
+    "participants_label": "参与者",
+    "follow": "关注话题",
+    "following": "已关注",
+    "also_send_label": "同时发送到频道",
+    "from_thread_badge": "来自话题",
+    "wake_pending": "等待回复",
+    "wake_replied": "已回复",
+    "wake_acked": "已确认",
+    "wake_delivered": "已送达",
+    "wake_no_reply": "未回复"
   },
   "typing": {
     "single": "{{name}} 正在输入",

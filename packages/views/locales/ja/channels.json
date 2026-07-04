@@ -144,7 +144,18 @@
     "empty_replies": "返信はまだありません。",
     "load_failed": "スレッドの読み込みに失敗しました。",
     "send_failed": "スレッド返信の送信に失敗しました。",
-    "composer_placeholder": "スレッドで返信..."
+    "composer_placeholder": "スレッドで返信...",
+    "back_to_conversation": "会話に戻る",
+    "participants_label": "参加者",
+    "follow": "スレッドをフォロー",
+    "following": "フォロー中",
+    "also_send_label": "チャンネルにも送信",
+    "from_thread_badge": "スレッドから",
+    "wake_pending": "返信待ち",
+    "wake_replied": "返信済み",
+    "wake_acked": "確認済み",
+    "wake_delivered": "配信済み",
+    "wake_no_reply": "返信なし"
   },
   "typing": {
     "single": "{{name}} が入力中",

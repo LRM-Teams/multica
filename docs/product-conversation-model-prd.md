@@ -17,6 +17,17 @@
 Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM；③ agent↔agent DM；④ reaction 覆盖 issue。
 红线：naming/模型清晰；不过度复杂。用户体感：Multica DM ≈ Raft DM。
 
+### 0.1 原架构与为什么改（考古，v2.4.2 补，代码核实）
+**整体架构五块（健康，本 PRD 不动它）**：Next.js 客户端（apps/web + packages/core·views，Next rewrite 代理 API）→ Go 单体后端（handler + sqlc）→ **Postgres 单存储**（业务表 + `agent_task_queue` 队列表）→ 双 WebSocket（`realtime` 服务器→浏览器推送；`daemonws` 服务器⇄各机 daemon 派任务）→ 分布式 daemon 在用户电脑上起 agent runtime 执行 run、产出经 API 回流。
+
+**旧数据语义四层（本 PRD 改的就是这些"血液"）**：
+1. **DM 无实体**：DM = `channel` 表一行，靠命名约定 `name="dm:user:<id>|agent:<id>"`（成员对排序拼进名字，借 UNIQUE(workspace_id,name) 做 create-or-find 幂等）。成员关系/1:1 约束/权限藏在字符串里，agent↔agent DM、审计无落点。更老一代 `chat_sessions` 只留历史迁移（三代同堂）。
+2. **顺序靠时钟**：`channel_message` 按 `created_at` 排，而 PG `now()`=事务**开始**时刻——并发下"先开始的后提交"，时间序≠可见序，结构性漏消息窗口（→ 改判 per-conversation seq，事务内取号+行锁，seq 序==提交可见序）。
+3. **读态三张 timestamp 表、全 user-only**：`channel_read` / `channel_thread_state`(mig139) / `dm_peer_state`(mig130，按 peer 记 pin/隐藏/静音)。**agent 没有已读概念**——每次唤醒喂什么全靠触发消息本身（→ #197 per-member cursor 含 agent）。
+4. **触发无游标、无脑扇出**：非 @ 消息 ambient 扇给频道全部 agent、每个各插一行 `agent_task_queue`（N×M 无背压）——7-3 事故 27 万行排队即此。合并唤醒在旧模型**做不出来**，前提是 agent 有已读位置（→ §6.3）。
+
+一句话：旧实现是"够用的 hack 堆叠"（DM 靠名字、顺序靠时钟、已读靠时间戳、触发靠扇出），单层能跑、叠加成灾；本 PRD 每一项改动都对应一个具体结构缺陷，不是重写偏好。
+
 **Scope 决策（Frank/Miles/Parker 一致）：本轮不迁移 issue 数据模型。**
 - issue 今天能正常工作（`issue`/`comment`/`issue_reaction`/`comment_reaction` 表齐全）；为统一而迁移的风险与复杂度 > 收益，且是 v1.2 全部模型空洞（讨论引擎挂接、issue reaction 落点、watcher vs follower）的来源。
 - 需求①④是**行为层**诉求，在现有 issue 表上即可满足（见 §7），不需要 schema 统一。

@@ -2800,7 +2800,7 @@ func TestCompleteTask_DMChannelUnwrapsStructuredMessageSendOutput(t *testing.T) 
 	const dmReply = "Structured DM reply"
 
 	w := completeTaskForTest(t, taskID, map[string]any{
-		"output": `{"action":"message_send","output":"` + dmReply + `","parts":[{"type":"text","text":"` + dmReply + `"}]}`,
+		"output": `Assistant reply: {"action":"message_send","output":"` + dmReply + `","parts":[{"type":"text","text":"` + dmReply + `"}]}`,
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
@@ -2835,7 +2835,7 @@ func TestTaskServiceCompleteTask_UnwrapsStructuredMessageSendBeforePersist(t *te
 
 	taskID, _ := createChannelCompletionTask(t, "dm")
 	const dmReply = "Structured service reply"
-	rawOutput := `{"action":"message_send","output":"` + dmReply + `","parts":[{"type":"text","text":"` + dmReply + `"}]}`
+	rawOutput := `Assistant reply: {"action":"message_send","output":"` + dmReply + `","parts":[{"type":"text","text":"` + dmReply + `"}]}`
 	result, err := json.Marshal(protocol.TaskCompletedPayload{Output: rawOutput})
 	if err != nil {
 		t.Fatalf("marshal task result: %v", err)

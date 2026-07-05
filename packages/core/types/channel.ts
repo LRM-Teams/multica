@@ -96,6 +96,7 @@ export interface ChannelMessage {
   reply_to_message_id?: string | null;
   reply_to?: ChannelMessageReply | null;
   thread_root_message_id?: string | null;
+  thread_root?: ChannelMessageReply | null;
   thread_reply_count?: number;
   thread_last_reply_at?: string | null;
   thread_unread_count?: number;

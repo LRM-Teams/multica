@@ -332,6 +332,7 @@ const ChannelMessageSchema = z.object({
   reply_to_message_id: z.string().nullable().optional(),
   reply_to: ChannelMessageReplySchema.nullable().optional(),
   thread_root_message_id: z.string().nullable().optional(),
+  thread_root: ChannelMessageReplySchema.nullable().optional(),
   thread_reply_count: z.number().default(0).optional(),
   thread_last_reply_at: z.string().nullable().optional(),
   thread_unread_count: z.number().default(0).optional(),

@@ -73,7 +73,7 @@ const RESOURCES = {
     participants_label: "Participants",
     follow: "Follow thread",
     following: "Following",
-    also_send_label: "Also send to channel",
+    show_in_channel_label: "Also show in channel",
     from_thread_badge: "From thread",
     wake_pending: "Awaiting reply",
     wake_replied: "Replied",
@@ -112,8 +112,8 @@ function baseProps() {
     participants: deriveThreadParticipants(makeMessage(), []),
     followed: false,
     onToggleFollow: vi.fn(),
-    alsoSendToChannel: false,
-    onAlsoSendToChannelChange: vi.fn(),
+    showInChannel: false,
+    onShowInChannelChange: vi.fn(),
     isMobile: false,
     onBack: vi.fn(),
     editor: <div data-testid="thread-editor">editor</div>,
@@ -204,14 +204,14 @@ describe("ThreadPanel", () => {
     expect(onToggleFollow).toHaveBeenCalledWith(false);
   });
 
-  it("defaults also-send-to-channel off and reports explicit toggles; the mirrored copy is marked from-thread", () => {
-    const onAlsoSendToChannelChange = vi.fn();
-    render(<ThreadPanel {...baseProps()} onAlsoSendToChannelChange={onAlsoSendToChannelChange} />);
+  it("defaults show-in-channel off and reports explicit toggles; the main-timeline surface is marked from-thread", () => {
+    const onShowInChannelChange = vi.fn();
+    render(<ThreadPanel {...baseProps()} onShowInChannelChange={onShowInChannelChange} />);
 
-    const checkbox = screen.getByRole("checkbox", { name: "Also send to channel" });
+    const checkbox = screen.getByRole("checkbox", { name: "Also show in channel" });
     expect(checkbox).not.toBeChecked();
     fireEvent.click(checkbox);
-    expect(onAlsoSendToChannelChange).toHaveBeenCalledWith(true);
+    expect(onShowInChannelChange).toHaveBeenCalledWith(true);
 
     render(<ThreadOriginTag />);
     expect(screen.getByText("From thread")).toBeInTheDocument();
@@ -284,16 +284,16 @@ describe("ThreadPanel wake strip render rules (#196)", () => {
     expect(screen.queryByTestId("thread-wake-strip")).not.toBeInTheDocument();
   });
 
-  it("hides the also-send checkbox when no change handler is supplied (#256 cut)", () => {
+  it("hides the show-in-channel checkbox when no change handler is supplied (#256 cut)", () => {
     render(
       <ThreadPanel
         {...baseProps()}
-        alsoSendToChannel={undefined}
-        onAlsoSendToChannelChange={undefined}
+        showInChannel={undefined}
+        onShowInChannelChange={undefined}
       />,
     );
     expect(
-      screen.queryByRole("checkbox", { name: "Also send to channel" }),
+      screen.queryByRole("checkbox", { name: "Also show in channel" }),
     ).not.toBeInTheDocument();
   });
 });

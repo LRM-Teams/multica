@@ -149,7 +149,7 @@
     "participants_label": "参加者",
     "follow": "スレッドをフォロー",
     "following": "フォロー中",
-    "also_send_label": "チャンネルにも送信",
+    "show_in_channel_label": "チャンネルにも表示",
     "from_thread_badge": "スレッドから",
     "wake_pending": "返信待ち",
     "wake_replied": "返信済み",

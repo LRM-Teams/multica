@@ -149,7 +149,7 @@
     "participants_label": "参与者",
     "follow": "关注话题",
     "following": "已关注",
-    "also_send_label": "同时发送到频道",
+    "show_in_channel_label": "同时在频道显示",
     "from_thread_badge": "来自话题",
     "wake_pending": "等待回复",
     "wake_replied": "已回复",

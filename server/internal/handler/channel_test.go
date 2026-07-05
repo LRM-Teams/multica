@@ -1521,13 +1521,13 @@ func TestSendChannelMessageThreadReplyClientMessageIDDedupes(t *testing.T) {
 	}
 }
 
-func TestSendChannelMessageThreadReplyAlsoSendDefaultAndFalseStayThreadOnly(t *testing.T) {
+func TestSendChannelMessageThreadReplyShowInChannelDefaultAndFalseStayThreadOnly(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
-	channelID := seedChannelForTest(t, "thread-also-send-default-"+uuid.NewString(), testUserID)
+	channelID := seedChannelForTest(t, "thread-show-in-channel-default-"+uuid.NewString(), testUserID)
 	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Root Author", "thread root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("thread-default-"+uuid.NewString()), 0)
 	if err != nil {
 		t.Fatalf("insert root: %v", err)
@@ -1540,8 +1540,8 @@ func TestSendChannelMessageThreadReplyAlsoSendDefaultAndFalseStayThreadOnly(t *t
 		t.Fatalf("default thread reply: status=%d body=%s", defaultSend.Code, defaultSend.Body.String())
 	}
 	falseSend := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{
-		"content":              "explicit false thread-only reply",
-		"also_send_to_channel": false,
+		"content":         "explicit false thread-only reply",
+		"show_in_channel": false,
 	})
 	if falseSend.Code != http.StatusCreated {
 		t.Fatalf("explicit false thread reply: status=%d body=%s", falseSend.Code, falseSend.Body.String())
@@ -1556,33 +1556,33 @@ func TestSendChannelMessageThreadReplyAlsoSendDefaultAndFalseStayThreadOnly(t *t
 	}
 }
 
-func TestSendChannelMessageThreadReplyAlsoSendCreatesThreadCarrierWithoutWakePollution(t *testing.T) {
+func TestSendChannelMessageThreadReplyShowInChannelProjectsSameMessageWithoutWakePollution(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "Thread Mirror Agent", nil)
-	channelID := seedChannelForTest(t, "thread-also-send-true-"+uuid.NewString(), testUserID)
+	agentID := createHandlerTestAgent(t, "Thread Projection Agent", nil)
+	channelID := seedChannelForTest(t, "thread-show-in-channel-true-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
-	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Root Author", "thread root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("thread-mirror-"+uuid.NewString()), 0)
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Root Author", "thread root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("thread-projection-"+uuid.NewString()), 0)
 	if err != nil {
 		t.Fatalf("insert root: %v", err)
 	}
-	content := "please [@Thread Mirror Agent](mention://agent/" + agentID + ") review from the thread"
+	content := "please [@Thread Projection Agent](mention://agent/" + agentID + ") review from the thread"
 	clientID := "client-" + uuid.NewString()
 
 	first := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{
-		"content":              content,
-		"client_message_id":    clientID,
-		"also_send_to_channel": true,
+		"content":           content,
+		"client_message_id": clientID,
+		"show_in_channel":   true,
 	})
 	if first.Code != http.StatusCreated {
-		t.Fatalf("first also-send thread reply: status=%d body=%s", first.Code, first.Body.String())
+		t.Fatalf("first show-in-channel thread reply: status=%d body=%s", first.Code, first.Body.String())
 	}
 	var reply ChannelMessageResponse
 	if err := json.Unmarshal(first.Body.Bytes(), &reply); err != nil {
@@ -1591,38 +1591,45 @@ func TestSendChannelMessageThreadReplyAlsoSendCreatesThreadCarrierWithoutWakePol
 	if reply.ThreadRootMessageID == nil || *reply.ThreadRootMessageID != root.ID {
 		t.Fatalf("thread reply root = %v, want %s", reply.ThreadRootMessageID, root.ID)
 	}
+	if reply.ThreadRoot == nil || reply.ThreadRoot.ID != root.ID || reply.ThreadRoot.Content != root.Content {
+		t.Fatalf("thread root summary = %+v, want root %s", reply.ThreadRoot, root.ID)
+	}
 
 	second := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{
-		"content":              content,
-		"client_message_id":    clientID,
-		"also_send_to_channel": true,
+		"content":           content,
+		"client_message_id": clientID,
+		"show_in_channel":   true,
 	})
 	if second.Code != http.StatusOK {
-		t.Fatalf("duplicate also-send thread reply: status=%d body=%s", second.Code, second.Body.String())
+		t.Fatalf("duplicate show-in-channel thread reply: status=%d body=%s", second.Code, second.Body.String())
+	}
+	var duplicate ChannelMessageResponse
+	if err := json.Unmarshal(second.Body.Bytes(), &duplicate); err != nil {
+		t.Fatalf("decode duplicate thread reply: %v", err)
+	}
+	if duplicate.ID != reply.ID {
+		t.Fatalf("duplicate reply id = %s, want %s", duplicate.ID, reply.ID)
 	}
 
 	mainTimeline := listedMessagesForUser(t, channelID, testUserID)
 	if len(mainTimeline) != 2 {
-		t.Fatalf("main timeline = %+v, want root + one thread carrier", mainTimeline)
+		t.Fatalf("main timeline = %+v, want root + projected reply", mainTimeline)
 	}
-	carrier := mainTimeline[1]
-	if carrier.Content != channelThreadMirrorContent {
-		t.Fatalf("carrier content = %q, want %q", carrier.Content, channelThreadMirrorContent)
+	projected := mainTimeline[1]
+	if projected.ID != reply.ID {
+		t.Fatalf("projected message id = %s, want thread reply %s", projected.ID, reply.ID)
 	}
-	if carrier.ThreadRootMessageID != nil {
-		t.Fatalf("carrier thread_root_message_id = %v, want top-level carrier", carrier.ThreadRootMessageID)
+	if projected.Content != content {
+		t.Fatalf("projected content = %q, want %q", projected.Content, content)
 	}
-	if carrier.Content == content {
-		t.Fatalf("carrier duplicated reply body %q", content)
+	if projected.ThreadRootMessageID == nil || *projected.ThreadRootMessageID != root.ID {
+		t.Fatalf("projected thread_root_message_id = %v, want %s", projected.ThreadRootMessageID, root.ID)
 	}
-	if carrier.ReplyToMessageID == nil || *carrier.ReplyToMessageID != reply.ID {
-		t.Fatalf("carrier reply_to_message_id = %v, want thread reply %s", carrier.ReplyToMessageID, reply.ID)
-	}
-	if carrier.ReplyTo == nil || carrier.ReplyTo.ID != reply.ID || carrier.ReplyTo.Content != content {
-		t.Fatalf("carrier reply summary = %+v, want thread reply summary", carrier.ReplyTo)
+	if projected.ThreadRoot == nil || projected.ThreadRoot.ID != root.ID || projected.ThreadRoot.Content != root.Content {
+		t.Fatalf("projected thread root summary = %+v, want root %s", projected.ThreadRoot, root.ID)
 	}
 
-	var threadReplies, carriers, tasks int
+	var threadReplies, projectedRows, carriers, tasks int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
 		FROM channel_message
@@ -1633,10 +1640,17 @@ func TestSendChannelMessageThreadReplyAlsoSendCreatesThreadCarrierWithoutWakePol
 		SELECT count(*)
 		FROM channel_message
 		WHERE channel_id = $1
+		  AND thread_root_message_id = $2
+		  AND main_timeline_visible`, channelID, root.ID).Scan(&projectedRows); err != nil {
+		t.Fatalf("count projected thread replies: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1
 		  AND thread_root_message_id IS NULL
-		  AND reply_to_message_id = $2
-		  AND content = $3`, channelID, reply.ID, channelThreadMirrorContent).Scan(&carriers); err != nil {
-		t.Fatalf("count thread carriers: %v", err)
+		  AND reply_to_message_id = $2`, channelID, reply.ID).Scan(&carriers); err != nil {
+		t.Fatalf("count legacy thread carriers: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
@@ -1645,43 +1659,43 @@ func TestSendChannelMessageThreadReplyAlsoSendCreatesThreadCarrierWithoutWakePol
 		WHERE cas.channel_id = $1 AND cas.agent_id = $2`, channelID, agentID).Scan(&tasks); err != nil {
 		t.Fatalf("count dispatched tasks: %v", err)
 	}
-	if threadReplies != 1 || carriers != 1 || tasks != 1 {
-		t.Fatalf("side effects = threadReplies:%d carriers:%d tasks:%d, want 1/1/1", threadReplies, carriers, tasks)
+	if threadReplies != 1 || projectedRows != 1 || carriers != 0 || tasks != 1 {
+		t.Fatalf("side effects = threadReplies:%d projectedRows:%d carriers:%d tasks:%d, want 1/1/0/1", threadReplies, projectedRows, carriers, tasks)
 	}
 }
 
-func TestSendChannelMessageThreadReplyAlsoSendUnsupportedOrInvalidFailsClosed(t *testing.T) {
+func TestSendChannelMessageThreadReplyShowInChannelUnsupportedOrInvalidFailsClosed(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "DM Thread Mirror Agent", nil)
+	agentID := createHandlerTestAgent(t, "DM Thread Projection Agent", nil)
 	dmChannelID := seedAgentDMChannel(t, agentID)
-	dmRoot, err := testHandler.insertChannelMessage(ctx, parseUUID(dmChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "dm root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("dm-thread-mirror-"+uuid.NewString()), 0)
+	dmRoot, err := testHandler.insertChannelMessage(ctx, parseUUID(dmChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "dm root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("dm-thread-projection-"+uuid.NewString()), 0)
 	if err != nil {
 		t.Fatalf("insert dm root: %v", err)
 	}
 	unsupported := sendChannelThreadReplyForTest(t, dmChannelID, dmRoot.ID, testUserID, map[string]any{
-		"content":              "dm should fail closed",
-		"also_send_to_channel": true,
+		"content":         "dm should fail closed",
+		"show_in_channel": true,
 	})
 	if unsupported.Code != http.StatusBadRequest {
-		t.Fatalf("unsupported DM also-send: status=%d body=%s", unsupported.Code, unsupported.Body.String())
+		t.Fatalf("unsupported DM show_in_channel: status=%d body=%s", unsupported.Code, unsupported.Body.String())
 	}
 	assertNoThreadRepliesForRoot(t, dmChannelID, dmRoot.ID)
 
-	groupChannelID := seedChannelForTest(t, "thread-also-send-invalid-"+uuid.NewString(), testUserID)
-	groupRoot, err := testHandler.insertChannelMessage(ctx, parseUUID(groupChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "group root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("invalid-thread-mirror-"+uuid.NewString()), 0)
+	groupChannelID := seedChannelForTest(t, "thread-show-in-channel-invalid-"+uuid.NewString(), testUserID)
+	groupRoot, err := testHandler.insertChannelMessage(ctx, parseUUID(groupChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "group root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("invalid-thread-projection-"+uuid.NewString()), 0)
 	if err != nil {
 		t.Fatalf("insert group root: %v", err)
 	}
 	invalid := sendChannelThreadReplyForTest(t, groupChannelID, groupRoot.ID, testUserID, map[string]any{
-		"content":              "invalid bool should fail closed",
-		"also_send_to_channel": "true",
+		"content":         "invalid bool should fail closed",
+		"show_in_channel": "true",
 	})
 	if invalid.Code != http.StatusBadRequest {
-		t.Fatalf("invalid also_send_to_channel: status=%d body=%s", invalid.Code, invalid.Body.String())
+		t.Fatalf("invalid show_in_channel: status=%d body=%s", invalid.Code, invalid.Body.String())
 	}
 	assertNoThreadRepliesForRoot(t, groupChannelID, groupRoot.ID)
 }
@@ -2436,6 +2450,49 @@ func TestChannelThreadReplyMetadataReadAndMainTimelineFiltering(t *testing.T) {
 	ch := listedChannelForTest(t, channelID)
 	if ch == nil || ch.RealUnreadCount != 0 {
 		t.Fatalf("thread read leaked into channel unread: %+v", ch)
+	}
+}
+
+func TestChannelThreadReplyShowInChannelCountsOnlyMainTimelineUnread(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	replierID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "thread-projection-unread-"+uuid.NewString(), testUserID, replierID)
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Root Author", "root topic", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("projection-unread-root-"+uuid.NewString()), 0)
+	if err != nil {
+		t.Fatalf("insert root: %v", err)
+	}
+	markChannelReadForTest(t, channelID, testUserID)
+
+	req := newRequestAs(replierID, http.MethodPost, "/api/channels/"+channelID+"/messages/"+root.ID+"/thread", map[string]any{
+		"content":         "thread reply visible in channel",
+		"show_in_channel": true,
+	})
+	req = withChannelTestWorkspaceCtx(t, req, replierID)
+	req = withURLParams(req, "channelId", channelID, "messageId", root.ID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessageThreadReply(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send projected thread reply: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rootTimeline := listedMessagesForUser(t, channelID, testUserID)
+	if len(rootTimeline) != 2 {
+		t.Fatalf("main timeline = %+v, want root + projected reply", rootTimeline)
+	}
+	if rootTimeline[0].ThreadReplyCount != 1 || rootTimeline[0].ThreadUnreadCount != 0 {
+		t.Fatalf("root metadata = %+v, want reply counted without thread unread", rootTimeline[0])
+	}
+	if rootTimeline[1].ThreadRootMessageID == nil || *rootTimeline[1].ThreadRootMessageID != root.ID {
+		t.Fatalf("projected reply root = %v, want %s", rootTimeline[1].ThreadRootMessageID, root.ID)
+	}
+
+	ch := listedChannelForUser(t, channelID, testUserID)
+	if ch == nil || ch.RealUnreadCount != 1 || ch.UnreadCount != 1 {
+		t.Fatalf("channel unread = %+v, want one main-timeline unread", ch)
 	}
 }
 
@@ -3647,6 +3704,18 @@ func listedMessagesForUser(t *testing.T, channelID, userID string) []ChannelMess
 		t.Fatalf("decode messages: %v", err)
 	}
 	return page.Messages
+}
+
+func markChannelReadForTest(t *testing.T, channelID, userID string) {
+	t.Helper()
+	req := newRequestAs(userID, http.MethodPost, "/api/channels/"+channelID+"/read", nil)
+	req = withChannelTestWorkspaceCtx(t, req, userID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.MarkChannelRead(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mark channel read: status=%d body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func listedThreadForUser(t *testing.T, channelID, rootID, userID string) (ChannelThreadMessagesPageResponse, string) {

@@ -156,7 +156,7 @@ export function useSendChannelThreadMessage() {
       replyToMessageId,
       parts,
       clientMessageId,
-      alsoSendToChannel,
+      showInChannel,
     }: {
       channelId: string;
       messageId: string;
@@ -165,8 +165,8 @@ export function useSendChannelThreadMessage() {
       replyToMessageId?: string | null;
       parts?: MessagePart[];
       clientMessageId?: string | null;
-      alsoSendToChannel?: boolean;
-    }) => api.sendChannelThreadMessage(channelId, messageId, content, attachmentIds, replyToMessageId, parts, clientMessageId, alsoSendToChannel),
+      showInChannel?: boolean;
+    }) => api.sendChannelThreadMessage(channelId, messageId, content, attachmentIds, replyToMessageId, parts, clientMessageId, showInChannel),
     onSuccess: (msg) => {
       const rootId = msg.thread_root_message_id;
       if (rootId) {

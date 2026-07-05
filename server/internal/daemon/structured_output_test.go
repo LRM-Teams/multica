@@ -202,7 +202,7 @@ func TestParseStructuredMessageOutputRejectsUnknownType(t *testing.T) {
 }
 
 func TestParseStructuredMessageOutputCarriesTargetAndOptions(t *testing.T) {
-	content, parts, outputType, action, target, options, reaction, structured, err := parseStructuredMessageOutput(`{"action":"send","target":"#general:11111111-1111-1111-1111-111111111111","output":"reply here","options":{"also_send_to_channel":false}}`)
+	content, parts, outputType, action, target, options, reaction, structured, err := parseStructuredMessageOutput(`{"action":"send","target":"#general:11111111-1111-1111-1111-111111111111","output":"reply here","options":{"show_in_channel":false}}`)
 	if err != nil {
 		t.Fatalf("parseStructuredMessageOutput returned error: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestParseStructuredMessageOutputCarriesTargetAndOptions(t *testing.T) {
 	if content != "reply here" || len(parts) != 0 || reaction != nil {
 		t.Fatalf("content=%q parts=%+v reaction=%+v, want plain message output", content, parts, reaction)
 	}
-	if options == nil || options.AlsoSendToChannel == nil || *options.AlsoSendToChannel {
-		t.Fatalf("options = %+v, want also_send_to_channel=false carried through", options)
+	if options == nil || options.ShowInChannel == nil || *options.ShowInChannel {
+		t.Fatalf("options = %+v, want show_in_channel=false carried through", options)
 	}
 }

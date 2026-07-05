@@ -2201,7 +2201,7 @@ export class ApiClient {
     replyToMessageId?: string | null,
     parts?: MessagePart[],
     clientMessageId?: string | null,
-    alsoSendToChannel?: boolean,
+    showInChannel?: boolean,
   ): Promise<ChannelMessage> {
     const body: {
       content: string;
@@ -2209,7 +2209,7 @@ export class ApiClient {
       reply_to_message_id?: string;
       parts?: MessagePart[];
       client_message_id?: string;
-      also_send_to_channel?: boolean;
+      show_in_channel?: boolean;
     } = { content };
     if (attachmentIds && attachmentIds.length > 0) {
       body.attachment_ids = attachmentIds;
@@ -2223,8 +2223,8 @@ export class ApiClient {
     if (clientMessageId) {
       body.client_message_id = clientMessageId;
     }
-    if (alsoSendToChannel === true) {
-      body.also_send_to_channel = true;
+    if (showInChannel === true) {
+      body.show_in_channel = true;
     }
     return this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread`, {
       method: "POST",

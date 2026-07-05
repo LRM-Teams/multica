@@ -2203,6 +2203,11 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		}
 		return err
 	}
+	if channelTask && explicitAction && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && !h.taskRuntimeHasCapability(ctx, task, protocol.DaemonCapabilityChannelOutputActions) {
+		slog.Warn("complete task: suppressing channel output action from outdated daemon", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "action", req.Action, "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+		return nil
+	}
 	if outputType != protocol.ChatOutputKindMessage {
 		output = ""
 		parts = nil
@@ -2232,6 +2237,23 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		req.Options = nil
 	}
 	return nil
+}
+
+func (h *Handler) taskRuntimeHasCapability(ctx context.Context, task db.AgentTaskQueue, capability string) bool {
+	if !task.RuntimeID.Valid {
+		return false
+	}
+	rt, err := h.Queries.GetAgentRuntime(ctx, task.RuntimeID)
+	if err != nil {
+		slog.Warn("complete task: failed to load task runtime capabilities", "task_id", uuidToString(task.ID), "runtime_id", uuidToString(task.RuntimeID), "error", err)
+		return false
+	}
+	for _, candidate := range runtimeCapabilities(runtimeMetadata(rt)) {
+		if candidate == capability {
+			return true
+		}
+	}
+	return false
 }
 
 func isLegacyChannelProtocolOutput(output string, parts []protocol.MessagePart) bool {

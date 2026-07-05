@@ -44,7 +44,12 @@ import {
 } from "../platform/system-notification";
 import type { Workspace } from "../types/workspace";
 import { chatKeys } from "../chat/queries";
-import { channelKeys, invalidateChannelMessages, upsertChannelMessageInCache } from "../channels/queries";
+import {
+  channelKeys,
+  invalidateChannelMessages,
+  upsertChannelMessageInCache,
+  upsertChannelMessageThreadInCache,
+} from "../channels/queries";
 import { dmKeys } from "../dm/queries";
 import { useChatStore } from "../chat";
 import { resolvePostAuthDestination, useHasOnboarded } from "../paths";
@@ -326,6 +331,7 @@ export async function handleChannelMessageNotification(
 ): Promise<void> {
   const sourceWsId = message.workspace_id;
   if (!sourceWsId) return;
+  if (message.edited_at || message.deleted_at) return;
   if (message.type === "user" && message.author_id === myUserId) return;
 
   const channels = qc.getQueryData<Channel[]>(channelKeys.list(sourceWsId)) ?? [];
@@ -1161,6 +1167,7 @@ export function useRealtimeSync(
         invalidateChannelMessages(qc, payload.channel_id);
       }
       if (payload.thread_root_message_id) {
+        upsertChannelMessageThreadInCache(qc, payload, payload.thread_root_message_id);
         qc.invalidateQueries({ queryKey: channelKeys.messageThread(payload.channel_id, payload.thread_root_message_id) });
       }
       const id = getCurrentWsId();

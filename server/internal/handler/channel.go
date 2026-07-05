@@ -282,6 +282,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			FROM channel_message m
 			WHERE m.channel_id = ch.id
 			  AND (m.thread_root_message_id IS NULL OR m.main_timeline_visible)
+			  AND m.deleted_at IS NULL
 			ORDER BY m.seq DESC LIMIT 1
 		) lm ON true
 		LEFT JOIN channel_read cr ON cr.channel_id = ch.id AND cr.user_id = $2
@@ -291,6 +292,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			  AND m.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
 			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
 			  AND (m.thread_root_message_id IS NULL OR m.main_timeline_visible)
+			  AND m.deleted_at IS NULL
 		) uc ON true
 		WHERE ch.workspace_id = $1 AND ch.kind = 'group'
 		  AND (($3 AND ch.archived_at IS NOT NULL) OR (NOT $3 AND ch.archived_at IS NULL))
@@ -884,16 +886,27 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := h.DB.Query(r.Context(), `
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
-		FROM channel_message
-		WHERE channel_id = $1 AND workspace_id = $2
-		  AND (thread_root_message_id IS NULL OR main_timeline_visible)
+			SELECT m.id, m.channel_id, m.workspace_id, m.author_type, m.author_id, m.author_name, m.content, m.parts, m.source, m.external_message_id, m.client_message_id, m.reply_to_message_id, m.thread_root_message_id, m.thread_id, m.trigger_depth, m.seq, m.created_at, m.edited_at, m.deleted_at
+		FROM channel_message m
+		WHERE m.channel_id = $1 AND m.workspace_id = $2
+		  AND (m.thread_root_message_id IS NULL OR m.main_timeline_visible)
+		  AND (
+		    m.deleted_at IS NULL
+		    OR EXISTS (
+		      SELECT 1
+		      FROM channel_message replies
+		      WHERE replies.workspace_id = m.workspace_id
+		        AND replies.channel_id = m.channel_id
+		        AND replies.thread_root_message_id = m.id
+		        AND replies.deleted_at IS NULL
+		    )
+		  )
 		  AND (
 		    ($3::bigint = 0 AND $4::timestamptz IS NULL AND $5::uuid IS NULL)
-		    OR ($3::bigint > 0 AND seq < $3::bigint)
-		    OR ($3::bigint = 0 AND (created_at, id) < ($4::timestamptz, $5::uuid))
+		    OR ($3::bigint > 0 AND m.seq < $3::bigint)
+		    OR ($3::bigint = 0 AND (m.created_at, m.id) < ($4::timestamptz, $5::uuid))
 		  )
-		ORDER BY seq DESC
+		ORDER BY m.seq DESC
 		LIMIT $6`, channelID, parseUUID(workspaceID), beforeSeq, beforeCreatedAt, beforeID, limit+1)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channel messages")
@@ -939,6 +952,7 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	h.attachChannelMessageThreadRootSummaries(r.Context(), workspaceID, out)
 	h.attachChannelMessageThreadMetadata(r.Context(), workspaceID, parseUUID(userID), out)
 	h.attachChannelMessageThreadReadModel(r.Context(), workspaceID, out)
+	applyChannelMessageTombstoneReadModel(out)
 	writeJSON(w, http.StatusOK, ChannelMessagesPageResponse{
 		Messages:   out,
 		Limit:      limit,
@@ -971,7 +985,7 @@ func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) 
 	if err := h.DB.QueryRow(r.Context(), `
 		SELECT count(*)
 		FROM channel_message
-		WHERE channel_id = $1 AND workspace_id = $2 AND author_type <> 'system' AND content ILIKE $3 ESCAPE '\'`,
+		WHERE channel_id = $1 AND workspace_id = $2 AND author_type <> 'system' AND deleted_at IS NULL AND content ILIKE $3 ESCAPE '\'`,
 		channelID, parseUUID(workspaceID), pattern).Scan(&resp.Total); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to search channel messages")
 		return
@@ -979,7 +993,7 @@ func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) 
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT id, channel_id, thread_root_message_id, author_type, author_id, author_name, content, created_at
 		FROM channel_message
-		WHERE channel_id = $1 AND workspace_id = $2 AND author_type <> 'system' AND content ILIKE $3 ESCAPE '\'
+		WHERE channel_id = $1 AND workspace_id = $2 AND author_type <> 'system' AND deleted_at IS NULL AND content ILIKE $3 ESCAPE '\'
 		ORDER BY seq ASC
 		LIMIT $4`, channelID, parseUUID(workspaceID), pattern, limit)
 	if err != nil {
@@ -1049,13 +1063,37 @@ func (h *Handler) attachSingleChannelMessageDetails(ctx context.Context, workspa
 	h.attachChannelMessageThreadReadModel(ctx, workspaceID, messages)
 	msg = messages[0]
 	msg.Attachments = h.groupChannelMessageAttachments(ctx, workspaceID, []pgtype.UUID{parseUUID(msg.ID)})[msg.ID]
+	applyChannelMessageTombstone(&msg)
 	return msg
+}
+
+func applyChannelMessageTombstoneReadModel(messages []ChannelMessageResponse) {
+	for i := range messages {
+		applyChannelMessageTombstone(&messages[i])
+	}
+}
+
+func applyChannelMessageTombstone(msg *ChannelMessageResponse) {
+	if msg == nil || msg.DeletedAt == nil {
+		return
+	}
+	msg.Content = ""
+	msg.Parts = nil
+	msg.Attachments = nil
+	msg.Reactions = nil
+	msg.ReplyTo = nil
+	msg.ThreadRoot = nil
+	msg.ThreadParticipants = nil
+	msg.ThreadWakeAnnotations = nil
 }
 
 func (h *Handler) attachChannelMessageReactions(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
 	messageIDs := []pgtype.UUID{}
 	channelIDs := map[string]string{}
 	for _, msg := range messages {
+		if msg.DeletedAt != nil {
+			continue
+		}
 		messageIDs = append(messageIDs, parseUUID(msg.ID))
 		channelIDs[msg.ID] = msg.ChannelID
 	}
@@ -1092,6 +1130,10 @@ func (h *Handler) attachChannelMessageReactions(ctx context.Context, workspaceID
 		})
 	}
 	for i := range messages {
+		if messages[i].DeletedAt != nil {
+			messages[i].Reactions = nil
+			continue
+		}
 		messages[i].Reactions = byMessage[messages[i].ID]
 	}
 }
@@ -1100,6 +1142,9 @@ func (h *Handler) attachChannelMessageReplySummaries(ctx context.Context, worksp
 	replyIDs := []pgtype.UUID{}
 	seen := map[string]bool{}
 	for _, msg := range messages {
+		if msg.DeletedAt != nil {
+			continue
+		}
 		if msg.ReplyToMessageID == nil || seen[*msg.ReplyToMessageID] {
 			continue
 		}
@@ -1112,7 +1157,7 @@ func (h *Handler) attachChannelMessageReplySummaries(ctx context.Context, worksp
 	rows, err := h.DB.Query(ctx, `
 		SELECT id, author_type, author_id, author_name, content, parts, created_at
 		FROM channel_message
-		WHERE workspace_id = $1 AND id = ANY($2::uuid[])`,
+		WHERE workspace_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL`,
 		parseUUID(workspaceID), replyIDs)
 	if err != nil {
 		slog.Warn("channel reply summary: load failed", "workspace", workspaceID, "error", err)
@@ -1153,6 +1198,9 @@ func (h *Handler) attachChannelMessageThreadRootSummaries(ctx context.Context, w
 	rootIDs := []pgtype.UUID{}
 	seen := map[string]bool{}
 	for _, msg := range messages {
+		if msg.DeletedAt != nil {
+			continue
+		}
 		if msg.ThreadRootMessageID == nil || seen[*msg.ThreadRootMessageID] {
 			continue
 		}
@@ -1165,7 +1213,7 @@ func (h *Handler) attachChannelMessageThreadRootSummaries(ctx context.Context, w
 	rows, err := h.DB.Query(ctx, `
 		SELECT id, author_type, author_id, author_name, content, parts, created_at
 		FROM channel_message
-		WHERE workspace_id = $1 AND id = ANY($2::uuid[])`,
+		WHERE workspace_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL`,
 		parseUUID(workspaceID), rootIDs)
 	if err != nil {
 		slog.Warn("channel thread root summary: load failed", "workspace", workspaceID, "error", err)
@@ -1229,6 +1277,7 @@ func (h *Handler) attachChannelMessageThreadMetadata(ctx context.Context, worksp
 		FROM channel_message roots
 		LEFT JOIN channel_message replies ON replies.channel_id = roots.channel_id
 			AND replies.thread_root_message_id = roots.id
+			AND replies.deleted_at IS NULL
 		LEFT JOIN thread_participant tp
 		  ON tp.root_message_id = roots.id
 		 AND tp.member_type = 'user'
@@ -1312,6 +1361,7 @@ func (h *Handler) attachChannelMessageThreadReadModel(ctx context.Context, works
 		  WHERE reply.workspace_id = $2
 		    AND reply.thread_root_message_id = ANY($1::uuid[])
 		    AND reply.author_type = 'agent'
+		    AND reply.deleted_at IS NULL
 		    AND (lt.prompt_created_at IS NULL OR reply.created_at > lt.prompt_created_at)
 		  ORDER BY reply.thread_root_message_id, reply.author_id, reply.seq DESC
 		)
@@ -1501,6 +1551,7 @@ func (h *Handler) UpdateChannelMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
+	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, msg)
 	writeJSON(w, http.StatusOK, msg)
 }
 
@@ -1529,7 +1580,7 @@ func (h *Handler) DeleteChannelMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete channel message")
 		return
 	}
-	tag, err := tx.Exec(r.Context(), `
+	msg, err := scanChannelMessage(tx.QueryRow(r.Context(), `
 		UPDATE channel_message
 		SET content = '', parts = '[]'::jsonb, deleted_at = now()
 		WHERE id = $1
@@ -1537,16 +1588,16 @@ func (h *Handler) DeleteChannelMessage(w http.ResponseWriter, r *http.Request) {
 		  AND workspace_id = $3
 		  AND author_type = 'user'
 		  AND author_id = $4
-		  AND deleted_at IS NULL`,
-		messageID, channelID, parseUUID(workspaceID), parseUUID(userID))
+		  AND deleted_at IS NULL
+		RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at`,
+		messageID, channelID, parseUUID(workspaceID), parseUUID(userID)))
 	if err != nil {
 		_ = tx.Rollback(r.Context())
+		if errorsIsNoRows(err) {
+			writeError(w, http.StatusNotFound, "message not found")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to delete channel message")
-		return
-	}
-	if tag.RowsAffected() == 0 {
-		_ = tx.Rollback(r.Context())
-		writeError(w, http.StatusNotFound, "message not found")
 		return
 	}
 	if _, err := tx.Exec(r.Context(), `
@@ -1561,6 +1612,8 @@ func (h *Handler) DeleteChannelMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete channel message")
 		return
 	}
+	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
+	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, msg)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1734,6 +1787,7 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 		FROM channel_message
 		WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id = $3
+		  AND deleted_at IS NULL
 		  AND (
 		    NOT $4::boolean
 		    OR ($5::boolean AND seq < $6::bigint)
@@ -1772,6 +1826,10 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 		w.Header().Set("X-Next-Before", oldest.CreatedAt)
 		w.Header().Set("X-Next-Before-Id", oldest.ID)
 	}
+	if root.DeletedAt != nil && len(repliesDesc) == 0 {
+		writeError(w, http.StatusNotFound, "message not found")
+		return
+	}
 	out := make([]ChannelMessageResponse, 0, 1+len(repliesDesc))
 	out = append(out, root)
 	for i := len(repliesDesc) - 1; i >= 0; i-- {
@@ -1789,6 +1847,7 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
 	h.attachChannelMessageThreadMetadata(r.Context(), workspaceID, parseUUID(userID), out[:1])
 	h.attachChannelMessageThreadReadModel(r.Context(), workspaceID, out[:1])
+	applyChannelMessageTombstoneReadModel(out)
 	writeJSON(w, http.StatusOK, ChannelThreadMessagesPageResponse{
 		Messages:   out,
 		NextCursor: nextCursor,
@@ -3914,13 +3973,17 @@ func scanChannelMessage(row rowScanner) (ChannelMessageResponse, error) {
 		return ChannelMessageResponse{}, err
 	}
 	decodedParts := messageparts.Decode(parts)
-	if authorType == "agent" {
+	deletedAtPtr := timestampToPtr(deletedAt)
+	if deletedAtPtr != nil {
+		content = ""
+		decodedParts = nil
+	} else if authorType == "agent" {
 		if unwrappedContent, unwrappedParts, unwrapped, err := messageparts.UnwrapStructuredMessageSend(content, decodedParts); err == nil && unwrapped {
 			content = unwrappedContent
 			decodedParts = unwrappedParts
 		}
 	}
-	return ChannelMessageResponse{ID: uuidToString(id), ChannelID: uuidToString(channelID), WorkspaceID: uuidToString(wsID), Seq: seq, Type: authorType, AuthorID: uuidToPtr(authorID), AuthorName: authorName, Content: content, Parts: decodedParts, Source: source, ExternalMessageID: textToPtr(external), ClientMessageID: textToPtr(client), ReplyToMessageID: uuidToPtr(replyToMessageID), ThreadRootMessageID: uuidToPtr(threadRootMessageID), ThreadID: textToPtr(thread), TriggerDepth: triggerDepth, CreatedAt: timestampToString(createdAt), EditedAt: timestampToPtr(editedAt), DeletedAt: timestampToPtr(deletedAt)}, nil
+	return ChannelMessageResponse{ID: uuidToString(id), ChannelID: uuidToString(channelID), WorkspaceID: uuidToString(wsID), Seq: seq, Type: authorType, AuthorID: uuidToPtr(authorID), AuthorName: authorName, Content: content, Parts: decodedParts, Source: source, ExternalMessageID: textToPtr(external), ClientMessageID: textToPtr(client), ReplyToMessageID: uuidToPtr(replyToMessageID), ThreadRootMessageID: uuidToPtr(threadRootMessageID), ThreadID: textToPtr(thread), TriggerDepth: triggerDepth, CreatedAt: timestampToString(createdAt), EditedAt: timestampToPtr(editedAt), DeletedAt: deletedAtPtr}, nil
 }
 
 func trimTextPtr(s *string) *string {

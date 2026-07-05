@@ -669,4 +669,27 @@ describe("handleInboxNew", () => {
 
     expect(webBanners).toHaveLength(0);
   });
+
+  it("suppresses banners for channel message edits and deletes", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
+    qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
+      preferences: { system_notifications: "all" },
+    });
+    qc.setQueryData<Channel[]>(channelKeys.list("ws-a"), [channel()]);
+    installBrowserNotification("granted");
+
+    await handleChannelMessageNotification(
+      qc,
+      channelMessage({ edited_at: "2026-05-18T00:01:00Z" }),
+      "member-1",
+    );
+    await handleChannelMessageNotification(
+      qc,
+      channelMessage({ deleted_at: "2026-05-18T00:02:00Z" }),
+      "member-1",
+    );
+
+    expect(webBanners).toHaveLength(0);
+  });
 });

@@ -22,7 +22,12 @@ export interface ThreadWakeAnnotation {
   key: string;
   displayName: string;
   memberType: ThreadMemberType;
-  state: ThreadWakeState;
+  /**
+   * A known wake state, or an unknown/future value the BE may add (the
+   * `(string & {})` escape hatch). Unknown states carry no vetted copy, so the
+   * strip drops them rather than surfacing a raw token.
+   */
+  state: ThreadWakeState | (string & {});
   /** "Why no reply" — surfaced next to a `no_reply` record. */
   reason?: string;
 }
@@ -80,7 +85,7 @@ function ThreadParticipants({
 
 function ThreadWakeStrip({ annotations }: { annotations: ThreadWakeAnnotation[] }) {
   const { t } = useT("channels");
-  const wakeLabel = (state: ThreadWakeState): string => {
+  const wakeLabel = (state: ThreadWakeState | (string & {})): string | null => {
     switch (state) {
       case "pending":
         return t(($) => $.thread.wake_pending);
@@ -92,33 +97,44 @@ function ThreadWakeStrip({ annotations }: { annotations: ThreadWakeAnnotation[] 
         return t(($) => $.thread.wake_delivered);
       case "no_reply":
         return t(($) => $.thread.wake_no_reply);
+      default:
+        // Unknown/future state — no vetted copy, so stay silent rather than
+        // surface a raw token or read as a refusal.
+        return null;
     }
   };
-  if (annotations.length === 0) return null;
+  // Iris UX: only agent participants are ever woken, so a human record (or an
+  // unknown-state record with no label) is dropped — never shown as "refused".
+  const visible = annotations.flatMap((annotation) => {
+    if (annotation.memberType !== "agent") return [];
+    const label = wakeLabel(annotation.state);
+    return label ? [{ annotation, label }] : [];
+  });
+  if (visible.length === 0) return null;
   return (
     <div
       data-testid="thread-wake-strip"
       className="flex shrink-0 flex-col gap-1 border-t border-border/30 px-5 py-2 text-xs"
     >
-      {annotations.map((annotation) => (
+      {visible.map(({ annotation, label }) => (
         <div
           key={annotation.key}
           data-wake-state={annotation.state}
           className="flex items-center gap-2"
         >
-          {annotation.memberType === "agent" ? (
-            <Bot className="size-3 shrink-0 text-primary" aria-hidden="true" />
-          ) : null}
+          <Bot className="size-3 shrink-0 text-primary" aria-hidden="true" />
           <span className="font-medium text-foreground/90">{annotation.displayName}</span>
           <span
             className={cn(
               "rounded-full px-1.5 py-0.5 text-[11px] leading-none",
+              // `no_reply` reads NEUTRAL ("received, no reply needed"), not as a
+              // refusal — same muted treatment as an informational chip.
               annotation.state === "no_reply"
                 ? "bg-muted text-muted-foreground"
                 : "bg-primary/[0.08] text-primary",
             )}
           >
-            {wakeLabel(annotation.state)}
+            {label}
           </span>
           {annotation.reason ? (
             <span className="truncate text-muted-foreground">{annotation.reason}</span>
@@ -160,9 +176,13 @@ export interface ThreadPanelProps {
   /** Whether the viewer follows this thread. */
   followed: boolean;
   onToggleFollow: (next: boolean) => void;
-  /** Mirror this reply into the main timeline too. Defaults off per Parker. */
-  alsoSendToChannel: boolean;
-  onAlsoSendToChannelChange: (next: boolean) => void;
+  /**
+   * Mirror this reply into the main timeline too. Optional: when
+   * `onAlsoSendToChannelChange` is omitted the also-send checkbox is not
+   * rendered at all — the affordance is cut until BE mirroring lands (#256).
+   */
+  alsoSendToChannel?: boolean;
+  onAlsoSendToChannelChange?: (next: boolean) => void;
   /**
    * Per-participant wake/ack/no_reply records (read-model #235). Presentational
    * only — undefined until the read-model is wired; a non-participant is simply
@@ -206,7 +226,7 @@ export function ThreadPanel({
   participants,
   followed,
   onToggleFollow,
-  alsoSendToChannel,
+  alsoSendToChannel = false,
   onAlsoSendToChannelChange,
   wakeAnnotations,
   isMobile,
@@ -269,18 +289,20 @@ export function ThreadPanel({
   const composerActions = useMemo(
     () => (
       <>
-        <label
-          className="flex shrink-0 items-center gap-1.5 px-1 text-xs text-muted-foreground"
-          data-slot="thread-also-send"
-        >
-          <input
-            type="checkbox"
-            className="size-3.5 accent-primary"
-            checked={alsoSendToChannel}
-            onChange={(event) => onAlsoSendToChannelChange(event.target.checked)}
-          />
-          {t(($) => $.thread.also_send_label)}
-        </label>
+        {onAlsoSendToChannelChange ? (
+          <label
+            className="flex shrink-0 items-center gap-1.5 px-1 text-xs text-muted-foreground"
+            data-slot="thread-also-send"
+          >
+            <input
+              type="checkbox"
+              className="size-3.5 accent-primary"
+              checked={alsoSendToChannel}
+              onChange={(event) => onAlsoSendToChannelChange(event.target.checked)}
+            />
+            {t(($) => $.thread.also_send_label)}
+          </label>
+        ) : null}
         {composerLeadingActions}
       </>
     ),

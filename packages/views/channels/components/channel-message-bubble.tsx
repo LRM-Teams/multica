@@ -14,7 +14,7 @@ import { MemoizedMarkdown } from "../../common/markdown";
 import { AttachmentList } from "../../issues/components/comment-card";
 import { agentColor } from "../../common/agent-color";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
-import { AgentStatusDot } from "../../common/actor-avatar";
+import { AgentPresenceOverlay } from "../../common/actor-avatar";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
@@ -251,6 +251,10 @@ export function ChannelMessageBubble({
         ? "user"
         : null;
   const profileActorId = profileActorType ? message.author_id : null;
+  // The 2px baseline nudge (`mt-0.5`) lives on the outer wrapper, not the
+  // avatar itself, so that when the avatar sits inside the fixed-size presence
+  // box the box hugs the avatar exactly (a margin on the inner avatar would
+  // overflow the box and lift the dot off the avatar's bottom edge).
   const avatarNode = (
     <ActorAvatar
       name={displayName}
@@ -259,21 +263,22 @@ export function ChannelMessageBubble({
       isAgent={isAgent}
       isSystem={false}
       size={28}
-      className="mt-0.5 select-none"
+      className="select-none"
       tint={tint}
     />
   );
   // Overlay the shared presence dot (breathing when the agent is actively
-  // running a task, static otherwise) on agent authors only — members have
-  // no presence backbone, system/lark authors aren't resolvable actors.
+  // running a task, static otherwise) on agent authors only — members have no
+  // presence backbone, system/lark authors aren't resolvable actors. Routed
+  // through the single, stretch-proof `AgentPresenceOverlay` so the dot can't
+  // detach in this CSS-grid row (root cause of the detached-dot bug).
   const avatar =
     isAgent && message.author_id != null ? (
-      <span className="relative inline-flex">
+      <AgentPresenceOverlay agentId={message.author_id} size={28} className="mt-0.5">
         {avatarNode}
-        <AgentStatusDot agentId={message.author_id} size={28} />
-      </span>
+      </AgentPresenceOverlay>
     ) : (
-      avatarNode
+      <span className="mt-0.5 inline-flex shrink-0">{avatarNode}</span>
     );
   const nameLabel = (
     <span className="truncate font-medium text-foreground">{displayName}</span>

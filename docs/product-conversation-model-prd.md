@@ -40,7 +40,7 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 
 **统一原语（channel/dm 共用一套引擎）**：`Message(parts[])` + `Reaction` + `reply/thread` + 未读/静音/follow/搜索/权限/审计。
 
-**thread** = 某条 message 下的**扁平**回复链（不嵌套；针对某条回复用 quote）。thread 回复**不进主时间线、不计会话级未读**（对齐现有 migration 139 与 Raft）；`also_send_to_channel` 是 reply 的显式 flag（默认 false），置真才同时进主流。
+**thread** = 某条 message 下的**扁平**回复链（不嵌套；针对某条回复用 quote）。thread 回复默认**不进主时间线、不计会话级未读**（对齐现有 migration 139 与 Raft）；`show_in_channel` 是 reply 的显式 flag（默认 false），置真时同一条 reply 以同一个 message id 投影到主流，编辑/删除/reaction/read-state 不分叉。
 
 **issue** = 现有一等 work-item 实体（workspace-scoped，本轮 schema 冻结）：7 态 status（backlog/todo/in_progress/in_review/done/blocked/cancelled）、priority、assignee、watchers(subscriber)、labels、dependencies、parent_issue_id（issue↔issue 工作分解树，与 thread 扁平无关）、acceptance_criteria、context_refs、due_date。issue 讨论仍走现有 comment 体系（行为对齐见 §7）。
 
@@ -69,7 +69,7 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 - **`send(target, parts[], options?)`** —— target ∈：
   - `#channel` → 频道顶层 Message；
   - `dm:@name` → Human DM：**自动 find-or-create** {me, target} 的 1:1 会话再发（**禁 self-DM**；仅同 workspace；权限/存在性错误码 non-leaky）；`@name` 用成员唯一 handle（#42），**UUID 不进模型可见层**；
-  - `#channel:<msgid>` → thread 回复（扁平；options 可带 `also_send_to_channel=false`，**只在 thread 分支显式处理**，不得变隐式 fanout；root/thread 可见性 server 校验）。
+  - `#channel:<msgid>` → thread 回复（扁平；options 可带 `show_in_channel=false`，**只在 thread 分支显式处理**，不得变隐式 fanout；root/thread 可见性 server 校验）。
 - **`react(message_id, emoji)`** → Reaction（**不触发 agent run**）。
 - **`no_reply`** → 无动作无可见行（合法性见 §6 must-reply）。
 
@@ -227,7 +227,7 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 - **QA（#201）**：§13 验收 + issue「不被本轮改坏」smoke + **§6.3 ambient 有界性压测**。
 
 ## 13. 验收标准
-1. channel/dm 统一原语：message/reply/react/未读/mute/follow/搜索一套引擎；thread 扁平不嵌套；thread 回复不进主流不计会话未读；also_send_to_channel 显式。
+1. channel/dm 统一原语：message/reply/react/未读/mute/follow/搜索一套引擎；thread 扁平不嵌套；thread 回复默认不进主流不计会话未读；`show_in_channel` 显式且同一 message id 投影主流。
 2. per-member cursor（含 agent）落表 = `last_read_seq`；**per-conversation seq：seq 顺序==提交可见顺序（结构保证）**；run 成功/ack 后推进；并发写入不丢投递；真实未读计数。
 3. Wake matrix 生效：DM 直达；thread 参与投递；channel 定向克制 + ambient pre-gate；directed 禁 silent no_reply（#196）；参与投递≠必须回复；unfollow/衰减可用；reaction 不唤醒。
 4. DM 体感对齐 Raft；状态机（active/closed/muted/offline/permission-revoked）正确。
@@ -248,7 +248,7 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 - v2.3：**排序/游标改判为 per-conversation seq**（Frank「完美方案、可接受改动」；代码核实 now()=事务开始时间使 keyset 存结构性丢投递风险；seq 取号行锁保证 seq 顺序==提交可见顺序，删除重扫窗口方案；cursor=last_read_seq，thread 共享会话 seq 空间；created_at 仅展示）；补「issue run 进 Activity」（trigger 支持 issue_id，双入口同一数据）。
 - v2.2：新增 §4.1 Attachment/Files（模型/human·agent 发送查看/三存储层 Product Store·Run Workspace·Agent Workspace/边界态）；§6.2 补 Raft Activity 设计基准 8 条（Frank 截图），P1 即含 step 级流；§13 加验收 #9；§15 补代码事实（Multica 无持久 per-agent workspace，仅 per-run workdir + project 目录 + agent_memory 表）。
 - v2.1：admin_visible 默认 TRUE 获 Frank 批准（待拍点清零）；新增 §6.2 Activity/Trace 面（run 级活动记录 + per-agent Activity 时间线 + 权限过滤 + 留存；数据层基于现有 agent_task_queue/task_message/task_usage）；§13 加「agent 活动可观测」验收。
-- v2.0：合稿；**scope cut：冻结 issue 数据模型**（A1/A2/A3 随之消失），issue 侧改行为对齐；全文清除 issue=message.kind / seq / 4 态 status / 宿主 channel 可见性 / 参与必回 等旧表述；cursor 统一 keyset 语言；补 at-least-once 并发兜底；also_send_to_channel 进动作合约；context-pack 缓存降为实现建议。
+- v2.0：合稿；**scope cut：冻结 issue 数据模型**（A1/A2/A3 随之消失），issue 侧改行为对齐；全文清除 issue=message.kind / seq / 4 态 status / 宿主 channel 可见性 / 参与必回 等旧表述；cursor 统一 keyset 语言；补 at-least-once 并发兜底；thread reply 主流显示选项进动作合约；context-pack 缓存降为实现建议。
 - v1.2：收 Frank 代码级 review 7 条（§16 补丁式，已并入本稿）。
 - v1.1：去平台压缩；多参与 thread 对齐 Raft；attachment/可观测；loop_guard 获批。
 - v1.0：初稿。

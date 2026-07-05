@@ -146,9 +146,9 @@ function ThreadWakeStrip({ annotations }: { annotations: ThreadWakeAnnotation[] 
 }
 
 /**
- * The "from thread" marker for a reply that was mirrored into the main
- * timeline via `also_send_to_channel`. Keeps the mainstream copy from reading
- * as a bare duplicate — it is explicitly labelled as originating in a thread.
+ * The "from thread" marker for a reply that is also visible in the main
+ * timeline. Keeps the mainstream surface from reading as a bare duplicate: it
+ * is explicitly labelled as originating in a thread.
  */
 export function ThreadOriginTag({ className }: { className?: string }) {
   const { t } = useT("channels");
@@ -177,12 +177,12 @@ export interface ThreadPanelProps {
   followed: boolean;
   onToggleFollow: (next: boolean) => void;
   /**
-   * Mirror this reply into the main timeline too. Optional: when
-   * `onAlsoSendToChannelChange` is omitted the also-send checkbox is not
-   * rendered at all — the affordance is cut until BE mirroring lands (#256).
+   * Show this reply in the main timeline too. Optional: when
+   * `onShowInChannelChange` is omitted the checkbox is not rendered at all —
+   * the affordance stays hidden until the #256 projection contract is deployed.
    */
-  alsoSendToChannel?: boolean;
-  onAlsoSendToChannelChange?: (next: boolean) => void;
+  showInChannel?: boolean;
+  onShowInChannelChange?: (next: boolean) => void;
   /**
    * Per-participant wake/ack/no_reply records (read-model #235). Presentational
    * only — undefined until the read-model is wired; a non-participant is simply
@@ -215,8 +215,8 @@ export interface ThreadPanelProps {
  * The thread panel: a pinned read-only root, a FLAT reply list (no nesting —
  * the reply list is never given an open-thread affordance), participant
  * visibility with an explicit follow toggle, the reused `<Composer
- * surface="thread">` (an optional `also_send_to_channel` action, hidden unless
- * a handler is supplied — deferred to the #256 main-timeline projection), and —
+ * surface="thread">` (an optional show-in-channel action, hidden unless a
+ * handler is supplied — deferred to the #256 main-timeline projection), and —
  * when the read-model wake state is supplied — a per-participant wake strip.
  */
 export function ThreadPanel({
@@ -227,8 +227,8 @@ export function ThreadPanel({
   participants,
   followed,
   onToggleFollow,
-  alsoSendToChannel = false,
-  onAlsoSendToChannelChange,
+  showInChannel = false,
+  onShowInChannelChange,
   wakeAnnotations,
   isMobile,
   onBack,
@@ -290,24 +290,24 @@ export function ThreadPanel({
   const composerActions = useMemo(
     () => (
       <>
-        {onAlsoSendToChannelChange ? (
+        {onShowInChannelChange ? (
           <label
             className="flex shrink-0 items-center gap-1.5 px-1 text-xs text-muted-foreground"
-            data-slot="thread-also-send"
+            data-slot="thread-show-in-channel"
           >
             <input
               type="checkbox"
               className="size-3.5 accent-primary"
-              checked={alsoSendToChannel}
-              onChange={(event) => onAlsoSendToChannelChange(event.target.checked)}
+              checked={showInChannel}
+              onChange={(event) => onShowInChannelChange(event.target.checked)}
             />
-            {t(($) => $.thread.also_send_label)}
+            {t(($) => $.thread.show_in_channel_label)}
           </label>
         ) : null}
         {composerLeadingActions}
       </>
     ),
-    [alsoSendToChannel, onAlsoSendToChannelChange, composerLeadingActions, t],
+    [showInChannel, onShowInChannelChange, composerLeadingActions, t],
   );
 
   return (

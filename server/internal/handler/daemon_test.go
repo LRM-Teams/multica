@@ -2419,7 +2419,7 @@ func TestCompleteTask_GroupChannelSendTargetInvalidSuppressesNonLeaky(t *testing
 				}
 				return "dm:@" + name
 			},
-			options: map[string]any{"also_send_to_channel": false},
+			options: map[string]any{"show_in_channel": false},
 		},
 	}
 
@@ -2459,7 +2459,7 @@ func TestCompleteTask_GroupChannelSendTargetInvalidSuppressesNonLeaky(t *testing
 	}
 }
 
-func TestCompleteTask_GroupChannelThreadTargetAllowsFalseAlsoSendOption(t *testing.T) {
+func TestCompleteTask_GroupChannelThreadTargetAllowsFalseShowInChannelOption(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2483,7 +2483,7 @@ func TestCompleteTask_GroupChannelThreadTargetAllowsFalseAlsoSendOption(t *testi
 	w := completeTaskForTest(t, taskID, map[string]any{
 		"action":  "send",
 		"target":  "#" + channelName + ":" + rootID,
-		"options": map[string]any{"also_send_to_channel": false},
+		"options": map[string]any{"show_in_channel": false},
 		"output":  visibleReply,
 	})
 	if w.Code != http.StatusOK {
@@ -2503,14 +2503,14 @@ func TestCompleteTask_GroupChannelThreadTargetAllowsFalseAlsoSendOption(t *testi
 	}
 }
 
-func TestCompleteTask_GroupChannelThreadTargetAlsoSendCreatesCarrier(t *testing.T) {
+func TestCompleteTask_GroupChannelThreadTargetShowInChannelProjectsSameMessage(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
 	taskID, channelID := createChannelCompletionTask(t, "group")
-	targetAgentID := createHandlerTestAgent(t, "Thread Mirror Completion Target", nil)
+	targetAgentID := createHandlerTestAgent(t, "Thread Projection Completion Target", nil)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, targetAgentID); err != nil {
@@ -2521,19 +2521,19 @@ func TestCompleteTask_GroupChannelThreadTargetAlsoSendCreatesCarrier(t *testing.
 		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, trigger_depth)
 		VALUES ($1, $2, 'user', $3, 'Tester', 'thread root', 'multica', $4, 0)
 		RETURNING id
-	`, channelID, testWorkspaceID, testUserID, "thread-target-mirror-"+uuid.NewString()).Scan(&rootID); err != nil {
+	`, channelID, testWorkspaceID, testUserID, "thread-target-projection-"+uuid.NewString()).Scan(&rootID); err != nil {
 		t.Fatalf("seed thread root: %v", err)
 	}
 	var channelName string
 	if err := testPool.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, channelID).Scan(&channelName); err != nil {
 		t.Fatalf("load channel name: %v", err)
 	}
-	visibleReply := "please [@Thread Mirror Completion Target](mention://agent/" + targetAgentID + ") review from the thread"
+	visibleReply := "please [@Thread Projection Completion Target](mention://agent/" + targetAgentID + ") review from the thread"
 
 	w := completeTaskForTest(t, taskID, map[string]any{
 		"action":  "send",
 		"target":  "#" + channelName + ":" + rootID,
-		"options": map[string]any{"also_send_to_channel": true},
+		"options": map[string]any{"show_in_channel": true},
 		"output":  visibleReply,
 	})
 	if w.Code != http.StatusOK {
@@ -2541,12 +2541,16 @@ func TestCompleteTask_GroupChannelThreadTargetAlsoSendCreatesCarrier(t *testing.
 	}
 
 	var replyID string
+	var projected bool
 	if err := testPool.QueryRow(ctx, `
-		SELECT id
+		SELECT id, main_timeline_visible
 		FROM channel_message
 		WHERE channel_id = $1 AND author_type = 'agent' AND content = $2 AND thread_root_message_id = $3
-	`, channelID, visibleReply, rootID).Scan(&replyID); err != nil {
+	`, channelID, visibleReply, rootID).Scan(&replyID, &projected); err != nil {
 		t.Fatalf("load targeted thread reply: %v", err)
+	}
+	if !projected {
+		t.Fatalf("targeted thread reply main_timeline_visible = false, want true")
 	}
 	var carrierCount int
 	if err := testPool.QueryRow(ctx, `
@@ -2555,12 +2559,24 @@ func TestCompleteTask_GroupChannelThreadTargetAlsoSendCreatesCarrier(t *testing.
 		WHERE channel_id = $1
 		  AND author_type = 'agent'
 		  AND thread_root_message_id IS NULL
-		  AND reply_to_message_id = $2
-		  AND content = $3`, channelID, replyID, channelThreadMirrorContent).Scan(&carrierCount); err != nil {
-		t.Fatalf("count thread mirror carriers: %v", err)
+		  AND reply_to_message_id = $2`, channelID, replyID).Scan(&carrierCount); err != nil {
+		t.Fatalf("count legacy thread mirror carriers: %v", err)
 	}
-	if carrierCount != 1 {
-		t.Fatalf("thread mirror carrier count = %d, want 1", carrierCount)
+	if carrierCount != 0 {
+		t.Fatalf("legacy thread mirror carrier count = %d, want 0", carrierCount)
+	}
+	mainTimeline := listedMessagesForUser(t, channelID, testUserID)
+	if len(mainTimeline) != 2 {
+		t.Fatalf("main timeline = %+v, want root + projected reply", mainTimeline)
+	}
+	if mainTimeline[1].ID != replyID {
+		t.Fatalf("projected message id = %s, want thread reply %s", mainTimeline[1].ID, replyID)
+	}
+	if mainTimeline[1].ThreadRootMessageID == nil || *mainTimeline[1].ThreadRootMessageID != rootID {
+		t.Fatalf("projected thread_root_message_id = %v, want %s", mainTimeline[1].ThreadRootMessageID, rootID)
+	}
+	if mainTimeline[1].ThreadRoot == nil || mainTimeline[1].ThreadRoot.ID != rootID {
+		t.Fatalf("projected thread root summary = %+v, want root %s", mainTimeline[1].ThreadRoot, rootID)
 	}
 	var targetTasks int
 	if err := testPool.QueryRow(ctx, `

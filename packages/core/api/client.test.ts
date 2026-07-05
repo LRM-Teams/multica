@@ -78,7 +78,7 @@ describe("ApiClient", () => {
     }
   });
 
-  it("sends explicit also_send_to_channel only for thread mirror requests", async () => {
+  it("sends explicit show_in_channel only for thread main-timeline display requests", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({ id: "m-1" }), {
         status: 200,
@@ -94,12 +94,12 @@ describe("ApiClient", () => {
     await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-3", true);
 
     const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
-    expect(bodies[0]).not.toHaveProperty("also_send_to_channel");
-    expect(bodies[1]).not.toHaveProperty("also_send_to_channel");
+    expect(bodies[0]).not.toHaveProperty("show_in_channel");
+    expect(bodies[1]).not.toHaveProperty("show_in_channel");
     expect(bodies[2]).toMatchObject({
       content: "hello",
       client_message_id: "client-3",
-      also_send_to_channel: true,
+      show_in_channel: true,
     });
   });
 

@@ -162,7 +162,22 @@ const (
 )
 
 type ChatOutputOptions struct {
-	AlsoSendToChannel *bool `json:"also_send_to_channel,omitempty"`
+	ShowInChannel     *bool `json:"show_in_channel,omitempty"`
+	AlsoSendToChannel *bool `json:"also_send_to_channel,omitempty"` // legacy #252 name; not part of the new contract.
+}
+
+func (o *ChatOutputOptions) HasChannelDisplayOption() bool {
+	return o != nil && (o.ShowInChannel != nil || o.AlsoSendToChannel != nil)
+}
+
+func (o *ChatOutputOptions) ShowInChannelValue() bool {
+	if o == nil {
+		return false
+	}
+	if o.ShowInChannel != nil {
+		return *o.ShowInChannel
+	}
+	return o.AlsoSendToChannel != nil && *o.AlsoSendToChannel
 }
 
 type ChatReactionPayload struct {

@@ -85,7 +85,7 @@ func (h *Handler) resolveChatOutputTarget(ctx context.Context, origin chatOutput
 }
 
 func chatOutputOptionsPresent(options *protocol.ChatOutputOptions) bool {
-	return options != nil && options.AlsoSendToChannel != nil
+	return options.HasChannelDisplayOption()
 }
 
 func (h *Handler) resolveHumanDMOutputTarget(ctx context.Context, origin chatOutputOrigin, handle string) (pgtype.UUID, error) {
@@ -213,39 +213,34 @@ func (h *Handler) handleTargetedChannelChatDone(ctx context.Context, origin chat
 			slog.Warn("channel bridge: create targeted dm failed", "chat_session_id", payload.ChatSessionID, "target", payload.Target)
 			return true
 		}
-		h.insertAgentChatOutputMessage(ctx, ch, origin.agentID, content, parts, pgtype.UUID{}, nil, 0, initiatorID)
+		h.insertAgentChatOutputMessage(ctx, ch, origin.agentID, content, parts, pgtype.UUID{}, nil, 0, initiatorID, false)
 	case chatOutputTargetThread:
 		threadID := target.threadRoot.ThreadID
 		if threadID == nil || strings.TrimSpace(*threadID) == "" {
 			fresh := uuid.NewString()
 			threadID = &fresh
 		}
-		msg, ok := h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, parseUUID(target.threadRoot.ID), threadID, target.threadRoot.TriggerDepth+1, initiatorID)
-		if ok && payload.Options != nil && payload.Options.AlsoSendToChannel != nil && *payload.Options.AlsoSendToChannel {
-			mirror, created, err := h.ensureChannelThreadMirrorMessage(ctx, target.channel.WorkspaceID, parseUUID(target.channel.ID), origin.agentID, "agent", msg.AuthorName, msg)
-			if err != nil {
-				slog.Warn("channel bridge: insert thread mirror carrier failed", "channel_id", target.channel.ID, "agent_id", uuidToString(origin.agentID), "message_id", msg.ID, "error", err)
-				return true
-			}
-			if created {
-				_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, parseUUID(target.channel.ID))
-				h.publishChannelToMembers(ctx, protocol.EventChannelMessage, target.channel.WorkspaceID, "agent", uuidToString(origin.agentID), parseUUID(target.channel.ID), mirror)
-			}
-		}
+		mainTimelineVisible := payload.Options.ShowInChannelValue()
+		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, parseUUID(target.threadRoot.ID), threadID, target.threadRoot.TriggerDepth+1, initiatorID, mainTimelineVisible)
 	case chatOutputTargetChannel:
-		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, pgtype.UUID{}, nil, 0, initiatorID)
+		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, pgtype.UUID{}, nil, 0, initiatorID, false)
 	}
 	return true
 }
 
-func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelResponse, agentID pgtype.UUID, content string, parts []protocol.MessagePart, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int, initiatorID pgtype.UUID) (ChannelMessageResponse, bool) {
+func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelResponse, agentID pgtype.UUID, content string, parts []protocol.MessagePart, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int, initiatorID pgtype.UUID, mainTimelineVisible bool) (ChannelMessageResponse, bool) {
 	channelID := parseUUID(ch.ID)
 	workspaceID := parseUUID(ch.WorkspaceID)
 	agentName := h.agentName(ctx, agentID)
-	msg, err := h.insertChannelMessageWithParts(ctx, channelID, workspaceID, "agent", agentID, agentName, content, parts, "multica", nil, pgtype.UUID{}, threadRootMessageID, threadID, triggerDepth)
+	msg, err := h.insertChannelMessageWithPartsMainProjection(ctx, channelID, workspaceID, "agent", agentID, agentName, content, parts, "multica", nil, pgtype.UUID{}, threadRootMessageID, threadID, triggerDepth, mainTimelineVisible)
 	if err != nil {
 		slog.Warn("channel bridge: insert targeted agent message failed", "channel_id", ch.ID, "agent_id", uuidToString(agentID), "error", err)
 		return ChannelMessageResponse{}, false
+	}
+	if mainTimelineVisible {
+		messages := []ChannelMessageResponse{msg}
+		h.attachChannelMessageThreadRootSummaries(ctx, ch.WorkspaceID, messages)
+		msg = messages[0]
 	}
 	_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
 	if ch.Kind == "dm" {

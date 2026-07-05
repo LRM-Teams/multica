@@ -117,8 +117,8 @@ export interface ChannelMessage {
   /** Set once the author has edited the message; drives the "(edited)" label. */
   edited_at?: string | null;
   /**
-   * Set once the message is soft-deleted; the bubble renders a tombstone
-   * placeholder ("message deleted") in its place — never an empty row.
+   * Set once the message is soft-deleted. Thread roots with live replies render
+   * a tombstone placeholder; deleted messages without replies can be omitted.
    */
   deleted_at?: string | null;
 }

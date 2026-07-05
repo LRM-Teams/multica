@@ -61,6 +61,7 @@ import {
   useAddChannelReaction,
   useRemoveChannelReaction,
   useMarkChannelThreadRead,
+  useSetChannelThreadFollowed,
   useSetChannelTyping,
 } from "@multica/core/channels";
 import { useAuthStore } from "@multica/core/auth";
@@ -162,7 +163,9 @@ import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
-import { ThreadRootPreview } from "./thread-root-preview";
+import { ThreadPanel } from "./thread-panel";
+import { deriveThreadParticipants } from "./thread-participants";
+import { mapThreadParticipants, mapThreadWakeAnnotations } from "./thread-read-model";
 import {
   Composer,
   ConversationHeader,
@@ -636,6 +639,20 @@ export function ChannelsPage() {
     },
     [threadPage?.messages, threadRoot],
   );
+  // Participant chips prefer the BE-provided read-model list (#251) and fall
+  // back to the structural derivation only when the BE sent none, so the panel
+  // is never empty-chipped for an older payload.
+  const threadParticipants = useMemo(() => {
+    if (!threadRoot) return [];
+    const beList = mapThreadParticipants(threadRoot);
+    return beList.length > 0 ? beList : deriveThreadParticipants(threadRoot, threadReplies);
+  }, [threadRoot, threadReplies]);
+  // "Why no reply" wake strip (#196), agent-only + neutral, from the root's
+  // read-model annotations (#251).
+  const threadWakeAnnotations = useMemo(
+    () => (threadRoot ? mapThreadWakeAnnotations(threadRoot) : []),
+    [threadRoot],
+  );
   const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
@@ -654,6 +671,7 @@ export function ChannelsPage() {
   const editChannelMessage = useEditChannelMessage();
   const deleteChannelMessage = useDeleteChannelMessage();
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
+  const setThreadFollowed = useSetChannelThreadFollowed();
   const setTyping = useSetChannelTyping();
   // Edit is a PATCH of an existing message (H5) — it routes through
   // editChannelMessage, never the send path, so it can never produce a new wake.
@@ -1352,6 +1370,17 @@ export function ChannelsPage() {
     setOpenThreadRoot(message);
   };
 
+  const handleToggleThreadFollow = useCallback(
+    (next: boolean) => {
+      if (!activeChannelId || !threadRoot) return;
+      setThreadFollowed.mutate(
+        { channelId: activeChannelId, messageId: threadRoot.id, followed: next },
+        { onError: () => toast.error(t(($) => $.dm.action_failed)) },
+      );
+    },
+    [activeChannelId, threadRoot, setThreadFollowed, t],
+  );
+
   const toggleInvite = (key: string) => {
     setSelectedInvites((prev) => {
       const next = new Set(prev);
@@ -1938,116 +1967,85 @@ export function ChannelsPage() {
   // can return to the list.
   const showChannelDetailSkeleton =
     isLoading || (!!activeId && !activeDmId && !active);
+  // The thread surface is the shared <ThreadPanel> (pinned root + flat replies +
+  // participant chips + wake strip), fed the #251 read-model off the root
+  // message. also-send is CUT this round (#256), so no also-send props are
+  // passed — the panel then hides the checkbox entirely.
   const threadPanel =
     active && threadRoot ? (
-      <div className="flex h-full min-h-0 min-w-0 flex-col bg-background">
-        <ConversationHeader
-          isMobile={isMobile}
-          leading={
-            <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-              <MessageSquare className="size-4" />
-            </span>
-          }
-          title={t(($) => $.thread.title)}
-          meta={
-            threadReplies.length > 0
-              ? t(($) => $.thread.meta_count, {
-                  count: threadReplies.length,
-                })
-              : undefined
-          }
-          actions={
-            <>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                aria-label={t(($) => $.thread.close_aria)}
-                onClick={() => setOpenThreadRoot(null)}
-              >
-                <X className="size-4" />
-              </Button>
-            </>
-          }
-        />
-        <ChannelMessageList
-          key={`thread:${threadRoot.id}:${threadLoading ? "loading" : "ready"}`}
-          messages={threadReplies}
-          currentUserId={currentUserId}
-          ownName={currentUserName ?? undefined}
-          emptyLabel={t(($) => $.thread.empty_replies)}
-          initialScroll="top"
-          header={
-            <ThreadRootPreview
-              message={threadRoot}
-              currentUserId={currentUserId}
-              ownName={currentUserName ?? undefined}
-              onViewParent={() => {
-                setHighlightMessageId(threadRoot.id);
-                if (isMobile) setOpenThreadRoot(null);
+      <ThreadPanel
+        root={threadRoot}
+        replies={threadReplies}
+        currentUserId={currentUserId}
+        currentUserName={currentUserName ?? undefined}
+        participants={threadParticipants}
+        followed={threadRoot.thread_followed ?? false}
+        onToggleFollow={handleToggleThreadFollow}
+        wakeAnnotations={threadWakeAnnotations}
+        isMobile={isMobile}
+        onBack={() => setOpenThreadRoot(null)}
+        onViewParent={() => {
+          setHighlightMessageId(threadRoot.id);
+          if (isMobile) setOpenThreadRoot(null);
+        }}
+        loading={threadLoading}
+        loadError={threadError}
+        onRetry={() => refetchThread()}
+        onReact={handleReactToMessage}
+        editor={
+          <ContentEditor
+            key={`thread-editor:${threadRoot.id}`}
+            ref={threadEditorRef}
+            placeholder={t(($) => $.thread.composer_placeholder)}
+            onUpdate={handleThreadEditorUpdate}
+            onSubmit={handleThreadSend}
+            onUploadFile={handleThreadUpload}
+            submitOnEnter
+            showBubbleMenu={false}
+            mentionAllowedActorIds={channelMemberIds}
+          />
+        }
+        onSend={handleThreadSend}
+        sendDisabled={threadDraftEmpty}
+        sending={sendThreadMessage.isPending}
+        composerLeadingActions={
+          <>
+            <input
+              ref={threadFileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                handlePickThreadFiles(e.target.files);
+                e.target.value = "";
               }}
             />
-          }
-          loading={threadLoading}
-          loadErrorLabel={threadError ? t(($) => $.thread.load_failed) : undefined}
-          onRetry={() => refetchThread()}
-          onReact={handleReactToMessage}
-        />
-        {isActiveArchived ? (
-          <ReadOnlyConversationBanner>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn(isMobile ? "size-10" : "size-8")}
+              aria-label={t(($) => $.composer.attach_aria)}
+              onClick={() => threadFileInputRef.current?.click()}
+            >
+              <Paperclip className={cn(isMobile ? "size-5" : "size-4")} />
+            </Button>
+          </>
+        }
+        readOnly={isActiveArchived}
+        readOnlyContent={
+          <>
             <Archive className="size-4 shrink-0" />
             <span>{t(($) => $.archive_dialog.readonly_notice)}</span>
-          </ReadOnlyConversationBanner>
-        ) : (
-          <>
-            <ConversationActivityStrip tasks={activeTasks} stoppingTaskId={stoppingChannelTaskId} onStopTask={handleStopChannelTask} />
-            <Composer
-              surface="thread"
-              sendLabel={t(($) => $.composer.send)}
-              sendDisabled={threadDraftEmpty}
-              sending={sendThreadMessage.isPending}
-              onSend={handleThreadSend}
-              isMobile={isMobile}
-              editor={
-                <ContentEditor
-                  key={`thread-editor:${threadRoot.id}`}
-                  ref={threadEditorRef}
-                  placeholder={t(($) => $.thread.composer_placeholder)}
-                  onUpdate={handleThreadEditorUpdate}
-                  onSubmit={handleThreadSend}
-                  onUploadFile={handleThreadUpload}
-                  submitOnEnter
-                  showBubbleMenu={false}
-                  mentionAllowedActorIds={channelMemberIds}
-                />
-              }
-              leadingActions={
-                <>
-                  <input
-                    ref={threadFileInputRef}
-                    type="file"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => {
-                      handlePickThreadFiles(e.target.files);
-                      e.target.value = "";
-                    }}
-                  />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn(isMobile ? "size-10" : "size-8")}
-                    aria-label={t(($) => $.composer.attach_aria)}
-                    onClick={() => threadFileInputRef.current?.click()}
-                  >
-                    <Paperclip className={cn(isMobile ? "size-5" : "size-4")} />
-                  </Button>
-                </>
-              }
-            />
           </>
-        )}
-      </div>
+        }
+        activitySlot={
+          <ConversationActivityStrip
+            tasks={activeTasks}
+            stoppingTaskId={stoppingChannelTaskId}
+            onStopTask={handleStopChannelTask}
+          />
+        }
+      />
     ) : null;
   const channelConversationPane = (
     <main className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background">

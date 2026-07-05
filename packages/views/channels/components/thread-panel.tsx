@@ -215,8 +215,9 @@ export interface ThreadPanelProps {
  * The thread panel: a pinned read-only root, a FLAT reply list (no nesting —
  * the reply list is never given an open-thread affordance), participant
  * visibility with an explicit follow toggle, the reused `<Composer
- * surface="thread">` with an `also_send_to_channel` action, and — when the
- * read-model wake state is supplied — a per-participant wake strip.
+ * surface="thread">` (an optional `also_send_to_channel` action, hidden unless
+ * a handler is supplied — deferred to the #256 main-timeline projection), and —
+ * when the read-model wake state is supplied — a per-participant wake strip.
  */
 export function ThreadPanel({
   root,

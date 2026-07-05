@@ -1727,7 +1727,7 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 		return nil, nil
 	}
 
-	child, err := s.Queries.CreateRetryTask(ctx, parent.ID)
+	child, err := s.createRetryTaskWithPendingWakeTransfer(ctx, parent.ID)
 	if err != nil {
 		slog.Warn("task auto-retry failed",
 			"parent_task_id", util.UUIDToString(parent.ID),
@@ -1749,6 +1749,69 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, child)
 	s.NotifyTaskEnqueued(ctx, child)
 	return &child, nil
+}
+
+func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context, parentID pgtype.UUID) (db.AgentTaskQueue, error) {
+	if s.TxStarter == nil {
+		return s.Queries.CreateRetryTask(ctx, parentID)
+	}
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("begin retry task transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	qtx := s.Queries.WithTx(tx)
+	child, err := qtx.CreateRetryTask(ctx, parentID)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("create retry task: %w", err)
+	}
+	if err := transferQueuedPendingWakeTask(ctx, tx, parentID, child.ID); err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	return child, nil
+}
+
+func transferQueuedPendingWakeTask(ctx context.Context, tx pgx.Tx, parentID, childID pgtype.UUID) error {
+	rows, err := tx.Query(ctx, `
+		SELECT status
+		FROM channel_ambient_pending_wake
+		WHERE task_id = $1
+		FOR UPDATE`, parentID)
+	if err != nil {
+		return fmt.Errorf("check pending wake state: %w", err)
+	}
+	defer rows.Close()
+
+	pendingRows := int64(0)
+	for rows.Next() {
+		pendingRows++
+		var status string
+		if err := rows.Scan(&status); err != nil {
+			return fmt.Errorf("scan pending wake state: %w", err)
+		}
+		if status != "queued" {
+			return fmt.Errorf("pending wake for parent task is %s, want queued", status)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("scan pending wake state: %w", err)
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE channel_ambient_pending_wake
+		SET task_id = $2, updated_at = now()
+		WHERE task_id = $1 AND status = 'queued'`, parentID, childID)
+	if err != nil {
+		return fmt.Errorf("update pending wake task: %w", err)
+	}
+	if tag.RowsAffected() != pendingRows {
+		return fmt.Errorf("pending wake transfer updated %d rows, want %d", tag.RowsAffected(), pendingRows)
+	}
+	return nil
 }
 
 // RerunIssue creates a fresh queued task for an agent on the issue. Used by

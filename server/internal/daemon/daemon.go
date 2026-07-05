@@ -3020,27 +3020,20 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	prompt := BuildPrompt(task, provider)
 
-	// Pass the daemon's auth credentials and context so the spawned agent CLI
-	// can call the Multica API and the local daemon (e.g. `multica repo checkout`).
+	// Pass the daemon's execution context so the spawned agent CLI can call
+	// the Multica API and the local daemon (e.g. `multica repo checkout`).
 	// MULTICA_TASK_SLOT is allocated from the daemon-wide concurrency pool, not
 	// per-agent. When one daemon hosts multiple agents, slots index shared
 	// daemon-level resources such as GPUs.
-	// MULTICA_TOKEN is the credential the agent process will use to call the
-	// Multica API. Prefer the task-scoped token the server minted at claim
-	// time — that token is bound to (agent, task) and the auth middleware
-	// rejects it on owner-only endpoints (e.g. `/api/agents/{id}/env`), so
-	// the agent cannot use it to read another agent's secrets. Falls back
-	// to the daemon's own credential only when the server returned no
-	// auth_token (older server, or cloud / system runtime with no owner) —
-	// in that legacy mode lateral-movement protection relies on the
-	// runtime not handing the daemon a workspace-owner PAT in the first
-	// place. See MUL-2600.
+	// The API credential itself is written below into a per-agent/per-run token
+	// file and exposed through a CLI wrapper, not as a raw environment value.
+	// Use only the task-scoped token the server minted at claim time. That
+	// token is bound to (agent, task) and the auth middleware rejects it on
+	// owner-only endpoints (e.g. `/api/agents/{id}/env`), so the agent cannot
+	// use it to read another agent's secrets. Do not fall back to the daemon's
+	// own long-lived credential for agent transport.
 	agentToken := task.AuthToken
-	if agentToken == "" {
-		agentToken = d.client.Token()
-	}
 	agentEnv := map[string]string{
-		"MULTICA_TOKEN":           agentToken,
 		"MULTICA_SERVER_URL":      d.cfg.ServerBaseURL,
 		"MULTICA_DAEMON_PORT":     fmt.Sprintf("%d", d.cfg.HealthPort),
 		"MULTICA_WORKSPACE_ID":    task.WorkspaceID,
@@ -3080,11 +3073,26 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	// Ensure the multica CLI is on PATH inside the agent's environment.
 	// Some runtimes (e.g. Codex) run in an isolated sandbox that may not
-	// inherit the daemon's PATH. Prepend the directory of the running
-	// multica binary so that `multica` commands in the agent always resolve.
+	// inherit the daemon's PATH. Prepend a per-run wrapper directory so
+	// `multica` resolves to the task-scoped transport wrapper first; keep the
+	// real binary directory after it as a fallback for explicit wrapper exec.
 	if selfBin, err := os.Executable(); err == nil {
 		binDir := filepath.Dir(selfBin)
-		agentEnv["PATH"] = binDir + string(os.PathListSeparator) + os.Getenv("PATH")
+		pathPrefix := binDir
+		if agentToken != "" {
+			wrapperDir, tokenFile, err := prepareTaskCLITransport(d.cfg, task.WorkspaceID, agentID, task.ID, selfBin, agentToken)
+			if err != nil {
+				return TaskResult{}, fmt.Errorf("prepare agent CLI transport: %w", err)
+			}
+			agentEnv["MULTICA_TOKEN_FILE"] = tokenFile
+			pathPrefix = wrapperDir + string(os.PathListSeparator) + binDir
+			taskLog.Info("agent cli transport prepared", "wrapper_dir", wrapperDir, "token_file", tokenFile)
+		} else {
+			taskLog.Warn("agent cli transport: no task token available; CLI API calls will require external auth")
+		}
+		agentEnv["PATH"] = pathPrefix + string(os.PathListSeparator) + os.Getenv("PATH")
+	} else {
+		taskLog.Warn("agent cli transport: unable to resolve multica executable", "error", err)
 	}
 	// Point Codex to the per-task CODEX_HOME so it discovers skills natively
 	// without polluting the system ~/.codex/skills/.

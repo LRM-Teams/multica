@@ -11,10 +11,10 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// The welcome prompt must (1) name the joiner and channel, (2) keep output
-// plain-text during the transport transition, and (3) forbid @-mentions /
-// follow-up — that last rule is what keeps a wall of welcomes from chaining
-// into the automatic agent-reply loop.
+// The welcome prompt must (1) name the joiner and channel, (2) route visible
+// output through the CLI transport, and (3) forbid @-mentions / follow-up —
+// that last rule is what keeps a wall of welcomes from chaining into the
+// automatic agent-reply loop.
 func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 	agent := db.Agent{Name: "总监助理", DisplayName: "总监助理", Description: "负责总监以上协调"}
 	trigger := ChannelMessageResponse{ID: "11111111-1111-1111-1111-111111111111", AuthorName: "用户", Type: "user", Content: "全体总监以上欢迎一下新同事"}
@@ -27,9 +27,10 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 		"directly addresses your agent name",
 		"全体",
 		"Do not stay silent",
-		"reaction-only output is unavailable",
+		"multica send",
+		"multica react",
 		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
-		"short plain-text acknowledgement",
+		"short acknowledgement",
 		"structured sticker parts are unavailable",
 		"全体总监以上欢迎一下新同事",
 	} {
@@ -45,7 +46,7 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 	}
 }
 
-func TestBuildChannelMentionPromptUsesPlainTextTransitionContract(t *testing.T) {
+func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 	h := &Handler{DB: channelPromptNoopDB{}}
 	ch := ChannelResponse{
 		ID:          "22222222-2222-2222-2222-222222222222",
@@ -63,7 +64,8 @@ func TestBuildChannelMentionPromptUsesPlainTextTransitionContract(t *testing.T) 
 		for _, want := range []string{
 			"Multica group chat #产品讨论",
 			"directly addressed to you",
-			"visible plain-text result",
+			"visible result by running `multica send`",
+			"`multica react`",
 			"Do not return no_reply",
 			"structured sticker parts are unavailable",
 			"Current message to respond to",

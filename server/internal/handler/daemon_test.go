@@ -98,13 +98,46 @@ func newDaemonTokenRequest(method, path string, body any, workspaceID, daemonID 
 
 func createChannelCompletionTask(t *testing.T, channelKind string) (taskID, channelID string) {
 	t.Helper()
+	return createChannelCompletionTaskWithCapabilities(t, channelKind, []string{protocol.DaemonCapabilityChannelOutputActions})
+}
+
+func createChannelCompletionTaskWithCapabilities(t *testing.T, channelKind string, capabilities []string) (taskID, channelID string) {
+	t.Helper()
 	ctx := context.Background()
 
-	agentID := createHandlerTestAgent(t, "Complete Output Agent "+uuid.NewString(), nil)
-	var runtimeID string
-	if err := testPool.QueryRow(ctx, `SELECT runtime_id FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
-		t.Fatalf("setup: load agent runtime: %v", err)
+	metadata := []byte(`{}`)
+	if capabilities != nil {
+		var err error
+		metadata, err = json.Marshal(map[string]any{"capabilities": capabilities})
+		if err != nil {
+			t.Fatalf("setup: marshal runtime capabilities: %v", err)
+		}
 	}
+	var runtimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at
+		)
+		VALUES ($1, $2, $3, 'local', 'handler_test_runtime', 'online', 'complete-output runtime', $4, now())
+		RETURNING id
+	`, testWorkspaceID, "complete-output-"+uuid.NewString(), "Complete Output Runtime "+uuid.NewString(), metadata).Scan(&runtimeID); err != nil {
+		t.Fatalf("setup: create completion runtime: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID) })
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, visibility, max_concurrent_tasks, owner_id,
+			instructions, custom_env, custom_args, mcp_config
+		)
+		VALUES ($1, $2, '', 'local', '{}'::jsonb, $3, 'private', 1, $4, '', '{}'::jsonb, '[]'::jsonb, NULL)
+		RETURNING id
+	`, testWorkspaceID, "Complete Output Agent "+uuid.NewString(), runtimeID, testUserID).Scan(&agentID); err != nil {
+		t.Fatalf("setup: create completion agent: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID) })
 
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO channel (workspace_id, name, created_by, kind)
@@ -2303,6 +2336,79 @@ func TestCompleteTask_GroupChannelSendActionWritesMessage(t *testing.T) {
 	}
 }
 
+func TestCompleteTask_GroupChannelSendActionWithoutDaemonCapabilityIsSuppressed(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", nil)
+	const visibleReply = "Outdated daemon action reply"
+
+	w := completeTaskForTest(t, taskID, map[string]any{
+		"action": "message_send",
+		"output": visibleReply,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertNoChannelMessageContent(t, channelID, visibleReply)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+}
+
+func TestCompleteTask_GroupChannelSendTargetDMWithoutDaemonCapabilityIsSuppressed(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, sourceChannelID := createChannelCompletionTaskWithCapabilities(t, "group", nil)
+	var recipientName, agentID string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM "user" WHERE id = $1`, testUserID).Scan(&recipientName); err != nil {
+		t.Fatalf("load recipient name: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT agent_id FROM agent_task_queue WHERE id = $1`, taskID).Scan(&agentID); err != nil {
+		t.Fatalf("load task agent: %v", err)
+	}
+	canonical := dmCanonicalName("user", testUserID, "agent", agentID)
+	const visibleReply = "Outdated daemon targeted DM reply"
+
+	w := completeTaskForTest(t, taskID, map[string]any{
+		"action": "send",
+		"target": "dm:@" + recipientName,
+		"output": visibleReply,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertNoChannelMessageContent(t, sourceChannelID, visibleReply)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+
+	var dmChannelCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel
+		WHERE workspace_id = $1 AND kind = 'dm' AND name = $2
+	`, testWorkspaceID, canonical).Scan(&dmChannelCount); err != nil {
+		t.Fatalf("count targeted dm channels: %v", err)
+	}
+	if dmChannelCount != 0 {
+		t.Fatalf("targeted dm channel count = %d, want 0", dmChannelCount)
+	}
+	var visibleCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE content = $1
+	`, visibleReply).Scan(&visibleCount); err != nil {
+		t.Fatalf("count visible targeted dm messages: %v", err)
+	}
+	if visibleCount != 0 {
+		t.Fatalf("visible targeted dm message count = %d, want 0", visibleCount)
+	}
+}
+
 func TestCompleteTask_GroupChannelSendAliasTargetHumanDMCreatesMessage(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -2718,6 +2824,51 @@ func TestCompleteTask_GroupChannelMessageReactActionWritesReaction(t *testing.T)
 	if reactionCount != 1 {
 		t.Fatalf("reaction count = %d, want 1", reactionCount)
 	}
+}
+
+func TestCompleteTask_GroupChannelMessageReactWithoutDaemonCapabilityIsSuppressed(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", nil)
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT agent_id FROM agent_task_queue WHERE id = $1`, taskID).Scan(&agentID); err != nil {
+		t.Fatalf("load task agent: %v", err)
+	}
+	var triggerID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, trigger_depth)
+		VALUES ($1, $2, 'user', $3, 'Tester', 'old daemon react target', 'multica', $4, 0)
+		RETURNING id
+	`, channelID, testWorkspaceID, testUserID, "old-daemon-react-target-"+uuid.NewString()).Scan(&triggerID); err != nil {
+		t.Fatalf("seed trigger message: %v", err)
+	}
+
+	w := completeTaskForTest(t, taskID, map[string]any{
+		"action": "message_react",
+		"reaction": map[string]any{
+			"message_id": triggerID,
+			"emoji":      "👍",
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var reactionCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message_reaction
+		WHERE channel_message_id = $1 AND actor_type = 'agent' AND actor_id = $2
+	`, triggerID, agentID).Scan(&reactionCount); err != nil {
+		t.Fatalf("count bridged reaction: %v", err)
+	}
+	if reactionCount != 0 {
+		t.Fatalf("reaction count = %d, want 0", reactionCount)
+	}
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
 }
 
 func TestCompleteTask_GroupChannelLegacyTopLevelTypeMessageWritesMessage(t *testing.T) {

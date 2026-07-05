@@ -3339,9 +3339,6 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 	if h.handleTargetedChannelChatDone(ctx, chatOutputOrigin{channelID: channelID, workspaceID: workspaceID, agentID: agentID}, payload, content, parts, initiatorID) {
 		return
 	}
-	if h.handleChannelReactionCommand(ctx, channelID, workspaceID, agentID, reactionTargetID, content) {
-		return
-	}
 	nextDepth := triggerDepth + 1
 	msg, err := h.insertChannelMessageWithParts(ctx, channelID, workspaceID, "agent", agentID, agentName, content, parts, "multica", nil, pgtype.UUID{}, threadRootMessageID, threadID, nextDepth)
 	if err != nil {
@@ -3399,14 +3396,6 @@ func (h *Handler) handleChannelReactionPayload(ctx context.Context, channelID, w
 		messageID = parsed
 	}
 	return h.insertChannelReactionCommand(ctx, channelID, workspaceID, agentID, messageID, strings.TrimSpace(reaction.Emoji))
-}
-
-func (h *Handler) handleChannelReactionCommand(ctx context.Context, channelID, workspaceID, agentID, triggerMessageID pgtype.UUID, content string) bool {
-	reaction, ok := protocol.ParseMessageReactCommand(content)
-	if !ok {
-		return false
-	}
-	return h.handleChannelReactionPayload(ctx, channelID, workspaceID, agentID, triggerMessageID, reaction)
 }
 
 func (h *Handler) insertChannelReactionCommand(ctx context.Context, channelID, workspaceID, agentID, messageID pgtype.UUID, emoji string) bool {

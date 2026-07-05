@@ -233,11 +233,14 @@ describe("DmConversation message edit / delete wiring (#241 B3)", () => {
     apiMock.sendChannelMessage.mockReset().mockResolvedValue(ownMessage());
   });
 
-  it("renders edit + delete affordances on the viewer's OWN DM message (real wiring)", async () => {
+  // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden in
+  // the bubble (canEdit=false) until rebuilt on the unified composer (#258).
+  // Delete stays, so a viewer's own DM message surfaces Delete but never Edit.
+  it("renders delete but never edit on the viewer's OWN DM message (real wiring)", async () => {
     renderDm();
     await screen.findByTestId("message-bubble");
-    expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
   });
 
   it("renders NEITHER edit nor delete on a peer's message", async () => {
@@ -248,7 +251,11 @@ describe("DmConversation message edit / delete wiring (#241 B3)", () => {
     expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
   });
 
-  it("routes an edit through editChannelMessage (PATCH) and never a send (H5)", async () => {
+  // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden
+  // (canEdit=false) so the inline editor is unreachable from the DM UI. The
+  // dormant onEditMessage → editChannelMessage (PATCH) wiring is kept for the
+  // composer-parity rebuild (#258); restore this H5 PATCH test when re-enabled.
+  it.skip("routes an edit through editChannelMessage (PATCH) and never a send (H5)", async () => {
     const user = userEvent.setup();
     renderDm();
     await screen.findByTestId("message-bubble");

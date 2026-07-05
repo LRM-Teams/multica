@@ -192,16 +192,23 @@ describe("ChannelsPage message edit / delete wiring (#241 B3)", () => {
     apiMock.sendChannelMessage.mockReset().mockResolvedValue(ownMessage());
   });
 
-  it("supplies working onEditMessage / onDeleteMessage handlers to the message list", async () => {
+  // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden in
+  // the bubble (canEdit=false) until rebuilt on the unified composer (#258). The
+  // onEditMessage wiring is kept dormant, so we assert only the live delete
+  // handler here; the dormant edit wiring is covered by the skipped PATCH test.
+  it("supplies a working onDeleteMessage handler to the message list", async () => {
     renderPage();
     await screen.findByTestId("message-list");
     await waitFor(() => {
-      expect(typeof listProps.current?.onEditMessage).toBe("function");
       expect(typeof listProps.current?.onDeleteMessage).toBe("function");
     });
   });
 
-  it("routes an edit through editChannelMessage (PATCH) and never a send (H5)", async () => {
+  // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden
+  // (canEdit=false) so an edit can't be triggered from the UI. The dormant
+  // onEditMessage → editChannelMessage (PATCH) wiring is kept for the
+  // composer-parity rebuild (#258); restore this H5 PATCH test when re-enabled.
+  it.skip("routes an edit through editChannelMessage (PATCH) and never a send (H5)", async () => {
     renderPage();
     await screen.findByTestId("message-list");
     await waitFor(() => expect(listProps.current?.onEditMessage).toBeTypeOf("function"));

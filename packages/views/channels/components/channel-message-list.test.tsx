@@ -380,7 +380,10 @@ function makeOwnUserMessage(
 // on every live row. These render the real list → bubble and assert the
 // composed DOM, so the wiring can't silently regress again.
 describe("ChannelMessageList message edit / delete wiring", () => {
-  it("surfaces edit and delete affordances on the viewer's own message when the list is wired", () => {
+  // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden
+  // (canEdit=false) until rebuilt on the unified composer (#258). Delete stays,
+  // so a wired own row surfaces Delete but never Edit.
+  it("surfaces delete but never edit on the viewer's own message when the list is wired", () => {
     render(
       <ChannelMessageList
         messages={[makeOwnUserMessage()]}
@@ -391,8 +394,8 @@ describe("ChannelMessageList message edit / delete wiring", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
   });
 
   it("hides edit and delete on a message the viewer does not own, even when wired", () => {
@@ -417,7 +420,11 @@ describe("ChannelMessageList message edit / delete wiring", () => {
     expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
   });
 
-  it("saves an inline edit through onEditMessage (PATCH) and never a send/dispatch path (H5)", async () => {
+  // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden
+  // (canEdit=false) so the inline editor is unreachable through the wired list.
+  // onEditMessage wiring is kept dormant for the composer-parity rebuild (#258);
+  // restore this PATCH/H5 flow test when Edit is re-enabled.
+  it.skip("saves an inline edit through onEditMessage (PATCH) and never a send/dispatch path (H5)", async () => {
     const onEditMessage = vi.fn();
     const onReact = vi.fn();
     const onOpenThread = vi.fn();

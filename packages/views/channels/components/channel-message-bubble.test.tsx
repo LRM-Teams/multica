@@ -858,7 +858,11 @@ describe("ChannelMessageBubble", () => {
   const ownMessage = () =>
     makeMessage({ type: "user", author_id: "user-1", author_name: "alice", content: "Original" });
 
-  it("shows edit/delete affordances only on the viewer's own message", () => {
+  // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden
+  // (canEdit=false) until the inline editor is rebuilt on the unified composer
+  // (#258). Delete stays. This asserts Delete renders on the viewer's own
+  // message while Edit never does.
+  it("shows delete but never edit on the viewer's own message", () => {
     const { rerender } = render(
       <ChannelMessageBubble
         message={ownMessage()}
@@ -868,8 +872,9 @@ describe("ChannelMessageBubble", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    // Edit is unshipped — the entry point must not render even on own messages.
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
 
     // A peer / agent message from another author exposes no edit or delete.
     rerender(
@@ -884,7 +889,11 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
   });
 
-  it("edits inline and saves through onEdit without a send/dispatch path", async () => {
+  // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden
+  // (canEdit=false) so the inline editor is unreachable. MessageInlineEditor /
+  // onEdit are kept dormant for the composer-parity rebuild (#258); restore
+  // these two flow tests when Edit is re-enabled on the unified composer.
+  it.skip("edits inline and saves through onEdit without a send/dispatch path", async () => {
     const onEdit = vi.fn();
     const onReact = vi.fn();
     const onOpenThread = vi.fn();
@@ -919,7 +928,9 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByRole("textbox", { name: "Edit" })).not.toBeInTheDocument();
   });
 
-  it("cancels an inline edit without calling onEdit", async () => {
+  // Edit unshipped 2026-07-05 (Frank/Miles): unreachable while canEdit=false;
+  // restore alongside the composer-parity rebuild (#258).
+  it.skip("cancels an inline edit without calling onEdit", async () => {
     const onEdit = vi.fn();
     render(
       <ChannelMessageBubble

@@ -314,7 +314,11 @@ export function ChannelMessageBubble({
   // Edit / delete are viewer-own affordances only. H5: saving an edit routes
   // through onEdit (a PATCH), never a re-send — it cannot produce a new wake.
   const isEditing = editDraft !== null;
-  const canEdit = isOwn && !!onEdit;
+  // Edit unshipped 2026-07-05 (Frank/Miles): the inline editor is a plain
+  // textarea with no @mention/composer parity; hidden until rebuilt on the
+  // unified composer (#258 backlog). onEdit/MessageInlineEditor kept dormant for
+  // that rebuild. Delete stays.
+  const canEdit = false;
   const canDelete = isOwn && !!onDelete;
   const isEdited = !!message.edited_at;
   const handleStartEdit = () => setEditDraft(message.content);

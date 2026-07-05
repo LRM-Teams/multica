@@ -166,7 +166,7 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	}
 }
 
-func TestChannelChatDoneNoReplyAndReactionCommandsAreNotPersisted(t *testing.T) {
+func TestChannelChatDoneNoReplyAndReactionPayloadOnly(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -227,7 +227,7 @@ func TestChannelChatDoneNoReplyAndReactionCommandsAreNotPersisted(t *testing.T) 
 		Type:          protocol.ChatOutputKindMessage,
 		Content:       reactionCommand,
 	}})
-	assertNoChannelMessageContent(t, channelID, reactionCommand)
+	assertChannelMessageContentCount(t, channelID, reactionCommand, 1)
 
 	var legacyReactionCount int
 	if err := testPool.QueryRow(ctx, `
@@ -236,8 +236,8 @@ func TestChannelChatDoneNoReplyAndReactionCommandsAreNotPersisted(t *testing.T) 
 		WHERE channel_message_id = $1 AND actor_type = 'agent' AND actor_id = $2 AND emoji = '🎉'`, trigger.ID, agentID).Scan(&legacyReactionCount); err != nil {
 		t.Fatalf("count legacy channel reaction: %v", err)
 	}
-	if legacyReactionCount != 1 {
-		t.Fatalf("message react count = %d, want 1", legacyReactionCount)
+	if legacyReactionCount != 0 {
+		t.Fatalf("message react count = %d, want 0", legacyReactionCount)
 	}
 
 	legacyReactionCommand := fmt.Sprintf("multica channel react %s 🚀", trigger.ID)
@@ -246,7 +246,7 @@ func TestChannelChatDoneNoReplyAndReactionCommandsAreNotPersisted(t *testing.T) 
 		Type:          protocol.ChatOutputKindMessage,
 		Content:       legacyReactionCommand,
 	}})
-	assertNoChannelMessageContent(t, channelID, legacyReactionCommand)
+	assertChannelMessageContentCount(t, channelID, legacyReactionCommand, 1)
 
 	var legacyChannelReactionCount int
 	if err := testPool.QueryRow(ctx, `
@@ -255,8 +255,8 @@ func TestChannelChatDoneNoReplyAndReactionCommandsAreNotPersisted(t *testing.T) 
 		WHERE channel_message_id = $1 AND actor_type = 'agent' AND actor_id = $2 AND emoji = '🚀'`, trigger.ID, agentID).Scan(&legacyChannelReactionCount); err != nil {
 		t.Fatalf("count legacy channel reaction: %v", err)
 	}
-	if legacyChannelReactionCount != 1 {
-		t.Fatalf("legacy channel reaction count = %d, want 1", legacyChannelReactionCount)
+	if legacyChannelReactionCount != 0 {
+		t.Fatalf("legacy channel reaction count = %d, want 0", legacyChannelReactionCount)
 	}
 
 	if _, err := testPool.Exec(ctx, `
@@ -286,13 +286,6 @@ func TestChannelChatDoneNoReplyAndReactionCommandsAreNotPersisted(t *testing.T) 
 		t.Fatalf("deleted-message reaction count = %d, want 0", deletedReactionCount)
 	}
 
-	malformedReactionCommand := "multica channel react not-a-message-id 👍"
-	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
-		ChatSessionID: sessionID,
-		Type:          protocol.ChatOutputKindMessage,
-		Content:       malformedReactionCommand,
-	}})
-	assertNoChannelMessageContent(t, channelID, malformedReactionCommand)
 }
 
 func TestChannelChatDoneSuppressedDaemonOutdatedDoesNotWriteSystemMessage(t *testing.T) {
@@ -3612,6 +3605,11 @@ func sendChannelThreadReplyForTest(t *testing.T, channelID, rootID, userID strin
 
 func assertNoChannelMessageContent(t *testing.T, channelID, content string) {
 	t.Helper()
+	assertChannelMessageContentCount(t, channelID, content, 0)
+}
+
+func assertChannelMessageContentCount(t *testing.T, channelID, content string, want int) {
+	t.Helper()
 	var count int
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT count(*)
@@ -3619,8 +3617,8 @@ func assertNoChannelMessageContent(t *testing.T, channelID, content string) {
 		WHERE channel_id = $1 AND content = $2`, channelID, content).Scan(&count); err != nil {
 		t.Fatalf("count channel message content: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("channel message content %q was persisted %d time(s)", content, count)
+	if count != want {
+		t.Fatalf("channel message content %q count = %d, want %d", content, count, want)
 	}
 }
 

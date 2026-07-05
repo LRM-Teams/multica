@@ -51,6 +51,7 @@ var businessMetricLabels = map[string][]string{
 	"multica_task_queued_expired_total":            {labelSource, labelRuntimeMode},
 	"multica_task_lease_expired_total":             {labelSource},
 	"multica_channel_ambient_gate_decisions_total": {labelAction, labelReason},
+	"multica_channel_output_suppressed_total":      {labelReason},
 
 	// PR3 funnel / community / commercial.
 	"multica_signup_total":                             {labelSignupSource},
@@ -161,6 +162,18 @@ var (
 		"runtime_window_cap":   "runtime_window_cap",
 		"other":                "other",
 	}
+	knownChannelOutputSuppressedReasons = map[string]string{
+		"daemon_outdated":        "daemon_outdated",
+		"legacy_protocol_output": "legacy_protocol_output",
+		"invalid_output":         "invalid_output",
+		"invalid_action":         "invalid_action",
+		"invalid_type":           "invalid_type",
+		"empty_message":          "empty_message",
+		"invalid_reaction":       "invalid_reaction",
+		"message_missing_action": "message_missing_action",
+		"invalid_target":         "invalid_target",
+		"other":                  "other",
+	}
 	knownFailureReasons = map[string]string{}
 	modelAliasUnsafeRe  = regexp.MustCompile(`[^a-z0-9._:/+-]+`)
 )
@@ -248,6 +261,14 @@ func NormalizeAmbientGateAction(value string) string {
 func NormalizeAmbientGateReason(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if normalized, ok := knownAmbientGateReasons[value]; ok {
+		return normalized
+	}
+	return "other"
+}
+
+func NormalizeChannelOutputSuppressedReason(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if normalized, ok := knownChannelOutputSuppressedReasons[value]; ok {
 		return normalized
 	}
 	return "other"

@@ -152,6 +152,7 @@ const (
 
 const (
 	ChannelOutputSuppressedReasonDaemonOutdated       = "daemon_outdated"
+	ChannelOutputSuppressedReasonLegacyProtocolOutput = "legacy_protocol_output"
 	ChannelOutputSuppressedReasonInvalidOutput        = "invalid_output"
 	ChannelOutputSuppressedReasonInvalidAction        = "invalid_action"
 	ChannelOutputSuppressedReasonInvalidType          = "invalid_type"
@@ -240,120 +241,6 @@ func NormalizeChatOutputType(outputType string, hasReplyBody, hasReactionPayload
 
 func ErrInvalidChatOutputType(outputType string) error {
 	return fmt.Errorf("invalid chat output type %q", outputType)
-}
-
-func ParseMessageSendCommand(output string) (string, bool) {
-	const prefix = "multica message send"
-	body := strings.TrimSpace(output)
-	if body != prefix && !strings.HasPrefix(body, prefix+" ") {
-		return "", false
-	}
-	rest := strings.TrimSpace(strings.TrimPrefix(body, prefix))
-	if rest == "" {
-		return "", true
-	}
-	if strings.HasPrefix(rest, "--channel ") {
-		_, after, ok := splitFirstCommandArg(strings.TrimSpace(strings.TrimPrefix(rest, "--channel ")))
-		if !ok {
-			return "", true
-		}
-		rest = strings.TrimSpace(after)
-	}
-	if strings.HasPrefix(rest, "--message ") {
-		rest = strings.TrimSpace(strings.TrimPrefix(rest, "--message "))
-	} else if strings.HasPrefix(rest, "-m ") {
-		rest = strings.TrimSpace(strings.TrimPrefix(rest, "-m "))
-	}
-	return trimMatchingCommandQuotes(rest), true
-}
-
-func ParseMessageReactCommand(output string) (*ChatReactionPayload, bool) {
-	body := strings.TrimSpace(output)
-	const messageReactPrefix = "multica message react"
-	if body == messageReactPrefix || strings.HasPrefix(body, messageReactPrefix+" ") {
-		rest := strings.TrimSpace(strings.TrimPrefix(body, messageReactPrefix))
-		if rest == "" {
-			return &ChatReactionPayload{}, true
-		}
-		fields := strings.Fields(rest)
-		var messageID string
-		var emoji string
-		for i := 0; i < len(fields); i++ {
-			switch fields[i] {
-			case "--message", "--message-id":
-				if i+1 < len(fields) {
-					messageID = fields[i+1]
-					i++
-				}
-			case "--emoji":
-				if i+1 < len(fields) {
-					emoji = trimMatchingCommandQuotes(fields[i+1])
-					i++
-				}
-			default:
-				if messageID == "" {
-					messageID = fields[i]
-				} else if emoji == "" {
-					emoji = trimMatchingCommandQuotes(fields[i])
-				}
-			}
-		}
-		return &ChatReactionPayload{
-			MessageID: strings.TrimSpace(messageID),
-			Emoji:     strings.TrimSpace(emoji),
-		}, true
-	}
-
-	const prefix = "multica channel react "
-	if !strings.HasPrefix(body, prefix) {
-		return nil, false
-	}
-	rest := strings.TrimSpace(strings.TrimPrefix(body, prefix))
-	messageID, emoji, ok := strings.Cut(rest, " ")
-	if !ok {
-		return &ChatReactionPayload{}, true
-	}
-	return &ChatReactionPayload{
-		MessageID: strings.TrimSpace(messageID),
-		Emoji:     strings.TrimSpace(emoji),
-	}, true
-}
-
-func ParseLegacyChatReactionCommand(output string) (*ChatReactionPayload, bool) {
-	return ParseMessageReactCommand(output)
-}
-
-func splitFirstCommandArg(input string) (string, string, bool) {
-	input = strings.TrimSpace(input)
-	if input == "" {
-		return "", "", false
-	}
-	quote := byte(0)
-	if input[0] == '"' || input[0] == '\'' {
-		quote = input[0]
-		for i := 1; i < len(input); i++ {
-			if input[i] == quote {
-				return input[1:i], input[i+1:], true
-			}
-		}
-		return "", "", false
-	}
-	arg, rest, ok := strings.Cut(input, " ")
-	if !ok {
-		return input, "", true
-	}
-	return arg, rest, true
-}
-
-func trimMatchingCommandQuotes(input string) string {
-	input = strings.TrimSpace(input)
-	if len(input) < 2 {
-		return input
-	}
-	if (input[0] == '"' && input[len(input)-1] == '"') || (input[0] == '\'' && input[len(input)-1] == '\'') {
-		return input[1 : len(input)-1]
-	}
-	return input
 }
 
 // TaskMessagePayload represents a single agent execution message (tool call, text, etc.)

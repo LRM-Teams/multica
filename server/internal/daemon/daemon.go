@@ -3305,19 +3305,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	outputTarget := ""
 	var outputOptions *protocol.ChatOutputOptions
 	outputType := ""
-	if normalizedOutput, normalizedParts, normalizedOutputType, normalizedOutputAction, normalizedOutputTarget, normalizedOptions, normalizedReaction, structured, err := parseStructuredMessageOutput(result.Output); structured {
-		if err != nil {
-			taskLog.Warn("agent structured message parts invalid; keeping raw output", "error", err)
-		} else {
-			output = normalizedOutput
-			parts = normalizedParts
-			outputType = normalizedOutputType
-			outputAction = normalizedOutputAction
-			outputTarget = normalizedOutputTarget
-			outputOptions = normalizedOptions
-			reaction = normalizedReaction
-		}
-	}
 
 	switch result.Status {
 	case "completed":

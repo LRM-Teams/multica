@@ -21,7 +21,7 @@ func TestAgentActivity_RoleGatesStepAndDiagnosticPayloads(t *testing.T) {
 	taskID := createActivityRunTask(t, agentID, "", "completed", "safe summary")
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent_task_queue
-		SET result = '{"action":"no_reply","trigger_kind":"time_trigger"}'::jsonb,
+		SET result = '{"action":"no_reply","trigger_kind":"time_trigger","output_suppressed_reason":"legacy_protocol_output"}'::jsonb,
 		    error = 'raw stack /Users/frank/secret sk_agent_should_not_leak',
 		    started_at = now() - interval '2 minutes',
 		    completed_at = now() - interval '1 minute'
@@ -59,6 +59,9 @@ func TestAgentActivity_RoleGatesStepAndDiagnosticPayloads(t *testing.T) {
 	}
 	if item.Run.Result.Action == nil || *item.Run.Result.Action != "no_reply" || item.Run.Result.MessageRef != nil {
 		t.Fatalf("no_reply result contract wrong: %+v", item.Run.Result)
+	}
+	if item.Run.Result.OutputSuppressedReason == nil || *item.Run.Result.OutputSuppressedReason != "legacy_protocol_output" {
+		t.Fatalf("suppressed reason not surfaced in run result: %+v", item.Run.Result)
 	}
 	if item.Run.Trigger.Kind != agentActivityTriggerTimeTrigger {
 		t.Fatalf("reserved time_trigger not surfaced: %+v", item.Run.Trigger)
@@ -113,6 +116,9 @@ func TestAgentActivity_RoleGatesStepAndDiagnosticPayloads(t *testing.T) {
 	}
 	if strings.Contains(ownerDiag.Body.String(), "sk_agent_should_not_leak") || strings.Contains(ownerDiag.Body.String(), "/Users/frank/secret") {
 		t.Fatalf("diagnostic leaked raw error: %s", ownerDiag.Body.String())
+	}
+	if !strings.Contains(ownerDiag.Body.String(), `"output_suppressed_reason":"legacy_protocol_output"`) {
+		t.Fatalf("diagnostic missing output_suppressed_reason: %s", ownerDiag.Body.String())
 	}
 }
 

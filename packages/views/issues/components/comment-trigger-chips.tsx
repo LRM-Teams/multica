@@ -337,6 +337,11 @@ function TriggerAgentAvatar({
 }) {
   return (
     <span
+      // Fixed-size, non-stretchable presence box (mirrors AgentPresenceOverlay)
+      // so the raw dot stays anchored to the avatar's bottom-right regardless
+      // of the parent layout. This surface keeps the raw dot (not the overlay)
+      // because it needs the `showDot`/`suppressed` gating.
+      style={{ width: AVATAR_SIZE, height: AVATAR_SIZE }}
       className={cn(
         "relative inline-flex shrink-0",
         suppressed && "opacity-40 grayscale",

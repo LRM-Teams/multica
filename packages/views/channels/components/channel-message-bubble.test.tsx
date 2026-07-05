@@ -242,6 +242,24 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByLabelText(/^Status:/)).not.toBeInTheDocument();
   });
 
+  // Root-cause guard: the bubble is a CSS grid (`align-items: stretch`), which
+  // used to stretch the hand-rolled `relative inline-flex` presence wrapper to
+  // the full message height and detach the dot to the row's bottom-left. The
+  // dot must now route through the single, fixed-size, stretch-proof
+  // AgentPresenceOverlay box — no manual wrapper — so it can't detach.
+  it("anchors the agent presence dot in a fixed-size, stretch-proof box (no manual wrapper)", () => {
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+
+    const dot = screen.getByLabelText(/^Status:/);
+    const box = dot.closest('[data-slot="agent-presence"]');
+    expect(box).not.toBeNull();
+    expect(box).toContainElement(dot);
+    // Non-stretchable: an explicit box size (immune to align-items: stretch)
+    // plus shrink-0 keeps the dot on the avatar's bottom-right.
+    expect(box).toHaveClass("shrink-0");
+    expect(box).toHaveStyle({ width: "28px", height: "28px" });
+  });
+
   it("resolves quoted reply author names through live identity", () => {
     render(
       <ChannelMessageBubble

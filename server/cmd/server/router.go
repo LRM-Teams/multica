@@ -1056,6 +1056,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// (resolveActor must be "agent"); human callers get 403.
 			r.Post("/api/chat/agent-dm", h.AgentDirectMessage)
 
+			// Agent task-token chat transport. These routes intentionally live
+			// on the regular Auth API so task tokens use the same workspace and
+			// permission chain as other channel operations.
+			r.Post("/api/agent/messages/send", h.AgentTransportSendMessage)
+			r.Post("/api/agent/messages/react", h.AgentTransportReactMessage)
+			r.Post("/api/agent/messages/read", h.AgentTransportReadMessages)
+			r.Post("/api/agent/messages/search", h.AgentTransportSearchMessages)
+
 			// Unified 1-on-1 DM list (kind='dm' channels ∪ legacy unbound chat
 			// sessions) plus idempotent create-or-find. Sole data source for the
 			// DM section; group channels stay on /api/channels.

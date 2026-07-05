@@ -781,7 +781,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
 	b.WriteString("## Chat Mode\n\n")
-	b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Reply conversationally and directly; your final assistant output is sent back to the chat. Do not post issue comments or change issue status unless the user explicitly asks you to operate on an issue.\n\n")
+	b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Reply conversationally and directly by using the task-scoped Multica CLI transport for visible chat output. Do not post issue comments or change issue status unless the user explicitly asks you to operate on an issue.\n\n")
 	b.WriteString("Context boundaries:\n")
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
 	b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary; do not load the entire parent channel/DM history by default.\n")
@@ -790,6 +790,9 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("## Available Commands\n\n")
 	b.WriteString("Use `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help` to discover exact flags. Prefer `--output json` when reading data.\n\n")
 	b.WriteString("Common capabilities available when the user asks or the answer needs platform data:\n")
+	b.WriteString("- Chat output: send a visible reply with `multica send --message \"...\"`, or use `--message-stdin` / `--message-file <path>` for longer bodies. Omit `--target` for the current DM/channel/thread; use `--target \"#channel\"`, `--target \"#channel:<message-id>\"`, or `--target \"dm:@handle\"` only when intentionally targeting another chat surface. After successful `multica send`, do not repeat the same content in final assistant output.\n")
+	b.WriteString("- Chat reactions: add a reaction with `multica react --message-id <message-id> --emoji \"...\"`; after successful `multica react`, do not add a second visible final reply.\n")
+	b.WriteString("- Chat history: read the current or targeted surface with `multica message read [--target ...] [--limit N] --output json`, and search with `multica message search \"query\" [--target ...] --output json`.\n")
 	b.WriteString("- Issues: list/get/create/update issues, including status, assignee, parent/sub-issue, project, and due-date changes.\n")
 	b.WriteString("- Comments: read or add issue comments, including `multica issue comment add`, when the user explicitly asks you to work on an issue.\n")
 	b.WriteString("- Issue metadata: inspect or update issue-specific persistent facts when explicitly working on an issue: `multica issue metadata list <issue-id>`, `multica issue metadata set <issue-id> --key <k> --value <v> [--type string|number|bool]`, `multica issue metadata delete <issue-id> --key <k>`.\n")
@@ -812,7 +815,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("All interactions with Multica platform resources — issues, comments, attachments, images, files, and platform data — must go through the `multica` CLI. Do NOT use `curl`, `wget`, or other HTTP clients to access Multica URLs or APIs directly.\n\n")
 
 	b.WriteString("## Output\n\n")
-	b.WriteString("Reply directly in your final assistant output. The platform sends that output to the chat. Keep responses concise and natural, and state the outcome rather than the process.\n")
+	b.WriteString("For visible chat replies, run `multica send` or `multica react`. After the command succeeds, leave final assistant output empty or minimal so the platform does not receive a duplicate answer. Keep sent messages concise and natural, and state the outcome rather than the process.\n")
 }
 
 func renderRepositoryContext(b *strings.Builder, ctx TaskContextForEnv) {

@@ -2203,6 +2203,11 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		}
 		return err
 	}
+	if channelTask && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && h.taskHasAgentTransportVisibleOutput(ctx, task.ID) {
+		slog.Warn("complete task: suppressing final output after agent transport output", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonToolTransportOutput)
+		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonToolTransportOutput)
+		return nil
+	}
 	if channelTask && explicitAction && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && !h.taskRuntimeHasCapability(ctx, task, protocol.DaemonCapabilityChannelOutputActions) {
 		slog.Warn("complete task: suppressing channel output action from outdated daemon", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "action", req.Action, "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonDaemonOutdated)
 		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonDaemonOutdated)

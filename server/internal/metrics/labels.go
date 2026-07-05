@@ -165,6 +165,7 @@ var (
 	knownChannelOutputSuppressedReasons = map[string]string{
 		"daemon_outdated":        "daemon_outdated",
 		"legacy_protocol_output": "legacy_protocol_output",
+		"tool_transport_output":  "tool_transport_output",
 		"invalid_output":         "invalid_output",
 		"invalid_action":         "invalid_action",
 		"invalid_type":           "invalid_type",

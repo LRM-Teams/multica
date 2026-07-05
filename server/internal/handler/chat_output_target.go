@@ -101,15 +101,28 @@ func (h *Handler) resolveHumanDMOutputTarget(ctx context.Context, origin chatOut
 		return pgtype.UUID{}, errChatOutputInvalidTarget
 	}
 	var userID pgtype.UUID
-	err := h.DB.QueryRow(ctx, `
+	rows, err := h.DB.Query(ctx, `
 		SELECT m.user_id
 		FROM member m
 		JOIN "user" u ON u.id = m.user_id
 		WHERE m.workspace_id = $1 AND lower(u.name) = lower($2)
-		LIMIT 1`, origin.workspaceID, handle).Scan(&userID)
+		ORDER BY m.created_at ASC
+		LIMIT 2`, origin.workspaceID, handle)
 	if err != nil {
 		return pgtype.UUID{}, errChatOutputInvalidTarget
 	}
+	defer rows.Close()
+	var matches []pgtype.UUID
+	for rows.Next() {
+		if err := rows.Scan(&userID); err != nil {
+			return pgtype.UUID{}, errChatOutputInvalidTarget
+		}
+		matches = append(matches, userID)
+	}
+	if rows.Err() != nil || len(matches) != 1 {
+		return pgtype.UUID{}, errChatOutputInvalidTarget
+	}
+	userID = matches[0]
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: origin.agentID, WorkspaceID: origin.workspaceID})
 	if err != nil || agent.ArchivedAt.Valid {
 		return pgtype.UUID{}, errChatOutputInvalidTarget

@@ -313,9 +313,13 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 
 	for _, want := range []string{
 		"## Chat Mode",
-		"your final assistant output is sent back to the chat",
+		"task-scoped Multica CLI transport",
 		"Context boundaries:",
 		"Use `multica --help`",
+		"multica send --message",
+		"multica react --message-id",
+		"multica message read",
+		"multica message search",
 		"Issues: list/get/create/update issues",
 		"including `multica issue comment add`",
 		"Issue metadata: inspect or update issue-specific persistent facts",
@@ -326,7 +330,7 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 		"## Skills",
 		"$CODEX_HOME/skills/issue-triage/SKILL.md",
 		"## Mention Safety",
-		"Reply directly in your final assistant output",
+		"After the command succeeds",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("chat brief missing %q\n---\n%s", want, out)

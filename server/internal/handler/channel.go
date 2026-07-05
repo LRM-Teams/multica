@@ -35,10 +35,10 @@ const channelMessagesMaxLimit = 100
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
-const channelOutputContractInstruction = "Channel output contract: during this transition, create visible output by writing the final chat message directly as plain text. Do not output JSON envelopes, action objects, no_reply/stay_silent tokens, CLI commands such as multica send/react, tool intent, analysis, or described commands as the final answer. Plain text can only reply to the current/default conversation; cross-conversation sends, reactions, and structured parts are unavailable until the Multica CLI transport lands."
-const channelDirectedReplyInstruction = "This run is directly addressed to you. You must produce a visible plain-text result: answer helpfully, ask a follow-up question, or acknowledge the request in words. Do not return no_reply, stay_silent, JSON, or any other silent/protocol outcome for a direct mention, direct question, assigned task, or DM-style continuation."
-const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not print no_reply, stay_silent, JSON, or CLI/protocol text."
-const channelStickerReplyInstruction = "Sticker replies: during this transition, structured sticker parts are unavailable. If the user explicitly asks for a sticker/表情包, or a sticker-only social reply would otherwise be natural, use a short plain-text reply instead and do not output sticker JSON, :sticker:<id>: tokens, or multica commands."
+const channelOutputContractInstruction = "Channel output contract: use the task-scoped Multica CLI transport for visible chat output. Run `multica send --message ...` for a text reply to the current channel/thread, `multica send --target \"#channel\"|\"#channel:<message-id>\"|\"dm:@handle\" --message ...` for an explicit target, and `multica react --message-id <id> --emoji ...` for reactions. You may read context with `multica message read` and search with `multica message search`. After a successful send or react, do not repeat the same content in final assistant output; finish without extra visible text. Do not print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, or described commands as the final answer."
+const channelDirectedReplyInstruction = "This run is directly addressed to you. You must produce a visible result by running `multica send` or, when a reaction is explicitly requested and sufficient, `multica react`. Answer helpfully, ask a follow-up question, or acknowledge the request in words. Do not return no_reply, stay_silent, JSON, or any other silent/protocol outcome for a direct mention, direct question, assigned task, or DM-style continuation."
+const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not run `multica send`/`multica react`, and do not print no_reply, stay_silent, JSON, or CLI/protocol text."
+const channelStickerReplyInstruction = "Sticker replies: structured sticker parts are unavailable in the CLI transport. If the user explicitly asks for a sticker/表情包, or a sticker-only social reply would otherwise be natural, use `multica send` with a short plain-text reply instead and do not output sticker JSON or :sticker:<id>: tokens."
 const channelNameTakenCode = "channel_name_taken"
 const channelNameUniqueConstraint = "channel_workspace_id_name_key"
 
@@ -3042,9 +3042,9 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString("\n")
 	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, finish without visible output; do not print no_reply or protocol text.\n")
 	b.WriteString("If the message directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: write a visible plain-text reply or acknowledgement, and do not return no_reply.\n")
-	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and write one short visible plain-text message. Do not stay silent, do not print no_reply, and do not use a reaction-only command/result for that case.\n")
+	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and run `multica send` with one short visible message. Do not stay silent or print no_reply for that case.\n")
 	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
-	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, use a short plain-text acknowledgement; reaction-only output is unavailable until CLI transport lands.\n")
+	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, use `multica react` when a reaction is sufficient; otherwise use `multica send` with a short acknowledgement.\n")
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
@@ -3461,9 +3461,22 @@ func (h *Handler) insertChannelReactionCommand(ctx context.Context, channelID, w
 	if !messageID.Valid || strings.TrimSpace(emoji) == "" {
 		return true
 	}
+	reaction, found, err := h.insertAgentChannelReaction(ctx, h.DB, channelID, workspaceID, agentID, messageID, emoji)
+	if err != nil {
+		slog.Warn("channel reaction command failed", "channel", uuidToString(channelID), "agent", uuidToString(agentID), "error", err)
+		return true
+	}
+	if !found {
+		return true
+	}
+	h.publishChannelToMembers(ctx, protocol.EventChannelReactionAdded, uuidToString(workspaceID), "agent", uuidToString(agentID), channelID, map[string]any{"reaction": reaction, "channel_id": uuidToString(channelID), "message_id": uuidToString(messageID)})
+	return true
+}
+
+func (h *Handler) insertAgentChannelReaction(ctx context.Context, exec dbExecutor, channelID, workspaceID, agentID, messageID pgtype.UUID, emoji string) (ChannelReactionResponse, bool, error) {
 	var id, returnedMessageID, actorID pgtype.UUID
 	var createdAt pgtype.Timestamptz
-	err := h.DB.QueryRow(ctx, `
+	err := exec.QueryRow(ctx, `
 		INSERT INTO channel_message_reaction (channel_message_id, workspace_id, actor_type, actor_id, emoji)
 		SELECT cm.id, cm.workspace_id, 'agent', $3, $4
 		FROM channel_message cm
@@ -3475,11 +3488,10 @@ func (h *Handler) insertChannelReactionCommand(ctx context.Context, channelID, w
 		ON CONFLICT (channel_message_id, actor_type, actor_id, emoji) DO UPDATE SET created_at = channel_message_reaction.created_at
 		RETURNING id, channel_message_id, actor_id, created_at`, messageID, channelID, agentID, emoji, workspaceID).Scan(&id, &returnedMessageID, &actorID, &createdAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return true
+		return ChannelReactionResponse{}, false, nil
 	}
 	if err != nil {
-		slog.Warn("channel reaction command failed", "channel", uuidToString(channelID), "agent", uuidToString(agentID), "error", err)
-		return true
+		return ChannelReactionResponse{}, false, err
 	}
 	reaction := ChannelReactionResponse{
 		ID:        uuidToString(id),
@@ -3490,8 +3502,7 @@ func (h *Handler) insertChannelReactionCommand(ctx context.Context, channelID, w
 		Emoji:     emoji,
 		CreatedAt: timestampToString(createdAt),
 	}
-	h.publishChannelToMembers(ctx, protocol.EventChannelReactionAdded, uuidToString(workspaceID), "agent", uuidToString(agentID), channelID, map[string]any{"reaction": reaction, "channel_id": uuidToString(channelID), "message_id": uuidToString(messageID)})
-	return true
+	return reaction, true, nil
 }
 
 func (h *Handler) channelMessageBelongsToChannel(ctx context.Context, channelID, workspaceID, messageID pgtype.UUID) bool {
@@ -3582,6 +3593,7 @@ type channelMessageInsertInput struct {
 	ReplyToMessageID    pgtype.UUID
 	ThreadRootMessageID pgtype.UUID
 	ThreadID            *string
+	TriggerDepth        int
 	ClientMessageID     *string
 	MainTimelineVisible bool
 }
@@ -3611,7 +3623,7 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 	if err != nil {
 		return channelMessageCreateResult{}, err
 	}
-	msg, err := insertChannelMessageWithPartsExec(ctx, tx, in.ChannelID, in.WorkspaceID, "user", in.AuthorID, in.AuthorName, in.Content, in.Parts, "multica", nil, in.ClientMessageID, in.ReplyToMessageID, in.ThreadRootMessageID, in.ThreadID, 0, in.MainTimelineVisible)
+	msg, err := insertChannelMessageWithPartsExec(ctx, tx, in.ChannelID, in.WorkspaceID, "user", in.AuthorID, in.AuthorName, in.Content, in.Parts, "multica", nil, in.ClientMessageID, in.ReplyToMessageID, in.ThreadRootMessageID, in.ThreadID, in.TriggerDepth, in.MainTimelineVisible)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		if in.ClientMessageID != nil && isUniqueViolation(err) {

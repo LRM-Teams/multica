@@ -625,7 +625,8 @@ func isFilteredChildEnvKey(key string) bool {
 		"CLAUDE_CODE_ENTRYPOINT", // entrypoint marker (cli/sdk-cli/...)
 		"CLAUDE_CODE_EXECPATH",   // path to the running CLI binary
 		"CLAUDE_CODE_SESSION_ID", // per-session identifier
-		"CLAUDE_CODE_SSE_PORT":   // IDE-extension transport port
+		"CLAUDE_CODE_SSE_PORT",   // IDE-extension transport port
+		"MULTICA_TOKEN":          // raw API credential; agent transport uses per-run token files.
 		return true
 	}
 	// CLAUDECODE_* (no underscore between CLAUDE and CODE) is wholly internal;

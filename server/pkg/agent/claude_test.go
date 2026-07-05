@@ -420,6 +420,8 @@ func TestMergeEnvFiltersClaudeCodeVars(t *testing.T) {
 		"CLAUDE_CODE_EXECPATH=/opt/claude",
 		"CLAUDE_CODE_SESSION_ID=abc123",
 		"CLAUDE_CODE_SSE_PORT=9999",
+		"MULTICA_TOKEN=raw-token-must-not-leak",
+		"MULTICA_TOKEN_FILE=/tmp/task-token",
 		"CLAUDECODEX=keep-me",
 		"CLAUDE_CODE_GIT_BASH_PATH=C:\\Program Files\\Git\\bin\\bash.exe",
 		"CLAUDE_CODE_USE_BEDROCK=1",
@@ -434,6 +436,7 @@ func TestMergeEnvFiltersClaudeCodeVars(t *testing.T) {
 		"CLAUDE_CODE_EXECPATH=/opt/claude",
 		"CLAUDE_CODE_SESSION_ID=abc123",
 		"CLAUDE_CODE_SSE_PORT=9999",
+		"MULTICA_TOKEN=raw-token-must-not-leak",
 	}
 	for _, entry := range env {
 		for _, banned := range filteredOut {
@@ -466,6 +469,9 @@ func TestMergeEnvFiltersClaudeCodeVars(t *testing.T) {
 	// an internal per-session marker, so it must reach the child.
 	if !found["CLAUDE_CODE_TMPDIR=/custom/tmp"] {
 		t.Fatalf("expected CLAUDE_CODE_TMPDIR to be preserved, got %v", env)
+	}
+	if !found["MULTICA_TOKEN_FILE=/tmp/task-token"] {
+		t.Fatalf("expected MULTICA_TOKEN_FILE to be preserved, got %v", env)
 	}
 	if !found["FOO=bar"] {
 		t.Fatalf("expected extra env var to be appended, got %v", env)

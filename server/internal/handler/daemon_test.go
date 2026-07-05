@@ -2645,7 +2645,7 @@ func TestCompleteTask_GroupChannelCommandSendOutputIsSuppressed(t *testing.T) {
 
 	assertNoChannelMessageContent(t, channelID, visibleReply)
 	assertNoChannelMessageContent(t, channelID, rawOutput)
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
 }
 
 func TestCompleteTask_GroupChannelStructuredMessageSendOutputIsSuppressed(t *testing.T) {
@@ -2673,7 +2673,7 @@ func TestCompleteTask_GroupChannelStructuredMessageSendOutputIsSuppressed(t *tes
 	if channelMessageCount != 0 {
 		t.Fatalf("channel message count = %d, want 0", channelMessageCount)
 	}
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
 }
 
 func TestCompleteTask_GroupChannelMessageReactActionWritesReaction(t *testing.T) {
@@ -2720,7 +2720,7 @@ func TestCompleteTask_GroupChannelMessageReactActionWritesReaction(t *testing.T)
 	}
 }
 
-func TestCompleteTask_GroupChannelLegacyTopLevelTypeMessageFailsClosed(t *testing.T) {
+func TestCompleteTask_GroupChannelLegacyTopLevelTypeMessageWritesMessage(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2735,8 +2735,8 @@ func TestCompleteTask_GroupChannelLegacyTopLevelTypeMessageFailsClosed(t *testin
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	assertNoChannelMessageContent(t, channelID, visibleReply)
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+	assertChannelMessageContentCount(t, channelID, visibleReply, 1)
+	assertTaskOutputSuppressedReason(t, taskID, "")
 
 	var chatMessageCount int
 	if err := testPool.QueryRow(context.Background(), `
@@ -2745,39 +2745,39 @@ func TestCompleteTask_GroupChannelLegacyTopLevelTypeMessageFailsClosed(t *testin
 	`, taskID, visibleReply).Scan(&chatMessageCount); err != nil {
 		t.Fatalf("count assistant chat messages: %v", err)
 	}
-	if chatMessageCount != 0 {
-		t.Fatalf("assistant chat message count = %d, want 0", chatMessageCount)
+	if chatMessageCount != 1 {
+		t.Fatalf("assistant chat message count = %d, want 1", chatMessageCount)
 	}
 }
 
-func TestCompleteTask_GroupChannelUnstructuredOutputFailsClosed(t *testing.T) {
+func TestCompleteTask_GroupChannelPlainFinalTextWritesMessage(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	taskID, channelID := createChannelCompletionTask(t, "group")
-	const thinkingLeak = "Before I respond, let me quickly inspect the thread history."
+	const plainReply = "Plain final reply in channel"
 
-	w := completeTaskForTest(t, taskID, map[string]any{"type": "message", "output": thinkingLeak})
+	w := completeTaskForTest(t, taskID, map[string]any{"output": plainReply})
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	assertNoChannelMessageContent(t, channelID, thinkingLeak)
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+	assertChannelMessageContentCount(t, channelID, plainReply, 1)
+	assertTaskOutputSuppressedReason(t, taskID, "")
 
 	var chatMessageCount int
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT count(*) FROM chat_message
 		WHERE task_id = $1 AND role = 'assistant' AND content = $2
-	`, taskID, thinkingLeak).Scan(&chatMessageCount); err != nil {
+	`, taskID, plainReply).Scan(&chatMessageCount); err != nil {
 		t.Fatalf("count assistant chat messages: %v", err)
 	}
-	if chatMessageCount != 0 {
-		t.Fatalf("assistant chat message count = %d, want 0", chatMessageCount)
+	if chatMessageCount != 1 {
+		t.Fatalf("assistant chat message count = %d, want 1", chatMessageCount)
 	}
 }
 
-func TestCompleteTask_DMChannelPlainTextReplyIsSuppressed(t *testing.T) {
+func TestCompleteTask_DMChannelPlainTextReplyWritesMessage(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2790,8 +2790,8 @@ func TestCompleteTask_DMChannelPlainTextReplyIsSuppressed(t *testing.T) {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	assertNoChannelMessageContent(t, channelID, dmReply)
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+	assertChannelMessageContentCount(t, channelID, dmReply, 1)
+	assertTaskOutputSuppressedReason(t, taskID, "")
 }
 
 func TestCompleteTask_DMChannelStructuredMessageSendOutputIsSuppressed(t *testing.T) {
@@ -2810,7 +2810,7 @@ func TestCompleteTask_DMChannelStructuredMessageSendOutputIsSuppressed(t *testin
 
 	assertNoChannelMessageContent(t, channelID, dmReply)
 	assertNoChannelMessageContent(t, channelID, rawOutput)
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
 }
 
 func TestTaskServiceCompleteTask_UnwrapsStructuredMessageSendBeforePersist(t *testing.T) {

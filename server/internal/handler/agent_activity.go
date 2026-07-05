@@ -85,8 +85,9 @@ type AgentActivityTokenUse struct {
 }
 
 type AgentActivityRunResult struct {
-	Action     *string                  `json:"action,omitempty"`
-	MessageRef *AgentActivityMessageRef `json:"message_ref,omitempty"`
+	Action                 *string                  `json:"action,omitempty"`
+	MessageRef             *AgentActivityMessageRef `json:"message_ref,omitempty"`
+	OutputSuppressedReason *string                  `json:"output_suppressed_reason,omitempty"`
 }
 
 type AgentActivityMessageRef struct {
@@ -877,9 +878,14 @@ func isKnownAgentActivityTrigger(kind string) bool {
 
 func agentActivityRunResult(row agentActivityRawRow) AgentActivityRunResult {
 	action := agentActivityResultState(row.Result)
+	var suppressedReason *string
+	if reason := agentActivityResultString(row.Result, "output_suppressed_reason"); reason != "" {
+		suppressedReason = stringPtr(reason)
+	}
 	return AgentActivityRunResult{
-		Action:     action,
-		MessageRef: agentActivityResultMessageRef(row),
+		Action:                 action,
+		MessageRef:             agentActivityResultMessageRef(row),
+		OutputSuppressedReason: suppressedReason,
 	}
 }
 
@@ -1052,6 +1058,9 @@ func agentActivityDiagnostic(row agentActivityRawRow) map[string]any {
 		}
 		if state := agentActivityResultState(row.Result); state != nil {
 			out["result_state"] = *state
+		}
+		if reason := agentActivityResultString(row.Result, "output_suppressed_reason"); reason != "" {
+			out["output_suppressed_reason"] = reason
 		}
 		out["step_count"] = row.StepCount
 		return out

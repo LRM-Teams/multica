@@ -2153,6 +2153,11 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	if err != nil {
 		return fmt.Errorf("invalid message parts: %w", err)
 	}
+	if channelTask && !explicitAction && isLegacyChannelProtocolOutput(output, parts) {
+		slog.Warn("complete task: suppressing protocol-shaped final text output", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
+		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
+		return nil
+	}
 
 	if channelTask && strings.TrimSpace(req.Action) == "" {
 		legacyType, legacyErr := protocol.NormalizeChatOutputType(req.Type, strings.TrimSpace(output) != "" || len(parts) > 0, req.Reaction != nil)
@@ -2180,24 +2185,20 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		if actionErr != nil {
 			if channelTask {
 				slog.Warn("complete task: suppressing invalid channel output action", "task_id", uuidToString(task.ID), "action", req.Action, "error", actionErr)
-				suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidAction)
+				h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidAction)
 				return nil
 			}
 			return actionErr
 		}
 		req.Action = normalizedAction
 		outputType, err = protocol.ChatOutputTypeForAction(normalizedAction)
-	} else if !channelTask {
-		outputType, err = protocol.NormalizeChatOutputType(req.Type, strings.TrimSpace(output) != "" || len(parts) > 0, req.Reaction != nil)
 	} else {
-		slog.Warn("complete task: suppressing channel output without explicit action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_type", req.Type)
-		suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
-		return nil
+		outputType, err = protocol.NormalizeChatOutputType(req.Type, strings.TrimSpace(output) != "" || len(parts) > 0, req.Reaction != nil)
 	}
 	if err != nil {
 		if channelTask {
 			slog.Warn("complete task: suppressing invalid channel output type", "task_id", uuidToString(task.ID), "output_type", req.Type, "error", err)
-			suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidType)
+			h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidType)
 			return nil
 		}
 		return err
@@ -2206,19 +2207,14 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		output = ""
 		parts = nil
 	}
-	if channelTask && outputType == protocol.ChatOutputKindMessage && !explicitAction {
-		slog.Warn("complete task: suppressing channel message without send action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
-		suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonMessageMissingAction)
-		return nil
-	}
 	if channelTask && outputType == protocol.ChatOutputKindMessage && strings.TrimSpace(output) == "" && len(parts) == 0 {
 		slog.Warn("complete task: suppressing empty channel send action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
-		suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonEmptyMessage)
+		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonEmptyMessage)
 		return nil
 	}
 	if channelTask && outputType == protocol.ChatOutputKindReaction && (req.Reaction == nil || strings.TrimSpace(req.Reaction.Emoji) == "") {
 		slog.Warn("complete task: suppressing invalid channel message react action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
-		suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidReaction)
+		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidReaction)
 		return nil
 	}
 	req.Output = output
@@ -2228,7 +2224,7 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	if channelTask && outputType == protocol.ChatOutputKindMessage {
 		if err := h.validateChatOutputTarget(ctx, task, req.Target, req.Options); err != nil {
 			slog.Warn("complete task: suppressing invalid channel output target", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "target", req.Target, "error", err)
-			suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidTarget)
+			h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidTarget)
 			return nil
 		}
 	} else if strings.TrimSpace(req.Target) != "" || chatOutputOptionsPresent(req.Options) {
@@ -2238,7 +2234,59 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	return nil
 }
 
-func suppressTaskCompleteOutput(req *TaskCompleteRequest, reason string) {
+func isLegacyChannelProtocolOutput(output string, parts []protocol.MessagePart) bool {
+	if _, _, unwrapped, err := messageparts.UnwrapStructuredMessageSend(output, parts); unwrapped || err != nil {
+		return true
+	}
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return false
+	}
+	if isLegacyChannelCLIOutput(trimmed) {
+		return true
+	}
+	var envelope struct {
+		Action   string                        `json:"action"`
+		Target   string                        `json:"target"`
+		Type     string                        `json:"type"`
+		Options  json.RawMessage               `json:"options"`
+		Parts    []protocol.MessagePart        `json:"parts"`
+		Reaction *protocol.ChatReactionPayload `json:"reaction"`
+	}
+	if strings.HasPrefix(trimmed, "{") && json.Unmarshal([]byte(trimmed), &envelope) == nil {
+		return strings.TrimSpace(envelope.Action) != "" ||
+			strings.TrimSpace(envelope.Target) != "" ||
+			strings.TrimSpace(envelope.Type) != "" ||
+			len(envelope.Options) > 0 ||
+			len(envelope.Parts) > 0 ||
+			envelope.Reaction != nil
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.Contains(lower, `{"action":"message_send"`) ||
+		strings.Contains(lower, `{"action":"send"`) ||
+		strings.Contains(lower, `{"action":"message_react"`) ||
+		strings.Contains(lower, `{"action":"react"`) ||
+		strings.Contains(lower, `{"action":"no_reply"`)
+}
+
+func isLegacyChannelCLIOutput(output string) bool {
+	lower := strings.ToLower(strings.TrimSpace(output))
+	for _, prefix := range []string{
+		"multica send",
+		"multica react",
+		"multica message send",
+		"multica message react",
+		"multica channel send",
+		"multica channel react",
+	} {
+		if lower == prefix || strings.HasPrefix(lower, prefix+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Handler) suppressTaskCompleteOutput(req *TaskCompleteRequest, reason string) {
 	req.Action = protocol.ChatOutputActionNoReply
 	req.Type = protocol.ChatOutputKindNoReply
 	req.Output = ""
@@ -2247,6 +2295,9 @@ func suppressTaskCompleteOutput(req *TaskCompleteRequest, reason string) {
 	req.Options = nil
 	req.Reaction = nil
 	req.OutputSuppressedReason = reason
+	if h.Metrics != nil {
+		h.Metrics.RecordChannelOutputSuppressed(reason)
+	}
 }
 
 func (h *Handler) isChannelAgentTask(ctx context.Context, task db.AgentTaskQueue) bool {

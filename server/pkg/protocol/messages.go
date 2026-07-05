@@ -152,6 +152,7 @@ const (
 
 const (
 	ChannelOutputSuppressedReasonDaemonOutdated       = "daemon_outdated"
+	ChannelOutputSuppressedReasonLegacyProtocolOutput = "legacy_protocol_output"
 	ChannelOutputSuppressedReasonInvalidOutput        = "invalid_output"
 	ChannelOutputSuppressedReasonInvalidAction        = "invalid_action"
 	ChannelOutputSuppressedReasonInvalidType          = "invalid_type"

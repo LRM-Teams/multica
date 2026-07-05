@@ -35,10 +35,10 @@ const channelMessagesMaxLimit = 100
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
-const channelOutputContractInstruction = "Channel action contract: create visible output only by returning exactly one action and nothing else. Use {\"action\":\"send\",\"output\":\"...\"} or {\"action\":\"send\",\"parts\":[...]} for a visible message in the current channel; use {\"action\":\"send\",\"target\":\"dm:@name\",\"output\":\"...\"} to send a Human DM to a same-workspace member by handle; use {\"action\":\"send\",\"target\":\"#channel:<message_id>\",\"output\":\"...\",\"options\":{\"show_in_channel\":false}} to reply in a thread, or set show_in_channel true only when the group thread reply should also be displayed in the main channel timeline. To react, use {\"action\":\"react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}}. Never output analysis, thinking, plans, tool intent, raw completion text, or described commands as a chat message."
-const channelDirectedReplyInstruction = "This run is directly addressed to you. You must produce a visible result: send a helpful reply, ask a follow-up question, or use a react action as an explicit acknowledgement. Do not return no_reply, stay_silent, or any other silent outcome for a direct mention, direct question, assigned task, or DM-style continuation."
-const channelAmbientNoReplyInstruction = "If you should not reply, do not call a send action; internal no_reply is allowed only as a non-visible outcome."
-const channelStickerReplyInstruction = "Sticker replies: if the user explicitly asks for a sticker/表情包, or you intentionally choose a sticker-only social reply such as hi/ok/收到/thanks/praise, use the send action with structured parts, for example {\"action\":\"send\",\"output\":\"Welcome!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome!\"},{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}. Use a real sticker_id from the multica-stickers skill. Do not output :sticker:<id>: tokens, and do not add a sticker to substantive answers."
+const channelOutputContractInstruction = "Channel output contract: during this transition, create visible output by writing the final chat message directly as plain text. Do not output JSON envelopes, action objects, no_reply/stay_silent tokens, CLI commands such as multica send/react, tool intent, analysis, or described commands as the final answer. Plain text can only reply to the current/default conversation; cross-conversation sends, reactions, and structured parts are unavailable until the Multica CLI transport lands."
+const channelDirectedReplyInstruction = "This run is directly addressed to you. You must produce a visible plain-text result: answer helpfully, ask a follow-up question, or acknowledge the request in words. Do not return no_reply, stay_silent, JSON, or any other silent/protocol outcome for a direct mention, direct question, assigned task, or DM-style continuation."
+const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not print no_reply, stay_silent, JSON, or CLI/protocol text."
+const channelStickerReplyInstruction = "Sticker replies: during this transition, structured sticker parts are unavailable. If the user explicitly asks for a sticker/表情包, or a sticker-only social reply would otherwise be natural, use a short plain-text reply instead and do not output sticker JSON, :sticker:<id>: tokens, or multica commands."
 const channelNameTakenCode = "channel_name_taken"
 const channelNameUniqueConstraint = "channel_workspace_id_name_key"
 
@@ -802,7 +802,7 @@ func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
-	// When a NEW human joins, every agent member greets them with a sticker.
+	// When a NEW human joins, every agent member greets them briefly.
 	// Guarded on RowsAffected so a duplicate re-add never re-welcomes, and on
 	// member_type so adding an agent member (or the creator at channel creation,
 	// which never routes through here) stays silent.
@@ -2604,7 +2604,7 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 }
 
 // dispatchChannelMemberWelcome makes every agent member of a channel post a
-// short, sticker-led welcome when a new human joins. Each welcome is an
+// short plain-text welcome when a new human joins. Each welcome is an
 // independent one-off agent run on its own fresh thread, driven by a static
 // prompt (no channel history) that forbids @-mentions — so welcomes never react
 // to each other and never chain into the automatic agent-reply discussion loop.
@@ -2665,7 +2665,7 @@ func buildChannelWelcomePrompt(channelName, joinedName string) string {
 	b.WriteString(channelOutputContractInstruction)
 	b.WriteString("\n")
 	b.WriteString("- Keep it to ONE short line, in the language the channel uses (Chinese if the member's name is Chinese).\n")
-	fmt.Fprintf(&b, "- Include exactly one sticker via the multica-stickers skill by returning a send action with structured parts, e.g. {\"action\":\"send\",\"output\":\"Welcome %s!\",\"parts\":[{\"type\":\"text\",\"text\":\"Welcome %s!\"},{\"type\":\"sticker\",\"sticker_id\":\"applause\"}]}. The sticker is the point of welcoming %s.\n", joinedName, joinedName, joinedName)
+	fmt.Fprintf(&b, "- During this transition, structured stickers are unavailable; welcome %s with plain text only.\n", joinedName)
 	b.WriteString("- Do NOT @-mention anyone — not the new member, not other agents. This is a one-off greeting, not a discussion.\n")
 	b.WriteString("- Do not ask questions, assign work, or start a conversation. Just welcome them in one line and stop.\n")
 	return b.String()
@@ -2981,11 +2981,11 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString("\n")
 	b.WriteString(channelAmbientNoReplyInstruction)
 	b.WriteString("\n")
-	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, do not call the send action; an internal {\"action\":\"no_reply\"} outcome is acceptable but must not be visible.\n")
-	b.WriteString("If the message directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: send a visible reply or acknowledgement, and do not return no_reply.\n")
-	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and send one short visible message. Do not stay silent (do not return no_reply), and do not use a reaction-only command/result for that case.\n")
+	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, finish without visible output; do not print no_reply or protocol text.\n")
+	b.WriteString("If the message directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: write a visible plain-text reply or acknowledgement, and do not return no_reply.\n")
+	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and write one short visible plain-text message. Do not stay silent, do not print no_reply, and do not use a reaction-only command/result for that case.\n")
 	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
-	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, prefer a message-scoped reaction action instead of a text reply: return exactly one JSON object like {\"action\":\"react\",\"reaction\":{\"message_id\":\"CURRENT_MESSAGE\",\"emoji\":\"👍\"}} and nothing else. Prefer 👍 for a simple like, ❤️ for warmth/welcome/support, 💯 for strong agreement or praise, and 🎉 for celebration/welcome.\n")
+	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, use a short plain-text acknowledgement; reaction-only output is unavailable until CLI transport lands.\n")
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)

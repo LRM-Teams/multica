@@ -40,7 +40,7 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 
 **统一原语（channel/dm 共用一套引擎）**：`Message(parts[])` + `Reaction` + `reply/thread` + 未读/静音/follow/搜索/权限/审计。
 
-**thread** = 某条 message 下的**扁平**回复链（不嵌套；针对某条回复用 quote）。thread 回复**不进主时间线、不计会话级未读**（对齐现有 migration 139 与 Raft）；`also_send_to_channel` 是 reply 的显式 flag（默认 false），置真才同时进主流。
+**thread** = 某条 message 下的**扁平**回复链（不嵌套；针对某条回复用 quote）。thread 回复**不进主时间线、不计会话级未读**（对齐现有 migration 139 与 Raft）；`show_in_channel` 是 reply 的显式 flag（默认 false，v2.4.4 更名自 also_send_to_channel），置真时同一条消息投影到主时间线显示（一行两面，task #256）。
 
 **issue** = 现有一等 work-item 实体（workspace-scoped，本轮 schema 冻结）：7 态 status（backlog/todo/in_progress/in_review/done/blocked/cancelled）、priority、assignee、watchers(subscriber)、labels、dependencies、parent_issue_id（issue↔issue 工作分解树，与 thread 扁平无关）、acceptance_criteria、context_refs、due_date。issue 讨论仍走现有 comment 体系（行为对齐见 §7）。
 
@@ -64,17 +64,16 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 - **③ Agent↔Agent DM（P3）**：同一套 dm + 治理（§9）。
 - **④ Reaction 覆盖 issue（已满足 + 统一 channel/dm）**：issue/comment reaction 用现有两张表（不迁）；channel/dm 统一 `Reaction`；行为口径三处一致（谁能 react、通知、**reaction 不唤醒 agent**）。
 
-## 4. 动作合约（v2.4.3 对齐 Raft target 语法，动词 4→3；Frank 拍"naming/调用方式对齐"）
-**Agent 可见层只有三个动词，寻址靠统一 target 语法**（与 Raft `raft message send --target ...` 一字位对齐）：
-- **`send(target, parts[], options?)`** —— target ∈：
-  - `#channel` → 频道顶层 Message；
-  - `dm:@name` → Human DM：**自动 find-or-create** {me, target} 的 1:1 会话再发（**禁 self-DM**；仅同 workspace；权限/存在性错误码 non-leaky）；`@name` 用成员唯一 handle（#42），**UUID 不进模型可见层**；
-  - `#channel:<msgid>` → thread 回复（扁平；options 可带 `also_send_to_channel=false`，**只在 thread 分支显式处理**，不得变隐式 fanout；root/thread 可见性 server 校验）。
-- **`react(message_id, emoji)`** → Reaction（**不触发 agent run**）。
-- **`no_reply`** → 无动作无可见行（合法性见 §6 must-reply）。
+## 4. 动作合约（v2.4.4 定版：两个工具 + 沉默；运输层 = CLI；Frank 拍）
+**Agent 只有"手"（工具），没有"协议话"。合同三行：**
+1. **`send(target, parts, options?)`** 和 **`react(message_id, emoji)`** —— 仅此两个动作。
+2. **不想回 = 什么都不做**。没有 no_reply 动词/工具/JSON——run 正常跑完没出手即自然结束，游标照常推进（"no_reply"只作为**平台观察到的 run 完结状态**存在：结算游标、判 #196 must-reply、喂"为什么没回"注解，见 §6/§6.2——它不是 agent 会"说"的东西）。
+3. **运输层 = CLI（Raft 同款，Frank 拍"MCP 太占上下文"）**：daemon 向 agent 工作环境注入 `multica` CLI（PATH + task 凭证），agent 执行 `multica send --target "#频道" …` / `multica react …` 直打 server API——**agent 的最终文本永不被解析成协议**（#255 砍掉文本 JSON 信封解析；unwrap 守卫只作历史数据防御）。幂等：send 带 `client_message_id`（复用 §4.2 契约，runtime 生成）。
 
-**`reply` 与 `send-to` 不再是独立动词——是 target 的两种形态。** server 只有一个 target parser，解析后分 channel/dm/thread 三支。direct/must-reply 语义仍走 durable queue/可见回复路径，不被 ambient coalescing 吞。agent↔agent DM（`dm:@agent`）仍 P3，不在 #247。落地=task #247。
-规则：thread 回复生成可见行；react 是 message-scoped；parts[] 只作 send 正文。issue 侧动作沿用现有 comment/issue_reaction API（策略对齐见 §7）。
+**target 语法（与 Raft 一字位对齐）**：`#channel`（频道）｜`dm:@name`（Human DM：自动 find-or-create、禁 self-DM、仅同 workspace、错误 non-leaky；`@name` 用 handle #42，UUID 不进模型可见层）｜`#channel:<msgid>`（thread 回复，扁平；options 可带 **`show_in_channel=false`**——见下）。server 单一 target parser，解析后分三支。direct/must-reply 语义仍走 durable queue/可见回复路径。agent↔agent DM 仍 P3。落地=task #247（CLI 载体）+ #255（存量迁移）。
+
+**`show_in_channel`（原 also_send_to_channel 更名，Frank 拍"名字难受"；task #256）**：thread 回复置真时**同一条消息**（同一 `channel_message.id`）投影到主时间线显示——"显示"不是"再发一条"（一行两面；旧 carrier 副本实现退役）；频道侧渲染带「↩ 来自 thread」可点回跳；主线未读计一次。
+规则：thread 回复生成可见行；react 是 message-scoped、不触发 agent run；parts[] 只作 send 正文。issue 侧动作沿用现有 comment/issue_reaction API（§7）。
 
 ### 4.2 send/reply 幂等（事故驱动，#207；BE 契约已由 Barry 锁定）
 每个 send/reply 带 **client-generated `client_message_id`**（idempotency key）。server 按 `(conversation, sender, client_message_id)` 去重。三支结果分流（FE 必须区分，不能混成一个"失败提示"）：
@@ -227,7 +226,7 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 - **QA（#201）**：§13 验收 + issue「不被本轮改坏」smoke + **§6.3 ambient 有界性压测**。
 
 ## 13. 验收标准
-1. channel/dm 统一原语：message/reply/react/未读/mute/follow/搜索一套引擎；thread 扁平不嵌套；thread 回复不进主流不计会话未读；also_send_to_channel 显式。
+1. channel/dm 统一原语：message/reply/react/未读/mute/follow/搜索一套引擎；thread 扁平不嵌套；thread 回复不进主流不计会话未读；show_in_channel 显式（置真=同一消息投影主线、计一次未读）。
 2. per-member cursor（含 agent）落表 = `last_read_seq`；**per-conversation seq：seq 顺序==提交可见顺序（结构保证）**；run 成功/ack 后推进；并发写入不丢投递；真实未读计数。
 3. Wake matrix 生效：DM 直达；thread 参与投递；channel 定向克制 + ambient pre-gate；directed 禁 silent no_reply（#196）；参与投递≠必须回复；unfollow/衰减可用；reaction 不唤醒。
 4. DM 体感对齐 Raft；状态机（active/closed/muted/offline/permission-revoked）正确。
@@ -241,6 +240,7 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 **待拍点：无。**
 
 ## 14. 变更记录
+- v2.4.4（7-5 晨，Frank 连拍三刀，§4 定版）：①**动词 3→2 + 沉默**：删除 no_reply 动词（Frank："不调 send 不就是 no_reply 么"）——agent 只有 send/react 两个动作，不回=什么都不做；no_reply 降级为平台观察的 run 完结状态（结算游标/判 must-reply/喂注解），非 agent 表态；②**运输层 = CLI**（Frank："MCP 太占上下文"）——daemon 注入 `multica` CLI（PATH+task 凭证）直打 server API，agent 最终文本永不解析为协议（#255 砍文本 JSON 信封；unwrap 只作历史防御）；幂等复用 §4.2 client_message_id；③**`also_send_to_channel` 更名 `show_in_channel`**（Frank："名字难受"；"send"暗示再发一条=carrier bug 方向）——语义定为同一消息投影主线（一行两面，task #256 退役 carrier 副本），频道侧「↩来自 thread」可点回跳。落地：#247（CLI 载体）/#255（存量迁移）/#256（投影）。
 - v2.4.3（7-4 晚，Frank 拍"DM 命令 naming/调用方式对齐 Raft"）：§4 动作合约改 **target-based**——动词 4→3（`send(target,parts,options?)`/`react`/`no_reply`），`reply`/`send-to` 收敛为 target 形态（`#channel:<msgid>` / `dm:@name` find-or-create）；统一 server target parser；`dm:@name` 用 handle 不用 UUID；agent 主动 Human DM=task #247（agent↔agent 仍 P3）。Barry BE schema gate 已 PASS。
 - v2.4.2（7-4，Frank DM 拍定 5 项 proactive gap 裁决）：①§6 加**编辑/删除 vs agent 已读竞态**三句口径（run 读执行时最新版 / context_pack 钉版本 / **edit·delete 绝不产生新 wake** 防新放大器）；②新增 **§4.3 陈旧发送保护 freshness hold**（P2 候选：send API 前置 seq 校验+有界 delta 补投+draft 暂存+显式二次决定）；③新增 **§6.4 时间驱动唤醒/Reminder**（P2 候选：Wake matrix 第四行 time trigger，author-owned，数量上限防自我放大）；④§6.3⑥ **成本护栏**（先视图后预算上限，observability follow-up）；⑤§6.2 基准#9：**Activity=只读观察面**，retry 不做进 backlog，Copy Diagnostic 保留。
 - v2.4.1（7-4）：§6.2 四面→**五面**：新增「Agent runtime lifecycle」事件源（runtime error 显式化·禁静默卡死 / restart·resume 含 replay 计数 / 版本变更），run 之外的 agent 级事件入 Activity 低噪层（Frank 由 Raft 0.67.0 dogfood 点出 run 锚定 Activity 的盲区：起不了 run 时什么都看不见）。§13#8 验收随之含 lifecycle 事件。

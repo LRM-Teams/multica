@@ -125,6 +125,86 @@ func TestAgentHealthMissingRuntimeSummary_OfflineEmptyState(t *testing.T) {
 	}
 }
 
+func TestGetAgentHealth_StaleOnlineRuntimeShowsSuspectedDisconnect(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	// Runtime row says "online" but heartbeat is older than the stale
+	// threshold (150s). The health summary must not show online. (#284)
+	agentID, _ := createAgentHealthFixture(t, "online",
+		time.Now().Add(-3*time.Minute), // last_seen_at: 3 min ago — stale
+		time.Now().Add(-2*time.Minute), // updated_at
+	)
+
+	w := httptest.NewRecorder()
+	testHandler.GetAgentHealth(w, withURLParam(newRequest("GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentHealth: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp AgentHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Summary.State != agentHealthStateSuspectedDisconnect {
+		t.Fatalf("summary state = %q, want %q (stale online runtime must not show as online)", resp.Summary.State, agentHealthStateSuspectedDisconnect)
+	}
+}
+
+func TestGetAgentHealth_VeryStaleOnlineRuntimeShowsReconnecting(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	// Runtime row says "online" but heartbeat is older than the reconnect
+	// window (5 min). Must show reconnecting, not online. (#284)
+	agentID, _ := createAgentHealthFixture(t, "online",
+		time.Now().Add(-7*time.Minute), // last_seen_at: 7 min ago — very stale
+		time.Now().Add(-6*time.Minute),
+	)
+
+	w := httptest.NewRecorder()
+	testHandler.GetAgentHealth(w, withURLParam(newRequest("GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentHealth: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp AgentHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Summary.State != agentHealthStateReconnecting {
+		t.Fatalf("summary state = %q, want %q (very stale runtime must show reconnecting)", resp.Summary.State, agentHealthStateReconnecting)
+	}
+}
+
+func TestGetAgentHealth_FreshOnlineRuntimeStaysOnline(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	// Runtime is genuinely online with a recent heartbeat — must stay online. (#284)
+	agentID, _ := createAgentHealthFixture(t, "online",
+		time.Now().Add(-10*time.Second), // last_seen_at: 10s ago — fresh
+		time.Now().Add(-5*time.Second),
+	)
+
+	w := httptest.NewRecorder()
+	testHandler.GetAgentHealth(w, withURLParam(newRequest("GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentHealth: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp AgentHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Summary.State != agentHealthStateOnline {
+		t.Fatalf("summary state = %q, want %q (fresh online runtime must stay online)", resp.Summary.State, agentHealthStateOnline)
+	}
+}
+
 func createAgentHealthFixture(t *testing.T, status string, lastSeen, updatedAt time.Time) (agentID, runtimeID string) {
 	t.Helper()
 	if err := testPool.QueryRow(context.Background(), `

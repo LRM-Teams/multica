@@ -1181,6 +1181,32 @@ func TestPiAgentEnvUsesTopLevelAgentIDFallback(t *testing.T) {
 	}
 }
 
+func TestPiAgentEnvDisablesExpensiveAutomaticMemoryWork(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{}
+	addPiAgentEnv(env, Config{WorkspacesRoot: t.TempDir()}, "workspace-1", "agent-1")
+
+	want := map[string]string{
+		"PI_MEMORY_BACKGROUND_SHUTDOWN":          "off",
+		"PI_MEMORY_LEARNING":                     "off",
+		"PI_MEMORY_SKILL_DRAFTS":                 "off",
+		"PI_MEMORY_QMD_UPDATE":                   "off",
+		"PI_MEMORY_AUTO_SYNC":                    "0",
+		"PI_MEMORY_AUTO_SYNC_PULL":               "0",
+		"PI_MEMORY_AUTO_SYNC_PULL_ON_START":      "0",
+		"PI_MEMORY_AUTO_SYNC_UPLOAD":             "0",
+		"PI_MEMORY_AUTO_SYNC_UPLOAD_ON_SHUTDOWN": "0",
+		"PI_MEMORY_NO_SEARCH":                    "1",
+		"PI_MEMORY_REVIEW_STARTUP_HINT":          "0",
+	}
+	for key, value := range want {
+		if got := env[key]; got != value {
+			t.Fatalf("%s = %q, want %q", key, got, value)
+		}
+	}
+}
+
 func TestMulticaAgentEnvUsesProviderNeutralRoot(t *testing.T) {
 	t.Parallel()
 
@@ -1211,6 +1237,11 @@ func TestBlockedEnvKeyBlocksPiMemoryOverrides(t *testing.T) {
 	for _, key := range []string{"PI_AGENT_ROOT", "PI_MEMORY_DIR", "PI_SKILL_DRAFTS_DIR", "PI_AGENT_SYNC_QUEUE_DIR", "MULTICA_AGENT_ROOT", "MULTICA_AGENT_MEMORY_DIR", "MULTICA_PROJECT_MEMORY_DIR"} {
 		if !isBlockedEnvKey(key) {
 			t.Fatalf("%s should be blocked from custom_env", key)
+		}
+	}
+	for _, key := range []string{"PI_MEMORY_LEARNING", "PI_MEMORY_QMD_UPDATE", "PI_MEMORY_AUTO_SYNC"} {
+		if isBlockedEnvKey(key) {
+			t.Fatalf("%s should remain configurable via custom_env", key)
 		}
 	}
 }

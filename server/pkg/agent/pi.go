@@ -188,11 +188,12 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 
 	// Early-complete: when the final assistant turn ends (turn_end with a
 	// terminal stop reason), the model's answer and usage are already known.
-	// The pi process then spends up to ~60s in synchronous session_shutdown
-	// (memory exit summary / learning / qmd) before exiting. Emitting the
-	// Result at turn_end lets the daemon mark the task done and release the
-	// user-facing reply immediately, while pi keeps running its shutdown in
-	// the background (memory is still written). Opt out with PI_EARLY_COMPLETE=0.
+	// Emitting the Result at turn_end lets the daemon mark the task done and
+	// release the user-facing reply immediately. The daemon's normal cleanup
+	// cancels the Pi process after this result, so expensive exit-time memory
+	// work is intentionally skipped for Multica-managed runs. Synchronous memory
+	// tool calls made during the turn have already completed. Opt out with
+	// PI_EARLY_COMPLETE=0.
 	earlyCompleteEnabled := getenvDefault("PI_EARLY_COMPLETE", "1") != "0"
 	earlyCompleted := false
 
@@ -376,10 +377,9 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 				// Early-complete: a terminal turn_end means the model finished
 				// answering and usage is accumulated above. Flush any pending
 				// text and emit the Result now so the daemon can mark the task
-				// done; the pi process keeps running its synchronous
-				// session_shutdown (memory summary/learning/qmd) in the
-				// background. Errors (stopReason=error) still flip finalStatus
-				// above and are reported. We emit exactly once.
+				// done without waiting for Pi's exit-time cleanup. Errors
+				// (stopReason=error) still flip finalStatus above and are
+				// reported. We emit exactly once.
 				if earlyCompleteEnabled && !earlyCompleted && finalStatus != "failed" {
 					if d := flushPiTextBuffer(&textBuffer); d != "" {
 						output.WriteString(d)
@@ -425,11 +425,9 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		duration := time.Since(startTime)
 
 		if earlyCompleted {
-			// We already emitted the Result at turn_end. The pi process ran its
-			// synchronous session_shutdown (memory summary/learning/qmd) after
-			// that; we only need to reap it here. Do not overwrite the
-			// already-sent Result — even if shutdown hit a context deadline or
-			// the process exited non-zero, the user-facing reply succeeded.
+			// We already emitted the Result at turn_end. The daemon may cancel
+			// the process immediately after receiving that result; either way,
+			// do not overwrite the already-sent user-facing success.
 			b.cfg.Logger.Info("pi finished (after early-complete)", "pid", cmd.Process.Pid, "waitErr", waitErr, "duration", duration.Round(time.Millisecond).String())
 			return
 		}

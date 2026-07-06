@@ -4085,6 +4085,24 @@ func addPiAgentEnv(env map[string]string, cfg Config, workspaceID, agentID strin
 	env["PI_AGENT_PROFILE_DIR"] = filepath.Join(agentRoot, "profile")
 	env["PI_AGENT_FEEDBACK_DIR"] = filepath.Join(agentRoot, "feedback")
 	env["PI_AGENT_SYNC_QUEUE_DIR"] = piAgentSyncQueueDir(agentRoot)
+	addPiMemoryFastModeEnv(env)
+}
+
+func addPiMemoryFastModeEnv(env map[string]string) {
+	// Multica-managed Pi runs should keep explicit memory tools available, but
+	// skip the expensive automatic shutdown pipeline (session summary, learning,
+	// qmd refresh, remote sync). Users can still override these via custom_env.
+	env["PI_MEMORY_BACKGROUND_SHUTDOWN"] = "off"
+	env["PI_MEMORY_LEARNING"] = "off"
+	env["PI_MEMORY_SKILL_DRAFTS"] = "off"
+	env["PI_MEMORY_QMD_UPDATE"] = "off"
+	env["PI_MEMORY_AUTO_SYNC"] = "0"
+	env["PI_MEMORY_AUTO_SYNC_PULL"] = "0"
+	env["PI_MEMORY_AUTO_SYNC_PULL_ON_START"] = "0"
+	env["PI_MEMORY_AUTO_SYNC_UPLOAD"] = "0"
+	env["PI_MEMORY_AUTO_SYNC_UPLOAD_ON_SHUTDOWN"] = "0"
+	env["PI_MEMORY_NO_SEARCH"] = "1"
+	env["PI_MEMORY_REVIEW_STARTUP_HINT"] = "0"
 }
 
 // isBlockedEnvKey returns true if the key must not be overridden by user-

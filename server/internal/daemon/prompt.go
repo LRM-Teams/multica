@@ -15,14 +15,14 @@ import (
 // is provider-agnostic now (Linux/macOS → quoted-HEREDOC stdin, Windows →
 // file) because the shell-layer corruption it guards against is not specific
 // to any one provider (MUL-2904).
-func BuildPrompt(task Task, provider string) string {
+func BuildPrompt(task Task, provider string, agentRoot string) string {
 	if task.ChatSessionID != "" {
 		if provider == "pi" {
 			if command, ok := piNativeSlashChatCommand(task.ChatMessage); ok {
 				return command
 			}
 		}
-		return buildChatPrompt(task)
+		return buildChatPrompt(task, agentRoot)
 	}
 	if task.TriggerCommentID != "" {
 		return buildCommentPrompt(task, provider)
@@ -257,11 +257,36 @@ func buildCommentPrompt(task Task, provider string) string {
 	return b.String()
 }
 
+// writeAgentRootSection writes the agent's personal workspace directory into
+// the prompt so the agent can answer "where is my memory / work dir" with the
+// real absolute path the daemon writes to (PI_AGENT_ROOT / PI_MEMORY_DIR).
+//
+// Layout is layered: the three primary surfaces the agent actually reads and
+// writes during chat (memory, skills, notes) get their own line with sub-files;
+// the remaining subdirs created by ensureMulticaAgentRoot are collapsed into a
+// single "other local dirs" line to keep the prompt short. Full per-subdir
+// detail is intentionally omitted — they are either agent-managed caches
+// (runtime/, sessions/, repos/), team-sync plumbing (inbox/, shared-cache/,
+// sync_queue/, feedback/), or rarely used scratch space (projects/).
+func writeAgentRootSection(b *strings.Builder, agentRoot string) {
+	if strings.TrimSpace(agentRoot) == "" {
+		return
+	}
+	b.WriteString("Your personal workspace directory (one per agent, persists across runs):\n")
+	fmt.Fprintf(b, "%s/\n", agentRoot)
+	fmt.Fprintf(b, "- memory: %s/memory/  (MEMORY.md, USER.md, STATE.md, REVIEW.md, daily/)\n", agentRoot)
+	fmt.Fprintf(b, "- skills: %s/skills/  (drafts/, generated/, enabled/)\n", agentRoot)
+	fmt.Fprintf(b, "- notes:  %s/notes/  (agents.md, channels.md, project-map.md, relationship-map.md, role-playbook.md, work-log.md, decisions.md)\n", agentRoot)
+	fmt.Fprintf(b, "Other local dirs (agent-managed caches & team-sync plumbing; not usually needed): projects/, repos/, sessions/, runtime/, profile/, feedback/, sync_queue/, inbox/, shared-cache/.\n")
+	b.WriteString("When asked where your memory or files live, give these absolute paths.\n\n")
+}
+
 // buildChatPrompt constructs a prompt for interactive chat tasks.
-func buildChatPrompt(task Task) string {
+func buildChatPrompt(task Task, agentRoot string) string {
 	var b strings.Builder
 	b.WriteString("You are running as a chat assistant for a Multica workspace.\n")
 	b.WriteString("A user is chatting with you directly. Respond to their message.\n\n")
+	writeAgentRootSection(&b, agentRoot)
 	b.WriteString("Context assembly rules:\n")
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread only. Do not assume visibility into other DMs, channels, issues, or threads unless the user explicitly references them and the Multica CLI allows access.\n")
 	b.WriteString("- For thread-triggered runs, the thread root and recent replies are the relevant conversation boundary; do not infer the entire parent channel/DM history.\n")

@@ -2072,7 +2072,7 @@ export function ChannelsPage() {
                     <ArrowLeft className="size-5" />
                   </Button>
                 )}
-                <ChannelGroupAvatar members={channelMembers} size={34} />
+                <ChannelGroupAvatar members={channelMembers} size={28} />
               </>
             }
             title={active.name}

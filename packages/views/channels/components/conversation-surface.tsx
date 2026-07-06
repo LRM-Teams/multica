@@ -32,7 +32,16 @@ export function ConversationHeader({
         isMobile ? "px-2" : "px-5",
       )}
     >
-      <div className={cn("flex min-w-0 items-center", isMobile ? "gap-2" : "gap-2.5")}>
+      {/* Desktop `pl-2` aligns the header avatar + title with the message
+          column (message rows sit at px-5 + the bubble's px-2 = a matching
+          left edge), so the header avatar and every message avatar share one
+          vertical line. Mobile keeps its tighter gutter. */}
+      <div
+        className={cn(
+          "flex min-w-0 items-center",
+          isMobile ? "gap-2" : "gap-2.5 pl-2",
+        )}
+      >
         {leading}
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-1.5 text-sm font-semibold leading-5">

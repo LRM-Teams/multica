@@ -50,20 +50,16 @@ export function AgentPresenceIndicator({
   const isWorking = detail.workload === "working";
   const isQueued = detail.workload === "queued";
   const showQueueBadge = isWorking && detail.queuedCount > 0;
-  // Queued's amber comes from workloadConfig as the *severe* tone — meant
-  // for "stuck on offline runtime", which is the dominant cause. But on a
-  // healthy runtime, queued is just a brief race between enqueue and the
-  // daemon's claim, and amber there reads as a warning that isn't there.
-  // Compose with availability: online ⇒ muted (transient), otherwise ⇒
-  // keep amber (genuine stuck signal).
-  const queuedTone =
-    detail.availability === "online" ? "text-muted-foreground" : wl.textClass;
+  // The workload chip renders only when online (see below), so queued here is
+  // always the brief enqueue→claim race on a healthy runtime — mute it rather
+  // than the amber "stuck" tone, which would read as a warning that isn't there.
+  const queuedTone = "text-muted-foreground";
 
   if (compact) {
     return (
       <span
         className="inline-flex items-center"
-        title={`${availabilityLabel}${detail.workload !== "idle" ? ` · ${workloadLabel}` : ""}`}
+        title={`${availabilityLabel}${detail.availability === "online" && detail.workload !== "idle" ? ` · ${workloadLabel}` : ""}`}
       >
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${av.dotClass}`} />
       </span>
@@ -79,12 +75,12 @@ export function AgentPresenceIndicator({
       </span>
 
       {/* Workload — separator + label, with counts when working/queued.
-          All three workload states render here for symmetry: idle gets
-          its own "Idle" label so the difference between "no presence
-          data" (no chip at all) and "agent is idle" (explicit Idle chip)
-          is visible. Archived agents skip the workload chip entirely —
-          "Archived" already says everything; "Archived · Idle" is noise. */}
-      {detail.availability !== "archived" && (
+          Workload is a modulation on top of "online": it only reads correctly
+          while the agent is reachable. When it's offline/unstable/archived the
+          dot already says the whole story, and appending "· Idle"/"· Working"
+          would contradict it ("Idle" implies available). So the workload chip
+          shows only when online; otherwise the availability label stands alone. */}
+      {detail.availability === "online" && (
       <span className="inline-flex items-center gap-1">
         <span className="text-xs text-muted-foreground">·</span>
         <span

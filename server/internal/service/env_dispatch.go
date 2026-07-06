@@ -143,7 +143,7 @@ type EnvDispatchDeps interface {
 	// (spec §4.1): one row per rollout project when a train_agent_id is set, so
 	// the later session-open hook can resolve the training target + default
 	// reward by project_id. Keyed by projectID (upsert on conflict).
-	SaveTrainingDispatch(ctx context.Context, projectID, workspaceID, trainAgentID string, defaultReward float64) error
+	SaveTrainingDispatch(ctx context.Context, projectID, workspaceID, trainAgentID, criticAgentID string, defaultReward float64) error
 }
 
 // Env is a snapshot of an environment row.
@@ -299,7 +299,7 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 			if rollouts[i].ProjectID == "" {
 				continue
 			}
-			if err := s.deps.SaveTrainingDispatch(ctx, rollouts[i].ProjectID, in.WorkspaceID, in.TrainAgentID, DefaultTrainingReward); err != nil {
+			if err := s.deps.SaveTrainingDispatch(ctx, rollouts[i].ProjectID, in.WorkspaceID, in.TrainAgentID, in.CriticAgentID, DefaultTrainingReward); err != nil {
 				// Non-fatal: record on the rollout so the caller can see the
 				// training row was not persisted, but continue the dispatch.
 				rollouts[i].Error = fmt.Sprintf("save training dispatch: %v", err)

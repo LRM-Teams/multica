@@ -190,15 +190,17 @@ type trainingSaveCall struct {
 	projectID     string
 	workspaceID   string
 	trainAgentID  string
+	criticAgentID string
 	defaultReward float64
 }
 
-func (f *fakeEnvDispatchDeps) SaveTrainingDispatch(_ context.Context, projectID, workspaceID, trainAgentID string, defaultReward float64) error {
+func (f *fakeEnvDispatchDeps) SaveTrainingDispatch(_ context.Context, projectID, workspaceID, trainAgentID, criticAgentID string, defaultReward float64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.trainingSaves = append(f.trainingSaves, trainingSaveCall{
 		projectID: projectID, workspaceID: workspaceID,
-		trainAgentID: trainAgentID, defaultReward: defaultReward,
+		trainAgentID: trainAgentID, criticAgentID: criticAgentID,
+		defaultReward: defaultReward,
 	})
 	return nil
 }
@@ -813,7 +815,92 @@ func TestEnvDispatchInput_Validate_CriticAgentID(t *testing.T) {
 				if err.Error() != tc.wantErr {
 					t.Fatalf("expected error %q, got %q", tc.wantErr, err.Error())
 				}
-			}
-		})
+				}
+			})
+		}
+	}
+
+// TestEnvDispatch_PersistsCriticAgentID verifies that critic_agent_id is
+// persisted to training_dispatch when provided.
+func TestEnvDispatch_PersistsCriticAgentID(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	fake := f
+	fake.trainingSaves = []trainingSaveCall{} // track inserts
+
+	baseEnv := fake.seedBaseEnv()
+	svc := NewEnvDispatchService(fake, 8)
+	in := EnvDispatchInput{
+		WorkspaceID:   "ws",
+		UserID:        "user",
+		Mode:          EnvModeScratch,
+		EnvID:         baseEnv,
+		Domain:        EnvDomainSweLego,
+		DispatchType:  EnvDispatchIssue,
+		GroupSize:     1,
+		AgentID:       "agent-1",
+		TrainAgentID:  "agent-1",
+		CriticAgentID: "critic-1",
+		Issue: &IssueInput{
+			Title: "Test Issue",
+		},
+	}
+	result, err := svc.Dispatch(context.Background(), in)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	if len(fake.trainingSaves) != 1 {
+		t.Fatalf("want 1 training_dispatch save, got %d", len(fake.trainingSaves))
+	}
+	if fake.trainingSaves[0].criticAgentID != "critic-1" {
+		t.Fatalf("save criticAgentID = %q, want %q", fake.trainingSaves[0].criticAgentID, "critic-1")
+	}
+	if fake.trainingSaves[0].trainAgentID != "agent-1" {
+		t.Fatalf("save trainAgentID = %q, want %q", fake.trainingSaves[0].trainAgentID, "agent-1")
+	}
+	if fake.trainingSaves[0].projectID != result.Rollouts[0].ProjectID {
+		t.Fatalf("save projectID mismatch: got %q, want %q", fake.trainingSaves[0].projectID, result.Rollouts[0].ProjectID)
+	}
+}
+
+// TestEnvDispatch_NoCritic_PersistsNull verifies that when no critic_agent_id
+// is provided, the persisted value is empty (NULL in DB terms).
+func TestEnvDispatch_NoCritic_PersistsNull(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	fake := f
+	fake.trainingSaves = []trainingSaveCall{} // track inserts
+
+	baseEnv := fake.seedBaseEnv()
+	svc := NewEnvDispatchService(fake, 8)
+	in := EnvDispatchInput{
+		WorkspaceID:  "ws",
+		UserID:       "user",
+		Mode:         EnvModeScratch,
+		EnvID:        baseEnv,
+		Domain:       EnvDomainSweLego,
+		DispatchType: EnvDispatchIssue,
+		GroupSize:    1,
+		AgentID:      "agent-1",
+		TrainAgentID: "agent-1",
+		Issue: &IssueInput{
+			Title: "Test Issue",
+		},
+	}
+	result, err := svc.Dispatch(context.Background(), in)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	if len(fake.trainingSaves) != 1 {
+		t.Fatalf("want 1 training_dispatch save, got %d", len(fake.trainingSaves))
+	}
+	if fake.trainingSaves[0].criticAgentID != "" {
+		t.Fatalf("save criticAgentID should be empty, got %q", fake.trainingSaves[0].criticAgentID)
+	}
+	if fake.trainingSaves[0].trainAgentID != "agent-1" {
+		t.Fatalf("save trainAgentID = %q, want %q", fake.trainingSaves[0].trainAgentID, "agent-1")
+	}
+	if fake.trainingSaves[0].projectID != result.Rollouts[0].ProjectID {
+		t.Fatalf("save projectID mismatch: got %q, want %q", fake.trainingSaves[0].projectID, result.Rollouts[0].ProjectID)
 	}
 }

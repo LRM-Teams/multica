@@ -927,13 +927,17 @@ func (a *envDispatchDepsAdapter) SaveIdempotentResponse(ctx context.Context, wor
 // (spec §4.1): one row per rollout project when a dispatch carries a
 // train_agent_id, keyed by project_id (upsert on conflict) so the later
 // session-open hook can resolve the training target + default reward.
-func (a *envDispatchDepsAdapter) SaveTrainingDispatch(ctx context.Context, projectID, workspaceID, trainAgentID string, defaultReward float64) error {
-	if err := a.h.Queries.CreateTrainingDispatch(ctx, db.CreateTrainingDispatchParams{
+func (a *envDispatchDepsAdapter) SaveTrainingDispatch(ctx context.Context, projectID, workspaceID, trainAgentID, criticAgentID string, defaultReward float64) error {
+	params := db.CreateTrainingDispatchParams{
 		ProjectID:     parseUUID(projectID),
 		WorkspaceID:   parseUUID(workspaceID),
 		TrainAgentID:  parseUUID(trainAgentID),
 		DefaultReward: defaultReward,
-	}); err != nil {
+	}
+	if criticAgentID != "" {
+		params.CriticAgentID = parseUUID(criticAgentID)
+	}
+	if err := a.h.Queries.CreateTrainingDispatch(ctx, params); err != nil {
 		return fmt.Errorf("save training dispatch: %w", err)
 	}
 	return nil
@@ -1022,6 +1026,6 @@ func (s *stubEnvDispatchDeps) EnqueueAgentRun(context.Context, string, string, s
 func (s *stubEnvDispatchDeps) GetDefaultSelfPlayEnv(context.Context, string) (string, error) {
 	return "stub-env", nil
 }
-func (s *stubEnvDispatchDeps) SaveTrainingDispatch(context.Context, string, string, string, float64) error {
+func (s *stubEnvDispatchDeps) SaveTrainingDispatch(context.Context, string, string, string, string, float64) error {
 	return nil
 }

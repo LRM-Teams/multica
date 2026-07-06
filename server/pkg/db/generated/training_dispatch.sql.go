@@ -15,16 +15,18 @@ type TrainingDispatch struct {
 	ProjectID     pgtype.UUID        `json:"project_id"`
 	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
 	TrainAgentID  pgtype.UUID        `json:"train_agent_id"`
+	CriticAgentID pgtype.UUID        `json:"critic_agent_id"`
 	DefaultReward float64            `json:"default_reward"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
 const createTrainingDispatch = `-- name: CreateTrainingDispatch :exec
-INSERT INTO training_dispatch (project_id, workspace_id, train_agent_id, default_reward)
-VALUES ($1, $2, $3, $4)
+INSERT INTO training_dispatch (project_id, workspace_id, train_agent_id, critic_agent_id, default_reward)
+VALUES ($1, $2, $3, $4, COALESCE($5, 1.0))
 ON CONFLICT (project_id) DO UPDATE SET
   workspace_id = EXCLUDED.workspace_id,
   train_agent_id = EXCLUDED.train_agent_id,
+  critic_agent_id = EXCLUDED.critic_agent_id,
   default_reward = EXCLUDED.default_reward
 `
 
@@ -32,6 +34,7 @@ type CreateTrainingDispatchParams struct {
 	ProjectID     pgtype.UUID `json:"project_id"`
 	WorkspaceID   pgtype.UUID `json:"workspace_id"`
 	TrainAgentID  pgtype.UUID `json:"train_agent_id"`
+	CriticAgentID pgtype.UUID `json:"critic_agent_id"`
 	DefaultReward float64     `json:"default_reward"`
 }
 
@@ -40,13 +43,14 @@ func (q *Queries) CreateTrainingDispatch(ctx context.Context, arg CreateTraining
 		arg.ProjectID,
 		arg.WorkspaceID,
 		arg.TrainAgentID,
+		arg.CriticAgentID,
 		arg.DefaultReward,
 	)
 	return err
 }
 
 const getTrainingDispatchByProject = `-- name: GetTrainingDispatchByProject :one
-SELECT project_id, workspace_id, train_agent_id, default_reward, created_at FROM training_dispatch
+SELECT project_id, workspace_id, train_agent_id, critic_agent_id, default_reward, created_at FROM training_dispatch
 WHERE project_id = $1
 `
 
@@ -57,6 +61,7 @@ func (q *Queries) GetTrainingDispatchByProject(ctx context.Context, projectID pg
 		&i.ProjectID,
 		&i.WorkspaceID,
 		&i.TrainAgentID,
+		&i.CriticAgentID,
 		&i.DefaultReward,
 		&i.CreatedAt,
 	)

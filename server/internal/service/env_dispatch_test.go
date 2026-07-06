@@ -22,6 +22,8 @@ type fakeEnvDispatchDeps struct {
 
 	defaultSelfPlayEnv string // per-workspace default self_play base env ("" = unconfigured)
 
+	trainingSaves []trainingSaveCall // every SaveTrainingDispatch call, in order
+
 	forkErr        error
 	createEnvErr   error
 	copyProjectErr error
@@ -181,6 +183,24 @@ func (f *fakeEnvDispatchDeps) GetDefaultSelfPlayEnv(_ context.Context, _ string)
 		return "", fmt.Errorf("not configured")
 	}
 	return f.defaultSelfPlayEnv, nil
+}
+
+// trainingSaveCall records the arguments of one SaveTrainingDispatch call.
+type trainingSaveCall struct {
+	projectID     string
+	workspaceID   string
+	trainAgentID  string
+	defaultReward float64
+}
+
+func (f *fakeEnvDispatchDeps) SaveTrainingDispatch(_ context.Context, projectID, workspaceID, trainAgentID string, defaultReward float64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.trainingSaves = append(f.trainingSaves, trainingSaveCall{
+		projectID: projectID, workspaceID: workspaceID,
+		trainAgentID: trainAgentID, defaultReward: defaultReward,
+	})
+	return nil
 }
 
 // Helper: seed a base env in the fake.
@@ -690,5 +710,71 @@ func TestValidate_EmptyEnvIDRejectedForSweLegoAndUnconfigured(t *testing.T) {
 		GroupSize: 1, AgentID: "ag", Message: &MessageInput{Content: "hi"},
 	}); err == nil {
 		t.Error("self_play with empty env_id and no default must be rejected")
+	}
+}
+
+// TestDispatch_PersistsTrainingDispatchWhenTrainAgentSet verifies that when a
+// dispatch carries a train_agent_id, exactly one training_dispatch row is
+// persisted per successful rollout project, keyed by the rollout's project_id
+// with the workspace_id, train_agent_id, and the default reward (spec §4.1).
+func TestDispatch_PersistsTrainingDispatchWhenTrainAgentSet(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 8)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 3,
+		AgentID: "ag", TrainAgentID: "ag", Issue: &IssueInput{Title: "t"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	if len(f.trainingSaves) != 3 {
+		t.Fatalf("want 3 training_dispatch saves (one per rollout project), got %d", len(f.trainingSaves))
+	}
+
+	// Each save must correspond 1:1 to a rollout project with the correct
+	// workspace_id, train_agent_id, and default reward.
+	savedByProject := map[string]trainingSaveCall{}
+	for _, s := range f.trainingSaves {
+		if s.workspaceID != "ws" {
+			t.Fatalf("save workspace_id = %q, want %q", s.workspaceID, "ws")
+		}
+		if s.trainAgentID != "ag" {
+			t.Fatalf("save train_agent_id = %q, want %q", s.trainAgentID, "ag")
+		}
+		if s.defaultReward != DefaultTrainingReward {
+			t.Fatalf("save default_reward = %v, want %v", s.defaultReward, DefaultTrainingReward)
+		}
+		savedByProject[s.projectID] = s
+	}
+	if len(savedByProject) != 3 {
+		t.Fatalf("want 3 distinct project_ids saved, got %d", len(savedByProject))
+	}
+	for i, r := range res.Rollouts {
+		if _, ok := savedByProject[r.ProjectID]; !ok {
+			t.Fatalf("rollout %d project %q has no training_dispatch save", i, r.ProjectID)
+		}
+	}
+}
+
+// TestDispatch_NoTrainingDispatchWhenTrainAgentEmpty verifies that with no
+// train_agent_id, zero training_dispatch rows are persisted (today's behavior
+// exactly).
+func TestDispatch_NoTrainingDispatchWhenTrainAgentEmpty(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 8)
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 3,
+		AgentID: "ag", Issue: &IssueInput{Title: "t"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(f.trainingSaves) != 0 {
+		t.Fatalf("want 0 training_dispatch saves when train_agent_id empty, got %d", len(f.trainingSaves))
 	}
 }

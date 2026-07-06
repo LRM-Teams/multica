@@ -19,6 +19,11 @@ const (
 // env has no project and is the reset source for scratch dispatch.
 const EnvModeBase EnvMode = "base"
 
+// DefaultTrainingReward is the reward stamped on a training_dispatch row when a
+// dispatch requests training (spec §4.1). Task 8 wires this to a configurable
+// TRAINING_DEFAULT_REWARD; for now it is a fixed default.
+const DefaultTrainingReward = 1.0
+
 // EnvDomain enumerates the dispatch domains (spec §4.2). Required on dispatch;
 // each domain pins a dispatch_type (swe_lego⇒issue, self_play⇒message).
 type EnvDomain string
@@ -132,6 +137,12 @@ type EnvDispatchDeps interface {
 	// replay. Both are workspace-scoped.
 	GetIdempotentResponse(ctx context.Context, workspaceID, key string) (EnvDispatchResult, bool, error)
 	SaveIdempotentResponse(ctx context.Context, workspaceID, key string, res EnvDispatchResult) error
+
+	// SaveTrainingDispatch persists the training intent for a rollout project
+	// (spec §4.1): one row per rollout project when a train_agent_id is set, so
+	// the later session-open hook can resolve the training target + default
+	// reward by project_id. Keyed by projectID (upsert on conflict).
+	SaveTrainingDispatch(ctx context.Context, projectID, workspaceID, trainAgentID string, defaultReward float64) error
 }
 
 // Env is a snapshot of an environment row.
@@ -273,6 +284,26 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 			rollouts[i] = EnvRollout{}
 		}
 		return EnvDispatchResult{}, fmt.Errorf("reset_failed: %v", resetErrs[0])
+	}
+
+	// Persist training intent per rollout project (spec §4.1) BEFORE dispatch:
+	// the session-open hook (fired when the trained member's task is created
+	// during dispatch) resolves the training target + default reward by
+	// project_id, so the row must exist by the time dispatchOne enqueues the
+	// run. Only when a train_agent_id is set; otherwise this is a no-op and
+	// behavior is unchanged. Best-effort per rollout (a save failure is not
+	// fatal to the dispatch; the open-hook simply finds no training row).
+	if in.TrainAgentID != "" {
+		for i := range rollouts {
+			if rollouts[i].ProjectID == "" {
+				continue
+			}
+			if err := s.deps.SaveTrainingDispatch(ctx, rollouts[i].ProjectID, in.WorkspaceID, in.TrainAgentID, DefaultTrainingReward); err != nil {
+				// Non-fatal: record on the rollout so the caller can see the
+				// training row was not persisted, but continue the dispatch.
+				rollouts[i].Error = fmt.Sprintf("save training dispatch: %v", err)
+			}
+		}
 	}
 
 	// Dispatch phase: best-effort, per-rollout errors recorded in rollouts[i].Error.

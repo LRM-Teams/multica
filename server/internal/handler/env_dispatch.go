@@ -908,6 +908,22 @@ func (a *envDispatchDepsAdapter) SaveIdempotentResponse(ctx context.Context, wor
 	return nil
 }
 
+// SaveTrainingDispatch persists the training intent for a rollout project
+// (spec §4.1): one row per rollout project when a dispatch carries a
+// train_agent_id, keyed by project_id (upsert on conflict) so the later
+// session-open hook can resolve the training target + default reward.
+func (a *envDispatchDepsAdapter) SaveTrainingDispatch(ctx context.Context, projectID, workspaceID, trainAgentID string, defaultReward float64) error {
+	if err := a.h.Queries.CreateTrainingDispatch(ctx, db.CreateTrainingDispatchParams{
+		ProjectID:     parseUUID(projectID),
+		WorkspaceID:   parseUUID(workspaceID),
+		TrainAgentID:  parseUUID(trainAgentID),
+		DefaultReward: defaultReward,
+	}); err != nil {
+		return fmt.Errorf("save training dispatch: %w", err)
+	}
+	return nil
+}
+
 // stubEnvDispatchDeps is a no-op Deps implementation used when the handler
 // is constructed without a *db.Queries (test fixtures that exercise only the
 // validation paths). Every method returns a zero value / nil error; the
@@ -965,4 +981,7 @@ func (s *stubEnvDispatchDeps) EnqueueAgentRun(context.Context, string, string, s
 }
 func (s *stubEnvDispatchDeps) GetDefaultSelfPlayEnv(context.Context, string) (string, error) {
 	return "stub-env", nil
+}
+func (s *stubEnvDispatchDeps) SaveTrainingDispatch(context.Context, string, string, string, float64) error {
+	return nil
 }

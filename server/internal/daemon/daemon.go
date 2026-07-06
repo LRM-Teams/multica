@@ -789,8 +789,11 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"device_name":       d.cfg.DeviceName,
 		"cli_version":       d.cfg.CLIVersion,
 		"launched_by":       d.cfg.LaunchedBy,
-		"capabilities":      []string{protocol.DaemonCapabilityChannelOutputActions},
-		"runtimes":          runtimes,
+		"capabilities": []string{
+			protocol.DaemonCapabilityChannelOutputActions,
+			protocol.DaemonCapabilityAgentCLITransport,
+		},
+		"runtimes": runtimes,
 	}
 
 	resp, err := d.client.Register(ctx, req)
@@ -2982,6 +2985,33 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	reused := gateResumeToReusedWorkdir(&task, &taskCtx, env.WorkDir, taskLog)
 
+	// Prepare the task-scoped Multica CLI wrapper before injecting the runtime
+	// brief. The brief must only advertise chat CLI transport when the command
+	// will actually exist in this run's PATH with a valid task token.
+	agentToken := task.AuthToken
+	cliWrapperDir := ""
+	cliTokenFile := ""
+	cliBinDir := ""
+	if selfBin, err := os.Executable(); err == nil {
+		cliBinDir = filepath.Dir(selfBin)
+		if agentToken != "" {
+			wrapperDir, tokenFile, err := prepareTaskCLITransport(d.cfg, task.WorkspaceID, agentID, task.ID, selfBin, agentToken)
+			if err != nil {
+				return TaskResult{}, fmt.Errorf("prepare agent CLI transport: %w", err)
+			}
+			cliWrapperDir = wrapperDir
+			cliTokenFile = tokenFile
+			taskLog.Info("agent cli transport prepared", "wrapper_dir", wrapperDir, "token_file", tokenFile)
+		} else {
+			taskLog.Warn("agent cli transport: no task token available; CLI API calls will require external auth")
+		}
+	} else {
+		taskLog.Warn("agent cli transport: unable to resolve multica executable", "error", err)
+	}
+	if task.ChatSessionID != "" && cliWrapperDir == "" {
+		taskCtx.ChatCLITransportUnavailable = true
+	}
+
 	// Inject runtime-specific config (meta skill) so the agent discovers .agent_context/.
 	runtimeBrief, err := execenv.InjectRuntimeConfig(env.WorkDir, provider, taskCtx)
 	if err != nil {
@@ -3032,7 +3062,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// owner-only endpoints (e.g. `/api/agents/{id}/env`), so the agent cannot
 	// use it to read another agent's secrets. Do not fall back to the daemon's
 	// own long-lived credential for agent transport.
-	agentToken := task.AuthToken
 	agentEnv := map[string]string{
 		"MULTICA_SERVER_URL":      d.cfg.ServerBaseURL,
 		"MULTICA_DAEMON_PORT":     fmt.Sprintf("%d", d.cfg.HealthPort),
@@ -3076,23 +3105,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// inherit the daemon's PATH. Prepend a per-run wrapper directory so
 	// `multica` resolves to the task-scoped transport wrapper first; keep the
 	// real binary directory after it as a fallback for explicit wrapper exec.
-	if selfBin, err := os.Executable(); err == nil {
-		binDir := filepath.Dir(selfBin)
-		pathPrefix := binDir
-		if agentToken != "" {
-			wrapperDir, tokenFile, err := prepareTaskCLITransport(d.cfg, task.WorkspaceID, agentID, task.ID, selfBin, agentToken)
-			if err != nil {
-				return TaskResult{}, fmt.Errorf("prepare agent CLI transport: %w", err)
-			}
-			agentEnv["MULTICA_TOKEN_FILE"] = tokenFile
-			pathPrefix = wrapperDir + string(os.PathListSeparator) + binDir
-			taskLog.Info("agent cli transport prepared", "wrapper_dir", wrapperDir, "token_file", tokenFile)
-		} else {
-			taskLog.Warn("agent cli transport: no task token available; CLI API calls will require external auth")
+	if cliBinDir != "" {
+		pathPrefix := cliBinDir
+		if cliWrapperDir != "" {
+			agentEnv["MULTICA_TOKEN_FILE"] = cliTokenFile
+			pathPrefix = cliWrapperDir + string(os.PathListSeparator) + cliBinDir
 		}
 		agentEnv["PATH"] = pathPrefix + string(os.PathListSeparator) + os.Getenv("PATH")
-	} else {
-		taskLog.Warn("agent cli transport: unable to resolve multica executable", "error", err)
 	}
 	// Point Codex to the per-task CODEX_HOME so it discovers skills natively
 	// without polluting the system ~/.codex/skills/.

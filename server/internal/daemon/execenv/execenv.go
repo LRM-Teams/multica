@@ -57,33 +57,38 @@ type PrepareParams struct {
 
 // TaskContextForEnv is the subset of task context used for writing context files.
 type TaskContextForEnv struct {
-	IssueID                 string
-	TriggerCommentID        string // comment that triggered this task (empty for on_assign)
-	TriggerThreadID         string // root comment ID for the triggering thread; falls back to TriggerCommentID when empty
-	NewCommentCount         int    // issue-wide comments since this agent's last run (excludes its own and the injected trigger)
-	NewCommentsSince        string // RFC3339 anchor (last run's started_at) the count is measured from; empty on cold start
-	PriorSessionResumed     bool   // true when the daemon will resume an existing provider session for this task
-	AgentID                 string // unique ID of the dispatched agent
-	AgentName               string
-	AgentInstructions       string // agent identity/persona instructions, injected into CLAUDE.md
-	AgentRoot               string // Multica-scoped local root for agent state (PI_AGENT_ROOT), when available
-	AgentMemoryDir          string // Multica-scoped memory root (PI_MEMORY_DIR), when available
-	AgentSkillDir           string // Multica-scoped skill root ({PI_AGENT_ROOT}/skills), when available
-	AgentSkillDraftsDir     string // Multica-scoped skill drafts root (PI_SKILL_DRAFTS_DIR), when available
-	AgentSkills             []SkillContextForEnv
-	Repos                   []RepoContextForEnv     // workspace repos available for checkout
-	ProjectID               string                  // issue's project, when present
-	ProjectTitle            string                  // human-readable project title
-	ProjectResources        []ProjectResourceForEnv // resources attached to the project
-	ChatSessionID           string                  // non-empty for chat tasks
-	AutopilotRunID          string                  // non-empty for autopilot run_only tasks
-	AutopilotID             string
-	AutopilotTitle          string
-	AutopilotDescription    string
-	AutopilotSource         string
-	AutopilotTriggerPayload string
-	QuickCreatePrompt       string // non-empty for quick-create tasks
-	IsSquadLeader           bool   // true when the agent is acting as a squad leader (may exit silently on no_action)
+	IssueID             string
+	TriggerCommentID    string // comment that triggered this task (empty for on_assign)
+	TriggerThreadID     string // root comment ID for the triggering thread; falls back to TriggerCommentID when empty
+	NewCommentCount     int    // issue-wide comments since this agent's last run (excludes its own and the injected trigger)
+	NewCommentsSince    string // RFC3339 anchor (last run's started_at) the count is measured from; empty on cold start
+	PriorSessionResumed bool   // true when the daemon will resume an existing provider session for this task
+	AgentID             string // unique ID of the dispatched agent
+	AgentName           string
+	AgentInstructions   string // agent identity/persona instructions, injected into CLAUDE.md
+	AgentRoot           string // Multica-scoped local root for agent state (PI_AGENT_ROOT), when available
+	AgentMemoryDir      string // Multica-scoped memory root (PI_MEMORY_DIR), when available
+	AgentSkillDir       string // Multica-scoped skill root ({PI_AGENT_ROOT}/skills), when available
+	AgentSkillDraftsDir string // Multica-scoped skill drafts root (PI_SKILL_DRAFTS_DIR), when available
+	AgentSkills         []SkillContextForEnv
+	Repos               []RepoContextForEnv     // workspace repos available for checkout
+	ProjectID           string                  // issue's project, when present
+	ProjectTitle        string                  // human-readable project title
+	ProjectResources    []ProjectResourceForEnv // resources attached to the project
+	ChatSessionID       string                  // non-empty for chat tasks
+	// ChatCLITransportUnavailable is true when this chat run cannot expose the
+	// task-scoped chat CLI wrapper. In that mixed-version or fail-closed path,
+	// the brief must not tell the agent to use commands that are absent from
+	// the run environment.
+	ChatCLITransportUnavailable bool
+	AutopilotRunID              string // non-empty for autopilot run_only tasks
+	AutopilotID                 string
+	AutopilotTitle              string
+	AutopilotDescription        string
+	AutopilotSource             string
+	AutopilotTriggerPayload     string
+	QuickCreatePrompt           string // non-empty for quick-create tasks
+	IsSquadLeader               bool   // true when the agent is acting as a squad leader (may exit silently on no_action)
 	// WorkspaceContext is the workspace-level system prompt (workspace.context
 	// in the DB). Rendered into the brief as `## Workspace Context` when
 	// non-empty so every agent in the workspace sees the same shared context,

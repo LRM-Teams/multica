@@ -32,8 +32,8 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 		"reaction",
 		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
 		"short acknowledgement",
-		"chat like a person",
-		"send a greeting sticker",
+		"respond with a 👋 reaction",
+		"explicitly asks for a sticker",
 		"Do not print JSON envelopes",
 		"全体总监以上欢迎一下新同事",
 	} {
@@ -103,7 +103,7 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 			"directly addressed to you",
 			"visible result using the output mechanism described in the runtime brief",
 			"Do not return no_reply",
-			"chat like a person",
+			"explicitly asks for a sticker",
 			"Do not print JSON envelopes",
 			"Current message to respond to",
 			trigger.Content,
@@ -184,6 +184,11 @@ func TestBuildChannelWelcomePrompt(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(p), "one short line") {
 		t.Error("prompt must constrain the welcome to one short line")
+	}
+	for _, banned := range []string{"structured sticker", "stickers are unavailable", "sticker JSON", ":sticker:", "\"action\"", "\"parts\"", "\"sticker_id\""} {
+		if strings.Contains(p, banned) {
+			t.Errorf("welcome prompt must not expose internal sticker transport detail %q:\n%s", banned, p)
+		}
 	}
 }
 

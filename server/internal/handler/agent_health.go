@@ -27,6 +27,11 @@ const (
 	agentHealthStateOffline             = "offline"
 	agentHealthReconnectAfter           = 5 * time.Minute
 	agentHealthRecoveredSummaryWindow   = 5 * time.Minute
+	// agentHealthStaleThreshold mirrors the runtime sweeper's stale threshold
+	// (150s in cmd/server/runtime_sweeper.go). Even if the DB row still says
+	// "online", a heartbeat older than this means the runtime is effectively
+	// unreachable and must not show as online in the health summary.
+	agentHealthStaleThreshold            = 150 * time.Second
 	defaultAgentHealthEventLimit        = 50
 )
 
@@ -244,7 +249,19 @@ func agentHealthSummary(agent db.Agent, rt db.AgentRuntime, events []AgentHealth
 
 	state := agentHealthStateOnline
 	reason := "heartbeat_received"
-	if rt.Status == "offline" {
+
+	// Freshness gate: even if the DB row still says "online", a stale
+	// heartbeat means the runtime is effectively unreachable. This closes
+	// the gap between a daemon going silent and the sweeper marking the
+	// row offline (~150s + sweep interval). (#284)
+	if rt.LastSeenAt.Valid && now.Sub(rt.LastSeenAt.Time) >= agentHealthStaleThreshold {
+		state = agentHealthStateSuspectedDisconnect
+		reason = "heartbeat_stale"
+		if now.Sub(rt.LastSeenAt.Time) >= agentHealthReconnectAfter {
+			state = agentHealthStateReconnecting
+			reason = "probe_timeout"
+		}
+	} else if rt.Status == "offline" {
 		state = agentHealthStateSuspectedDisconnect
 		reason = "heartbeat_stale"
 		if rt.UpdatedAt.Valid && now.Sub(rt.UpdatedAt.Time) >= agentHealthReconnectAfter {

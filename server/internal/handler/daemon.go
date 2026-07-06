@@ -617,6 +617,9 @@ func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("deregister: failed to set offline", "runtime_id", rid, "error", err)
 			continue
 		}
+		h.recordRuntimeHealthEventForActiveAgents(r.Context(), rt, agentHealthEventLivenessProbe, agentHealthStateSuspectedDisconnect, "daemon_deregistered", "runtime deregistered by daemon shutdown", map[string]any{
+			"source": "daemon_deregister",
+		})
 		obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeOffline(
 			uuidToString(rt.OwnerID),
 			wsID,

@@ -205,17 +205,150 @@ func TestGetAgentHealth_FreshOnlineRuntimeStaysOnline(t *testing.T) {
 	}
 }
 
+func TestGetAgentHealth_PrivateRuntimeOwnedByAnotherMemberCountsMissing(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeOwnerID := createWorkspaceMemberUser(t, "Health Runtime Owner", "health-runtime-owner-"+randomID()+"@multica.test")
+	agentID, runtimeID := createAgentHealthFixtureWithRuntimeAccess(t, "online",
+		time.Now().Add(-10*time.Second),
+		time.Now().Add(-5*time.Second),
+		runtimeOwnerID,
+		"private",
+	)
+
+	w := httptest.NewRecorder()
+	testHandler.GetAgentHealth(w, withURLParam(newRequest("GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentHealth: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp AgentHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Summary.State != agentHealthStateOffline || resp.Summary.ReasonCode != "runtime_missing" {
+		t.Fatalf("summary = %+v, want offline runtime_missing for non-runnable private runtime %s", resp.Summary, runtimeID)
+	}
+	if resp.Summary.RuntimeID != nil {
+		t.Fatalf("non-runnable private runtime should be hidden as missing, got runtime_id=%q", *resp.Summary.RuntimeID)
+	}
+	if len(resp.Events) != 0 {
+		t.Fatalf("non-runnable private runtime should not expose health events, got %+v", resp.Events)
+	}
+}
+
+func TestGetAgentHealth_PublicRuntimeOwnedByAnotherMemberStaysOnline(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeOwnerID := createWorkspaceMemberUser(t, "Health Public Runtime Owner", "health-public-runtime-owner-"+randomID()+"@multica.test")
+	agentID, _ := createAgentHealthFixtureWithRuntimeAccess(t, "online",
+		time.Now().Add(-10*time.Second),
+		time.Now().Add(-5*time.Second),
+		runtimeOwnerID,
+		"public",
+	)
+
+	w := httptest.NewRecorder()
+	testHandler.GetAgentHealth(w, withURLParam(newRequest("GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentHealth: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp AgentHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Summary.State != agentHealthStateOnline {
+		t.Fatalf("summary state = %q, want %q for public fresh runtime", resp.Summary.State, agentHealthStateOnline)
+	}
+}
+
+func TestAgentRuntimeRunnableForAgent_Pure(t *testing.T) {
+	ownerID := parseUUID("11111111-1111-1111-1111-111111111111")
+	otherID := parseUUID("22222222-2222-2222-2222-222222222222")
+	tests := []struct {
+		name    string
+		agent   db.Agent
+		runtime db.AgentRuntime
+		want    bool
+	}{
+		{
+			name: "workspace agent can use public runtime",
+			agent: db.Agent{
+				Visibility: "workspace",
+				OwnerID:    ownerID,
+			},
+			runtime: db.AgentRuntime{
+				Visibility: "public",
+				OwnerID:    otherID,
+			},
+			want: true,
+		},
+		{
+			name: "workspace agent cannot count private runtime as shared capacity",
+			agent: db.Agent{
+				Visibility: "workspace",
+				OwnerID:    ownerID,
+			},
+			runtime: db.AgentRuntime{
+				Visibility: "private",
+				OwnerID:    ownerID,
+			},
+			want: false,
+		},
+		{
+			name: "private agent can use same-owner private runtime",
+			agent: db.Agent{
+				Visibility: "private",
+				OwnerID:    ownerID,
+			},
+			runtime: db.AgentRuntime{
+				Visibility: "private",
+				OwnerID:    ownerID,
+			},
+			want: true,
+		},
+		{
+			name: "private agent cannot use another owner's private runtime",
+			agent: db.Agent{
+				Visibility: "private",
+				OwnerID:    ownerID,
+			},
+			runtime: db.AgentRuntime{
+				Visibility: "private",
+				OwnerID:    otherID,
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := agentRuntimeRunnableForAgent(tt.agent, tt.runtime); got != tt.want {
+				t.Fatalf("agentRuntimeRunnableForAgent() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func createAgentHealthFixture(t *testing.T, status string, lastSeen, updatedAt time.Time) (agentID, runtimeID string) {
+	return createAgentHealthFixtureWithRuntimeAccess(t, status, lastSeen, updatedAt, testUserID, "public")
+}
+
+func createAgentHealthFixtureWithRuntimeAccess(t *testing.T, status string, lastSeen, updatedAt time.Time, runtimeOwnerID, visibility string) (agentID, runtimeID string) {
 	t.Helper()
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider,
-			status, device_info, metadata, last_seen_at, updated_at
+			status, device_info, metadata, last_seen_at, updated_at, owner_id, visibility
 		)
 		VALUES ($1, NULL, $2, 'cloud', 'health-test',
-			$3, '', '{}'::jsonb, $4, $5)
+			$3, '', '{}'::jsonb, $4, $5, $6, $7)
 		RETURNING id
-	`, testWorkspaceID, "health-runtime-"+randomID(), status, lastSeen, updatedAt).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, "health-runtime-"+randomID(), status, lastSeen, updatedAt, runtimeOwnerID, visibility).Scan(&runtimeID); err != nil {
 		t.Fatalf("create health runtime: %v", err)
 	}
 	if err := testPool.QueryRow(context.Background(), `

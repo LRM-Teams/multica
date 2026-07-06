@@ -235,4 +235,39 @@ describe("AgentStatusDot", () => {
     rerender(<AgentStatusDot agentId="agent-1" size={28} />);
     expect(container.querySelector(".animate-ping")).toBeNull();
   });
+
+  it("renders an OFFLINE dot as a hollow ring at legible sizes, filled on tiny ones (§3-v2)", () => {
+    presenceDetailMock.mockReturnValue({
+      availability: "offline",
+      workload: "idle",
+      runningCount: 0,
+      queuedCount: 0,
+      capacity: 1,
+    });
+    healthSummaryMock.mockReturnValue({
+      summary: {
+        agent_id: "agent-1",
+        state: "offline",
+        state_since: "2026-07-06T09:00:00Z",
+        last_seen_at: "2026-07-06T09:40:00Z",
+        last_event_at: "2026-07-06T09:40:00Z",
+      },
+      events: undefined,
+      isLoading: false,
+      isError: false,
+    });
+    // Legible size (40 → ~11px dot) → hollow ring, no filled gray.
+    const { rerender } = render(<AgentStatusDot agentId="agent-1" size={40} />);
+    let dot = screen.getByLabelText(/^Status:/);
+    expect(dot).toHaveClass("border-2");
+    expect(dot).toHaveClass("bg-transparent");
+    expect(dot).not.toHaveClass("bg-muted-foreground/40");
+
+    // Tiny participant-stack dot (14 → clamped to 5px) → hollow unreadable, so
+    // it falls back to the filled gray.
+    rerender(<AgentStatusDot agentId="agent-1" size={14} />);
+    dot = screen.getByLabelText(/^Status:/);
+    expect(dot).toHaveClass("bg-muted-foreground/40");
+    expect(dot).not.toHaveClass("border-2");
+  });
 });

@@ -892,7 +892,19 @@ func (h *Handler) recordHeartbeat(ctx context.Context, rt db.AgentRuntime) error
 	// Either bumps last_seen_at on an already-online row (Touch + race
 	// fallback) or flips status from offline to online. The scheduler
 	// chooses sync vs batched per case; see HeartbeatScheduler doc.
-	return h.HeartbeatScheduler.Schedule(ctx, rt)
+	if err := h.HeartbeatScheduler.Schedule(ctx, rt); err != nil {
+		return err
+	}
+	switch {
+	case rt.Status != "online":
+		h.recordRuntimeHealthEventForActiveAgents(ctx, rt, agentHealthEventTransportRecover, agentHealthStateRecovered, "transport_reconnected", "runtime transport reconnected", map[string]any{
+			"previous_status": rt.Status,
+			"last_seen_at":    timestampToString(rt.LastSeenAt),
+		})
+	case !rt.LastSeenAt.Valid:
+		h.recordRuntimeHealthEventForActiveAgents(ctx, rt, agentHealthEventServerPing, agentHealthStateOnline, "heartbeat_received", "runtime heartbeat received", nil)
+	}
+	return nil
 }
 
 // heartbeatMetrics carries per-stage timings out of processHeartbeat so the

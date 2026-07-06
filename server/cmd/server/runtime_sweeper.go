@@ -77,7 +77,7 @@ const (
 // hot heartbeat path; the DB is allowed to lag up to runtimeHeartbeatDBFlushInterval).
 // When liveness is unavailable or errors, we fall back to trusting the DB
 // stale window — that is the original behavior.
-func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, taskSvc *service.TaskService, bus *events.Bus) {
+func runRuntimeSweeper(ctx context.Context, queries *db.Queries, healthEventExec handler.RuntimeHealthEventExecutor, liveness handler.LivenessStore, taskSvc *service.TaskService, bus *events.Bus) {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
 
@@ -86,7 +86,7 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handle
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			sweepStaleRuntimes(ctx, queries, liveness, taskSvc, bus)
+			sweepStaleRuntimes(ctx, queries, healthEventExec, liveness, taskSvc, bus)
 			sweepStaleSandboxNodes(ctx, queries)
 			sweepStaleTasks(ctx, queries, taskSvc, bus)
 			sweepExpiredQueuedTasks(ctx, queries, taskSvc)
@@ -97,7 +97,7 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handle
 
 // sweepStaleRuntimes marks runtimes offline if they haven't heartbeated,
 // then fails any tasks belonging to those offline runtimes.
-func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, taskSvc *service.TaskService, bus *events.Bus) {
+func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, healthEventExec handler.RuntimeHealthEventExecutor, liveness handler.LivenessStore, taskSvc *service.TaskService, bus *events.Bus) {
 	candidates, err := queries.SelectStaleOnlineRuntimes(ctx, staleThresholdSeconds)
 	if err != nil {
 		slog.Warn("runtime sweeper: failed to list stale online runtimes", "error", err)
@@ -134,6 +134,13 @@ func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, liveness handl
 				row.DaemonID.String,
 				row.Provider,
 			))
+		}
+	}
+	for _, row := range staleRows {
+		if err := handler.RecordRuntimeHealthEventForRuntimeAgents(ctx, healthEventExec, row.WorkspaceID, row.ID, "daemon_liveness_probe_sent", "suspected_disconnect", "heartbeat_stale", "runtime heartbeat stale; liveness probe sent", map[string]any{
+			"stale_threshold_seconds": staleThresholdSeconds,
+		}); err != nil {
+			slog.Warn("runtime sweeper: failed to record health event", "runtime_id", util.UUIDToString(row.ID), "error", err)
 		}
 	}
 

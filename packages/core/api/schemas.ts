@@ -19,6 +19,7 @@ import type {
   ChannelMessageSearchResponse,
   ChannelMessagesPage,
   ChannelThreadMessagesPage,
+  AgentHealthResponse,
   StickerCatalogResponse,
   ListIssuesResponse,
   ListWebhookDeliveriesResponse,
@@ -610,6 +611,55 @@ const RuntimeUsageSchema = z.object({
 }).loose();
 
 export const RuntimeUsageListSchema = z.array(RuntimeUsageSchema);
+
+const AgentHealthSummarySchema = z.object({
+  agent_id: z.string().default(""),
+  runtime_id: z.string().nullable().default(null),
+  state: z.string().default("offline"),
+  reason_code: z.string().default(""),
+  state_since: z.string().nullable().default(null),
+  last_seen_at: z.string().nullable().default(null),
+  last_event_at: z.string().nullable().default(null),
+}).loose();
+
+const AgentHealthEventSchema = z.object({
+  id: z.string().default(""),
+  agent_id: z.string().default(""),
+  runtime_id: z.string().nullable().default(null),
+  type: z.string().default("server_ping_received"),
+  state_after: z.string().default("offline"),
+  reason_code: z.string().default(""),
+  message: z.string().default(""),
+  occurred_at: z.string().default(""),
+  details: z.record(z.string(), z.unknown()).optional(),
+  synthetic: z.boolean().optional(),
+}).loose();
+
+export const AgentHealthResponseSchema = z.object({
+  health_summary: AgentHealthSummarySchema.default({
+    agent_id: "",
+    runtime_id: null,
+    state: "offline",
+    reason_code: "schema_fallback",
+    state_since: null,
+    last_seen_at: null,
+    last_event_at: null,
+  }),
+  health_events: z.array(AgentHealthEventSchema).default([]),
+}).loose();
+
+export const EMPTY_AGENT_HEALTH_RESPONSE: AgentHealthResponse = {
+  health_summary: {
+    agent_id: "",
+    runtime_id: null,
+    state: "offline",
+    reason_code: "empty",
+    state_since: null,
+    last_seen_at: null,
+    last_event_at: null,
+  },
+  health_events: [],
+};
 
 const RuntimeHourlyActivitySchema = z.object({
   hour: z.number().default(0),

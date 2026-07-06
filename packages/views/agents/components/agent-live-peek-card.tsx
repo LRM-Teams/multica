@@ -18,7 +18,7 @@ import type { AgentTask } from "@multica/core/types";
 import { AlertTriangle } from "lucide-react";
 import { AppLink } from "../../navigation";
 import { useT, useTimeAgo } from "../../i18n";
-import { availabilityConfig, workloadConfig } from "../presence";
+import { availabilityConfig, presenceStatusToken, workloadConfig } from "../presence";
 
 interface AgentLivePeekCardProps {
   agentId: string;
@@ -82,18 +82,18 @@ export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
   // falsely imply "available", so surface the availability word instead.
   // Archived flows through here too ("Archived"), replacing the old
   // archived-only special case.
-  const status =
-    presence === "loading"
-      ? null
-      : presence.availability === "online"
-        ? {
-            visual: workloadConfig[presence.workload],
-            label: t(($) => $.workload[presence.workload]),
-          }
-        : {
-            visual: availabilityConfig[presence.availability],
-            label: t(($) => $.availability[presence.availability]),
-          };
+  const statusToken = presenceStatusToken(presence);
+  const status = statusToken
+    ? statusToken.kind === "workload"
+      ? {
+          visual: workloadConfig[statusToken.value],
+          label: t(($) => $.workload[statusToken.value]),
+        }
+      : {
+          visual: availabilityConfig[statusToken.value],
+          label: t(($) => $.availability[statusToken.value]),
+        }
+    : null;
 
   return (
     <div className="flex flex-col gap-3 text-left">

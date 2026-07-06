@@ -229,6 +229,23 @@ describe("AgentLivePeekCard", () => {
     expect(screen.queryByText(enAgents.live_peek.failed_indicator)).toBeNull();
   });
 
+  it("shows the availability word (Offline), not a workload word, when the agent is not online", () => {
+    // Offline + idle is a valid derivation, but "Idle" would falsely read as
+    // "available". The word must agree with the (gray) dot — surface "Offline".
+    mockPresence.current = {
+      availability: "offline",
+      workload: "idle",
+      runningCount: 0,
+      queuedCount: 0,
+      capacity: 1,
+    };
+
+    renderCard();
+
+    expect(screen.getByText("Offline")).toBeInTheDocument();
+    expect(screen.queryByText("Idle")).toBeNull();
+  });
+
   it("shows the failed indicator on the last-activity row when the most recent terminal task failed", () => {
     mockPresence.current = {
       availability: "online",

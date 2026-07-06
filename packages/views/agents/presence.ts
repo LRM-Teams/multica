@@ -1,6 +1,6 @@
 import {
-  AlertCircle,
   Archive,
+  Circle,
   CircleDot,
   CircleSlash,
   Clock,
@@ -105,9 +105,12 @@ export const workloadConfig: Record<Workload, WorkloadVisual> = {
     icon: Clock,
   },
   idle: {
+    // Calm, neutral glyph — "available, nothing on the plate". The old
+    // AlertCircle read like a warning for a benign resting state. Only shown
+    // while online (offline surfaces the availability word instead).
     label: "Idle",
     textClass: "text-muted-foreground",
-    icon: AlertCircle,
+    icon: Circle,
   },
 };
 

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -16,6 +17,20 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
+import { useMessageDayDividers } from "../../i18n/use-message-time";
+
+// Raft-style date separator inserted before the first message of each local day.
+function DateDivider({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-3 px-5 py-2" data-testid="date-divider">
+      <div className="h-px flex-1 bg-border/60" />
+      <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </span>
+      <div className="h-px flex-1 bg-border/60" />
+    </div>
+  );
+}
 
 /**
  * Virtualized message list shared by the group conversation (channels-page)
@@ -131,6 +146,7 @@ function MessageViewport({
   const [isNearBottom, setIsNearBottom] = useState(true);
   const channelId = messages[0]?.channel_id;
   const canLoadOlder = !!hasOlder && !loadingOlder && !!onLoadOlder;
+  const dayDividers = useMessageDayDividers(messages);
 
   if (!messageRefs.current) {
     messageRefs.current = new Map<string, HTMLDivElement>();
@@ -235,33 +251,36 @@ function MessageViewport({
 
   const renderRow = (msg: ChannelMessage) => {
     const searchHighlighted = searchHitIds?.has(msg.id) ?? false;
+    const dividerLabel = dayDividers.get(msg.id);
     return (
-      <div
-        key={msg.id}
-        ref={(node) => {
-          if (node) {
-            messageRefMap.set(msg.id, node);
-          } else {
-            messageRefMap.delete(msg.id);
-          }
-        }}
-        className="px-5 pt-1.5"
-        data-testid="message-row"
-      >
-        <ChannelMessageBubble
-          message={msg}
-          currentUserId={currentUserId}
-          ownName={ownName}
-          highlighted={msg.id === highlightMessageId}
-          onOpenThread={onOpenThread}
-          onScrollTo={onScrollToMessage}
-          onReact={onReact}
-          onEdit={onEditMessage}
-          onDelete={onDeleteMessage}
-          searchHighlighted={searchHighlighted}
-          searchQuery={searchHighlighted ? searchQuery : undefined}
-        />
-      </div>
+      <Fragment key={msg.id}>
+        {dividerLabel && <DateDivider label={dividerLabel} />}
+        <div
+          ref={(node) => {
+            if (node) {
+              messageRefMap.set(msg.id, node);
+            } else {
+              messageRefMap.delete(msg.id);
+            }
+          }}
+          className="px-5 pt-1.5"
+          data-testid="message-row"
+        >
+          <ChannelMessageBubble
+            message={msg}
+            currentUserId={currentUserId}
+            ownName={ownName}
+            highlighted={msg.id === highlightMessageId}
+            onOpenThread={onOpenThread}
+            onScrollTo={onScrollToMessage}
+            onReact={onReact}
+            onEdit={onEditMessage}
+            onDelete={onDeleteMessage}
+            searchHighlighted={searchHighlighted}
+            searchQuery={searchHighlighted ? searchQuery : undefined}
+          />
+        </div>
+      </Fragment>
     );
   };
 

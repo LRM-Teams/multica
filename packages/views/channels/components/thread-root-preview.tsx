@@ -11,22 +11,12 @@ import { agentColor } from "../../common/agent-color";
 import { initialsOf } from "../../common/initials";
 import { AttachmentList } from "../../issues/components/comment-card";
 import { useT } from "../../i18n/use-t";
+import { useMessageTime } from "../../i18n/use-message-time";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
 import {
   formatMessagePartsPreview,
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
-
-function formatTime(value: string): string {
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(new Date(value));
-  } catch {
-    return "";
-  }
-}
 
 export function ThreadRootPreview({
   message,
@@ -40,6 +30,7 @@ export function ThreadRootPreview({
   onViewParent?: () => void;
 }) {
   const { t } = useT("channels");
+  const messageTime = useMessageTime();
   const { getActorName } = useActorName();
   const isAgent = message.type === "agent";
   const displayName = resolveChannelAuthorDisplayName(message, {
@@ -114,8 +105,11 @@ export function ThreadRootPreview({
                 {t(($) => $.message.agent_badge)}
               </span>
             )}
-            <span className="text-[11px] text-muted-foreground">
-              {formatTime(message.created_at)}
+            <span
+              className="text-[11px] text-muted-foreground"
+              title={messageTime.full(message.created_at)}
+            >
+              {messageTime.format(message.created_at)}
             </span>
           </div>
           <div className="mt-1 min-w-0 overflow-hidden text-sm leading-6 text-foreground">

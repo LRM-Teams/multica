@@ -29,16 +29,22 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   }),
 }));
 
+vi.mock("../../common/use-viewing-timezone", () => ({
+  useViewingTimezone: () => "UTC",
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (
       selector: (resources: {
         message: { agent_badge: string };
         thread: { collapse_message: string; show_full_message: string; view_parent: string };
+        time: { today: string; yesterday: string };
       }) => string,
     ) =>
       selector({
         message: { agent_badge: "Agent" },
+        time: { today: "Today", yesterday: "Yesterday" },
         thread: {
           collapse_message: "Collapse message",
           show_full_message: "Show full message",

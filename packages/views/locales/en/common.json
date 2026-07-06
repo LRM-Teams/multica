@@ -8,7 +8,9 @@
     "just_now": "just now",
     "minutes_ago": "{{count}}m ago",
     "hours_ago": "{{count}}h ago",
-    "days_ago": "{{count}}d ago"
+    "days_ago": "{{count}}d ago",
+    "today": "Today",
+    "yesterday": "Yesterday"
   },
   "lark_bind": {
     "page_title": "Bind your Lark account",

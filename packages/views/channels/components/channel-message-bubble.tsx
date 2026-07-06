@@ -17,6 +17,7 @@ import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { AgentPresenceOverlay } from "../../common/actor-avatar";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
+import { useMessageTime } from "../../i18n/use-message-time";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
 import {
   extractEnvelopeParts,
@@ -28,17 +29,6 @@ import {
 import { MessagePartsRenderer } from "./message-parts-renderer";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 
-function formatTime(value: string): string {
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(new Date(value));
-  } catch {
-    return "";
-  }
-}
-
 function ChannelSystemMessageRow({
   message,
   highlighted,
@@ -48,6 +38,7 @@ function ChannelSystemMessageRow({
   highlighted: boolean;
   systemText: string;
 }) {
+  const messageTime = useMessageTime();
   return (
     <div
       id={`message-${message.id}`}
@@ -59,8 +50,11 @@ function ChannelSystemMessageRow({
       )}
     >
       <span className="min-w-0 break-words">{systemText}</span>
-      <span className="shrink-0 text-[11px] text-muted-foreground/70">
-        {formatTime(message.created_at)}
+      <span
+        className="shrink-0 text-[11px] text-muted-foreground/70"
+        title={messageTime.full(message.created_at)}
+      >
+        {messageTime.format(message.created_at)}
       </span>
     </div>
   );
@@ -177,6 +171,7 @@ export function ChannelMessageBubble({
 }) {
   const { t } = useT("channels");
   const { getActorAvatarUrl, getActorName } = useActorName();
+  const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
 
   if (message.deleted_at) {
@@ -378,8 +373,11 @@ export function ChannelMessageBubble({
               {t(($) => $.message.feishu_badge)}
             </span>
           )}
-          <span className="shrink-0 text-[11px] text-muted-foreground">
-            {formatTime(message.created_at)}
+          <span
+            className="shrink-0 text-[11px] text-muted-foreground"
+            title={messageTime.full(message.created_at)}
+          >
+            {messageTime.format(message.created_at)}
           </span>
           {isEdited && (
             <span

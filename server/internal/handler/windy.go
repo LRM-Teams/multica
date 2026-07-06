@@ -19,6 +19,8 @@ import (
 
 const (
 	windyAgentName        = "Wendy"
+	legacyWindyAgentName  = "Windy"
+	legacyJoeAgentName    = "Joe"
 	windyAgentTemplate    = "windy_hr"
 	windyDescription      = "Personal HR for building and updating your Multica agent team."
 	windyMaxDraftNameLen  = 80
@@ -232,10 +234,17 @@ func (h *Handler) ensureWindyAgent(r *http.Request, workspaceID, userID pgtype.U
 		return db.Agent{}, false, err
 	}
 	for _, existing := range agents {
-		name := agentDisplayName(existing)
-		if existing.OwnerID.Valid && uuidToString(existing.OwnerID) == uuidToString(userID) && name == windyAgentName && existing.Visibility == "private" {
+		if !isOwnedPrivateWindyAgent(existing, userID) {
+			continue
+		}
+		if agentDisplayName(existing) == windyAgentName {
 			return existing, false, nil
 		}
+		updated, err := h.renameLegacyWindyAgent(r, existing)
+		if err != nil {
+			return db.Agent{}, false, err
+		}
+		return updated, false, nil
 	}
 
 	created, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
@@ -259,6 +268,31 @@ func (h *Handler) ensureWindyAgent(r *http.Request, workspaceID, userID pgtype.U
 		return db.Agent{}, false, err
 	}
 	return created, true, nil
+}
+
+func isOwnedPrivateWindyAgent(agent db.Agent, userID pgtype.UUID) bool {
+	if !agent.OwnerID.Valid || uuidToString(agent.OwnerID) != uuidToString(userID) || agent.Visibility != "private" {
+		return false
+	}
+	switch agentDisplayName(agent) {
+	case windyAgentName, legacyWindyAgentName, legacyJoeAgentName:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *Handler) renameLegacyWindyAgent(r *http.Request, agent db.Agent) (db.Agent, error) {
+	updated, err := h.Queries.UpdateAgent(r.Context(), db.UpdateAgentParams{
+		ID:          agent.ID,
+		DisplayName: pgtype.Text{String: windyAgentName, Valid: true},
+	})
+	if err != nil {
+		return db.Agent{}, err
+	}
+	resp := agentToResponse(updated)
+	h.publish(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), "member", requestUserID(r), map[string]any{"agent": broadcastAgentResponse(resp)})
+	return updated, nil
 }
 
 func (h *Handler) ensureWindyDM(r *http.Request, workspaceID string, userID, windyID pgtype.UUID) (ChannelResponse, bool) {

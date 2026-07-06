@@ -22,7 +22,11 @@ import {
 } from "@multica/ui/components/ui/hover-card";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
-import { memberProfileOptions } from "@multica/core/agents";
+import {
+  memberProfileOptions,
+  useAgentPresenceDetail,
+  type AgentPresenceDetail,
+} from "@multica/core/agents";
 import type {
   MemberProfile,
   MemberProfileActivityItem,
@@ -31,10 +35,27 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { resolveActorIdentityPresentation } from "@multica/core/identity";
 import { ActorIdentityRow } from "./actor-identity-row";
+import { presenceStatusToken } from "../agents/presence";
 import { useT } from "../i18n/use-t";
 import { useTimeAgo } from "../i18n/use-time-ago";
 
 type ChannelsT = ReturnType<typeof useT<"channels">>["t"];
+type AgentsT = ReturnType<typeof useT<"agents">>["t"];
+
+// #288: the status pill must agree with the presence dot — both read the
+// availability/health source. A workload word ("空闲/处理中") shows only while
+// online; offline/unstable/archived show the availability word ("离线" etc.).
+// Never a bare raw status (that was the "gray dot vs idle" contradiction).
+function presenceStatusLabel(
+  presence: AgentPresenceDetail | "loading",
+  t: AgentsT,
+): string | null {
+  const token = presenceStatusToken(presence);
+  if (!token) return null;
+  return token.kind === "workload"
+    ? t(($) => $.workload[token.value])
+    : t(($) => $.availability[token.value]);
+}
 
 type ProfileMemberType = "agent" | "user";
 type ProfilePopoverSide = "top" | "right" | "bottom" | "left" | "inline-start" | "inline-end";
@@ -163,6 +184,14 @@ function ActorProfileContent({
 
 export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
   const { t } = useT("channels");
+  const { t: tAgents } = useT("agents");
+  const wsId = useWorkspaceId();
+  // #288: the status pill reads the same availability/health source as the
+  // presence dot (via useAgentPresenceDetail), so the two can never disagree.
+  const presence = useAgentPresenceDetail(
+    wsId,
+    profile.member_type === "agent" ? profile.member_id : undefined,
+  );
   const identity = {
     name: profile.name,
     display_name: profile.display_name,
@@ -177,10 +206,9 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
     .slice(0, 2);
   const safeDescription = profile.description?.trim() || t(($) => $.profile_popover.no_description);
   const role = roleLabel(profile.role ?? (profile.member_type === "agent" ? "agent" : null), t);
-  const status = profile.status?.trim() || null;
-  const metadata = [role, profile.member_type === "agent" ? status : null]
-    .filter(Boolean)
-    .join(" · ");
+  const agentStatus =
+    profile.member_type === "agent" ? presenceStatusLabel(presence, tAgents) : null;
+  const metadata = [role, agentStatus].filter(Boolean).join(" · ");
 
   return (
     <div className="text-left">

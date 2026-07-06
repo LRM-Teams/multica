@@ -1,6 +1,14 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { ApiError } from "@multica/core/api";
 import { useComposeSendIntent } from "./use-compose-send-intent";
+
+/**
+ * Safety timeout for a send request. If the mutation hasn't settled within
+ * this window the lock is force-released so the composer is never permanently
+ * stuck. The underlying HTTP request is *not* aborted — the message may still
+ * land server-side and dedupe on retry via `client_message_id`.
+ */
+const SEND_TIMEOUT_MS = 30_000;
 
 /**
  * Which visible-error branch a failed send takes. The third branch of the
@@ -83,27 +91,67 @@ export interface ComposerSend {
 export function useComposerSend(): ComposerSend {
   const { beginSend, finishSend, resetIntent, settleSend } = useComposeSendIntent();
 
+  /**
+   * Safety timer for the in-flight send. When it fires the lock is
+   * force-released and a retryable error is surfaced — the composer can never
+   * hang forever on a request that never settles (network stall, held-open
+   * connection, backend stuck). Cleared on normal settle and on unmount.
+   */
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearTimeout = useCallback(() => {
+    if (timeoutRef.current !== null) {
+      globalThis.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  }, []);
+
+  // Clean up the timer if the composer unmounts mid-send.
+  useEffect(() => clearTimeout, [clearTimeout]);
+
   const send = useCallback(
     <TVars>(run: ComposerSendRun<TVars>): boolean => {
       // Send lock + payload-bound client_message_id in one step. `null` means a
       // send is already running (held / auto-repeat trigger) → abort.
       const clientMessageId = beginSend(run.payloadKey);
       if (clientMessageId === null) return false;
+
+      // Guard against a double-settle: if the timeout already fired, a late
+      // `onSettled` from the mutation must be a no-op.
+      let settled = false;
+
+      timeoutRef.current = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout();
+        // Force-release the lock. The intent id is preserved (not reset) so a
+        // retry dedupes if the original actually landed server-side.
+        settleSend();
+        run.onVisibleError("retry");
+      }, SEND_TIMEOUT_MS);
+
       run.mutate(run.buildVars(clientMessageId), {
         onSuccess: () => {
+          if (settled) return; // timeout already released the lock
           run.onCommitted();
           finishSend();
         },
         onError: (err) => {
+          if (settled) return; // timeout already surfaced a retryable error
           const kind = classifySendFailure(err);
           if (kind === "conflict") resetIntent();
           run.onVisibleError(kind);
         },
-        onSettled: () => settleSend(),
+        onSettled: () => {
+          if (settled) return; // timeout already released the lock
+          settled = true;
+          clearTimeout();
+          settleSend();
+        },
       });
       return true;
     },
-    [beginSend, finishSend, resetIntent, settleSend],
+    [beginSend, finishSend, resetIntent, settleSend, clearTimeout],
   );
 
   return { send };

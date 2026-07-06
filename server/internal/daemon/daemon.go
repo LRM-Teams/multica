@@ -3049,7 +3049,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}()
 	}
 
-	prompt := BuildPrompt(task, provider)
+	prompt := BuildPrompt(task, provider, agentRootPath)
 
 	// Pass the daemon's execution context so the spawned agent CLI can call
 	// the Multica API and the local daemon (e.g. `multica repo checkout`).

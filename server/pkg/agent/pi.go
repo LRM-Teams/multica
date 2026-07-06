@@ -186,6 +186,16 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 
 	timeout := opts.Timeout
 
+	// Early-complete: when the final assistant turn ends (turn_end with a
+	// terminal stop reason), the model's answer and usage are already known.
+	// The pi process then spends up to ~60s in synchronous session_shutdown
+	// (memory exit summary / learning / qmd) before exiting. Emitting the
+	// Result at turn_end lets the daemon mark the task done and release the
+	// user-facing reply immediately, while pi keeps running its shutdown in
+	// the background (memory is still written). Opt out with PI_EARLY_COMPLETE=0.
+	earlyCompleteEnabled := getenvDefault("PI_EARLY_COMPLETE", "1") != "0"
+	earlyCompleted := false
+
 	// Pi's --session flag expects a file path where events are appended.
 	// The path doubles as our opaque session identifier: we return it as
 	// SessionID and expect it back as ResumeSessionID on the next turn.
@@ -363,6 +373,30 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 					}
 				}
 
+				// Early-complete: a terminal turn_end means the model finished
+				// answering and usage is accumulated above. Flush any pending
+				// text and emit the Result now so the daemon can mark the task
+				// done; the pi process keeps running its synchronous
+				// session_shutdown (memory summary/learning/qmd) in the
+				// background. Errors (stopReason=error) still flip finalStatus
+				// above and are reported. We emit exactly once.
+				if earlyCompleteEnabled && !earlyCompleted && finalStatus != "failed" {
+					if d := flushPiTextBuffer(&textBuffer); d != "" {
+						output.WriteString(d)
+						trySend(msgCh, Message{Type: MessageText, Content: d})
+					}
+					earlyCompleted = true
+					b.cfg.Logger.Info("pi early-complete", "pid", cmd.Process.Pid, "duration", time.Since(startTime).Round(time.Millisecond).String())
+					resCh <- Result{
+						Status:     finalStatus,
+						Output:     output.String(),
+						Error:      finalError,
+						DurationMs: time.Since(startTime).Milliseconds(),
+						SessionID:  sessionPath,
+						Usage:      usage,
+					}
+				}
+
 			case "error":
 				errText := decodePiString(evt.Message)
 				trySend(msgCh, Message{Type: MessageError, Content: errText})
@@ -389,6 +423,16 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 
 		waitErr := cmd.Wait()
 		duration := time.Since(startTime)
+
+		if earlyCompleted {
+			// We already emitted the Result at turn_end. The pi process ran its
+			// synchronous session_shutdown (memory summary/learning/qmd) after
+			// that; we only need to reap it here. Do not overwrite the
+			// already-sent Result — even if shutdown hit a context deadline or
+			// the process exited non-zero, the user-facing reply succeeded.
+			b.cfg.Logger.Info("pi finished (after early-complete)", "pid", cmd.Process.Pid, "waitErr", waitErr, "duration", duration.Round(time.Millisecond).String())
+			return
+		}
 
 		if runCtx.Err() == context.DeadlineExceeded {
 			finalStatus = "timeout"
@@ -565,6 +609,14 @@ func buildPiArgs(prompt, sessionPath string, opts ExecOptions, logger *slog.Logg
 		args = append(args, prompt)
 	}
 	return args
+}
+
+// getenvDefault returns the env var value or default when unset/empty.
+func getenvDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 // splitPiModel parses a "provider/model" string into its parts. Plain

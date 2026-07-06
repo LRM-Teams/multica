@@ -604,7 +604,7 @@ func TestBuildPromptContainsIssueID(t *testing.T) {
 				{Name: "Concise", Content: "Be concise."},
 			},
 		},
-	}, "claude")
+	}, "claude", "")
 
 	// Prompt should contain the issue ID and CLI hint.
 	for _, want := range []string{
@@ -630,7 +630,7 @@ func TestBuildPromptNoIssueDetails(t *testing.T) {
 	prompt := BuildPrompt(Task{
 		IssueID: "test-id",
 		Agent:   &AgentData{Name: "Test"},
-	}, "claude")
+	}, "claude", "")
 
 	// Prompt should not contain issue title/description (agent fetches via CLI).
 	for _, absent := range []string{"**Issue:**", "**Summary:**"} {
@@ -649,7 +649,7 @@ func TestBuildPromptAutopilotRunOnly(t *testing.T) {
 		AutopilotTitle:       "Daily dependency check",
 		AutopilotDescription: "Check dependencies and report outdated packages.",
 		AutopilotSource:      "manual",
-	}, "claude")
+	}, "claude", "")
 
 	for _, want := range []string{
 		"run-only mode",
@@ -681,7 +681,7 @@ func TestBuildPromptCommentTriggered(t *testing.T) {
 		TriggerCommentID:      commentID,
 		TriggerCommentContent: commentContent,
 		Agent:                 &AgentData{Name: "Test"},
-	}, "claude")
+	}, "claude", "")
 
 	// Prompt should contain the comment content, the trigger comment id, and
 	// the full reply command with --parent. Re-emitting --parent on every turn
@@ -726,7 +726,7 @@ func TestBuildPromptCommentTriggeredByAgent(t *testing.T) {
 		TriggerAuthorType:     "agent",
 		TriggerAuthorName:     "Atlas",
 		Agent:                 &AgentData{Name: "Test"},
-	}, "claude")
+	}, "claude", "")
 
 	for _, want := range []string{
 		"Another agent (Atlas)",
@@ -752,7 +752,7 @@ func TestBuildPromptCommentTriggeredByMember(t *testing.T) {
 		TriggerAuthorType:     "member",
 		TriggerAuthorName:     "Alice",
 		Agent:                 &AgentData{Name: "Test"},
-	}, "claude")
+	}, "claude", "")
 
 	if !strings.Contains(prompt, "A user just left a new comment") {
 		t.Fatalf("member-triggered prompt should label the author as a user\n---\n%s", prompt)
@@ -781,7 +781,7 @@ func TestBuildPromptCommentTriggeredNoContent(t *testing.T) {
 		IssueID:          "test-id",
 		TriggerCommentID: "comment-id",
 		Agent:            &AgentData{Name: "Test"},
-	}, "claude")
+	}, "claude", "")
 
 	if !strings.Contains(prompt, "multica issue get") {
 		t.Fatal("prompt missing CLI hint")
@@ -805,7 +805,7 @@ func TestBuildPromptSquadLeaderNoActionProhibition(t *testing.T) {
 			Name:         "Leader",
 			Instructions: "You lead the team.\n\n## Squad Operating Protocol\n\nYou are the LEADER.",
 		},
-	}, "claude")
+	}, "claude", "")
 
 	for _, want := range []string{
 		"Squad leader no_action rule",
@@ -828,7 +828,7 @@ func TestBuildPromptSquadLeaderNoActionProhibition(t *testing.T) {
 			Name:         "Regular",
 			Instructions: "You are a regular agent.",
 		},
-	}, "claude")
+	}, "claude", "")
 
 	if strings.Contains(nonLeaderPrompt, "Squad leader no_action rule") {
 		t.Fatalf("non-squad-leader prompt should NOT contain squad leader rule\n---\n%s", nonLeaderPrompt)

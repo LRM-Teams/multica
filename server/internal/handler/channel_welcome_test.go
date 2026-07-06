@@ -32,7 +32,8 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 		"reaction",
 		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
 		"short acknowledgement",
-		"structured sticker parts are unavailable in chat task output",
+		"plain-text or emoji fallback",
+		"Do not output protocol-shaped sticker payloads",
 		"全体总监以上欢迎一下新同事",
 	} {
 		if !strings.Contains(p, want) {
@@ -101,7 +102,8 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 			"directly addressed to you",
 			"visible result using the output mechanism described in the runtime brief",
 			"Do not return no_reply",
-			"structured sticker parts are unavailable in chat task output",
+			"plain-text or emoji fallback",
+			"Do not output protocol-shaped sticker payloads",
 			"Current message to respond to",
 			trigger.Content,
 		} {
@@ -173,14 +175,16 @@ func TestBuildChannelWelcomePrompt(t *testing.T) {
 	if !strings.Contains(p, "产品讨论") {
 		t.Error("prompt should name the channel")
 	}
-	if !strings.Contains(p, "plain text only") {
-		t.Error("prompt should instruct the agent to welcome with plain text during transition")
+	if !strings.Contains(p, "plain-text or emoji fallback") {
+		t.Error("prompt should instruct the agent to use a plain-text or emoji fallback")
 	}
-	if !strings.Contains(p, "structured stickers are unavailable") {
-		t.Error("prompt should name that structured stickers are unavailable during transition")
+	if !strings.Contains(p, "do not explain the fallback or mention internal delivery details") {
+		t.Error("prompt should forbid user-visible internal fallback explanations")
 	}
-	if strings.Contains(p, "\"action\"") || strings.Contains(p, "\"parts\"") || strings.Contains(p, "\"sticker_id\"") {
-		t.Error("prompt must not teach JSON structured parts during transition")
+	for _, banned := range []string{"structured sticker", "stickers are unavailable", "unsupported", "sticker JSON", ":sticker:", "\"action\"", "\"parts\"", "\"sticker_id\""} {
+		if strings.Contains(p, banned) {
+			t.Errorf("prompt must not teach or expose internal sticker transport detail %q:\n%s", banned, p)
+		}
 	}
 	// Loop-prevention guarantees.
 	if !strings.Contains(p, "Do NOT @-mention") {

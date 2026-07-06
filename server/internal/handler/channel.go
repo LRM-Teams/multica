@@ -38,7 +38,8 @@ const channelClientMessageIDMaxLen = 128
 const channelOutputContractInstruction = "Channel output contract: follow the runtime brief's Output section for visible chat output in this run. Do not print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, missing-tool diagnostics, or described commands as the final answer."
 const channelDirectedReplyInstruction = "This run is directly addressed to you. You must produce a visible result using the output mechanism described in the runtime brief. Answer helpfully, ask a follow-up question, or acknowledge the request in words. Do not return no_reply, stay_silent, JSON, or any other silent/protocol outcome for a direct mention, direct question, assigned task, or DM-style continuation."
 const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not use the visible-output path, and do not print no_reply, stay_silent, JSON, or CLI/protocol text."
-const channelStickerReplyInstruction = "Sticker replies: structured sticker parts are unavailable in chat task output. If the user explicitly asks for a sticker/表情包, or a sticker-only social reply would otherwise be natural, send a short plain-text reply instead and do not output sticker JSON or :sticker:<id>: tokens."
+const channelAmbientGreetingReactionInstruction = "If the current channel message or unread bundle is only a casual greeting or small talk (for example hi, hello, hey, 你好, 在吗) with no @-mention, no question, and no task request, respond with a 👋 reaction to the reaction target only and do not create a text reply. This also applies when you are the only agent in the channel: treat the greeting as directed to you, but keep the action reaction-only unless the user includes a question or request. If reactions are unavailable, finish without visible output rather than explaining that no reply is needed."
+const channelStickerReplyInstruction = "Sticker replies: if the user explicitly asks for a sticker/表情包, or a sticker-only social reply would otherwise be natural, send a short natural plain-text or emoji fallback instead. Do not output protocol-shaped sticker payloads or explain internal delivery details."
 const channelNameTakenCode = "channel_name_taken"
 const channelNameUniqueConstraint = "channel_workspace_id_name_key"
 
@@ -2724,7 +2725,7 @@ func buildChannelWelcomePrompt(channelName, joinedName string) string {
 	b.WriteString(channelOutputContractInstruction)
 	b.WriteString("\n")
 	b.WriteString("- Keep it to ONE short line, in the language the channel uses (Chinese if the member's name is Chinese).\n")
-	fmt.Fprintf(&b, "- During this transition, structured stickers are unavailable; welcome %s with plain text only.\n", joinedName)
+	fmt.Fprintf(&b, "- If a sticker-style welcome for %s would be natural, use a short plain-text or emoji fallback; do not explain the fallback or mention internal delivery details.\n", joinedName)
 	b.WriteString("- Do NOT @-mention anyone — not the new member, not other agents. This is a one-off greeting, not a discussion.\n")
 	b.WriteString("- Do not ask questions, assign work, or start a conversation. Just welcome them in one line and stop.\n")
 	return b.String()
@@ -3039,6 +3040,8 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString(channelOutputContractInstruction)
 	b.WriteString("\n")
 	b.WriteString(channelAmbientNoReplyInstruction)
+	b.WriteString("\n")
+	b.WriteString(channelAmbientGreetingReactionInstruction)
 	b.WriteString("\n")
 	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, finish without visible output; do not print no_reply or protocol text.\n")
 	b.WriteString("If the message directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: write a visible plain-text reply or acknowledgement, and do not return no_reply.\n")

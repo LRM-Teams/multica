@@ -2175,6 +2175,11 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
 		return nil
 	}
+	if channelTask && !explicitAction && isNoReplyRationaleFinalText(output, parts) {
+		slog.Warn("complete task: suppressing no-reply rationale final text", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonNoReplyRationale)
+		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
+		return nil
+	}
 
 	if channelTask && strings.TrimSpace(req.Action) == "" {
 		legacyType, legacyErr := protocol.NormalizeChatOutputType(req.Type, strings.TrimSpace(output) != "" || len(parts) > 0, req.Reaction != nil)
@@ -2328,6 +2333,39 @@ func isLegacyChannelCLIOutput(output string) bool {
 		}
 	}
 	return false
+}
+
+func isNoReplyRationaleFinalText(output string, parts []protocol.MessagePart) bool {
+	if len(parts) > 0 {
+		return false
+	}
+	normalized := normalizeNoReplyRationaleCandidate(output)
+	if normalized == "" {
+		return false
+	}
+	for _, phrase := range []string{
+		"no visible reply needed",
+		"not directed at me - no visible reply needed",
+		"not directed at me - this is a general greeting, not a task or request. no visible reply needed",
+		"not directed at me - frank's \"hi\" is a general greeting following my own earlier message, not a new task or all-hands request. no visible reply needed",
+	} {
+		if normalized == phrase {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeNoReplyRationaleCandidate(output string) string {
+	normalized := strings.ToLower(strings.TrimSpace(output))
+	normalized = strings.ReplaceAll(normalized, "—", "-")
+	normalized = strings.ReplaceAll(normalized, "–", "-")
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	normalized = strings.TrimSpace(normalized)
+	for strings.HasSuffix(normalized, ".") {
+		normalized = strings.TrimSpace(strings.TrimSuffix(normalized, "."))
+	}
+	return normalized
 }
 
 func (h *Handler) suppressTaskCompleteOutput(req *TaskCompleteRequest, reason string) {

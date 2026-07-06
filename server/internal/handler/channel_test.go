@@ -992,6 +992,84 @@ func TestChannelAmbientGateDoesNotBlockDirectMention(t *testing.T) {
 	assertChannelAgentTaskPriorityCounts(t, channelID, agentID, 1, 1)
 }
 
+func TestChannelAmbientGreetingPromptUsesReactionOnlyForSingleAgentChannel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Ambient Greeting Single "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "ambient-greeting-single-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	agent, err := testHandler.Queries.GetAgent(ctx, parseUUID(agentID))
+	if err != nil {
+		t.Fatalf("load agent: %v", err)
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "hi", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert greeting trigger: %v", err)
+	}
+
+	prompt := testHandler.buildChannelAmbientUnreadPromptWithDB(ctx, testHandler.DB, ch, agent, trigger, 0, trigger.Seq)
+	for _, want := range []string{
+		"respond with a 👋 reaction to the reaction target only and do not create a text reply",
+		"This also applies when you are the only agent in the channel",
+		"Reaction target message id: " + trigger.ID,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("single-agent greeting prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestChannelAmbientGreetingPromptUsesReactionOnlyForLargerChannel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Ambient Greeting Larger "+uuid.NewString()[:8], nil)
+	otherAgentID := createHandlerTestAgent(t, "Ambient Greeting Larger Peer "+uuid.NewString()[:8], nil)
+	otherUserID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "ambient-greeting-larger-"+uuid.NewString(), testUserID, otherUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)`, channelID, testWorkspaceID, agentID, otherAgentID); err != nil {
+		t.Fatalf("seed agent members: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	agent, err := testHandler.Queries.GetAgent(ctx, parseUUID(agentID))
+	if err != nil {
+		t.Fatalf("load agent: %v", err)
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "hello", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert greeting trigger: %v", err)
+	}
+
+	prompt := testHandler.buildChannelAmbientUnreadPromptWithDB(ctx, testHandler.DB, ch, agent, trigger, 0, trigger.Seq)
+	for _, want := range []string{
+		"casual greeting or small talk",
+		"respond with a 👋 reaction to the reaction target only",
+		"do not create a text reply",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("larger-channel greeting prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestChannelMentionedAgentsMatchesHandleDisplayAndStructuredID(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

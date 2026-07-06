@@ -390,14 +390,14 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 		  INSERT INTO channel_read (channel_id, user_id, last_read_at, last_read_seq)
 		  SELECT $1, $2, now(), conv.last_seq FROM conv
 		  ON CONFLICT (channel_id, user_id)
-		  DO UPDATE SET last_read_at = now(), last_read_seq = EXCLUDED.last_read_seq
+		  DO UPDATE SET last_read_at = now(), last_read_seq = GREATEST(channel_read.last_read_seq, EXCLUDED.last_read_seq)
 		  RETURNING channel_id, user_id, last_read_seq
 		)
 		INSERT INTO conversation_member (conversation_id, workspace_id, member_type, member_id, last_read_seq, followed_at, updated_at)
 		SELECT conv.id, conv.workspace_id, 'user', $2, conv.last_seq, now(), now()
 		FROM conv
 		ON CONFLICT (conversation_id, member_type, member_id)
-		DO UPDATE SET last_read_seq = EXCLUDED.last_read_seq, updated_at = now()`, channelID, parseUUID(userID))
+		DO UPDATE SET last_read_seq = GREATEST(conversation_member.last_read_seq, EXCLUDED.last_read_seq), updated_at = now()`, channelID, parseUUID(userID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to mark channel read")
 		return
@@ -2113,7 +2113,7 @@ func (h *Handler) followChannelThreadUser(ctx context.Context, channelID, rootID
 		  ON CONFLICT (root_message_id, user_id) DO UPDATE
 		  SET followed_at = COALESCE(channel_thread_state.followed_at, now()),
 		      last_read_at = CASE WHEN $4 THEN now() ELSE channel_thread_state.last_read_at END,
-		      last_read_seq = CASE WHEN $4 THEN EXCLUDED.last_read_seq ELSE channel_thread_state.last_read_seq END,
+		      last_read_seq = CASE WHEN $4 THEN GREATEST(channel_thread_state.last_read_seq, EXCLUDED.last_read_seq) ELSE channel_thread_state.last_read_seq END,
 		      updated_at = now()
 		  RETURNING root_message_id, user_id, last_read_seq, followed_at, updated_at
 		)
@@ -2123,7 +2123,7 @@ func (h *Handler) followChannelThreadUser(ctx context.Context, channelID, rootID
 		ON CONFLICT (root_message_id, member_type, member_id) DO UPDATE
 		SET followed_at = EXCLUDED.followed_at,
 		    wake_state = 'active',
-		    last_read_seq = EXCLUDED.last_read_seq,
+		    last_read_seq = GREATEST(thread_participant.last_read_seq, EXCLUDED.last_read_seq),
 		    updated_at = now()`,
 		channelID, rootID, userID, markRead); err != nil {
 		slog.Warn("channel thread follow failed", "root", uuidToString(rootID), "user", uuidToString(userID), "error", err)

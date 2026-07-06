@@ -148,6 +148,7 @@ const (
 
 const (
 	DaemonCapabilityChannelOutputActions = "channel_output_actions"
+	DaemonCapabilityAgentCLITransport    = "agent_cli_transport"
 )
 
 const (

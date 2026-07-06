@@ -35,10 +35,10 @@ const channelMessagesMaxLimit = 100
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
-const channelOutputContractInstruction = "Channel output contract: use the task-scoped Multica CLI transport for visible chat output. Run `multica send --message ...` for a text reply to the current channel/thread, `multica send --target \"#channel\"|\"#channel:<message-id>\"|\"dm:@handle\" --message ...` for an explicit target, and `multica react --message-id <id> --emoji ...` for reactions. You may read context with `multica message read` and search with `multica message search`. After a successful send or react, do not repeat the same content in final assistant output; finish without extra visible text. Do not print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, or described commands as the final answer."
-const channelDirectedReplyInstruction = "This run is directly addressed to you. You must produce a visible result by running `multica send` or, when a reaction is explicitly requested and sufficient, `multica react`. Answer helpfully, ask a follow-up question, or acknowledge the request in words. Do not return no_reply, stay_silent, JSON, or any other silent/protocol outcome for a direct mention, direct question, assigned task, or DM-style continuation."
-const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not run `multica send`/`multica react`, and do not print no_reply, stay_silent, JSON, or CLI/protocol text."
-const channelStickerReplyInstruction = "Sticker replies: structured sticker parts are unavailable in the CLI transport. If the user explicitly asks for a sticker/表情包, or a sticker-only social reply would otherwise be natural, use `multica send` with a short plain-text reply instead and do not output sticker JSON or :sticker:<id>: tokens."
+const channelOutputContractInstruction = "Channel output contract: follow the runtime brief's Output section for visible chat output in this run. Do not print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, missing-tool diagnostics, or described commands as the final answer."
+const channelDirectedReplyInstruction = "This run is directly addressed to you. You must produce a visible result using the output mechanism described in the runtime brief. Answer helpfully, ask a follow-up question, or acknowledge the request in words. Do not return no_reply, stay_silent, JSON, or any other silent/protocol outcome for a direct mention, direct question, assigned task, or DM-style continuation."
+const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not use the visible-output path, and do not print no_reply, stay_silent, JSON, or CLI/protocol text."
+const channelStickerReplyInstruction = "Sticker replies: structured sticker parts are unavailable in chat task output. If the user explicitly asks for a sticker/表情包, or a sticker-only social reply would otherwise be natural, send a short plain-text reply instead and do not output sticker JSON or :sticker:<id>: tokens."
 const channelNameTakenCode = "channel_name_taken"
 const channelNameUniqueConstraint = "channel_workspace_id_name_key"
 
@@ -3042,9 +3042,9 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString("\n")
 	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, finish without visible output; do not print no_reply or protocol text.\n")
 	b.WriteString("If the message directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: write a visible plain-text reply or acknowledgement, and do not return no_reply.\n")
-	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and run `multica send` with one short visible message. Do not stay silent or print no_reply for that case.\n")
+	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and produce one short visible message. Do not stay silent or print no_reply for that case.\n")
 	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
-	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, use `multica react` when a reaction is sufficient; otherwise use `multica send` with a short acknowledgement.\n")
+	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, use a reaction when the runtime brief supports reactions and a reaction is sufficient; otherwise send a short acknowledgement.\n")
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)

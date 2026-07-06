@@ -358,6 +358,47 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 	}
 }
 
+func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
+	t.Parallel()
+	ctx := TaskContextForEnv{
+		ChatSessionID:                    "chat-1",
+		ChatCLITransportUnavailable:      true,
+		Repos:                            []RepoContextForEnv{{URL: "https://github.com/acme/app.git"}},
+		RequestingUserName:               "Frank",
+		RequestingUserProfileDescription: "Product owner",
+	}
+	out := buildMetaSkillContent("codex", ctx)
+
+	for _, want := range []string{
+		"## Chat Mode",
+		"compatibility chat output",
+		"write the visible reply as your final assistant output",
+		"Do not try to find, install, or discuss chat send/react commands",
+		"never mention compatibility mode, missing tools, tokens, CLI transport, or runtime setup",
+		"Issues: list/get/search issues",
+		"multica issue list --mine --output json",
+		"## Repositories",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("compat chat brief missing %q\n---\n%s", want, out)
+		}
+	}
+
+	for _, banned := range []string{
+		"task-scoped Multica CLI transport for visible chat output",
+		"multica send --message",
+		"multica react --message-id",
+		"multica message read",
+		"multica message search",
+		"For visible chat replies, run `multica send`",
+		"After the command succeeds",
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("compat chat brief should not advertise unavailable chat CLI %q\n---\n%s", banned, out)
+		}
+	}
+}
+
 func TestIssueRuntimeBriefKeepsIssueWorkflowContract(t *testing.T) {
 	t.Parallel()
 	out := buildMetaSkillContent("claude", TaskContextForEnv{IssueID: "11111111-2222-3333-4444-555555555555"})

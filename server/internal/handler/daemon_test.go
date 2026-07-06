@@ -670,6 +670,8 @@ func TestDaemonRegister_WithDaemonToken(t *testing.T) {
 		"capabilities": []string{
 			protocol.DaemonCapabilityChannelOutputActions,
 			protocol.DaemonCapabilityChannelOutputActions,
+			protocol.DaemonCapabilityAgentCLITransport,
+			protocol.DaemonCapabilityAgentCLITransport,
 			" ",
 		},
 		"runtimes": []map[string]any{
@@ -696,18 +698,41 @@ func TestDaemonRegister_WithDaemonToken(t *testing.T) {
 		t.Fatalf("metadata.cli_version = %v, want v0.3.0", got)
 	}
 	capabilities, ok := metadata["capabilities"].([]any)
-	if !ok || len(capabilities) != 1 || capabilities[0] != protocol.DaemonCapabilityChannelOutputActions {
-		t.Fatalf("metadata.capabilities = %#v, want [%q]", metadata["capabilities"], protocol.DaemonCapabilityChannelOutputActions)
+	if !ok || !capabilitiesContainExactly(capabilities, protocol.DaemonCapabilityChannelOutputActions, protocol.DaemonCapabilityAgentCLITransport) {
+		t.Fatalf("metadata.capabilities = %#v, want [%q %q]", metadata["capabilities"], protocol.DaemonCapabilityChannelOutputActions, protocol.DaemonCapabilityAgentCLITransport)
 	}
 	responseCapabilities, ok := runtimes[0].(map[string]any)["capabilities"].([]any)
-	if !ok || len(responseCapabilities) != 1 || responseCapabilities[0] != protocol.DaemonCapabilityChannelOutputActions {
-		t.Fatalf("runtime.capabilities = %#v, want [%q]", runtimes[0].(map[string]any)["capabilities"], protocol.DaemonCapabilityChannelOutputActions)
+	if !ok || !capabilitiesContainExactly(responseCapabilities, protocol.DaemonCapabilityChannelOutputActions, protocol.DaemonCapabilityAgentCLITransport) {
+		t.Fatalf("runtime.capabilities = %#v, want [%q %q]", runtimes[0].(map[string]any)["capabilities"], protocol.DaemonCapabilityChannelOutputActions, protocol.DaemonCapabilityAgentCLITransport)
 	}
 
 	// Clean up: deregister the runtime.
 	rt := runtimes[0].(map[string]any)
 	runtimeID := rt["id"].(string)
 	testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+}
+
+func capabilitiesContainExactly(got []any, want ...string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(got))
+	for _, v := range got {
+		s, ok := v.(string)
+		if !ok {
+			return false
+		}
+		seen[s] = struct{}{}
+	}
+	if len(seen) != len(want) {
+		return false
+	}
+	for _, w := range want {
+		if _, ok := seen[w]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func TestDaemonRegister_WithDaemonToken_WorkspaceMismatch(t *testing.T) {

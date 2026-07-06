@@ -621,9 +621,9 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- Conversation context is scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
 		b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary. Do not load the entire parent channel/DM history by default.\n")
 		b.WriteString("- You have full access to the `multica` CLI to look up issues, workspace info, members, agents, etc.\n")
-		b.WriteString("- If asked about issues, use `multica issue list --output json` or `multica issue get <id> --output json`\n")
+		b.WriteString("- If asked about your assigned issues, use `multica issue list --mine --output json`; for general issue browsing, use `multica issue list --output json`, `multica issue get <id> --output json`, `multica issue search <query> --output json`, or `multica issue comment list <issue-id> --output json`\n")
 		b.WriteString("- If asked about the workspace, use `multica workspace get --output json`\n")
-		b.WriteString("- If asked to perform actions (create issues, update status, etc.), use the appropriate CLI commands\n")
+		b.WriteString("- Issue writes follow the Raft claim-first model: claim/own the issue before status/comment/field writes, do not mutate issues you did not claim, do not self-approve `in_review -> done`, and rely on message/system-event visibility for auditability.\n")
 		b.WriteString("- If the task requires code changes, use `multica repo checkout <url>` to get the code first. Use `--ref <branch-or-sha>` when you need an exact revision\n")
 		b.WriteString("- Keep responses concise and direct\n\n")
 	} else if ctx.QuickCreatePrompt != "" {
@@ -781,7 +781,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
 	b.WriteString("## Chat Mode\n\n")
-	b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Reply conversationally and directly by using the task-scoped Multica CLI transport for visible chat output. Do not post issue comments or change issue status unless the user explicitly asks you to operate on an issue.\n\n")
+	b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Reply conversationally and directly by using the task-scoped Multica CLI transport for visible chat output. Do not mutate issues as an incidental side effect of browsing; issue writes follow the claim-first issue model described below.\n\n")
 	b.WriteString("Context boundaries:\n")
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
 	b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary; do not load the entire parent channel/DM history by default.\n")
@@ -793,8 +793,8 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("- Chat output: send a visible reply with `multica send --message \"...\"`, or use `--message-stdin` / `--message-file <path>` for longer bodies. Omit `--target` for the current DM/channel/thread; use `--target \"#channel\"`, `--target \"#channel:<message-id>\"`, or `--target \"dm:@handle\"` only when intentionally targeting another chat surface. After successful `multica send`, do not repeat the same content in final assistant output.\n")
 	b.WriteString("- Chat reactions: add a reaction with `multica react --message-id <message-id> --emoji \"...\"`; after successful `multica react`, do not add a second visible final reply.\n")
 	b.WriteString("- Chat history: read the current or targeted surface with `multica message read [--target ...] [--limit N] --output json`, and search with `multica message search \"query\" [--target ...] --output json`.\n")
-	b.WriteString("- Issues: list/get/create/update issues, including status, assignee, parent/sub-issue, project, and due-date changes.\n")
-	b.WriteString("- Comments: read or add issue comments, including `multica issue comment add`, when the user explicitly asks you to work on an issue.\n")
+	b.WriteString("- Issues: list/get/search issues; use `multica issue list --mine --output json` for issues assigned to the running agent. Existing-issue writes follow the Raft claim-first model: claim/own the issue before status/comment/field writes, do not mutate issues you did not claim, do not self-approve `in_review -> done`, and keep writes visible through message/system events.\n")
+	b.WriteString("- Comments: read issue comments with `multica issue comment list`; add comments with `multica issue comment add` only when you are operating on a claimed/owned issue or the user explicitly asks you to work on that issue.\n")
 	b.WriteString("- Issue metadata: inspect or update issue-specific persistent facts when explicitly working on an issue: `multica issue metadata list <issue-id>`, `multica issue metadata set <issue-id> --key <k> --value <v> [--type string|number|bool]`, `multica issue metadata delete <issue-id> --key <k>`.\n")
 	b.WriteString("- Projects/repos: inspect project resources and check out code with `multica repo checkout <url>`; use `--ref <branch-or-sha>` when you need an exact revision.\n")
 	b.WriteString("- Attachments: download chat or issue attachments with `multica attachment download <id>`.\n")

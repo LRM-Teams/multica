@@ -269,6 +269,7 @@ func init() {
 	issueListCmd.Flags().String("priority", "", "Filter by priority")
 	issueListCmd.Flags().String("assignee", "", "Filter by assignee name (member, agent, or squad; fuzzy match)")
 	issueListCmd.Flags().String("assignee-id", "", "Filter by assignee UUID — member, agent, or squad (mutually exclusive with --assignee)")
+	issueListCmd.Flags().Bool("mine", false, "Filter to issues assigned to the running agent (agent execution context only; mutually exclusive with --assignee/--assignee-id)")
 	issueListCmd.Flags().String("project", "", "Filter by project ID")
 	issueListCmd.Flags().StringSlice("metadata", nil, "Filter by metadata key=value (repeatable; combined with AND). Value is JSON-parsed: 'true'/'false' → bool, numbers → number, otherwise string. Wrap as '\"42\"' to force a string when the value would otherwise sniff as a number.")
 	issueListCmd.Flags().Int("limit", 50, "Maximum number of issues to return")
@@ -404,9 +405,9 @@ func runIssueList(cmd *cobra.Command, _ []string) error {
 	if v, _ := cmd.Flags().GetInt("limit"); v > 0 {
 		params.Set("limit", fmt.Sprintf("%d", v))
 	}
-	_, aID, hasAssignee, resolveErr := pickAssigneeFromFlags(ctx, client, cmd, "assignee", "assignee-id", issueAssigneeKinds)
-	if resolveErr != nil {
-		return fmt.Errorf("resolve assignee: %w", resolveErr)
+	aID, hasAssignee, err := resolveIssueListAssigneeFilter(ctx, client, cmd)
+	if err != nil {
+		return err
 	}
 	if hasAssignee {
 		params.Set("assignee_id", aID)
@@ -503,6 +504,31 @@ func runIssueList(cmd *cobra.Command, _ []string) error {
 	}
 	cli.PrintTable(os.Stdout, headers, rows)
 	return nil
+}
+
+func resolveIssueListAssigneeFilter(ctx context.Context, client *cli.APIClient, cmd *cobra.Command) (string, bool, error) {
+	mine, _ := cmd.Flags().GetBool("mine")
+	if mine {
+		assignee, _ := cmd.Flags().GetString("assignee")
+		assigneeID, _ := cmd.Flags().GetString("assignee-id")
+		if assignee != "" || assigneeID != "" {
+			return "", false, fmt.Errorf("--mine is mutually exclusive with --assignee and --assignee-id")
+		}
+		if !inAgentExecutionContext() {
+			return "", false, fmt.Errorf("--mine can only be used in an agent execution context")
+		}
+		agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
+		if agentID == "" {
+			return "", false, fmt.Errorf("--mine requires MULTICA_AGENT_ID in agent execution context")
+		}
+		return agentID, true, nil
+	}
+
+	_, assigneeID, hasAssignee, err := pickAssigneeFromFlags(ctx, client, cmd, "assignee", "assignee-id", issueAssigneeKinds)
+	if err != nil {
+		return "", false, fmt.Errorf("resolve assignee: %w", err)
+	}
+	return assigneeID, hasAssignee, nil
 }
 
 func runIssuePullRequests(cmd *cobra.Command, args []string) error {

@@ -82,6 +82,71 @@ func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.
 	assertNoChannelMessageContent(t, channelID, finalText)
 }
 
+func TestAgentTransportSendMessageStickerOnlyAndWithText(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+
+	stickerOnlyID := "transport-sticker-" + uuid.NewString()
+	stickerOnly := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"parts": []protocol.MessagePart{{
+			Type:      protocol.MessagePartTypeSticker,
+			StickerID: "hi",
+		}},
+		"client_message_id": stickerOnlyID,
+	})
+	if stickerOnly.Code != http.StatusCreated {
+		t.Fatalf("sticker-only transport send: status=%d body=%s", stickerOnly.Code, stickerOnly.Body.String())
+	}
+	var stickerOnlyBody AgentTransportSendResponse
+	if err := json.Unmarshal(stickerOnly.Body.Bytes(), &stickerOnlyBody); err != nil {
+		t.Fatalf("decode sticker-only send: %v", err)
+	}
+	if len(stickerOnlyBody.Message.Parts) != 1 || stickerOnlyBody.Message.Parts[0].Type != protocol.MessagePartTypeSticker || stickerOnlyBody.Message.Parts[0].StickerID != "hi" {
+		t.Fatalf("sticker-only parts = %+v, want hi sticker", stickerOnlyBody.Message.Parts)
+	}
+
+	explanation := "这个问题是因为 transport sticker test " + uuid.NewString()
+	combinedID := "transport-combined-" + uuid.NewString()
+	combined := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"content": explanation,
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeSticker, StickerID: "got-it"},
+			{Type: protocol.MessagePartTypeText, Text: explanation},
+		},
+		"client_message_id": combinedID,
+	})
+	if combined.Code != http.StatusCreated {
+		t.Fatalf("combined transport send: status=%d body=%s", combined.Code, combined.Body.String())
+	}
+	var combinedBody AgentTransportSendResponse
+	if err := json.Unmarshal(combined.Body.Bytes(), &combinedBody); err != nil {
+		t.Fatalf("decode combined send: %v", err)
+	}
+	if len(combinedBody.Message.Parts) != 2 ||
+		combinedBody.Message.Parts[0].Type != protocol.MessagePartTypeSticker ||
+		combinedBody.Message.Parts[0].StickerID != "got-it" ||
+		combinedBody.Message.Parts[1].Type != protocol.MessagePartTypeText ||
+		combinedBody.Message.Parts[1].Text != explanation {
+		t.Fatalf("combined parts = %+v, want got-it sticker then text", combinedBody.Message.Parts)
+	}
+
+	var messageRows int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'agent' AND client_message_id IN ($2, $3)`,
+		channelID, stickerOnlyID, combinedID).Scan(&messageRows); err != nil {
+		t.Fatalf("count transport sticker messages: %v", err)
+	}
+	if messageRows != 2 {
+		t.Fatalf("transport sticker message rows=%d, want 2", messageRows)
+	}
+}
+
 func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

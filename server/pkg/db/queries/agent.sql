@@ -484,6 +484,17 @@ SET session_id = COALESCE(sqlc.narg('session_id'), session_id),
     work_dir  = COALESCE(sqlc.narg('work_dir'), work_dir)
 WHERE id = $1 AND status IN ('dispatched', 'running');
 
+-- name: MergeTaskArealProxyContext :exec
+-- Merges the training RL proxy config into the task's context JSONB via a
+-- single read-modify-write. COALESCE handles a NULL/empty context; the `||`
+-- operator preserves every existing top-level key (e.g. squad_id) and
+-- overwrites only the areal_proxy sub-object. Used by the session-open hook.
+-- This intentionally does NOT touch agent_task_queue.session_id, which is the
+-- runtime/chat session pointer, not the RL session.
+UPDATE agent_task_queue
+SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object('areal_proxy', $2::jsonb)
+WHERE id = $1;
+
 -- name: RecoverOrphanedTasksForRuntime :many
 -- Called by the daemon at startup. Atomically fails any dispatched/running/
 -- waiting_local_directory task that the prior incarnation of this runtime

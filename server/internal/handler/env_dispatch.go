@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -659,6 +660,10 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 		if err != nil {
 			return "", fmt.Errorf("create agent task: %w", err)
 		}
+		// Training session-open chokepoint (spec §4.3): a single-agent training
+		// dispatch (train_agent_id == agent_id) creates the trained task HERE,
+		// not via a later @mention. Resolve the owning project via the issue.
+		a.maybeOpenTrainingSession(ctx, util.UUIDToString(task.ID), util.UUIDToString(agentUUID), a.issueProjectID(ctx, issueID))
 		return util.UUIDToString(task.ID), nil
 	case chatSessionID != "":
 		session, err := a.h.Queries.GetChatSession(ctx, parseUUID(chatSessionID))
@@ -704,6 +709,9 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 		if err != nil {
 			return "", fmt.Errorf("create chat task: %w", err)
 		}
+		// Training session-open chokepoint (spec §4.3): chat-bound dispatch.
+		// Project resolves via the chat session (seam 1e).
+		a.maybeOpenTrainingSession(ctx, util.UUIDToString(task.ID), util.UUIDToString(params.AgentID), util.UUIDToString(session.ProjectID))
 		return util.UUIDToString(task.ID), nil
 	default:
 		return "", fmt.Errorf("enqueue agent run: issueID or chatSessionID required")
@@ -922,6 +930,31 @@ func (a *envDispatchDepsAdapter) SaveTrainingDispatch(ctx context.Context, proje
 		return fmt.Errorf("save training dispatch: %w", err)
 	}
 	return nil
+}
+
+// maybeOpenTrainingSession fires the shared session-open hook for a task
+// created at dispatch time. It delegates to TaskService (no-op when training is
+// unconfigured) and logs any error loudly — a trained task must never run
+// un-proxied silently. Errors are not propagated: the task row already exists.
+func (a *envDispatchDepsAdapter) maybeOpenTrainingSession(ctx context.Context, taskID, agentID, projectID string) {
+	if a.h.TaskService == nil {
+		return
+	}
+	if err := a.h.TaskService.MaybeOpenTrainingSession(ctx, taskID, agentID, projectID); err != nil {
+		slog.Error("training session open failed (env_dispatch)",
+			"task_id", taskID, "agent_id", agentID, "project_id", projectID, "error", err)
+	}
+}
+
+// issueProjectID resolves the owning project for an issue-bound dispatch task
+// (seam 1e). Returns "" when the issue can't be loaded or has no project, in
+// which case the session-open hook no-ops.
+func (a *envDispatchDepsAdapter) issueProjectID(ctx context.Context, issueID string) string {
+	issue, err := a.h.Queries.GetIssue(ctx, parseUUID(issueID))
+	if err != nil {
+		return ""
+	}
+	return util.UUIDToString(issue.ProjectID)
 }
 
 // stubEnvDispatchDeps is a no-op Deps implementation used when the handler

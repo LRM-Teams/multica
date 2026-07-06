@@ -2779,6 +2779,40 @@ func TestCompleteTask_GroupChannelCommandSendOutputIsSuppressed(t *testing.T) {
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
 }
 
+func TestCompleteTask_GroupChannelNoReplyRationaleOutputIsSuppressed(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	rawOutput := `Not directed at me — Frank's "hi" is a general greeting following my own earlier message, not a new task or all-hands request. No visible reply needed.`
+
+	w := completeTaskForTest(t, taskID, map[string]any{"output": rawOutput})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertNoChannelMessageContent(t, channelID, rawOutput)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
+}
+
+func TestCompleteTask_GroupChannelNoReplyPhraseInsideNormalTextIsNotSuppressed(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	visibleReply := `Please keep the user-authored phrase "no reply needed" visible in this normal answer.`
+
+	w := completeTaskForTest(t, taskID, map[string]any{"output": visibleReply})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertChannelMessageContentCount(t, channelID, visibleReply, 1)
+	assertTaskOutputSuppressedReason(t, taskID, "")
+}
+
 func TestCompleteTask_GroupChannelStructuredMessageSendOutputIsSuppressed(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

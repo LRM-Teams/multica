@@ -2,7 +2,7 @@
 
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import type { AgentPresenceDetail } from "@multica/core/agents";
-import { availabilityConfig, workloadConfig } from "../presence";
+import { availabilityConfig, presenceStatusToken, workloadConfig } from "../presence";
 import { useT } from "../../i18n";
 
 interface PresenceIndicatorProps {
@@ -47,6 +47,10 @@ export function AgentPresenceIndicator({
   const wl = workloadConfig[detail.workload];
   const availabilityLabel = t(($) => $.availability[detail.availability]);
   const workloadLabel = t(($) => $.workload[detail.workload]);
+  // The "workload word only while online" rule lives in ONE place
+  // (presenceStatusToken), shared with the peek card and profile popover so the
+  // three surfaces can never disagree about when a workload word is valid.
+  const showWorkload = presenceStatusToken(detail)?.kind === "workload";
   const isWorking = detail.workload === "working";
   const isQueued = detail.workload === "queued";
   const showQueueBadge = isWorking && detail.queuedCount > 0;
@@ -59,7 +63,7 @@ export function AgentPresenceIndicator({
     return (
       <span
         className="inline-flex items-center"
-        title={`${availabilityLabel}${detail.availability === "online" && detail.workload !== "idle" ? ` · ${workloadLabel}` : ""}`}
+        title={`${availabilityLabel}${showWorkload && detail.workload !== "idle" ? ` · ${workloadLabel}` : ""}`}
       >
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${av.dotClass}`} />
       </span>
@@ -80,7 +84,7 @@ export function AgentPresenceIndicator({
           dot already says the whole story, and appending "· Idle"/"· Working"
           would contradict it ("Idle" implies available). So the workload chip
           shows only when online; otherwise the availability label stands alone. */}
-      {detail.availability === "online" && (
+      {showWorkload && (
       <span className="inline-flex items-center gap-1">
         <span className="text-xs text-muted-foreground">·</span>
         <span

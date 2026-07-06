@@ -28,6 +28,7 @@ import type {
   AgentEnvResponse,
   UpdateAgentEnvRequest,
   AgentTask,
+  AgentHealthResponse,
   AgentActivityBucket,
   AgentRunCount,
   AgentRuntime,
@@ -179,6 +180,7 @@ import {
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
   EMPTY_AGENT_TEMPLATE_DETAIL,
+  EMPTY_AGENT_HEALTH_RESPONSE,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
   EMPTY_ATTACHMENT,
@@ -197,6 +199,7 @@ import {
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
   AppConfigSchema,
+  AgentHealthResponseSchema,
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelMessageSearchResponseSchema,
@@ -898,6 +901,13 @@ export class ApiClient {
 
   async archiveAgent(id: string): Promise<Agent> {
     return this.fetch(`/api/agents/${id}/archive`, { method: "POST" });
+  }
+
+  async getAgentHealth(id: string): Promise<AgentHealthResponse> {
+    const raw = await this.fetch<unknown>(`/api/agents/${id}/health`);
+    return parseWithFallback(raw, AgentHealthResponseSchema, EMPTY_AGENT_HEALTH_RESPONSE, {
+      endpoint: "GET /api/agents/:id/health",
+    });
   }
 
   /**

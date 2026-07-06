@@ -121,6 +121,47 @@ export interface AgentTaskFeedPage {
   next_cursor?: AgentTaskFeedCursor | null;
 }
 
+export type AgentHealthState =
+  | "online"
+  | "suspected_disconnect"
+  | "reconnecting"
+  | "recovered"
+  | "offline";
+
+export type AgentHealthEventType =
+  | "server_ping_received"
+  | "daemon_liveness_probe_sent"
+  | "probe_timeout_reconnect"
+  | "transport_reconnected";
+
+export interface AgentHealthSummary {
+  agent_id: string;
+  runtime_id: string | null;
+  state: AgentHealthState;
+  reason_code: string;
+  state_since: string | null;
+  last_seen_at: string | null;
+  last_event_at: string | null;
+}
+
+export interface AgentHealthEvent {
+  id: string;
+  agent_id: string;
+  runtime_id: string | null;
+  type: AgentHealthEventType;
+  state_after: AgentHealthState;
+  reason_code: string;
+  message: string;
+  occurred_at: string;
+  details?: Record<string, unknown>;
+  synthetic?: boolean;
+}
+
+export interface AgentHealthResponse {
+  health_summary: AgentHealthSummary;
+  health_events: AgentHealthEvent[];
+}
+
 // Overview "tasks done" KPI — completed/failed/total counts over ALL agent
 // tasks in the workspace (issue, chat, and channel-reply tasks alike), so a
 // channel reply counts as a finished task, matching the agent activity feed.

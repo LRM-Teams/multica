@@ -17,6 +17,12 @@ export const agentRunCountsKeys = {
   last30d: (wsId: string) => [...agentRunCountsKeys.all(wsId), "30d"] as const,
 };
 
+export const agentHealthKeys = {
+  all: (wsId: string) => ["workspaces", wsId, "agent-health"] as const,
+  detail: (wsId: string, agentId: string) =>
+    [...agentHealthKeys.all(wsId), agentId] as const,
+};
+
 // Workspace-scoped agent task snapshot — every active task plus each agent's
 // most recent terminal task. This is the single shared source of truth that
 // powers per-agent presence derivation across the app. One fetch per
@@ -65,6 +71,17 @@ export function agentTaskFeedOptions(wsId: string, limit = 30) {
       lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined,
     enabled: !!wsId,
     staleTime: 30 * 1000,
+  });
+}
+
+export function agentHealthOptions(wsId: string, agentId: string) {
+  return queryOptions({
+    queryKey: agentHealthKeys.detail(wsId, agentId),
+    queryFn: () => api.getAgentHealth(agentId),
+    enabled: !!wsId && !!agentId,
+    staleTime: 15 * 1000,
+    gcTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: true,
   });
 }
 

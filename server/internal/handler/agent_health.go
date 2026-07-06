@@ -31,8 +31,8 @@ const (
 	// (150s in cmd/server/runtime_sweeper.go). Even if the DB row still says
 	// "online", a heartbeat older than this means the runtime is effectively
 	// unreachable and must not show as online in the health summary.
-	agentHealthStaleThreshold            = 150 * time.Second
-	defaultAgentHealthEventLimit        = 50
+	agentHealthStaleThreshold    = 150 * time.Second
+	defaultAgentHealthEventLimit = 50
 )
 
 var agentHealthEventTypes = []string{
@@ -140,6 +140,14 @@ func (h *Handler) GetAgentHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent health")
 		return
 	}
+	if !agentRuntimeRunnableForAgent(agent, rt) {
+		resp := AgentHealthResponse{
+			Summary: agentHealthMissingRuntimeSummary(agent),
+			Events:  []AgentHealthEvent{},
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
 
 	events, err := h.listAgentHealthEvents(r.Context(), agent, rt.ID, defaultAgentHealthEventLimit)
 	if err != nil {
@@ -236,6 +244,20 @@ func agentHealthMissingRuntimeSummary(agent db.Agent) AgentHealthSummary {
 		State:      agentHealthStateOffline,
 		ReasonCode: "runtime_missing",
 	}
+}
+
+func agentRuntimeRunnableForAgent(agent db.Agent, rt db.AgentRuntime) bool {
+	// A raw runtime row is not enough for a workspace-visible agent to be
+	// available. The runtime must be public to serve as shared workspace
+	// capacity. A private runtime only counts for a private agent owned by the
+	// same user, which keeps the predicate objective for every viewer.
+	if rt.Visibility == "public" {
+		return true
+	}
+	if agent.Visibility != "private" || !rt.OwnerID.Valid || !agent.OwnerID.Valid {
+		return false
+	}
+	return uuidToString(rt.OwnerID) == uuidToString(agent.OwnerID)
 }
 
 func agentHealthSummary(agent db.Agent, rt db.AgentRuntime, events []AgentHealthEvent, now time.Time) AgentHealthSummary {

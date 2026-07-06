@@ -2796,6 +2796,26 @@ func TestCompleteTask_GroupChannelNoReplyRationaleOutputIsSuppressed(t *testing.
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
 }
 
+func TestCompleteTask_GroupChannelNoReplyRationaleOutputIsSuppressedWithCLITransport(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", []string{
+		protocol.DaemonCapabilityChannelOutputActions,
+		protocol.DaemonCapabilityAgentCLITransport,
+	})
+	rawOutput := `Not directed at me — Frank's "hi" is a general greeting following my own earlier message, not a new task or all-hands request. No visible reply needed.`
+
+	w := completeTaskForTest(t, taskID, map[string]any{"output": rawOutput})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertNoChannelMessageContent(t, channelID, rawOutput)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
+}
+
 func TestCompleteTask_GroupChannelNoReplyPhraseInsideNormalTextIsNotSuppressed(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

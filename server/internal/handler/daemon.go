@@ -2175,7 +2175,7 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
 		return nil
 	}
-	if channelTask && !explicitAction && !h.taskRuntimeHasCapability(ctx, task, protocol.DaemonCapabilityAgentCLITransport) && isNoReplyRationaleFinalText(output, parts) {
+	if channelTask && !explicitAction && isNoReplyRationaleFinalText(output, parts) {
 		slog.Warn("complete task: suppressing no-reply rationale final text", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonNoReplyRationale)
 		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
 		return nil

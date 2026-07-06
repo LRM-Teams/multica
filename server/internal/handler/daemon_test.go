@@ -2889,6 +2889,73 @@ func TestCompleteTask_GroupChannelNoReplyPhraseInsideNormalTextIsNotSuppressed(t
 	assertTaskOutputSuppressedReason(t, taskID, "")
 }
 
+func TestCompleteTask_CLICapableRunSuppressesUnsentFinalText(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", []string{
+		protocol.DaemonCapabilityChannelOutputActions,
+		protocol.DaemonCapabilityAgentCLITransport,
+	})
+	// Novel rationale phrasing that exact-match does not catch.
+	rawOutput := "This request was already fully handled in the unread bundle itself — I already sent all the stickers and followed up with Frank An. No new action needed here."
+
+	w := completeTaskForTest(t, taskID, map[string]any{"output": rawOutput})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertNoChannelMessageContent(t, channelID, rawOutput)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
+}
+
+func TestCompleteTask_CLICapableRunSuppressesNormalFinalText(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", []string{
+		protocol.DaemonCapabilityChannelOutputActions,
+		protocol.DaemonCapabilityAgentCLITransport,
+	})
+	// Even a legitimate-looking message is suppressed on CLI-capable runs:
+	// the agent must use `multica send` to produce visible output.
+	const visibleReply = "Here is a perfectly normal reply that should have been sent via multica send."
+
+	w := completeTaskForTest(t, taskID, map[string]any{"output": visibleReply})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertNoChannelMessageContent(t, channelID, visibleReply)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
+}
+
+func TestCompleteTask_CLICapableRunDoesNotSuppressExplicitMessageSendAction(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", []string{
+		protocol.DaemonCapabilityChannelOutputActions,
+		protocol.DaemonCapabilityAgentCLITransport,
+	})
+	const visibleReply = "Intentional explicit action message on CLI-capable run"
+
+	w := completeTaskForTest(t, taskID, map[string]any{
+		"action": protocol.ChatOutputActionMessageSend,
+		"output": visibleReply,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Explicit message_send action is intentional, not rationale text.
+	assertChannelMessageContentCount(t, channelID, visibleReply, 1)
+	assertTaskOutputSuppressedReason(t, taskID, "")
+}
+
 func TestCompleteTask_GroupChannelStructuredMessageSendOutputIsSuppressed(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -173,6 +173,7 @@ var (
 		"invalid_reaction":       "invalid_reaction",
 		"message_missing_action": "message_missing_action",
 		"invalid_target":         "invalid_target",
+		"unsent_final_output":    "unsent_final_output",
 		"other":                  "other",
 	}
 	knownFailureReasons = map[string]string{}

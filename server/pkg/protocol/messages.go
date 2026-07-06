@@ -163,6 +163,7 @@ const (
 	ChannelOutputSuppressedReasonInvalidReaction      = "invalid_reaction"
 	ChannelOutputSuppressedReasonMessageMissingAction = "message_missing_action"
 	ChannelOutputSuppressedReasonInvalidTarget        = "invalid_target"
+	ChannelOutputSuppressedReasonUnsentFinalOutput    = "unsent_final_output"
 )
 
 type ChatOutputOptions struct {

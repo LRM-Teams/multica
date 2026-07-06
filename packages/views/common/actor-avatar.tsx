@@ -9,8 +9,12 @@ import {
   HoverCardContent,
 } from "@multica/ui/components/ui/hover-card";
 import { useActorName } from "@multica/core/workspace/hooks";
-import { useAgentPresenceDetail } from "@multica/core/agents";
+import {
+  useAgentHealth,
+  useAgentPresenceDetail,
+} from "@multica/core/agents";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
+import { resolveHealthDotClass } from "../agents/health";
 import { AgentProfileCard } from "../agents/components/agent-profile-card";
 import { AgentLivePeekCard } from "../agents/components/agent-live-peek-card";
 import { MemberProfileCard } from "../members/member-profile-card";
@@ -252,9 +256,20 @@ export function AgentPresenceOverlay({
 export function AgentStatusDot({ agentId, size }: { agentId: string; size?: number }) {
   const ws = useCurrentWorkspace();
   const detail = useAgentPresenceDetail(ws?.id, agentId);
+  // COLOR source: connectivity health (Iris §1) — the SAME source as the
+  // Activity tab Health block, so the dot can never drift from the tab.
+  const { summary: healthSummary } = useAgentHealth(agentId);
   if (detail === "loading") return null;
 
-  const { dotClass, label } = availabilityConfig[detail.availability];
+  const { dotClass: availabilityDotClass, label } =
+    availabilityConfig[detail.availability];
+  // TODO(#266): once the BE health API is live, health_summary.state is the
+  // SOLE dot color source. Until then the dot degrades to the availability
+  // color when the summary is missing (endpoint not deployed / loading) so it
+  // never blanks or crashes. STRUCTURE (fixed box, proportional dot, cut-out
+  // ring) and PULSE (a workload overlay, below) are unchanged — orthogonal to
+  // color.
+  const dotClass = resolveHealthDotClass(healthSummary, availabilityDotClass);
   // Diameter tracks the avatar so the indicator is proportional everywhere,
   // with a floor so it never disappears on the smallest (14–16px) avatars.
   const diameter = Math.max(5, Math.round((size ?? 24) * 0.28));
@@ -263,7 +278,16 @@ export function AgentStatusDot({ agentId, size }: { agentId: string; size?: numb
   // color — amber is already taken by `unstable`. A slow breathing pulse
   // communicates "online + actively running a task" without colliding with
   // the availability palette. `idle` / `queued` / non-online stay static.
-  const isWorking = detail.availability === "online" && detail.workload === "working";
+  //
+  // Gate the pulse on the SAME connectivity axis as the dot color (Iris): a
+  // disconnected agent must never appear to be "working". When health is known,
+  // pulse only on a healthy link (online / recovered); when the summary is
+  // absent (transitional / no record yet) fall back to the availability signal,
+  // consistent with the color fallback above.
+  const connectivityOk = healthSummary
+    ? healthSummary.state === "online" || healthSummary.state === "recovered"
+    : detail.availability === "online";
+  const isWorking = connectivityOk && detail.workload === "working";
   const statusLabel = isWorking ? `${label} · Working` : label;
 
   return (

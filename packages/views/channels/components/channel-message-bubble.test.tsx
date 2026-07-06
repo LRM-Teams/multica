@@ -62,6 +62,14 @@ const presenceDetailMock = vi.fn(() => ({
 
 vi.mock("@multica/core/agents", () => ({
   useAgentPresenceDetail: () => presenceDetailMock(),
+  // Dot COLOR source (#266). No summary in tests → the dot falls back to the
+  // availability color, keeping presence assertions stable.
+  useAgentHealth: () => ({
+    summary: undefined,
+    events: undefined,
+    isLoading: false,
+    isError: false,
+  }),
 }));
 
 vi.mock("@multica/core/paths", () => ({

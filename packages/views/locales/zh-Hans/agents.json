@@ -393,7 +393,19 @@
       "cancel_failed_toast": "取消 task 失败",
       "started_prefix": "{{when}}启动",
       "dispatched_prefix": "{{when}}派发",
-      "queued_prefix": "{{when}}排队"
+      "queued_prefix": "{{when}}排队",
+      "health": {
+        "section_title": "健康",
+        "timeline_title": "健康事件",
+        "empty_events": "暂无健康事件",
+        "last_seen": "最后活跃 {{time}}",
+        "head_unavailable": "连接状态暂不可用",
+        "state_online": "在线",
+        "state_suspected_disconnect": "疑似掉线",
+        "state_reconnecting": "重连中",
+        "state_recovered": "已恢复",
+        "state_offline": "离线"
+      }
     },
     "memory": {
       "intro": "此智能体从运行时同步的记忆。它们会保存在 Multica 中，确保智能体切换运行时时不会丢失上下文。",

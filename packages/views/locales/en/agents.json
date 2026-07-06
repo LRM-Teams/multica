@@ -403,7 +403,19 @@
       "cancel_failed_toast": "Failed to cancel task",
       "started_prefix": "Started {{when}}",
       "dispatched_prefix": "Dispatched {{when}}",
-      "queued_prefix": "Queued {{when}}"
+      "queued_prefix": "Queued {{when}}",
+      "health": {
+        "section_title": "Health",
+        "timeline_title": "Health events",
+        "empty_events": "No health events yet",
+        "last_seen": "Last active {{time}}",
+        "head_unavailable": "Connectivity status unavailable",
+        "state_online": "Online",
+        "state_suspected_disconnect": "Suspected disconnect",
+        "state_reconnecting": "Reconnecting",
+        "state_recovered": "Recovered",
+        "state_offline": "Offline"
+      }
     },
     "memory": {
       "intro": "Runtime-synced memories for this agent. They are saved in Multica so the agent keeps context when it moves to another runtime.",

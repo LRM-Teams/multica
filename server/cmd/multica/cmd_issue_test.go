@@ -246,6 +246,135 @@ func newIssueCreateTestCmd() *cobra.Command {
 	return cmd
 }
 
+func newIssueListTestCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "list"}
+	cmd.Flags().String("output", "table", "")
+	cmd.Flags().Bool("full-id", false, "")
+	cmd.Flags().String("status", "", "")
+	cmd.Flags().String("priority", "", "")
+	cmd.Flags().String("assignee", "", "")
+	cmd.Flags().String("assignee-id", "", "")
+	cmd.Flags().Bool("mine", false, "")
+	cmd.Flags().String("project", "", "")
+	cmd.Flags().StringSlice("metadata", nil, "")
+	cmd.Flags().Int("limit", 50, "")
+	cmd.Flags().Int("offset", 0, "")
+	return cmd
+}
+
+func TestRunIssueListMineUsesAgentContextAssignee(t *testing.T) {
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/api/issues" {
+			t.Errorf("path = %s, want /api/issues", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("workspace_id"); got != "ws-1" {
+			t.Errorf("workspace_id = %q, want ws-1", got)
+		}
+		if got := r.URL.Query().Get("assignee_id"); got != "agent-123" {
+			t.Errorf("assignee_id = %q, want agent-123", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer task-token" {
+			t.Errorf("Authorization = %q, want task-token bearer", got)
+		}
+		if got := r.Header.Get("X-Agent-ID"); got != "agent-123" {
+			t.Errorf("X-Agent-ID = %q, want agent-123", got)
+		}
+		if got := r.Header.Get("X-Task-ID"); got != "task-456" {
+			t.Errorf("X-Task-ID = %q, want task-456", got)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"issues": []map[string]any{},
+			"total":  0,
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "")
+	tokenFile := t.TempDir() + "/task-token"
+	if err := os.WriteFile(tokenFile, []byte("task-token\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+	t.Setenv("MULTICA_TOKEN_FILE", tokenFile)
+	t.Setenv("MULTICA_AGENT_ID", "agent-123")
+	t.Setenv("MULTICA_TASK_ID", "task-456")
+
+	cmd := newIssueListTestCmd()
+	_ = cmd.Flags().Set("output", "json")
+	_ = cmd.Flags().Set("mine", "true")
+	out, err := captureStdout(t, func() error {
+		return runIssueList(cmd, nil)
+	})
+	if err != nil {
+		t.Fatalf("runIssueList: %v", err)
+	}
+	if !called {
+		t.Fatal("expected /api/issues to be called")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("decode JSON output: %v\n%s", err, string(out))
+	}
+	if got := int(payload["total"].(float64)); got != 0 {
+		t.Fatalf("total = %d, want 0", got)
+	}
+}
+
+func TestRunIssueListMineFailsOutsideAgentContext(t *testing.T) {
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		http.Error(w, "should not be called", http.StatusTeapot)
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "user-token")
+	t.Setenv("MULTICA_AGENT_ID", "")
+	t.Setenv("MULTICA_TASK_ID", "")
+
+	cmd := newIssueListTestCmd()
+	_ = cmd.Flags().Set("mine", "true")
+	_, err := captureStdout(t, func() error {
+		return runIssueList(cmd, nil)
+	})
+	if err == nil || !strings.Contains(err.Error(), "--mine can only be used in an agent execution context") {
+		t.Fatalf("expected non-agent --mine error, got %v", err)
+	}
+	if called {
+		t.Fatal("--mine outside agent context should fail before calling /api/issues")
+	}
+}
+
+func TestRunIssueListMineRejectsExplicitAssigneeFilters(t *testing.T) {
+	t.Setenv("MULTICA_SERVER_URL", "http://127.0.0.1:0")
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "task-token")
+	t.Setenv("MULTICA_AGENT_ID", "agent-123")
+	t.Setenv("MULTICA_TASK_ID", "task-456")
+
+	for _, flag := range []string{"assignee", "assignee-id"} {
+		t.Run(flag, func(t *testing.T) {
+			cmd := newIssueListTestCmd()
+			_ = cmd.Flags().Set("mine", "true")
+			_ = cmd.Flags().Set(flag, "other")
+			_, err := captureStdout(t, func() error {
+				return runIssueList(cmd, nil)
+			})
+			if err == nil || !strings.Contains(err.Error(), "--mine is mutually exclusive with --assignee and --assignee-id") {
+				t.Fatalf("expected mutual-exclusion error, got %v", err)
+			}
+		})
+	}
+}
+
 func TestRunIssueCreateSendsAllowDuplicate(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

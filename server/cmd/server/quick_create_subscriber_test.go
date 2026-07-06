@@ -206,6 +206,9 @@ func TestQuickCreateCompletion_ReturnsToSourceChannelThreadAndIsIdempotent(t *te
 	if !strings.Contains(content, "Created issue [") || !strings.Contains(content, util.UUIDToString(issue.ID)) || !strings.Contains(content, "Status: todo.") {
 		t.Fatalf("return content missing human-readable issue summary: %q", content)
 	}
+	if !strings.Contains(content, "mention://member/"+testUserID) {
+		t.Fatalf("return content must mention the quick-create requester so they get notified, got: %q", content)
+	}
 	assertQuickCreateReturnMetadata(t, issue.ID, "sent", "")
 
 	// Duplicate terminal callbacks are treated as idempotent success by the

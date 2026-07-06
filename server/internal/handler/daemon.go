@@ -2642,16 +2642,56 @@ func taskMessageToPayload(m db.TaskMessage, taskID, issueID string) protocol.Tas
 	if m.CreatedAt.Valid {
 		createdAt = m.CreatedAt.Time.UTC().Format(time.RFC3339Nano)
 	}
+	narrative := taskMessageNarrative(m.Type)
 	return protocol.TaskMessagePayload{
-		TaskID:    taskID,
-		IssueID:   issueID,
-		Seq:       int(m.Seq),
-		Type:      m.Type,
-		Tool:      m.Tool.String,
-		Content:   m.Content.String,
-		Input:     input,
-		Output:    m.Output.String,
-		CreatedAt: createdAt,
+		TaskID:      taskID,
+		IssueID:     issueID,
+		Seq:         int(m.Seq),
+		Type:        m.Type,
+		Tool:        m.Tool.String,
+		Content:     m.Content.String,
+		Input:       input,
+		Output:      m.Output.String,
+		ActionLabel: narrative.Label,
+		Summary:     narrative.Summary,
+		CreatedAt:   createdAt,
+	}
+}
+
+type taskMessageNarrativeSummary struct {
+	Label   string
+	Summary string
+}
+
+func taskMessageNarrative(msgType string) taskMessageNarrativeSummary {
+	switch msgType {
+	case "text":
+		return taskMessageNarrativeSummary{
+			Label:   "Message received",
+			Summary: "Received a message.",
+		}
+	case "thinking":
+		return taskMessageNarrativeSummary{
+			Label:   "Thinking",
+			Summary: "Reviewed the next step.",
+		}
+	case "tool_use":
+		return taskMessageNarrativeSummary{
+			Label:   "Working",
+			Summary: "Started a work step.",
+		}
+	case "tool_result":
+		return taskMessageNarrativeSummary{
+			Label:   "Step finished",
+			Summary: "Finished a work step.",
+		}
+	case "error":
+		return taskMessageNarrativeSummary{
+			Label:   "Ran into an error",
+			Summary: "Ran into an error.",
+		}
+	default:
+		return taskMessageNarrativeSummary{Label: "Took a step", Summary: "Took a step."}
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 var sendCmd = &cobra.Command{
@@ -18,7 +19,9 @@ var sendCmd = &cobra.Command{
 	Long: "Send a visible message from the running agent task to the current " +
 		"chat surface or an explicit target. Targets are parsed server-side and " +
 		"may be omitted for the current channel/thread, set to #channel, " +
-		"#channel:<message-id>, or dm:@handle.",
+		"#channel:<message-id>, or dm:@handle. Use --sticker for a sticker-only " +
+		"reply, or combine --sticker with --message for an acknowledgement sticker " +
+		"followed by explanatory text in one message.",
 	RunE: runAgentMessageSend,
 }
 
@@ -54,6 +57,7 @@ func init() {
 	sendCmd.Flags().String("message", "", "Message to send (decodes \\n, \\r, \\t, \\\\; use --message-stdin to preserve literal backslashes)")
 	sendCmd.Flags().Bool("message-stdin", false, "Read the message from stdin (preserves multi-line content verbatim)")
 	sendCmd.Flags().String("message-file", "", "Read the message from a UTF-8 file")
+	sendCmd.Flags().String("sticker", "", "Builtin sticker id (see `multica sticker list`); sticker-only when --message is omitted")
 	sendCmd.Flags().String("client-message-id", "", "Idempotency key; generated automatically when omitted")
 	sendCmd.Flags().Bool("show-in-channel", false, "For thread targets, also show the reply on the parent channel timeline")
 	sendCmd.Flags().String("output", "json", "Output format: json or text")
@@ -77,17 +81,27 @@ func init() {
 }
 
 func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
-	content, ok, err := resolveTextFlag(cmd, "message")
+	content, contentOK, err := resolveTextFlag(cmd, "message")
 	if err != nil {
 		return err
 	}
-	if !ok || strings.TrimSpace(content) == "" {
-		return fmt.Errorf("message is required; pass --message, --message-stdin, or --message-file")
+	stickerID := strings.TrimSpace(flagString(cmd, "sticker"))
+	text := ""
+	if contentOK {
+		text = strings.TrimSpace(content)
+	}
+	if stickerID == "" && text == "" {
+		return fmt.Errorf("message or sticker is required; pass --message, --message-stdin, --message-file, and/or --sticker")
 	}
 	body := map[string]any{
 		"target":            flagString(cmd, "target"),
-		"content":           content,
 		"client_message_id": clientMessageIDFlag(cmd),
+	}
+	if text != "" {
+		body["content"] = content
+	}
+	if parts := buildAgentSendParts(stickerID, text); len(parts) > 0 {
+		body["parts"] = parts
 	}
 	if cmd.Flags().Changed("show-in-channel") {
 		show, _ := cmd.Flags().GetBool("show-in-channel")
@@ -98,6 +112,23 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("send message: %w", err)
 	}
 	return printAgentTransportOutput(cmd, out, "Message sent.")
+}
+
+func buildAgentSendParts(stickerID, text string) []protocol.MessagePart {
+	var parts []protocol.MessagePart
+	if stickerID != "" {
+		parts = append(parts, protocol.MessagePart{
+			Type:      protocol.MessagePartTypeSticker,
+			StickerID: stickerID,
+		})
+	}
+	if text != "" {
+		parts = append(parts, protocol.MessagePart{
+			Type: protocol.MessagePartTypeText,
+			Text: text,
+		})
+	}
+	return parts
 }
 
 func runAgentMessageReact(cmd *cobra.Command, _ []string) error {

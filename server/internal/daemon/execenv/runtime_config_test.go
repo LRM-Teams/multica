@@ -317,6 +317,7 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 		"Context boundaries:",
 		"Use `multica --help`",
 		"multica send --message",
+		"multica send --sticker",
 		"multica react --message-id",
 		"multica message read",
 		"multica message search",

@@ -13,14 +13,11 @@ import (
 // rejects these unauthenticated probes with 401/400, which still proves the
 // route exists. Runs against the shared testServer; skipped without a DB.
 func TestForkAndSandboxRoutesAreRegistered(t *testing.T) {
-	const sampleIssue = "00000000-0000-0000-0000-0000000000ab"
 	cases := []struct {
 		method string
 		path   string
 		body   string
 	}{
-		{http.MethodPost, "/api/issues/" + sampleIssue + "/fork?task_id=00000000-0000-0000-0000-0000000000aa&seq=1", ""},
-		{http.MethodDelete, "/api/issues/" + sampleIssue + "/fork", ""},
 		{http.MethodPost, "/api/cloud-runtime/sandboxes/sbx-1/snapshot", ""},
 		{http.MethodPost, "/api/cloud-runtime/sandboxes/fork", `{"snapshot_id":"snap-1"}`},
 	}

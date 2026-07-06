@@ -7,15 +7,15 @@ function agent(partial: Partial<Agent>): Agent {
 }
 
 describe("accountHasConfiguredWindy", () => {
-  it("is true when a Windy agent has a runtime configured", () => {
-    expect(accountHasConfiguredWindy([agent({ display_name: "Windy", runtime_id: "rt-1" })])).toBe(true);
+  it("is true when a Wendy agent has a runtime configured", () => {
+    expect(accountHasConfiguredWindy([agent({ display_name: "Wendy", runtime_id: "rt-1" })])).toBe(true);
   });
 
-  it("is false when the Windy agent has no runtime yet (setup incomplete)", () => {
-    expect(accountHasConfiguredWindy([agent({ display_name: "Windy", runtime_id: "" })])).toBe(false);
+  it("is false when the Wendy agent has no runtime yet (setup incomplete)", () => {
+    expect(accountHasConfiguredWindy([agent({ display_name: "Wendy", runtime_id: "" })])).toBe(false);
   });
 
-  it("is false when no agent is named Windy", () => {
+  it("is false when no agent is named Wendy", () => {
     expect(
       accountHasConfiguredWindy([agent({ display_name: "Atlas", runtime_id: "rt-1" })]),
     ).toBe(false);
@@ -25,11 +25,11 @@ describe("accountHasConfiguredWindy", () => {
     expect(accountHasConfiguredWindy([])).toBe(false);
   });
 
-  it("finds a configured Windy among other agents", () => {
+  it("finds a configured Wendy among other agents", () => {
     expect(
       accountHasConfiguredWindy([
         agent({ display_name: "Atlas", runtime_id: "rt-1" }),
-        agent({ display_name: "Windy", runtime_id: "rt-2" }),
+        agent({ display_name: "Wendy", runtime_id: "rt-2" }),
       ]),
     ).toBe(true);
   });

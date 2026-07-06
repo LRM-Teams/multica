@@ -32,18 +32,18 @@
     "sign_in_different": "Sign in as a different user"
   },
   "windy_setup": {
-    "title": "Set up Windy HR",
-    "description": "Set up Windy HR for this workspace — choose where it runs and we'll configure its runtime, model, and instructions. You can also finish this later from Windy's settings.",
-    "intro": "Windy recruits useful agents from your chat and keeps the generated hiring card in the current conversation. Its Direct Message is pinned after setup.",
+    "title": "Set up Wendy HR",
+    "description": "Set up Wendy HR for this workspace — choose where it runs and we'll configure its runtime, model, and instructions. You can also finish this later from Wendy's settings.",
+    "intro": "Wendy recruits useful agents from your chat and keeps the generated hiring card in the current conversation. Its Direct Message is pinned after setup.",
     "runtime_required_title": "Connect or share a runtime first",
-    "runtime_required_description": "Windy needs an available runtime before it can recruit agents or update its own instructions.",
+    "runtime_required_description": "Wendy needs an available runtime before it can recruit agents or update its own instructions.",
     "refresh_runtimes": "Refresh runtimes",
     "one_time_note": "You'll only see this setup prompt once — you can always finish later.",
-    "update": "Update Windy",
+    "update": "Update Wendy",
     "later": "Later",
     "badge_label": "Personal agent HR",
-    "intro_title": "Windy turns conversations into hires",
+    "intro_title": "Wendy turns conversations into hires",
     "one_time_label": "One-time update",
-    "runtime_move_note": "Pick any usable runtime now; Windy can be moved later from its agent settings."
+    "runtime_move_note": "Pick any usable runtime now; Wendy can be moved later from its agent settings."
   }
 }

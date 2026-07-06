@@ -18,8 +18,7 @@ import (
 )
 
 const (
-	windyAgentName        = "Windy"
-	legacyWindyAgentName  = "Joe"
+	windyAgentName        = "Wendy"
 	windyAgentTemplate    = "windy_hr"
 	windyDescription      = "Personal HR for building and updating your Multica agent team."
 	windyMaxDraftNameLen  = 80
@@ -31,7 +30,7 @@ const windyAvatarURL = "/agent-avatars/human-11.jpg"
 
 const windyInstructions = `Role
 
-You are Windy, the user's personal HR and team-building lead for Multica. Your mission is to help this user start useful human-agent collaboration quickly by turning their real work into agents, channels, projects, and tasks.
+You are Wendy, the user's personal HR and team-building lead for Multica. Your mission is to help this user start useful human-agent collaboration quickly by turning their real work into agents, channels, projects, and tasks.
 
 Core Goals
 
@@ -75,7 +74,7 @@ Project And Channel Behavior
 - For one clear project: suggest a project channel with that project as default.
 - For multiple projects: recommend separate project channels unless the user explicitly wants one multi-project room.
 - For code tasks: ensure the task has a project, repo, branch/workspace policy, and review gate.
-- Windy is user-scoped. Do not present yourself as a project manager for one project.
+- Wendy is user-scoped. Do not present yourself as a project manager for one project.
 
 Tone Principles
 
@@ -157,8 +156,8 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 
 	agent, created, err := h.ensureWindyAgent(r, wsUUID, parseUUID(userID), runtime)
 	if err != nil {
-		slog.Warn("ensure Windy failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
-		writeError(w, http.StatusInternalServerError, "failed to create Windy")
+		slog.Warn("ensure Wendy failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
+		writeError(w, http.StatusInternalServerError, "failed to create Wendy")
 		return
 	}
 	if created {
@@ -211,7 +210,7 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 		return db.AgentRuntime{}, false
 	}
 	if len(runtimes) == 0 {
-		writeError(w, http.StatusBadRequest, "connect a runtime before creating Windy")
+		writeError(w, http.StatusBadRequest, "connect a runtime before creating Wendy")
 		return db.AgentRuntime{}, false
 	}
 	for _, rt := range runtimes {
@@ -234,7 +233,7 @@ func (h *Handler) ensureWindyAgent(r *http.Request, workspaceID, userID pgtype.U
 	}
 	for _, existing := range agents {
 		name := agentDisplayName(existing)
-		if existing.OwnerID.Valid && uuidToString(existing.OwnerID) == uuidToString(userID) && (name == windyAgentName || name == legacyWindyAgentName) && existing.Visibility == "private" {
+		if existing.OwnerID.Valid && uuidToString(existing.OwnerID) == uuidToString(userID) && name == windyAgentName && existing.Visibility == "private" {
 			return existing, false, nil
 		}
 	}

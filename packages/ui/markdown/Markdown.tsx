@@ -59,7 +59,7 @@ export interface MarkdownProps {
    * When not provided, mentions render as a simple styled span.
    */
   renderMention?: (props: { type: string; id: string; label?: string }) => React.ReactNode
-  /** Custom renderer for non-http app links such as Windy's create-agent cards. */
+  /** Custom renderer for non-http app links such as Wendy's create-agent cards. */
   renderAppLink?: AppLinkRenderer
   /**
    * CDN hostname for file card detection (e.g. "multica-static.copilothub.ai").

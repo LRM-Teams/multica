@@ -1135,10 +1135,7 @@ func TestTaskMessageToPayload_AddsSafeActionReadModel(t *testing.T) {
 		}`),
 	}, "task-1", "issue-1")
 
-	if payload.ActionKind != "run" {
-		t.Fatalf("action_kind = %q, want run", payload.ActionKind)
-	}
-	if payload.ActionLabel != "Ran a command" || payload.Summary != "Ran a command." {
+	if payload.ActionLabel != "Working" || payload.Summary != "Started a work step." {
 		t.Fatalf("unexpected action read model: label=%q summary=%q", payload.ActionLabel, payload.Summary)
 	}
 
@@ -1152,21 +1149,33 @@ func TestTaskMessageToPayload_AddsSafeActionReadModel(t *testing.T) {
 	}
 }
 
-func TestTaskMessageToPayload_UnknownToolUsesNeutralFallback(t *testing.T) {
+func TestTaskMessageToPayload_ToolUseNarrativeDoesNotExposeToolName(t *testing.T) {
 	payload := taskMessageToPayload(db.TaskMessage{
 		Seq:  2,
 		Type: "tool_use",
 		Tool: pgtype.Text{String: "mcp__future_vendor__do_secret_thing", Valid: true},
 	}, "task-1", "issue-1")
 
-	if payload.ActionKind != "unknown" {
-		t.Fatalf("action_kind = %q, want unknown", payload.ActionKind)
+	if payload.ActionLabel != "Working" || payload.Summary != "Started a work step." {
+		t.Fatalf("tool_use narrative = label %q summary %q", payload.ActionLabel, payload.Summary)
 	}
-	if payload.ActionLabel != "" || payload.Summary != "" {
-		t.Fatalf("unknown action should leave localized fallback copy to FE, got label %q summary %q", payload.ActionLabel, payload.Summary)
-	}
-	if strings.Contains(payload.ActionLabel, "mcp__") || strings.Contains(payload.Summary, "mcp__") {
+	if strings.Contains(payload.ActionLabel, "mcp__") || strings.Contains(payload.Summary, "mcp__") || strings.Contains(payload.ActionLabel, "future_vendor") || strings.Contains(payload.Summary, "future_vendor") {
 		t.Fatalf("unknown action fallback must not expose raw tool name: label=%q summary=%q", payload.ActionLabel, payload.Summary)
+	}
+}
+
+func TestTaskMessageToPayload_UnknownTypeUsesNeutralNarrative(t *testing.T) {
+	payload := taskMessageToPayload(db.TaskMessage{
+		Seq:  3,
+		Type: "future_type",
+		Tool: pgtype.Text{String: "mcp__future_vendor__do_secret_thing", Valid: true},
+	}, "task-1", "issue-1")
+
+	if payload.ActionLabel != "Took a step" || payload.Summary != "Took a step." {
+		t.Fatalf("unknown type narrative = label %q summary %q", payload.ActionLabel, payload.Summary)
+	}
+	if strings.Contains(payload.ActionLabel, "mcp__") || strings.Contains(payload.Summary, "mcp__") || strings.Contains(payload.ActionLabel, "future_vendor") || strings.Contains(payload.Summary, "future_vendor") {
+		t.Fatalf("unknown type fallback must not expose raw tool name: label=%q summary=%q", payload.ActionLabel, payload.Summary)
 	}
 }
 

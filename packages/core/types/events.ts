@@ -238,7 +238,6 @@ export interface TaskMessagePayload {
   content?: string;
   input?: Record<string, unknown>;
   output?: string;
-  action_kind?: "read" | "search" | "edit" | "run" | "reply" | "inspect" | "unknown" | string;
   action_label?: string;
   summary?: string;
   created_at?: string;

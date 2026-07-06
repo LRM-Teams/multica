@@ -2642,7 +2642,7 @@ func taskMessageToPayload(m db.TaskMessage, taskID, issueID string) protocol.Tas
 	if m.CreatedAt.Valid {
 		createdAt = m.CreatedAt.Time.UTC().Format(time.RFC3339Nano)
 	}
-	action := taskMessageAction(m.Type, m.Tool.String)
+	narrative := taskMessageNarrative(m.Type)
 	return protocol.TaskMessagePayload{
 		TaskID:      taskID,
 		IssueID:     issueID,
@@ -2652,105 +2652,46 @@ func taskMessageToPayload(m db.TaskMessage, taskID, issueID string) protocol.Tas
 		Content:     m.Content.String,
 		Input:       input,
 		Output:      m.Output.String,
-		ActionKind:  action.Kind,
-		ActionLabel: action.Label,
-		Summary:     action.Summary,
+		ActionLabel: narrative.Label,
+		Summary:     narrative.Summary,
 		CreatedAt:   createdAt,
 	}
 }
 
-type taskMessageActionSummary struct {
-	Kind    string
+type taskMessageNarrativeSummary struct {
 	Label   string
 	Summary string
 }
 
-func taskMessageAction(msgType, tool string) taskMessageActionSummary {
-	if msgType == "text" {
-		return taskMessageKnownAction("reply")
-	}
-	if msgType == "thinking" {
-		return taskMessageKnownAction("inspect")
-	}
-	if msgType == "error" {
-		return taskMessageActionSummary{
-			Kind:    "unknown",
+func taskMessageNarrative(msgType string) taskMessageNarrativeSummary {
+	switch msgType {
+	case "text":
+		return taskMessageNarrativeSummary{
+			Label:   "Message received",
+			Summary: "Received a message.",
+		}
+	case "thinking":
+		return taskMessageNarrativeSummary{
+			Label:   "Thinking",
+			Summary: "Reviewed the next step.",
+		}
+	case "tool_use":
+		return taskMessageNarrativeSummary{
+			Label:   "Working",
+			Summary: "Started a work step.",
+		}
+	case "tool_result":
+		return taskMessageNarrativeSummary{
+			Label:   "Step finished",
+			Summary: "Finished a work step.",
+		}
+	case "error":
+		return taskMessageNarrativeSummary{
+			Label:   "Ran into an error",
 			Summary: "Ran into an error.",
 		}
-	}
-	return taskMessageKnownAction(taskMessageActionKindForTool(tool))
-}
-
-func taskMessageActionKindForTool(tool string) string {
-	normalized := strings.ToLower(strings.TrimSpace(tool))
-	if normalized == "" {
-		return "unknown"
-	}
-	switch {
-	case strings.Contains(normalized, "search"),
-		strings.Contains(normalized, "grep"),
-		strings.Contains(normalized, "ripgrep"),
-		strings.Contains(normalized, "find"):
-		return "search"
-	case strings.Contains(normalized, "patch"),
-		strings.Contains(normalized, "write"),
-		strings.Contains(normalized, "edit"),
-		strings.Contains(normalized, "update"),
-		strings.Contains(normalized, "delete"),
-		strings.Contains(normalized, "create"):
-		return "edit"
-	case strings.Contains(normalized, "message"),
-		strings.Contains(normalized, "send"),
-		strings.Contains(normalized, "reply"),
-		strings.Contains(normalized, "react"),
-		strings.Contains(normalized, "comment"):
-		return "reply"
-	case strings.Contains(normalized, "browser"),
-		strings.Contains(normalized, "screenshot"),
-		strings.Contains(normalized, "inspect"),
-		strings.Contains(normalized, "status"):
-		return "inspect"
-	case strings.Contains(normalized, "read"),
-		strings.Contains(normalized, "open"),
-		strings.Contains(normalized, "view"),
-		strings.Contains(normalized, "cat"),
-		strings.Contains(normalized, "head"),
-		strings.Contains(normalized, "tail"),
-		strings.Contains(normalized, "list"),
-		strings.Contains(normalized, "fetch"),
-		strings.Contains(normalized, "get"):
-		return "read"
-	case strings.Contains(normalized, "exec"),
-		strings.Contains(normalized, "bash"),
-		strings.Contains(normalized, "shell"),
-		strings.Contains(normalized, "command"),
-		strings.Contains(normalized, "terminal"),
-		strings.Contains(normalized, "test"),
-		strings.Contains(normalized, "build"),
-		strings.Contains(normalized, "npm"),
-		strings.Contains(normalized, "pnpm"):
-		return "run"
 	default:
-		return "unknown"
-	}
-}
-
-func taskMessageKnownAction(kind string) taskMessageActionSummary {
-	switch kind {
-	case "read":
-		return taskMessageActionSummary{Kind: "read", Label: "Read something", Summary: "Read project context."}
-	case "search":
-		return taskMessageActionSummary{Kind: "search", Label: "Searched", Summary: "Searched project context."}
-	case "edit":
-		return taskMessageActionSummary{Kind: "edit", Label: "Edited a file", Summary: "Updated files."}
-	case "run":
-		return taskMessageActionSummary{Kind: "run", Label: "Ran a command", Summary: "Ran a command."}
-	case "reply":
-		return taskMessageActionSummary{Kind: "reply", Label: "Replied", Summary: "Sent a reply."}
-	case "inspect":
-		return taskMessageActionSummary{Kind: "inspect", Label: "Looked at something", Summary: "Inspected current state."}
-	default:
-		return taskMessageActionSummary{Kind: "unknown"}
+		return taskMessageNarrativeSummary{Label: "Took a step", Summary: "Took a step."}
 	}
 }
 

@@ -256,9 +256,8 @@ type TaskMessagePayload struct {
 	Content     string         `json:"content,omitempty"`      // text content
 	Input       map[string]any `json:"input,omitempty"`        // tool input (tool_use only)
 	Output      string         `json:"output,omitempty"`       // tool output (tool_result only)
-	ActionKind  string         `json:"action_kind"`            // high-level read-model action for default UI narrative
-	ActionLabel string         `json:"action_label,omitempty"` // optional safe fallback; localized copy lives in the UI
-	Summary     string         `json:"summary,omitempty"`      // optional safe fallback; raw details stay diagnostic
+	ActionLabel string         `json:"action_label"`           // safe human label for the default UI narrative
+	Summary     string         `json:"summary"`                // safe one-sentence summary; raw details stay diagnostic
 	CreatedAt   string         `json:"created_at,omitempty"`
 }
 

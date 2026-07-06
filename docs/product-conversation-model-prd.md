@@ -100,7 +100,11 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 1. **活儿的上下文 → 写进 issue（唯一必需机制）**：聊天下发 issue 时，把上下文写全——来源 thread 引用 + 聊天里拍过的决定 + 边界/验收（生成机制复用现有 ChatContextSummary）。写清楚的 issue，任何新 session 拿起即干；**session 续接从"必需品"降级为"性能优化"**，断了不影响正确性。制品可见可审，优于 session 的隐式黑盒状态（与 context_pack 可观测哲学同源）。
 2. **交付回流（脐带闭环）**：issue 完成后结果自动回流来源 thread 并 @发起人——下发和交付都在聊天里闭环。
 3. **人的记忆 → 一份薄的 agent 级持久记忆**：只装跨活儿的东西（用户偏好、团队约定、拍过的原则——不可能每个 issue 重抄一遍），每个 agent 一份（文件量级），聊天 run 和 issue run 都注入、agent 可自行更新。现状只有 Codex 的 per-(agent,issue) memory，升级为 agent 级。对标 raft（聊天为主的先例）：身份连续性靠持久 MEMORY，不靠 session。
-**session 架构不动**：per-issue / per-chat_session 的 resume 模型照旧（复用键、runtime/workdir 绑定、中毒轮换、摘要交接全保留），它退回纯实现细节。
+**session 策略（v2.4.7 Frank 定版，取代此前"架构不动"表述）**："聊天用一个 session，issue 按 (agent_id, issue_id) 维度新开 session"：
+- **聊天 = 每 agent 一条常驻 session**：所有 DM/频道消息投进同一条 session（raft 同款身份 session）——agent 在聊天里天然连续，DM 里说过的话频道里当然记得。变化点：聊天侧从现状"每 chat_session 一条"并为"每 agent 一条"。
+- **issue = (agent_id, issue_id) 新开 session**：干活的脑子按 issue 隔离、天然并行。与现状实现同键（migration 020），零改动。
+- **两个配套（raft 已验证）**：①常驻 session 涨满→压缩重启，#273 agent 记忆文件即恢复锚（session 可死、记忆不死）；issue session 新开时同样注入这份记忆——**两个 session 世界靠一份记忆连接**。②聊天串行（忙时消息合并排队）、issue 并行——并行度全在该并行的一侧。
+- 其余实现机制保留：runtime/workdir 绑定、中毒轮换、摘要交接照旧。
 
 ## 4.1 Attachment / Files（发送与查看）
 **模型**：Attachment = 一等 file asset（id/uploader/filename/mime/size/storage ref）；进消息 = `parts[]` 的 **attachment part**（image/file 子型），与 sticker 同一契约，跨 channel/dm/thread 一致；**权限跟随所属会话**。不允许把文件路径/JSON 当正文；用户可见的永远是 attachment id/ref，不是本机 path。
@@ -254,6 +258,7 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 **待拍点：无。**
 
 ## 14. 变更记录
+- v2.4.7（7-6 午，Frank DM 定版 session 策略）：§4.4 session 从"实现细节不动"升级为定版两句——**聊天=每 agent 一条常驻 session**（所有 DM/频道进同一条，raft 身份 session 同款；聊天侧由"每 chat_session 一条"合并）；**issue=(agent_id, issue_id) 新开 session**（与现状同键，零改动）。配套：常驻 session 压缩重启以 #273 agent 记忆为恢复锚、issue session 注入同一份记忆（两个 session 世界靠一份记忆连接）；聊天串行/issue 并行。
 - v2.4.6（7-6 午，Frank DM 定调"聊天为主、issue 为辅"）：新增 **§4.4 聊天为主工作模式**——产品只有一种模式（聊天），issue=聊天里长出的工作产物；核心原则"**上下文进制品、记忆进 agent、session 只是优化**"：①下发 issue 写全上下文（来源 thread+决定+边界，复用 ChatContextSummary），session 续接降级为性能优化；②交付回流原 thread @发起人（脐带闭环）；③薄的 agent 级持久记忆（跨活儿偏好/约定/原则，聊天与 issue run 共用一份，对标 raft 身份 MEMORY）。session 架构（per-issue/per-chat resume）不动。P1 候选，排 #259/#178 主线后，待 Miles 排期。
 - v2.4.5（7-6，raft daemon 对标——Frank 贴生产日志两轮，Parker 分析 + Miles 对 raft 源码核实，两条进 gate）：①**§4-3 凭证隔离**：task 凭证 per-agent/per-run 文件级隔离（禁共享 env/长期 token；raft `cli-transport/<agent>/<run>/agent-token` 为参考形状），作为 #259 merge 前 gate——我们与 raft 独立收敛到同一 CLI carrier 架构，验证了 §4 运输层方向；②**§6.3⑦ spawn 级削峰**：daemon 端 agent 启动并发上限+间隔（raft `AgentStartCoordinator` maxConcurrentStarts=5/500ms，slot 只占拉起一瞬），削同秒冷启动风暴，配 fingerprint 去重/already-contributed 抑制参照，归 #194。对标结论（不改道项）：deliver/start 动词分离+忙时降级 content-free 计数=我们 wake/cursor 同思路已在 raft 生产验证；异构 runtime 统一 start/deliver 契约=#178 Runtime Health 建模参照（在线判定用心跳，非"最近发过消息"）；动词级版本号（如 reminder.cancel v2）=#262 capability gate 同族。总原则：**验收按失败路径验（投递失败重试/重启积压不丢/卡死 watchdog），不只 happy path**。（7-6 追补③：**§6.3⑧ server⇄daemon 双向探活**——server 30s ping 判死机器 + daemon 70s 沉默看门狗判死连接自愈重连；心跳只管连接健康、不计业务；防"显示在线但收不到消息"的半开连接假死。归 #178/#194。）
 - v2.4.4（7-5 晨，Frank 连拍三刀，§4 定版）：①**动词 3→2 + 沉默**：删除 no_reply 动词（Frank："不调 send 不就是 no_reply 么"）——agent 只有 send/react 两个动作，不回=什么都不做；no_reply 降级为平台观察的 run 完结状态（结算游标/判 must-reply/喂注解），非 agent 表态；②**运输层 = CLI**（Frank："MCP 太占上下文"）——daemon 注入 `multica` CLI（PATH+task 凭证）直打 server API，agent 最终文本永不解析为协议（#255 砍文本 JSON 信封；unwrap 只作历史防御）；幂等复用 §4.2 client_message_id；③**`also_send_to_channel` 更名 `show_in_channel`**（Frank："名字难受"；"send"暗示再发一条=carrier bug 方向）——语义定为同一消息投影主线（一行两面，task #256 退役 carrier 副本），频道侧「↩来自 thread」可点回跳。落地：#247（CLI 载体）/#255（存量迁移）/#256（投影）。

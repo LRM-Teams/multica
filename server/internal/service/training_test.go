@@ -54,11 +54,13 @@ type fakeRLClient struct {
 	err      error
 	calls    int
 	lastTask string
+	lastEnv  string
 }
 
-func (f *fakeRLClient) StartSession(_ context.Context, taskID string) (arealrl.SessionCreds, error) {
+func (f *fakeRLClient) StartSession(_ context.Context, taskID, envID string) (arealrl.SessionCreds, error) {
 	f.calls++
 	f.lastTask = taskID
+	f.lastEnv = envID
 	return f.creds, f.err
 }
 

@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -38,7 +41,7 @@ func TestStartSession_RequestAndResponse(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, testAdminKey)
-	creds, err := c.StartSession(context.Background(), "task-123")
+	creds, err := c.StartSession(context.Background(), "task-123", "")
 	if err != nil {
 		t.Fatalf("StartSession returned error: %v", err)
 	}
@@ -76,7 +79,7 @@ func TestStartSession_Non2xxIsError(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, testAdminKey)
-	if _, err := c.StartSession(context.Background(), "task-123"); err == nil {
+	if _, err := c.StartSession(context.Background(), "task-123", ""); err == nil {
 		t.Fatal("expected error on non-2xx, got nil")
 	}
 }
@@ -89,7 +92,7 @@ func TestStartSession_EmptySessionIDIsError(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, testAdminKey)
-	if _, err := c.StartSession(context.Background(), "task-123"); err == nil {
+	if _, err := c.StartSession(context.Background(), "task-123", ""); err == nil {
 		t.Fatal("expected error on empty session_id, got nil")
 	}
 }
@@ -102,7 +105,7 @@ func TestStartSession_EmptyAPIKeyIsError(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, testAdminKey)
-	if _, err := c.StartSession(context.Background(), "task-123"); err == nil {
+	if _, err := c.StartSession(context.Background(), "task-123", ""); err == nil {
 		t.Fatal("expected error on empty api_key, got nil")
 	}
 }
@@ -199,4 +202,33 @@ func TestEndSession_Non2xxIsError(t *testing.T) {
 	if err := c.EndSession(context.Background(), testProxyKey); err == nil {
 		t.Fatal("expected error on non-2xx, got nil")
 	}
+}
+
+func TestStartSession_IncludesEnvIDWhenNonEmpty(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &gotBody)
+		json.NewEncoder(w).Encode(map[string]any{"session_id": "s1", "api_key": "k1"})
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "admin-key")
+	_, err := c.StartSession(context.Background(), "task-1", "env_abc")
+	require.NoError(t, err)
+	assert.Equal(t, "env_abc", gotBody["env_id"])
+}
+
+func TestStartSession_OmitsEnvIDWhenEmpty(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &gotBody)
+		json.NewEncoder(w).Encode(map[string]any{"session_id": "s1", "api_key": "k1"})
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "admin-key")
+	_, err := c.StartSession(context.Background(), "task-1", "")
+	require.NoError(t, err)
+	_, hasEnvID := gotBody["env_id"]
+	assert.False(t, hasEnvID, "env_id should be omitted when empty")
 }

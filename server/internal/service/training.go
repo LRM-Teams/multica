@@ -58,7 +58,7 @@ type trainingTaskStore interface {
 // implementation is *arealrl.Client; tests inject a fake. The helper never
 // constructs a real client — it is injected via TrainingSessionDeps.
 type arealSessionStarter interface {
-	StartSession(ctx context.Context, taskID string) (arealrl.SessionCreds, error)
+	StartSession(ctx context.Context, taskID, envID string) (arealrl.SessionCreds, error)
 }
 
 // TrainingSessionDeps bundles the collaborators the session-open hook needs.
@@ -164,7 +164,7 @@ func maybeOpenTrainingSession(ctx context.Context, deps *TrainingSessionDeps, ta
 		return nil
 	}
 
-	creds, err := deps.RL.StartSession(ctx, taskID)
+	creds, err := deps.RL.StartSession(ctx, taskID, "")
 	if err != nil {
 		return fmt.Errorf("training: start_session for task %s: %w", taskID, err)
 	}

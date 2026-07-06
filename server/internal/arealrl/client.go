@@ -87,10 +87,13 @@ type startSessionResponse struct {
 
 // StartSession opens a new RL session for taskID using admin-key auth and
 // returns the session id and per-session proxy key.
-func (c *Client) StartSession(ctx context.Context, taskID string) (SessionCreds, error) {
+func (c *Client) StartSession(ctx context.Context, taskID, envID string) (SessionCreds, error) {
 	body := map[string]any{
 		"task_id":    taskID,
 		"group_size": 1,
+	}
+	if envID != "" {
+		body["env_id"] = envID
 	}
 	resp, err := c.doJSON(ctx, startSessionPath, c.adminKey, body)
 	if err != nil {

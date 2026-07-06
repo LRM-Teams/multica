@@ -246,7 +246,9 @@ function DmHeader({
     <ActorAvatar
       actorType={actorType}
       actorId={dm.peer.id}
-      size={34}
+      // 28px matches the message-row avatar so the header avatar and every
+      // message avatar share one size + left edge (see ConversationHeader).
+      size={28}
       showStatusDot={dm.peer.type === "agent"}
       profileLink={false}
     />

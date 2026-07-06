@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // BuildPrompt constructs the task prompt for an agent CLI.
@@ -80,6 +81,11 @@ func buildQuickCreatePrompt(task Task) string {
 	b.WriteString("You are running as a quick-create assistant for a Multica workspace.\n\n")
 	b.WriteString("A user captured the following input via the quick-create modal. There is NO existing issue. Your job is to create a well-formed issue from this input with a single `multica issue create` command.\n\n")
 	fmt.Fprintf(&b, "User input:\n> %s\n\n", task.QuickCreatePrompt)
+	if task.QuickCreateSource != nil {
+		b.WriteString("Source chat context:\n")
+		b.WriteString(formatQuickCreateSourceContext(task.QuickCreateSource))
+		b.WriteString("\n\n")
+	}
 
 	b.WriteString("Field rules:\n\n")
 
@@ -87,10 +93,11 @@ func buildQuickCreatePrompt(task Task) string {
 	b.WriteString("- **title**: required. A concise but semantically rich summary. If the input references external resources (PRs, issues, URLs), use your judgment on whether fetching the resource would produce a meaningfully better title — e.g. \"review PR #123\" → \"Review PR #123: Refactor auth module to OAuth2\". Strip filler words but preserve key semantic information.\n\n")
 
 	// description — the core optimization
-	b.WriteString("- **description**: The description is the executing agent's primary context. Aim for high fidelity — they should grasp the user's intent as if they had read the raw input themselves. Use a two-section structure:\n\n")
+	b.WriteString("- **description**: The description is the executing agent's primary context. Aim for high fidelity — they should grasp the user's intent as if they had read the raw input themselves. Use this section structure:\n\n")
 	b.WriteString("  1. **User request** — Faithfully restate what the user wants in their own words. Preserve specific names, identifiers, file paths, code snippets, and technical terms verbatim. Strip non-spec material before writing it (this is removal, not paraphrasing): verbal routing wrappers about creating the issue or routing it (e.g. \"create an issue\", \"分配给 X\", \"让 @X 处理\") and pure conversational fillers (e.g. \"对吧？\"). When in doubt, keep it.\n\n")
 	b.WriteString("     CC exception: `multica issue create` has no `--subscriber` flag, and the platform auto-subscribes members whose `[@Name](mention://member/<uuid>)` link appears in the description. When the user wrote \"cc @Y\", strip the verbal \"cc\" wrapper from the User request body and append a final `CC: <mention link(s)>` line to the description so the cc routing still fires.\n\n")
 	b.WriteString("  2. **Context** — include ONLY when the input cited external resources AND you successfully fetched them AND they produced verifiable facts worth recording. Summarize facts only (e.g. \"PR #45 changes auth to JWT\"), not interpretation or unsolicited reference implementations. If you have nothing factual to add, omit the section entirely — never use it as an apology log for resources you could not fetch.\n\n")
+	b.WriteString("  3. **Source chat context** — include ONLY when a `Source chat context` block is present in this prompt. Copy the source surface, thread root message ID, source message ID, source quote/excerpt, attachment IDs, and bounded visible summary into this section so the created issue can be audited back to the chat/DM/thread that spawned it. Do not add internal run IDs, queue IDs, event payloads, or hidden conversation data.\n\n")
 	b.WriteString("  Hard rules: never invent requirements, implementation details, or acceptance criteria the user did not express; never reduce multi-sentence input to a single vague sentence; never echo the title.\n\n")
 
 	// priority
@@ -161,6 +168,45 @@ func buildQuickCreatePrompt(task Task) string {
 	b.WriteString("- Do NOT call `multica issue get` or `multica issue comment add` — there is no issue to query or comment on.\n")
 	b.WriteString("- On CLI error or JSON parse error, exit with the error as the only output. The platform writes a failure notification automatically.\n")
 	return b.String()
+}
+
+func formatQuickCreateSourceContext(src *protocol.QuickCreateSourceContext) string {
+	if src == nil {
+		return ""
+	}
+	var b strings.Builder
+	surface := "channel"
+	if src.ChannelKind == "dm" {
+		surface = "DM"
+	} else if src.ChannelName != "" {
+		surface = "channel #" + src.ChannelName
+	}
+	fmt.Fprintf(&b, "- Source surface: %s\n", surface)
+	fmt.Fprintf(&b, "- Channel ID: %s\n", src.ChannelID)
+	fmt.Fprintf(&b, "- Thread root message ID: %s\n", src.ThreadRootMessageID)
+	fmt.Fprintf(&b, "- Source message ID: %s\n", src.SourceMessageID)
+	if src.SourceAuthorName != "" || src.SourceAuthorType != "" {
+		fmt.Fprintf(&b, "- Source author: %s", src.SourceAuthorName)
+		if src.SourceAuthorType != "" {
+			fmt.Fprintf(&b, " (%s)", src.SourceAuthorType)
+		}
+		if src.SourceAuthorID != "" {
+			fmt.Fprintf(&b, " [%s]", src.SourceAuthorID)
+		}
+		b.WriteString("\n")
+	}
+	if src.SourceExcerpt != "" {
+		fmt.Fprintf(&b, "- Source excerpt: %s\n", src.SourceExcerpt)
+	}
+	if len(src.AttachmentIDs) > 0 {
+		fmt.Fprintf(&b, "- Source attachment IDs: %s\n", strings.Join(src.AttachmentIDs, ", "))
+	}
+	if strings.TrimSpace(src.Summary) != "" {
+		b.WriteString("\nBounded visible summary:\n")
+		b.WriteString(strings.TrimSpace(src.Summary))
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // buildCommentPrompt constructs a prompt for comment-triggered tasks.

@@ -53,6 +53,28 @@ type ActorSelection =
   | { type: "agent"; id: string }
   | { type: "squad"; id: string };
 
+type QuickCreateSourceSeed = {
+  channel_id: string;
+  message_id?: string | null;
+  thread_root_message_id?: string | null;
+};
+
+function readQuickCreateSourceSeed(value: unknown): QuickCreateSourceSeed | null {
+  if (!value || typeof value !== "object") return null;
+  const source = value as Record<string, unknown>;
+  if (typeof source.channel_id !== "string" || !source.channel_id.trim()) {
+    return null;
+  }
+  const out: QuickCreateSourceSeed = { channel_id: source.channel_id };
+  if (typeof source.message_id === "string" && source.message_id.trim()) {
+    out.message_id = source.message_id;
+  }
+  if (typeof source.thread_root_message_id === "string" && source.thread_root_message_id.trim()) {
+    out.thread_root_message_id = source.thread_root_message_id;
+  }
+  return out;
+}
+
 // AgentCreatePanel — agent-mode body of the create-issue dialog. Renders
 // only the inner content; the surrounding `<Dialog>` AND `<DialogContent>`
 // (Portal + Overlay + Popup) are owned by CreateIssueDialog so mode-switching
@@ -210,6 +232,7 @@ export function AgentCreatePanel({
   const parentIssueId = (data?.parent_issue_id as string | undefined) ?? undefined;
   const parentIssueIdentifier =
     (data?.parent_issue_identifier as string | undefined) ?? undefined;
+  const source = useMemo(() => readQuickCreateSourceSeed(data?.source), [data?.source]);
 
   // Stale-id sweep. Once the project list query has actually resolved
   // (`isSuccess` — distinct from "data is the empty default during loading"),
@@ -301,6 +324,7 @@ export function AgentCreatePanel({
         project_id: projectId ?? undefined,
         parent_issue_id: parentIssueId,
         ...(activeAttachmentIds.length > 0 ? { attachment_ids: activeAttachmentIds } : {}),
+        ...(source ? { source } : {}),
       });
       setLastActor(actor.type, actor.id);
       setLastProjectId(projectId);

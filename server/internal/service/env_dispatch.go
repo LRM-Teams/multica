@@ -48,6 +48,7 @@ type EnvDispatchInput struct {
 	GroupSize       int
 	AgentID         string
 	SquadID         string // team dispatch; mutually exclusive with AgentID (leader resolved server-side)
+	TrainAgentID    string // optional training target (spec §4.1): a squad member or the single agent; empty ⇒ no training session
 	IdempotencyKey  string // optional; dedupes retries (spec §7.7)
 
 	// Issue dispatch (required for scratch+swe_lego; forbidden for
@@ -325,6 +326,13 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 		return fmt.Errorf("validation_failed: agent_id or squad_id is required")
 	case in.AgentID != "" && in.SquadID != "":
 		return fmt.Errorf("validation_failed: agent_id and squad_id are mutually exclusive")
+	}
+	// train_agent_id (spec §4.1): the training target. Allowed when a squad_id
+	// is set (a team member) OR when it equals agent_id (single-agent
+	// training). Empty ⇒ today's behavior exactly (no new error). DB membership
+	// resolution is enforced later, not here.
+	if in.TrainAgentID != "" && in.SquadID == "" && in.TrainAgentID != in.AgentID {
+		return fmt.Errorf("validation_failed: train_agent_id must accompany a squad_id (team member) or equal agent_id (single-agent training)")
 	}
 	if in.Domain != EnvDomainSweLego && in.Domain != EnvDomainSelfPlay {
 		return fmt.Errorf("validation_failed: domain is required (swe_lego or self_play)")

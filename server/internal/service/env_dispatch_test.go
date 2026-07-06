@@ -192,6 +192,53 @@ func (f *fakeEnvDispatchDeps) seedBaseEnv() string {
 	return id
 }
 
+// TestValidate_TrainAgentID exercises the train_agent_id validation rule
+// (spec §4.1): a non-empty train_agent_id is allowed when a squad_id is set
+// (a team member) OR when it equals agent_id (single-agent training);
+// otherwise it is rejected. An empty train_agent_id is today's behavior
+// exactly (no new error).
+func TestValidate_TrainAgentID(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	svc := NewEnvDispatchService(f, 1)
+	base := EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeScratch, EnvID: "base",
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
+		GroupSize: 1, Message: &MessageInput{Content: "hi"},
+	}
+
+	// Empty train_agent_id + single agent → unchanged behavior (accepted).
+	empty := base
+	empty.AgentID = "ag"
+	if err := svc.validate(empty); err != nil {
+		t.Fatalf("empty train_agent_id must be accepted, got %v", err)
+	}
+
+	// train_agent_id == agent_id (single-agent training) → accepted.
+	single := base
+	single.AgentID = "ag"
+	single.TrainAgentID = "ag"
+	if err := svc.validate(single); err != nil {
+		t.Fatalf("train_agent_id == agent_id must be accepted, got %v", err)
+	}
+
+	// train_agent_id with squad_id (team member) → accepted.
+	team := base
+	team.SquadID = "sq"
+	team.TrainAgentID = "member"
+	if err := svc.validate(team); err != nil {
+		t.Fatalf("train_agent_id with squad_id must be accepted, got %v", err)
+	}
+
+	// train_agent_id set, single agent, but != agent_id and no squad → rejected.
+	bad := base
+	bad.AgentID = "ag"
+	bad.TrainAgentID = "other"
+	if err := svc.validate(bad); err == nil {
+		t.Fatal("train_agent_id != agent_id without squad_id must be rejected")
+	}
+}
+
+// TestDispatch_ScratchSweLegoIssue_N3 exercises the happy path.
 func TestDispatch_ScratchSweLegoIssue_N3(t *testing.T) {
 	f := newFakeEnvDispatchDeps()
 	baseEnv := f.seedBaseEnv()

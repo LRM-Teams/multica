@@ -124,6 +124,31 @@ func TestEnvDispatch_AcceptsEmptyEnvIDShape(t *testing.T) {
 	}
 }
 
+func TestEnvDispatch_RejectsMalformedTrainAgentID(t *testing.T) {
+	// A malformed train_agent_id must be rejected by the handler's UUID-shape
+	// gate with a 400 (mirroring the agent_id/squad_id shape checks) instead of
+	// panicking deeper in the adapter.
+	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","train_agent_id":"not-a-uuid","issue":{"title":"t"}}`
+	rr := doEnvDispatch(t, body)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (malformed train_agent_id must not panic)", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "invalid train_agent_id") {
+		t.Fatalf("body = %s, want it to mention invalid train_agent_id", rr.Body.String())
+	}
+}
+
+func TestEnvDispatch_AcceptsWellFormedTrainAgentID(t *testing.T) {
+	// A well-formed train_agent_id equal to agent_id (single-agent training)
+	// must pass the handler's UUID-shape gate. Using train_agent_id == agent_id
+	// also satisfies the service validate() rule so no 400 is emitted.
+	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","train_agent_id":"` + validUUID + `","message":{"content":"hi"}}`
+	rr := doEnvDispatch(t, body)
+	if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "train_agent_id") {
+		t.Fatalf("well-formed train_agent_id must pass shape validation, got %d %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestEnvDispatch_AcceptsResumeMode(t *testing.T) {
 	body := `{"mode":"resume","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
 	rr := doEnvDispatch(t, body)

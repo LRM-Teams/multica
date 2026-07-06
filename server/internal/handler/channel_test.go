@@ -3418,6 +3418,87 @@ func TestChannelUnreadUsesConversationSeq(t *testing.T) {
 	}
 }
 
+func TestMarkChannelReadCursorIsMonotonic(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	readerID := createChannelPlainMember(t)
+	writerID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "cursor-monotonic-"+uuid.NewString(), readerID, writerID)
+
+	// Insert two messages so the conversation has seq 1 and 2.
+	first, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(writerID), "Writer", "first", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("cursor-monotonic-1"), 0)
+	if err != nil {
+		t.Fatalf("insert first: %v", err)
+	}
+	second, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(writerID), "Writer", "second", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("cursor-monotonic-2"), 0)
+	if err != nil {
+		t.Fatalf("insert second: %v", err)
+	}
+	_ = first
+
+	// Mark read — advances cursor to second.Seq (the conversation last_seq).
+	req := newRequestAs(readerID, http.MethodPost, "/api/channels/"+channelID+"/read", nil)
+	req = withChannelTestWorkspaceCtx(t, req, readerID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.MarkChannelRead(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mark read (first): status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Simulate a stale/slow request: manually regress channel_read to an older seq.
+	if _, err := testPool.Exec(ctx, `
+		UPDATE channel_read SET last_read_seq = $3
+		WHERE channel_id = $1 AND user_id = $2`,
+		channelID, readerID, first.Seq); err != nil {
+		t.Fatalf("regress channel_read: %v", err)
+	}
+	// Also regress conversation_member if it exists.
+	if _, err := testPool.Exec(ctx, `
+		UPDATE conversation_member SET last_read_seq = $3
+		WHERE member_type = 'user' AND member_id = $2
+		AND EXISTS (SELECT 1 FROM conversation WHERE id = conversation_member.conversation_id AND channel_id = $1)`,
+		channelID, readerID, first.Seq); err != nil {
+		t.Fatalf("regress conversation_member: %v", err)
+	}
+
+	// Mark read again — the GREATEST guard must NOT move the cursor backwards.
+	// The conversation last_seq is still second.Seq, so this should advance to second.Seq,
+	// not regress to first.Seq.
+	req2 := newRequestAs(readerID, http.MethodPost, "/api/channels/"+channelID+"/read", nil)
+	req2 = withChannelTestWorkspaceCtx(t, req2, readerID)
+	req2 = withURLParam(req2, "channelId", channelID)
+	rec2 := httptest.NewRecorder()
+	testHandler.MarkChannelRead(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("mark read (second): status=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+
+	// Verify cursor is at second.Seq, not first.Seq.
+	var convSeq int64
+	if err := testPool.QueryRow(ctx, `
+		SELECT last_read_seq FROM conversation_member cm
+		JOIN conversation c ON c.id = cm.conversation_id
+		WHERE c.channel_id = $1 AND cm.member_type = 'user' AND cm.member_id = $2`,
+		channelID, readerID).Scan(&convSeq); err == nil {
+		if convSeq < second.Seq {
+			t.Fatalf("conversation_member cursor regressed: got %d, want >= %d", convSeq, second.Seq)
+		}
+	}
+
+	// No unread messages after the mark-read.
+	ch := listedChannelForUser(t, channelID, readerID)
+	if ch == nil {
+		t.Fatal("channel missing from list")
+	}
+	if ch.RealUnreadCount != 0 {
+		t.Fatalf("expected 0 unread after mark read, got real=%d", ch.RealUnreadCount)
+	}
+}
+
 func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

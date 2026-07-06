@@ -183,12 +183,29 @@ func (h *Handler) channelHasAgentMember(ctx context.Context, workspaceID, channe
 	return err == nil && exists
 }
 
-func (h *Handler) loadChannelThreadRootForOutputTarget(ctx context.Context, workspaceID, channelID, rootID pgtype.UUID) (ChannelMessageResponse, error) {
+func (h *Handler) loadChannelThreadRootForOutputTarget(ctx context.Context, workspaceID, channelID, msgID pgtype.UUID) (ChannelMessageResponse, error) {
+	// First, look up the message to check whether it is a root or a reply.
+	// If the caller passed a thread reply id (#channel:<replyid>), flatten to
+	// the thread root so a natural reply target is not silently suppressed.
+	var threadRootID pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+		SELECT thread_root_message_id
+		FROM channel_message
+		WHERE id = $1 AND channel_id = $2 AND workspace_id = $3 AND author_type <> 'system'`,
+		msgID, channelID, workspaceID).Scan(&threadRootID)
+	if err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	lookupID := msgID
+	if threadRootID.Valid {
+		// The passed id is itself a thread reply — flatten to the root.
+		lookupID = threadRootID
+	}
 	row := h.DB.QueryRow(ctx, `
 		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 		FROM channel_message
 		WHERE id = $1 AND channel_id = $2 AND workspace_id = $3 AND thread_root_message_id IS NULL AND author_type <> 'system'`,
-		rootID, channelID, workspaceID)
+		lookupID, channelID, workspaceID)
 	return scanChannelMessage(row)
 }
 

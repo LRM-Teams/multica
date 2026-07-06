@@ -147,6 +147,62 @@ func TestAgentTransportSendMessageStickerOnlyAndWithText(t *testing.T) {
 	}
 }
 
+func TestAgentTransportSendThreadReplyIDFlattensToRoot(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+
+	// Create a root message in the channel.
+	var rootID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, seq)
+		VALUES ($1, $2, 'user', $3, 'test-user', 'thread root msg', 1)
+		RETURNING id`,
+		channelID, testWorkspaceID, testUserID).Scan(&rootID); err != nil {
+		t.Fatalf("create root message: %v", err)
+	}
+
+	// Create a thread reply under that root.
+	var replyID string
+	var threadID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, seq, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth)
+		VALUES ($1, $2, 'agent', $3, 'test-agent', 'thread reply msg', 2, $4, $4, gen_random_uuid()::text, 1)
+		RETURNING id, thread_id`,
+		channelID, testWorkspaceID, agentID, rootID).Scan(&replyID, &threadID); err != nil {
+		t.Fatalf("create thread reply: %v", err)
+	}
+
+	// Look up the channel name for the target.
+	var channelName string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, channelID).Scan(&channelName); err != nil {
+		t.Fatalf("get channel name: %v", err)
+	}
+
+	// Send using the REPLY id as the thread target — should flatten to root.
+	resp := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            "#" + channelName + ":" + replyID,
+		"content":           "reply-to-thread-reply-id should flatten",
+		"client_message_id": "flatten-test-" + uuid.NewString(),
+	})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("send targeting thread reply id: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var body AgentTransportSendResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	// The message must land in the thread (thread_root_message_id = rootID, not the reply).
+	if body.Message.ThreadRootMessageID == nil || *body.Message.ThreadRootMessageID != rootID {
+		t.Fatalf("thread reply id did not flatten to root: got thread_root_message_id=%v, want %s",
+			body.Message.ThreadRootMessageID, rootID)
+	}
+}
+
 func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

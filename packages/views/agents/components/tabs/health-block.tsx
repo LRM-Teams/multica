@@ -153,27 +153,41 @@ function HealthTimeline({
   const { t } = useT("agents");
   const timeAgo = useTimeAgo();
 
-  // Reverse-chron. `recovered` rows are NOT filtered — they stay in the
-  // timeline as history even after the summary returns to online (§3c).
-  const ordered = useMemo(() => {
+  // §3-v2 density: the timeline shows only state TRANSITIONS, never every ping
+  // and never a big blank card per row.
+  //   1. Drop the synthetic current-state event — the head (§3.1) already shows
+  //      the current state, so keeping it here would repeat the badge.
+  //   2. Fold consecutive same-state runs into a single row (a new row only at a
+  //      change point), so a run of identical states can't wall the panel.
+  // `recovered` transitions are kept as history (§3c).
+  const rows = useMemo(() => {
     if (!events) return [];
-    return events.toSorted(
-      (a, b) =>
-        new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime(),
-    );
+    const sorted = events
+      .filter((event) => !event.synthetic)
+      .toSorted(
+        (a, b) =>
+          new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime(),
+      );
+    const folded: AgentHealthEvent[] = [];
+    for (const event of sorted) {
+      const prev = folded[folded.length - 1];
+      if (prev && prev.state_after === event.state_after) continue;
+      folded.push(event);
+    }
+    return folded;
   }, [events]);
 
   if (loading) {
     return (
-      <div className="space-y-1.5" aria-hidden="true">
+      <div className="space-y-1" aria-hidden="true">
         {[0, 1, 2].map((i) => (
-          <Skeleton key={i} className="h-9 w-full rounded-md" />
+          <Skeleton key={i} className="h-5 w-40 rounded" />
         ))}
       </div>
     );
   }
 
-  if (ordered.length === 0) {
+  if (rows.length === 0) {
     return (
       <p className="text-xs italic text-muted-foreground/60">
         {t(($) => $.tab_body.activity.health.empty_events)}
@@ -181,17 +195,16 @@ function HealthTimeline({
     );
   }
 
+  // Compact rows (chip + relative time) — no bordered box per event.
   return (
     <ul className="flex flex-col gap-1.5">
-      {ordered.map((event) => (
+      {rows.map((event) => (
         <li
           key={event.id}
-          className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-3 py-2"
+          className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs"
         >
           <StateChip state={event.state_after} size="sm" />
-          <span className="text-xs text-muted-foreground">
-            {timeAgo(event.occurred_at)}
-          </span>
+          <span className="text-muted-foreground">{timeAgo(event.occurred_at)}</span>
         </li>
       ))}
     </ul>

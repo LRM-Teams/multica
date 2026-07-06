@@ -411,7 +411,7 @@
         "last_seen": "Last active {{time}}",
         "head_unavailable": "Connectivity status unavailable",
         "state_online": "Online",
-        "state_suspected_disconnect": "Suspected disconnect",
+        "state_suspected_disconnect": "Connection unstable",
         "state_reconnecting": "Reconnecting",
         "state_recovered": "Recovered",
         "state_offline": "Offline"

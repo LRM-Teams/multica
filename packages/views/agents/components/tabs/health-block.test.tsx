@@ -62,7 +62,7 @@ function renderView(props: Partial<ComponentProps<typeof HealthBlockView>>) {
 
 const STATE_COPY: Record<AgentHealthState, string> = {
   online: "Online",
-  suspected_disconnect: "Suspected disconnect",
+  suspected_disconnect: "Connection unstable",
   reconnecting: "Reconnecting",
   recovered: "Recovered",
   offline: "Offline",
@@ -116,7 +116,36 @@ describe("HealthBlockView — timeline (Iris §3c)", () => {
     // Newest first: recovered (10:00) → reconnecting (09:00) → suspected (08:00)
     expect(within(items[0]!).getByText("Recovered")).toBeInTheDocument();
     expect(within(items[1]!).getByText("Reconnecting")).toBeInTheDocument();
-    expect(within(items[2]!).getByText("Suspected disconnect")).toBeInTheDocument();
+    expect(within(items[2]!).getByText("Connection unstable")).toBeInTheDocument();
+  });
+
+  it("drops the synthetic current-state event (head shows it — no repeated badge, §3-v2)", () => {
+    // Only a synthetic current-state event → timeline is empty (the head already
+    // shows current state), so it renders the one-line empty note, not a card.
+    renderView({
+      summary: summary("online"),
+      events: [event({ id: "syn", state_after: "online", synthetic: true })],
+    });
+    expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
+    expect(screen.getByText("No health events yet")).toBeInTheDocument();
+  });
+
+  it("folds consecutive same-state events into a single row (§3-v2 density)", () => {
+    // Three consecutive "online" transitions collapse to ONE row; the distinct
+    // offline transition stays a separate row.
+    renderView({
+      summary: summary("online"),
+      events: [
+        event({ id: "a", state_after: "online", occurred_at: "2026-07-06T11:00:00Z" }),
+        event({ id: "b", state_after: "online", occurred_at: "2026-07-06T10:30:00Z" }),
+        event({ id: "c", state_after: "online", occurred_at: "2026-07-06T10:00:00Z" }),
+        event({ id: "d", state_after: "offline", occurred_at: "2026-07-06T09:00:00Z" }),
+      ],
+    });
+    const items = screen.getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(within(items[0]!).getByText("Online")).toBeInTheDocument();
+    expect(within(items[1]!).getByText("Offline")).toBeInTheDocument();
   });
 
   it("shows an explicit empty state (not silent) when there are no events", () => {

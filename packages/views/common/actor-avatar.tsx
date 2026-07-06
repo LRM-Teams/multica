@@ -290,6 +290,18 @@ export function AgentStatusDot({ agentId, size }: { agentId: string; size?: numb
   const isWorking = connectivityOk && detail.workload === "working";
   const statusLabel = isWorking ? `${label} · Working` : label;
 
+  // §3-v2 ①: an OFFLINE agent's dot is a HOLLOW gray ring (ring-only, no fill)
+  // so "unavailable" reads distinctly from the filled active states. On tiny
+  // participant-stack dots (~5px) a hollow ring is unreadable, so those fall
+  // back to the filled gray. Only the known-offline health state is hollow;
+  // the transitional availability fallback and all other states stay filled.
+  const HOLLOW_MIN_PX = 8;
+  const isOfflineHollow =
+    healthSummary?.state === "offline" && diameter >= HOLLOW_MIN_PX;
+  const dotColorClass = isOfflineHollow
+    ? "border-2 border-muted-foreground/50 bg-transparent"
+    : dotClass;
+
   return (
     <span className="absolute bottom-0 right-0 inline-flex">
       {isWorking && (
@@ -308,7 +320,7 @@ export function AgentStatusDot({ agentId, size }: { agentId: string; size?: numb
         aria-label={`Status: ${statusLabel}`}
         title={statusLabel}
         style={dotStyle}
-        className={`relative rounded-full ring-2 ring-background ${dotClass} ${
+        className={`relative rounded-full ring-2 ring-background ${dotColorClass} ${
           isWorking ? "motion-reduce:ring-brand" : ""
         }`}
       />

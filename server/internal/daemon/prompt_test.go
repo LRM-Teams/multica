@@ -3,6 +3,8 @@ package daemon
 import (
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // TestBuildQuickCreatePromptRules locks in the rules that govern how the
@@ -200,6 +202,41 @@ func TestBuildQuickCreatePromptParentPinning(t *testing.T) {
 	plain := buildQuickCreatePrompt(Task{QuickCreatePrompt: "fix the login button color"})
 	if strings.Contains(plain, "--parent") {
 		t.Errorf("buildQuickCreatePrompt without parent must NOT mention --parent, got:\n%s", plain)
+	}
+}
+
+func TestBuildQuickCreatePromptIncludesSourceContext(t *testing.T) {
+	out := buildQuickCreatePrompt(Task{
+		QuickCreatePrompt: "turn this thread into an issue",
+		QuickCreateSource: &protocol.QuickCreateSourceContext{
+			ChannelID:           "channel-1",
+			ChannelKind:         "group",
+			ChannelName:         "product",
+			ThreadRootMessageID: "root-1",
+			SourceMessageID:     "source-1",
+			SourceAuthorType:    "member",
+			SourceAuthorID:      "member-1",
+			SourceAuthorName:    "Frank",
+			SourceExcerpt:       "this is broken",
+			Summary:             "Recent visible messages from the source thread:\n- Frank: this is broken",
+			AttachmentIDs:       []string{"att-1", "att-2"},
+		},
+	})
+	mustContain := []string{
+		"Source chat context:",
+		"channel #product",
+		"Thread root message ID: root-1",
+		"Source message ID: source-1",
+		"Source excerpt: this is broken",
+		"Source attachment IDs: att-1, att-2",
+		"Source chat context** — include ONLY when a `Source chat context` block is present",
+		"created issue can be audited back to the chat/DM/thread",
+		"Do not add internal run IDs, queue IDs, event payloads",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("buildQuickCreatePrompt with source missing %q\n--- output ---\n%s", s, out)
+		}
 	}
 }
 

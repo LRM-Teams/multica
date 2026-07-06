@@ -614,6 +614,11 @@ export class ApiClient {
     project_id?: string | null;
     parent_issue_id?: string | null;
     attachment_ids?: string[];
+    source?: {
+      channel_id: string;
+      message_id?: string | null;
+      thread_root_message_id?: string | null;
+    } | null;
   }): Promise<{ task_id: string }> {
     return this.fetch("/api/issues/quick-create", {
       method: "POST",

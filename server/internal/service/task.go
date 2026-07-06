@@ -618,6 +618,12 @@ type QuickCreateContext struct {
 	ProjectID     string   `json:"project_id,omitempty"`
 	SquadID       string   `json:"squad_id,omitempty"`
 	AttachmentIDs []string `json:"attachment_ids,omitempty"`
+	// Source carries the visible chat/channel/DM thread context that opened
+	// the quick-create flow. It is written into the task context so the
+	// daemon can instruct the agent to copy that context into the issue
+	// artifact, and so completion can return a human-readable link to the
+	// same source thread.
+	Source *protocol.QuickCreateSourceContext `json:"source,omitempty"`
 	// ParentIssueID is the optional UUID of the parent issue the new issue
 	// should be filed under. Set when the user opens the modal from "Add
 	// sub issue" on an existing issue; the daemon claim handler resolves the
@@ -649,7 +655,7 @@ const QuickCreateContextType = "quick_create"
 // parentIssueID is optional (zero-valued pgtype.UUID when the user didn't
 // open the modal from "Add sub issue"). The handler is responsible for
 // validating it belongs to the same workspace before passing it in.
-func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, requesterID pgtype.UUID, agentID, squadID pgtype.UUID, prompt string, projectID, parentIssueID pgtype.UUID, attachmentIDs []pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, requesterID pgtype.UUID, agentID, squadID pgtype.UUID, prompt string, projectID, parentIssueID pgtype.UUID, attachmentIDs []pgtype.UUID, source *protocol.QuickCreateSourceContext) (db.AgentTaskQueue, error) {
 	agent, err := s.Queries.GetAgent(ctx, agentID)
 	if err != nil {
 		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
@@ -683,6 +689,11 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 				payload.AttachmentIDs = append(payload.AttachmentIDs, util.UUIDToString(id))
 			}
 		}
+	}
+	if source != nil {
+		sourceCopy := *source
+		sourceCopy.AttachmentIDs = append([]string(nil), source.AttachmentIDs...)
+		payload.Source = &sourceCopy
 	}
 	contextJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -2587,6 +2598,7 @@ func (s *TaskService) notifyQuickCreateCompleted(ctx context.Context, task db.Ag
 	}
 	prefix := s.getIssuePrefix(workspaceID)
 	identifier := fmt.Sprintf("%s-%d", prefix, issue.Number)
+	s.handleQuickCreateSourceReturn(ctx, task, qc, issue, identifier)
 	details, _ := json.Marshal(map[string]any{
 		"task_id":         util.UUIDToString(task.ID),
 		"agent_id":        util.UUIDToString(task.AgentID),

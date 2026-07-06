@@ -306,6 +306,14 @@ export class PreviewUnsupportedError extends Error {
   }
 }
 
+// Composer sends must never hang forever: a stalled fetch (network stall,
+// held-open connection, stuck backend) is aborted after this window so the
+// composer lock releases and a visible retry error shows instead of an endless
+// spinner. Aborting an already-landed send is harmless — retries dedupe via
+// client_message_id. Per-request on purpose: uploads / long queries keep their
+// own (or no) timeout (#294).
+const SEND_TIMEOUT_MS = 30_000;
+
 export class ApiClient {
   private baseUrl: string;
   private token: string | null = null;
@@ -1943,6 +1951,7 @@ export class ApiClient {
     return this.fetch(`/api/chat/sessions/${sessionId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
   }
 
@@ -2171,6 +2180,7 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
   }
 
@@ -2244,6 +2254,7 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread`, {
       method: "POST",
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
   }
 

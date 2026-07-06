@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "@multica/core/api";
 import { composePayloadKey } from "./use-compose-send-intent";
 import { classifySendFailure, useComposerSend } from "./use-composer-send";
@@ -179,14 +179,7 @@ describe("useComposerSend", () => {
   });
 });
 
-describe("useComposerSend — send timeout (#215)", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
+describe("useComposerSend — request-level send timeout (#294)", () => {
   function run(overrides: Partial<Parameters<ReturnType<typeof useComposerSend>["send"]>[0]> = {}) {
     const mutate = makeMutate();
     const onCommitted = vi.fn();
@@ -201,9 +194,12 @@ describe("useComposerSend — send timeout (#215)", () => {
     return { mutate, onCommitted, onVisibleError, base: { ...base, ...overrides } };
   }
 
-  it("timeout force-releases the lock if the request never settles", () => {
+  it("a timed-out/aborted request surfaces a retry error and releases the lock", () => {
+    // The timeout now lives on the request (ApiClient's AbortSignal.timeout); a
+    // fired timeout rejects the fetch with a DOMException("...", "TimeoutError")
+    // that reaches the hook via react-query's onError — no hook-level timer.
     const { result } = renderHook(() => useComposerSend());
-    const { onCommitted, onVisibleError, base } = run();
+    const { mutate, onCommitted, onVisibleError, base } = run();
 
     act(() => {
       result.current.send(base);
@@ -215,12 +211,16 @@ describe("useComposerSend — send timeout (#215)", () => {
     });
     expect(blocked).toBe(false);
 
-    // The request never settles — advance past the safety timeout.
+    // The request aborts on timeout → onError(TimeoutError) → onSettled.
     act(() => {
-      vi.advanceTimersByTime(30_001);
+      mutate.calls[0]!.onError(
+        new DOMException("The operation timed out.", "TimeoutError"),
+      );
+      mutate.calls[0]!.onSettled();
     });
 
-    // The lock is force-released and a retryable error is surfaced.
+    // A retry error (never a 409 conflict), no commit, lock released.
+    expect(onVisibleError).toHaveBeenCalledTimes(1);
     expect(onVisibleError).toHaveBeenCalledWith("retry");
     expect(onCommitted).not.toHaveBeenCalled();
 
@@ -230,47 +230,5 @@ describe("useComposerSend — send timeout (#215)", () => {
       allowed = result.current.send(base);
     });
     expect(allowed).toBe(true);
-  });
-
-  it("timeout does not double-fire if the request settles first", () => {
-    const { result } = renderHook(() => useComposerSend());
-    const { mutate, onVisibleError, base } = run();
-
-    act(() => {
-      result.current.send(base);
-    });
-    // Request settles normally before the timeout.
-    act(() => {
-      mutate.calls[0]!.onSuccess();
-      mutate.calls[0]!.onSettled();
-    });
-
-    // Advance well past the timeout — no late fire.
-    act(() => {
-      vi.advanceTimersByTime(60_000);
-    });
-    expect(onVisibleError).not.toHaveBeenCalled();
-  });
-
-  it("a late settle after timeout is a no-op (no double-release)", () => {
-    const { result } = renderHook(() => useComposerSend());
-    const { mutate, onVisibleError, base } = run();
-
-    act(() => {
-      result.current.send(base);
-    });
-    // Timeout fires first.
-    act(() => {
-      vi.advanceTimersByTime(30_001);
-    });
-    expect(onVisibleError).toHaveBeenCalledTimes(1);
-
-    // The request finally settles late — must not fire a second error or throw.
-    act(() => {
-      mutate.calls[0]!.onError(new ApiError("late", 500, "Server Error"));
-      mutate.calls[0]!.onSettled();
-    });
-    // Still only the timeout's single error.
-    expect(onVisibleError).toHaveBeenCalledTimes(1);
   });
 });

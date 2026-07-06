@@ -156,3 +156,21 @@ func TestEnvDispatch_AcceptsResumeMode(t *testing.T) {
 		t.Fatalf("resume must be accepted as a mode, got %d %s", rr.Code, rr.Body.String())
 	}
 }
+
+func TestEnvDispatchHandler_CriticAgentID_ShapeValidation(t *testing.T) {
+	// 400 on malformed UUID
+	body := `{"squad_id":"` + validUUID + `","mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"train_agent_id":"` + validUUID + `","critic_agent_id":"not-a-uuid","message":{"content":"hi"}}`
+	req := httptest.NewRequest("POST", "/api/v1/env-dispatch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	h := newTestHandler(Config{})
+	w := httptest.NewRecorder()
+	req.Header.Set("X-User-ID", "u1")
+	req = req.WithContext(middleware.SetMemberContext(req.Context(), "ws1", db.Member{}))
+	h.EnvDispatch(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "invalid critic_agent_id") {
+		t.Fatalf("body = %s, want it to mention invalid critic_agent_id", w.Body.String())
+	}
+}

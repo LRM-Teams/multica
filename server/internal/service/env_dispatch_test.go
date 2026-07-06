@@ -778,3 +778,42 @@ func TestDispatch_NoTrainingDispatchWhenTrainAgentEmpty(t *testing.T) {
 		t.Fatalf("want 0 training_dispatch saves when train_agent_id empty, got %d", len(f.trainingSaves))
 	}
 }
+
+// TestEnvDispatchInput_Validate_CriticAgentID exercises the critic_agent_id validation rules:
+// critic_agent_id requires train_agent_id; critic_agent_id must differ from train_agent_id;
+// critic_agent_id must differ from agent_id; empty critic_agent_id is unchanged behavior.
+func TestEnvDispatchInput_Validate_CriticAgentID(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      EnvDispatchInput
+		wantErr string
+	}{
+		{"empty critic ok (squad)", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+		{"critic with squad+train ok", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", CriticAgentID: "crit", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+		{"critic without train rejected", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", CriticAgentID: "crit", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id requires train_agent_id"},
+		{"critic == train rejected", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "same", CriticAgentID: "same", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id must differ from train_agent_id"},
+		{"critic == agent rejected (single agent)", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", CriticAgentID: "ag", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id must differ from train_agent_id"},
+		{"critic ok with squad (no agent id)", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", CriticAgentID: "crit", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+		{"empty critic ok (single agent)", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+		{"critic with single agent ok", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", CriticAgentID: "crit", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeEnvDispatchDeps()
+			svc := NewEnvDispatchService(f, 1)
+			err := svc.validate(tc.in)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+				}
+				if err.Error() != tc.wantErr {
+					t.Fatalf("expected error %q, got %q", tc.wantErr, err.Error())
+				}
+			}
+		})
+	}
+}

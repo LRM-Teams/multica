@@ -54,6 +54,7 @@ type EnvDispatchInput struct {
 	AgentID         string
 	SquadID         string // team dispatch; mutually exclusive with AgentID (leader resolved server-side)
 	TrainAgentID    string // optional training target (spec §4.1): a squad member or the single agent; empty ⇒ no training session
+	CriticAgentID   string // optional critic for trained agent (sub-project E): evaluates the trained agent's output; empty ⇒ unchanged behavior
 	IdempotencyKey  string // optional; dedupes retries (spec §7.7)
 
 	// Issue dispatch (required for scratch+swe_lego; forbidden for
@@ -364,6 +365,19 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 	// resolution is enforced later, not here.
 	if in.TrainAgentID != "" && in.SquadID == "" && in.TrainAgentID != in.AgentID {
 		return fmt.Errorf("validation_failed: train_agent_id must accompany a squad_id (team member) or equal agent_id (single-agent training)")
+	}
+	// critic_agent_id (sub-project E): the critic that evaluates the trained agent.
+	// Requires train_agent_id. Must differ from train_agent_id and agent_id.
+	if in.CriticAgentID != "" {
+		if in.TrainAgentID == "" {
+			return fmt.Errorf("validation_failed: critic_agent_id requires train_agent_id")
+		}
+		if in.CriticAgentID == in.TrainAgentID {
+			return fmt.Errorf("validation_failed: critic_agent_id must differ from train_agent_id")
+		}
+		if in.CriticAgentID == in.AgentID {
+			return fmt.Errorf("validation_failed: critic_agent_id must differ from agent_id")
+		}
 	}
 	if in.Domain != EnvDomainSweLego && in.Domain != EnvDomainSelfPlay {
 		return fmt.Errorf("validation_failed: domain is required (swe_lego or self_play)")

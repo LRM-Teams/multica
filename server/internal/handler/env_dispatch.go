@@ -29,6 +29,7 @@ type EnvDispatchRequest struct {
 	AgentID        string                `json:"agent_id"`
 	SquadID        string                `json:"squad_id,omitempty"`
 	TrainAgentID   string                `json:"train_agent_id,omitempty"`
+	CriticAgentID  string                `json:"critic_agent_id,omitempty"`
 	IdempotencyKey string                `json:"idempotency_key,omitempty"`
 	Issue          *IssueDispatchInput   `json:"issue,omitempty"`
 	Message        *MessageDispatchInput `json:"message,omitempty"`
@@ -103,6 +104,11 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.CriticAgentID != "" {
+		if _, ok := parseUUIDOrBadRequest(w, req.CriticAgentID, "critic_agent_id"); !ok {
+			return
+		}
+	}
 	if req.IdempotencyKey != "" {
 		if _, err := util.ParseUUID(req.IdempotencyKey); err != nil {
 			writeError(w, http.StatusBadRequest, "idempotency_key must be a valid UUID")
@@ -119,6 +125,7 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		GroupSize:    req.GroupSize, AgentID: req.AgentID,
 		SquadID:        req.SquadID,
 		TrainAgentID:   req.TrainAgentID,
+		CriticAgentID:  req.CriticAgentID,
 		IdempotencyKey: req.IdempotencyKey,
 		Issue:          mapIssueInput(req.Issue),
 		Message:        mapMessageInput(req.Message),

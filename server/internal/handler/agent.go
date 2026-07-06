@@ -169,20 +169,29 @@ type AgentTaskResponse struct {
 	// as `## Workspace Context` so every agent running in this workspace —
 	// regardless of issue / chat / autopilot / quick-create — sees the same
 	// shared context. Empty when the workspace owner hasn't set it.
-	WorkspaceContext string                `json:"workspace_context,omitempty"`
-	ThreadName       string                `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
-	Status           string                `json:"status"`
-	Priority         int32                 `json:"priority"`
-	DispatchedAt     *string               `json:"dispatched_at"`
-	StartedAt        *string               `json:"started_at"`
-	CompletedAt      *string               `json:"completed_at"`
-	Result           any                   `json:"result"`
-	Error            *string               `json:"error"`
-	FailureReason    string                `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
-	Attempt          int32                 `json:"attempt"`
-	MaxAttempts      int32                 `json:"max_attempts"`
-	ParentTaskID     *string               `json:"parent_task_id,omitempty"`
-	Agent            *TaskAgentData        `json:"agent,omitempty"`
+	WorkspaceContext string         `json:"workspace_context,omitempty"`
+	ThreadName       string         `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
+	Status           string         `json:"status"`
+	Priority         int32          `json:"priority"`
+	DispatchedAt     *string        `json:"dispatched_at"`
+	StartedAt        *string        `json:"started_at"`
+	CompletedAt      *string        `json:"completed_at"`
+	Result           any            `json:"result"`
+	Error            *string        `json:"error"`
+	FailureReason    string         `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
+	Attempt          int32          `json:"attempt"`
+	MaxAttempts      int32          `json:"max_attempts"`
+	ParentTaskID     *string        `json:"parent_task_id,omitempty"`
+	Agent            *TaskAgentData `json:"agent,omitempty"`
+	// ArealProxy carries the AReaL RL proxy provider config extracted from the
+	// task's context.areal_proxy at claim time (written by the session-open
+	// hook, Task 5). When present the daemon launches the runtime against the
+	// RL proxy — `pi -p --provider areal --model areal-default --api-key
+	// <api_key>` with the proxy base_url — so the trained agent's LLM traffic
+	// routes through the bridge and its trajectory is captured. Nil for the
+	// overwhelming majority of (non-trained) tasks; omitempty so old daemons
+	// ignore it. See §4.4.
+	ArealProxy       *ArealProxyData       `json:"areal_proxy,omitempty"`
 	Repos            []RepoData            `json:"repos,omitempty"`
 	ProjectID        string                `json:"project_id,omitempty"`        // issue's project, when present
 	ProjectTitle     string                `json:"project_title,omitempty"`     // for surfacing in agent context
@@ -297,6 +306,41 @@ type TaskAgentData struct {
 	ThinkingLevel string                   `json:"thinking_level,omitempty"`
 }
 
+// ArealProxyData is the wire shape of the RL proxy provider config stored at
+// context.areal_proxy on a trained task. The daemon consumes it at ExecOptions
+// build (see internal/daemon.ArealProxy, kept in sync). SessionID is not needed
+// for runtime launch (the close hook reads it from context directly) so it is
+// intentionally omitted here.
+type ArealProxyData struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	APIKey   string `json:"api_key"`
+	BaseURL  string `json:"base_url"`
+}
+
+// parseArealProxy extracts the areal_proxy provider config from a task's
+// context JSONB. It returns nil for the common case of a non-trained task (no
+// context / no areal_proxy key), for malformed JSON, and for an incomplete
+// sub-object (missing api_key or base_url) — so a normal task is never
+// accidentally routed through the proxy. Provider/Model are allowed to be empty
+// here; the daemon defaults them to areal/areal-default.
+func parseArealProxy(raw []byte) *ArealProxyData {
+	if len(raw) == 0 {
+		return nil
+	}
+	var envelope struct {
+		ArealProxy *ArealProxyData `json:"areal_proxy"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil
+	}
+	p := envelope.ArealProxy
+	if p == nil || p.APIKey == "" || p.BaseURL == "" {
+		return nil
+	}
+	return p
+}
+
 // taskToResponse maps a queue row to its wire shape. workspaceID is threaded
 // in because the row itself doesn't carry one (workspace lives on the agent
 // / issue / chat session) — we ask the caller to resolve it once and pass it
@@ -316,7 +360,7 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 	if t.WorkDir.Valid {
 		workDir = t.WorkDir.String
 	}
-	return AgentTaskResponse{
+	resp := AgentTaskResponse{
 		ID:               uuidToString(t.ID),
 		AgentID:          uuidToString(t.AgentID),
 		RuntimeID:        uuidToString(t.RuntimeID),
@@ -345,6 +389,10 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		AutopilotRunID: uuidToString(t.AutopilotRunID),
 		Kind:           computeTaskKind(t),
 	}
+	// Trained-task RL proxy override (§4.4): surface context.areal_proxy on the
+	// claim response so the daemon can route the runtime through the bridge.
+	resp.ArealProxy = parseArealProxy(t.Context)
+	return resp
 }
 
 // relativeWorkDir produces a privacy-safe display form of the daemon-reported

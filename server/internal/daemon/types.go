@@ -110,6 +110,13 @@ type Task struct {
 	InitiatorID    string `json:"initiator_id,omitempty"`
 	InitiatorName  string `json:"initiator_name,omitempty"`
 	InitiatorEmail string `json:"initiator_email,omitempty"`
+	// ArealProxy carries the AReaL RL proxy provider config the server extracts
+	// from a trained task's context.areal_proxy at claim time (§4.4). When set,
+	// the daemon launches the runtime against the RL proxy instead of the
+	// agent's normal provider so the trained agent's LLM traffic routes through
+	// the bridge. Nil for non-trained tasks (the vast majority); omitempty so
+	// old servers that never send it are handled transparently.
+	ArealProxy *ArealProxy `json:"areal_proxy,omitempty"`
 	// AuthToken is the task-scoped credential the server mints at claim time.
 	// The daemon injects it into the spawned agent as MULTICA_TOKEN so the
 	// agent never sees the daemon's own (often workspace-owner) credential.
@@ -127,6 +134,16 @@ type ChatAttachmentMeta struct {
 	ID          string `json:"id"`
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type,omitempty"`
+}
+
+// ArealProxy is the daemon-side mirror of handler.ArealProxyData: the AReaL RL
+// proxy provider config the server extracts from context.areal_proxy at claim
+// time (§4.4). The JSON tags must stay in sync with the wire struct.
+type ArealProxy struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	APIKey   string `json:"api_key"`
+	BaseURL  string `json:"base_url"`
 }
 
 // AgentData holds agent details returned by the claim endpoint.

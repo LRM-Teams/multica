@@ -3149,6 +3149,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			agentEnv[k] = v
 		}
 	}
+	// AReaL RL proxy override (§4.4): when the claimed task carries an
+	// areal_proxy config, force the runtime onto the RL proxy provider. The
+	// base_url env must be injected before the backend is created (it is part
+	// of the agent process env); the model + api-key are applied at ExecOptions
+	// build below. See arealProxyExecOverride for pi's arg/env contract.
+	arealModel, arealArgs, arealEnvKey, arealEnvVal, arealOverride := arealProxyExecOverride(task.ArealProxy)
+	if arealOverride && arealEnvKey != "" {
+		agentEnv[arealEnvKey] = arealEnvVal
+	}
 	backend, err := agent.New(provider, agent.Config{
 		ExecutablePath: entry.Path,
 		Env:            agentEnv,
@@ -3224,6 +3233,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			)
 			thinkingLevel = ""
 		}
+	}
+	if arealOverride {
+		model = arealModel
+		customArgs = append(customArgs, arealArgs...)
+		taskLog.Info("areal proxy: routing runtime through RL bridge",
+			"runtime_provider", provider,
+			"model", model,
+			"base_url", arealEnvVal,
+		)
 	}
 	execOpts := agent.ExecOptions{
 		Cwd:                       env.WorkDir,
@@ -4103,6 +4121,64 @@ func addPiMemoryFastModeEnv(env map[string]string) {
 	env["PI_MEMORY_AUTO_SYNC_UPLOAD_ON_SHUTDOWN"] = "0"
 	env["PI_MEMORY_NO_SEARCH"] = "1"
 	env["PI_MEMORY_REVIEW_STARTUP_HINT"] = "0"
+}
+
+// AReaL RL proxy runtime override (§4.4). A trained task carries an
+// `areal_proxy` object in its context (written server-side by the session-open
+// hook); the server surfaces it on the claim response and the daemon consumes
+// it here to route the runtime through the RL bridge.
+//
+// pi's real arg/env contract (confirmed against River2.0/packages/coding-agent,
+// the pi CLI source):
+//   - provider/model: pkg/agent/pi.go buildPiArgs splits ExecOptions.Model on
+//     "/" into `--provider <p> --model <m>` (pi src/cli/args.ts:87,89 parse
+//     both). So Model="areal/areal-default" yields
+//     `--provider areal --model areal-default`.
+//   - api-key: pi's `--api-key <key>` flag (src/cli/args.ts:91 ->
+//     src/main.ts:697 authStorage.setRuntimeApiKey(model.provider, key)).
+//     buildPiArgs does NOT emit it and it is NOT in piBlockedArgs, so we inject
+//     it via CustomArgs. This matches spec §1's literal
+//     `pi -p --provider areal --model areal-default --api-key <proxy_key>`.
+//   - base_url: pi has NO --base-url flag and NO generic per-provider base-url
+//     env var (packages/ai/src/env-api-keys.ts maps only built-in providers;
+//     "areal" is not one). A custom provider's base_url is supplied via pi's
+//     models.json / registerProvider, both of which support "$ENV" references.
+//     We therefore export base_url as AREAL_PROXY_BASE_URL, which the
+//     deployment's `areal` provider entry in models.json references; registering
+//     that entry on the runtime host is Task 8's job. Injected into agentEnv
+//     alongside the other provider creds (mirrors CustomEnv's ANTHROPIC_BASE_URL).
+const (
+	arealProxyProvider      = "areal"
+	arealProxyModel         = "areal-default"
+	arealProxyBaseURLEnvVar = "AREAL_PROXY_BASE_URL"
+)
+
+// arealProxyExecOverride computes the runtime overrides for a task routed
+// through the AReaL RL proxy. It returns the "provider/model" string
+// buildPiArgs maps to `--provider`/`--model`, the api-key custom args pi reads
+// via its `--api-key` flag, and the base_url env var (key + value) the
+// deployment's models.json references. ok is false when the task carries no
+// proxy config, leaving the caller's runtime configuration untouched.
+func arealProxyExecOverride(p *ArealProxy) (model string, extraArgs []string, envKey, envVal string, ok bool) {
+	if p == nil {
+		return "", nil, "", "", false
+	}
+	provider := p.Provider
+	if provider == "" {
+		provider = arealProxyProvider
+	}
+	m := p.Model
+	if m == "" {
+		m = arealProxyModel
+	}
+	model = provider + "/" + m
+	if p.APIKey != "" {
+		extraArgs = []string{"--api-key", p.APIKey}
+	}
+	if p.BaseURL != "" {
+		envKey, envVal = arealProxyBaseURLEnvVar, p.BaseURL
+	}
+	return model, extraArgs, envKey, envVal, true
 }
 
 // isBlockedEnvKey returns true if the key must not be overridden by user-

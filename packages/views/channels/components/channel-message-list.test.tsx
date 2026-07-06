@@ -90,6 +90,13 @@ vi.mock("@multica/core/workspace/hooks", () => ({
 // stays free of QueryClient/workspace-provider wiring.
 vi.mock("@multica/core/agents", () => ({
   useAgentPresenceDetail: () => "loading",
+  // #271 single-hook: summary + events fetched together.
+  useAgentHealth: () => ({
+    summary: undefined,
+    events: undefined,
+    isLoading: false,
+    isError: false,
+  }),
 }));
 
 vi.mock("@multica/core/paths", () => ({

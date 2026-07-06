@@ -20,8 +20,25 @@ const presenceDetailMock = vi.fn((): PresenceDetail => ({
   capacity: 1,
 }));
 
+// The dot COLOR now derives from connectivity health (#266). Default to "no
+// summary yet" so the dot falls back to the availability color — this keeps
+// the pre-existing availability-based assertions valid while the transitional
+// fallback is in place. Individual tests override to prove health drives color.
+type HealthResult = {
+  summary:
+    | { agent_id: string; state: string; state_since: string; last_seen_at: string; last_event_at: string }
+    | undefined;
+  events: unknown[] | undefined;
+  isLoading: boolean;
+  isError: boolean;
+};
+const healthSummaryMock = vi.fn(
+  (): HealthResult => ({ summary: undefined, events: undefined, isLoading: false, isError: false }),
+);
+
 vi.mock("@multica/core/agents", () => ({
   useAgentPresenceDetail: () => presenceDetailMock(),
+  useAgentHealth: () => healthSummaryMock(),
 }));
 
 vi.mock("@multica/core/paths", () => ({
@@ -100,6 +117,12 @@ describe("AgentStatusDot", () => {
       queuedCount: 0,
       capacity: 1,
     });
+    healthSummaryMock.mockReturnValue({
+      summary: undefined,
+      events: undefined,
+      isLoading: false,
+      isError: false,
+    });
   });
 
   it("scales the dot diameter with the avatar size, clamped to a legible minimum", () => {
@@ -140,5 +163,76 @@ describe("AgentStatusDot", () => {
     presenceDetailMock.mockReturnValue("loading" as never);
     const { container } = render(<AgentStatusDot agentId="agent-1" size={28} />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("derives the dot COLOR from health_summary.state, not availability (#266)", () => {
+    // Availability says online (green), but connectivity health says the link
+    // is wobbling — the dot must follow HEALTH (amber), proving health_summary
+    // is the color source. Pulse stays a workload overlay (idle here → static).
+    presenceDetailMock.mockReturnValue({
+      availability: "online",
+      workload: "idle",
+      runningCount: 0,
+      queuedCount: 0,
+      capacity: 1,
+    });
+    healthSummaryMock.mockReturnValue({
+      summary: {
+        agent_id: "agent-1",
+        state: "suspected_disconnect",
+        state_since: "2026-07-06T09:00:00Z",
+        last_seen_at: "2026-07-06T09:40:00Z",
+        last_event_at: "2026-07-06T09:40:00Z",
+      },
+      events: undefined,
+      isLoading: false,
+      isError: false,
+    });
+    render(<AgentStatusDot agentId="agent-1" size={28} />);
+    const dot = screen.getByLabelText(/^Status:/);
+    expect(dot).toHaveClass("bg-warning");
+    expect(dot).not.toHaveClass("bg-success");
+  });
+
+  it("shows the working pulse only when health is online/recovered (#266, Iris)", () => {
+    // Working on a healthy link → breathing pulse present.
+    presenceDetailMock.mockReturnValue({
+      availability: "online",
+      workload: "working",
+      runningCount: 1,
+      queuedCount: 0,
+      capacity: 1,
+    });
+    healthSummaryMock.mockReturnValue({
+      summary: {
+        agent_id: "agent-1",
+        state: "online",
+        state_since: "2026-07-06T09:00:00Z",
+        last_seen_at: "2026-07-06T09:40:00Z",
+        last_event_at: "2026-07-06T09:40:00Z",
+      },
+      events: undefined,
+      isLoading: false,
+      isError: false,
+    });
+    const { container, rerender } = render(<AgentStatusDot agentId="agent-1" size={28} />);
+    expect(container.querySelector(".animate-ping")).not.toBeNull();
+
+    // Same "working" workload but the link is offline — a disconnected agent
+    // must NOT appear to be working, so the pulse is suppressed.
+    healthSummaryMock.mockReturnValue({
+      summary: {
+        agent_id: "agent-1",
+        state: "offline",
+        state_since: "2026-07-06T09:00:00Z",
+        last_seen_at: "2026-07-06T09:40:00Z",
+        last_event_at: "2026-07-06T09:40:00Z",
+      },
+      events: undefined,
+      isLoading: false,
+      isError: false,
+    });
+    rerender(<AgentStatusDot agentId="agent-1" size={28} />);
+    expect(container.querySelector(".animate-ping")).toBeNull();
   });
 });

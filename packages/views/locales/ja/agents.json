@@ -385,7 +385,19 @@
       "cancel_failed_toast": "タスクをキャンセルできませんでした",
       "started_prefix": "{{when}} に開始",
       "dispatched_prefix": "{{when}} にディスパッチ",
-      "queued_prefix": "{{when}} に待機開始"
+      "queued_prefix": "{{when}} に待機開始",
+      "health": {
+        "section_title": "ヘルス",
+        "timeline_title": "ヘルスイベント",
+        "empty_events": "ヘルスイベントはまだありません",
+        "last_seen": "最終アクティブ {{time}}",
+        "head_unavailable": "接続状態を取得できません",
+        "state_online": "オンライン",
+        "state_suspected_disconnect": "切断の疑い",
+        "state_reconnecting": "再接続中",
+        "state_recovered": "回復済み",
+        "state_offline": "オフライン"
+      }
     },
     "memory": {
       "intro": "このエージェントのランタイムから同期されたメモリです。Multica に保存されるため、エージェントが別のランタイムへ移動しても文脈を保持できます。",

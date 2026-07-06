@@ -8,7 +8,9 @@
     "just_now": "たった今",
     "minutes_ago": "{{count}}分前",
     "hours_ago": "{{count}}時間前",
-    "days_ago": "{{count}}日前"
+    "days_ago": "{{count}}日前",
+    "today": "今日",
+    "yesterday": "昨日"
   },
   "lark_bind": {
     "page_title": "Lark アカウントを連携",

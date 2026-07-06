@@ -86,6 +86,10 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   }),
 }));
 
+vi.mock("../../common/use-viewing-timezone", () => ({
+  useViewingTimezone: () => "UTC",
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (
@@ -110,6 +114,7 @@ vi.mock("../../i18n/use-t", () => ({
         };
         quote: { jump_to: string };
         thread: { reply: string; reply_count: string };
+        time: { today: string; yesterday: string };
       }) => string,
     ) =>
       selector({
@@ -138,6 +143,7 @@ vi.mock("../../i18n/use-t", () => ({
           reply: "Reply in thread",
           reply_count: "2 replies",
         },
+        time: { today: "Today", yesterday: "Yesterday" },
       }),
   }),
 }));

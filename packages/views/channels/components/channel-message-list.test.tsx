@@ -132,6 +132,10 @@ vi.mock("../../i18n", () => ({
 // The bubble (rendered inside every row) reads its labels from
 // `../../i18n/use-t`; stub it so the edit/delete affordances have concrete
 // accessible names to query by in the composition tests below.
+vi.mock("../../common/use-viewing-timezone", () => ({
+  useViewingTimezone: () => "UTC",
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (
@@ -152,6 +156,7 @@ vi.mock("../../i18n/use-t", () => ({
         };
         quote: { jump_to: string };
         thread: { reply: string; reply_count: string };
+        time: { today: string; yesterday: string };
       }) => string,
     ) =>
       selector({
@@ -171,6 +176,7 @@ vi.mock("../../i18n/use-t", () => ({
         },
         quote: { jump_to: "Jump to original message" },
         thread: { reply: "Reply in thread", reply_count: "2 replies" },
+        time: { today: "Today", yesterday: "Yesterday" },
       }),
   }),
 }));

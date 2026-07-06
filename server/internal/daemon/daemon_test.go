@@ -142,6 +142,25 @@ func TestTriggerRestart_BrewPrefixUnavailable_NoKnownPrefix_KeepsExecutable(t *t
 	}
 }
 
+func writeFakeMulticaVersion(t *testing.T, dir, version string) string {
+	t.Helper()
+	name := "multica"
+	if runtime.GOOS == "windows" {
+		name += ".bat"
+	}
+	path := filepath.Join(dir, name)
+	var content []byte
+	if runtime.GOOS == "windows" {
+		content = []byte("@echo off\r\necho multica " + version + " (commit: test)\r\n")
+	} else {
+		content = []byte("#!/usr/bin/env sh\necho 'multica " + version + " (commit: test)'\n")
+	}
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatalf("write fake multica: %v", err)
+	}
+	return path
+}
+
 func TestHandleUpdateReportsFailedWhenStableBinaryStillOld(t *testing.T) {
 	withFastUpdateReportBackoffs(t)
 
@@ -157,10 +176,7 @@ func TestHandleUpdateReportsFailedWhenStableBinaryStillOld(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatalf("mkdir brew bin: %v", err)
 	}
-	binaryPath := filepath.Join(binDir, "multica")
-	if err := os.WriteFile(binaryPath, []byte("#!/usr/bin/env sh\necho 'multica 0.3.35 (commit: test)'\n"), 0o755); err != nil {
-		t.Fatalf("write fake multica: %v", err)
-	}
+	writeFakeMulticaVersion(t, binDir, "0.3.35")
 	isBrewInstall = func() bool { return true }
 	getBrewPrefix = func() string { return prefix }
 

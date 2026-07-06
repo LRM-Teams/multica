@@ -366,7 +366,7 @@ func openclawActiveConfigPath(bin string, timeout time.Duration) (string, bool, 
 		return "", false, fmt.Errorf("`openclaw config file` returned empty output")
 	}
 	if path == "~" || strings.HasPrefix(path, "~/") {
-		home, herr := os.UserHomeDir()
+		home, herr := homeDirForTilde()
 		if herr != nil {
 			return "", false, fmt.Errorf("expand `~` in openclaw config path: %w", herr)
 		}
@@ -390,6 +390,13 @@ func openclawActiveConfigPath(bin string, timeout time.Duration) (string, bool, 
 		return "", false, fmt.Errorf("openclaw config path %s is a directory, not a file", path)
 	}
 	return path, true, nil
+}
+
+func homeDirForTilde() (string, error) {
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return home, nil
+	}
+	return os.UserHomeDir()
 }
 
 // openclawResolvedFullConfig fetches the user's fully resolved openclaw

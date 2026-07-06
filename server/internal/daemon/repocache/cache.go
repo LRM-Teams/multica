@@ -957,7 +957,8 @@ func excludeFromGit(worktreePath, pattern string) error {
 // repoNameFromURL extracts a short directory name from a git remote URL.
 // e.g. "https://github.com/org/my-repo.git" → "my-repo"
 func repoNameFromURL(url string) string {
-	url = filepath.ToSlash(strings.TrimRight(url, "/\\"))
+	url = strings.ReplaceAll(strings.TrimRight(url, "/\\"), "\\", "/")
+	url = filepath.ToSlash(url)
 	url = strings.TrimSuffix(url, ".git")
 
 	if i := strings.LastIndex(url, "/"); i >= 0 {

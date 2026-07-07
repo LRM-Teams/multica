@@ -42,6 +42,7 @@ const (
 )
 
 // EnvDispatchInput is the service-layer input for the unified dispatch.
+// EnvDispatchInput is the service-layer input for the unified dispatch.
 type EnvDispatchInput struct {
 	WorkspaceID     string
 	UserID          string // creator/actor
@@ -57,12 +58,25 @@ type EnvDispatchInput struct {
 	CriticAgentID   string // optional critic for trained agent (sub-project E): evaluates the trained agent's output; empty ⇒ unchanged behavior
 	IdempotencyKey  string // optional; dedupes retries (spec §7.7)
 
+	// PerAgentEnvSpecs optionally assigns individual squad agents to sandbox
+	// templates or base environments while preserving a shared Multica entity
+	// subtree. Empty preserves existing default/shared sandbox behavior.
+	PerAgentEnvSpecs []PerAgentEnvSpec
+
 	// Issue dispatch (required for scratch+swe_lego; forbidden for
 	// branch+swe_lego where the copied issue is reused).
 	Issue *IssueInput
 
 	// Message dispatch (required for self_play).
 	Message *MessageInput
+}
+
+// PerAgentEnvSpec assigns one squad agent to a sandbox template or base
+// environment. All agents still share the same Multica entity subtree.
+type PerAgentEnvSpec struct {
+	AgentID   string
+	Template  string
+	BaseEnvID string
 }
 
 type IssueInput struct {
@@ -85,6 +99,13 @@ type EnvRollout struct {
 	ChatSessionID string // empty iff dispatch_type=issue
 	AgentRunID    string // empty if dispatch failed (partial rollout)
 	Error         string // empty if rollout succeeded
+
+	// SandboxRefs carries structured sandbox_instance refs for save/resume-capable
+	// (sandbox_instance-backed) rollouts. Empty for Fleet-backed rollouts.
+	SandboxRefs []SandboxInstanceRef
+	// AgentSandboxRefs maps agent_id -> its sandbox_instance ref when per-agent
+	// env specs are used. Empty for default/shared sandbox assignment.
+	AgentSandboxRefs map[string]SandboxInstanceRef
 }
 
 // EnvDispatchResult wraps the rollouts slice.
@@ -403,6 +424,33 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 		if in.Mode != EnvModeScratch || in.Domain != EnvDomainSelfPlay {
 			return fmt.Errorf("validation_failed: env_id is required except for scratch self_play")
 		}
+	}
+	if err := validatePerAgentEnvSpecsShape(in.PerAgentEnvSpecs); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validatePerAgentEnvSpecsShape enforces the synchronous shape rules for
+// per-agent env specs: every spec needs an agent_id, at most one of
+// template/base_env_id, and no duplicate agents. DB-backed membership and
+// env-spec resolution happen later in validatePerAgentEnvSpecs (ctx).
+func validatePerAgentEnvSpecsShape(specs []PerAgentEnvSpec) error {
+	seen := make(map[string]struct{}, len(specs))
+	for _, s := range specs {
+		if s.AgentID == "" {
+			return fmt.Errorf("validation_failed: per_agent_env agent_id is required")
+		}
+		if s.Template == "" && s.BaseEnvID == "" {
+			return fmt.Errorf("validation_failed: per_agent_env spec for agent %s needs a template or base_env_id", s.AgentID)
+		}
+		if s.Template != "" && s.BaseEnvID != "" {
+			return fmt.Errorf("validation_failed: per_agent_env spec for agent %s must set template or base_env_id, not both", s.AgentID)
+		}
+		if _, dup := seen[s.AgentID]; dup {
+			return fmt.Errorf("validation_failed: per_agent_env agent_id %s is duplicated", s.AgentID)
+		}
+		seen[s.AgentID] = struct{}{}
 	}
 	return nil
 }

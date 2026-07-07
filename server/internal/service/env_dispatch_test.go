@@ -820,6 +820,50 @@ func TestEnvDispatchInput_Validate_CriticAgentID(t *testing.T) {
 	}
 }
 
+// TestEnvDispatchPerAgentEnvSpecs_ShapeValidation exercises the synchronous
+// shape rules for per-agent env specs: empty specs preserve current behavior,
+// every spec needs an agent_id with exactly one of template/base_env_id, and
+// duplicate agents are rejected.
+func TestEnvDispatchPerAgentEnvSpecs_ShapeValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		specs   []PerAgentEnvSpec
+		wantErr string
+	}{
+		{"empty ok", nil, ""},
+		{"valid template ok", []PerAgentEnvSpec{{AgentID: "a", Template: "python"}}, ""},
+		{"valid base_env ok", []PerAgentEnvSpec{{AgentID: "a", BaseEnvID: "base"}}, ""},
+		{"empty agent_id rejected", []PerAgentEnvSpec{{Template: "python"}}, "validation_failed: per_agent_env agent_id is required"},
+		{"missing template and base_env rejected", []PerAgentEnvSpec{{AgentID: "a"}}, "validation_failed: per_agent_env spec for agent a needs a template or base_env_id"},
+		{"both template and base_env rejected", []PerAgentEnvSpec{{AgentID: "a", Template: "python", BaseEnvID: "base"}}, "validation_failed: per_agent_env spec for agent a must set template or base_env_id, not both"},
+		{"duplicate agent rejected", []PerAgentEnvSpec{{AgentID: "a", Template: "x"}, {AgentID: "a", Template: "y"}}, "validation_failed: per_agent_env agent_id a is duplicated"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeEnvDispatchDeps()
+			svc := NewEnvDispatchService(f, 1)
+			in := EnvDispatchInput{
+				WorkspaceID: "ws", SquadID: "sq", Mode: EnvModeScratch, EnvID: "base",
+				Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+				Message: &MessageInput{Content: "hi"}, PerAgentEnvSpecs: tc.specs,
+			}
+			err := svc.validate(in)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("expected error %q, got nil", tc.wantErr)
+				}
+				if err.Error() != tc.wantErr {
+					t.Fatalf("expected error %q, got %q", tc.wantErr, err.Error())
+				}
+			}
+		})
+	}
+}
+
 // TestEnvDispatch_PersistsCriticAgentID verifies that critic_agent_id is
 // persisted to training_dispatch when provided.
 func TestEnvDispatch_PersistsCriticAgentID(t *testing.T) {

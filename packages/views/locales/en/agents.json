@@ -365,6 +365,9 @@
       "members_note": "Only workspace owners and admins can bind a Lark Bot to an agent. You can view connected bots in Settings → Integrations."
     },
     "activity": {
+      "timeline_empty": "No activity yet",
+      "view_diagnostics": "View diagnostic details",
+      "hide_diagnostics": "Hide diagnostic details",
       "section_now": "Now",
       "section_last_30d": "Last 30 days",
       "section_recent": "Recent work",

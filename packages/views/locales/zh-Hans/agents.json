@@ -357,6 +357,9 @@
       "members_note": "只有工作区的所有者和管理员才能为智能体绑定飞书 Bot。你可以在「设置 → 集成」中查看已连接的 Bot。"
     },
     "activity": {
+      "timeline_empty": "暂无活动",
+      "view_diagnostics": "查看诊断详情",
+      "hide_diagnostics": "收起诊断详情",
       "section_now": "当前",
       "section_last_30d": "近 30 天",
       "section_recent": "最近工作",

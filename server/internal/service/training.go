@@ -247,6 +247,11 @@ func extractArealProxyConfig(raw []byte) (*arealProxyConfig, bool) {
 // maybeCloseTrainingSession closes an RL session and sets reward when the task
 // has an areal_proxy config. It is safe to call on any terminal task state.
 // Errors are logged, not propagated — the task is already terminal.
+//
+// NOTE: runtime_sweeper.FailStaleTasks uses raw SQL to transition stale tasks
+// to failed, bypassing FailTask — so timeout-killed tasks will NOT auto-close
+// their RL session. A reaper that sweeps orphaned sessions is future hardening,
+// out of D scope.
 func maybeCloseTrainingSession(ctx context.Context, deps *TrainingSessionDeps, task db.AgentTaskQueue, projectID pgtype.UUID) {
 	if deps == nil || deps.Closer == nil {
 		return

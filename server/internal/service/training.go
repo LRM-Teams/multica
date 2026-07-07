@@ -404,9 +404,11 @@ func maybeSpawnCriticTask(ctx context.Context, deps *TrainingSessionDeps, traine
 		return nil
 	}
 	if deps.Creator == nil {
-		// No creator wired (training disabled or mis-configured) → D's close
-		// fires via the routing layer. This path is defensive; production
-		// wiring (Task 10) sets Creator whenever Lookup is set.
+		// Critic configured but no creator wired (mis-configured deployment).
+		// Fall back to D's close so the session isn't orphaned. Production
+		// wiring (NewTrainingSessionDeps) sets Creator whenever Lookup is set,
+		// so this path is defensive.
+		maybeCloseTrainingSession(ctx, deps, trained, projectID)
 		return nil
 	}
 

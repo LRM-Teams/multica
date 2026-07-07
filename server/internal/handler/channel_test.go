@@ -3,7 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
+
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
-	"github.com/multica-ai/multica/server/internal/service"
+
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -2988,7 +2988,7 @@ func withChannelAmbientGateTestConfig(t *testing.T) {
 	t.Cleanup(func() { testHandler.cfg = prev })
 }
 
-func TestChannelOfflineRuntimeDoesNotQueueOrShowActiveTask(t *testing.T) {
+func TestChannelOfflineRuntimeQueuesButDoesNotShowActiveTask(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -3051,8 +3051,8 @@ func TestChannelOfflineRuntimeDoesNotQueueOrShowActiveTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load chat session: %v", err)
 	}
-	if _, err := testHandler.TaskService.EnqueueChatTask(ctx, session, parseUUID(testUserID)); !errors.Is(err, service.ErrChatTaskAgentNoRuntime) {
-		t.Fatalf("enqueue offline chat task error = %v, want ErrChatTaskAgentNoRuntime", err)
+	if _, err := testHandler.TaskService.EnqueueChatTask(ctx, session, parseUUID(testUserID)); err != nil {
+		t.Fatalf("enqueue offline chat task failed (should queue for later): %v", err)
 	}
 
 	var queuedCount int
@@ -3061,8 +3061,8 @@ func TestChannelOfflineRuntimeDoesNotQueueOrShowActiveTask(t *testing.T) {
 	`, chatSessionID).Scan(&queuedCount); err != nil {
 		t.Fatalf("count queued tasks: %v", err)
 	}
-	if queuedCount != 0 {
-		t.Fatalf("offline enqueue created %d tasks, want 0", queuedCount)
+	if queuedCount != 1 {
+		t.Fatalf("offline enqueue created %d tasks, want 1 (queued for reconnect)", queuedCount)
 	}
 
 	if _, err := testPool.Exec(ctx, `

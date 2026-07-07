@@ -810,13 +810,8 @@ func (s *TaskService) createChatTaskRow(ctx context.Context, q *db.Queries, chat
 	if agent.ArchivedAt.Valid {
 		return db.AgentTaskQueue{}, ErrChatTaskAgentArchived
 	}
-	ready, reason, err := AgentReadiness(ctx, q, agent)
-	if err != nil {
-		slog.Error("chat task enqueue failed", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)
-		return db.AgentTaskQueue{}, fmt.Errorf("load agent runtime: %w", err)
-	}
-	if !ready {
-		slog.Info("chat task enqueue refused: agent not ready", "chat_session_id", util.UUIDToString(chatSession.ID), "agent_id", util.UUIDToString(chatSession.AgentID), "reason", reason)
+	if !agent.RuntimeID.Valid {
+		slog.Info("chat task enqueue refused: agent has no runtime", "chat_session_id", util.UUIDToString(chatSession.ID), "agent_id", util.UUIDToString(chatSession.AgentID))
 		return db.AgentTaskQueue{}, ErrChatTaskAgentNoRuntime
 	}
 

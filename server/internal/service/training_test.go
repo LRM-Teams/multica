@@ -51,12 +51,12 @@ func (f *fakeTaskStore) MergeTaskArealProxyContext(_ context.Context, arg db.Mer
 }
 
 type fakeRLClient struct {
-	creds            arealrl.SessionCreds
-	err              error
-	calls            int
-	lastTask         string
-	lastEnv          string
-	setRewardCalls   []struct {
+	creds          arealrl.SessionCreds
+	err            error
+	calls          int
+	lastTask       string
+	lastEnv        string
+	setRewardCalls []struct {
 		proxyKey string
 		reward   float64
 	}
@@ -301,8 +301,8 @@ func TestMaybeCloseTrainingSession_CompletedTask_CallsSetRewardThenEndSession(t 
 	deps := newTrainingDeps(lookup, nil, rl)
 
 	task := db.AgentTaskQueue{
-		ID:     util.MustParseUUID(testTrainingTaskID),
-		Status: "completed",
+		ID:      util.MustParseUUID(testTrainingTaskID),
+		Status:  "completed",
 		Context: []byte(`{"areal_proxy":{"provider":"areal","model":"areal-default","api_key":"pk-xyz","base_url":"http://test","session_id":"sess-abc"}}`),
 	}
 	projectID := util.MustParseUUID(testTrainingProjectID)
@@ -342,8 +342,8 @@ func TestMaybeCloseTrainingSession_FailedTask_AlsoCloses(t *testing.T) {
 	deps := newTrainingDeps(lookup, nil, rl)
 
 	task := db.AgentTaskQueue{
-		ID:     util.MustParseUUID(testTrainingTaskID),
-		Status: "failed",
+		ID:      util.MustParseUUID(testTrainingTaskID),
+		Status:  "failed",
 		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
 	}
 	projectID := util.MustParseUUID(testTrainingProjectID)
@@ -364,8 +364,8 @@ func TestMaybeCloseTrainingSession_CancelledTask_AlsoCloses(t *testing.T) {
 	deps := newTrainingDeps(lookup, nil, rl)
 
 	task := db.AgentTaskQueue{
-		ID:     util.MustParseUUID(testTrainingTaskID),
-		Status: "cancelled",
+		ID:      util.MustParseUUID(testTrainingTaskID),
+		Status:  "cancelled",
 		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
 	}
 	projectID := util.MustParseUUID(testTrainingProjectID)
@@ -408,8 +408,8 @@ func TestMaybeCloseTrainingSession_RLClientError_LoggedNotFatal(t *testing.T) {
 	deps := newTrainingDeps(lookup, nil, rl)
 
 	task := db.AgentTaskQueue{
-		ID:     util.MustParseUUID(testTrainingTaskID),
-		Status: "completed",
+		ID:      util.MustParseUUID(testTrainingTaskID),
+		Status:  "completed",
 		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
 	}
 	projectID := util.MustParseUUID(testTrainingProjectID)
@@ -429,8 +429,8 @@ func TestMaybeCloseTrainingSession_RLClientError_LoggedNotFatal(t *testing.T) {
 // s.Training == nil -> no-op.
 func TestMaybeCloseTrainingSession_NoTrainingDeps_NoOp(t *testing.T) {
 	task := db.AgentTaskQueue{
-		ID:     util.MustParseUUID(testTrainingTaskID),
-		Status: "completed",
+		ID:      util.MustParseUUID(testTrainingTaskID),
+		Status:  "completed",
 		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
 	}
 	projectID := util.MustParseUUID(testTrainingProjectID)
@@ -447,8 +447,8 @@ func TestMaybeCloseTrainingSession_NoTrainingDispatch_FallbackReward(t *testing.
 	deps := newTrainingDeps(lookup, nil, rl)
 
 	task := db.AgentTaskQueue{
-		ID:     util.MustParseUUID(testTrainingTaskID),
-		Status: "completed",
+		ID:      util.MustParseUUID(testTrainingTaskID),
+		Status:  "completed",
 		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
 	}
 	projectID := util.MustParseUUID(testTrainingProjectID)

@@ -815,10 +815,10 @@ func TestEnvDispatchInput_Validate_CriticAgentID(t *testing.T) {
 				if err.Error() != tc.wantErr {
 					t.Fatalf("expected error %q, got %q", tc.wantErr, err.Error())
 				}
-				}
-			})
-		}
+			}
+		})
 	}
+}
 
 // TestEnvDispatch_PersistsCriticAgentID verifies that critic_agent_id is
 // persisted to training_dispatch when provided.

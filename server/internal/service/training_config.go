@@ -22,11 +22,11 @@ type TrainingConfig struct {
 }
 
 const (
-	arealBridgeStubURLEnv = "AREAL_BRIDGE_STUB_URL"
-	arealAdminAPIKeyEnv   = "AREAL_ADMIN_API_KEY"
+	arealBridgeStubURLEnv    = "AREAL_BRIDGE_STUB_URL"
+	arealAdminAPIKeyEnv      = "AREAL_ADMIN_API_KEY"
 	trainingDefaultRewardEnv = "TRAINING_DEFAULT_REWARD"
-	arealProxyURLEnv      = "AREAL_PROXY_URL"
-	defaultProxyURL       = "http://db_bridge_stub:9100/v1"
+	arealProxyURLEnv         = "AREAL_PROXY_URL"
+	defaultProxyURL          = "http://db_bridge_stub:9100/v1"
 )
 
 // LoadTrainingConfig reads training config from environment variables. Returns
@@ -65,11 +65,11 @@ func NewTrainingSessionDeps(cfg TrainingConfig, q *db.Queries) *TrainingSessionD
 	client := arealrl.New(cfg.BridgeStubURL, cfg.AdminAPIKey)
 
 	return &TrainingSessionDeps{
-		Lookup:       q,
-		Store:        q,
-		RL:           client,
-		Closer:       client,
-		ProxyURL:     cfg.ProxyURL,
+		Lookup:        q,
+		Store:         q,
+		RL:            client,
+		Closer:        client,
+		ProxyURL:      cfg.ProxyURL,
 		DefaultReward: cfg.DefaultReward,
 	}
 }

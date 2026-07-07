@@ -77,15 +77,15 @@ type TrainingSessionDeps struct {
 // EnqueueAgentRun adapter). It delegates to the shared helper using the
 // service's injected training deps; when training is unconfigured
 // (s.Training == nil) it is a no-op.
-func (s *TaskService) MaybeOpenTrainingSession(ctx context.Context, taskID, agentID, projectID string) error {
-	return maybeOpenTrainingSession(ctx, s.Training, taskID, agentID, projectID)
+func (s *TaskService) MaybeOpenTrainingSession(ctx context.Context, taskID, agentID, projectID, envID string) error {
+	return maybeOpenTrainingSession(ctx, s.Training, taskID, agentID, projectID, envID)
 }
 
 // tryOpenTrainingSession is the in-service convenience wrapper used by the
 // Enqueue* chokepoints: it derives taskID/agentID from the freshly-created task
 // row + owning projectID and logs any error loudly (the task otherwise runs
 // un-proxied, which must never be silent) without failing the enqueue.
-func (s *TaskService) tryOpenTrainingSession(ctx context.Context, task db.AgentTaskQueue, projectID pgtype.UUID) {
+func (s *TaskService) tryOpenTrainingSession(ctx context.Context, task db.AgentTaskQueue, projectID pgtype.UUID, envID string) {
 	if s.Training == nil {
 		return
 	}
@@ -94,11 +94,13 @@ func (s *TaskService) tryOpenTrainingSession(ctx context.Context, task db.AgentT
 		util.UUIDToString(task.ID),
 		util.UUIDToString(task.AgentID),
 		util.UUIDToString(projectID),
+		envID,
 	); err != nil {
 		slog.Error("training session open failed",
 			"task_id", util.UUIDToString(task.ID),
 			"agent_id", util.UUIDToString(task.AgentID),
 			"project_id", util.UUIDToString(projectID),
+			"env_id", envID,
 			"error", err,
 		)
 	}
@@ -113,12 +115,12 @@ func (s *TaskService) tryOpenTrainingSession(ctx context.Context, task db.AgentT
 //  2. project has no training_dispatch row -> no-op (not a training project).
 //  3. training_dispatch.train_agent_id != agentID -> no-op (not the target).
 //  4. task already has context.areal_proxy -> no-op (idempotent / retry-safe).
-//  5. otherwise: StartSession(taskID) and merge context.areal_proxy.
+//  5. otherwise: StartSession(taskID, envID) and merge context.areal_proxy.
 //
 // It returns (does NOT swallow) StartSession/persist errors so the caller can
 // log + record. When a task IS a training target but the RL bridge is not
 // configured, that is a loud error rather than a silent un-proxied run.
-func maybeOpenTrainingSession(ctx context.Context, deps *TrainingSessionDeps, taskID, agentID, projectID string) error {
+func maybeOpenTrainingSession(ctx context.Context, deps *TrainingSessionDeps, taskID, agentID, projectID, envID string) error {
 	if deps == nil {
 		return nil // training not configured for this deployment
 	}
@@ -164,7 +166,7 @@ func maybeOpenTrainingSession(ctx context.Context, deps *TrainingSessionDeps, ta
 		return nil
 	}
 
-	creds, err := deps.RL.StartSession(ctx, taskID, "")
+	creds, err := deps.RL.StartSession(ctx, taskID, envID)
 	if err != nil {
 		return fmt.Errorf("training: start_session for task %s: %w", taskID, err)
 	}

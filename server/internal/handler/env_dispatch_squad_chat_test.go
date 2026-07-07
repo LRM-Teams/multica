@@ -59,7 +59,7 @@ func TestEnqueueAgentRun_ChatSquad_StampsSquadHint(t *testing.T) {
 	leaderAgentID, squadID, chatSessionID := setupSquadChatFixture(t)
 
 	a := &envDispatchDepsAdapter{h: testHandler}
-	runID, err := a.EnqueueAgentRun(ctx, testWorkspaceID, "", squadID, "", chatSessionID, "", 0)
+	runID, err := a.EnqueueAgentRun(ctx, testWorkspaceID, "", squadID, "", chatSessionID, "", "", 0)
 	if err != nil {
 		t.Fatalf("EnqueueAgentRun squad chat: %v", err)
 	}

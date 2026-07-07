@@ -63,7 +63,7 @@ func TestEnqueueAgentRun_IssueSquad_SetsAssigneeAndLeaderTask(t *testing.T) {
 	leaderAgentID, squadID, issueID := setupSquadIssueFixture(t)
 
 	a := &envDispatchDepsAdapter{h: testHandler}
-	runID, err := a.EnqueueAgentRun(ctx, testWorkspaceID, "", squadID, issueID, "", "", 0)
+	runID, err := a.EnqueueAgentRun(ctx, testWorkspaceID, "", squadID, issueID, "", "", "", 0)
 	if err != nil {
 		t.Fatalf("EnqueueAgentRun squad issue: %v", err)
 	}

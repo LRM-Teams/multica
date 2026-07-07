@@ -165,7 +165,7 @@ func (f *fakeEnvDispatchDeps) CreateChatSession(_ context.Context, pid, _, _, _ 
 func (f *fakeEnvDispatchDeps) CreateChatMessage(_ context.Context, _, _, _ string) (string, error) {
 	return "msg-1", nil
 }
-func (f *fakeEnvDispatchDeps) EnqueueAgentRun(_ context.Context, _, _, _, _, _, _ string, idx int) (string, error) {
+func (f *fakeEnvDispatchDeps) EnqueueAgentRun(_ context.Context, _, _, _, _, _, _, _ string, idx int) (string, error) {
 	if f.enqueueErr != nil {
 		return "", f.enqueueErr
 	}

@@ -126,7 +126,7 @@ type EnvDispatchDeps interface {
 	ListChatSessionsByProject(ctx context.Context, projectID, workspaceID string) ([]string, error)
 
 	// Agent run
-	EnqueueAgentRun(ctx context.Context, workspaceID, agentID, squadID, issueID, chatSessionID, sandboxID string, idx int) (runID string, err error)
+	EnqueueAgentRun(ctx context.Context, workspaceID, agentID, squadID, issueID, chatSessionID, sandboxID, envID string, idx int) (runID string, err error)
 
 	// GetDefaultSelfPlayEnv resolves the per-workspace default self_play base
 	// env used when a scratch+self_play dispatch is called with an empty
@@ -517,7 +517,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 			issueID = newID
 			r.IssueID = newID
 		}
-		runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, issueID, "", "", idx)
+		runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, issueID, "", "", r.EnvID, idx)
 		if err != nil {
 			r.Error = fmt.Sprintf("enqueue agent run: %v", err)
 			return
@@ -542,7 +542,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 		r.Error = fmt.Sprintf("create chat message: %v", err)
 		return
 	}
-	runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, "", sessionID, "", idx)
+	runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, "", sessionID, "", r.EnvID, idx)
 	if err != nil {
 		r.Error = fmt.Sprintf("enqueue agent run: %v", err)
 		return

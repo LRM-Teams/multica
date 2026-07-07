@@ -619,7 +619,7 @@ func (a *envDispatchDepsAdapter) GetDefaultSelfPlayEnv(ctx context.Context, work
 // (assignee=squad + leader task) and the chat-path squad branch (leader
 // resolution + {"squad_id"} context hint) are implemented below. When
 // squadID == "" both paths behave exactly as the current single-agent path.
-func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceID, agentID, squadID, issueID, chatSessionID, sandboxID string, idx int) (string, error) {
+func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceID, agentID, squadID, issueID, chatSessionID, sandboxID, envID string, idx int) (string, error) {
 	switch {
 	case issueID != "":
 		var agentUUID pgtype.UUID
@@ -670,7 +670,7 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 		// Training session-open chokepoint (spec §4.3): a single-agent training
 		// dispatch (train_agent_id == agent_id) creates the trained task HERE,
 		// not via a later @mention. Resolve the owning project via the issue.
-		a.maybeOpenTrainingSession(ctx, util.UUIDToString(task.ID), util.UUIDToString(agentUUID), a.issueProjectID(ctx, issueID))
+		a.maybeOpenTrainingSession(ctx, util.UUIDToString(task.ID), util.UUIDToString(agentUUID), a.issueProjectID(ctx, issueID), envID)
 		return util.UUIDToString(task.ID), nil
 	case chatSessionID != "":
 		session, err := a.h.Queries.GetChatSession(ctx, parseUUID(chatSessionID))
@@ -718,7 +718,7 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 		}
 		// Training session-open chokepoint (spec §4.3): chat-bound dispatch.
 		// Project resolves via the chat session (seam 1e).
-		a.maybeOpenTrainingSession(ctx, util.UUIDToString(task.ID), util.UUIDToString(params.AgentID), util.UUIDToString(session.ProjectID))
+		a.maybeOpenTrainingSession(ctx, util.UUIDToString(task.ID), util.UUIDToString(params.AgentID), util.UUIDToString(session.ProjectID), envID)
 		return util.UUIDToString(task.ID), nil
 	default:
 		return "", fmt.Errorf("enqueue agent run: issueID or chatSessionID required")
@@ -947,13 +947,13 @@ func (a *envDispatchDepsAdapter) SaveTrainingDispatch(ctx context.Context, proje
 // created at dispatch time. It delegates to TaskService (no-op when training is
 // unconfigured) and logs any error loudly — a trained task must never run
 // un-proxied silently. Errors are not propagated: the task row already exists.
-func (a *envDispatchDepsAdapter) maybeOpenTrainingSession(ctx context.Context, taskID, agentID, projectID string) {
+func (a *envDispatchDepsAdapter) maybeOpenTrainingSession(ctx context.Context, taskID, agentID, projectID, envID string) {
 	if a.h.TaskService == nil {
 		return
 	}
-	if err := a.h.TaskService.MaybeOpenTrainingSession(ctx, taskID, agentID, projectID); err != nil {
+	if err := a.h.TaskService.MaybeOpenTrainingSession(ctx, taskID, agentID, projectID, envID); err != nil {
 		slog.Error("training session open failed (env_dispatch)",
-			"task_id", taskID, "agent_id", agentID, "project_id", projectID, "error", err)
+			"task_id", taskID, "agent_id", agentID, "project_id", projectID, "env_id", envID, "error", err)
 	}
 }
 
@@ -1020,7 +1020,7 @@ func (s *stubEnvDispatchDeps) CreateChatSession(context.Context, string, string,
 func (s *stubEnvDispatchDeps) CreateChatMessage(context.Context, string, string, string) (string, error) {
 	return "stub-msg", nil
 }
-func (s *stubEnvDispatchDeps) EnqueueAgentRun(context.Context, string, string, string, string, string, string, int) (string, error) {
+func (s *stubEnvDispatchDeps) EnqueueAgentRun(context.Context, string, string, string, string, string, string, string, int) (string, error) {
 	return "stub-run", nil
 }
 func (s *stubEnvDispatchDeps) GetDefaultSelfPlayEnv(context.Context, string) (string, error) {

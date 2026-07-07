@@ -500,7 +500,7 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 	// Training session-open chokepoint (spec §4.3, seam 1a/1e): the task row now
 	// exists with a known agent_id + owning project (issue.ProjectID). No-op
 	// unless this project/agent is the training target.
-	s.tryOpenTrainingSession(ctx, task, issue.ProjectID)
+	s.tryOpenTrainingSession(ctx, task, issue.ProjectID, "")
 	// Order matters: broadcast first, notify daemon second. notifyTaskAvailable
 	// kicks an in-process channel that the daemon picks up over HTTP and
 	// claims; the claim path then emits its own task:dispatch. Doing the
@@ -604,7 +604,7 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 	slog.Info("mention task enqueued", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "is_leader_task", isLeader)
 	// Training session-open chokepoint (spec §4.3): leader @mention delegation
 	// of a teammate — the trained member's task is typically created here.
-	s.tryOpenTrainingSession(ctx, task, issue.ProjectID)
+	s.tryOpenTrainingSession(ctx, task, issue.ProjectID, "")
 	// See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
 	s.interruptInFlightIssueTasksForFollowup(ctx, task)
@@ -740,7 +740,7 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	// Training session-open chokepoint (spec §4.3): quick-create task. The
 	// owning project is the optional projectID the user picked (may be zero,
 	// in which case the hook no-ops).
-	s.tryOpenTrainingSession(ctx, task, projectID)
+	s.tryOpenTrainingSession(ctx, task, projectID, "")
 	// Match every other Enqueue* path: kick the daemon WS so the task
 	// gets claimed promptly instead of waiting for the next 30 s poll
 	// cycle. Without this the user perceives "quick create never
@@ -815,7 +815,7 @@ func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSe
 	}
 	// Training session-open chokepoint (spec §4.3): chat-bound task. Project
 	// resolves via chatSession.ProjectID (seam 1e).
-	s.tryOpenTrainingSession(ctx, task, chatSession.ProjectID)
+	s.tryOpenTrainingSession(ctx, task, chatSession.ProjectID, "")
 	s.PublishChatTaskQueued(ctx, task, interruptFollowup)
 	return task, nil
 }

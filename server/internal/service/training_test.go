@@ -92,7 +92,7 @@ func TestMaybeOpenTrainingSession_TrainedTarget_OpensAndPersists(t *testing.T) {
 	err := maybeOpenTrainingSession(
 		context.Background(),
 		newTrainingDeps(lookup, store, rl),
-		testTrainingTaskID, testTrainAgentID, testTrainingProjectID,
+		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -133,7 +133,7 @@ func TestMaybeOpenTrainingSession_NonTrainingProject_NoOp(t *testing.T) {
 	err := maybeOpenTrainingSession(
 		context.Background(),
 		newTrainingDeps(lookup, store, rl),
-		testTrainingTaskID, testTrainAgentID, testTrainingProjectID,
+		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -155,7 +155,7 @@ func TestMaybeOpenTrainingSession_NonTargetAgent_NoOp(t *testing.T) {
 	err := maybeOpenTrainingSession(
 		context.Background(),
 		newTrainingDeps(lookup, store, rl),
-		testTrainingTaskID, testOtherAgentID, testTrainingProjectID,
+		testTrainingTaskID, testOtherAgentID, testTrainingProjectID, "",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -181,7 +181,7 @@ func TestMaybeOpenTrainingSession_AlreadyOpen_Idempotent(t *testing.T) {
 	err := maybeOpenTrainingSession(
 		context.Background(),
 		newTrainingDeps(lookup, store, rl),
-		testTrainingTaskID, testTrainAgentID, testTrainingProjectID,
+		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -198,7 +198,7 @@ func TestMaybeOpenTrainingSession_AlreadyOpen_Idempotent(t *testing.T) {
 func TestMaybeOpenTrainingSession_NilDeps_NoOp(t *testing.T) {
 	if err := maybeOpenTrainingSession(
 		context.Background(), nil,
-		testTrainingTaskID, testTrainAgentID, testTrainingProjectID,
+		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "",
 	); err != nil {
 		t.Fatalf("nil deps should be a no-op, got %v", err)
 	}
@@ -212,9 +212,57 @@ func TestMaybeOpenTrainingSession_TargetButMissingBridge_LoudError(t *testing.T)
 
 	err := maybeOpenTrainingSession(
 		context.Background(), deps,
-		testTrainingTaskID, testTrainAgentID, testTrainingProjectID,
+		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "",
 	)
 	if err == nil {
 		t.Fatalf("expected loud error when RL bridge missing for a training target")
+	}
+}
+
+// env_id is passed through to StartSession when provided.
+func TestMaybeOpenTrainingSession_PassesEnvID(t *testing.T) {
+	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
+	store := &fakeTaskStore{}
+	rl := &fakeRLClient{creds: arealrl.SessionCreds{SessionID: "sess-abc", ProxyKey: "pk-xyz"}}
+	testEnvID := "env-12345"
+
+	err := maybeOpenTrainingSession(
+		context.Background(),
+		newTrainingDeps(lookup, store, rl),
+		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, testEnvID,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rl.calls != 1 {
+		t.Fatalf("StartSession calls = %d, want 1", rl.calls)
+	}
+	if rl.lastTask != testTrainingTaskID {
+		t.Fatalf("StartSession task id = %q, want %q", rl.lastTask, testTrainingTaskID)
+	}
+	if rl.lastEnv != testEnvID {
+		t.Fatalf("StartSession env id = %q, want %q", rl.lastEnv, testEnvID)
+	}
+}
+
+// empty env_id is passed through when no env_id is available (e.g., non-env-dispatch paths).
+func TestMaybeOpenTrainingSession_EmptyEnvID_WhenUnavailable(t *testing.T) {
+	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
+	store := &fakeTaskStore{}
+	rl := &fakeRLClient{creds: arealrl.SessionCreds{SessionID: "sess-abc", ProxyKey: "pk-xyz"}}
+
+	err := maybeOpenTrainingSession(
+		context.Background(),
+		newTrainingDeps(lookup, store, rl),
+		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rl.calls != 1 {
+		t.Fatalf("StartSession calls = %d, want 1", rl.calls)
+	}
+	if rl.lastEnv != "" {
+		t.Fatalf("StartSession env id = %q, want empty string", rl.lastEnv)
 	}
 }

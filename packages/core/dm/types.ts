@@ -48,6 +48,11 @@ export interface DMItem {
    * Use this (not `unread`) to decide number-badge vs dot.
    */
   real_unread?: number;
+  /**
+   * Viewer's read cursor for this DM (`conversation_member.last_read_seq`).
+   * Drives the "N new messages" divider pinned on entry; omitted → no divider.
+   */
+  last_read_seq?: number;
 }
 
 /** Body for POST /api/dm — idempotent create-or-find of a 1-on-1 DM. */

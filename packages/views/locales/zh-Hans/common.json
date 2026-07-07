@@ -10,7 +10,8 @@
     "hours_ago": "{{count}} 小时前",
     "days_ago": "{{count}} 天前",
     "today": "今天",
-    "yesterday": "昨天"
+    "yesterday": "昨天",
+    "new_messages_other": "{{count}} 条新消息"
   },
   "lark_bind": {
     "page_title": "绑定飞书账号",

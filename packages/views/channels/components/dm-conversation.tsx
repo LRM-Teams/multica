@@ -926,6 +926,7 @@ function DmChannelConversation({
         currentUserId={currentUserId}
         ownName={currentUserName ?? undefined}
         highlightMessageId={highlightMessageId}
+        lastReadSeq={dm.last_read_seq ?? null}
         firstItemIndex={messagesFirstItemIndex}
         searchHitIds={searchHitIds}
         searchQuery={searchHighlightQuery}

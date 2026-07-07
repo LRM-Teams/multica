@@ -35,6 +35,9 @@ export interface Channel {
    *  Falls back to unread_count when absent so old API responses still work. */
   real_unread_count?: number;
   manually_unread?: boolean;
+  /** Viewer's read cursor for this conversation (`conversation_member.last_read_seq`).
+   *  List/detail enrichment; drives the "N new messages" divider pinned on entry. */
+  last_read_seq?: number;
   pinned_at?: string | null;
   muted_at?: string | null;
   muted?: boolean;

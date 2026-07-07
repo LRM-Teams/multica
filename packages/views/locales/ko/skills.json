@@ -68,7 +68,8 @@
     "source_runtime_shared_unknown": "공유 폴더에서 동기화됨",
     "source_clawhub": "ClawHub에서 가져옴",
     "source_skills_sh": "Skills.sh에서 가져옴",
-    "source_github": "GitHub에서 가져옴"
+    "source_github": "GitHub에서 가져옴",
+    "source_platform": "Multica 제공"
   },
   "detail": {
     "all_skills": "모든 스킬",
@@ -96,7 +97,8 @@
       "origin_github": "가져옴 · GitHub",
       "origin_workspace": "워크스페이스",
       "updated_label": "{{when}} 수정됨",
-      "by_creator": "{{name}}님"
+      "by_creator": "{{name}}님",
+      "origin_platform": "Multica 플랫폼"
     },
     "conflict_banner": {
       "title": "다른 사람이 이 스킬을 업데이트했습니다",
@@ -130,7 +132,8 @@
       "imported_clawhub": "ClawHub에서 가져옴",
       "imported_skills_sh": "Skills.sh에서 가져옴",
       "imported_github": "GitHub에서 가져옴",
-      "provider": "제공자 · {{provider}}"
+      "provider": "제공자 · {{provider}}",
+      "imported_platform": "Multica 플랫폼에서 가져옴"
     },
     "not_found": {
       "title": "스킬을 찾을 수 없습니다",
@@ -185,6 +188,10 @@
       "runtime": {
         "title": "런타임에서 복사",
         "desc": "로컬 런타임을 스캔해 디스크에 있는 스킬을 이 워크스페이스로 승격합니다."
+      },
+      "platform": {
+        "title": "플랫폼 워크플로 설치",
+        "desc": "Multica가 관리하는 마이그레이션 skill을 이 워크스페이스에 추가합니다."
       }
     },
     "method_card": {
@@ -193,7 +200,9 @@
       "url_title": "URL에서 가져오기",
       "url_desc": "ClawHub 또는 Skills.sh의 공개 스킬을 가져옵니다.",
       "runtime_title": "런타임에서 복사",
-      "runtime_desc": "로컬 런타임에 이미 설치된 스킬을 워크스페이스로 가져옵니다."
+      "runtime_desc": "로컬 런타임에 이미 설치된 스킬을 워크스페이스로 가져옵니다.",
+      "platform_title": "메모리 마이그레이션 워크플로",
+      "platform_desc": "오래된 메모리를 이전해야 하는 agent에 할당할 단계별 의미 기반 마이그레이션 skill을 설치합니다."
     },
     "manual": {
       "name_label": "이름",
@@ -220,6 +229,15 @@
       "fallback_error": "가져오기 실패",
       "cancel": "취소",
       "toast_imported": "스킬을 가져왔습니다"
+    },
+    "platform": {
+      "skill_title": "multica-memory-migration",
+      "skill_desc": "이전 agent 폴더에서 의미 기반 마이그레이션을 수행합니다. inventory, alias mapping, candidate extraction, REVIEW.md triage, safe writes, final report를 안내합니다.",
+      "cancel": "취소",
+      "install": "skill 설치",
+      "installing": "설치 중...",
+      "toast_installed": "마이그레이션 skill을 설치했습니다",
+      "fallback_error": "플랫폼 skill 설치 실패"
     }
   },
   "runtime_import": {

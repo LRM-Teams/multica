@@ -45,6 +45,7 @@ import type {
   User,
   Skill,
   SkillSummary,
+  PlatformSkillSummary,
   AgentMemory,
   ListAgentSkillSuggestionsResponse,
   DecideAgentSkillSuggestionRequest,
@@ -1719,6 +1720,16 @@ export class ApiClient {
     return this.fetch("/api/skills", {
       method: "POST",
       body: JSON.stringify(data),
+    });
+  }
+
+  async listPlatformSkills(): Promise<PlatformSkillSummary[]> {
+    return this.fetch("/api/skills/platform");
+  }
+
+  async installPlatformSkill(name: string): Promise<Skill> {
+    return this.fetch(`/api/skills/platform/${encodeURIComponent(name)}/install`, {
+      method: "POST",
     });
   }
 

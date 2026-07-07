@@ -12,6 +12,22 @@ vi.mock("../../issues/components/comment-card", () => ({
   AttachmentList: () => null,
 }));
 
+vi.mock("./message-parts-renderer", () => ({
+  MessagePartsRenderer: ({
+    parts,
+  }: {
+    parts: { type: string; sticker_id?: string; alt?: string }[];
+  }) => (
+    <div data-testid="message-parts-renderer">
+      {parts.map((part, index) =>
+        part.type === "sticker" ? (
+          <img key={index} data-testid="message-sticker" alt={part.alt ?? ""} />
+        ) : null,
+      )}
+    </div>
+  ),
+}));
+
 vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: ({ actorId }: { actorId: string }) => (
     <span data-testid="actor-avatar">{actorId}</span>
@@ -120,7 +136,11 @@ describe("ThreadRootPreview", () => {
     expect(screen.queryByText("andong3")).not.toBeInTheDocument();
   });
 
-  it("uses compact part text for sticker root previews", () => {
+  // Sticker root previews must render the sticker as an IMAGE, matching the
+  // channel message bubble (MessagePartsRenderer) — not the flattened
+  // `[Sticker] …` label. This is what keeps channel and thread rendering
+  // consistent for the same message.
+  it("renders sticker parts as images in the root preview", () => {
     render(
       <ThreadRootPreview
         message={makeMessage({
@@ -131,7 +151,8 @@ describe("ThreadRootPreview", () => {
       />,
     );
 
-    expect(screen.getByText("[Sticker] Hi sticker")).toBeInTheDocument();
+    expect(screen.getByTestId("message-sticker")).toBeInTheDocument();
+    expect(screen.queryByText("[Sticker] Hi sticker")).not.toBeInTheDocument();
     expect(screen.queryByText(":sticker:hi:")).not.toBeInTheDocument();
   });
 

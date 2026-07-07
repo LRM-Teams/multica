@@ -7,6 +7,22 @@ export function hasStructuredMessageParts(parts?: MessagePart[] | null): parts i
   return Array.isArray(parts) && parts.length > 0;
 }
 
+/**
+ * Resolve the structured parts to render for a message body. Prefers the
+ * message's own denormalized `parts`; for historical agent messages whose
+ * `parts` were never backfilled, unwraps the structured-action envelope carried
+ * in `content` so stickers etc. still render through `MessagePartsRenderer`.
+ * Returns null only for ordinary, non-envelope content, which callers render as
+ * plain markdown. This is the single source of truth shared by every message
+ * body surface (channel bubble, thread root, DM parent) so they stay consistent.
+ */
+export function resolveMessageParts(
+  content: string,
+  parts?: MessagePart[] | null,
+): MessagePart[] | null {
+  return hasStructuredMessageParts(parts) ? parts : extractEnvelopeParts(content);
+}
+
 function normalizeText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func TestLoadTrainingConfig_DisabledByDefault(t *testing.T) {
@@ -84,6 +86,43 @@ func TestNewTrainingSessionDeps_CreatedWhenConfigured(t *testing.T) {
 	assert.NotNil(t, deps.Closer)
 	assert.Equal(t, "http://proxy:9100/v1", deps.ProxyURL)
 	assert.Equal(t, 0.75, deps.DefaultReward)
+}
+
+// When config is missing but Queries is non-nil (the production path), deps
+// MUST be non-nil with Lookup+Store set and RL/Closer nil — this lets the
+// open-hook loud-error guard (training.go:161-166) fire for training targets
+// instead of silently no-oping.
+func TestNewTrainingSessionDeps_GuardDepsWhenConfigMissing(t *testing.T) {
+	clearTrainingEnv(t)
+
+	// db.New(nil) creates a non-nil *db.Queries (pointer is non-nil; methods
+	// would panic on nil db, but we don't call them here).
+	q := db.New(nil)
+
+	// No BridgeStubURL
+	cfg := TrainingConfig{AdminAPIKey: "test-key"}
+	deps := NewTrainingSessionDeps(cfg, q)
+	assert.NotNil(t, deps, "deps must be non-nil so the open-hook guard is reachable")
+	assert.Nil(t, deps.RL, "RL must be nil when bridge config missing")
+	assert.Nil(t, deps.Closer, "Closer must be nil when bridge config missing")
+	assert.NotNil(t, deps.Lookup, "Lookup must be set so the guard can resolve training targets")
+	assert.NotNil(t, deps.Store, "Store must be set")
+
+	// No AdminAPIKey
+	cfg = TrainingConfig{BridgeStubURL: "http://localhost:9100/v1"}
+	deps = NewTrainingSessionDeps(cfg, q)
+	assert.NotNil(t, deps)
+	assert.Nil(t, deps.RL)
+	assert.Nil(t, deps.Closer)
+	assert.NotNil(t, deps.Lookup)
+
+	// Neither
+	cfg = TrainingConfig{}
+	deps = NewTrainingSessionDeps(cfg, q)
+	assert.NotNil(t, deps)
+	assert.Nil(t, deps.RL)
+	assert.Nil(t, deps.Closer)
+	assert.NotNil(t, deps.Lookup)
 }
 
 func TestTaskService_WithTraining(t *testing.T) {

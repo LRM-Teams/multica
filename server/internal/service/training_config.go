@@ -55,11 +55,40 @@ func LoadTrainingConfig() TrainingConfig {
 	return cfg
 }
 
-// NewTrainingSessionDeps constructs a *TrainingSessionDeps from config. Returns
-// nil if training is not configured (BridgeStubURL or AdminAPIKey empty).
+// NewTrainingSessionDeps constructs a *TrainingSessionDeps from config.
+//
+// When the bridge is not configured (BridgeStubURL or AdminAPIKey empty) AND q
+// is non-nil, returns a non-nil deps with Lookup+Store set but RL/Closer nil.
+// This lets the session-open hook's loud-error guard (training.go:161-166)
+// fire when a training target is requested despite missing config, instead of
+// silently no-oping and letting the trained task run un-proxied. The close
+// hook no-ops on nil Closer (training.go:257-259).
+//
+// When q is nil (test-only — production always passes a real *db.Queries),
+// preserves the old contract: nil deps when config missing, non-nil deps with
+// RL/Closer when config set.
 func NewTrainingSessionDeps(cfg TrainingConfig, q *db.Queries) *TrainingSessionDeps {
+	if q == nil {
+		if cfg.BridgeStubURL == "" || cfg.AdminAPIKey == "" {
+			return nil
+		}
+		client := arealrl.New(cfg.BridgeStubURL, cfg.AdminAPIKey)
+		return &TrainingSessionDeps{
+			RL:            client,
+			Closer:        client,
+			ProxyURL:      cfg.ProxyURL,
+			DefaultReward: cfg.DefaultReward,
+		}
+	}
+
 	if cfg.BridgeStubURL == "" || cfg.AdminAPIKey == "" {
-		return nil
+		return &TrainingSessionDeps{
+			Lookup:        q,
+			Store:         q,
+			ProxyURL:      cfg.ProxyURL,
+			DefaultReward: cfg.DefaultReward,
+			// RL, Closer nil — open hook loud-errors if a training target is hit.
+		}
 	}
 
 	client := arealrl.New(cfg.BridgeStubURL, cfg.AdminAPIKey)

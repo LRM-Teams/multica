@@ -6,6 +6,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type Ref,
@@ -17,20 +18,42 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
-import { useMessageDayDividers } from "../../i18n/use-message-time";
+import { useMessageDayDividers, useMessageTime } from "../../i18n/use-message-time";
 import { useT } from "../../i18n/use-t";
 import { maxSeqOrNull, useNewMessagesDivider } from "../hooks/use-new-messages-divider";
 import { computeNewArrivals } from "../hooks/use-new-arrivals-pill";
 
-// Raft-style date separator inserted before the first message of each local day.
+// Small centered date pill (Iris #303 A). Same look inline (at a day boundary)
+// and when the sticky overlay pins the current day at the top.
+function DatePill({ label }: { label: string }) {
+  return (
+    <span className="rounded-full border border-border/60 bg-background/90 px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm">
+      {label}
+    </span>
+  );
+}
+
+// Inserted before the first message of each local day.
 function DateDivider({ label }: { label: string }) {
   return (
-    <div className="flex items-center gap-3 px-5 py-2" data-testid="date-divider">
-      <div className="h-px flex-1 bg-border/60" />
-      <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
-      </span>
-      <div className="h-px flex-1 bg-border/60" />
+    <div className="flex justify-center px-5 py-2" data-testid="date-divider">
+      <DatePill label={label} />
+    </div>
+  );
+}
+
+// Floating "current day" header (Iris #303 A): pinned at the top of the message
+// area, showing the day of the topmost visible message and updating as you
+// scroll into the next day. react-virtuoso unmounts off-screen rows, so a
+// CSS-sticky divider row can't pin reliably — this overlay is driven by the
+// visible range instead.
+function StickyDateHeader({ label }: { label: string }) {
+  return (
+    <div
+      className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center"
+      data-testid="sticky-date-header"
+    >
+      <DatePill label={label} />
     </div>
   );
 }
@@ -193,6 +216,14 @@ function MessageViewport({
   const channelId = messages[0]?.channel_id;
   const canLoadOlder = !!hasOlder && !loadingOlder && !!onLoadOlder;
   const dayDividers = useMessageDayDividers(messages);
+  const messageTime = useMessageTime();
+  // Sticky "current day" header: the day of the topmost visible message, tracked
+  // from Virtuoso's visible range (set in the handler, not a derived-state
+  // effect). Reuses the same day-label logic as the inline date dividers.
+  const [topDayLabel, setTopDayLabel] = useReducer(
+    (_prev: string | null, label: string | null) => label,
+    null,
+  );
   const newMessagesDivider = useNewMessagesDivider(
     channelId,
     messages,
@@ -463,6 +494,9 @@ function MessageViewport({
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      {topDayLabel && messages.length > 0 && (
+        <StickyDateHeader label={topDayLabel} />
+      )}
       <div
         ref={setScrollContainerRef}
         className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
@@ -477,6 +511,11 @@ function MessageViewport({
         increaseViewportBy={{ top: 320, bottom: 520 }}
         atBottomThreshold={120}
         atBottomStateChange={handleAtBottomStateChange}
+        rangeChanged={(range) => {
+          const msg = messages[range.startIndex - firstItemIndex];
+          const label = msg ? messageTime.dayLabel(msg.created_at) : null;
+          setTopDayLabel(label);
+        }}
         followOutput={() => (!loadingOlder && isNearBottom ? "smooth" : false)}
         startReached={() => {
           if (canLoadOlder) onLoadOlder?.();

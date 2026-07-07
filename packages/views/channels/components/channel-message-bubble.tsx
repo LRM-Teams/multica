@@ -10,7 +10,6 @@ import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
-import { MemoizedMarkdown } from "../../common/markdown";
 import { AttachmentList } from "../../issues/components/comment-card";
 import { agentColor } from "../../common/agent-color";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
@@ -20,13 +19,12 @@ import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
 import {
-  extractEnvelopeParts,
   formatMessagePartsCopyText,
   formatMessagePartsPreview,
-  hasStructuredMessageParts,
+  resolveMessageParts,
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
-import { MessagePartsRenderer } from "./message-parts-renderer";
+import { MessageBody } from "./message-body";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 
 function ChannelSystemMessageRow({
@@ -285,15 +283,11 @@ export function ChannelMessageBubble({
   const hasThreadActivity = threadReplyCount > 0 || threadUnreadCount > 0;
   const hasFeedback = (message.reactions?.length ?? 0) > 0 || hasThreadActivity;
   const quickReactionEmojis = ["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"];
-  // Prefer the message's own denormalized parts. For historical agent messages
-  // whose `parts` were never backfilled, the raw `content` is the structured-
-  // action envelope JSON — unwrap it to its real parts so the body renders them
-  // (stickers etc.) through MessagePartsRenderer and copy yields real text,
-  // instead of leaking raw JSON. `effectiveParts` is null ONLY for ordinary,
-  // non-envelope content, which is left completely unchanged. An envelope with
-  // an empty `parts` array yields `[]` (truthy) so the raw JSON is never shown.
-  const ownParts = hasStructuredMessageParts(message.parts) ? message.parts : null;
-  const effectiveParts = ownParts ?? extractEnvelopeParts(message.content);
+  // Resolved once here for copy + attachment de-dupe; `MessageBody` resolves the
+  // same way to render the body (see resolveMessageParts for the envelope-unwrap
+  // rationale). Non-null for real parts / historical envelopes, null for
+  // ordinary content.
+  const effectiveParts = resolveMessageParts(message.content, message.parts);
   const handleCopy = async () => {
     const copyPayload =
       formatMessagePartsCopyText(effectiveParts) ??
@@ -486,20 +480,12 @@ export function ChannelMessageBubble({
               </p>
             </button>
           )}
-          {effectiveParts ? (
-            <MessagePartsRenderer
-              parts={effectiveParts}
-              highlightQuery={searchHighlighted ? searchQuery : undefined}
-            />
-          ) : (
-            <MemoizedMarkdown
-              attachments={message.attachments}
-              highlightQuery={searchHighlighted ? searchQuery : undefined}
-              enableStickerShortcodes={false}
-            >
-              {message.content}
-            </MemoizedMarkdown>
-          )}
+          <MessageBody
+            content={message.content}
+            parts={message.parts}
+            attachments={message.attachments}
+            highlightQuery={searchHighlighted ? searchQuery : undefined}
+          />
           <AttachmentList
             attachments={message.attachments}
             content={effectiveParts ? "" : message.content}

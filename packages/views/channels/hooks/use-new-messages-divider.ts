@@ -13,20 +13,31 @@ interface SeqMessage {
   author_id?: string | null;
 }
 
+function maxSeqOrNull(messages: readonly SeqMessage[]): number | null {
+  let max: number | null = null;
+  for (const m of messages) if (max === null || m.seq > max) max = m.seq;
+  return max;
+}
+
 // Pure: the first message past the read cursor that the viewer did NOT send,
-// plus how many such messages there are. The viewer's own messages are never
-// "new" to them, so they're excluded from both the anchor and the count —
-// otherwise sending a message would raise a "1 new message" divider above your
-// own message. Null when the cursor is unknown or nothing unread is from others.
-// Exported for exhaustive unit tests.
+// plus how many such messages there are, bounded to what was already in the
+// conversation ON ENTRY (`entryHighWaterSeq`). Messages that ARRIVE while you're
+// actively viewing (seq beyond the entry high-water) are not "new" — you're
+// watching them come in, so they must not extend/raise the divider (Parker's
+// snapshot-and-pin rule; avoids a "1 new message" line popping up under your
+// eyes). The viewer's own messages are also excluded. Null when the cursor is
+// unknown or nothing qualifies. Exported for exhaustive unit tests.
 export function computeNewMessagesDivider(
   messages: readonly SeqMessage[],
   lastReadSeq: number | null,
   currentUserId: string | null,
+  entryHighWaterSeq: number | null,
 ): NewMessagesDivider | null {
   if (lastReadSeq == null) return null;
   const isNewFromOther = (m: SeqMessage) =>
-    m.seq > lastReadSeq && (currentUserId == null || m.author_id !== currentUserId);
+    m.seq > lastReadSeq &&
+    (entryHighWaterSeq == null || m.seq <= entryHighWaterSeq) &&
+    (currentUserId == null || m.author_id !== currentUserId);
   const index = messages.findIndex(isNewFromOther);
   if (index < 0) return null;
   const anchor = messages[index];
@@ -45,11 +56,16 @@ export function computeNewMessagesDivider(
  * known `lastReadSeq` per channel visit and compute against that snapshot; a
  * later (advanced) value is ignored.
  *
- * The viewer's own messages are excluded — a message you send is not "new" to
- * you, so it never raises the divider.
+ * We also snapshot the entry HIGH-WATER seq (the latest message present when the
+ * conversation opened). Messages that arrive live while you're in the
+ * conversation land beyond it and never raise or grow the divider — you're
+ * watching them arrive, so they carry no "unread" meaning (Parker's口径). Older
+ * messages loaded via pagination sit below the high-water, so they don't affect
+ * it.
  *
- * Degrades to null while the BE hasn't supplied `last_read_seq` yet, so the
- * feature ships dark and lights up once the field lands.
+ * The viewer's own messages are excluded — a message you send is not "new".
+ *
+ * Degrades to null while the BE hasn't supplied `last_read_seq` yet.
  */
 export function useNewMessagesDivider(
   channelId: string | null | undefined,
@@ -57,25 +73,30 @@ export function useNewMessagesDivider(
   lastReadSeq: number | null | undefined,
   currentUserId: string | null | undefined,
 ): NewMessagesDivider | null {
-  const snapshotRef = useRef<{ channelId: string | null; seq: number | null }>({
-    channelId: null,
-    seq: null,
-  });
+  const snapshotRef = useRef<{
+    channelId: string | null;
+    seq: number | null;
+    highWater: number | null;
+  }>({ channelId: null, seq: null, highWater: null });
   const key = channelId ?? null;
   const snap = snapshotRef.current;
   if (snap.channelId !== key) {
-    // New conversation visit — take a fresh cursor snapshot (may be null until
-    // the channel query resolves; captured below once it does).
+    // New conversation visit — fresh snapshots (either may be null until the
+    // channel query / first message page resolves; captured once below).
     snap.channelId = key;
     snap.seq = lastReadSeq ?? null;
-  } else if (snap.seq === null && lastReadSeq != null) {
-    // Cursor arrived after entry (async channel query) — capture it once.
-    snap.seq = lastReadSeq;
+    snap.highWater = maxSeqOrNull(messages);
+  } else {
+    if (snap.seq === null && lastReadSeq != null) snap.seq = lastReadSeq;
+    if (snap.highWater === null && messages.length > 0) {
+      snap.highWater = maxSeqOrNull(messages);
+    }
   }
   const snapshotSeq = snap.seq;
+  const highWater = snap.highWater;
   const viewerId = currentUserId ?? null;
   return useMemo(
-    () => computeNewMessagesDivider(messages, snapshotSeq, viewerId),
-    [messages, snapshotSeq, viewerId],
+    () => computeNewMessagesDivider(messages, snapshotSeq, viewerId, highWater),
+    [messages, snapshotSeq, viewerId, highWater],
   );
 }

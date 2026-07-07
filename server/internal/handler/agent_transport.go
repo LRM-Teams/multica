@@ -148,6 +148,18 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		Created:     created,
 		TransportID: transportID,
 	})
+
+	// Record a message-sent activity event (agent replied via multica send).
+	recordAgentActivityEvent(r.Context(), h.DB,
+		origin.workspaceID, task.AgentID, task.RuntimeID, task.ID,
+		"lifecycle", "message_sent", "info",
+		"channel", parseUUID(target.channel.ID), target.raw,
+		"", "Agent sent a visible message",
+		map[string]any{
+			"message_id": msg.ID,
+			"created":    created,
+		},
+	)
 }
 
 func (h *Handler) AgentTransportReactMessage(w http.ResponseWriter, r *http.Request) {
@@ -212,6 +224,18 @@ func (h *Handler) AgentTransportReactMessage(w http.ResponseWriter, r *http.Requ
 		Reaction:    reaction,
 		TransportID: transportID,
 	})
+
+	// Record a reaction activity event (covers greeting/ack reaction-only replies).
+	recordAgentActivityEvent(r.Context(), h.DB,
+		origin.workspaceID, task.AgentID, task.RuntimeID, task.ID,
+		"lifecycle", "reaction_sent", "info",
+		"channel", parseUUID(target.channel.ID), target.raw,
+		"", "Reacted "+emoji+" to a message",
+		map[string]any{
+			"emoji":      emoji,
+			"message_id": uuidToString(messageID),
+		},
+	)
 }
 
 func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Request) {

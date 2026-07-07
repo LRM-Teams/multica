@@ -349,7 +349,9 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 				})
 
 			case "turn_end":
+				turnStopReason := ""
 				if msg := decodePiMessage(evt.Message); msg != nil {
+					turnStopReason = msg.StopReason
 					if msg.Usage != nil {
 						model := msg.Model
 						if model == "" {
@@ -380,7 +382,18 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 				// done without waiting for Pi's exit-time cleanup. Errors
 				// (stopReason=error) still flip finalStatus above and are
 				// reported. We emit exactly once.
-				if earlyCompleteEnabled && !earlyCompleted && finalStatus != "failed" {
+				//
+				// A turn that ended to call a tool (stopReason=toolUse) is NOT
+				// terminal: the model still owes a follow-up turn once the tool
+				// result comes back (e.g. the `multica send` bash call that
+				// actually delivers a chat reply). Early-completing here makes
+				// the daemon kill Pi mid-loop, truncating the run before the
+				// model answers — this is the "先查后答" silent-DM bug where a
+				// message that first triggers web_search/help lookup never gets
+				// a visible reply. Gate on a strict terminal allowlist so only a
+				// genuinely finished turn (stopReason=stop) early-completes; any
+				// tool-use/unseen reason falls through and the loop continues.
+				if earlyCompleteEnabled && !earlyCompleted && finalStatus != "failed" && piStopReasonAllowsEarlyComplete(turnStopReason) {
 					if d := flushPiTextBuffer(&textBuffer); d != "" {
 						output.WriteString(d)
 						trySend(msgCh, Message{Type: MessageText, Content: d})
@@ -607,6 +620,22 @@ func buildPiArgs(prompt, sessionPath string, opts ExecOptions, logger *slog.Logg
 		args = append(args, prompt)
 	}
 	return args
+}
+
+// piStopReasonAllowsEarlyComplete reports whether a turn_end stop reason
+// marks a genuinely terminal turn that is safe to early-complete on.
+//
+// This is a strict allowlist, not a blocklist, on purpose. Across the Pi
+// session corpus the only stop reasons observed are "stop" (terminal),
+// "toolUse" (the model owes a follow-up turn once the tool result returns),
+// and "error" (handled separately as a failure). Only "stop" is terminal.
+// Any other/unseen value must NOT early-complete: the failure direction we
+// want is "slow" (degrade to waiting for Pi's exit-time cleanup) rather than
+// "mute" (kill Pi mid-loop and truncate the reply). Early-completing on a
+// tool-use turn is exactly what truncated "先查后答" chat runs into silent
+// no-reply. PI_EARLY_COMPLETE=0 remains the global escape valve.
+func piStopReasonAllowsEarlyComplete(stopReason string) bool {
+	return strings.ToLower(strings.TrimSpace(stopReason)) == "stop"
 }
 
 // getenvDefault returns the env var value or default when unset/empty.

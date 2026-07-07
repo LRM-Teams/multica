@@ -173,7 +173,12 @@ function MessageViewport({
   const channelId = messages[0]?.channel_id;
   const canLoadOlder = !!hasOlder && !loadingOlder && !!onLoadOlder;
   const dayDividers = useMessageDayDividers(messages);
-  const newMessagesDivider = useNewMessagesDivider(channelId, messages, lastReadSeq);
+  const newMessagesDivider = useNewMessagesDivider(
+    channelId,
+    messages,
+    lastReadSeq,
+    currentUserId,
+  );
 
   if (!messageRefs.current) {
     messageRefs.current = new Map<string, HTMLDivElement>();

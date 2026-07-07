@@ -571,7 +571,7 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	visible := make([]AgentResponse, 0, len(agents))
 	for _, a := range agents {
-		if a.Visibility == "private" && actorType == "member" {
+		if actorType == "member" && (a.Visibility == "private" || privateAgentOwnerOnly(a)) {
 			if !memberAllowedForPrivateAgent(a, actorID, member.Role) {
 				continue
 			}

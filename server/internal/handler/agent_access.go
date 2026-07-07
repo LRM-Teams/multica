@@ -12,7 +12,8 @@ import (
 // agents: chat / @-mention dispatch, viewing the agent's history, editing
 // configuration, and deletion.
 //
-// Public agents are unrestricted — the predicate returns true unconditionally.
+// Public agents are unrestricted — except Wendy, which is always owner-only so
+// each user gets a personal HR that cannot be searched or opened by coworkers.
 //
 // Agent-to-agent traffic is always allowed (actorType == "agent"); this is
 // what preserves A2A collaboration even with private agents. The trust
@@ -23,6 +24,9 @@ import (
 // allowed_principals is not exposed in v1; future work can extend this set
 // without changing call sites.
 func (h *Handler) canAccessPrivateAgent(ctx context.Context, agent db.Agent, actorType, actorID, workspaceID string) bool {
+	if privateAgentOwnerOnly(agent) && actorType == "member" {
+		return uuidToString(agent.OwnerID) == actorID
+	}
 	if agent.Visibility != "private" {
 		return true
 	}
@@ -43,10 +47,17 @@ func (h *Handler) canAccessPrivateAgent(ctx context.Context, agent db.Agent, act
 // canAccessPrivateAgent and the ListAgents filter loop. Caller must have
 // already confirmed agent.Visibility == "private".
 func memberAllowedForPrivateAgent(agent db.Agent, userID, role string) bool {
+	if privateAgentOwnerOnly(agent) {
+		return uuidToString(agent.OwnerID) == userID
+	}
 	if roleAllowed(role, "owner", "admin") {
 		return true
 	}
 	return uuidToString(agent.OwnerID) == userID
+}
+
+func privateAgentOwnerOnly(agent db.Agent) bool {
+	return isWindyAgentName(agentDisplayName(agent))
 }
 
 // accessibleAgentIDs returns the set of agent IDs in the workspace the actor
@@ -64,7 +75,7 @@ func (h *Handler) accessibleAgentIDs(ctx context.Context, workspaceID, actorType
 	}
 	allowed := make(map[string]struct{}, len(agents))
 	for _, a := range agents {
-		if a.Visibility == "private" && actorType == "member" {
+		if actorType == "member" && (a.Visibility == "private" || privateAgentOwnerOnly(a)) {
 			if !memberAllowedForPrivateAgent(a, actorID, role) {
 				continue
 			}
@@ -73,6 +84,7 @@ func (h *Handler) accessibleAgentIDs(ctx context.Context, workspaceID, actorType
 	}
 	return allowed, true
 }
+
 // canEnqueueSquadLeader returns true when the given actor is allowed to
 // trigger the squad's private leader. It loads the leader agent and delegates
 // to canAccessPrivateAgent. Non-private leaders always pass. System-initiated

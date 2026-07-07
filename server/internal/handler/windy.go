@@ -274,7 +274,11 @@ func isOwnedPrivateWindyAgent(agent db.Agent, userID pgtype.UUID) bool {
 	if !agent.OwnerID.Valid || uuidToString(agent.OwnerID) != uuidToString(userID) || agent.Visibility != "private" {
 		return false
 	}
-	switch agentDisplayName(agent) {
+	return isWindyAgentName(agentDisplayName(agent))
+}
+
+func isWindyAgentName(name string) bool {
+	switch name {
 	case windyAgentName, legacyWindyAgentName, legacyJoeAgentName:
 		return true
 	default:

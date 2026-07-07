@@ -5,6 +5,7 @@
   },
   "sidebar": {
     "heading": "Messages",
+    "mention_indicator": "You were mentioned",
     "search": "Search conversations...",
     "no_conversation_matches": "No matching conversations",
     "search_scope_hint": "This filters the conversation list only. Open a conversation and use the top-right message search to search message text.",

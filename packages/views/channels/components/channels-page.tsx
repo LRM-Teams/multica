@@ -1786,6 +1786,8 @@ export function ChannelsPage() {
                                   realUnread={realUnread}
                                   isManualDot={isManualDot}
                                   isMuted={isMuted}
+                                  hasMention={!!channel.has_mention}
+                                  mentionLabel={t(($) => $.sidebar.mention_indicator)}
                                 />
                               </div>
                             </div>

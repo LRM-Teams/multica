@@ -35,6 +35,9 @@ export interface Channel {
    *  Falls back to unread_count when absent so old API responses still work. */
   real_unread_count?: number;
   manually_unread?: boolean;
+  /** An unread message in this conversation @-mentions the viewer (BE #301);
+   *  drives the independent @-mention red dot (coexists with the count). */
+  has_mention?: boolean;
   /** Viewer's read cursor for this conversation (`conversation_member.last_read_seq`).
    *  List/detail enrichment; drives the "N new messages" divider pinned on entry. */
   last_read_seq?: number;

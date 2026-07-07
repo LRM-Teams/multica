@@ -5,6 +5,7 @@
   },
   "sidebar": {
     "heading": "消息",
+    "mention_indicator": "有人 @ 你",
     "search": "搜索会话...",
     "no_conversation_matches": "没有匹配会话",
     "search_scope_hint": "左侧只过滤会话列表；要搜索消息正文，请打开会话后使用右上角消息搜索。",

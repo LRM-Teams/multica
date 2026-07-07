@@ -63,6 +63,38 @@ describe("ConversationUnreadAffordance", () => {
     expect(dot).not.toHaveClass("bg-primary");
   });
 
+  it("shows an @-mention red dot alongside the count — they coexist (Parker)", () => {
+    const { getByText, container } = render(
+      <ConversationUnreadAffordance
+        realUnread={2}
+        isManualDot={false}
+        isMuted={false}
+        hasMention
+        mentionLabel="You were mentioned"
+      />,
+    );
+    // The dot is decorative (aria-hidden); its meaning is exposed via sr-only text.
+    expect(container.querySelector(".bg-destructive")).not.toBeNull();
+    expect(getByText("You were mentioned")).toHaveClass("sr-only");
+    // The count still renders next to the mention dot.
+    expect(container).toHaveTextContent("2");
+  });
+
+  it("suppresses the @-mention dot for muted conversations — silent (count remains)", () => {
+    const { queryByText, container } = render(
+      <ConversationUnreadAffordance
+        realUnread={2}
+        isManualDot={false}
+        isMuted
+        hasMention
+        mentionLabel="You were mentioned"
+      />,
+    );
+    expect(container.querySelector(".bg-destructive")).toBeNull();
+    expect(queryByText("You were mentioned")).toBeNull();
+    expect(container).toHaveTextContent("2");
+  });
+
   it("renders nothing when there is neither real unread nor a manual dot", () => {
     const { container } = render(
       <ConversationUnreadAffordance realUnread={0} isManualDot={false} isMuted={false} />,

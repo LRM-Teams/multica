@@ -943,6 +943,22 @@ func (a *envDispatchDepsAdapter) SaveTrainingDispatch(ctx context.Context, proje
 	return nil
 }
 
+// ValidateAgentInWorkspaceOrSquad is a placeholder until Step 6c wires real
+// workspace/squad membership queries. Per-agent env specs are optional and no
+// production caller sends them yet, so this method is unreachable in current
+// production traffic; it returns not_implemented to fail loudly if a caller
+// starts sending specs before the real lookup lands.
+func (a *envDispatchDepsAdapter) ValidateAgentInWorkspaceOrSquad(ctx context.Context, workspaceID, squadID, agentID string) error {
+	return fmt.Errorf("not_implemented: per-agent env membership validation is not yet wired")
+}
+
+// ResolvePerAgentEnvSpec is a placeholder until Step 6c wires real template /
+// base-env resolution. See ValidateAgentInWorkspaceOrSquad for the safety
+// argument.
+func (a *envDispatchDepsAdapter) ResolvePerAgentEnvSpec(ctx context.Context, workspaceID string, spec service.PerAgentEnvSpec) (service.SandboxInstanceRef, error) {
+	return service.SandboxInstanceRef{}, fmt.Errorf("not_implemented: per-agent env spec resolution is not yet wired")
+}
+
 // maybeOpenTrainingSession fires the shared session-open hook for a task
 // created at dispatch time. It delegates to TaskService (no-op when training is
 // unconfigured) and logs any error loudly — a trained task must never run
@@ -1028,4 +1044,10 @@ func (s *stubEnvDispatchDeps) GetDefaultSelfPlayEnv(context.Context, string) (st
 }
 func (s *stubEnvDispatchDeps) SaveTrainingDispatch(context.Context, string, string, string, string, float64) error {
 	return nil
+}
+func (s *stubEnvDispatchDeps) ValidateAgentInWorkspaceOrSquad(context.Context, string, string, string) error {
+	return nil
+}
+func (s *stubEnvDispatchDeps) ResolvePerAgentEnvSpec(context.Context, string, service.PerAgentEnvSpec) (service.SandboxInstanceRef, error) {
+	return service.SandboxInstanceRef{}, nil
 }

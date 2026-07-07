@@ -165,6 +165,20 @@ type EnvDispatchDeps interface {
 	// the later session-open hook can resolve the training target + default
 	// reward by project_id. Keyed by projectID (upsert on conflict).
 	SaveTrainingDispatch(ctx context.Context, projectID, workspaceID, trainAgentID, criticAgentID string, defaultReward float64) error
+
+	// ValidateAgentInWorkspaceOrSquad reports whether agentID is a member of
+	// the workspace, or — when squadID is non-empty — a member of that squad.
+	// Returns a typed error when the agent is unknown or unauthorized; nil when
+	// the agent is a member. Used by per-agent env spec validation (§5) to
+	// reject unknown agents before any rollout state is created.
+	ValidateAgentInWorkspaceOrSquad(ctx context.Context, workspaceID, squadID, agentID string) error
+
+	// ResolvePerAgentEnvSpec validates that the spec's template or base_env_id
+	// is known and authorized for the workspace, and returns a ref carrying the
+	// resolved template name (InstanceID left empty — the caller creates the
+	// sandbox_instance via SandboxInstanceCreator). Returns a typed error when
+	// the template/base_env_id is unknown or unauthorized.
+	ResolvePerAgentEnvSpec(ctx context.Context, workspaceID string, spec PerAgentEnvSpec) (SandboxInstanceRef, error)
 }
 
 // Env is a snapshot of an environment row.
@@ -233,6 +247,13 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	}
 
 	if err := s.validate(in); err != nil {
+		return EnvDispatchResult{}, err
+	}
+
+	// DB-backed per-agent env spec validation (§5): reject unknown agents and
+	// unknown/unauthorized env specs before any rollout state is created. No-op
+	// when PerAgentEnvSpecs is empty, preserving current behavior.
+	if err := s.validatePerAgentEnvSpecsDB(ctx, in); err != nil {
 		return EnvDispatchResult{}, err
 	}
 
@@ -469,6 +490,26 @@ func validatePerAgentEnvSpecsShape(specs []PerAgentEnvSpec) error {
 			return fmt.Errorf("validation_failed: per_agent_env agent_id %s is duplicated", s.AgentID)
 		}
 		seen[s.AgentID] = struct{}{}
+	}
+	return nil
+}
+
+// validatePerAgentEnvSpecsDB runs the DB-backed per-agent env spec validation
+// (§5): for each spec, verify the agent is a workspace/squad member and the
+// template/base_env_id is known and authorized. Preserves current behavior
+// when PerAgentEnvSpecs is empty (no DB calls). Called after the synchronous
+// shape validation passes, before any rollout state is created.
+func (s *EnvDispatchService) validatePerAgentEnvSpecsDB(ctx context.Context, in EnvDispatchInput) error {
+	if len(in.PerAgentEnvSpecs) == 0 {
+		return nil
+	}
+	for _, spec := range in.PerAgentEnvSpecs {
+		if err := s.deps.ValidateAgentInWorkspaceOrSquad(ctx, in.WorkspaceID, in.SquadID, spec.AgentID); err != nil {
+			return fmt.Errorf("validation_failed: per_agent_env agent %s: %w", spec.AgentID, err)
+		}
+		if _, err := s.deps.ResolvePerAgentEnvSpec(ctx, in.WorkspaceID, spec); err != nil {
+			return fmt.Errorf("validation_failed: per_agent_env spec for agent %s: %w", spec.AgentID, err)
+		}
 	}
 	return nil
 }

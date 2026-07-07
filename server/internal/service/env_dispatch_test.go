@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -53,6 +54,12 @@ type fakeEnvDispatchDeps struct {
 	copyProjectErr error
 	createIssueErr error
 	enqueueErr     error
+
+	// Per-agent env spec DB-backed validation seam (§5).
+	validateAgentErrs   map[string]error // agentID -> error; missing key = OK
+	resolveEnvSpecErrs  map[string]error // template or base_env_id -> error; missing key = OK
+	validateAgentCalls  []string
+	resolveEnvSpecCalls []PerAgentEnvSpec
 }
 
 func newFakeEnvDispatchDeps() *fakeEnvDispatchDeps {
@@ -227,6 +234,38 @@ func (f *fakeEnvDispatchDeps) SaveTrainingDispatch(_ context.Context, projectID,
 		defaultReward: defaultReward,
 	})
 	return nil
+}
+
+func (f *fakeEnvDispatchDeps) ValidateAgentInWorkspaceOrSquad(_ context.Context, _, _, agentID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.validateAgentCalls = append(f.validateAgentCalls, agentID)
+	if f.validateAgentErrs != nil {
+		if err, ok := f.validateAgentErrs[agentID]; ok {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *fakeEnvDispatchDeps) ResolvePerAgentEnvSpec(_ context.Context, _ string, spec PerAgentEnvSpec) (SandboxInstanceRef, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolveEnvSpecCalls = append(f.resolveEnvSpecCalls, spec)
+	key := spec.Template
+	if key == "" {
+		key = spec.BaseEnvID
+	}
+	if f.resolveEnvSpecErrs != nil {
+		if err, ok := f.resolveEnvSpecErrs[key]; ok {
+			return SandboxInstanceRef{}, err
+		}
+	}
+	template := spec.Template
+	if template == "" {
+		template = "default"
+	}
+	return SandboxInstanceRef{Template: template, WorkspaceID: spec.AgentID}, nil
 }
 
 // Helper: seed a base env in the fake.
@@ -953,6 +992,91 @@ func TestEnvDispatchPerAgentEnvSpecs_ShapeValidation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestEnvDispatchPerAgentEnvSpecsRejectUnknownAgent verifies that DB-backed
+// agent membership validation rejects per-agent env specs whose agent_id is not
+// a member of the workspace/squad, before any rollout state is created.
+func TestEnvDispatchPerAgentEnvSpecsRejectUnknownAgent(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.validateAgentErrs = map[string]error{"ghost": fmt.Errorf("agent not in workspace")}
+	svc := NewEnvDispatchService(f, 1)
+
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		Message:          &MessageInput{Content: "hi"},
+		PerAgentEnvSpecs: []PerAgentEnvSpec{{AgentID: "ghost", Template: "python"}},
+	})
+	if err == nil {
+		t.Fatalf("expected validation error for unknown agent, got nil")
+	}
+	if !strings.Contains(err.Error(), "validation_failed") {
+		t.Fatalf("expected validation_failed error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("expected error to reference agent ghost, got %v", err)
+	}
+	if len(f.envs) != 1 {
+		t.Fatalf("reject must happen before env creation; envs=%d", len(f.envs))
+	}
+}
+
+// TestEnvDispatchPerAgentEnvSpecsRejectUnknownEnvSpec verifies that DB-backed
+// env spec resolution rejects per-agent env specs whose template/base_env_id is
+// unknown or unauthorized, before any rollout state is created.
+func TestEnvDispatchPerAgentEnvSpecsRejectUnknownEnvSpec(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.resolveEnvSpecErrs = map[string]error{"bad-template": fmt.Errorf("template not found: bad-template")}
+	svc := NewEnvDispatchService(f, 1)
+
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		Message:          &MessageInput{Content: "hi"},
+		PerAgentEnvSpecs: []PerAgentEnvSpec{{AgentID: "ag", Template: "bad-template"}},
+	})
+	if err == nil {
+		t.Fatalf("expected validation error for unknown env spec, got nil")
+	}
+	if !strings.Contains(err.Error(), "validation_failed") {
+		t.Fatalf("expected validation_failed error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "bad-template") {
+		t.Fatalf("expected error to reference bad-template, got %v", err)
+	}
+	if len(f.envs) != 1 {
+		t.Fatalf("reject must happen before env creation; envs=%d", len(f.envs))
+	}
+}
+
+// TestEnvDispatchPerAgentEnvSpecsEmptyPreservesCurrentBehavior verifies that
+// empty per-agent env specs trigger no DB-backed validation calls and produce
+// the same rollout shape as today's default/shared sandbox behavior.
+func TestEnvDispatchPerAgentEnvSpecsEmptyPreservesCurrentBehavior(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 1)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag", Issue: &IssueInput{Title: "t"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(f.validateAgentCalls) != 0 {
+		t.Fatalf("empty specs must not trigger agent validation, got %d calls", len(f.validateAgentCalls))
+	}
+	if len(f.resolveEnvSpecCalls) != 0 {
+		t.Fatalf("empty specs must not trigger env spec resolution, got %d calls", len(f.resolveEnvSpecCalls))
+	}
+	if len(res.Rollouts) != 1 || len(res.Rollouts[0].AgentSandboxRefs) != 0 {
+		t.Fatalf("empty specs must not populate AgentSandboxRefs, got %+v", res.Rollouts)
 	}
 }
 

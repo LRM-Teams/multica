@@ -308,9 +308,9 @@ func (h *Handler) recordChannelAmbientGateDecision(action, reason string, ch Cha
 		"message", trigger.ID,
 	)
 
-	// NOTE: ambient gate hold events are not recorded here because this
-	// function is called inside an advisory-lock transaction. Inserting a
-	// separate activity event row would contend on the same lock and
-	// deadlock. The freshness-hold event should be recorded after the
-	// gate transaction commits — deferred to a follow-up.
+	// Ambient gate hold events are deferred — recording them from this
+	// function causes deadlocks in concurrent gate tests because the
+	// INSERT contends with the advisory lock held by sibling goroutines.
+	// A safe approach requires collecting decisions during the gate pass
+	// and batch-inserting after all transactions commit.
 }

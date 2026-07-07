@@ -2,11 +2,35 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
 	"testing"
 )
+
+type fakeSandboxInstanceCreator struct {
+	calls []createSandboxCall
+	ref   SandboxInstanceRef
+	err   error
+}
+
+type createSandboxCall struct {
+	WorkspaceID string
+	ActorUserID string
+	Template    string
+	BaseEnvID   string
+}
+
+func (c *fakeSandboxInstanceCreator) CreateSandboxInstance(_ context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error) {
+	c.calls = append(c.calls, createSandboxCall{WorkspaceID: in.WorkspaceID, ActorUserID: actorUserID, Template: in.Template, BaseEnvID: ""})
+	if c.err != nil {
+		return SandboxInstanceRef{}, c.err
+	}
+	return c.ref, nil
+}
+
+var _ SandboxInstanceCreator = (*fakeSandboxInstanceCreator)(nil)
 
 type fakeEnvDispatchDeps struct {
 	mu sync.Mutex
@@ -817,6 +841,74 @@ func TestEnvDispatchInput_Validate_CriticAgentID(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestEnvDispatchTrainedRolloutCreatesSandboxInstanceRefs verifies that when
+// a sandbox lifecycle creator is injected and the dispatch is save/resume-
+// capable (train_agent_id set), reset creates a sandbox_instance via the
+// creator instead of forking Fleet sandboxes, and populates SandboxRefs.
+func TestEnvDispatchTrainedRolloutCreatesSandboxInstanceRefs(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{ref: SandboxInstanceRef{
+		InstanceID: "inst-1", WorkspaceID: "ws", NodeID: "node-1",
+		Template: "default", Status: "pending",
+		RuntimeMetadata: json.RawMessage(`{}`),
+	}}
+	svc := NewEnvDispatchService(f, 8).WithSandboxLifecycle(creator)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag", TrainAgentID: "ag", Issue: &IssueInput{Title: "t"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(creator.calls) != 1 {
+		t.Fatalf("want 1 sandbox_instance create, got %d", len(creator.calls))
+	}
+	if len(f.sandboxes) != 0 {
+		t.Fatalf("trained rollout must not fork Fleet sandboxes, got %d", len(f.sandboxes))
+	}
+	if len(res.Rollouts) != 1 || len(res.Rollouts[0].SandboxRefs) != 1 {
+		t.Fatalf("want 1 rollout with 1 sandbox ref, got %+v", res.Rollouts)
+	}
+	if res.Rollouts[0].SandboxRefs[0].InstanceID != "inst-1" {
+		t.Fatalf("unexpected sandbox ref: %+v", res.Rollouts[0].SandboxRefs[0])
+	}
+	env := f.envs[res.Rollouts[0].EnvID]
+	if len(env.SandboxIDs) != 1 || env.SandboxIDs[0] != "inst-1" {
+		t.Fatalf("env sandbox_ids should carry the sandbox_instance id, got %+v", env.SandboxIDs)
+	}
+}
+
+// TestEnvDispatchNonTrainedRolloutPreservesFleetPath verifies that without a
+// train_agent_id (or without an injected lifecycle creator), the existing
+// Fleet fork path is preserved and SandboxRefs stays empty.
+func TestEnvDispatchNonTrainedRolloutPreservesFleetPath(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{ref: SandboxInstanceRef{InstanceID: "inst-1", WorkspaceID: "ws"}}
+	svc := NewEnvDispatchService(f, 8).WithSandboxLifecycle(creator)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag", Issue: &IssueInput{Title: "t"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(creator.calls) != 0 {
+		t.Fatalf("non-trained rollout must not create sandbox_instances, got %d", len(creator.calls))
+	}
+	if len(f.sandboxes) != 1 {
+		t.Fatalf("non-trained rollout should fork 1 Fleet sandbox, got %d", len(f.sandboxes))
+	}
+	if len(res.Rollouts) != 1 || len(res.Rollouts[0].SandboxRefs) != 0 {
+		t.Fatalf("non-trained rollout must have no sandbox refs, got %+v", res.Rollouts)
 	}
 }
 

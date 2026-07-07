@@ -192,6 +192,15 @@ type IssueRow struct {
 type EnvDispatchService struct {
 	deps        EnvDispatchDeps
 	concurrency int
+	lifecycle   SandboxInstanceCreator // optional; nil ⇒ existing Fleet fork path
+}
+
+// SandboxInstanceCreator creates a sandbox_instance-backed environment
+// handle. *EnvSandboxLifecycleService satisfies it. When injected into
+// EnvDispatchService, save/resume-capable (trained) rollouts create
+// sandbox_instances instead of forking Fleet sandboxes.
+type SandboxInstanceCreator interface {
+	CreateSandboxInstance(ctx context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error)
 }
 
 func NewEnvDispatchService(deps EnvDispatchDeps, concurrency int) *EnvDispatchService {
@@ -199,6 +208,15 @@ func NewEnvDispatchService(deps EnvDispatchDeps, concurrency int) *EnvDispatchSe
 		concurrency = 8
 	}
 	return &EnvDispatchService{deps: deps, concurrency: concurrency}
+}
+
+// WithSandboxLifecycle injects an optional sandbox_instance creator. When
+// set, trained rollouts (train_agent_id present) create sandbox_instances and
+// populate structured SandboxInstanceRefs; non-trained rollouts keep the
+// Fleet fork path. Returns the service for chaining.
+func (s *EnvDispatchService) WithSandboxLifecycle(lc SandboxInstanceCreator) *EnvDispatchService {
+	s.lifecycle = lc
+	return s
 }
 
 // ErrAllDispatchFailed signals reset succeeded but every rollout's dispatch
@@ -482,13 +500,31 @@ func (s *EnvDispatchService) validateBranchSource(ctx context.Context, in EnvDis
 
 // resetOne does the per-rollout reset (sandbox + env + project) per §7.2.
 func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, sourceEnv Env, idx int) (EnvRollout, error) {
-	// Branch always forks (spec §4.3): the source sandbox set is never reused
-	// in place, so the source state stays re-branchable (MCTS). Scratch forks
-	// the base. An env can hold many sandboxes (one per agent), so fork every
-	// one and carry the full set into the new env row.
-	forked, err := s.forkAll(ctx, sourceEnv.SandboxIDs, idx)
-	if err != nil {
-		return EnvRollout{}, fmt.Errorf("fork sandbox: %w", err)
+	// sandbox_instance backend bridge (D7): save/resume-capable (trained)
+	// rollouts create sandbox_instances via the injected lifecycle creator
+	// instead of forking Fleet sandboxes, and carry structured SandboxRefs.
+	// Non-trained rollouts (or no creator injected) keep the Fleet fork path.
+	var forked []string
+	var sandboxRefs []SandboxInstanceRef
+	if s.useSandboxInstanceBackend(in) {
+		refs, err := s.createSandboxInstanceRefs(ctx, in, sourceEnv)
+		if err != nil {
+			return EnvRollout{}, fmt.Errorf("create sandbox_instance: %w", err)
+		}
+		for _, r := range refs {
+			forked = append(forked, r.InstanceID)
+			sandboxRefs = append(sandboxRefs, r)
+		}
+	} else {
+		// Branch always forks (spec §4.3): the source sandbox set is never reused
+		// in place, so the source state stays re-branchable (MCTS). Scratch forks
+		// the base. An env can hold many sandboxes (one per agent), so fork every
+		// one and carry the full set into the new env row.
+		f, err := s.forkAll(ctx, sourceEnv.SandboxIDs, idx)
+		if err != nil {
+			return EnvRollout{}, fmt.Errorf("fork sandbox: %w", err)
+		}
+		forked = f
 	}
 	mode := EnvModeScratch
 	if in.Mode == EnvModeBranch {
@@ -524,7 +560,7 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 		chatSessionIDMap = smap
 	}
 
-	r := EnvRollout{EnvID: envID, ProjectID: projectID}
+	r := EnvRollout{EnvID: envID, ProjectID: projectID, SandboxRefs: sandboxRefs}
 	// Stash the single copied entity for dispatchOne (spec §7.4: exactly one).
 	if in.Mode == EnvModeBranch {
 		if in.Domain == EnvDomainSweLego {
@@ -540,6 +576,47 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 		}
 	}
 	return r, nil
+}
+
+// useSandboxInstanceBackend reports whether this rollout should create
+// sandbox_instance-backed sandboxes (D7). True when a lifecycle creator is
+// injected AND the rollout is save/resume-capable (train_agent_id present —
+// trained rollouts are the checkpointing target). Non-trained rollouts keep
+// the Fleet fork path.
+func (s *EnvDispatchService) useSandboxInstanceBackend(in EnvDispatchInput) bool {
+	return s.lifecycle != nil && in.TrainAgentID != ""
+}
+
+// createSandboxInstanceRefs creates one sandbox_instance per per-agent env
+// spec, or a single default sandbox_instance when no per-agent specs are set.
+// Branch (D7) creates from the source env's template; scratch creates from the
+// requested template. v1 resolves the workspace/node via the lifecycle creator
+// deps; production adapter wiring (node selection) is injected by the handler.
+func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in EnvDispatchInput, sourceEnv Env) ([]SandboxInstanceRef, error) {
+	if len(in.PerAgentEnvSpecs) > 0 {
+		refs := make([]SandboxInstanceRef, 0, len(in.PerAgentEnvSpecs))
+		for _, spec := range in.PerAgentEnvSpecs {
+			ref, err := s.lifecycle.CreateSandboxInstance(ctx, CreateSandboxInstanceInput{
+				WorkspaceID: in.WorkspaceID,
+				Template:    spec.Template,
+			}, in.UserID)
+			if err != nil {
+				return nil, err
+			}
+			refs = append(refs, ref)
+		}
+		return refs, nil
+	}
+	// No per-agent specs: create one default sandbox_instance for the rollout.
+	ref, err := s.lifecycle.CreateSandboxInstance(ctx, CreateSandboxInstanceInput{
+		WorkspaceID: in.WorkspaceID,
+		Template:    "default",
+	}, in.UserID)
+	if err != nil {
+		return nil, err
+	}
+	_ = sourceEnv // branch-from-template: source template resolution is a follow-up
+	return []SandboxInstanceRef{ref}, nil
 }
 
 // dispatchOne runs the dispatch phase for one rollout (§7.3). Best-effort:

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MarkChannelReadResult } from "@multica/core/types";
 
 type MarkRead = (
@@ -13,10 +13,19 @@ type MarkRead = (
  * cursor value from *before* this visit advanced it, so it's immune to the
  * mark-read → refetch race (Frank's race-free requirement).
  *
- * Prefers the list `payloadLastReadSeq` when present so an already-cached
- * conversation can pin the divider at first render (no round-trip wait); a
- * cold-loaded conversation (no cached cursor) falls back to the echoed response.
- * Both are pre-advance values, so neither can misplace the line.
+ * Two pre-advance sources, so the line can never be misplaced:
+ *  - a SNAPSHOT of the list cursor taken at the conversation's first render
+ *    (before mark-read runs). On a warm/soft-nav open the list is cached, so
+ *    this is the real pre-advance cursor and the divider pins at first render
+ *    with no round-trip wait.
+ *  - the echoed `previous_last_read_seq`, for a cold/deep-link open where the
+ *    list hasn't resolved yet.
+ *
+ * The list cursor is snapshotted, NOT read live: on a cold/deep-link load the
+ * live payload resolves to the ALREADY-advanced cursor (mark-read has run by the
+ * time the list arrives), which would beat the echo and hide the divider — the
+ * exact gap deep-linking into an unread conversation hit. The first-render
+ * snapshot is null on a cold load, so the echo wins there.
  *
  * The echoed value is captured once per conversation visit — re-marks (e.g. new
  * messages arriving while you're already here) don't move the frozen divider.
@@ -26,6 +35,17 @@ export function useEntryReadCursor(
   payloadLastReadSeq: number | null | undefined,
   markRead: MarkRead,
 ): number | null {
+  const key = channelId ?? null;
+
+  const payloadSnapRef = useRef<{ channelId: string | null; seq: number | null }>({
+    channelId: null,
+    seq: null,
+  });
+  if (payloadSnapRef.current.channelId !== key) {
+    // First render for this conversation — freeze the (pre-advance) list cursor.
+    payloadSnapRef.current = { channelId: key, seq: payloadLastReadSeq ?? null };
+  }
+
   const [echoed, setEchoed] = useState<{ channelId: string; seq: number | null } | null>(
     null,
   );
@@ -44,6 +64,8 @@ export function useEntryReadCursor(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelId]);
 
+  const payloadSnap =
+    payloadSnapRef.current.channelId === key ? payloadSnapRef.current.seq : null;
   const echoedSeq = echoed && echoed.channelId === channelId ? echoed.seq : null;
-  return payloadLastReadSeq ?? echoedSeq;
+  return payloadSnap ?? echoedSeq;
 }

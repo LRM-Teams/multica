@@ -547,12 +547,14 @@ function DmRow({
               >
                 {preview}
               </span>
+              {/* No @-mention dot in DMs by design (Iris/#303): every DM
+                  message is already directed at you, so the dot carries no
+                  extra signal over the unread count — it earns its place in
+                  channels, to separate an @-mention from ambient chatter. */}
               <ConversationUnreadAffordance
                 realUnread={realUnread}
                 isManualDot={isManualDot}
                 isMuted={isMuted}
-                hasMention={!!dm.has_mention}
-                mentionLabel={t(($) => $.sidebar.mention_indicator)}
               />
             </div>
           </div>

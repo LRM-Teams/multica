@@ -344,7 +344,7 @@ export function ChannelMessageBubble({
         avatar
       )}
       <div className="min-w-0 max-w-[min(760px,100%)]">
-        <div className="mb-0.5 flex select-none items-baseline gap-2 pr-24 text-sm">
+        <div className="mb-0.5 flex select-none items-baseline gap-2 pr-40 text-sm md:pr-24">
           {profileActorType && profileActorId ? (
             <ActorProfileTrigger
               memberType={profileActorType}
@@ -383,13 +383,13 @@ export function ChannelMessageBubble({
           )}
         </div>
         {!isEditing && (
-        <div className="pointer-events-none absolute right-3 top-2 z-10 flex items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+        <div className="pointer-events-auto absolute right-3 top-2 z-10 flex items-center gap-1 rounded-lg border border-border/60 bg-background/90 p-0.5 text-muted-foreground opacity-100 shadow-sm backdrop-blur transition-opacity md:pointer-events-none md:gap-0.5 md:border-0 md:bg-transparent md:p-0 md:opacity-0 md:shadow-none md:backdrop-blur-none md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100">
           {onReact && (
             <QuickEmojiPicker
               onSelect={(emoji) => onReact(message, emoji)}
               align="end"
               side="bottom"
-              className="size-7 rounded-md hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+              className="size-8 rounded-md hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground md:size-7 md:hover:bg-background/70 md:focus-visible:bg-background/70"
               ariaLabel={t(($) => $.message.add_reaction)}
               sideOffset={4}
               emojis={quickReactionEmojis}
@@ -400,7 +400,7 @@ export function ChannelMessageBubble({
           <button
             type="button"
             onClick={handleCopy}
-            className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+            className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground md:size-7 md:hover:bg-background/70 md:focus-visible:bg-background/70"
             aria-label={t(($) => $.message.copy_action)}
             title={t(($) => $.message.copy_action)}
           >
@@ -410,7 +410,7 @@ export function ChannelMessageBubble({
             <button
               type="button"
               onClick={() => onOpenThread?.(message)}
-              className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+              className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground md:size-7 md:hover:bg-background/70 md:focus-visible:bg-background/70"
               aria-label={t(($) => $.thread.reply)}
               title={t(($) => $.thread.reply)}
             >
@@ -421,7 +421,7 @@ export function ChannelMessageBubble({
             <button
               type="button"
               onClick={handleStartEdit}
-              className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+              className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground md:size-7 md:hover:bg-background/70 md:focus-visible:bg-background/70"
               aria-label={t(($) => $.message.edit_action)}
               title={t(($) => $.message.edit_action)}
             >
@@ -432,7 +432,7 @@ export function ChannelMessageBubble({
             <button
               type="button"
               onClick={handleDelete}
-              className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive"
+              className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive md:size-7"
               aria-label={t(($) => $.message.delete_action)}
               title={t(($) => $.message.delete_action)}
             >

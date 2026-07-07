@@ -6,25 +6,24 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
   type Ref,
   type ReactNode,
 } from "react";
-import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import { GroupedVirtuoso, type GroupedVirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
-import { useMessageDayDividers, useMessageTime } from "../../i18n/use-message-time";
+import { useMessageDayDividers } from "../../i18n/use-message-time";
 import { useT } from "../../i18n/use-t";
 import { maxSeqOrNull, useNewMessagesDivider } from "../hooks/use-new-messages-divider";
 import { computeNewArrivals } from "../hooks/use-new-arrivals-pill";
 
-// Small centered date pill (Iris #303 A). Same look inline (at a day boundary)
-// and when the sticky overlay pins the current day at the top.
+// Small centered date pill (Iris #303 A). Same look for the sticky day header
+// (Virtuoso path) and the inline divider (direct-fallback path).
 function DatePill({ label }: { label: string }) {
   return (
     <span className="rounded-full border border-border/60 bg-background/90 px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm">
@@ -33,26 +32,26 @@ function DatePill({ label }: { label: string }) {
   );
 }
 
-// Inserted before the first message of each local day.
-function DateDivider({ label }: { label: string }) {
+// Sticky day header (Iris #303 A). Rendered as a GroupedVirtuoso group header:
+// react-virtuoso pins it at the top of the scroll area while you're in that
+// day's messages and swaps it for the next day as its first message crosses the
+// top — the virtualizer owns the sticky, so (unlike the earlier floating
+// overlay) it can't double with an inline row or read the wrong day. The row is
+// transparent; only the centered pill carries a background, so messages scroll
+// cleanly beneath it (Slack-style).
+function DateGroupHeader({ label }: { label: string }) {
   return (
-    <div className="flex justify-center px-5 py-2" data-testid="date-divider">
+    <div className="flex justify-center px-5 py-2" data-testid="date-group-header">
       <DatePill label={label} />
     </div>
   );
 }
 
-// Floating "current day" header (Iris #303 A): pinned at the top of the message
-// area, showing the day of the topmost visible message and updating as you
-// scroll into the next day. react-virtuoso unmounts off-screen rows, so a
-// CSS-sticky divider row can't pin reliably — this overlay is driven by the
-// visible range instead.
-function StickyDateHeader({ label }: { label: string }) {
+// Inline date divider — used only on the non-virtualized direct-fallback path
+// (the Virtuoso path uses the sticky DateGroupHeader instead).
+function DateDivider({ label }: { label: string }) {
   return (
-    <div
-      className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center"
-      data-testid="sticky-date-header"
-    >
+    <div className="flex justify-center px-5 py-2" data-testid="date-divider">
       <DatePill label={label} />
     </div>
   );
@@ -201,7 +200,7 @@ function MessageViewport({
   onRetry,
 }: MessageViewportProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const virtuosoRef = useRef<GroupedVirtuosoHandle>(null);
   const messageRefs = useRef<Map<string, HTMLDivElement> | null>(null);
   // Only the direct-fallback path needs manual scroll-position preservation:
   // it renders plain divs with no virtualization, so prepending an older page
@@ -216,14 +215,30 @@ function MessageViewport({
   const channelId = messages[0]?.channel_id;
   const canLoadOlder = !!hasOlder && !loadingOlder && !!onLoadOlder;
   const dayDividers = useMessageDayDividers(messages);
-  const messageTime = useMessageTime();
-  // Sticky "current day" header: the day of the topmost visible message, tracked
-  // from Virtuoso's visible range (set in the handler, not a derived-state
-  // effect). Reuses the same day-label logic as the inline date dividers.
-  const [topDayLabel, setTopDayLabel] = useReducer(
-    (_prev: string | null, label: string | null) => label,
-    null,
-  );
+  // Day grouping for the sticky header (GroupedVirtuoso). `groupCounts` is the
+  // message count per local day, in order; `groupLabels` is the parallel day
+  // label. Reuses the memoized `dayDividers` (id → label at each day boundary).
+  // Invariant: sum(groupCounts) === messages.length — every message either
+  // opens a new group or extends the current one, so the virtualizer's item
+  // total always matches `data`.
+  const { groupCounts, groupLabels } = useMemo(() => {
+    const counts: number[] = [];
+    const labels: string[] = [];
+    for (const m of messages) {
+      const label = dayDividers.get(m.id);
+      // A boundary message has a label; the very first message always does. The
+      // `counts.length === 0` guard also captures the rare unparseable-date
+      // first message (no label) so it still opens a group and stays counted.
+      if (label !== undefined || counts.length === 0) {
+        counts.push(1);
+        labels.push(label ?? "");
+      } else {
+        const last = counts.length - 1;
+        counts[last] = (counts[last] ?? 0) + 1;
+      }
+    }
+    return { groupCounts: counts, groupLabels: labels };
+  }, [messages, dayDividers]);
   const newMessagesDivider = useNewMessagesDivider(
     channelId,
     messages,
@@ -401,9 +416,12 @@ function MessageViewport({
     );
   }
 
-  const renderRow = (msg: ChannelMessage) => {
+  // `inlineDivider` is set only on the direct-fallback path (no virtualization,
+  // so no sticky group header) — the Virtuoso path renders the day label as the
+  // sticky DateGroupHeader instead, so passing it here would double the date.
+  const renderRow = (msg: ChannelMessage, options?: { inlineDivider?: boolean }) => {
     const searchHighlighted = searchHitIds?.has(msg.id) ?? false;
-    const dividerLabel = dayDividers.get(msg.id);
+    const dividerLabel = options?.inlineDivider ? dayDividers.get(msg.id) : undefined;
     const isUnreadAnchor = newMessagesDivider?.anchorMessageId === msg.id;
     return (
       <Fragment key={msg.id}>
@@ -473,7 +491,7 @@ function MessageViewport({
               onLoadOlder={requestLoadOlderWithFallbackRestore}
             />
           </div>
-          {messages.map(renderRow)}
+          {messages.map((msg) => renderRow(msg, { inlineDivider: true }))}
           <div className="pb-5" />
         </div>
       </div>
@@ -494,33 +512,33 @@ function MessageViewport({
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      {topDayLabel && messages.length > 0 && (
-        <StickyDateHeader label={topDayLabel} />
-      )}
       <div
         ref={setScrollContainerRef}
         className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
         data-testid="message-scroller"
       >
-      <Virtuoso
+      <GroupedVirtuoso
         ref={virtuosoRef}
         customScrollParent={scrollContainerEl}
         data={messages}
+        groupCounts={groupCounts}
         firstItemIndex={firstItemIndex}
         initialTopMostItemIndex={initialTopMostItemIndex}
         increaseViewportBy={{ top: 320, bottom: 520 }}
         atBottomThreshold={120}
         atBottomStateChange={handleAtBottomStateChange}
-        rangeChanged={(range) => {
-          const msg = messages[range.startIndex - firstItemIndex];
-          const label = msg ? messageTime.dayLabel(msg.created_at) : null;
-          setTopDayLabel(label);
-        }}
         followOutput={() => (!loadingOlder && isNearBottom ? "smooth" : false)}
         startReached={() => {
           if (canLoadOlder) onLoadOlder?.();
         }}
         computeItemKey={(_, msg) => msg.id}
+        groupContent={(index) =>
+          groupLabels[index] ? (
+            <DateGroupHeader label={groupLabels[index]} />
+          ) : (
+            <div className="h-0" />
+          )
+        }
         components={{
           List: VirtuosoItemList,
           Header: () => (
@@ -539,7 +557,7 @@ function MessageViewport({
           ),
           Footer: () => <div className="pb-5" />,
         }}
-        itemContent={(_, msg) => renderRow(msg)}
+        itemContent={(_index, _groupIndex, msg) => renderRow(msg)}
       />
       </div>
       {!isNearBottom && newArrivals && (

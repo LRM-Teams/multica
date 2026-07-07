@@ -78,6 +78,11 @@ type TaskContextForEnv struct {
 	ProjectTitle        string                  // human-readable project title
 	ProjectResources    []ProjectResourceForEnv // resources attached to the project
 	ChatSessionID       string                  // non-empty for chat tasks
+	// Directed is true when this chat task was triggered by a directed message
+	// (DM, @mention, direct question/reply) rather than ambient channel
+	// observation. Used by renderChatRuntimeBrief to conditionally render the
+	// must-reply requirement (priority >= 2 is the directed signal).
+	Directed bool
 	// ChatCLITransportUnavailable is true when this chat run cannot expose the
 	// task-scoped chat CLI wrapper. In that mixed-version or fail-closed path,
 	// the brief must not tell the agent to use commands that are absent from

@@ -781,21 +781,22 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
 	b.WriteString("## Chat Mode\n\n")
-	// Directed reply requirement — placed first so it takes precedence over
-	// any conservative/ambient-only rules below. Every chat run includes this
-	// block; the agent judges from context whether it was directed (DM,
-	// @mention, direct question) or ambient (channel observation).
-	b.WriteString("### Reply Requirement (READ FIRST — overrides all rules below)\n\n")
-	b.WriteString("This run was triggered by a message directed at you: a DM, an @mention, or a direct question/reply addressed to you. **You MUST produce a visible response before finishing.** Acceptable responses, in order of preference:\n")
-	if ctx.ChatCLITransportUnavailable {
-		b.WriteString("1. Write the visible reply as your final assistant output (answer, result, or a brief acknowledgment).\n")
-		b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica react` or a sticker via `multica send --sticker`.\n")
-		b.WriteString("Producing empty final output is **not** an option for this run.\n")
-	} else {
-		b.WriteString("1. A reply via `multica send` (answer, result, or a brief acknowledgment).\n")
-		b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica react` or a sticker via `multica send --sticker`.\n")
+	// Directed reply requirement — only rendered for directed runs (DM,
+	// @mention, direct question, priority >= 2). Ambient runs never see
+	// this block, so they won't be pressured to reply to every message.
+	if ctx.Directed {
+		b.WriteString("### Reply Requirement (READ FIRST — overrides all rules below)\n\n")
+		b.WriteString("This run was triggered by a message directed at you: a DM, an @mention, or a direct question/reply addressed to you. **You MUST produce a visible response before finishing.** Acceptable responses, in order of preference:\n")
+		if ctx.ChatCLITransportUnavailable {
+			b.WriteString("1. Write the visible reply as your final assistant output (answer, result, or a brief acknowledgment).\n")
+			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica react` or a sticker via `multica send --sticker`.\n")
+			b.WriteString("Producing empty final output is **not** an option for this run.\n")
+		} else {
+			b.WriteString("1. A reply via `multica send` (answer, result, or a brief acknowledgment).\n")
+			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica react` or a sticker via `multica send --sticker`.\n")
+		}
+		b.WriteString("\nNot responding is **not** an option for this run. Any rule below or elsewhere in this brief that permits silence, discourages unnecessary replies, or says \"no visible reply is warranted\" applies **only** to ambient channel messages that are not addressed to you — none of those rules apply to this run. If you are unsure whether to reply: reply.\n\n")
 	}
-	b.WriteString("\nNot responding is **not** an option for this run. Any rule below or elsewhere in this brief that permits silence, discourages unnecessary replies, or says \"no visible reply is warranted\" applies **only** to ambient channel messages that are not addressed to you — none of those rules apply to this run. If you are unsure whether to reply: reply.\n\n")
 	// Regular chat mode context (directed + ambient agents both see this;
 	// the Reply Requirement above tells them which parts apply).
 	if ctx.ChatCLITransportUnavailable {

@@ -349,6 +349,9 @@
       "members_note": "エージェントに Lark Bot を紐付けできるのはワークスペースのオーナーと管理者のみです。接続済みの Bot は「設定 → 連携」で確認できます。"
     },
     "activity": {
+      "timeline_empty": "アクティビティはまだありません",
+      "view_diagnostics": "診断の詳細を表示",
+      "hide_diagnostics": "診断の詳細を非表示",
       "section_now": "現在",
       "section_last_30d": "過去30日",
       "section_recent": "最近の作業",

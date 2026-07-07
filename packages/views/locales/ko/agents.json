@@ -365,6 +365,9 @@
       "members_note": "에이전트에 Lark 봇을 연결할 수 있는 사람은 워크스페이스 소유자와 관리자뿐입니다. 연결된 봇은 설정 → 연동에서 확인할 수 있습니다."
     },
     "activity": {
+      "timeline_empty": "아직 활동이 없습니다",
+      "view_diagnostics": "진단 세부정보 보기",
+      "hide_diagnostics": "진단 세부정보 숨기기",
       "section_now": "현재",
       "section_last_30d": "최근 30일",
       "section_recent": "최근 작업",

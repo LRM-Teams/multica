@@ -212,6 +212,8 @@
     "heading": "Direct messages",
     "empty": "No direct messages yet.",
     "empty_cta": "Start a chat",
+    "wendy_title": "Ask Wendy",
+    "wendy_description": "Wendy can help you turn real work into useful agents.",
     "new_aria": "New direct message",
     "menu_aria": "Direct message actions",
     "agent_meta": "Agent",

@@ -51,14 +51,20 @@ function isStorageKeyDone(storageKey: string | null): boolean {
   return !!storageKey && typeof window !== "undefined" && window.localStorage.getItem(storageKey) === "done";
 }
 
-export function WindySetupModal() {
+type WindySetupModalProps = {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  onConfigured?: (agent: Agent, dmId?: string) => void;
+};
+
+export function WindySetupModal({ open, onOpenChange, onConfigured }: WindySetupModalProps = {}) {
   const { t } = useT("workspace");
   const wsId = useWorkspaceId();
   const user = useAuthStore((s) => s.user);
   const qc = useQueryClient();
   const { data: runtimes = [], isLoading: runtimesLoading, refetch: refetchRuntimes } = useQuery(runtimeListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: agents = [], isFetched: agentsFetched } = useQuery(agentListOptions(wsId));
   const storageKey = user ? setupStorageKey(wsId, user.id) : null;
   // An account that already has a Wendy agent with a runtime configured has
   // been through setup — a WINDY_SETUP_VERSION bump must not re-block it (#219).
@@ -84,13 +90,17 @@ export function WindySetupModal() {
     [effectiveRuntimeId, runtimes],
   );
 
-  if (
-    !user ||
-    !storageKey ||
-    configuredKey === storageKey ||
-    isStorageKeyDone(storageKey) ||
-    hasConfiguredWendy
-  ) {
+  const manualOpen = open === true;
+  const autoOpen =
+    open === undefined &&
+    !!user &&
+    !!storageKey &&
+    configuredKey !== storageKey &&
+    !isStorageKeyDone(storageKey) &&
+    agentsFetched &&
+    !hasConfiguredWendy;
+
+  if (!user || !storageKey || !agentsFetched || (!manualOpen && !autoOpen)) {
     return null;
   }
 
@@ -100,8 +110,11 @@ export function WindySetupModal() {
   // block. Mark the version done so declining (or a failed discovery) doesn't
   // re-trap the user out of channels/issues.
   const handleDismiss = () => {
-    if (storageKey && typeof window !== "undefined") window.localStorage.setItem(storageKey, "done");
-    updateState({ configuredKey: storageKey });
+    if (open === undefined) {
+      if (storageKey && typeof window !== "undefined") window.localStorage.setItem(storageKey, "done");
+      updateState({ configuredKey: storageKey });
+    }
+    onOpenChange?.(false);
   };
 
   const handleSubmit = async () => {
@@ -132,6 +145,8 @@ export function WindySetupModal() {
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
       window.localStorage.setItem(storageKey, "done");
       updateState({ configuredKey: storageKey });
+      onConfigured?.(updated, ensured.dm_id);
+      onOpenChange?.(false);
       toast.success("Wendy is ready and pinned in Direct Messages.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to set up Wendy");

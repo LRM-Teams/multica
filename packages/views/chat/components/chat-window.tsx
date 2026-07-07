@@ -51,7 +51,6 @@ import { ChatMessageList, ChatMessageSkeleton } from "./chat-message-list";
 import { ChatInput } from "./chat-input";
 import { ChatContactList } from "./chat-contact-list";
 import { ChatResizeHandles } from "./chat-resize-handles";
-import { useChatContextItems } from "./use-chat-context-items";
 import { useChatResize } from "./use-chat-resize";
 import { createLogger } from "@multica/core/logger";
 import type { Agent, ChatMessage, ChatMessagesPage, ChatPendingTask, ChatSession, PendingChatTasksResponse } from "@multica/core/types";
@@ -672,8 +671,6 @@ export function ChatWindow() {
     pointerEvents: isOpen ? "auto" : "none",
   };
 
-  const contextItems = useChatContextItems(wsId);
-
   return (
     <motion.div
       ref={windowRef}
@@ -826,7 +823,6 @@ export function ChatWindow() {
             onSelect={handleSelectAgent}
           />
         }
-        contextItems={contextItems}
       />
       </div>
     </motion.div>

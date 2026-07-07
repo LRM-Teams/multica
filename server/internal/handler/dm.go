@@ -48,6 +48,8 @@ type DMItem struct {
 	PinnedAt       *string             `json:"pinned_at,omitempty"`
 	MutedAt        *string             `json:"muted_at,omitempty"`
 	Muted          bool                `json:"muted,omitempty"`
+	HasMention     bool                `json:"has_mention,omitempty"`
+	LastReadSeq    *int64              `json:"last_read_seq,omitempty"`
 	UpdatedAt      string              `json:"updated_at"`
 }
 
@@ -705,7 +707,9 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		       a.avatar_url AS peer_avatar,
 		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
 		       COALESCE(uc.cnt, 0) AS real_unread,
-		       state.pinned_at, state.manual_unread_at, COALESCE(vcm.muted_at, state.muted_at)
+		       state.pinned_at, state.manual_unread_at, COALESCE(vcm.muted_at, state.muted_at),
+		       COALESCE(hm.has_mention, false),
+		       COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)::bigint
 		FROM channel ch
 		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
 		JOIN conversation conv ON conv.channel_id = ch.id
@@ -735,6 +739,18 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
 			  AND m.thread_root_message_id IS NULL
 		) uc ON true
+		LEFT JOIN LATERAL (
+			SELECT EXISTS (
+				SELECT 1 FROM channel_message m
+				WHERE m.channel_id = ch.id
+				  AND m.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
+				  AND NOT (m.author_type = 'user' AND m.author_id = $2)
+				  AND m.deleted_at IS NULL
+				  AND (m.content ILIKE '%@' || (
+				    SELECT name FROM "user" WHERE id = $2
+				  ) || '%' OR m.parts::text ILIKE '%mention://' || $2::text || '%')
+			) AS has_mention
+		) hm ON true
 		LEFT JOIN dm_peer_state state
 		  ON state.workspace_id = ch.workspace_id
 		 AND state.user_id = $2
@@ -755,8 +771,10 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		var peerAvatar, lastType, lastName, lastContent pgtype.Text
 		var lastParts []byte
 		var unread int
+		var hasMention bool
+		var lastReadSeq int64
 		if err := rows.Scan(&id, &updatedAt, &peerType, &peerID, &peerName, &peerAvatar,
-			&lastType, &lastName, &lastContent, &lastParts, &lastAt, &unread, &pinnedAt, &manualUnreadAt, &mutedAt); err != nil {
+			&lastType, &lastName, &lastContent, &lastParts, &lastAt, &unread, &pinnedAt, &manualUnreadAt, &mutedAt, &hasMention, &lastReadSeq); err != nil {
 			continue
 		}
 		if peerType == "agent" {
@@ -774,6 +792,8 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 			PinnedAt:       timestampToPtr(pinnedAt),
 			MutedAt:        timestampToPtr(mutedAt),
 			Muted:          mutedAt.Valid,
+			HasMention:     hasMention,
+			LastReadSeq:    &lastReadSeq,
 			UpdatedAt:      timestampToString(updatedAt),
 		}
 		if item.ManuallyUnread && item.Unread == 0 {

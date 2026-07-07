@@ -781,10 +781,27 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
 	b.WriteString("## Chat Mode\n\n")
+	// Directed reply requirement — placed first so it takes precedence over
+	// any conservative/ambient-only rules below. Every chat run includes this
+	// block; the agent judges from context whether it was directed (DM,
+	// @mention, direct question) or ambient (channel observation).
+	b.WriteString("### Reply Requirement (READ FIRST — overrides all rules below)\n\n")
+	b.WriteString("This run was triggered by a message directed at you: a DM, an @mention, or a direct question/reply addressed to you. **You MUST produce a visible response before finishing.** Acceptable responses, in order of preference:\n")
 	if ctx.ChatCLITransportUnavailable {
-		b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Reply conversationally and directly. This run is using compatibility chat output: write the visible reply as your final assistant output, and the platform will deliver it to the current conversation. Do not try to find, install, or discuss chat send/react commands, missing tools, tokens, transport, or runtime setup. Do not print JSON envelopes, action objects, no_reply/stay_silent tokens, protocol text, debugging notes, or explanations that no visible reply is needed as the final answer. If no visible reply is warranted, finish with empty output. Do not mutate issues as an incidental side effect of browsing; issue writes follow the claim-first issue model described below.\n\n")
+		b.WriteString("1. Write the visible reply as your final assistant output (answer, result, or a brief acknowledgment).\n")
+		b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica react` or a sticker via `multica send --sticker`.\n")
+		b.WriteString("Producing empty final output is **not** an option for this run.\n")
 	} else {
-		b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Reply conversationally and directly by using the task-scoped Multica CLI transport for visible chat output. If no visible reply is warranted, do not send a message and do not print a no-reply rationale as final output. Do not mutate issues as an incidental side effect of browsing; issue writes follow the claim-first issue model described below.\n\n")
+		b.WriteString("1. A reply via `multica send` (answer, result, or a brief acknowledgment).\n")
+		b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica react` or a sticker via `multica send --sticker`.\n")
+	}
+	b.WriteString("\nNot responding is **not** an option for this run. Any rule below or elsewhere in this brief that permits silence, discourages unnecessary replies, or says \"no visible reply is warranted\" applies **only** to ambient channel messages that are not addressed to you — none of those rules apply to this run. If you are unsure whether to reply: reply.\n\n")
+	// Regular chat mode context (directed + ambient agents both see this;
+	// the Reply Requirement above tells them which parts apply).
+	if ctx.ChatCLITransportUnavailable {
+		b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Reply conversationally and directly. This run is using compatibility chat output: write the visible reply as your final assistant output, and the platform will deliver it to the current conversation. Do not try to find, install, or discuss chat send/react commands, missing tools, tokens, transport, or runtime setup. Do not print JSON envelopes, action objects, no_reply/stay_silent tokens, protocol text, debugging notes, or explanations that no visible reply is needed as the final answer. Any permission to finish with empty output here applies **only** to ambient channel messages not addressed to you — never to DMs, @mentions, or direct questions. Do not mutate issues as an incidental side effect of browsing; issue writes follow the claim-first issue model described below.\n\n")
+	} else {
+		b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Reply conversationally and directly by using the task-scoped Multica CLI transport for visible chat output. If no visible reply is warranted, do not send a message and do not print a no-reply rationale as final output (this applies **only** to ambient channel messages not addressed to you — never to DMs, @mentions, or direct questions). Do not mutate issues as an incidental side effect of browsing; issue writes follow the claim-first issue model described below.\n\n")
 	}
 	b.WriteString("Context boundaries:\n")
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")

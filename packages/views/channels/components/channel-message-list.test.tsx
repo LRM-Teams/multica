@@ -32,7 +32,16 @@ vi.mock("react-virtuoso", async () => {
         initialTopMostItemIndex?: number;
         firstItemIndex?: number;
         startReached?: () => void;
-        itemContent: (index: number, item: ChannelMessage) => React.ReactNode;
+        // GroupedVirtuoso extras — accepted so the mock stands in for it; the
+        // sticky group header is a device concern, so the mock ignores them and
+        // just renders the windowed message rows the assertions check.
+        groupCounts?: number[];
+        groupContent?: (index: number) => React.ReactNode;
+        itemContent: (
+          index: number,
+          groupIndex: number,
+          item: ChannelMessage,
+        ) => React.ReactNode;
       },
       ref: React.ForwardedRef<{ scrollToIndex: (...args: unknown[]) => void }>,
     ) => {
@@ -56,7 +65,7 @@ vi.mock("react-virtuoso", async () => {
             <button type="button" data-testid="start-reached" onClick={() => startReached()} />
           )}
           {Header ? <Header /> : null}
-          <List>{windowedData.map((item, offset) => itemContent(start + offset, item))}</List>
+          <List>{windowedData.map((item, offset) => itemContent(start + offset, 0, item))}</List>
           {Footer ? <Footer /> : null}
         </div>
       );
@@ -66,6 +75,7 @@ vi.mock("react-virtuoso", async () => {
 
   return {
     Virtuoso: MockVirtuoso,
+    GroupedVirtuoso: MockVirtuoso,
   };
 });
 

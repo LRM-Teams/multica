@@ -71,13 +71,7 @@ vi.mock("react-virtuoso", async () => {
         initialTopMostItemIndex?: number;
         firstItemIndex?: number;
         startReached?: () => void;
-        groupCounts?: number[];
-        groupContent?: (index: number) => React.ReactNode;
-        itemContent: (
-          index: number,
-          groupIndex: number,
-          item: ChannelMessage,
-        ) => React.ReactNode;
+        itemContent: (index: number, item: ChannelMessage) => React.ReactNode;
       },
       ref: React.ForwardedRef<{ scrollToIndex: (...args: unknown[]) => void }>,
     ) => {
@@ -95,14 +89,14 @@ vi.mock("react-virtuoso", async () => {
             <button type="button" data-testid="start-reached" onClick={() => startReached()} />
           )}
           {Header ? <Header /> : null}
-          <List>{windowedData.map((item, offset) => itemContent(start + offset, 0, item))}</List>
+          <List>{windowedData.map((item, offset) => itemContent(start + offset, item))}</List>
           {Footer ? <Footer /> : null}
         </div>
       );
     },
   );
   MockVirtuoso.displayName = "MockVirtuoso";
-  return { Virtuoso: MockVirtuoso, GroupedVirtuoso: MockVirtuoso };
+  return { Virtuoso: MockVirtuoso };
 });
 
 // Keep the real mutation hooks (so edit/delete really route through the api

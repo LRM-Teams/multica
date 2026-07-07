@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -184,4 +185,126 @@ func TestMaybeSpawnCriticTask_SpawnFails_FallsBackToD(t *testing.T) {
 	require.Len(t, rl.endSessionCalls, 1)
 	// default reward used
 	assert.Equal(t, 1.0, rl.setRewardCalls[0].reward)
+}
+
+// criticTaskForCloseTest builds a critic task row carrying context.critic_of
+// and a TaskCompletedPayload result whose Output ends in {"reward": <float>}.
+// Tests mutate it locally when they need a different shape (e.g., no critic_of,
+// unparseable output, out-of-range reward).
+func criticTaskForCloseTest(reward float64) db.AgentTaskQueue {
+	return db.AgentTaskQueue{
+		ID:      util.MustParseUUID("66666666-6666-6666-6666-666666666666"),
+		AgentID: util.MustParseUUID(testCriticAgentID),
+		Context: []byte(`{"critic_of":{"trained_task_id":"` + testTrainingTaskID + `","proxy_key":"pk1","session_id":"s1","project_id":"` + testTrainingProjectID + `"},"trained_output":"trained agent's final output text"}`),
+		Result:  []byte(`{"output":"Some critique text...\n{\"reward\": ` + fmtFloat(reward) + `}"}`),
+	}
+}
+
+// fmtFloat formats a float without trailing zeros (0.85 → "0.85", 1.5 → "1.5").
+// Used only by test fixtures to embed expected rewards in JSON literals.
+func fmtFloat(f float64) string {
+	return strconv.FormatFloat(f, 'f', -1, 64)
+}
+
+// (T8-1) Critic task with valid context.critic_of + Output ending in
+// {"reward": 0.85} → SetReward("pk1", 0.85) THEN EndSession("pk1"), in order.
+func TestMaybeCloseTrainingSessionFromCritic_ParsesRewardAndCloses(t *testing.T) {
+	rl := &fakeRLClient{}
+	deps := &TrainingSessionDeps{
+		Closer:        rl,
+		DefaultReward: 1.0,
+	}
+	criticTask := criticTaskForCloseTest(0.85)
+
+	closed := maybeCloseTrainingSessionFromCritic(context.Background(), deps, criticTask)
+	require.True(t, closed)
+	require.Len(t, rl.setRewardCalls, 1)
+	assert.Equal(t, "pk1", rl.setRewardCalls[0].proxyKey)
+	assert.InDelta(t, 0.85, rl.setRewardCalls[0].reward, 0.001)
+	require.Len(t, rl.endSessionCalls, 1)
+	assert.Equal(t, "pk1", rl.endSessionCalls[0])
+	// Order: SetReward BEFORE EndSession
+	require.Len(t, rl.callOrder, 2)
+	assert.Equal(t, "SetReward", rl.callOrder[0])
+	assert.Equal(t, "EndSession", rl.callOrder[1])
+}
+
+// (T8-2) Critic output without a parseable reward line → default reward used,
+// session still closed.
+func TestMaybeCloseTrainingSessionFromCritic_Unparseable_FallbackDefault(t *testing.T) {
+	rl := &fakeRLClient{}
+	deps := &TrainingSessionDeps{
+		Closer:        rl,
+		DefaultReward: 1.0,
+	}
+	criticTask := db.AgentTaskQueue{
+		Context: []byte(`{"critic_of":{"proxy_key":"pk1","session_id":"s1","project_id":"` + testTrainingProjectID + `"}}`),
+		Result:  []byte(`{"output":"I couldn't decide on a score"}`),
+	}
+
+	closed := maybeCloseTrainingSessionFromCritic(context.Background(), deps, criticTask)
+	require.True(t, closed)
+	require.Len(t, rl.setRewardCalls, 1)
+	assert.InDelta(t, 1.0, rl.setRewardCalls[0].reward, 0.001) // default
+	require.Len(t, rl.endSessionCalls, 1)
+}
+
+// (T8-3) Critic reward 1.5 (out of [0.0, 1.0]) → default reward used.
+func TestMaybeCloseTrainingSessionFromCritic_OutOfRange_FallbackDefault(t *testing.T) {
+	rl := &fakeRLClient{}
+	deps := &TrainingSessionDeps{
+		Closer:        rl,
+		DefaultReward: 1.0,
+	}
+	criticTask := criticTaskForCloseTest(1.5)
+
+	closed := maybeCloseTrainingSessionFromCritic(context.Background(), deps, criticTask)
+	require.True(t, closed)
+	require.Len(t, rl.setRewardCalls, 1)
+	assert.InDelta(t, 1.0, rl.setRewardCalls[0].reward, 0.001) // default fallback
+	require.Len(t, rl.endSessionCalls, 1)
+}
+
+// (T8-4) Non-critic task (no context.critic_of) → no-op, returns false so the
+// routing layer proceeds with trained-terminal logic.
+func TestMaybeCloseTrainingSessionFromCritic_NonCriticTask_NoOp(t *testing.T) {
+	rl := &fakeRLClient{}
+	deps := &TrainingSessionDeps{
+		Closer:        rl,
+		DefaultReward: 1.0,
+	}
+	regularTask := db.AgentTaskQueue{
+		Context: []byte(`{}`), // no critic_of
+	}
+
+	closed := maybeCloseTrainingSessionFromCritic(context.Background(), deps, regularTask)
+	assert.False(t, closed)
+	assert.Empty(t, rl.setRewardCalls)
+	assert.Empty(t, rl.endSessionCalls)
+}
+
+// (T8-5) Nil deps (training not configured) → no-op, returns false.
+func TestMaybeCloseTrainingSessionFromCritic_NilDeps_NoOp(t *testing.T) {
+	regularTask := db.AgentTaskQueue{
+		Context: []byte(`{"critic_of":{"proxy_key":"pk1","session_id":"s1","project_id":"` + testTrainingProjectID + `"}}`),
+	}
+	closed := maybeCloseTrainingSessionFromCritic(context.Background(), nil, regularTask)
+	assert.False(t, closed)
+}
+
+// (T8-6) Malformed context.critic_of (not valid JSON) → treat as non-critic,
+// return false so routing proceeds.
+func TestMaybeCloseTrainingSessionFromCritic_MalformedCriticOf_NoOp(t *testing.T) {
+	rl := &fakeRLClient{}
+	deps := &TrainingSessionDeps{
+		Closer:        rl,
+		DefaultReward: 1.0,
+	}
+	criticTask := db.AgentTaskQueue{
+		Context: []byte(`{"critic_of":not-valid-json}`),
+	}
+
+	closed := maybeCloseTrainingSessionFromCritic(context.Background(), deps, criticTask)
+	assert.False(t, closed)
+	assert.Empty(t, rl.setRewardCalls)
 }

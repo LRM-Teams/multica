@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -334,14 +335,24 @@ func (s *TaskService) MaybeCloseTrainingSession(ctx context.Context, task db.Age
 }
 
 // RouteTerminalTrainingTask is the terminal-transition routing hook invoked at
-// complete/fail/cancel. When the owning project has a training_dispatch row
+// complete/fail/cancel. When the terminating task is itself a critic task
+// (carries context.critic_of), T8 closes the trained session using the critic's
+// parsed reward. Otherwise, when the owning project has a training_dispatch row
 // with a critic_agent_id, it spawns a critic task (deferring the RL session
-// close to critic-terminal — T8). Otherwise, it falls back to D's close hook
-// (SetReward(default) → EndSession). Safe to call on any terminal task;
-// errors are logged, not propagated — the task is already terminal.
+// close to critic-terminal — T8). If no critic is configured, it falls back to
+// D's close hook (SetReward(default) → EndSession). Safe to call on any
+// terminal task; errors are logged, not propagated — the task is already
+// terminal.
 func (s *TaskService) RouteTerminalTrainingTask(ctx context.Context, task db.AgentTaskQueue) {
 	if s.Training == nil {
 		return
+	}
+	// T8: if this is a critic task, close the trained session from it. The
+	// critic path parses {"reward": <float>} from the critic's output and
+	// calls SetReward then EndSession on the trained session. Returns false
+	// (no-op) for non-critic tasks, so trained-terminal routing proceeds.
+	if maybeCloseTrainingSessionFromCritic(ctx, s.Training, task) {
+		return // closed via critic; skip trained-terminal routing
 	}
 	projectID := pgtype.UUID{}
 	if task.IssueID.Valid {
@@ -489,4 +500,131 @@ func maybeSpawnCriticTask(ctx context.Context, deps *TrainingSessionDeps, traine
 		"session_id", cfg.SessionID,
 	)
 	return nil
+}
+
+// maybeCloseTrainingSessionFromCritic closes the trained RL session when the
+// terminating task is itself a critic task (carries context.critic_of). It
+// reads proxy_key from context.critic_of and parses {"reward": <float>} from
+// the LAST line of the critic's output (TaskCompletedPayload.Output stored in
+// result JSONB). SetReward is called before EndSession (same ordering as D's
+// close hook). RL errors are logged, not propagated — the task is already
+// terminal.
+//
+// Returns true when the critic path fired (session close attempted). Returns
+// false (no-op) when:
+//   - deps == nil (training not configured);
+//   - the task has no context.critic_of (not a critic task — routing proceeds
+//     with trained-terminal logic);
+//   - context.critic_of is malformed (skip silently — the task is mis-tagged).
+//
+// The default reward fallback is deps.DefaultReward (set by NewTrainingSessionDeps
+// from TRAINING_DEFAULT_REWARD, default 1.0). When DefaultReward is zero
+// (e.g., tests constructing TrainingSessionDeps directly), the package constant
+// trainingDefaultReward is used.
+func maybeCloseTrainingSessionFromCritic(ctx context.Context, deps *TrainingSessionDeps, critic db.AgentTaskQueue) bool {
+	if deps == nil || deps.Closer == nil {
+		return false
+	}
+
+	// Read context.critic_of. If absent or malformed, this is not a critic
+	// task — routing proceeds with trained-terminal logic.
+	var payload struct {
+		CriticOf json.RawMessage `json:"critic_of"`
+	}
+	if len(critic.Context) == 0 {
+		return false
+	}
+	if err := json.Unmarshal(critic.Context, &payload); err != nil {
+		return false // malformed context — not a critic task
+	}
+	if len(payload.CriticOf) == 0 || string(payload.CriticOf) == "null" {
+		return false // no critic_of — not a critic task
+	}
+	var cof struct {
+		TrainedTaskID string `json:"trained_task_id"`
+		ProxyKey      string `json:"proxy_key"`
+		SessionID     string `json:"session_id"`
+		ProjectID     string `json:"project_id"`
+	}
+	if err := json.Unmarshal(payload.CriticOf, &cof); err != nil {
+		return false // malformed critic_of — skip
+	}
+	if cof.ProxyKey == "" {
+		// Critic task without a proxy_key linkage — nothing to close. Treat
+		// as a non-critic task so routing proceeds (the trained session will
+		// be closed by D's fallback if/when the trained task itself terminates).
+		return false
+	}
+
+	// Extract the critic's output text from result JSONB
+	// (TaskCompletedPayload.Output). For failed/cancelled critic tasks this is
+	// empty — parseCriticReward falls back to the default reward.
+	output := ""
+	if len(critic.Result) > 0 {
+		var resultPayload protocol.TaskCompletedPayload
+		if err := json.Unmarshal(critic.Result, &resultPayload); err == nil {
+			output = resultPayload.Output
+		}
+	}
+
+	defaultReward := deps.DefaultReward
+	if defaultReward == 0 {
+		defaultReward = trainingDefaultReward
+	}
+	reward := parseCriticReward(output, defaultReward)
+
+	// Set reward (best effort)
+	if err := deps.Closer.SetReward(ctx, cof.ProxyKey, reward); err != nil {
+		slog.Warn("critic close: SetReward failed",
+			"critic_task_id", util.UUIDToString(critic.ID),
+			"trained_task_id", cof.TrainedTaskID,
+			"session_id", cof.SessionID,
+			"reward", reward,
+			"error", err,
+		)
+	}
+
+	// End session (best effort)
+	if err := deps.Closer.EndSession(ctx, cof.ProxyKey); err != nil {
+		slog.Warn("critic close: EndSession failed",
+			"critic_task_id", util.UUIDToString(critic.ID),
+			"trained_task_id", cof.TrainedTaskID,
+			"session_id", cof.SessionID,
+			"error", err,
+		)
+	}
+
+	slog.Info("training session closed from critic",
+		"critic_task_id", util.UUIDToString(critic.ID),
+		"trained_task_id", cof.TrainedTaskID,
+		"session_id", cof.SessionID,
+		"reward", reward,
+	)
+	return true
+}
+
+// parseCriticReward extracts {"reward": <float>} from the LAST line of output.
+// Returns defaultReward on any failure (no lines, JSON parse failure, missing
+// reward field). Range-checked to [0.0, 1.0]; out-of-range values fall back to
+// defaultReward. Standalone (not a method) for testability.
+func parseCriticReward(output string, defaultReward float64) float64 {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return defaultReward
+	}
+	lines := strings.Split(trimmed, "\n")
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+	if lastLine == "" {
+		return defaultReward
+	}
+	var parsed struct {
+		Reward float64 `json:"reward"`
+	}
+	if err := json.Unmarshal([]byte(lastLine), &parsed); err != nil {
+		return defaultReward
+	}
+	if parsed.Reward < 0.0 || parsed.Reward > 1.0 {
+		return defaultReward
+	}
+	return parsed.Reward
 }

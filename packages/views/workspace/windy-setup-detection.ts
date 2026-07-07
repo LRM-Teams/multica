@@ -8,7 +8,23 @@ export function isWindyAgent(agent: Agent): boolean {
 }
 
 export function findWindyAgent(agents: readonly Agent[]): Agent | null {
-  return agents.find(isWindyAgent) ?? null;
+  const candidates = agents.filter(isWindyAgent);
+  if (candidates.length === 0) return null;
+  return candidates.reduce((best, candidate) =>
+    preferWindyAgent(candidate, best) ? candidate : best,
+  );
+}
+
+function preferWindyAgent(candidate: Agent, current: Agent): boolean {
+  if (!!candidate.archived_at !== !!current.archived_at) return !candidate.archived_at;
+  if (!!candidate.runtime_id !== !!current.runtime_id) return !!candidate.runtime_id;
+  const candidateIsWendy = candidate.display_name === WINDY_AGENT_NAME;
+  const currentIsWendy = current.display_name === WINDY_AGENT_NAME;
+  if (candidateIsWendy !== currentIsWendy) return candidateIsWendy;
+  const candidateTime = candidate.updated_at || candidate.created_at || "";
+  const currentTime = current.updated_at || current.created_at || "";
+  if (candidateTime !== currentTime) return candidateTime > currentTime;
+  return candidate.id < current.id;
 }
 
 /**
@@ -18,5 +34,6 @@ export function findWindyAgent(agents: readonly Agent[]): Agent | null {
  * users (#219). Detection matches the server's Wendy/Windy/Joe migration path.
  */
 export function accountHasConfiguredWindy(agents: readonly Agent[]): boolean {
-  return agents.some((a) => isWindyAgent(a) && !!a.runtime_id);
+  const windy = findWindyAgent(agents);
+  return !!windy && !windy.archived_at && !!windy.runtime_id;
 }

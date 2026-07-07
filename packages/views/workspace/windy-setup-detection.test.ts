@@ -3,7 +3,16 @@ import type { Agent } from "@multica/core/types";
 import { accountHasConfiguredWindy, findWindyAgent } from "./windy-setup-detection";
 
 function agent(partial: Partial<Agent>): Agent {
-  return { id: partial.display_name ?? partial.name ?? "agent", name: "", display_name: "", runtime_id: "", ...partial } as Agent;
+  return {
+    id: partial.id ?? partial.display_name ?? partial.name ?? "agent",
+    name: "",
+    display_name: "",
+    runtime_id: "",
+    archived_at: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...partial,
+  } as Agent;
 }
 
 describe("accountHasConfiguredWindy", () => {
@@ -42,5 +51,24 @@ describe("accountHasConfiguredWindy", () => {
         agent({ display_name: "Wendy", runtime_id: "rt-2" }),
       ]),
     ).toBe(true);
+  });
+
+  it("prefers active configured canonical Wendy when duplicates exist", () => {
+    const picked = findWindyAgent([
+      agent({ id: "archived-newer", display_name: "Wendy", runtime_id: "rt-archived", archived_at: "2026-01-04T00:00:00Z", updated_at: "2026-01-04T00:00:00Z" }),
+      agent({ id: "legacy-configured", display_name: "Joe", runtime_id: "rt-legacy", updated_at: "2026-01-03T00:00:00Z" }),
+      agent({ id: "canonical-configured", display_name: "Wendy", runtime_id: "rt-canonical", updated_at: "2026-01-02T00:00:00Z" }),
+      agent({ id: "canonical-unconfigured", display_name: "Wendy", runtime_id: "", updated_at: "2026-01-05T00:00:00Z" }),
+    ]);
+
+    expect(picked?.id).toBe("canonical-configured");
+  });
+
+  it("does not treat an archived Wendy as configured", () => {
+    expect(
+      accountHasConfiguredWindy([
+        agent({ display_name: "Wendy", runtime_id: "rt-1", archived_at: "2026-01-01T00:00:00Z" }),
+      ]),
+    ).toBe(false);
   });
 });

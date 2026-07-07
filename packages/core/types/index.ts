@@ -38,6 +38,7 @@ export type {
   SkillSummary,
   AgentSkillSummary,
   SkillFile,
+  PlatformSkillSummary,
   AgentMemory,
   AgentSkillSuggestionAction,
   AgentSkillSuggestionStatus,

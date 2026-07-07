@@ -577,6 +577,12 @@ export interface SkillFile {
   updated_at: string;
 }
 
+export interface PlatformSkillSummary {
+  name: string;
+  description: string;
+  installed_skill_id?: string;
+}
+
 export interface AgentMemory {
   id: string;
   workspace_id: string;

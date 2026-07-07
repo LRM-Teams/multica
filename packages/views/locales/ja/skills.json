@@ -68,7 +68,8 @@
     "source_runtime_shared_unknown": "共有フォルダから同期",
     "source_clawhub": "ClawHub から",
     "source_skills_sh": "Skills.sh から",
-    "source_github": "GitHub から"
+    "source_github": "GitHub から",
+    "source_platform": "Multica から"
   },
   "detail": {
     "all_skills": "すべてのスキル",
@@ -96,7 +97,8 @@
       "origin_github": "インポート済み · GitHub",
       "origin_workspace": "ワークスペース",
       "updated_label": "{{when}} に更新",
-      "by_creator": "{{name}}"
+      "by_creator": "{{name}}",
+      "origin_platform": "Multica プラットフォーム"
     },
     "conflict_banner": {
       "title": "他のユーザーがこのスキルを更新しました",
@@ -129,7 +131,8 @@
       "imported_clawhub": "ClawHub からインポート",
       "imported_skills_sh": "Skills.sh からインポート",
       "imported_github": "GitHub からインポート",
-      "provider": "プロバイダー · {{provider}}"
+      "provider": "プロバイダー · {{provider}}",
+      "imported_platform": "Multica プラットフォームから"
     },
     "not_found": {
       "title": "スキルが見つかりません",
@@ -183,6 +186,10 @@
       "runtime": {
         "title": "ランタイムからコピー",
         "desc": "ローカルランタイムをスキャンし、ディスク上のスキルの 1 つをこのワークスペースに昇格します。"
+      },
+      "platform": {
+        "title": "プラットフォーム手順をインストール",
+        "desc": "Multica が管理する移行 skill をこのワークスペースに追加します。"
       }
     },
     "method_card": {
@@ -191,7 +198,9 @@
       "url_title": "URL からインポート",
       "url_desc": "ClawHub または Skills.sh の公開スキルを取得します。",
       "runtime_title": "ランタイムからコピー",
-      "runtime_desc": "ローカルランタイムにすでにインストールされているスキルを昇格します。"
+      "runtime_desc": "ローカルランタイムにすでにインストールされているスキルを昇格します。",
+      "platform_title": "メモリ移行ワークフロー",
+      "platform_desc": "古いメモリを移行する agent に割り当てるため、段階的な意味的移行 skill をインストールします。"
     },
     "manual": {
       "name_label": "名前",
@@ -218,6 +227,15 @@
       "fallback_error": "インポートに失敗しました",
       "cancel": "キャンセル",
       "toast_imported": "スキルをインポートしました"
+    },
+    "platform": {
+      "skill_title": "multica-memory-migration",
+      "skill_desc": "古い agent フォルダからの意味的移行を支援します。inventory、エイリアス対応、候補抽出、REVIEW.md 仕分け、安全な書き込み、最終レポートを行います。",
+      "cancel": "キャンセル",
+      "install": "skill をインストール",
+      "installing": "インストール中...",
+      "toast_installed": "移行 skill をインストールしました",
+      "fallback_error": "プラットフォーム skill のインストールに失敗しました"
     }
   },
   "runtime_import": {

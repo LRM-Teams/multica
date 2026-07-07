@@ -46,13 +46,19 @@ export function ConversationUnreadAffordance({
   realUnread,
   isManualDot,
   isMuted,
+  hasMention = false,
+  mentionLabel,
 }: {
   realUnread: number;
   isManualDot: boolean;
   isMuted: boolean;
+  /** An unread message in this conversation @-mentions the viewer (#303). */
+  hasMention?: boolean;
+  /** Accessible label for the @-mention dot. */
+  mentionLabel?: string;
 }) {
-  if (realUnread > 0) {
-    return (
+  const countBadge =
+    realUnread > 0 ? (
       <span
         className={cn(
           "flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-medium",
@@ -63,17 +69,30 @@ export function ConversationUnreadAffordance({
       >
         {realUnread > 99 ? "99+" : realUnread}
       </span>
-    );
-  }
-  if (isManualDot) {
-    return (
+    ) : isManualDot ? (
       <span
         className={cn(
           "size-2 shrink-0 rounded-full",
           isMuted ? "bg-muted-foreground/50" : "bg-primary",
         )}
       />
+    ) : null;
+
+  // An @-mention outranks the plain count and shows a distinct red dot alongside
+  // it (both coexist — Parker's spec). Suppressed when muted: mute stays silent
+  // (no attention-grabbing red), while the count still renders so the
+  // conversation isn't lost.
+  if (hasMention && !isMuted) {
+    return (
+      <span className="flex shrink-0 items-center gap-1">
+        <span
+          role="img"
+          aria-label={mentionLabel}
+          className="size-2 shrink-0 rounded-full bg-destructive"
+        />
+        {countBadge}
+      </span>
     );
   }
-  return null;
+  return countBadge;
 }

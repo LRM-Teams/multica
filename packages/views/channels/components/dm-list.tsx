@@ -525,6 +525,8 @@ function DmRow({
                 realUnread={realUnread}
                 isManualDot={isManualDot}
                 isMuted={isMuted}
+                hasMention={!!dm.has_mention}
+                mentionLabel={t(($) => $.sidebar.mention_indicator)}
               />
             </div>
           </div>

@@ -81,8 +81,10 @@ type TrainingSessionDeps struct {
 	DefaultReward float64 // Fallback reward if training dispatch not available
 }
 
-// trainingDefaultReward is the fallback reward when training dispatch can't be loaded.
-// T8 will make this configurable.
+// trainingDefaultReward is the fallback reward when deps.DefaultReward is
+// zero (e.g. tests constructing TrainingSessionDeps directly). Production
+// code goes through NewTrainingSessionDeps, which sets DefaultReward from
+// TRAINING_DEFAULT_REWARD (default 1.0).
 const trainingDefaultReward = 1.0
 
 // MaybeOpenTrainingSession is the public entry point invoked at every

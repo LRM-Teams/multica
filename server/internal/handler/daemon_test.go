@@ -2956,6 +2956,42 @@ func TestCompleteTask_CLICapableRunDoesNotSuppressExplicitMessageSendAction(t *t
 	assertTaskOutputSuppressedReason(t, taskID, "")
 }
 
+func TestCompleteTask_DirectedCLICapableRunFlagsMustReplyFailure(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	// Directed task (priority=2, @mention/DM) on a CLI-capable run.
+	// Agent outputs plain text instead of using multica send → suppressed
+	// and flagged as must-reply failure so Activity can surface it.
+	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", []string{
+		protocol.DaemonCapabilityChannelOutputActions,
+		protocol.DaemonCapabilityAgentCLITransport,
+	})
+	rawOutput := "I already handled this in a previous message, no need to reply again."
+
+	w := completeTaskForTest(t, taskID, map[string]any{"output": rawOutput})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertNoChannelMessageContent(t, channelID, rawOutput)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
+
+	// Verify must_reply_failure flag is set in the task result.
+	var raw []byte
+	if err := testPool.QueryRow(context.Background(), `SELECT result FROM agent_task_queue WHERE id = $1`, taskID).Scan(&raw); err != nil {
+		t.Fatalf("load task result: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("decode task result: %v", err)
+	}
+	if v, ok := result["must_reply_failure"].(bool); !ok || !v {
+		t.Fatalf("must_reply_failure = %v, want true (directed run with suppressed output)", result["must_reply_failure"])
+	}
+}
+
 func TestCompleteTask_GroupChannelStructuredMessageSendOutputIsSuppressed(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

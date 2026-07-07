@@ -67,3 +67,111 @@ func (q *Queries) GetTrainingDispatchByProject(ctx context.Context, projectID pg
 	)
 	return i, err
 }
+
+const findCriticTaskForTrained = `-- name: FindCriticTaskForTrained :one
+-- Finds a critic task already spawned for a trained task. Used by the
+-- critic-spawn hook's idempotency guard: if a row exists, the spawn is
+-- skipped. Matches on context.critic_of.trained_task_id. Returns the
+-- critic task's row (LIMIT 1) or no rows.
+SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id FROM agent_task_queue
+WHERE context->'critic_of'->>'trained_task_id' = $1::text
+LIMIT 1
+`
+
+// FindCriticTaskForTrained resolves a previously-spawned critic task for the
+// given trained task ID. Used by the critic-spawn hook's idempotency guard.
+// Returns pgx.ErrNoRows when no critic exists yet.
+func (q *Queries) FindCriticTaskForTrained(ctx context.Context, trainedTaskID string) (AgentTaskQueue, error) {
+	row := q.db.QueryRow(ctx, findCriticTaskForTrained, trainedTaskID)
+	var i AgentTaskQueue
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.IssueID,
+		&i.Status,
+		&i.Priority,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.CreatedAt,
+		&i.Context,
+		&i.RuntimeID,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.ChatSessionID,
+		&i.AutopilotRunID,
+		&i.Attempt,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
+	)
+	return i, err
+}
+
+const createCriticTask = `-- name: CreateCriticTask :one
+-- Inserts a critic task peer (parent_task_id NOT set) carrying the
+-- critic_of linkage + trained_output in context JSONB. status is hardcoded
+-- 'queued' so the daemon's normal claim path picks it up. issue_id is
+-- inherited from the trained task so the critic shows up on the same issue.
+INSERT INTO agent_task_queue (agent_id, issue_id, status, priority, context)
+VALUES ($1, $2, 'queued', $3, $4)
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+`
+
+type CreateCriticTaskParams struct {
+	AgentID  pgtype.UUID `json:"agent_id"`
+	IssueID  pgtype.UUID `json:"issue_id"`
+	Priority int32       `json:"priority"`
+	Context  []byte      `json:"context"`
+}
+
+// CreateCriticTask inserts a critic task peer (no parent_task_id) carrying
+// the critic_of linkage + trained_output in context JSONB. status is hardcoded
+// 'queued' so the daemon's claim path picks it up.
+func (q *Queries) CreateCriticTask(ctx context.Context, arg CreateCriticTaskParams) (AgentTaskQueue, error) {
+	row := q.db.QueryRow(ctx, createCriticTask,
+		arg.AgentID,
+		arg.IssueID,
+		arg.Priority,
+		arg.Context,
+	)
+	var i AgentTaskQueue
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.IssueID,
+		&i.Status,
+		&i.Priority,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.CreatedAt,
+		&i.Context,
+		&i.RuntimeID,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.ChatSessionID,
+		&i.AutopilotRunID,
+		&i.Attempt,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
+	)
+	return i, err
+}

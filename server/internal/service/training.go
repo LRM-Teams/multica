@@ -15,6 +15,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/arealrl"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // arealProxyProvider / arealProxyModel are the fixed provider/model the trained
@@ -68,6 +69,13 @@ type arealSessionCloser interface {
 	EndSession(ctx context.Context, proxyKey string) error
 }
 
+// criticTaskCreator creates critic tasks and reads existing ones for the
+// critic-spawn hook's idempotency guard. *db.Queries satisfies it.
+type criticTaskCreator interface {
+	FindCriticTaskForTrained(ctx context.Context, trainedTaskID string) (db.AgentTaskQueue, error)
+	CreateCriticTask(ctx context.Context, arg db.CreateCriticTaskParams) (db.AgentTaskQueue, error)
+}
+
 // TrainingSessionDeps bundles the collaborators the session-open/close hooks need.
 // A nil *TrainingSessionDeps means training is not configured for this
 // deployment, in which case the hook is a no-op. Construction/wiring of the
@@ -75,6 +83,7 @@ type arealSessionCloser interface {
 type TrainingSessionDeps struct {
 	Lookup        trainingDispatchLookup
 	Store         trainingTaskStore
+	Creator       criticTaskCreator
 	RL            arealSessionStarter
 	Closer        arealSessionCloser
 	ProxyURL      string
@@ -322,4 +331,160 @@ func (s *TaskService) MaybeCloseTrainingSession(ctx context.Context, task db.Age
 		}
 	}
 	maybeCloseTrainingSession(ctx, s.Training, task, projectID)
+}
+
+// RouteTerminalTrainingTask is the terminal-transition routing hook invoked at
+// complete/fail/cancel. When the owning project has a training_dispatch row
+// with a critic_agent_id, it spawns a critic task (deferring the RL session
+// close to critic-terminal — T8). Otherwise, it falls back to D's close hook
+// (SetReward(default) → EndSession). Safe to call on any terminal task;
+// errors are logged, not propagated — the task is already terminal.
+func (s *TaskService) RouteTerminalTrainingTask(ctx context.Context, task db.AgentTaskQueue) {
+	if s.Training == nil {
+		return
+	}
+	projectID := pgtype.UUID{}
+	if task.IssueID.Valid {
+		if issue, err := s.Queries.GetIssue(ctx, task.IssueID); err == nil {
+			projectID = issue.ProjectID
+		}
+	}
+	if !projectID.Valid {
+		// No owning project → cannot resolve a training dispatch → D's close
+		// fires (no-op when the task has no areal_proxy context).
+		maybeCloseTrainingSession(ctx, s.Training, task, projectID)
+		return
+	}
+	dispatch, err := s.Training.Lookup.GetTrainingDispatchByProject(ctx, projectID)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("training: terminal-route dispatch lookup failed",
+				"task_id", util.UUIDToString(task.ID),
+				"project_id", util.UUIDToString(projectID),
+				"error", err,
+			)
+		}
+		// No dispatch (or lookup failed) → D's close fires.
+		maybeCloseTrainingSession(ctx, s.Training, task, projectID)
+		return
+	}
+	if !dispatch.CriticAgentID.Valid {
+		// No critic configured → D's close fires.
+		maybeCloseTrainingSession(ctx, s.Training, task, projectID)
+		return
+	}
+	// Critic configured → spawn (or skip if already exists). Spawn failure
+	// is swallowed inside maybeSpawnCriticTask, which fires the D-close
+	// fallback itself — so we do NOT double-close here on error.
+	if err := maybeSpawnCriticTask(ctx, s.Training, task, dispatch, projectID); err != nil {
+		slog.Warn("critic spawn routing failed",
+			"task_id", util.UUIDToString(task.ID),
+			"project_id", util.UUIDToString(projectID),
+			"error", err,
+		)
+	}
+}
+
+// maybeSpawnCriticTask creates a critic task for the trained agent's output
+// when training_dispatch has a critic_agent_id. Replaces D's close hook for
+// trained tasks when a critic is configured. Idempotent — a prior spawn
+// (matched on context.critic_of.trained_task_id) is a no-op. On spawn
+// failure, the error is swallowed and D's close hook fires (SetReward +
+// EndSession with default reward) so the RL session is not orphaned.
+//
+// Returns nil in all expected cases (including spawn-failure fallback). An
+// error is returned only for pre-spawn lookup failures that prevent the
+// fallback from firing safely — the caller logs but does not double-close.
+func maybeSpawnCriticTask(ctx context.Context, deps *TrainingSessionDeps, trained db.AgentTaskQueue, td db.TrainingDispatch, projectID pgtype.UUID) error {
+	if deps == nil {
+		return nil
+	}
+	if !td.CriticAgentID.Valid {
+		// No critic configured → caller's D-close fallback fires.
+		return nil
+	}
+	if deps.Creator == nil {
+		// No creator wired (training disabled or mis-configured) → D's close
+		// fires via the routing layer. This path is defensive; production
+		// wiring (Task 10) sets Creator whenever Lookup is set.
+		return nil
+	}
+
+	// Idempotency: skip if a critic task already exists for this trained task.
+	existing, err := deps.Creator.FindCriticTaskForTrained(ctx, util.UUIDToString(trained.ID))
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("training: find existing critic for task %s: %w", util.UUIDToString(trained.ID), err)
+	}
+	if existing.ID.Valid {
+		// Already spawned — critic-terminal (T8) owns the eventual close.
+		return nil
+	}
+
+	// Read the trained session creds from context.areal_proxy. If the trained
+	// task has no proxy config, it never went through the open hook — nothing
+	// to link to, so D's close fires (which itself no-ops without the proxy).
+	cfg, ok := extractArealProxyConfig(trained.Context)
+	if !ok {
+		maybeCloseTrainingSession(ctx, deps, trained, projectID)
+		return nil
+	}
+
+	// Build the critic_of linkage stored in the critic task's context JSONB.
+	criticOf, err := json.Marshal(map[string]string{
+		"trained_task_id": util.UUIDToString(trained.ID),
+		"proxy_key":       cfg.APIKey,
+		"session_id":      cfg.SessionID,
+		"project_id":      util.UUIDToString(projectID),
+	})
+	if err != nil {
+		return fmt.Errorf("training: marshal critic_of for task %s: %w", util.UUIDToString(trained.ID), err)
+	}
+
+	// Extract the trained task's literal output text from result JSONB
+	// (TaskCompletedPayload.Output). For failed/cancelled tasks this is
+	// empty — the critic still runs against whatever output survived.
+	trainedOutput := ""
+	if len(trained.Result) > 0 {
+		var payload protocol.TaskCompletedPayload
+		if err := json.Unmarshal(trained.Result, &payload); err == nil {
+			trainedOutput = payload.Output
+		}
+	}
+
+	criticCtx, err := json.Marshal(map[string]any{
+		"critic_of":      json.RawMessage(criticOf),
+		"trained_output": trainedOutput,
+	})
+	if err != nil {
+		return fmt.Errorf("training: marshal critic context for task %s: %w", util.UUIDToString(trained.ID), err)
+	}
+
+	// Create the critic task as a peer (parent_task_id NOT set). issue_id is
+	// inherited so the critic shows up on the same issue as the trained task.
+	if _, err := deps.Creator.CreateCriticTask(ctx, db.CreateCriticTaskParams{
+		AgentID:  td.CriticAgentID,
+		IssueID:  trained.IssueID,
+		Priority: trained.Priority,
+		Context:  criticCtx,
+	}); err != nil {
+		// Spawn failed — fall back to D's close so the RL session is not
+		// orphaned. The error is swallowed; the close is the user-visible
+		// outcome (default reward + EndSession).
+		slog.Warn("critic spawn failed; closing with default reward",
+			"trained_task_id", util.UUIDToString(trained.ID),
+			"critic_agent_id", util.UUIDToString(td.CriticAgentID),
+			"project_id", util.UUIDToString(projectID),
+			"error", err,
+		)
+		maybeCloseTrainingSession(ctx, deps, trained, projectID)
+		return nil
+	}
+
+	slog.Info("critic task spawned",
+		"trained_task_id", util.UUIDToString(trained.ID),
+		"critic_agent_id", util.UUIDToString(td.CriticAgentID),
+		"project_id", util.UUIDToString(projectID),
+		"session_id", cfg.SessionID,
+	)
+	return nil
 }

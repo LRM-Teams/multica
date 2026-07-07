@@ -85,6 +85,7 @@ func NewTrainingSessionDeps(cfg TrainingConfig, q *db.Queries) *TrainingSessionD
 		return &TrainingSessionDeps{
 			Lookup:        q,
 			Store:         q,
+			Creator:       q,
 			ProxyURL:      cfg.ProxyURL,
 			DefaultReward: cfg.DefaultReward,
 			// RL, Closer nil — open hook loud-errors if a training target is hit.
@@ -96,6 +97,7 @@ func NewTrainingSessionDeps(cfg TrainingConfig, q *db.Queries) *TrainingSessionD
 	return &TrainingSessionDeps{
 		Lookup:        q,
 		Store:         q,
+		Creator:       q,
 		RL:            client,
 		Closer:        client,
 		ProxyURL:      cfg.ProxyURL,

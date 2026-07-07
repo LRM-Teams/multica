@@ -2661,6 +2661,29 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 	if _, err := h.DB.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
 		slog.Warn(logScope+": tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
 	}
+
+	// Record a wake-trigger activity event so the agent's Activity timeline
+	// shows why this run started (mention / ambient / DM / thread reply).
+	wakeReason := "mention"
+	if lowPriority {
+		wakeReason = "ambient"
+	} else if ch.Kind == "dm" {
+		wakeReason = "dm"
+	} else if trigger.ThreadRootMessageID != nil {
+		wakeReason = "thread_reply"
+	}
+	recordAgentActivityEvent(ctx, h.DB,
+		parseUUID(ch.WorkspaceID), agent.ID, agent.RuntimeID, task.ID,
+		"lifecycle", "task_dispatched", "info",
+		"channel", parseUUID(ch.ID), ch.Name,
+		wakeReason, "Agent woken by "+wakeReason,
+		map[string]any{
+			"trigger_message_id": trigger.ID,
+			"trigger_author":     trigger.AuthorName,
+			"trigger_content":   truncateForActivity(trigger.Content, 100),
+			"thread_root":       trigger.ThreadRootMessageID,
+		},
+	)
 }
 
 // dispatchChannelMemberWelcome makes every agent member of a channel post a

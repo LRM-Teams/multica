@@ -170,9 +170,6 @@ type Daemon struct {
 
 	sharedSkillScanMu    sync.Mutex
 	sharedSkillScanCache map[string]string // scanRoot\x00skillKey -> fingerprint
-
-	piMemoryPostRunExec func(ctx context.Context, name string, args []string, env map[string]string) ([]byte, error)
-	piMemoryPostRunSync func(ctx context.Context, rt Runtime) error
 }
 
 // New creates a new Daemon instance.
@@ -203,8 +200,6 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	d.runner = taskRunnerFunc(d.runTask)
 	d.runUpdateFn = d.runUpdate
 	d.verifyUpdatedBinaryFn = d.verifyUpdatedBinary
-	d.piMemoryPostRunExec = defaultPiMemoryPostRunExec
-	d.piMemoryPostRunSync = d.syncEvolutionSubmissionsForRuntime
 	return d
 }
 
@@ -2556,7 +2551,6 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 			}
 		}
 	}
-	d.maybeStartPiMemoryPostRun(task, result, rt, taskLog)
 }
 
 // acquireLocalDirectoryLockIfNeeded inspects the task's project resources for
@@ -3351,11 +3345,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		})
 	}
 
-	withToolCount := func(r TaskResult) TaskResult {
-		r.ToolCount = tools
-		return r
-	}
-
 	output := result.Output
 	var parts []protocol.MessagePart
 	var reaction *protocol.ChatReactionPayload
@@ -3372,7 +3361,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			// calls (e.g. posting comments via CLI, pushing code). Treat as
 			// a normal completion so the task is not incorrectly marked as
 			// blocked.
-			return withToolCount(TaskResult{
+			return TaskResult{
 				Status:    "completed",
 				Comment:   "",
 				Action:    protocol.ChatOutputActionNoReply,
@@ -3381,7 +3370,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				WorkDir:   env.WorkDir,
 				EnvRoot:   env.RootDir,
 				Usage:     usageEntries,
-			}), nil
+			}, nil
 		}
 		// Detect "poisoned" terminal output: the agent didn't reach a real
 		// conclusion but emitted a known fallback marker (iteration limit,
@@ -3394,7 +3383,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			taskLog.Warn("agent finished with poisoned fallback output, classifying as blocked",
 				"failure_reason", reason,
 			)
-			return withToolCount(TaskResult{
+			return TaskResult{
 				Status:        "blocked",
 				Comment:       output,
 				SessionID:     result.SessionID,
@@ -3402,9 +3391,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				EnvRoot:       env.RootDir,
 				Usage:         usageEntries,
 				FailureReason: reason,
-			}), nil
+			}, nil
 		}
-		return withToolCount(TaskResult{
+		return TaskResult{
 			Status:    "completed",
 			Comment:   output,
 			Action:    outputAction,
@@ -3417,7 +3406,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			WorkDir:   env.WorkDir,
 			EnvRoot:   env.RootDir,
 			Usage:     usageEntries,
-		}), nil
+		}, nil
 	case "timeout":
 		// Surface session_id/work_dir so the chat resume pointer is kept
 		// in sync even when the agent times out after building a session.
@@ -3434,7 +3423,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			)
 			failureReason = reason
 		}
-		return withToolCount(TaskResult{
+		return TaskResult{
 			Status:        "blocked",
 			Comment:       comment,
 			SessionID:     result.SessionID,
@@ -3442,7 +3431,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			EnvRoot:       env.RootDir,
 			FailureReason: failureReason,
 			Usage:         usageEntries,
-		}), nil
+		}, nil
 	case "idle_watchdog":
 		// The idle watchdog force-stopped the run because the backend
 		// went silent (e.g. claude blocked on a tool call against a
@@ -3453,7 +3442,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		if comment == "" {
 			comment = idleWatchdogReason(d.cfg.AgentIdleWatchdog)
 		}
-		return withToolCount(TaskResult{
+		return TaskResult{
 			Status:        "blocked",
 			Comment:       comment,
 			SessionID:     result.SessionID,
@@ -3461,21 +3450,21 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			EnvRoot:       env.RootDir,
 			FailureReason: "idle_watchdog",
 			Usage:         usageEntries,
-		}), nil
+		}, nil
 	case "cancelled":
 		// Server cancelled the task (e.g. issue reassignment, user cancel).
 		// handleTask's cancelledByPoll branch already discards this result,
 		// so this case is mainly defensive — and preserves the "cancelled"
 		// status string for the "agent finished" log line so operators can
 		// distinguish "task cancelled by server" from a real timeout.
-		return withToolCount(TaskResult{
+		return TaskResult{
 			Status:    "cancelled",
 			Comment:   "task cancelled by server",
 			SessionID: result.SessionID,
 			WorkDir:   env.WorkDir,
 			EnvRoot:   env.RootDir,
 			Usage:     usageEntries,
-		}), nil
+		}, nil
 	default:
 		errMsg := result.Error
 		if errMsg == "" {
@@ -3511,7 +3500,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			// fact.
 			failureReason = taskfailure.Classify(errMsg).String()
 		}
-		return withToolCount(TaskResult{
+		return TaskResult{
 			Status:        "blocked",
 			Comment:       errMsg,
 			SessionID:     result.SessionID,
@@ -3519,7 +3508,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			EnvRoot:       env.RootDir,
 			Usage:         usageEntries,
 			FailureReason: failureReason,
-		}), nil
+		}, nil
 	}
 }
 

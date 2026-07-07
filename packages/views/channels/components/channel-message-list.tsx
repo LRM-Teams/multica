@@ -19,7 +19,8 @@ import { ChannelMessageBubble } from "./channel-message-bubble";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 import { useMessageDayDividers } from "../../i18n/use-message-time";
 import { useT } from "../../i18n/use-t";
-import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
+import { maxSeqOrNull, useNewMessagesDivider } from "../hooks/use-new-messages-divider";
+import { computeNewArrivals } from "../hooks/use-new-arrivals-pill";
 
 // Raft-style date separator inserted before the first message of each local day.
 function DateDivider({ label }: { label: string }) {
@@ -47,6 +48,25 @@ function UnreadDivider({ count }: { count: number }) {
       </span>
       <div className="h-px flex-1 bg-brand/50" />
     </div>
+  );
+}
+
+// Floating "N new messages ↓" jump pill (#303 follow-up). Shown when you're
+// scrolled up and messages arrive live below you; clicking jumps to the first
+// one. Same brand language as the divider; anchored bottom-center above the
+// composer, pinned to the viewport (doesn't scroll with messages).
+function NewMessagesPill({ count, onClick }: { count: number; onClick: () => void }) {
+  const { t } = useT("common");
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full bg-brand px-3 py-1.5 text-xs font-medium text-white shadow-md transition-colors hover:bg-brand/90"
+      data-testid="new-messages-pill"
+    >
+      <span>{t(($) => $.time.new_messages, { count })}</span>
+      <span aria-hidden="true">↓</span>
+    </button>
   );
 }
 
@@ -199,6 +219,52 @@ function MessageViewport({
     if (!newMessagesDivider) return -1;
     return messages.findIndex((m) => m.id === newMessagesDivider.anchorMessageId);
   }, [messages, newMessagesDivider]);
+
+  // Floating "N new messages ↓" pill (#303 follow-up). Two boundaries, combined:
+  //  - entry high-water: the latest message present on entry, snapshotted per
+  //    conversation visit (same ref pattern as the divider);
+  //  - caughtUpSeq: bumped forward whenever you reach the bottom or click the
+  //    pill — set only in event handlers, never a derived-state effect.
+  // `newArrivals` = messages from others past that boundary, i.e. they arrived
+  // live while you're scrolled up. The pill renders only when not at the bottom.
+  const entryHighWaterRef = useRef<{ channelId: string | null; seq: number | null }>({
+    channelId: null,
+    seq: null,
+  });
+  const pillKey = channelId ?? null;
+  if (entryHighWaterRef.current.channelId !== pillKey) {
+    entryHighWaterRef.current = { channelId: pillKey, seq: maxSeqOrNull(messages) };
+  } else if (entryHighWaterRef.current.seq === null && messages.length > 0) {
+    entryHighWaterRef.current.seq = maxSeqOrNull(messages);
+  }
+  const [caughtUpSeq, setCaughtUpSeq] = useState<number | null>(null);
+  const arrivalsBoundary = caughtUpSeq ?? entryHighWaterRef.current.seq;
+  const newArrivals = useMemo(
+    () => computeNewArrivals(messages, arrivalsBoundary, currentUserId),
+    [messages, arrivalsBoundary, currentUserId],
+  );
+  const handleAtBottomStateChange = useCallback(
+    (atBottom: boolean) => {
+      setIsNearBottom(atBottom);
+      // At the bottom = caught up to the latest; the pill has nothing to show.
+      if (atBottom) setCaughtUpSeq(maxSeqOrNull(messages));
+    },
+    [messages],
+  );
+  const handleNewArrivalsClick = useCallback(() => {
+    const target = newArrivals
+      ? messages.findIndex((m) => m.id === newArrivals.firstMessageId)
+      : -1;
+    if (target >= 0) {
+      virtuosoRef.current?.scrollToIndex({
+        index: firstItemIndex + target,
+        align: "start",
+        behavior: "smooth",
+      });
+    }
+    // Clicking = caught up: dismiss the pill until more arrive.
+    setCaughtUpSeq(maxSeqOrNull(messages));
+  }, [newArrivals, messages, firstItemIndex]);
 
   // Fallback-only: captures the pre-prepend scroll offset so the layout
   // effect below can restore it once the older page's rows are in the DOM.
@@ -396,11 +462,12 @@ function MessageViewport({
           : firstItemIndex;
 
   return (
-    <div
-      ref={setScrollContainerRef}
-      className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
-      data-testid="message-scroller"
-    >
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <div
+        ref={setScrollContainerRef}
+        className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
+        data-testid="message-scroller"
+      >
       <Virtuoso
         ref={virtuosoRef}
         customScrollParent={scrollContainerEl}
@@ -409,7 +476,7 @@ function MessageViewport({
         initialTopMostItemIndex={initialTopMostItemIndex}
         increaseViewportBy={{ top: 320, bottom: 520 }}
         atBottomThreshold={120}
-        atBottomStateChange={setIsNearBottom}
+        atBottomStateChange={handleAtBottomStateChange}
         followOutput={() => (!loadingOlder && isNearBottom ? "smooth" : false)}
         startReached={() => {
           if (canLoadOlder) onLoadOlder?.();
@@ -435,6 +502,10 @@ function MessageViewport({
         }}
         itemContent={(_, msg) => renderRow(msg)}
       />
+      </div>
+      {!isNearBottom && newArrivals && (
+        <NewMessagesPill count={newArrivals.count} onClick={handleNewArrivalsClick} />
+      )}
     </div>
   );
 }

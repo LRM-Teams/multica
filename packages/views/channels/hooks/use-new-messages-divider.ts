@@ -13,7 +13,7 @@ interface SeqMessage {
   author_id?: string | null;
 }
 
-function maxSeqOrNull(messages: readonly SeqMessage[]): number | null {
+export function maxSeqOrNull(messages: readonly SeqMessage[]): number | null {
   let max: number | null = null;
   for (const m of messages) if (max === null || m.seq > max) max = m.seq;
   return max;

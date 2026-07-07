@@ -2317,6 +2317,28 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidReaction)
 		return nil
 	}
+	// #308: Directed run (DM/@mention/direct question, priority >= 2) must produce
+	// visible output. If the agent explicitly chose no_reply or produced empty
+	// output with no CLI-sent message, it's a must-reply failure.
+	// This catches cases like Pi returning no_reply for every DM message,
+	// which bypasses #295's unsent_final_output suppression (no_reply is an
+	// explicit action).
+	// Plain-text final output (action="", non-empty) IS visible even without
+	// CLI transport — do NOT flag those as failure.
+	if channelTask && task.Priority >= 2 && !req.MustReplyFailure {
+		hasCLIOutput := h.taskHasAgentTransportVisibleOutput(ctx, task.ID)
+		isNoReply := req.Action == protocol.ChatOutputActionNoReply
+		isEmptyMessage := req.Action == "" && outputType == protocol.ChatOutputKindMessage && strings.TrimSpace(output) == "" && len(parts) == 0
+		hasPlainText := req.Action == "" && outputType == protocol.ChatOutputKindMessage && (strings.TrimSpace(output) != "" || len(parts) > 0)
+		hasSendAction := req.Action == protocol.ChatOutputActionMessageSend
+		hasReactAction := req.Action == protocol.ChatOutputActionMessageReact
+		if !hasCLIOutput && !hasSendAction && !hasReactAction && !hasPlainText && (isNoReply || isEmptyMessage) {
+			req.MustReplyFailure = true
+			slog.Warn("complete task: directed run must-reply failure — no visible output",
+				"task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID),
+				"action", req.Action, "type", outputType, "priority", task.Priority)
+		}
+	}
 	req.Output = output
 	req.Type = outputType
 	req.Parts = parts

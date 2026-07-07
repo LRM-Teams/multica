@@ -2992,6 +2992,50 @@ func TestCompleteTask_DirectedCLICapableRunFlagsMustReplyFailure(t *testing.T) {
 	}
 }
 
+func TestCompleteTask_DirectedNoReplyRunFlagsMustReplyFailure(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	// Non-CLI-capable directed run (Pi scenario): agent returns explicit
+	// no_reply action with no CLI-sent message → must-reply failure.
+	// This verifies #308's standalone check (outside #295 suppression).
+	taskID, channelID := createChannelCompletionTask(t, "group")
+
+	w := completeTaskForTest(t, taskID, map[string]any{
+		"action": protocol.ChatOutputActionNoReply,
+		"output": "",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// No channel message should be created (no_reply produces no visible output).
+	var msgCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'agent'
+	`, channelID).Scan(&msgCount); err != nil {
+		t.Fatalf("count channel messages: %v", err)
+	}
+	if msgCount != 0 {
+		t.Fatalf("channel message count = %d, want 0", msgCount)
+	}
+
+	// Verify must_reply_failure flag is set in the task result.
+	var raw []byte
+	if err := testPool.QueryRow(context.Background(), `SELECT result FROM agent_task_queue WHERE id = $1`, taskID).Scan(&raw); err != nil {
+		t.Fatalf("load task result: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("decode task result: %v", err)
+	}
+	if v, ok := result["must_reply_failure"].(bool); !ok || !v {
+		t.Fatalf("must_reply_failure = %v, want true (directed no_reply run)", result["must_reply_failure"])
+	}
+}
+
 func TestCompleteTask_GroupChannelStructuredMessageSendOutputIsSuppressed(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

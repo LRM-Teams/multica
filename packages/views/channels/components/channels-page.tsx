@@ -2265,6 +2265,7 @@ export function ChannelsPage() {
                 currentUserId={currentUserId}
                 ownName={currentUserName ?? undefined}
                 highlightMessageId={effectiveHighlightId}
+                lastReadSeq={active.last_read_seq ?? null}
                 firstItemIndex={messagesFirstItemIndex}
                 searchHitIds={searchHitIds}
                 searchQuery={searchHighlightQuery}

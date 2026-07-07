@@ -18,6 +18,8 @@ import { cn } from "@multica/ui/lib/utils";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 import { useMessageDayDividers } from "../../i18n/use-message-time";
+import { useT } from "../../i18n/use-t";
+import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
 
 // Raft-style date separator inserted before the first message of each local day.
 function DateDivider({ label }: { label: string }) {
@@ -28,6 +30,22 @@ function DateDivider({ label }: { label: string }) {
         {label}
       </span>
       <div className="h-px flex-1 bg-border/60" />
+    </div>
+  );
+}
+
+// "N new messages" separator pinned above the first unread message (#303). Brand
+// tint (vs the muted date divider) so it reads as the "you're here" locator,
+// glanceable but not loud — per Iris's spec.
+function UnreadDivider({ count }: { count: number }) {
+  const { t } = useT("common");
+  return (
+    <div className="flex items-center gap-3 px-5 py-2" data-testid="unread-divider">
+      <div className="h-px flex-1 bg-brand/50" />
+      <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-brand">
+        {t(($) => $.time.new_messages, { count })}
+      </span>
+      <div className="h-px flex-1 bg-brand/50" />
     </div>
   );
 }
@@ -55,6 +73,13 @@ type MessageViewportProps = {
   ownName?: string;
   /** Deep-link target id - scrolls to and ring-highlights that bubble. */
   highlightMessageId?: string | null;
+  /**
+   * Viewer's read cursor for this conversation (BE `last_read_seq`). Drives the
+   * "N new messages" divider: the list pins it above the first message past the
+   * cursor as snapshotted on entry, and opens scrolled there. Omitted/undefined
+   * → no divider (feature stays dark until the BE field lands).
+   */
+  lastReadSeq?: number | null;
   /**
    * Virtuoso's stable prepend anchor (see `channelMessagesFirstItemIndex`).
    * Callers with paginated history must recompute and pass this so loading
@@ -111,6 +136,7 @@ function MessageViewport({
   currentUserId,
   ownName,
   highlightMessageId,
+  lastReadSeq,
   firstItemIndex = 0,
   emptyLabel,
   header,
@@ -147,6 +173,7 @@ function MessageViewport({
   const channelId = messages[0]?.channel_id;
   const canLoadOlder = !!hasOlder && !loadingOlder && !!onLoadOlder;
   const dayDividers = useMessageDayDividers(messages);
+  const newMessagesDivider = useNewMessagesDivider(channelId, messages, lastReadSeq);
 
   if (!messageRefs.current) {
     messageRefs.current = new Map<string, HTMLDivElement>();
@@ -162,6 +189,11 @@ function MessageViewport({
     if (!highlightMessageId) return -1;
     return messages.findIndex((m) => m.id === highlightMessageId);
   }, [messages, highlightMessageId]);
+
+  const unreadAnchorIndex = useMemo(() => {
+    if (!newMessagesDivider) return -1;
+    return messages.findIndex((m) => m.id === newMessagesDivider.anchorMessageId);
+  }, [messages, newMessagesDivider]);
 
   // Fallback-only: captures the pre-prepend scroll offset so the layout
   // effect below can restore it once the older page's rows are in the DOM.
@@ -252,9 +284,11 @@ function MessageViewport({
   const renderRow = (msg: ChannelMessage) => {
     const searchHighlighted = searchHitIds?.has(msg.id) ?? false;
     const dividerLabel = dayDividers.get(msg.id);
+    const isUnreadAnchor = newMessagesDivider?.anchorMessageId === msg.id;
     return (
       <Fragment key={msg.id}>
         {dividerLabel && <DateDivider label={dividerLabel} />}
+        {isUnreadAnchor && <UnreadDivider count={newMessagesDivider.count} />}
         <div
           ref={(node) => {
             if (node) {
@@ -326,12 +360,17 @@ function MessageViewport({
     );
   }
 
+  // Open scrolled to: a deep-link target first, else the "new messages" divider
+  // so the viewer starts where they left off (#303, Iris), else the chat
+  // default (latest / thread root).
   const initialTopMostItemIndex =
     highlightIndex >= 0
       ? firstItemIndex + highlightIndex
-      : initialScroll === "bottom"
-        ? firstItemIndex + Math.max(0, messages.length - 1)
-        : firstItemIndex;
+      : unreadAnchorIndex >= 0
+        ? firstItemIndex + unreadAnchorIndex
+        : initialScroll === "bottom"
+          ? firstItemIndex + Math.max(0, messages.length - 1)
+          : firstItemIndex;
 
   return (
     <div

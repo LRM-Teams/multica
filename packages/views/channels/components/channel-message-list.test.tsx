@@ -156,7 +156,7 @@ vi.mock("../../i18n/use-t", () => ({
         };
         quote: { jump_to: string };
         thread: { reply: string; reply_count: string };
-        time: { today: string; yesterday: string };
+        time: { today: string; yesterday: string; new_messages: string };
       }) => string,
     ) =>
       selector({
@@ -176,7 +176,7 @@ vi.mock("../../i18n/use-t", () => ({
         },
         quote: { jump_to: "Jump to original message" },
         thread: { reply: "Reply in thread", reply_count: "2 replies" },
-        time: { today: "Today", yesterday: "Yesterday" },
+        time: { today: "Today", yesterday: "Yesterday", new_messages: "New messages" },
       }),
   }),
 }));
@@ -277,6 +277,57 @@ describe("MessageViewport", () => {
     expect(screen.getByText("First thread reply")).toBeInTheDocument();
     expect(screen.getByText("Second thread reply")).toBeInTheDocument();
     expect(screen.queryByText("Later thread reply")).not.toBeInTheDocument();
+  });
+
+  it("pins a 'new messages' divider above the first unread message and opens there", () => {
+    // seq 5,6,7,8 with the read cursor at 6 → first unread is m7 (index 2).
+    const messages = [
+      { ...makeMessage("m5", "Read one"), seq: 5 },
+      { ...makeMessage("m6", "Read two"), seq: 6 },
+      { ...makeMessage("m7", "Unread one"), seq: 7 },
+      { ...makeMessage("m8", "Unread two"), seq: 8 },
+    ];
+    render(
+      <MessageViewport
+        messages={messages}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        lastReadSeq={6}
+      />,
+    );
+
+    expect(screen.getByTestId("unread-divider")).toBeInTheDocument();
+    // Opens scrolled to the divider anchor (index 2), not the latest message.
+    expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute("data-initial-index", "2");
+  });
+
+  it("renders no divider when the cursor is unknown (BE field absent)", () => {
+    const messages = [
+      { ...makeMessage("m1", "One"), seq: 1 },
+      { ...makeMessage("m2", "Two"), seq: 2 },
+    ];
+    render(
+      <MessageViewport messages={messages} currentUserId="user-1" emptyLabel="No messages" />,
+    );
+
+    expect(screen.queryByTestId("unread-divider")).not.toBeInTheDocument();
+  });
+
+  it("renders no divider when everything is already read", () => {
+    const messages = [
+      { ...makeMessage("m1", "One"), seq: 1 },
+      { ...makeMessage("m2", "Two"), seq: 2 },
+    ];
+    render(
+      <MessageViewport
+        messages={messages}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        lastReadSeq={2}
+      />,
+    );
+
+    expect(screen.queryByTestId("unread-divider")).not.toBeInTheDocument();
   });
 
   it("does not render the full list while the custom scroller ref is being captured", () => {

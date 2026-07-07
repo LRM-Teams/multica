@@ -64,6 +64,7 @@ type ChannelResponse struct {
 	PinnedAt        *string              `json:"pinned_at,omitempty"`
 	MutedAt         *string              `json:"muted_at,omitempty"`
 	Muted           bool                 `json:"muted,omitempty"`
+	HasMention      bool                 `json:"has_mention,omitempty"`
 	LastMessage     *ChannelLastMessage  `json:"last_message,omitempty"`
 	Members         []ChannelMemberBrief `json:"members,omitempty"`
 }
@@ -270,7 +271,8 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		       ch.archived_at, ch.archived_by, cm.pinned_at, cm.manual_unread_at, COALESCE(vcm.muted_at, cm.muted_at),
 		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
 		       COALESCE(uc.cnt, 0),
-		       GREATEST(COALESCE(uc.cnt, 0), CASE WHEN cm.manual_unread_at IS NOT NULL THEN 1 ELSE 0 END)
+		       GREATEST(COALESCE(uc.cnt, 0), CASE WHEN cm.manual_unread_at IS NOT NULL THEN 1 ELSE 0 END),
+		       COALESCE(hm.has_mention, false)
 		FROM channel ch
 		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
 		JOIN conversation conv ON conv.channel_id = ch.id
@@ -295,6 +297,18 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			  AND (m.thread_root_message_id IS NULL OR m.main_timeline_visible)
 			  AND m.deleted_at IS NULL
 		) uc ON true
+		LEFT JOIN LATERAL (
+			SELECT EXISTS (
+				SELECT 1 FROM channel_message m
+				WHERE m.channel_id = ch.id
+				  AND m.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
+				  AND NOT (m.author_type = 'user' AND m.author_id = $2)
+				  AND m.deleted_at IS NULL
+				  AND (m.content ILIKE '%@' || (
+				    SELECT name FROM "user" WHERE id = $2
+				  ) || '%' OR m.parts::text ILIKE '%mention://' || $2::text || '%')
+			) AS has_mention
+		) hm ON true
 		WHERE ch.workspace_id = $1 AND ch.kind = 'group'
 		  AND (($3 AND ch.archived_at IS NOT NULL) OR (NOT $3 AND ch.archived_at IS NULL))
 		ORDER BY CASE WHEN $3 THEN ch.archived_at ELSE cm.pinned_at END DESC NULLS LAST, ch.updated_at DESC, ch.created_at DESC`, parseUUID(workspaceID), uid, archivedOnly)
@@ -312,9 +326,10 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		var lastParts []byte
 		var createdAt, updatedAt, archivedAt, pinnedAt, manualUnreadAt, mutedAt, lastAt pgtype.Timestamptz
 		var realUnread, unread int
+		var hasMention bool
 		var kind string
 		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt, &kind,
-			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &mutedAt, &lastType, &lastName, &lastContent, &lastParts, &lastAt, &realUnread, &unread); err != nil {
+			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &mutedAt, &lastType, &lastName, &lastContent, &lastParts, &lastAt, &realUnread, &unread, &hasMention); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channels")
 			return
 		}
@@ -324,7 +339,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt),
 			ArchivedAt: timestampToPtr(archivedAt), ArchivedBy: uuidToPtr(archivedBy),
 			Kind: kind, UnreadCount: unread, RealUnreadCount: realUnread, ManuallyUnread: manualUnreadAt.Valid,
-			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid, Members: []ChannelMemberBrief{},
+			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid, HasMention: hasMention, Members: []ChannelMemberBrief{},
 		}
 		if lastContent.Valid {
 			ch.LastMessage = channelLastMessage(lastType.String, lastName.String, lastContent.String, lastParts, lastAt)
@@ -380,6 +395,16 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+
+	// Optional: caller may pass a specific last_read_seq (e.g. the seq of the
+	// last message scrolled into view). When omitted, mark up to the
+	// conversation's current last_seq (original behavior).
+	var req struct {
+		LastReadSeq *int64 `json:"last_read_seq"`
+	}
+	// Body is optional — ignore decode errors (empty body = mark to latest).
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
 	_, err := h.DB.Exec(r.Context(), `
 		WITH conv AS (
 		  SELECT id, workspace_id, last_seq
@@ -388,16 +413,25 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 		),
 		read_state AS (
 		  INSERT INTO channel_read (channel_id, user_id, last_read_at, last_read_seq)
-		  SELECT $1, $2, now(), conv.last_seq FROM conv
+		  SELECT $1, $2, now(),
+		    CASE WHEN $3::bigint IS NOT NULL
+		         THEN LEAST($3::bigint, conv.last_seq)
+		         ELSE conv.last_seq END
+		  FROM conv
 		  ON CONFLICT (channel_id, user_id)
 		  DO UPDATE SET last_read_at = now(), last_read_seq = GREATEST(channel_read.last_read_seq, EXCLUDED.last_read_seq)
 		  RETURNING channel_id, user_id, last_read_seq
 		)
 		INSERT INTO conversation_member (conversation_id, workspace_id, member_type, member_id, last_read_seq, followed_at, updated_at)
-		SELECT conv.id, conv.workspace_id, 'user', $2, conv.last_seq, now(), now()
+		SELECT conv.id, conv.workspace_id, 'user', $2,
+		    CASE WHEN $3::bigint IS NOT NULL
+		         THEN LEAST($3::bigint, conv.last_seq)
+		         ELSE conv.last_seq END,
+		    now(), now()
 		FROM conv
 		ON CONFLICT (conversation_id, member_type, member_id)
-		DO UPDATE SET last_read_seq = GREATEST(conversation_member.last_read_seq, EXCLUDED.last_read_seq), updated_at = now()`, channelID, parseUUID(userID))
+		DO UPDATE SET last_read_seq = GREATEST(conversation_member.last_read_seq, EXCLUDED.last_read_seq), updated_at = now()`,
+		channelID, parseUUID(userID), req.LastReadSeq)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to mark channel read")
 		return

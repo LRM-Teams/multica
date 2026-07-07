@@ -55,6 +55,23 @@ describe("useEntryReadCursor", () => {
     expect(result.current).toBe(3);
   });
 
+  it("ignores a payload that resolves advanced after a cold entry — echo wins (deep-link fix)", () => {
+    const { fn, calls } = makeMarkRead();
+    const { result, rerender } = renderHook(
+      ({ seq }) => useEntryReadCursor("c1", seq, fn),
+      { initialProps: { seq: undefined as number | undefined } },
+    );
+    expect(result.current).toBeNull();
+    // On a cold/deep-link open the list resolves AFTER mark-read ran, so it
+    // carries the already-advanced cursor. The first-render snapshot was null,
+    // so this later value must NOT be used (else the divider would be hidden).
+    rerender({ seq: 9 });
+    expect(result.current).toBeNull();
+    // The echo (pre-advance) arrives and wins — the divider anchors correctly.
+    act(() => calls[0]?.onSuccess?.(echo(3)));
+    expect(result.current).toBe(3);
+  });
+
   it("re-snapshots for a new conversation", () => {
     const { fn, calls } = makeMarkRead();
     const { result, rerender } = renderHook(

@@ -229,18 +229,12 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 }
 
 func (h *Handler) ensureWindyAgent(r *http.Request, workspaceID, userID pgtype.UUID, runtime db.AgentRuntime) (db.Agent, bool, error) {
-	agents, err := h.Queries.ListAgents(r.Context(), workspaceID)
+	agents, err := h.Queries.ListAllAgents(r.Context(), workspaceID)
 	if err != nil {
 		return db.Agent{}, false, err
 	}
-	for _, existing := range agents {
-		if !isOwnedPrivateWindyAgent(existing, userID) {
-			continue
-		}
-		if agentDisplayName(existing) == windyAgentName {
-			return existing, false, nil
-		}
-		updated, err := h.renameLegacyWindyAgent(r, existing)
+	if existing, ok := selectOwnedWindyAgent(agents, userID); ok {
+		updated, err := h.restoreAndNormalizeWindyAgent(r, existing)
 		if err != nil {
 			return db.Agent{}, false, err
 		}
@@ -270,8 +264,23 @@ func (h *Handler) ensureWindyAgent(r *http.Request, workspaceID, userID pgtype.U
 	return created, true, nil
 }
 
-func isOwnedPrivateWindyAgent(agent db.Agent, userID pgtype.UUID) bool {
-	if !agent.OwnerID.Valid || uuidToString(agent.OwnerID) != uuidToString(userID) || agent.Visibility != "private" {
+func selectOwnedWindyAgent(agents []db.Agent, userID pgtype.UUID) (db.Agent, bool) {
+	var selected db.Agent
+	found := false
+	for _, agent := range agents {
+		if !isOwnedWindyAgent(agent, userID) {
+			continue
+		}
+		if !found || preferWindyAgent(agent, selected) {
+			selected = agent
+			found = true
+		}
+	}
+	return selected, found
+}
+
+func isOwnedWindyAgent(agent db.Agent, userID pgtype.UUID) bool {
+	if !agent.OwnerID.Valid || uuidToString(agent.OwnerID) != uuidToString(userID) {
 		return false
 	}
 	return isWindyAgentName(agentDisplayName(agent))
@@ -286,10 +295,56 @@ func isWindyAgentName(name string) bool {
 	}
 }
 
-func (h *Handler) renameLegacyWindyAgent(r *http.Request, agent db.Agent) (db.Agent, error) {
+func preferWindyAgent(candidate, current db.Agent) bool {
+	if candidate.ArchivedAt.Valid != current.ArchivedAt.Valid {
+		return !candidate.ArchivedAt.Valid
+	}
+	if candidate.RuntimeID.Valid != current.RuntimeID.Valid {
+		return candidate.RuntimeID.Valid
+	}
+	if (candidate.Visibility == "private") != (current.Visibility == "private") {
+		return candidate.Visibility == "private"
+	}
+	candidateIsWendy := agentDisplayName(candidate) == windyAgentName
+	currentIsWendy := agentDisplayName(current) == windyAgentName
+	if candidateIsWendy != currentIsWendy {
+		return candidateIsWendy
+	}
+	if candidate.UpdatedAt.Valid && current.UpdatedAt.Valid && !candidate.UpdatedAt.Time.Equal(current.UpdatedAt.Time) {
+		return candidate.UpdatedAt.Time.After(current.UpdatedAt.Time)
+	}
+	if candidate.CreatedAt.Valid && current.CreatedAt.Valid && !candidate.CreatedAt.Time.Equal(current.CreatedAt.Time) {
+		return candidate.CreatedAt.Time.After(current.CreatedAt.Time)
+	}
+	return uuidToString(candidate.ID) < uuidToString(current.ID)
+}
+
+func (h *Handler) restoreAndNormalizeWindyAgent(r *http.Request, agent db.Agent) (db.Agent, error) {
+	updated := agent
+	restored := false
+	if agent.ArchivedAt.Valid {
+		var err error
+		updated, err = h.Queries.RestoreAgent(r.Context(), agent.ID)
+		if err != nil {
+			return db.Agent{}, err
+		}
+		restored = true
+	}
+	if agentDisplayName(updated) != windyAgentName || updated.Visibility != "private" {
+		return h.normalizeWindyAgent(r, updated)
+	}
+	if restored {
+		resp := agentToResponse(updated)
+		h.publish(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), "member", requestUserID(r), map[string]any{"agent": broadcastAgentResponse(resp)})
+	}
+	return updated, nil
+}
+
+func (h *Handler) normalizeWindyAgent(r *http.Request, agent db.Agent) (db.Agent, error) {
 	updated, err := h.Queries.UpdateAgent(r.Context(), db.UpdateAgentParams{
 		ID:          agent.ID,
 		DisplayName: pgtype.Text{String: windyAgentName, Valid: true},
+		Visibility:  pgtype.Text{String: "private", Valid: true},
 	})
 	if err != nil {
 		return db.Agent{}, err

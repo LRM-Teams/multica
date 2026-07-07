@@ -200,7 +200,7 @@ function MessageViewport({
   loadErrorLabel,
   onRetry,
 }: MessageViewportProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLElement | null>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const messageRefs = useRef<Map<string, HTMLDivElement> | null>(null);
   // Only the direct-fallback path needs manual scroll-position preservation:
@@ -210,7 +210,6 @@ function MessageViewport({
   // prepend-without-jump, and fighting that with a second scrollTop write is
   // exactly what caused the viewport jumping this replaces.
   const preserveScrollDeltaRef = useRef<number | null>(null);
-  const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
   const [directFallbackChannelId, setDirectFallbackChannelId] = useState<string | null>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const channelId = messages[0]?.channel_id;
@@ -236,9 +235,12 @@ function MessageViewport({
   }
   const messageRefMap = messageRefs.current;
   const useDirectFallback = directFallbackChannelId === channelId;
-  const setScrollContainerRef = useCallback((node: HTMLDivElement | null) => {
-    scrollRef.current = node;
-    setScrollContainerEl(node);
+  // #325 phase 1: Virtuoso now owns its own scroller (no customScrollParent).
+  // Captured via Virtuoso's `scrollerRef` on the virtualized path and via the
+  // fallback's own scroll div — used imperatively by the fallback scroll-position
+  // preservation and the render-detection probe.
+  const handleScrollerRef = useCallback((node: HTMLElement | Window | null) => {
+    scrollRef.current = node instanceof Window ? null : node;
   }, []);
 
   const highlightIndex = useMemo(() => {
@@ -331,13 +333,15 @@ function MessageViewport({
   // depend on `messages` — bottom-follow for newly-arrived messages is
   // Virtuoso's own `followOutput` job now; re-running this on every new
   // message during an open search used to re-fire scrollToIndex repeatedly.
-  // Does depend on `scrollContainerEl`: the first render returns a bare
-  // placeholder (Virtuoso isn't mounted yet, so `virtuosoRef.current` is
-  // still null), and this effect must re-fire once Virtuoso actually mounts
-  // on the following render — otherwise a highlight set before first mount
-  // (e.g. opening a channel via a deep link) never scrolls into view.
+  // #325 phase 1: with Virtuoso owning its scroller, it mounts on the very first
+  // render (no placeholder frame anymore), so `virtuosoRef.current` is ready by
+  // the time this effect runs — a deep-link highlight set on mount scrolls into
+  // view without a separate mount signal (previously `initialTopMostItemIndex`
+  // already positions the deep link; this adds the smooth-scroll + centering).
+  // Deliberately does NOT depend on `messages` — bottom-follow for new messages
+  // is Virtuoso's own `followOutput` job.
   useEffect(() => {
-    if (!highlightMessageId || highlightIndex < 0 || !scrollContainerEl) return;
+    if (!highlightMessageId || highlightIndex < 0) return;
     virtuosoRef.current?.scrollToIndex({
       index: firstItemIndex + highlightIndex,
       align: "center",
@@ -347,7 +351,7 @@ function MessageViewport({
       block: "center",
       behavior: "smooth",
     });
-  }, [highlightMessageId, highlightIndex, firstItemIndex, messageRefMap, scrollContainerEl]);
+  }, [highlightMessageId, highlightIndex, firstItemIndex, messageRefMap]);
 
   // Scroll the "new messages" divider near the top on entry — start reading
   // where you left off (Iris, #303). The race-free cursor arrives with the
@@ -357,7 +361,7 @@ function MessageViewport({
   // over a deep-link/search scroll (that target wins).
   const scrolledDividerChannelRef = useRef<string | null>(null);
   useEffect(() => {
-    if (highlightMessageId || !scrollContainerEl || unreadAnchorIndex < 0) return;
+    if (highlightMessageId || unreadAnchorIndex < 0) return;
     if (scrolledDividerChannelRef.current === channelId) return;
     scrolledDividerChannelRef.current = channelId ?? null;
     virtuosoRef.current?.scrollToIndex({
@@ -365,7 +369,7 @@ function MessageViewport({
       align: "start",
       behavior: "auto",
     });
-  }, [channelId, unreadAnchorIndex, highlightMessageId, firstItemIndex, scrollContainerEl]);
+  }, [channelId, unreadAnchorIndex, highlightMessageId, firstItemIndex]);
 
   if (loadErrorLabel) {
     return (
@@ -438,20 +442,10 @@ function MessageViewport({
     );
   };
 
-  if (!scrollContainerEl) {
-    return (
-      <div
-        ref={setScrollContainerRef}
-        className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
-        data-testid="message-scroller"
-      />
-    );
-  }
-
   if (useDirectFallback) {
     return (
       <div
-        ref={setScrollContainerRef}
+        ref={handleScrollerRef}
         className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
         data-testid="message-scroller"
         onScroll={(event) => {
@@ -497,14 +491,10 @@ function MessageViewport({
       {topDayLabel && messages.length > 0 && (
         <StickyDateHeader label={topDayLabel} />
       )}
-      <div
-        ref={setScrollContainerRef}
-        className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
-        data-testid="message-scroller"
-      >
       <Virtuoso
         ref={virtuosoRef}
-        customScrollParent={scrollContainerEl}
+        scrollerRef={handleScrollerRef}
+        className="virtuoso-scroller min-h-0 min-w-0 flex-1"
         data={messages}
         firstItemIndex={firstItemIndex}
         initialTopMostItemIndex={initialTopMostItemIndex}
@@ -541,7 +531,6 @@ function MessageViewport({
         }}
         itemContent={(_, msg) => renderRow(msg)}
       />
-      </div>
       {!isNearBottom && newArrivals && (
         <NewMessagesPill count={newArrivals.count} onClick={handleNewArrivalsClick} />
       )}

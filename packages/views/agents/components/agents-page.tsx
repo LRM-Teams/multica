@@ -59,6 +59,8 @@ import { RuntimeMachineFilterDropdown } from "./runtime-machine-filter-dropdown"
 import { AgentDetailOverview, type AgentMetric } from "./agent-detail-overview";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useOpenDM } from "../../common/use-open-dm";
+import { WindySetupModal } from "../../workspace/windy-setup-modal";
+import { useWindyEntryAction } from "../../workspace/use-wendy-entry-action";
 import { estimateCost } from "../../runtimes/utils";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
@@ -165,7 +167,7 @@ export function AgentsPage({
   const [sort, setSort] = useState<SortKey>("recent");
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
-  const [ensuringWendy, setEnsuringWendy] = useState(false);
+  const [showWindySetup, setShowWindySetup] = useState(false);
   const [createDraft, setCreateDraft] = useState<AgentCreationDraft | null>(null);
   // When set, the Create dialog opens pre-populated with this agent's
   // config — driven by the row-level "Duplicate" action. We keep this
@@ -180,29 +182,15 @@ export function AgentsPage({
     setShowCreate(true);
   }, []);
 
-  const handleEnsureWindy = useCallback(async () => {
-    if (ensuringWendy) return;
-    setEnsuringWendy(true);
-    try {
-      const result = await api.ensureWindy();
-      qc.setQueryData<Agent[]>(workspaceKeys.agents(wsId), (current = []) => {
-        const exists = current.some((a) => a.id === result.agent.id);
-        return exists
-          ? current.map((a) => (a.id === result.agent.id ? result.agent : a))
-          : [...current, result.agent];
-      });
-      qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
-      if (result.dm_id) {
-        navigation.push(`${paths.channels()}?dm=${encodeURIComponent(result.dm_id)}`);
-      } else {
-        navigation.push(paths.agentDetail(result.agent.id));
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create Wendy");
-    } finally {
-      setEnsuringWendy(false);
+  const windyEntry = useWindyEntryAction(wsId, agents);
+  const { openDM: openWindyDM } = useOpenDM();
+  const handleWindyEntry = useCallback(() => {
+    if (windyEntry.hasConfiguredWendy) {
+      void windyEntry.openWindy();
+      return;
     }
-  }, [ensuringWendy, navigation, paths, qc, wsId]);
+    setShowWindySetup(true);
+  }, [windyEntry]);
 
   useEffect(() => {
     const draftId = navigation.searchParams.get("draft");
@@ -595,7 +583,14 @@ export function AgentsPage({
   if (isLoading) {
     return (
       <div className="flex flex-1 min-h-0 flex-col">
-        <PageHeaderBar totalCount={0} onCreate={openBlankCreate} onEnsureWindy={handleEnsureWindy} ensuringWendy={ensuringWendy} />
+        <PageHeaderBar
+          totalCount={0}
+          onCreate={openBlankCreate}
+          onOpenWindy={handleWindyEntry}
+          openingWendy={windyEntry.isPending}
+          hasConfiguredWendy={windyEntry.hasConfiguredWendy}
+          windyDisabled
+        />
         <div className="flex flex-1 min-h-0 flex-col gap-4 p-6">
           <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-lg border">
             <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
@@ -625,8 +620,10 @@ export function AgentsPage({
         onCreate={openBlankCreate}
         listError={listError}
         onRetry={refetchList}
-        onEnsureWindy={handleEnsureWindy}
-        ensuringWendy={ensuringWendy}
+        onOpenWindy={handleWindyEntry}
+        openingWendy={windyEntry.isPending}
+        hasConfiguredWendy={windyEntry.hasConfiguredWendy}
+        windyDisabled
       />
     );
   }
@@ -638,8 +635,10 @@ export function AgentsPage({
       <PageHeaderBar
         totalCount={totalActiveCount}
         onCreate={openBlankCreate}
-        onEnsureWindy={handleEnsureWindy}
-        ensuringWendy={ensuringWendy}
+        onOpenWindy={handleWindyEntry}
+        openingWendy={windyEntry.isPending}
+        hasConfiguredWendy={windyEntry.hasConfiguredWendy}
+        windyDisabled={false}
       />
 
       {showEmpty ? (
@@ -771,6 +770,14 @@ export function AgentsPage({
         </div>
       )}
 
+      <WindySetupModal
+        open={showWindySetup}
+        onOpenChange={setShowWindySetup}
+        onConfigured={(agent) => {
+          void openWindyDM({ peer_type: "agent", peer_id: agent.id });
+        }}
+      />
+
       {showCreate && (
         <CreateAgentDialog
           runtimes={runtimes}
@@ -798,13 +805,17 @@ export function AgentsPage({
 function PageHeaderBar({
   totalCount,
   onCreate,
-  onEnsureWindy,
-  ensuringWendy,
+  onOpenWindy,
+  openingWendy,
+  hasConfiguredWendy,
+  windyDisabled,
 }: {
   totalCount: number;
   onCreate: () => void;
-  onEnsureWindy: () => void;
-  ensuringWendy: boolean;
+  onOpenWindy: () => void;
+  openingWendy: boolean;
+  hasConfiguredWendy: boolean;
+  windyDisabled: boolean;
 }) {
   const { t } = useT("agents");
   return (
@@ -831,9 +842,9 @@ function PageHeaderBar({
         </p>
       </div>
       <div className="flex items-center gap-2">
-        <Button type="button" size="sm" variant="outline" onClick={onEnsureWindy} disabled={ensuringWendy}>
-          {ensuringWendy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Bot className="h-3 w-3" />}
-          {t(($) => $.windy.ask_windy)}
+        <Button type="button" size="sm" variant="outline" onClick={onOpenWindy} disabled={windyDisabled || openingWendy}>
+          {openingWendy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Bot className="h-3 w-3" />}
+          {hasConfiguredWendy ? t(($) => $.windy.ask_windy) : t(($) => $.windy.set_up_windy)}
         </Button>
         <Button type="button" size="sm" onClick={onCreate}>
           <Plus className="h-3 w-3" />
@@ -848,19 +859,30 @@ function ListError({
   onCreate,
   listError,
   onRetry,
-  onEnsureWindy,
-  ensuringWendy,
+  onOpenWindy,
+  openingWendy,
+  hasConfiguredWendy,
+  windyDisabled,
 }: {
   onCreate: () => void;
   listError: unknown;
   onRetry: () => void;
-  onEnsureWindy: () => void;
-  ensuringWendy: boolean;
+  onOpenWindy: () => void;
+  openingWendy: boolean;
+  hasConfiguredWendy: boolean;
+  windyDisabled: boolean;
 }) {
   const { t } = useT("agents");
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <PageHeaderBar totalCount={0} onCreate={onCreate} onEnsureWindy={onEnsureWindy} ensuringWendy={ensuringWendy} />
+      <PageHeaderBar
+        totalCount={0}
+        onCreate={onCreate}
+        onOpenWindy={onOpenWindy}
+        openingWendy={openingWendy}
+        hasConfiguredWendy={hasConfiguredWendy}
+        windyDisabled={windyDisabled}
+      />
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
         <AlertCircle className="h-8 w-8 text-destructive" />
         <div>

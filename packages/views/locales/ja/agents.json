@@ -519,6 +519,7 @@
   },
   "windy": {
     "ask_windy": "Ask Wendy",
+    "set_up_windy": "Set up Wendy",
     "draft_description": "Wendy prepared this agent draft. Review the fields, choose a runtime, then create it.",
     "create_title": "Create Agent @{{name}}",
     "create_description": "Review Wendy's hiring card, pick a runtime/model, then start the agent here.",

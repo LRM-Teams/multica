@@ -736,6 +736,66 @@ func capabilitiesContainExactly(got []any, want ...string) bool {
 	return true
 }
 
+func TestDaemonRegister_PiRuntimeDoesNotGetAgentCLITransport(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/register", map[string]any{
+		"workspace_id": testWorkspaceID,
+		"daemon_id":    "test-daemon-pi-no-cli",
+		"device_name":  "test-device",
+		"cli_version":  "v0.3.38",
+		"capabilities": []string{
+			protocol.DaemonCapabilityChannelOutputActions,
+			protocol.DaemonCapabilityAgentCLITransport,
+		},
+		"runtimes": []map[string]any{
+			{"name": "Pi (test-device)", "type": "pi", "version": "0.80.3", "status": "online"},
+			{"name": "Claude (test-device)", "type": "claude", "version": "1.0.0", "status": "online"},
+		},
+	}, testWorkspaceID, "test-daemon-pi-no-cli")
+
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	runtimes, ok := resp["runtimes"].([]any)
+	if !ok || len(runtimes) != 2 {
+		t.Fatalf("DaemonRegister: expected 2 runtimes, got %v", resp)
+	}
+
+	// Pi runtime should NOT have agent_cli_transport
+	piRT := runtimes[0].(map[string]any)
+	piCaps, _ := piRT["capabilities"].([]any)
+	for _, c := range piCaps {
+		if c.(string) == protocol.DaemonCapabilityAgentCLITransport {
+			t.Fatalf("Pi runtime should NOT have agent_cli_transport capability, got %v", piCaps)
+		}
+	}
+	if !capabilitiesContainExactly(piCaps, protocol.DaemonCapabilityChannelOutputActions) {
+		t.Fatalf("Pi runtime capabilities = %#v, want [%q]", piCaps, protocol.DaemonCapabilityChannelOutputActions)
+	}
+
+	// Claude runtime should still have agent_cli_transport
+	claudeRT := runtimes[1].(map[string]any)
+	claudeCaps, _ := claudeRT["capabilities"].([]any)
+	if !capabilitiesContainExactly(claudeCaps, protocol.DaemonCapabilityChannelOutputActions, protocol.DaemonCapabilityAgentCLITransport) {
+		t.Fatalf("Claude runtime capabilities = %#v, want [%q %q]", claudeCaps, protocol.DaemonCapabilityChannelOutputActions, protocol.DaemonCapabilityAgentCLITransport)
+	}
+
+	// Clean up: deregister both runtimes.
+	for _, rt := range runtimes {
+		rtMap := rt.(map[string]any)
+		runtimeID := rtMap["id"].(string)
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	}
+}
+
 func TestDaemonRegister_WithDaemonToken_WorkspaceMismatch(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

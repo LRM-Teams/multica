@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -331,11 +332,12 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		if runtime.Status == "offline" {
 			status = "offline"
 		}
+		runtimeCapabilities := runtimeCapabilitiesForProvider(capabilities, provider)
 		metadata, _ := json.Marshal(map[string]any{
 			"version":      runtime.Version,
 			"cli_version":  req.CLIVersion,
 			"launched_by":  req.LaunchedBy,
-			"capabilities": capabilities,
+			"capabilities": runtimeCapabilities,
 		})
 
 		row, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
@@ -478,6 +480,49 @@ func normalizeDaemonCapabilities(capabilities []string) []string {
 		return []string{}
 	}
 	return normalized
+}
+
+// runtimeCapabilitiesForProvider filters daemon-level capabilities per runtime
+// provider. Provider-specific LLMs may not follow the CLI transport brief even
+// when the daemon has the capability, so we only advertise agent_cli_transport
+// for providers known to honor it (e.g. Claude Code). Others keep
+// channel_output_actions but lose agent_cli_transport, so #295 suppression
+// does not silence their final-text replies.
+func runtimeCapabilitiesForProvider(caps []string, provider string) []string {
+	if !slices.Contains(caps, protocol.DaemonCapabilityAgentCLITransport) {
+		return caps
+	}
+	// Providers that correctly follow the CLI transport brief and use
+	// multica send for visible chat output. An allowlist ensures no
+	// provider accidentally inherits the capability without explicit
+	// verification.
+	cliawareProviders := map[string]bool{
+		"claude":     true,
+		"codex":      false, // temporarily excluded; needs CLI brief follow-up
+		"opencode":   true,
+		"openclaw":   true,
+		"codebuddy":  true,
+		"copilot":    true,
+		"hermes":     false, // unverified
+		"gemini":     false, // unverified
+		"cursor":     false, // unverified
+		"pi":         false, // does not follow CLI brief
+		"kiro":       false, // unverified
+		"kimi":       false, // unverified
+		"antigravity": false, // unverified
+	}
+	if cliawareProviders[provider] {
+		return caps
+	}
+	// Remove agent_cli_transport for non-CLI-aware providers.
+	filtered := make([]string, 0, len(caps))
+	for _, c := range caps {
+		if c == protocol.DaemonCapabilityAgentCLITransport {
+			continue
+		}
+		filtered = append(filtered, c)
+	}
+	return filtered
 }
 
 // mergeLegacyRuntimes folds every runtime row keyed on a prior hostname-derived

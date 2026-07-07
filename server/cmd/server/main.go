@@ -332,6 +332,12 @@ func main() {
 	taskSvc := service.NewTaskService(queries, pool, hub, bus, daemonWakeup)
 	taskSvc.Analytics = analyticsClient
 	taskSvc.Metrics = businessMetrics
+	if tc := service.LoadTrainingConfig(); tc.BridgeStubURL != "" {
+		taskSvc.WithTraining(service.NewTrainingSessionDeps(tc, queries))
+		slog.Info("training bridge configured", "stub_url", tc.BridgeStubURL)
+	} else {
+		slog.Info("training bridge not configured (AREAL_BRIDGE_STUB_URL unset) — training hooks disabled")
+	}
 	autopilotSvc := service.NewAutopilotService(queries, pool, bus, taskSvc)
 	registerAutopilotListeners(bus, autopilotSvc)
 

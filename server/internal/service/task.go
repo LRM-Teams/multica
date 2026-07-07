@@ -127,6 +127,13 @@ func NewTaskService(q *db.Queries, tx TxStarter, hub *realtime.Hub, bus *events.
 	return &TaskService{Queries: q, TxStarter: tx, Hub: hub, Bus: bus, Wakeup: wakeup}
 }
 
+// WithTraining sets the TrainingSessionDeps for the TaskService.
+// Returns the TaskService to enable builder-style chaining.
+func (s *TaskService) WithTraining(deps *TrainingSessionDeps) *TaskService {
+	s.Training = deps
+	return s
+}
+
 var trivialDoneMarkers = []string{
 	"done",
 	"готово",

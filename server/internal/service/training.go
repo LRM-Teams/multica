@@ -73,11 +73,12 @@ type arealSessionCloser interface {
 // deployment, in which case the hook is a no-op. Construction/wiring of the
 // real client + proxy URL is finalized in Task 8 (config).
 type TrainingSessionDeps struct {
-	Lookup   trainingDispatchLookup
-	Store    trainingTaskStore
-	RL       arealSessionStarter
-	Closer   arealSessionCloser
-	ProxyURL string
+	Lookup        trainingDispatchLookup
+	Store         trainingTaskStore
+	RL            arealSessionStarter
+	Closer        arealSessionCloser
+	ProxyURL      string
+	DefaultReward float64 // Fallback reward if training dispatch not available
 }
 
 // trainingDefaultReward is the fallback reward when training dispatch can't be loaded.
@@ -263,8 +264,11 @@ func maybeCloseTrainingSession(ctx context.Context, deps *TrainingSessionDeps, t
 		return
 	}
 
-	// Resolve reward: try training dispatch first, fall back to default
-	reward := trainingDefaultReward
+	// Resolve reward: try training dispatch first, fall back to configured default or 1.0
+	reward := 1.0
+	if deps.DefaultReward != 0 {
+		reward = deps.DefaultReward
+	}
 	if deps.Lookup != nil {
 		dispatch, err := deps.Lookup.GetTrainingDispatchByProject(ctx, projectID)
 		if err == nil {

@@ -50,17 +50,23 @@ const (
 	// matching tool_result would otherwise run forever. This is the backstop for
 	// that stuck-tool case (MUL-3064). Set MULTICA_AGENT_TOOL_WATCHDOG=0 to
 	// disable, in which case an in-flight tool never force-stops the run.
-	DefaultAgentToolWatchdog        = 2 * time.Hour
-	DefaultRuntimeName              = "Local Agent"
-	DefaultWorkspaceSyncInterval    = 30 * time.Second
-	DefaultHealthPort               = 19514
-	DefaultMaxConcurrentTasks       = 20
-	DefaultGCInterval               = 1 * time.Hour
-	DefaultGCTTL                    = 24 * time.Hour // 1 day — AI-coding issues rarely stay open long
-	DefaultGCOrphanTTL              = 72 * time.Hour // 3 days — orphans with no meta (crashes, pre-GC leftovers)
-	DefaultGCArtifactTTL            = 12 * time.Hour // 12h — drop regenerable artifacts on completed but still-open issues
-	DefaultAutoUpdateCheckInterval  = 6 * time.Hour  // how often the daemon polls GitHub for a newer CLI release
-	DefaultSharedSkillsSyncInterval = 60 * time.Second
+	DefaultAgentToolWatchdog               = 2 * time.Hour
+	DefaultRuntimeName                     = "Local Agent"
+	DefaultWorkspaceSyncInterval           = 30 * time.Second
+	DefaultHealthPort                      = 19514
+	DefaultMaxConcurrentTasks              = 20
+	DefaultGCInterval                      = 1 * time.Hour
+	DefaultGCTTL                           = 24 * time.Hour // 1 day — AI-coding issues rarely stay open long
+	DefaultGCOrphanTTL                     = 72 * time.Hour // 3 days — orphans with no meta (crashes, pre-GC leftovers)
+	DefaultGCArtifactTTL                   = 12 * time.Hour // 12h — drop regenerable artifacts on completed but still-open issues
+	DefaultAutoUpdateCheckInterval         = 6 * time.Hour  // how often the daemon polls GitHub for a newer CLI release
+	DefaultSharedSkillsSyncInterval        = 60 * time.Second
+	DefaultPiMemoryPostRun                 = "auto"
+	DefaultPiMemoryPostRunIncludeModel     = "auto"
+	DefaultPiMemoryPostRunMinOutputChars   = 1200
+	DefaultPiMemoryPostRunShortOutputChars = 800
+	DefaultPiMemoryPostRunMinTools         = 1
+	DefaultPiMemoryPostRunTimeout          = 60 * time.Second
 )
 
 // DefaultGCArtifactPatterns lists basename matches that the GC loop treats as
@@ -73,38 +79,44 @@ var DefaultGCArtifactPatterns = []string{"node_modules", ".next", ".turbo"}
 
 // Config holds all daemon configuration.
 type Config struct {
-	ServerBaseURL                  string
-	DaemonID                       string
-	LegacyDaemonIDs                []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
-	DeviceName                     string
-	RuntimeName                    string
-	CLIVersion                     string                // multica CLI version (e.g. "0.1.13")
-	LaunchedBy                     string                // "desktop" when spawned by the Electron app, empty for standalone
-	Profile                        string                // profile name (empty = default)
-	Agents                         map[string]AgentEntry // keyed by provider: claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity
-	WorkspacesRoot                 string                // base path for execution envs (default: ~/multica_workspaces)
-	KeepEnvAfterTask               bool                  // preserve env after task for debugging
-	HealthPort                     int                   // local HTTP port for health checks (default: 19514)
-	MaxConcurrentTasks             int                   // max tasks running in parallel (default: 20)
-	GCEnabled                      bool                  // enable periodic workspace garbage collection (default: true)
-	GCInterval                     time.Duration         // how often the GC loop runs (default: 1h)
-	GCTTL                          time.Duration         // clean dirs whose issue is done/cancelled and updated_at < now()-TTL (default: 24h)
-	GCOrphanTTL                    time.Duration         // clean orphan dirs with no meta, or dirs whose issue gc-check returns 404, once they exceed this age (default: 72h). The 404 path uses the same TTL — a scoped-down token can't instantly wipe live workspaces.
-	GCArtifactTTL                  time.Duration         // when a task has been completed for at least this long but its issue is still open, drop regenerable artifacts (default: 12h, set 0 to disable)
-	GCArtifactPatterns             []string              // basename patterns whose subtrees are removed during artifact cleanup (default: node_modules, .next, .turbo)
-	AutoUpdateEnabled              bool                  // periodically check for a newer CLI release and self-update when idle (default: true on Multica Cloud, false on self-host)
-	AutoUpdateCheckInterval        time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
-	SharedSkillsDir                string                // optional global override; when empty each provider uses its own shared root
-	SharedSkillsSyncInterval       time.Duration         // how often to scan and sync SharedSkillsDir
-	PollInterval                   time.Duration
-	HeartbeatInterval              time.Duration
-	AgentTimeout                   time.Duration
-	CodexSemanticInactivityTimeout time.Duration
-	AgentIdleWatchdog              time.Duration // force-stop a run when the backend goes silent this long with an empty queue (0 = disabled)
-	AgentToolWatchdog              time.Duration // force-stop a run when a single tool call stays in flight (silent) this long (0 = disabled); backstop for hung tools now that there is no wall-clock cap
-	ClaudeArgs                     []string
-	CodexArgs                      []string
-	CodebuddyArgs                  []string
+	ServerBaseURL                   string
+	DaemonID                        string
+	LegacyDaemonIDs                 []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
+	DeviceName                      string
+	RuntimeName                     string
+	CLIVersion                      string                // multica CLI version (e.g. "0.1.13")
+	LaunchedBy                      string                // "desktop" when spawned by the Electron app, empty for standalone
+	Profile                         string                // profile name (empty = default)
+	Agents                          map[string]AgentEntry // keyed by provider: claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity
+	WorkspacesRoot                  string                // base path for execution envs (default: ~/multica_workspaces)
+	KeepEnvAfterTask                bool                  // preserve env after task for debugging
+	HealthPort                      int                   // local HTTP port for health checks (default: 19514)
+	MaxConcurrentTasks              int                   // max tasks running in parallel (default: 20)
+	GCEnabled                       bool                  // enable periodic workspace garbage collection (default: true)
+	GCInterval                      time.Duration         // how often the GC loop runs (default: 1h)
+	GCTTL                           time.Duration         // clean dirs whose issue is done/cancelled and updated_at < now()-TTL (default: 24h)
+	GCOrphanTTL                     time.Duration         // clean orphan dirs with no meta, or dirs whose issue gc-check returns 404, once they exceed this age (default: 72h). The 404 path uses the same TTL — a scoped-down token can't instantly wipe live workspaces.
+	GCArtifactTTL                   time.Duration         // when a task has been completed for at least this long but its issue is still open, drop regenerable artifacts (default: 12h, set 0 to disable)
+	GCArtifactPatterns              []string              // basename patterns whose subtrees are removed during artifact cleanup (default: node_modules, .next, .turbo)
+	AutoUpdateEnabled               bool                  // periodically check for a newer CLI release and self-update when idle (default: true on Multica Cloud, false on self-host)
+	AutoUpdateCheckInterval         time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
+	SharedSkillsDir                 string                // optional global override; when empty each provider uses its own shared root
+	SharedSkillsSyncInterval        time.Duration         // how often to scan and sync SharedSkillsDir
+	PiMemoryPostRun                 string                // auto|off|always: best-effort post-run Pi memory learning hook
+	PiMemoryPostRunIncludeModel     string                // auto|0|1: whether post-run learning may use model extraction
+	PiMemoryPostRunMinOutputChars   int                   // output length that triggers post-run learning in auto mode
+	PiMemoryPostRunShortOutputChars int                   // short no-tool output below this threshold is skipped
+	PiMemoryPostRunMinTools         int                   // minimum tool count that triggers structured extraction in auto mode
+	PiMemoryPostRunTimeout          time.Duration         // maximum time spent in the async post-run hook
+	PollInterval                    time.Duration
+	HeartbeatInterval               time.Duration
+	AgentTimeout                    time.Duration
+	CodexSemanticInactivityTimeout  time.Duration
+	AgentIdleWatchdog               time.Duration // force-stop a run when the backend goes silent this long with an empty queue (0 = disabled)
+	AgentToolWatchdog               time.Duration // force-stop a run when a single tool call stays in flight (silent) this long (0 = disabled); backstop for hung tools now that there is no wall-clock cap
+	ClaudeArgs                      []string
+	CodexArgs                       []string
+	CodebuddyArgs                   []string
 }
 
 // Overrides allows CLI flags to override environment variables and defaults.
@@ -480,38 +492,68 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	piMemoryPostRun, err := piMemoryPostRunModeFromEnv("MULTICA_PI_MEMORY_POST_RUN", DefaultPiMemoryPostRun)
+	if err != nil {
+		return Config{}, err
+	}
+	piMemoryPostRunIncludeModel, err := piMemoryPostRunIncludeModelFromEnv("MULTICA_PI_MEMORY_POST_RUN_INCLUDE_MODEL", DefaultPiMemoryPostRunIncludeModel)
+	if err != nil {
+		return Config{}, err
+	}
+	piMemoryPostRunMinOutputChars, err := intFromEnv("MULTICA_PI_MEMORY_POST_RUN_MIN_OUTPUT_CHARS", DefaultPiMemoryPostRunMinOutputChars)
+	if err != nil {
+		return Config{}, err
+	}
+	piMemoryPostRunShortOutputChars, err := intFromEnv("MULTICA_PI_MEMORY_POST_RUN_SHORT_OUTPUT_CHARS", DefaultPiMemoryPostRunShortOutputChars)
+	if err != nil {
+		return Config{}, err
+	}
+	piMemoryPostRunMinTools, err := intFromEnv("MULTICA_PI_MEMORY_POST_RUN_MIN_TOOLS", DefaultPiMemoryPostRunMinTools)
+	if err != nil {
+		return Config{}, err
+	}
+	piMemoryPostRunTimeout, err := durationFromEnv("MULTICA_PI_MEMORY_POST_RUN_TIMEOUT", DefaultPiMemoryPostRunTimeout)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
-		ServerBaseURL:                  serverBaseURL,
-		DaemonID:                       daemonID,
-		LegacyDaemonIDs:                legacyDaemonIDs,
-		DeviceName:                     deviceName,
-		RuntimeName:                    runtimeName,
-		Profile:                        profile,
-		Agents:                         agents,
-		WorkspacesRoot:                 workspacesRoot,
-		KeepEnvAfterTask:               keepEnv,
-		GCEnabled:                      gcEnabled,
-		GCInterval:                     gcInterval,
-		GCTTL:                          gcTTL,
-		GCOrphanTTL:                    gcOrphanTTL,
-		GCArtifactTTL:                  gcArtifactTTL,
-		GCArtifactPatterns:             gcArtifactPatterns,
-		AutoUpdateEnabled:              autoUpdateEnabled,
-		AutoUpdateCheckInterval:        autoUpdateInterval,
-		SharedSkillsDir:                sharedSkillsDir,
-		SharedSkillsSyncInterval:       sharedSkillsInterval,
-		HealthPort:                     healthPort,
-		MaxConcurrentTasks:             maxConcurrentTasks,
-		PollInterval:                   pollInterval,
-		HeartbeatInterval:              heartbeatInterval,
-		AgentTimeout:                   agentTimeout,
-		CodexSemanticInactivityTimeout: codexSemanticInactivityTimeout,
-		AgentIdleWatchdog:              agentIdleWatchdog,
-		AgentToolWatchdog:              agentToolWatchdog,
-		ClaudeArgs:                     claudeArgs,
-		CodexArgs:                      codexArgs,
-		CodebuddyArgs:                  codebuddyArgs,
+		ServerBaseURL:                   serverBaseURL,
+		DaemonID:                        daemonID,
+		LegacyDaemonIDs:                 legacyDaemonIDs,
+		DeviceName:                      deviceName,
+		RuntimeName:                     runtimeName,
+		Profile:                         profile,
+		Agents:                          agents,
+		WorkspacesRoot:                  workspacesRoot,
+		KeepEnvAfterTask:                keepEnv,
+		GCEnabled:                       gcEnabled,
+		GCInterval:                      gcInterval,
+		GCTTL:                           gcTTL,
+		GCOrphanTTL:                     gcOrphanTTL,
+		GCArtifactTTL:                   gcArtifactTTL,
+		GCArtifactPatterns:              gcArtifactPatterns,
+		AutoUpdateEnabled:               autoUpdateEnabled,
+		AutoUpdateCheckInterval:         autoUpdateInterval,
+		SharedSkillsDir:                 sharedSkillsDir,
+		SharedSkillsSyncInterval:        sharedSkillsInterval,
+		PiMemoryPostRun:                 piMemoryPostRun,
+		PiMemoryPostRunIncludeModel:     piMemoryPostRunIncludeModel,
+		PiMemoryPostRunMinOutputChars:   piMemoryPostRunMinOutputChars,
+		PiMemoryPostRunShortOutputChars: piMemoryPostRunShortOutputChars,
+		PiMemoryPostRunMinTools:         piMemoryPostRunMinTools,
+		PiMemoryPostRunTimeout:          piMemoryPostRunTimeout,
+		HealthPort:                      healthPort,
+		MaxConcurrentTasks:              maxConcurrentTasks,
+		PollInterval:                    pollInterval,
+		HeartbeatInterval:               heartbeatInterval,
+		AgentTimeout:                    agentTimeout,
+		CodexSemanticInactivityTimeout:  codexSemanticInactivityTimeout,
+		AgentIdleWatchdog:               agentIdleWatchdog,
+		AgentToolWatchdog:               agentToolWatchdog,
+		ClaudeArgs:                      claudeArgs,
+		CodexArgs:                       codexArgs,
+		CodebuddyArgs:                   codebuddyArgs,
 	}, nil
 }
 

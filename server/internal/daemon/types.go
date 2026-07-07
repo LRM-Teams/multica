@@ -40,9 +40,9 @@ type ProjectResourceData struct {
 // Agent data (name, skills) is populated by the claim endpoint.
 type Task struct {
 	ID          string `json:"id"`
-	AgentID       string `json:"agent_id"`
-	RuntimeID     string `json:"runtime_id"`
-	Priority      int    `json:"priority,omitempty"`
+	AgentID     string `json:"agent_id"`
+	RuntimeID   string `json:"runtime_id"`
+	Priority    int    `json:"priority,omitempty"`
 	IssueID     string `json:"issue_id"`
 	WorkspaceID string `json:"workspace_id"`
 	// WorkspaceContext mirrors workspace.context (the per-workspace system
@@ -271,5 +271,6 @@ type TaskResult struct {
 	WorkDir       string                        `json:"work_dir,omitempty"`   // working directory used during execution
 	EnvRoot       string                        `json:"-"`                    // env root dir for writing GC metadata (not sent to server)
 	FailureReason string                        `json:"-"`                    // classifier forwarded to FailTask on the blocked path; empty falls back to 'agent_error'
+	ToolCount     int32                         `json:"-"`                    // daemon-observed tool_use count for post-run hooks
 	Usage         []TaskUsageEntry              `json:"usage,omitempty"`      // per-model token usage
 }

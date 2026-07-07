@@ -2566,6 +2566,124 @@ func TestHandleTask_ReportsUsageBeforeCancel(t *testing.T) {
 // called even when the task is cancelled mid-execution by the poll goroutine.
 // Regression test for the cancelledByPoll early-return path that previously
 // discarded accumulated usage before calling ReportTaskUsage.
+func TestHandleTask_PiMemoryPostRunStartsAfterCompleteAndGCWithoutBlocking(t *testing.T) {
+	tmp := t.TempDir()
+	sessionFile := filepath.Join(tmp, "pi-session.jsonl")
+	if err := os.WriteFile(sessionFile, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	envRoot := filepath.Join(tmp, "env-root")
+	if err := os.MkdirAll(envRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	completeSeen := make(chan struct{})
+	execStarted := make(chan struct{})
+	execRelease := make(chan struct{})
+	syncCalled := make(chan struct{})
+	var completeOnce sync.Once
+	var execOnce sync.Once
+	var syncOnce sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/complete"):
+			completeOnce.Do(func() { close(completeSeen) })
+			w.WriteHeader(http.StatusOK)
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"running"}`))
+		case strings.HasSuffix(r.URL.Path, "/progress"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{
+		cfg: Config{
+			ServerBaseURL:          srv.URL,
+			WorkspacesRoot:         tmp,
+			PiMemoryPostRun:        "auto",
+			PiMemoryPostRunTimeout: 5 * time.Second,
+		},
+		client:             NewClient(srv.URL),
+		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:         make(map[string]*workspaceState),
+		runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "pi", WorkspaceID: "ws-1"}},
+		activeEnvRoots:     make(map[string]int),
+		cancelPollInterval: time.Hour,
+	}
+	d.runner = taskRunnerFunc(func(_ context.Context, _ Task, provider string, _ int, _ *slog.Logger) (TaskResult, error) {
+		if provider != "pi" {
+			t.Fatalf("provider = %q, want pi", provider)
+		}
+		return TaskResult{
+			Status:    "completed",
+			Comment:   "done",
+			SessionID: sessionFile,
+			EnvRoot:   envRoot,
+			ToolCount: 1,
+		}, nil
+	})
+	d.piMemoryPostRunExec = func(ctx context.Context, name string, args []string, env map[string]string) ([]byte, error) {
+		select {
+		case <-completeSeen:
+		default:
+			t.Errorf("post-run hook started before task completion was reported")
+		}
+		if _, err := execenv.ReadGCMeta(envRoot); err != nil {
+			t.Errorf("post-run hook started before GC metadata was written: %v", err)
+		}
+		if name != "jhp-pi-memory-curator" {
+			t.Errorf("command = %q, want jhp-pi-memory-curator", name)
+		}
+		execOnce.Do(func() { close(execStarted) })
+		select {
+		case <-execRelease:
+			return []byte(`{"status":"ok"}`), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	d.piMemoryPostRunSync = func(ctx context.Context, rt Runtime) error {
+		syncOnce.Do(func() { close(syncCalled) })
+		return nil
+	}
+
+	handleDone := make(chan struct{})
+	go func() {
+		d.handleTask(context.Background(), Task{
+			ID:          "task-1",
+			RuntimeID:   "rt-1",
+			WorkspaceID: "ws-1",
+			AgentID:     "agent-1",
+			IssueID:     "issue-1",
+			Agent:       &AgentData{Name: "pi-agent"},
+		}, 0)
+		close(handleDone)
+	}()
+
+	select {
+	case <-handleDone:
+	case <-time.After(time.Second):
+		t.Fatal("handleTask blocked on post-run hook")
+	}
+	select {
+	case <-execStarted:
+	case <-time.After(time.Second):
+		t.Fatal("post-run hook did not start")
+	}
+	close(execRelease)
+	select {
+	case <-syncCalled:
+	case <-time.After(time.Second):
+		t.Fatal("post-run hook did not sync evolution submissions after curator success")
+	}
+}
+
 func TestHandleTask_ReportsUsageWhenCancelledByPoll(t *testing.T) {
 	t.Parallel()
 

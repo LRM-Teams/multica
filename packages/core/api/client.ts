@@ -85,6 +85,7 @@ import type {
   ChannelMember,
   ChannelMessage,
   ChannelMessagesPage,
+  MarkChannelReadResult,
   ChannelReaction,
   ChannelMessageSearchResponse,
   ChannelThreadMessagesPage,
@@ -2290,8 +2291,10 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/active-tasks`);
   }
 
-  async markChannelRead(channelId: string): Promise<void> {
-    await this.fetch(`/api/channels/${channelId}/read`, { method: "POST" });
+  async markChannelRead(channelId: string): Promise<MarkChannelReadResult> {
+    return this.fetch<MarkChannelReadResult>(`/api/channels/${channelId}/read`, {
+      method: "POST",
+    });
   }
 
   async setChannelTyping(channelId: string, isTyping: boolean): Promise<void> {

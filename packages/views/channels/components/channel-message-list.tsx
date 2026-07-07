@@ -247,6 +247,24 @@ function MessageViewport({
     });
   }, [highlightMessageId, highlightIndex, firstItemIndex, messageRefMap, scrollContainerEl]);
 
+  // Scroll the "new messages" divider near the top on entry — start reading
+  // where you left off (Iris, #303). The race-free cursor arrives with the
+  // mark-read response, so the anchor can become known *after* mount (when
+  // `initialTopMostItemIndex` has already positioned at the latest message);
+  // this effect covers that late arrival. Once per conversation visit, and never
+  // over a deep-link/search scroll (that target wins).
+  const scrolledDividerChannelRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (highlightMessageId || !scrollContainerEl || unreadAnchorIndex < 0) return;
+    if (scrolledDividerChannelRef.current === channelId) return;
+    scrolledDividerChannelRef.current = channelId ?? null;
+    virtuosoRef.current?.scrollToIndex({
+      index: firstItemIndex + unreadAnchorIndex,
+      align: "start",
+      behavior: "auto",
+    });
+  }, [channelId, unreadAnchorIndex, highlightMessageId, firstItemIndex, scrollContainerEl]);
+
   if (loadErrorLabel) {
     return (
       <StaticMessageScroller header={header}>

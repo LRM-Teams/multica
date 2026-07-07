@@ -142,6 +142,14 @@ export interface ChannelMessagesPage {
   next_cursor?: ChannelMessagesCursor | null;
 }
 
+/** Response of `POST /channels/{id}/read`. `previous_last_read_seq` echoes the
+ *  member's read cursor *before* this call advanced it — the entry-moment read
+ *  point, used to pin the "N new messages" divider race-free (BE #301). */
+export interface MarkChannelReadResult {
+  ok: boolean;
+  previous_last_read_seq: number | null;
+}
+
 export interface ChannelThreadMessagesCursor {
   before_seq?: number;
   before: string;

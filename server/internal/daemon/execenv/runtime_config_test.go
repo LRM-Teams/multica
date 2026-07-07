@@ -359,6 +359,64 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 	}
 }
 
+func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
+	t.Parallel()
+	ctx := TaskContextForEnv{
+		ChatSessionID: "chat-1",
+		Directed:      true,
+		ChatCLITransportUnavailable: false,
+	}
+	out := buildMetaSkillContent("codex", ctx)
+
+	for _, want := range []string{
+		"### Reply Requirement (READ FIRST",
+		"You MUST produce a visible response before finishing",
+		"Not responding is **not** an option",
+		"Reply Requirement",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("directed brief missing must-reply block %q\n---\n%s", want, out)
+		}
+	}
+
+	// Also verify the output section still mentions multica send (CLI path).
+	if !strings.Contains(out, "multica send") {
+		t.Errorf("directed brief should contain CLI send instruction")
+	}
+}
+
+func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
+	t.Parallel()
+	ctx := TaskContextForEnv{
+		ChatSessionID: "chat-1",
+		Directed:      false, // ambient run
+		ChatCLITransportUnavailable: false,
+	}
+	out := buildMetaSkillContent("codex", ctx)
+
+	// Must NOT contain the Reply Requirement block.
+	for _, banned := range []string{
+		"Reply Requirement",
+		"You MUST produce a visible response",
+		"Not responding is **not** an option",
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("ambient brief should NOT contain must-reply section %q\n---\n%s", banned, out)
+		}
+	}
+
+	// Should still contain the regular chat mode section and CLI instructions.
+	for _, want := range []string{
+		"## Chat Mode",
+		"task-scoped Multica CLI transport",
+		"multica send",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("ambient brief missing expected section %q\n---\n%s", want, out)
+		}
+	}
+}
+
 func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{

@@ -141,6 +141,7 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 | DM | direct delivery：对方发消息即唤醒 agent member（DM 内 thread 同此规则，不套 participant 门控） |
 | Thread(channel) | participant delivery：follow/被@/参与过/被指派的 agent 收到投递；非参与不唤醒 |
 | Channel 主流 | directed delivery，默认克制：@agent/@all、指派·认领·需行动、direct question 才唤醒；ambient 是例外策略且必须先过便宜 pre-gate（明显无关不起 run，#196 浪费根因） |
+| **reconnect/restart 补偿唤醒（v2.4.9，#304，Frank 07-07 抓）** | **agent 一上线/重启就必须补处理离线期间到达的消息，不能等下一条新消息才醒。** agent offline/断连期间发来的消息照常持久化+分 seq（数据侧本就有），但历史上**没有"上线即扫未读补唤醒"这条路**——resume 不重新 wake → 消息静默漏（比内心戏泄漏更严重=不回错话、而是根本不回、丢工作）。规则：agent transition to online（reconnect/daemon restart/resume）→ 对每个 conversation 扫 `seq > last_read_seq`，有未读就触发补偿唤醒：**direct/@我/DM 必补一次 run；ambient 走 §6.3 合并唤醒（不逐条炸）**。幂等：补唤醒和后续新消息 wake 不重复处理同一 backlog（复用 pending_wake / cursor）。这是我在 §6.3 raft 对标点过的"重启撞积压不丢"失败路径——识别过但没落地，#304 补齐。落点=Wake matrix 本行 + §8 offline 语义。 |
 
 **参与投递 ≠ 必须回复**：
 - 定向（@ / 指派 / 直接问题 / DM）⇒ **必须**可见 reply/ack（#196 must-reply，禁 silent no_reply）。
@@ -228,7 +229,7 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 - **未来**：若要将 issue 接入统一讨论引擎，单独立项评审；倾向 anchor-message 方案（同时解 root 挂接与 issue 本体 reaction 落点），本轮不做。
 
 ## 8. DM 状态机
-`active`（正常）→ `closed`（closed_at；关闭移出列表；来新消息自动 reopen + 真实未读）｜`muted`（muted_at；静默投递、无红点；human 静音 agent 即此态）｜`agent offline`（入队 + 唤醒投递 + 真实未读；不显示假的「正在回复」）｜`permission-revoked`（私有 agent 访问被撤 → 不可访问/隐藏、必须重查，对齐 #191）｜`dormant`（P3，见 §9）。
+`active`（正常）→ `closed`（closed_at；关闭移出列表；来新消息自动 reopen + 真实未读）｜`muted`（muted_at；静默投递、无红点；human 静音 agent 即此态）｜`agent offline`（入队 + 唤醒投递 + 真实未读；不显示假的「正在回复」；**agent 一上线/重启必走 reconnect 补偿唤醒补处理离线期间消息，见 §6 Wake matrix，#304——离线期间到达的消息不能静默丢**）｜`permission-revoked`（私有 agent 访问被撤 → 不可访问/隐藏、必须重查，对齐 #191）｜`dormant`（P3，见 §9）。
 
 ## 9. Agent↔Agent DM 治理（P3）
 - `admin_visible`: **默认 TRUE，Frank 已批准**（会话头安静常驻「此对话 admin 可见」，非 banner）。
@@ -264,6 +265,7 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 **待拍点：无。**
 
 ## 14. 变更记录
+- v2.4.9（7-7 早，Frank 抓离线消息+重启后没回=#304）：§6 Wake matrix 加「reconnect/restart 补偿唤醒」行——agent 上线/重启即扫每 conversation seq>last_read_seq 未读、有就补唤醒（direct/@/DM 必补一次 run、ambient 走 §6.3 合并唤醒、幂等不重复处理 backlog）；§8 agent offline 态引用该补偿唤醒。根因=我在 §6.3 raft 对标点过的「重启撞积压不丢」失败路径识别过但没落地，静默丢消息比内心戏泄漏更严重。归 #304 BE。
 - v2.4.7（7-6 午，Frank DM 定版 session 策略）：§4.4 session 从"实现细节不动"升级为定版两句——**聊天=每 agent 一条常驻 session**（所有 DM/频道进同一条，raft 身份 session 同款；聊天侧由"每 chat_session 一条"合并）；**issue=(agent_id, issue_id) 新开 session**（与现状同键，零改动）。配套：常驻 session 压缩重启以 #273 agent 记忆为恢复锚、issue session 注入同一份记忆（两个 session 世界靠一份记忆连接）；聊天串行/issue 并行。
 - v2.4.6（7-6 午，Frank DM 定调"聊天为主、issue 为辅"）：新增 **§4.4 聊天为主工作模式**——产品只有一种模式（聊天），issue=聊天里长出的工作产物；核心原则"**上下文进制品、记忆进 agent、session 只是优化**"：①下发 issue 写全上下文（来源 thread+决定+边界，复用 ChatContextSummary），session 续接降级为性能优化；②交付回流原 thread @发起人（脐带闭环）；③薄的 agent 级持久记忆（跨活儿偏好/约定/原则，聊天与 issue run 共用一份，对标 raft 身份 MEMORY）。session 架构（per-issue/per-chat resume）不动。P1 候选，排 #259/#178 主线后，待 Miles 排期。
 - v2.4.5（7-6，raft daemon 对标——Frank 贴生产日志两轮，Parker 分析 + Miles 对 raft 源码核实，两条进 gate）：①**§4-3 凭证隔离**：task 凭证 per-agent/per-run 文件级隔离（禁共享 env/长期 token；raft `cli-transport/<agent>/<run>/agent-token` 为参考形状），作为 #259 merge 前 gate——我们与 raft 独立收敛到同一 CLI carrier 架构，验证了 §4 运输层方向；②**§6.3⑦ spawn 级削峰**：daemon 端 agent 启动并发上限+间隔（raft `AgentStartCoordinator` maxConcurrentStarts=5/500ms，slot 只占拉起一瞬），削同秒冷启动风暴，配 fingerprint 去重/already-contributed 抑制参照，归 #194。对标结论（不改道项）：deliver/start 动词分离+忙时降级 content-free 计数=我们 wake/cursor 同思路已在 raft 生产验证；异构 runtime 统一 start/deliver 契约=#178 Runtime Health 建模参照（在线判定用心跳，非"最近发过消息"）；动词级版本号（如 reminder.cancel v2）=#262 capability gate 同族。总原则：**验收按失败路径验（投递失败重试/重启积压不丢/卡死 watchdog），不只 happy path**。（7-6 追补③：**§6.3⑧ server⇄daemon 双向探活**——server 30s ping 判死机器 + daemon 70s 沉默看门狗判死连接自愈重连；心跳只管连接健康、不计业务；防"显示在线但收不到消息"的半开连接假死。归 #178/#194。）

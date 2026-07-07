@@ -2823,6 +2823,16 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task cancelled by user", "task_id", taskID, "issue_id", uuidToString(task.IssueID))
+
+	// Record a task-cancelled activity event.
+	recordAgentActivityEvent(r.Context(), h.DB,
+		issue.WorkspaceID, task.AgentID, task.RuntimeID, task.ID,
+		"lifecycle", "task_cancelled", "info",
+		"issue", task.IssueID, "",
+		"", "Task cancelled by user",
+		nil,
+	)
+
 	writeJSON(w, http.StatusOK, taskToResponse(*task, uuidToString(issue.WorkspaceID)))
 }
 

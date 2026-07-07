@@ -307,4 +307,18 @@ func (h *Handler) recordChannelAmbientGateDecision(action, reason string, ch Cha
 		"agent", uuidToString(agent.ID),
 		"message", trigger.ID,
 	)
+
+	// Record a diagnostic-level activity event when the ambient gate
+	// holds/coalesces a message (freshness gate). This maps to Raft's
+	// "Send held by freshness check" event — diagnostic-only by default.
+	recordAgentActivityEvent(context.Background(), h.DB,
+		parseUUID(ch.WorkspaceID), agent.ID, agent.RuntimeID, pgtype.UUID{},
+		"platform_decision", "ambient_gate_hold", "info",
+		"channel", parseUUID(ch.ID), ch.Name,
+		reason, "Ambient gate: " + action + " (" + reason + ")",
+		map[string]any{
+			"action":          action,
+			"trigger_message": trigger.ID,
+		},
+	)
 }

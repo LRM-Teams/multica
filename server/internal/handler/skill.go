@@ -2341,6 +2341,6 @@ func (h *Handler) writeUpdatedAgentSkills(w http.ResponseWriter, r *http.Request
 		)
 	}
 	actorType, actorID := h.resolveActor(r, requestUserID(r), uuidToString(agent.WorkspaceID))
-	h.publish(protocol.EventAgentStatus, uuidToString(agent.WorkspaceID), actorType, actorID, map[string]any{"agent_id": uuidToString(agent.ID), "skills": resp})
+	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(agent.WorkspaceID), actorType, actorID, agent, map[string]any{"agent_id": uuidToString(agent.ID), "skills": resp})
 	writeJSON(w, http.StatusOK, resp)
 }

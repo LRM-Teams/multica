@@ -169,7 +169,7 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 			agent, _ = h.Queries.GetAgent(r.Context(), agent.ID)
 		}
 		resp := agentToResponse(agent)
-		h.publish(protocol.EventAgentCreated, workspaceID, "member", userID, map[string]any{"agent": broadcastAgentResponse(resp)})
+		h.publishAgentVisibilityEvent(protocol.EventAgentCreated, workspaceID, "member", userID, agent, map[string]any{"agent": broadcastAgentResponse(resp)})
 		obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.AgentCreated(
 			userID,
 			workspaceID,
@@ -274,7 +274,11 @@ func isOwnedPrivateWindyAgent(agent db.Agent, userID pgtype.UUID) bool {
 	if !agent.OwnerID.Valid || uuidToString(agent.OwnerID) != uuidToString(userID) || agent.Visibility != "private" {
 		return false
 	}
-	switch agentDisplayName(agent) {
+	return isWindyAgentName(agentDisplayName(agent))
+}
+
+func isWindyAgentName(name string) bool {
+	switch name {
 	case windyAgentName, legacyWindyAgentName, legacyJoeAgentName:
 		return true
 	default:
@@ -291,7 +295,7 @@ func (h *Handler) renameLegacyWindyAgent(r *http.Request, agent db.Agent) (db.Ag
 		return db.Agent{}, err
 	}
 	resp := agentToResponse(updated)
-	h.publish(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), "member", requestUserID(r), map[string]any{"agent": broadcastAgentResponse(resp)})
+	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), "member", requestUserID(r), updated, map[string]any{"agent": broadcastAgentResponse(resp)})
 	return updated, nil
 }
 

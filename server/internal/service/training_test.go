@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -50,18 +51,40 @@ func (f *fakeTaskStore) MergeTaskArealProxyContext(_ context.Context, arg db.Mer
 }
 
 type fakeRLClient struct {
-	creds    arealrl.SessionCreds
-	err      error
-	calls    int
-	lastTask string
-	lastEnv  string
+	creds            arealrl.SessionCreds
+	err              error
+	calls            int
+	lastTask         string
+	lastEnv          string
+	setRewardCalls   []struct {
+		proxyKey string
+		reward   float64
+	}
+	endSessionCalls []string
+	callOrder       []string // "StartSession", "SetReward", "EndSession"
 }
 
 func (f *fakeRLClient) StartSession(_ context.Context, taskID, envID string) (arealrl.SessionCreds, error) {
 	f.calls++
 	f.lastTask = taskID
 	f.lastEnv = envID
+	f.callOrder = append(f.callOrder, "StartSession")
 	return f.creds, f.err
+}
+
+func (f *fakeRLClient) SetReward(_ context.Context, proxyKey string, reward float64) error {
+	f.setRewardCalls = append(f.setRewardCalls, struct {
+		proxyKey string
+		reward   float64
+	}{proxyKey, reward})
+	f.callOrder = append(f.callOrder, "SetReward")
+	return f.err
+}
+
+func (f *fakeRLClient) EndSession(_ context.Context, proxyKey string) error {
+	f.endSessionCalls = append(f.endSessionCalls, proxyKey)
+	f.callOrder = append(f.callOrder, "EndSession")
+	return f.err
 }
 
 func trainingDispatchRow(trainAgentID string) db.TrainingDispatch {
@@ -77,6 +100,7 @@ func newTrainingDeps(lookup *fakeDispatchLookup, store *fakeTaskStore, rl *fakeR
 		Lookup:   lookup,
 		Store:    store,
 		RL:       rl,
+		Closer:   rl,
 		ProxyURL: testProxyURL,
 	}
 }
@@ -264,5 +288,177 @@ func TestMaybeOpenTrainingSession_EmptyEnvID_WhenUnavailable(t *testing.T) {
 	}
 	if rl.lastEnv != "" {
 		t.Fatalf("StartSession env id = %q, want empty string", rl.lastEnv)
+	}
+}
+
+// TestMaybeCloseTrainingSession_CompletedTask_CallsSetRewardThenEndSession:
+// task with context.areal_proxy carrying session_id + api_key reaches
+// 'completed' -> SetReward(proxy_key, default_reward) called THEN
+// EndSession(proxy_key) called (order asserted).
+func TestMaybeCloseTrainingSession_CompletedTask_CallsSetRewardThenEndSession(t *testing.T) {
+	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
+	rl := &fakeRLClient{}
+	deps := newTrainingDeps(lookup, nil, rl)
+
+	task := db.AgentTaskQueue{
+		ID:     util.MustParseUUID(testTrainingTaskID),
+		Status: "completed",
+		Context: []byte(`{"areal_proxy":{"provider":"areal","model":"areal-default","api_key":"pk-xyz","base_url":"http://test","session_id":"sess-abc"}}`),
+	}
+	projectID := util.MustParseUUID(testTrainingProjectID)
+
+	maybeCloseTrainingSession(context.Background(), deps, task, projectID)
+
+	if len(rl.setRewardCalls) != 1 {
+		t.Fatalf("SetReward calls = %d, want 1", len(rl.setRewardCalls))
+	}
+	if rl.setRewardCalls[0].proxyKey != "pk-xyz" {
+		t.Fatalf("SetReward proxyKey = %q, want pk-xyz", rl.setRewardCalls[0].proxyKey)
+	}
+	if rl.setRewardCalls[0].reward != 1.0 {
+		t.Fatalf("SetReward reward = %f, want 1.0", rl.setRewardCalls[0].reward)
+	}
+
+	if len(rl.endSessionCalls) != 1 {
+		t.Fatalf("EndSession calls = %d, want 1", len(rl.endSessionCalls))
+	}
+	if rl.endSessionCalls[0] != "pk-xyz" {
+		t.Fatalf("EndSession proxyKey = %q, want pk-xyz", rl.endSessionCalls[0])
+	}
+
+	if len(rl.callOrder) != 2 {
+		t.Fatalf("call order length = %d, want 2", len(rl.callOrder))
+	}
+	if rl.callOrder[0] != "SetReward" || rl.callOrder[1] != "EndSession" {
+		t.Fatalf("call order = %v, want [SetReward, EndSession]", rl.callOrder)
+	}
+}
+
+// TestMaybeCloseTrainingSession_FailedTask_AlsoCloses:
+// task with areal_proxy reaches 'failed' -> SetReward + EndSession called.
+func TestMaybeCloseTrainingSession_FailedTask_AlsoCloses(t *testing.T) {
+	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
+	rl := &fakeRLClient{}
+	deps := newTrainingDeps(lookup, nil, rl)
+
+	task := db.AgentTaskQueue{
+		ID:     util.MustParseUUID(testTrainingTaskID),
+		Status: "failed",
+		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
+	}
+	projectID := util.MustParseUUID(testTrainingProjectID)
+
+	maybeCloseTrainingSession(context.Background(), deps, task, projectID)
+
+	if len(rl.setRewardCalls) != 1 || len(rl.endSessionCalls) != 1 {
+		t.Fatalf("SetReward+EndSession not called for failed task: got %d+%d calls",
+			len(rl.setRewardCalls), len(rl.endSessionCalls))
+	}
+}
+
+// TestMaybeCloseTrainingSession_CancelledTask_AlsoCloses:
+// task with areal_proxy reaches 'cancelled' -> SetReward + EndSession called.
+func TestMaybeCloseTrainingSession_CancelledTask_AlsoCloses(t *testing.T) {
+	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
+	rl := &fakeRLClient{}
+	deps := newTrainingDeps(lookup, nil, rl)
+
+	task := db.AgentTaskQueue{
+		ID:     util.MustParseUUID(testTrainingTaskID),
+		Status: "cancelled",
+		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
+	}
+	projectID := util.MustParseUUID(testTrainingProjectID)
+
+	maybeCloseTrainingSession(context.Background(), deps, task, projectID)
+
+	if len(rl.setRewardCalls) != 1 || len(rl.endSessionCalls) != 1 {
+		t.Fatalf("SetReward+EndSession not called for cancelled task: got %d+%d calls",
+			len(rl.setRewardCalls), len(rl.endSessionCalls))
+	}
+}
+
+// TestMaybeCloseTrainingSession_NoArealProxy_NoOp:
+// task without areal_proxy in context -> no RL calls.
+func TestMaybeCloseTrainingSession_NoArealProxy_NoOp(t *testing.T) {
+	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
+	rl := &fakeRLClient{}
+	deps := newTrainingDeps(lookup, nil, rl)
+
+	task := db.AgentTaskQueue{
+		ID:      util.MustParseUUID(testTrainingTaskID),
+		Status:  "completed",
+		Context: []byte(`{"other_key":"value"}`),
+	}
+	projectID := util.MustParseUUID(testTrainingProjectID)
+
+	maybeCloseTrainingSession(context.Background(), deps, task, projectID)
+
+	if len(rl.setRewardCalls) != 0 || len(rl.endSessionCalls) != 0 {
+		t.Fatalf("no-op expected, got SetReward=%d EndSession=%d calls",
+			len(rl.setRewardCalls), len(rl.endSessionCalls))
+	}
+}
+
+// TestMaybeCloseTrainingSession_RLClientError_LoggedNotFatal:
+// SetReward returns error -> error is logged, still call EndSession.
+func TestMaybeCloseTrainingSession_RLClientError_LoggedNotFatal(t *testing.T) {
+	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
+	rl := &fakeRLClient{err: fmt.Errorf("rl bridge error")}
+	deps := newTrainingDeps(lookup, nil, rl)
+
+	task := db.AgentTaskQueue{
+		ID:     util.MustParseUUID(testTrainingTaskID),
+		Status: "completed",
+		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
+	}
+	projectID := util.MustParseUUID(testTrainingProjectID)
+
+	maybeCloseTrainingSession(context.Background(), deps, task, projectID)
+
+	// Even though SetReward failed, we still try EndSession
+	if len(rl.setRewardCalls) != 1 {
+		t.Fatalf("SetReward should have been called once despite error")
+	}
+	if len(rl.endSessionCalls) != 1 {
+		t.Fatalf("EndSession should still be called even if SetReward fails")
+	}
+}
+
+// TestMaybeCloseTrainingSession_NoTrainingDeps_NoOp:
+// s.Training == nil -> no-op.
+func TestMaybeCloseTrainingSession_NoTrainingDeps_NoOp(t *testing.T) {
+	task := db.AgentTaskQueue{
+		ID:     util.MustParseUUID(testTrainingTaskID),
+		Status: "completed",
+		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
+	}
+	projectID := util.MustParseUUID(testTrainingProjectID)
+
+	maybeCloseTrainingSession(context.Background(), nil, task, projectID)
+	// No error, that's all we need to check
+}
+
+// TestMaybeCloseTrainingSession_NoTrainingDispatch_FallbackReward:
+// project has no training dispatch row -> use trainingDefaultReward fallback.
+func TestMaybeCloseTrainingSession_NoTrainingDispatch_FallbackReward(t *testing.T) {
+	lookup := &fakeDispatchLookup{err: pgx.ErrNoRows}
+	rl := &fakeRLClient{}
+	deps := newTrainingDeps(lookup, nil, rl)
+
+	task := db.AgentTaskQueue{
+		ID:     util.MustParseUUID(testTrainingTaskID),
+		Status: "completed",
+		Context: []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`),
+	}
+	projectID := util.MustParseUUID(testTrainingProjectID)
+
+	maybeCloseTrainingSession(context.Background(), deps, task, projectID)
+
+	if len(rl.setRewardCalls) != 1 {
+		t.Fatalf("SetReward calls = %d, want 1", len(rl.setRewardCalls))
+	}
+	if rl.setRewardCalls[0].reward != trainingDefaultReward {
+		t.Fatalf("SetReward reward = %f, want fallback %f", rl.setRewardCalls[0].reward, trainingDefaultReward)
 	}
 }

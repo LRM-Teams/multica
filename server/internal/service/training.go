@@ -61,7 +61,14 @@ type arealSessionStarter interface {
 	StartSession(ctx context.Context, taskID, envID string) (arealrl.SessionCreds, error)
 }
 
-// TrainingSessionDeps bundles the collaborators the session-open hook needs.
+// arealSessionCloser closes an RL session and sets reward via the bridge.
+// The real implementation is *arealrl.Client; tests inject a fake.
+type arealSessionCloser interface {
+	SetReward(ctx context.Context, proxyKey string, reward float64) error
+	EndSession(ctx context.Context, proxyKey string) error
+}
+
+// TrainingSessionDeps bundles the collaborators the session-open/close hooks need.
 // A nil *TrainingSessionDeps means training is not configured for this
 // deployment, in which case the hook is a no-op. Construction/wiring of the
 // real client + proxy URL is finalized in Task 8 (config).
@@ -69,8 +76,13 @@ type TrainingSessionDeps struct {
 	Lookup   trainingDispatchLookup
 	Store    trainingTaskStore
 	RL       arealSessionStarter
+	Closer   arealSessionCloser
 	ProxyURL string
 }
+
+// trainingDefaultReward is the fallback reward when training dispatch can't be loaded.
+// T8 will make this configurable.
+const trainingDefaultReward = 1.0
 
 // MaybeOpenTrainingSession is the public entry point invoked at every
 // task-creation chokepoint (the Enqueue* family and the env_dispatch
@@ -210,4 +222,93 @@ func hasArealProxyContext(raw []byte) bool {
 	}
 	v, ok := m[arealProxyContextKey]
 	return ok && len(v) > 0 && string(v) != "null"
+}
+
+// extractArealProxyConfig parses the areal proxy config from task context.
+func extractArealProxyConfig(raw []byte) (*arealProxyConfig, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, false
+	}
+	v, ok := m[arealProxyContextKey]
+	if !ok || len(v) == 0 || string(v) == "null" {
+		return nil, false
+	}
+	var cfg arealProxyConfig
+	if err := json.Unmarshal(v, &cfg); err != nil {
+		return nil, false
+	}
+	return &cfg, true
+}
+
+// maybeCloseTrainingSession closes an RL session and sets reward when the task
+// has an areal_proxy config. It is safe to call on any terminal task state.
+// Errors are logged, not propagated — the task is already terminal.
+func maybeCloseTrainingSession(ctx context.Context, deps *TrainingSessionDeps, task db.AgentTaskQueue, projectID pgtype.UUID) {
+	if deps == nil || deps.Closer == nil {
+		return
+	}
+
+	// Extract proxy config from task context
+	cfg, ok := extractArealProxyConfig(task.Context)
+	if !ok {
+		return
+	}
+
+	// Resolve reward: try training dispatch first, fall back to default
+	reward := trainingDefaultReward
+	if deps.Lookup != nil {
+		dispatch, err := deps.Lookup.GetTrainingDispatchByProject(ctx, projectID)
+		if err == nil {
+			reward = dispatch.DefaultReward
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("training: failed to load training dispatch for close hook",
+				"task_id", util.UUIDToString(task.ID),
+				"project_id", util.UUIDToString(projectID),
+				"error", err,
+			)
+		}
+	}
+
+	// Set reward (best effort)
+	if err := deps.Closer.SetReward(ctx, cfg.APIKey, reward); err != nil {
+		slog.Warn("training: failed to set reward",
+			"task_id", util.UUIDToString(task.ID),
+			"session_id", cfg.SessionID,
+			"reward", reward,
+			"error", err,
+		)
+	}
+
+	// End session (best effort)
+	if err := deps.Closer.EndSession(ctx, cfg.APIKey); err != nil {
+		slog.Warn("training: failed to end session",
+			"task_id", util.UUIDToString(task.ID),
+			"session_id", cfg.SessionID,
+			"error", err,
+		)
+	}
+
+	slog.Info("training session closed",
+		"task_id", util.UUIDToString(task.ID),
+		"project_id", util.UUIDToString(projectID),
+		"session_id", cfg.SessionID,
+		"reward", reward,
+	)
+}
+
+// MaybeCloseTrainingSession is the public entry point invoked at terminal task
+// transitions (complete/fail/cancel). It delegates to the shared helper using
+// the service's injected training deps.
+func (s *TaskService) MaybeCloseTrainingSession(ctx context.Context, task db.AgentTaskQueue) {
+	projectID := pgtype.UUID{}
+	if task.IssueID.Valid {
+		if issue, err := s.Queries.GetIssue(ctx, task.IssueID); err == nil {
+			projectID = issue.ProjectID
+		}
+	}
+	maybeCloseTrainingSession(ctx, s.Training, task, projectID)
 }

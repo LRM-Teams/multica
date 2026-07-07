@@ -2163,6 +2163,26 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
+
+	// Record a task-completed activity event. If the output was suppressed,
+	// include the suppression reason so the Activity timeline surfaces it.
+	completedDetails := map[string]any{}
+	if req.OutputSuppressedReason != "" {
+		completedDetails["output_suppressed_reason"] = req.OutputSuppressedReason
+	}
+	completedSeverity := "info"
+	completedMessage := "Task completed"
+	if req.OutputSuppressedReason != "" {
+		completedMessage = "Task completed (output suppressed: " + req.OutputSuppressedReason + ")"
+		completedSeverity = "warning"
+	}
+	recordAgentActivityEvent(r.Context(), h.DB,
+		parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
+		"lifecycle", "task_completed", completedSeverity,
+		"agent", task.AgentID, "",
+		req.OutputSuppressedReason, completedMessage, completedDetails,
+	)
+
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
@@ -2557,6 +2577,18 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)
+
+	// Record a task-failed activity event.
+	recordAgentActivityEvent(r.Context(), h.DB,
+		parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
+		"lifecycle", "task_failed", "error",
+		"agent", task.AgentID, "",
+		req.FailureReason, "Task failed: "+truncateForActivity(req.Error, 200),
+		map[string]any{
+			"failure_reason": req.FailureReason,
+		},
+	)
+
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
@@ -2796,6 +2828,16 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task cancelled by user", "task_id", taskID, "issue_id", uuidToString(task.IssueID))
+
+	// Record a task-cancelled activity event.
+	recordAgentActivityEvent(r.Context(), h.DB,
+		issue.WorkspaceID, task.AgentID, task.RuntimeID, task.ID,
+		"lifecycle", "task_cancelled", "info",
+		"issue", task.IssueID, "",
+		"", "Task cancelled by user",
+		nil,
+	)
+
 	writeJSON(w, http.StatusOK, taskToResponse(*task, uuidToString(issue.WorkspaceID)))
 }
 

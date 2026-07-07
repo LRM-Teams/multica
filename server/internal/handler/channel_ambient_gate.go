@@ -307,4 +307,10 @@ func (h *Handler) recordChannelAmbientGateDecision(action, reason string, ch Cha
 		"agent", uuidToString(agent.ID),
 		"message", trigger.ID,
 	)
+
+	// NOTE: ambient gate hold events are not recorded here because this
+	// function is called inside an advisory-lock transaction. Inserting a
+	// separate activity event row would contend on the same lock and
+	// deadlock. The freshness-hold event should be recorded after the
+	// gate transaction commits — deferred to a follow-up.
 }

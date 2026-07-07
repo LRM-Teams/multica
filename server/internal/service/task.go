@@ -41,6 +41,12 @@ type TaskService struct {
 	// client.
 	EmptyClaim *EmptyClaimCache
 
+	// OnChildTaskCreated is an optional callback fired when a retry child
+	// task is created (subagent lifecycle). When set, it receives the parent
+	// and child task so the caller can record activity events. Failures in
+	// the callback are logged but never block task processing.
+	OnChildTaskCreated func(ctx context.Context, parent, child db.AgentTaskQueue)
+
 	analyticsContextMu    sync.Mutex
 	analyticsContextCache map[string]analytics.TaskContext
 	analyticsContextOrder []string
@@ -1759,6 +1765,13 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 	// see EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, child)
 	s.NotifyTaskEnqueued(ctx, child)
+
+	// Fire the optional subagent-lifecycle callback so activity events
+	// can be recorded for the retry child task.
+	if s.OnChildTaskCreated != nil {
+		s.OnChildTaskCreated(ctx, parent, child)
+	}
+
 	return &child, nil
 }
 

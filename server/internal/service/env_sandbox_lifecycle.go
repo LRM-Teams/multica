@@ -35,9 +35,22 @@ type SandboxLifecycleJobResult struct {
 
 type EnvSandboxLifecycleDeps interface {
 	GetSandboxInstanceRef(ctx context.Context, workspaceID, instanceID string) (SandboxInstanceRef, error)
+	InsertSandboxInstance(ctx context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error)
 	EnqueueSandboxJob(ctx context.Context, workspaceID, actorUserID, nodeID, instanceID, jobType string, payload json.RawMessage) (SandboxLifecycleJobResult, error)
 	NotifySandboxJobAvailable(ctx context.Context, nodeID, jobID string) error
 	ForceDeleteSandboxInstance(ctx context.Context, workspaceID, instanceID string) error
+}
+
+// CreateSandboxInstanceInput is the service-layer input for creating a new
+// sandbox_instance-backed environment handle. NodeID may be empty when the
+// caller wants the deps to auto-select an available node for the workspace.
+type CreateSandboxInstanceInput struct {
+	WorkspaceID string
+	NodeID      string
+	Template    string
+	Limits      json.RawMessage
+	Runtime     json.RawMessage
+	RuntimeEnv  map[string]string
 }
 
 type EnvSandboxLifecycleService struct {
@@ -54,6 +67,35 @@ func NewEnvSandboxLifecycleService(deps EnvSandboxLifecycleDeps, timeout time.Du
 
 func (s *EnvSandboxLifecycleService) Save(ctx context.Context, ref SandboxInstanceRef, actorUserID string) (SandboxLifecycleJobResult, error) {
 	return s.enqueue(ctx, ref, actorUserID, "stop", nil)
+}
+
+// Create inserts a pending sandbox_instance row, enqueues the existing
+// sandboxd create job, and notifies the owning node — mirroring the existing
+// CreateSandboxInstance handler. It returns the structured ref checkpointing
+// and env-dispatch use to track the new environment handle.
+func (s *EnvSandboxLifecycleService) Create(ctx context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error) {
+	if in.WorkspaceID == "" || in.NodeID == "" {
+		return SandboxInstanceRef{}, fmt.Errorf("validation_failed: workspace_id and node_id are required for sandbox create")
+	}
+	if in.Template == "" {
+		in.Template = "default"
+	}
+	ref, err := s.deps.InsertSandboxInstance(ctx, in, actorUserID)
+	if err != nil {
+		return SandboxInstanceRef{}, fmt.Errorf("insert sandbox instance: %w", err)
+	}
+	payload, err := sandboxCreatePayload(in)
+	if err != nil {
+		return SandboxInstanceRef{}, fmt.Errorf("build sandbox create payload: %w", err)
+	}
+	job, err := s.deps.EnqueueSandboxJob(ctx, ref.WorkspaceID, actorUserID, ref.NodeID, ref.InstanceID, "create", payload)
+	if err != nil {
+		return SandboxInstanceRef{}, err
+	}
+	if err := s.deps.NotifySandboxJobAvailable(ctx, ref.NodeID, job.JobID); err != nil {
+		return SandboxInstanceRef{}, err
+	}
+	return ref, nil
 }
 
 func (s *EnvSandboxLifecycleService) Resume(ctx context.Context, ref SandboxInstanceRef, actorUserID string) (SandboxLifecycleJobResult, error) {
@@ -118,4 +160,29 @@ func sandboxLifecyclePayload(ref SandboxInstanceRef, runtime json.RawMessage) (j
 		payload["runtime"] = rt
 	}
 	return json.Marshal(payload)
+}
+
+// sandboxCreatePayload builds the sandboxd create job payload, mirroring the
+// existing CreateSandboxInstance handler (template, limits, runtime,
+// runtime_env).
+func sandboxCreatePayload(in CreateSandboxInstanceInput) (json.RawMessage, error) {
+	payload := map[string]any{
+		"template": in.Template,
+		"limits":   json.RawMessage(jsonBytesOrDefault(in.Limits, "{}")),
+		"runtime":  json.RawMessage(jsonBytesOrDefault(in.Runtime, "{}")),
+	}
+	if len(in.RuntimeEnv) > 0 {
+		payload["runtime_env"] = in.RuntimeEnv
+	}
+	return json.Marshal(payload)
+}
+
+// jsonBytesOrDefault returns v when non-empty (and not the literal "null"),
+// otherwise the fallback JSON. Used so sandbox payloads always carry valid
+// JSON objects even when a caller omits an optional field.
+func jsonBytesOrDefault(v json.RawMessage, fallback string) []byte {
+	if len(v) == 0 || string(v) == "null" {
+		return []byte(fallback)
+	}
+	return v
 }

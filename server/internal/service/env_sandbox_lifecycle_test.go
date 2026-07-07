@@ -14,10 +14,19 @@ type fakeEnvSandboxLifecycleDeps struct {
 	jobs         []sandboxJobCall
 	wakeups      []sandboxWakeupCall
 	forceDeletes []string
+	inserts      []createSandboxInstanceCall
 
-	enqueueErr error
-	notifyErr  error
-	deleteErr  error
+	insertedRef SandboxInstanceRef
+	enqueueErr  error
+	notifyErr   error
+	deleteErr   error
+}
+
+type createSandboxInstanceCall struct {
+	WorkspaceID string
+	ActorUserID string
+	Template    string
+	NodeID      string
 }
 
 type sandboxJobCall struct {
@@ -71,6 +80,27 @@ func (f *fakeEnvSandboxLifecycleDeps) ForceDeleteSandboxInstance(_ context.Conte
 	}
 	f.forceDeletes = append(f.forceDeletes, workspaceID+":"+instanceID)
 	return nil
+}
+
+func (f *fakeEnvSandboxLifecycleDeps) InsertSandboxInstance(_ context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error) {
+	f.inserts = append(f.inserts, createSandboxInstanceCall{
+		WorkspaceID: in.WorkspaceID,
+		ActorUserID: actorUserID,
+		Template:    in.Template,
+		NodeID:      in.NodeID,
+	})
+	if f.insertedRef.InstanceID == "" {
+		f.insertedRef = SandboxInstanceRef{
+			InstanceID:      "inst-created",
+			WorkspaceID:     in.WorkspaceID,
+			NodeID:          in.NodeID,
+			Template:        in.Template,
+			Status:          "pending",
+			RuntimeMetadata: in.Runtime,
+			EndpointInfo:    in.Limits,
+		}
+	}
+	return f.insertedRef, nil
 }
 
 func lifecycleRef() SandboxInstanceRef {
@@ -173,5 +203,47 @@ func TestEnvSandboxLifecycleMissingSandboxReturnsTypedError(t *testing.T) {
 
 	if !errors.Is(err, ErrSandboxInstanceNotFound) {
 		t.Fatalf("want ErrSandboxInstanceNotFound, got %v", err)
+	}
+}
+
+func TestEnvSandboxLifecycleCreateEnqueuesCreateJobAndWakesNode(t *testing.T) {
+	ctx := context.Background()
+	deps := &fakeEnvSandboxLifecycleDeps{}
+	svc := NewEnvSandboxLifecycleService(deps, 5*time.Second)
+
+	in := CreateSandboxInstanceInput{
+		WorkspaceID: "ws-1",
+		NodeID:      "node-1",
+		Template:    "python",
+		Limits:      json.RawMessage(`{"cpu":2}`),
+		Runtime:     json.RawMessage(`{"model":"gpt-test"}`),
+		RuntimeEnv:  map[string]string{"MULTICA_TOKEN": "tok"},
+	}
+	ref, err := svc.Create(ctx, in, "user-1")
+
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if ref.InstanceID == "" || ref.Status != "pending" {
+		t.Fatalf("unexpected created ref: %+v", ref)
+	}
+	if len(deps.inserts) != 1 || deps.inserts[0].Template != "python" || deps.inserts[0].NodeID != "node-1" {
+		t.Fatalf("missing insert: %+v", deps.inserts)
+	}
+	if len(deps.jobs) != 1 || deps.jobs[0].JobType != "create" {
+		t.Fatalf("want one create job, got %+v", deps.jobs)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(deps.jobs[0].Payload, &payload); err != nil {
+		t.Fatalf("payload invalid JSON: %v", err)
+	}
+	if payload["template"] != "python" {
+		t.Fatalf("payload template = %v", payload["template"])
+	}
+	if _, ok := payload["runtime_env"]; !ok {
+		t.Fatalf("payload missing runtime_env: %s", string(deps.jobs[0].Payload))
+	}
+	if len(deps.wakeups) != 1 || deps.wakeups[0].NodeID != "node-1" {
+		t.Fatalf("missing node wakeup: %+v", deps.wakeups)
 	}
 }

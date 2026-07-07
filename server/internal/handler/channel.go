@@ -65,6 +65,7 @@ type ChannelResponse struct {
 	MutedAt         *string              `json:"muted_at,omitempty"`
 	Muted           bool                 `json:"muted,omitempty"`
 	HasMention      bool                 `json:"has_mention,omitempty"`
+	LastReadSeq     *int64               `json:"last_read_seq,omitempty"`
 	LastMessage     *ChannelLastMessage  `json:"last_message,omitempty"`
 	Members         []ChannelMemberBrief `json:"members,omitempty"`
 }
@@ -272,7 +273,8 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
 		       COALESCE(uc.cnt, 0),
 		       GREATEST(COALESCE(uc.cnt, 0), CASE WHEN cm.manual_unread_at IS NOT NULL THEN 1 ELSE 0 END),
-		       COALESCE(hm.has_mention, false)
+		       COALESCE(hm.has_mention, false),
+		       COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)::bigint
 		FROM channel ch
 		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
 		JOIN conversation conv ON conv.channel_id = ch.id
@@ -328,8 +330,9 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		var realUnread, unread int
 		var hasMention bool
 		var kind string
+			var lastReadSeq int64
 		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt, &kind,
-			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &mutedAt, &lastType, &lastName, &lastContent, &lastParts, &lastAt, &realUnread, &unread, &hasMention); err != nil {
+			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &mutedAt, &lastType, &lastName, &lastContent, &lastParts, &lastAt, &realUnread, &unread, &hasMention, &lastReadSeq); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channels")
 			return
 		}
@@ -339,7 +342,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt),
 			ArchivedAt: timestampToPtr(archivedAt), ArchivedBy: uuidToPtr(archivedBy),
 			Kind: kind, UnreadCount: unread, RealUnreadCount: realUnread, ManuallyUnread: manualUnreadAt.Valid,
-			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid, HasMention: hasMention, Members: []ChannelMemberBrief{},
+			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid, HasMention: hasMention, LastReadSeq: &lastReadSeq, Members: []ChannelMemberBrief{},
 		}
 		if lastContent.Valid {
 			ch.LastMessage = channelLastMessage(lastType.String, lastName.String, lastContent.String, lastParts, lastAt)
@@ -405,7 +408,22 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 	// Body is optional — ignore decode errors (empty body = mark to latest).
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	_, err := h.DB.Exec(r.Context(), `
+	// Read the previous last_read_seq before upsert, so the response can echo
+	// it back for FE race-free divider positioning (Frank's requirement).
+	var previousLastReadSeq *int64
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT COALESCE(cr.last_read_seq, vcm.last_read_seq, 0)::bigint
+		FROM conversation conv
+		LEFT JOIN channel_read cr ON cr.channel_id = conv.channel_id AND cr.user_id = $2
+		LEFT JOIN conversation_member vcm
+		  ON vcm.conversation_id = conv.id AND vcm.member_type = 'user' AND vcm.member_id = $2
+		WHERE conv.channel_id = $1`, channelID, parseUUID(userID)).Scan(&previousLastReadSeq)
+	if err != nil {
+		// No conversation or no existing read state — that's fine, old is nil.
+		previousLastReadSeq = nil
+	}
+
+	_, err = h.DB.Exec(r.Context(), `
 		WITH conv AS (
 		  SELECT id, workspace_id, last_seq
 		  FROM conversation
@@ -442,7 +460,7 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`,
 		channelID, parseUUID(workspaceID), parseUUID(userID))
 	h.clearDMPeerManualUnreadForChannel(r.Context(), workspaceID, userID, channelID)
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "previous_last_read_seq": previousLastReadSeq})
 }
 
 func (h *Handler) PinChannel(w http.ResponseWriter, r *http.Request) {

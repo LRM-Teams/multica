@@ -60,6 +60,14 @@ func privateAgentOwnerOnly(agent db.Agent) bool {
 	return isWindyAgentName(agentDisplayName(agent))
 }
 
+func (h *Handler) publishAgentVisibilityEvent(eventType, workspaceID, actorType, actorID string, agent db.Agent, payload any) {
+	if privateAgentOwnerOnly(agent) {
+		h.publishToUsers(eventType, workspaceID, actorType, actorID, []string{uuidToString(agent.OwnerID)}, payload)
+		return
+	}
+	h.publish(eventType, workspaceID, actorType, actorID, payload)
+}
+
 // accessibleAgentIDs returns the set of agent IDs in the workspace the actor
 // is allowed to see, for use by workspace-wide aggregation endpoints
 // (run counts, activity histograms, task snapshots) that need to filter out

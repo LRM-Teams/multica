@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -203,6 +204,52 @@ func TestListAgents_FiltersPrivateForPlainMember(t *testing.T) {
 	}
 	if listContainsAgent(t, w.Body.Bytes(), agentID) {
 		t.Fatalf("ListAgents as plain member leaked private agent %s", agentID)
+	}
+}
+
+func TestPublishAgentVisibilityEventScopesWendyToOwner(t *testing.T) {
+	ownerUserID := "11111111-1111-1111-1111-111111111111"
+	workspaceID := "33333333-3333-3333-3333-333333333333"
+	bus := events.New()
+	h := &Handler{Bus: bus}
+	var got []events.Event
+	bus.SubscribeAll(func(e events.Event) {
+		got = append(got, e)
+	})
+
+	h.publishAgentVisibilityEvent("agent:status", workspaceID, "member", ownerUserID, db.Agent{
+		OwnerID:     util.MustParseUUID(ownerUserID),
+		DisplayName: "Wendy",
+	}, map[string]any{"ok": true})
+	if len(got) != 1 {
+		t.Fatalf("published events = %d, want 1", len(got))
+	}
+	if got[0].WorkspaceID != workspaceID {
+		t.Fatalf("workspace id = %q, want %q", got[0].WorkspaceID, workspaceID)
+	}
+	if len(got[0].RecipientUserIDs) != 1 || got[0].RecipientUserIDs[0] != ownerUserID {
+		t.Fatalf("recipient user ids = %#v, want owner only", got[0].RecipientUserIDs)
+	}
+}
+
+func TestPublishAgentVisibilityEventBroadcastsNormalAgent(t *testing.T) {
+	workspaceID := "33333333-3333-3333-3333-333333333333"
+	bus := events.New()
+	h := &Handler{Bus: bus}
+	var got []events.Event
+	bus.SubscribeAll(func(e events.Event) {
+		got = append(got, e)
+	})
+
+	h.publishAgentVisibilityEvent("agent:status", workspaceID, "member", "actor", db.Agent{
+		OwnerID:     util.MustParseUUID("11111111-1111-1111-1111-111111111111"),
+		DisplayName: "Researcher",
+	}, map[string]any{"ok": true})
+	if len(got) != 1 {
+		t.Fatalf("published events = %d, want 1", len(got))
+	}
+	if got[0].RecipientUserIDs != nil {
+		t.Fatalf("recipient user ids = %#v, want nil workspace broadcast", got[0].RecipientUserIDs)
 	}
 }
 

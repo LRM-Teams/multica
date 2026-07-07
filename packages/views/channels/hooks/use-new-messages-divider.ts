@@ -1,54 +1,61 @@
 import { useMemo, useRef } from "react";
 
 export interface NewMessagesDivider {
-  /** Id of the first loaded message newer than the entry read cursor. */
+  /** Id of the first unread message from someone other than the viewer. */
   anchorMessageId: string;
-  /** How many loaded messages sit at/after the anchor — the "N new messages". */
+  /** How many unread messages are from others — the "N new messages". */
   count: number;
 }
 
 interface SeqMessage {
   id: string;
   seq: number;
+  author_id?: string | null;
 }
 
-// Pure: the first message whose seq is beyond the read cursor, plus how many
-// messages sit at/after it. Null when the cursor is unknown or everything
-// currently loaded is already read. The loaded window is contiguous, so when
-// the anchor is present every newer message is loaded too — `count` is the
-// exact unread total, not an undercount. Exported for exhaustive unit tests.
+// Pure: the first message past the read cursor that the viewer did NOT send,
+// plus how many such messages there are. The viewer's own messages are never
+// "new" to them, so they're excluded from both the anchor and the count —
+// otherwise sending a message would raise a "1 new message" divider above your
+// own message. Null when the cursor is unknown or nothing unread is from others.
+// Exported for exhaustive unit tests.
 export function computeNewMessagesDivider(
   messages: readonly SeqMessage[],
   lastReadSeq: number | null,
+  currentUserId: string | null,
 ): NewMessagesDivider | null {
   if (lastReadSeq == null) return null;
-  const index = messages.findIndex((m) => m.seq > lastReadSeq);
+  const isNewFromOther = (m: SeqMessage) =>
+    m.seq > lastReadSeq && (currentUserId == null || m.author_id !== currentUserId);
+  const index = messages.findIndex(isNewFromOther);
   if (index < 0) return null;
   const anchor = messages[index];
   if (!anchor) return null;
-  return { anchorMessageId: anchor.id, count: messages.length - index };
+  let count = 0;
+  for (const m of messages) if (isNewFromOther(m)) count += 1;
+  return { anchorMessageId: anchor.id, count };
 }
 
 /**
  * The "N new messages" divider anchor for a conversation (#303). Pins to the
- * first message past the viewer's read cursor as captured ON ENTRY, and stays
- * frozen for the visit: opening the conversation fires mark-read, which
- * advances the server cursor and refetches the channel, but the divider must
- * not chase it down the list ("进会话即见、不随手清" — Iris). We therefore
- * snapshot the first known `lastReadSeq` per channel visit and compute against
- * that snapshot; a later (advanced) value is ignored.
+ * first unread message from someone else as captured ON ENTRY, and stays frozen
+ * for the visit: opening the conversation fires mark-read, which advances the
+ * server cursor and refetches the channel, but the divider must not chase it
+ * down the list ("进会话即见、不随手清" — Iris). We therefore snapshot the first
+ * known `lastReadSeq` per channel visit and compute against that snapshot; a
+ * later (advanced) value is ignored.
+ *
+ * The viewer's own messages are excluded — a message you send is not "new" to
+ * you, so it never raises the divider.
  *
  * Degrades to null while the BE hasn't supplied `last_read_seq` yet, so the
- * feature ships dark and lights up once the field lands. Residual race: if the
- * channel query only resolves *after* the entry mark-read round-trips, the
- * first cursor we see is already advanced and the divider stays hidden — a
- * graceful miss, never a misplaced line. (A pre-advance cursor echoed by the
- * mark-read response would remove even that; tracked with BE.)
+ * feature ships dark and lights up once the field lands.
  */
 export function useNewMessagesDivider(
   channelId: string | null | undefined,
   messages: readonly SeqMessage[],
   lastReadSeq: number | null | undefined,
+  currentUserId: string | null | undefined,
 ): NewMessagesDivider | null {
   const snapshotRef = useRef<{ channelId: string | null; seq: number | null }>({
     channelId: null,
@@ -66,8 +73,9 @@ export function useNewMessagesDivider(
     snap.seq = lastReadSeq;
   }
   const snapshotSeq = snap.seq;
+  const viewerId = currentUserId ?? null;
   return useMemo(
-    () => computeNewMessagesDivider(messages, snapshotSeq),
-    [messages, snapshotSeq],
+    () => computeNewMessagesDivider(messages, snapshotSeq, viewerId),
+    [messages, snapshotSeq, viewerId],
   );
 }

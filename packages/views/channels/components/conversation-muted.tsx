@@ -85,11 +85,8 @@ export function ConversationUnreadAffordance({
   if (hasMention && !isMuted) {
     return (
       <span className="flex shrink-0 items-center gap-1">
-        <span
-          role="img"
-          aria-label={mentionLabel}
-          className="size-2 shrink-0 rounded-full bg-destructive"
-        />
+        <span className="size-2 shrink-0 rounded-full bg-destructive" aria-hidden="true" />
+        {mentionLabel ? <span className="sr-only">{mentionLabel}</span> : null}
         {countBadge}
       </span>
     );

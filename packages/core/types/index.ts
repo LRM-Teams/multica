@@ -233,6 +233,7 @@ export type {
   ChannelMessage,
   ChannelMessagesCursor,
   ChannelMessagesPage,
+  MarkChannelReadResult,
   ChannelMessageReply,
   ChannelReaction,
   ChannelThreadMessagesCursor,

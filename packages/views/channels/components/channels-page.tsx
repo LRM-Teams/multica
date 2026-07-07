@@ -158,6 +158,7 @@ import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
+import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
@@ -936,11 +937,15 @@ export function ChannelsPage() {
     return () => clearTimeout(timer);
   }, [convSearchQuery, active, convSearchOpen, t]);
 
-  // Clear the unread badge when a channel becomes active (select / deep link /
-  // auto-select). `markChannelRead` (mutate) is referentially stable.
-  useEffect(() => {
-    if (active?.id) markChannelRead(active.id);
-  }, [active?.id, markChannelRead]);
+  // Mark the conversation read when it becomes active (select / deep link /
+  // auto-select) — clears the unread badge — and expose the pre-advance read
+  // cursor from the mark-read response so the "N new messages" divider anchors
+  // race-free (#303).
+  const dividerLastReadSeq = useEntryReadCursor(
+    active?.id,
+    active?.last_read_seq,
+    markChannelRead,
+  );
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -2267,7 +2272,7 @@ export function ChannelsPage() {
                 currentUserId={currentUserId}
                 ownName={currentUserName ?? undefined}
                 highlightMessageId={effectiveHighlightId}
-                lastReadSeq={active.last_read_seq ?? null}
+                lastReadSeq={dividerLastReadSeq}
                 firstItemIndex={messagesFirstItemIndex}
                 searchHitIds={searchHitIds}
                 searchQuery={searchHighlightQuery}

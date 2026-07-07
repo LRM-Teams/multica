@@ -50,6 +50,7 @@ import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useT } from "../../i18n/use-t";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
+import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { Composer, ConversationHeader, MobileThreadDrawerContent } from "./conversation-surface";
@@ -498,10 +499,10 @@ function DmChannelConversation({
   // Bottom-stick on new messages and open-at-latest on switch are handled by
   // ChannelMessageList (react-virtuoso). No manual scrollIntoView needed.
 
-  // Mark read on open and keep it read while viewing.
-  useEffect(() => {
-    if (channelId) markChannelRead(channelId);
-  }, [channelId, markChannelRead]);
+  // Mark read on open — clears the badge — and expose the pre-advance read
+  // cursor from the mark-read response for the race-free "N new messages"
+  // divider (#303).
+  const dividerLastReadSeq = useEntryReadCursor(channelId, dm.last_read_seq, markChannelRead);
 
   useEffect(() => {
     dispatch({ type: "resetForChannel" });
@@ -926,7 +927,7 @@ function DmChannelConversation({
         currentUserId={currentUserId}
         ownName={currentUserName ?? undefined}
         highlightMessageId={highlightMessageId}
-        lastReadSeq={dm.last_read_seq ?? null}
+        lastReadSeq={dividerLastReadSeq}
         firstItemIndex={messagesFirstItemIndex}
         searchHitIds={searchHitIds}
         searchQuery={searchHighlightQuery}

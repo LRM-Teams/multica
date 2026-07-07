@@ -41,11 +41,11 @@ function UnreadDivider({ count }: { count: number }) {
   const { t } = useT("common");
   return (
     <div className="flex items-center gap-3 px-5 py-2" data-testid="unread-divider">
-      <div className="h-px flex-1 bg-brand/40" />
+      <div className="h-px flex-1 bg-brand/50" />
       <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-brand">
         {t(($) => $.time.new_messages, { count })}
       </span>
-      <div className="h-px flex-1 bg-brand/40" />
+      <div className="h-px flex-1 bg-brand/50" />
     </div>
   );
 }

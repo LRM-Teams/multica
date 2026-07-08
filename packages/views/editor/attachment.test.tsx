@@ -41,7 +41,11 @@ vi.mock("../platform", () => ({
 
 vi.mock("../i18n", () => ({
   useT: () => ({
-    t: (sel: (s: Record<string, Record<string, string>>) => string) =>
+    t: (
+      sel: (
+        s: Record<string, Record<string, string | Record<string, string>>>,
+      ) => string,
+    ) =>
       sel({
         image: {
           view: "View",
@@ -59,6 +63,20 @@ vi.mock("../i18n", () => ({
           preview_too_large: "File is too large to preview.",
           open_in_new_tab: "Open in new tab",
           close: "Close",
+          open_file: "Open {{filename}}",
+          file_type: {
+            image: "Image",
+            video: "Video",
+            audio: "Audio",
+            pdf: "PDF",
+            word: "Word document",
+            excel: "Spreadsheet",
+            ppt: "Presentation",
+            archive: "Archive",
+            code: "Code",
+            text: "Text",
+            file: "File",
+          },
         },
         file_card: { uploading: "Uploading {{filename}}" },
       }),
@@ -166,7 +184,7 @@ afterEach(() => {
 });
 
 describe("Attachment — image dispatch", () => {
-  it("record image renders <img> with hover toolbar (View/Download/Copy)", () => {
+  it("record image renders <img> with a minimal display toolbar (View/Download only)", () => {
     const att = makeRecord();
     renderWithQuery(<Attachment attachment={{ kind: "record", attachment: att }} />);
     const img = document.querySelector("img");
@@ -180,9 +198,20 @@ describe("Attachment — image dispatch", () => {
     expect(img?.getAttribute("alt")).toBe("shot.png");
     expect(screen.getByTitle("View")).toBeTruthy();
     expect(screen.getByTitle("Download")).toBeTruthy();
-    expect(screen.getByTitle("Copy link")).toBeTruthy();
-    // Trash only shows in editable mode.
+    // Read-only display surfaces keep the hover toolbar to two actions
+    // (task #339). Copy-link and Trash are editor-compose affordances.
+    expect(screen.queryByTitle("Copy link")).toBeNull();
     expect(screen.queryByTitle("Delete")).toBeNull();
+  });
+
+  it("editable image exposes the compose toolbar (View/Download/Copy link)", () => {
+    const att = makeRecord();
+    renderWithQuery(
+      <Attachment attachment={{ kind: "record", attachment: att }} editable />,
+    );
+    expect(screen.getByTitle("View")).toBeTruthy();
+    expect(screen.getByTitle("Download")).toBeTruthy();
+    expect(screen.getByTitle("Copy link")).toBeTruthy();
   });
 
   it("editable image shows Trash button and wires onDelete", () => {

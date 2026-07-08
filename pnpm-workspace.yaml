@@ -44,6 +44,9 @@ catalog:
 
   # Icons
   lucide-react: "^1.0.1"
+  # File-type glyphs for attachment tiles (no reinventing per-type icons)
+  react-file-icon: "^1.6.0"
+  "@types/react-file-icon": "^1.0.5"
 
   # i18n
   i18next: "^26.0.8"

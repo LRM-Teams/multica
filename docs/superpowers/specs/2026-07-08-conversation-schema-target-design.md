@@ -1,7 +1,7 @@
 # 统一 Conversation / Message 终态表设计
 
 - Date: 2026-07-08
-- Status: 提案(Frank review)
+- Status: 已拍(2026-07-08 Frank 批准,§7 待拍点清零)
 - 上游: `docs/product-conversation-model-prd.md` v2.4 §5(产品模型已定);migration 144(#197)已落地约 60%
 - 本文角色: §5 的**工程终态 schema** — 最终 DDL、与现状的 delta、退役清单、迁移排序。PRD 定"是什么",本文定"表长什么样、旧表怎么死"
 - 参照: Slack conversations 模型;raft CLI 命令面(0.71.0,本机实测)——命令面即 schema 验收测试
@@ -198,9 +198,13 @@ CREATE TABLE message_mention (
 | `message_mention` | — | `mention pending/notify/add` |
 | `member_kind` 单词汇 | bot_id/user_id 双轨(反面教材) | 消息头 `type=human|agent|system` |
 
-## 7. 待拍点(Frank)
+## 7. 决策记录(2026-07-08 Frank 全部拍定)
 
-1. 步骤 2(停双写)是否排进当前迭代?——正确性风险最高、收益最快的一步。
-2. `principal` 表(user/agent id 统一派生,多态引用变真外键)列为二期还是放弃?
-3. Lark `thread_id TEXT` 退役前需确认 Lark 线程映射已完全走 `root_message_id`(#255 存量迁移口径)。
-4. 步骤 4/5(channel 转正、chat 退役)动作大,建议每步独立 PR + 产品 smoke,是否接受节奏?
+1. **步骤 2(停双写)排进当前迭代。** 正确性风险最高、收益最快,优先启动。
+2. **`principal` 表 = 二期 backlog,不排期。** 两个触发条件,命中任一即启动:
+   ① 悬空引用产生用户可见 bug(删 agent/成员后出现脏数据);② 需要引入第三种主体
+   (webhook/app 作为一等 actor)。在那之前靠步骤 1 的词汇表锁定 + 应用层纪律。
+3. **Lark `thread_id TEXT` 退役前置条件确认**:必须先核实 Lark 线程映射已完全走
+   `root_message_id`(#255 存量迁移口径),核实通过才执行步骤 7 中的 thread_id drop。
+4. **大步骤节奏确认**:步骤 4(channel 转正)、步骤 5(chat 退役)每步独立 PR + 产品 smoke,
+   不合并推进。

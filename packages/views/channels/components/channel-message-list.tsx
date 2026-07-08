@@ -260,7 +260,7 @@ function MessageViewport({
   // (#325 phase-2 block 2). Owns the anchor derivation, the once-per-visit guard,
   // and the measure-safe (#883) settle-scroll; the core just reads back
   // `unreadAnchorIndex` to seed the Virtuoso mount position below.
-  const { unreadAnchorIndex } = useUnreadAnchorScroll({
+  const { unreadAnchorIndex, isAnchorSettling } = useUnreadAnchorScroll({
     channelId,
     messages,
     newMessagesDivider,
@@ -493,7 +493,17 @@ function MessageViewport({
           increaseViewportBy={{ top: 320, bottom: 520 }}
           atBottomThreshold={120}
           atBottomStateChange={handleAtBottomStateChange}
-          followOutput={() => (!loadingOlder && isNearBottom ? "smooth" : false)}
+          // Scroll position has exactly one owner at a time (#348 postmortem):
+          // while the unread-anchor settle loop is in flight it's re-issuing
+          // `scrollToIndex` toward the anchor every frame — `followOutput`
+          // smooth-scrolling back to the bottom during that window (its
+          // `isNearBottom` default is `true` before the real cold-load
+          // position is known) fights it, so `hasReached()` never sees the
+          // anchor arrive and the settle loop times out at the bottom,
+          // indistinguishable from never having tried. Gate it off for the
+          // duration; the anchor hook hands ownership back the moment it
+          // reaches or gives up.
+          followOutput={() => (!loadingOlder && !isAnchorSettling && isNearBottom ? "smooth" : false)}
           startReached={() => {
             if (canLoadOlder) onLoadOlder?.();
           }}

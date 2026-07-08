@@ -115,6 +115,7 @@ type Handler struct {
 	IssueService          *service.IssueService
 	AutopilotService      *service.AutopilotService
 	EmailService          *service.EmailService
+	EnvCheckpointService  EnvCheckpointServiceAPI
 	UpdateStore           UpdateStore
 	RuntimeReleaseSource  RuntimeReleaseSource
 	ModelListStore        ModelListStore

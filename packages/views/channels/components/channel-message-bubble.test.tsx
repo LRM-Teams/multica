@@ -99,6 +99,7 @@ vi.mock("../../i18n/use-t", () => ({
           agent_badge: string;
           feishu_badge: string;
           copy_action: string;
+          expand_action: string;
           copied_toast: string;
           copy_failed_toast: string;
           sticker_alt: string;
@@ -125,6 +126,7 @@ vi.mock("../../i18n/use-t", () => ({
           feishu_badge: "Feishu",
           actions_menu: "Message actions",
           copy_action: "Copy",
+          expand_action: "Show full message",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
           sticker_alt: "Sticker",
@@ -420,6 +422,39 @@ describe("ChannelMessageBubble", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(body).toHaveClass("select-text");
+  });
+
+  it("keeps long history as full DOM content behind a readable collapsed preview", async () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: Array.from({ length: 13 }, (_, index) => `Line ${index}`).join("\n") })}
+        currentUserId="user-1"
+        collapseLongContent
+      />,
+    );
+
+    const body = screen.getByTestId("message-body");
+    expect(body).toHaveAttribute("data-collapsed", "true");
+    expect(body).toHaveClass("max-h-[min(260px,55vh)]");
+    expect(body).toHaveTextContent("Line 12");
+
+    await userEvent.click(screen.getByRole("button", { name: "Show full message" }));
+
+    expect(body).not.toHaveAttribute("data-collapsed");
+    expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
+  });
+
+  it("does not show the history collapse affordance for short messages", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: "Short historical answer" })}
+        currentUserId="user-1"
+        collapseLongContent
+      />,
+    );
+
+    expect(screen.getByTestId("message-body")).not.toHaveAttribute("data-collapsed");
+    expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
   });
 
   it("copies the message content from the visible action button", async () => {

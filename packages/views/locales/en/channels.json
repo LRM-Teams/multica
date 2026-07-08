@@ -192,6 +192,7 @@
     "add_reaction": "Add reaction",
     "actions_menu": "Message actions",
     "copy_action": "Copy",
+    "expand_action": "Show full message",
     "copied_toast": "Copied",
     "copy_failed_toast": "Copy failed",
     "sticker_alt": "Sticker",

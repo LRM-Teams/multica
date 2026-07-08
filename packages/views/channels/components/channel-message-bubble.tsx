@@ -36,6 +36,9 @@ import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 const LONG_PRESS_MS = 450;
 const TOUCH_MOVE_CANCEL_PX = 8;
 const MOBILE_THREAD_TAP_FEEDBACK_MS = 120;
+const HISTORY_MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[min(260px,55vh)] md:max-h-[360px]";
+const HISTORY_MESSAGE_COLLAPSE_MIN_CHARS = 800;
+const HISTORY_MESSAGE_COLLAPSE_MIN_LINES = 12;
 
 function isInteractiveMessageTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) return false;
@@ -57,6 +60,13 @@ function isMobileActionViewport() {
     window.innerWidth < 768 ||
     window.matchMedia?.("(max-width: 767px)").matches ||
     window.matchMedia?.("(pointer: coarse)").matches
+  );
+}
+
+function isLongHistoryMessageText(text: string) {
+  return (
+    text.length >= HISTORY_MESSAGE_COLLAPSE_MIN_CHARS ||
+    text.split(/\r?\n/).length >= HISTORY_MESSAGE_COLLAPSE_MIN_LINES
   );
 }
 
@@ -176,6 +186,7 @@ export function ChannelMessageBubble({
   onOpenAgent,
   searchHighlighted = false,
   searchQuery,
+  collapseLongContent = false,
 }: {
   message: ChannelMessage;
   currentUserId: string | null;
@@ -202,18 +213,25 @@ export function ChannelMessageBubble({
   searchHighlighted?: boolean;
   /** Trimmed conversation search phrase to mark inside this hit's visible text. */
   searchQuery?: string;
+  /** Visually clamp already-read long history while keeping the full DOM/copy payload intact. */
+  collapseLongContent?: boolean;
 }) {
   const { t } = useT("channels");
   const { getActorAvatarUrl, getActorName } = useActorName();
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
+  const [contentExpanded, setContentExpanded] = useState(false);
   const [mobileThreadTapActive, setMobileThreadTapActive] = useState(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mobileActionsDialogRef = useRef<HTMLDialogElement | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const touchCancelledRef = useRef(false);
+
+  useEffect(() => {
+    setContentExpanded(false);
+  }, [message.id, collapseLongContent]);
 
   // react-doctor-disable-next-line react-doctor/exhaustive-deps -- unmount needs to clear whichever touch timers are currently pending.
   useEffect(() => {
@@ -375,6 +393,12 @@ export function ChannelMessageBubble({
   const canEdit = false;
   const canDelete = isOwn && !!onDelete;
   const isEdited = !!message.edited_at;
+  const collapseText =
+    formatMessagePartsCopyText(effectiveParts) ??
+    unwrapStructuredPreviewContent(message.content) ??
+    message.content;
+  const canCollapseContent = collapseLongContent && isLongHistoryMessageText(collapseText);
+  const isContentCollapsed = canCollapseContent && !contentExpanded;
   const handleStartEdit = () => setEditDraft(message.content);
   const handleCancelEdit = () => setEditDraft(null);
   const handleSaveEdit = () => {
@@ -609,10 +633,13 @@ export function ChannelMessageBubble({
         ) : (
           <div
             className={cn(
-              "min-w-0 max-w-full select-text overflow-hidden break-words text-sm leading-6 text-foreground",
+              "relative min-w-0 max-w-full select-text break-words text-sm leading-6 text-foreground",
+              isContentCollapsed && "overflow-hidden",
+              isContentCollapsed ? HISTORY_MESSAGE_COLLAPSE_HEIGHT_CLASS : "overflow-visible",
               searchHighlighted && "rounded-md bg-primary/5",
             )}
             data-testid="message-body"
+            data-collapsed={isContentCollapsed ? "true" : undefined}
             style={{ WebkitTouchCallout: "default" }}
           >
             {/* Inline quote block: rendered when reply_to is present (BE task #23) */}
@@ -646,6 +673,20 @@ export function ChannelMessageBubble({
               content={effectiveParts ? "" : message.content}
               className="mt-1.5"
             />
+            {isContentCollapsed && (
+              <div
+                className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-background via-background/95 to-transparent pb-1.5 pt-12"
+                data-testid="message-collapse-fade"
+              >
+                <button
+                  type="button"
+                  className="pointer-events-auto inline-flex min-h-11 items-center rounded-full border border-border bg-background px-3 text-xs font-medium text-foreground shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:min-h-8"
+                  onClick={() => setContentExpanded(true)}
+                >
+                  {t(($) => $.message.expand_action)}
+                </button>
+              </div>
+            )}
           </div>
         )}
         {!isEditing && mobileActionsOpen && (

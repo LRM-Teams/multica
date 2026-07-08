@@ -9,6 +9,10 @@ import {
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelMessageSearchResponseSchema,
+  AgentFileContentResponseSchema,
+  AgentFilesResponseSchema,
+  EMPTY_AGENT_FILE_CONTENT_RESPONSE,
+  EMPTY_AGENT_FILES_RESPONSE,
   EMPTY_USER,
   EvolutionReviewSubmissionListSchema,
   ListIssuesResponseSchema,
@@ -78,6 +82,38 @@ describe("IssueSchema (via ListIssuesResponseSchema)", () => {
       total: 1,
     };
     expect(ListIssuesResponseSchema.safeParse(payload).success).toBe(false);
+  });
+});
+
+describe("Agent file schemas", () => {
+  it("parses a valid file tree response", () => {
+    const parsed = AgentFilesResponseSchema.parse({
+      agent_id: "agent-1",
+      status: "ok",
+      nodes: [{ path: "memory/MEMORY.md", is_dir: false, size: 42 }],
+      truncated: false,
+    });
+    expect(parsed.nodes[0]?.path).toBe("memory/MEMORY.md");
+  });
+
+  it("falls back when file tree response is malformed", () => {
+    const parsed = parseWithFallback(
+      { agent_id: "agent-1", status: "ok", nodes: null },
+      AgentFilesResponseSchema,
+      EMPTY_AGENT_FILES_RESPONSE,
+      { endpoint: "GET /api/agents/:id/files" },
+    );
+    expect(parsed).toEqual(EMPTY_AGENT_FILES_RESPONSE);
+  });
+
+  it("falls back when file content response is malformed", () => {
+    const parsed = parseWithFallback(
+      { content: 123, content_hash: null },
+      AgentFileContentResponseSchema,
+      EMPTY_AGENT_FILE_CONTENT_RESPONSE,
+      { endpoint: "GET /api/agents/:id/files/content" },
+    );
+    expect(parsed).toEqual(EMPTY_AGENT_FILE_CONTENT_RESPONSE);
   });
 });
 

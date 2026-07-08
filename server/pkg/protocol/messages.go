@@ -59,6 +59,10 @@ type ListWorkdirFilesRequestPayload struct {
 	RelPath    string `json:"rel_path"`
 	MaxEntries int    `json:"max_entries,omitempty"`
 	MaxDepth   int    `json:"max_depth,omitempty"`
+	// HideDotfiles skips files/directories whose basename starts with ".".
+	// Project file browsing leaves this false; agent config browsing toggles it
+	// from the UI's "show hidden files" eye button.
+	HideDotfiles bool `json:"hide_dotfiles,omitempty"`
 }
 
 // WorkdirFileNode is one entry in a flat workdir listing. Path is relative to
@@ -100,15 +104,41 @@ type ReadWorkdirFileRequestPayload struct {
 // set (no Content) for non-text files that aren't a known media type; TooLarge
 // when over the byte cap; Truncated when text was cut to the cap.
 type ReadWorkdirFileResponsePayload struct {
-	RequestID string `json:"request_id"`
-	Content   string `json:"content,omitempty"`
-	Encoding  string `json:"encoding,omitempty"`
-	MimeType  string `json:"mime_type,omitempty"`
-	Truncated bool   `json:"truncated,omitempty"`
-	TooLarge  bool   `json:"too_large,omitempty"`
-	Binary    bool   `json:"binary,omitempty"`
-	Missing   bool   `json:"missing,omitempty"`
-	Error     string `json:"error,omitempty"`
+	RequestID   string `json:"request_id"`
+	Content     string `json:"content,omitempty"`
+	Encoding    string `json:"encoding,omitempty"`
+	MimeType    string `json:"mime_type,omitempty"`
+	ContentHash string `json:"content_hash,omitempty"`
+	Truncated   bool   `json:"truncated,omitempty"`
+	TooLarge    bool   `json:"too_large,omitempty"`
+	Binary      bool   `json:"binary,omitempty"`
+	Missing     bool   `json:"missing,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// WriteWorkdirFileRequestPayload is pushed server→daemon to replace one UTF-8
+// text file inside a confined workdir root. ExpectedContentHash, when present,
+// must match the current file hash or the daemon returns Conflict without
+// modifying the file.
+type WriteWorkdirFileRequestPayload struct {
+	RequestID           string `json:"request_id"`
+	RuntimeID           string `json:"runtime_id"`
+	RelPath             string `json:"rel_path"`
+	FilePath            string `json:"file_path"`
+	Content             string `json:"content"`
+	ExpectedContentHash string `json:"expected_content_hash,omitempty"`
+	MaxBytes            int    `json:"max_bytes,omitempty"`
+}
+
+// WriteWorkdirFileResponsePayload is the daemon→server reply for a text write.
+type WriteWorkdirFileResponsePayload struct {
+	RequestID   string `json:"request_id"`
+	ContentHash string `json:"content_hash,omitempty"`
+	Conflict    bool   `json:"conflict,omitempty"`
+	TooLarge    bool   `json:"too_large,omitempty"`
+	Binary      bool   `json:"binary,omitempty"`
+	Missing     bool   `json:"missing,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // TaskProgressPayload is sent from daemon to server during task execution.
@@ -252,13 +282,13 @@ type TaskMessagePayload struct {
 	TaskID      string         `json:"task_id"`
 	IssueID     string         `json:"issue_id,omitempty"`
 	Seq         int            `json:"seq"`
-	Type        string         `json:"type"`                   // "text", "tool_use", "tool_result", "error"
-	Tool        string         `json:"tool,omitempty"`         // tool name for tool_use/tool_result
-	Content     string         `json:"content,omitempty"`      // text content
-	Input       map[string]any `json:"input,omitempty"`        // tool input (tool_use only)
-	Output      string         `json:"output,omitempty"`       // tool output (tool_result only)
-	ActionLabel string         `json:"action_label"`           // safe human label for the default UI narrative
-	Summary     string         `json:"summary"`                // safe one-sentence summary; raw details stay diagnostic
+	Type        string         `json:"type"`              // "text", "tool_use", "tool_result", "error"
+	Tool        string         `json:"tool,omitempty"`    // tool name for tool_use/tool_result
+	Content     string         `json:"content,omitempty"` // text content
+	Input       map[string]any `json:"input,omitempty"`   // tool input (tool_use only)
+	Output      string         `json:"output,omitempty"`  // tool output (tool_result only)
+	ActionLabel string         `json:"action_label"`      // safe human label for the default UI narrative
+	Summary     string         `json:"summary"`           // safe one-sentence summary; raw details stay diagnostic
 	CreatedAt   string         `json:"created_at,omitempty"`
 }
 

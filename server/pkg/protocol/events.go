@@ -141,6 +141,11 @@ const (
 	// text content. Correlated by RequestID. See protocol.ReadWorkdirFile*.
 	EventDaemonReadFileRequest  = "daemon:read_file_request"
 	EventDaemonReadFileResponse = "daemon:read_file_response"
+	// Workdir single-file write RPC: server pushes a bounded UTF-8 text write,
+	// daemon writes inside the confined workdir root and replies with a content
+	// hash or conflict/error. Correlated by RequestID.
+	EventDaemonWriteFileRequest  = "daemon:write_file_request"
+	EventDaemonWriteFileResponse = "daemon:write_file_response"
 
 	// GitHub integration events
 	EventGitHubInstallationCreated = "github_installation:created"

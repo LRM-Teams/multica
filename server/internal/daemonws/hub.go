@@ -210,6 +210,20 @@ func (h *Hub) RequestReadFile(ctx context.Context, req protocol.ReadWorkdirFileR
 	return &resp, nil
 }
 
+// RequestWriteFile pushes a write-file request to req.RuntimeID's daemon and
+// waits for the correlated response. ErrRuntimeOffline if no daemon is connected.
+func (h *Hub) RequestWriteFile(ctx context.Context, req protocol.WriteWorkdirFileRequestPayload) (*protocol.WriteWorkdirFileResponsePayload, error) {
+	raw, err := h.requestDaemon(ctx, req.RuntimeID, req.RequestID, protocol.EventDaemonWriteFileRequest, req)
+	if err != nil {
+		return nil, err
+	}
+	var resp protocol.WriteWorkdirFileResponsePayload
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // SetHeartbeatHandler installs the callback used for daemon:heartbeat frames.
 // Wiring is done after handler construction because the handler depends on
 // DB queries that aren't available when the hub is built. A nil handler

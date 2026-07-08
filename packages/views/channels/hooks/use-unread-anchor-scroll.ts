@@ -33,7 +33,16 @@ export function scrollToIndexUntilSettled(
   location: { index: number; align: "start" | "center" | "end"; behavior?: "auto" | "smooth" },
   options?: { maxFrames?: number; onSettleTimeout?: () => void },
 ): () => void {
-  if (!handle) return () => {};
+  if (!handle) {
+    // Permanent, not temp: a null handle here means the caller fired before
+    // Virtuoso attached its ref (or after it detached) — a silent no-op with no
+    // scroll, no warn, no state change, indistinguishable from every other
+    // "nothing happened" failure mode. Caught the team out twice (#348) before
+    // this log existed. Cheap and rare enough in the healthy path to keep always-on.
+    // eslint-disable-next-line no-console
+    console.warn("[scrollToIndexUntilSettled] called with a null Virtuoso handle — no-op", { location });
+    return () => {};
+  }
   const maxFrames = options?.maxFrames ?? 180;
   let raf = 0;
   let frame = 0;
@@ -130,12 +139,20 @@ export function useUnreadAnchorScroll({
     // scrollTop check — it can't be fooled by scrollToIndex's async lag (which
     // reads scrollTop=0 for the first frames). Until the row is virtualized into
     // the DOM and reaches the top, keep re-issuing.
+    // TEMP DIAGNOSTIC (#348 H2 retest) — remove only after Iris confirms PASS.
+    let frameNum = 0;
     const hasReached = () => {
+      frameNum += 1;
       if (!anchorId) return false;
       const el = messageRefMap.get(anchorId);
-      if (!el) return false;
-      const rel = el.getBoundingClientRect().top - scrollContainerEl.getBoundingClientRect().top;
-      const reached = rel <= ANCHOR_TOP_BAND_PX;
+      const reached = !!el && el.getBoundingClientRect().top - scrollContainerEl.getBoundingClientRect().top <= ANCHOR_TOP_BAND_PX;
+      // eslint-disable-next-line no-console
+      console.log("[#348 H2 diag] frame", frameNum, {
+        elFound: !!el,
+        reached,
+        scrollContainerElScrollTop: scrollContainerEl.scrollTop,
+        target: { index: firstItemIndex + unreadAnchorIndex, align: "start" },
+      });
       if (reached) scrolledDividerChannelRef.current = channelId ?? null;
       return reached;
     };

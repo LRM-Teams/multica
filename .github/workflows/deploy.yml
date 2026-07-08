@@ -191,8 +191,12 @@ jobs:
           }
           # postgres + caddy are left running; only the app services roll.
           # The backend container runs `migrate up` on start (entrypoint.sh).
-          compose pull backend frontend
-          compose up -d backend frontend
+          compose pull frontend backend
+          # Start frontend before backend so Caddy can resolve the frontend DNS name
+          # before the backend health check begins — avoids the container-restart
+          # DNS race that caused intermittent 'no such host' errors (#324).
+          compose up -d frontend
+          compose up -d backend
 
       - name: Health check (/readyz)
         run: |

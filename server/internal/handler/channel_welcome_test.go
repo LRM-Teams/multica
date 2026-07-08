@@ -41,7 +41,7 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 			t.Errorf("ambient prompt missing %q:\n%s", want, p)
 		}
 	}
-	for _, banned := range []string{"multica send", "multica react", "multica message read", "multica message search"} {
+	for _, banned := range []string{"multica send", "multica react", "multica message send", "multica message react", "multica message read", "multica message search"} {
 		if strings.Contains(p, banned) {
 			t.Errorf("ambient prompt should not hardcode chat CLI command %q:\n%s", banned, p)
 		}
@@ -76,7 +76,7 @@ func TestBuildChannelAmbientUnreadPromptUsesRuntimeOutputContract(t *testing.T) 
 			t.Errorf("ambient unread prompt missing %q:\n%s", want, p)
 		}
 	}
-	for _, banned := range []string{"multica send", "multica react", "multica message read", "multica message search"} {
+	for _, banned := range []string{"multica send", "multica react", "multica message send", "multica message react", "multica message read", "multica message search"} {
 		if strings.Contains(p, banned) {
 			t.Errorf("ambient unread prompt should not hardcode chat CLI command %q:\n%s", banned, p)
 		}
@@ -117,7 +117,7 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 		if strings.Contains(p, "internal no_reply is allowed") {
 			t.Errorf("direct mention prompt must not allow silent no_reply:\n%s", p)
 		}
-		for _, banned := range []string{"multica send", "multica react", "multica message read", "multica message search"} {
+		for _, banned := range []string{"multica send", "multica react", "multica message send", "multica message react", "multica message read", "multica message search"} {
 			if strings.Contains(p, banned) {
 				t.Errorf("direct mention prompt should not hardcode chat CLI command %q:\n%s", banned, p)
 			}

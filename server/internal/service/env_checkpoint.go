@@ -112,6 +112,11 @@ func (s *EnvCheckpointService) Create(ctx context.Context, in EnvCheckpointCreat
 	if in.SaveTimeout <= 0 {
 		return EnvCheckpoint{}, fmt.Errorf("validation_failed: save_timeout must be positive")
 	}
+	// Checkpoint save/resume only operates on sandbox_instance refs. A request
+	// with no refs is a Fleet-only env, which is not checkpointable (D7).
+	if len(in.SandboxRefs) == 0 {
+		return EnvCheckpoint{}, fmt.Errorf("validation_failed: checkpoint requires sandbox_instance refs (Fleet-only envs are not checkpointable)")
+	}
 
 	snapshot, err := s.snapshot.CaptureProjectSnapshot(ctx, in.WorkspaceID, in.ProjectID)
 	if err != nil {

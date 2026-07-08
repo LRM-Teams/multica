@@ -250,6 +250,31 @@ func TestEnvCheckpointListNewestFirstAndWorkspaceScoped(t *testing.T) {
 	}
 }
 
+func TestEnvCheckpointCreateRejectsFleetOnlyEnv(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{})
+
+	_, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
+		WorkspaceID: "ws",
+		ProjectID:   "proj",
+		SandboxRefs: nil, // Fleet-only env: no sandbox_instance refs
+		ActorUserID: "u",
+		SaveTimeout: 5 * time.Second,
+	})
+	if err == nil {
+		t.Fatalf("expected validation error for Fleet-only env, got nil")
+	}
+	if !strings.Contains(err.Error(), "validation_failed") {
+		t.Fatalf("expected validation_failed error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "Fleet-only") {
+		t.Fatalf("expected error to mention Fleet-only, got %v", err)
+	}
+	if len(repo.createCalls) != 0 {
+		t.Fatalf("Fleet-only checkpoint must not persist a row, got %d", len(repo.createCalls))
+	}
+}
+
 func TestEnvCheckpointStoresInlineDBSnapshot(t *testing.T) {
 	repo := newFakeCheckpointRepo()
 	snapshotJSON := json.RawMessage(`{"issues":[{"id":"i1"}],"sessions":[]}`)

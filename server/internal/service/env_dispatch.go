@@ -215,6 +215,10 @@ type EnvDispatchService struct {
 // sandbox_instances instead of forking Fleet sandboxes.
 type SandboxInstanceCreator interface {
 	CreateSandboxInstance(ctx context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error)
+	// GetSandboxInstanceRef resolves the current ref (template, node, status)
+	// for an existing sandbox_instance. Used by branch-from-template to derive
+	// the source env's template when creating fresh sandbox_instances.
+	GetSandboxInstanceRef(ctx context.Context, workspaceID, instanceID string) (SandboxInstanceRef, error)
 }
 
 func NewEnvDispatchService(deps EnvDispatchDeps, concurrency int) *EnvDispatchService {
@@ -658,14 +662,27 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 		return refs, agentRefs, nil
 	}
 	// No per-agent specs: create one default sandbox_instance for the rollout.
+	template := "default"
+	if in.Mode == EnvModeBranch && len(sourceEnv.SandboxIDs) > 0 {
+		// Branch-from-template (D7): derive the template from the source env's
+		// first sandbox_instance rather than a live fork. The source DB subtree
+		// is still copied by CopyProjectSubtree, so the child continues the
+		// copied conversation in a fresh sandbox.
+		sourceRef, err := s.lifecycle.GetSandboxInstanceRef(ctx, in.WorkspaceID, sourceEnv.SandboxIDs[0])
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve source sandbox template: %w", err)
+		}
+		if sourceRef.Template != "" {
+			template = sourceRef.Template
+		}
+	}
 	ref, err := s.lifecycle.CreateSandboxInstance(ctx, CreateSandboxInstanceInput{
 		WorkspaceID: in.WorkspaceID,
-		Template:    "default",
+		Template:    template,
 	}, in.UserID)
 	if err != nil {
 		return nil, nil, err
 	}
-	_ = sourceEnv // branch-from-template: source template resolution is a follow-up
 	return []SandboxInstanceRef{ref}, nil, nil
 }
 

@@ -11,9 +11,23 @@ import (
 )
 
 type fakeSandboxInstanceCreator struct {
-	calls []createSandboxCall
-	ref   SandboxInstanceRef
-	err   error
+	calls   []createSandboxCall
+	ref     SandboxInstanceRef
+	err     error
+	refs    map[string]SandboxInstanceRef // instanceID -> ref for GetSandboxInstanceRef
+	getErr  error
+}
+
+func (c *fakeSandboxInstanceCreator) GetSandboxInstanceRef(_ context.Context, _, instanceID string) (SandboxInstanceRef, error) {
+	if c.getErr != nil {
+		return SandboxInstanceRef{}, c.getErr
+	}
+	if c.refs != nil {
+		if ref, ok := c.refs[instanceID]; ok {
+			return ref, nil
+		}
+	}
+	return SandboxInstanceRef{}, fmt.Errorf("sandbox_instance not found: %s", instanceID)
 }
 
 type createSandboxCall struct {
@@ -955,6 +969,52 @@ func TestEnvDispatchNonTrainedRolloutPreservesFleetPath(t *testing.T) {
 	}
 	if len(res.Rollouts) != 1 || len(res.Rollouts[0].SandboxRefs) != 0 {
 		t.Fatalf("non-trained rollout must have no sandbox refs, got %+v", res.Rollouts)
+	}
+}
+
+// TestEnvDispatchSandboxInstanceBranchCreatesFreshFromTemplate verifies that a
+// save/resume-capable branch rollout creates a fresh sandbox_instance from the
+// source env's template (resolved via GetSandboxInstanceRef) rather than a live
+// Fleet fork, and carries the new ref on the rollout.
+func TestEnvDispatchSandboxInstanceBranchCreatesFreshFromTemplate(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	// Seed a source STATE env (branch source) with one sandbox_instance.
+	sourceEnvID := "src-env-1"
+	f.envs[sourceEnvID] = Env{
+		ID: sourceEnvID, WorkspaceID: "ws",
+		SandboxIDs: []string{"src-inst-1"},
+		Mode:        EnvModeBranch, Domain: EnvDomainSweLego,
+	}
+	f.projects["src-proj-1"] = sourceEnvID
+	f.issues["src-proj-1"] = []IssueRow{{ID: "src-issue-1", ProjectID: "src-proj-1"}}
+
+	creator := &fakeSandboxInstanceCreator{
+		refs: map[string]SandboxInstanceRef{
+			"src-inst-1": {InstanceID: "src-inst-1", WorkspaceID: "ws", Template: "python-3.12"},
+		},
+	}
+	svc := NewEnvDispatchService(f, 8).WithSandboxLifecycle(creator)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: sourceEnvID,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag", TrainAgentID: "ag",
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(creator.calls) != 1 {
+		t.Fatalf("want 1 sandbox_instance create, got %d", len(creator.calls))
+	}
+	// The created instance must use the source env's template, not "default".
+	if creator.calls[0].Template != "python-3.12" {
+		t.Fatalf("want template python-3.12 (from source), got %q", creator.calls[0].Template)
+	}
+	if len(f.sandboxes) != 0 {
+		t.Fatalf("branch rollout must not fork Fleet sandboxes, got %d", len(f.sandboxes))
+	}
+	if len(res.Rollouts) != 1 || len(res.Rollouts[0].SandboxRefs) != 1 {
+		t.Fatalf("want 1 rollout with 1 sandbox ref, got %+v", res.Rollouts)
 	}
 }
 

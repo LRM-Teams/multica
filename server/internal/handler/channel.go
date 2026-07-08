@@ -2621,9 +2621,14 @@ func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch Channel
 		}
 		return
 	}
-	if strings.Contains(trigger.Content, "@") {
-		return
-	}
+	// #328: do NOT skip ambient fan-out just because the message contains an "@".
+	// A message can @ a human (or any non-agent) while still being a collective
+	// instruction to the agents — e.g. "一起 @newperson 打个招呼" @s the newcomer, not
+	// the agents, yet every agent should still greet. The server's job is delivery,
+	// not judging semantics: fan out to the channel's agents and let each model
+	// decide whether it's addressed to them (the ambient prompt's collective-response
+	// clause + silence rules do the judging). Cost stays bounded by the #214 ambient
+	// volume gate ("by volume, not by meaning"), never by a "contains @" heuristic.
 	h.dispatchChannelAmbientObservation(ctx, ch, trigger, initiatorUserID)
 }
 
@@ -2640,7 +2645,11 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 		}
 		return
 	}
-	if strings.Contains(trigger.Content, "@") || trigger.ThreadRootMessageID == nil {
+	// #328: don't skip thread ambient fan-out on a bare "@" (see
+	// dispatchChannelMessageToAgents). Only skip when there's no thread root to fan
+	// out to — a collective instruction in a thread can @ a human and still be for
+	// the thread's agents; the model judges relevance, not a "contains @" check.
+	if trigger.ThreadRootMessageID == nil {
 		return
 	}
 	for _, agent := range h.channelThreadTargetAgents(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID) {

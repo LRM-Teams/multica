@@ -533,6 +533,51 @@ func TestChannelAmbientGateBoundsRepeatedAmbientFanout(t *testing.T) {
 	}
 }
 
+// TestChannelAmbientDispatchNotSkippedForAtMention is the #328 regression: a
+// collective instruction that @-mentions a non-agent (a human) must still fan
+// out ambient observation to the channel's agents, so each model — not the
+// server — decides whether it's addressed. Before the fix,
+// dispatchChannelMessageToAgents returned early on any "@" in the content, so
+// agents were never woken and stayed silent on "一起 @xx 打个招呼".
+func TestChannelAmbientDispatchNotSkippedForAtMention(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	withChannelAmbientGateTestConfig(t)
+	agentID := createHandlerTestAgent(t, "Ambient AtMention Agent "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "ambient-atmention-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+
+	// Collective instruction that @-mentions a human who is NOT a channel agent.
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "大家一起 @some-human 打个招呼", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ambient-atmention"), 0)
+	if err != nil {
+		t.Fatalf("insert at-mention trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+	var tasks int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_task_queue atq
+		JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
+		WHERE cas.channel_id = $1`, channelID).Scan(&tasks); err != nil {
+		t.Fatalf("count ambient tasks: %v", err)
+	}
+	if tasks != 1 {
+		t.Fatalf("at-mention collective message created %d ambient tasks, want 1 (agents must be woken so the model can judge relevance)", tasks)
+	}
+}
+
 func TestChannelAmbientGateSerializesConcurrentSameAgentAmbient(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

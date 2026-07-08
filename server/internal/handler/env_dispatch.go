@@ -128,6 +128,9 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), envDispatchConcurrency())
+	if lc := newEnvSandboxLifecycleService(h); lc != nil {
+		svc = svc.WithSandboxLifecycle(lc)
+	}
 	res, err := svc.Dispatch(r.Context(), service.EnvDispatchInput{
 		WorkspaceID: workspaceID, UserID: userID,
 		Mode: service.EnvMode(req.Mode), EnvID: req.EnvID,
@@ -980,20 +983,72 @@ func (a *envDispatchDepsAdapter) SaveTrainingDispatch(ctx context.Context, proje
 	return nil
 }
 
-// ValidateAgentInWorkspaceOrSquad is a placeholder until Step 6c wires real
-// workspace/squad membership queries. Per-agent env specs are optional and no
-// production caller sends them yet, so this method is unreachable in current
-// production traffic; it returns not_implemented to fail loudly if a caller
-// starts sending specs before the real lookup lands.
+// ValidateAgentInWorkspaceOrSquad reports whether agentID is a member of the
+// squad (when squadID is set) or the workspace. Returns a typed error when the
+// agent is unknown or unauthorized.
 func (a *envDispatchDepsAdapter) ValidateAgentInWorkspaceOrSquad(ctx context.Context, workspaceID, squadID, agentID string) error {
-	return fmt.Errorf("not_implemented: per-agent env membership validation is not yet wired")
+	agentUUID, err := util.ParseUUID(agentID)
+	if err != nil {
+		return fmt.Errorf("parse agent_id: %w", err)
+	}
+	if squadID != "" {
+		squadUUID, err := util.ParseUUID(squadID)
+		if err != nil {
+			return fmt.Errorf("parse squad_id: %w", err)
+		}
+		ok, err := a.h.Queries.IsSquadMember(ctx, db.IsSquadMemberParams{
+			SquadID:    squadUUID,
+			MemberType: "agent",
+			MemberID:   agentUUID,
+		})
+		if err != nil {
+			return fmt.Errorf("check squad membership: %w", err)
+		}
+		if !ok {
+			return fmt.Errorf("agent %s is not a member of squad %s", agentID, squadID)
+		}
+		return nil
+	}
+	// No squad: validate the agent belongs to the workspace.
+	wsUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return fmt.Errorf("parse workspace_id: %w", err)
+	}
+	if _, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+		ID:          agentUUID,
+		WorkspaceID: wsUUID,
+	}); err != nil {
+		return fmt.Errorf("agent %s is not a member of workspace %s", agentID, workspaceID)
+	}
+	return nil
 }
 
-// ResolvePerAgentEnvSpec is a placeholder until Step 6c wires real template /
-// base-env resolution. See ValidateAgentInWorkspaceOrSquad for the safety
-// argument.
+// ResolvePerAgentEnvSpec validates that the spec's base_env_id is known and
+// authorized (templates are pass-through; there is no template registry), and
+// returns a ref carrying the resolved template. For BaseEnvID, the template is
+// resolved from the env's first sandbox_instance; for Template, the spec's
+// template is used directly.
 func (a *envDispatchDepsAdapter) ResolvePerAgentEnvSpec(ctx context.Context, workspaceID string, spec service.PerAgentEnvSpec) (service.SandboxInstanceRef, error) {
-	return service.SandboxInstanceRef{}, fmt.Errorf("not_implemented: per-agent env spec resolution is not yet wired")
+	template := spec.Template
+	if spec.BaseEnvID != "" {
+		env, err := a.GetEnv(ctx, spec.BaseEnvID, workspaceID)
+		if err != nil {
+			return service.SandboxInstanceRef{}, fmt.Errorf("resolve base env %s: %w", spec.BaseEnvID, err)
+		}
+		// Resolve the template from the base env's first sandbox_instance, if
+		// any; otherwise fall back to "default".
+		if len(env.SandboxIDs) > 0 {
+			if lcDeps := newEnvSandboxLifecycleDepsAdapter(a.h); lcDeps != nil {
+				if ref, err := lcDeps.GetSandboxInstanceRef(ctx, workspaceID, env.SandboxIDs[0]); err == nil && ref.Template != "" {
+					template = ref.Template
+				}
+			}
+		}
+		if template == "" {
+			template = "default"
+		}
+	}
+	return service.SandboxInstanceRef{Template: template, WorkspaceID: workspaceID}, nil
 }
 
 // maybeOpenTrainingSession fires the shared session-open hook for a task

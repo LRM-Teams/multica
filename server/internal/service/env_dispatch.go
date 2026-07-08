@@ -1,0 +1,836 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+)
+
+// EnvMode enumerates the reset modes (spec §4.2).
+type EnvMode string
+
+const (
+	EnvModeScratch EnvMode = "scratch"
+	EnvModeBranch  EnvMode = "branch"
+)
+
+// EnvModeBase is the mode for a freshly booted env (POST /api/v1/env). A base
+// env has no project and is the reset source for scratch dispatch.
+const EnvModeBase EnvMode = "base"
+
+// DefaultTrainingReward is the reward stamped on a training_dispatch row when a
+// dispatch requests training (spec §4.1). Task 8 wires this to a configurable
+// TRAINING_DEFAULT_REWARD; for now it is a fixed default.
+const DefaultTrainingReward = 1.0
+
+// EnvDomain enumerates the dispatch domains (spec §4.2). Required on dispatch;
+// each domain pins a dispatch_type (swe_lego⇒issue, self_play⇒message).
+type EnvDomain string
+
+const (
+	EnvDomainSweLego  EnvDomain = "swe_lego"
+	EnvDomainSelfPlay EnvDomain = "self_play"
+)
+
+// EnvDispatchType enumerates the dispatch types.
+type EnvDispatchType string
+
+const (
+	EnvDispatchIssue   EnvDispatchType = "issue"
+	EnvDispatchMessage EnvDispatchType = "message"
+)
+
+// EnvDispatchInput is the service-layer input for the unified dispatch.
+// EnvDispatchInput is the service-layer input for the unified dispatch.
+type EnvDispatchInput struct {
+	WorkspaceID     string
+	UserID          string // creator/actor
+	Mode            EnvMode
+	EnvID           string    // base env (scratch) or state env (branch)
+	SourceProjectID string    // branch only: the single project on EnvID (1:1 invariant), resolved by the handler
+	Domain          EnvDomain // required
+	DispatchType    EnvDispatchType
+	GroupSize       int
+	AgentID         string
+	SquadID         string // team dispatch; mutually exclusive with AgentID (leader resolved server-side)
+	TrainAgentID    string // optional training target (spec §4.1): a squad member or the single agent; empty ⇒ no training session
+	CriticAgentID   string // optional critic for trained agent (sub-project E): evaluates the trained agent's output; empty ⇒ unchanged behavior
+	IdempotencyKey  string // optional; dedupes retries (spec §7.7)
+
+	// PerAgentEnvSpecs optionally assigns individual squad agents to sandbox
+	// templates or base environments while preserving a shared Multica entity
+	// subtree. Empty preserves existing default/shared sandbox behavior.
+	PerAgentEnvSpecs []PerAgentEnvSpec
+
+	// Issue dispatch (required for scratch+swe_lego; forbidden for
+	// branch+swe_lego where the copied issue is reused).
+	Issue *IssueInput
+
+	// Message dispatch (required for self_play).
+	Message *MessageInput
+}
+
+// PerAgentEnvSpec assigns one squad agent to a sandbox template or base
+// environment. All agents still share the same Multica entity subtree.
+type PerAgentEnvSpec struct {
+	AgentID   string
+	Template  string
+	BaseEnvID string
+}
+
+type IssueInput struct {
+	Title              string
+	Description        string
+	AcceptanceCriteria []string
+	FailToPass         []string
+	PassToPass         []string
+}
+
+type MessageInput struct {
+	Content string
+}
+
+// EnvRollout is one element of the response array (spec §6.3).
+type EnvRollout struct {
+	EnvID         string // always a new env_id (branch always forks, incl. N=1)
+	ProjectID     string
+	IssueID       string // empty iff dispatch_type=message
+	ChatSessionID string // empty iff dispatch_type=issue
+	AgentRunID    string // empty if dispatch failed (partial rollout)
+	Error         string // empty if rollout succeeded
+
+	// SandboxRefs carries structured sandbox_instance refs for save/resume-capable
+	// (sandbox_instance-backed) rollouts. Empty for Fleet-backed rollouts.
+	SandboxRefs []SandboxInstanceRef
+	// AgentSandboxRefs maps agent_id -> its sandbox_instance ref when per-agent
+	// env specs are used. Empty for default/shared sandbox assignment.
+	AgentSandboxRefs map[string]SandboxInstanceRef
+}
+
+// EnvDispatchResult wraps the rollouts slice.
+type EnvDispatchResult struct {
+	Rollouts []EnvRollout
+}
+
+// EnvDispatchDeps is the seam between the service and the DB + cloud runtime.
+// Production wires this to real queries + cloudRuntimeProxy; tests inject a fake.
+type EnvDispatchDeps interface {
+	// Environment operations
+	GetEnv(ctx context.Context, envID, workspaceID string) (Env, error)
+	CreateEnv(ctx context.Context, workspaceID string, sandboxIDs []string, parentEnvID string, mode EnvMode, domain EnvDomain) (envID string, err error)
+	DeleteEnv(ctx context.Context, envID, workspaceID string) error
+
+	// Sandbox operations (proxy to cloud-runtime/Fleet)
+	ForkSandbox(ctx context.Context, sourceSandboxID string, idx int) (sandboxID string, err error)
+	DeleteSandbox(ctx context.Context, sandboxID string) error
+	BootSandbox(ctx context.Context, imageRef string) (sandboxID string, err error) // for POST /api/v1/env
+
+	// Project operations
+	GetProjectByEnvID(ctx context.Context, envID, workspaceID string) (projectID string, err error) // branch: resolve source env → its single project (1:1 invariant)
+	CreateProject(ctx context.Context, workspaceID, name, envID string) (projectID string, err error)
+	// CopyProjectSubtree deep-copies issues + chat sessions + messages under a
+	// new project bound to envID; returns source→copied ID maps so dispatch can
+	// target the copied issue (branch+swe_lego) or copied session (branch+self_play).
+	CopyProjectSubtree(ctx context.Context, sourceProjectID, workspaceID, envID string) (newProjectID string, issueIDMap, chatSessionIDMap map[string]string, err error)
+	DeleteProject(ctx context.Context, projectID, workspaceID string) error
+
+	// Issue operations
+	ListIssuesByProject(ctx context.Context, projectID, workspaceID string) ([]IssueRow, error)
+	CreateIssue(ctx context.Context, projectID, workspaceID, creatorID, title, description string, acceptanceCriteria, failToPass, passToPass []string) (issueID string, err error)
+
+	// Chat operations
+	CreateChatSession(ctx context.Context, projectID, workspaceID, agentID, creatorID string) (sessionID string, err error)
+	CreateChatMessage(ctx context.Context, sessionID, role, content string) (messageID string, err error)
+	// ListChatSessionsByProject returns the chat session ids under a project.
+	// Used to enforce the branch+self_play "exactly one session" rule (§7.4).
+	ListChatSessionsByProject(ctx context.Context, projectID, workspaceID string) ([]string, error)
+
+	// Agent run
+	EnqueueAgentRun(ctx context.Context, workspaceID, agentID, squadID, issueID, chatSessionID, sandboxID, envID string, idx int) (runID string, err error)
+
+	// GetDefaultSelfPlayEnv resolves the per-workspace default self_play base
+	// env used when a scratch+self_play dispatch is called with an empty
+	// env_id. Returns ("", nil) or an error when unconfigured (spec D2/D3).
+	GetDefaultSelfPlayEnv(ctx context.Context, workspaceID string) (envID string, err error)
+
+	// Idempotency ledger (spec §7.7). GetIdempotentResponse returns ok=false
+	// when the key is unseen; SaveIdempotentResponse persists the response for
+	// replay. Both are workspace-scoped.
+	GetIdempotentResponse(ctx context.Context, workspaceID, key string) (EnvDispatchResult, bool, error)
+	SaveIdempotentResponse(ctx context.Context, workspaceID, key string, res EnvDispatchResult) error
+
+	// SaveTrainingDispatch persists the training intent for a rollout project
+	// (spec §4.1): one row per rollout project when a train_agent_id is set, so
+	// the later session-open hook can resolve the training target + default
+	// reward by project_id. Keyed by projectID (upsert on conflict).
+	SaveTrainingDispatch(ctx context.Context, projectID, workspaceID, trainAgentID, criticAgentID string, defaultReward float64) error
+
+	// ValidateAgentInWorkspaceOrSquad reports whether agentID is a member of
+	// the workspace, or — when squadID is non-empty — a member of that squad.
+	// Returns a typed error when the agent is unknown or unauthorized; nil when
+	// the agent is a member. Used by per-agent env spec validation (§5) to
+	// reject unknown agents before any rollout state is created.
+	ValidateAgentInWorkspaceOrSquad(ctx context.Context, workspaceID, squadID, agentID string) error
+
+	// ResolvePerAgentEnvSpec validates that the spec's template or base_env_id
+	// is known and authorized for the workspace, and returns a ref carrying the
+	// resolved template name (InstanceID left empty — the caller creates the
+	// sandbox_instance via SandboxInstanceCreator). Returns a typed error when
+	// the template/base_env_id is unknown or unauthorized.
+	ResolvePerAgentEnvSpec(ctx context.Context, workspaceID string, spec PerAgentEnvSpec) (SandboxInstanceRef, error)
+}
+
+// Env is a snapshot of an environment row.
+type Env struct {
+	ID          string
+	WorkspaceID string
+	// SandboxIDs holds one or more sandbox handles: an environment can host
+	// many agents, each running in its own sandbox. Base envs carry a single
+	// booted sandbox; branching an env forks every sandbox in the set.
+	SandboxIDs  []string
+	ParentEnvID string // empty for base
+	Mode        EnvMode
+	Domain      EnvDomain
+}
+
+// IssueRow is a snapshot of an issue row (subset needed by the service).
+type IssueRow struct {
+	ID          string
+	ProjectID   string
+	Title       string
+	Description string
+}
+
+// EnvDispatchService orchestrates reset → dispatch (spec §7).
+type EnvDispatchService struct {
+	deps        EnvDispatchDeps
+	concurrency int
+	lifecycle   SandboxInstanceCreator // optional; nil ⇒ existing Fleet fork path
+}
+
+// SandboxInstanceCreator creates a sandbox_instance-backed environment
+// handle. *EnvSandboxLifecycleService satisfies it. When injected into
+// EnvDispatchService, save/resume-capable (trained) rollouts create
+// sandbox_instances instead of forking Fleet sandboxes.
+type SandboxInstanceCreator interface {
+	CreateSandboxInstance(ctx context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error)
+	// GetSandboxInstanceRef resolves the current ref (template, node, status)
+	// for an existing sandbox_instance. Used by branch-from-template to derive
+	// the source env's template when creating fresh sandbox_instances.
+	GetSandboxInstanceRef(ctx context.Context, workspaceID, instanceID string) (SandboxInstanceRef, error)
+}
+
+func NewEnvDispatchService(deps EnvDispatchDeps, concurrency int) *EnvDispatchService {
+	if concurrency < 1 {
+		concurrency = 8
+	}
+	return &EnvDispatchService{deps: deps, concurrency: concurrency}
+}
+
+// WithSandboxLifecycle injects an optional sandbox_instance creator. When
+// set, trained rollouts (train_agent_id present) create sandbox_instances and
+// populate structured SandboxInstanceRefs; non-trained rollouts keep the
+// Fleet fork path. Returns the service for chaining.
+func (s *EnvDispatchService) WithSandboxLifecycle(lc SandboxInstanceCreator) *EnvDispatchService {
+	s.lifecycle = lc
+	return s
+}
+
+// ErrAllDispatchFailed signals reset succeeded but every rollout's dispatch
+// failed (spec §8 → 500). The returned result still carries rollouts[] so the
+// caller can see the created envs/projects to clean up.
+var ErrAllDispatchFailed = fmt.Errorf("dispatch_failed: all rollouts failed")
+
+// Dispatch runs the unified dispatch flow.
+func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) (EnvDispatchResult, error) {
+	// resume is an alias for branch (spec D1): normalize at the edge so there
+	// is a single downstream code path and no new EnvMode.
+	if in.Mode == "resume" {
+		in.Mode = EnvModeBranch
+	}
+
+	if err := s.validate(in); err != nil {
+		return EnvDispatchResult{}, err
+	}
+
+	// DB-backed per-agent env spec validation (§5): reject unknown agents and
+	// unknown/unauthorized env specs before any rollout state is created. No-op
+	// when PerAgentEnvSpecs is empty, preserving current behavior.
+	if err := s.validatePerAgentEnvSpecsDB(ctx, in); err != nil {
+		return EnvDispatchResult{}, err
+	}
+
+	// Idempotency replay (spec §7.7): a repeat key returns the stored response.
+	if in.IdempotencyKey != "" {
+		if prev, ok, err := s.deps.GetIdempotentResponse(ctx, in.WorkspaceID, in.IdempotencyKey); err != nil {
+			return EnvDispatchResult{}, fmt.Errorf("idempotency lookup: %w", err)
+		} else if ok {
+			return prev, nil
+		}
+	}
+
+	// Resolve the per-workspace default self_play base env when env_id is empty.
+	// validate() guarantees this is only reachable for scratch+self_play.
+	if in.EnvID == "" {
+		envID, err := s.deps.GetDefaultSelfPlayEnv(ctx, in.WorkspaceID)
+		if err != nil || envID == "" {
+			return EnvDispatchResult{}, fmt.Errorf("validation_failed: default self-play env not configured")
+		}
+		in.EnvID = envID
+	}
+
+	env, err := s.deps.GetEnv(ctx, in.EnvID, in.WorkspaceID)
+	if err != nil {
+		return EnvDispatchResult{}, fmt.Errorf("get env: %w", err)
+	}
+
+	// Mode ↔ env kind cross-check (spec §6.3): scratch forks a base env;
+	// branch forks a state env. Reject the mismatched combinations with a 400.
+	if in.Mode == EnvModeScratch && env.Mode != EnvModeBase {
+		return EnvDispatchResult{}, fmt.Errorf("validation_failed: scratch requires a base env (env_id is mode=%s)", env.Mode)
+	}
+	if in.Mode == EnvModeBranch && env.Mode == EnvModeBase {
+		return EnvDispatchResult{}, fmt.Errorf("validation_failed: branch requires a state env (env_id is a base env)")
+	}
+
+	// Branch: resolve the single source project on this env (spec §7.2 step 0).
+	// The 1:1 unique index guarantees exactly one; a base env has none → error.
+	if in.Mode == EnvModeBranch && in.SourceProjectID == "" {
+		pid, err := s.deps.GetProjectByEnvID(ctx, in.EnvID, in.WorkspaceID)
+		if err != nil {
+			return EnvDispatchResult{}, fmt.Errorf("validation_failed: resolve source project: %w", err)
+		}
+		in.SourceProjectID = pid
+	}
+
+	// Branch source shape (spec §7.4): v1 requires the source project to hold
+	// exactly one dispatch target. Check upfront so zero/multiple yields a 400
+	// before any fork/create work (and so dispatchOne never sees an empty
+	// target for a branch, which would otherwise nil-deref on in.Issue).
+	if in.Mode == EnvModeBranch {
+		if err := s.validateBranchSource(ctx, in); err != nil {
+			return EnvDispatchResult{}, err
+		}
+	}
+
+	rollouts := make([]EnvRollout, in.GroupSize)
+	sem := make(chan struct{}, s.concurrency)
+	var wg sync.WaitGroup
+	var resetErrs []error
+	var resetErrMu sync.Mutex
+
+	for i := 0; i < in.GroupSize; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			r, err := s.resetOne(ctx, in, env, idx)
+			if err != nil {
+				resetErrMu.Lock()
+				resetErrs = append(resetErrs, fmt.Errorf("rollout %d reset: %w", idx, err))
+				resetErrMu.Unlock()
+				return
+			}
+			rollouts[idx] = r
+		}(i)
+	}
+	wg.Wait()
+
+	if len(resetErrs) > 0 {
+		// Reset failed for ≥1 rollout → roll back every rollout and return a
+		// reset_failed error (handler → 503). Reset is all-or-nothing.
+		for i, r := range rollouts {
+			if r.ProjectID != "" || r.EnvID != "" {
+				s.rollbackRollout(ctx, in.WorkspaceID, r)
+			}
+			rollouts[i] = EnvRollout{}
+		}
+		return EnvDispatchResult{}, fmt.Errorf("reset_failed: %v", resetErrs[0])
+	}
+
+	// Persist training intent per rollout project (spec §4.1) BEFORE dispatch:
+	// the session-open hook (fired when the trained member's task is created
+	// during dispatch) resolves the training target + default reward by
+	// project_id, so the row must exist by the time dispatchOne enqueues the
+	// run. Only when a train_agent_id is set; otherwise this is a no-op and
+	// behavior is unchanged. Best-effort per rollout (a save failure is not
+	// fatal to the dispatch; the open-hook simply finds no training row).
+	if in.TrainAgentID != "" {
+		for i := range rollouts {
+			if rollouts[i].ProjectID == "" {
+				continue
+			}
+			if err := s.deps.SaveTrainingDispatch(ctx, rollouts[i].ProjectID, in.WorkspaceID, in.TrainAgentID, in.CriticAgentID, DefaultTrainingReward); err != nil {
+				// Non-fatal: record on the rollout so the caller can see the
+				// training row was not persisted, but continue the dispatch.
+				rollouts[i].Error = fmt.Sprintf("save training dispatch: %v", err)
+			}
+		}
+	}
+
+	// Dispatch phase: best-effort, per-rollout errors recorded in rollouts[i].Error.
+	var dispatchWG sync.WaitGroup
+	for i := 0; i < in.GroupSize; i++ {
+		dispatchWG.Add(1)
+		go func(idx int) {
+			defer dispatchWG.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			s.dispatchOne(ctx, in, &rollouts[idx], idx)
+		}(i)
+	}
+	dispatchWG.Wait()
+
+	result := EnvDispatchResult{Rollouts: rollouts}
+
+	// Persist the idempotency response so a retry replays it (spec §7.7). Best-effort.
+	if in.IdempotencyKey != "" {
+		_ = s.deps.SaveIdempotentResponse(ctx, in.WorkspaceID, in.IdempotencyKey, result)
+	}
+
+	// Status rule (spec §6.3/§8): ≥1 dispatched → nil (201); all failed →
+	// ErrAllDispatchFailed (handler → 500, body still carries rollouts[]).
+	succeeded := 0
+	for _, r := range rollouts {
+		if r.AgentRunID != "" {
+			succeeded++
+		}
+	}
+	if succeeded == 0 {
+		return result, ErrAllDispatchFailed
+	}
+	return result, nil
+}
+
+// validate implements the §6.3 validation table (the subset that's
+// service-level; UUID-shape validation lives in the handler).
+func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
+	if in.Mode != EnvModeScratch && in.Mode != EnvModeBranch {
+		return fmt.Errorf("validation_failed: mode must be scratch or branch")
+	}
+	if in.DispatchType != EnvDispatchIssue && in.DispatchType != EnvDispatchMessage {
+		return fmt.Errorf("validation_failed: dispatch_type must be issue or message")
+	}
+	if in.GroupSize < 1 || in.GroupSize > 64 {
+		return fmt.Errorf("validation_failed: group_size must be in [1, 64]")
+	}
+	switch {
+	case in.AgentID == "" && in.SquadID == "":
+		return fmt.Errorf("validation_failed: agent_id or squad_id is required")
+	case in.AgentID != "" && in.SquadID != "":
+		return fmt.Errorf("validation_failed: agent_id and squad_id are mutually exclusive")
+	}
+	// train_agent_id (spec §4.1): the training target. Allowed when a squad_id
+	// is set (a team member) OR when it equals agent_id (single-agent
+	// training). Empty ⇒ today's behavior exactly (no new error). DB membership
+	// resolution is enforced later, not here.
+	if in.TrainAgentID != "" && in.SquadID == "" && in.TrainAgentID != in.AgentID {
+		return fmt.Errorf("validation_failed: train_agent_id must accompany a squad_id (team member) or equal agent_id (single-agent training)")
+	}
+	// critic_agent_id (sub-project E): the critic that evaluates the trained agent.
+	// Requires train_agent_id. Must differ from train_agent_id and agent_id.
+	if in.CriticAgentID != "" {
+		if in.TrainAgentID == "" {
+			return fmt.Errorf("validation_failed: critic_agent_id requires train_agent_id")
+		}
+		if in.CriticAgentID == in.TrainAgentID {
+			return fmt.Errorf("validation_failed: critic_agent_id must differ from train_agent_id")
+		}
+		if in.CriticAgentID == in.AgentID {
+			return fmt.Errorf("validation_failed: critic_agent_id must differ from agent_id")
+		}
+	}
+	if in.Domain != EnvDomainSweLego && in.Domain != EnvDomainSelfPlay {
+		return fmt.Errorf("validation_failed: domain is required (swe_lego or self_play)")
+	}
+	if in.Domain == EnvDomainSweLego && in.DispatchType == EnvDispatchMessage {
+		return fmt.Errorf("validation_failed: swe_lego domain is issue-only")
+	}
+	if in.Domain == EnvDomainSelfPlay && in.DispatchType == EnvDispatchIssue {
+		return fmt.Errorf("not_implemented: self_play + issue dispatch")
+	}
+	if in.Mode == EnvModeBranch && in.Domain == EnvDomainSweLego && in.Issue != nil {
+		return fmt.Errorf("validation_failed: issue must not be supplied for branch+swe_lego (copied issue is reused)")
+	}
+	if in.Mode == EnvModeScratch && in.Domain == EnvDomainSweLego && in.Issue == nil {
+		return fmt.Errorf("validation_failed: issue required for scratch+swe_lego")
+	}
+	if in.DispatchType == EnvDispatchMessage && (in.Message == nil || in.Message.Content == "") {
+		return fmt.Errorf("validation_failed: message.content required")
+	}
+	// env_id may be empty ONLY for scratch+self_play (resolves the workspace
+	// default base env); every other combination requires an explicit env_id.
+	if in.EnvID == "" {
+		if in.Mode != EnvModeScratch || in.Domain != EnvDomainSelfPlay {
+			return fmt.Errorf("validation_failed: env_id is required except for scratch self_play")
+		}
+	}
+	if err := validatePerAgentEnvSpecsShape(in.PerAgentEnvSpecs); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validatePerAgentEnvSpecsShape enforces the synchronous shape rules for
+// per-agent env specs: every spec needs an agent_id, at most one of
+// template/base_env_id, and no duplicate agents. DB-backed membership and
+// env-spec resolution happen later in validatePerAgentEnvSpecs (ctx).
+func validatePerAgentEnvSpecsShape(specs []PerAgentEnvSpec) error {
+	seen := make(map[string]struct{}, len(specs))
+	for _, s := range specs {
+		if s.AgentID == "" {
+			return fmt.Errorf("validation_failed: per_agent_env agent_id is required")
+		}
+		if s.Template == "" && s.BaseEnvID == "" {
+			return fmt.Errorf("validation_failed: per_agent_env spec for agent %s needs a template or base_env_id", s.AgentID)
+		}
+		if s.Template != "" && s.BaseEnvID != "" {
+			return fmt.Errorf("validation_failed: per_agent_env spec for agent %s must set template or base_env_id, not both", s.AgentID)
+		}
+		if _, dup := seen[s.AgentID]; dup {
+			return fmt.Errorf("validation_failed: per_agent_env agent_id %s is duplicated", s.AgentID)
+		}
+		seen[s.AgentID] = struct{}{}
+	}
+	return nil
+}
+
+// validatePerAgentEnvSpecsDB runs the DB-backed per-agent env spec validation
+// (§5): for each spec, verify the agent is a workspace/squad member and the
+// template/base_env_id is known and authorized. Preserves current behavior
+// when PerAgentEnvSpecs is empty (no DB calls). Called after the synchronous
+// shape validation passes, before any rollout state is created.
+func (s *EnvDispatchService) validatePerAgentEnvSpecsDB(ctx context.Context, in EnvDispatchInput) error {
+	if len(in.PerAgentEnvSpecs) == 0 {
+		return nil
+	}
+	for _, spec := range in.PerAgentEnvSpecs {
+		if err := s.deps.ValidateAgentInWorkspaceOrSquad(ctx, in.WorkspaceID, in.SquadID, spec.AgentID); err != nil {
+			return fmt.Errorf("validation_failed: per_agent_env agent %s: %w", spec.AgentID, err)
+		}
+		if _, err := s.deps.ResolvePerAgentEnvSpec(ctx, in.WorkspaceID, spec); err != nil {
+			return fmt.Errorf("validation_failed: per_agent_env spec for agent %s: %w", spec.AgentID, err)
+		}
+	}
+	return nil
+}
+
+// validateBranchSource enforces the §7.4 v1 constraint that a branch source
+// project contains exactly one dispatch target: one swe_lego issue (issue
+// dispatch) or one chat session (message dispatch). Zero or multiple → 400.
+func (s *EnvDispatchService) validateBranchSource(ctx context.Context, in EnvDispatchInput) error {
+	switch in.Domain {
+	case EnvDomainSweLego:
+		issues, err := s.deps.ListIssuesByProject(ctx, in.SourceProjectID, in.WorkspaceID)
+		if err != nil {
+			return fmt.Errorf("validation_failed: list source issues: %w", err)
+		}
+		if len(issues) != 1 {
+			return fmt.Errorf("validation_failed: branch+swe_lego requires the source project to have exactly one issue (found %d)", len(issues))
+		}
+	case EnvDomainSelfPlay:
+		sessions, err := s.deps.ListChatSessionsByProject(ctx, in.SourceProjectID, in.WorkspaceID)
+		if err != nil {
+			return fmt.Errorf("validation_failed: list source chat sessions: %w", err)
+		}
+		if len(sessions) != 1 {
+			return fmt.Errorf("validation_failed: branch+self_play requires the source project to have exactly one chat session (found %d)", len(sessions))
+		}
+	}
+	return nil
+}
+
+// resetOne does the per-rollout reset (sandbox + env + project) per §7.2.
+func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, sourceEnv Env, idx int) (EnvRollout, error) {
+	// sandbox_instance backend bridge (D7): save/resume-capable (trained)
+	// rollouts create sandbox_instances via the injected lifecycle creator
+	// instead of forking Fleet sandboxes, and carry structured SandboxRefs.
+	// Non-trained rollouts (or no creator injected) keep the Fleet fork path.
+	var forked []string
+	var sandboxRefs []SandboxInstanceRef
+	var agentSandboxRefs map[string]SandboxInstanceRef
+	if s.useSandboxInstanceBackend(in) {
+		refs, agentRefs, err := s.createSandboxInstanceRefs(ctx, in, sourceEnv)
+		if err != nil {
+			return EnvRollout{}, fmt.Errorf("create sandbox_instance: %w", err)
+		}
+		for _, r := range refs {
+			forked = append(forked, r.InstanceID)
+			sandboxRefs = append(sandboxRefs, r)
+		}
+		agentSandboxRefs = agentRefs
+	} else {
+		// Branch always forks (spec §4.3): the source sandbox set is never reused
+		// in place, so the source state stays re-branchable (MCTS). Scratch forks
+		// the base. An env can hold many sandboxes (one per agent), so fork every
+		// one and carry the full set into the new env row.
+		f, err := s.forkAll(ctx, sourceEnv.SandboxIDs, idx)
+		if err != nil {
+			return EnvRollout{}, fmt.Errorf("fork sandbox: %w", err)
+		}
+		forked = f
+	}
+	mode := EnvModeScratch
+	if in.Mode == EnvModeBranch {
+		mode = EnvModeBranch
+	}
+	envID, err := s.deps.CreateEnv(ctx, in.WorkspaceID, forked, sourceEnv.ID, mode, in.Domain)
+	if err != nil {
+		s.deleteSandboxes(ctx, forked)
+		return EnvRollout{}, fmt.Errorf("create env: %w", err)
+	}
+
+	// Project
+	var projectID string
+	var issueIDMap, chatSessionIDMap map[string]string
+	if in.Mode == EnvModeScratch {
+		name := fmt.Sprintf("env-dispatch-%s", envID) // unique, spec §7.2
+		pid, err := s.deps.CreateProject(ctx, in.WorkspaceID, name, envID)
+		if err != nil {
+			s.rollbackRollout(ctx, in.WorkspaceID, EnvRollout{EnvID: envID})
+			return EnvRollout{}, fmt.Errorf("create project: %w", err)
+		}
+		projectID = pid
+	} else {
+		// branch — copy source project subtree (issues + chat sessions).
+		// in.SourceProjectID is resolved by the handler from the 1:1 env→project.
+		pid, imap, smap, err := s.deps.CopyProjectSubtree(ctx, in.SourceProjectID, in.WorkspaceID, envID)
+		if err != nil {
+			s.rollbackRollout(ctx, in.WorkspaceID, EnvRollout{EnvID: envID})
+			return EnvRollout{}, fmt.Errorf("copy project: %w", err)
+		}
+		projectID = pid
+		issueIDMap = imap
+		chatSessionIDMap = smap
+	}
+
+	r := EnvRollout{EnvID: envID, ProjectID: projectID, SandboxRefs: sandboxRefs, AgentSandboxRefs: agentSandboxRefs}
+	// Stash the single copied entity for dispatchOne (spec §7.4: exactly one).
+	if in.Mode == EnvModeBranch {
+		if in.Domain == EnvDomainSweLego {
+			for _, newID := range issueIDMap {
+				r.IssueID = newID
+				break
+			}
+		} else if in.Domain == EnvDomainSelfPlay {
+			for _, newID := range chatSessionIDMap {
+				r.ChatSessionID = newID
+				break
+			}
+		}
+	}
+	return r, nil
+}
+
+// useSandboxInstanceBackend reports whether this rollout should create
+// sandbox_instance-backed sandboxes (D7). True when a lifecycle creator is
+// injected AND the rollout is save/resume-capable (train_agent_id present —
+// trained rollouts are the checkpointing target). Non-trained rollouts keep
+// the Fleet fork path.
+func (s *EnvDispatchService) useSandboxInstanceBackend(in EnvDispatchInput) bool {
+	return s.lifecycle != nil && in.TrainAgentID != ""
+}
+
+// createSandboxInstanceRefs creates one sandbox_instance per per-agent env
+// spec, or a single default sandbox_instance when no per-agent specs are set.
+// Branch (D7) creates from the source env's template; scratch creates from the
+// requested template. v1 resolves the workspace/node via the lifecycle creator
+// deps; production adapter wiring (node selection) is injected by the handler.
+// Returns the flat slice (for SandboxIDs/SandboxRefs) and, when per-agent specs
+// are used, an agent_id→ref map for AgentSandboxRefs.
+func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in EnvDispatchInput, sourceEnv Env) ([]SandboxInstanceRef, map[string]SandboxInstanceRef, error) {
+	if len(in.PerAgentEnvSpecs) > 0 {
+		refs := make([]SandboxInstanceRef, 0, len(in.PerAgentEnvSpecs))
+		agentRefs := make(map[string]SandboxInstanceRef, len(in.PerAgentEnvSpecs))
+		for _, spec := range in.PerAgentEnvSpecs {
+			// spec.Template is used directly; BaseEnvID → template resolution is
+			// deferred to Step 6c (production adapter wiring). Shape validation
+			// guarantees exactly one of Template/BaseEnvID is set.
+			ref, err := s.lifecycle.CreateSandboxInstance(ctx, CreateSandboxInstanceInput{
+				WorkspaceID: in.WorkspaceID,
+				Template:    spec.Template,
+			}, in.UserID)
+			if err != nil {
+				return nil, nil, err
+			}
+			refs = append(refs, ref)
+			agentRefs[spec.AgentID] = ref
+		}
+		return refs, agentRefs, nil
+	}
+	// No per-agent specs: create one default sandbox_instance for the rollout.
+	template := "default"
+	if in.Mode == EnvModeBranch && len(sourceEnv.SandboxIDs) > 0 {
+		// Branch-from-template (D7): derive the template from the source env's
+		// first sandbox_instance rather than a live fork. The source DB subtree
+		// is still copied by CopyProjectSubtree, so the child continues the
+		// copied conversation in a fresh sandbox.
+		sourceRef, err := s.lifecycle.GetSandboxInstanceRef(ctx, in.WorkspaceID, sourceEnv.SandboxIDs[0])
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve source sandbox template: %w", err)
+		}
+		if sourceRef.Template != "" {
+			template = sourceRef.Template
+		}
+	}
+	ref, err := s.lifecycle.CreateSandboxInstance(ctx, CreateSandboxInstanceInput{
+		WorkspaceID: in.WorkspaceID,
+		Template:    template,
+	}, in.UserID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return []SandboxInstanceRef{ref}, nil, nil
+}
+
+// dispatchOne runs the dispatch phase for one rollout (§7.3). Best-effort:
+// failures recorded in r.Error, no rollback.
+func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInput, r *EnvRollout, idx int) {
+	if in.DispatchType == EnvDispatchIssue {
+		issueID := r.IssueID // branch+swe_lego: copied issue id
+		if issueID == "" {
+			// scratch+swe_lego — create the new issue. in.Issue is guaranteed
+			// non-nil here: validate() requires it for scratch+swe_lego, and
+			// validateBranchSource guarantees branch+swe_lego set r.IssueID
+			// above (so we never reach this branch with a nil in.Issue).
+			ii := in.Issue
+			if ii == nil {
+				r.Error = "internal: missing issue payload for issue dispatch"
+				return
+			}
+			newID, err := s.deps.CreateIssue(ctx, r.ProjectID, in.WorkspaceID, in.UserID, ii.Title, ii.Description, ii.AcceptanceCriteria, ii.FailToPass, ii.PassToPass)
+			if err != nil {
+				r.Error = fmt.Sprintf("create issue: %v", err)
+				return
+			}
+			issueID = newID
+			r.IssueID = newID
+		}
+		runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, issueID, "", "", r.EnvID, idx)
+		if err != nil {
+			r.Error = fmt.Sprintf("enqueue agent run: %v", err)
+			return
+		}
+		r.AgentRunID = runID
+		return
+	}
+	// message (self_play)
+	sessionID := r.ChatSessionID // branch: the copied session (spec §7.4); empty for scratch
+	if sessionID == "" {
+		// scratch+self_play — new session bound to the new project
+		newID, err := s.deps.CreateChatSession(ctx, r.ProjectID, in.WorkspaceID, in.AgentID, in.UserID)
+		if err != nil {
+			r.Error = fmt.Sprintf("create chat session: %v", err)
+			return
+		}
+		sessionID = newID
+		r.ChatSessionID = newID
+	}
+	// branch continues the copied conversation by appending; scratch starts fresh (spec §7.3).
+	if _, err := s.deps.CreateChatMessage(ctx, sessionID, "user", in.Message.Content); err != nil {
+		r.Error = fmt.Sprintf("create chat message: %v", err)
+		return
+	}
+	runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, "", sessionID, "", r.EnvID, idx)
+	if err != nil {
+		r.Error = fmt.Sprintf("enqueue agent run: %v", err)
+		return
+	}
+	r.AgentRunID = runID
+}
+
+// rollbackRollout cleans up a partially-created rollout (reset phase only).
+// Order matters under ON DELETE RESTRICT: delete the project first (it
+// references env_id), then the env row, then its sandboxes. Every rollout
+// forks its own sandboxes, so this never touches a shared/source sandbox.
+func (s *EnvDispatchService) rollbackRollout(ctx context.Context, workspaceID string, r EnvRollout) {
+	if r.ProjectID != "" {
+		_ = s.deps.DeleteProject(ctx, r.ProjectID, workspaceID)
+	}
+	if r.EnvID != "" {
+		env, err := s.deps.GetEnv(ctx, r.EnvID, workspaceID)
+		_ = s.deps.DeleteEnv(ctx, r.EnvID, workspaceID)
+		if err == nil {
+			s.deleteSandboxes(ctx, env.SandboxIDs)
+		}
+	}
+}
+
+// forkAll forks every sandbox in src, returning the new sandbox ids. On the
+// first failure it best-effort deletes the sandboxes already forked so the
+// reset does not leak them, then returns the error.
+func (s *EnvDispatchService) forkAll(ctx context.Context, src []string, idx int) ([]string, error) {
+	forked := make([]string, 0, len(src))
+	for _, sid := range src {
+		newID, err := s.deps.ForkSandbox(ctx, sid, idx)
+		if err != nil {
+			s.deleteSandboxes(ctx, forked)
+			return nil, err
+		}
+		forked = append(forked, newID)
+	}
+	return forked, nil
+}
+
+// deleteSandboxes best-effort deletes every sandbox id; errors are ignored
+// (rollback is best-effort and the runtime GC is the backstop, spec §7.6).
+func (s *EnvDispatchService) deleteSandboxes(ctx context.Context, ids []string) {
+	for _, sid := range ids {
+		_ = s.deps.DeleteSandbox(ctx, sid)
+	}
+}
+
+// CreateBaseEnv boots a sandbox and creates a mode='base' env row.
+func (s *EnvDispatchService) CreateBaseEnv(ctx context.Context, workspaceID, imageRef string) (envID, sandboxID string, err error) {
+	if imageRef == "" || len(imageRef) > 256 {
+		return "", "", fmt.Errorf("validation_failed: image_ref must be 1..256 chars")
+	}
+	sbx, err := s.deps.BootSandbox(ctx, imageRef)
+	if err != nil {
+		return "", "", fmt.Errorf("boot sandbox: %w", err)
+	}
+	eid, err := s.deps.CreateEnv(ctx, workspaceID, []string{sbx}, "", EnvModeBase, "")
+	if err != nil {
+		_ = s.deps.DeleteSandbox(ctx, sbx)
+		return "", "", fmt.Errorf("create env: %w", err)
+	}
+	return eid, sbx, nil
+}
+
+// ErrEnvInUse signals a DELETE /api/v1/env against an env a project still
+// references (ON DELETE RESTRICT). Handler maps it to 409.
+var ErrEnvInUse = fmt.Errorf("env_in_use")
+
+// DeleteEnv deletes the env row + its sandbox. Idempotent: a missing env
+// returns a "not found" error which the handler maps to 404. Returns
+// ErrEnvInUse (→ 409) if a project still references the env.
+func (s *EnvDispatchService) DeleteEnv(ctx context.Context, envID, workspaceID string) error {
+	env, err := s.deps.GetEnv(ctx, envID, workspaceID)
+	if err != nil {
+		return fmt.Errorf("not found: %w", err)
+	}
+	// Delete the env ROW first. Under ON DELETE RESTRICT this fails with a FK
+	// violation if a project still references it — the adapter surfaces that as
+	// ErrEnvInUse, and the sandbox is left untouched. Only once the row is gone
+	// do we reclaim the sandbox.
+	if err := s.deps.DeleteEnv(ctx, envID, workspaceID); err != nil {
+		if errors.Is(err, ErrEnvInUse) {
+			return ErrEnvInUse
+		}
+		return fmt.Errorf("delete env: %w", err)
+	}
+	s.deleteSandboxes(ctx, env.SandboxIDs) // idempotent on 404 in Fleet
+	return nil
+}
+
+// DeleteProject deletes a project by ID (cascades to issues/chat/tasks).
+// Idempotent: a missing project returns nil.
+func (s *EnvDispatchService) DeleteProject(ctx context.Context, projectID, workspaceID string) error {
+	if err := s.deps.DeleteProject(ctx, projectID, workspaceID); err != nil {
+		return fmt.Errorf("delete project: %w", err)
+	}
+	return nil
+}

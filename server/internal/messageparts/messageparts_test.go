@@ -41,3 +41,113 @@ func TestNormalizeRejectsUnknownSticker(t *testing.T) {
 		t.Fatal("Normalize accepted an unknown sticker")
 	}
 }
+
+func TestUnwrapStructuredMessageSendTextParts(t *testing.T) {
+	content, parts, unwrapped, err := UnwrapStructuredMessageSend(
+		`{"action":"message_send","output":"Hello","parts":[{"type":"text","text":"Hello"}]}`,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("UnwrapStructuredMessageSend returned error: %v", err)
+	}
+	if !unwrapped {
+		t.Fatal("expected structured message_send payload to unwrap")
+	}
+	if content != "Hello" {
+		t.Fatalf("content = %q, want Hello", content)
+	}
+	if len(parts) != 1 || parts[0].Type != protocol.MessagePartTypeText || parts[0].Text != "Hello" {
+		t.Fatalf("parts = %+v, want one normalized text part", parts)
+	}
+}
+
+func TestUnwrapStructuredMessageSendEmbeddedTextPrefixedEnvelope(t *testing.T) {
+	raw := `Repo is not checked out this turn either - consistent with prior attempts. {"action":"message_send","output":"Visible reply","parts":[{"type":"text","text":"Visible reply"}]}`
+	content, parts, unwrapped, err := UnwrapStructuredMessageSend(raw, nil)
+	if err != nil {
+		t.Fatalf("UnwrapStructuredMessageSend returned error: %v", err)
+	}
+	if !unwrapped {
+		t.Fatal("expected embedded structured message_send payload to unwrap")
+	}
+	if content != "Visible reply" {
+		t.Fatalf("content = %q, want Visible reply", content)
+	}
+	if len(parts) != 1 || parts[0].Type != protocol.MessagePartTypeText || parts[0].Text != "Visible reply" {
+		t.Fatalf("parts = %+v, want one normalized text part", parts)
+	}
+}
+
+func TestUnwrapStructuredMessageSendEmbeddedEnvelopeHandlesBracesInStrings(t *testing.T) {
+	raw := `prefix {"action":"message_send","output":"Visible {brace} reply","parts":[{"type":"text","text":"Visible {brace} reply"}]} suffix {"parts":["left alone"]}`
+	content, parts, unwrapped, err := UnwrapStructuredMessageSend(raw, nil)
+	if err != nil {
+		t.Fatalf("UnwrapStructuredMessageSend returned error: %v", err)
+	}
+	if !unwrapped {
+		t.Fatal("expected embedded structured message_send payload to unwrap")
+	}
+	if content != "Visible {brace} reply" {
+		t.Fatalf("content = %q, want visible reply with braces", content)
+	}
+	if len(parts) != 1 || parts[0].Text != "Visible {brace} reply" {
+		t.Fatalf("parts = %+v, want one normalized text part", parts)
+	}
+}
+
+func TestUnwrapStructuredMessageSendLeavesPlainJSONAlone(t *testing.T) {
+	raw := `{"output":"Hello"}`
+	content, parts, unwrapped, err := UnwrapStructuredMessageSend(raw, nil)
+	if err != nil {
+		t.Fatalf("UnwrapStructuredMessageSend returned error: %v", err)
+	}
+	if unwrapped {
+		t.Fatal("plain JSON without action/type/parts must not unwrap")
+	}
+	if content != raw || len(parts) != 0 {
+		t.Fatalf("content=%q parts=%+v, want unchanged raw JSON", content, parts)
+	}
+}
+
+func TestUnwrapStructuredMessageSendLeavesEmbeddedJSONWithoutActionAlone(t *testing.T) {
+	raw := `Here is sample JSON: {"parts":["a","b"]}`
+	content, parts, unwrapped, err := UnwrapStructuredMessageSend(raw, nil)
+	if err != nil {
+		t.Fatalf("UnwrapStructuredMessageSend returned error: %v", err)
+	}
+	if unwrapped {
+		t.Fatal("embedded JSON without action must not unwrap")
+	}
+	if content != raw || len(parts) != 0 {
+		t.Fatalf("content=%q parts=%+v, want unchanged input", content, parts)
+	}
+}
+
+func TestUnwrapStructuredMessageSendLeavesEmbeddedMessageSendWithoutPartsAlone(t *testing.T) {
+	raw := `Here is a JSON snippet: {"action":"message_send","output":"plain text"}`
+	content, parts, unwrapped, err := UnwrapStructuredMessageSend(raw, nil)
+	if err != nil {
+		t.Fatalf("UnwrapStructuredMessageSend returned error: %v", err)
+	}
+	if unwrapped {
+		t.Fatal("embedded message_send without parts must not unwrap")
+	}
+	if content != raw || len(parts) != 0 {
+		t.Fatalf("content=%q parts=%+v, want unchanged input", content, parts)
+	}
+}
+
+func TestUnwrapStructuredMessageSendLeavesExistingPartsAlone(t *testing.T) {
+	existing := []protocol.MessagePart{{Type: protocol.MessagePartTypeText, Text: "Already normalized"}}
+	raw := `{"action":"message_send","output":"Hidden"}`
+	content, parts, unwrapped, err := UnwrapStructuredMessageSend(raw, existing)
+	if err != nil {
+		t.Fatalf("UnwrapStructuredMessageSend returned error: %v", err)
+	}
+	if unwrapped {
+		t.Fatal("content with existing structured parts must not unwrap again")
+	}
+	if content != raw || len(parts) != 1 || parts[0].Text != "Already normalized" {
+		t.Fatalf("content=%q parts=%+v, want unchanged input", content, parts)
+	}
+}

@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
 import { ChannelMessageList, MessageViewport } from "./channel-message-list";
@@ -21,6 +22,7 @@ vi.mock("react-virtuoso", async () => {
         initialTopMostItemIndex,
         firstItemIndex = 0,
         startReached,
+        scrollerRef,
       }: {
         components?: {
           Footer?: React.ComponentType;
@@ -31,6 +33,9 @@ vi.mock("react-virtuoso", async () => {
         initialTopMostItemIndex?: number;
         firstItemIndex?: number;
         startReached?: () => void;
+        // #325 phase 1: Virtuoso owns its scroller and reports it via scrollerRef.
+        // Wire the mock's root so the mount-gated scroll effects still fire.
+        scrollerRef?: (el: HTMLElement | Window | null) => void;
         itemContent: (index: number, item: ChannelMessage) => React.ReactNode;
       },
       ref: React.ForwardedRef<{ scrollToIndex: (...args: unknown[]) => void }>,
@@ -47,6 +52,7 @@ vi.mock("react-virtuoso", async () => {
 
       return (
         <div
+          ref={scrollerRef}
           data-testid="virtuoso-scroller"
           data-initial-index={initialTopMostItemIndex ?? "unset"}
           data-first-item-index={firstItemIndex}
@@ -89,6 +95,13 @@ vi.mock("@multica/core/workspace/hooks", () => ({
 // stays free of QueryClient/workspace-provider wiring.
 vi.mock("@multica/core/agents", () => ({
   useAgentPresenceDetail: () => "loading",
+  // #271 single-hook: summary + events fetched together.
+  useAgentHealth: () => ({
+    summary: undefined,
+    events: undefined,
+    isLoading: false,
+    isError: false,
+  }),
 }));
 
 vi.mock("@multica/core/paths", () => ({
@@ -117,6 +130,60 @@ vi.mock("../../i18n", () => ({
           reply: "Reply in thread",
           reply_count: "{{count}} replies",
         },
+      }),
+  }),
+}));
+
+// The bubble (rendered inside every row) reads its labels from
+// `../../i18n/use-t`; stub it so the edit/delete affordances have concrete
+// accessible names to query by in the composition tests below.
+vi.mock("../../common/use-viewing-timezone", () => ({
+  useViewingTimezone: () => "UTC",
+}));
+
+vi.mock("../../i18n/use-t", () => ({
+  useT: () => ({
+    t: (
+      selector: (resources: {
+        message: {
+          add_reaction: string;
+          agent_badge: string;
+          feishu_badge: string;
+          copy_action: string;
+          expand_action: string;
+          copied_toast: string;
+          copy_failed_toast: string;
+          edit_action: string;
+          delete_action: string;
+          edited_label: string;
+          deleted_placeholder: string;
+          save_edit: string;
+          cancel_edit: string;
+        };
+        quote: { jump_to: string };
+        thread: { reply: string; reply_count: string };
+        time: { today: string; yesterday: string; new_messages: string };
+      }) => string,
+    ) =>
+      selector({
+        message: {
+          add_reaction: "Add reaction",
+          agent_badge: "Agent",
+          feishu_badge: "Feishu",
+          copy_action: "Copy",
+          expand_action: "Show full message",
+          copied_toast: "Copied",
+          copy_failed_toast: "Copy failed",
+          edit_action: "Edit",
+          delete_action: "Delete",
+          edited_label: "(edited)",
+          deleted_placeholder: "This message was deleted",
+          save_edit: "Save",
+          cancel_edit: "Cancel",
+        },
+        quote: { jump_to: "Jump to original message" },
+        thread: { reply: "Reply in thread", reply_count: "2 replies" },
+        time: { today: "Today", yesterday: "Yesterday", new_messages: "New messages" },
       }),
   }),
 }));
@@ -219,6 +286,79 @@ describe("MessageViewport", () => {
     expect(screen.queryByText("Later thread reply")).not.toBeInTheDocument();
   });
 
+  it("pins a 'new messages' divider above the first unread message and opens there", () => {
+    // seq 5,6,7,8 with the read cursor at 6 → first unread is m7 (index 2).
+    const messages = [
+      { ...makeMessage("m5", "Read one"), seq: 5 },
+      { ...makeMessage("m6", "Read two"), seq: 6 },
+      { ...makeMessage("m7", "Unread one"), seq: 7 },
+      { ...makeMessage("m8", "Unread two"), seq: 8 },
+    ];
+    render(
+      <MessageViewport
+        messages={messages}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        lastReadSeq={6}
+      />,
+    );
+
+    expect(screen.getByTestId("unread-divider")).toBeInTheDocument();
+    // Opens scrolled to the divider anchor (index 2), not the latest message.
+    expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute("data-initial-index", "2");
+  });
+
+  it("only collapses already-read history messages, never unread messages", () => {
+    const longText = Array.from({ length: 13 }, (_, index) => `History line ${index}`).join("\n");
+    const messages = [
+      { ...makeMessage("m1", longText), seq: 1 },
+      { ...makeMessage("m2", longText), seq: 2 },
+    ];
+    render(
+      <MessageViewport
+        messages={messages}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        lastReadSeq={1}
+      />,
+    );
+
+    const bodies = screen.getAllByTestId("message-body");
+    expect(bodies[0]).toHaveTextContent("History line 12");
+    expect(bodies[0]).toHaveAttribute("data-collapsed", "true");
+    expect(bodies[1]).toHaveTextContent("History line 12");
+    expect(bodies[1]).not.toHaveAttribute("data-collapsed");
+  });
+
+  it("renders no divider when the cursor is unknown (BE field absent)", () => {
+    const messages = [
+      { ...makeMessage("m1", "One"), seq: 1 },
+      { ...makeMessage("m2", "Two"), seq: 2 },
+    ];
+    render(
+      <MessageViewport messages={messages} currentUserId="user-1" emptyLabel="No messages" />,
+    );
+
+    expect(screen.queryByTestId("unread-divider")).not.toBeInTheDocument();
+  });
+
+  it("renders no divider when everything is already read", () => {
+    const messages = [
+      { ...makeMessage("m1", "One"), seq: 1 },
+      { ...makeMessage("m2", "Two"), seq: 2 },
+    ];
+    render(
+      <MessageViewport
+        messages={messages}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        lastReadSeq={2}
+      />,
+    );
+
+    expect(screen.queryByTestId("unread-divider")).not.toBeInTheDocument();
+  });
+
   it("does not render the full list while the custom scroller ref is being captured", () => {
     const messages = Array.from({ length: 700 }, (_, index) =>
       makeMessage(`m${index}`, `Message ${index}`),
@@ -303,5 +443,143 @@ describe("MessageViewport", () => {
     );
     screen.getByTestId("start-reached").click();
     expect(onLoadOlder).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A viewer-authored user message: only these expose edit/delete affordances.
+function makeOwnUserMessage(
+  overrides: Partial<ChannelMessage> = {},
+): ChannelMessage {
+  return {
+    id: "own-1",
+    channel_id: "c1",
+    workspace_id: "w1",
+    seq: 1,
+    type: "user",
+    author_id: "user-1",
+    author_name: "Alice",
+    content: "Original",
+    source: "multica",
+    external_message_id: null,
+    client_message_id: null,
+    created_at: "2026-06-17T09:15:00Z",
+    ...overrides,
+  };
+}
+
+// B3 (#241) parent→bubble composition: the prior unit tests passed onEdit /
+// onDelete straight to the bubble, so they never caught that the message list
+// (the bubble's real parent) forwarded neither — leaving the affordances dead
+// on every live row. These render the real list → bubble and assert the
+// composed DOM, so the wiring can't silently regress again.
+describe("ChannelMessageList message edit / delete wiring", () => {
+  // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden
+  // (canEdit=false) until rebuilt on the unified composer (#258). Delete stays,
+  // so a wired own row surfaces Delete but never Edit.
+  it("surfaces delete but never edit on the viewer's own message when the list is wired", () => {
+    render(
+      <ChannelMessageList
+        messages={[makeOwnUserMessage()]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        onEditMessage={vi.fn()}
+        onDeleteMessage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  });
+
+  it("hides edit and delete on a message the viewer does not own, even when wired", () => {
+    render(
+      <ChannelMessageList
+        messages={[
+          makeOwnUserMessage({
+            id: "peer-1",
+            author_id: "user-2",
+            author_name: "Bob",
+            content: "Not mine",
+          }),
+        ]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        onEditMessage={vi.fn()}
+        onDeleteMessage={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+  });
+
+  // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden
+  // (canEdit=false) so the inline editor is unreachable through the wired list.
+  // onEditMessage wiring is kept dormant for the composer-parity rebuild (#258);
+  // restore this PATCH/H5 flow test when Edit is re-enabled.
+  it.skip("saves an inline edit through onEditMessage (PATCH) and never a send/dispatch path (H5)", async () => {
+    const onEditMessage = vi.fn();
+    const onReact = vi.fn();
+    const onOpenThread = vi.fn();
+    const message = makeOwnUserMessage();
+    render(
+      <ChannelMessageList
+        messages={[message]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        onEditMessage={onEditMessage}
+        onDeleteMessage={vi.fn()}
+        onReact={onReact}
+        onOpenThread={onOpenThread}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const editor = screen.getByRole("textbox", { name: "Edit" });
+    await userEvent.clear(editor);
+    await userEvent.type(editor, "Corrected");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    // Edit is a PATCH of the existing row — it must route only through
+    // onEditMessage, never a reaction / thread (wake) path.
+    expect(onEditMessage).toHaveBeenCalledTimes(1);
+    expect(onEditMessage).toHaveBeenCalledWith(message, "Corrected");
+    expect(onReact).not.toHaveBeenCalled();
+    expect(onOpenThread).not.toHaveBeenCalled();
+  });
+
+  it("deletes through onDeleteMessage and renders a tombstone (non-empty row) for a deleted message", async () => {
+    const onDeleteMessage = vi.fn();
+    const message = makeOwnUserMessage();
+    const { rerender } = render(
+      <ChannelMessageList
+        messages={[message]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        onEditMessage={vi.fn()}
+        onDeleteMessage={onDeleteMessage}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(onDeleteMessage).toHaveBeenCalledTimes(1);
+    expect(onDeleteMessage).toHaveBeenCalledWith(message);
+
+    // A soft-deleted message renders the tombstone placeholder, not a blank row.
+    rerender(
+      <ChannelMessageList
+        messages={[
+          makeOwnUserMessage({ deleted_at: "2026-06-17T09:25:00Z", content: "gone" }),
+        ]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        onEditMessage={vi.fn()}
+        onDeleteMessage={onDeleteMessage}
+      />,
+    );
+
+    const tombstone = screen.getByTestId("message-tombstone");
+    expect(tombstone).toHaveTextContent("This message was deleted");
+    expect(screen.queryByText("gone")).not.toBeInTheDocument();
   });
 });

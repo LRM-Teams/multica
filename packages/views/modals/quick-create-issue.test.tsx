@@ -393,6 +393,46 @@ describe("AgentCreatePanel", () => {
     });
   });
 
+  it("forwards source chat context from the carry payload to quick-create", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+
+    renderPanel({
+      onClose,
+      isExpanded: false,
+      setIsExpanded: vi.fn(),
+      data: {
+        source: {
+          channel_id: "channel-1",
+          message_id: "message-1",
+          thread_root_message_id: "root-1",
+        },
+      },
+    });
+
+    const editor = screen.getByPlaceholderText(
+      'Tell the agent what to do, e.g. "let Bohan fix the inbox loading slowness in the Web project"',
+    );
+    await user.clear(editor);
+    await user.type(editor, "Investigate the regression");
+
+    await user.click(screen.getByRole("button", { name: /^Create \(/i }));
+
+    await waitFor(() => {
+      expect(mockQuickCreateIssue).toHaveBeenCalledWith({
+        agent_id: "agent-1",
+        prompt: "Investigate the regression",
+        project_id: undefined,
+        parent_issue_id: undefined,
+        source: {
+          channel_id: "channel-1",
+          message_id: "message-1",
+          thread_root_message_id: "root-1",
+        },
+      });
+    });
+  });
+
   // Picking a squad routes the submission through `squad_id` (not
   // `agent_id`) so the backend can resolve the squad's leader agent and
   // inject the squad-leader briefing on dispatch. The persisted preference

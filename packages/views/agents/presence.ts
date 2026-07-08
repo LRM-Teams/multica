@@ -1,6 +1,6 @@
 import {
-  AlertCircle,
   Archive,
+  Circle,
   CircleDot,
   CircleSlash,
   Clock,
@@ -8,7 +8,11 @@ import {
   PlugZap,
   type LucideIcon,
 } from "lucide-react";
-import type { AgentAvailability, Workload } from "@multica/core/agents";
+import type {
+  AgentAvailability,
+  AgentPresenceDetail,
+  Workload,
+} from "@multica/core/agents";
 
 // Visual mapping for the two presence dimensions, kept in matching shape
 // so consumers can pick which to render. The two are independent — the
@@ -105,11 +109,34 @@ export const workloadConfig: Record<Workload, WorkloadVisual> = {
     icon: Clock,
   },
   idle: {
+    // Calm, neutral glyph — "available, nothing on the plate". The old
+    // AlertCircle read like a warning for a benign resting state. Only shown
+    // while online (offline surfaces the availability word instead).
     label: "Idle",
     textClass: "text-muted-foreground",
-    icon: AlertCircle,
+    icon: Circle,
   },
 };
 
 // Order used in any future workload chip group; actionable signals first.
 export const workloadOrder: Workload[] = ["working", "queued", "idle"];
+
+// The single rule for an agent's one-line status *word* on cards/pills: it must
+// agree with the availability dot. A workload word ("Idle"/"Working") only
+// while online; otherwise the availability word ("Offline"/"Unstable"/
+// "Archived"). Returns a discriminated token so every surface localizes (and
+// picks the matching config) from ONE shared decision — never from a raw status
+// string or its own drifting copy of this rule. This is why the presence dot
+// and the pill can never disagree again (#288).
+export type PresenceStatusToken =
+  | { kind: "workload"; value: Workload }
+  | { kind: "availability"; value: AgentAvailability };
+
+export function presenceStatusToken(
+  presence: AgentPresenceDetail | "loading" | null | undefined,
+): PresenceStatusToken | null {
+  if (!presence || presence === "loading") return null;
+  return presence.availability === "online"
+    ? { kind: "workload", value: presence.workload }
+    : { kind: "availability", value: presence.availability };
+}

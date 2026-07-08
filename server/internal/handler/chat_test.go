@@ -33,6 +33,40 @@ func withChatTestWorkspaceCtx(t *testing.T, req *http.Request) *http.Request {
 	return req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, memberRow))
 }
 
+func TestChatMessageToResponseUnwrapsAssistantStructuredMessageSend(t *testing.T) {
+	const visible = "Hello from structured output"
+	resp := chatMessageToResponse(db.ChatMessage{
+		ID:            util.MustParseUUID("11111111-1111-1111-1111-111111111111"),
+		ChatSessionID: util.MustParseUUID("22222222-2222-2222-2222-222222222222"),
+		Role:          "assistant",
+		Content:       `Assistant reply: {"action":"message_send","output":"` + visible + `","parts":[{"type":"text","text":"` + visible + `"}]}`,
+	}, nil)
+
+	if resp.Content != visible {
+		t.Fatalf("content = %q, want %q", resp.Content, visible)
+	}
+	if len(resp.Parts) != 1 || resp.Parts[0].Type != protocol.MessagePartTypeText || resp.Parts[0].Text != visible {
+		t.Fatalf("parts = %+v, want one text part", resp.Parts)
+	}
+}
+
+func TestChatMessageToResponseLeavesUserStructuredJSONAlone(t *testing.T) {
+	raw := `{"action":"message_send","output":"not from an agent"}`
+	resp := chatMessageToResponse(db.ChatMessage{
+		ID:            util.MustParseUUID("11111111-1111-1111-1111-111111111111"),
+		ChatSessionID: util.MustParseUUID("22222222-2222-2222-2222-222222222222"),
+		Role:          "user",
+		Content:       raw,
+	}, nil)
+
+	if resp.Content != raw {
+		t.Fatalf("content = %q, want raw user JSON", resp.Content)
+	}
+	if len(resp.Parts) != 0 {
+		t.Fatalf("parts = %+v, want none", resp.Parts)
+	}
+}
+
 // TestSendChatMessage_LinksAttachments verifies that attachments uploaded
 // against a chat_session (chat_message_id NULL) are back-filled with the
 // message_id when SendChatMessage receives the matching attachment_ids.

@@ -1,4 +1,4 @@
-import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
@@ -62,6 +62,14 @@ const presenceDetailMock = vi.fn(() => ({
 
 vi.mock("@multica/core/agents", () => ({
   useAgentPresenceDetail: () => presenceDetailMock(),
+  // Dot COLOR source (#266). No summary in tests → the dot falls back to the
+  // availability color, keeping presence assertions stable.
+  useAgentHealth: () => ({
+    summary: undefined,
+    events: undefined,
+    isLoading: false,
+    isError: false,
+  }),
 }));
 
 vi.mock("@multica/core/paths", () => ({
@@ -78,6 +86,10 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   }),
 }));
 
+vi.mock("../../common/use-viewing-timezone", () => ({
+  useViewingTimezone: () => "UTC",
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (
@@ -87,15 +99,24 @@ vi.mock("../../i18n/use-t", () => ({
           agent_badge: string;
           feishu_badge: string;
           copy_action: string;
+          expand_action: string;
           copied_toast: string;
           copy_failed_toast: string;
           sticker_alt: string;
           sticker_loading: string;
           sticker_failed: string;
           sticker_unavailable: string;
+          edit_action: string;
+          actions_menu: string;
+          delete_action: string;
+          edited_label: string;
+          deleted_placeholder: string;
+          save_edit: string;
+          cancel_edit: string;
         };
         quote: { jump_to: string };
         thread: { reply: string; reply_count: string };
+        time: { today: string; yesterday: string };
       }) => string,
     ) =>
       selector({
@@ -103,13 +124,21 @@ vi.mock("../../i18n/use-t", () => ({
           add_reaction: "Add reaction",
           agent_badge: "Agent",
           feishu_badge: "Feishu",
+          actions_menu: "Message actions",
           copy_action: "Copy",
+          expand_action: "Show full message",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
           sticker_alt: "Sticker",
           sticker_loading: "Loading sticker",
           sticker_failed: "Sticker failed to load",
           sticker_unavailable: "Sticker unavailable",
+          edit_action: "Edit",
+          delete_action: "Delete",
+          edited_label: "(edited)",
+          deleted_placeholder: "This message was deleted",
+          save_edit: "Save",
+          cancel_edit: "Cancel",
         },
         quote: {
           jump_to: "Jump to original message",
@@ -118,6 +147,7 @@ vi.mock("../../i18n/use-t", () => ({
           reply: "Reply in thread",
           reply_count: "2 replies",
         },
+        time: { today: "Today", yesterday: "Yesterday" },
       }),
   }),
 }));
@@ -176,10 +206,41 @@ function renderWithStickerCatalog(ui: ReactNode) {
 }
 
 describe("ChannelMessageBubble", () => {
+  const setMobileViewport = () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn((query: string) => ({
+        matches: query.includes("max-width") || query.includes("pointer"),
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+  };
+
   beforeEach(() => {
     copyTextMock.mockReset();
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
   });
 
   it("renders an agent message left-aligned with an Agent pill, name and body", () => {
@@ -228,6 +289,24 @@ describe("ChannelMessageBubble", () => {
       />,
     );
     expect(screen.queryByLabelText(/^Status:/)).not.toBeInTheDocument();
+  });
+
+  // Root-cause guard: the bubble is a CSS grid (`align-items: stretch`), which
+  // used to stretch the hand-rolled `relative inline-flex` presence wrapper to
+  // the full message height and detach the dot to the row's bottom-left. The
+  // dot must now route through the single, fixed-size, stretch-proof
+  // AgentPresenceOverlay box — no manual wrapper — so it can't detach.
+  it("anchors the agent presence dot in a fixed-size, stretch-proof box (no manual wrapper)", () => {
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+
+    const dot = screen.getByLabelText(/^Status:/);
+    const box = dot.closest('[data-slot="agent-presence"]');
+    expect(box).not.toBeNull();
+    expect(box).toContainElement(dot);
+    // Non-stretchable: an explicit box size (immune to align-items: stretch)
+    // plus shrink-0 keeps the dot on the avatar's bottom-right.
+    expect(box).toHaveClass("shrink-0");
+    expect(box).toHaveStyle({ width: "28px", height: "28px" });
   });
 
   it("resolves quoted reply author names through live identity", () => {
@@ -345,6 +424,39 @@ describe("ChannelMessageBubble", () => {
     expect(body).toHaveClass("select-text");
   });
 
+  it("keeps long history as full DOM content behind a readable collapsed preview", async () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: Array.from({ length: 13 }, (_, index) => `Line ${index}`).join("\n") })}
+        currentUserId="user-1"
+        collapseLongContent
+      />,
+    );
+
+    const body = screen.getByTestId("message-body");
+    expect(body).toHaveAttribute("data-collapsed", "true");
+    expect(body).toHaveClass("max-h-[min(260px,55vh)]");
+    expect(body).toHaveTextContent("Line 12");
+
+    await userEvent.click(screen.getByRole("button", { name: "Show full message" }));
+
+    expect(body).not.toHaveAttribute("data-collapsed");
+    expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
+  });
+
+  it("does not show the history collapse affordance for short messages", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: "Short historical answer" })}
+        currentUserId="user-1"
+        collapseLongContent
+      />,
+    );
+
+    expect(screen.getByTestId("message-body")).not.toHaveAttribute("data-collapsed");
+    expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
+  });
+
   it("copies the message content from the visible action button", async () => {
     copyTextMock.mockResolvedValue(true);
 
@@ -354,6 +466,164 @@ describe("ChannelMessageBubble", () => {
 
     await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("Here is the data."));
     expect(toast.success).toHaveBeenCalledWith("Copied");
+  });
+
+  // #250 — historical agent messages whose denormalized `parts` were never
+  // backfilled carry the structured-action envelope JSON in `content`. The body
+  // must unwrap it to its REAL parts (never render raw JSON) and copy the real
+  // text, while ordinary non-envelope content stays completely unchanged.
+  const ENVELOPE_CONTENT =
+    '{"action":"message_send","output":"hi","parts":[{"type":"text","text":"hi there"}]}';
+
+  it("renders unwrapped envelope parts for a historical message, never raw JSON", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: ENVELOPE_CONTENT, parts: [] })}
+        currentUserId="user-1"
+      />,
+    );
+
+    const body = screen.getByTestId("message-body");
+    expect(body).toHaveTextContent("hi there");
+    expect(body.textContent).not.toContain('"action"');
+    expect(body.textContent).not.toContain("{");
+    expect(screen.queryByText(ENVELOPE_CONTENT)).not.toBeInTheDocument();
+  });
+
+  it("copies the unwrapped envelope text for a historical message, not raw JSON", async () => {
+    copyTextMock.mockResolvedValue(true);
+
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: ENVELOPE_CONTENT, parts: [] })}
+        currentUserId="user-1"
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("hi there"));
+    const copied = copyTextMock.mock.calls[0]?.[0] as string;
+    expect(copied).not.toContain('"action"');
+    expect(copied).not.toContain("{");
+  });
+
+  it("leaves body and copy unchanged for ordinary non-envelope content", async () => {
+    copyTextMock.mockResolvedValue(true);
+
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: "just a plain message" })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("just a plain message")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("just a plain message"));
+  });
+
+  // GAP 3 — legit user-pasted JSON with a `parts` array but no top-level
+  // `action` key must NOT be intercepted; it renders as normal markdown text.
+  it("does not intercept legit JSON content lacking an action key", () => {
+    const jsonish = '{"parts":["a","b"]}';
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ type: "user", author_id: "user-1", content: jsonish })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText(jsonish)).toBeInTheDocument();
+  });
+
+  // #250 (round 3) — the real leaking historical content is reasoning-text
+  // prefix + the envelope JSON concatenated, so a whole-string parse throws and
+  // the raw string (prefix + JSON) would otherwise render. The body must unwrap
+  // the embedded envelope's real parts; copy must yield the real text.
+  const EMBEDDED_ENVELOPE_CONTENT =
+    'Repo isn\'t checked out this turn either — consistent with prior. {"action":"message_send","output":"x","parts":[{"type":"text","text":"the real message"}]}';
+
+  it("renders the embedded envelope's real message, dropping the reasoning prefix and raw JSON", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: EMBEDDED_ENVELOPE_CONTENT, parts: [] })}
+        currentUserId="user-1"
+      />,
+    );
+
+    const body = screen.getByTestId("message-body");
+    expect(body).toHaveTextContent("the real message");
+    expect(body.textContent).not.toContain('"action"');
+    expect(body.textContent).not.toContain("{");
+    expect(body.textContent).not.toContain("Repo isn't checked out");
+  });
+
+  it("copies only the embedded envelope's real text, not the prefix or JSON", async () => {
+    copyTextMock.mockResolvedValue(true);
+
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: EMBEDDED_ENVELOPE_CONTENT, parts: [] })}
+        currentUserId="user-1"
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("the real message"));
+    const copied = copyTextMock.mock.calls[0]?.[0] as string;
+    expect(copied).not.toContain('"action"');
+    expect(copied).not.toContain("Repo isn't checked out");
+  });
+
+  it("extracts an embedded envelope even when a part text value contains braces", () => {
+    const raw =
+      'thinking… {"action":"message_send","parts":[{"type":"text","text":"use {curly} braces"}]}';
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: raw, parts: [] })}
+        currentUserId="user-1"
+      />,
+    );
+
+    const body = screen.getByTestId("message-body");
+    expect(body).toHaveTextContent("use {curly} braces");
+    expect(body.textContent).not.toContain('"action"');
+    expect(body.textContent).not.toContain("thinking");
+  });
+
+  // GAP 3 — prose that merely mentions a stray JSON object (no action+parts
+  // envelope) must render intact, never blanked or mangled.
+  it("leaves prose that mentions a stray JSON object intact", () => {
+    const prose = 'here is {"foo":1} in my note';
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ type: "user", author_id: "user-1", content: prose })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText(prose)).toBeInTheDocument();
+  });
+
+  // #250 — embedded envelope with no renderable text parts: body must fall back
+  // to the envelope output, never the raw JSON or reasoning prefix.
+  it("renders the embedded envelope output when it carries no text parts", () => {
+    const raw =
+      'some reasoning here {"action":"message_send","output":"fallback summary","parts":[{"type":"image","url":"x"}]}';
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: raw, parts: [] })}
+        currentUserId="user-1"
+      />,
+    );
+
+    const body = screen.getByTestId("message-body");
+    expect(body.textContent).not.toContain('"action"');
+    expect(body.textContent).not.toContain("some reasoning here");
+    expect(body.textContent).not.toContain("{");
   });
 
   it("copies structured message parts instead of hidden fallback content", async () => {
@@ -498,7 +768,117 @@ describe("ChannelMessageBubble", () => {
     );
   });
 
-  it("keeps first-level actions on the visible action surface only", () => {
+  // B4 (#242) — reaction 4-carrier consistency. Channel / dm_channel / thread
+  // all render their reactions through this same bubble, so its picker→pill
+  // aggregate (emoji + count, self-highlight) is the shared contract the issue
+  // carrier (CommentCard) also delegates to via the same ReactionBar primitive.
+  it("self-highlights the viewer's own reaction pill but not a peer-only pill", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          reactions: [
+            {
+              id: "reaction-own",
+              channel_id: "c1",
+              message_id: "m1",
+              actor_type: "member",
+              actor_id: "user-1",
+              emoji: "👍",
+              created_at: "2026-06-17T09:16:00Z",
+            },
+            {
+              id: "reaction-peer",
+              channel_id: "c1",
+              message_id: "m1",
+              actor_type: "member",
+              actor_id: "user-2",
+              emoji: "🎉",
+              created_at: "2026-06-17T09:17:00Z",
+            },
+          ],
+        })}
+        currentUserId="user-1"
+        onReact={vi.fn()}
+      />,
+    );
+
+    // Own reaction → brand-highlighted; peer-only reaction → muted, not brand.
+    expect(screen.getByRole("button", { name: "👍1" })).toHaveClass("text-brand");
+    const peerPill = screen.getByRole("button", { name: "🎉1" });
+    expect(peerPill).not.toHaveClass("text-brand");
+    expect(peerPill).toHaveClass("text-muted-foreground");
+  });
+
+  it("toggles through onReact when an existing reaction pill is clicked (no send/dispatch path)", async () => {
+    const onReact = vi.fn();
+    const message = makeMessage({
+      reactions: [
+        {
+          id: "reaction-own",
+          channel_id: "c1",
+          message_id: "m1",
+          actor_type: "member",
+          actor_id: "user-1",
+          emoji: "👍",
+          created_at: "2026-06-17T09:16:00Z",
+        },
+      ],
+    });
+    render(
+      <ChannelMessageBubble message={message} currentUserId="user-1" onReact={onReact} />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "👍1" }));
+
+    // The bubble surfaces reactions only through onReact — it has no send /
+    // dispatch affordance, so a react can never produce a wake here.
+    expect(onReact).toHaveBeenCalledTimes(1);
+    expect(onReact).toHaveBeenCalledWith(message, "👍");
+  });
+
+  it("reacts through onReact when an emoji is chosen from the picker", async () => {
+    const onReact = vi.fn();
+    const message = makeMessage();
+    render(
+      <ChannelMessageBubble message={message} currentUserId="user-1" onReact={onReact} />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Add reaction" }));
+    await userEvent.click(screen.getByRole("button", { name: "🎉" }));
+
+    expect(onReact).toHaveBeenCalledWith(message, "🎉");
+  });
+
+  it("opens the thread page from a mobile message tap with border feedback", async () => {
+    setMobileViewport();
+    const onOpenThread = vi.fn();
+    const message = makeMessage();
+    render(
+      <ChannelMessageBubble
+        message={message}
+        currentUserId="user-1"
+        onOpenThread={onOpenThread}
+        onReact={vi.fn()}
+      />,
+    );
+
+    const bubble = screen.getByTestId("message-bubble");
+    const actionBar = screen.getByTestId("message-action-bar");
+    expect(actionBar).toHaveClass("hidden");
+    expect(actionBar).toHaveClass("md:flex");
+    expect(actionBar).toHaveClass("opacity-0");
+    expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument();
+
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+
+    expect(bubble).toHaveClass("ring-primary/45");
+    expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument();
+    await waitFor(() => expect(onOpenThread).toHaveBeenCalledWith(message));
+  });
+
+  it("opens mobile message actions from a long press without a thread menu item", async () => {
+    setMobileViewport();
     render(
       <ChannelMessageBubble
         message={makeMessage()}
@@ -508,10 +888,33 @@ describe("ChannelMessageBubble", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Add reaction" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(1);
-    expect(screen.getByRole("button", { name: "Reply in thread" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Quote reply" })).not.toBeInTheDocument();
+    const bubble = screen.getByTestId("message-bubble");
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+
+    const menu = await screen.findByRole("dialog", { name: "Message actions" });
+    expect(menu).toBeInTheDocument();
+    expect(within(menu).getByRole("button", { name: "Add reaction" })).toBeInTheDocument();
+    expect(within(menu).getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("button", { name: "Reply in thread" })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole("button", { name: "Quote reply" })).not.toBeInTheDocument();
+  });
+
+  it("closes the mobile action sheet after a copy action", async () => {
+    setMobileViewport();
+    copyTextMock.mockResolvedValue(true);
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+
+    const bubble = screen.getByTestId("message-bubble");
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+
+    const copyButtons = await screen.findAllByRole("button", { name: "Copy" });
+    await userEvent.click(copyButtons.at(-1)!);
+
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("Here is the data."));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
+    );
   });
 
   it("renders system messages as notice rows without chat bubble actions", () => {
@@ -583,5 +986,177 @@ describe("ChannelMessageBubble", () => {
 
     expect(container).toBeEmptyDOMElement();
     expect(screen.queryByText("daemon_outdated")).not.toBeInTheDocument();
+  });
+
+  // B3 (#241) — Edit / Delete + H5 FE guard.
+  const ownMessage = () =>
+    makeMessage({ type: "user", author_id: "user-1", author_name: "alice", content: "Original" });
+
+  // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden
+  // (canEdit=false) until the inline editor is rebuilt on the unified composer
+  // (#258). Delete stays. This asserts Delete renders on the viewer's own
+  // message while Edit never does.
+  it("shows delete but never edit on the viewer's own message", () => {
+    const { rerender } = render(
+      <ChannelMessageBubble
+        message={ownMessage()}
+        currentUserId="user-1"
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    // Edit is unshipped — the entry point must not render even on own messages.
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+
+    // A peer / agent message from another author exposes no edit or delete.
+    rerender(
+      <ChannelMessageBubble
+        message={makeMessage({ type: "user", author_id: "user-2", author_name: "bob" })}
+        currentUserId="user-1"
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+  });
+
+  // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden
+  // (canEdit=false) so the inline editor is unreachable. MessageInlineEditor /
+  // onEdit are kept dormant for the composer-parity rebuild (#258); restore
+  // these two flow tests when Edit is re-enabled on the unified composer.
+  it.skip("edits inline and saves through onEdit without a send/dispatch path", async () => {
+    const onEdit = vi.fn();
+    const onReact = vi.fn();
+    const onOpenThread = vi.fn();
+    const message = ownMessage();
+    render(
+      <ChannelMessageBubble
+        message={message}
+        currentUserId="user-1"
+        onEdit={onEdit}
+        onDelete={vi.fn()}
+        onReact={onReact}
+        onOpenThread={onOpenThread}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    const editor = screen.getByRole("textbox", { name: "Edit" });
+    expect(editor).toHaveValue("Original");
+
+    await userEvent.clear(editor);
+    await userEvent.type(editor, "Corrected");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    // Edit routes only through onEdit — never a reaction / thread (wake) path.
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    expect(onEdit).toHaveBeenCalledWith(message, "Corrected");
+    expect(onReact).not.toHaveBeenCalled();
+    expect(onOpenThread).not.toHaveBeenCalled();
+
+    // Editor closes back to the read view after saving.
+    expect(screen.queryByRole("textbox", { name: "Edit" })).not.toBeInTheDocument();
+  });
+
+  // Edit unshipped 2026-07-05 (Frank/Miles): unreachable while canEdit=false;
+  // restore alongside the composer-parity rebuild (#258).
+  it.skip("cancels an inline edit without calling onEdit", async () => {
+    const onEdit = vi.fn();
+    render(
+      <ChannelMessageBubble
+        message={ownMessage()}
+        currentUserId="user-1"
+        onEdit={onEdit}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Edit" }), " changed");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onEdit).not.toHaveBeenCalled();
+    expect(screen.queryByRole("textbox", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.getByText("Original")).toBeInTheDocument();
+  });
+
+  it("marks an edited message with an edited label", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-1",
+          author_name: "alice",
+          content: "Fixed typo",
+          edited_at: "2026-06-17T09:20:00Z",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("(edited)")).toBeInTheDocument();
+  });
+
+  it("renders a tombstone placeholder for a deleted message, not an empty row", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-1",
+          author_name: "alice",
+          content: "secret text",
+          deleted_at: "2026-06-17T09:25:00Z",
+          reactions: [
+            {
+              id: "reaction-1",
+              channel_id: "c1",
+              message_id: "m1",
+              actor_type: "member",
+              actor_id: "user-1",
+              emoji: "👍",
+              created_at: "2026-06-17T09:16:00Z",
+            },
+          ],
+        })}
+        currentUserId="user-1"
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onReact={vi.fn()}
+        onOpenThread={vi.fn()}
+      />,
+    );
+
+    const tombstone = screen.getByTestId("message-tombstone");
+    expect(tombstone).toHaveTextContent("This message was deleted");
+    // Original content is gone and no message actions survive a delete.
+    expect(screen.queryByText("secret text")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("message-body")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "👍1" })).not.toBeInTheDocument();
+  });
+
+  it("deletes through onDelete without a send/dispatch path", async () => {
+    const onDelete = vi.fn();
+    const onReact = vi.fn();
+    const message = ownMessage();
+    render(
+      <ChannelMessageBubble
+        message={message}
+        currentUserId="user-1"
+        onEdit={vi.fn()}
+        onDelete={onDelete}
+        onReact={onReact}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(onDelete).toHaveBeenCalledWith(message);
+    expect(onReact).not.toHaveBeenCalled();
   });
 });

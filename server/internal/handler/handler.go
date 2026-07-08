@@ -115,6 +115,7 @@ type Handler struct {
 	IssueService          *service.IssueService
 	AutopilotService      *service.AutopilotService
 	EmailService          *service.EmailService
+	EnvCheckpointService  EnvCheckpointServiceAPI
 	UpdateStore           UpdateStore
 	RuntimeReleaseSource  RuntimeReleaseSource
 	ModelListStore        ModelListStore
@@ -198,6 +199,26 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 
 	taskSvc := service.NewTaskService(queries, txStarter, hub, bus, daemonHub)
 	taskSvc.Analytics = analyticsClient
+	// Wire the subagent-lifecycle callback so retry child tasks get an
+	// activity event record. Uses the shared executor (pool), not the
+	// Handler, to avoid a circular init dependency.
+	taskSvc.OnChildTaskCreated = func(ctx context.Context, parent, child db.AgentTaskQueue) {
+		// Resolve workspace_id from the agent (task row doesn't carry it).
+		var wsID pgtype.UUID
+		_ = executor.QueryRow(ctx, `SELECT workspace_id FROM agent WHERE id = $1`, parent.AgentID).Scan(&wsID)
+		recordAgentActivityEvent(ctx, executor,
+			wsID, parent.AgentID, parent.RuntimeID, child.ID,
+			"lifecycle", "subagent_started", "info",
+			"agent", parent.AgentID, "",
+			"auto_retry", "Subagent spawned for retry",
+			map[string]any{
+				"parent_task_id": uuidToString(parent.ID),
+				"child_task_id":  uuidToString(child.ID),
+				"attempt":        child.Attempt,
+				"max_attempts":   child.MaxAttempts,
+			},
+		)
+	}
 	return &Handler{
 		Queries:               queries,
 		DB:                    executor,
@@ -561,7 +582,24 @@ func (h *Handler) requireWorkspaceMember(w http.ResponseWriter, r *http.Request,
 		return db.Member{}, false
 	}
 
+	member = h.touchMemberLastActiveWorkspace(r.Context(), member)
 	return member, true
+}
+
+func (h *Handler) touchMemberLastActiveWorkspace(ctx context.Context, member db.Member) db.Member {
+	touched, err := h.Queries.TouchMemberLastActiveWorkspace(ctx, db.TouchMemberLastActiveWorkspaceParams{
+		UserID:      member.UserID,
+		WorkspaceID: member.WorkspaceID,
+	})
+	if err != nil {
+		slog.Warn("workspace: failed to touch member last active workspace",
+			"error", err,
+			"user_id", uuidToString(member.UserID),
+			"workspace_id", uuidToString(member.WorkspaceID),
+		)
+		return member
+	}
+	return touched
 }
 
 func (h *Handler) requireWorkspaceRole(w http.ResponseWriter, r *http.Request, workspaceID, notFoundMsg string, roles ...string) (db.Member, bool) {

@@ -17,19 +17,19 @@ import {
   useSendChannelThreadMessage,
   useAddChannelReaction,
   useRemoveChannelReaction,
+  useEditChannelMessage,
+  useDeleteChannelMessage,
   useSetChannelTyping,
 } from "@multica/core/channels";
 import { dmKeys } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
 import { useAuthStore } from "@multica/core/auth";
-import { ApiError } from "@multica/core/api";
 import { api } from "@multica/core/api";
 import { useFileUpload, type UploadResult } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWSEvent } from "@multica/core/realtime";
 import type { ChannelActiveTask, ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
-import { Drawer } from "@multica/ui/components/ui/drawer";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -47,16 +47,19 @@ import { ContentEditor, type ContentEditorRef } from "../../editor/content-edito
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useT } from "../../i18n/use-t";
-import { composePayloadKey, useComposeSendIntent } from "../hooks/use-compose-send-intent";
+import { composePayloadKey } from "../hooks/use-compose-send-intent";
+import { useComposerSend } from "../hooks/use-composer-send";
+import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
-import { ChannelComposer, ConversationHeader, MobileThreadDrawerContent } from "./conversation-surface";
+import { Composer, ConversationHeader } from "./conversation-surface";
 import { ThreadRootPreview } from "./thread-root-preview";
 import {
   ConversationActivityStrip,
   type TypingActor,
 } from "./channels-page";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
+import { isTypingActorVisible } from "./conversation-typing";
 
 /**
  * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
@@ -243,7 +246,9 @@ function DmHeader({
     <ActorAvatar
       actorType={actorType}
       actorId={dm.peer.id}
-      size={34}
+      // 28px matches the message-row avatar so the header avatar and every
+      // message avatar share one size + left edge (see ConversationHeader).
+      size={28}
       showStatusDot={dm.peer.type === "agent"}
       profileLink={false}
     />
@@ -345,6 +350,24 @@ function DmChannelConversation({
   const sendThreadMessage = useSendChannelThreadMessage();
   const addChannelReaction = useAddChannelReaction();
   const removeChannelReaction = useRemoveChannelReaction();
+  const editChannelMessage = useEditChannelMessage();
+  const deleteChannelMessage = useDeleteChannelMessage();
+  // Edit is a PATCH of an existing message (H5) — it routes through
+  // editChannelMessage, never the send path, so it can never produce a new wake.
+  // DMs are never archived/closed, so (like onReact) edit/delete are always wired;
+  // the bubble still gates the affordance on the message being the viewer's own.
+  const handleEditMessage = useCallback((message: ChannelMessage, content: string) => {
+    editChannelMessage.mutate(
+      { channelId: message.channel_id, messageId: message.id, content },
+      { onError: () => toast.error(t(($) => $.message.edit_failed_toast)) },
+    );
+  }, [editChannelMessage, t]);
+  const handleDeleteMessage = useCallback((message: ChannelMessage) => {
+    deleteChannelMessage.mutate(
+      { channelId: message.channel_id, messageId: message.id },
+      { onError: () => toast.error(t(($) => $.message.delete_failed_toast)) },
+    );
+  }, [deleteChannelMessage, t]);
   const handleReactToMessage = useCallback((message: ChannelMessage, emoji: string) => {
     const hasReacted = message.reactions?.some(
       (reaction) => reaction.actor_type === "member" && reaction.actor_id === currentUserId && reaction.emoji === emoji,
@@ -405,13 +428,13 @@ function DmChannelConversation({
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Send idempotency + send lock (#207) — see use-compose-send-intent. DM
   // top-level and thread reply each own an independent intent.
-  const dmSend = useComposeSendIntent();
-  const threadSend = useComposeSendIntent();
+  const dmSend = useComposerSend();
+  const threadSend = useComposerSend();
 
   // Agents surface lifecycle via the query-driven working indicator, so filter
   // them out of the transient typing render (same rule as the group thread).
   const activeTypingActors = useMemo(
-    () => Object.values(typingActors).filter((a) => a.actorType !== "agent"),
+    () => Object.values(typingActors).filter((a) => isTypingActorVisible(a.actorType)),
     [typingActors],
   );
 
@@ -475,10 +498,10 @@ function DmChannelConversation({
   // Bottom-stick on new messages and open-at-latest on switch are handled by
   // ChannelMessageList (react-virtuoso). No manual scrollIntoView needed.
 
-  // Mark read on open and keep it read while viewing.
-  useEffect(() => {
-    if (channelId) markChannelRead(channelId);
-  }, [channelId, markChannelRead]);
+  // Mark read on open — clears the badge — and expose the pre-advance read
+  // cursor from the mark-read response for the race-free "N new messages"
+  // divider (#303).
+  const dividerLastReadSeq = useEntryReadCursor(channelId, dm.last_read_seq, markChannelRead);
 
   useEffect(() => {
     dispatch({ type: "resetForChannel" });
@@ -648,34 +671,30 @@ function DmChannelConversation({
     for (const [url, id] of uploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
-    const clientMessageId = dmSend.beginSend(composePayloadKey(content, attachmentIds));
-    if (clientMessageId === null) return;
-    if (typingStartedRef.current) {
-      typingStartedRef.current = false;
-      publishTyping(false);
-    }
-    sendMessage.mutate(
-      {
+    // Stop typing before the send lock so a dropped (held-Enter) trigger still
+    // clears the indicator.
+    const dispatched = dmSend.send({
+      payloadKey: composePayloadKey(content, attachmentIds),
+      buildVars: (clientMessageId) => ({
         channelId,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
         clientMessageId,
+      }),
+      mutate: sendMessage.mutate,
+      onCommitted: () => {
+        editorRef.current?.clearContent();
+        uploadMapRef.current.clear();
+        onDraftClear?.();
       },
-      {
-        onSuccess: () => {
-          editorRef.current?.clearContent();
-          uploadMapRef.current.clear();
-          onDraftClear?.();
-          dmSend.finishSend();
-        },
-        onError: (err) => {
-          if (err instanceof ApiError && err.status === 409) dmSend.resetIntent();
-          // Always surface failure so a silent 409 isn't mistaken for a sent message.
-          toast.error(t(($) => $.composer.send_failed));
-        },
-        onSettled: () => dmSend.settleSend(),
-      },
-    );
+      // 200-dedup is silent (handled by onCommitted); 409/other always surface,
+      // so a silent conflict isn't mistaken for a sent message.
+      onVisibleError: () => toast.error(t(($) => $.composer.send_failed)),
+    });
+    if (dispatched && typingStartedRef.current) {
+      typingStartedRef.current = false;
+      publishTyping(false);
+    }
   };
 
   const handleThreadSend = () => {
@@ -686,30 +705,23 @@ function DmChannelConversation({
     for (const [url, id] of threadUploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
-    const clientMessageId = threadSend.beginSend(composePayloadKey(content, attachmentIds, threadRoot.id));
-    if (clientMessageId === null) return;
-    sendThreadMessage.mutate(
-      {
+    threadSend.send({
+      payloadKey: composePayloadKey(content, attachmentIds, threadRoot.id),
+      buildVars: (clientMessageId) => ({
         channelId,
         messageId: threadRoot.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
         clientMessageId,
+      }),
+      mutate: sendThreadMessage.mutate,
+      onCommitted: () => {
+        threadEditorRef.current?.clearContent();
+        threadUploadMapRef.current.clear();
+        dispatch({ type: "setThreadDraftEmpty", empty: true });
       },
-      {
-        onSuccess: () => {
-          threadEditorRef.current?.clearContent();
-          threadUploadMapRef.current.clear();
-          dispatch({ type: "setThreadDraftEmpty", empty: true });
-          threadSend.finishSend();
-        },
-        onError: (err) => {
-          if (err instanceof ApiError && err.status === 409) threadSend.resetIntent();
-          toast.error(t(($) => $.thread.send_failed));
-        },
-        onSettled: () => threadSend.settleSend(),
-      },
-    );
+      onVisibleError: () => toast.error(t(($) => $.thread.send_failed)),
+    });
   };
 
   const handleOpenThread = (message: ChannelMessage) => {
@@ -723,9 +735,21 @@ function DmChannelConversation({
         <ConversationHeader
           isMobile={isMobile}
           leading={
-            <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-              <MessageSquare className="size-4" />
-            </span>
+            isMobile ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-9"
+                aria-label={t(($) => $.thread.back_to_conversation)}
+                onClick={() => dispatch({ type: "closeThread" })}
+              >
+                <ArrowLeft className="size-5" />
+              </Button>
+            ) : (
+              <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                <MessageSquare className="size-4" />
+              </span>
+            )
           }
           title={t(($) => $.thread.title)}
           meta={
@@ -736,7 +760,7 @@ function DmChannelConversation({
               : undefined
           }
           actions={
-            <>
+            isMobile ? undefined : (
               <Button
                 variant="ghost"
                 size="icon"
@@ -746,7 +770,7 @@ function DmChannelConversation({
               >
                 <X className="size-4" />
               </Button>
-            </>
+            )
           }
         />
         <ChannelMessageList
@@ -771,13 +795,16 @@ function DmChannelConversation({
           loadErrorLabel={threadError ? t(($) => $.thread.load_failed) : undefined}
           onRetry={() => refetchThread()}
           onReact={handleReactToMessage}
+          onEditMessage={handleEditMessage}
+          onDeleteMessage={handleDeleteMessage}
         />
         <ConversationActivityStrip
           tasks={activeTasks}
           stoppingTaskId={stoppingTaskId}
           onStopTask={handleStopTask}
         />
-        <ChannelComposer
+        <Composer
+          surface="thread"
           sendLabel={t(($) => $.composer.send)}
           sendDisabled={threadDraftEmpty}
           sending={sendThreadMessage.isPending}
@@ -911,6 +938,7 @@ function DmChannelConversation({
         currentUserId={currentUserId}
         ownName={currentUserName ?? undefined}
         highlightMessageId={highlightMessageId}
+        lastReadSeq={dividerLastReadSeq}
         firstItemIndex={messagesFirstItemIndex}
         searchHitIds={searchHitIds}
         searchQuery={searchHighlightQuery}
@@ -925,6 +953,8 @@ function DmChannelConversation({
         emptyLabel={t(($) => $.dm.thread_empty)}
         onOpenThread={handleOpenThread}
         onReact={handleReactToMessage}
+        onEditMessage={handleEditMessage}
+        onDeleteMessage={handleDeleteMessage}
       />
       <ConversationActivityStrip
         typingActors={activeTypingActors}
@@ -932,7 +962,8 @@ function DmChannelConversation({
         stoppingTaskId={stoppingTaskId}
         onStopTask={handleStopTask}
       />
-      <ChannelComposer
+      <Composer
+        surface="dm_channel"
         sendLabel={t(($) => $.composer.send)}
         sendDisabled={draftEmpty}
         sending={sendMessage.isPending}
@@ -987,18 +1018,6 @@ function DmChannelConversation({
           </>
         }
       />
-      {isMobile && (
-        <Drawer
-          open={!!threadPanel}
-          onOpenChange={(open) => {
-            if (!open) dispatch({ type: "closeThread" });
-          }}
-        >
-          <MobileThreadDrawerContent open={!!threadPanel}>
-            {threadPanel}
-          </MobileThreadDrawerContent>
-        </Drawer>
-      )}
     </main>
   );
 
@@ -1027,5 +1046,5 @@ function DmChannelConversation({
     );
   }
 
-  return conversationPane;
+  return threadPanel ?? conversationPane;
 }

@@ -169,20 +169,29 @@ type AgentTaskResponse struct {
 	// as `## Workspace Context` so every agent running in this workspace —
 	// regardless of issue / chat / autopilot / quick-create — sees the same
 	// shared context. Empty when the workspace owner hasn't set it.
-	WorkspaceContext string                `json:"workspace_context,omitempty"`
-	ThreadName       string                `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
-	Status           string                `json:"status"`
-	Priority         int32                 `json:"priority"`
-	DispatchedAt     *string               `json:"dispatched_at"`
-	StartedAt        *string               `json:"started_at"`
-	CompletedAt      *string               `json:"completed_at"`
-	Result           any                   `json:"result"`
-	Error            *string               `json:"error"`
-	FailureReason    string                `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
-	Attempt          int32                 `json:"attempt"`
-	MaxAttempts      int32                 `json:"max_attempts"`
-	ParentTaskID     *string               `json:"parent_task_id,omitempty"`
-	Agent            *TaskAgentData        `json:"agent,omitempty"`
+	WorkspaceContext string         `json:"workspace_context,omitempty"`
+	ThreadName       string         `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
+	Status           string         `json:"status"`
+	Priority         int32          `json:"priority"`
+	DispatchedAt     *string        `json:"dispatched_at"`
+	StartedAt        *string        `json:"started_at"`
+	CompletedAt      *string        `json:"completed_at"`
+	Result           any            `json:"result"`
+	Error            *string        `json:"error"`
+	FailureReason    string         `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
+	Attempt          int32          `json:"attempt"`
+	MaxAttempts      int32          `json:"max_attempts"`
+	ParentTaskID     *string        `json:"parent_task_id,omitempty"`
+	Agent            *TaskAgentData `json:"agent,omitempty"`
+	// ArealProxy carries the AReaL RL proxy provider config extracted from the
+	// task's context.areal_proxy at claim time (written by the session-open
+	// hook, Task 5). When present the daemon launches the runtime against the
+	// RL proxy — `pi -p --provider areal --model areal-default --api-key
+	// <api_key>` with the proxy base_url — so the trained agent's LLM traffic
+	// routes through the bridge and its trajectory is captured. Nil for the
+	// overwhelming majority of (non-trained) tasks; omitempty so old daemons
+	// ignore it. See §4.4.
+	ArealProxy       *ArealProxyData       `json:"areal_proxy,omitempty"`
 	Repos            []RepoData            `json:"repos,omitempty"`
 	ProjectID        string                `json:"project_id,omitempty"`        // issue's project, when present
 	ProjectTitle     string                `json:"project_title,omitempty"`     // for surfacing in agent context
@@ -208,31 +217,32 @@ type AgentTaskResponse struct {
 	// when WorkDir is empty, or when stripping leaves nothing. See
 	// relativeWorkDir() for the full rules. Older clients can still read
 	// WorkDir directly; newer UIs should prefer RelativeWorkDir.
-	RelativeWorkDir          string               `json:"relative_work_dir,omitempty"`
-	TriggerCommentID         *string              `json:"trigger_comment_id,omitempty"`          // comment that triggered this task
-	TriggerThreadID          string               `json:"trigger_thread_id,omitempty"`           // root comment ID for the triggering thread
-	TriggerCommentContent    string               `json:"trigger_comment_content,omitempty"`     // content of the triggering comment
-	TriggerSummary           *string              `json:"trigger_summary,omitempty"`             // canonical short description snapshot — comment text / autopilot title — taken at task creation; survives source edits/deletes
-	TriggerAuthorType        string               `json:"trigger_author_type,omitempty"`         // "agent" or "member" — author kind of the triggering comment
-	TriggerAuthorName        string               `json:"trigger_author_name,omitempty"`         // display name of the triggering comment author
-	NewCommentCount          int                  `json:"new_comment_count,omitempty"`           // issue-wide comments since this agent's last run; excludes injected trigger + own comments; omitempty so old daemons ignore it
-	NewCommentsSince         string               `json:"new_comments_since,omitempty"`          // RFC3339 anchor (last run's started_at) the count is measured from; omitempty so old daemons ignore it
-	ChatSessionID            string               `json:"chat_session_id,omitempty"`             // non-empty for chat tasks
-	ChatMessage              string               `json:"chat_message,omitempty"`                // user message for chat tasks
-	ChatContextSummary       string               `json:"chat_context_summary,omitempty"`        // compact surface-scoped context handoff when native resume is skipped
-	ChatMessageAttachments   []ChatAttachmentMeta `json:"chat_message_attachments,omitempty"`    // attachments on the user message — agent calls `multica attachment download <id>` per entry
-	AutopilotRunID           string               `json:"autopilot_run_id,omitempty"`            // non-empty for autopilot-spawned tasks
-	AutopilotID              string               `json:"autopilot_id,omitempty"`                // autopilot that spawned this task
-	AutopilotTitle           string               `json:"autopilot_title,omitempty"`             // autopilot title used as task context
-	AutopilotDescription     string               `json:"autopilot_description,omitempty"`       // autopilot description used as task prompt
-	AutopilotSource          string               `json:"autopilot_source,omitempty"`            // manual, schedule, webhook, or api
-	AutopilotTriggerPayload  json.RawMessage      `json:"autopilot_trigger_payload,omitempty"`   // optional trigger payload for webhook/api runs
-	QuickCreatePrompt        string               `json:"quick_create_prompt,omitempty"`         // user's natural-language input for quick-create tasks
-	QuickCreateAttachmentIDs []string             `json:"quick_create_attachment_ids,omitempty"` // attachment ids uploaded in the quick-create prompt and bound on issue create
-	SquadID                  string               `json:"squad_id,omitempty"`                    // for quick-create tasks where the picker was a squad; Agent is still the resolved leader
-	SquadName                string               `json:"squad_name,omitempty"`                  // display name for the picker squad
-	ParentIssueID            string               `json:"parent_issue_id,omitempty"`             // for quick-create tasks opened from "Add sub issue" — UUID of the parent issue the new issue should be filed under
-	ParentIssueIdentifier    string               `json:"parent_issue_identifier,omitempty"`     // human-readable identifier (e.g. MUL-123) of the quick-create parent issue, resolved on claim for prompt context
+	RelativeWorkDir          string                             `json:"relative_work_dir,omitempty"`
+	TriggerCommentID         *string                            `json:"trigger_comment_id,omitempty"`          // comment that triggered this task
+	TriggerThreadID          string                             `json:"trigger_thread_id,omitempty"`           // root comment ID for the triggering thread
+	TriggerCommentContent    string                             `json:"trigger_comment_content,omitempty"`     // content of the triggering comment
+	TriggerSummary           *string                            `json:"trigger_summary,omitempty"`             // canonical short description snapshot — comment text / autopilot title — taken at task creation; survives source edits/deletes
+	TriggerAuthorType        string                             `json:"trigger_author_type,omitempty"`         // "agent" or "member" — author kind of the triggering comment
+	TriggerAuthorName        string                             `json:"trigger_author_name,omitempty"`         // display name of the triggering comment author
+	NewCommentCount          int                                `json:"new_comment_count,omitempty"`           // issue-wide comments since this agent's last run; excludes injected trigger + own comments; omitempty so old daemons ignore it
+	NewCommentsSince         string                             `json:"new_comments_since,omitempty"`          // RFC3339 anchor (last run's started_at) the count is measured from; omitempty so old daemons ignore it
+	ChatSessionID            string                             `json:"chat_session_id,omitempty"`             // non-empty for chat tasks
+	ChatMessage              string                             `json:"chat_message,omitempty"`                // user message for chat tasks
+	ChatContextSummary       string                             `json:"chat_context_summary,omitempty"`        // compact surface-scoped context handoff when native resume is skipped
+	ChatMessageAttachments   []ChatAttachmentMeta               `json:"chat_message_attachments,omitempty"`    // attachments on the user message — agent calls `multica attachment download <id>` per entry
+	AutopilotRunID           string                             `json:"autopilot_run_id,omitempty"`            // non-empty for autopilot-spawned tasks
+	AutopilotID              string                             `json:"autopilot_id,omitempty"`                // autopilot that spawned this task
+	AutopilotTitle           string                             `json:"autopilot_title,omitempty"`             // autopilot title used as task context
+	AutopilotDescription     string                             `json:"autopilot_description,omitempty"`       // autopilot description used as task prompt
+	AutopilotSource          string                             `json:"autopilot_source,omitempty"`            // manual, schedule, webhook, or api
+	AutopilotTriggerPayload  json.RawMessage                    `json:"autopilot_trigger_payload,omitempty"`   // optional trigger payload for webhook/api runs
+	QuickCreatePrompt        string                             `json:"quick_create_prompt,omitempty"`         // user's natural-language input for quick-create tasks
+	QuickCreateAttachmentIDs []string                           `json:"quick_create_attachment_ids,omitempty"` // attachment ids uploaded in the quick-create prompt and bound on issue create
+	QuickCreateSource        *protocol.QuickCreateSourceContext `json:"quick_create_source,omitempty"`         // bounded chat/thread source context for quick-create tasks
+	SquadID                  string                             `json:"squad_id,omitempty"`                    // for quick-create tasks where the picker was a squad; Agent is still the resolved leader
+	SquadName                string                             `json:"squad_name,omitempty"`                  // display name for the picker squad
+	ParentIssueID            string                             `json:"parent_issue_id,omitempty"`             // for quick-create tasks opened from "Add sub issue" — UUID of the parent issue the new issue should be filed under
+	ParentIssueIdentifier    string                             `json:"parent_issue_identifier,omitempty"`     // human-readable identifier (e.g. MUL-123) of the quick-create parent issue, resolved on claim for prompt context
 	// RequestingUserName + RequestingUserProfileDescription mirror the user
 	// the agent is acting on behalf of (see daemon/types.go). v1 sources them
 	// from the runtime owner so they're populated for daemon runtimes and
@@ -296,6 +306,41 @@ type TaskAgentData struct {
 	ThinkingLevel string                   `json:"thinking_level,omitempty"`
 }
 
+// ArealProxyData is the wire shape of the RL proxy provider config stored at
+// context.areal_proxy on a trained task. The daemon consumes it at ExecOptions
+// build (see internal/daemon.ArealProxy, kept in sync). SessionID is not needed
+// for runtime launch (the close hook reads it from context directly) so it is
+// intentionally omitted here.
+type ArealProxyData struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	APIKey   string `json:"api_key"`
+	BaseURL  string `json:"base_url"`
+}
+
+// parseArealProxy extracts the areal_proxy provider config from a task's
+// context JSONB. It returns nil for the common case of a non-trained task (no
+// context / no areal_proxy key), for malformed JSON, and for an incomplete
+// sub-object (missing api_key or base_url) — so a normal task is never
+// accidentally routed through the proxy. Provider/Model are allowed to be empty
+// here; the daemon defaults them to areal/areal-default.
+func parseArealProxy(raw []byte) *ArealProxyData {
+	if len(raw) == 0 {
+		return nil
+	}
+	var envelope struct {
+		ArealProxy *ArealProxyData `json:"areal_proxy"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil
+	}
+	p := envelope.ArealProxy
+	if p == nil || p.APIKey == "" || p.BaseURL == "" {
+		return nil
+	}
+	return p
+}
+
 // taskToResponse maps a queue row to its wire shape. workspaceID is threaded
 // in because the row itself doesn't carry one (workspace lives on the agent
 // / issue / chat session) — we ask the caller to resolve it once and pass it
@@ -315,7 +360,7 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 	if t.WorkDir.Valid {
 		workDir = t.WorkDir.String
 	}
-	return AgentTaskResponse{
+	resp := AgentTaskResponse{
 		ID:               uuidToString(t.ID),
 		AgentID:          uuidToString(t.AgentID),
 		RuntimeID:        uuidToString(t.RuntimeID),
@@ -344,6 +389,10 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		AutopilotRunID: uuidToString(t.AutopilotRunID),
 		Kind:           computeTaskKind(t),
 	}
+	// Trained-task RL proxy override (§4.4): surface context.areal_proxy on the
+	// claim response so the daemon can route the runtime through the bridge.
+	resp.ArealProxy = parseArealProxy(t.Context)
+	return resp
 }
 
 // relativeWorkDir produces a privacy-safe display form of the daemon-reported
@@ -522,7 +571,7 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	visible := make([]AgentResponse, 0, len(agents))
 	for _, a := range agents {
-		if a.Visibility == "private" && actorType == "member" {
+		if actorType == "member" && (a.Visibility == "private" || privateAgentOwnerOnly(a)) {
 			if !memberAllowedForPrivateAgent(a, actorID, member.Role) {
 				continue
 			}
@@ -608,6 +657,8 @@ type CreateAgentRequest struct {
 	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
 	Model              string            `json:"model"`
 	ThinkingLevel      string            `json:"thinking_level"`
+	InitialNotes       map[string]string `json:"initial_notes"`
+	InitialMemory      map[string]string `json:"initial_memory"`
 	// Template records which template slug was used to seed this agent
 	// (e.g. "coding" / "planning" / "writing" / "assistant"). Empty when
 	// the caller didn't come from a template picker — the `agent_created`
@@ -740,6 +791,14 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	draftID := extractDraftID(rawFields)
+	initialNotes := cleanInitialContextMap(req.InitialNotes, allowedInitialNoteSeedPath)
+	initialMemory := cleanInitialContextMap(req.InitialMemory, allowedInitialMemorySeedPath)
+	if draftID.Valid {
+		if draftNotes, draftMemory := h.loadAgentDraftInitialContext(r, workspaceID, ownerID, draftID); len(draftNotes) > 0 || len(draftMemory) > 0 {
+			initialNotes = draftNotes
+			initialMemory = draftMemory
+		}
+	}
 
 	created, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
 		WorkspaceID:        wsUUID,
@@ -765,7 +824,10 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
 	if draftID.Valid {
-		h.MarkAgentDraftUsed(r, workspaceID, draftID, created.ID)
+		h.MarkAgentDraftUsed(r, workspaceID, ownerID, draftID, created.ID)
+	}
+	if len(initialNotes) > 0 || len(initialMemory) > 0 {
+		h.seedAgentInitialContext(r, created, initialNotes, initialMemory)
 	}
 
 	h.refreshAgentSkillSuggestions(r.Context(), created)
@@ -777,7 +839,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 
 	resp := agentToResponse(created)
 	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
-	h.publish(protocol.EventAgentCreated, workspaceID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
+	h.publishAgentVisibilityEvent(protocol.EventAgentCreated, workspaceID, actorType, actorID, created, map[string]any{"agent": broadcastAgentResponse(resp)})
 
 	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.AgentCreated(
 		ownerID,
@@ -791,6 +853,29 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+func (h *Handler) seedAgentInitialContext(r *http.Request, agent db.Agent, initialNotes, initialMemory map[string]string) {
+	if h == nil || h.DaemonHub == nil || !agent.RuntimeID.Valid {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), agentFileRPCTimeout)
+	defer cancel()
+	resp, err := h.DaemonHub.RequestSeedAgentContext(ctx, protocol.SeedAgentContextRequestPayload{
+		RequestID:     randomID(),
+		RuntimeID:     uuidToString(agent.RuntimeID),
+		RelPath:       agentRootRelPath(agent),
+		InitialNotes:  initialNotes,
+		InitialMemory: initialMemory,
+		MaxBytes:      256 * 1024,
+	})
+	if err != nil {
+		slog.Warn("seed agent initial context failed", append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID))...)
+		return
+	}
+	if resp.Error != "" || resp.TooLarge {
+		slog.Warn("seed agent initial context rejected", append(logger.RequestAttrs(r), "error", resp.Error, "too_large", resp.TooLarge, "agent_id", uuidToString(agent.ID))...)
+	}
 }
 
 type UpdateAgentRequest struct {
@@ -1147,7 +1232,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	slog.Info("agent updated", append(logger.RequestAttrs(r), "agent_id", id, "workspace_id", uuidToString(updated.WorkspaceID))...)
 	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(updated.WorkspaceID))
-	h.publish(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
+	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), actorType, actorID, updated, map[string]any{"agent": broadcastAgentResponse(resp)})
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -242,6 +243,18 @@ func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []str
 			if err != nil {
 				writeError(w, http.StatusNotFound, "workspace not found")
 				return
+			}
+			if touched, err := queries.TouchMemberLastActiveWorkspace(r.Context(), db.TouchMemberLastActiveWorkspaceParams{
+				UserID:      member.UserID,
+				WorkspaceID: member.WorkspaceID,
+			}); err == nil {
+				member = touched
+			} else {
+				slog.Warn("workspace middleware: failed to touch member last active workspace",
+					"error", err,
+					"user_id", userID,
+					"workspace_id", workspaceID,
+				)
 			}
 
 			if len(roles) > 0 {

@@ -342,7 +342,7 @@ func (d *Daemon) tryClaimRegisterSlot(workspaceID string, entryAt, now time.Time
 	if next, ok := d.reregisterNextAttempt[workspaceID]; ok && now.Before(next) {
 		return false
 	}
-	if last, ok := d.reregisterLastCompletedAt[workspaceID]; ok && !last.Before(entryAt) {
+	if last, ok := d.reregisterLastCompletedAt[workspaceID]; ok && last.After(entryAt) {
 		return false
 	}
 	d.reregisterNextAttempt[workspaceID] = now.Add(reregisterCoalesceWindow)
@@ -789,8 +789,11 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"device_name":       d.cfg.DeviceName,
 		"cli_version":       d.cfg.CLIVersion,
 		"launched_by":       d.cfg.LaunchedBy,
-		"capabilities":      []string{protocol.DaemonCapabilityChannelOutputActions},
-		"runtimes":          runtimes,
+		"capabilities": []string{
+			protocol.DaemonCapabilityChannelOutputActions,
+			protocol.DaemonCapabilityAgentCLITransport,
+		},
+		"runtimes": runtimes,
 	}
 
 	resp, err := d.client.Register(ctx, req)
@@ -2680,7 +2683,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 	switch result.Status {
 	case "completed":
 		taskLog.Info("task completed", "status", result.Status)
-		err := d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Type, result.SessionID, result.WorkDir, result.Parts, result.Reaction)
+		err := d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Target, result.Options, result.Type, result.SessionID, result.WorkDir, result.Parts, result.Reaction)
 		if err == nil {
 			return
 		}
@@ -2875,6 +2878,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		ProjectTitle:                     task.ProjectTitle,
 		ProjectResources:                 convertProjectResourcesForEnv(task.ProjectResources),
 		ChatSessionID:                    task.ChatSessionID,
+		Directed:                         task.Priority >= 2,
 		AutopilotRunID:                   task.AutopilotRunID,
 		AutopilotID:                      task.AutopilotID,
 		AutopilotTitle:                   task.AutopilotTitle,
@@ -2882,6 +2886,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AutopilotSource:                  task.AutopilotSource,
 		AutopilotTriggerPayload:          strings.TrimSpace(string(task.AutopilotTriggerPayload)),
 		QuickCreatePrompt:                task.QuickCreatePrompt,
+		QuickCreateSource:                task.QuickCreateSource,
 		IsSquadLeader:                    strings.Contains(instructions, "## Squad Operating Protocol"),
 		RequestingUserName:               task.RequestingUserName,
 		RequestingUserProfileDescription: task.RequestingUserProfileDescription,
@@ -2982,6 +2987,33 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	reused := gateResumeToReusedWorkdir(&task, &taskCtx, env.WorkDir, taskLog)
 
+	// Prepare the task-scoped Multica CLI wrapper before injecting the runtime
+	// brief. The brief must only advertise chat CLI transport when the command
+	// will actually exist in this run's PATH with a valid task token.
+	agentToken := task.AuthToken
+	cliWrapperDir := ""
+	cliTokenFile := ""
+	cliBinDir := ""
+	if selfBin, err := os.Executable(); err == nil {
+		cliBinDir = filepath.Dir(selfBin)
+		if agentToken != "" {
+			wrapperDir, tokenFile, err := prepareTaskCLITransport(d.cfg, task.WorkspaceID, agentID, task.ID, selfBin, agentToken)
+			if err != nil {
+				return TaskResult{}, fmt.Errorf("prepare agent CLI transport: %w", err)
+			}
+			cliWrapperDir = wrapperDir
+			cliTokenFile = tokenFile
+			taskLog.Info("agent cli transport prepared", "wrapper_dir", wrapperDir, "token_file", tokenFile)
+		} else {
+			taskLog.Warn("agent cli transport: no task token available; CLI API calls will require external auth")
+		}
+	} else {
+		taskLog.Warn("agent cli transport: unable to resolve multica executable", "error", err)
+	}
+	if task.ChatSessionID != "" && cliWrapperDir == "" {
+		taskCtx.ChatCLITransportUnavailable = true
+	}
+
 	// Inject runtime-specific config (meta skill) so the agent discovers .agent_context/.
 	runtimeBrief, err := execenv.InjectRuntimeConfig(env.WorkDir, provider, taskCtx)
 	if err != nil {
@@ -3018,29 +3050,21 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}()
 	}
 
-	prompt := BuildPrompt(task, provider)
+	prompt := BuildPrompt(task, provider, agentRootPath)
 
-	// Pass the daemon's auth credentials and context so the spawned agent CLI
-	// can call the Multica API and the local daemon (e.g. `multica repo checkout`).
+	// Pass the daemon's execution context so the spawned agent CLI can call
+	// the Multica API and the local daemon (e.g. `multica repo checkout`).
 	// MULTICA_TASK_SLOT is allocated from the daemon-wide concurrency pool, not
 	// per-agent. When one daemon hosts multiple agents, slots index shared
 	// daemon-level resources such as GPUs.
-	// MULTICA_TOKEN is the credential the agent process will use to call the
-	// Multica API. Prefer the task-scoped token the server minted at claim
-	// time — that token is bound to (agent, task) and the auth middleware
-	// rejects it on owner-only endpoints (e.g. `/api/agents/{id}/env`), so
-	// the agent cannot use it to read another agent's secrets. Falls back
-	// to the daemon's own credential only when the server returned no
-	// auth_token (older server, or cloud / system runtime with no owner) —
-	// in that legacy mode lateral-movement protection relies on the
-	// runtime not handing the daemon a workspace-owner PAT in the first
-	// place. See MUL-2600.
-	agentToken := task.AuthToken
-	if agentToken == "" {
-		agentToken = d.client.Token()
-	}
+	// The API credential itself is written below into a per-agent/per-run token
+	// file and exposed through a CLI wrapper, not as a raw environment value.
+	// Use only the task-scoped token the server minted at claim time. That
+	// token is bound to (agent, task) and the auth middleware rejects it on
+	// owner-only endpoints (e.g. `/api/agents/{id}/env`), so the agent cannot
+	// use it to read another agent's secrets. Do not fall back to the daemon's
+	// own long-lived credential for agent transport.
 	agentEnv := map[string]string{
-		"MULTICA_TOKEN":           agentToken,
 		"MULTICA_SERVER_URL":      d.cfg.ServerBaseURL,
 		"MULTICA_DAEMON_PORT":     fmt.Sprintf("%d", d.cfg.HealthPort),
 		"MULTICA_WORKSPACE_ID":    task.WorkspaceID,
@@ -3080,11 +3104,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	// Ensure the multica CLI is on PATH inside the agent's environment.
 	// Some runtimes (e.g. Codex) run in an isolated sandbox that may not
-	// inherit the daemon's PATH. Prepend the directory of the running
-	// multica binary so that `multica` commands in the agent always resolve.
-	if selfBin, err := os.Executable(); err == nil {
-		binDir := filepath.Dir(selfBin)
-		agentEnv["PATH"] = binDir + string(os.PathListSeparator) + os.Getenv("PATH")
+	// inherit the daemon's PATH. Prepend a per-run wrapper directory so
+	// `multica` resolves to the task-scoped transport wrapper first; keep the
+	// real binary directory after it as a fallback for explicit wrapper exec.
+	if cliBinDir != "" {
+		pathPrefix := cliBinDir
+		if cliWrapperDir != "" {
+			agentEnv["MULTICA_TOKEN_FILE"] = cliTokenFile
+			pathPrefix = cliWrapperDir + string(os.PathListSeparator) + cliBinDir
+		}
+		agentEnv["PATH"] = pathPrefix + string(os.PathListSeparator) + os.Getenv("PATH")
 	}
 	// Point Codex to the per-task CODEX_HOME so it discovers skills natively
 	// without polluting the system ~/.codex/skills/.
@@ -3120,6 +3149,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			}
 			agentEnv[k] = v
 		}
+	}
+	// AReaL RL proxy override (§4.4): when the claimed task carries an
+	// areal_proxy config, force the runtime onto the RL proxy provider. The
+	// base_url env must be injected before the backend is created (it is part
+	// of the agent process env); the model + api-key are applied at ExecOptions
+	// build below. See arealProxyExecOverride for pi's arg/env contract.
+	arealModel, arealArgs, arealEnvKey, arealEnvVal, arealOverride := arealProxyExecOverride(task.ArealProxy)
+	if arealOverride && arealEnvKey != "" {
+		agentEnv[arealEnvKey] = arealEnvVal
 	}
 	backend, err := agent.New(provider, agent.Config{
 		ExecutablePath: entry.Path,
@@ -3196,6 +3234,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			)
 			thinkingLevel = ""
 		}
+	}
+	if arealOverride {
+		model = arealModel
+		customArgs = append(customArgs, arealArgs...)
+		taskLog.Info("areal proxy: routing runtime through RL bridge",
+			"runtime_provider", provider,
+			"model", model,
+			"base_url", arealEnvVal,
+		)
 	}
 	execOpts := agent.ExecOptions{
 		Cwd:                       env.WorkDir,
@@ -3302,18 +3349,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	var parts []protocol.MessagePart
 	var reaction *protocol.ChatReactionPayload
 	outputAction := ""
+	outputTarget := ""
+	var outputOptions *protocol.ChatOutputOptions
 	outputType := ""
-	if normalizedOutput, normalizedParts, normalizedOutputType, normalizedOutputAction, normalizedReaction, structured, err := parseStructuredMessageOutput(result.Output); structured {
-		if err != nil {
-			taskLog.Warn("agent structured message parts invalid; keeping raw output", "error", err)
-		} else {
-			output = normalizedOutput
-			parts = normalizedParts
-			outputType = normalizedOutputType
-			outputAction = normalizedOutputAction
-			reaction = normalizedReaction
-		}
-	}
 
 	switch result.Status {
 	case "completed":
@@ -3359,6 +3397,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Status:    "completed",
 			Comment:   output,
 			Action:    outputAction,
+			Target:    outputTarget,
+			Options:   outputOptions,
 			Type:      outputType,
 			Parts:     parts,
 			Reaction:  reaction,
@@ -4064,6 +4104,82 @@ func addPiAgentEnv(env map[string]string, cfg Config, workspaceID, agentID strin
 	env["PI_AGENT_PROFILE_DIR"] = filepath.Join(agentRoot, "profile")
 	env["PI_AGENT_FEEDBACK_DIR"] = filepath.Join(agentRoot, "feedback")
 	env["PI_AGENT_SYNC_QUEUE_DIR"] = piAgentSyncQueueDir(agentRoot)
+	addPiMemoryFastModeEnv(env)
+}
+
+func addPiMemoryFastModeEnv(env map[string]string) {
+	// Multica-managed Pi runs should keep explicit memory tools available, but
+	// skip the expensive automatic shutdown pipeline (session summary, learning,
+	// qmd refresh, remote sync). Users can still override these via custom_env.
+	env["PI_MEMORY_BACKGROUND_SHUTDOWN"] = "off"
+	env["PI_MEMORY_LEARNING"] = "off"
+	env["PI_MEMORY_SKILL_DRAFTS"] = "off"
+	env["PI_MEMORY_QMD_UPDATE"] = "off"
+	env["PI_MEMORY_AUTO_SYNC"] = "0"
+	env["PI_MEMORY_AUTO_SYNC_PULL"] = "0"
+	env["PI_MEMORY_AUTO_SYNC_PULL_ON_START"] = "0"
+	env["PI_MEMORY_AUTO_SYNC_UPLOAD"] = "0"
+	env["PI_MEMORY_AUTO_SYNC_UPLOAD_ON_SHUTDOWN"] = "0"
+	env["PI_MEMORY_NO_SEARCH"] = "1"
+	env["PI_MEMORY_REVIEW_STARTUP_HINT"] = "0"
+}
+
+// AReaL RL proxy runtime override (§4.4). A trained task carries an
+// `areal_proxy` object in its context (written server-side by the session-open
+// hook); the server surfaces it on the claim response and the daemon consumes
+// it here to route the runtime through the RL bridge.
+//
+// pi's real arg/env contract (confirmed against River2.0/packages/coding-agent,
+// the pi CLI source):
+//   - provider/model: pkg/agent/pi.go buildPiArgs splits ExecOptions.Model on
+//     "/" into `--provider <p> --model <m>` (pi src/cli/args.ts:87,89 parse
+//     both). So Model="areal/areal-default" yields
+//     `--provider areal --model areal-default`.
+//   - api-key: pi's `--api-key <key>` flag (src/cli/args.ts:91 ->
+//     src/main.ts:697 authStorage.setRuntimeApiKey(model.provider, key)).
+//     buildPiArgs does NOT emit it and it is NOT in piBlockedArgs, so we inject
+//     it via CustomArgs. This matches spec §1's literal
+//     `pi -p --provider areal --model areal-default --api-key <proxy_key>`.
+//   - base_url: pi has NO --base-url flag and NO generic per-provider base-url
+//     env var (packages/ai/src/env-api-keys.ts maps only built-in providers;
+//     "areal" is not one). A custom provider's base_url is supplied via pi's
+//     models.json / registerProvider, both of which support "$ENV" references.
+//     We therefore export base_url as AREAL_PROXY_BASE_URL, which the
+//     deployment's `areal` provider entry in models.json references; registering
+//     that entry on the runtime host is Task 8's job. Injected into agentEnv
+//     alongside the other provider creds (mirrors CustomEnv's ANTHROPIC_BASE_URL).
+const (
+	arealProxyProvider      = "areal"
+	arealProxyModel         = "areal-default"
+	arealProxyBaseURLEnvVar = "AREAL_PROXY_BASE_URL"
+)
+
+// arealProxyExecOverride computes the runtime overrides for a task routed
+// through the AReaL RL proxy. It returns the "provider/model" string
+// buildPiArgs maps to `--provider`/`--model`, the api-key custom args pi reads
+// via its `--api-key` flag, and the base_url env var (key + value) the
+// deployment's models.json references. ok is false when the task carries no
+// proxy config, leaving the caller's runtime configuration untouched.
+func arealProxyExecOverride(p *ArealProxy) (model string, extraArgs []string, envKey, envVal string, ok bool) {
+	if p == nil {
+		return "", nil, "", "", false
+	}
+	provider := p.Provider
+	if provider == "" {
+		provider = arealProxyProvider
+	}
+	m := p.Model
+	if m == "" {
+		m = arealProxyModel
+	}
+	model = provider + "/" + m
+	if p.APIKey != "" {
+		extraArgs = []string{"--api-key", p.APIKey}
+	}
+	if p.BaseURL != "" {
+		envKey, envVal = arealProxyBaseURLEnvVar, p.BaseURL
+	}
+	return model, extraArgs, envKey, envVal, true
 }
 
 // isBlockedEnvKey returns true if the key must not be overridden by user-

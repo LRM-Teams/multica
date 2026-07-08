@@ -617,6 +617,9 @@ func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("deregister: failed to set offline", "runtime_id", rid, "error", err)
 			continue
 		}
+		h.recordRuntimeHealthEventForActiveAgents(r.Context(), rt, agentHealthEventLivenessProbe, agentHealthStateSuspectedDisconnect, "daemon_deregistered", "runtime deregistered by daemon shutdown", map[string]any{
+			"source": "daemon_deregister",
+		})
 		obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeOffline(
 			uuidToString(rt.OwnerID),
 			wsID,
@@ -892,7 +895,19 @@ func (h *Handler) recordHeartbeat(ctx context.Context, rt db.AgentRuntime) error
 	// Either bumps last_seen_at on an already-online row (Touch + race
 	// fallback) or flips status from offline to online. The scheduler
 	// chooses sync vs batched per case; see HeartbeatScheduler doc.
-	return h.HeartbeatScheduler.Schedule(ctx, rt)
+	if err := h.HeartbeatScheduler.Schedule(ctx, rt); err != nil {
+		return err
+	}
+	switch {
+	case rt.Status != "online":
+		h.recordRuntimeHealthEventForActiveAgents(ctx, rt, agentHealthEventTransportRecover, agentHealthStateRecovered, "transport_reconnected", "runtime transport reconnected", map[string]any{
+			"previous_status": rt.Status,
+			"last_seen_at":    timestampToString(rt.LastSeenAt),
+		})
+	case !rt.LastSeenAt.Valid:
+		h.recordRuntimeHealthEventForActiveAgents(ctx, rt, agentHealthEventServerPing, agentHealthStateOnline, "heartbeat_received", "runtime heartbeat received", nil)
+	}
+	return nil
 }
 
 // heartbeatMetrics carries per-stage timings out of processHeartbeat so the
@@ -1414,6 +1429,41 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			resp.WorkspaceID = uuidToString(cs.WorkspaceID)
 			resp.ChatSessionID = uuidToString(cs.ID)
 			resp.ThreadName = cs.Title
+
+			// Squad-leader briefing injection for chat tasks. env-dispatch
+			// squad dispatch stamps the chat task's context JSONB with
+			// {"squad_id": ...} and enqueues the squad's leader. When the
+			// claiming agent is that leader, append the same Operating
+			// Protocol + Roster + user Instructions that issue-bound squad
+			// tasks see (mirrors the issue-path and quick-create blocks), and
+			// surface the squad identity to the daemon.
+			if resp.Agent != nil && task.Context != nil {
+				var cc struct {
+					SquadID string `json:"squad_id"`
+				}
+				if json.Unmarshal(task.Context, &cc) == nil && cc.SquadID != "" {
+					if squadUUID, err := util.ParseUUID(cc.SquadID); err == nil {
+						if squad, err := h.Queries.GetSquadInWorkspace(r.Context(), db.GetSquadInWorkspaceParams{
+							ID:          squadUUID,
+							WorkspaceID: cs.WorkspaceID,
+						}); err == nil && uuidToString(squad.LeaderID) == resp.Agent.ID {
+							briefing := buildSquadLeaderBriefing(r.Context(), h.Queries, squad)
+							if strings.TrimSpace(resp.Agent.Instructions) == "" {
+								resp.Agent.Instructions = briefing
+							} else {
+								resp.Agent.Instructions = resp.Agent.Instructions + "\n\n" + briefing
+							}
+							resp.SquadID = uuidToString(squad.ID)
+							resp.SquadName = squad.Name
+							slog.Debug("injected squad leader briefing for chat task",
+								"squad_id", uuidToString(squad.ID),
+								"squad_name", squad.Name,
+								"leader_agent_id", resp.Agent.ID,
+							)
+						}
+					}
+				}
+			}
 			// Resolve the chat's bound project (the composer "current project").
 			// When set, the agent works in that project's directory exactly like
 			// an issue task does — so a group chat about a project sees the same
@@ -1593,6 +1643,11 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			hasQuickCreate = true
 			resp.QuickCreatePrompt = qc.Prompt
 			resp.QuickCreateAttachmentIDs = append([]string(nil), qc.AttachmentIDs...)
+			if qc.Source != nil {
+				source := *qc.Source
+				source.AttachmentIDs = append([]string(nil), qc.Source.AttachmentIDs...)
+				resp.QuickCreateSource = &source
+			}
 			resp.ThreadName = qc.Prompt
 			resp.WorkspaceID = qc.WorkspaceID
 
@@ -2092,21 +2147,15 @@ type TaskCompleteRequest struct {
 	PRURL                  string                        `json:"pr_url"`
 	Output                 string                        `json:"output"`
 	Action                 string                        `json:"action"`
+	Target                 string                        `json:"target"`
+	Options                *protocol.ChatOutputOptions   `json:"options"`
 	Type                   string                        `json:"type"`
 	Parts                  []protocol.MessagePart        `json:"parts"`
 	Reaction               *protocol.ChatReactionPayload `json:"reaction"`
 	OutputSuppressedReason string                        `json:"output_suppressed_reason,omitempty"`
+	MustReplyFailure       bool                          `json:"must_reply_failure,omitempty"`
 	SessionID              string                        `json:"session_id"` // Claude session ID for future resumption
 	WorkDir                string                        `json:"work_dir"`   // working directory used during execution
-}
-
-type taskCompleteOutputEnvelope struct {
-	Action   string                        `json:"action"`
-	Type     string                        `json:"type"`
-	Output   string                        `json:"output"`
-	Content  string                        `json:"content"`
-	Parts    []protocol.MessagePart        `json:"parts"`
-	Reaction *protocol.ChatReactionPayload `json:"reaction"`
 }
 
 func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
@@ -2149,65 +2198,49 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
+
+	// Record a task-completed activity event. If the output was suppressed,
+	// include the suppression reason so the Activity timeline surfaces it.
+	completedDetails := map[string]any{}
+	if req.OutputSuppressedReason != "" {
+		completedDetails["output_suppressed_reason"] = req.OutputSuppressedReason
+	}
+	completedSeverity := "info"
+	completedMessage := "Task completed"
+	if req.OutputSuppressedReason != "" {
+		completedMessage = "Task completed (output suppressed: " + req.OutputSuppressedReason + ")"
+		completedSeverity = "warning"
+	}
+	recordAgentActivityEvent(r.Context(), h.DB,
+		parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
+		"lifecycle", "task_completed", completedSeverity,
+		"agent", task.AgentID, "",
+		req.OutputSuppressedReason, completedMessage, completedDetails,
+	)
+
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
 func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.AgentTaskQueue, req *TaskCompleteRequest) error {
-	groupChannelTask := h.isGroupChannelAgentTask(ctx, task)
+	channelTask := h.isChannelAgentTask(ctx, task)
 	explicitAction := strings.TrimSpace(req.Action) != ""
-
-	envelope, structured, err := parseTaskCompleteOutputEnvelope(req.Output)
-	if err != nil {
-		if groupChannelTask {
-			slog.Warn("complete task: suppressing invalid structured channel output", "task_id", uuidToString(task.ID), "error", err)
-			suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidOutput)
-			return nil
-		}
-		structured = false
-	}
-	if structured {
-		if strings.TrimSpace(envelope.Action) != "" || !explicitAction {
-			req.Action = envelope.Action
-			explicitAction = strings.TrimSpace(req.Action) != ""
-		}
-		if strings.TrimSpace(envelope.Type) != "" || strings.TrimSpace(req.Type) == "" {
-			req.Type = envelope.Type
-		}
-		if strings.TrimSpace(envelope.Output) != "" || envelope.Content == "" {
-			req.Output = envelope.Output
-		} else {
-			req.Output = envelope.Content
-		}
-		req.Parts = envelope.Parts
-		req.Reaction = envelope.Reaction
-	}
 
 	output, parts, err := messageparts.Normalize(req.Output, req.Parts)
 	if err != nil {
 		return fmt.Errorf("invalid message parts: %w", err)
 	}
-
-	if message, ok := protocol.ParseMessageSendCommand(output); ok {
-		output, parts, err = messageparts.Normalize(message, nil)
-		if err != nil {
-			return fmt.Errorf("invalid message parts: %w", err)
-		}
-		req.Action = protocol.ChatOutputActionMessageSend
-		req.Type = protocol.ChatOutputKindMessage
-		req.Reaction = nil
-		explicitAction = true
-	} else if reaction, ok := protocol.ParseMessageReactCommand(output); ok {
-		if strings.TrimSpace(req.Action) == "" {
-			req.Action = protocol.ChatOutputActionMessageReact
-			req.Type = protocol.ChatOutputKindReaction
-			req.Reaction = reaction
-		}
-		output = ""
-		parts = nil
-		explicitAction = true
+	if channelTask && !explicitAction && isLegacyChannelProtocolOutput(output, parts) {
+		slog.Warn("complete task: suppressing protocol-shaped final text output", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
+		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
+		return nil
+	}
+	if channelTask && !explicitAction && isNoReplyRationaleFinalText(output, parts) {
+		slog.Warn("complete task: suppressing no-reply rationale final text", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonNoReplyRationale)
+		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
+		return nil
 	}
 
-	if groupChannelTask && strings.TrimSpace(req.Action) == "" {
+	if channelTask && strings.TrimSpace(req.Action) == "" {
 		legacyType, legacyErr := protocol.NormalizeChatOutputType(req.Type, strings.TrimSpace(output) != "" || len(parts) > 0, req.Reaction != nil)
 		if legacyErr == nil {
 			switch legacyType {
@@ -2231,99 +2264,228 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	if strings.TrimSpace(req.Action) != "" {
 		normalizedAction, actionErr := protocol.NormalizeChatOutputAction(req.Action)
 		if actionErr != nil {
-			if groupChannelTask {
-				slog.Warn("complete task: suppressing invalid group channel output action", "task_id", uuidToString(task.ID), "action", req.Action, "error", actionErr)
-				suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidAction)
+			if channelTask {
+				slog.Warn("complete task: suppressing invalid channel output action", "task_id", uuidToString(task.ID), "action", req.Action, "error", actionErr)
+				h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidAction)
 				return nil
 			}
 			return actionErr
 		}
 		req.Action = normalizedAction
 		outputType, err = protocol.ChatOutputTypeForAction(normalizedAction)
-	} else if !groupChannelTask {
-		outputType, err = protocol.NormalizeChatOutputType(req.Type, strings.TrimSpace(output) != "" || len(parts) > 0, req.Reaction != nil)
 	} else {
-		slog.Warn("complete task: suppressing group channel output without explicit action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_type", req.Type)
-		suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
-		return nil
+		outputType, err = protocol.NormalizeChatOutputType(req.Type, strings.TrimSpace(output) != "" || len(parts) > 0, req.Reaction != nil)
 	}
 	if err != nil {
-		if groupChannelTask {
-			slog.Warn("complete task: suppressing invalid group channel output type", "task_id", uuidToString(task.ID), "output_type", req.Type, "error", err)
-			suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidType)
+		if channelTask {
+			slog.Warn("complete task: suppressing invalid channel output type", "task_id", uuidToString(task.ID), "output_type", req.Type, "error", err)
+			h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidType)
 			return nil
 		}
 		return err
+	}
+	if channelTask && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && h.taskHasAgentTransportVisibleOutput(ctx, task.ID) {
+		slog.Warn("complete task: suppressing final output after agent transport output", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonToolTransportOutput)
+		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonToolTransportOutput)
+		return nil
+	}
+	if channelTask && task.Priority < 2 && !explicitAction && outputType == protocol.ChatOutputKindMessage && h.taskRuntimeHasCapability(ctx, task, protocol.DaemonCapabilityAgentCLITransport) {
+		slog.Warn("complete task: suppressing unsent final text on ambient CLI-capable run", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
+		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
+		return nil
+	}
+	if channelTask && explicitAction && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && !h.taskRuntimeHasCapability(ctx, task, protocol.DaemonCapabilityChannelOutputActions) {
+		slog.Warn("complete task: suppressing channel output action from outdated daemon", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "action", req.Action, "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+		return nil
 	}
 	if outputType != protocol.ChatOutputKindMessage {
 		output = ""
 		parts = nil
 	}
-	if groupChannelTask && outputType == protocol.ChatOutputKindMessage && !explicitAction {
-		slog.Warn("complete task: suppressing group channel message without send action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
-		suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonMessageMissingAction)
+	if channelTask && outputType == protocol.ChatOutputKindMessage && strings.TrimSpace(output) == "" && len(parts) == 0 {
+		slog.Warn("complete task: suppressing empty channel send action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
+		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonEmptyMessage)
 		return nil
 	}
-	if groupChannelTask && outputType == protocol.ChatOutputKindMessage && strings.TrimSpace(output) == "" && len(parts) == 0 {
-		slog.Warn("complete task: suppressing empty group channel send action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
-		suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonEmptyMessage)
+	if channelTask && outputType == protocol.ChatOutputKindReaction && (req.Reaction == nil || strings.TrimSpace(req.Reaction.Emoji) == "") {
+		slog.Warn("complete task: suppressing invalid channel message react action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
+		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidReaction)
 		return nil
 	}
-	if groupChannelTask && outputType == protocol.ChatOutputKindReaction && (req.Reaction == nil || strings.TrimSpace(req.Reaction.Emoji) == "") {
-		slog.Warn("complete task: suppressing invalid group channel message react action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
-		suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidReaction)
-		return nil
+	// #308: Directed run (DM/@mention/direct question, priority >= 2) must produce
+	// visible output. If the agent explicitly chose no_reply or produced empty
+	// output with no CLI-sent message, it's a must-reply failure.
+	// This catches cases like Pi returning no_reply for every DM message,
+	// which bypasses #295's unsent_final_output suppression (no_reply is an
+	// explicit action).
+	// Plain-text final output (action="", non-empty) IS visible even without
+	// CLI transport — do NOT flag those as failure.
+	if channelTask && task.Priority >= 2 && !req.MustReplyFailure {
+		hasCLIOutput := h.taskHasAgentTransportVisibleOutput(ctx, task.ID)
+		isNoReply := req.Action == protocol.ChatOutputActionNoReply
+		isEmptyMessage := req.Action == "" && outputType == protocol.ChatOutputKindMessage && strings.TrimSpace(output) == "" && len(parts) == 0
+		hasPlainText := req.Action == "" && outputType == protocol.ChatOutputKindMessage && (strings.TrimSpace(output) != "" || len(parts) > 0)
+		hasSendAction := req.Action == protocol.ChatOutputActionMessageSend
+		hasReactAction := req.Action == protocol.ChatOutputActionMessageReact
+		if !hasCLIOutput && !hasSendAction && !hasReactAction && !hasPlainText && (isNoReply || isEmptyMessage) {
+			req.MustReplyFailure = true
+			slog.Warn("complete task: directed run must-reply failure — no visible output",
+				"task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID),
+				"action", req.Action, "type", outputType, "priority", task.Priority)
+		}
 	}
 	req.Output = output
 	req.Type = outputType
 	req.Parts = parts
+	req.Target = strings.TrimSpace(req.Target)
+	if channelTask && outputType == protocol.ChatOutputKindMessage {
+		if err := h.validateChatOutputTarget(ctx, task, req.Target, req.Options); err != nil {
+			slog.Warn("complete task: suppressing invalid channel output target", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "target", req.Target, "error", err)
+			h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidTarget)
+			return nil
+		}
+	} else if strings.TrimSpace(req.Target) != "" || chatOutputOptionsPresent(req.Options) {
+		req.Target = ""
+		req.Options = nil
+	}
 	return nil
 }
 
-func suppressTaskCompleteOutput(req *TaskCompleteRequest, reason string) {
+func (h *Handler) taskRuntimeHasCapability(ctx context.Context, task db.AgentTaskQueue, capability string) bool {
+	if !task.RuntimeID.Valid {
+		return false
+	}
+	rt, err := h.Queries.GetAgentRuntime(ctx, task.RuntimeID)
+	if err != nil {
+		slog.Warn("complete task: failed to load task runtime capabilities", "task_id", uuidToString(task.ID), "runtime_id", uuidToString(task.RuntimeID), "error", err)
+		return false
+	}
+	for _, candidate := range runtimeCapabilities(runtimeMetadata(rt)) {
+		if candidate == capability {
+			return true
+		}
+	}
+	return false
+}
+
+func isLegacyChannelProtocolOutput(output string, parts []protocol.MessagePart) bool {
+	if _, _, unwrapped, err := messageparts.UnwrapStructuredMessageSend(output, parts); unwrapped || err != nil {
+		return true
+	}
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return false
+	}
+	if isLegacyChannelCLIOutput(trimmed) {
+		return true
+	}
+	var envelope struct {
+		Action   string                        `json:"action"`
+		Target   string                        `json:"target"`
+		Type     string                        `json:"type"`
+		Options  json.RawMessage               `json:"options"`
+		Parts    []protocol.MessagePart        `json:"parts"`
+		Reaction *protocol.ChatReactionPayload `json:"reaction"`
+	}
+	if strings.HasPrefix(trimmed, "{") && json.Unmarshal([]byte(trimmed), &envelope) == nil {
+		return strings.TrimSpace(envelope.Action) != "" ||
+			strings.TrimSpace(envelope.Target) != "" ||
+			strings.TrimSpace(envelope.Type) != "" ||
+			len(envelope.Options) > 0 ||
+			len(envelope.Parts) > 0 ||
+			envelope.Reaction != nil
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.Contains(lower, `{"action":"message_send"`) ||
+		strings.Contains(lower, `{"action":"send"`) ||
+		strings.Contains(lower, `{"action":"message_react"`) ||
+		strings.Contains(lower, `{"action":"react"`) ||
+		strings.Contains(lower, `{"action":"no_reply"`)
+}
+
+func isLegacyChannelCLIOutput(output string) bool {
+	lower := strings.ToLower(strings.TrimSpace(output))
+	for _, prefix := range []string{
+		"multica send",
+		"multica react",
+		"multica message send",
+		"multica message react",
+		"multica channel send",
+		"multica channel react",
+	} {
+		if lower == prefix || strings.HasPrefix(lower, prefix+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+func isNoReplyRationaleFinalText(output string, parts []protocol.MessagePart) bool {
+	if len(parts) > 0 {
+		return false
+	}
+	normalized := normalizeNoReplyRationaleCandidate(output)
+	if normalized == "" {
+		return false
+	}
+	for _, phrase := range []string{
+		"no visible reply needed",
+		"not directed at me - no visible reply needed",
+		"not directed at me - this is a general greeting, not a task or request. no visible reply needed",
+		"not directed at me - frank's \"hi\" is a general greeting following my own earlier message, not a new task or all-hands request. no visible reply needed",
+	} {
+		if normalized == phrase {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeNoReplyRationaleCandidate(output string) string {
+	normalized := strings.ToLower(strings.TrimSpace(output))
+	normalized = strings.ReplaceAll(normalized, "—", "-")
+	normalized = strings.ReplaceAll(normalized, "–", "-")
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	normalized = strings.TrimSpace(normalized)
+	for strings.HasSuffix(normalized, ".") {
+		normalized = strings.TrimSpace(strings.TrimSuffix(normalized, "."))
+	}
+	return normalized
+}
+
+func (h *Handler) suppressTaskCompleteOutput(req *TaskCompleteRequest, reason string) {
 	req.Action = protocol.ChatOutputActionNoReply
 	req.Type = protocol.ChatOutputKindNoReply
 	req.Output = ""
 	req.Parts = nil
+	req.Target = ""
+	req.Options = nil
 	req.Reaction = nil
 	req.OutputSuppressedReason = reason
+	if h.Metrics != nil {
+		h.Metrics.RecordChannelOutputSuppressed(reason)
+	}
 }
 
-func parseTaskCompleteOutputEnvelope(raw string) (taskCompleteOutputEnvelope, bool, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
-		return taskCompleteOutputEnvelope{}, false, nil
-	}
-	var envelope taskCompleteOutputEnvelope
-	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
-		return taskCompleteOutputEnvelope{}, true, err
-	}
-	if strings.TrimSpace(envelope.Type) == "" &&
-		strings.TrimSpace(envelope.Action) == "" &&
-		len(envelope.Parts) == 0 &&
-		envelope.Reaction == nil {
-		return taskCompleteOutputEnvelope{}, false, nil
-	}
-	return envelope, true, nil
-}
-
-func (h *Handler) isGroupChannelAgentTask(ctx context.Context, task db.AgentTaskQueue) bool {
+func (h *Handler) isChannelAgentTask(ctx context.Context, task db.AgentTaskQueue) bool {
 	if !task.ChatSessionID.Valid {
 		return false
 	}
-	var kind string
+	var exists bool
 	if err := h.DB.QueryRow(ctx, `
-		SELECT ch.kind
-		FROM channel_agent_session cas
-		JOIN channel ch ON ch.id = cas.channel_id
-		WHERE cas.chat_session_id = $1
-	`, task.ChatSessionID).Scan(&kind); err != nil {
+		SELECT EXISTS (
+			SELECT 1
+			FROM channel_agent_session
+			WHERE chat_session_id = $1
+		)
+	`, task.ChatSessionID).Scan(&exists); err != nil {
 		if !isNotFound(err) {
-			slog.Warn("complete task: failed to resolve channel kind", "task_id", uuidToString(task.ID), "chat_session_id", uuidToString(task.ChatSessionID), "error", err)
+			slog.Warn("complete task: failed to resolve channel task", "task_id", uuidToString(task.ID), "chat_session_id", uuidToString(task.ChatSessionID), "error", err)
 		}
 		return false
 	}
-	return kind != "dm"
+	return exists
 }
 
 // emitIssueExecutedOnFirstCompletion atomically flips issue.first_executed_at
@@ -2468,6 +2630,18 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)
+
+	// Record a task-failed activity event.
+	recordAgentActivityEvent(r.Context(), h.DB,
+		parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
+		"lifecycle", "task_failed", "error",
+		"agent", task.AgentID, "",
+		req.FailureReason, "Task failed: "+truncateForActivity(req.Error, 200),
+		map[string]any{
+			"failure_reason": req.FailureReason,
+		},
+	)
+
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
@@ -2563,16 +2737,56 @@ func taskMessageToPayload(m db.TaskMessage, taskID, issueID string) protocol.Tas
 	if m.CreatedAt.Valid {
 		createdAt = m.CreatedAt.Time.UTC().Format(time.RFC3339Nano)
 	}
+	narrative := taskMessageNarrative(m.Type)
 	return protocol.TaskMessagePayload{
-		TaskID:    taskID,
-		IssueID:   issueID,
-		Seq:       int(m.Seq),
-		Type:      m.Type,
-		Tool:      m.Tool.String,
-		Content:   m.Content.String,
-		Input:     input,
-		Output:    m.Output.String,
-		CreatedAt: createdAt,
+		TaskID:      taskID,
+		IssueID:     issueID,
+		Seq:         int(m.Seq),
+		Type:        m.Type,
+		Tool:        m.Tool.String,
+		Content:     m.Content.String,
+		Input:       input,
+		Output:      m.Output.String,
+		ActionLabel: narrative.Label,
+		Summary:     narrative.Summary,
+		CreatedAt:   createdAt,
+	}
+}
+
+type taskMessageNarrativeSummary struct {
+	Label   string
+	Summary string
+}
+
+func taskMessageNarrative(msgType string) taskMessageNarrativeSummary {
+	switch msgType {
+	case "text":
+		return taskMessageNarrativeSummary{
+			Label:   "Message received",
+			Summary: "Received a message.",
+		}
+	case "thinking":
+		return taskMessageNarrativeSummary{
+			Label:   "Thinking",
+			Summary: "Reviewed the next step.",
+		}
+	case "tool_use":
+		return taskMessageNarrativeSummary{
+			Label:   "Working",
+			Summary: "Started a work step.",
+		}
+	case "tool_result":
+		return taskMessageNarrativeSummary{
+			Label:   "Step finished",
+			Summary: "Finished a work step.",
+		}
+	case "error":
+		return taskMessageNarrativeSummary{
+			Label:   "Ran into an error",
+			Summary: "Ran into an error.",
+		}
+	default:
+		return taskMessageNarrativeSummary{Label: "Took a step", Summary: "Took a step."}
 	}
 }
 
@@ -2667,6 +2881,16 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task cancelled by user", "task_id", taskID, "issue_id", uuidToString(task.IssueID))
+
+	// Record a task-cancelled activity event.
+	recordAgentActivityEvent(r.Context(), h.DB,
+		issue.WorkspaceID, task.AgentID, task.RuntimeID, task.ID,
+		"lifecycle", "task_cancelled", "info",
+		"issue", task.IssueID, "",
+		"", "Task cancelled by user",
+		nil,
+	)
+
 	writeJSON(w, http.StatusOK, taskToResponse(*task, uuidToString(issue.WorkspaceID)))
 }
 

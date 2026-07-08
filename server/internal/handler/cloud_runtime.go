@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/multica-ai/multica/server/internal/cloudruntime"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -95,6 +96,31 @@ func (h *Handler) GetCloudRuntimeNodeStatus(w http.ResponseWriter, r *http.Reque
 
 func (h *Handler) ExecCloudRuntimeNode(w http.ResponseWriter, r *http.Request) {
 	h.proxyCloudRuntime(w, r, http.MethodPost, "/api/v1/nodes/exec", cloudRuntimeProxyOptions{
+		withUserID: true,
+		withBody:   true,
+	})
+}
+
+// SnapshotCloudRuntimeSandbox proxies POST /api/v1/sandboxes/{id}/snapshot to
+// the cloud runtime (Fleet), which dispatches to the underlying sandbox vendor
+// (Daytona today) to snapshot a live sandbox. Used by the AReaL training loop
+// to capture a fork point before branching an agent run.
+func (h *Handler) SnapshotCloudRuntimeSandbox(w http.ResponseWriter, r *http.Request) {
+	sandboxID := chi.URLParam(r, "sandboxID")
+	if sandboxID == "" {
+		writeError(w, http.StatusBadRequest, "sandbox_id is required")
+		return
+	}
+	h.proxyCloudRuntime(w, r, http.MethodPost, "/api/v1/sandboxes/"+url.PathEscape(sandboxID)+"/snapshot", cloudRuntimeProxyOptions{
+		withUserID: true,
+	})
+}
+
+// ForkCloudRuntimeSandbox proxies POST /api/v1/sandboxes/fork to the cloud
+// runtime (Fleet). The request body carries either source_sandbox_id or
+// snapshot_id; Fleet dispatches to the underlying vendor to fork.
+func (h *Handler) ForkCloudRuntimeSandbox(w http.ResponseWriter, r *http.Request) {
+	h.proxyCloudRuntime(w, r, http.MethodPost, "/api/v1/sandboxes/fork", cloudRuntimeProxyOptions{
 		withUserID: true,
 		withBody:   true,
 	})

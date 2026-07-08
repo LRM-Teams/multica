@@ -10,8 +10,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // TestListWorkspaceAgentTaskSnapshot covers the agent presence snapshot endpoint:
@@ -1163,3 +1165,169 @@ func insertHandlerTestTask(t *testing.T, agentID string) string {
 // Defence-in-depth: spot-check that the package compiles a small
 // fmt.Sprintf so accidental imports stay tidy.
 var _ = fmt.Sprintf
+
+func TestEnsureWindyRestoresArchivedWendyInsteadOfCreatingDuplicate(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("handler test fixture unavailable")
+	}
+	ctx := context.Background()
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, display_name, description, instructions, avatar_url,
+			runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
+			archived_at, archived_by
+		)
+		VALUES ($1, $2, 'Wendy', 'archived Wendy', 'instructions', '/legacy.png',
+			'cloud', '{}'::jsonb, $3, 'private', 1, $4, now(), $4)
+		RETURNING id
+	`, testWorkspaceID, "archived_wendy_"+strings.ReplaceAll(t.Name(), "/", "_"), handlerTestRuntimeID(t), testUserID).Scan(&agentID); err != nil {
+		t.Fatalf("seed archived Wendy agent: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, agentID) })
+
+	req := newRequest(http.MethodPost, "/api/agents/windy", nil)
+	updated, created, err := testHandler.ensureWindyAgent(req, parseUUID(testWorkspaceID), parseUUID(testUserID), db.AgentRuntime{})
+	if err != nil {
+		t.Fatalf("ensureWindyAgent: %v", err)
+	}
+	if created {
+		t.Fatal("ensureWindyAgent created a new agent instead of restoring archived Wendy")
+	}
+	if uuidToString(updated.ID) != agentID {
+		t.Fatalf("ensureWindyAgent reused agent %q, want archived %q", uuidToString(updated.ID), agentID)
+	}
+	if updated.ArchivedAt.Valid {
+		t.Fatal("archived Wendy was not restored")
+	}
+
+	var count int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent
+		WHERE workspace_id = $1 AND owner_id = $2 AND display_name = 'Wendy'
+	`, testWorkspaceID, testUserID).Scan(&count); err != nil {
+		t.Fatalf("count Wendy agents: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("Wendy agent count = %d, want 1", count)
+	}
+}
+
+func TestEnsureWindyPrefersActiveConfiguredWendy(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("handler test fixture unavailable")
+	}
+	ctx := context.Background()
+	activeRuntime := handlerTestRuntimeID(t)
+	var activeID, archivedID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, display_name, description, instructions, avatar_url,
+			runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
+			created_at, updated_at
+		)
+		VALUES ($1, $2, 'Wendy', 'active Wendy', '', '/wendy.png',
+			'cloud', '{}'::jsonb, $3, 'private', 1, $4, now() - interval '2 hours', now() - interval '2 hours')
+		RETURNING id
+	`, testWorkspaceID, "active_wendy_"+strings.ReplaceAll(t.Name(), "/", "_"), activeRuntime, testUserID).Scan(&activeID); err != nil {
+		t.Fatalf("seed active Wendy: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, display_name, description, instructions, avatar_url,
+			runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
+			created_at, updated_at, archived_at, archived_by
+		)
+		VALUES ($1, $2, 'Wendy', 'archived newer Wendy', '', '/wendy.png',
+			'cloud', '{}'::jsonb, $3, 'private', 1, $4,
+			now() - interval '1 hour', now() - interval '1 hour', now(), $4)
+		RETURNING id
+	`, testWorkspaceID, "archived_newer_wendy_"+strings.ReplaceAll(t.Name(), "/", "_"), activeRuntime, testUserID).Scan(&archivedID); err != nil {
+		t.Fatalf("seed archived Wendy: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent WHERE id IN ($1, $2)`, activeID, archivedID) })
+
+	req := newRequest(http.MethodPost, "/api/agents/windy", nil)
+	updated, created, err := testHandler.ensureWindyAgent(req, parseUUID(testWorkspaceID), parseUUID(testUserID), db.AgentRuntime{})
+	if err != nil {
+		t.Fatalf("ensureWindyAgent: %v", err)
+	}
+	if created {
+		t.Fatal("ensureWindyAgent created a new agent despite existing Wendy")
+	}
+	if uuidToString(updated.ID) != activeID {
+		t.Fatalf("ensureWindyAgent chose %q, want active configured %q", uuidToString(updated.ID), activeID)
+	}
+}
+
+func TestPreferWindyAgentRanksActiveConfiguredCanonicalLatest(t *testing.T) {
+	base := db.Agent{ID: parseUUID("00000000-0000-0000-0000-000000000001"), OwnerID: parseUUID(testUserID), DisplayName: "Joe", CreatedAt: pgtype.Timestamptz{Time: time.Now().Add(-3 * time.Hour), Valid: true}, UpdatedAt: pgtype.Timestamptz{Time: time.Now().Add(-3 * time.Hour), Valid: true}}
+	configured := base
+	configured.ID = parseUUID("00000000-0000-0000-0000-000000000002")
+	configured.RuntimeID = parseUUID("99999999-9999-9999-9999-999999999999")
+	if !preferWindyAgent(configured, base) {
+		t.Fatal("configured Wendy should beat unconfigured legacy Wendy")
+	}
+	archived := configured
+	archived.ID = parseUUID("00000000-0000-0000-0000-000000000003")
+	archived.UpdatedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	archived.ArchivedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	if preferWindyAgent(archived, configured) {
+		t.Fatal("archived Wendy should not beat active Wendy")
+	}
+	canonical := configured
+	canonical.ID = parseUUID("00000000-0000-0000-0000-000000000004")
+	canonical.DisplayName = windyAgentName
+	if !preferWindyAgent(canonical, configured) {
+		t.Fatal("canonical Wendy should beat legacy configured Wendy")
+	}
+}
+
+func TestEnsureWindyRenamesLegacyWindyAgent(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("handler test fixture unavailable")
+	}
+	ctx := context.Background()
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, display_name, description, instructions, avatar_url,
+			runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id
+		)
+		VALUES ($1, $2, 'Windy', 'legacy windy', 'legacy instructions', '/legacy.png',
+			'cloud', '{}'::jsonb, $3, 'private', 1, $4)
+		RETURNING id
+	`, testWorkspaceID, "legacy_windy_"+strings.ReplaceAll(t.Name(), "/", "_"), handlerTestRuntimeID(t), testUserID).Scan(&agentID); err != nil {
+		t.Fatalf("seed legacy Windy agent: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, agentID) })
+
+	req := newRequest(http.MethodPost, "/api/agents/windy", nil)
+	updated, created, err := testHandler.ensureWindyAgent(req, parseUUID(testWorkspaceID), parseUUID(testUserID), db.AgentRuntime{})
+	if err != nil {
+		t.Fatalf("ensureWindyAgent: %v", err)
+	}
+	if created {
+		t.Fatal("ensureWindyAgent created a new agent instead of reusing legacy Windy")
+	}
+	if uuidToString(updated.ID) != agentID {
+		t.Fatalf("ensureWindyAgent reused agent %q, want legacy %q", uuidToString(updated.ID), agentID)
+	}
+	if updated.DisplayName != windyAgentName {
+		t.Fatalf("display_name = %q, want %q", updated.DisplayName, windyAgentName)
+	}
+
+	var count int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent
+		WHERE workspace_id = $1 AND owner_id = $2 AND visibility = 'private'
+		  AND display_name IN ('Windy', 'Wendy')
+	`, testWorkspaceID, testUserID).Scan(&count); err != nil {
+		t.Fatalf("count Windy/Wendy agents: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("Windy/Wendy private agent count = %d, want 1", count)
+	}
+}

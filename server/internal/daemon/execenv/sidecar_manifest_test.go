@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -982,6 +983,9 @@ func TestCleanupSidecarsSurfacesEACCESOnEmptyRecordedDir(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("chmod is bypassed for uid 0; cannot synthesize EACCES on rmdir")
 	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows ACL semantics do not make chmod 0555 reliably deny rmdir")
+	}
 
 	workDir := t.TempDir()
 	envRoot := t.TempDir()
@@ -1032,6 +1036,9 @@ func TestCleanupSidecarsSurfacesEACCESWhenReadDirFailsToo(t *testing.T) {
 	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("chmod is bypassed for uid 0; cannot synthesize EACCES on rmdir + readdir")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows ACL semantics do not make chmod 0555 reliably deny rmdir")
 	}
 
 	workDir := t.TempDir()

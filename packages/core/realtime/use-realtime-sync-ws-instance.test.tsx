@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
 import { channelKeys } from "../channels/queries";
-import type { ChannelMessage, ChannelMessagesPage } from "../types";
+import type { ChannelMessage, ChannelMessagesPage, ChannelThreadMessagesPage } from "../types";
 import { useRealtimeSync, type RealtimeSyncStores } from "./use-realtime-sync";
 
 vi.mock("../platform/workspace-storage", () => ({
@@ -218,6 +218,113 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: channelKeys.messagesPage("channel-1"),
     });
+  });
+
+  it("removes deleted root messages without replies but keeps tombstone roots with replies", () => {
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+
+    const channelMessageHandler = (ws.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([eventName]) => eventName === "channel:message",
+    )?.[1] as ((payload: ChannelMessage) => void) | undefined;
+    expect(channelMessageHandler).toBeDefined();
+
+    qc.setQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage("channel-1"), {
+      pages: [
+        {
+          messages: [channelMessage("root-old")],
+          limit: 50,
+          has_more: false,
+          next_cursor: null,
+        },
+      ],
+      pageParams: [null],
+    });
+
+    channelMessageHandler?.(
+      channelMessage("root-old", { deleted_at: "2026-07-01T00:01:00Z", thread_reply_count: 0 }),
+    );
+
+    expect(
+      qc
+        .getQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage("channel-1"))
+        ?.pages[0]?.messages.map((message) => message.id),
+    ).toEqual([]);
+
+    qc.setQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage("channel-1"), {
+      pages: [
+        {
+          messages: [channelMessage("root-old")],
+          limit: 50,
+          has_more: false,
+          next_cursor: null,
+        },
+      ],
+      pageParams: [null],
+    });
+
+    channelMessageHandler?.(
+      channelMessage("root-old", { deleted_at: "2026-07-01T00:02:00Z", thread_reply_count: 2 }),
+    );
+
+    expect(
+      qc
+        .getQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage("channel-1"))
+        ?.pages[0]?.messages.map((message) => [message.id, message.deleted_at]),
+    ).toEqual([["root-old", "2026-07-01T00:02:00Z"]]);
+  });
+
+  it("upserts thread reply edits and deletes into the cached thread panel", () => {
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+
+    const channelMessageHandler = (ws.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([eventName]) => eventName === "channel:message",
+    )?.[1] as ((payload: ChannelMessage) => void) | undefined;
+    expect(channelMessageHandler).toBeDefined();
+
+    qc.setQueryData<ChannelThreadMessagesPage>(channelKeys.messageThread("channel-1", "root-old"), {
+      messages: [
+        channelMessage("root-old", { thread_reply_count: 1 }),
+        channelMessage("reply-1", { thread_root_message_id: "root-old", content: "old reply" }),
+      ],
+      next_cursor: null,
+    });
+
+    channelMessageHandler?.(
+      channelMessage("reply-1", {
+        thread_root_message_id: "root-old",
+        content: "edited reply",
+        edited_at: "2026-07-01T00:01:00Z",
+      }),
+    );
+
+    expect(
+      qc
+        .getQueryData<ChannelThreadMessagesPage>(channelKeys.messageThread("channel-1", "root-old"))
+        ?.messages.map((message) => [message.id, message.content, message.edited_at]),
+    ).toEqual([
+      ["root-old", "root-old", undefined],
+      ["reply-1", "edited reply", "2026-07-01T00:01:00Z"],
+    ]);
+
+    channelMessageHandler?.(
+      channelMessage("reply-1", {
+        thread_root_message_id: "root-old",
+        deleted_at: "2026-07-01T00:02:00Z",
+        thread_reply_count: 0,
+      }),
+    );
+
+    expect(
+      qc
+        .getQueryData<ChannelThreadMessagesPage>(channelKeys.messageThread("channel-1", "root-old"))
+        ?.messages.map((message) => message.id),
+    ).toEqual(["root-old"]);
   });
 
   it("invalidates the paged (and thread) channel message cache when a reaction changes", () => {

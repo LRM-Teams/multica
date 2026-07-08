@@ -11,9 +11,10 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// The welcome prompt must (1) name the joiner and channel, (2) ask for a
-// sticker, and (3) forbid @-mentions / follow-up — that last rule is what keeps
-// a wall of welcomes from chaining into the automatic agent-reply loop.
+// The welcome prompt must (1) name the joiner and channel, (2) route visible
+// output through the runtime-selected chat transport, and (3) forbid
+// @-mentions / follow-up — that last rule is what keeps a wall of welcomes
+// from chaining into the automatic agent-reply loop.
 func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 	agent := db.Agent{Name: "总监助理", DisplayName: "总监助理", Description: "负责总监以上协调"}
 	trigger := ChannelMessageResponse{ID: "11111111-1111-1111-1111-111111111111", AuthorName: "用户", Type: "user", Content: "全体总监以上欢迎一下新同事"}
@@ -21,37 +22,68 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 
 	for _, want := range []string{
 		"ONLY the current message",
-		"stay silent",
-		"internal no_reply is allowed",
+		"finish without visible output",
+		"do not print no_reply",
 		"directly addresses your agent name",
 		"全体",
 		"Do not stay silent",
-		"do not use a reaction-only command",
+		"runtime brief",
+		"visible message",
+		"reaction",
 		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
-		"\"action\":\"message_react\"",
-		"multica message react --message CURRENT_MESSAGE --emoji",
-		"\"message_id\":\"CURRENT_MESSAGE\"",
-		"💯",
-		"🎉",
-		"multica-stickers",
-		"\"parts\"",
-		"\"action\":\"message_send\"",
-		"\"sticker_id\":\"hi\"",
+		"short acknowledgement",
+		"respond with a 👋 reaction",
+		"explicitly asks for a sticker",
+		"Do not print JSON envelopes",
 		"全体总监以上欢迎一下新同事",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("ambient prompt missing %q:\n%s", want, p)
 		}
 	}
+	for _, banned := range []string{"multica send", "multica react", "multica message send", "multica message react", "multica message read", "multica message search"} {
+		if strings.Contains(p, banned) {
+			t.Errorf("ambient prompt should not hardcode chat CLI command %q:\n%s", banned, p)
+		}
+	}
 	if strings.Contains(p, "Recent channel messages") {
 		t.Error("ambient prompt must not include channel history")
 	}
-	if strings.Contains(p, "Do not return no_reply") {
-		t.Error("ambient prompt must not use directed no-reply prohibition")
+	if strings.Contains(p, "\"action\"") || strings.Contains(p, "\"parts\"") {
+		t.Error("ambient prompt must not teach JSON action envelopes during transition")
 	}
 }
 
-func TestBuildChannelMentionPromptIncludesStickerInstruction(t *testing.T) {
+func TestBuildChannelAmbientUnreadPromptUsesRuntimeOutputContract(t *testing.T) {
+	h := &Handler{}
+	agent := db.Agent{Name: "总监助理", DisplayName: "总监助理", Description: "负责总监以上协调"}
+	trigger := ChannelMessageResponse{ID: "11111111-1111-1111-1111-111111111111", AuthorName: "用户", Type: "user", Content: "全体总监以上欢迎一下新同事"}
+	p := h.buildChannelAmbientUnreadPromptWithDB(context.Background(), channelPromptNoopDB{}, ChannelResponse{
+		ID:          "22222222-2222-2222-2222-222222222222",
+		WorkspaceID: "33333333-3333-3333-3333-333333333333",
+		Name:        "产品讨论",
+	}, agent, trigger, 1, 2)
+
+	for _, want := range []string{
+		"runtime brief",
+		"visible message",
+		"reaction",
+		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
+		"Ambient cursor range: seq > 1 and seq <= 2",
+		"全体总监以上欢迎一下新同事",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("ambient unread prompt missing %q:\n%s", want, p)
+		}
+	}
+	for _, banned := range []string{"multica send", "multica react", "multica message send", "multica message react", "multica message read", "multica message search"} {
+		if strings.Contains(p, banned) {
+			t.Errorf("ambient unread prompt should not hardcode chat CLI command %q:\n%s", banned, p)
+		}
+	}
+}
+
+func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 	h := &Handler{DB: channelPromptNoopDB{}}
 	ch := ChannelResponse{
 		ID:          "22222222-2222-2222-2222-222222222222",
@@ -68,11 +100,13 @@ func TestBuildChannelMentionPromptIncludesStickerInstruction(t *testing.T) {
 		p := h.buildChannelMentionPrompt(context.Background(), ch, trigger)
 		for _, want := range []string{
 			"Multica group chat #产品讨论",
-			"multica-stickers",
 			"directly addressed to you",
+			"visible result using the output mechanism described in the runtime brief",
 			"Do not return no_reply",
-			"\"parts\"",
-			"\"sticker_id\":\"hi\"",
+			"A sticker reply counts as a visible result",
+			"greeting sticker only",
+			"directly addressed to you (@-mention",
+			"Do not print JSON envelopes",
 			"Current message to respond to",
 			trigger.Content,
 		} {
@@ -82,6 +116,14 @@ func TestBuildChannelMentionPromptIncludesStickerInstruction(t *testing.T) {
 		}
 		if strings.Contains(p, "internal no_reply is allowed") {
 			t.Errorf("direct mention prompt must not allow silent no_reply:\n%s", p)
+		}
+		for _, banned := range []string{"multica send", "multica react", "multica message send", "multica message react", "multica message read", "multica message search"} {
+			if strings.Contains(p, banned) {
+				t.Errorf("direct mention prompt should not hardcode chat CLI command %q:\n%s", banned, p)
+			}
+		}
+		if strings.Contains(p, "\"action\"") || strings.Contains(p, "\"parts\"") {
+			t.Errorf("direct mention prompt must not teach JSON action envelopes during transition:\n%s", p)
 		}
 	}
 }
@@ -136,21 +178,19 @@ func TestBuildChannelWelcomePrompt(t *testing.T) {
 	if !strings.Contains(p, "产品讨论") {
 		t.Error("prompt should name the channel")
 	}
-	if !strings.Contains(p, "\"parts\"") || !strings.Contains(p, "\"sticker_id\":\"applause\"") {
-		t.Error("prompt should instruct the agent to include structured sticker parts")
+	if !strings.Contains(p, "runtime brief's chat output path") {
+		t.Error("prompt should instruct the agent to send a greeting sticker via the runtime brief")
 	}
-	if !strings.Contains(p, "\"action\":\"message_send\"") {
-		t.Error("prompt should instruct the agent to use the message_send action")
-	}
-	if !strings.Contains(p, "multica-stickers") {
-		t.Error("prompt should point at the multica-stickers skill")
-	}
-	// Loop-prevention guarantees.
 	if !strings.Contains(p, "Do NOT @-mention") {
 		t.Error("prompt must forbid @-mentions to avoid re-triggering the agent-reply loop")
 	}
 	if !strings.Contains(strings.ToLower(p), "one short line") {
 		t.Error("prompt must constrain the welcome to one short line")
+	}
+	for _, banned := range []string{"structured sticker", "stickers are unavailable", "sticker JSON", ":sticker:", "\"action\"", "\"parts\"", "\"sticker_id\""} {
+		if strings.Contains(p, banned) {
+			t.Errorf("welcome prompt must not expose internal sticker transport detail %q:\n%s", banned, p)
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"os"
 	"strings"
 	"testing"
 
@@ -16,6 +17,37 @@ func testCmd() *cobra.Command {
 	cmd := &cobra.Command{}
 	cmd.Flags().String("profile", "", "")
 	return cmd
+}
+
+func TestResolveTokenUsesTokenFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_TOKEN", "")
+
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte("  token-from-file\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+	t.Setenv("MULTICA_TOKEN_FILE", tokenFile)
+
+	if got := resolveToken(testCmd()); got != "token-from-file" {
+		t.Fatalf("resolveToken() = %q, want token-from-file", got)
+	}
+}
+
+func TestResolveTokenAgentContextDoesNotFallbackToProfile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_TOKEN", "")
+	t.Setenv("MULTICA_TOKEN_FILE", t.TempDir()+"/missing-token")
+	t.Setenv("MULTICA_AGENT_ID", "agent-123")
+	t.Setenv("MULTICA_TASK_ID", "task-456")
+
+	if err := cli.SaveCLIConfig(cli.CLIConfig{Token: "profile-token-must-not-leak"}); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	if got := resolveToken(testCmd()); got != "" {
+		t.Fatalf("resolveToken() = %q, want empty in agent context with missing token file", got)
+	}
 }
 
 func TestResolveAppURL(t *testing.T) {

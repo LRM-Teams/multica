@@ -18,7 +18,7 @@ import type { AgentTask } from "@multica/core/types";
 import { AlertTriangle } from "lucide-react";
 import { AppLink } from "../../navigation";
 import { useT, useTimeAgo } from "../../i18n";
-import { availabilityConfig, workloadConfig } from "../presence";
+import { availabilityConfig, presenceStatusToken, workloadConfig } from "../presence";
 
 interface AgentLivePeekCardProps {
   agentId: string;
@@ -76,14 +76,24 @@ export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
     .toUpperCase()
     .slice(0, 2);
 
-  // Archived wins over workload — a retired agent reads "Archived", never
-  // "Idle"/"Working". availability is the unified signal (see
-  // deriveAgentPresenceDetail); for archived it's set before any task scan.
-  const isArchived =
-    presence !== "loading" && presence.availability === "archived";
-  const workload = presence === "loading" ? null : presence.workload;
-  const workloadVisual = workload ? workloadConfig[workload] : null;
-  const archivedVisual = availabilityConfig.archived;
+  // The status word must agree with the availability dot (single source).
+  // Workload ("Idle"/"Working") is a modulation that only reads correctly
+  // while the agent is online — offline/unstable/archived would make "Idle"
+  // falsely imply "available", so surface the availability word instead.
+  // Archived flows through here too ("Archived"), replacing the old
+  // archived-only special case.
+  const statusToken = presenceStatusToken(presence);
+  const status = statusToken
+    ? statusToken.kind === "workload"
+      ? {
+          visual: workloadConfig[statusToken.value],
+          label: t(($) => $.workload[statusToken.value]),
+        }
+      : {
+          visual: availabilityConfig[statusToken.value],
+          label: t(($) => $.availability[statusToken.value]),
+        }
+    : null;
 
   return (
     <div className="flex flex-col gap-3 text-left">
@@ -100,22 +110,13 @@ export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
         <div className="min-w-0 flex-1">
           <ActorIdentityRow identity={agent} primaryClassName="truncate text-sm font-semibold" />
           <div className="mt-0.5 inline-flex items-center gap-1.5">
-            {isArchived ? (
+            {status ? (
               <>
-                <archivedVisual.icon
-                  className={`h-3 w-3 shrink-0 ${archivedVisual.textClass}`}
+                <status.visual.icon
+                  className={`h-3 w-3 shrink-0 ${status.visual.textClass}`}
                 />
-                <span className={`text-xs ${archivedVisual.textClass}`}>
-                  {t(($) => $.availability.archived)}
-                </span>
-              </>
-            ) : workloadVisual ? (
-              <>
-                <workloadVisual.icon
-                  className={`h-3 w-3 shrink-0 ${workloadVisual.textClass}`}
-                />
-                <span className={`text-xs ${workloadVisual.textClass}`}>
-                  {t(($) => $.workload[workload!])}
+                <span className={`text-xs ${status.visual.textClass}`}>
+                  {status.label}
                 </span>
               </>
             ) : (

@@ -757,14 +757,8 @@ export function createMentionSuggestion(
         items: props.items,
         query: props.query,
         command: props.command,
-        searchIssues: (q, signal) =>
-          api.searchIssues({
-            q,
-            limit: SERVER_CONTEXT_SEARCH_LIMIT,
-            include_closed: true,
-            signal,
-          }),
-        includeProjectSearch: options.mode === "context",
+        // `@` summons a person — it never searches issues/projects (task #57;
+        // Parker's rule). Issue/project references go through the `#` picker.
       }),
       onKeyDown: (ref, props) => ref?.onKeyDown(props) ?? false,
     }),

@@ -41,6 +41,17 @@ var agentCreateCmd = &cobra.Command{
 	RunE:  runAgentCreate,
 }
 
+var agentDraftCmd = &cobra.Command{
+	Use:   "draft",
+	Short: "Create and inspect Wendy agent drafts",
+}
+
+var agentDraftCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Create an agent draft from a JSON payload",
+	RunE:  runAgentDraftCreate,
+}
+
 var agentUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
 	Short: "Update an agent",
@@ -133,6 +144,7 @@ func init() {
 	agentCmd.AddCommand(agentListCmd)
 	agentCmd.AddCommand(agentGetCmd)
 	agentCmd.AddCommand(agentCreateCmd)
+	agentCmd.AddCommand(agentDraftCmd)
 	agentCmd.AddCommand(agentUpdateCmd)
 	agentCmd.AddCommand(agentArchiveCmd)
 	agentCmd.AddCommand(agentRestoreCmd)
@@ -147,6 +159,7 @@ func init() {
 
 	agentEnvCmd.AddCommand(agentEnvGetCmd)
 	agentEnvCmd.AddCommand(agentEnvSetCmd)
+	agentDraftCmd.AddCommand(agentDraftCreateCmd)
 
 	// agent list
 	agentListCmd.Flags().String("output", "table", "Output format: table or json")
@@ -172,6 +185,11 @@ func init() {
 	agentCreateCmd.Flags().String("visibility", "private", "Visibility: private or workspace")
 	agentCreateCmd.Flags().Int32("max-concurrent-tasks", 6, "Maximum concurrent tasks")
 	agentCreateCmd.Flags().String("output", "json", "Output format: table or json")
+
+	// agent draft create
+	agentDraftCreateCmd.Flags().String("file", "", "Read draft JSON payload from file")
+	agentDraftCreateCmd.Flags().Bool("stdin", false, "Read draft JSON payload from stdin")
+	agentDraftCreateCmd.Flags().String("output", "json", "Output format: json or link")
 
 	// agent update
 	agentUpdateCmd.Flags().String("name", "", "New name")
@@ -490,6 +508,55 @@ func runAgentCreate(cmd *cobra.Command, _ []string) error {
 
 	fmt.Printf("Agent created: %s (%s)\n", strVal(result, "name"), strVal(result, "id"))
 	return nil
+}
+
+func runAgentDraftCreate(cmd *cobra.Command, _ []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	file, _ := cmd.Flags().GetString("file")
+	useStdin, _ := cmd.Flags().GetBool("stdin")
+	if file != "" && useStdin {
+		return fmt.Errorf("use only one of --file or --stdin")
+	}
+	if file == "" && !useStdin {
+		return fmt.Errorf("draft JSON is required: pass --file or --stdin")
+	}
+	var data []byte
+	if useStdin {
+		data, err = io.ReadAll(os.Stdin)
+	} else {
+		data, err = os.ReadFile(file)
+	}
+	if err != nil {
+		return fmt.Errorf("read draft JSON: %w", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(data, &body); err != nil {
+		return fmt.Errorf("draft JSON must be an object: %w", err)
+	}
+
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	var result map[string]any
+	if err := client.PostJSON(ctx, "/api/agents/drafts", body, &result); err != nil {
+		return fmt.Errorf("create agent draft: %w", err)
+	}
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		return cli.PrintJSON(os.Stdout, result)
+	}
+	if output == "link" {
+		id := strVal(result, "id")
+		name := strVal(result, "name")
+		if name == "" {
+			name = "agent"
+		}
+		fmt.Fprintf(os.Stdout, "[Create Agent: %s](multica://create-agent?draft_id=%s)\n", name, url.QueryEscape(id))
+		return nil
+	}
+	return fmt.Errorf("unsupported output format %q; use json or link", output)
 }
 
 func runAgentUpdate(cmd *cobra.Command, args []string) error {

@@ -1,6 +1,6 @@
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
-import type { ChannelMessage, ChannelMessagesPage } from "../types";
+import type { ChannelMessage, ChannelMessagesPage, ChannelThreadMessagesPage } from "../types";
 
 export const channelKeys = {
   all: (wsId: string) => ["channels", wsId] as const,
@@ -81,6 +81,15 @@ export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMes
     // here would mark it "fresh" under staleTime: Infinity, so opening the channel later
     // skips the real fetch and only ever shows the messages caught by this upsert.
     if (!old?.pages.length) return old;
+    if (!shouldRenderChannelMessage(message)) {
+      return {
+        ...old,
+        pages: old.pages.map((page) => ({
+          ...page,
+          messages: page.messages.filter((existing) => existing.id !== message.id),
+        })),
+      };
+    }
     const existingPageIndex = old.pages.findIndex((page: ChannelMessagesPage) =>
       page.messages.some((existing: ChannelMessage) => existing.id === message.id),
     );
@@ -98,12 +107,32 @@ export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMes
   });
 }
 
+export function upsertChannelMessageThreadInCache(qc: QueryClient, message: ChannelMessage, rootMessageId: string) {
+  qc.setQueriesData<ChannelThreadMessagesPage>(
+    { queryKey: channelKeys.messageThread(message.channel_id, rootMessageId) },
+    (old) => {
+      if (!old) return old;
+      return {
+        ...old,
+        messages: upsertChannelMessage(old.messages, message) ?? [],
+      };
+    },
+  );
+}
+
 export function invalidateChannelMessages(qc: QueryClient, channelId: string) {
   qc.invalidateQueries({ queryKey: channelKeys.messages(channelId) });
   qc.invalidateQueries({ queryKey: channelKeys.messagesPage(channelId) });
 }
 
+function shouldRenderChannelMessage(message: ChannelMessage): boolean {
+  return !message.deleted_at || (message.thread_reply_count ?? 0) > 0;
+}
+
 function upsertChannelMessage(old: ChannelMessage[] | undefined, message: ChannelMessage) {
+  if (!shouldRenderChannelMessage(message)) {
+    return old?.filter((existing) => existing.id !== message.id);
+  }
   if (!old) return [message];
   const index = old.findIndex((existing) => existing.id === message.id);
   if (index >= 0) {

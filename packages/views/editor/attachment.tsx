@@ -98,6 +98,7 @@ interface Normalized {
   contentType: string;
   url: string;
   attachmentId?: string;
+  sizeBytes?: number;
   record?: AttachmentRecord;
   uploading: boolean;
   width?: number;
@@ -117,6 +118,7 @@ function normalize(
         pickInlineMediaURL(input.attachment, input.attachment.url, cdnDomain),
       ),
       attachmentId: input.attachment.id,
+      sizeBytes: input.attachment.size_bytes,
       record: input.attachment,
       uploading: false,
     };
@@ -150,6 +152,7 @@ function normalize(
       record ? pickInlineMediaURL(record, input.url, cdnDomain) : input.url,
     ),
     attachmentId: record?.id,
+    sizeBytes: record?.size_bytes,
     record,
     uploading: !!input.uploading,
     width: input.width,
@@ -373,6 +376,7 @@ export function Attachment({
       <AttachmentCard
         filename={state.filename}
         contentType={state.contentType}
+        sizeBytes={state.sizeBytes}
         attachmentId={state.attachmentId}
         href={state.url || undefined}
         uploading={state.uploading}
@@ -475,9 +479,14 @@ function ImageAttachmentView({
             <button type="button" onClick={onDownload} title={t(($) => $.image.download)}>
               <Download className="size-3.5" />
             </button>
-            <button type="button" onClick={handleCopyLink} title={t(($) => $.image.copy_link)}>
-              <LinkIcon className="size-3.5" />
-            </button>
+            {/* Copy-link is an editor-compose affordance. On read-only display
+                surfaces (chat / comments) the hover toolbar stays minimal —
+                fullscreen + download only (task #339, Slack parity). */}
+            {editable && (
+              <button type="button" onClick={handleCopyLink} title={t(($) => $.image.copy_link)}>
+                <LinkIcon className="size-3.5" />
+              </button>
+            )}
             {editable && onDelete && (
               <button type="button" onClick={onDelete} title={t(($) => $.image.delete)}>
                 <Trash2 className="size-3.5" />

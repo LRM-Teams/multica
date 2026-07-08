@@ -5,6 +5,7 @@
   },
   "sidebar": {
     "heading": "메시지",
+    "mention_indicator": "언급됨",
     "search": "대화 검색...",
     "no_conversation_matches": "일치하는 대화가 없습니다",
     "search_scope_hint": "왼쪽은 대화 목록만 필터링합니다. 메시지 본문은 대화를 연 뒤 오른쪽 위 메시지 검색을 사용하세요.",
@@ -144,7 +145,18 @@
     "empty_replies": "아직 답글이 없습니다.",
     "load_failed": "스레드를 불러오지 못했습니다.",
     "send_failed": "스레드 답글을 보내지 못했습니다.",
-    "composer_placeholder": "스레드에서 답장..."
+    "composer_placeholder": "스레드에서 답장...",
+    "back_to_conversation": "대화로 돌아가기",
+    "participants_label": "참여자",
+    "follow": "스레드 팔로우",
+    "following": "팔로우 중",
+    "show_in_channel_label": "채널에도 표시",
+    "from_thread_badge": "스레드에서",
+    "wake_pending": "답장 대기 중",
+    "wake_replied": "답장함",
+    "wake_acked": "확인함",
+    "wake_delivered": "전달됨",
+    "wake_no_reply": "답장 없음"
   },
   "typing": {
     "single": "{{name}} 님이 입력 중",
@@ -178,7 +190,9 @@
   },
   "message": {
     "add_reaction": "반응 추가",
+    "actions_menu": "메시지 작업",
     "copy_action": "복사",
+    "expand_action": "전체 메시지 보기",
     "copied_toast": "복사했습니다",
     "copy_failed_toast": "복사 실패",
     "sticker_alt": "스티커",
@@ -186,12 +200,22 @@
     "sticker_failed": "스티커를 불러오지 못했습니다",
     "sticker_unavailable": "스티커를 사용할 수 없습니다",
     "agent_badge": "Agent",
-    "feishu_badge": "Feishu"
+    "feishu_badge": "Feishu",
+    "edit_action": "편집",
+    "delete_action": "삭제",
+    "edited_label": "(편집됨)",
+    "deleted_placeholder": "이 메시지는 삭제되었습니다",
+    "save_edit": "저장",
+    "cancel_edit": "취소",
+    "edit_failed_toast": "메시지를 편집하지 못했습니다",
+    "delete_failed_toast": "메시지를 삭제하지 못했습니다"
   },
   "dm": {
     "heading": "다이렉트 메시지",
     "empty": "아직 다이렉트 메시지가 없습니다.",
     "empty_cta": "채팅 시작",
+    "wendy_title": "Ask Wendy",
+    "wendy_description": "Wendy can help you turn real work into useful agents.",
     "new_aria": "새 다이렉트 메시지",
     "menu_aria": "다이렉트 메시지 작업",
     "agent_meta": "에이전트",

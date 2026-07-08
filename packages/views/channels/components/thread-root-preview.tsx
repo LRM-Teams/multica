@@ -4,26 +4,16 @@ import { Bot } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
-import { MemoizedMarkdown } from "../../common/markdown";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { agentColor } from "../../common/agent-color";
 import { initialsOf } from "../../common/initials";
 import { AttachmentList } from "../../issues/components/comment-card";
 import { useT } from "../../i18n/use-t";
+import { useMessageTime } from "../../i18n/use-message-time";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
-import { formatMessagePartsPreview } from "./message-parts-preview";
-
-function formatTime(value: string): string {
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(new Date(value));
-  } catch {
-    return "";
-  }
-}
+import { resolveMessageParts } from "./message-parts-preview";
+import { MessageBody } from "./message-body";
 
 export function ThreadRootPreview({
   message,
@@ -37,6 +27,7 @@ export function ThreadRootPreview({
   onViewParent?: () => void;
 }) {
   const { t } = useT("channels");
+  const messageTime = useMessageTime();
   const { getActorName } = useActorName();
   const isAgent = message.type === "agent";
   const displayName = resolveChannelAuthorDisplayName(message, {
@@ -84,7 +75,9 @@ export function ThreadRootPreview({
       avatar
     );
   const nameNode = <span className="font-medium text-foreground">{displayName}</span>;
-  const compactBody = formatMessagePartsPreview(message.parts);
+  // Same resolution the body renderer uses, so the attachment list de-dupes
+  // against the exact content the compact body renders.
+  const effectiveParts = resolveMessageParts(message.content, message.parts);
 
   return (
     <div className="shrink-0 border-b border-border/40 bg-background px-5 py-3">
@@ -109,24 +102,24 @@ export function ThreadRootPreview({
                 {t(($) => $.message.agent_badge)}
               </span>
             )}
-            <span className="text-[11px] text-muted-foreground">
-              {formatTime(message.created_at)}
+            <span
+              className="text-[11px] text-muted-foreground"
+              title={messageTime.full(message.created_at)}
+            >
+              {messageTime.format(message.created_at)}
             </span>
           </div>
           <div className="mt-1 min-w-0 overflow-hidden text-sm leading-6 text-foreground">
-            <div className="line-clamp-3">
-              {compactBody ? (
-                <span>{compactBody}</span>
-              ) : (
-                <MemoizedMarkdown attachments={message.attachments} enableStickerShortcodes={false}>
-                  {message.content}
-                </MemoizedMarkdown>
-              )}
-            </div>
+            <MessageBody
+              content={message.content}
+              parts={message.parts}
+              attachments={message.attachments}
+              compact
+            />
             <div className="max-h-16 overflow-hidden opacity-80">
               <AttachmentList
                 attachments={message.attachments}
-                content={compactBody ? "" : message.content}
+                content={effectiveParts ? "" : message.content}
                 className="mt-1.5"
               />
             </div>

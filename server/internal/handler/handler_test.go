@@ -2904,7 +2904,7 @@ func TestFollowupCommentInterruptsRunningIssueTask(t *testing.T) {
 	}
 }
 
-func TestFollowupChatInterruptsRunningChatTask(t *testing.T) {
+func TestFollowupChatDoesNotCancelRunningChatTask(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -2947,8 +2947,11 @@ func TestFollowupChatInterruptsRunningChatTask(t *testing.T) {
 	`, runningTaskID).Scan(&status, &reason); err != nil {
 		t.Fatalf("load interrupted chat task: %v", err)
 	}
-	if status != "cancelled" || reason != "followup_interrupt" {
-		t.Fatalf("running chat task = (%q, %q), want (cancelled, followup_interrupt)", status, reason)
+	// #311: EnqueueChatTask no longer cancels an in-flight directed run. The
+	// running task stays running and the follow-up queues behind it (serialized
+	// per chat_session by ClaimAgentChatTask), so neither request is dropped.
+	if status != "running" || reason != "" {
+		t.Fatalf("running chat task = (%q, %q), want (running, \"\") — #311 abolished the followup cancel", status, reason)
 	}
 	if followup.Status != "queued" {
 		t.Fatalf("follow-up chat task status = %q, want queued", followup.Status)

@@ -290,7 +290,11 @@ func TestValidateThinkingLevel_EmptyModelResolvesToDefault(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script fake binary requires a POSIX shell")
 	}
-	t.Parallel()
+	// Intentionally NOT t.Parallel(): this test mutates the shared global
+	// thinkingCache via resetThinkingCacheForTests(). Running it parallel to the
+	// other cache-resetting tests lets one test's reset wipe another's entries
+	// mid-assertion — a logical race (not a data race, so -race won't catch it)
+	// that flakes TestThinkingCacheKeyDistinct under CI parallelism. See task #319.
 
 	// We need a `claude` whose --help advertises the full superset
 	// (low/medium/high/xhigh/max) so per-model projection actually has
@@ -345,7 +349,9 @@ func TestValidateThinkingLevel_ExplicitModel(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script fake binary requires a POSIX shell")
 	}
-	t.Parallel()
+	// Intentionally NOT t.Parallel(): mutates the shared global thinkingCache
+	// (resetThinkingCacheForTests). Keeping the cache-resetting tests serial
+	// avoids one test's reset clobbering another's entries mid-assertion (#319).
 	fakeClaude := writeFakeClaudeHelpBinary(t)
 	resetThinkingCacheForTests()
 	defer resetThinkingCacheForTests()
@@ -458,7 +464,11 @@ func writeFakeClaudeHelpBinary(t *testing.T) string {
 // ── Cache key invalidation ───────────────────────────────────────────
 
 func TestThinkingCacheKeyDistinct(t *testing.T) {
-	t.Parallel()
+	// Intentionally NOT t.Parallel(): this test puts three distinct keys into the
+	// shared global thinkingCache and reads them back. A sibling cache-resetting
+	// test running in parallel could wipe the cache between the puts and the gets,
+	// which is exactly the CI flake this fixes (#319). The cache-resetting tests
+	// are kept serial so their resets never overlap another test's assertions.
 	resetThinkingCacheForTests()
 	defer resetThinkingCacheForTests()
 

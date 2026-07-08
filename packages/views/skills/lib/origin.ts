@@ -13,6 +13,7 @@ export type OriginInfo = {
     | "clawhub"
     | "skills_sh"
     | "github"
+    | "platform"
     | "manual";
   provider?: string;
   runtime_id?: string;
@@ -33,6 +34,7 @@ export function readOrigin(skill: SkillSummary): OriginInfo {
   if (raw?.type === "clawhub") return raw;
   if (raw?.type === "skills_sh") return raw;
   if (raw?.type === "github") return raw;
+  if (raw?.type === "platform") return raw;
   return { type: "manual" };
 }
 

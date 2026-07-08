@@ -132,6 +132,20 @@ describe("LoginPage", () => {
   // Email validation
   // -------------------------------------------------------------------------
 
+  it("seeds the error line from initialError (OAuth callback ?error= copy)", () => {
+    // The host page maps a callback ?error= code to localized copy and passes
+    // it in; a bounced sign-in must explain itself, not show a blank form.
+    renderWithI18n(
+      <LoginPage
+        onSuccess={onSuccess}
+        initialError={enAuth.errors.oauth_login_failed}
+      />,
+    );
+    const line = screen.getByText(enAuth.errors.oauth_login_failed);
+    expect(line).toBeInTheDocument();
+    expect(line).toHaveClass("text-destructive");
+  });
+
   it("shows error when submitting with empty email", async () => {
     renderWithI18n(<LoginPage onSuccess={onSuccess} />);
 

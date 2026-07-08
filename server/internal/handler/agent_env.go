@@ -238,7 +238,7 @@ func (h *Handler) UpdateAgentEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceID := uuidToString(updated.WorkspaceID)
-	h.publish(protocol.EventAgentStatus, workspaceID, "member", uuidToString(member.UserID), map[string]any{"agent": broadcastAgentResponse(resp)})
+	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, workspaceID, "member", uuidToString(member.UserID), updated, map[string]any{"agent": broadcastAgentResponse(resp)})
 
 	writeJSON(w, http.StatusOK, AgentEnvResponse{
 		AgentID:   uuidToString(updated.ID),

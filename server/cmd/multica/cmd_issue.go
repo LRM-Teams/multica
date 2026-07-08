@@ -269,6 +269,7 @@ func init() {
 	issueListCmd.Flags().String("priority", "", "Filter by priority")
 	issueListCmd.Flags().String("assignee", "", "Filter by assignee name (member, agent, or squad; fuzzy match)")
 	issueListCmd.Flags().String("assignee-id", "", "Filter by assignee UUID — member, agent, or squad (mutually exclusive with --assignee)")
+	issueListCmd.Flags().Bool("mine", false, "Filter to issues assigned to the running agent (agent execution context only; mutually exclusive with --assignee/--assignee-id)")
 	issueListCmd.Flags().String("project", "", "Filter by project ID")
 	issueListCmd.Flags().StringSlice("metadata", nil, "Filter by metadata key=value (repeatable; combined with AND). Value is JSON-parsed: 'true'/'false' → bool, numbers → number, otherwise string. Wrap as '\"42\"' to force a string when the value would otherwise sniff as a number.")
 	issueListCmd.Flags().Int("limit", 50, "Maximum number of issues to return")
@@ -404,9 +405,9 @@ func runIssueList(cmd *cobra.Command, _ []string) error {
 	if v, _ := cmd.Flags().GetInt("limit"); v > 0 {
 		params.Set("limit", fmt.Sprintf("%d", v))
 	}
-	_, aID, hasAssignee, resolveErr := pickAssigneeFromFlags(ctx, client, cmd, "assignee", "assignee-id", issueAssigneeKinds)
-	if resolveErr != nil {
-		return fmt.Errorf("resolve assignee: %w", resolveErr)
+	aID, hasAssignee, err := resolveIssueListAssigneeFilter(ctx, client, cmd)
+	if err != nil {
+		return err
 	}
 	if hasAssignee {
 		params.Set("assignee_id", aID)
@@ -503,6 +504,31 @@ func runIssueList(cmd *cobra.Command, _ []string) error {
 	}
 	cli.PrintTable(os.Stdout, headers, rows)
 	return nil
+}
+
+func resolveIssueListAssigneeFilter(ctx context.Context, client *cli.APIClient, cmd *cobra.Command) (string, bool, error) {
+	mine, _ := cmd.Flags().GetBool("mine")
+	if mine {
+		assignee, _ := cmd.Flags().GetString("assignee")
+		assigneeID, _ := cmd.Flags().GetString("assignee-id")
+		if assignee != "" || assigneeID != "" {
+			return "", false, fmt.Errorf("--mine is mutually exclusive with --assignee and --assignee-id")
+		}
+		if !inAgentExecutionContext() {
+			return "", false, fmt.Errorf("--mine can only be used in an agent execution context")
+		}
+		agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
+		if agentID == "" {
+			return "", false, fmt.Errorf("--mine requires MULTICA_AGENT_ID in agent execution context")
+		}
+		return agentID, true, nil
+	}
+
+	_, assigneeID, hasAssignee, err := pickAssigneeFromFlags(ctx, client, cmd, "assignee", "assignee-id", issueAssigneeKinds)
+	if err != nil {
+		return "", false, fmt.Errorf("resolve assignee: %w", err)
+	}
+	return assigneeID, hasAssignee, nil
 }
 
 func runIssuePullRequests(cmd *cobra.Command, args []string) error {
@@ -623,6 +649,36 @@ func runIssueGet(cmd *cobra.Command, args []string) error {
 func isHTTPURL(path string) bool {
 	p := strings.TrimSpace(path)
 	return strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://")
+}
+
+// uploadCLIAttachments uploads each local path in attachments via
+// client.UploadFile and returns the resulting attachment IDs. URL-shaped
+// paths are skipped with a stderr warning — --attachment only accepts local
+// file paths. issueID is passed through to UploadFile to associate the
+// attachment with an issue; pass "" when there's no owning issue (e.g.
+// sending a chat/channel message). Aborts on the first read or upload
+// failure, so callers that upload before mutating server state (unlike
+// `issue create`, which uploads after creating the issue and only warns on
+// failure) get a clean all-or-nothing result.
+func uploadCLIAttachments(ctx context.Context, client *cli.APIClient, attachments []string, issueID string) ([]string, error) {
+	var attachmentIDs []string
+	for _, filePath := range attachments {
+		if isHTTPURL(filePath) {
+			fmt.Fprintf(os.Stderr, "Skipping --attachment %q: URLs are not supported here, only local file paths.\n", filePath)
+			continue
+		}
+		data, readErr := os.ReadFile(filePath)
+		if readErr != nil {
+			return nil, fmt.Errorf("read attachment %s: %w", filePath, readErr)
+		}
+		id, uploadErr := client.UploadFile(ctx, data, filePath, issueID)
+		if uploadErr != nil {
+			return nil, fmt.Errorf("upload attachment %s: %w", filePath, uploadErr)
+		}
+		attachmentIDs = append(attachmentIDs, id)
+		fmt.Fprintf(os.Stderr, "Uploaded %s\n", filePath)
+	}
+	return attachmentIDs, nil
 }
 
 func appendUniqueStrings(dst []string, values ...string) []string {
@@ -1217,28 +1273,14 @@ func runIssueCommentAdd(cmd *cobra.Command, args []string) error {
 	}
 	issueID := issueRef.ID
 
-	// Upload attachments and collect their IDs. URLs are skipped with a
-	// warning — `--attachment` only accepts local file paths, and a
-	// markdown image URL embedded in agent-supplied content should never
-	// be re-uploaded as if it were a file. Unlike `issue create`, this
-	// path uploads BEFORE posting the comment, so a hard failure on a
-	// real (local) attachment correctly aborts the whole call.
-	var attachmentIDs []string
-	for _, filePath := range attachments {
-		if isHTTPURL(filePath) {
-			fmt.Fprintf(os.Stderr, "Skipping --attachment %q: URLs are not supported here, only local file paths.\n", filePath)
-			continue
-		}
-		data, readErr := os.ReadFile(filePath)
-		if readErr != nil {
-			return fmt.Errorf("read attachment %s: %w", filePath, readErr)
-		}
-		id, uploadErr := client.UploadFile(ctx, data, filePath, issueID)
-		if uploadErr != nil {
-			return fmt.Errorf("upload attachment %s: %w", filePath, uploadErr)
-		}
-		attachmentIDs = append(attachmentIDs, id)
-		fmt.Fprintf(os.Stderr, "Uploaded %s\n", filePath)
+	// A markdown image URL embedded in agent-supplied content should never
+	// be re-uploaded as if it were a file — uploadCLIAttachments skips
+	// URL-shaped paths. Unlike `issue create`, this path uploads BEFORE
+	// posting the comment, so a hard failure on a real (local) attachment
+	// correctly aborts the whole call.
+	attachmentIDs, err := uploadCLIAttachments(ctx, client, attachments, issueID)
+	if err != nil {
+		return err
 	}
 
 	body := map[string]any{"content": content}

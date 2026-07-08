@@ -144,7 +144,20 @@ export function OnboardingFlow({
     enabled: step === "welcome" || step === "workspace",
   });
   const existingWorkspace = workspace ?? workspaces[0] ?? null;
-  const canSkipWelcome = workspacesFetched && workspaces.length > 0;
+  // Latch the skip affordance ON the moment the workspace list confirms a
+  // returning user (>= 1 workspace), and never flip it back for the life of
+  // this flow. A later transient refetch/empty must not turn
+  // `canSkipWelcome` false mid-session: that could leave the "I've done this
+  // before" button visible while its handler precondition had already gone
+  // false, so a click did nothing and gave no feedback (task #228).
+  // Visibility and the handler stay on the same monotonic predicate. A
+  // render-time ref (not state+effect) keeps this a pure derived latch with
+  // no extra render.
+  const skipReadyRef = useRef(false);
+  if (workspacesFetched && workspaces.length > 0) {
+    skipReadyRef.current = true;
+  }
+  const canSkipWelcome = skipReadyRef.current;
   const startedEmittedRef = useRef(false);
   useEffect(() => {
     if (startedEmittedRef.current || !workspacesFetched) return;
@@ -218,6 +231,22 @@ export function OnboardingFlow({
       );
       return;
     }
+    // "I've done this before" opts the returning user out of the whole
+    // questionnaire. Mark every slot skipped (best-effort — the PATCH must
+    // never trap an already-onboarded user) so the post-onboarding
+    // source-backfill modal doesn't immediately corner them: without this,
+    // `needsSourceBackfill` sees an empty questionnaire + onboarded_at and
+    // pops the "How did you hear about Multica?" prompt over their first
+    // workspace (task #230 funnel wall).
+    void saveQuestionnaire({
+      ...EMPTY_QUESTIONNAIRE,
+      source_skipped: true,
+      role_skipped: true,
+      use_case_skipped: true,
+    }).catch(() => {
+      /* non-fatal: the user is onboarded; a missed skip marker at worst
+         shows the backfill prompt, which is itself dismissable. */
+    });
     onComplete(workspaces[0] ?? undefined);
   }, [t, workspaces, onComplete]);
 

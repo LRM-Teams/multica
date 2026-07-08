@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func testLogger() *slog.Logger {
@@ -1678,6 +1680,38 @@ func TestInjectRuntimeConfigQuickCreateOutputPrefixAgnostic(t *testing.T) {
 	} {
 		if strings.Contains(s, absent) {
 			t.Errorf("quick-create runtime config should not contain %q\n---\n%s", absent, s)
+		}
+	}
+}
+
+func TestRenderQuickCreateContextIncludesSourceContext(t *testing.T) {
+	t.Parallel()
+	out := renderQuickCreateContext(TaskContextForEnv{
+		QuickCreatePrompt: "create a task",
+		QuickCreateSource: &protocol.QuickCreateSourceContext{
+			ChannelID:           "channel-1",
+			ChannelKind:         "dm",
+			ThreadRootMessageID: "root-1",
+			SourceMessageID:     "source-1",
+			SourceAuthorType:    "member",
+			SourceAuthorName:    "Frank",
+			SourceExcerpt:       "please file this",
+			Summary:             "Source surface: DM thread.\nRecent visible messages from the source thread:\n- Frank: please file this",
+			AttachmentIDs:       []string{"att-1"},
+		},
+	})
+	for _, want := range []string{
+		"## Source chat context",
+		"Source surface: DM thread",
+		"Channel ID: channel-1",
+		"Thread root message ID: root-1",
+		"Source message ID: source-1",
+		"Source excerpt: please file this",
+		"Source attachment IDs: att-1",
+		"Recent visible messages from the source thread",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("quick-create issue_context.md missing %q\n---\n%s", want, out)
 		}
 	}
 }

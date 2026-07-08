@@ -625,12 +625,12 @@ describe("handleInboxNew", () => {
       tag: "channel-1",
       data: expect.objectContaining({
         channelId: "channel-1",
-        url: "/workspace-a/channels?channel=channel-1",
+        url: "/workspace-a/channels/channel-1",
       }),
     });
   });
 
-  it("routes DM channel banners with the dm query param", async () => {
+  it("routes DM channel banners to the same channel detail path", async () => {
     const qc = createQueryClient();
     qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
     qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
@@ -646,7 +646,7 @@ describe("handleInboxNew", () => {
       tag: "channel-1",
       data: expect.objectContaining({
         dmId: "channel-1",
-        url: "/workspace-a/channels?dm=channel-1",
+        url: "/workspace-a/channels/channel-1",
       }),
     });
   });
@@ -664,6 +664,29 @@ describe("handleInboxNew", () => {
     await handleChannelMessageNotification(
       qc,
       channelMessage({ type: "user", author_id: "member-1" }),
+      "member-1",
+    );
+
+    expect(webBanners).toHaveLength(0);
+  });
+
+  it("suppresses banners for channel message edits and deletes", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
+    qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
+      preferences: { system_notifications: "all" },
+    });
+    qc.setQueryData<Channel[]>(channelKeys.list("ws-a"), [channel()]);
+    installBrowserNotification("granted");
+
+    await handleChannelMessageNotification(
+      qc,
+      channelMessage({ edited_at: "2026-05-18T00:01:00Z" }),
+      "member-1",
+    );
+    await handleChannelMessageNotification(
+      qc,
+      channelMessage({ deleted_at: "2026-05-18T00:02:00Z" }),
       "member-1",
     );
 

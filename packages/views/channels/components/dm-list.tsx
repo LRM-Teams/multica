@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Bell, BellOff, ChevronDown, ChevronRight, Loader2, Mail, MoreHorizontal, Pin, PinOff, Plus, Search, X } from "lucide-react";
+import { Bell, BellOff, Bot, ChevronDown, ChevronRight, Loader2, Mail, MoreHorizontal, Pin, PinOff, Plus, Search, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -58,6 +58,7 @@ import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { useOpenDM } from "../../common/use-open-dm";
+import { useWindyEntryAction } from "../../workspace/use-wendy-entry-action";
 import {
   formatChannelMessagePreview,
   resolveChannelAuthorDisplayName,
@@ -109,6 +110,8 @@ export function DmList({
   const [collapsed, setCollapsed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
+  const windyEntry = useWindyEntryAction(wsId, agents);
+
   const setPinned = useSetDMPinned();
   const markUnread = useMarkDMUnread();
   const closeDM = useCloseDM();
@@ -159,10 +162,29 @@ export function DmList({
     return sortedDms.filter((dm) => dm.peer.name.toLowerCase().includes(q));
   }, [searchQuery, sortedDms]);
   const hasSearchQuery = searchQuery.trim().length > 0;
+  const hasWindyDM = !!windyEntry.windyAgent && visibleDms.some((dm) => dm.peer.type === "agent" && dm.peer.id === windyEntry.windyAgent?.id);
+  const showWindyNudge = windyEntry.hasConfiguredWendy && !hasWindyDM && !hasSearchQuery;
 
-  const showHeaderTrigger = isLoading || visibleDms.length > 0;
+  const showHeaderTrigger = isLoading || visibleDms.length > 0 || showWindyNudge;
   const openPicker = () => setPickerOpen(true);
   const closePicker = () => setPickerOpen(false);
+
+  const windyNudge = showWindyNudge ? (
+    <button
+      type="button"
+      disabled={windyEntry.isPending}
+      onClick={() => void windyEntry.openWindy()}
+      className="mx-2 mb-2 flex w-[calc(100%-1rem)] items-start gap-2 rounded-xl border bg-muted/25 p-2.5 text-left transition-colors hover:bg-muted/45 disabled:opacity-60"
+    >
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        {windyEntry.isPending ? <Loader2 className="size-4 animate-spin" /> : <Bot className="size-4" />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-foreground">{t(($) => $.dm.wendy_title)}</span>
+        <span className="mt-0.5 block text-xs leading-4 text-muted-foreground">{t(($) => $.dm.wendy_description)}</span>
+      </span>
+    </button>
+  ) : null;
 
   const listBody =
     !collapsed &&
@@ -180,6 +202,7 @@ export function DmList({
       </div>
     ) : visibleDms.length === 0 ? (
       <div className="flex flex-col items-center gap-2 px-3 py-3">
+        {windyNudge}
         <p className="text-xs text-muted-foreground">{t(($) => $.dm.empty)}</p>
         {isMobile ? (
           <Button
@@ -204,7 +227,9 @@ export function DmList({
         )}
       </div>
     ) : (
-      filteredDms.map((dm) => (
+      <>
+        {windyNudge}
+        {filteredDms.map((dm) => (
         <DmRow
           key={`${dm.source}:${dm.id}`}
           dm={dm}
@@ -220,7 +245,8 @@ export function DmList({
           onToggleMute={() => handleToggleMute(dm)}
           onClose={() => handleClose(dm)}
         />
-      ))
+        ))}
+      </>
     ));
 
   return (
@@ -521,6 +547,10 @@ function DmRow({
               >
                 {preview}
               </span>
+              {/* No @-mention dot in DMs by design (Iris/#303): every DM
+                  message is already directed at you, so the dot carries no
+                  extra signal over the unread count — it earns its place in
+                  channels, to separate an @-mention from ambient chatter. */}
               <ConversationUnreadAffordance
                 realUnread={realUnread}
                 isManualDot={isManualDot}

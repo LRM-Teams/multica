@@ -9,6 +9,7 @@ import { createLogger } from "../logger";
 import { clearWorkspaceStorage } from "../platform/storage-cleanup";
 import { defaultStorage } from "../platform/storage";
 import { getCurrentWsId, getCurrentSlug } from "../platform/workspace-storage";
+import { paths } from "../paths/paths";
 import { issueKeys } from "../issues/queries";
 import { projectKeys } from "../projects/queries";
 import { pinKeys } from "../pins/queries";
@@ -44,7 +45,12 @@ import {
 } from "../platform/system-notification";
 import type { Workspace } from "../types/workspace";
 import { chatKeys } from "../chat/queries";
-import { channelKeys, invalidateChannelMessages, upsertChannelMessageInCache } from "../channels/queries";
+import {
+  channelKeys,
+  invalidateChannelMessages,
+  upsertChannelMessageInCache,
+  upsertChannelMessageThreadInCache,
+} from "../channels/queries";
 import { dmKeys } from "../dm/queries";
 import { useChatStore } from "../chat";
 import { resolvePostAuthDestination, useHasOnboarded } from "../paths";
@@ -286,10 +292,10 @@ async function deliverSystemNotification(
 
 function buildSystemNotificationUrl(payload: SystemNotificationPayload): string {
   if (!payload.slug) return "/";
-  const slug = encodeURIComponent(payload.slug);
-  if (payload.dmId) return `/${slug}/channels?dm=${encodeURIComponent(payload.dmId)}`;
-  if (payload.channelId) return `/${slug}/channels?channel=${encodeURIComponent(payload.channelId)}`;
-  return `/${slug}/inbox${payload.issueKey ? `?issue=${encodeURIComponent(payload.issueKey)}` : ""}`;
+  const wsPaths = paths.workspace(payload.slug);
+  if (payload.dmId) return wsPaths.channelDetail(payload.dmId);
+  if (payload.channelId) return wsPaths.channelDetail(payload.channelId);
+  return `${wsPaths.inbox()}${payload.issueKey ? `?issue=${encodeURIComponent(payload.issueKey)}` : ""}`;
 }
 
 export async function handleInboxNew(
@@ -326,6 +332,7 @@ export async function handleChannelMessageNotification(
 ): Promise<void> {
   const sourceWsId = message.workspace_id;
   if (!sourceWsId) return;
+  if (message.edited_at || message.deleted_at) return;
   if (message.type === "user" && message.author_id === myUserId) return;
 
   const channels = qc.getQueryData<Channel[]>(channelKeys.list(sourceWsId)) ?? [];
@@ -1161,6 +1168,7 @@ export function useRealtimeSync(
         invalidateChannelMessages(qc, payload.channel_id);
       }
       if (payload.thread_root_message_id) {
+        upsertChannelMessageThreadInCache(qc, payload, payload.thread_root_message_id);
         qc.invalidateQueries({ queryKey: channelKeys.messageThread(payload.channel_id, payload.thread_root_message_id) });
       }
       const id = getCurrentWsId();

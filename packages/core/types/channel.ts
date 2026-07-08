@@ -35,6 +35,12 @@ export interface Channel {
    *  Falls back to unread_count when absent so old API responses still work. */
   real_unread_count?: number;
   manually_unread?: boolean;
+  /** An unread message in this conversation @-mentions the viewer (BE #301);
+   *  drives the independent @-mention red dot (coexists with the count). */
+  has_mention?: boolean;
+  /** Viewer's read cursor for this conversation (`conversation_member.last_read_seq`).
+   *  List/detail enrichment; drives the "N new messages" divider pinned on entry. */
+  last_read_seq?: number;
   pinned_at?: string | null;
   muted_at?: string | null;
   muted?: boolean;
@@ -62,6 +68,24 @@ export interface ChannelReaction {
   created_at: string;
 }
 
+export interface ChannelThreadParticipant {
+  key: string;
+  member_type: string;
+  member_id: string;
+  name: string;
+  display_name: string;
+  followed: boolean;
+}
+
+export interface ChannelThreadWakeAnnotation {
+  key: string;
+  member_type: string;
+  member_id: string;
+  display_name: string;
+  state: "pending" | "replied" | "acked" | "delivered" | "no_reply" | (string & {});
+  reason?: string | null;
+}
+
 export interface ChannelMessage {
   id: string;
   channel_id: string;
@@ -78,10 +102,13 @@ export interface ChannelMessage {
   reply_to_message_id?: string | null;
   reply_to?: ChannelMessageReply | null;
   thread_root_message_id?: string | null;
+  thread_root?: ChannelMessageReply | null;
   thread_reply_count?: number;
   thread_last_reply_at?: string | null;
   thread_unread_count?: number;
   thread_followed?: boolean;
+  thread_participants?: ChannelThreadParticipant[];
+  thread_wake_annotations?: ChannelThreadWakeAnnotation[];
   thread_id?: string | null;
   trigger_depth?: number;
   reactions?: ChannelReaction[];
@@ -93,6 +120,13 @@ export interface ChannelMessage {
    */
   attachments?: import("./attachment").Attachment[];
   created_at: string;
+  /** Set once the author has edited the message; drives the "(edited)" label. */
+  edited_at?: string | null;
+  /**
+   * Set once the message is soft-deleted. Thread roots with live replies render
+   * a tombstone placeholder; deleted messages without replies can be omitted.
+   */
+  deleted_at?: string | null;
 }
 
 export interface ChannelMessagesCursor {
@@ -106,6 +140,14 @@ export interface ChannelMessagesPage {
   limit: number;
   has_more: boolean;
   next_cursor?: ChannelMessagesCursor | null;
+}
+
+/** Response of `POST /channels/{id}/read`. `previous_last_read_seq` echoes the
+ *  member's read cursor *before* this call advanced it — the entry-moment read
+ *  point, used to pin the "N new messages" divider race-free (BE #301). */
+export interface MarkChannelReadResult {
+  ok: boolean;
+  previous_last_read_seq: number | null;
 }
 
 export interface ChannelThreadMessagesCursor {

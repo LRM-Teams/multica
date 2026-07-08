@@ -1671,12 +1671,22 @@ func (h *Handler) ChildIssueProgress(w http.ResponseWriter, r *http.Request) {
 // keeping the sub-issue intent of the entry point regardless of whether
 // the user submits via manual or agent mode.
 type QuickCreateIssueRequest struct {
-	AgentID       string   `json:"agent_id,omitempty"`
-	SquadID       string   `json:"squad_id,omitempty"`
-	Prompt        string   `json:"prompt"`
-	ProjectID     string   `json:"project_id,omitempty"`
-	ParentIssueID string   `json:"parent_issue_id,omitempty"`
-	AttachmentIDs []string `json:"attachment_ids,omitempty"`
+	AgentID       string                         `json:"agent_id,omitempty"`
+	SquadID       string                         `json:"squad_id,omitempty"`
+	Prompt        string                         `json:"prompt"`
+	ProjectID     string                         `json:"project_id,omitempty"`
+	ParentIssueID string                         `json:"parent_issue_id,omitempty"`
+	AttachmentIDs []string                       `json:"attachment_ids,omitempty"`
+	Source        *QuickCreateIssueSourceRequest `json:"source,omitempty"`
+}
+
+// QuickCreateIssueSourceRequest identifies the visible chat source that opened
+// quick-create. The handler resolves it server-side so task context cannot be
+// forged from hidden/deleted/foreign messages.
+type QuickCreateIssueSourceRequest struct {
+	ChannelID           string `json:"channel_id"`
+	MessageID           string `json:"message_id,omitempty"`
+	ThreadRootMessageID string `json:"thread_root_message_id,omitempty"`
 }
 
 // QuickCreateIssueResponse echoes the queued task id so the frontend can
@@ -1809,6 +1819,11 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	source, ok := h.resolveQuickCreateSourceContext(w, r, workspaceID, requesterUUID, req.Source)
+	if !ok {
+		return
+	}
+
 	// Optional project_id — validate it belongs to the same workspace before
 	// pinning the task to it. The handler is the trust boundary; the frontend
 	// already only shows projects from the active workspace, but we re-check
@@ -1850,7 +1865,7 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		parentIssueUUID = pid
 	}
 
-	task, err := h.TaskService.EnqueueQuickCreateTask(r.Context(), wsUUID, requesterUUID, agentUUID, squadUUID, prompt, projectUUID, parentIssueUUID, attachmentIDs)
+	task, err := h.TaskService.EnqueueQuickCreateTask(r.Context(), wsUUID, requesterUUID, agentUUID, squadUUID, prompt, projectUUID, parentIssueUUID, attachmentIDs, source)
 	if err != nil {
 		slog.Warn("quick-create enqueue failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to enqueue quick-create task")

@@ -236,14 +236,8 @@ func TestIsOfficialCloudServer(t *testing.T) {
 // so tests that need to add their own dirs can extend it.
 func stageFakeAgent(t *testing.T) string {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX shell not available on Windows")
-	}
 	binDir := t.TempDir()
-	fake := filepath.Join(binDir, "claude")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("write fake claude: %v", err)
-	}
+	writeFakeExecutable(t, binDir, "claude")
 	t.Setenv("PATH", binDir)
 	t.Setenv("MULTICA_DAEMON_ID", "11111111-1111-1111-1111-111111111111")
 	// Clear any inherited env-var override so the test sees the URL-based
@@ -570,10 +564,7 @@ func TestLoadConfig_CodexDesktopFallbackDoesNotOverrideExplicitPath(t *testing.T
 	t.Setenv("MULTICA_DAEMON_ID", "11111111-1111-1111-1111-111111111111")
 	t.Setenv("MULTICA_CODEX_PATH", filepath.Join(t.TempDir(), "missing-codex"))
 	pinNonCodexAgentsToMissingPaths(t)
-	fakeClaude := filepath.Join(t.TempDir(), "claude")
-	if err := os.WriteFile(fakeClaude, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("write fake claude: %v", err)
-	}
+	fakeClaude := writeFakeExecutable(t, t.TempDir(), "claude")
 	t.Setenv("MULTICA_CLAUDE_PATH", fakeClaude)
 
 	cfg, err := LoadConfig(Overrides{
@@ -586,6 +577,24 @@ func TestLoadConfig_CodexDesktopFallbackDoesNotOverrideExplicitPath(t *testing.T
 	if got, ok := cfg.Agents["codex"]; ok {
 		t.Fatalf("explicit missing MULTICA_CODEX_PATH should not fall back to Desktop bundle, got %#v", got)
 	}
+}
+
+func writeFakeExecutable(t *testing.T, dir, name string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" && filepath.Ext(name) == "" {
+		name += ".bat"
+	}
+	path := filepath.Join(dir, name)
+	var content []byte
+	if runtime.GOOS == "windows" {
+		content = []byte("@echo off\r\nexit /b 0\r\n")
+	} else {
+		content = []byte("#!/bin/sh\nexit 0\n")
+	}
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatalf("write fake executable: %v", err)
+	}
+	return path
 }
 
 func pinNonCodexAgentsToMissingPaths(t *testing.T) {
@@ -602,6 +611,8 @@ func pinNonCodexAgentsToMissingPaths(t *testing.T) {
 		"MULTICA_COPILOT_PATH",
 		"MULTICA_KIMI_PATH",
 		"MULTICA_KIRO_PATH",
+		"MULTICA_CODEBUDDY_PATH",
+		"MULTICA_ANTIGRAVITY_PATH",
 	} {
 		t.Setenv(name, filepath.Join(missingDir, strings.ToLower(name)))
 	}
@@ -746,10 +757,7 @@ func TestLoadConfig_AppliesBackendOverridesFromConfigFile(t *testing.T) {
 	// at a custom path that the config file points at (mimicking a non-default
 	// installation: another bundled / isolated / CI deployment, etc).
 	customDir := t.TempDir()
-	customOpenclaw := filepath.Join(customDir, "non-default-openclaw")
-	if err := os.WriteFile(customOpenclaw, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("write fake openclaw: %v", err)
-	}
+	customOpenclaw := writeFakeExecutable(t, customDir, "non-default-openclaw")
 
 	// Make sure no env-var override is leaking in from the test runner.
 	os.Unsetenv("MULTICA_OPENCLAW_PATH")

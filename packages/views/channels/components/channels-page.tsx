@@ -56,13 +56,17 @@ import {
   useRemoveChannelMember,
   useSendChannelMessage,
   useSendChannelThreadMessage,
+  useEditChannelMessage,
+  useDeleteChannelMessage,
   useAddChannelReaction,
   useRemoveChannelReaction,
   useMarkChannelThreadRead,
+  useSetChannelThreadFollowed,
   useSetChannelTyping,
+  useComposerDraftStore,
+  type ComposerDraftKey,
 } from "@multica/core/channels";
 import { useAuthStore } from "@multica/core/auth";
-import { ApiError } from "@multica/core/api";
 import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
 import { api } from "@multica/core/api";
@@ -154,17 +158,20 @@ import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
-import { composePayloadKey, useComposeSendIntent } from "../hooks/use-compose-send-intent";
+import { composePayloadKey } from "../hooks/use-compose-send-intent";
+import { useComposerSend } from "../hooks/use-composer-send";
+import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
-import { ThreadRootPreview } from "./thread-root-preview";
+import { ThreadPanel } from "./thread-panel";
+import { deriveThreadParticipants } from "./thread-participants";
+import { mapThreadParticipants, mapThreadWakeAnnotations } from "./thread-read-model";
 import {
-  ChannelComposer,
+  Composer,
   ConversationHeader,
-  MobileThreadDrawerContent,
   ReadOnlyConversationBanner,
 } from "./conversation-surface";
 import { DmList } from "./dm-list";
@@ -180,6 +187,7 @@ import {
   MutedIndicator,
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
+import { AgentFilesPanel } from "./agent-files-panel";
 
 export interface TypingActor {
   key: string;
@@ -469,7 +477,17 @@ function TypingDots() {
   );
 }
 
-export function ChannelsPage() {
+interface ChannelsPageProps {
+  /** The selected channel or DM id, from the /channels/[id] route segment. */
+  channelId?: string;
+}
+
+// ChannelsPage's many useState calls predate #309 — this routing change reduced
+// the count, it did not add to it. Consolidating them into useReducer is a
+// refactor of a ~2500-line component, out of scope for a URL-format change and
+// tracked separately; suppress the pre-existing warning rather than block on it.
+// react-doctor-disable-next-line react-doctor/prefer-useReducer
+export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const { t } = useT("channels");
   const timeAgo = useTimeAgo();
   const qc = useQueryClient();
@@ -491,12 +509,18 @@ export function ChannelsPage() {
   const [mobilePanel, setMobilePanel] = useState<
     "menu" | "members" | "stats" | "files" | null
   >(null);
-  // Initialize from ?channel= so shared deep links open the right channel.
-  const [activeId, setActiveId] = useState<string | null>(() => searchParams.get("channel"));
+  // Selected channel. Resolved from the `channelId` route param below, since we
+  // don't yet know (until channels/dms load) whether it's a channel or a DM.
+  const [activeId, setActiveId] = useState<string | null>(null);
   // Selected DM (Direct Messages region). Mutually exclusive with the group
   // selection: opening a DM clears `activeId`, opening a group clears this.
-  // Seeded from ?dm= so create-or-find entry points can deep-link a DM open.
-  const [activeDmId, setActiveDmId] = useState<string | null>(() => searchParams.get("dm"));
+  const [activeDmId, setActiveDmId] = useState<string | null>(null);
+  // The last `/channels/[id]` route id we reconciled into the selection above.
+  // A ref (not state): it's bookkeeping that gates the reconciliation below, not
+  // a render input. Tracking it lets the reconciliation fire only on a genuine
+  // ROUTE change, never on an optimistic in-page selection that momentarily runs
+  // ahead of the async route commit. `undefined` = not yet reconciled.
+  const reconciledRouteIdRef = useRef<string | undefined>(undefined);
   // ?message= deep-links to a specific message (e.g. from an overview mention).
   // We scroll to and briefly highlight it, then clear so it fades out.
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(
@@ -509,7 +533,9 @@ export function ChannelsPage() {
   const [archiveTarget, setArchiveTarget] = useState<Channel | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const editorRef = useRef<ContentEditorRef>(null);
-  const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
+  const composerDrafts = useComposerDraftStore((s) => s.drafts);
+  const storeSetComposerDraft = useComposerDraftStore((s) => s.setDraft);
+  const storeClearComposerDraft = useComposerDraftStore((s) => s.clearDraft);
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
   const [newName, setNewName] = useState("");
   const [newLarkChatId, setNewLarkChatId] = useState("");
@@ -527,12 +553,36 @@ export function ChannelsPage() {
   // Send idempotency + send lock (#207). Channel top-level and thread reply each
   // own an independent intent so an in-flight channel send never blocks a thread
   // reply, and vice versa.
-  const channelSend = useComposeSendIntent();
-  const threadSend = useComposeSendIntent();
-  const [openThreadRoot, setOpenThreadRoot] = useState<ChannelMessage | null>(null);
+  const channelSend = useComposerSend();
+  const threadSend = useComposerSend();
   const threadEditorRef = useRef<ContentEditorRef>(null);
   const focusThreadComposerOnOpenRef = useRef(false);
-  const [threadDraftEmpty, setThreadDraftEmpty] = useState(true);
+  const [sidePanelState, setSidePanelState] = useState<{
+    openThreadRoot: ChannelMessage | null;
+    selectedAgentPanelId: string | null;
+    threadDraftEmpty: boolean;
+  }>({
+    openThreadRoot: null,
+    selectedAgentPanelId: null,
+    threadDraftEmpty: true,
+  });
+  const { openThreadRoot, selectedAgentPanelId, threadDraftEmpty } = sidePanelState;
+  const setOpenThreadRoot = useCallback((next: ChannelMessage | null) => {
+    setSidePanelState((current) => ({ ...current, openThreadRoot: next }));
+  }, []);
+  const setSelectedAgentPanelId = useCallback((next: string | null) => {
+    setSidePanelState((current) => ({ ...current, selectedAgentPanelId: next }));
+  }, []);
+  const setThreadDraftEmpty = useCallback((next: boolean) => {
+    setSidePanelState((current) => ({ ...current, threadDraftEmpty: next }));
+  }, []);
+  const resetSidePanelState = useCallback(() => {
+    setSidePanelState({
+      openThreadRoot: null,
+      selectedAgentPanelId: null,
+      threadDraftEmpty: true,
+    });
+  }, []);
   const [convSearchOpen, setConvSearchOpen] = useState(false);
   const [convSearchQuery, setConvSearchQuery] = useState("");
   const [convSearchResults, setConvSearchResults] = useState<ChannelMessageSearchResult[]>([]);
@@ -561,6 +611,40 @@ export function ChannelsPage() {
   // (click or ?channel= deep link), so the list shows until the user opens a
   // channel and the Back button (which clears activeId) returns to it.
   const { data: dms = [] } = useQuery(dmListOptions(wsId));
+
+  // Reconcile the `/channels/[id]` route param into the active selection.
+  // Adjusting state during render (not in an effect) keeps the reconciliation
+  // keyed on a genuine change of the ROUTE id: an in-page click updates the
+  // selection state and calls `replace()`, but on web the route commits
+  // asynchronously, so `channelId` briefly still points at the previous
+  // conversation. Because we compare against `reconciledRouteId` (the last route
+  // we adopted) rather than the current selection, that stale value never drags
+  // the click back — while a real external navigation (shared link,
+  // notification, Cmd+K) still opens its target. The id alone doesn't reveal
+  // channel-vs-DM, so resolution waits on list membership: until the lists load
+  // we leave the ref unadvanced so this retries as they arrive.
+  if (channelId !== reconciledRouteIdRef.current) {
+    if (!channelId) {
+      setActiveId(null);
+      setActiveDmId(null);
+      reconciledRouteIdRef.current = undefined;
+    } else if (channelId === activeId || channelId === activeDmId) {
+      reconciledRouteIdRef.current = channelId;
+    } else if (
+      channels.some((c) => c.id === channelId) ||
+      archivedChannels.some((c) => c.id === channelId)
+    ) {
+      setActiveId(channelId);
+      setActiveDmId(null);
+      reconciledRouteIdRef.current = channelId;
+    } else if (dms.some((d) => d.id === channelId)) {
+      setActiveId(null);
+      setActiveDmId(channelId);
+      reconciledRouteIdRef.current = channelId;
+    }
+    // else: lists still loading — leave the ref unadvanced to retry.
+  }
+
   // Resolve the selected DM from the list. A DM selection takes priority over a
   // group selection (the two are mutually exclusive via the select handlers),
   // so when a DM is active we don't auto-resolve a group below.
@@ -578,30 +662,21 @@ export function ChannelsPage() {
       null;
     return isMobile ? explicit : (explicit ?? channels[0] ?? null);
   }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
+  const selectedAgentPanel = useMemo(
+    () => (selectedAgentPanelId ? agents.find((agent) => agent.id === selectedAgentPanelId) ?? null : null),
+    [agents, selectedAgentPanelId],
+  );
   const isActiveArchived = !!active?.archived_at;
-  const activeDraftKey = active ? `channel:${active.id}` : null;
-  const activeDraft = activeDraftKey ? (composerDrafts[activeDraftKey] ?? "") : "";
+  const activeDraftKey = active ? (`channel:${active.id}` as const) : null;
+  const activeDraft = activeDraftKey ? (composerDrafts[activeDraftKey]?.content ?? "") : "";
   const activeDraftEmpty = !activeDraft.trim();
-  const setConversationDraft = useCallback((key: string, value: string) => {
-    setComposerDrafts((current) => {
-      if (!value.trim()) {
-        if (!(key in current)) return current;
-        const next = { ...current };
-        delete next[key];
-        return next;
-      }
-      if (current[key] === value) return current;
-      return { ...current, [key]: value };
-    });
-  }, []);
-  const clearConversationDraft = useCallback((key: string) => {
-    setComposerDrafts((current) => {
-      if (!(key in current)) return current;
-      const next = { ...current };
-      delete next[key];
-      return next;
-    });
-  }, []);
+  const setConversationDraft = useCallback((key: ComposerDraftKey, value: string) => {
+    if (!value.trim()) {
+      storeClearComposerDraft(key);
+      return;
+    }
+    storeSetComposerDraft(key, value);
+  }, [storeSetComposerDraft, storeClearComposerDraft]);
   const {
     data: messagePages,
     isLoading: messagesLoading,
@@ -634,6 +709,20 @@ export function ChannelsPage() {
     },
     [threadPage?.messages, threadRoot],
   );
+  // Participant chips prefer the BE-provided read-model list (#251) and fall
+  // back to the structural derivation only when the BE sent none, so the panel
+  // is never empty-chipped for an older payload.
+  const threadParticipants = useMemo(() => {
+    if (!threadRoot) return [];
+    const beList = mapThreadParticipants(threadRoot);
+    return beList.length > 0 ? beList : deriveThreadParticipants(threadRoot, threadReplies);
+  }, [threadRoot, threadReplies]);
+  // "Why no reply" wake strip (#196), agent-only + neutral, from the root's
+  // read-model annotations (#251).
+  const threadWakeAnnotations = useMemo(
+    () => (threadRoot ? mapThreadWakeAnnotations(threadRoot) : []),
+    [threadRoot],
+  );
   const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
@@ -649,8 +738,25 @@ export function ChannelsPage() {
   const sendThreadMessage = useSendChannelThreadMessage();
   const addChannelReaction = useAddChannelReaction();
   const removeChannelReaction = useRemoveChannelReaction();
+  const editChannelMessage = useEditChannelMessage();
+  const deleteChannelMessage = useDeleteChannelMessage();
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
+  const setThreadFollowed = useSetChannelThreadFollowed();
   const setTyping = useSetChannelTyping();
+  // Edit is a PATCH of an existing message (H5) — it routes through
+  // editChannelMessage, never the send path, so it can never produce a new wake.
+  const handleEditMessage = useCallback((message: ChannelMessage, content: string) => {
+    editChannelMessage.mutate(
+      { channelId: message.channel_id, messageId: message.id, content },
+      { onError: () => toast.error(t(($) => $.message.edit_failed_toast)) },
+    );
+  }, [editChannelMessage, t]);
+  const handleDeleteMessage = useCallback((message: ChannelMessage) => {
+    deleteChannelMessage.mutate(
+      { channelId: message.channel_id, messageId: message.id },
+      { onError: () => toast.error(t(($) => $.message.delete_failed_toast)) },
+    );
+  }, [deleteChannelMessage, t]);
   const handleReactToMessage = useCallback((message: ChannelMessage, emoji: string) => {
     const hasReacted = message.reactions?.some(
       (reaction) => reaction.actor_type === "member" && reaction.actor_id === currentUserId && reaction.emoji === emoji,
@@ -900,11 +1006,15 @@ export function ChannelsPage() {
     return () => clearTimeout(timer);
   }, [convSearchQuery, active, convSearchOpen, t]);
 
-  // Clear the unread badge when a channel becomes active (select / deep link /
-  // auto-select). `markChannelRead` (mutate) is referentially stable.
-  useEffect(() => {
-    if (active?.id) markChannelRead(active.id);
-  }, [active?.id, markChannelRead]);
+  // Mark the conversation read when it becomes active (select / deep link /
+  // auto-select) — clears the unread badge — and expose the pre-advance read
+  // cursor from the mark-read response so the "N new messages" divider anchors
+  // race-free (#303).
+  const dividerLastReadSeq = useEntryReadCursor(
+    active?.id,
+    active?.last_read_seq,
+    markChannelRead,
+  );
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -924,11 +1034,6 @@ export function ChannelsPage() {
   }, [active?.id]);
 
   useEffect(() => {
-    setOpenThreadRoot(null);
-    setThreadDraftEmpty(true);
-  }, [active?.id, activeDmId]);
-
-  useEffect(() => {
     if (!activeChannelId || !threadRoot) return;
     markThreadRead({ channelId: activeChannelId, messageId: threadRoot.id });
   }, [activeChannelId, threadRoot, markThreadRead]);
@@ -940,23 +1045,6 @@ export function ChannelsPage() {
       threadEditorRef.current?.focus();
     });
   }, [threadRoot]);
-
-  // Sync the DM selection from the `?dm=` deep link. The entry points outside
-  // this view (Cmd+K, agent hover card) push(`...?dm=ID`); when the user is
-  // already on the Messages page that's a same-route navigation that doesn't
-  // remount, so the `useState` initializer never re-runs. This reactively opens
-  // (or clears) the DM when the param changes. No loop: in-page `selectDm`
-  // updates state and replaces the URL to match, so param === state here.
-  const dmParam = searchParams.get("dm");
-  useEffect(() => {
-    if (dmParam === activeDmId) return;
-    if (dmParam) {
-      setActiveId(null);
-      setActiveDmId(dmParam);
-    } else {
-      setActiveDmId(null);
-    }
-  }, [dmParam, activeDmId]);
 
   // New messages (from others / agents) refresh the list (unread + preview)
   // and the open thread. Keep the active channel marked read while viewing it.
@@ -1054,17 +1142,19 @@ export function ChannelsPage() {
   // Select a channel and reflect it in the URL so the address is shareable.
   // Clears any DM selection — the two regions are mutually exclusive.
   const selectChannel = (id: string) => {
+    resetSidePanelState();
     setActiveDmId(null);
     setActiveId(id);
-    replace(`${wsPaths.channels()}?channel=${id}`);
+    replace(wsPaths.channelDetail(id));
   };
 
   // Select a DM (from the DIRECT MESSAGES region). Clears the group selection
   // and reflects the DM in the URL so it can be shared / deep-linked.
   const selectDm = (dm: DMItem) => {
+    resetSidePanelState();
     setActiveId(null);
     setActiveDmId(dm.id);
-    replace(`${wsPaths.channels()}?dm=${dm.id}`);
+    replace(wsPaths.channelDetail(dm.id));
   };
 
   // "Send message" entry point on a channel member row: create-or-find the DM
@@ -1083,6 +1173,7 @@ export function ChannelsPage() {
   // Mobile-only: return from the detail (group or DM) to the list. Clears both
   // selections (so the list renders) and drops the deep-link param.
   const mobileBackToList = () => {
+    resetSidePanelState();
     setActiveId(null);
     setActiveDmId(null);
     setMobilePanel(null);
@@ -1162,7 +1253,7 @@ export function ChannelsPage() {
 
   const handleShare = async () => {
     if (!active) return;
-    const url = getShareableUrl(`${wsPaths.channels()}?channel=${active.id}`);
+    const url = getShareableUrl(wsPaths.channelDetail(active.id));
     try {
       await navigator.clipboard.writeText(url);
       toast.success(t(($) => $.share.copied));
@@ -1275,39 +1366,31 @@ export function ChannelsPage() {
     for (const [url, id] of uploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
-    // Send lock + payload-bound client_message_id in one step. null means a send
-    // is already running (held / auto-repeat Enter) → abort.
-    const clientMessageId = channelSend.beginSend(composePayloadKey(content, attachmentIds));
-    if (clientMessageId === null) return;
-    if (typingStartedRef.current) {
-      typingStartedRef.current = false;
-      publishTyping(false);
-    }
-    sendMessage.mutate(
-      {
+    // Send lock (N held/auto-repeat Enter → 1 request) + payload-bound
+    // client_message_id + the 3-way outcome, all owned by useComposerSend.
+    const dispatched = channelSend.send({
+      payloadKey: composePayloadKey(content, attachmentIds),
+      buildVars: (clientMessageId) => ({
         channelId: active.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
         clientMessageId,
+      }),
+      mutate: sendMessage.mutate,
+      onCommitted: () => {
+        editorRef.current?.clearContent();
+        uploadMapRef.current.clear();
+        if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
       },
-      {
-        onSuccess: () => {
-          editorRef.current?.clearContent();
-          uploadMapRef.current.clear();
-          if (activeDraftKey) clearConversationDraft(activeDraftKey);
-          channelSend.finishSend();
-        },
-        onError: (err) => {
-          // 409 = same id, conflicting payload already committed. Retire the
-          // intent so the next attempt is fresh instead of a permanent lock.
-          if (err instanceof ApiError && err.status === 409) channelSend.resetIntent();
-          // Always surface failure — the draft is kept, but the user must know
-          // this send did NOT land (a silent 409 reads as a sent message).
-          toast.error(t(($) => $.composer.send_failed));
-        },
-        onSettled: () => channelSend.settleSend(),
-      },
-    );
+      // 200-dedup is silent (onCommitted); a 409 or any other failure always
+      // surfaces — the draft is kept, but the user must know this send did NOT
+      // land (a silent 409 reads as a sent message).
+      onVisibleError: () => toast.error(t(($) => $.composer.send_failed)),
+    });
+    if (dispatched && typingStartedRef.current) {
+      typingStartedRef.current = false;
+      publishTyping(false);
+    }
   };
 
   const handleThreadSend = () => {
@@ -1318,36 +1401,46 @@ export function ChannelsPage() {
     for (const [url, id] of threadUploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
-    const clientMessageId = threadSend.beginSend(composePayloadKey(content, attachmentIds, threadRoot.id));
-    if (clientMessageId === null) return;
-    sendThreadMessage.mutate(
-      {
+    threadSend.send({
+      payloadKey: composePayloadKey(content, attachmentIds, threadRoot.id),
+      buildVars: (clientMessageId) => ({
         channelId: active.id,
         messageId: threadRoot.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
         clientMessageId,
+      }),
+      mutate: sendThreadMessage.mutate,
+      onCommitted: () => {
+        threadEditorRef.current?.clearContent();
+        threadUploadMapRef.current.clear();
+        setThreadDraftEmpty(true);
       },
-      {
-        onSuccess: () => {
-          threadEditorRef.current?.clearContent();
-          threadUploadMapRef.current.clear();
-          setThreadDraftEmpty(true);
-          threadSend.finishSend();
-        },
-        onError: (err) => {
-          if (err instanceof ApiError && err.status === 409) threadSend.resetIntent();
-          toast.error(t(($) => $.thread.send_failed));
-        },
-        onSettled: () => threadSend.settleSend(),
-      },
-    );
+      onVisibleError: () => toast.error(t(($) => $.thread.send_failed)),
+    });
   };
 
   const handleOpenThread = (message: ChannelMessage) => {
     focusThreadComposerOnOpenRef.current = true;
+    setSelectedAgentPanelId(null);
     setOpenThreadRoot(message);
   };
+
+  const handleOpenAgentPanel = (agentId: string) => {
+    setOpenThreadRoot(null);
+    setSelectedAgentPanelId(agentId);
+  };
+
+  const handleToggleThreadFollow = useCallback(
+    (next: boolean) => {
+      if (!activeChannelId || !threadRoot) return;
+      setThreadFollowed.mutate(
+        { channelId: activeChannelId, messageId: threadRoot.id, followed: next },
+        { onError: () => toast.error(t(($) => $.dm.action_failed)) },
+      );
+    },
+    [activeChannelId, threadRoot, setThreadFollowed, t],
+  );
 
   const toggleInvite = (key: string) => {
     setSelectedInvites((prev) => {
@@ -1754,6 +1847,8 @@ export function ChannelsPage() {
                                   realUnread={realUnread}
                                   isManualDot={isManualDot}
                                   isMuted={isMuted}
+                                  hasMention={!!channel.has_mention}
+                                  mentionLabel={t(($) => $.sidebar.mention_indicator)}
                                 />
                               </div>
                             </div>
@@ -1935,115 +2030,94 @@ export function ChannelsPage() {
   // can return to the list.
   const showChannelDetailSkeleton =
     isLoading || (!!activeId && !activeDmId && !active);
+  // The thread surface is the shared <ThreadPanel> (pinned root + flat replies +
+  // participant chips + wake strip), fed the #251 read-model off the root
+  // message. also-send is CUT this round (#256), so no also-send props are
+  // passed — the panel then hides the checkbox entirely.
   const threadPanel =
     active && threadRoot ? (
-      <div className="flex h-full min-h-0 min-w-0 flex-col bg-background">
-        <ConversationHeader
-          isMobile={isMobile}
-          leading={
-            <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-              <MessageSquare className="size-4" />
-            </span>
-          }
-          title={t(($) => $.thread.title)}
-          meta={
-            threadReplies.length > 0
-              ? t(($) => $.thread.meta_count, {
-                  count: threadReplies.length,
-                })
-              : undefined
-          }
-          actions={
-            <>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                aria-label={t(($) => $.thread.close_aria)}
-                onClick={() => setOpenThreadRoot(null)}
-              >
-                <X className="size-4" />
-              </Button>
-            </>
-          }
-        />
-        <ChannelMessageList
-          key={`thread:${threadRoot.id}:${threadLoading ? "loading" : "ready"}`}
-          messages={threadReplies}
-          currentUserId={currentUserId}
-          ownName={currentUserName ?? undefined}
-          emptyLabel={t(($) => $.thread.empty_replies)}
-          initialScroll="top"
-          header={
-            <ThreadRootPreview
-              message={threadRoot}
-              currentUserId={currentUserId}
-              ownName={currentUserName ?? undefined}
-              onViewParent={() => {
-                setHighlightMessageId(threadRoot.id);
-                if (isMobile) setOpenThreadRoot(null);
+      <ThreadPanel
+        root={threadRoot}
+        replies={threadReplies}
+        currentUserId={currentUserId}
+        currentUserName={currentUserName ?? undefined}
+        participants={threadParticipants}
+        followed={threadRoot.thread_followed ?? false}
+        onToggleFollow={handleToggleThreadFollow}
+        wakeAnnotations={threadWakeAnnotations}
+        isMobile={isMobile}
+        onBack={() => setOpenThreadRoot(null)}
+        onViewParent={() => {
+          setHighlightMessageId(threadRoot.id);
+          if (isMobile) setOpenThreadRoot(null);
+        }}
+        loading={threadLoading}
+        loadError={threadError}
+        onRetry={() => refetchThread()}
+        onReact={handleReactToMessage}
+        editor={
+          <ContentEditor
+            key={`thread-editor:${threadRoot.id}`}
+            ref={threadEditorRef}
+            placeholder={t(($) => $.thread.composer_placeholder)}
+            onUpdate={handleThreadEditorUpdate}
+            onSubmit={handleThreadSend}
+            onUploadFile={handleThreadUpload}
+            submitOnEnter
+            showBubbleMenu={false}
+            mentionAllowedActorIds={channelMemberIds}
+          />
+        }
+        onSend={handleThreadSend}
+        sendDisabled={threadDraftEmpty}
+        sending={sendThreadMessage.isPending}
+        composerLeadingActions={
+          <>
+            <input
+              ref={threadFileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                handlePickThreadFiles(e.target.files);
+                e.target.value = "";
               }}
             />
-          }
-          loading={threadLoading}
-          loadErrorLabel={threadError ? t(($) => $.thread.load_failed) : undefined}
-          onRetry={() => refetchThread()}
-          onReact={handleReactToMessage}
-        />
-        {isActiveArchived ? (
-          <ReadOnlyConversationBanner>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn(isMobile ? "size-10" : "size-8")}
+              aria-label={t(($) => $.composer.attach_aria)}
+              onClick={() => threadFileInputRef.current?.click()}
+            >
+              <Paperclip className={cn(isMobile ? "size-5" : "size-4")} />
+            </Button>
+          </>
+        }
+        readOnly={isActiveArchived}
+        readOnlyContent={
+          <>
             <Archive className="size-4 shrink-0" />
             <span>{t(($) => $.archive_dialog.readonly_notice)}</span>
-          </ReadOnlyConversationBanner>
-        ) : (
-          <>
-            <ConversationActivityStrip tasks={activeTasks} stoppingTaskId={stoppingChannelTaskId} onStopTask={handleStopChannelTask} />
-            <ChannelComposer
-              sendLabel={t(($) => $.composer.send)}
-              sendDisabled={threadDraftEmpty}
-              sending={sendThreadMessage.isPending}
-              onSend={handleThreadSend}
-              isMobile={isMobile}
-              editor={
-                <ContentEditor
-                  key={`thread-editor:${threadRoot.id}`}
-                  ref={threadEditorRef}
-                  placeholder={t(($) => $.thread.composer_placeholder)}
-                  onUpdate={handleThreadEditorUpdate}
-                  onSubmit={handleThreadSend}
-                  onUploadFile={handleThreadUpload}
-                  submitOnEnter
-                  showBubbleMenu={false}
-                  mentionAllowedActorIds={channelMemberIds}
-                />
-              }
-              leadingActions={
-                <>
-                  <input
-                    ref={threadFileInputRef}
-                    type="file"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => {
-                      handlePickThreadFiles(e.target.files);
-                      e.target.value = "";
-                    }}
-                  />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn(isMobile ? "size-10" : "size-8")}
-                    aria-label={t(($) => $.composer.attach_aria)}
-                    onClick={() => threadFileInputRef.current?.click()}
-                  >
-                    <Paperclip className={cn(isMobile ? "size-5" : "size-4")} />
-                  </Button>
-                </>
-              }
-            />
           </>
-        )}
-      </div>
+        }
+        activitySlot={
+          <ConversationActivityStrip
+            tasks={activeTasks}
+            stoppingTaskId={stoppingChannelTaskId}
+            onStopTask={handleStopChannelTask}
+          />
+        }
+      />
+    ) : null;
+  const agentPanel =
+    active && selectedAgentPanel ? (
+      <AgentFilesPanel
+        agent={selectedAgentPanel}
+        currentUserId={currentUserId}
+        members={workspaceMembers}
+        onClose={() => setSelectedAgentPanelId(null)}
+      />
     ) : null;
   const channelConversationPane = (
     <main className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background">
@@ -2070,7 +2144,7 @@ export function ChannelsPage() {
                     <ArrowLeft className="size-5" />
                   </Button>
                 )}
-                <ChannelGroupAvatar members={channelMembers} size={34} />
+                <ChannelGroupAvatar members={channelMembers} size={28} />
               </>
             }
             title={active.name}
@@ -2263,6 +2337,7 @@ export function ChannelsPage() {
                 currentUserId={currentUserId}
                 ownName={currentUserName ?? undefined}
                 highlightMessageId={effectiveHighlightId}
+                lastReadSeq={dividerLastReadSeq}
                 firstItemIndex={messagesFirstItemIndex}
                 searchHitIds={searchHitIds}
                 searchQuery={searchHighlightQuery}
@@ -2278,6 +2353,9 @@ export function ChannelsPage() {
                 onOpenThread={isActiveArchived ? undefined : handleOpenThread}
                 onScrollToMessage={setHighlightMessageId}
                 onReact={handleReactToMessage}
+                onEditMessage={isActiveArchived ? undefined : handleEditMessage}
+                onDeleteMessage={isActiveArchived ? undefined : handleDeleteMessage}
+                onOpenAgent={handleOpenAgentPanel}
               />
 
               {isActiveArchived ? (
@@ -2320,7 +2398,8 @@ export function ChannelsPage() {
                     stoppingTaskId={stoppingChannelTaskId}
                     onStopTask={handleStopChannelTask}
                   />
-                  <ChannelComposer
+                  <Composer
+                    surface="channel"
                     sendLabel={t(($) => $.composer.send)}
                     sendDisabled={activeDraftEmpty}
                     sending={sendMessage.isPending}
@@ -2387,18 +2466,6 @@ export function ChannelsPage() {
               )}
             </>
           )}
-          {isMobile && (
-            <Drawer
-              open={!!threadPanel}
-              onOpenChange={(open) => {
-                if (!open) setOpenThreadRoot(null);
-              }}
-            >
-              <MobileThreadDrawerContent open={!!threadPanel}>
-                {threadPanel}
-              </MobileThreadDrawerContent>
-            </Drawer>
-          )}
         </main>
   );
   const detailPane = !isMobile ? (
@@ -2406,24 +2473,24 @@ export function ChannelsPage() {
       <ResizablePanel id="conversation" minSize="50%" className="flex min-h-0 flex-col">
         {channelConversationPane}
       </ResizablePanel>
-      {threadPanel ? (
+      {threadPanel || agentPanel ? (
         <>
           <ResizableHandle />
           <ResizablePanel
-            id="thread"
+            id={threadPanel ? "thread" : "agent-files"}
             defaultSize={440}
             minSize={360}
             maxSize={640}
             groupResizeBehavior="preserve-pixel-size"
             className="border-l border-border/30 bg-background"
           >
-            {threadPanel}
+            {threadPanel ?? agentPanel}
           </ResizablePanel>
         </>
       ) : null}
     </ResizablePanelGroup>
   ) : (
-    channelConversationPane
+    threadPanel ?? channelConversationPane
   );
 
   // DM detail pane — rendered in place of the group detail when a DM is active.
@@ -2432,18 +2499,18 @@ export function ChannelsPage() {
   // When a `?dm=` deep link opens cold, `activeDmId` is set before the DM list
   // resolves the row — keep the conversation structure in place instead of
   // dropping to a blank pane during that window.
-  const dmDraftKey = activeDm ? `dm:${activeDm.id}` : null;
+  const dmDraftKey = activeDm ? (`dm:${activeDm.id}` as const) : null;
   const dmDetailPane = activeDm ? (
     <DmConversation
       key={`${activeDm.source}:${activeDm.id}`}
       dm={activeDm}
       onBack={mobileBackToList}
-      draft={dmDraftKey ? (composerDrafts[dmDraftKey] ?? "") : ""}
+      draft={dmDraftKey ? (composerDrafts[dmDraftKey]?.content ?? "") : ""}
       onDraftChange={(value) => {
         if (dmDraftKey) setConversationDraft(dmDraftKey, value);
       }}
       onDraftClear={() => {
-        if (dmDraftKey) clearConversationDraft(dmDraftKey);
+        if (dmDraftKey) storeClearComposerDraft(dmDraftKey);
       }}
     />
   ) : (

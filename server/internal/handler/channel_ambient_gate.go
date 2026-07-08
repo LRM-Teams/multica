@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -87,6 +88,10 @@ func (h *Handler) channelAmbientGateConfig() channelAmbientGateConfig {
 }
 
 func (h *Handler) shouldDispatchChannelAmbientObservation(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, agent db.Agent) bool {
+	return h.shouldDispatchChannelAmbientObservationWithDB(ctx, h.DB, ch, trigger, agent)
+}
+
+func (h *Handler) shouldDispatchChannelAmbientObservationWithDB(ctx context.Context, exec db.DBTX, ch ChannelResponse, trigger ChannelMessageResponse, agent db.Agent) bool {
 	cfg := h.channelAmbientGateConfig()
 	if cfg.mode == channelAmbientGateModeOff {
 		h.recordChannelAmbientGateDecision(channelAmbientGateActionEnqueued, channelAmbientGateReasonGateOff, ch, agent, trigger)
@@ -96,15 +101,14 @@ func (h *Handler) shouldDispatchChannelAmbientObservation(ctx context.Context, c
 		h.recordChannelAmbientGateDecision(channelAmbientGateActionRelevanceSkipped, reason, ch, agent, trigger)
 		return false
 	}
-	stats, err := h.channelAmbientGateStats(ctx, parseUUID(ch.ID), agent.ID, agent.RuntimeID, cfg.window)
+	stats, err := h.channelAmbientGateStatsWithDB(ctx, exec, parseUUID(ch.ID), agent.ID, agent.RuntimeID, cfg.window)
 	if err != nil {
-		slog.Warn("channel ambient gate: stats query failed; allowing ambient dispatch", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		h.recordChannelAmbientGateDecision(channelAmbientGateActionEnqueued, channelAmbientGateReasonGateError, ch, agent, trigger)
-		return true
+		slog.Warn("channel ambient gate: stats query failed; dropping ambient dispatch", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		h.recordChannelAmbientGateDecision(channelAmbientGateActionDropped, channelAmbientGateReasonGateError, ch, agent, trigger)
+		return false
 	}
 	if stats.activeForAgent > 0 {
-		h.recordChannelAmbientGateDecision(channelAmbientGateActionCoalesced, channelAmbientGateReasonAgentActive, ch, agent, trigger)
-		return false
+		return true
 	}
 	if stats.recentForAgent >= int64(cfg.maxRecentPerAgent) {
 		h.recordChannelAmbientGateDecision(channelAmbientGateActionDropped, channelAmbientGateReasonAgentWindowCap, ch, agent, trigger)
@@ -120,6 +124,97 @@ func (h *Handler) shouldDispatchChannelAmbientObservation(ctx context.Context, c
 	}
 	h.recordChannelAmbientGateDecision(channelAmbientGateActionEnqueued, channelAmbientGateReasonAccepted, ch, agent, trigger)
 	return true
+}
+
+func (h *Handler) dispatchSingleChannelAmbientObservation(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, agent db.Agent) {
+	cfg := h.channelAmbientGateConfig()
+	if cfg.mode == channelAmbientGateModeOff {
+		h.recordChannelAmbientGateDecision(channelAmbientGateActionEnqueued, channelAmbientGateReasonGateOff, ch, agent, trigger)
+		h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, buildChannelAmbientObservationPrompt(ch, agent, trigger), "channel ambient observation", false, true, false, true)
+		return
+	}
+	if skip, reason := deterministicChannelAmbientRelevanceSkip(trigger.Content); skip {
+		h.recordChannelAmbientGateDecision(channelAmbientGateActionRelevanceSkipped, reason, ch, agent, trigger)
+		return
+	}
+	if h.TxStarter == nil {
+		slog.Warn("channel ambient gate: missing transaction starter; dropping ambient dispatch", "channel", ch.ID, "agent", uuidToString(agent.ID))
+		h.recordChannelAmbientGateDecision(channelAmbientGateActionDropped, channelAmbientGateReasonGateError, ch, agent, trigger)
+		return
+	}
+
+	// Serialize the final ambient gate recheck and enqueue per (channel, agent).
+	// This makes concurrent ordinary messages coalesce behind the first queued
+	// ambient task instead of all passing the same pre-enqueue count snapshot.
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		slog.Warn("channel ambient gate: begin lock transaction failed; dropping ambient dispatch", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		h.recordChannelAmbientGateDecision(channelAmbientGateActionDropped, channelAmbientGateReasonGateError, ch, agent, trigger)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	if err := h.lockChannelAmbientGate(ctx, tx, ch, agent); err != nil {
+		slog.Warn("channel ambient gate: advisory lock failed; dropping ambient dispatch", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		h.recordChannelAmbientGateDecision(channelAmbientGateActionDropped, channelAmbientGateReasonGateError, ch, agent, trigger)
+		return
+	}
+	if !h.shouldDispatchChannelAmbientObservationWithDB(ctx, tx, ch, trigger, agent) {
+		_ = tx.Commit(ctx)
+		return
+	}
+	task, queued, ok := h.createOrCoalesceChannelAmbientWakeTx(ctx, tx, ch, agent, trigger, initiatorUserID)
+	if !ok {
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Warn("channel ambient gate: advisory lock transaction commit failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	if queued {
+		h.TaskService.PublishChatTaskQueued(ctx, task, false)
+	}
+}
+
+func (h *Handler) createChannelAmbientPromptTaskTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, bool) {
+	task, queued, ok := h.createOrCoalesceChannelAmbientWakeTx(ctx, tx, ch, agent, trigger, initiatorUserID)
+	if !ok || !queued {
+		return db.AgentTaskQueue{}, false
+	}
+	return task, true
+}
+
+func (h *Handler) createChannelAmbientPromptTaskRowTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt string) (db.ChatSession, db.AgentTaskQueue, bool) {
+	if h.TaskService == nil {
+		slog.Warn("channel ambient observation: task service missing", "channel", ch.ID, "agent", uuidToString(agent.ID))
+		return db.ChatSession{}, db.AgentTaskQueue{}, false
+	}
+	txQueries := h.Queries.WithTx(tx)
+	session, err := h.ensureChannelAgentSessionWithDB(ctx, txQueries, tx, ch, agent.ID, initiatorUserID)
+	if err != nil {
+		slog.Warn("channel ambient observation: ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return db.ChatSession{}, db.AgentTaskQueue{}, false
+	}
+	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, trigger)
+	if err != nil {
+		slog.Warn("channel ambient observation: create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return db.ChatSession{}, db.AgentTaskQueue{}, false
+	}
+	task, err := h.TaskService.CreateAmbientChatTaskRow(ctx, txQueries, session, initiatorUserID)
+	if err != nil {
+		slog.Warn("channel ambient observation: enqueue chat task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return db.ChatSession{}, db.AgentTaskQueue{}, false
+	}
+	if _, err := tx.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
+		slog.Warn("channel ambient observation: tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
+		return db.ChatSession{}, db.AgentTaskQueue{}, false
+	}
+	return session, task, true
+}
+
+func (h *Handler) lockChannelAmbientGate(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, ch.ID, uuidToString(agent.ID))
+	return err
 }
 
 func deterministicChannelAmbientRelevanceSkip(content string) (bool, string) {
@@ -145,8 +240,12 @@ func deterministicChannelAmbientRelevanceSkip(content string) (bool, string) {
 }
 
 func (h *Handler) channelAmbientGateStats(ctx context.Context, channelID, agentID, runtimeID pgtype.UUID, window time.Duration) (channelAmbientGateStats, error) {
+	return h.channelAmbientGateStatsWithDB(ctx, h.DB, channelID, agentID, runtimeID, window)
+}
+
+func (h *Handler) channelAmbientGateStatsWithDB(ctx context.Context, exec db.DBTX, channelID, agentID, runtimeID pgtype.UUID, window time.Duration) (channelAmbientGateStats, error) {
 	var stats channelAmbientGateStats
-	err := h.DB.QueryRow(ctx, `
+	err := exec.QueryRow(ctx, `
 		SELECT
 			COALESCE((
 				SELECT count(*)
@@ -208,4 +307,10 @@ func (h *Handler) recordChannelAmbientGateDecision(action, reason string, ch Cha
 		"agent", uuidToString(agent.ID),
 		"message", trigger.ID,
 	)
+
+	// Ambient gate hold events are deferred — recording them from this
+	// function causes deadlocks in concurrent gate tests because the
+	// INSERT contends with the advisory lock held by sibling goroutines.
+	// A safe approach requires collecting decisions during the gate pass
+	// and batch-inserting after all transactions commit.
 }

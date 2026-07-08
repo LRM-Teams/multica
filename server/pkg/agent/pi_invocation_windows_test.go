@@ -5,6 +5,7 @@ package agent
 import (
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -62,6 +63,40 @@ func TestPlatformPiInvocation_RewritesCmdLauncherToPowerShellFile(t *testing.T) 
 	// fix for callers that pass prompt-like custom argv through the rewrite.
 	if gotArgs[len(gotArgs)-1] != multiLinePrompt {
 		t.Errorf("multi-line prompt was mangled:\n got  %q\n want %q", gotArgs[len(gotArgs)-1], multiLinePrompt)
+	}
+}
+
+// TestPlatformPiInvocation_PrefersNodeDirect is the encoding-fix regression:
+// when the npm launcher resolves to a real node entrypoint, we must spawn
+// `node <entry> <args>` directly rather than powershell -File pi.ps1, so the
+// UTF-8 prompt piped to stdin reaches node without PowerShell codepage
+// re-encoding (garbled CJK). See resolvePiNodeEntry.
+func TestPlatformPiInvocation_PrefersNodeDirect(t *testing.T) {
+	dir := t.TempDir()
+	cmdPath := filepath.Join(dir, "pi.cmd")
+	nodeExe := filepath.Join(dir, "node.exe")
+	entry := filepath.Join(dir, "node_modules", "pi", "bin", "pi.js")
+
+	writeFile(t, cmdPath, "@ECHO off\r\n\"%dp0%\\node.exe\"  \"%dp0%\\node_modules\\pi\\bin\\pi.js\" %*\r\n")
+	writeFile(t, nodeExe, "")
+	if err := os.MkdirAll(filepath.Dir(entry), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, entry, "#!/usr/bin/env node\r\n")
+
+	args := []string{"-p", "--mode", "json", "--session", `C:\s.jsonl`}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	gotExec, gotArgs, ok := platformPiInvocation(cmdPath, args, logger)
+	if !ok {
+		t.Fatalf("expected node-direct invocation, got ok=false")
+	}
+	if gotExec != nodeExe {
+		t.Errorf("argv0: got %q want colocated node %q", gotExec, nodeExe)
+	}
+	wantArgs := append([]string{entry}, args...)
+	if !reflect.DeepEqual(gotArgs, wantArgs) {
+		t.Errorf("argv mismatch:\n got  %#v\n want %#v", gotArgs, wantArgs)
 	}
 }
 

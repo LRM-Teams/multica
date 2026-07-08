@@ -7,23 +7,31 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // TestMemberAllowedForPrivateAgent_Pure exercises the pure predicate that
-// drives the private-agent gate. The gate must allow:
-//   - workspace owner / admin (regardless of agent ownership)
-//   - the agent owner (regardless of role)
-//
-// And deny everyone else. This test runs without a database.
+// drives the private-agent gate. The gate must allow normal private agents to
+// workspace owner/admins or the agent owner, while Wendy stays owner-only so
+// each user has a personal HR. This test runs without a database.
 func TestMemberAllowedForPrivateAgent_Pure(t *testing.T) {
 	ownerUserID := "11111111-1111-1111-1111-111111111111"
 	otherUserID := "22222222-2222-2222-2222-222222222222"
 
 	agent := db.Agent{
 		OwnerID: util.MustParseUUID(ownerUserID),
+	}
+	wendy := db.Agent{
+		OwnerID:     util.MustParseUUID(ownerUserID),
+		DisplayName: "Wendy",
+	}
+	publicWendy := db.Agent{
+		OwnerID:     util.MustParseUUID(ownerUserID),
+		DisplayName: "Wendy",
+		Visibility:  "workspace",
 	}
 
 	cases := []struct {
@@ -47,6 +55,16 @@ func TestMemberAllowedForPrivateAgent_Pure(t *testing.T) {
 					tc.userID, tc.role, got, tc.want)
 			}
 		})
+	}
+
+	if memberAllowedForPrivateAgent(wendy, otherUserID, "admin") {
+		t.Fatal("workspace admin should not see another user's private Wendy")
+	}
+	if !memberAllowedForPrivateAgent(wendy, ownerUserID, "member") {
+		t.Fatal("Wendy owner should see their private Wendy")
+	}
+	if memberAllowedForPrivateAgent(publicWendy, otherUserID, "admin") {
+		t.Fatal("workspace admin should not see another user's workspace-visible Wendy")
 	}
 }
 
@@ -186,6 +204,87 @@ func TestListAgents_FiltersPrivateForPlainMember(t *testing.T) {
 	}
 	if listContainsAgent(t, w.Body.Bytes(), agentID) {
 		t.Fatalf("ListAgents as plain member leaked private agent %s", agentID)
+	}
+}
+
+func TestPublishAgentVisibilityEventScopesWendyToOwner(t *testing.T) {
+	ownerUserID := "11111111-1111-1111-1111-111111111111"
+	workspaceID := "33333333-3333-3333-3333-333333333333"
+	bus := events.New()
+	h := &Handler{Bus: bus}
+	var got []events.Event
+	bus.SubscribeAll(func(e events.Event) {
+		got = append(got, e)
+	})
+
+	h.publishAgentVisibilityEvent("agent:status", workspaceID, "member", ownerUserID, db.Agent{
+		OwnerID:     util.MustParseUUID(ownerUserID),
+		DisplayName: "Wendy",
+	}, map[string]any{"ok": true})
+	if len(got) != 1 {
+		t.Fatalf("published events = %d, want 1", len(got))
+	}
+	if got[0].WorkspaceID != workspaceID {
+		t.Fatalf("workspace id = %q, want %q", got[0].WorkspaceID, workspaceID)
+	}
+	if len(got[0].RecipientUserIDs) != 1 || got[0].RecipientUserIDs[0] != ownerUserID {
+		t.Fatalf("recipient user ids = %#v, want owner only", got[0].RecipientUserIDs)
+	}
+}
+
+func TestPublishAgentVisibilityEventBroadcastsNormalAgent(t *testing.T) {
+	workspaceID := "33333333-3333-3333-3333-333333333333"
+	bus := events.New()
+	h := &Handler{Bus: bus}
+	var got []events.Event
+	bus.SubscribeAll(func(e events.Event) {
+		got = append(got, e)
+	})
+
+	h.publishAgentVisibilityEvent("agent:status", workspaceID, "member", "actor", db.Agent{
+		OwnerID:     util.MustParseUUID("11111111-1111-1111-1111-111111111111"),
+		DisplayName: "Researcher",
+	}, map[string]any{"ok": true})
+	if len(got) != 1 {
+		t.Fatalf("published events = %d, want 1", len(got))
+	}
+	if got[0].RecipientUserIDs != nil {
+		t.Fatalf("recipient user ids = %#v, want nil workspace broadcast", got[0].RecipientUserIDs)
+	}
+}
+
+func TestWendyPrivateAgentIsOwnerOnly(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentID, ownerID, _ := privateAgentTestFixture(t)
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET display_name = 'Wendy' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("rename private agent to Wendy: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	testHandler.ListAgents(w, newRequest("GET", "/api/agents", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListAgents as workspace owner: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if listContainsAgent(t, w.Body.Bytes(), agentID) {
+		t.Fatalf("ListAgents as workspace owner leaked another user's Wendy %s", agentID)
+	}
+
+	w = httptest.NewRecorder()
+	testHandler.ListAgents(w, newRequestAs(ownerID, "GET", "/api/agents", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListAgents as Wendy owner: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !listContainsAgent(t, w.Body.Bytes(), agentID) {
+		t.Fatalf("ListAgents as Wendy owner did not include Wendy %s", agentID)
+	}
+
+	w = httptest.NewRecorder()
+	testHandler.GetAgent(w, withURLParam(newRequest("GET", "/api/agents/"+agentID, nil), "id", agentID))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("GetAgent as workspace owner for another user's Wendy: expected 403, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -546,11 +645,11 @@ func TestShouldEnqueueOnComment_PrivateAgentGate(t *testing.T) {
 	}
 
 	cases := []struct {
-		name       string
-		actorType  string
-		actorID    string
-		want       bool
-		reason     string
+		name      string
+		actorType string
+		actorID   string
+		want      bool
+		reason    string
 	}{
 		{
 			name:      "plain member — denied",

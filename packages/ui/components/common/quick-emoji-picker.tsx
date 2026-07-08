@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, lazy, Suspense } from "react";
+import { useState, lazy, Suspense, type ReactNode } from "react";
 import { SmilePlus } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@multica/ui/components/ui/popover";
 
@@ -20,6 +20,7 @@ interface QuickEmojiPickerProps {
   sideOffset?: number;
   emojis?: string[];
   showMore?: boolean;
+  label?: ReactNode;
 }
 
 function QuickEmojiPicker({
@@ -32,6 +33,7 @@ function QuickEmojiPicker({
   sideOffset,
   emojis = QUICK_EMOJIS,
   showMore = true,
+  label,
 }: QuickEmojiPickerProps) {
   const [open, setOpen] = useState(false);
   const [showFull, setShowFull] = useState(false);
@@ -58,6 +60,7 @@ function QuickEmojiPicker({
             className={`inline-flex items-center justify-center h-6 w-6 rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors ${className ?? ""}`}
           >
             <SmilePlus className="h-3.5 w-3.5" />
+            {label ? <span>{label}</span> : null}
           </button>
         }
       />

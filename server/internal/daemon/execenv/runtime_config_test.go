@@ -313,11 +313,19 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 
 	for _, want := range []string{
 		"## Chat Mode",
-		"your final assistant output is sent back to the chat",
+		"task-scoped Multica CLI transport",
 		"Context boundaries:",
 		"Use `multica --help`",
-		"Issues: list/get/create/update issues",
-		"including `multica issue comment add`",
+		"multica message send --message",
+		"multica message send --sticker",
+		"multica message react --message-id",
+		"multica message read",
+		"multica message search",
+		"Issues: list/get/search issues",
+		"multica issue list --mine --output json",
+		"Raft claim-first model",
+		"do not self-approve `in_review -> done`",
+		"add comments with `multica issue comment add`",
 		"Issue metadata: inspect or update issue-specific persistent facts",
 		"multica repo checkout <url>",
 		"multica attachment download <id>",
@@ -326,7 +334,7 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 		"## Skills",
 		"$CODEX_HOME/skills/issue-triage/SKILL.md",
 		"## Mention Safety",
-		"Reply directly in your final assistant output",
+		"After the command succeeds",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("chat brief missing %q\n---\n%s", want, out)
@@ -347,6 +355,105 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 	} {
 		if strings.Contains(out, banned) {
 			t.Errorf("chat brief should not contain issue-task contract text %q\n---\n%s", banned, out)
+		}
+	}
+}
+
+func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
+	t.Parallel()
+	ctx := TaskContextForEnv{
+		ChatSessionID: "chat-1",
+		Directed:      true,
+		ChatCLITransportUnavailable: false,
+	}
+	out := buildMetaSkillContent("codex", ctx)
+
+	for _, want := range []string{
+		"### Reply Requirement (READ FIRST",
+		"You MUST produce a visible response before finishing",
+		"Not responding is **not** an option",
+		"Reply Requirement",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("directed brief missing must-reply block %q\n---\n%s", want, out)
+		}
+	}
+
+	// Also verify the output section still mentions multica message send (CLI path).
+	if !strings.Contains(out, "multica message send") {
+		t.Errorf("directed brief should contain CLI send instruction")
+	}
+}
+
+func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
+	t.Parallel()
+	ctx := TaskContextForEnv{
+		ChatSessionID: "chat-1",
+		Directed:      false, // ambient run
+		ChatCLITransportUnavailable: false,
+	}
+	out := buildMetaSkillContent("codex", ctx)
+
+	// Must NOT contain the Reply Requirement block.
+	for _, banned := range []string{
+		"Reply Requirement",
+		"You MUST produce a visible response",
+		"Not responding is **not** an option",
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("ambient brief should NOT contain must-reply section %q\n---\n%s", banned, out)
+		}
+	}
+
+	// Should still contain the regular chat mode section and CLI instructions.
+	for _, want := range []string{
+		"## Chat Mode",
+		"task-scoped Multica CLI transport",
+		"multica message send",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("ambient brief missing expected section %q\n---\n%s", want, out)
+		}
+	}
+}
+
+func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
+	t.Parallel()
+	ctx := TaskContextForEnv{
+		ChatSessionID:                    "chat-1",
+		ChatCLITransportUnavailable:      true,
+		Repos:                            []RepoContextForEnv{{URL: "https://github.com/acme/app.git"}},
+		RequestingUserName:               "Frank",
+		RequestingUserProfileDescription: "Product owner",
+	}
+	out := buildMetaSkillContent("codex", ctx)
+
+	for _, want := range []string{
+		"## Chat Mode",
+		"compatibility chat output",
+		"write the visible reply as your final assistant output",
+		"Do not try to find, install, or discuss chat send/react commands",
+		"never mention compatibility mode, missing tools, tokens, CLI transport, or runtime setup",
+		"Issues: list/get/search issues",
+		"multica issue list --mine --output json",
+		"## Repositories",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("compat chat brief missing %q\n---\n%s", want, out)
+		}
+	}
+
+	for _, banned := range []string{
+		"task-scoped Multica CLI transport for visible chat output",
+		"multica message send --message",
+		"multica message react --message-id",
+		"multica message read",
+		"multica message search",
+		"For visible chat replies, run `multica message send`",
+		"After the command succeeds",
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("compat chat brief should not advertise unavailable chat CLI %q\n---\n%s", banned, out)
 		}
 	}
 }

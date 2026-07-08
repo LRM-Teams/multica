@@ -31,6 +31,17 @@ const agentFilesQueryKey = (agentId: string, includeHidden: boolean) =>
 const agentFileContentQueryKey = (agentId: string, path: string | null) =>
   ["agent-file-content", agentId, path ?? ""] as const;
 
+const FILE_LOAD_FAILED = "Failed to load file.";
+const FILE_TOO_LARGE = "This file is too large to edit.";
+const BINARY_FILE_READONLY = "Binary files cannot be edited.";
+const MEDIA_FILE_READONLY = "Media files are read-only in this editor.";
+const SAVE_FILE_LABEL = "Save";
+const OWNER_ONLY_FILES_MESSAGE =
+  "Only the creator can view and edit this agent's configuration files.";
+const FILES_LABEL = "Files";
+const NO_FILES_FOUND = "No files found.";
+const FILE_LIST_TRUNCATED = "File list truncated.";
+
 function ownerName(agent: Agent, members: readonly MemberWithUser[]): string {
   if (!agent.owner_id) return "Unknown";
   const member = members.find((m) => m.user_id === agent.owner_id);
@@ -126,13 +137,13 @@ function AgentFileEditorDialog({
             <Skeleton className="h-4 w-2/3" />
           </div>
         ) : isError ? (
-          <CenteredNote>Failed to load file.</CenteredNote>
+          <CenteredNote>{FILE_LOAD_FAILED}</CenteredNote>
         ) : data?.too_large ? (
-          <CenteredNote>This file is too large to edit.</CenteredNote>
+          <CenteredNote>{FILE_TOO_LARGE}</CenteredNote>
         ) : data?.binary ? (
-          <CenteredNote>Binary files cannot be edited.</CenteredNote>
+          <CenteredNote>{BINARY_FILE_READONLY}</CenteredNote>
         ) : data?.encoding === "base64" ? (
-          <CenteredNote>Media files are read-only in this editor.</CenteredNote>
+          <CenteredNote>{MEDIA_FILE_READONLY}</CenteredNote>
         ) : path && data ? (
           <AgentFileEditorForm
             key={`${path}:${data.content_hash}`}
@@ -209,7 +220,7 @@ function AgentFileEditorForm({
           disabled={save.isPending || draft === initialContent}
         >
           <Save className="mr-1.5 size-3.5" />
-          Save
+          {SAVE_FILE_LABEL}
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">
@@ -280,11 +291,13 @@ export function AgentFilesPanel({
         <InfoRow label="Status" value={agent.status} />
       </div>
       {!isOwner ? (
-        <CenteredNote>Only the creator can view and edit this agent's configuration files.</CenteredNote>
+        <CenteredNote>{OWNER_ONLY_FILES_MESSAGE}</CenteredNote>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex items-center justify-between border-b px-3 py-2">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Files</span>
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {FILES_LABEL}
+            </span>
             <Button
               type="button"
               variant="ghost"
@@ -312,12 +325,14 @@ export function AgentFilesPanel({
                     : "Failed to load agent files."}
               </CenteredNote>
             ) : tree.length === 0 ? (
-              <CenteredNote>No files found.</CenteredNote>
+              <CenteredNote>{NO_FILES_FOUND}</CenteredNote>
             ) : (
               <>
                 <FileTree tree={tree} collapsed={collapsed} onToggle={toggle} onOpenFile={setSelectedPath} />
                 {data?.truncated && (
-                  <p className="mt-1 px-2 py-1 text-[11px] text-muted-foreground">File list truncated.</p>
+                  <p className="mt-1 px-2 py-1 text-[11px] text-muted-foreground">
+                    {FILE_LIST_TRUNCATED}
+                  </p>
                 )}
               </>
             )}

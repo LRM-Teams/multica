@@ -93,6 +93,34 @@ function NewMessagesPill({ count, onClick }: { count: number; onClick: () => voi
   );
 }
 
+// react-virtuoso #883: on a cold load `scrollToIndex` can run before the list's
+// item heights are measured, so it lands at the wrong offset (the unread divider
+// dropping far below the viewport was exactly this). The maintainer-acknowledged
+// fix is to re-issue the scroll after mount until it settles. We re-issue across
+// a few animation frames — as measurement completes the target converges, and
+// with `behavior: "auto"` the repeats just re-pin the same index (idempotent, no
+// jank). Returns a disposer so the effect can cancel on re-target/unmount.
+function scrollToIndexUntilSettled(
+  handle: VirtuosoHandle | null,
+  location: { index: number; align: "start" | "center" | "end"; behavior?: "auto" | "smooth" },
+  frames = 6,
+): () => void {
+  if (!handle) return () => {};
+  let raf = 0;
+  let remaining = frames;
+  const tick = () => {
+    handle.scrollToIndex(location);
+    if (remaining > 0) {
+      remaining -= 1;
+      raf = requestAnimationFrame(tick);
+    }
+  };
+  tick();
+  return () => {
+    if (raf) cancelAnimationFrame(raf);
+  };
+}
+
 /**
  * Virtualized message list shared by the group conversation (channels-page)
  * and the DM channel conversation (dm-conversation).
@@ -364,7 +392,10 @@ function MessageViewport({
     if (highlightMessageId || unreadAnchorIndex < 0) return;
     if (scrolledDividerChannelRef.current === channelId) return;
     scrolledDividerChannelRef.current = channelId ?? null;
-    virtuosoRef.current?.scrollToIndex({
+    // Measure-safe (react-virtuoso #883): the read cursor arrives ~100ms after
+    // mount, so the list may still be measuring — re-issue until it settles,
+    // else the "N new messages" divider lands far below the viewport.
+    return scrollToIndexUntilSettled(virtuosoRef.current, {
       index: firstItemIndex + unreadAnchorIndex,
       align: "start",
       behavior: "auto",

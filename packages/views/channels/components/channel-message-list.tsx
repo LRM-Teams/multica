@@ -6,7 +6,6 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
   type Ref,
@@ -18,13 +17,13 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
-import { useMessageDayDividers, useMessageTime } from "../../i18n/use-message-time";
+import { useMessageDayDividers } from "../../i18n/use-message-time";
 import { useT } from "../../i18n/use-t";
 import { maxSeqOrNull, useNewMessagesDivider } from "../hooks/use-new-messages-divider";
 import { computeNewArrivals } from "../hooks/use-new-arrivals-pill";
 
-// Small centered date pill (Iris #303 A). Same look inline (at a day boundary)
-// and when the sticky overlay pins the current day at the top.
+// Small centered date pill (Iris #303 A) — the inline date divider at each local
+// day boundary.
 function DatePill({ label }: { label: string }) {
   return (
     <span className="rounded-full border border-border/60 bg-background/90 px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm">
@@ -37,22 +36,6 @@ function DatePill({ label }: { label: string }) {
 function DateDivider({ label }: { label: string }) {
   return (
     <div className="flex justify-center px-5 py-2" data-testid="date-divider">
-      <DatePill label={label} />
-    </div>
-  );
-}
-
-// Floating "current day" header (Iris #303 A): pinned at the top of the message
-// area, showing the day of the topmost visible message and updating as you
-// scroll into the next day. react-virtuoso unmounts off-screen rows, so a
-// CSS-sticky divider row can't pin reliably — this overlay is driven by the
-// visible range instead.
-function StickyDateHeader({ label }: { label: string }) {
-  return (
-    <div
-      className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center"
-      data-testid="sticky-date-header"
-    >
       <DatePill label={label} />
     </div>
   );
@@ -228,7 +211,7 @@ function MessageViewport({
   loadErrorLabel,
   onRetry,
 }: MessageViewportProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLElement | null>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const messageRefs = useRef<Map<string, HTMLDivElement> | null>(null);
   // Only the direct-fallback path needs manual scroll-position preservation:
@@ -238,20 +221,11 @@ function MessageViewport({
   // prepend-without-jump, and fighting that with a second scrollTop write is
   // exactly what caused the viewport jumping this replaces.
   const preserveScrollDeltaRef = useRef<number | null>(null);
-  const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
   const [directFallbackChannelId, setDirectFallbackChannelId] = useState<string | null>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const channelId = messages[0]?.channel_id;
   const canLoadOlder = !!hasOlder && !loadingOlder && !!onLoadOlder;
   const dayDividers = useMessageDayDividers(messages);
-  const messageTime = useMessageTime();
-  // Sticky "current day" header: the day of the topmost visible message, tracked
-  // from Virtuoso's visible range (set in the handler, not a derived-state
-  // effect). Reuses the same day-label logic as the inline date dividers.
-  const [topDayLabel, setTopDayLabel] = useReducer(
-    (_prev: string | null, label: string | null) => label,
-    null,
-  );
   const newMessagesDivider = useNewMessagesDivider(
     channelId,
     messages,
@@ -264,9 +238,12 @@ function MessageViewport({
   }
   const messageRefMap = messageRefs.current;
   const useDirectFallback = directFallbackChannelId === channelId;
-  const setScrollContainerRef = useCallback((node: HTMLDivElement | null) => {
-    scrollRef.current = node;
-    setScrollContainerEl(node);
+  // #325 phase 1: Virtuoso now owns its own scroller (no customScrollParent).
+  // Captured via Virtuoso's `scrollerRef` on the virtualized path and via the
+  // fallback's own scroll div — used imperatively by the fallback scroll-position
+  // preservation and the render-detection probe.
+  const handleScrollerRef = useCallback((node: HTMLElement | Window | null) => {
+    scrollRef.current = node instanceof Window ? null : node;
   }, []);
 
   const highlightIndex = useMemo(() => {
@@ -359,13 +336,15 @@ function MessageViewport({
   // depend on `messages` — bottom-follow for newly-arrived messages is
   // Virtuoso's own `followOutput` job now; re-running this on every new
   // message during an open search used to re-fire scrollToIndex repeatedly.
-  // Does depend on `scrollContainerEl`: the first render returns a bare
-  // placeholder (Virtuoso isn't mounted yet, so `virtuosoRef.current` is
-  // still null), and this effect must re-fire once Virtuoso actually mounts
-  // on the following render — otherwise a highlight set before first mount
-  // (e.g. opening a channel via a deep link) never scrolls into view.
+  // #325 phase 1: with Virtuoso owning its scroller, it mounts on the very first
+  // render (no placeholder frame anymore), so `virtuosoRef.current` is ready by
+  // the time this effect runs — a deep-link highlight set on mount scrolls into
+  // view without a separate mount signal (previously `initialTopMostItemIndex`
+  // already positions the deep link; this adds the smooth-scroll + centering).
+  // Deliberately does NOT depend on `messages` — bottom-follow for new messages
+  // is Virtuoso's own `followOutput` job.
   useEffect(() => {
-    if (!highlightMessageId || highlightIndex < 0 || !scrollContainerEl) return;
+    if (!highlightMessageId || highlightIndex < 0) return;
     virtuosoRef.current?.scrollToIndex({
       index: firstItemIndex + highlightIndex,
       align: "center",
@@ -375,7 +354,7 @@ function MessageViewport({
       block: "center",
       behavior: "smooth",
     });
-  }, [highlightMessageId, highlightIndex, firstItemIndex, messageRefMap, scrollContainerEl]);
+  }, [highlightMessageId, highlightIndex, firstItemIndex, messageRefMap]);
 
   // Scroll the "new messages" divider near the top on entry — start reading
   // where you left off (Iris, #303). The race-free cursor arrives with the
@@ -385,7 +364,7 @@ function MessageViewport({
   // over a deep-link/search scroll (that target wins).
   const scrolledDividerChannelRef = useRef<string | null>(null);
   useEffect(() => {
-    if (highlightMessageId || !scrollContainerEl || unreadAnchorIndex < 0) return;
+    if (highlightMessageId || unreadAnchorIndex < 0) return;
     if (scrolledDividerChannelRef.current === channelId) return;
     scrolledDividerChannelRef.current = channelId ?? null;
     // Measure-safe (react-virtuoso #883): the read cursor arrives ~100ms after
@@ -396,7 +375,7 @@ function MessageViewport({
       align: "start",
       behavior: "auto",
     });
-  }, [channelId, unreadAnchorIndex, highlightMessageId, firstItemIndex, scrollContainerEl]);
+  }, [channelId, unreadAnchorIndex, highlightMessageId, firstItemIndex]);
 
   if (loadErrorLabel) {
     return (
@@ -469,20 +448,10 @@ function MessageViewport({
     );
   };
 
-  if (!scrollContainerEl) {
-    return (
-      <div
-        ref={setScrollContainerRef}
-        className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
-        data-testid="message-scroller"
-      />
-    );
-  }
-
   if (useDirectFallback) {
     return (
       <div
-        ref={setScrollContainerRef}
+        ref={handleScrollerRef}
         className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
         data-testid="message-scroller"
         onScroll={(event) => {
@@ -525,28 +494,16 @@ function MessageViewport({
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      {topDayLabel && messages.length > 0 && (
-        <StickyDateHeader label={topDayLabel} />
-      )}
-      <div
-        ref={setScrollContainerRef}
-        className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
-        data-testid="message-scroller"
-      >
       <Virtuoso
         ref={virtuosoRef}
-        customScrollParent={scrollContainerEl}
+        scrollerRef={handleScrollerRef}
+        className="virtuoso-scroller min-h-0 min-w-0 flex-1"
         data={messages}
         firstItemIndex={firstItemIndex}
         initialTopMostItemIndex={initialTopMostItemIndex}
         increaseViewportBy={{ top: 320, bottom: 520 }}
         atBottomThreshold={120}
         atBottomStateChange={handleAtBottomStateChange}
-        rangeChanged={(range) => {
-          const msg = messages[range.startIndex - firstItemIndex];
-          const label = msg ? messageTime.dayLabel(msg.created_at) : null;
-          setTopDayLabel(label);
-        }}
         followOutput={() => (!loadingOlder && isNearBottom ? "smooth" : false)}
         startReached={() => {
           if (canLoadOlder) onLoadOlder?.();
@@ -572,7 +529,6 @@ function MessageViewport({
         }}
         itemContent={(_, msg) => renderRow(msg)}
       />
-      </div>
       {!isNearBottom && newArrivals && (
         <NewMessagesPill count={newArrivals.count} onClick={handleNewArrivalsClick} />
       )}

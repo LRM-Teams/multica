@@ -5,7 +5,6 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   type Ref,
@@ -22,6 +21,7 @@ import { useT } from "../../i18n/use-t";
 import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
 import { useNewMessagesPill } from "../hooks/use-new-arrivals-pill";
 import { useUnreadAnchorScroll } from "../hooks/use-unread-anchor-scroll";
+import { useHighlightScroll } from "../hooks/use-highlight-scroll";
 
 // Small centered date pill (Iris #303 A) — the inline date divider at each local
 // day boundary.
@@ -219,10 +219,17 @@ function MessageViewport({
     scrollRef.current = node instanceof Window ? null : node;
   }, []);
 
-  const highlightIndex = useMemo(() => {
-    if (!highlightMessageId) return -1;
-    return messages.findIndex((m) => m.id === highlightMessageId);
-  }, [messages, highlightMessageId]);
+  // Deep-link / inline-quote scroll-to-and-center (#309/#303) — self-contained
+  // plugin hook (#325 phase-2 block 3). Owns the target-index derivation and the
+  // smooth-scroll effect; the core just reads back `highlightIndex` to seed the
+  // Virtuoso mount position below.
+  const { highlightIndex } = useHighlightScroll({
+    messages,
+    highlightMessageId,
+    firstItemIndex,
+    virtuosoRef,
+    messageRefMap,
+  });
 
   // "Open scrolled to the unread divider" (#303) — self-contained plugin hook
   // (#325 phase-2 block 2). Owns the anchor derivation, the once-per-visit guard,
@@ -284,30 +291,6 @@ function MessageViewport({
     }, 350);
     return () => window.clearTimeout(timer);
   }, [channelId, messages.length, useDirectFallback]);
-
-  // Scrolls to a deep-linked / search-hit message. Deliberately does NOT
-  // depend on `messages` — bottom-follow for newly-arrived messages is
-  // Virtuoso's own `followOutput` job now; re-running this on every new
-  // message during an open search used to re-fire scrollToIndex repeatedly.
-  // #325 phase 1: with Virtuoso owning its scroller, it mounts on the very first
-  // render (no placeholder frame anymore), so `virtuosoRef.current` is ready by
-  // the time this effect runs — a deep-link highlight set on mount scrolls into
-  // view without a separate mount signal (previously `initialTopMostItemIndex`
-  // already positions the deep link; this adds the smooth-scroll + centering).
-  // Deliberately does NOT depend on `messages` — bottom-follow for new messages
-  // is Virtuoso's own `followOutput` job.
-  useEffect(() => {
-    if (!highlightMessageId || highlightIndex < 0) return;
-    virtuosoRef.current?.scrollToIndex({
-      index: firstItemIndex + highlightIndex,
-      align: "center",
-      behavior: "smooth",
-    });
-    messageRefMap.get(highlightMessageId)?.scrollIntoView({
-      block: "center",
-      behavior: "smooth",
-    });
-  }, [highlightMessageId, highlightIndex, firstItemIndex, messageRefMap]);
 
   if (loadErrorLabel) {
     return (

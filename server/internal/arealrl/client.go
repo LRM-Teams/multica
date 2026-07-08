@@ -29,6 +29,19 @@
 //   - POST /rl/end_session — session-key auth (Bearer <proxy_key>). No body
 //     fields are required; the gateway forwards `{}`, which we mirror.
 //
+//   - POST /rl/close_segment - session-key auth (Bearer <proxy_key>), no body.
+//     Closes the session's current segment without reward (the segment-DAG
+//     path slices a session into communication-bounded segments). Response
+//     CloseSegmentResponse {trajectory_id (nullable), interaction_count,
+//     session_id, ready_transition}; trajectory_id is the just-closed
+//     segment's trajectory.
+//
+//   - POST /export_trajectories - admin-key auth (Bearer <admin_key>). Body
+//     {session_ids, trajectory_id?, remove_session}. Returns {traj: <merged
+//     serialized interactions>}. The segment-DAG path calls this per closed
+//     segment with remove_session=false to fetch the tensor ref while keeping
+//     the session alive.
+//
 // Deviations from design §4.6:
 //   - §4.6 specifies body {task_id, group_size:1} for start_session. The
 //     server-side StartSessionRequest model declares only {task_id, api_key?}
@@ -53,6 +66,8 @@ const (
 	startSessionPath = "/rl/start_session"
 	setRewardPath    = "/rl/set_reward"
 	endSessionPath   = "/rl/end_session"
+	closeSegmentPath = "/rl/close_segment"
+	exportTrajPath   = "/export_trajectories"
 )
 
 // Client talks to the db_bridge stub that fronts AReaL's experimental RL proxy.
@@ -139,6 +154,81 @@ func (c *Client) EndSession(ctx context.Context, proxyKey string) error {
 	}
 	defer resp.Body.Close()
 	return checkStatus(resp, "end_session")
+}
+
+// closeSegmentResponse mirrors AReaL's CloseSegmentResponse. TrajectoryID is
+// nil when close_segment did not close a trajectory (no active segment); the
+// segment-DAG flow treats that as an error since every close should yield a
+// trajectory to export.
+type closeSegmentResponse struct {
+	TrajectoryID     *int   `json:"trajectory_id"`
+	InteractionCount int    `json:"interaction_count"`
+	SessionID        string `json:"session_id"`
+	ReadyTransition  bool   `json:"ready_transition"`
+}
+
+// CloseSegment closes the session's current segment (session-key auth via
+// proxyKey) and returns the trajectory id of the just-closed segment. The
+// endpoint resolves the session from the bearer token, so no session_id is
+// sent - mirroring SetReward/EndSession.
+func (c *Client) CloseSegment(ctx context.Context, proxyKey string) (int, error) {
+	resp, err := c.doJSON(ctx, closeSegmentPath, proxyKey, map[string]any{})
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, "close_segment"); err != nil {
+		return 0, err
+	}
+	var out closeSegmentResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, fmt.Errorf("arealrl: decode close_segment response: %w", err)
+	}
+	if out.TrajectoryID == nil {
+		return 0, fmt.Errorf("arealrl: close_segment response missing trajectory_id")
+	}
+	return *out.TrajectoryID, nil
+}
+
+// exportRequest mirrors AReaL's ExportTrajectoriesRequest. RemoveSession is
+// false so the session stays alive for subsequent per-segment exports (the
+// gateway would otherwise revoke the session group on removal). No group_id
+// is sent.
+type exportRequest struct {
+	SessionIDs    []string `json:"session_ids"`
+	TrajectoryID  *int     `json:"trajectory_id,omitempty"`
+	RemoveSession bool     `json:"remove_session"`
+}
+
+// ExportTrajectory exports one trajectory from sessionID (admin-key auth) and
+// returns the raw “traj“ JSON. The caller decodes the tensor_ref it needs
+// from the returned payload. Admin key is the client's configured key, the
+// same used by StartSession.
+func (c *Client) ExportTrajectory(
+	ctx context.Context,
+	sessionID string,
+	trajectoryID int,
+) (json.RawMessage, error) {
+	body := exportRequest{
+		SessionIDs:    []string{sessionID},
+		TrajectoryID:  &trajectoryID,
+		RemoveSession: false,
+	}
+	resp, err := c.doJSON(ctx, exportTrajPath, c.adminKey, body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, "export_trajectories"); err != nil {
+		return nil, err
+	}
+	var out struct {
+		Traj json.RawMessage `json:"traj"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("arealrl: decode export response: %w", err)
+	}
+	return out.Traj, nil
 }
 
 // doJSON POSTs a JSON body to path with Bearer authentication.

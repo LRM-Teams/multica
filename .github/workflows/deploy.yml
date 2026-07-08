@@ -18,15 +18,15 @@ name: Deploy
 # One-time server + repo setup is documented in docs/deploy-s89.md.
 
 on:
-  # Deploy only when a PR is MERGED into `dev` (the team's integration branch).
-  # Direct pushes to dev do NOT deploy — the disciplined flow is
-  # feature branch → PR → merge to dev → deploy.
+  # Deploy only when a PR is MERGED into `dev` or `main`.
+  # Direct pushes do NOT deploy — the disciplined flow is
+  # feature branch → PR → merge to target branch → deploy.
   # Docs-only PRs (#354 bug) are excluded — they don't change any code, so
   # triggering a backend rebuild/restart would disconnect all WS connections
   # for zero benefit.
   pull_request:
     types: [closed]
-    branches: [dev]
+    branches: [dev, main]
     paths-ignore:
       - "docs/**"
       - "*.md"

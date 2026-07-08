@@ -215,6 +215,13 @@ func assertTaskOutputSuppressedReason(t *testing.T, taskID, want string) {
 	}
 }
 
+func setTaskPriority(t *testing.T, taskID string, priority int) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_task_queue SET priority = $2 WHERE id = $1`, taskID, priority); err != nil {
+		t.Fatalf("set task priority: %v", err)
+	}
+}
+
 func createClaimReclaimRuntime(t *testing.T, ctx context.Context, name string) string {
 	t.Helper()
 
@@ -2889,7 +2896,7 @@ func TestCompleteTask_GroupChannelNoReplyPhraseInsideNormalTextIsNotSuppressed(t
 	assertTaskOutputSuppressedReason(t, taskID, "")
 }
 
-func TestCompleteTask_CLICapableRunSuppressesUnsentFinalText(t *testing.T) {
+func TestCompleteTask_AmbientCLICapableRunSuppressesUnsentFinalText(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2898,6 +2905,7 @@ func TestCompleteTask_CLICapableRunSuppressesUnsentFinalText(t *testing.T) {
 		protocol.DaemonCapabilityChannelOutputActions,
 		protocol.DaemonCapabilityAgentCLITransport,
 	})
+	setTaskPriority(t, taskID, 1)
 	// Novel rationale phrasing that exact-match does not catch.
 	rawOutput := "This request was already fully handled in the unread bundle itself — I already sent all the stickers and followed up with Frank An. No new action needed here."
 
@@ -2910,7 +2918,7 @@ func TestCompleteTask_CLICapableRunSuppressesUnsentFinalText(t *testing.T) {
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 }
 
-func TestCompleteTask_CLICapableRunSuppressesNormalFinalText(t *testing.T) {
+func TestCompleteTask_AmbientCLICapableRunSuppressesNormalFinalText(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2919,9 +2927,10 @@ func TestCompleteTask_CLICapableRunSuppressesNormalFinalText(t *testing.T) {
 		protocol.DaemonCapabilityChannelOutputActions,
 		protocol.DaemonCapabilityAgentCLITransport,
 	})
-	// Even a legitimate-looking message is suppressed on CLI-capable runs:
-	// the agent must use `multica send` to produce visible output.
-	const visibleReply = "Here is a perfectly normal reply that should have been sent via multica send."
+	setTaskPriority(t, taskID, 1)
+	// Ambient fan-out remains opt-in via multica send/react so unrelated agents
+	// can observe a channel without turning final text into visible chatter.
+	const visibleReply = "Here is a perfectly normal ambient observation that should stay hidden unless sent via multica send."
 
 	w := completeTaskForTest(t, taskID, map[string]any{"output": visibleReply})
 	if w.Code != http.StatusOK {
@@ -2956,29 +2965,29 @@ func TestCompleteTask_CLICapableRunDoesNotSuppressExplicitMessageSendAction(t *t
 	assertTaskOutputSuppressedReason(t, taskID, "")
 }
 
-func TestCompleteTask_DirectedCLICapableRunFlagsMustReplyFailure(t *testing.T) {
+func TestCompleteTask_DirectedCLICapableRunBridgesFinalTextFallback(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	// Directed task (priority=2, @mention/DM) on a CLI-capable run.
-	// Agent outputs plain text instead of using multica send → suppressed
-	// and flagged as must-reply failure so Activity can surface it.
+	// If multica send was not used successfully, non-empty final text is a
+	// visible fallback so must-reply runs do not complete silently.
 	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", []string{
 		protocol.DaemonCapabilityChannelOutputActions,
 		protocol.DaemonCapabilityAgentCLITransport,
 	})
-	rawOutput := "I already handled this in a previous message, no need to reply again."
+	rawOutput := "I tried to send this through the chat transport; here is the final answer fallback."
 
 	w := completeTaskForTest(t, taskID, map[string]any{"output": rawOutput})
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	assertNoChannelMessageContent(t, channelID, rawOutput)
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
+	assertChannelMessageContentCount(t, channelID, rawOutput, 1)
+	assertTaskOutputSuppressedReason(t, taskID, "")
 
-	// Verify must_reply_failure flag is set in the task result.
+	// Plain-text fallback is visible output, not a must-reply failure.
 	var raw []byte
 	if err := testPool.QueryRow(context.Background(), `SELECT result FROM agent_task_queue WHERE id = $1`, taskID).Scan(&raw); err != nil {
 		t.Fatalf("load task result: %v", err)
@@ -2987,8 +2996,8 @@ func TestCompleteTask_DirectedCLICapableRunFlagsMustReplyFailure(t *testing.T) {
 	if err := json.Unmarshal(raw, &result); err != nil {
 		t.Fatalf("decode task result: %v", err)
 	}
-	if v, ok := result["must_reply_failure"].(bool); !ok || !v {
-		t.Fatalf("must_reply_failure = %v, want true (directed run with suppressed output)", result["must_reply_failure"])
+	if v, ok := result["must_reply_failure"].(bool); ok && v {
+		t.Fatalf("must_reply_failure = %v, want absent/false for visible final text fallback", result["must_reply_failure"])
 	}
 }
 

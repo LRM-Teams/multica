@@ -2153,7 +2153,7 @@ type TaskCompleteRequest struct {
 	Parts                  []protocol.MessagePart        `json:"parts"`
 	Reaction               *protocol.ChatReactionPayload `json:"reaction"`
 	OutputSuppressedReason string                        `json:"output_suppressed_reason,omitempty"`
-	MustReplyFailure      bool                          `json:"must_reply_failure,omitempty"`
+	MustReplyFailure       bool                          `json:"must_reply_failure,omitempty"`
 	SessionID              string                        `json:"session_id"` // Claude session ID for future resumption
 	WorkDir                string                        `json:"work_dir"`   // working directory used during execution
 }
@@ -2289,13 +2289,9 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonToolTransportOutput)
 		return nil
 	}
-	if channelTask && !explicitAction && outputType == protocol.ChatOutputKindMessage && h.taskRuntimeHasCapability(ctx, task, protocol.DaemonCapabilityAgentCLITransport) {
-		slog.Warn("complete task: suppressing unsent final text on CLI-capable run", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
+	if channelTask && task.Priority < 2 && !explicitAction && outputType == protocol.ChatOutputKindMessage && h.taskRuntimeHasCapability(ctx, task, protocol.DaemonCapabilityAgentCLITransport) {
+		slog.Warn("complete task: suppressing unsent final text on ambient CLI-capable run", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
-		if task.Priority >= 2 {
-			req.MustReplyFailure = true
-			slog.Warn("complete task: directed run produced no visible output (must-reply failure)", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "priority", task.Priority)
-		}
 		return nil
 	}
 	if channelTask && explicitAction && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && !h.taskRuntimeHasCapability(ctx, task, protocol.DaemonCapabilityChannelOutputActions) {

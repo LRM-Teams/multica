@@ -243,8 +243,9 @@ function MessageViewport({
     firstItemIndex,
     virtuosoRef,
     // The scroll container gates the anchor scroll (Virtuoso only mounts once it
-    // exists) and is polled by the settle helper to detect landing convergence.
+    // exists) and its rect tells the settle helper when the anchor row arrives.
     scrollContainerEl,
+    messageRefMap,
   });
 
   // Floating "N new messages ↓" pill (#303) — self-contained plugin hook (#325

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildFileTree } from "./file-tree";
+import { buildFileTree } from "./file-tree-utils";
 
 describe("buildFileTree", () => {
   it("builds nested directories and sorts directories before files", () => {

@@ -13,7 +13,8 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { useT } from "../../i18n";
-import { buildFileTree, FileTree, fileLanguage } from "./file-tree";
+import { FileTree } from "./file-tree";
+import { buildFileTree, fileLanguage } from "./file-tree-utils";
 
 // Modal preview of one file's content. Fetches lazily when `path` is set.
 function CenteredNote({ children }: { children: ReactNode }) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import CodeMirror from "@uiw/react-codemirror";
 import { css } from "@codemirror/lang-css";
@@ -23,7 +23,8 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
-import { buildFileTree, FileTree, fileLanguage } from "./file-tree";
+import { FileTree } from "./file-tree";
+import { buildFileTree, fileLanguage } from "./file-tree-utils";
 
 const agentFilesQueryKey = (agentId: string, includeHidden: boolean) =>
   ["agent-files", agentId, includeHidden] as const;
@@ -102,27 +103,65 @@ function AgentFileEditorDialog({
   path: string | null;
   onClose: () => void;
 }) {
-  const qc = useQueryClient();
   const { data, isPending, isError } = useQuery({
     queryKey: agentFileContentQueryKey(agentId, path),
     queryFn: () => api.getAgentFileContent(agentId, path ?? ""),
     enabled: !!path,
   });
-  const [draft, setDraft] = useState("");
-  const [jsonError, setJsonError] = useState<string | null>(null);
   const name = path ? path.slice(path.lastIndexOf("/") + 1) : "";
-  const readonly = data?.binary === true || data?.too_large === true || data?.encoding === "base64";
 
-  useEffect(() => {
-    if (path) {
-      setDraft(prettyInitialContent(path, data));
-      setJsonError(null);
-    }
-  }, [data, path]);
+  return (
+    <Dialog open={!!path} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="flex h-[85vh] w-[92vw] max-w-[1200px] sm:max-w-[1200px] flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="flex-row items-center justify-between gap-3 border-b px-4 py-3">
+          <DialogTitle className="truncate font-mono text-sm">{name}</DialogTitle>
+          <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close editor">
+            <X className="size-4" />
+          </Button>
+        </DialogHeader>
+        {isPending ? (
+          <div className="space-y-2 p-4">
+            <Skeleton className="h-4" />
+            <Skeleton className="h-4" />
+            <Skeleton className="h-4 w-2/3" />
+          </div>
+        ) : isError ? (
+          <CenteredNote>Failed to load file.</CenteredNote>
+        ) : data?.too_large ? (
+          <CenteredNote>This file is too large to edit.</CenteredNote>
+        ) : data?.binary ? (
+          <CenteredNote>Binary files cannot be edited.</CenteredNote>
+        ) : data?.encoding === "base64" ? (
+          <CenteredNote>Media files are read-only in this editor.</CenteredNote>
+        ) : path && data ? (
+          <AgentFileEditorForm
+            key={`${path}:${data.content_hash}`}
+            agentId={agentId}
+            path={path}
+            data={data}
+          />
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
 
+function AgentFileEditorForm({
+  agentId,
+  path,
+  data,
+}: {
+  agentId: string;
+  path: string;
+  data: AgentFileContentResponse;
+}) {
+  const qc = useQueryClient();
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const initialContent = prettyInitialContent(path, data);
+  const [draft, setDraft] = useState(initialContent);
+  const [jsonError, setJsonError] = useState<string | null>(null);
   const save = useMutation({
     mutationFn: async () => {
-      if (!path) throw new Error("missing path");
       if (fileLanguage(path) === "json" && draft.trim()) {
         try {
           JSON.parse(draft);
@@ -136,7 +175,7 @@ function AgentFileEditorDialog({
       return api.updateAgentFileContent(agentId, {
         path,
         content: draft,
-        expected_content_hash: data?.content_hash ?? "",
+        expected_content_hash: data.content_hash,
       });
     },
     onSuccess: async (resp) => {
@@ -145,9 +184,11 @@ function AgentFileEditorDialog({
         return;
       }
       toast.success("File saved");
-      await qc.invalidateQueries({ queryKey: agentFilesQueryKey(agentId, false) });
-      await qc.invalidateQueries({ queryKey: agentFilesQueryKey(agentId, true) });
-      await qc.invalidateQueries({ queryKey: agentFileContentQueryKey(agentId, path) });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: agentFilesQueryKey(agentId, false) }),
+        qc.invalidateQueries({ queryKey: agentFilesQueryKey(agentId, true) }),
+        qc.invalidateQueries({ queryKey: agentFileContentQueryKey(agentId, path) }),
+      ]);
     },
     onError: (err) => {
       if (err instanceof Error && err.message) {
@@ -158,21 +199,19 @@ function AgentFileEditorDialog({
     },
   });
 
-  const renderBody = () => {
-    if (isPending) {
-      return (
-        <div className="space-y-2 p-4">
-          <Skeleton className="h-4" />
-          <Skeleton className="h-4" />
-          <Skeleton className="h-4 w-2/3" />
-        </div>
-      );
-    }
-    if (isError) return <CenteredNote>Failed to load file.</CenteredNote>;
-    if (data?.too_large) return <CenteredNote>This file is too large to edit.</CenteredNote>;
-    if (data?.binary) return <CenteredNote>Binary files cannot be edited.</CenteredNote>;
-    if (data?.encoding === "base64") return <CenteredNote>Media files are read-only in this editor.</CenteredNote>;
-    return (
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="flex items-center justify-end border-b px-4 py-2">
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => save.mutate()}
+          disabled={save.isPending || draft === initialContent}
+        >
+          <Save className="mr-1.5 size-3.5" />
+          Save
+        </Button>
+      </div>
       <div className="min-h-0 flex-1 overflow-hidden">
         <CodeMirror
           value={draft}
@@ -188,32 +227,7 @@ function AgentFileEditorDialog({
         />
         {jsonError && <p className="border-t px-4 py-2 text-xs text-destructive">{jsonError}</p>}
       </div>
-    );
-  };
-
-  return (
-    <Dialog open={!!path} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex h-[85vh] w-[92vw] max-w-[1200px] sm:max-w-[1200px] flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="flex-row items-center justify-between gap-3 border-b px-4 py-3">
-          <DialogTitle className="truncate font-mono text-sm">{name}</DialogTitle>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => save.mutate()}
-              disabled={readonly || !path || save.isPending || draft === prettyInitialContent(path, data)}
-            >
-              <Save className="mr-1.5 size-3.5" />
-              Save
-            </Button>
-            <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close editor">
-              <X className="size-4" />
-            </Button>
-          </div>
-        </DialogHeader>
-        {renderBody()}
-      </DialogContent>
-    </Dialog>
+    </div>
   );
 }
 

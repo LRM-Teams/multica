@@ -93,8 +93,27 @@ export function useUnreadAnchorScroll({
     return messages.findIndex((m) => m.id === newMessagesDivider.anchorMessageId);
   }, [messages, newMessagesDivider]);
 
+  // TEMP DIAGNOSTIC (#348 branch A/B split) — remove after the s89 verify.
+  useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.log("[#348 diag] unreadAnchorIndex changed:", {
+      unreadAnchorIndex,
+      newMessagesDivider,
+      channelId,
+      scrollContainerElPresent: !!scrollContainerEl,
+    });
+  }, [unreadAnchorIndex, newMessagesDivider, channelId, scrollContainerEl]);
+
   const scrolledDividerChannelRef = useRef<string | null>(null);
   useEffect(() => {
+    // TEMP DIAGNOSTIC (#348 branch A/B split) — remove after the s89 verify.
+    // eslint-disable-next-line no-console
+    console.log("[#348 diag] settle effect ran:", {
+      scrollContainerElPresent: !!scrollContainerEl,
+      highlightMessageId,
+      unreadAnchorIndex,
+      alreadyScrolledForChannel: scrolledDividerChannelRef.current === channelId,
+    });
     if (!scrollContainerEl || highlightMessageId || unreadAnchorIndex < 0) return;
     if (scrolledDividerChannelRef.current === channelId) return;
     scrolledDividerChannelRef.current = channelId ?? null;
@@ -104,13 +123,27 @@ export function useUnreadAnchorScroll({
     // scrollTop check — it can't be fooled by scrollToIndex's async lag (which
     // reads scrollTop=0 for the first frames). Until the row is virtualized into
     // the DOM and reaches the top, keep re-issuing.
+    let hasReachedCallCount = 0;
     const hasReached = () => {
+      hasReachedCallCount += 1;
       if (!anchorId) return false;
       const el = messageRefMap.get(anchorId);
-      if (!el) return false;
-      const rel = el.getBoundingClientRect().top - scrollContainerEl.getBoundingClientRect().top;
-      return rel <= ANCHOR_TOP_BAND_PX;
+      const reached = !!el && el.getBoundingClientRect().top - scrollContainerEl.getBoundingClientRect().top <= ANCHOR_TOP_BAND_PX;
+      // TEMP DIAGNOSTIC (#348 branch A/B split) — remove after the s89 verify.
+      // eslint-disable-next-line no-console
+      console.log("[#348 diag] hasReached check", hasReachedCallCount, {
+        anchorId,
+        elFound: !!el,
+        reached,
+      });
+      return reached;
     };
+    // TEMP DIAGNOSTIC (#348 branch A/B split) — remove after the s89 verify.
+    // eslint-disable-next-line no-console
+    console.log("[#348 diag] firing scrollToIndexUntilSettled", {
+      index: firstItemIndex + unreadAnchorIndex,
+      virtuosoHandlePresent: !!virtuosoRef.current,
+    });
     // Measure-safe (react-virtuoso #883): the read cursor arrives ~100ms after
     // mount, so the list may still be measuring — re-issue until the anchor row
     // actually reaches the top, else a big-list far jump to the "N new messages"

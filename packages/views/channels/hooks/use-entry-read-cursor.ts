@@ -52,13 +52,20 @@ export function useEntryReadCursor(
 
   useEffect(() => {
     if (!channelId) return;
+    // TEMP DIAGNOSTIC (#348 branch A/B split) — remove after the s89 verify.
+    // eslint-disable-next-line no-console
+    console.log("[#348 diag] markRead firing on entry", { channelId, payloadLastReadSeq });
     markRead(channelId, {
-      onSuccess: (result) =>
+      onSuccess: (result) => {
+        // TEMP DIAGNOSTIC (#348 branch A/B split) — remove after the s89 verify.
+        // eslint-disable-next-line no-console
+        console.log("[#348 diag] markRead onSuccess", { channelId, result });
         setEchoed((prev) =>
           prev?.channelId === channelId
             ? prev
             : { channelId, seq: result?.previous_last_read_seq ?? null },
-        ),
+        );
+      },
     });
     // `markRead` (react-query mutate) is referentially stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -67,5 +74,15 @@ export function useEntryReadCursor(
   const payloadSnap =
     payloadSnapRef.current.channelId === key ? payloadSnapRef.current.seq : null;
   const echoedSeq = echoed && echoed.channelId === channelId ? echoed.seq : null;
-  return payloadSnap ?? echoedSeq;
+  const result = payloadSnap ?? echoedSeq;
+  // TEMP DIAGNOSTIC (#348 branch A/B split) — remove after the s89 verify.
+  // eslint-disable-next-line no-console
+  console.log("[#348 diag] useEntryReadCursor result", {
+    channelId,
+    payloadLastReadSeq,
+    payloadSnap,
+    echoedSeq,
+    result,
+  });
+  return result;
 }

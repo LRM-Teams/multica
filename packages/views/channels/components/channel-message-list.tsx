@@ -21,6 +21,7 @@ import { useMessageDayDividers } from "../../i18n/use-message-time";
 import { useT } from "../../i18n/use-t";
 import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
 import { useNewMessagesPill } from "../hooks/use-new-arrivals-pill";
+import { useUnreadAnchorScroll } from "../hooks/use-unread-anchor-scroll";
 
 // Small centered date pill (Iris #303 A) — the inline date divider at each local
 // day boundary.
@@ -74,34 +75,6 @@ function NewMessagesPill({ count, onClick }: { count: number; onClick: () => voi
       <span aria-hidden="true">↓</span>
     </button>
   );
-}
-
-// react-virtuoso #883: on a cold load `scrollToIndex` can run before the list's
-// item heights are measured, so it lands at the wrong offset (the unread divider
-// dropping far below the viewport was exactly this). The maintainer-acknowledged
-// fix is to re-issue the scroll after mount until it settles. We re-issue across
-// a few animation frames — as measurement completes the target converges, and
-// with `behavior: "auto"` the repeats just re-pin the same index (idempotent, no
-// jank). Returns a disposer so the effect can cancel on re-target/unmount.
-function scrollToIndexUntilSettled(
-  handle: VirtuosoHandle | null,
-  location: { index: number; align: "start" | "center" | "end"; behavior?: "auto" | "smooth" },
-  frames = 6,
-): () => void {
-  if (!handle) return () => {};
-  let raf = 0;
-  let remaining = frames;
-  const tick = () => {
-    handle.scrollToIndex(location);
-    if (remaining > 0) {
-      remaining -= 1;
-      raf = requestAnimationFrame(tick);
-    }
-  };
-  tick();
-  return () => {
-    if (raf) cancelAnimationFrame(raf);
-  };
 }
 
 /**
@@ -251,10 +224,18 @@ function MessageViewport({
     return messages.findIndex((m) => m.id === highlightMessageId);
   }, [messages, highlightMessageId]);
 
-  const unreadAnchorIndex = useMemo(() => {
-    if (!newMessagesDivider) return -1;
-    return messages.findIndex((m) => m.id === newMessagesDivider.anchorMessageId);
-  }, [messages, newMessagesDivider]);
+  // "Open scrolled to the unread divider" (#303) — self-contained plugin hook
+  // (#325 phase-2 block 2). Owns the anchor derivation, the once-per-visit guard,
+  // and the measure-safe (#883) settle-scroll; the core just reads back
+  // `unreadAnchorIndex` to seed the Virtuoso mount position below.
+  const { unreadAnchorIndex } = useUnreadAnchorScroll({
+    channelId,
+    messages,
+    newMessagesDivider,
+    highlightMessageId,
+    firstItemIndex,
+    virtuosoRef,
+  });
 
   // Floating "N new messages ↓" pill (#303) — self-contained plugin hook (#325
   // phase-2 block 1). It owns its own boundary/scroll state; the core list just
@@ -327,27 +308,6 @@ function MessageViewport({
       behavior: "smooth",
     });
   }, [highlightMessageId, highlightIndex, firstItemIndex, messageRefMap]);
-
-  // Scroll the "new messages" divider near the top on entry — start reading
-  // where you left off (Iris, #303). The race-free cursor arrives with the
-  // mark-read response, so the anchor can become known *after* mount (when
-  // `initialTopMostItemIndex` has already positioned at the latest message);
-  // this effect covers that late arrival. Once per conversation visit, and never
-  // over a deep-link/search scroll (that target wins).
-  const scrolledDividerChannelRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (highlightMessageId || unreadAnchorIndex < 0) return;
-    if (scrolledDividerChannelRef.current === channelId) return;
-    scrolledDividerChannelRef.current = channelId ?? null;
-    // Measure-safe (react-virtuoso #883): the read cursor arrives ~100ms after
-    // mount, so the list may still be measuring — re-issue until it settles,
-    // else the "N new messages" divider lands far below the viewport.
-    return scrollToIndexUntilSettled(virtuosoRef.current, {
-      index: firstItemIndex + unreadAnchorIndex,
-      align: "start",
-      behavior: "auto",
-    });
-  }, [channelId, unreadAnchorIndex, highlightMessageId, firstItemIndex]);
 
   if (loadErrorLabel) {
     return (

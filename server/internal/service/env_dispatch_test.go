@@ -28,7 +28,14 @@ func (c *fakeSandboxInstanceCreator) CreateSandboxInstance(_ context.Context, in
 	if c.err != nil {
 		return SandboxInstanceRef{}, c.err
 	}
-	return c.ref, nil
+	if c.ref.InstanceID != "" {
+		return c.ref, nil
+	}
+	return SandboxInstanceRef{
+		InstanceID:  fmt.Sprintf("inst-%d", len(c.calls)),
+		WorkspaceID: in.WorkspaceID,
+		Template:    in.Template,
+	}, nil
 }
 
 var _ SandboxInstanceCreator = (*fakeSandboxInstanceCreator)(nil)
@@ -1077,6 +1084,82 @@ func TestEnvDispatchPerAgentEnvSpecsEmptyPreservesCurrentBehavior(t *testing.T) 
 	}
 	if len(res.Rollouts) != 1 || len(res.Rollouts[0].AgentSandboxRefs) != 0 {
 		t.Fatalf("empty specs must not populate AgentSandboxRefs, got %+v", res.Rollouts)
+	}
+}
+
+// TestEnvDispatchPerAgentEnvSpecsAssignDistinctSandboxRefs verifies that
+// per-agent env specs produce one sandbox_instance per spec, with each ref
+// keyed by agent_id in AgentSandboxRefs and all refs distinct.
+func TestEnvDispatchPerAgentEnvSpecsAssignDistinctSandboxRefs(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{} // distinct refs auto-generated
+	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(creator)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		TrainAgentID: "train",
+		Message: &MessageInput{Content: "hi"},
+		PerAgentEnvSpecs: []PerAgentEnvSpec{
+			{AgentID: "a1", Template: "python"},
+			{AgentID: "a2", Template: "node"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(creator.calls) != 2 {
+		t.Fatalf("want 2 sandbox_instance creates, got %d", len(creator.calls))
+	}
+	if len(res.Rollouts) != 1 {
+		t.Fatalf("want 1 rollout, got %d", len(res.Rollouts))
+	}
+	refs := res.Rollouts[0].AgentSandboxRefs
+	if len(refs) != 2 {
+		t.Fatalf("want 2 agent sandbox refs, got %d", len(refs))
+	}
+	r1, ok1 := refs["a1"]
+	r2, ok2 := refs["a2"]
+	if !ok1 || !ok2 {
+		t.Fatalf("missing agent refs: a1=%v a2=%v", ok1, ok2)
+	}
+	if r1.InstanceID == r2.InstanceID {
+		t.Fatalf("agent refs must be distinct: both %s", r1.InstanceID)
+	}
+}
+
+// TestEnvDispatchPerAgentEnvSpecsPartialSquadUsesDefaults verifies that when
+// only some squad members have per-agent env specs, specified members get their
+// own sandbox_instance refs and unspecified members do not get entries in
+// AgentSandboxRefs (they use the shared/default behavior).
+func TestEnvDispatchPerAgentEnvSpecsPartialSquadUsesDefaults(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{}
+	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(creator)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		TrainAgentID: "train",
+		Message: &MessageInput{Content: "hi"},
+		PerAgentEnvSpecs: []PerAgentEnvSpec{
+			{AgentID: "a1", Template: "python"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	refs := res.Rollouts[0].AgentSandboxRefs
+	if len(refs) != 1 {
+		t.Fatalf("want 1 agent sandbox ref (only specified), got %d", len(refs))
+	}
+	if _, ok := refs["a1"]; !ok {
+		t.Fatalf("missing ref for specified agent a1")
+	}
+	if _, ok := refs["a2"]; ok {
+		t.Fatalf("unspecified agent a2 should not have a ref")
 	}
 }
 

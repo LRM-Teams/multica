@@ -547,8 +547,9 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 	// Non-trained rollouts (or no creator injected) keep the Fleet fork path.
 	var forked []string
 	var sandboxRefs []SandboxInstanceRef
+	var agentSandboxRefs map[string]SandboxInstanceRef
 	if s.useSandboxInstanceBackend(in) {
-		refs, err := s.createSandboxInstanceRefs(ctx, in, sourceEnv)
+		refs, agentRefs, err := s.createSandboxInstanceRefs(ctx, in, sourceEnv)
 		if err != nil {
 			return EnvRollout{}, fmt.Errorf("create sandbox_instance: %w", err)
 		}
@@ -556,6 +557,7 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 			forked = append(forked, r.InstanceID)
 			sandboxRefs = append(sandboxRefs, r)
 		}
+		agentSandboxRefs = agentRefs
 	} else {
 		// Branch always forks (spec §4.3): the source sandbox set is never reused
 		// in place, so the source state stays re-branchable (MCTS). Scratch forks
@@ -601,7 +603,7 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 		chatSessionIDMap = smap
 	}
 
-	r := EnvRollout{EnvID: envID, ProjectID: projectID, SandboxRefs: sandboxRefs}
+	r := EnvRollout{EnvID: envID, ProjectID: projectID, SandboxRefs: sandboxRefs, AgentSandboxRefs: agentSandboxRefs}
 	// Stash the single copied entity for dispatchOne (spec §7.4: exactly one).
 	if in.Mode == EnvModeBranch {
 		if in.Domain == EnvDomainSweLego {
@@ -633,20 +635,27 @@ func (s *EnvDispatchService) useSandboxInstanceBackend(in EnvDispatchInput) bool
 // Branch (D7) creates from the source env's template; scratch creates from the
 // requested template. v1 resolves the workspace/node via the lifecycle creator
 // deps; production adapter wiring (node selection) is injected by the handler.
-func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in EnvDispatchInput, sourceEnv Env) ([]SandboxInstanceRef, error) {
+// Returns the flat slice (for SandboxIDs/SandboxRefs) and, when per-agent specs
+// are used, an agent_id→ref map for AgentSandboxRefs.
+func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in EnvDispatchInput, sourceEnv Env) ([]SandboxInstanceRef, map[string]SandboxInstanceRef, error) {
 	if len(in.PerAgentEnvSpecs) > 0 {
 		refs := make([]SandboxInstanceRef, 0, len(in.PerAgentEnvSpecs))
+		agentRefs := make(map[string]SandboxInstanceRef, len(in.PerAgentEnvSpecs))
 		for _, spec := range in.PerAgentEnvSpecs {
+			// spec.Template is used directly; BaseEnvID → template resolution is
+			// deferred to Step 6c (production adapter wiring). Shape validation
+			// guarantees exactly one of Template/BaseEnvID is set.
 			ref, err := s.lifecycle.CreateSandboxInstance(ctx, CreateSandboxInstanceInput{
 				WorkspaceID: in.WorkspaceID,
 				Template:    spec.Template,
 			}, in.UserID)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			refs = append(refs, ref)
+			agentRefs[spec.AgentID] = ref
 		}
-		return refs, nil
+		return refs, agentRefs, nil
 	}
 	// No per-agent specs: create one default sandbox_instance for the rollout.
 	ref, err := s.lifecycle.CreateSandboxInstance(ctx, CreateSandboxInstanceInput{
@@ -654,10 +663,10 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 		Template:    "default",
 	}, in.UserID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	_ = sourceEnv // branch-from-template: source template resolution is a follow-up
-	return []SandboxInstanceRef{ref}, nil
+	return []SandboxInstanceRef{ref}, nil, nil
 }
 
 // dispatchOne runs the dispatch phase for one rollout (§7.3). Best-effort:

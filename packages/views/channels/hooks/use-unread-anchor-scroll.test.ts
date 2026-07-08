@@ -59,25 +59,46 @@ describe("scrollToIndexUntilSettled (#883 measurement-race guard)", () => {
     let checks = 0;
     const NO_EFFECT_FRAMES = 12;
     const hasReached = () => ++checks > NO_EFFECT_FRAMES;
-    scrollToIndexUntilSettled(ref.current, hasReached, { index: 900, align: "start" }, 40);
+    scrollToIndexUntilSettled(ref.current, hasReached, { index: 900, align: "start" }, { maxFrames: 40 });
     // Kept re-issuing through the whole no-effect stretch, then stopped on arrival.
     expect(scrollToIndex.mock.calls.length).toBe(NO_EFFECT_FRAMES + 1);
   });
 
   it("stops at the frame cap if the target never arrives", () => {
     const { scrollToIndex, ref } = handleWithSpy();
-    scrollToIndexUntilSettled(ref.current, () => false, { index: 3, align: "start" }, 5);
+    scrollToIndexUntilSettled(ref.current, () => false, { index: 3, align: "start" }, { maxFrames: 5 });
     expect(scrollToIndex.mock.calls.length).toBe(5);
   });
 
   it("stops after a single scroll when the target is already at the top", () => {
     const { scrollToIndex, ref } = handleWithSpy();
-    scrollToIndexUntilSettled(ref.current, () => true, { index: 3, align: "start" }, 40);
+    scrollToIndexUntilSettled(ref.current, () => true, { index: 3, align: "start" }, { maxFrames: 40 });
     expect(scrollToIndex.mock.calls.length).toBe(1);
   });
 
   it("is a no-op (no throw) with a null handle", () => {
     expect(() => scrollToIndexUntilSettled(null, () => true, { index: 0, align: "start" })).not.toThrow();
+  });
+
+  it("calls onSettleTimeout exactly once when the frame cap is hit without ever reaching (Parker fallback contract)", () => {
+    const { ref } = handleWithSpy();
+    const onSettleTimeout = vi.fn();
+    scrollToIndexUntilSettled(ref.current, () => false, { index: 3, align: "start" }, {
+      maxFrames: 5,
+      onSettleTimeout,
+    });
+    expect(onSettleTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT call onSettleTimeout when the target is reached before the cap", () => {
+    const { ref } = handleWithSpy();
+    const onSettleTimeout = vi.fn();
+    let frames = 0;
+    scrollToIndexUntilSettled(ref.current, () => ++frames >= 2, { index: 3, align: "start" }, {
+      maxFrames: 40,
+      onSettleTimeout,
+    });
+    expect(onSettleTimeout).not.toHaveBeenCalled();
   });
 });
 
@@ -180,6 +201,85 @@ describe("useUnreadAnchorScroll", () => {
     expect(scrollToIndex).not.toHaveBeenCalled();
     rerender({ ...base, scrollContainerEl: elAt(0) });
     expect(scrollToIndex).toHaveBeenCalledWith({ index: 2, align: "start", behavior: "auto" });
+  });
+
+  it("REGRESSION (#348): an effect re-run mid-settle does not permanently block retries", () => {
+    // The actual #348 bug: the settle effect marked the visit "done" the moment
+    // it FIRST ran, before the async retry loop had a chance to succeed. If
+    // React re-ran the effect (any dependency touched by a stray re-render)
+    // before `hasReached` ever returned true, the cleanup cancelled the pending
+    // frame and the re-run's guard check saw "already done" — permanently
+    // stopping retries with the anchor row never having rendered. Reproduce by
+    // manually controlling rAF (not auto-firing) so we can interleave a
+    // React re-render between animation frames.
+    const pending: FrameRequestCallback[] = [];
+    globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+      pending.push(cb);
+      return pending.length;
+    }) as typeof globalThis.requestAnimationFrame;
+
+    const { scrollToIndex, ref } = handleWithSpy();
+    const messageRefMap = new Map<string, HTMLElement>(); // anchor not yet virtualized in
+    const props = {
+      channelId: "c1",
+      messages: messages(["m1", "m2", "m3"]),
+      newMessagesDivider: { anchorMessageId: "m3", count: 1 },
+      highlightMessageId: null as string | null,
+      firstItemIndex: 0,
+      virtuosoRef: ref,
+      scrollContainerEl: elAt(0),
+      messageRefMap,
+    };
+
+    const { rerender } = renderHook((p) => useUnreadAnchorScroll(p), { initialProps: props });
+    // Frame 1 ran synchronously inside the effect (tick() fires immediately);
+    // hasReached() returned false (anchor not in messageRefMap yet), so frame 2
+    // is queued.
+    expect(scrollToIndex.mock.calls.length).toBe(1);
+    expect(pending.length).toBe(1);
+
+    // A stray re-render happens before frame 2 fires (any real-world dependency
+    // touch — the exact trigger doesn't matter, only that the effect re-runs
+    // mid-settle). Vary `messageRefMap`'s identity to force the effect deps to
+    // differ; the anchor is still not virtualized in.
+    rerender({ ...props, messageRefMap: new Map(messageRefMap) });
+    // React's cleanup cancelled the queued frame-2 callback; the fixed hook's
+    // re-run must restart the settle loop (fresh tick()) rather than treat the
+    // interrupted attempt as "done".
+    expect(scrollToIndex.mock.calls.length).toBe(2);
+
+    // Now the anchor row actually gets virtualized in — the settle loop's next
+    // (most-recently-scheduled) frame should find and reach it. (The mocked
+    // `cancelAnimationFrame` from `beforeEach` is a no-op, so the earlier
+    // cancelled callback stays in `pending` uninvoked — that's a test-harness
+    // artifact, not a real pending scroll; the call-count assertions above are
+    // what prove retries aren't blocked.)
+    messageRefMap.set("m3", elAt(0));
+    const nextFrame = pending.pop();
+    nextFrame?.(0);
+    expect(scrollToIndex.mock.calls.length).toBe(3);
+  });
+
+  it("falls back to latest + logs when the anchor row never renders within the settle timeout", () => {
+    const { scrollToIndex, ref } = handleWithSpy();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    renderHook(() =>
+      useUnreadAnchorScroll({
+        channelId: "c1",
+        messages: messages(["m1", "m2", "m3", "m4", "m5"]),
+        newMessagesDivider: { anchorMessageId: "m3", count: 1 },
+        highlightMessageId: null,
+        firstItemIndex: 0,
+        virtuosoRef: ref,
+        scrollContainerEl: elAt(0),
+        messageRefMap: new Map(), // anchor never gets virtualized in
+      }),
+    );
+    // Anchor scroll attempts exhaust the cap, then the fallback fires: scroll to
+    // the last message, and a diagnosable warning is logged (not a silent no-op).
+    expect(scrollToIndex).toHaveBeenLastCalledWith({ index: 4, align: "start", behavior: "auto" });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
   });
 
   it("reports no anchor and never scrolls when there is no unread divider", () => {

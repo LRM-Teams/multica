@@ -16,23 +16,35 @@ import type { NewMessagesDivider } from "./use-new-messages-divider";
 // on "scroll position stopped changing": `scrollToIndex` is async, so scrollTop
 // reads its pre-scroll value (0 on cold load) for the first frames, and a
 // position-stability check would falsely settle at the top before the scroll ever
-// applies ("hasn't moved yet" is indistinguishable from "arrived"). A frame cap
-// backstops a target that never renders. `behavior: "auto"` makes each repeat
-// re-pin the same index idempotently (no jank). Returns a disposer so the caller
-// can cancel on re-target/unmount.
+// applies ("hasn't moved yet" is indistinguishable from "arrived").
+//
+// A frame cap backstops a target that never renders (e.g. it was deleted mid-
+// settle). `onSettleTimeout` fires exactly once if the cap is hit without ever
+// reaching — callers use it to fall back to a safe position AND log, so a stuck
+// settle is diagnosable instead of a silent no-op (#348 postmortem: the caller
+// previously self-marked "done" after a single failed check, permanently
+// blocking retries — this only gives up after genuinely exhausting the cap).
+//
+// `behavior: "auto"` makes each repeat re-pin the same index idempotently (no
+// jank). Returns a disposer so the caller can cancel on re-target/unmount.
 export function scrollToIndexUntilSettled(
   handle: VirtuosoHandle | null,
   hasReached: () => boolean,
   location: { index: number; align: "start" | "center" | "end"; behavior?: "auto" | "smooth" },
-  maxFrames = 40,
+  options?: { maxFrames?: number; onSettleTimeout?: () => void },
 ): () => void {
   if (!handle) return () => {};
+  const maxFrames = options?.maxFrames ?? 180;
   let raf = 0;
   let frame = 0;
   const tick = () => {
     handle.scrollToIndex(location);
     frame += 1;
-    if (hasReached() || frame >= maxFrames) return;
+    if (hasReached()) return;
+    if (frame >= maxFrames) {
+      options?.onSettleTimeout?.();
+      return;
+    }
     raf = requestAnimationFrame(tick);
   };
   tick();
@@ -93,66 +105,68 @@ export function useUnreadAnchorScroll({
     return messages.findIndex((m) => m.id === newMessagesDivider.anchorMessageId);
   }, [messages, newMessagesDivider]);
 
-  // TEMP DIAGNOSTIC (#348 branch A/B split) — remove after the s89 verify.
-  useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log("[#348 diag] unreadAnchorIndex changed:", {
-      unreadAnchorIndex,
-      newMessagesDivider,
-      channelId,
-      scrollContainerElPresent: !!scrollContainerEl,
-    });
-  }, [unreadAnchorIndex, newMessagesDivider, channelId, scrollContainerEl]);
+  // A stable primitive, not the whole `newMessagesDivider` object — that object
+  // is a fresh `useMemo` result on every recompute (e.g. a `messages` refetch
+  // after the mark-read echo lands), even when the anchor itself hasn't changed.
+  // Keying the effect below on the object identity was the root cause of #348's
+  // failure: it re-ran the effect on every such churn, and each re-run's cleanup
+  // cancelled the in-flight settle loop's pending frame.
+  const anchorId = newMessagesDivider?.anchorMessageId ?? null;
 
+  // Marks a channel visit's anchor scroll as resolved — either it actually
+  // reached (see `hasReached` below) or it gave up after exhausting the settle
+  // timeout. Deliberately NOT set at the top of the effect: doing so previously
+  // treated "an attempt was made" as "the scroll is done", so if the effect
+  // re-ran before the async settle loop finished (any dependency touched by a
+  // stray re-render), the guard silently blocked every subsequent retry after
+  // just one failed geometry check — the list stayed at its cold-load fallback
+  // position forever. Only a genuine outcome (reached or timed out) may set it.
   const scrolledDividerChannelRef = useRef<string | null>(null);
   useEffect(() => {
-    // TEMP DIAGNOSTIC (#348 branch A/B split) — remove after the s89 verify.
-    // eslint-disable-next-line no-console
-    console.log("[#348 diag] settle effect ran:", {
-      scrollContainerElPresent: !!scrollContainerEl,
-      highlightMessageId,
-      unreadAnchorIndex,
-      alreadyScrolledForChannel: scrolledDividerChannelRef.current === channelId,
-    });
     if (!scrollContainerEl || highlightMessageId || unreadAnchorIndex < 0) return;
     if (scrolledDividerChannelRef.current === channelId) return;
-    scrolledDividerChannelRef.current = channelId ?? null;
-    const anchorId = newMessagesDivider?.anchorMessageId ?? null;
     // Arrived = the anchor row is rendered AND pinned near the scroller's top.
     // getBoundingClientRect reflects the real post-scroll layout, so — unlike a
     // scrollTop check — it can't be fooled by scrollToIndex's async lag (which
     // reads scrollTop=0 for the first frames). Until the row is virtualized into
     // the DOM and reaches the top, keep re-issuing.
-    let hasReachedCallCount = 0;
     const hasReached = () => {
-      hasReachedCallCount += 1;
       if (!anchorId) return false;
       const el = messageRefMap.get(anchorId);
-      const reached = !!el && el.getBoundingClientRect().top - scrollContainerEl.getBoundingClientRect().top <= ANCHOR_TOP_BAND_PX;
-      // TEMP DIAGNOSTIC (#348 branch A/B split) — remove after the s89 verify.
-      // eslint-disable-next-line no-console
-      console.log("[#348 diag] hasReached check", hasReachedCallCount, {
-        anchorId,
-        elFound: !!el,
-        reached,
-      });
+      if (!el) return false;
+      const rel = el.getBoundingClientRect().top - scrollContainerEl.getBoundingClientRect().top;
+      const reached = rel <= ANCHOR_TOP_BAND_PX;
+      if (reached) scrolledDividerChannelRef.current = channelId ?? null;
       return reached;
     };
-    // TEMP DIAGNOSTIC (#348 branch A/B split) — remove after the s89 verify.
-    // eslint-disable-next-line no-console
-    console.log("[#348 diag] firing scrollToIndexUntilSettled", {
-      index: firstItemIndex + unreadAnchorIndex,
-      virtuosoHandlePresent: !!virtuosoRef.current,
-    });
     // Measure-safe (react-virtuoso #883): the read cursor arrives ~100ms after
     // mount, so the list may still be measuring — re-issue until the anchor row
     // actually reaches the top, else a big-list far jump to the "N new messages"
     // divider lands far below the viewport.
-    return scrollToIndexUntilSettled(virtuosoRef.current, hasReached, {
-      index: firstItemIndex + unreadAnchorIndex,
-      align: "start",
-      behavior: "auto",
-    });
+    return scrollToIndexUntilSettled(
+      virtuosoRef.current,
+      hasReached,
+      { index: firstItemIndex + unreadAnchorIndex, align: "start", behavior: "auto" },
+      {
+        onSettleTimeout: () => {
+          // Give up cleanly instead of retrying forever (e.g. the anchor row was
+          // deleted and can never render) — mark this visit resolved so we don't
+          // loop, log it for prod diagnosability, and fall back to the list's
+          // default: latest message.
+          scrolledDividerChannelRef.current = channelId ?? null;
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[useUnreadAnchorScroll] settle timed out — anchor row never reached the top band, falling back to latest",
+            { channelId, anchorId },
+          );
+          virtuosoRef.current?.scrollToIndex({
+            index: firstItemIndex + Math.max(0, messages.length - 1),
+            align: "start",
+            behavior: "auto",
+          });
+        },
+      },
+    );
   }, [
     scrollContainerEl,
     channelId,
@@ -160,8 +174,9 @@ export function useUnreadAnchorScroll({
     highlightMessageId,
     firstItemIndex,
     virtuosoRef,
-    newMessagesDivider,
+    anchorId,
     messageRefMap,
+    messages,
   ]);
 
   return { unreadAnchorIndex };

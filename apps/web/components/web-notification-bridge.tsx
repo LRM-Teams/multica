@@ -33,8 +33,8 @@ export function WebNotificationBridge() {
     ({ slug, issueKey, channelId, dmId }: SystemNotificationPayload) => {
       if (!slug) return null;
       const wsPaths = paths.workspace(slug);
-      if (dmId) return `${wsPaths.channels()}?dm=${encodeURIComponent(dmId)}`;
-      if (channelId) return `${wsPaths.channels()}?channel=${encodeURIComponent(channelId)}`;
+      if (dmId) return wsPaths.channelDetail(dmId);
+      if (channelId) return wsPaths.channelDetail(channelId);
       const selector = issueKey ? `?issue=${encodeURIComponent(issueKey)}` : "";
       return `${wsPaths.inbox()}${selector}`;
     },

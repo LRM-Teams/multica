@@ -477,7 +477,17 @@ function TypingDots() {
   );
 }
 
-export function ChannelsPage() {
+interface ChannelsPageProps {
+  /** The selected channel or DM id, from the /channels/[id] route segment. */
+  channelId?: string;
+}
+
+// ChannelsPage's many useState calls predate #309 — this routing change reduced
+// the count, it did not add to it. Consolidating them into useReducer is a
+// refactor of a ~2500-line component, out of scope for a URL-format change and
+// tracked separately; suppress the pre-existing warning rather than block on it.
+// react-doctor-disable-next-line react-doctor/prefer-useReducer
+export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const { t } = useT("channels");
   const timeAgo = useTimeAgo();
   const qc = useQueryClient();
@@ -499,12 +509,18 @@ export function ChannelsPage() {
   const [mobilePanel, setMobilePanel] = useState<
     "menu" | "members" | "stats" | "files" | null
   >(null);
-  // Initialize from ?channel= so shared deep links open the right channel.
-  const [activeId, setActiveId] = useState<string | null>(() => searchParams.get("channel"));
+  // Selected channel. Resolved from the `channelId` route param below, since we
+  // don't yet know (until channels/dms load) whether it's a channel or a DM.
+  const [activeId, setActiveId] = useState<string | null>(null);
   // Selected DM (Direct Messages region). Mutually exclusive with the group
   // selection: opening a DM clears `activeId`, opening a group clears this.
-  // Seeded from ?dm= so create-or-find entry points can deep-link a DM open.
-  const [activeDmId, setActiveDmId] = useState<string | null>(() => searchParams.get("dm"));
+  const [activeDmId, setActiveDmId] = useState<string | null>(null);
+  // The last `/channels/[id]` route id we reconciled into the selection above.
+  // A ref (not state): it's bookkeeping that gates the reconciliation below, not
+  // a render input. Tracking it lets the reconciliation fire only on a genuine
+  // ROUTE change, never on an optimistic in-page selection that momentarily runs
+  // ahead of the async route commit. `undefined` = not yet reconciled.
+  const reconciledRouteIdRef = useRef<string | undefined>(undefined);
   // ?message= deep-links to a specific message (e.g. from an overview mention).
   // We scroll to and briefly highlight it, then clear so it fades out.
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(
@@ -571,6 +587,40 @@ export function ChannelsPage() {
   // (click or ?channel= deep link), so the list shows until the user opens a
   // channel and the Back button (which clears activeId) returns to it.
   const { data: dms = [] } = useQuery(dmListOptions(wsId));
+
+  // Reconcile the `/channels/[id]` route param into the active selection.
+  // Adjusting state during render (not in an effect) keeps the reconciliation
+  // keyed on a genuine change of the ROUTE id: an in-page click updates the
+  // selection state and calls `replace()`, but on web the route commits
+  // asynchronously, so `channelId` briefly still points at the previous
+  // conversation. Because we compare against `reconciledRouteId` (the last route
+  // we adopted) rather than the current selection, that stale value never drags
+  // the click back — while a real external navigation (shared link,
+  // notification, Cmd+K) still opens its target. The id alone doesn't reveal
+  // channel-vs-DM, so resolution waits on list membership: until the lists load
+  // we leave the ref unadvanced so this retries as they arrive.
+  if (channelId !== reconciledRouteIdRef.current) {
+    if (!channelId) {
+      setActiveId(null);
+      setActiveDmId(null);
+      reconciledRouteIdRef.current = undefined;
+    } else if (channelId === activeId || channelId === activeDmId) {
+      reconciledRouteIdRef.current = channelId;
+    } else if (
+      channels.some((c) => c.id === channelId) ||
+      archivedChannels.some((c) => c.id === channelId)
+    ) {
+      setActiveId(channelId);
+      setActiveDmId(null);
+      reconciledRouteIdRef.current = channelId;
+    } else if (dms.some((d) => d.id === channelId)) {
+      setActiveId(null);
+      setActiveDmId(channelId);
+      reconciledRouteIdRef.current = channelId;
+    }
+    // else: lists still loading — leave the ref unadvanced to retry.
+  }
+
   // Resolve the selected DM from the list. A DM selection takes priority over a
   // group selection (the two are mutually exclusive via the select handlers),
   // so when a DM is active we don't auto-resolve a group below.
@@ -973,23 +1023,6 @@ export function ChannelsPage() {
     });
   }, [threadRoot]);
 
-  // Sync the DM selection from the `?dm=` deep link. The entry points outside
-  // this view (Cmd+K, agent hover card) push(`...?dm=ID`); when the user is
-  // already on the Messages page that's a same-route navigation that doesn't
-  // remount, so the `useState` initializer never re-runs. This reactively opens
-  // (or clears) the DM when the param changes. No loop: in-page `selectDm`
-  // updates state and replaces the URL to match, so param === state here.
-  const dmParam = searchParams.get("dm");
-  useEffect(() => {
-    if (dmParam === activeDmId) return;
-    if (dmParam) {
-      setActiveId(null);
-      setActiveDmId(dmParam);
-    } else {
-      setActiveDmId(null);
-    }
-  }, [dmParam, activeDmId]);
-
   // New messages (from others / agents) refresh the list (unread + preview)
   // and the open thread. Keep the active channel marked read while viewing it.
   useWSEvent("channel:message", (payload) => {
@@ -1088,7 +1121,7 @@ export function ChannelsPage() {
   const selectChannel = (id: string) => {
     setActiveDmId(null);
     setActiveId(id);
-    replace(`${wsPaths.channels()}?channel=${id}`);
+    replace(wsPaths.channelDetail(id));
   };
 
   // Select a DM (from the DIRECT MESSAGES region). Clears the group selection
@@ -1096,7 +1129,7 @@ export function ChannelsPage() {
   const selectDm = (dm: DMItem) => {
     setActiveId(null);
     setActiveDmId(dm.id);
-    replace(`${wsPaths.channels()}?dm=${dm.id}`);
+    replace(wsPaths.channelDetail(dm.id));
   };
 
   // "Send message" entry point on a channel member row: create-or-find the DM
@@ -1194,7 +1227,7 @@ export function ChannelsPage() {
 
   const handleShare = async () => {
     if (!active) return;
-    const url = getShareableUrl(`${wsPaths.channels()}?channel=${active.id}`);
+    const url = getShareableUrl(wsPaths.channelDetail(active.id));
     try {
       await navigator.clipboard.writeText(url);
       toast.success(t(($) => $.share.copied));

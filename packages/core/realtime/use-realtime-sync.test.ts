@@ -625,12 +625,12 @@ describe("handleInboxNew", () => {
       tag: "channel-1",
       data: expect.objectContaining({
         channelId: "channel-1",
-        url: "/workspace-a/channels?channel=channel-1",
+        url: "/workspace-a/channels/channel-1",
       }),
     });
   });
 
-  it("routes DM channel banners with the dm query param", async () => {
+  it("routes DM channel banners to the same channel detail path", async () => {
     const qc = createQueryClient();
     qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
     qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
@@ -646,7 +646,7 @@ describe("handleInboxNew", () => {
       tag: "channel-1",
       data: expect.objectContaining({
         dmId: "channel-1",
-        url: "/workspace-a/channels?dm=channel-1",
+        url: "/workspace-a/channels/channel-1",
       }),
     });
   });

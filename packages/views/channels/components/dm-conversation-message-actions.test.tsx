@@ -239,7 +239,15 @@ describe("DmConversation message edit / delete wiring (#241 B3)", () => {
   it("renders delete but never edit on the viewer's OWN DM message (real wiring)", async () => {
     renderDm();
     await screen.findByTestId("message-bubble");
-    expect(await screen.findByRole("button", { name: "Delete" })).toBeInTheDocument();
+    // findByRole already asserts the Delete button is present at find-time — do
+    // NOT chain .toBeInTheDocument() on the awaited element. Under a loaded CI run
+    // the list can transiently re-render between the await resolving and the
+    // assertion, detaching that element reference → jest-dom reports "element
+    // could not be found in the document" (green locally, red only on overloaded
+    // CI). Re-query with waitFor so we assert against the currently-mounted node.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    });
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
   });
 

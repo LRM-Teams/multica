@@ -84,7 +84,10 @@ vi.mock("@multica/core/hooks", async (importOriginal) => ({
 
 vi.mock("@multica/core/paths", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/paths")>()),
-  useWorkspacePaths: () => ({ channels: () => "/w/test/channels" }),
+  useWorkspacePaths: () => ({
+    channels: () => "/w/test/channels",
+    channelDetail: (id: string) => `/w/test/channels/${id}`,
+  }),
 }));
 
 vi.mock("@multica/core/realtime", async (importOriginal) => ({

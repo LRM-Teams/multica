@@ -197,6 +197,8 @@ jobs:
           # DNS race that caused intermittent 'no such host' errors (#324).
           compose up -d frontend
           compose up -d backend
+          # Prune unused Docker images to prevent disk from filling up (#327).
+          docker image prune -af
 
       - name: Health check (/readyz)
         run: |

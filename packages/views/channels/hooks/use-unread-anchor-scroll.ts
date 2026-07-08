@@ -86,7 +86,6 @@ export function useUnreadAnchorScroll({
   newMessagesDivider,
   highlightMessageId,
   firstItemIndex,
-  virtuosoHandle,
   virtuosoRef,
   scrollContainerEl,
   messageRefMap,
@@ -96,18 +95,6 @@ export function useUnreadAnchorScroll({
   newMessagesDivider: NewMessagesDivider | null;
   highlightMessageId: string | null | undefined;
   firstItemIndex: number;
-  /**
-   * The attached Virtuoso imperative handle, or null before/after attachment —
-   * a STATE value (via the caller's callback-ref-into-state), not read off a
-   * plain ref. Refs don't trigger re-renders when `.current` changes, so an
-   * effect gated only on a ref can fire while the handle is still null and
-   * never get a second chance once it attaches (#348 root cause). Included in
-   * the effect's dependency array below so attachment reliably re-fires it.
-   */
-  virtuosoHandle: VirtuosoHandle | null;
-  /** Still used for the actual imperative `scrollToIndex` calls — equivalent to
-   * `virtuosoHandle` within the same render, kept as a ref for callers that
-   * don't need render-time reactivity. */
   virtuosoRef: RefObject<VirtuosoHandle | null>;
   /**
    * The caller's scroll container (Virtuoso's `customScrollParent`), or null
@@ -145,7 +132,7 @@ export function useUnreadAnchorScroll({
   // position forever. Only a genuine outcome (reached or timed out) may set it.
   const scrolledDividerChannelRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!scrollContainerEl || !virtuosoHandle || highlightMessageId || unreadAnchorIndex < 0) return;
+    if (!scrollContainerEl || highlightMessageId || unreadAnchorIndex < 0) return;
     if (scrolledDividerChannelRef.current === channelId) return;
     // Arrived = the anchor row is rendered AND pinned near the scroller's top.
     // getBoundingClientRect reflects the real post-scroll layout, so — unlike a
@@ -174,7 +161,7 @@ export function useUnreadAnchorScroll({
     // actually reaches the top, else a big-list far jump to the "N new messages"
     // divider lands far below the viewport.
     return scrollToIndexUntilSettled(
-      virtuosoHandle,
+      virtuosoRef.current,
       hasReached,
       { index: firstItemIndex + unreadAnchorIndex, align: "start", behavior: "auto" },
       {
@@ -199,7 +186,6 @@ export function useUnreadAnchorScroll({
     );
   }, [
     scrollContainerEl,
-    virtuosoHandle,
     channelId,
     unreadAnchorIndex,
     highlightMessageId,

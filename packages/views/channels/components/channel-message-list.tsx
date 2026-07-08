@@ -189,23 +189,6 @@ function MessageViewport({
 }: MessageViewportProps) {
   const scrollRef = useRef<HTMLElement | null>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
-  // `virtuosoRef.current` alone can't gate a mount-time effect: ref attachment
-  // doesn't trigger a re-render, so an effect that fires the instant its OTHER
-  // dependencies are satisfied (e.g. `scrollContainerEl`) can run while the
-  // handle is still null and never gets a second chance — the #348 root cause.
-  // Mirrors `scrollContainerEl`'s existing callback-ref-into-state pattern so
-  // "the Virtuoso handle just attached" is a real dependency-array-visible
-  // state change, not silent.
-  const [virtuosoHandle, setVirtuosoHandle] = useState<VirtuosoHandle | null>(null);
-  const handleVirtuosoRef = useCallback((node: VirtuosoHandle | null) => {
-    virtuosoRef.current = node;
-    // Bail if the same instance is passed again — defense against a ref
-    // consumer (real or mocked) that re-invokes the callback ref with an
-    // unchanged handle on every render; setting the same reference would still
-    // be a no-op re-render, but skipping it entirely is cheaper and matches how
-    // `scrollContainerEl` behaves.
-    setVirtuosoHandle((prev) => (prev === node ? prev : node));
-  }, []);
   const messageRefs = useRef<Map<string, HTMLDivElement> | null>(null);
   // Only the direct-fallback path needs manual scroll-position preservation:
   // it renders plain divs with no virtualization, so prepending an older page
@@ -261,10 +244,6 @@ function MessageViewport({
     newMessagesDivider,
     highlightMessageId,
     firstItemIndex,
-    // State, not the ref: a real dependency-array value so the settle effect
-    // re-runs the instant Virtuoso attaches, instead of possibly having already
-    // run (and no-op'd) while the handle was still null with no second chance.
-    virtuosoHandle,
     virtuosoRef,
     // The scroll container gates the anchor scroll (Virtuoso only mounts once it
     // exists) and its rect tells the settle helper when the anchor row arrives.
@@ -478,7 +457,7 @@ function MessageViewport({
         data-testid="message-scroller"
       >
         <Virtuoso
-          ref={handleVirtuosoRef}
+          ref={virtuosoRef}
           customScrollParent={scrollContainerEl}
           data={messages}
           firstItemIndex={firstItemIndex}

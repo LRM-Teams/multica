@@ -190,6 +190,7 @@
   },
   "message": {
     "add_reaction": "リアクションを追加",
+    "actions_menu": "メッセージ操作",
     "copy_action": "コピー",
     "copied_toast": "コピーしました",
     "copy_failed_toast": "コピーに失敗しました",

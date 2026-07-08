@@ -190,6 +190,7 @@
   },
   "message": {
     "add_reaction": "Add reaction",
+    "actions_menu": "Message actions",
     "copy_action": "Copy",
     "copied_toast": "Copied",
     "copy_failed_toast": "Copy failed",

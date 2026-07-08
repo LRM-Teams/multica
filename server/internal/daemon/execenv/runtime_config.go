@@ -789,11 +789,11 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 		b.WriteString("This run was triggered by a message directed at you: a DM, an @mention, or a direct question/reply addressed to you. **You MUST produce a visible response before finishing.** Acceptable responses, in order of preference:\n")
 		if ctx.ChatCLITransportUnavailable {
 			b.WriteString("1. Write the visible reply as your final assistant output (answer, result, or a brief acknowledgment).\n")
-			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica react` or a sticker via `multica send --sticker`.\n")
+			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica message react` or a sticker via `multica message send --sticker`.\n")
 			b.WriteString("Producing empty final output is **not** an option for this run.\n")
 		} else {
-			b.WriteString("1. A reply via `multica send` (answer, result, or a brief acknowledgment).\n")
-			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica react` or a sticker via `multica send --sticker`.\n")
+			b.WriteString("1. A reply via `multica message send` (answer, result, or a brief acknowledgment).\n")
+			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica message react` or a sticker via `multica message send --sticker`.\n")
 		}
 		b.WriteString("\nNot responding is **not** an option for this run. Any rule below or elsewhere in this brief that permits silence, discourages unnecessary replies, or says \"no visible reply is warranted\" applies **only** to ambient channel messages that are not addressed to you — none of those rules apply to this run. If you are unsure whether to reply: reply.\n\n")
 	}
@@ -813,8 +813,8 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("Use `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help` to discover exact flags. Prefer `--output json` when reading data.\n\n")
 	b.WriteString("Common capabilities available when the user asks or the answer needs platform data:\n")
 	if !ctx.ChatCLITransportUnavailable {
-		b.WriteString("- Chat output: send a visible reply with `multica send --message \"...\"`, or use `--message-stdin` / `--message-file <path>` for longer bodies. For sticker replies use `multica send --sticker <id>` for sticker-only social beats, or `multica send --sticker <id> --message \"...\"` when you also need explanatory text in the same message (sticker first). Omit `--target` for the current DM/channel/thread; use `--target \"#channel\"`, `--target \"#channel:<message-id>\"`, or `--target \"dm:@handle\"` only when intentionally targeting another chat surface. After successful `multica send`, do not repeat the same content in final assistant output.\n")
-		b.WriteString("- Chat reactions: add a reaction with `multica react --message-id <message-id> --emoji \"...\"`; after successful `multica react`, do not add a second visible final reply.\n")
+		b.WriteString("- Chat output: send a visible reply with `multica message send --message \"...\"`, or use `--message-stdin` / `--message-file <path>` for longer bodies. For sticker replies use `multica message send --sticker <id>` for sticker-only social beats, or `multica message send --sticker <id> --message \"...\"` when you also need explanatory text in the same message (sticker first). Omit `--target` for the current DM/channel/thread; use `--target \"#channel\"`, `--target \"#channel:<message-id>\"`, or `--target \"dm:@handle\"` only when intentionally targeting another chat surface. After successful `multica message send`, do not repeat the same content in final assistant output.\n")
+		b.WriteString("- Chat reactions: add a reaction with `multica message react --message-id <message-id> --emoji \"...\"`; after successful `multica message react`, do not add a second visible final reply.\n")
 		b.WriteString("- Chat history: read the current or targeted surface with `multica message read [--target ...] [--limit N] --output json`, and search with `multica message search \"query\" [--target ...] --output json`.\n")
 	}
 	b.WriteString("- Issues: list/get/search issues; use `multica issue list --mine --output json` for issues assigned to the running agent. Existing-issue writes follow the Raft claim-first model: claim/own the issue before status/comment/field writes, do not mutate issues you did not claim, do not self-approve `in_review -> done`, and keep writes visible through message/system events.\n")
@@ -848,7 +848,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	if ctx.ChatCLITransportUnavailable {
 		b.WriteString("For visible chat replies, write the user-facing message as your final assistant output. Keep it concise and natural, state the outcome rather than the process, and never mention compatibility mode, missing tools, tokens, CLI transport, or runtime setup.\n")
 	} else {
-		b.WriteString("For visible chat replies, run `multica send` or `multica react`. After the command succeeds, leave final assistant output empty or minimal so the platform does not receive a duplicate answer. Keep sent messages concise and natural, and state the outcome rather than the process.\n")
+		b.WriteString("For visible chat replies, run `multica message send` or `multica message react`. After the command succeeds, leave final assistant output empty or minimal so the platform does not receive a duplicate answer. Keep sent messages concise and natural, and state the outcome rather than the process.\n")
 	}
 }
 

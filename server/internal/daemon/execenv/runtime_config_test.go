@@ -316,9 +316,9 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 		"task-scoped Multica CLI transport",
 		"Context boundaries:",
 		"Use `multica --help`",
-		"multica send --message",
-		"multica send --sticker",
-		"multica react --message-id",
+		"multica message send --message",
+		"multica message send --sticker",
+		"multica message react --message-id",
 		"multica message read",
 		"multica message search",
 		"Issues: list/get/search issues",
@@ -379,8 +379,8 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 		}
 	}
 
-	// Also verify the output section still mentions multica send (CLI path).
-	if !strings.Contains(out, "multica send") {
+	// Also verify the output section still mentions multica message send (CLI path).
+	if !strings.Contains(out, "multica message send") {
 		t.Errorf("directed brief should contain CLI send instruction")
 	}
 }
@@ -409,7 +409,7 @@ func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
 	for _, want := range []string{
 		"## Chat Mode",
 		"task-scoped Multica CLI transport",
-		"multica send",
+		"multica message send",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("ambient brief missing expected section %q\n---\n%s", want, out)
@@ -445,11 +445,11 @@ func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
 
 	for _, banned := range []string{
 		"task-scoped Multica CLI transport for visible chat output",
-		"multica send --message",
-		"multica react --message-id",
+		"multica message send --message",
+		"multica message react --message-id",
 		"multica message read",
 		"multica message search",
-		"For visible chat replies, run `multica send`",
+		"For visible chat replies, run `multica message send`",
 		"After the command succeeds",
 	} {
 		if strings.Contains(out, banned) {

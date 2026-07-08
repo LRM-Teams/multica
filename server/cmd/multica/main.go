@@ -55,6 +55,8 @@ func init() {
 	sendCmd.GroupID = groupCore
 	reactCmd.GroupID = groupCore
 	messageCmd.GroupID = groupCore
+	channelCmd.GroupID = groupCore
+	threadCmd.GroupID = groupCore
 
 	// Runtime commands
 	daemonCmd.GroupID = groupRuntime
@@ -93,6 +95,8 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(dmCmd)
+	rootCmd.AddCommand(channelCmd)
+	rootCmd.AddCommand(threadCmd)
 	rootCmd.AddCommand(stickerCmd)
 	rootCmd.AddCommand(sandboxdCmd)
 

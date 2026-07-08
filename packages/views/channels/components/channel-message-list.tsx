@@ -383,6 +383,7 @@ function MessageViewport({
     const searchHighlighted = searchHitIds?.has(msg.id) ?? false;
     const dividerLabel = dayDividers.get(msg.id);
     const isUnreadAnchor = newMessagesDivider?.anchorMessageId === msg.id;
+    const collapseLongContent = lastReadSeq != null && msg.seq <= lastReadSeq;
     return (
       <Fragment key={msg.id}>
         {dividerLabel && <DateDivider label={dividerLabel} />}
@@ -411,6 +412,7 @@ function MessageViewport({
             onOpenAgent={onOpenAgent}
             searchHighlighted={searchHighlighted}
             searchQuery={searchHighlighted ? searchQuery : undefined}
+            collapseLongContent={collapseLongContent}
           />
         </div>
       </Fragment>

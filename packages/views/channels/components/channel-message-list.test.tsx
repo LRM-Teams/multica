@@ -150,6 +150,7 @@ vi.mock("../../i18n/use-t", () => ({
           agent_badge: string;
           feishu_badge: string;
           copy_action: string;
+          expand_action: string;
           copied_toast: string;
           copy_failed_toast: string;
           edit_action: string;
@@ -170,6 +171,7 @@ vi.mock("../../i18n/use-t", () => ({
           agent_badge: "Agent",
           feishu_badge: "Feishu",
           copy_action: "Copy",
+          expand_action: "Show full message",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
           edit_action: "Edit",
@@ -304,6 +306,28 @@ describe("MessageViewport", () => {
     expect(screen.getByTestId("unread-divider")).toBeInTheDocument();
     // Opens scrolled to the divider anchor (index 2), not the latest message.
     expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute("data-initial-index", "2");
+  });
+
+  it("only collapses already-read history messages, never unread messages", () => {
+    const longText = Array.from({ length: 13 }, (_, index) => `History line ${index}`).join("\n");
+    const messages = [
+      { ...makeMessage("m1", longText), seq: 1 },
+      { ...makeMessage("m2", longText), seq: 2 },
+    ];
+    render(
+      <MessageViewport
+        messages={messages}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        lastReadSeq={1}
+      />,
+    );
+
+    const bodies = screen.getAllByTestId("message-body");
+    expect(bodies[0]).toHaveTextContent("History line 12");
+    expect(bodies[0]).toHaveAttribute("data-collapsed", "true");
+    expect(bodies[1]).toHaveTextContent("History line 12");
+    expect(bodies[1]).not.toHaveAttribute("data-collapsed");
   });
 
   it("renders no divider when the cursor is unknown (BE field absent)", () => {

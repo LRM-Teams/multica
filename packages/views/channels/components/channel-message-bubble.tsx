@@ -221,7 +221,7 @@ export function ChannelMessageBubble({
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
-  const [contentExpanded, setContentExpanded] = useState(false);
+  const [expandedContentKey, setExpandedContentKey] = useState<string | null>(null);
   const [mobileThreadTapActive, setMobileThreadTapActive] = useState(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -229,9 +229,6 @@ export function ChannelMessageBubble({
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const touchCancelledRef = useRef(false);
 
-  useEffect(() => {
-    setContentExpanded(false);
-  }, [message.id, collapseLongContent]);
 
   // react-doctor-disable-next-line react-doctor/exhaustive-deps -- unmount needs to clear whichever touch timers are currently pending.
   useEffect(() => {
@@ -397,8 +394,9 @@ export function ChannelMessageBubble({
     formatMessagePartsCopyText(effectiveParts) ??
     unwrapStructuredPreviewContent(message.content) ??
     message.content;
+  const contentCollapseKey = `${message.id}:${collapseLongContent ? "collapsed" : "open"}`;
   const canCollapseContent = collapseLongContent && isLongHistoryMessageText(collapseText);
-  const isContentCollapsed = canCollapseContent && !contentExpanded;
+  const isContentCollapsed = canCollapseContent && expandedContentKey !== contentCollapseKey;
   const handleStartEdit = () => setEditDraft(message.content);
   const handleCancelEdit = () => setEditDraft(null);
   const handleSaveEdit = () => {
@@ -681,7 +679,7 @@ export function ChannelMessageBubble({
                 <button
                   type="button"
                   className="pointer-events-auto inline-flex min-h-11 items-center rounded-full border border-border bg-background px-3 text-xs font-medium text-foreground shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:min-h-8"
-                  onClick={() => setContentExpanded(true)}
+                  onClick={() => setExpandedContentKey(contentCollapseKey)}
                 >
                   {t(($) => $.message.expand_action)}
                 </button>

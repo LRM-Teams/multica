@@ -63,6 +63,8 @@ import {
   useMarkChannelThreadRead,
   useSetChannelThreadFollowed,
   useSetChannelTyping,
+  useComposerDraftStore,
+  type ComposerDraftKey,
 } from "@multica/core/channels";
 import { useAuthStore } from "@multica/core/auth";
 import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
@@ -515,7 +517,9 @@ export function ChannelsPage() {
   const [archiveTarget, setArchiveTarget] = useState<Channel | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const editorRef = useRef<ContentEditorRef>(null);
-  const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
+  const composerDrafts = useComposerDraftStore((s) => s.drafts);
+  const storeSetComposerDraft = useComposerDraftStore((s) => s.setDraft);
+  const storeClearComposerDraft = useComposerDraftStore((s) => s.clearDraft);
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
   const [newName, setNewName] = useState("");
   const [newLarkChatId, setNewLarkChatId] = useState("");
@@ -585,29 +589,16 @@ export function ChannelsPage() {
     return isMobile ? explicit : (explicit ?? channels[0] ?? null);
   }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
   const isActiveArchived = !!active?.archived_at;
-  const activeDraftKey = active ? `channel:${active.id}` : null;
-  const activeDraft = activeDraftKey ? (composerDrafts[activeDraftKey] ?? "") : "";
+  const activeDraftKey = active ? (`channel:${active.id}` as const) : null;
+  const activeDraft = activeDraftKey ? (composerDrafts[activeDraftKey]?.content ?? "") : "";
   const activeDraftEmpty = !activeDraft.trim();
-  const setConversationDraft = useCallback((key: string, value: string) => {
-    setComposerDrafts((current) => {
-      if (!value.trim()) {
-        if (!(key in current)) return current;
-        const next = { ...current };
-        delete next[key];
-        return next;
-      }
-      if (current[key] === value) return current;
-      return { ...current, [key]: value };
-    });
-  }, []);
-  const clearConversationDraft = useCallback((key: string) => {
-    setComposerDrafts((current) => {
-      if (!(key in current)) return current;
-      const next = { ...current };
-      delete next[key];
-      return next;
-    });
-  }, []);
+  const setConversationDraft = useCallback((key: ComposerDraftKey, value: string) => {
+    if (!value.trim()) {
+      storeClearComposerDraft(key);
+      return;
+    }
+    storeSetComposerDraft(key, value);
+  }, [storeSetComposerDraft, storeClearComposerDraft]);
   const {
     data: messagePages,
     isLoading: messagesLoading,
@@ -1330,7 +1321,7 @@ export function ChannelsPage() {
       onCommitted: () => {
         editorRef.current?.clearContent();
         uploadMapRef.current.clear();
-        if (activeDraftKey) clearConversationDraft(activeDraftKey);
+        if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
       },
       // 200-dedup is silent (onCommitted); a 409 or any other failure always
       // surfaces — the draft is kept, but the user must know this send did NOT
@@ -2445,18 +2436,18 @@ export function ChannelsPage() {
   // When a `?dm=` deep link opens cold, `activeDmId` is set before the DM list
   // resolves the row — keep the conversation structure in place instead of
   // dropping to a blank pane during that window.
-  const dmDraftKey = activeDm ? `dm:${activeDm.id}` : null;
+  const dmDraftKey = activeDm ? (`dm:${activeDm.id}` as const) : null;
   const dmDetailPane = activeDm ? (
     <DmConversation
       key={`${activeDm.source}:${activeDm.id}`}
       dm={activeDm}
       onBack={mobileBackToList}
-      draft={dmDraftKey ? (composerDrafts[dmDraftKey] ?? "") : ""}
+      draft={dmDraftKey ? (composerDrafts[dmDraftKey]?.content ?? "") : ""}
       onDraftChange={(value) => {
         if (dmDraftKey) setConversationDraft(dmDraftKey, value);
       }}
       onDraftClear={() => {
-        if (dmDraftKey) clearConversationDraft(dmDraftKey);
+        if (dmDraftKey) storeClearComposerDraft(dmDraftKey);
       }}
     />
   ) : (

@@ -479,9 +479,14 @@ function ImageAttachmentView({
             <button type="button" onClick={onDownload} title={t(($) => $.image.download)}>
               <Download className="size-3.5" />
             </button>
-            <button type="button" onClick={handleCopyLink} title={t(($) => $.image.copy_link)}>
-              <LinkIcon className="size-3.5" />
-            </button>
+            {/* Copy-link is an editor-compose affordance. On read-only display
+                surfaces (chat / comments) the hover toolbar stays minimal —
+                fullscreen + download only (task #339, Slack parity). */}
+            {editable && (
+              <button type="button" onClick={handleCopyLink} title={t(($) => $.image.copy_link)}>
+                <LinkIcon className="size-3.5" />
+              </button>
+            )}
             {editable && onDelete && (
               <button type="button" onClick={onDelete} title={t(($) => $.image.delete)}>
                 <Trash2 className="size-3.5" />

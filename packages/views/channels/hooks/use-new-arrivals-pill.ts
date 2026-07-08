@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";
 import { maxSeqOrNull } from "./use-new-messages-divider";
+import { toFlatItemIndex } from "../virtuoso-flat-index";
 
 export interface NewArrivalsPill {
   /** How many messages from others arrived live after you last caught up. */
@@ -86,7 +87,7 @@ export function useNewMessagesPill({
     const target = pill ? messages.findIndex((m) => m.id === pill.firstMessageId) : -1;
     if (target >= 0) {
       virtuosoRef.current?.scrollToIndex({
-        index: firstItemIndex + target,
+        index: toFlatItemIndex(firstItemIndex, target),
         align: "start",
         behavior: "smooth",
       });

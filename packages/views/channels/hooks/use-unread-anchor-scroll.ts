@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, type RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";
 import type { NewMessagesDivider } from "./use-new-messages-divider";
+import { toFlatItemIndex } from "../virtuoso-flat-index";
 
 // react-virtuoso #883: on a cold load `scrollToIndex` can run before the list's
 // item heights are measured, so it lands at the wrong offset (the unread divider
@@ -72,7 +73,7 @@ export function useUnreadAnchorScroll({
     // mount, so the list may still be measuring — re-issue until it settles, else
     // the "N new messages" divider lands far below the viewport.
     return scrollToIndexUntilSettled(virtuosoRef.current, {
-      index: firstItemIndex + unreadAnchorIndex,
+      index: toFlatItemIndex(firstItemIndex, unreadAnchorIndex),
       align: "start",
       behavior: "auto",
     });

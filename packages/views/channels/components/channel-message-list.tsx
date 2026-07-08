@@ -22,6 +22,7 @@ import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
 import { useNewMessagesPill } from "../hooks/use-new-arrivals-pill";
 import { useUnreadAnchorScroll } from "../hooks/use-unread-anchor-scroll";
 import { useHighlightScroll } from "../hooks/use-highlight-scroll";
+import { toFlatItemIndex } from "../virtuoso-flat-index";
 
 // Small centered date pill (Iris #303 A) — the inline date divider at each local
 // day boundary.
@@ -400,11 +401,11 @@ function MessageViewport({
   // default (latest / thread root).
   const initialTopMostItemIndex =
     highlightIndex >= 0
-      ? firstItemIndex + highlightIndex
+      ? toFlatItemIndex(firstItemIndex, highlightIndex)
       : unreadAnchorIndex >= 0
-        ? firstItemIndex + unreadAnchorIndex
+        ? toFlatItemIndex(firstItemIndex, unreadAnchorIndex)
         : initialScroll === "bottom"
-          ? firstItemIndex + Math.max(0, messages.length - 1)
+          ? toFlatItemIndex(firstItemIndex, Math.max(0, messages.length - 1))
           : firstItemIndex;
 
   return (

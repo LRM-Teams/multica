@@ -22,7 +22,6 @@ vi.mock("react-virtuoso", async () => {
         initialTopMostItemIndex,
         firstItemIndex = 0,
         startReached,
-        scrollerRef,
       }: {
         components?: {
           Footer?: React.ComponentType;
@@ -33,9 +32,6 @@ vi.mock("react-virtuoso", async () => {
         initialTopMostItemIndex?: number;
         firstItemIndex?: number;
         startReached?: () => void;
-        // #325 phase 1: Virtuoso owns its scroller and reports it via scrollerRef.
-        // Wire the mock's root so the mount-gated scroll effects still fire.
-        scrollerRef?: (el: HTMLElement | Window | null) => void;
         itemContent: (index: number, item: ChannelMessage) => React.ReactNode;
       },
       ref: React.ForwardedRef<{ scrollToIndex: (...args: unknown[]) => void }>,
@@ -52,7 +48,6 @@ vi.mock("react-virtuoso", async () => {
 
       return (
         <div
-          ref={scrollerRef}
           data-testid="virtuoso-scroller"
           data-initial-index={initialTopMostItemIndex ?? "unset"}
           data-first-item-index={firstItemIndex}

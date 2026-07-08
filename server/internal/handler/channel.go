@@ -158,7 +158,7 @@ type ChannelMessagesPageResponse struct {
 	NextCursor *ChannelMessagesCursorResponse `json:"next_cursor,omitempty"`
 
 	// around_seq mode only:
-	AnchorIndex  int                            `json:"anchor_index,omitempty"`
+	AnchorIndex  int                            `json:"anchor_index"`
 	HasMoreAfter bool                           `json:"has_more_after,omitempty"`
 	AfterCursor  *ChannelMessagesCursorResponse `json:"after_cursor,omitempty"`
 }
@@ -1090,7 +1090,7 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 		beforeMsgs = beforeMsgs[:limitBefore]
 	}
 
-	// Symmetric backfill: if the before side is short, give remaining capacity to after side
+	// Symmetric backfill: if before side is short, after side gets the remaining capacity
 	actualBefore := len(beforeMsgs)
 	remainingAfter := limit - actualBefore
 
@@ -1109,6 +1109,28 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 		afterMsgs = afterMsgs[:remainingAfter]
 	}
 
+	actualAfter := len(afterMsgs)
+
+	// Reverse symmetric backfill: if after side is short AND before side was at full capacity,
+	// re-query before side with the unused capacity (anchor near end of history)
+	if actualAfter < remainingAfter && actualBefore == limitBefore {
+		extraBefore := remainingAfter - actualAfter
+		limitBeforeExtra := limitBefore + extraBefore
+		beforeMsgs, err = h.queryChannelMessages(r.Context(), channelID, workspaceID,
+			`m.seq <= $3::bigint
+			ORDER BY m.seq DESC
+			LIMIT $4`, pgtype.Int8{Int64: aroundSeq, Valid: true}, pgtype.Int8{Int64: int64(limitBeforeExtra + 1), Valid: true})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list channel messages")
+			return
+		}
+		hasMore = len(beforeMsgs) > limitBeforeExtra
+		if hasMore {
+			beforeMsgs = beforeMsgs[:limitBeforeExtra]
+		}
+		actualBefore = len(beforeMsgs)
+	}
+
 	// Calculate cursor for the before (older) direction
 	var nextCursor *ChannelMessagesCursorResponse
 	if hasMore && actualBefore > 0 {
@@ -1122,7 +1144,7 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 
 	// Calculate cursor for the after (newer) direction
 	var afterCursor *ChannelMessagesCursorResponse
-	if hasMoreAfter && len(afterMsgs) > 0 {
+	if hasMoreAfter && actualAfter > 0 {
 		newestAfter := afterMsgs[len(afterMsgs)-1] // last in ASC order = newest seq
 		afterCursor = &ChannelMessagesCursorResponse{
 			CreatedAt: newestAfter.CreatedAt,

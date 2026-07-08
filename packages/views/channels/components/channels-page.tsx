@@ -172,7 +172,6 @@ import { mapThreadParticipants, mapThreadWakeAnnotations } from "./thread-read-m
 import {
   Composer,
   ConversationHeader,
-  MobileThreadDrawerContent,
   ReadOnlyConversationBanner,
 } from "./conversation-surface";
 import { DmList } from "./dm-list";
@@ -2467,18 +2466,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               )}
             </>
           )}
-          {isMobile && (
-            <Drawer
-              open={!!threadPanel}
-              onOpenChange={(open) => {
-                if (!open) setOpenThreadRoot(null);
-              }}
-            >
-              <MobileThreadDrawerContent open={!!threadPanel}>
-                {threadPanel}
-              </MobileThreadDrawerContent>
-            </Drawer>
-          )}
         </main>
   );
   const detailPane = !isMobile ? (
@@ -2503,7 +2490,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       ) : null}
     </ResizablePanelGroup>
   ) : (
-    channelConversationPane
+    threadPanel ?? channelConversationPane
   );
 
   // DM detail pane — rendered in place of the group detail when a DM is active.

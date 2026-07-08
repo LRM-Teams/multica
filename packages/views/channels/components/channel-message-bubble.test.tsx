@@ -1,4 +1,4 @@
-import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
@@ -106,6 +106,7 @@ vi.mock("../../i18n/use-t", () => ({
           sticker_failed: string;
           sticker_unavailable: string;
           edit_action: string;
+          actions_menu: string;
           delete_action: string;
           edited_label: string;
           deleted_placeholder: string;
@@ -122,6 +123,7 @@ vi.mock("../../i18n/use-t", () => ({
           add_reaction: "Add reaction",
           agent_badge: "Agent",
           feishu_badge: "Feishu",
+          actions_menu: "Message actions",
           copy_action: "Copy",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
@@ -202,10 +204,41 @@ function renderWithStickerCatalog(ui: ReactNode) {
 }
 
 describe("ChannelMessageBubble", () => {
+  const setMobileViewport = () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn((query: string) => ({
+        matches: query.includes("max-width") || query.includes("pointer"),
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+  };
+
   beforeEach(() => {
     copyTextMock.mockReset();
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
   });
 
   it("renders an agent message left-aligned with an Agent pill, name and body", () => {
@@ -781,7 +814,35 @@ describe("ChannelMessageBubble", () => {
     expect(onReact).toHaveBeenCalledWith(message, "🎉");
   });
 
-  it("keeps first-level actions on the visible action surface only", () => {
+  it("opens the thread page from a mobile message tap with border feedback", async () => {
+    setMobileViewport();
+    const onOpenThread = vi.fn();
+    const message = makeMessage();
+    render(
+      <ChannelMessageBubble
+        message={message}
+        currentUserId="user-1"
+        onOpenThread={onOpenThread}
+        onReact={vi.fn()}
+      />,
+    );
+
+    const bubble = screen.getByTestId("message-bubble");
+    const actionBar = screen.getByTestId("message-action-bar");
+    expect(actionBar).toHaveClass("hidden");
+    expect(actionBar).toHaveClass("md:flex");
+    expect(actionBar).toHaveClass("opacity-0");
+    expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument();
+
+    await userEvent.click(bubble);
+
+    expect(bubble).toHaveClass("ring-primary/45");
+    expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument();
+    await waitFor(() => expect(onOpenThread).toHaveBeenCalledWith(message));
+  });
+
+  it("opens mobile message actions from a long press without a thread menu item", async () => {
+    setMobileViewport();
     render(
       <ChannelMessageBubble
         message={makeMessage()}
@@ -791,10 +852,30 @@ describe("ChannelMessageBubble", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Add reaction" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(1);
-    expect(screen.getByRole("button", { name: "Reply in thread" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Quote reply" })).not.toBeInTheDocument();
+    const bubble = screen.getByTestId("message-bubble");
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+
+    const menu = await screen.findByRole("dialog", { name: "Message actions" });
+    expect(menu).toBeInTheDocument();
+    expect(within(menu).getByRole("button", { name: "Add reaction" })).toBeInTheDocument();
+    expect(within(menu).getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("button", { name: "Reply in thread" })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole("button", { name: "Quote reply" })).not.toBeInTheDocument();
+  });
+
+  it("closes the mobile action sheet after a copy action", async () => {
+    setMobileViewport();
+    copyTextMock.mockResolvedValue(true);
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+
+    await userEvent.click(screen.getByTestId("message-bubble"));
+    const copyButtons = screen.getAllByRole("button", { name: "Copy" });
+    await userEvent.click(copyButtons.at(-1)!);
+
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("Here is the data."));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
+    );
   });
 
   it("renders system messages as notice rows without chat bubble actions", () => {

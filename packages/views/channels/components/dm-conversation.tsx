@@ -30,7 +30,6 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useWSEvent } from "@multica/core/realtime";
 import type { ChannelActiveTask, ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
-import { Drawer } from "@multica/ui/components/ui/drawer";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -53,7 +52,7 @@ import { useComposerSend } from "../hooks/use-composer-send";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
-import { Composer, ConversationHeader, MobileThreadDrawerContent } from "./conversation-surface";
+import { Composer, ConversationHeader } from "./conversation-surface";
 import { ThreadRootPreview } from "./thread-root-preview";
 import {
   ConversationActivityStrip,
@@ -736,9 +735,21 @@ function DmChannelConversation({
         <ConversationHeader
           isMobile={isMobile}
           leading={
-            <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-              <MessageSquare className="size-4" />
-            </span>
+            isMobile ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-9"
+                aria-label={t(($) => $.thread.back_to_conversation)}
+                onClick={() => dispatch({ type: "closeThread" })}
+              >
+                <ArrowLeft className="size-5" />
+              </Button>
+            ) : (
+              <span className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                <MessageSquare className="size-4" />
+              </span>
+            )
           }
           title={t(($) => $.thread.title)}
           meta={
@@ -749,7 +760,7 @@ function DmChannelConversation({
               : undefined
           }
           actions={
-            <>
+            isMobile ? undefined : (
               <Button
                 variant="ghost"
                 size="icon"
@@ -759,7 +770,7 @@ function DmChannelConversation({
               >
                 <X className="size-4" />
               </Button>
-            </>
+            )
           }
         />
         <ChannelMessageList
@@ -1007,18 +1018,6 @@ function DmChannelConversation({
           </>
         }
       />
-      {isMobile && (
-        <Drawer
-          open={!!threadPanel}
-          onOpenChange={(open) => {
-            if (!open) dispatch({ type: "closeThread" });
-          }}
-        >
-          <MobileThreadDrawerContent open={!!threadPanel}>
-            {threadPanel}
-          </MobileThreadDrawerContent>
-        </Drawer>
-      )}
     </main>
   );
 
@@ -1047,5 +1046,5 @@ function DmChannelConversation({
     );
   }
 
-  return conversationPane;
+  return threadPanel ?? conversationPane;
 }

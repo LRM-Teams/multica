@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent,
+} from "react";
 import { Copy, MessageSquare, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
@@ -26,6 +33,33 @@ import {
 } from "./message-parts-preview";
 import { MessageBody } from "./message-body";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
+
+const LONG_PRESS_MS = 450;
+const TOUCH_MOVE_CANCEL_PX = 8;
+const MOBILE_THREAD_TAP_FEEDBACK_MS = 120;
+
+function isInteractiveMessageTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest(
+      'button,a,input,textarea,select,[role="button"],[role="menuitem"],[contenteditable="true"],[data-message-action-surface="true"]',
+    ),
+  );
+}
+
+function hasActiveTextSelection() {
+  const selection = window.getSelection?.();
+  return Boolean(selection && !selection.isCollapsed && selection.toString().trim());
+}
+
+function isMobileActionViewport() {
+  if (typeof window === "undefined") return false;
+  return (
+    window.innerWidth < 768 ||
+    window.matchMedia?.("(max-width: 767px)").matches ||
+    window.matchMedia?.("(pointer: coarse)").matches
+  );
+}
 
 function ChannelSystemMessageRow({
   message,
@@ -174,6 +208,19 @@ export function ChannelMessageBubble({
   const { getActorAvatarUrl, getActorName } = useActorName();
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
+  const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
+  const [mobileThreadTapActive, setMobileThreadTapActive] = useState(false);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tapFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const suppressNextClickRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+      if (tapFeedbackTimerRef.current) clearTimeout(tapFeedbackTimerRef.current);
+    };
+  }, []);
 
   if (message.deleted_at) {
     return (
@@ -302,6 +349,13 @@ export function ChannelMessageBubble({
       toast.error(t(($) => $.message.copy_failed_toast));
     }
   };
+  const runMobileAction = (action: () => void | Promise<void>) => {
+    setMobileActionsOpen(false);
+    void action();
+  };
+  const handleMobileReactionSelect = (emoji: string) => {
+    runMobileAction(() => onReact?.(message, emoji));
+  };
 
   // Edit / delete are viewer-own affordances only. H5: saving an edit routes
   // through onEdit (a PATCH), never a re-send — it cannot produce a new wake.
@@ -329,6 +383,70 @@ export function ChannelMessageBubble({
     }
   };
   const handleOpenAgentCapture = isAgent && onOpenAgent ? handleOpenAgent : undefined;
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+  const clearTapFeedbackTimer = () => {
+    if (tapFeedbackTimerRef.current) {
+      clearTimeout(tapFeedbackTimerRef.current);
+      tapFeedbackTimerRef.current = null;
+    }
+  };
+  const openMobileActions = () => {
+    if (!isEditing && isMobileActionViewport()) {
+      clearTapFeedbackTimer();
+      setMobileThreadTapActive(false);
+      setMobileActionsOpen(true);
+    }
+  };
+  const openThreadAfterMobileTap = () => {
+    if (!canOpenThread) return;
+    setMobileActionsOpen(false);
+    clearTapFeedbackTimer();
+    setMobileThreadTapActive(true);
+    tapFeedbackTimerRef.current = setTimeout(() => {
+      tapFeedbackTimerRef.current = null;
+      setMobileThreadTapActive(false);
+      onOpenThread?.(message);
+    }, MOBILE_THREAD_TAP_FEEDBACK_MS);
+  };
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType !== "touch" || isInteractiveMessageTarget(event.target)) return;
+    suppressNextClickRef.current = false;
+    touchStartRef.current = { x: event.clientX, y: event.clientY };
+    clearLongPressTimer();
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTimerRef.current = null;
+      suppressNextClickRef.current = true;
+      openMobileActions();
+    }, LONG_PRESS_MS);
+  };
+  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const start = touchStartRef.current;
+    if (!start) return;
+    const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
+    if (moved > TOUCH_MOVE_CANCEL_PX) clearLongPressTimer();
+  };
+  const handlePointerEnd = () => {
+    touchStartRef.current = null;
+    clearLongPressTimer();
+  };
+  const handleMobileTap = (event: MouseEvent<HTMLDivElement>) => {
+    if (!isMobileActionViewport()) return;
+    if (suppressNextClickRef.current) {
+      suppressNextClickRef.current = false;
+      return;
+    }
+    if (isInteractiveMessageTarget(event.target) || hasActiveTextSelection()) return;
+    if (canOpenThread) {
+      openThreadAfterMobileTap();
+      return;
+    }
+    openMobileActions();
+  };
 
   return (
     <div
@@ -338,7 +456,14 @@ export function ChannelMessageBubble({
       className={cn(
         "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 py-1.5 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35",
         highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0",
+        mobileThreadTapActive && "bg-primary/[0.04] ring-1 ring-primary/45 duration-75",
       )}
+      onClick={handleMobileTap}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerEnd}
+      onPointerCancel={handlePointerEnd}
+      onPointerLeave={handlePointerEnd}
     >
       {profileActorType && profileActorId ? (
         <ActorProfileTrigger
@@ -394,63 +519,67 @@ export function ChannelMessageBubble({
           )}
         </div>
         {!isEditing && (
-        <div className="pointer-events-auto absolute right-3 top-2 z-10 flex items-center gap-1 rounded-lg border border-border/60 bg-background/90 p-0.5 text-muted-foreground opacity-100 shadow-sm backdrop-blur transition-opacity md:pointer-events-none md:gap-0.5 md:border-0 md:bg-transparent md:p-0 md:opacity-0 md:shadow-none md:backdrop-blur-none md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100">
-          {onReact && (
-            <QuickEmojiPicker
-              onSelect={(emoji) => onReact(message, emoji)}
-              align="end"
-              side="bottom"
-              className="size-8 rounded-md hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground md:size-7 md:hover:bg-background/70 md:focus-visible:bg-background/70"
-              ariaLabel={t(($) => $.message.add_reaction)}
-              sideOffset={4}
-              emojis={quickReactionEmojis}
-              showMore={false}
-              contentClassName="rounded-md border border-border/70 bg-popover/95 shadow-none ring-0"
-            />
-          )}
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground md:size-7 md:hover:bg-background/70 md:focus-visible:bg-background/70"
-            aria-label={t(($) => $.message.copy_action)}
-            title={t(($) => $.message.copy_action)}
+          <div
+            data-testid="message-action-bar"
+            data-message-action-surface="true"
+            className="pointer-events-none absolute right-3 top-2 z-10 hidden items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity md:flex md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
           >
-            <Copy className="size-3.5" />
-          </button>
-          {canOpenThread && (
+            {onReact && (
+              <QuickEmojiPicker
+                onSelect={(emoji) => onReact(message, emoji)}
+                align="end"
+                side="bottom"
+                className="size-7 rounded-md hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                ariaLabel={t(($) => $.message.add_reaction)}
+                sideOffset={4}
+                emojis={quickReactionEmojis}
+                showMore={false}
+                contentClassName="rounded-md border border-border/70 bg-popover/95 shadow-none ring-0"
+              />
+            )}
             <button
               type="button"
-              onClick={() => onOpenThread?.(message)}
-              className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground md:size-7 md:hover:bg-background/70 md:focus-visible:bg-background/70"
-              aria-label={t(($) => $.thread.reply)}
-              title={t(($) => $.thread.reply)}
+              onClick={handleCopy}
+              className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+              aria-label={t(($) => $.message.copy_action)}
+              title={t(($) => $.message.copy_action)}
             >
-              <MessageSquare className="size-3.5" />
+              <Copy className="size-3.5" />
             </button>
-          )}
-          {canEdit && (
-            <button
-              type="button"
-              onClick={handleStartEdit}
-              className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground md:size-7 md:hover:bg-background/70 md:focus-visible:bg-background/70"
-              aria-label={t(($) => $.message.edit_action)}
-              title={t(($) => $.message.edit_action)}
-            >
-              <Pencil className="size-3.5" />
-            </button>
-          )}
-          {canDelete && (
-            <button
-              type="button"
-              onClick={handleDelete}
-              className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive md:size-7"
-              aria-label={t(($) => $.message.delete_action)}
-              title={t(($) => $.message.delete_action)}
-            >
-              <Trash2 className="size-3.5" />
-            </button>
-          )}
-        </div>
+            {canOpenThread && (
+              <button
+                type="button"
+                onClick={() => onOpenThread?.(message)}
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                aria-label={t(($) => $.thread.reply)}
+                title={t(($) => $.thread.reply)}
+              >
+                <MessageSquare className="size-3.5" />
+              </button>
+            )}
+            {canEdit && (
+              <button
+                type="button"
+                onClick={handleStartEdit}
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                aria-label={t(($) => $.message.edit_action)}
+                title={t(($) => $.message.edit_action)}
+              >
+                <Pencil className="size-3.5" />
+              </button>
+            )}
+            {canDelete && (
+              <button
+                type="button"
+                onClick={handleDelete}
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive"
+                aria-label={t(($) => $.message.delete_action)}
+                title={t(($) => $.message.delete_action)}
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+            )}
+          </div>
         )}
         {isEditing ? (
           <MessageInlineEditor
@@ -463,46 +592,109 @@ export function ChannelMessageBubble({
             cancelLabel={t(($) => $.message.cancel_edit)}
           />
         ) : (
-        <div
-          className={cn(
-            "min-w-0 max-w-full select-text overflow-hidden break-words text-sm leading-6 text-foreground",
-            searchHighlighted && "rounded-md bg-primary/5",
-          )}
-          data-testid="message-body"
-          style={{ WebkitTouchCallout: "default" }}
-        >
-          {/* Inline quote block: rendered when reply_to is present (BE task #23) */}
-          {message.reply_to && (
-            <button
-              type="button"
-              onClick={() =>
-                message.reply_to_message_id && onScrollTo?.(message.reply_to_message_id)
-              }
-              className="mb-2 w-full cursor-pointer rounded border-l-2 border-muted-foreground/30 bg-muted/30 px-2 py-1 text-left transition-opacity hover:opacity-80"
-              aria-label={t(($) => $.quote.jump_to)}
+          <div
+            className={cn(
+              "min-w-0 max-w-full select-text overflow-hidden break-words text-sm leading-6 text-foreground",
+              searchHighlighted && "rounded-md bg-primary/5",
+            )}
+            data-testid="message-body"
+            style={{ WebkitTouchCallout: "default" }}
+          >
+            {/* Inline quote block: rendered when reply_to is present (BE task #23) */}
+            {message.reply_to && (
+              <button
+                type="button"
+                onClick={() =>
+                  message.reply_to_message_id && onScrollTo?.(message.reply_to_message_id)
+                }
+                className="mb-2 w-full cursor-pointer rounded border-l-2 border-muted-foreground/30 bg-muted/30 px-2 py-1 text-left transition-opacity hover:opacity-80"
+                aria-label={t(($) => $.quote.jump_to)}
+              >
+                <p className="truncate text-[11px] font-semibold text-foreground/70">
+                  {replyAuthorName}
+                </p>
+                <p className="line-clamp-1 text-[11px] text-muted-foreground">
+                  {formatMessagePartsPreview(message.reply_to.parts) ??
+                    unwrapStructuredPreviewContent(message.reply_to.content) ??
+                    message.reply_to.content}
+                </p>
+              </button>
+            )}
+            <MessageBody
+              content={message.content}
+              parts={message.parts}
+              attachments={message.attachments}
+              highlightQuery={searchHighlighted ? searchQuery : undefined}
+            />
+            <AttachmentList
+              attachments={message.attachments}
+              content={effectiveParts ? "" : message.content}
+              className="mt-1.5"
+            />
+          </div>
+        )}
+        {!isEditing && mobileActionsOpen && (
+          <div
+            className="fixed inset-0 z-50 bg-black/10 md:hidden"
+            role="presentation"
+            onClick={() => setMobileActionsOpen(false)}
+          >
+            <div
+              data-testid="mobile-message-actions"
+              data-message-action-surface="true"
+              role="dialog"
+              aria-modal="true"
+              aria-label={t(($) => $.message.actions_menu)}
+              className="absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-border bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
             >
-              <p className="truncate text-[11px] font-semibold text-foreground/70">
-                {replyAuthorName}
-              </p>
-              <p className="line-clamp-1 text-[11px] text-muted-foreground">
-                {formatMessagePartsPreview(message.reply_to.parts) ??
-                  unwrapStructuredPreviewContent(message.reply_to.content) ??
-                  message.reply_to.content}
-              </p>
-            </button>
-          )}
-          <MessageBody
-            content={message.content}
-            parts={message.parts}
-            attachments={message.attachments}
-            highlightQuery={searchHighlighted ? searchQuery : undefined}
-          />
-          <AttachmentList
-            attachments={message.attachments}
-            content={effectiveParts ? "" : message.content}
-            className="mt-1.5"
-          />
-        </div>
+              <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-muted-foreground/25" />
+              <div className="flex flex-col gap-1">
+                {onReact && (
+                  <QuickEmojiPicker
+                    onSelect={handleMobileReactionSelect}
+                    align="start"
+                    side="top"
+                    className="h-11 w-full justify-start gap-3 rounded-xl px-3 text-sm text-popover-foreground hover:bg-muted focus-visible:bg-muted"
+                    ariaLabel={t(($) => $.message.add_reaction)}
+                    sideOffset={8}
+                    emojis={quickReactionEmojis}
+                    showMore={false}
+                    contentClassName="rounded-lg border border-border/70 bg-popover/95 shadow-lg ring-0"
+                    label={t(($) => $.message.add_reaction)}
+                  />
+                )}
+                <button
+                  type="button"
+                  onClick={() => runMobileAction(handleCopy)}
+                  className="inline-flex h-11 items-center gap-3 rounded-xl px-3 text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                >
+                  <Copy className="size-4" />
+                  <span>{t(($) => $.message.copy_action)}</span>
+                </button>
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => runMobileAction(handleStartEdit)}
+                    className="inline-flex h-11 items-center gap-3 rounded-xl px-3 text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                  >
+                    <Pencil className="size-4" />
+                    <span>{t(($) => $.message.edit_action)}</span>
+                  </button>
+                )}
+                {canDelete && (
+                  <button
+                    type="button"
+                    onClick={() => runMobileAction(handleDelete)}
+                    className="inline-flex h-11 items-center gap-3 rounded-xl px-3 text-sm text-destructive transition-colors hover:bg-destructive/10 focus-visible:bg-destructive/10 focus-visible:outline-none"
+                  >
+                    <Trash2 className="size-4" />
+                    <span>{t(($) => $.message.delete_action)}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
         )}
         {!isEditing && hasFeedback && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">

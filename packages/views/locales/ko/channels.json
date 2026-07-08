@@ -190,6 +190,7 @@
   },
   "message": {
     "add_reaction": "반응 추가",
+    "actions_menu": "메시지 작업",
     "copy_action": "복사",
     "copied_toast": "복사했습니다",
     "copy_failed_toast": "복사 실패",

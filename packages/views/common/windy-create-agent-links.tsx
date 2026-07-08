@@ -45,24 +45,27 @@ export function WindyCreateAgentLink({
   const handleClick = async () => {
     const url = parseWindyCreateAgentURL(href);
     if (!url || creatingDraft || createdAgentName) return;
+    const draftId = url.searchParams.get("draft_id")?.trim();
     const name = url.searchParams.get("name")?.trim() || "New Agent";
     setCreatingDraft(true);
     try {
-      const createdDraft = await api.createAgentDraft({
-        name,
-        description: url.searchParams.get("description")?.trim() || "",
-        instructions: url.searchParams.get("instructions")?.trim() || "",
-        avatar_url: url.searchParams.get("avatar_url") || fallbackAvatarUrl,
-        visibility: url.searchParams.get("visibility") === "workspace" ? "workspace" : "private",
-        project_id: url.searchParams.get("project_id") || null,
-        channel_id: url.searchParams.get("channel_id") || null,
-        can_execute_code: url.searchParams.get("can_execute_code") === "true",
-        suggested_channels: listParam(url, "suggested_channel"),
-        recommended_tools: listParam(url, "tool"),
-      });
+      const createdDraft = draftId
+        ? await api.getAgentDraft(draftId)
+        : await api.createAgentDraft({
+            name,
+            description: url.searchParams.get("description")?.trim() || "",
+            instructions: url.searchParams.get("instructions")?.trim() || "",
+            avatar_url: url.searchParams.get("avatar_url") || fallbackAvatarUrl,
+            visibility: url.searchParams.get("visibility") === "workspace" ? "workspace" : "private",
+            project_id: url.searchParams.get("project_id") || null,
+            channel_id: url.searchParams.get("channel_id") || null,
+            can_execute_code: url.searchParams.get("can_execute_code") === "true",
+            suggested_channels: listParam(url, "suggested_channel"),
+            recommended_tools: listParam(url, "tool"),
+          });
       setDraft(createdDraft);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create agent draft");
+      toast.error(err instanceof Error ? err.message : "Failed to load agent draft");
     } finally {
       setCreatingDraft(false);
     }

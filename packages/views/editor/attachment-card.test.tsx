@@ -54,10 +54,11 @@ describe("AttachmentCard — chrome row", () => {
     expect(document.querySelector("iframe")).toBeNull();
   });
 
-  it("hides the Eye button for an html URL-only source (the modal's /content proxy is ID-keyed)", () => {
+  it("html URL-only source is inert body text + download (no primary Open)", () => {
     // Regression: a cross-comment / copy-pasted `!file[report.html](url)`
-    // used to surface a dead Eye button — text kinds need an attachmentId,
-    // otherwise tryOpen rejects and the click becomes a silent no-op.
+    // used to surface a dead preview affordance — text kinds need an
+    // attachmentId, otherwise the /content proxy rejects. Without one the
+    // body is not openable; download stays available.
     render(
       <AttachmentCard
         filename="report.html"
@@ -67,12 +68,12 @@ describe("AttachmentCard — chrome row", () => {
         onDownload={() => {}}
       />,
     );
-    expect(screen.queryByTitle("Preview")).toBeNull();
+    expect(screen.queryByRole("button", { name: /open/i })).toBeNull();
     // Download stays available — the underlying URL is still reachable.
     expect(screen.getByTitle("Download")).toBeTruthy();
   });
 
-  it("shows the Eye button for an html source when an attachmentId is available", () => {
+  it("html source with an attachmentId makes the body a primary Open button", () => {
     render(
       <AttachmentCard
         filename="report.html"
@@ -83,13 +84,13 @@ describe("AttachmentCard — chrome row", () => {
         onDownload={() => {}}
       />,
     );
-    expect(screen.getByTitle("Preview")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /open/i })).toBeTruthy();
   });
 
-  it("shows the Eye button for a URL-only pdf source (modal renders pdfs directly from URL)", () => {
-    // Counterpart to the html regression: media kinds (pdf/video/audio)
-    // ARE URL-previewable because the modal renders them via
-    // <iframe src=url>/<video>/<audio>, not via the /content proxy.
+  it("URL-only pdf source is openable from the body (modal renders pdfs from URL)", () => {
+    // Media kinds (pdf/video/audio) ARE URL-previewable because the modal
+    // renders them via <iframe src=url>/<video>/<audio>, not via the
+    // ID-keyed /content proxy.
     render(
       <AttachmentCard
         filename="manual.pdf"
@@ -99,27 +100,11 @@ describe("AttachmentCard — chrome row", () => {
         onDownload={() => {}}
       />,
     );
-    expect(screen.getByTitle("Preview")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /open/i })).toBeTruthy();
   });
 });
 
-describe("AttachmentCard — Eye / Download buttons", () => {
-  it("invokes onPreview when Eye is clicked", () => {
-    const onPreview = vi.fn();
-    render(
-      <AttachmentCard
-        filename="manual.pdf"
-        contentType="application/pdf"
-        attachmentId="att-1"
-        href="https://cdn.example/manual.pdf"
-        onPreview={onPreview}
-        onDownload={() => {}}
-      />,
-    );
-    fireEvent.mouseDown(screen.getByTitle("Preview"));
-    expect(onPreview).toHaveBeenCalled();
-  });
-
+describe("AttachmentCard — open / download", () => {
   it("invokes onDownload when Download is clicked", () => {
     const onDownload = vi.fn();
     render(

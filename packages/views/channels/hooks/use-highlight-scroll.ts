@@ -1,6 +1,7 @@
 import { useEffect, useMemo, type RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";
+import { toFlatItemIndex } from "../virtuoso-flat-index";
 
 /**
  * #325 phase-2 block 3: deep-link / inline-quote "scroll to and center a specific
@@ -37,7 +38,7 @@ export function useHighlightScroll({
   useEffect(() => {
     if (!highlightMessageId || highlightIndex < 0) return;
     virtuosoRef.current?.scrollToIndex({
-      index: firstItemIndex + highlightIndex,
+      index: toFlatItemIndex(firstItemIndex, highlightIndex),
       align: "center",
       behavior: "smooth",
     });

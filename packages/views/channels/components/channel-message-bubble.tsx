@@ -140,6 +140,7 @@ export function ChannelMessageBubble({
   onReact,
   onEdit,
   onDelete,
+  onOpenAgent,
   searchHighlighted = false,
   searchQuery,
 }: {
@@ -162,6 +163,8 @@ export function ChannelMessageBubble({
   onEdit?: (message: ChannelMessage, content: string) => void;
   /** Soft-delete the viewer's own message; the bubble then renders a tombstone. */
   onDelete?: (message: ChannelMessage) => void;
+  /** Opens the side agent file/public-info panel for agent-authored messages. */
+  onOpenAgent?: (agentId: string) => void;
   /** Search hit: marks matching visible text while search is open. */
   searchHighlighted?: boolean;
   /** Trimmed conversation search phrase to mark inside this hit's visible text. */
@@ -320,6 +323,12 @@ export function ChannelMessageBubble({
     setEditDraft(null);
   };
   const handleDelete = () => onDelete?.(message);
+  const handleOpenAgent = () => {
+    if (isAgent && message.author_id) {
+      onOpenAgent?.(message.author_id);
+    }
+  };
+  const handleOpenAgentCapture = isAgent && onOpenAgent ? handleOpenAgent : undefined;
 
   return (
     <div
@@ -337,6 +346,7 @@ export function ChannelMessageBubble({
           memberId={profileActorId}
           side="top"
           sideOffset={8}
+          onClickCapture={handleOpenAgentCapture}
         >
           {avatar}
         </ActorProfileTrigger>
@@ -351,6 +361,7 @@ export function ChannelMessageBubble({
               memberId={profileActorId}
               side="top"
               sideOffset={8}
+              onClickCapture={handleOpenAgentCapture}
             >
               {nameLabel}
             </ActorProfileTrigger>

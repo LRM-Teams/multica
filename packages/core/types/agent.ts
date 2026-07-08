@@ -597,6 +597,42 @@ export interface AgentMemory {
   updated_at: string;
 }
 
+export interface AgentFileNode {
+  path: string;
+  is_dir: boolean;
+  size?: number;
+}
+
+export type AgentFilesStatus = "ok" | "offline" | "missing" | "error";
+
+export interface AgentFilesResponse {
+  agent_id: string;
+  status: AgentFilesStatus;
+  nodes: AgentFileNode[];
+  truncated: boolean;
+}
+
+export interface AgentFileContentResponse {
+  content: string;
+  encoding: string;
+  mime_type: string;
+  content_hash: string;
+  truncated: boolean;
+  too_large: boolean;
+  binary: boolean;
+}
+
+export interface UpdateAgentFileContentRequest {
+  path: string;
+  content: string;
+  expected_content_hash?: string;
+}
+
+export interface UpdateAgentFileContentResponse {
+  content_hash: string;
+  conflict: boolean;
+}
+
 export type AgentSkillSuggestionAction = "add" | "remove";
 
 export type AgentSkillSuggestionStatus = "pending" | "accepted" | "dismissed";

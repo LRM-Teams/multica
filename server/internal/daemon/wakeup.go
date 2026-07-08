@@ -305,6 +305,13 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				continue
 			}
 			d.handleReadFileRequest(req, writes)
+		case protocol.EventDaemonWriteFileRequest:
+			var req protocol.WriteWorkdirFileRequestPayload
+			if err := json.Unmarshal(msg.Payload, &req); err != nil {
+				d.logger.Debug("write file request invalid payload", "error", err)
+				continue
+			}
+			d.handleWriteFileRequest(req, writes)
 		}
 	}
 }

@@ -12,6 +12,8 @@ import type {
   ListIssuesParams,
   ListGroupedIssuesParams,
   Agent,
+  AgentFileContentResponse,
+  AgentFilesResponse,
   CreateAgentRequest,
   CreateAgentDraftRequest,
   AgentCreationDraft,
@@ -27,6 +29,8 @@ import type {
   UpdateAgentRequest,
   AgentEnvResponse,
   UpdateAgentEnvRequest,
+  UpdateAgentFileContentRequest,
+  UpdateAgentFileContentResponse,
   AgentTask,
   AgentHealthResponse,
   AgentActivityBucket,
@@ -182,6 +186,8 @@ import {
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
   EMPTY_AGENT_TEMPLATE_DETAIL,
+  EMPTY_AGENT_FILE_CONTENT_RESPONSE,
+  EMPTY_AGENT_FILES_RESPONSE,
   EMPTY_AGENT_HEALTH_RESPONSE,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
@@ -201,6 +207,8 @@ import {
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
   AppConfigSchema,
+  AgentFileContentResponseSchema,
+  AgentFilesResponseSchema,
   AgentHealthResponseSchema,
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
@@ -241,8 +249,10 @@ import {
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
   EMPTY_CANCEL_TASK_RESPONSE,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
+  EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE,
   EvolutionReviewSubmissionListSchema,
   EvolutionReviewSubmissionSchema,
+  UpdateAgentFileContentResponseSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -948,6 +958,40 @@ export class ApiClient {
       method: "PUT",
       body: JSON.stringify(data),
     });
+  }
+
+  async listAgentFiles(id: string, params?: { include_hidden?: boolean }): Promise<AgentFilesResponse> {
+    const search = new URLSearchParams();
+    if (params?.include_hidden) search.set("include_hidden", "true");
+    const suffix = search.toString() ? `?${search}` : "";
+    const raw = await this.fetch<unknown>(`/api/agents/${id}/files${suffix}`);
+    return parseWithFallback(raw, AgentFilesResponseSchema, EMPTY_AGENT_FILES_RESPONSE, {
+      endpoint: "GET /api/agents/:id/files",
+    });
+  }
+
+  async getAgentFileContent(id: string, path: string): Promise<AgentFileContentResponse> {
+    const search = new URLSearchParams({ path });
+    const raw = await this.fetch<unknown>(`/api/agents/${id}/files/content?${search}`);
+    return parseWithFallback(raw, AgentFileContentResponseSchema, EMPTY_AGENT_FILE_CONTENT_RESPONSE, {
+      endpoint: "GET /api/agents/:id/files/content",
+    });
+  }
+
+  async updateAgentFileContent(
+    id: string,
+    data: UpdateAgentFileContentRequest,
+  ): Promise<UpdateAgentFileContentResponse> {
+    const raw = await this.fetch<unknown>(`/api/agents/${id}/files/content`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(
+      raw,
+      UpdateAgentFileContentResponseSchema,
+      EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE,
+      { endpoint: "PUT /api/agents/:id/files/content" },
+    );
   }
 
   async restoreAgent(id: string): Promise<Agent> {

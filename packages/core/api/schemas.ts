@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type {
   Agent,
+  AgentFileContentResponse,
+  AgentFilesResponse,
   AgentTemplate,
   AgentTemplateSummary,
   Attachment,
@@ -26,6 +28,7 @@ import type {
   Squad,
   TimelineEntry,
   User,
+  UpdateAgentFileContentResponse,
   WebhookDelivery,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
@@ -659,6 +662,56 @@ export const EMPTY_AGENT_HEALTH_RESPONSE: AgentHealthResponse = {
     last_event_at: null,
   },
   health_events: [],
+};
+
+const AgentFileNodeSchema = z.object({
+  path: z.string(),
+  is_dir: z.boolean().default(false),
+  size: z.number().optional(),
+}).loose();
+
+export const AgentFilesResponseSchema = z.object({
+  agent_id: z.string().default(""),
+  status: z.string().default("error"),
+  nodes: z.array(AgentFileNodeSchema),
+  truncated: z.boolean().default(false),
+}).loose();
+
+export const EMPTY_AGENT_FILES_RESPONSE: AgentFilesResponse = {
+  agent_id: "",
+  status: "error",
+  nodes: [],
+  truncated: false,
+};
+
+export const AgentFileContentResponseSchema = z.object({
+  content: z.string().default(""),
+  encoding: z.string().default(""),
+  mime_type: z.string().default(""),
+  content_hash: z.string().default(""),
+  truncated: z.boolean().default(false),
+  too_large: z.boolean().default(false),
+  binary: z.boolean().default(false),
+}).loose();
+
+export const EMPTY_AGENT_FILE_CONTENT_RESPONSE: AgentFileContentResponse = {
+  content: "",
+  encoding: "",
+  mime_type: "",
+  content_hash: "",
+  truncated: false,
+  too_large: false,
+  binary: false,
+};
+
+export const UpdateAgentFileContentResponseSchema = z.object({
+  content_hash: z.string().default(""),
+  conflict: z.boolean().default(false),
+}).loose();
+
+export const EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE: UpdateAgentFileContentResponse = {
+  content_hash: "",
+  conflict: false,
 };
 
 const RuntimeHourlyActivitySchema = z.object({

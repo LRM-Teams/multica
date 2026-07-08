@@ -188,6 +188,7 @@ import {
   MutedIndicator,
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
+import { AgentFilesPanel } from "./agent-files-panel";
 
 export interface TypingActor {
   key: string;
@@ -555,10 +556,34 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // reply, and vice versa.
   const channelSend = useComposerSend();
   const threadSend = useComposerSend();
-  const [openThreadRoot, setOpenThreadRoot] = useState<ChannelMessage | null>(null);
   const threadEditorRef = useRef<ContentEditorRef>(null);
   const focusThreadComposerOnOpenRef = useRef(false);
-  const [threadDraftEmpty, setThreadDraftEmpty] = useState(true);
+  const [sidePanelState, setSidePanelState] = useState<{
+    openThreadRoot: ChannelMessage | null;
+    selectedAgentPanelId: string | null;
+    threadDraftEmpty: boolean;
+  }>({
+    openThreadRoot: null,
+    selectedAgentPanelId: null,
+    threadDraftEmpty: true,
+  });
+  const { openThreadRoot, selectedAgentPanelId, threadDraftEmpty } = sidePanelState;
+  const setOpenThreadRoot = useCallback((next: ChannelMessage | null) => {
+    setSidePanelState((current) => ({ ...current, openThreadRoot: next }));
+  }, []);
+  const setSelectedAgentPanelId = useCallback((next: string | null) => {
+    setSidePanelState((current) => ({ ...current, selectedAgentPanelId: next }));
+  }, []);
+  const setThreadDraftEmpty = useCallback((next: boolean) => {
+    setSidePanelState((current) => ({ ...current, threadDraftEmpty: next }));
+  }, []);
+  const resetSidePanelState = useCallback(() => {
+    setSidePanelState({
+      openThreadRoot: null,
+      selectedAgentPanelId: null,
+      threadDraftEmpty: true,
+    });
+  }, []);
   const [convSearchOpen, setConvSearchOpen] = useState(false);
   const [convSearchQuery, setConvSearchQuery] = useState("");
   const [convSearchResults, setConvSearchResults] = useState<ChannelMessageSearchResult[]>([]);
@@ -638,6 +663,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       null;
     return isMobile ? explicit : (explicit ?? channels[0] ?? null);
   }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
+  const selectedAgentPanel = useMemo(
+    () => (selectedAgentPanelId ? agents.find((agent) => agent.id === selectedAgentPanelId) ?? null : null),
+    [agents, selectedAgentPanelId],
+  );
   const isActiveArchived = !!active?.archived_at;
   const activeDraftKey = active ? (`channel:${active.id}` as const) : null;
   const activeDraft = activeDraftKey ? (composerDrafts[activeDraftKey]?.content ?? "") : "";
@@ -1006,11 +1035,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   }, [active?.id]);
 
   useEffect(() => {
-    setOpenThreadRoot(null);
-    setThreadDraftEmpty(true);
-  }, [active?.id, activeDmId]);
-
-  useEffect(() => {
     if (!activeChannelId || !threadRoot) return;
     markThreadRead({ channelId: activeChannelId, messageId: threadRoot.id });
   }, [activeChannelId, threadRoot, markThreadRead]);
@@ -1119,6 +1143,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // Select a channel and reflect it in the URL so the address is shareable.
   // Clears any DM selection — the two regions are mutually exclusive.
   const selectChannel = (id: string) => {
+    resetSidePanelState();
     setActiveDmId(null);
     setActiveId(id);
     replace(wsPaths.channelDetail(id));
@@ -1127,6 +1152,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // Select a DM (from the DIRECT MESSAGES region). Clears the group selection
   // and reflects the DM in the URL so it can be shared / deep-linked.
   const selectDm = (dm: DMItem) => {
+    resetSidePanelState();
     setActiveId(null);
     setActiveDmId(dm.id);
     replace(wsPaths.channelDetail(dm.id));
@@ -1148,6 +1174,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // Mobile-only: return from the detail (group or DM) to the list. Clears both
   // selections (so the list renders) and drops the deep-link param.
   const mobileBackToList = () => {
+    resetSidePanelState();
     setActiveId(null);
     setActiveDmId(null);
     setMobilePanel(null);
@@ -1396,7 +1423,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
 
   const handleOpenThread = (message: ChannelMessage) => {
     focusThreadComposerOnOpenRef.current = true;
+    setSelectedAgentPanelId(null);
     setOpenThreadRoot(message);
+  };
+
+  const handleOpenAgentPanel = (agentId: string) => {
+    setOpenThreadRoot(null);
+    setSelectedAgentPanelId(agentId);
   };
 
   const handleToggleThreadFollow = useCallback(
@@ -2078,6 +2111,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         }
       />
     ) : null;
+  const agentPanel =
+    active && selectedAgentPanel ? (
+      <AgentFilesPanel
+        agent={selectedAgentPanel}
+        currentUserId={currentUserId}
+        members={workspaceMembers}
+        onClose={() => setSelectedAgentPanelId(null)}
+      />
+    ) : null;
   const channelConversationPane = (
     <main className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background">
       {!active ? (
@@ -2314,6 +2356,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 onReact={handleReactToMessage}
                 onEditMessage={isActiveArchived ? undefined : handleEditMessage}
                 onDeleteMessage={isActiveArchived ? undefined : handleDeleteMessage}
+                onOpenAgent={handleOpenAgentPanel}
               />
 
               {isActiveArchived ? (
@@ -2443,18 +2486,18 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       <ResizablePanel id="conversation" minSize="50%" className="flex min-h-0 flex-col">
         {channelConversationPane}
       </ResizablePanel>
-      {threadPanel ? (
+      {threadPanel || agentPanel ? (
         <>
           <ResizableHandle />
           <ResizablePanel
-            id="thread"
+            id={threadPanel ? "thread" : "agent-files"}
             defaultSize={440}
             minSize={360}
             maxSize={640}
             groupResizeBehavior="preserve-pixel-size"
             className="border-l border-border/30 bg-background"
           >
-            {threadPanel}
+            {threadPanel ?? agentPanel}
           </ResizablePanel>
         </>
       ) : null}

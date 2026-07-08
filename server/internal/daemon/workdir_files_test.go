@@ -85,3 +85,68 @@ func TestWalkWorkdirFiles_EntryCapTruncates(t *testing.T) {
 		t.Fatalf("expected at most 5 nodes, got %d", len(nodes))
 	}
 }
+
+func TestWalkWorkdirFiles_HidesDotfilesWhenRequested(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{
+		"memory/MEMORY.md",
+		".env",
+		".hidden/note.md",
+		"notes/.private.md",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	hidden, _, err := walkWorkdirFilesWithOptions(root, 0, 0, workdirWalkOptions{HideDotfiles: true})
+	if err != nil {
+		t.Fatalf("walk hidden: %v", err)
+	}
+	for _, n := range hidden {
+		if n.Path == ".env" || n.Path == ".hidden" || n.Path == ".hidden/note.md" || n.Path == "notes/.private.md" {
+			t.Fatalf("hidden path leaked with HideDotfiles: %q", n.Path)
+		}
+	}
+
+	all, _, err := walkWorkdirFilesWithOptions(root, 0, 0, workdirWalkOptions{HideDotfiles: false})
+	if err != nil {
+		t.Fatalf("walk all: %v", err)
+	}
+	got := map[string]bool{}
+	for _, n := range all {
+		got[n.Path] = true
+	}
+	for _, path := range []string{".env", ".hidden", ".hidden/note.md", "notes/.private.md"} {
+		if !got[path] {
+			t.Fatalf("expected hidden path %q when HideDotfiles=false; got %#v", path, got)
+		}
+	}
+}
+
+func TestWriteWorkdirTextFileRejectsHashMismatch(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "memory", "STATE.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := writeWorkdirTextFile(root, "memory/STATE.md", "new", "not-the-current-hash", 0)
+	if !resp.Conflict {
+		t.Fatalf("expected hash conflict, got %+v", resp)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "old" {
+		t.Fatalf("hash conflict must not modify file, got %q", got)
+	}
+}

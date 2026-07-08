@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,7 +20,8 @@ import (
 )
 
 const (
-	defaultReadFileMaxBytes = 256 * 1024
+	defaultReadFileMaxBytes  = 256 * 1024
+	defaultWriteFileMaxBytes = 256 * 1024
 	// Media files (image/audio/video/pdf) are base64-encoded in the response,
 	// so keep the cap modest — the JSON frame is ~1.34× this.
 	mediaMaxBytes = 6 * 1024 * 1024
@@ -40,6 +43,30 @@ var mediaMimeByExt = map[string]string{
 // mediaMime returns the MIME type for a previewable media file, or "" for text.
 func mediaMime(path string) string {
 	return mediaMimeByExt[strings.ToLower(filepath.Ext(path))]
+}
+
+func contentHash(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func confinedWorkdirPath(workspacesRoot, relPath, filePath string) (root string, target string, err error) {
+	base, err := filepath.Abs(workspacesRoot)
+	if err != nil {
+		return "", "", err
+	}
+	root, _ = filepath.Abs(filepath.Join(base, filepath.FromSlash(relPath)))
+	target = root
+	if filePath != "" {
+		target, _ = filepath.Abs(filepath.Join(root, filepath.FromSlash(filePath)))
+	}
+	if root != base && !strings.HasPrefix(root, base+string(os.PathSeparator)) {
+		return "", "", errors.New("invalid root path")
+	}
+	if target != root && !strings.HasPrefix(target, root+string(os.PathSeparator)) {
+		return "", "", errors.New("invalid file path")
+	}
+	return root, target, nil
 }
 
 // sendDaemonFrame marshals payload into a typed Message and queues it on the
@@ -70,17 +97,15 @@ func (d *Daemon) handleReadFileRequest(req protocol.ReadWorkdirFileRequestPayloa
 		maxBytes = defaultReadFileMaxBytes
 	}
 
-	base, err := filepath.Abs(d.cfg.WorkspacesRoot)
+	root, target, err := confinedWorkdirPath(d.cfg.WorkspacesRoot, req.RelPath, req.FilePath)
 	if err != nil {
 		resp.Error = "workspaces root unavailable"
 		d.sendDaemonFrame(protocol.EventDaemonReadFileResponse, resp, req.RequestID, writes)
 		return
 	}
-	root, _ := filepath.Abs(filepath.Join(base, filepath.FromSlash(req.RelPath)))
-	target, _ := filepath.Abs(filepath.Join(root, filepath.FromSlash(req.FilePath)))
 
 	switch {
-	case target != root && !strings.HasPrefix(target, root+string(os.PathSeparator)):
+	case req.FilePath == "" || target == root:
 		resp.Error = "invalid path"
 	default:
 		info, statErr := os.Stat(target)
@@ -103,6 +128,7 @@ func (d *Daemon) handleReadFileRequest(req protocol.ReadWorkdirFileRequestPayloa
 			resp.MimeType = mime
 			resp.Encoding = "base64"
 			resp.Content = base64.StdEncoding.EncodeToString(raw)
+			resp.ContentHash = contentHash(raw)
 			break
 		}
 		f, openErr := os.Open(target)
@@ -125,10 +151,23 @@ func (d *Daemon) handleReadFileRequest(req protocol.ReadWorkdirFileRequestPayloa
 			resp.Binary = true
 		} else {
 			resp.Content = string(data)
+			resp.ContentHash = contentHash(data)
 		}
 	}
 
 	d.sendDaemonFrame(protocol.EventDaemonReadFileResponse, resp, req.RequestID, writes)
+}
+
+func (d *Daemon) handleWriteFileRequest(req protocol.WriteWorkdirFileRequestPayload, writes chan<- []byte) {
+	resp := writeWorkdirTextFile(
+		filepath.Join(d.cfg.WorkspacesRoot, filepath.FromSlash(req.RelPath)),
+		req.FilePath,
+		req.Content,
+		req.ExpectedContentHash,
+		req.MaxBytes,
+	)
+	resp.RequestID = req.RequestID
+	d.sendDaemonFrame(protocol.EventDaemonWriteFileResponse, resp, req.RequestID, writes)
 }
 
 // handleListFilesRequest resolves a project workdir under WorkspacesRoot, walks
@@ -149,7 +188,9 @@ func (d *Daemon) handleListFilesRequest(req protocol.ListWorkdirFilesRequestPayl
 		} else if info, statErr := os.Stat(target); statErr != nil || !info.IsDir() {
 			resp.Missing = true
 		} else {
-			nodes, truncated, walkErr := walkWorkdirFiles(target, req.MaxEntries, req.MaxDepth)
+			nodes, truncated, walkErr := walkWorkdirFilesWithOptions(target, req.MaxEntries, req.MaxDepth, workdirWalkOptions{
+				HideDotfiles: req.HideDotfiles,
+			})
 			if walkErr != nil {
 				resp.Error = "failed to read directory"
 			} else {
@@ -189,6 +230,10 @@ const (
 	defaultWorkdirMaxDepth   = 12
 )
 
+type workdirWalkOptions struct {
+	HideDotfiles bool
+}
+
 // errStopWalk is the sentinel used to abort filepath.WalkDir once the entry
 // cap is reached. It never escapes walkWorkdirFiles.
 var errStopWalk = errors.New("workdir walk: entry cap reached")
@@ -200,6 +245,10 @@ var errStopWalk = errors.New("workdir walk: entry cap reached")
 // by path so the frontend can rebuild a stable tree. root must be an existing
 // directory; an unreadable child entry is skipped rather than aborting.
 func walkWorkdirFiles(root string, maxEntries, maxDepth int) (nodes []protocol.WorkdirFileNode, truncated bool, err error) {
+	return walkWorkdirFilesWithOptions(root, maxEntries, maxDepth, workdirWalkOptions{})
+}
+
+func walkWorkdirFilesWithOptions(root string, maxEntries, maxDepth int, opts workdirWalkOptions) (nodes []protocol.WorkdirFileNode, truncated bool, err error) {
 	if maxEntries <= 0 || maxEntries > defaultWorkdirMaxEntries {
 		maxEntries = defaultWorkdirMaxEntries
 	}
@@ -233,6 +282,12 @@ func walkWorkdirFiles(root string, maxEntries, maxDepth int) (nodes []protocol.W
 		rel = filepath.ToSlash(rel)
 		isDir := entry.IsDir()
 
+		if opts.HideDotfiles && strings.HasPrefix(entry.Name(), ".") {
+			if isDir {
+				return fs.SkipDir
+			}
+			return nil
+		}
 		if isDir {
 			if _, ignored := workdirIgnoredDirs[entry.Name()]; ignored {
 				return fs.SkipDir
@@ -266,4 +321,61 @@ func walkWorkdirFiles(root string, maxEntries, maxDepth int) (nodes []protocol.W
 
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Path < nodes[j].Path })
 	return nodes, truncated, nil
+}
+
+func writeWorkdirTextFile(root, filePath, content, expectedContentHash string, maxBytes int) protocol.WriteWorkdirFileResponsePayload {
+	resp := protocol.WriteWorkdirFileResponsePayload{}
+	if maxBytes <= 0 || maxBytes > defaultWriteFileMaxBytes {
+		maxBytes = defaultWriteFileMaxBytes
+	}
+	data := []byte(content)
+	if len(data) > maxBytes {
+		resp.TooLarge = true
+		return resp
+	}
+	if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
+		resp.Binary = true
+		return resp
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		resp.Error = "workdir root unavailable"
+		return resp
+	}
+	target, _ := filepath.Abs(filepath.Join(rootAbs, filepath.FromSlash(filePath)))
+	if filePath == "" || target == rootAbs || (target != rootAbs && !strings.HasPrefix(target, rootAbs+string(os.PathSeparator))) {
+		resp.Error = "invalid path"
+		return resp
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			resp.Missing = true
+			return resp
+		}
+		resp.Error = "failed to stat file"
+		return resp
+	}
+	if info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
+		resp.Error = "invalid file"
+		return resp
+	}
+	current, err := os.ReadFile(target)
+	if err != nil {
+		resp.Error = "failed to read file"
+		return resp
+	}
+	currentHash := contentHash(current)
+	if expectedContentHash != "" && expectedContentHash != currentHash {
+		resp.Conflict = true
+		resp.ContentHash = currentHash
+		return resp
+	}
+	nextHash := contentHash(data)
+	if err := os.WriteFile(target, data, info.Mode().Perm()); err != nil {
+		resp.Error = "failed to write file"
+		return resp
+	}
+	resp.ContentHash = nextHash
+	return resp
 }

@@ -834,7 +834,8 @@ describe("ChannelMessageBubble", () => {
     expect(actionBar).toHaveClass("opacity-0");
     expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument();
 
-    await userEvent.click(bubble);
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
 
     expect(bubble).toHaveClass("ring-primary/45");
     expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument();
@@ -868,8 +869,11 @@ describe("ChannelMessageBubble", () => {
     copyTextMock.mockResolvedValue(true);
     render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
 
-    await userEvent.click(screen.getByTestId("message-bubble"));
-    const copyButtons = screen.getAllByRole("button", { name: "Copy" });
+    const bubble = screen.getByTestId("message-bubble");
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+
+    const copyButtons = await screen.findAllByRole("button", { name: "Copy" });
     await userEvent.click(copyButtons.at(-1)!);
 
     await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("Here is the data."));

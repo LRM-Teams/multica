@@ -5,7 +5,6 @@ import {
   useEffect,
   useRef,
   useState,
-  type MouseEvent,
   type PointerEvent,
 } from "react";
 import { Copy, MessageSquare, Pencil, Trash2 } from "lucide-react";
@@ -212,14 +211,23 @@ export function ChannelMessageBubble({
   const [mobileThreadTapActive, setMobileThreadTapActive] = useState(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mobileActionsDialogRef = useRef<HTMLDialogElement | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
-  const suppressNextClickRef = useRef(false);
+  const touchCancelledRef = useRef(false);
 
+  // react-doctor-disable-next-line react-doctor/exhaustive-deps -- unmount needs to clear whichever touch timers are currently pending.
   useEffect(() => {
     return () => {
       if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
       if (tapFeedbackTimerRef.current) clearTimeout(tapFeedbackTimerRef.current);
     };
+  }, []);
+
+  const showMobileActionsDialog = useCallback((dialog: HTMLDialogElement | null) => {
+    mobileActionsDialogRef.current = dialog;
+    if (!dialog || dialog.open) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
   }, []);
 
   if (message.deleted_at) {
@@ -415,37 +423,45 @@ export function ChannelMessageBubble({
   };
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.pointerType !== "touch" || isInteractiveMessageTarget(event.target)) return;
-    suppressNextClickRef.current = false;
+    touchCancelledRef.current = false;
     touchStartRef.current = { x: event.clientX, y: event.clientY };
     clearLongPressTimer();
     longPressTimerRef.current = setTimeout(() => {
       longPressTimerRef.current = null;
-      suppressNextClickRef.current = true;
-      openMobileActions();
+      touchCancelledRef.current = true;
+      if (!hasActiveTextSelection()) openMobileActions();
     }, LONG_PRESS_MS);
   };
   const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const start = touchStartRef.current;
     if (!start) return;
     const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
-    if (moved > TOUCH_MOVE_CANCEL_PX) clearLongPressTimer();
+    if (moved > TOUCH_MOVE_CANCEL_PX) {
+      touchCancelledRef.current = true;
+      clearLongPressTimer();
+    }
   };
-  const handlePointerEnd = () => {
+  const handlePointerEnd = (event: PointerEvent<HTMLDivElement>) => {
+    const wasTouch = event.pointerType === "touch" && touchStartRef.current;
     touchStartRef.current = null;
     clearLongPressTimer();
-  };
-  const handleMobileTap = (event: MouseEvent<HTMLDivElement>) => {
-    if (!isMobileActionViewport()) return;
-    if (suppressNextClickRef.current) {
-      suppressNextClickRef.current = false;
+
+    if (!wasTouch || touchCancelledRef.current || !isMobileActionViewport()) {
+      touchCancelledRef.current = false;
       return;
     }
+    touchCancelledRef.current = false;
     if (isInteractiveMessageTarget(event.target) || hasActiveTextSelection()) return;
     if (canOpenThread) {
       openThreadAfterMobileTap();
       return;
     }
     openMobileActions();
+  };
+  const cancelTouchGesture = () => {
+    touchCancelledRef.current = true;
+    touchStartRef.current = null;
+    clearLongPressTimer();
   };
 
   return (
@@ -458,12 +474,11 @@ export function ChannelMessageBubble({
         highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0",
         mobileThreadTapActive && "bg-primary/[0.04] ring-1 ring-primary/45 duration-75",
       )}
-      onClick={handleMobileTap}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}
-      onPointerCancel={handlePointerEnd}
-      onPointerLeave={handlePointerEnd}
+      onPointerCancel={cancelTouchGesture}
+      onPointerLeave={cancelTouchGesture}
     >
       {profileActorType && profileActorId ? (
         <ActorProfileTrigger
@@ -634,19 +649,27 @@ export function ChannelMessageBubble({
           </div>
         )}
         {!isEditing && mobileActionsOpen && (
-          <div
-            className="fixed inset-0 z-50 bg-black/10 md:hidden"
-            role="presentation"
-            onClick={() => setMobileActionsOpen(false)}
+          <dialog
+            ref={showMobileActionsDialog}
+            className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 backdrop:bg-black/10 md:hidden"
+            aria-label={t(($) => $.message.actions_menu)}
+            onCancel={(event) => {
+              event.preventDefault();
+              setMobileActionsOpen(false);
+            }}
+            onClose={() => setMobileActionsOpen(false)}
           >
+            <form method="dialog" className="absolute inset-0">
+              <button
+                type="submit"
+                aria-label={t(($) => $.message.actions_menu)}
+                className="h-full w-full cursor-default"
+              />
+            </form>
             <div
               data-testid="mobile-message-actions"
               data-message-action-surface="true"
-              role="dialog"
-              aria-modal="true"
-              aria-label={t(($) => $.message.actions_menu)}
               className="absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-border bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-2xl"
-              onClick={(event) => event.stopPropagation()}
             >
               <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-muted-foreground/25" />
               <div className="flex flex-col gap-1">
@@ -694,7 +717,7 @@ export function ChannelMessageBubble({
                 )}
               </div>
             </div>
-          </div>
+          </dialog>
         )}
         {!isEditing && hasFeedback && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">

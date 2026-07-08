@@ -14,31 +14,68 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-var sendCmd = &cobra.Command{
-	Use:   "send",
-	Short: "Send a visible chat message from the running agent task",
-	Long: "Send a visible message from the running agent task to the current " +
-		"chat surface or an explicit target. Targets are parsed server-side and " +
-		"may be omitted for the current channel/thread, set to #channel, " +
-		"#channel:<message-id>, or dm:@handle. Use --sticker for a sticker-only " +
-		"reply, or combine --sticker with --message for an acknowledgement sticker " +
-		"followed by explanatory text in one message. Use --attachment (repeatable) " +
-		"to upload and attach local files.",
-	RunE: runAgentMessageSend,
+func newMessageSendCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "send",
+		Short: "Send a visible chat message from the running agent task",
+		Long: "Send a visible message from the running agent task to the current " +
+			"chat surface or an explicit target. Targets are parsed server-side and " +
+			"may be omitted for the current channel/thread, set to #channel, " +
+			"#channel:<message-id>, or dm:@handle. Use --sticker for a sticker-only " +
+			"reply, or combine --sticker with --message for an acknowledgement sticker " +
+			"followed by explanatory text in one message. Use --attachment (repeatable) " +
+			"to upload and attach local files.",
+		RunE: runAgentMessageSend,
+	}
+	cmd.Flags().String("target", "", "Target: omit for current surface, #channel, #channel:<message-id>, or dm:@handle")
+	cmd.Flags().String("message", "", "Message to send (decodes \\n, \\r, \\t, \\\\; use --message-stdin to preserve literal backslashes)")
+	cmd.Flags().Bool("message-stdin", false, "Read the message from stdin (preserves multi-line content verbatim)")
+	cmd.Flags().String("message-file", "", "Read the message from a UTF-8 file")
+	cmd.Flags().String("sticker", "", "Builtin sticker id (see `multica sticker list`); sticker-only when --message is omitted")
+	cmd.Flags().StringSlice("attachment", nil, "Local file path(s) to attach (repeatable); URLs are not supported")
+	cmd.Flags().String("client-message-id", "", "Idempotency key; generated automatically when omitted")
+	cmd.Flags().Bool("show-in-channel", false, "For thread targets, also show the reply on the parent channel timeline")
+	cmd.Flags().String("output", "json", "Output format: json or text")
+	return cmd
 }
 
-var reactCmd = &cobra.Command{
-	Use:   "react",
-	Short: "React to a channel or thread message from the running agent task",
-	Long: "Add a reaction from the running agent task. Omit --message-id to " +
-		"react to the message that triggered the task when the task context " +
-		"provides one.",
-	RunE: runAgentMessageReact,
+func newMessageReactCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "react",
+		Short: "React to a channel or thread message from the running agent task",
+		Long: "Add a reaction from the running agent task. Omit --message-id to " +
+			"react to the message that triggered the task when the task context " +
+			"provides one.",
+		RunE: runAgentMessageReact,
+	}
+	cmd.Flags().String("target", "", "Target: omit for current surface, #channel, #channel:<message-id>, or dm:@handle")
+	cmd.Flags().String("message-id", "", "Message UUID to react to; omit to use the triggering message when available")
+	cmd.Flags().String("emoji", "", "Emoji reaction to add")
+	cmd.Flags().String("client-message-id", "", "Idempotency/audit key; generated automatically when omitted")
+	cmd.Flags().String("output", "json", "Output format: json or text")
+	return cmd
+}
+
+// Canonical grouped forms: `multica message send` / `multica message react`.
+var messageSendCmd = newMessageSendCmd()
+var messageReactCmd = newMessageReactCmd()
+
+// Top-level `multica send` / `multica react` are compatibility aliases kept
+// while injected prompts and built-in skills still teach the ungrouped names.
+// New surfaces should reference the grouped forms.
+var sendCmd = newCompatMessageAlias(newMessageSendCmd(), "message send")
+var reactCmd = newCompatMessageAlias(newMessageReactCmd(), "message react")
+
+func newCompatMessageAlias(cmd *cobra.Command, canonical string) *cobra.Command {
+	cmd.Short += " (alias of `multica " + canonical + "`)"
+	cmd.Long += "\n\nThis top-level form is a compatibility alias of `multica " +
+		canonical + "`; prefer the grouped form."
+	return cmd
 }
 
 var messageCmd = &cobra.Command{
 	Use:   "message",
-	Short: "Read and search chat messages for the running agent task",
+	Short: "Send, react to, read, and search chat messages for the running agent task",
 }
 
 var messageReadCmd = &cobra.Command{
@@ -55,22 +92,6 @@ var messageSearchCmd = &cobra.Command{
 }
 
 func init() {
-	sendCmd.Flags().String("target", "", "Target: omit for current surface, #channel, #channel:<message-id>, or dm:@handle")
-	sendCmd.Flags().String("message", "", "Message to send (decodes \\n, \\r, \\t, \\\\; use --message-stdin to preserve literal backslashes)")
-	sendCmd.Flags().Bool("message-stdin", false, "Read the message from stdin (preserves multi-line content verbatim)")
-	sendCmd.Flags().String("message-file", "", "Read the message from a UTF-8 file")
-	sendCmd.Flags().String("sticker", "", "Builtin sticker id (see `multica sticker list`); sticker-only when --message is omitted")
-	sendCmd.Flags().StringSlice("attachment", nil, "Local file path(s) to attach (repeatable); URLs are not supported")
-	sendCmd.Flags().String("client-message-id", "", "Idempotency key; generated automatically when omitted")
-	sendCmd.Flags().Bool("show-in-channel", false, "For thread targets, also show the reply on the parent channel timeline")
-	sendCmd.Flags().String("output", "json", "Output format: json or text")
-
-	reactCmd.Flags().String("target", "", "Target: omit for current surface, #channel, #channel:<message-id>, or dm:@handle")
-	reactCmd.Flags().String("message-id", "", "Message UUID to react to; omit to use the triggering message when available")
-	reactCmd.Flags().String("emoji", "", "Emoji reaction to add")
-	reactCmd.Flags().String("client-message-id", "", "Idempotency/audit key; generated automatically when omitted")
-	reactCmd.Flags().String("output", "json", "Output format: json or text")
-
 	messageReadCmd.Flags().String("target", "", "Target: omit for current surface, #channel, #channel:<message-id>, or dm:@handle")
 	messageReadCmd.Flags().Int("limit", 20, "Maximum messages to return")
 	messageReadCmd.Flags().String("output", "json", "Output format: json or text")
@@ -79,6 +100,8 @@ func init() {
 	messageSearchCmd.Flags().Int("limit", 50, "Maximum matches to return")
 	messageSearchCmd.Flags().String("output", "json", "Output format: json or text")
 
+	messageCmd.AddCommand(messageSendCmd)
+	messageCmd.AddCommand(messageReactCmd)
 	messageCmd.AddCommand(messageReadCmd)
 	messageCmd.AddCommand(messageSearchCmd)
 }

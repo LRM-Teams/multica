@@ -220,7 +220,7 @@ function renderDm() {
   );
 }
 
-describe("DmConversation message edit / delete wiring (#241 B3)", () => {
+describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () => {
   beforeEach(() => {
     apiMock.state.deleted = false;
     currentPageMessages = [ownMessage()];

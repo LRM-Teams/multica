@@ -183,6 +183,11 @@ CREATE TABLE message_mention (
 7. **收尾卫生**:seq 取号收回 Go 事务(顺势把 channel/dm 域裸 SQL 收进 sqlc);drop 旧索引与
    `thread_id`;`content` → `text`(parts 派生)。
 8. **增量新表**(与 1-7 无依赖,可并行):`message_draft`(§4.3)、`message_mention`、`reminder`。
+9. **principal 表(二期,依赖步骤 1,排在 1-7 完成后)**:建 `principal(id UUID PK,
+   kind CHECK(human|agent))`;user/agent 主键改为派生自 principal(创建同事务先插主体行);
+   各引用表逐个把 `(member_kind, member_id)` 多态对收敛为 `member_id REFERENCES principal(id)
+   ON DELETE CASCADE`(kind 需要时 JOIN 取)。独立系列 PR,一表一 PR,横切 issue 域
+   (assignee)时与 issue 侧对齐后再动。
 
 ## 6. Slack / raft 坐标对照(设计对齐依据)
 
@@ -201,9 +206,13 @@ CREATE TABLE message_mention (
 ## 7. 决策记录(2026-07-08 Frank 全部拍定)
 
 1. **步骤 2(停双写)排进当前迭代。** 正确性风险最高、收益最快,优先启动。
-2. **`principal` 表 = 二期 backlog,不排期。** 两个触发条件,命中任一即启动:
-   ① 悬空引用产生用户可见 bug(删 agent/成员后出现脏数据);② 需要引入第三种主体
-   (webhook/app 作为一等 actor)。在那之前靠步骤 1 的词汇表锁定 + 应用层纪律。
+2. **`principal` 表确认为长期方案,列为二期正式阶段(步骤 9)。** 行业对齐:主流 IM
+   均已统一 actor 命名空间(Slack bot user、Discord bot=user flag、Matrix bot 即用户);
+   multica 的 agent 明细远重于 user,故取关系建模的标准 party/actor 超类型形态——薄
+   `principal(id, kind)` 主体表 + user/agent 明细表,多态对收敛为真外键,比 Slack 的
+   半吊子统一(遗留 bot_id/user_id 双轨)更干净。启动时机:步骤 1-7 完成、消息域稳定后;
+   前置依赖 = 步骤 1 词汇表锁定。提前触发条件保留:悬空引用产生用户可见 bug,或需要
+   引入第三种主体(webhook/app),命中即提前。
 3. **Lark `thread_id TEXT` 退役前置条件确认**:必须先核实 Lark 线程映射已完全走
    `root_message_id`(#255 存量迁移口径),核实通过才执行步骤 7 中的 thread_id drop。
 4. **大步骤节奏确认**:步骤 4(channel 转正)、步骤 5(chat 退役)每步独立 PR + 产品 smoke,

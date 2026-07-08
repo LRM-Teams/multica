@@ -60,7 +60,7 @@ RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurren
 WITH deleted AS (
     UPDATE sandbox_node
     SET deleted_at = now(), status = 'offline', updated_at = now()
-    WHERE id = @id AND owner_user_id = @owner_user_id AND deleted_at IS NULL
+    WHERE sandbox_node.id = @id AND sandbox_node.owner_user_id = @owner_user_id AND sandbox_node.deleted_at IS NULL
     RETURNING id
 )
 UPDATE sandbox_node_token
@@ -218,7 +218,7 @@ RETURNING *;
 WITH next_jobs AS (
     SELECT id
     FROM sandbox_job
-    WHERE node_id = @node_id AND status = 'queued'
+    WHERE sandbox_job.node_id = @node_id AND sandbox_job.status = 'queued'
     ORDER BY created_at ASC
     LIMIT @limit_count
     FOR UPDATE SKIP LOCKED

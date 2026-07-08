@@ -353,6 +353,23 @@ type DaemonToken struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type EnvCheckpoint struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	EventRef       string             `json:"event_ref"`
+	CheckpointKind string             `json:"checkpoint_kind"`
+	EnvIDMap       []byte             `json:"env_id_map"`
+	SandboxRefs    []byte             `json:"sandbox_refs"`
+	DbSnapshot     []byte             `json:"db_snapshot"`
+	EntropyScore   pgtype.Float8      `json:"entropy_score"`
+	SaveTimeoutMs  int32              `json:"save_timeout_ms"`
+	SaveStatus     string             `json:"save_status"`
+	SaveError      pgtype.Text        `json:"save_error"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type EnvDispatchRequest struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

@@ -21,9 +21,16 @@ on:
   # Deploy only when a PR is MERGED into `dev` (the team's integration branch).
   # Direct pushes to dev do NOT deploy — the disciplined flow is
   # feature branch → PR → merge to dev → deploy.
+  # Docs-only PRs (#354 bug) are excluded — they don't change any code, so
+  # triggering a backend rebuild/restart would disconnect all WS connections
+  # for zero benefit.
   pull_request:
     types: [closed]
     branches: [dev]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "**/*.md"
   workflow_dispatch:
     inputs:
       image_tag:

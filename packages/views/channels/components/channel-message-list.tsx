@@ -196,6 +196,7 @@ function MessageViewport({
   const preserveScrollDeltaRef = useRef<number | null>(null);
   const [directFallbackChannelId, setDirectFallbackChannelId] = useState<string | null>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
+  const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
   const channelId = messages[0]?.channel_id;
   const canLoadOlder = !!hasOlder && !loadingOlder && !!onLoadOlder;
   const dayDividers = useMessageDayDividers(messages);
@@ -211,12 +212,18 @@ function MessageViewport({
   }
   const messageRefMap = messageRefs.current;
   const useDirectFallback = directFallbackChannelId === channelId;
-  // #325 phase 1: Virtuoso now owns its own scroller (no customScrollParent).
-  // Captured via Virtuoso's `scrollerRef` on the virtualized path and via the
-  // fallback's own scroll div — used imperatively by the fallback scroll-position
-  // preservation and the render-detection probe.
-  const handleScrollerRef = useCallback((node: HTMLElement | Window | null) => {
-    scrollRef.current = node instanceof Window ? null : node;
+  // #325: Virtuoso scrolls a caller-owned parent (`customScrollParent`), not its
+  // own div. We render the scroll container ourselves and capture it into
+  // `scrollContainerEl`, which (a) is Virtuoso's scroll parent, (b) gates the
+  // mount-time scroll effects until the container exists — the first render is a
+  // bare placeholder scroller, so Virtuoso only mounts on the second render once
+  // this ref has set the state and the parent is laid out (this is what makes
+  // `initialTopMostItemIndex` land correctly; giving Virtuoso its own flex
+  // scroller regressed cold-load positioning), and (c) backs the fallback
+  // scroll-position preservation + the render-detection probe via `scrollRef`.
+  const setScrollContainerRef = useCallback((node: HTMLDivElement | null) => {
+    scrollRef.current = node;
+    setScrollContainerEl(node);
   }, []);
 
   const highlightIndex = useMemo(() => {
@@ -235,6 +242,9 @@ function MessageViewport({
     highlightMessageId,
     firstItemIndex,
     virtuosoRef,
+    // Virtuoso only mounts once the scroll container exists; the anchor scroll
+    // must wait for that (else it fires before there's anything to scroll).
+    scrollerReady: !!scrollContainerEl,
   });
 
   // Floating "N new messages ↓" pill (#303) — self-contained plugin hook (#325
@@ -285,19 +295,15 @@ function MessageViewport({
     return () => window.clearTimeout(timer);
   }, [channelId, messages.length, useDirectFallback]);
 
-  // Scrolls to a deep-linked / search-hit message. Deliberately does NOT
-  // depend on `messages` — bottom-follow for newly-arrived messages is
-  // Virtuoso's own `followOutput` job now; re-running this on every new
-  // message during an open search used to re-fire scrollToIndex repeatedly.
-  // #325 phase 1: with Virtuoso owning its scroller, it mounts on the very first
-  // render (no placeholder frame anymore), so `virtuosoRef.current` is ready by
-  // the time this effect runs — a deep-link highlight set on mount scrolls into
-  // view without a separate mount signal (previously `initialTopMostItemIndex`
-  // already positions the deep link; this adds the smooth-scroll + centering).
-  // Deliberately does NOT depend on `messages` — bottom-follow for new messages
-  // is Virtuoso's own `followOutput` job.
+  // Scrolls to a deep-linked / search-hit message. Deliberately does NOT depend
+  // on `messages` — bottom-follow for newly-arrived messages is Virtuoso's own
+  // `followOutput` job; re-running on every new message during an open search
+  // used to re-fire scrollToIndex repeatedly. Depends on `scrollContainerEl`: the
+  // first render is a bare placeholder scroller (Virtuoso isn't mounted yet, so
+  // `virtuosoRef.current` is still null), and this effect must re-fire once the
+  // container exists and Virtuoso has mounted.
   useEffect(() => {
-    if (!highlightMessageId || highlightIndex < 0) return;
+    if (!highlightMessageId || highlightIndex < 0 || !scrollContainerEl) return;
     virtuosoRef.current?.scrollToIndex({
       index: firstItemIndex + highlightIndex,
       align: "center",
@@ -307,7 +313,7 @@ function MessageViewport({
       block: "center",
       behavior: "smooth",
     });
-  }, [highlightMessageId, highlightIndex, firstItemIndex, messageRefMap]);
+  }, [highlightMessageId, highlightIndex, firstItemIndex, messageRefMap, scrollContainerEl]);
 
   if (loadErrorLabel) {
     return (
@@ -380,10 +386,24 @@ function MessageViewport({
     );
   };
 
+  // First render: no scroll container captured yet. Render a bare scroller div
+  // whose ref sets `scrollContainerEl`; the next render mounts Virtuoso against
+  // this now-laid-out parent (`customScrollParent`), which is what lets
+  // `initialTopMostItemIndex` position correctly on cold load.
+  if (!scrollContainerEl) {
+    return (
+      <div
+        ref={setScrollContainerRef}
+        className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
+        data-testid="message-scroller"
+      />
+    );
+  }
+
   if (useDirectFallback) {
     return (
       <div
-        ref={handleScrollerRef}
+        ref={setScrollContainerRef}
         className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
         data-testid="message-scroller"
         onScroll={(event) => {
@@ -426,41 +446,46 @@ function MessageViewport({
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      <Virtuoso
-        ref={virtuosoRef}
-        scrollerRef={handleScrollerRef}
-        className="virtuoso-scroller min-h-0 min-w-0 flex-1"
-        data={messages}
-        firstItemIndex={firstItemIndex}
-        initialTopMostItemIndex={initialTopMostItemIndex}
-        increaseViewportBy={{ top: 320, bottom: 520 }}
-        atBottomThreshold={120}
-        atBottomStateChange={handleAtBottomStateChange}
-        followOutput={() => (!loadingOlder && isNearBottom ? "smooth" : false)}
-        startReached={() => {
-          if (canLoadOlder) onLoadOlder?.();
-        }}
-        computeItemKey={(_, msg) => msg.id}
-        components={{
-          List: VirtuosoItemList,
-          Header: () => (
-            <>
-              {header}
-              <div className={header ? "pt-2" : "pt-3"}>
-                <LoadOlderAffordance
-                  hasOlder={hasOlder}
-                  loadingOlder={loadingOlder}
-                  loadingOlderLabel={loadingOlderLabel}
-                  loadOlderLabel={loadOlderLabel}
-                  onLoadOlder={() => onLoadOlder?.()}
-                />
-              </div>
-            </>
-          ),
-          Footer: () => <div className="pb-5" />,
-        }}
-        itemContent={(_, msg) => renderRow(msg)}
-      />
+      <div
+        ref={setScrollContainerRef}
+        className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
+        data-testid="message-scroller"
+      >
+        <Virtuoso
+          ref={virtuosoRef}
+          customScrollParent={scrollContainerEl}
+          data={messages}
+          firstItemIndex={firstItemIndex}
+          initialTopMostItemIndex={initialTopMostItemIndex}
+          increaseViewportBy={{ top: 320, bottom: 520 }}
+          atBottomThreshold={120}
+          atBottomStateChange={handleAtBottomStateChange}
+          followOutput={() => (!loadingOlder && isNearBottom ? "smooth" : false)}
+          startReached={() => {
+            if (canLoadOlder) onLoadOlder?.();
+          }}
+          computeItemKey={(_, msg) => msg.id}
+          components={{
+            List: VirtuosoItemList,
+            Header: () => (
+              <>
+                {header}
+                <div className={header ? "pt-2" : "pt-3"}>
+                  <LoadOlderAffordance
+                    hasOlder={hasOlder}
+                    loadingOlder={loadingOlder}
+                    loadingOlderLabel={loadingOlderLabel}
+                    loadOlderLabel={loadOlderLabel}
+                    onLoadOlder={() => onLoadOlder?.()}
+                  />
+                </div>
+              </>
+            ),
+            Footer: () => <div className="pb-5" />,
+          }}
+          itemContent={(_, msg) => renderRow(msg)}
+        />
+      </div>
       {!isNearBottom && pill && (
         <NewMessagesPill count={pill.count} onClick={onPillClick} />
       )}

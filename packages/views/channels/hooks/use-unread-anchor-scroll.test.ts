@@ -61,6 +61,7 @@ describe("useUnreadAnchorScroll", () => {
         highlightMessageId: null,
         firstItemIndex: 100,
         virtuosoRef: ref,
+        scrollerReady: true,
       }),
     );
     expect(result.current.unreadAnchorIndex).toBe(2);
@@ -76,6 +77,7 @@ describe("useUnreadAnchorScroll", () => {
       highlightMessageId: null as string | null,
       firstItemIndex: 0,
       virtuosoRef: ref,
+      scrollerReady: true,
     };
     const { rerender } = renderHook((p) => useUnreadAnchorScroll(p), {
       initialProps: { ...props, newMessagesDivider: { anchorMessageId: "m3", count: 1 } },
@@ -96,9 +98,30 @@ describe("useUnreadAnchorScroll", () => {
         highlightMessageId: "m2",
         firstItemIndex: 0,
         virtuosoRef: ref,
+        scrollerReady: true,
       }),
     );
     expect(scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("waits for the scroll container: no scroll until scrollerReady flips true", () => {
+    const { scrollToIndex, ref } = handleWithSpy();
+    const base = {
+      channelId: "c1",
+      messages: messages(["m1", "m2", "m3"]),
+      newMessagesDivider: { anchorMessageId: "m3", count: 1 },
+      highlightMessageId: null as string | null,
+      firstItemIndex: 0,
+      virtuosoRef: ref,
+    };
+    const { rerender } = renderHook((p) => useUnreadAnchorScroll(p), {
+      initialProps: { ...base, scrollerReady: false },
+    });
+    // First render is the bare placeholder scroller — Virtuoso isn't mounted yet.
+    expect(scrollToIndex).not.toHaveBeenCalled();
+    // Container captured → Virtuoso mounts → the anchor scroll fires (late arrival).
+    rerender({ ...base, scrollerReady: true });
+    expect(scrollToIndex).toHaveBeenCalledWith({ index: 2, align: "start", behavior: "auto" });
   });
 
   it("reports no anchor and never scrolls when there is no unread divider", () => {
@@ -111,6 +134,7 @@ describe("useUnreadAnchorScroll", () => {
         highlightMessageId: null,
         firstItemIndex: 0,
         virtuosoRef: ref,
+        scrollerReady: true,
       }),
     );
     expect(result.current.unreadAnchorIndex).toBe(-1);

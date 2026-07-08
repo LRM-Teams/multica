@@ -45,6 +45,7 @@
     "close": "关闭",
     "open_in_new_tab": "在新标签页打开",
     "remove": "移除附件",
+    "open_file": "打开 {{filename}}",
     "file_type": {
       "image": "图片",
       "video": "视频",

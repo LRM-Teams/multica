@@ -3,12 +3,17 @@ import { fireEvent, render, screen } from "@testing-library/react";
 
 vi.mock("../i18n", () => ({
   useT: () => ({
-    t: (sel: (s: any) => string) =>
+    t: (
+      sel: (
+        s: Record<string, Record<string, string | Record<string, string>>>,
+      ) => string,
+    ) =>
       sel({
         image: { download: "Download" },
         attachment: {
           preview: "Preview",
           preview_loading: "Loading preview…",
+          open_file: "Open {{filename}}",
           file_type: {
             image: "Image",
             video: "Video",
@@ -129,6 +134,40 @@ describe("AttachmentCard — Eye / Download buttons", () => {
     );
     fireEvent.mouseDown(screen.getByTitle("Download"));
     expect(onDownload).toHaveBeenCalled();
+  });
+
+  it("previewable file body is a primary Open button that fires onPreview", () => {
+    const onPreview = vi.fn();
+    render(
+      <AttachmentCard
+        filename="manual.pdf"
+        contentType="application/pdf"
+        href="https://cdn.example/manual.pdf"
+        onPreview={onPreview}
+        onDownload={() => {}}
+      />,
+    );
+    // The icon+name region is the primary control; its accessible name leads
+    // with the localized "Open …" verb (mock returns the raw template).
+    const open = screen.getByRole("button", { name: /open/i });
+    fireEvent.click(open);
+    expect(onPreview).toHaveBeenCalled();
+  });
+
+  it("non-previewable file renders an inert body (no Open button), download-only", () => {
+    render(
+      <AttachmentCard
+        filename="logs.zip"
+        contentType="application/zip"
+        href="https://cdn.example/logs.zip"
+        onPreview={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /open/i })).toBeNull();
+    expect(screen.queryByTitle("Preview")).toBeNull();
+    expect(screen.getByTitle("Download")).toBeTruthy();
+    expect(screen.getByText("logs.zip")).toBeTruthy();
   });
 
   it("hides Eye and Download buttons while uploading", () => {

@@ -10,14 +10,22 @@
  *
  * Layout (Slack-style, per task #339 design): a fixed-width card with a
  * type-colored react-file-icon glyph, a two-line meta column (filename + size ·
- * type), and hover-revealed actions. The whole card is clickable — preview when
- * previewable, otherwise download.
+ * type), and hover/focus-revealed actions.
+ *
+ * Accessibility (design owner: Iris):
+ *   - The icon+meta region is the PRIMARY control for previewable files: a real
+ *     `<button>` (Slack's "click the name to open") whose aria-label carries
+ *     the whole file identity — "Open {name} · {size} · {type}" — so a screen
+ *     reader announces it once as a single, actionable file item. For
+ *     non-previewable files (zip, …) it is inert text (name + size · type stay
+ *     SR-readable) and download is the only action, on the right.
+ *   - Secondary actions (preview / download / delete) are SIBLING buttons,
+ *     never nested inside the primary one (a button may not contain another
+ *     interactive element), revealed on hover or keyboard focus.
  */
 
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Download, Eye, Loader2, Trash2 } from "lucide-react";
 import { FileIcon, defaultStyles } from "react-file-icon";
-import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
 import { getPreviewKind } from "./utils/preview";
 import {
@@ -43,9 +51,9 @@ export interface AttachmentCardProps {
   href?: string;
   /** True while a synchronous upload is in flight (file-card NodeView only). */
   uploading?: boolean;
-  /** Pressed when the Eye button (or a previewable card) is clicked. */
+  /** Pressed when the Eye button (or a previewable card body) is clicked. */
   onPreview: () => void;
-  /** Pressed when the Download button (or a non-previewable card) is clicked. */
+  /** Pressed when the Download button is clicked. */
   onDownload: () => void;
   /** Optional remove button, used by editable comment/file-card surfaces. */
   onDelete?: () => void;
@@ -87,73 +95,68 @@ export function AttachmentCard({
       : "";
   const meta = [sizeLabel, typeLabel].filter(Boolean).join(" · ");
 
-  // Whole-card click → primary action. Previewable cards open the preview;
-  // everything else downloads. Non-actionable cards (no href) aren't clickable.
-  const primaryAction = canPreview
-    ? onPreview
-    : canDownload
-      ? onDownload
-      : undefined;
-  const clickable = !uploading && !!primaryAction;
+  // Previewable files get a primary "open" affordance on the body. Uploading
+  // and non-previewable files render the body as inert text.
+  const openable = !uploading && canPreview;
+  const hasActions = !uploading && (canPreview || canDownload || canDelete);
+  // Primary-button accessible name: open verb + full file identity, so a
+  // screen reader hears "Open report.pdf · 1.4 MB · PDF" as one item.
+  const openLabelBase = t(($) => $.attachment.open_file, { filename });
+  const openLabel = meta ? `${openLabelBase} · ${meta}` : openLabelBase;
 
-  // Interaction props are spread as a unit so the card is either a fully
-  // keyboard-accessible `button` (role + tabIndex + Enter/Space) or a plain
-  // static div with no click handler — never a click-only div.
-  const interactionProps = clickable
-    ? {
-        role: "button" as const,
-        tabIndex: 0,
-        onClick: primaryAction,
-        onKeyDown: (e: ReactKeyboardEvent) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            primaryAction?.();
-          }
-        },
-      }
-    : {};
+  const body = (
+    <>
+      {/* Icon slot — fixed size so cards align regardless of glyph aspect. */}
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center">
+        {uploading ? (
+          <Loader2 className="size-5 animate-spin text-muted-foreground" />
+        ) : (
+          <span className="w-[30px] leading-none">
+            <FileIcon extension={ext || undefined} {...iconStyles} />
+          </span>
+        )}
+      </span>
+      {/* Two-line meta — phrasing-only markup so it can live inside a button. */}
+      <span className="min-w-0 flex-1 text-left">
+        <span
+          className="block truncate text-[13.5px] font-semibold leading-tight"
+          title={filename}
+        >
+          {uploading
+            ? t(($) => $.file_card.uploading, { filename })
+            : filename}
+        </span>
+        {!uploading && meta && (
+          <span className="mt-0.5 block truncate text-[11.5px] leading-tight text-muted-foreground">
+            {meta}
+          </span>
+        )}
+      </span>
+    </>
+  );
 
   return (
     <div className="my-1">
       <div
-        className={cn(
-          "group inline-flex max-w-[340px] items-center gap-3 rounded-xl border border-border bg-muted/40 px-3 py-2.5 transition-colors hover:bg-muted/70",
-          clickable && "cursor-pointer",
-        )}
+        className="group inline-flex max-w-[340px] items-center gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2.5 transition-colors hover:bg-muted/70"
         onMouseDown={(e) => e.stopPropagation()}
-        {...interactionProps}
       >
-        {/* Icon slot — fixed size so cards align regardless of glyph aspect. */}
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center">
-          {uploading ? (
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
-          ) : (
-            <span className="w-[30px] leading-none">
-              <FileIcon extension={ext || undefined} {...iconStyles} />
-            </span>
-          )}
-        </span>
-
-        {/* Two-line meta. */}
-        <div className="min-w-0 flex-1">
-          <p
-            className="truncate text-[13.5px] font-semibold leading-tight"
-            title={filename}
+        {openable ? (
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+            aria-label={openLabel}
+            onClick={onPreview}
           >
-            {uploading
-              ? t(($) => $.file_card.uploading, { filename })
-              : filename}
-          </p>
-          {!uploading && meta && (
-            <p className="mt-0.5 truncate text-[11.5px] leading-tight text-muted-foreground">
-              {meta}
-            </p>
-          )}
-        </div>
+            {body}
+          </button>
+        ) : (
+          <div className="flex min-w-0 flex-1 items-center gap-3">{body}</div>
+        )}
 
-        {/* Actions — hidden until hover (desktop), grouped on the right. */}
-        {!uploading && (canPreview || canDownload || canDelete) && (
-          <div className="ml-1.5 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+        {/* Actions — hidden until hover / keyboard focus, grouped on the right. */}
+        {hasActions && (
+          <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
             {canPreview && (
               <button
                 type="button"
@@ -165,7 +168,6 @@ export function AttachmentCard({
                   e.stopPropagation();
                   onPreview();
                 }}
-                onClick={(e) => e.stopPropagation()}
               >
                 <Eye className="size-3.5" />
               </button>
@@ -181,7 +183,6 @@ export function AttachmentCard({
                   e.stopPropagation();
                   onDownload();
                 }}
-                onClick={(e) => e.stopPropagation()}
               >
                 <Download className="size-3.5" />
               </button>
@@ -197,7 +198,6 @@ export function AttachmentCard({
                   e.stopPropagation();
                   onDelete();
                 }}
-                onClick={(e) => e.stopPropagation()}
               >
                 <Trash2 className="size-3.5" />
               </button>

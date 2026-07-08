@@ -45,6 +45,7 @@
     "close": "閉じる",
     "open_in_new_tab": "新しいタブで開く",
     "remove": "添付ファイルを削除",
+    "open_file": "{{filename}} を開く",
     "file_type": {
       "image": "画像",
       "video": "動画",

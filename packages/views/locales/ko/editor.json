@@ -45,6 +45,7 @@
     "close": "닫기",
     "open_in_new_tab": "새 탭에서 열기",
     "remove": "첨부 파일 제거",
+    "open_file": "{{filename}} 열기",
     "file_type": {
       "image": "이미지",
       "video": "동영상",

@@ -50,6 +50,7 @@ export function useUnreadAnchorScroll({
   highlightMessageId,
   firstItemIndex,
   virtuosoRef,
+  scrollerReady,
 }: {
   channelId: string | undefined;
   messages: readonly ChannelMessage[];
@@ -57,6 +58,14 @@ export function useUnreadAnchorScroll({
   highlightMessageId: string | null | undefined;
   firstItemIndex: number;
   virtuosoRef: RefObject<VirtuosoHandle | null>;
+  /**
+   * True once the caller's scroll container exists and Virtuoso has mounted. The
+   * anchor scroll must wait for it: with `customScrollParent` the first render is
+   * a bare placeholder scroller, so `virtuosoRef.current` is null until the
+   * second render — firing earlier scrolls nothing and the divider is left far
+   * below the viewport (the cold-load regression this restores).
+   */
+  scrollerReady: boolean;
 }): { unreadAnchorIndex: number } {
   const unreadAnchorIndex = useMemo(() => {
     if (!newMessagesDivider) return -1;
@@ -65,7 +74,7 @@ export function useUnreadAnchorScroll({
 
   const scrolledDividerChannelRef = useRef<string | null>(null);
   useEffect(() => {
-    if (highlightMessageId || unreadAnchorIndex < 0) return;
+    if (!scrollerReady || highlightMessageId || unreadAnchorIndex < 0) return;
     if (scrolledDividerChannelRef.current === channelId) return;
     scrolledDividerChannelRef.current = channelId ?? null;
     // Measure-safe (react-virtuoso #883): the read cursor arrives ~100ms after
@@ -76,7 +85,7 @@ export function useUnreadAnchorScroll({
       align: "start",
       behavior: "auto",
     });
-  }, [channelId, unreadAnchorIndex, highlightMessageId, firstItemIndex, virtuosoRef]);
+  }, [scrollerReady, channelId, unreadAnchorIndex, highlightMessageId, firstItemIndex, virtuosoRef]);
 
   return { unreadAnchorIndex };
 }

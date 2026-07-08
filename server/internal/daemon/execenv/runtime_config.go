@@ -822,7 +822,13 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("- Issue metadata: inspect or update issue-specific persistent facts when explicitly working on an issue: `multica issue metadata list <issue-id>`, `multica issue metadata set <issue-id> --key <k> --value <v> [--type string|number|bool]`, `multica issue metadata delete <issue-id> --key <k>`.\n")
 	b.WriteString("- Projects/repos: inspect project resources and check out code with `multica repo checkout <url>`; use `--ref <branch-or-sha>` when you need an exact revision.\n")
 	b.WriteString("- Attachments: download chat or issue attachments with `multica attachment download <id>`.\n")
-	b.WriteString("- Workspace: inspect workspace info, members, agents, and squads when needed.\n\n")
+	b.WriteString("- Workspace: inspect workspace info, members, agents, and squads when needed.\n")
+	b.WriteString("- Channels: list channels you are a member of with `multica channel list`, inspect members with `multica channel members --target \"#channel\"`.\n")
+	b.WriteString("- Channel attention: mute a channel (`multica channel mute --target \"#channel\"`) or unmute it (`multica channel unmute --target \"#channel\"`). Muting stops ambient delivery; personal @mentions and DMs still arrive.\n")
+	if !ctx.ChatCLITransportUnavailable {
+		b.WriteString("- Thread attention: unfollow a thread with `multica thread unfollow --target \"#channel:<message-id>\"`. Personal @mentions still arrive; posting re-follows automatically.\n")
+	}
+	b.WriteString("\n")
 	b.WriteString("Do not run issue commands just because you are in chat. Use them only when the user asks about an issue/task/project/repo or the answer needs that platform data.\n\n")
 
 	renderRepositoryContext(b, ctx)

@@ -99,7 +99,7 @@ jobs:
             VERSION=${{ steps.prep.outputs.tag }}
             COMMIT=${{ github.sha }}
           cache-from: type=gha,scope=deploy-backend
-          cache-to: type=gha,mode=max,scope=deploy-backend
+          cache-to: type=gha,mode=max,scope=deploy-backend,ignore-error=true
 
       - name: Build & push web
         uses: docker/build-push-action@v6
@@ -115,7 +115,7 @@ jobs:
             REMOTE_API_URL=http://backend:8080
             NEXT_PUBLIC_APP_VERSION=${{ steps.prep.outputs.tag }}
           cache-from: type=gha,scope=deploy-web
-          cache-to: type=gha,mode=max,scope=deploy-web
+          cache-to: type=gha,mode=max,scope=deploy-web,ignore-error=true
 
   deploy:
     needs: build

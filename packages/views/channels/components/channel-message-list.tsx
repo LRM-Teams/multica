@@ -242,9 +242,9 @@ function MessageViewport({
     highlightMessageId,
     firstItemIndex,
     virtuosoRef,
-    // Virtuoso only mounts once the scroll container exists; the anchor scroll
-    // must wait for that (else it fires before there's anything to scroll).
-    scrollerReady: !!scrollContainerEl,
+    // The scroll container gates the anchor scroll (Virtuoso only mounts once it
+    // exists) and is polled by the settle helper to detect landing convergence.
+    scrollContainerEl,
   });
 
   // Floating "N new messages ↓" pill (#303) — self-contained plugin hook (#325

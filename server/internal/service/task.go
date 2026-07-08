@@ -790,7 +790,14 @@ var ErrChatTaskAgentNoRuntime = errors.New("chat task: agent has no runtime")
 // latest message in the silence window. Stored on the task so the daemon brief
 // can attribute the run to the right person. See MUL-2645.
 func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
-	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, false, 2, true)
+	// #311: the system never cancels a directed chat request. A new message that
+	// arrives while an earlier one is still running must NOT cancel the in-flight
+	// run (interruptFollowup=false). It queues instead: ClaimAgentChatTask only
+	// claims a chat task when no active task exists for the same chat_session, and
+	// runs queued tasks FIFO (priority DESC, created_at ASC). So a different
+	// requester's request and a same-requester follow-up both get answered in
+	// order rather than one silently cancelling the other (the Frank+海鹏 case).
+	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, false, 2, false)
 }
 
 // EnqueueFreshChatTask creates a chat task that must not resume the prior
@@ -798,7 +805,9 @@ func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSe
 // so the agent starts from the latest channel context instead of continuing the
 // previous mistaken execution path.
 func (s *TaskService) EnqueueFreshChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
-	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, true, 2, true)
+	// #311: interruptFollowup=false — a fresh-session chat run still must not
+	// cancel an in-flight directed run; it queues and serializes like EnqueueChatTask.
+	return s.enqueueChatTask(ctx, chatSession, initiatorUserID, true, 2, false)
 }
 
 // EnqueueAmbientChatTask is for low-priority channel observation runs where the

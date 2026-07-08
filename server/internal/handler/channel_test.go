@@ -384,7 +384,7 @@ func TestChannelChatDoneSuppressedTraceOnlyDoesNotWriteSystemMessage(t *testing.
 	}
 }
 
-func TestChannelRementionInterruptsRunningTaskWithFreshSession(t *testing.T) {
+func TestChannelRementionFollowupDoesNotCancelRunningTask(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -442,8 +442,20 @@ func TestChannelRementionInterruptsRunningTaskWithFreshSession(t *testing.T) {
 		FROM agent_task_queue WHERE id = $1`, firstTaskID).Scan(&oldStatus, &oldReason); err != nil {
 		t.Fatalf("load interrupted task: %v", err)
 	}
-	if oldStatus != "cancelled" || oldReason != "followup_interrupt" {
-		t.Fatalf("first task = (%q, %q), want (cancelled, followup_interrupt)", oldStatus, oldReason)
+	// #311: the system must NOT cancel an in-flight directed run when a follow-up
+	// mention arrives. The first task stays running; the follow-up queues behind
+	// it (ClaimAgentChatTask serializes per chat_session + FIFO) so both requests
+	// get answered instead of the earlier one being silently dropped.
+	if oldStatus != "running" || oldReason != "" {
+		t.Fatalf("first task = (%q, %q), want (running, \"\") — #311 abolished the followup cancel", oldStatus, oldReason)
+	}
+	// A second task must exist (the queued follow-up), not replace the first.
+	var taskCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE chat_session_id = $1`, sessionID).Scan(&taskCount); err != nil {
+		t.Fatalf("count session tasks: %v", err)
+	}
+	if taskCount != 2 {
+		t.Fatalf("session task count = %d, want 2 (first still running + queued follow-up)", taskCount)
 	}
 
 	var fresh bool

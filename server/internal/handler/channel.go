@@ -2688,10 +2688,15 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 		slog.Warn(logScope+": ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
 	}
+	// #311: the system no longer cancels an in-flight directed chat run when a
+	// newer mention arrives for the same channel agent. A directed request must
+	// never be silently dropped — different requesters' asks are independent
+	// must-answer work, and a same-requester follow-up should merge/queue, not
+	// kill the earlier run (the Frank+海鹏 double-joke case). New mentions queue
+	// instead: ClaimAgentChatTask serializes per chat_session and runs queued
+	// tasks FIFO, so each request is answered in turn. interruptActive is left on
+	// the signature but no longer triggers a cancel.
 	interruptingActiveTask := false
-	if interruptActive {
-		interruptingActiveTask = h.interruptInFlightChannelAgentTasks(ctx, session.ID)
-	}
 	promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, trigger)
 	if err != nil {
 		slog.Warn(logScope+": create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
@@ -3330,35 +3335,6 @@ func (h *Handler) createChannelAgentPromptMessageWithDB(ctx context.Context, exe
 	var msg db.ChatMessage
 	err := row.Scan(&msg.ID, &msg.ChatSessionID, &msg.Role, &msg.Content, &msg.TaskID, &msg.CreatedAt, &msg.FailureReason, &msg.ElapsedMs, &msg.ThreadID, &msg.TriggerDepth, &msg.Parts)
 	return msg, err
-}
-
-func (h *Handler) interruptInFlightChannelAgentTasks(ctx context.Context, chatSessionID pgtype.UUID) bool {
-	rows, err := h.DB.Query(ctx, `
-		SELECT id FROM agent_task_queue
-		WHERE chat_session_id = $1
-		  AND status IN ('dispatched', 'running', 'waiting_local_directory')`, chatSessionID)
-	if err != nil {
-		slog.Warn("channel re-mention: list in-flight tasks failed", "chat_session_id", uuidToString(chatSessionID), "error", err)
-		return false
-	}
-	defer rows.Close()
-
-	interrupted := false
-	for rows.Next() {
-		var taskID pgtype.UUID
-		if err := rows.Scan(&taskID); err != nil {
-			continue
-		}
-		if _, err := h.DB.Exec(ctx, `UPDATE agent_task_queue SET failure_reason = 'followup_interrupt' WHERE id = $1`, taskID); err != nil {
-			slog.Warn("channel re-mention: mark interrupt reason failed", "task_id", uuidToString(taskID), "chat_session_id", uuidToString(chatSessionID), "error", err)
-		}
-		if _, err := h.TaskService.CancelTaskWithResult(ctx, taskID); err != nil {
-			slog.Warn("channel re-mention: interrupt task failed", "task_id", uuidToString(taskID), "chat_session_id", uuidToString(chatSessionID), "error", err)
-			continue
-		}
-		interrupted = true
-	}
-	return interrupted
 }
 
 func (h *Handler) ensureChannelAgentSession(ctx context.Context, ch ChannelResponse, agentID pgtype.UUID, creatorID pgtype.UUID) (db.ChatSession, error) {

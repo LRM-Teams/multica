@@ -95,6 +95,21 @@ SELECT * FROM attachment
 WHERE channel_message_id = ANY($1::uuid[]) AND workspace_id = $2
 ORDER BY created_at ASC;
 
+-- name: LinkOwnedAttachmentsToChannelMessage :exec
+-- Binds channel_id + channel_message_id together for attachments the CLI
+-- uploaded unbound (target channel isn't known until send-time server-side
+-- resolution). Scoped by uploader ownership instead of a pre-existing
+-- channel_id match, since the human-message upload flow's channel_id-set-at-
+-- upload-time authorization isn't available here.
+UPDATE attachment
+SET channel_id = $1, channel_message_id = $2
+WHERE workspace_id = $3
+  AND uploader_type = $4
+  AND uploader_id = $5
+  AND channel_id IS NULL
+  AND channel_message_id IS NULL
+  AND id = ANY(sqlc.arg(attachment_ids)::uuid[]);
+
 -- name: ListAttachmentsByChannel :many
 SELECT * FROM attachment
 WHERE channel_id = $1 AND workspace_id = $2

@@ -147,6 +147,53 @@ func TestAgentTransportSendMessageStickerOnlyAndWithText(t *testing.T) {
 	}
 }
 
+func TestAgentTransportSendMessageLinksOwnedAttachmentsOnly(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+
+	ownedAttachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "agent-file.png")
+	otherAgentID := uuid.NewString()
+	foreignAttachmentID := seedUnboundAgentAttachmentForTest(t, otherAgentID, "not-mine.png")
+
+	clientID := "transport-attachment-" + uuid.NewString()
+	resp := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"content":           "here's the file",
+		"attachment_ids":    []string{ownedAttachmentID, foreignAttachmentID},
+		"client_message_id": clientID,
+	})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("transport send with attachments: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var body AgentTransportSendResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode transport send: %v", err)
+	}
+	if len(body.Message.Attachments) != 1 || body.Message.Attachments[0].ID != ownedAttachmentID {
+		t.Fatalf("message attachments = %+v, want only owned attachment %s", body.Message.Attachments, ownedAttachmentID)
+	}
+
+	var ownedChannelID, ownedMessageID string
+	if err := testPool.QueryRow(ctx, `SELECT channel_id, channel_message_id FROM attachment WHERE id = $1`, ownedAttachmentID).Scan(&ownedChannelID, &ownedMessageID); err != nil {
+		t.Fatalf("load owned attachment: %v", err)
+	}
+	if ownedChannelID != channelID || ownedMessageID != body.Message.ID {
+		t.Fatalf("owned attachment not linked: channel_id=%s message_id=%s, want channel=%s message=%s", ownedChannelID, ownedMessageID, channelID, body.Message.ID)
+	}
+
+	var foreignChannelID, foreignMessageID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `SELECT channel_id, channel_message_id FROM attachment WHERE id = $1`, foreignAttachmentID).Scan(&foreignChannelID, &foreignMessageID); err != nil {
+		t.Fatalf("load foreign attachment: %v", err)
+	}
+	if foreignChannelID.Valid || foreignMessageID.Valid {
+		t.Fatalf("foreign attachment got linked: channel_id=%+v message_id=%+v, want both NULL", foreignChannelID, foreignMessageID)
+	}
+}
+
 func TestAgentTransportSendThreadReplyIDFlattensToRoot(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -506,6 +553,19 @@ func seedWorkspaceUserForTransportTargetTest(t *testing.T, name string) string {
 		t.Fatalf("seed workspace member %s: %v", name, err)
 	}
 	return userID
+}
+
+func seedUnboundAgentAttachmentForTest(t *testing.T, agentID, filename string) string {
+	t.Helper()
+	var attachmentID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO attachment (workspace_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+		VALUES ($1, 'agent', $2, $3, 's3://'||$3, 'image/png', 42)
+		RETURNING id`,
+		testWorkspaceID, agentID, filename).Scan(&attachmentID); err != nil {
+		t.Fatalf("seed unbound agent attachment: %v", err)
+	}
+	return attachmentID
 }
 
 func assertAgentTransportAuditCount(t *testing.T, taskID, action string, want int) {

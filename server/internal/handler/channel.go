@@ -156,6 +156,11 @@ type ChannelMessagesPageResponse struct {
 	Limit      int                            `json:"limit"`
 	HasMore    bool                           `json:"has_more"`
 	NextCursor *ChannelMessagesCursorResponse `json:"next_cursor,omitempty"`
+
+	// around_seq mode only:
+	AnchorIndex  int                            `json:"anchor_index,omitempty"`
+	HasMoreAfter bool                           `json:"has_more_after,omitempty"`
+	AfterCursor  *ChannelMessagesCursorResponse `json:"after_cursor,omitempty"`
 }
 
 type ChannelThreadMessagesCursorResponse struct {
@@ -933,11 +938,17 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
 		return
 	}
-	limit, beforeSeq, beforeCreatedAt, beforeID, err := parseChannelMessagesPageParams(r)
+	limit, beforeSeq, beforeCreatedAt, beforeID, aroundSeq, err := parseChannelMessagesPageParams(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	if aroundSeq > 0 {
+		h.listChannelMessagesAround(w, r, channelID, workspaceID, userID, limit, aroundSeq)
+		return
+	}
+
 	rows, err := h.DB.Query(r.Context(), `
 			SELECT m.id, m.channel_id, m.workspace_id, m.author_type, m.author_id, m.author_name, m.content, m.parts, m.source, m.external_message_id, m.client_message_id, m.reply_to_message_id, m.thread_root_message_id, m.thread_id, m.trigger_depth, m.seq, m.created_at, m.edited_at, m.deleted_at
 		FROM channel_message m
@@ -992,25 +1003,171 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	for i := len(desc) - 1; i >= 0; i-- {
 		out = append(out, desc[i])
 	}
-	messageIDs := make([]pgtype.UUID, len(out))
-	for i, m := range out {
-		messageIDs[i] = parseUUID(m.ID)
+	attachChannelMessageExtras := func(msgs []ChannelMessageResponse) {
+		messageIDs := make([]pgtype.UUID, len(msgs))
+		for i, m := range msgs {
+			messageIDs[i] = parseUUID(m.ID)
+		}
+		grouped := h.groupChannelMessageAttachments(r.Context(), workspaceID, messageIDs)
+		for i := range msgs {
+			msgs[i].Attachments = grouped[msgs[i].ID]
+		}
+		h.attachChannelMessageReactions(r.Context(), workspaceID, msgs)
+		h.attachChannelMessageReplySummaries(r.Context(), workspaceID, msgs)
+		h.attachChannelMessageThreadRootSummaries(r.Context(), workspaceID, msgs)
+		h.attachChannelMessageThreadMetadata(r.Context(), workspaceID, parseUUID(userID), msgs)
+		h.attachChannelMessageThreadReadModel(r.Context(), workspaceID, msgs)
+		applyChannelMessageTombstoneReadModel(msgs)
 	}
-	grouped := h.groupChannelMessageAttachments(r.Context(), workspaceID, messageIDs)
-	for i := range out {
-		out[i].Attachments = grouped[out[i].ID]
-	}
-	h.attachChannelMessageReactions(r.Context(), workspaceID, out)
-	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
-	h.attachChannelMessageThreadRootSummaries(r.Context(), workspaceID, out)
-	h.attachChannelMessageThreadMetadata(r.Context(), workspaceID, parseUUID(userID), out)
-	h.attachChannelMessageThreadReadModel(r.Context(), workspaceID, out)
-	applyChannelMessageTombstoneReadModel(out)
+	attachChannelMessageExtras(out)
 	writeJSON(w, http.StatusOK, ChannelMessagesPageResponse{
 		Messages:   out,
 		Limit:      limit,
 		HasMore:    hasMore,
 		NextCursor: nextCursor,
+	})
+}
+
+// channelMessageColumnList is the SELECT column list for channel_message queries.
+const channelMessageColumnList = `m.id, m.channel_id, m.workspace_id, m.author_type, m.author_id, m.author_name, m.content, m.parts, m.source, m.external_message_id, m.client_message_id, m.reply_to_message_id, m.thread_root_message_id, m.thread_id, m.trigger_depth, m.seq, m.created_at, m.edited_at, m.deleted_at`
+
+// channelMessageWhereClause is the WHERE clause for listing visible channel messages (shared by before/around paths).
+const channelMessageWhereClause = `m.channel_id = $1 AND m.workspace_id = $2
+	  AND (m.thread_root_message_id IS NULL OR m.main_timeline_visible)
+	  AND (
+	    m.deleted_at IS NULL
+	    OR EXISTS (
+	      SELECT 1
+	      FROM channel_message replies
+	      WHERE replies.workspace_id = m.workspace_id
+	        AND replies.channel_id = m.channel_id
+	        AND replies.thread_root_message_id = m.id
+	        AND replies.deleted_at IS NULL
+	    )
+	  )`
+
+func (h *Handler) queryChannelMessages(ctx context.Context, channelID, workspaceID pgtype.UUID, whereExtra string, args ...interface{}) ([]ChannelMessageResponse, error) {
+	query := fmt.Sprintf(`SELECT `+channelMessageColumnList+`
+		FROM channel_message m
+		WHERE `+channelMessageWhereClause+`
+		AND %s`, whereExtra)
+	allArgs := make([]interface{}, 0, 2+len(args))
+	allArgs = append(allArgs, channelID, workspaceID)
+	allArgs = append(allArgs, args...)
+	rows, err := h.DB.Query(ctx, query, allArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var msgs []ChannelMessageResponse
+	for rows.Next() {
+		msg, err := scanChannelMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs, rows.Err()
+}
+
+func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Request, channelID pgtype.UUID, workspaceIDStr string, userIDStr string, limit int, aroundSeq int64) {
+	workspaceID := parseUUID(workspaceIDStr)
+	userID := parseUUID(userIDStr)
+	limitBefore := limit / 2
+
+	// Query A: messages before or at anchor (seq <= aroundSeq), newest-first
+	beforeMsgs, err := h.queryChannelMessages(r.Context(), channelID, workspaceID,
+		`m.seq <= $3::bigint
+		ORDER BY m.seq DESC
+		LIMIT $4`, pgtype.Int8{Int64: aroundSeq, Valid: true}, pgtype.Int8{Int64: int64(limitBefore + 1), Valid: true})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list channel messages")
+		return
+	}
+
+	hasMore := len(beforeMsgs) > limitBefore
+	if hasMore {
+		beforeMsgs = beforeMsgs[:limitBefore]
+	}
+
+	// Symmetric backfill: if the before side is short, give remaining capacity to after side
+	actualBefore := len(beforeMsgs)
+	remainingAfter := limit - actualBefore
+
+	// Query B: messages after anchor (seq > aroundSeq), oldest-first
+	afterMsgs, err := h.queryChannelMessages(r.Context(), channelID, workspaceID,
+		`m.seq > $3::bigint
+		ORDER BY m.seq ASC
+		LIMIT $4`, pgtype.Int8{Int64: aroundSeq, Valid: true}, pgtype.Int8{Int64: int64(remainingAfter + 1), Valid: true})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list channel messages")
+		return
+	}
+
+	hasMoreAfter := len(afterMsgs) > remainingAfter
+	if hasMoreAfter {
+		afterMsgs = afterMsgs[:remainingAfter]
+	}
+
+	// Calculate cursor for the before (older) direction
+	var nextCursor *ChannelMessagesCursorResponse
+	if hasMore && actualBefore > 0 {
+		oldestBefore := beforeMsgs[actualBefore-1] // last in DESC order = oldest seq
+		nextCursor = &ChannelMessagesCursorResponse{
+			CreatedAt: oldestBefore.CreatedAt,
+			ID:        oldestBefore.ID,
+			Seq:       oldestBefore.Seq,
+		}
+	}
+
+	// Calculate cursor for the after (newer) direction
+	var afterCursor *ChannelMessagesCursorResponse
+	if hasMoreAfter && len(afterMsgs) > 0 {
+		newestAfter := afterMsgs[len(afterMsgs)-1] // last in ASC order = newest seq
+		afterCursor = &ChannelMessagesCursorResponse{
+			CreatedAt: newestAfter.CreatedAt,
+			ID:        newestAfter.ID,
+			Seq:       newestAfter.Seq,
+		}
+	}
+
+	// Reverse beforeMsgs to ASC order for the merged result
+	out := make([]ChannelMessageResponse, 0, len(beforeMsgs)+len(afterMsgs))
+	for i := len(beforeMsgs) - 1; i >= 0; i-- {
+		out = append(out, beforeMsgs[i])
+	}
+	out = append(out, afterMsgs...)
+
+	// Anchor index: last message with seq <= aroundSeq (0-based in the ASC-ordered merged array)
+	anchorIndex := actualBefore - 1
+
+	// Attach extras
+	attachChannelMessageExtras := func(msgs []ChannelMessageResponse) {
+		messageIDs := make([]pgtype.UUID, len(msgs))
+		for i, m := range msgs {
+			messageIDs[i] = parseUUID(m.ID)
+		}
+		grouped := h.groupChannelMessageAttachments(r.Context(), workspaceIDStr, messageIDs)
+		for i := range msgs {
+			msgs[i].Attachments = grouped[msgs[i].ID]
+		}
+		h.attachChannelMessageReactions(r.Context(), workspaceIDStr, msgs)
+		h.attachChannelMessageReplySummaries(r.Context(), workspaceIDStr, msgs)
+		h.attachChannelMessageThreadRootSummaries(r.Context(), workspaceIDStr, msgs)
+		h.attachChannelMessageThreadMetadata(r.Context(), workspaceIDStr, userID, msgs)
+		h.attachChannelMessageThreadReadModel(r.Context(), workspaceIDStr, msgs)
+		applyChannelMessageTombstoneReadModel(msgs)
+	}
+	attachChannelMessageExtras(out)
+
+	writeJSON(w, http.StatusOK, ChannelMessagesPageResponse{
+		Messages:     out,
+		Limit:        limit,
+		HasMore:      hasMore,
+		NextCursor:   nextCursor,
+		AnchorIndex:  anchorIndex,
+		HasMoreAfter: hasMoreAfter,
+		AfterCursor:  afterCursor,
 	})
 }
 
@@ -2267,41 +2424,56 @@ func parseChannelThreadPageParams(w http.ResponseWriter, r *http.Request) (int, 
 	return limit, 0, pgtype.Timestamptz{Time: t, Valid: true}, id, false, true, true
 }
 
-func parseChannelMessagesPageParams(r *http.Request) (int, int64, pgtype.Timestamptz, pgtype.UUID, error) {
+func parseChannelMessagesPageParams(r *http.Request) (int, int64, pgtype.Timestamptz, pgtype.UUID, int64, error) {
 	limit := channelMessagesDefaultLimit
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 1 || parsed > channelMessagesMaxLimit {
-			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid limit")
+			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, errors.New("invalid limit")
 		}
 		limit = parsed
 	}
 
-	if rawBeforeSeq := strings.TrimSpace(r.URL.Query().Get("before_seq")); rawBeforeSeq != "" {
-		beforeSeq, err := strconv.ParseInt(rawBeforeSeq, 10, 64)
-		if err != nil || beforeSeq < 1 {
-			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
-		}
-		return limit, beforeSeq, pgtype.Timestamptz{}, pgtype.UUID{}, nil
-	}
-
+	aroundSeqStr := strings.TrimSpace(r.URL.Query().Get("around_seq"))
+	beforeSeqStr := strings.TrimSpace(r.URL.Query().Get("before_seq"))
 	rawBeforeCreatedAt := strings.TrimSpace(r.URL.Query().Get("before_created_at"))
 	rawBeforeID := strings.TrimSpace(r.URL.Query().Get("before_id"))
+
+	// around_seq is mutually exclusive with before_seq / before_created_at+before_id
+	if aroundSeqStr != "" {
+		if beforeSeqStr != "" || rawBeforeCreatedAt != "" || rawBeforeID != "" {
+			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, errors.New("around_seq is mutually exclusive with before_* cursors")
+		}
+		aroundSeq, err := strconv.ParseInt(aroundSeqStr, 10, 64)
+		if err != nil || aroundSeq < 1 {
+			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, errors.New("invalid around_seq")
+		}
+		return limit, 0, pgtype.Timestamptz{}, pgtype.UUID{}, aroundSeq, nil
+	}
+
+	if beforeSeqStr != "" {
+		beforeSeq, err := strconv.ParseInt(beforeSeqStr, 10, 64)
+		if err != nil || beforeSeq < 1 {
+			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, errors.New("invalid cursor")
+		}
+		return limit, beforeSeq, pgtype.Timestamptz{}, pgtype.UUID{}, 0, nil
+	}
+
 	if rawBeforeCreatedAt == "" && rawBeforeID == "" {
-		return limit, 0, pgtype.Timestamptz{}, pgtype.UUID{}, nil
+		return limit, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, nil
 	}
 	if rawBeforeCreatedAt == "" || rawBeforeID == "" {
-		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, errors.New("invalid cursor")
 	}
 	beforeTime, err := time.Parse(time.RFC3339Nano, rawBeforeCreatedAt)
 	if err != nil {
-		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, errors.New("invalid cursor")
 	}
 	beforeID, err := util.ParseUUID(rawBeforeID)
 	if err != nil {
-		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, errors.New("invalid cursor")
 	}
-	return limit, 0, pgtype.Timestamptz{Time: beforeTime, Valid: true}, beforeID, nil
+	return limit, 0, pgtype.Timestamptz{Time: beforeTime, Valid: true}, beforeID, 0, nil
 }
 
 type ChannelAuthorStat struct {

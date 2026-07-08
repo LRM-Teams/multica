@@ -40,13 +40,7 @@ vi.mock("react-virtuoso", async () => {
       },
       ref: React.ForwardedRef<{ scrollToIndex: (...args: unknown[]) => void }>,
     ) => {
-      // Empty deps: a stable handle object across re-renders, matching a
-      // well-behaved forwardRef component. Without this the mock creates a new
-      // object every render — React sees the ref "change" each time and
-      // re-invokes any callback ref, which combined with a consumer that syncs
-      // the handle into state (channel-message-list.tsx's `handleVirtuosoRef`)
-      // is an infinite render loop, not a real react-virtuoso behavior.
-      React.useImperativeHandle(ref, () => ({ scrollToIndex: scrollToIndexMock }), []);
+      React.useImperativeHandle(ref, () => ({ scrollToIndex: scrollToIndexMock }));
 
       const Header = components.Header;
       const List = components.List ?? "div";

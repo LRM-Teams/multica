@@ -129,6 +129,16 @@ func (f *fakeCheckpointSaver) Save(ctx context.Context, ref SandboxInstanceRef, 
 	return nil
 }
 
+type fakeCheckpointResumer struct {
+	calls []SandboxInstanceRef
+	err   error
+}
+
+func (f *fakeCheckpointResumer) Resume(_ context.Context, ref SandboxInstanceRef, _ string) error {
+	f.calls = append(f.calls, ref)
+	return f.err
+}
+
 type fakeProjectSnapshotReader struct {
 	snapshot json.RawMessage
 	err      error
@@ -144,7 +154,7 @@ func TestEnvCheckpointCreateWaitsForSynchronousSaveComplete(t *testing.T) {
 	repo := newFakeCheckpointRepo()
 	saver := &fakeCheckpointSaver{}
 	snapshot := &fakeProjectSnapshotReader{snapshot: json.RawMessage(`{"issues":[]}`)}
-	svc := NewEnvCheckpointService(repo, saver, snapshot)
+	svc := NewEnvCheckpointService(repo, saver, &fakeCheckpointResumer{}, snapshot)
 
 	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
 		WorkspaceID: "ws",
@@ -178,7 +188,7 @@ func TestEnvCheckpointCreateRecordsTimeoutStatus(t *testing.T) {
 	repo := newFakeCheckpointRepo()
 	saver := &fakeCheckpointSaver{blockUntilCancel: true}
 	snapshot := &fakeProjectSnapshotReader{snapshot: json.RawMessage(`{}`)}
-	svc := NewEnvCheckpointService(repo, saver, snapshot)
+	svc := NewEnvCheckpointService(repo, saver, &fakeCheckpointResumer{}, snapshot)
 
 	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
 		WorkspaceID: "ws",
@@ -199,7 +209,7 @@ func TestEnvCheckpointCreateRecordsSaveFailureStatus(t *testing.T) {
 	repo := newFakeCheckpointRepo()
 	saver := &fakeCheckpointSaver{err: fmt.Errorf("sandbox crash")}
 	snapshot := &fakeProjectSnapshotReader{snapshot: json.RawMessage(`{}`)}
-	svc := NewEnvCheckpointService(repo, saver, snapshot)
+	svc := NewEnvCheckpointService(repo, saver, &fakeCheckpointResumer{}, snapshot)
 
 	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
 		WorkspaceID: "ws",
@@ -226,7 +236,7 @@ func TestEnvCheckpointListNewestFirstAndWorkspaceScoped(t *testing.T) {
 	repo.checkpoints["cp-2"] = EnvCheckpoint{ID: "cp-2", WorkspaceID: "ws", ProjectID: "proj", CreatedAt: base}
 	repo.checkpoints["cp-3"] = EnvCheckpoint{ID: "cp-3", WorkspaceID: "other-ws", ProjectID: "proj", CreatedAt: base}
 
-	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeProjectSnapshotReader{})
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{})
 
 	list, err := svc.List(context.Background(), "ws", "proj")
 	if err != nil {
@@ -244,7 +254,7 @@ func TestEnvCheckpointStoresInlineDBSnapshot(t *testing.T) {
 	repo := newFakeCheckpointRepo()
 	snapshotJSON := json.RawMessage(`{"issues":[{"id":"i1"}],"sessions":[]}`)
 	snapshot := &fakeProjectSnapshotReader{snapshot: snapshotJSON}
-	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, snapshot)
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, snapshot)
 
 	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
 		WorkspaceID: "ws",
@@ -264,5 +274,124 @@ func TestEnvCheckpointStoresInlineDBSnapshot(t *testing.T) {
 	}
 	if string(repo.createCalls[0].in.DBSnapshot) != string(snapshotJSON) {
 		t.Fatalf("create call snapshot mismatch: got %s", repo.createCalls[0].in.DBSnapshot)
+	}
+}
+
+// --- resume tests ---
+
+func TestResumeFromCheckpointResumesCompletedSandboxRefs(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	repo.checkpoints["cp-1"] = EnvCheckpoint{
+		ID: "cp-1", WorkspaceID: "ws", ProjectID: "proj",
+		SaveStatus: EnvCheckpointSaveComplete,
+		SandboxRefs: []SandboxInstanceRef{
+			{InstanceID: "inst-1", WorkspaceID: "ws"},
+			{InstanceID: "inst-2", WorkspaceID: "ws"},
+		},
+	}
+	resumer := &fakeCheckpointResumer{}
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{})
+
+	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if len(resumer.calls) != 2 {
+		t.Fatalf("want 2 resume calls, got %d", len(resumer.calls))
+	}
+	if res.CheckpointID != "cp-1" || res.ProjectID != "proj" {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if res.RolloutHandle == "" {
+		t.Fatalf("rollout handle must be non-empty")
+	}
+}
+
+func TestResumeFromCheckpointRejectsTimedOutCheckpoint(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	repo.checkpoints["cp-1"] = EnvCheckpoint{
+		ID: "cp-1", WorkspaceID: "ws", ProjectID: "proj",
+		SaveStatus: EnvCheckpointSaveTimedOut,
+	}
+	resumer := &fakeCheckpointResumer{}
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{})
+
+	_, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	if err == nil {
+		t.Fatalf("expected error for timed_out checkpoint, got nil")
+	}
+	if !strings.Contains(err.Error(), "validation_failed") {
+		t.Fatalf("expected validation_failed error, got %v", err)
+	}
+	if len(resumer.calls) != 0 {
+		t.Fatalf("timed_out checkpoint must not resume any sandboxes, got %d", len(resumer.calls))
+	}
+}
+
+func TestResumeFromCheckpointRejectsFailedCheckpoint(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	repo.checkpoints["cp-1"] = EnvCheckpoint{
+		ID: "cp-1", WorkspaceID: "ws", ProjectID: "proj",
+		SaveStatus: EnvCheckpointSaveFailed,
+	}
+	resumer := &fakeCheckpointResumer{}
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{})
+
+	_, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	if err == nil {
+		t.Fatalf("expected error for failed checkpoint, got nil")
+	}
+	if !strings.Contains(err.Error(), "validation_failed") {
+		t.Fatalf("expected validation_failed error, got %v", err)
+	}
+	if len(resumer.calls) != 0 {
+		t.Fatalf("failed checkpoint must not resume any sandboxes, got %d", len(resumer.calls))
+	}
+}
+
+func TestResumeFromCheckpointNotFound(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	resumer := &fakeCheckpointResumer{}
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{})
+
+	_, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "missing", "u")
+	if err == nil {
+		t.Fatalf("expected error for missing checkpoint, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not found error, got %v", err)
+	}
+	if len(resumer.calls) != 0 {
+		t.Fatalf("missing checkpoint must not resume any sandboxes, got %d", len(resumer.calls))
+	}
+}
+
+func TestResumeFromCheckpointPreservesPerAgentSandboxRefs(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	refs := []SandboxInstanceRef{
+		{InstanceID: "inst-a1", WorkspaceID: "ws", Template: "python"},
+		{InstanceID: "inst-a2", WorkspaceID: "ws", Template: "node"},
+	}
+	repo.checkpoints["cp-1"] = EnvCheckpoint{
+		ID: "cp-1", WorkspaceID: "ws", ProjectID: "proj",
+		SaveStatus:  EnvCheckpointSaveComplete,
+		SandboxRefs: refs,
+		EnvIDMap:    map[string]string{"a1": "env-1", "a2": "env-2"},
+	}
+	resumer := &fakeCheckpointResumer{}
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{})
+
+	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if len(res.SandboxRefs) != 2 {
+		t.Fatalf("want 2 sandbox refs in result, got %d", len(res.SandboxRefs))
+	}
+	if res.SandboxRefs[0].InstanceID != "inst-a1" || res.SandboxRefs[1].InstanceID != "inst-a2" {
+		t.Fatalf("sandbox refs not preserved: %+v", res.SandboxRefs)
+	}
+	if res.EnvIDMap["a1"] != "env-1" || res.EnvIDMap["a2"] != "env-2" {
+		t.Fatalf("env id map not preserved: %+v", res.EnvIDMap)
 	}
 }

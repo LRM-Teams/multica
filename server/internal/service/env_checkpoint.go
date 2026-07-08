@@ -65,21 +65,40 @@ type SandboxInstanceSaver interface {
 	Save(ctx context.Context, ref SandboxInstanceRef, actorUserID string) error
 }
 
+// SandboxInstanceResumer resumes a previously-saved sandbox instance. The
+// production adapter wraps EnvSandboxLifecycleService.Resume (enqueue resume
+// job). Unlike Save, Resume is fire-and-forget: the job is enqueued and the
+// caller returns a continuation handle for AReaL to poll.
+type SandboxInstanceResumer interface {
+	Resume(ctx context.Context, ref SandboxInstanceRef, actorUserID string) error
+}
+
 // ProjectSnapshotReader captures an inline JSONB snapshot of a project subtree
 // (issues, chat sessions, messages) for checkpoint storage.
 type ProjectSnapshotReader interface {
 	CaptureProjectSnapshot(ctx context.Context, workspaceID, projectID string) (json.RawMessage, error)
 }
 
+// ResumeFromCheckpointResult is the continuation handle returned by
+// ResumeFromCheckpoint. AReaL uses RolloutHandle to re-enter the rollout.
+type ResumeFromCheckpointResult struct {
+	CheckpointID  string
+	ProjectID     string
+	EnvIDMap      map[string]string
+	SandboxRefs   []SandboxInstanceRef
+	RolloutHandle string
+}
+
 // EnvCheckpointService orchestrates checkpoint creation, save, and retrieval.
 type EnvCheckpointService struct {
 	repo     EnvCheckpointRepository
 	saver    SandboxInstanceSaver
+	resumer  SandboxInstanceResumer
 	snapshot ProjectSnapshotReader
 }
 
-func NewEnvCheckpointService(repo EnvCheckpointRepository, saver SandboxInstanceSaver, snapshot ProjectSnapshotReader) *EnvCheckpointService {
-	return &EnvCheckpointService{repo: repo, saver: saver, snapshot: snapshot}
+func NewEnvCheckpointService(repo EnvCheckpointRepository, saver SandboxInstanceSaver, resumer SandboxInstanceResumer, snapshot ProjectSnapshotReader) *EnvCheckpointService {
+	return &EnvCheckpointService{repo: repo, saver: saver, resumer: resumer, snapshot: snapshot}
 }
 
 // Create records a checkpoint candidate, saves each sandbox instance with the
@@ -137,4 +156,34 @@ func (s *EnvCheckpointService) Get(ctx context.Context, checkpointID, workspaceI
 // List returns checkpoints for a project, newest first, scoped to the workspace.
 func (s *EnvCheckpointService) List(ctx context.Context, workspaceID, projectID string) ([]EnvCheckpoint, error) {
 	return s.repo.ListCheckpoints(ctx, workspaceID, projectID)
+}
+
+// ResumeFromCheckpoint loads a checkpoint, requires save_status == complete,
+// resumes each sandbox instance, and returns a continuation handle. Incomplete
+// (pending/timed_out/failed) checkpoints are rejected without enqueueing any
+// resume jobs. A missing resumer is a loud error — resume without a resumer
+// would silently no-op and return a handle AReaL cannot actually use.
+func (s *EnvCheckpointService) ResumeFromCheckpoint(ctx context.Context, workspaceID, checkpointID, actorUserID string) (ResumeFromCheckpointResult, error) {
+	if s.resumer == nil {
+		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: resume is not configured (no sandbox resumer)")
+	}
+	cp, err := s.repo.GetCheckpoint(ctx, checkpointID, workspaceID)
+	if err != nil {
+		return ResumeFromCheckpointResult{}, fmt.Errorf("not found: %w", err)
+	}
+	if cp.SaveStatus != EnvCheckpointSaveComplete {
+		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: checkpoint save_status is %s, must be complete to resume", cp.SaveStatus)
+	}
+	for _, ref := range cp.SandboxRefs {
+		if err := s.resumer.Resume(ctx, ref, actorUserID); err != nil {
+			return ResumeFromCheckpointResult{}, fmt.Errorf("resume sandbox %s: %w", ref.InstanceID, err)
+		}
+	}
+	return ResumeFromCheckpointResult{
+		CheckpointID:  cp.ID,
+		ProjectID:     cp.ProjectID,
+		EnvIDMap:      cp.EnvIDMap,
+		SandboxRefs:   cp.SandboxRefs,
+		RolloutHandle: fmt.Sprintf("resume:%s", cp.ID),
+	}, nil
 }

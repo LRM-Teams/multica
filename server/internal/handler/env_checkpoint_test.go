@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,15 +19,18 @@ import (
 // --- fake ---
 
 type fakeEnvCheckpointService struct {
-	createCP    service.EnvCheckpoint
-	createErr   error
-	getCP       service.EnvCheckpoint
-	getErr      error
-	listCPs     []service.EnvCheckpoint
-	listErr     error
-	createCalls []service.EnvCheckpointCreateInput
-	getCalls    []envCheckpointGetCall
-	listCalls   []envCheckpointListCall
+	createCP     service.EnvCheckpoint
+	createErr    error
+	getCP        service.EnvCheckpoint
+	getErr       error
+	listCPs      []service.EnvCheckpoint
+	listErr      error
+	resumeResult service.ResumeFromCheckpointResult
+	resumeErr    error
+	createCalls  []service.EnvCheckpointCreateInput
+	getCalls     []envCheckpointGetCall
+	listCalls    []envCheckpointListCall
+	resumeCalls  []envCheckpointResumeCall
 }
 
 type envCheckpointGetCall struct {
@@ -37,6 +41,12 @@ type envCheckpointGetCall struct {
 type envCheckpointListCall struct {
 	workspaceID string
 	projectID   string
+}
+
+type envCheckpointResumeCall struct {
+	workspaceID  string
+	checkpointID string
+	actorUserID  string
 }
 
 func (f *fakeEnvCheckpointService) Create(_ context.Context, in service.EnvCheckpointCreateInput) (service.EnvCheckpoint, error) {
@@ -52,6 +62,11 @@ func (f *fakeEnvCheckpointService) Get(_ context.Context, checkpointID, workspac
 func (f *fakeEnvCheckpointService) List(_ context.Context, workspaceID, projectID string) ([]service.EnvCheckpoint, error) {
 	f.listCalls = append(f.listCalls, envCheckpointListCall{workspaceID, projectID})
 	return f.listCPs, f.listErr
+}
+
+func (f *fakeEnvCheckpointService) ResumeFromCheckpoint(_ context.Context, workspaceID, checkpointID, actorUserID string) (service.ResumeFromCheckpointResult, error) {
+	f.resumeCalls = append(f.resumeCalls, envCheckpointResumeCall{workspaceID, checkpointID, actorUserID})
+	return f.resumeResult, f.resumeErr
 }
 
 // --- helpers ---
@@ -170,5 +185,71 @@ func TestGetEnvCheckpointCrossWorkspaceDoesNotLeak(t *testing.T) {
 	}
 	if len(fake.getCalls) != 1 || fake.getCalls[0].workspaceID != "ws1" {
 		t.Fatalf("expected 1 get call scoped to ws1, got %+v", fake.getCalls)
+	}
+}
+
+// --- resume handler tests ---
+
+func TestResumeFromCheckpointRouteUsesResumeNaming(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{
+		resumeResult: service.ResumeFromCheckpointResult{
+			CheckpointID:  validUUID,
+			ProjectID:     validUUID,
+			RolloutHandle: "resume:" + validUUID,
+		},
+	}
+	h := newCheckpointHandler(fake)
+	r := authedCheckpointRequest("POST", "/api/v1/env-checkpoints/"+validUUID+"/resume", "")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("checkpointID", validUUID)
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+	h.ResumeEnvCheckpoint(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "rollout_handle") {
+		t.Fatalf("response should include rollout_handle; body=%s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "resume:"+validUUID) {
+		t.Fatalf("response should use resume terminology in handle; body=%s", w.Body.String())
+	}
+}
+
+func TestResumeFromCheckpointMapsIncompleteToConflict(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{
+		resumeErr: fmt.Errorf("validation_failed: checkpoint save_status is timed_out, must be complete to resume"),
+	}
+	h := newCheckpointHandler(fake)
+	r := authedCheckpointRequest("POST", "/api/v1/env-checkpoints/"+validUUID+"/resume", "")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("checkpointID", validUUID)
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+	h.ResumeEnvCheckpoint(w, r)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (incomplete); body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestResumeFromCheckpointCrossWorkspaceRejected(t *testing.T) {
+	t.Setenv("ENV_CHECKPOINTS_ENABLED", "true")
+	fake := &fakeEnvCheckpointService{
+		resumeErr: fmt.Errorf("not found"),
+	}
+	h := newCheckpointHandler(fake)
+	r := authedCheckpointRequest("POST", "/api/v1/env-checkpoints/"+validUUID+"/resume", "")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("checkpointID", validUUID)
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+	h.ResumeEnvCheckpoint(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (cross-workspace); body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.resumeCalls) != 1 || fake.resumeCalls[0].workspaceID != "ws1" {
+		t.Fatalf("expected 1 resume call scoped to ws1, got %+v", fake.resumeCalls)
 	}
 }

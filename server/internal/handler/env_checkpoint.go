@@ -237,4 +237,61 @@ type EnvCheckpointServiceAPI interface {
 	Create(ctx context.Context, in service.EnvCheckpointCreateInput) (service.EnvCheckpoint, error)
 	Get(ctx context.Context, checkpointID, workspaceID string) (service.EnvCheckpoint, error)
 	List(ctx context.Context, workspaceID, projectID string) ([]service.EnvCheckpoint, error)
+	ResumeFromCheckpoint(ctx context.Context, workspaceID, checkpointID, actorUserID string) (service.ResumeFromCheckpointResult, error)
+}
+
+// ResumeFromCheckpointResponse is the HTTP response body for POST /api/v1/env-checkpoints/{checkpointID}/resume.
+type ResumeFromCheckpointResponse struct {
+	CheckpointID  string                          `json:"checkpoint_id"`
+	ProjectID     string                          `json:"project_id"`
+	EnvIDMap      map[string]string               `json:"env_id_map,omitempty"`
+	SandboxRefs   []service.SandboxInstanceRef    `json:"sandbox_refs,omitempty"`
+	RolloutHandle string                          `json:"rollout_handle"`
+}
+
+// ResumeEnvCheckpoint handles POST /api/v1/env-checkpoints/{checkpointID}/resume.
+func (h *Handler) ResumeEnvCheckpoint(w http.ResponseWriter, r *http.Request) {
+	if !envCheckpointsEnabled() {
+		writeError(w, http.StatusNotFound, "env checkpoints are not enabled")
+		return
+	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	if workspaceID == "" {
+		writeError(w, http.StatusBadRequest, "workspace ID required")
+		return
+	}
+	if h.EnvCheckpointService == nil {
+		writeError(w, http.StatusServiceUnavailable, "checkpoint service not configured")
+		return
+	}
+	checkpointID := chi.URLParam(r, "checkpointID")
+	if _, ok := parseUUIDOrBadRequest(w, checkpointID, "checkpointID"); !ok {
+		return
+	}
+
+	res, err := h.EnvCheckpointService.ResumeFromCheckpoint(r.Context(), workspaceID, checkpointID, userID)
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "not found") {
+			writeError(w, http.StatusNotFound, "checkpoint not found")
+			return
+		}
+		if strings.Contains(msg, "validation_failed") {
+			writeError(w, http.StatusConflict, "checkpoint is not resumable")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "resume failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, ResumeFromCheckpointResponse{
+		CheckpointID:  res.CheckpointID,
+		ProjectID:     res.ProjectID,
+		EnvIDMap:      res.EnvIDMap,
+		SandboxRefs:   res.SandboxRefs,
+		RolloutHandle: res.RolloutHandle,
+	})
 }

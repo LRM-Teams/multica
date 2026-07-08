@@ -1034,6 +1034,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// return 404 when disabled so AReaL clients can detect the gate.
 			r.Post("/api/v1/env-checkpoints", h.CreateEnvCheckpoint)
 			r.Get("/api/v1/env-checkpoints/{checkpointID}", h.GetEnvCheckpoint)
+			r.Post("/api/v1/env-checkpoints/{checkpointID}/resume", h.ResumeEnvCheckpoint)
 			r.Get("/api/v1/projects/{projectID}/env-checkpoints", h.ListEnvCheckpoints)
 
 			// Tasks (user-facing, with ownership check)

@@ -86,6 +86,7 @@ export function useUnreadAnchorScroll({
   newMessagesDivider,
   highlightMessageId,
   firstItemIndex,
+  handleAttached,
   virtuosoRef,
   scrollContainerEl,
   messageRefMap,
@@ -95,6 +96,23 @@ export function useUnreadAnchorScroll({
   newMessagesDivider: NewMessagesDivider | null;
   highlightMessageId: string | null | undefined;
   firstItemIndex: number;
+  /**
+   * True once Virtuoso's imperative handle has attached — a value-comparable
+   * BOOLEAN, not the handle object itself. Ref attachment doesn't trigger a
+   * re-render, so an effect gated only on `scrollContainerEl` can run in the
+   * exact render where the handle is still null and never get a second
+   * chance (#348 root cause). We need a state value that flips when the
+   * handle attaches, but NOT the handle object: react-virtuoso hands the
+   * callback ref different object identities across some renders, so storing
+   * the object (even with a reference-equality bail) doesn't actually bail —
+   * it cascades into setState → re-render → new handle object → setState →
+   * ... an infinite loop (shipped and reverted once — #365 incident). A
+   * boolean compares by value, so React's built-in same-value bailout stops
+   * the cascade regardless of how many identities the ref receives, as long
+   * as attached-ness doesn't change. The handle itself is still read live off
+   * `virtuosoRef.current` when actually scrolling.
+   */
+  handleAttached: boolean;
   virtuosoRef: RefObject<VirtuosoHandle | null>;
   /**
    * The caller's scroll container (Virtuoso's `customScrollParent`), or null
@@ -132,7 +150,7 @@ export function useUnreadAnchorScroll({
   // position forever. Only a genuine outcome (reached or timed out) may set it.
   const scrolledDividerChannelRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!scrollContainerEl || highlightMessageId || unreadAnchorIndex < 0) return;
+    if (!scrollContainerEl || !handleAttached || highlightMessageId || unreadAnchorIndex < 0) return;
     if (scrolledDividerChannelRef.current === channelId) return;
     // Arrived = the anchor row is rendered AND pinned near the scroller's top.
     // getBoundingClientRect reflects the real post-scroll layout, so — unlike a
@@ -186,6 +204,7 @@ export function useUnreadAnchorScroll({
     );
   }, [
     scrollContainerEl,
+    handleAttached,
     channelId,
     unreadAnchorIndex,
     highlightMessageId,

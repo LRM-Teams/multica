@@ -9,6 +9,7 @@ import { createLogger } from "../logger";
 import { clearWorkspaceStorage } from "../platform/storage-cleanup";
 import { defaultStorage } from "../platform/storage";
 import { getCurrentWsId, getCurrentSlug } from "../platform/workspace-storage";
+import { paths } from "../paths/paths";
 import { issueKeys } from "../issues/queries";
 import { projectKeys } from "../projects/queries";
 import { pinKeys } from "../pins/queries";
@@ -291,10 +292,10 @@ async function deliverSystemNotification(
 
 function buildSystemNotificationUrl(payload: SystemNotificationPayload): string {
   if (!payload.slug) return "/";
-  const slug = encodeURIComponent(payload.slug);
-  if (payload.dmId) return `/${slug}/channels?dm=${encodeURIComponent(payload.dmId)}`;
-  if (payload.channelId) return `/${slug}/channels?channel=${encodeURIComponent(payload.channelId)}`;
-  return `/${slug}/inbox${payload.issueKey ? `?issue=${encodeURIComponent(payload.issueKey)}` : ""}`;
+  const wsPaths = paths.workspace(payload.slug);
+  if (payload.dmId) return wsPaths.channelDetail(payload.dmId);
+  if (payload.channelId) return wsPaths.channelDetail(payload.channelId);
+  return `${wsPaths.inbox()}${payload.issueKey ? `?issue=${encodeURIComponent(payload.issueKey)}` : ""}`;
 }
 
 export async function handleInboxNew(

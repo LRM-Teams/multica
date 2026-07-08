@@ -89,8 +89,8 @@ export function MyTasksPanel({ wsId }: { wsId: string }) {
           // routes to the channel, scrolling to the exact message.
           if (i.read) return null;
           const messageId = i.details?.message_id;
-          const href = `${p.channels()}?channel=${channelId}${
-            messageId ? `&message=${messageId}` : ""
+          const href = `${p.channelDetail(channelId)}${
+            messageId ? `?message=${messageId}` : ""
           }`;
           return {
             id: i.id,

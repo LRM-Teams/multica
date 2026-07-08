@@ -2,11 +2,57 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 )
+
+type fakeSandboxInstanceCreator struct {
+	calls   []createSandboxCall
+	ref     SandboxInstanceRef
+	err     error
+	refs    map[string]SandboxInstanceRef // instanceID -> ref for GetSandboxInstanceRef
+	getErr  error
+}
+
+func (c *fakeSandboxInstanceCreator) GetSandboxInstanceRef(_ context.Context, _, instanceID string) (SandboxInstanceRef, error) {
+	if c.getErr != nil {
+		return SandboxInstanceRef{}, c.getErr
+	}
+	if c.refs != nil {
+		if ref, ok := c.refs[instanceID]; ok {
+			return ref, nil
+		}
+	}
+	return SandboxInstanceRef{}, fmt.Errorf("sandbox_instance not found: %s", instanceID)
+}
+
+type createSandboxCall struct {
+	WorkspaceID string
+	ActorUserID string
+	Template    string
+	BaseEnvID   string
+}
+
+func (c *fakeSandboxInstanceCreator) CreateSandboxInstance(_ context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error) {
+	c.calls = append(c.calls, createSandboxCall{WorkspaceID: in.WorkspaceID, ActorUserID: actorUserID, Template: in.Template, BaseEnvID: ""})
+	if c.err != nil {
+		return SandboxInstanceRef{}, c.err
+	}
+	if c.ref.InstanceID != "" {
+		return c.ref, nil
+	}
+	return SandboxInstanceRef{
+		InstanceID:  fmt.Sprintf("inst-%d", len(c.calls)),
+		WorkspaceID: in.WorkspaceID,
+		Template:    in.Template,
+	}, nil
+}
+
+var _ SandboxInstanceCreator = (*fakeSandboxInstanceCreator)(nil)
 
 type fakeEnvDispatchDeps struct {
 	mu sync.Mutex
@@ -29,6 +75,12 @@ type fakeEnvDispatchDeps struct {
 	copyProjectErr error
 	createIssueErr error
 	enqueueErr     error
+
+	// Per-agent env spec DB-backed validation seam (§5).
+	validateAgentErrs   map[string]error // agentID -> error; missing key = OK
+	resolveEnvSpecErrs  map[string]error // template or base_env_id -> error; missing key = OK
+	validateAgentCalls  []string
+	resolveEnvSpecCalls []PerAgentEnvSpec
 }
 
 func newFakeEnvDispatchDeps() *fakeEnvDispatchDeps {
@@ -203,6 +255,38 @@ func (f *fakeEnvDispatchDeps) SaveTrainingDispatch(_ context.Context, projectID,
 		defaultReward: defaultReward,
 	})
 	return nil
+}
+
+func (f *fakeEnvDispatchDeps) ValidateAgentInWorkspaceOrSquad(_ context.Context, _, _, agentID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.validateAgentCalls = append(f.validateAgentCalls, agentID)
+	if f.validateAgentErrs != nil {
+		if err, ok := f.validateAgentErrs[agentID]; ok {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *fakeEnvDispatchDeps) ResolvePerAgentEnvSpec(_ context.Context, _ string, spec PerAgentEnvSpec) (SandboxInstanceRef, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolveEnvSpecCalls = append(f.resolveEnvSpecCalls, spec)
+	key := spec.Template
+	if key == "" {
+		key = spec.BaseEnvID
+	}
+	if f.resolveEnvSpecErrs != nil {
+		if err, ok := f.resolveEnvSpecErrs[key]; ok {
+			return SandboxInstanceRef{}, err
+		}
+	}
+	template := spec.Template
+	if template == "" {
+		template = "default"
+	}
+	return SandboxInstanceRef{Template: template, WorkspaceID: spec.AgentID}, nil
 }
 
 // Helper: seed a base env in the fake.
@@ -817,6 +901,325 @@ func TestEnvDispatchInput_Validate_CriticAgentID(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestEnvDispatchTrainedRolloutCreatesSandboxInstanceRefs verifies that when
+// a sandbox lifecycle creator is injected and the dispatch is save/resume-
+// capable (train_agent_id set), reset creates a sandbox_instance via the
+// creator instead of forking Fleet sandboxes, and populates SandboxRefs.
+func TestEnvDispatchTrainedRolloutCreatesSandboxInstanceRefs(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{ref: SandboxInstanceRef{
+		InstanceID: "inst-1", WorkspaceID: "ws", NodeID: "node-1",
+		Template: "default", Status: "pending",
+		RuntimeMetadata: json.RawMessage(`{}`),
+	}}
+	svc := NewEnvDispatchService(f, 8).WithSandboxLifecycle(creator)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag", TrainAgentID: "ag", Issue: &IssueInput{Title: "t"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(creator.calls) != 1 {
+		t.Fatalf("want 1 sandbox_instance create, got %d", len(creator.calls))
+	}
+	if len(f.sandboxes) != 0 {
+		t.Fatalf("trained rollout must not fork Fleet sandboxes, got %d", len(f.sandboxes))
+	}
+	if len(res.Rollouts) != 1 || len(res.Rollouts[0].SandboxRefs) != 1 {
+		t.Fatalf("want 1 rollout with 1 sandbox ref, got %+v", res.Rollouts)
+	}
+	if res.Rollouts[0].SandboxRefs[0].InstanceID != "inst-1" {
+		t.Fatalf("unexpected sandbox ref: %+v", res.Rollouts[0].SandboxRefs[0])
+	}
+	env := f.envs[res.Rollouts[0].EnvID]
+	if len(env.SandboxIDs) != 1 || env.SandboxIDs[0] != "inst-1" {
+		t.Fatalf("env sandbox_ids should carry the sandbox_instance id, got %+v", env.SandboxIDs)
+	}
+}
+
+// TestEnvDispatchNonTrainedRolloutPreservesFleetPath verifies that without a
+// train_agent_id (or without an injected lifecycle creator), the existing
+// Fleet fork path is preserved and SandboxRefs stays empty.
+func TestEnvDispatchNonTrainedRolloutPreservesFleetPath(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{ref: SandboxInstanceRef{InstanceID: "inst-1", WorkspaceID: "ws"}}
+	svc := NewEnvDispatchService(f, 8).WithSandboxLifecycle(creator)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag", Issue: &IssueInput{Title: "t"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(creator.calls) != 0 {
+		t.Fatalf("non-trained rollout must not create sandbox_instances, got %d", len(creator.calls))
+	}
+	if len(f.sandboxes) != 1 {
+		t.Fatalf("non-trained rollout should fork 1 Fleet sandbox, got %d", len(f.sandboxes))
+	}
+	if len(res.Rollouts) != 1 || len(res.Rollouts[0].SandboxRefs) != 0 {
+		t.Fatalf("non-trained rollout must have no sandbox refs, got %+v", res.Rollouts)
+	}
+}
+
+// TestEnvDispatchSandboxInstanceBranchCreatesFreshFromTemplate verifies that a
+// save/resume-capable branch rollout creates a fresh sandbox_instance from the
+// source env's template (resolved via GetSandboxInstanceRef) rather than a live
+// Fleet fork, and carries the new ref on the rollout.
+func TestEnvDispatchSandboxInstanceBranchCreatesFreshFromTemplate(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	// Seed a source STATE env (branch source) with one sandbox_instance.
+	sourceEnvID := "src-env-1"
+	f.envs[sourceEnvID] = Env{
+		ID: sourceEnvID, WorkspaceID: "ws",
+		SandboxIDs: []string{"src-inst-1"},
+		Mode:        EnvModeBranch, Domain: EnvDomainSweLego,
+	}
+	f.projects["src-proj-1"] = sourceEnvID
+	f.issues["src-proj-1"] = []IssueRow{{ID: "src-issue-1", ProjectID: "src-proj-1"}}
+
+	creator := &fakeSandboxInstanceCreator{
+		refs: map[string]SandboxInstanceRef{
+			"src-inst-1": {InstanceID: "src-inst-1", WorkspaceID: "ws", Template: "python-3.12"},
+		},
+	}
+	svc := NewEnvDispatchService(f, 8).WithSandboxLifecycle(creator)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: sourceEnvID,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag", TrainAgentID: "ag",
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(creator.calls) != 1 {
+		t.Fatalf("want 1 sandbox_instance create, got %d", len(creator.calls))
+	}
+	// The created instance must use the source env's template, not "default".
+	if creator.calls[0].Template != "python-3.12" {
+		t.Fatalf("want template python-3.12 (from source), got %q", creator.calls[0].Template)
+	}
+	if len(f.sandboxes) != 0 {
+		t.Fatalf("branch rollout must not fork Fleet sandboxes, got %d", len(f.sandboxes))
+	}
+	if len(res.Rollouts) != 1 || len(res.Rollouts[0].SandboxRefs) != 1 {
+		t.Fatalf("want 1 rollout with 1 sandbox ref, got %+v", res.Rollouts)
+	}
+}
+
+// TestEnvDispatchPerAgentEnvSpecs_ShapeValidation exercises the synchronous
+// shape rules for per-agent env specs: empty specs preserve current behavior,
+// every spec needs an agent_id with exactly one of template/base_env_id, and
+// duplicate agents are rejected.
+func TestEnvDispatchPerAgentEnvSpecs_ShapeValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		specs   []PerAgentEnvSpec
+		wantErr string
+	}{
+		{"empty ok", nil, ""},
+		{"valid template ok", []PerAgentEnvSpec{{AgentID: "a", Template: "python"}}, ""},
+		{"valid base_env ok", []PerAgentEnvSpec{{AgentID: "a", BaseEnvID: "base"}}, ""},
+		{"empty agent_id rejected", []PerAgentEnvSpec{{Template: "python"}}, "validation_failed: per_agent_env agent_id is required"},
+		{"missing template and base_env rejected", []PerAgentEnvSpec{{AgentID: "a"}}, "validation_failed: per_agent_env spec for agent a needs a template or base_env_id"},
+		{"both template and base_env rejected", []PerAgentEnvSpec{{AgentID: "a", Template: "python", BaseEnvID: "base"}}, "validation_failed: per_agent_env spec for agent a must set template or base_env_id, not both"},
+		{"duplicate agent rejected", []PerAgentEnvSpec{{AgentID: "a", Template: "x"}, {AgentID: "a", Template: "y"}}, "validation_failed: per_agent_env agent_id a is duplicated"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeEnvDispatchDeps()
+			svc := NewEnvDispatchService(f, 1)
+			in := EnvDispatchInput{
+				WorkspaceID: "ws", SquadID: "sq", Mode: EnvModeScratch, EnvID: "base",
+				Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+				Message: &MessageInput{Content: "hi"}, PerAgentEnvSpecs: tc.specs,
+			}
+			err := svc.validate(in)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("expected error %q, got nil", tc.wantErr)
+				}
+				if err.Error() != tc.wantErr {
+					t.Fatalf("expected error %q, got %q", tc.wantErr, err.Error())
+				}
+			}
+		})
+	}
+}
+
+// TestEnvDispatchPerAgentEnvSpecsRejectUnknownAgent verifies that DB-backed
+// agent membership validation rejects per-agent env specs whose agent_id is not
+// a member of the workspace/squad, before any rollout state is created.
+func TestEnvDispatchPerAgentEnvSpecsRejectUnknownAgent(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.validateAgentErrs = map[string]error{"ghost": fmt.Errorf("agent not in workspace")}
+	svc := NewEnvDispatchService(f, 1)
+
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		Message:          &MessageInput{Content: "hi"},
+		PerAgentEnvSpecs: []PerAgentEnvSpec{{AgentID: "ghost", Template: "python"}},
+	})
+	if err == nil {
+		t.Fatalf("expected validation error for unknown agent, got nil")
+	}
+	if !strings.Contains(err.Error(), "validation_failed") {
+		t.Fatalf("expected validation_failed error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("expected error to reference agent ghost, got %v", err)
+	}
+	if len(f.envs) != 1 {
+		t.Fatalf("reject must happen before env creation; envs=%d", len(f.envs))
+	}
+}
+
+// TestEnvDispatchPerAgentEnvSpecsRejectUnknownEnvSpec verifies that DB-backed
+// env spec resolution rejects per-agent env specs whose template/base_env_id is
+// unknown or unauthorized, before any rollout state is created.
+func TestEnvDispatchPerAgentEnvSpecsRejectUnknownEnvSpec(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.resolveEnvSpecErrs = map[string]error{"bad-template": fmt.Errorf("template not found: bad-template")}
+	svc := NewEnvDispatchService(f, 1)
+
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		Message:          &MessageInput{Content: "hi"},
+		PerAgentEnvSpecs: []PerAgentEnvSpec{{AgentID: "ag", Template: "bad-template"}},
+	})
+	if err == nil {
+		t.Fatalf("expected validation error for unknown env spec, got nil")
+	}
+	if !strings.Contains(err.Error(), "validation_failed") {
+		t.Fatalf("expected validation_failed error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "bad-template") {
+		t.Fatalf("expected error to reference bad-template, got %v", err)
+	}
+	if len(f.envs) != 1 {
+		t.Fatalf("reject must happen before env creation; envs=%d", len(f.envs))
+	}
+}
+
+// TestEnvDispatchPerAgentEnvSpecsEmptyPreservesCurrentBehavior verifies that
+// empty per-agent env specs trigger no DB-backed validation calls and produce
+// the same rollout shape as today's default/shared sandbox behavior.
+func TestEnvDispatchPerAgentEnvSpecsEmptyPreservesCurrentBehavior(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 1)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag", Issue: &IssueInput{Title: "t"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(f.validateAgentCalls) != 0 {
+		t.Fatalf("empty specs must not trigger agent validation, got %d calls", len(f.validateAgentCalls))
+	}
+	if len(f.resolveEnvSpecCalls) != 0 {
+		t.Fatalf("empty specs must not trigger env spec resolution, got %d calls", len(f.resolveEnvSpecCalls))
+	}
+	if len(res.Rollouts) != 1 || len(res.Rollouts[0].AgentSandboxRefs) != 0 {
+		t.Fatalf("empty specs must not populate AgentSandboxRefs, got %+v", res.Rollouts)
+	}
+}
+
+// TestEnvDispatchPerAgentEnvSpecsAssignDistinctSandboxRefs verifies that
+// per-agent env specs produce one sandbox_instance per spec, with each ref
+// keyed by agent_id in AgentSandboxRefs and all refs distinct.
+func TestEnvDispatchPerAgentEnvSpecsAssignDistinctSandboxRefs(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{} // distinct refs auto-generated
+	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(creator)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		TrainAgentID: "train",
+		Message: &MessageInput{Content: "hi"},
+		PerAgentEnvSpecs: []PerAgentEnvSpec{
+			{AgentID: "a1", Template: "python"},
+			{AgentID: "a2", Template: "node"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(creator.calls) != 2 {
+		t.Fatalf("want 2 sandbox_instance creates, got %d", len(creator.calls))
+	}
+	if len(res.Rollouts) != 1 {
+		t.Fatalf("want 1 rollout, got %d", len(res.Rollouts))
+	}
+	refs := res.Rollouts[0].AgentSandboxRefs
+	if len(refs) != 2 {
+		t.Fatalf("want 2 agent sandbox refs, got %d", len(refs))
+	}
+	r1, ok1 := refs["a1"]
+	r2, ok2 := refs["a2"]
+	if !ok1 || !ok2 {
+		t.Fatalf("missing agent refs: a1=%v a2=%v", ok1, ok2)
+	}
+	if r1.InstanceID == r2.InstanceID {
+		t.Fatalf("agent refs must be distinct: both %s", r1.InstanceID)
+	}
+}
+
+// TestEnvDispatchPerAgentEnvSpecsPartialSquadUsesDefaults verifies that when
+// only some squad members have per-agent env specs, specified members get their
+// own sandbox_instance refs and unspecified members do not get entries in
+// AgentSandboxRefs (they use the shared/default behavior).
+func TestEnvDispatchPerAgentEnvSpecsPartialSquadUsesDefaults(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{}
+	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(creator)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		TrainAgentID: "train",
+		Message: &MessageInput{Content: "hi"},
+		PerAgentEnvSpecs: []PerAgentEnvSpec{
+			{AgentID: "a1", Template: "python"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	refs := res.Rollouts[0].AgentSandboxRefs
+	if len(refs) != 1 {
+		t.Fatalf("want 1 agent sandbox ref (only specified), got %d", len(refs))
+	}
+	if _, ok := refs["a1"]; !ok {
+		t.Fatalf("missing ref for specified agent a1")
+	}
+	if _, ok := refs["a2"]; ok {
+		t.Fatalf("unspecified agent a2 should not have a ref")
 	}
 }
 

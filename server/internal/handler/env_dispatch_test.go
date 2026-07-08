@@ -2,12 +2,14 @@ package handler
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -172,5 +174,71 @@ func TestEnvDispatchHandler_CriticAgentID_ShapeValidation(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "invalid critic_agent_id") {
 		t.Fatalf("body = %s, want it to mention invalid critic_agent_id", w.Body.String())
+	}
+}
+
+// TestEnvDispatch_ParsesPerAgentEnv verifies that the per_agent_env JSON field
+// is parsed from the request and passed to the service as PerAgentEnvSpecs.
+// A spec with neither template nor base_env_id triggers the service's shape
+// validation error, proving the field reached the service layer.
+func TestEnvDispatch_ParsesPerAgentEnv(t *testing.T) {
+	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"squad_id":"` + validUUID + `","message":{"content":"hi"},"per_agent_env":{"` + validUUID + `":{}}}`
+	w := doEnvDispatch(t, body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (shape validation); body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "per_agent_env spec for agent") {
+		t.Fatalf("body should mention per_agent_env shape error; got %s", w.Body.String())
+	}
+}
+
+// TestMapRollouts_IncludesSandboxRefs verifies that SandboxRefs and
+// AgentSandboxRefs from the service rollout are carried into the handler
+// response and serialized under their JSON field names.
+func TestMapRollouts_IncludesSandboxRefs(t *testing.T) {
+	rollouts := []service.EnvRollout{
+		{
+			EnvID: "env-1", ProjectID: "proj-1",
+			SandboxRefs: []service.SandboxInstanceRef{
+				{InstanceID: "inst-1", WorkspaceID: "ws", Template: "python"},
+			},
+			AgentSandboxRefs: map[string]service.SandboxInstanceRef{
+				"a1": {InstanceID: "inst-1", WorkspaceID: "ws", Template: "python"},
+			},
+		},
+	}
+	out := mapRollouts(rollouts)
+	if len(out) != 1 {
+		t.Fatalf("want 1 rollout, got %d", len(out))
+	}
+	if len(out[0].SandboxRefs) != 1 || out[0].SandboxRefs[0].InstanceID != "inst-1" {
+		t.Fatalf("unexpected sandbox_refs: %+v", out[0].SandboxRefs)
+	}
+	if len(out[0].AgentSandboxRefs) != 1 {
+		t.Fatalf("unexpected agent_sandbox_refs: %+v", out[0].AgentSandboxRefs)
+	}
+	if ref, ok := out[0].AgentSandboxRefs["a1"]; !ok || ref.InstanceID != "inst-1" {
+		t.Fatalf("missing or wrong ref for a1: %+v", out[0].AgentSandboxRefs)
+	}
+	body, _ := json.Marshal(out[0])
+	if !strings.Contains(string(body), "sandbox_refs") {
+		t.Fatalf("JSON should include sandbox_refs: %s", body)
+	}
+	if !strings.Contains(string(body), "agent_sandbox_refs") {
+		t.Fatalf("JSON should include agent_sandbox_refs: %s", body)
+	}
+}
+
+// TestMapRollouts_OmitsEmptySandboxRefs verifies that empty refs are omitted
+// from the JSON response via omitempty, so non-checkpointed rollouts don't
+// carry empty arrays/objects.
+func TestMapRollouts_OmitsEmptySandboxRefs(t *testing.T) {
+	out := mapRollouts([]service.EnvRollout{{EnvID: "env-1", ProjectID: "proj-1"}})
+	body, _ := json.Marshal(out[0])
+	if strings.Contains(string(body), "sandbox_refs") {
+		t.Fatalf("JSON should omit empty sandbox_refs: %s", body)
+	}
+	if strings.Contains(string(body), "agent_sandbox_refs") {
+		t.Fatalf("JSON should omit empty agent_sandbox_refs: %s", body)
 	}
 }

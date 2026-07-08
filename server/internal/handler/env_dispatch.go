@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -21,18 +22,26 @@ import (
 
 // EnvDispatchRequest is the body of POST /api/v1/env-dispatch (spec §6.3).
 type EnvDispatchRequest struct {
-	Mode           string                `json:"mode"`
-	EnvID          string                `json:"env_id"`
-	Domain         string                `json:"domain,omitempty"`
-	DispatchType   string                `json:"dispatch_type"`
-	GroupSize      int                   `json:"group_size"`
-	AgentID        string                `json:"agent_id"`
-	SquadID        string                `json:"squad_id,omitempty"`
-	TrainAgentID   string                `json:"train_agent_id,omitempty"`
-	CriticAgentID  string                `json:"critic_agent_id,omitempty"`
-	IdempotencyKey string                `json:"idempotency_key,omitempty"`
-	Issue          *IssueDispatchInput   `json:"issue,omitempty"`
-	Message        *MessageDispatchInput `json:"message,omitempty"`
+	Mode           string                 `json:"mode"`
+	EnvID          string                 `json:"env_id"`
+	Domain         string                 `json:"domain,omitempty"`
+	DispatchType   string                 `json:"dispatch_type"`
+	GroupSize      int                    `json:"group_size"`
+	AgentID        string                 `json:"agent_id"`
+	SquadID        string                 `json:"squad_id,omitempty"`
+	TrainAgentID   string                 `json:"train_agent_id,omitempty"`
+	CriticAgentID  string                 `json:"critic_agent_id,omitempty"`
+	IdempotencyKey string                 `json:"idempotency_key,omitempty"`
+	Issue          *IssueDispatchInput    `json:"issue,omitempty"`
+	Message        *MessageDispatchInput  `json:"message,omitempty"`
+	PerAgentEnv    map[string]PerAgentEnvRequest `json:"per_agent_env,omitempty"`
+}
+
+// PerAgentEnvRequest carries one squad member's sandbox template or base env
+// intent. The map key in EnvDispatchRequest is the agent_id.
+type PerAgentEnvRequest struct {
+	Template  string `json:"template,omitempty"`
+	BaseEnvID string `json:"base_env_id,omitempty"`
 }
 
 type IssueDispatchInput struct {
@@ -53,12 +62,14 @@ type EnvDispatchResponse struct {
 }
 
 type EnvRolloutResponse struct {
-	EnvID         string `json:"env_id"`
-	ProjectID     string `json:"project_id"`
-	IssueID       string `json:"issue_id,omitempty"`
-	ChatSessionID string `json:"chat_session_id,omitempty"`
-	AgentRunID    string `json:"agent_run_id,omitempty"`
-	Error         string `json:"error,omitempty"`
+	EnvID         string                          `json:"env_id"`
+	ProjectID     string                          `json:"project_id"`
+	IssueID       string                          `json:"issue_id,omitempty"`
+	ChatSessionID string                          `json:"chat_session_id,omitempty"`
+	AgentRunID    string                          `json:"agent_run_id,omitempty"`
+	Error         string                          `json:"error,omitempty"`
+	SandboxRefs   []service.SandboxInstanceRef    `json:"sandbox_refs,omitempty"`
+	AgentSandboxRefs map[string]service.SandboxInstanceRef `json:"agent_sandbox_refs,omitempty"`
 }
 
 // EnvDispatch handles POST /api/v1/env-dispatch.
@@ -117,18 +128,22 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), envDispatchConcurrency())
+	if lc := newEnvSandboxLifecycleService(h); lc != nil {
+		svc = svc.WithSandboxLifecycle(lc)
+	}
 	res, err := svc.Dispatch(r.Context(), service.EnvDispatchInput{
 		WorkspaceID: workspaceID, UserID: userID,
 		Mode: service.EnvMode(req.Mode), EnvID: req.EnvID,
 		Domain:       service.EnvDomain(req.Domain),
 		DispatchType: service.EnvDispatchType(req.DispatchType),
 		GroupSize:    req.GroupSize, AgentID: req.AgentID,
-		SquadID:        req.SquadID,
-		TrainAgentID:   req.TrainAgentID,
-		CriticAgentID:  req.CriticAgentID,
-		IdempotencyKey: req.IdempotencyKey,
-		Issue:          mapIssueInput(req.Issue),
-		Message:        mapMessageInput(req.Message),
+		SquadID:          req.SquadID,
+		TrainAgentID:     req.TrainAgentID,
+		CriticAgentID:    req.CriticAgentID,
+		IdempotencyKey:   req.IdempotencyKey,
+		Issue:            mapIssueInput(req.Issue),
+		Message:          mapMessageInput(req.Message),
+		PerAgentEnvSpecs: mapPerAgentEnvSpecs(req.PerAgentEnv),
 	})
 	if err != nil {
 		writeEnvDispatchError(w, err, res)
@@ -197,12 +212,37 @@ func mapMessageInput(m *MessageDispatchInput) *service.MessageInput {
 	return &service.MessageInput{Content: m.Content}
 }
 
+// mapPerAgentEnvSpecs converts the request's agent_id→spec map into the sorted
+// service-layer slice. Map iteration order is non-deterministic, so keys are
+// sorted for reproducible validation/creation order.
+func mapPerAgentEnvSpecs(m map[string]PerAgentEnvRequest) []service.PerAgentEnvSpec {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]service.PerAgentEnvSpec, 0, len(m))
+	for _, k := range keys {
+		out = append(out, service.PerAgentEnvSpec{
+			AgentID:   k,
+			Template:  m[k].Template,
+			BaseEnvID: m[k].BaseEnvID,
+		})
+	}
+	return out
+}
+
 func mapRollouts(rs []service.EnvRollout) []EnvRolloutResponse {
 	out := make([]EnvRolloutResponse, 0, len(rs))
 	for _, r := range rs {
 		out = append(out, EnvRolloutResponse{
 			EnvID: r.EnvID, ProjectID: r.ProjectID, IssueID: r.IssueID,
 			ChatSessionID: r.ChatSessionID, AgentRunID: r.AgentRunID, Error: r.Error,
+			SandboxRefs:      r.SandboxRefs,
+			AgentSandboxRefs: r.AgentSandboxRefs,
 		})
 	}
 	return out
@@ -943,6 +983,74 @@ func (a *envDispatchDepsAdapter) SaveTrainingDispatch(ctx context.Context, proje
 	return nil
 }
 
+// ValidateAgentInWorkspaceOrSquad reports whether agentID is a member of the
+// squad (when squadID is set) or the workspace. Returns a typed error when the
+// agent is unknown or unauthorized.
+func (a *envDispatchDepsAdapter) ValidateAgentInWorkspaceOrSquad(ctx context.Context, workspaceID, squadID, agentID string) error {
+	agentUUID, err := util.ParseUUID(agentID)
+	if err != nil {
+		return fmt.Errorf("parse agent_id: %w", err)
+	}
+	if squadID != "" {
+		squadUUID, err := util.ParseUUID(squadID)
+		if err != nil {
+			return fmt.Errorf("parse squad_id: %w", err)
+		}
+		ok, err := a.h.Queries.IsSquadMember(ctx, db.IsSquadMemberParams{
+			SquadID:    squadUUID,
+			MemberType: "agent",
+			MemberID:   agentUUID,
+		})
+		if err != nil {
+			return fmt.Errorf("check squad membership: %w", err)
+		}
+		if !ok {
+			return fmt.Errorf("agent %s is not a member of squad %s", agentID, squadID)
+		}
+		return nil
+	}
+	// No squad: validate the agent belongs to the workspace.
+	wsUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return fmt.Errorf("parse workspace_id: %w", err)
+	}
+	if _, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+		ID:          agentUUID,
+		WorkspaceID: wsUUID,
+	}); err != nil {
+		return fmt.Errorf("agent %s is not a member of workspace %s", agentID, workspaceID)
+	}
+	return nil
+}
+
+// ResolvePerAgentEnvSpec validates that the spec's base_env_id is known and
+// authorized (templates are pass-through; there is no template registry), and
+// returns a ref carrying the resolved template. For BaseEnvID, the template is
+// resolved from the env's first sandbox_instance; for Template, the spec's
+// template is used directly.
+func (a *envDispatchDepsAdapter) ResolvePerAgentEnvSpec(ctx context.Context, workspaceID string, spec service.PerAgentEnvSpec) (service.SandboxInstanceRef, error) {
+	template := spec.Template
+	if spec.BaseEnvID != "" {
+		env, err := a.GetEnv(ctx, spec.BaseEnvID, workspaceID)
+		if err != nil {
+			return service.SandboxInstanceRef{}, fmt.Errorf("resolve base env %s: %w", spec.BaseEnvID, err)
+		}
+		// Resolve the template from the base env's first sandbox_instance, if
+		// any; otherwise fall back to "default".
+		if len(env.SandboxIDs) > 0 {
+			if lcDeps := newEnvSandboxLifecycleDepsAdapter(a.h); lcDeps != nil {
+				if ref, err := lcDeps.GetSandboxInstanceRef(ctx, workspaceID, env.SandboxIDs[0]); err == nil && ref.Template != "" {
+					template = ref.Template
+				}
+			}
+		}
+		if template == "" {
+			template = "default"
+		}
+	}
+	return service.SandboxInstanceRef{Template: template, WorkspaceID: workspaceID}, nil
+}
+
 // maybeOpenTrainingSession fires the shared session-open hook for a task
 // created at dispatch time. It delegates to TaskService (no-op when training is
 // unconfigured) and logs any error loudly — a trained task must never run
@@ -1028,4 +1136,10 @@ func (s *stubEnvDispatchDeps) GetDefaultSelfPlayEnv(context.Context, string) (st
 }
 func (s *stubEnvDispatchDeps) SaveTrainingDispatch(context.Context, string, string, string, string, float64) error {
 	return nil
+}
+func (s *stubEnvDispatchDeps) ValidateAgentInWorkspaceOrSquad(context.Context, string, string, string) error {
+	return nil
+}
+func (s *stubEnvDispatchDeps) ResolvePerAgentEnvSpec(context.Context, string, service.PerAgentEnvSpec) (service.SandboxInstanceRef, error) {
+	return service.SandboxInstanceRef{}, nil
 }

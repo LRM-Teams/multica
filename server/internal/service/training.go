@@ -81,14 +81,24 @@ type criticTaskCreator interface {
 // A nil *TrainingSessionDeps means training is not configured for this
 // deployment, in which case the hook is a no-op. Construction/wiring of the
 // real client + proxy URL is finalized in Task 8 (config).
+// CheckpointTrigger creates an env checkpoint for a trained rollout's
+// structural event. The training service calls it when a trained task reaches
+// a terminal state that is eligible for checkpointing (not sweeper-failed,
+// not autopilot, not a sandbox lifecycle job). Errors are logged but do not
+// block the terminal routing flow.
+type CheckpointTrigger interface {
+	TriggerCheckpoint(ctx context.Context, task db.AgentTaskQueue, projectID pgtype.UUID) error
+}
+
 type TrainingSessionDeps struct {
-	Lookup        trainingDispatchLookup
-	Store         trainingTaskStore
-	Creator       criticTaskCreator
-	RL            arealSessionStarter
-	Closer        arealSessionCloser
-	ProxyURL      string
-	DefaultReward float64 // Fallback reward if training dispatch not available
+	Lookup            trainingDispatchLookup
+	Store             trainingTaskStore
+	Creator           criticTaskCreator
+	RL                arealSessionStarter
+	Closer            arealSessionCloser
+	ProxyURL          string
+	DefaultReward     float64 // Fallback reward if training dispatch not available
+	CheckpointTrigger CheckpointTrigger
 }
 
 // trainingDefaultReward is the fallback reward when deps.DefaultReward is
@@ -343,6 +353,54 @@ func (s *TaskService) MaybeCloseTrainingSession(ctx context.Context, task db.Age
 // D's close hook (SetReward(default) → EndSession). Safe to call on any
 // terminal task; errors are logged, not propagated — the task is already
 // terminal.
+// maybeTriggerCheckpoint fires the checkpoint trigger for a trained rollout
+// structural event. It skips autopilot tasks, sweeper-failed tasks (stale /
+// runtime-offline / timeout), and sandbox lifecycle jobs — these are not
+// structural events that should produce a checkpoint. Errors are logged but
+// do not block the terminal routing flow.
+func maybeTriggerCheckpoint(ctx context.Context, deps *TrainingSessionDeps, task db.AgentTaskQueue, projectID pgtype.UUID) {
+	if deps == nil || deps.CheckpointTrigger == nil {
+		return
+	}
+	if task.AutopilotRunID.Valid {
+		return
+	}
+	if task.FailureReason.Valid {
+		reason := task.FailureReason.String
+		if strings.Contains(reason, "queued_expired") ||
+			strings.Contains(reason, "runtime_offline") ||
+			strings.Contains(reason, "timeout") ||
+			strings.Contains(reason, "stale") {
+			return
+		}
+	}
+	if hasSandboxLifecycleContext(task.Context) {
+		return
+	}
+	if err := deps.CheckpointTrigger.TriggerCheckpoint(ctx, task, projectID); err != nil {
+		slog.Warn("training: checkpoint trigger failed",
+			"task_id", util.UUIDToString(task.ID),
+			"project_id", util.UUIDToString(projectID),
+			"error", err,
+		)
+	}
+}
+
+// hasSandboxLifecycleContext reports whether the task context JSONB carries a
+// sandbox_lifecycle marker, indicating the task is a sandbox lifecycle job
+// (create/stop/resume/delete) rather than a trained rollout structural event.
+func hasSandboxLifecycleContext(raw []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var ctx map[string]any
+	if err := json.Unmarshal(raw, &ctx); err != nil {
+		return false
+	}
+	_, ok := ctx["sandbox_lifecycle"]
+	return ok
+}
+
 func (s *TaskService) RouteTerminalTrainingTask(ctx context.Context, task db.AgentTaskQueue) {
 	if s.Training == nil {
 		return
@@ -379,6 +437,9 @@ func (s *TaskService) RouteTerminalTrainingTask(ctx context.Context, task db.Age
 		maybeCloseTrainingSession(ctx, s.Training, task, projectID)
 		return
 	}
+	// Checkpoint trigger: fire for trained rollout structural events (§6.2).
+	// Skips autopilot, sweeper-failed, and sandbox lifecycle tasks internally.
+	maybeTriggerCheckpoint(ctx, s.Training, task, projectID)
 	if !dispatch.CriticAgentID.Valid {
 		// No critic configured → D's close fires.
 		maybeCloseTrainingSession(ctx, s.Training, task, projectID)

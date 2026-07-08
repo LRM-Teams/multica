@@ -26,8 +26,9 @@ afterEach(() => {
 
 function handleWithSpy() {
   const scrollToIndex = vi.fn();
-  const ref = { current: { scrollToIndex } as unknown as VirtuosoHandle };
-  return { scrollToIndex, ref };
+  const handle = { scrollToIndex } as unknown as VirtuosoHandle;
+  const ref = { current: handle };
+  return { scrollToIndex, ref, handle };
 }
 
 // A DOM element whose top edge sits `top` px from the viewport top.
@@ -113,7 +114,7 @@ function landedAt(anchorId: string) {
 
 describe("useUnreadAnchorScroll", () => {
   it("scrolls the anchor to the top on cold-load entry", () => {
-    const { scrollToIndex, ref } = handleWithSpy();
+    const { scrollToIndex, ref, handle } = handleWithSpy();
     const { result } = renderHook(() =>
       useUnreadAnchorScroll({
         channelId: "c1",
@@ -121,6 +122,7 @@ describe("useUnreadAnchorScroll", () => {
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },
         highlightMessageId: null,
         firstItemIndex: 100,
+        virtuosoHandle: handle,
         virtuosoRef: ref,
         ...landedAt("m3"),
       }),
@@ -130,12 +132,13 @@ describe("useUnreadAnchorScroll", () => {
   });
 
   it("scrolls only once per conversation visit (guarded re-renders don't re-anchor)", () => {
-    const { scrollToIndex, ref } = handleWithSpy();
+    const { scrollToIndex, ref, handle } = handleWithSpy();
     const props = {
       channelId: "c1",
       messages: messages(["m1", "m2", "m3"]),
       highlightMessageId: null as string | null,
       firstItemIndex: 0,
+      virtuosoHandle: handle,
       virtuosoRef: ref,
       ...landedAt("m3"),
     };
@@ -148,7 +151,7 @@ describe("useUnreadAnchorScroll", () => {
   });
 
   it("stands down while a deep-link highlight owns the viewport", () => {
-    const { scrollToIndex, ref } = handleWithSpy();
+    const { scrollToIndex, ref, handle } = handleWithSpy();
     renderHook(() =>
       useUnreadAnchorScroll({
         channelId: "c1",
@@ -156,6 +159,7 @@ describe("useUnreadAnchorScroll", () => {
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },
         highlightMessageId: "m2",
         firstItemIndex: 0,
+        virtuosoHandle: handle,
         virtuosoRef: ref,
         ...landedAt("m3"),
       }),
@@ -164,12 +168,13 @@ describe("useUnreadAnchorScroll", () => {
   });
 
   it("cursor arrives late — anchor flips invalid→valid, must still scroll (permanent watchdog)", () => {
-    const { scrollToIndex, ref } = handleWithSpy();
+    const { scrollToIndex, ref, handle } = handleWithSpy();
     const base = {
       channelId: "c1",
       messages: messages(["m1", "m2", "m3"]),
       highlightMessageId: null as string | null,
       firstItemIndex: 0,
+      virtuosoHandle: handle,
       virtuosoRef: ref,
       ...landedAt("m3"),
       newMessagesDivider: null as { anchorMessageId: string; count: number } | null,
@@ -184,13 +189,14 @@ describe("useUnreadAnchorScroll", () => {
   });
 
   it("waits for the scroll container: no scroll until it exists", () => {
-    const { scrollToIndex, ref } = handleWithSpy();
+    const { scrollToIndex, ref, handle } = handleWithSpy();
     const base = {
       channelId: "c1",
       messages: messages(["m1", "m2", "m3"]),
       newMessagesDivider: { anchorMessageId: "m3", count: 1 },
       highlightMessageId: null as string | null,
       firstItemIndex: 0,
+      virtuosoHandle: handle,
       virtuosoRef: ref,
       messageRefMap: new Map<string, HTMLElement>([["m3", elAt(0)]]),
       scrollContainerEl: null as HTMLElement | null,
@@ -200,6 +206,34 @@ describe("useUnreadAnchorScroll", () => {
     });
     expect(scrollToIndex).not.toHaveBeenCalled();
     rerender({ ...base, scrollContainerEl: elAt(0) });
+    expect(scrollToIndex).toHaveBeenCalledWith({ index: 2, align: "start", behavior: "auto" });
+  });
+
+  it("REGRESSION (#348 H1): waits for the Virtuoso handle — no scroll (and no re-run) until it attaches", () => {
+    // The actual root cause: scrollContainerEl alone was treated as the
+    // "scroller ready" signal, but Virtuoso's imperative handle can still be
+    // null at that exact instant (ref attachment doesn't trigger a re-render,
+    // so nothing re-ran the effect once it later attached). Reproduced here by
+    // holding `virtuosoHandle` at null while `scrollContainerEl` is already
+    // truthy, then flipping it — the effect must fire ONLY once the handle is
+    // real, not fire-and-silently-no-op while it's still null.
+    const { scrollToIndex, ref, handle } = handleWithSpy();
+    const base = {
+      channelId: "c1",
+      messages: messages(["m1", "m2", "m3"]),
+      newMessagesDivider: { anchorMessageId: "m3", count: 1 },
+      highlightMessageId: null as string | null,
+      firstItemIndex: 0,
+      virtuosoRef: ref,
+      scrollContainerEl: elAt(0), // ready — but the handle is not, yet
+      messageRefMap: new Map<string, HTMLElement>([["m3", elAt(0)]]),
+      virtuosoHandle: null as VirtuosoHandle | null,
+    };
+    const { rerender } = renderHook((p) => useUnreadAnchorScroll(p), {
+      initialProps: { ...base },
+    });
+    expect(scrollToIndex).not.toHaveBeenCalled();
+    rerender({ ...base, virtuosoHandle: handle });
     expect(scrollToIndex).toHaveBeenCalledWith({ index: 2, align: "start", behavior: "auto" });
   });
 
@@ -218,7 +252,7 @@ describe("useUnreadAnchorScroll", () => {
       return pending.length;
     }) as typeof globalThis.requestAnimationFrame;
 
-    const { scrollToIndex, ref } = handleWithSpy();
+    const { scrollToIndex, ref, handle } = handleWithSpy();
     const messageRefMap = new Map<string, HTMLElement>(); // anchor not yet virtualized in
     const props = {
       channelId: "c1",
@@ -226,6 +260,7 @@ describe("useUnreadAnchorScroll", () => {
       newMessagesDivider: { anchorMessageId: "m3", count: 1 },
       highlightMessageId: null as string | null,
       firstItemIndex: 0,
+      virtuosoHandle: handle,
       virtuosoRef: ref,
       scrollContainerEl: elAt(0),
       messageRefMap,
@@ -261,7 +296,7 @@ describe("useUnreadAnchorScroll", () => {
   });
 
   it("falls back to latest + logs when the anchor row never renders within the settle timeout", () => {
-    const { scrollToIndex, ref } = handleWithSpy();
+    const { scrollToIndex, ref, handle } = handleWithSpy();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     renderHook(() =>
       useUnreadAnchorScroll({
@@ -270,6 +305,7 @@ describe("useUnreadAnchorScroll", () => {
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },
         highlightMessageId: null,
         firstItemIndex: 0,
+        virtuosoHandle: handle,
         virtuosoRef: ref,
         scrollContainerEl: elAt(0),
         messageRefMap: new Map(), // anchor never gets virtualized in
@@ -283,7 +319,7 @@ describe("useUnreadAnchorScroll", () => {
   });
 
   it("reports no anchor and never scrolls when there is no unread divider", () => {
-    const { scrollToIndex, ref } = handleWithSpy();
+    const { scrollToIndex, ref, handle } = handleWithSpy();
     const { result } = renderHook(() =>
       useUnreadAnchorScroll({
         channelId: "c1",
@@ -291,6 +327,7 @@ describe("useUnreadAnchorScroll", () => {
         newMessagesDivider: null,
         highlightMessageId: null,
         firstItemIndex: 0,
+        virtuosoHandle: handle,
         virtuosoRef: ref,
         scrollContainerEl: elAt(0),
         messageRefMap: new Map<string, HTMLElement>(),

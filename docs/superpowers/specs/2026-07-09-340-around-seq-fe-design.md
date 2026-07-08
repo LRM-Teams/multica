@@ -80,10 +80,12 @@ around_seq 首屏 = 锚点窗口（既非最新、两侧都可能有更多），
 - around 模式与 default 模式**并存、default 路径一行不改**（无未读/老会话继续 backward-only）。降低 blast radius。
 - firstItemIndex/双向是消息加载核心，出过 #365 事故——小步 + 充分单测 + Felix 互审 + 真机验收再上。
 
-## 8. 给 Iris / Parker 的产品口径问题（醒来看）
-- divider 文案 / 空态（无已读=锚点在最早、无未读=不走 around）表现？
-- 向新翻页触发距离（endReached 阈值）？
-- 大量未读、锚点在很久以前时，向旧默认只到窗口边、上滑再加载——首屏窗口 `limit` 默认值够不够一屏 + 缓冲？
+## 8. 产品口径（Parker 2026-07-09 已答，锁定）
+1. **divider 文案/空态**：文案不新增，沿用 "N new messages"；**N = 真实未读数（与 sidebar badge 同源），不是窗口内条数**（486 未读、窗口只装 50，divider 仍写 486）。实现注意：`useNewMessagesDivider.count` 要取真实未读数、不是窗口计数（实现时核一遍）。空态：`anchor_index=-1`（全窗皆未读）→ divider 钉窗口最顶、首屏从第一条起（§2 `+0` 正确）；无未读 → 不走 around、无 divider、落底、现状原样。
+2. **向新翻页触发距离**：跟旧方向**对称、不发明新参数**——Virtuoso `endReached` + 现有 `increaseViewportBy.bottom`（520px ≈ 1.5 屏预取），跟 `startReached`+top 320px 同思路。真机撞到空洞再调，不预优化。
+3. **首屏 limit**：默认 **50（锚点前后各 ~25）不动**；~25 ≈ 桌面 2-4 屏。Barry 补完对称回填后小未读窗口也填满到 50。真机调，不预设特殊值。
+
+产品侧确认：around/default 双模并存、**default 一行不改**（最重要的爆炸半径控制）✓；settle 全套降兜底（#341 降级）✓。架构难点（firstItemIndex / 双向 pages 顺序）等 Felix 早上拍。
 
 ## 9. 测试计划
 - 数据层单测：around 模式 query key / 响应解析（anchor_index/dual cursor）/ 冷开选 around vs default 分支。

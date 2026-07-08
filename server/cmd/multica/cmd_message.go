@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -21,7 +22,8 @@ var sendCmd = &cobra.Command{
 		"may be omitted for the current channel/thread, set to #channel, " +
 		"#channel:<message-id>, or dm:@handle. Use --sticker for a sticker-only " +
 		"reply, or combine --sticker with --message for an acknowledgement sticker " +
-		"followed by explanatory text in one message.",
+		"followed by explanatory text in one message. Use --attachment (repeatable) " +
+		"to upload and attach local files.",
 	RunE: runAgentMessageSend,
 }
 
@@ -58,6 +60,7 @@ func init() {
 	sendCmd.Flags().Bool("message-stdin", false, "Read the message from stdin (preserves multi-line content verbatim)")
 	sendCmd.Flags().String("message-file", "", "Read the message from a UTF-8 file")
 	sendCmd.Flags().String("sticker", "", "Builtin sticker id (see `multica sticker list`); sticker-only when --message is omitted")
+	sendCmd.Flags().StringSlice("attachment", nil, "Local file path(s) to attach (repeatable); URLs are not supported")
 	sendCmd.Flags().String("client-message-id", "", "Idempotency key; generated automatically when omitted")
 	sendCmd.Flags().Bool("show-in-channel", false, "For thread targets, also show the reply on the parent channel timeline")
 	sendCmd.Flags().String("output", "json", "Output format: json or text")
@@ -90,9 +93,29 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	if contentOK {
 		text = strings.TrimSpace(content)
 	}
-	if stickerID == "" && text == "" {
-		return fmt.Errorf("message or sticker is required; pass --message, --message-stdin, --message-file, and/or --sticker")
+	attachments, _ := cmd.Flags().GetStringSlice("attachment")
+	if stickerID == "" && text == "" && len(attachments) == 0 {
+		return fmt.Errorf("message, sticker, or attachment is required; pass --message, --message-stdin, --message-file, --sticker, and/or --attachment")
 	}
+
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+
+	// Use a longer timeout when attachments are present (file uploads can be slow).
+	timeout := cli.APITimeout()
+	if len(attachments) > 0 {
+		timeout = cli.AtLeastAPITimeout(60 * time.Second)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	attachmentIDs, err := uploadCLIAttachments(ctx, client, attachments, "")
+	if err != nil {
+		return err
+	}
+
 	body := map[string]any{
 		"target":            flagString(cmd, "target"),
 		"client_message_id": clientMessageIDFlag(cmd),
@@ -103,12 +126,15 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	if parts := buildAgentSendParts(stickerID, text); len(parts) > 0 {
 		body["parts"] = parts
 	}
+	if len(attachmentIDs) > 0 {
+		body["attachment_ids"] = attachmentIDs
+	}
 	if cmd.Flags().Changed("show-in-channel") {
 		show, _ := cmd.Flags().GetBool("show-in-channel")
 		body["options"] = map[string]any{"show_in_channel": show}
 	}
 	var out map[string]any
-	if err := postAgentTransport(cmd, "/api/agent/messages/send", body, &out); err != nil {
+	if err := client.PostJSON(ctx, "/api/agent/messages/send", body, &out); err != nil {
 		return fmt.Errorf("send message: %w", err)
 	}
 	return printAgentTransportOutput(cmd, out, "Message sent.")

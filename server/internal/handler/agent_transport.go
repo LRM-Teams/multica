@@ -26,6 +26,7 @@ type AgentTransportSendRequest struct {
 	Target          string                      `json:"target"`
 	Content         string                      `json:"content"`
 	Parts           []protocol.MessagePart      `json:"parts"`
+	AttachmentIDs   []string                    `json:"attachment_ids"`
 	Options         *protocol.ChatOutputOptions `json:"options,omitempty"`
 	ClientMessageID string                      `json:"client_message_id"`
 }
@@ -108,8 +109,12 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(content) == "" && len(parts) == 0 {
-		writeError(w, http.StatusBadRequest, "content is required")
+	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, req.AttachmentIDs, "attachment_ids")
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(content) == "" && len(parts) == 0 && len(attachmentIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "content, sticker, or attachment is required")
 		return
 	}
 	if len([]rune(content)) > channelMessageMaxLen {
@@ -131,7 +136,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	initiatorID := h.channelInitiatorForChatSession(r.Context(), task.ChatSessionID)
-	msg, created, transportID, err := h.createAgentTransportMessage(r.Context(), task, origin, target, content, parts, clientMessageID, initiatorID)
+	msg, created, transportID, err := h.createAgentTransportMessage(r.Context(), task, origin, target, content, parts, attachmentIDs, clientMessageID, initiatorID)
 	if err != nil {
 		if errors.Is(err, errChannelClientMessageConflict) {
 			writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
@@ -438,7 +443,7 @@ func (h *Handler) agentHumanDMChannel(ctx context.Context, workspaceID, agentID,
 	return h.ensureAgentHumanDMChannel(ctx, workspaceID, agentID, userID)
 }
 
-func (h *Handler) createAgentTransportMessage(ctx context.Context, task db.AgentTaskQueue, origin chatOutputOrigin, target agentTransportTarget, content string, parts []protocol.MessagePart, clientMessageID string, initiatorID pgtype.UUID) (ChannelMessageResponse, bool, string, error) {
+func (h *Handler) createAgentTransportMessage(ctx context.Context, task db.AgentTaskQueue, origin chatOutputOrigin, target agentTransportTarget, content string, parts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, initiatorID pgtype.UUID) (ChannelMessageResponse, bool, string, error) {
 	agentName := h.agentName(ctx, origin.agentID)
 	input := channelMessageInsertInput{
 		ChannelID:           parseUUID(target.channel.ID),
@@ -453,9 +458,12 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, task db.Agent
 		ClientMessageID:     &clientMessageID,
 		MainTimelineVisible: target.mainTimelineVisible,
 	}
-	msg, created, transportID, err := h.insertAgentTransportMessageWithAudit(ctx, task, origin, target, input, clientMessageID)
+	msg, created, transportID, err := h.insertAgentTransportMessageWithAudit(ctx, task, origin, target, input, attachmentIDs, clientMessageID)
 	if err != nil {
 		return ChannelMessageResponse{}, false, "", err
+	}
+	if len(attachmentIDs) > 0 {
+		msg.Attachments = h.groupChannelMessageAttachments(ctx, uuidToString(origin.workspaceID), []pgtype.UUID{parseUUID(msg.ID)})[msg.ID]
 	}
 	if target.mainTimelineVisible {
 		messages := []ChannelMessageResponse{msg}
@@ -480,7 +488,7 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, task db.Agent
 	return msg, created, transportID, nil
 }
 
-func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, task db.AgentTaskQueue, origin chatOutputOrigin, target agentTransportTarget, input channelMessageInsertInput, clientMessageID string) (ChannelMessageResponse, bool, string, error) {
+func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, task db.AgentTaskQueue, origin chatOutputOrigin, target agentTransportTarget, input channelMessageInsertInput, attachmentIDs []pgtype.UUID, clientMessageID string) (ChannelMessageResponse, bool, string, error) {
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return ChannelMessageResponse{}, false, "", err
@@ -492,6 +500,20 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, task
 			return h.resolveDuplicateAgentTransportMessage(ctx, task, origin, target, input, clientMessageID)
 		}
 		return ChannelMessageResponse{}, false, "", err
+	}
+	if len(attachmentIDs) > 0 {
+		qtx := h.Queries.WithTx(tx)
+		if err := qtx.LinkOwnedAttachmentsToChannelMessage(ctx, db.LinkOwnedAttachmentsToChannelMessageParams{
+			ChannelID:        input.ChannelID,
+			ChannelMessageID: parseUUID(msg.ID),
+			WorkspaceID:      origin.workspaceID,
+			UploaderType:     "agent",
+			UploaderID:       origin.agentID,
+			AttachmentIds:    attachmentIDs,
+		}); err != nil {
+			_ = tx.Rollback(ctx)
+			return ChannelMessageResponse{}, false, "", err
+		}
 	}
 	transportID, err := h.recordAgentTransportAuditExec(ctx, tx, task, origin.workspaceID, agentTransportActionSend, target.raw, input.ChannelID, parseUUID(msg.ID), clientMessageID, map[string]any{
 		"channel_id":        target.channel.ID,

@@ -651,6 +651,36 @@ func isHTTPURL(path string) bool {
 	return strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://")
 }
 
+// uploadCLIAttachments uploads each local path in attachments via
+// client.UploadFile and returns the resulting attachment IDs. URL-shaped
+// paths are skipped with a stderr warning — --attachment only accepts local
+// file paths. issueID is passed through to UploadFile to associate the
+// attachment with an issue; pass "" when there's no owning issue (e.g.
+// sending a chat/channel message). Aborts on the first read or upload
+// failure, so callers that upload before mutating server state (unlike
+// `issue create`, which uploads after creating the issue and only warns on
+// failure) get a clean all-or-nothing result.
+func uploadCLIAttachments(ctx context.Context, client *cli.APIClient, attachments []string, issueID string) ([]string, error) {
+	var attachmentIDs []string
+	for _, filePath := range attachments {
+		if isHTTPURL(filePath) {
+			fmt.Fprintf(os.Stderr, "Skipping --attachment %q: URLs are not supported here, only local file paths.\n", filePath)
+			continue
+		}
+		data, readErr := os.ReadFile(filePath)
+		if readErr != nil {
+			return nil, fmt.Errorf("read attachment %s: %w", filePath, readErr)
+		}
+		id, uploadErr := client.UploadFile(ctx, data, filePath, issueID)
+		if uploadErr != nil {
+			return nil, fmt.Errorf("upload attachment %s: %w", filePath, uploadErr)
+		}
+		attachmentIDs = append(attachmentIDs, id)
+		fmt.Fprintf(os.Stderr, "Uploaded %s\n", filePath)
+	}
+	return attachmentIDs, nil
+}
+
 func appendUniqueStrings(dst []string, values ...string) []string {
 	seen := make(map[string]struct{}, len(dst)+len(values))
 	out := make([]string, 0, len(dst)+len(values))
@@ -1243,28 +1273,14 @@ func runIssueCommentAdd(cmd *cobra.Command, args []string) error {
 	}
 	issueID := issueRef.ID
 
-	// Upload attachments and collect their IDs. URLs are skipped with a
-	// warning — `--attachment` only accepts local file paths, and a
-	// markdown image URL embedded in agent-supplied content should never
-	// be re-uploaded as if it were a file. Unlike `issue create`, this
-	// path uploads BEFORE posting the comment, so a hard failure on a
-	// real (local) attachment correctly aborts the whole call.
-	var attachmentIDs []string
-	for _, filePath := range attachments {
-		if isHTTPURL(filePath) {
-			fmt.Fprintf(os.Stderr, "Skipping --attachment %q: URLs are not supported here, only local file paths.\n", filePath)
-			continue
-		}
-		data, readErr := os.ReadFile(filePath)
-		if readErr != nil {
-			return fmt.Errorf("read attachment %s: %w", filePath, readErr)
-		}
-		id, uploadErr := client.UploadFile(ctx, data, filePath, issueID)
-		if uploadErr != nil {
-			return fmt.Errorf("upload attachment %s: %w", filePath, uploadErr)
-		}
-		attachmentIDs = append(attachmentIDs, id)
-		fmt.Fprintf(os.Stderr, "Uploaded %s\n", filePath)
+	// A markdown image URL embedded in agent-supplied content should never
+	// be re-uploaded as if it were a file — uploadCLIAttachments skips
+	// URL-shaped paths. Unlike `issue create`, this path uploads BEFORE
+	// posting the comment, so a hard failure on a real (local) attachment
+	// correctly aborts the whole call.
+	attachmentIDs, err := uploadCLIAttachments(ctx, client, attachments, issueID)
+	if err != nil {
+		return err
 	}
 
 	body := map[string]any{"content": content}

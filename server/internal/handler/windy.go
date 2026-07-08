@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -18,14 +20,17 @@ import (
 )
 
 const (
-	windyAgentName        = "Wendy"
-	legacyWindyAgentName  = "Windy"
-	legacyJoeAgentName    = "Joe"
-	windyAgentTemplate    = "windy_hr"
-	windyDescription      = "Personal HR for building and updating your Multica agent team."
-	windyMaxDraftNameLen  = 80
-	windyMaxDraftTextLen  = 20000
-	windyMaxDraftListSize = 32
+	windyAgentName                 = "Wendy"
+	legacyWindyAgentName           = "Windy"
+	legacyJoeAgentName             = "Joe"
+	windyAgentTemplate             = "windy_hr"
+	windyDescription               = "Personal HR for building and updating your Multica agent team."
+	windyMaxDraftNameLen           = 80
+	windyMaxDraftTextLen           = 20000
+	windyMaxDraftListSize          = 32
+	windyMaxInitialContextFiles    = 16
+	windyMaxInitialContextTextLen  = 20000
+	windyMaxInitialContextTotalLen = 64000
 )
 
 const windyAvatarURL = "/agent-avatars/human-11.jpg"
@@ -54,7 +59,8 @@ Decision Principles
 - If the user wants casual discussion, suggest general agents and general channels.
 - If the user wants project collaboration, suggest a project channel and optional project binding.
 - If the user wants code execution, require a project/repo and task-level workspaces.
-- Recommend a small initial team first, usually 2-4 agents.
+- If the user asks for one employee, draft one agent. Draft multiple agents only when the user asks for a team or the work clearly needs distinct roles.
+- When the scope is unclear, ask whether they want one employee or a small team instead of guessing.
 - Let specialization emerge when the user is unsure.
 - Use channels for workstreams and threads/tasks for execution.
 
@@ -62,9 +68,19 @@ Agent Recruiting Behavior
 
 When the user describes a goal, produce agent draft cards instead of asking them to manually write prompts. Each draft should include name, role summary, why it is useful, suggested channels, optional project binding, generated system instructions, recommended tools/capabilities, and whether it can execute code.
 
-Use this exact markdown shape for a draft card so the UI can open a prefilled Create Agent page:
+Before drafting, do a light HR intake when important context is missing. Ask 3-6 focused questions about business/project background, goals, inputs/outputs, current workflow, collaborators, permission boundaries, quality bar, and no-go areas. Do not over-interview when the user already gave enough detail.
+
+Generated system instructions should be an executable SOP, not a one-line summary. Keep description short and put mission, responsibilities, inputs/outputs, workflow, collaboration rules, escalation/approval rules, memory/project context, quality standards, boundaries, and example tasks in instructions.
+
+Use create-agent links for stable identity and creation parameters only:
 
 [Create Agent: <agent name>](multica://create-agent?name=<urlencoded name>&description=<urlencoded short description>&instructions=<urlencoded generated instructions>&visibility=private&can_execute_code=<true-or-false>)
+
+If you need to seed multi-agent relationships, channel routing, project context, or role playbooks into the new agent's notes/memory, do NOT put that content in the URL. Instead create a server-side draft with the Multica CLI, including initial_notes and only small initial_memory when needed, then show the returned draft link:
+
+multica agent draft create --file <draft.json> --output link
+
+Allowed initial_notes keys: notes/agents.md, notes/channels.md, notes/project-map.md, notes/relationship-map.md, notes/role-playbook.md, notes/work-log.md, notes/decisions.md. Allowed initial_memory keys: memory/MEMORY.md and memory/STATE.md only. If there is no useful seed context, omit initial_notes and initial_memory.
 
 Leave avatar_url empty unless the user explicitly provides an image. The Multica UI will assign a random human avatar automatically.
 
@@ -98,38 +114,42 @@ type WindyResponse struct {
 }
 
 type AgentCreationDraftResponse struct {
-	ID                string   `json:"id"`
-	WorkspaceID       string   `json:"workspace_id"`
-	CreatedByAgentID  *string  `json:"created_by_agent_id,omitempty"`
-	TargetUserID      string   `json:"target_user_id"`
-	Name              string   `json:"name"`
-	Description       string   `json:"description"`
-	Instructions      string   `json:"instructions"`
-	AvatarURL         *string  `json:"avatar_url,omitempty"`
-	Visibility        string   `json:"visibility"`
-	ProjectID         *string  `json:"project_id,omitempty"`
-	ChannelID         *string  `json:"channel_id,omitempty"`
-	CanExecuteCode    bool     `json:"can_execute_code"`
-	SuggestedChannels []string `json:"suggested_channels"`
-	RecommendedTools  []string `json:"recommended_tools"`
-	Status            string   `json:"status"`
-	UsedAgentID       *string  `json:"used_agent_id,omitempty"`
-	CreatedAt         string   `json:"created_at"`
-	UpdatedAt         string   `json:"updated_at"`
-	UsedAt            *string  `json:"used_at,omitempty"`
+	ID                string            `json:"id"`
+	WorkspaceID       string            `json:"workspace_id"`
+	CreatedByAgentID  *string           `json:"created_by_agent_id,omitempty"`
+	TargetUserID      string            `json:"target_user_id"`
+	Name              string            `json:"name"`
+	Description       string            `json:"description"`
+	Instructions      string            `json:"instructions"`
+	AvatarURL         *string           `json:"avatar_url,omitempty"`
+	Visibility        string            `json:"visibility"`
+	ProjectID         *string           `json:"project_id,omitempty"`
+	ChannelID         *string           `json:"channel_id,omitempty"`
+	CanExecuteCode    bool              `json:"can_execute_code"`
+	SuggestedChannels []string          `json:"suggested_channels"`
+	RecommendedTools  []string          `json:"recommended_tools"`
+	InitialNotes      map[string]string `json:"initial_notes,omitempty"`
+	InitialMemory     map[string]string `json:"initial_memory,omitempty"`
+	Status            string            `json:"status"`
+	UsedAgentID       *string           `json:"used_agent_id,omitempty"`
+	CreatedAt         string            `json:"created_at"`
+	UpdatedAt         string            `json:"updated_at"`
+	UsedAt            *string           `json:"used_at,omitempty"`
 }
 
 type CreateAgentDraftRequest struct {
-	Name              string   `json:"name"`
-	Description       string   `json:"description"`
-	Instructions      string   `json:"instructions"`
-	AvatarURL         *string  `json:"avatar_url"`
-	Visibility        string   `json:"visibility"`
-	ProjectID         *string  `json:"project_id"`
-	ChannelID         *string  `json:"channel_id"`
-	CanExecuteCode    bool     `json:"can_execute_code"`
-	SuggestedChannels []string `json:"suggested_channels"`
-	RecommendedTools  []string `json:"recommended_tools"`
+	Name              string            `json:"name"`
+	Description       string            `json:"description"`
+	Instructions      string            `json:"instructions"`
+	AvatarURL         *string           `json:"avatar_url"`
+	Visibility        string            `json:"visibility"`
+	ProjectID         *string           `json:"project_id"`
+	ChannelID         *string           `json:"channel_id"`
+	CanExecuteCode    bool              `json:"can_execute_code"`
+	SuggestedChannels []string          `json:"suggested_channels"`
+	RecommendedTools  []string          `json:"recommended_tools"`
+	InitialNotes      map[string]string `json:"initial_notes"`
+	InitialMemory     map[string]string `json:"initial_memory"`
 }
 
 func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
@@ -383,8 +403,8 @@ func (h *Handler) GetAgentDraft(w http.ResponseWriter, r *http.Request) {
 	row := h.DB.QueryRow(r.Context(), `
 		SELECT id, workspace_id, created_by_agent_id, target_user_id, name,
 			description, instructions, avatar_url, visibility, project_id, channel_id,
-			can_execute_code, suggested_channels, recommended_tools, status,
-			used_agent_id, created_at, updated_at, used_at
+			can_execute_code, suggested_channels, recommended_tools, initial_notes,
+			initial_memory, status, used_agent_id, created_at, updated_at, used_at
 		FROM agent_creation_draft
 		WHERE id = $1 AND workspace_id = $2 AND target_user_id = $3`,
 		draftID, wsUUID, parseUUID(userID))
@@ -482,7 +502,78 @@ func (h *Handler) validateAgentDraftRequest(w http.ResponseWriter, req *CreateAg
 	}
 	req.SuggestedChannels = cleanWindyStringList(req.SuggestedChannels, windyMaxDraftListSize)
 	req.RecommendedTools = cleanWindyStringList(req.RecommendedTools, windyMaxDraftListSize)
+	req.InitialNotes = cleanInitialContextMap(req.InitialNotes, allowedInitialNoteSeedPath)
+	req.InitialMemory = cleanInitialContextMap(req.InitialMemory, allowedInitialMemorySeedPath)
 	return true
+}
+
+func cleanInitialContextMap(in map[string]string, allowed func(string) bool) map[string]string {
+	if len(in) == 0 {
+		return map[string]string{}
+	}
+	out := map[string]string{}
+	total := 0
+	keys := make([]string, 0, len(in))
+	for key := range in {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		path := normalizeInitialContextPath(key)
+		content := strings.TrimSpace(in[key])
+		if path == "" || content == "" || !allowed(path) {
+			continue
+		}
+		if utf8.RuneCountInString(content) > windyMaxInitialContextTextLen {
+			content = string([]rune(content)[:windyMaxInitialContextTextLen])
+		}
+		total += utf8.RuneCountInString(content)
+		if total > windyMaxInitialContextTotalLen {
+			break
+		}
+		out[path] = content
+		if len(out) >= windyMaxInitialContextFiles {
+			break
+		}
+	}
+	return out
+}
+
+func normalizeInitialContextPath(raw string) string {
+	path := filepath.ToSlash(strings.TrimSpace(raw))
+	path = strings.TrimPrefix(path, "/")
+	path = filepath.ToSlash(filepath.Clean(path))
+	if path == "." || strings.HasPrefix(path, "../") || path == ".." {
+		return ""
+	}
+	if strings.HasPrefix(path, "notes/") || strings.HasPrefix(path, "memory/") {
+		return path
+	}
+	if allowedInitialNoteSeedPath("notes/" + path) {
+		return "notes/" + path
+	}
+	if allowedInitialMemorySeedPath("memory/" + path) {
+		return "memory/" + path
+	}
+	return path
+}
+
+func allowedInitialNoteSeedPath(path string) bool {
+	switch path {
+	case "notes/agents.md", "notes/channels.md", "notes/project-map.md", "notes/relationship-map.md", "notes/role-playbook.md", "notes/work-log.md", "notes/decisions.md":
+		return true
+	default:
+		return false
+	}
+}
+
+func allowedInitialMemorySeedPath(path string) bool {
+	switch path {
+	case "memory/MEMORY.md", "memory/STATE.md":
+		return true
+	default:
+		return false
+	}
 }
 
 func cleanWindyStringList(in []string, max int) []string {
@@ -507,15 +598,16 @@ func (h *Handler) insertAgentDraft(r *http.Request, workspaceID, targetUserID, c
 		INSERT INTO agent_creation_draft (
 			workspace_id, created_by_agent_id, target_user_id, name, description,
 			instructions, avatar_url, visibility, project_id, channel_id,
-			can_execute_code, suggested_channels, recommended_tools
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			can_execute_code, suggested_channels, recommended_tools, initial_notes,
+			initial_memory
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING id, workspace_id, created_by_agent_id, target_user_id, name,
 			description, instructions, avatar_url, visibility, project_id, channel_id,
-			can_execute_code, suggested_channels, recommended_tools, status,
-			used_agent_id, created_at, updated_at, used_at`,
+			can_execute_code, suggested_channels, recommended_tools, initial_notes,
+			initial_memory, status, used_agent_id, created_at, updated_at, used_at`,
 		workspaceID, nullableUUID(createdByAgentID), targetUserID, req.Name, req.Description,
 		req.Instructions, ptrToText(req.AvatarURL), req.Visibility, nullableUUID(projectID), nullableUUID(channelID),
-		req.CanExecuteCode, suggestedChannels, recommendedTools)
+		req.CanExecuteCode, suggestedChannels, recommendedTools, marshalStringMap(req.InitialNotes), marshalStringMap(req.InitialMemory))
 	return scanAgentDraft(row)
 }
 
@@ -524,13 +616,13 @@ func scanAgentDraft(row rowScanner) (AgentCreationDraftResponse, error) {
 	var name, description, instructions, visibility, status string
 	var avatarURL pgtype.Text
 	var canExecuteCode bool
-	var suggestedChannelsRaw, recommendedToolsRaw []byte
+	var suggestedChannelsRaw, recommendedToolsRaw, initialNotesRaw, initialMemoryRaw []byte
 	var createdAt, updatedAt, usedAt pgtype.Timestamptz
 	if err := row.Scan(
 		&id, &workspaceID, &createdByAgentID, &targetUserID, &name,
 		&description, &instructions, &avatarURL, &visibility, &projectID, &channelID,
-		&canExecuteCode, &suggestedChannelsRaw, &recommendedToolsRaw, &status,
-		&usedAgentID, &createdAt, &updatedAt, &usedAt,
+		&canExecuteCode, &suggestedChannelsRaw, &recommendedToolsRaw, &initialNotesRaw,
+		&initialMemoryRaw, &status, &usedAgentID, &createdAt, &updatedAt, &usedAt,
 	); err != nil {
 		return AgentCreationDraftResponse{}, err
 	}
@@ -549,6 +641,8 @@ func scanAgentDraft(row rowScanner) (AgentCreationDraftResponse, error) {
 		CanExecuteCode:    canExecuteCode,
 		SuggestedChannels: decodeStringList(suggestedChannelsRaw),
 		RecommendedTools:  decodeStringList(recommendedToolsRaw),
+		InitialNotes:      decodeStringMap(initialNotesRaw),
+		InitialMemory:     decodeStringMap(initialMemoryRaw),
 		Status:            status,
 		UsedAgentID:       uuidToPtr(usedAgentID),
 		CreatedAt:         timestampToString(createdAt),
@@ -568,21 +662,56 @@ func decodeStringList(raw []byte) []string {
 	return out
 }
 
+func decodeStringMap(raw []byte) map[string]string {
+	var out map[string]string
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &out)
+	}
+	if out == nil {
+		out = map[string]string{}
+	}
+	return out
+}
+
+func marshalStringMap(in map[string]string) []byte {
+	if in == nil {
+		in = map[string]string{}
+	}
+	out, _ := json.Marshal(in)
+	return out
+}
+
 func parseAgentActorHeader(raw string) (pgtype.UUID, error) {
 	var out pgtype.UUID
 	err := out.Scan(strings.TrimSpace(raw))
 	return out, err
 }
 
-func (h *Handler) MarkAgentDraftUsed(r *http.Request, workspaceID string, draftID pgtype.UUID, usedAgentID pgtype.UUID) {
-	if h == nil || h.DB == nil || !draftID.Valid || !usedAgentID.Valid {
+func (h *Handler) MarkAgentDraftUsed(r *http.Request, workspaceID, targetUserID string, draftID pgtype.UUID, usedAgentID pgtype.UUID) {
+	if h == nil || h.DB == nil || !draftID.Valid || !usedAgentID.Valid || strings.TrimSpace(targetUserID) == "" {
 		return
 	}
 	_, _ = h.DB.Exec(r.Context(), `
 		UPDATE agent_creation_draft
 		SET status = 'used', used_agent_id = $2, used_at = now(), updated_at = now()
-		WHERE id = $1 AND workspace_id = $3 AND status = 'draft'`,
-		draftID, usedAgentID, parseUUID(workspaceID))
+		WHERE id = $1 AND workspace_id = $3 AND target_user_id = $4 AND status = 'draft'`,
+		draftID, usedAgentID, parseUUID(workspaceID), parseUUID(targetUserID))
+}
+
+func (h *Handler) loadAgentDraftInitialContext(r *http.Request, workspaceID, targetUserID string, draftID pgtype.UUID) (map[string]string, map[string]string) {
+	if h == nil || h.DB == nil || !draftID.Valid || strings.TrimSpace(targetUserID) == "" {
+		return nil, nil
+	}
+	var initialNotesRaw, initialMemoryRaw []byte
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT initial_notes, initial_memory
+		FROM agent_creation_draft
+		WHERE id = $1 AND workspace_id = $2 AND target_user_id = $3 AND status = 'draft'`,
+		draftID, parseUUID(workspaceID), parseUUID(targetUserID)).Scan(&initialNotesRaw, &initialMemoryRaw)
+	if err != nil {
+		return nil, nil
+	}
+	return decodeStringMap(initialNotesRaw), decodeStringMap(initialMemoryRaw)
 }
 
 func extractDraftID(rawFields map[string]json.RawMessage) pgtype.UUID {

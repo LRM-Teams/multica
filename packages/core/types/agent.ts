@@ -354,6 +354,8 @@ export interface AgentCreationDraft {
   can_execute_code: boolean;
   suggested_channels: string[];
   recommended_tools: string[];
+  initial_notes?: Record<string, string>;
+  initial_memory?: Record<string, string>;
   status: "draft" | "used" | "dismissed";
   used_agent_id?: string | null;
   created_at: string;
@@ -372,6 +374,8 @@ export interface CreateAgentDraftRequest {
   can_execute_code?: boolean;
   suggested_channels?: string[];
   recommended_tools?: string[];
+  initial_notes?: Record<string, string>;
+  initial_memory?: Record<string, string>;
 }
 
 export interface EnsureWindyResponse {
@@ -396,6 +400,10 @@ export interface CreateAgentRequest {
   model?: string;
   /** Optional runtime-native reasoning/effort token. See `Agent.thinking_level`. */
   thinking_level?: string;
+  /** Optional non-URL seed context for new agent notes. Prefer draft_id for Wendy flows. */
+  initial_notes?: Record<string, string>;
+  /** Optional non-URL seed context for durable memory. Prefer draft_id for Wendy flows. */
+  initial_memory?: Record<string, string>;
   /** Optional template slug used by the onboarding agent picker. Surfaced
    *  as the `template` property on the `agent_created` PostHog event. */
   template?: string;

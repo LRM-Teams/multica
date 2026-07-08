@@ -146,6 +146,11 @@ const (
 	// hash or conflict/error. Correlated by RequestID.
 	EventDaemonWriteFileRequest  = "daemon:write_file_request"
 	EventDaemonWriteFileResponse = "daemon:write_file_response"
+	// Agent initial-context seed RPC: server pushes Wendy-created notes/memory
+	// metadata after agent creation; daemon initializes the agent root and appends
+	// only whitelisted markdown files. Correlated by RequestID.
+	EventDaemonSeedAgentContextRequest  = "daemon:seed_agent_context_request"
+	EventDaemonSeedAgentContextResponse = "daemon:seed_agent_context_response"
 
 	// GitHub integration events
 	EventGitHubInstallationCreated = "github_installation:created"

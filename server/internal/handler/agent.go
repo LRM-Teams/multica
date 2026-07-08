@@ -657,6 +657,8 @@ type CreateAgentRequest struct {
 	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
 	Model              string            `json:"model"`
 	ThinkingLevel      string            `json:"thinking_level"`
+	InitialNotes       map[string]string `json:"initial_notes"`
+	InitialMemory      map[string]string `json:"initial_memory"`
 	// Template records which template slug was used to seed this agent
 	// (e.g. "coding" / "planning" / "writing" / "assistant"). Empty when
 	// the caller didn't come from a template picker — the `agent_created`
@@ -789,6 +791,14 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	draftID := extractDraftID(rawFields)
+	initialNotes := cleanInitialContextMap(req.InitialNotes, allowedInitialNoteSeedPath)
+	initialMemory := cleanInitialContextMap(req.InitialMemory, allowedInitialMemorySeedPath)
+	if draftID.Valid {
+		if draftNotes, draftMemory := h.loadAgentDraftInitialContext(r, workspaceID, ownerID, draftID); len(draftNotes) > 0 || len(draftMemory) > 0 {
+			initialNotes = draftNotes
+			initialMemory = draftMemory
+		}
+	}
 
 	created, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
 		WorkspaceID:        wsUUID,
@@ -814,7 +824,10 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
 	if draftID.Valid {
-		h.MarkAgentDraftUsed(r, workspaceID, draftID, created.ID)
+		h.MarkAgentDraftUsed(r, workspaceID, ownerID, draftID, created.ID)
+	}
+	if len(initialNotes) > 0 || len(initialMemory) > 0 {
+		h.seedAgentInitialContext(r, created, initialNotes, initialMemory)
 	}
 
 	h.refreshAgentSkillSuggestions(r.Context(), created)
@@ -840,6 +853,29 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+func (h *Handler) seedAgentInitialContext(r *http.Request, agent db.Agent, initialNotes, initialMemory map[string]string) {
+	if h == nil || h.DaemonHub == nil || !agent.RuntimeID.Valid {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), agentFileRPCTimeout)
+	defer cancel()
+	resp, err := h.DaemonHub.RequestSeedAgentContext(ctx, protocol.SeedAgentContextRequestPayload{
+		RequestID:     randomID(),
+		RuntimeID:     uuidToString(agent.RuntimeID),
+		RelPath:       agentRootRelPath(agent),
+		InitialNotes:  initialNotes,
+		InitialMemory: initialMemory,
+		MaxBytes:      256 * 1024,
+	})
+	if err != nil {
+		slog.Warn("seed agent initial context failed", append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID))...)
+		return
+	}
+	if resp.Error != "" || resp.TooLarge {
+		slog.Warn("seed agent initial context rejected", append(logger.RequestAttrs(r), "error", resp.Error, "too_large", resp.TooLarge, "agent_id", uuidToString(agent.ID))...)
+	}
 }
 
 type UpdateAgentRequest struct {

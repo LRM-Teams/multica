@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -125,6 +126,47 @@ func TestWalkWorkdirFiles_HidesDotfilesWhenRequested(t *testing.T) {
 		if !got[path] {
 			t.Fatalf("expected hidden path %q when HideDotfiles=false; got %#v", path, got)
 		}
+	}
+}
+
+func TestSeedAgentContextFilesCreatesRootAndAppendsWhitelistedMarkdown(t *testing.T) {
+	root := t.TempDir()
+	written, err := seedAgentContextFiles(root, map[string]string{
+		"notes/agents.md":      "Reviewer: checks output.",
+		"notes/not-allowed.md": "skip me",
+		"../notes/channels.md": "skip traversal",
+	}, map[string]string{
+		"memory/MEMORY.md": "Long-lived preference.",
+		"memory/USER.md":   "skip user profile",
+	}, 256*1024)
+	if err != nil {
+		t.Fatalf("seed context: %v", err)
+	}
+	gotWritten := map[string]bool{}
+	for _, path := range written {
+		gotWritten[path] = true
+	}
+	for _, path := range []string{"notes/agents.md", "memory/MEMORY.md"} {
+		if !gotWritten[path] {
+			t.Fatalf("expected written path %q in %#v", path, written)
+		}
+	}
+	agents, err := os.ReadFile(filepath.Join(root, "notes", "agents.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content := string(agents); !strings.Contains(content, "# Agents") || !strings.Contains(content, "Reviewer: checks output.") {
+		t.Fatalf("notes/agents.md missing header or seed: %q", content)
+	}
+	memory, err := os.ReadFile(filepath.Join(root, "memory", "MEMORY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(memory), "Long-lived preference.") {
+		t.Fatalf("MEMORY.md missing seed: %q", string(memory))
+	}
+	if _, err := os.Stat(filepath.Join(root, "notes", "not-allowed.md")); !os.IsNotExist(err) {
+		t.Fatalf("disallowed notes file should not be created, err=%v", err)
 	}
 }
 

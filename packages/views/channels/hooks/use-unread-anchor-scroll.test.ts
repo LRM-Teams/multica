@@ -6,7 +6,7 @@ import type { ChannelMessage } from "@multica/core/types";
 import { scrollToIndexUntilSettled, useUnreadAnchorScroll } from "./use-unread-anchor-scroll";
 
 // The #883 fix re-issues scrollToIndex across animation frames. Run rAF
-// synchronously (bounded by the helper's own frame counter / convergence) so the
+// synchronously (bounded by the helper's own arrival check / frame cap) so the
 // settle completes within the test without real timers.
 let origRaf: typeof globalThis.requestAnimationFrame;
 let origCaf: typeof globalThis.cancelAnimationFrame;
@@ -30,24 +30,9 @@ function handleWithSpy() {
   return { scrollToIndex, ref };
 }
 
-// A scroll container whose `scrollTop` returns each value in `tops` on successive
-// reads (last value sticks) — models Virtuoso's landing offset converging as
-// off-screen item heights get measured over successive frames.
-function scrollerReading(tops: number[]): HTMLElement {
-  let i = 0;
-  return {
-    get scrollTop() {
-      const v = tops[Math.min(i, tops.length - 1)];
-      i += 1;
-      return v;
-    },
-  } as unknown as HTMLElement;
-}
-
-// A ready container that never moves (converges immediately) — for the hook tests
-// that only care that the anchor scroll fired.
-function settledScroller(): HTMLElement {
-  return { scrollTop: 0 } as unknown as HTMLElement;
+// A DOM element whose top edge sits `top` px from the viewport top.
+function elAt(top: number): HTMLElement {
+  return { getBoundingClientRect: () => ({ top }) } as unknown as HTMLElement;
 }
 
 // The hook only reads `.id`; keep fixtures minimal.
@@ -56,56 +41,57 @@ function messages(ids: string[]): ChannelMessage[] {
 }
 
 describe("scrollToIndexUntilSettled (#883 measurement-race guard)", () => {
-  it("re-issues scrollToIndex across frames, not just once", () => {
+  it("re-issues scrollToIndex across frames until the target arrives, not just once", () => {
     const { scrollToIndex, ref } = handleWithSpy();
-    scrollToIndexUntilSettled(ref.current, settledScroller(), {
-      index: 42,
-      align: "start",
-      behavior: "auto",
-    });
-    // Pre-#883-fix code fired a single scrollToIndex (landed before measurement);
-    // the fix re-pins it across frames. A regression back to one call fails here.
-    expect(scrollToIndex.mock.calls.length).toBeGreaterThan(1);
+    let frames = 0;
+    // Arrives on the 4th check — models a far jump converging over several frames.
+    const hasReached = () => ++frames >= 4;
+    scrollToIndexUntilSettled(ref.current, hasReached, { index: 42, align: "start", behavior: "auto" });
+    expect(scrollToIndex.mock.calls.length).toBe(4);
     expect(scrollToIndex).toHaveBeenLastCalledWith({ index: 42, align: "start", behavior: "auto" });
   });
 
-  it("keeps re-issuing while the landing is still moving, then stops once it settles", () => {
+  it("does NOT false-settle while the scroll has no effect — keeps re-issuing until the target arrives (Parker watchdog)", () => {
     const { scrollToIndex, ref } = handleWithSpy();
-    // A big-list far jump: the landing offset drifts for several frames as heights
-    // get measured, then holds at 9000 — the exact case a fixed 6-frame settle
-    // couldn't reach (Iris's 14k-px DM).
-    const scroller = scrollerReading([1200, 4200, 7000, 9000, 9000, 9000, 9000]);
-    scrollToIndexUntilSettled(ref.current, scroller, { index: 500, align: "start" }, 40);
-    // Re-issued through the whole moving phase (would have stopped at 6 pre-fix)...
-    expect(scrollToIndex.mock.calls.length).toBeGreaterThan(4);
-    // ...but stopped once converged, well short of the cap.
-    expect(scrollToIndex.mock.calls.length).toBeLessThan(40);
-    expect(scrollToIndex).toHaveBeenLastCalledWith({ index: 500, align: "start" });
+    // scrollToIndex is async: for the first N frames it has produced no visible
+    // movement yet (a scrollTop-stability check would have wrongly stopped here at
+    // the top). Arrival is only true once the row is actually rendered at the top.
+    let checks = 0;
+    const NO_EFFECT_FRAMES = 12;
+    const hasReached = () => ++checks > NO_EFFECT_FRAMES;
+    scrollToIndexUntilSettled(ref.current, hasReached, { index: 900, align: "start" }, 40);
+    // Kept re-issuing through the whole no-effect stretch, then stopped on arrival.
+    expect(scrollToIndex.mock.calls.length).toBe(NO_EFFECT_FRAMES + 1);
   });
 
-  it("stops at the frame cap if the landing never settles", () => {
+  it("stops at the frame cap if the target never arrives", () => {
     const { scrollToIndex, ref } = handleWithSpy();
-    // scrollTop changes every frame forever → never converges → cap backstops.
-    let n = 0;
-    const forever = {
-      get scrollTop() {
-        n += 100;
-        return n;
-      },
-    } as unknown as HTMLElement;
-    scrollToIndexUntilSettled(ref.current, forever, { index: 3, align: "start" }, 5);
+    scrollToIndexUntilSettled(ref.current, () => false, { index: 3, align: "start" }, 5);
     expect(scrollToIndex.mock.calls.length).toBe(5);
   });
 
+  it("stops after a single scroll when the target is already at the top", () => {
+    const { scrollToIndex, ref } = handleWithSpy();
+    scrollToIndexUntilSettled(ref.current, () => true, { index: 3, align: "start" }, 40);
+    expect(scrollToIndex.mock.calls.length).toBe(1);
+  });
+
   it("is a no-op (no throw) with a null handle", () => {
-    expect(() =>
-      scrollToIndexUntilSettled(null, settledScroller(), { index: 0, align: "start" }),
-    ).not.toThrow();
+    expect(() => scrollToIndexUntilSettled(null, () => true, { index: 0, align: "start" })).not.toThrow();
   });
 });
 
+// A scroll container + a rendered anchor row both pinned at the viewport top, so
+// the hook's arrival check passes on the first frame (the scroll "lands").
+function landedAt(anchorId: string) {
+  return {
+    scrollContainerEl: elAt(0),
+    messageRefMap: new Map<string, HTMLElement>([[anchorId, elAt(0)]]),
+  };
+}
+
 describe("useUnreadAnchorScroll", () => {
-  it("settles the viewport at firstItemIndex + anchor index on cold-load entry", () => {
+  it("scrolls the anchor to the top on cold-load entry", () => {
     const { scrollToIndex, ref } = handleWithSpy();
     const { result } = renderHook(() =>
       useUnreadAnchorScroll({
@@ -115,12 +101,11 @@ describe("useUnreadAnchorScroll", () => {
         highlightMessageId: null,
         firstItemIndex: 100,
         virtuosoRef: ref,
-        scrollContainerEl: settledScroller(),
+        ...landedAt("m3"),
       }),
     );
     expect(result.current.unreadAnchorIndex).toBe(2);
-    expect(scrollToIndex).toHaveBeenCalled();
-    expect(scrollToIndex).toHaveBeenLastCalledWith({ index: 102, align: "start", behavior: "auto" });
+    expect(scrollToIndex).toHaveBeenCalledWith({ index: 102, align: "start", behavior: "auto" });
   });
 
   it("scrolls only once per conversation visit (guarded re-renders don't re-anchor)", () => {
@@ -131,13 +116,12 @@ describe("useUnreadAnchorScroll", () => {
       highlightMessageId: null as string | null,
       firstItemIndex: 0,
       virtuosoRef: ref,
-      scrollContainerEl: settledScroller(),
+      ...landedAt("m3"),
     };
     const { rerender } = renderHook((p) => useUnreadAnchorScroll(p), {
       initialProps: { ...props, newMessagesDivider: { anchorMessageId: "m3", count: 1 } },
     });
     const afterEntry = scrollToIndex.mock.calls.length;
-    // A fresh divider object on the same channel re-runs the effect but must not re-scroll.
     rerender({ ...props, newMessagesDivider: { anchorMessageId: "m3", count: 1 } });
     expect(scrollToIndex.mock.calls.length).toBe(afterEntry);
   });
@@ -152,7 +136,7 @@ describe("useUnreadAnchorScroll", () => {
         highlightMessageId: "m2",
         firstItemIndex: 0,
         virtuosoRef: ref,
-        scrollContainerEl: settledScroller(),
+        ...landedAt("m3"),
       }),
     );
     expect(scrollToIndex).not.toHaveBeenCalled();
@@ -166,11 +150,9 @@ describe("useUnreadAnchorScroll", () => {
       highlightMessageId: null as string | null,
       firstItemIndex: 0,
       virtuosoRef: ref,
-      scrollContainerEl: settledScroller(),
+      ...landedAt("m3"),
       newMessagesDivider: null as { anchorMessageId: string; count: number } | null,
     };
-    // Cold-load: scroller ready, but the read cursor hasn't arrived → no divider
-    // yet → anchor index is -1.
     const { rerender } = renderHook((p) => useUnreadAnchorScroll(p), {
       initialProps: { ...base },
     });
@@ -189,15 +171,14 @@ describe("useUnreadAnchorScroll", () => {
       highlightMessageId: null as string | null,
       firstItemIndex: 0,
       virtuosoRef: ref,
+      messageRefMap: new Map<string, HTMLElement>([["m3", elAt(0)]]),
       scrollContainerEl: null as HTMLElement | null,
     };
     const { rerender } = renderHook((p) => useUnreadAnchorScroll(p), {
       initialProps: { ...base },
     });
-    // First render is the bare placeholder scroller — Virtuoso isn't mounted yet.
     expect(scrollToIndex).not.toHaveBeenCalled();
-    // Container captured → Virtuoso mounts → the anchor scroll fires (late arrival).
-    rerender({ ...base, scrollContainerEl: settledScroller() });
+    rerender({ ...base, scrollContainerEl: elAt(0) });
     expect(scrollToIndex).toHaveBeenCalledWith({ index: 2, align: "start", behavior: "auto" });
   });
 
@@ -211,7 +192,8 @@ describe("useUnreadAnchorScroll", () => {
         highlightMessageId: null,
         firstItemIndex: 0,
         virtuosoRef: ref,
-        scrollContainerEl: settledScroller(),
+        scrollContainerEl: elAt(0),
+        messageRefMap: new Map<string, HTMLElement>(),
       }),
     );
     expect(result.current.unreadAnchorIndex).toBe(-1);

@@ -123,6 +123,7 @@
     "lucide-react": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
+    "react-file-icon": "catalog:",
     "react-i18next": "catalog:",
     "zustand": "catalog:"
   },
@@ -134,6 +135,7 @@
     "@testing-library/user-event": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
+    "@types/react-file-icon": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "eslint-plugin-i18next": "catalog:",
     "jsdom": "catalog:",

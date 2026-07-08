@@ -44,7 +44,20 @@
     "preview_unsupported": "该文件类型暂不支持预览。",
     "close": "关闭",
     "open_in_new_tab": "在新标签页打开",
-    "remove": "移除附件"
+    "remove": "移除附件",
+    "file_type": {
+      "image": "图片",
+      "video": "视频",
+      "audio": "音频",
+      "pdf": "PDF 文档",
+      "word": "Word 文档",
+      "excel": "表格",
+      "ppt": "演示文稿",
+      "archive": "压缩包",
+      "code": "代码",
+      "text": "纯文本",
+      "file": "文件"
+    }
   },
   "link_hover": {
     "copy_link": "复制链接",

@@ -41,7 +41,7 @@ vi.mock("../platform", () => ({
 
 vi.mock("../i18n", () => ({
   useT: () => ({
-    t: (sel: (s: Record<string, Record<string, string>>) => string) =>
+    t: (sel: (s: any) => string) =>
       sel({
         image: {
           view: "View",
@@ -59,6 +59,19 @@ vi.mock("../i18n", () => ({
           preview_too_large: "File is too large to preview.",
           open_in_new_tab: "Open in new tab",
           close: "Close",
+          file_type: {
+            image: "Image",
+            video: "Video",
+            audio: "Audio",
+            pdf: "PDF",
+            word: "Word document",
+            excel: "Spreadsheet",
+            ppt: "Presentation",
+            archive: "Archive",
+            code: "Code",
+            text: "Text",
+            file: "File",
+          },
         },
         file_card: { uploading: "Uploading {{filename}}" },
       }),

@@ -3,12 +3,25 @@ import { fireEvent, render, screen } from "@testing-library/react";
 
 vi.mock("../i18n", () => ({
   useT: () => ({
-    t: (sel: (s: Record<string, Record<string, string>>) => string) =>
+    t: (sel: (s: any) => string) =>
       sel({
         image: { download: "Download" },
         attachment: {
           preview: "Preview",
           preview_loading: "Loading preview…",
+          file_type: {
+            image: "Image",
+            video: "Video",
+            audio: "Audio",
+            pdf: "PDF",
+            word: "Word document",
+            excel: "Spreadsheet",
+            ppt: "Presentation",
+            archive: "Archive",
+            code: "Code",
+            text: "Text",
+            file: "File",
+          },
         },
         file_card: { uploading: "Uploading {{filename}}" },
       }),

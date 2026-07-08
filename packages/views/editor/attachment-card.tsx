@@ -24,7 +24,7 @@
  *     interactive element), revealed on hover or keyboard focus.
  */
 
-import { Download, Eye, Loader2, Trash2 } from "lucide-react";
+import { Download, Loader2, Trash2 } from "lucide-react";
 import { FileIcon, defaultStyles } from "react-file-icon";
 import { useT } from "../i18n";
 import { getPreviewKind } from "./utils/preview";
@@ -98,7 +98,7 @@ export function AttachmentCard({
   // Previewable files get a primary "open" affordance on the body. Uploading
   // and non-previewable files render the body as inert text.
   const openable = !uploading && canPreview;
-  const hasActions = !uploading && (canPreview || canDownload || canDelete);
+  const hasActions = !uploading && (canDownload || canDelete);
   // Primary-button accessible name: open verb + full file identity, so a
   // screen reader hears "Open report.pdf · 1.4 MB · PDF" as one item.
   const openLabelBase = t(($) => $.attachment.open_file, { filename });
@@ -154,24 +154,12 @@ export function AttachmentCard({
           <div className="flex min-w-0 flex-1 items-center gap-3">{body}</div>
         )}
 
-        {/* Actions — hidden until hover / keyboard focus, grouped on the right. */}
+        {/* Actions — hidden until hover / keyboard focus, grouped on the right.
+            Preview is NOT a button here: previewable files open from the body
+            control above; the hover toolbar stays minimal (download / delete),
+            matching the design + Slack parity. */}
         {hasActions && (
           <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-            {canPreview && (
-              <button
-                type="button"
-                className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                title={t(($) => $.attachment.preview)}
-                aria-label={t(($) => $.attachment.preview)}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onPreview();
-                }}
-              >
-                <Eye className="size-3.5" />
-              </button>
-            )}
             {canDownload && (
               <button
                 type="button"

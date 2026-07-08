@@ -18,10 +18,15 @@ root is `server/`. TDD per task: failing test → minimal impl → targeted `go 
 ## T2 — Fire path + scheduler (depends T1)
 - `server/internal/handler/reminder_fire.go`: `(h *Handler) FireDueReminders(ctx)` — claim,
   per row: resolve channel+agent (gone → cancel + activity event `anchor_gone`); insert system
-  receipt via `insertChannelMessageWithParts` (verify timeline visibility of author_type
-  'system'; document findings in code comment); `ensureChannelAgentSession` → reminder prompt
+  receipt via `insertChannelMessageWithParts`; `ensureChannelAgentSession` → reminder prompt
   chat_message → `TaskService.EnqueueChatTask` (priority 2) → tag task_id → MarkReminderFired →
   activity event `reminder_fired`.
+- System-message contract (#329, verified findings in design doc): human timeline already
+  shows system rows (no change); FIX the ambient unread-bundle exclusion
+  (`channel_ambient_wake.go:193`) so agents receive system rows with a system marker in the
+  bundle format; receipt path never calls wake dispatch (by construction) — add regression
+  test. Tests: receipt visible on timeline read; receipt present in an agent unread bundle
+  marked system; receipt alone causes zero new tasks and no ambient pending bump.
 - `server/cmd/server/reminder_scheduler.go`: 30s ticker + startup `RecoverStuckFiringReminders`,
   modeled on `autopilot_scheduler.go`. Wire in `main.go` background block (~:354); expose the
   handler from router construction in the least invasive way.

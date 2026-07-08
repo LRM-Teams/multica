@@ -87,16 +87,45 @@ transient errors; if the channel/agent is gone, `status='cancelled'` + activity 
 1. **Receipt**: insert a system message into the anchored surface via
    `insertChannelMessageWithParts(..., authorType="system")` — content
    `⏰ Reminder for @<agent>: <title>`, threaded when `anchor_thread_root_message_id` is set.
-   ⚠ Implementation must verify system messages are visible on the main timeline read path
-   (some read paths filter `author_type <> 'system'` — check `channel.go:1041`-style filters;
-   if the timeline hides system messages, surface the receipt as the wake prompt context only
-   and record the gap in the PR).
+   Visibility and wake semantics of this row are governed by the system-message contract below.
 2. **Wake**: `ensureChannelAgentSession` → `createChannelAgentPromptMessage` with a reminder
    prompt (title + anchor message excerpt + "reply in this surface") →
    `TaskService.EnqueueChatTask` (**priority 2** → `Directed=true` → must-reply brief renders).
    Mute does NOT suppress a reminder fire (direct-level, wake ownership is the author's own
    request). Agent offline → the queued task waits for daemon delivery (existing durable-queue
    behavior satisfies "到点时 agent 离线 → 入队待上线").
+
+## System-message contract (#329 alignment — 一条数据,两类读者)
+
+The fire receipt rides the #329 decision: system notices reuse the message flow as
+`author_type='system'` rows — **not** a separate UI notification layer. One row, two audiences:
+
+1. **Humans see it in the surface — already true today (verified).** The main-timeline,
+   thread, sidebar-preview, and unread-count queries carry no `author_type <> 'system'`
+   filter. The filters that do exist are interaction guards and stay as-is: search excludes
+   system rows (`channel.go:1041`, `agent_transport.go:642`), system rows cannot be
+   quote-replied (`channel.go:2135`) or reacted to (`channel.go:1770`). No change needed.
+2. **Agents see it in bundles, marked as system — currently FALSE, fix in scope.** The
+   ambient unread-bundle query excludes system rows (`channel_ambient_wake.go:193
+   author_type <> 'system'`), so agents today cannot read system notices at all —
+   inconsistent with raft (agents receive `type=system` lines, informational, usually no
+   reply) and with #329's "一条数据,两类读者". Fix: include system rows in unread bundles,
+   rendered with an explicit system marker in the bundle line format; keep the existing
+   guidance that system lines rarely need replies. This fix benefits all system notices
+   (welcome lines, future unfollow notices), not just reminder receipts.
+3. **System rows never wake — holds by construction, add a regression guard.** Wake dispatch
+   is caller-driven (`dispatchChannelMessageToAgents` runs only where user/agent sends call
+   it); the fire path simply never calls dispatch for the receipt. Same family as
+   "reaction 不唤醒" and "edit/delete 绝不产生新 wake" — otherwise every receipt becomes an
+   N-agent ambient amplifier violating the §6.3 bounded-load invariant. Add a test asserting
+   a receipt insert produces zero new tasks and no ambient `pending_wake` bump.
+
+### Broadcast boundary (Parker's rule: 影响别人预期→公示,只关自己→静默)
+
+| Lifecycle event | Broadcast? | Rationale |
+|---|---|---|
+| schedule / snooze / update / cancel | **No system message.** Queryable via `reminder list` + Activity events. | 只关作者自己的注意力管理 — same boundary as channel mute (#329: mute 静默、可查询不广播). Raft's schedule-receipt is opt-in (`--channel`); V1 omits it. |
+| fire | **System line in the anchored surface.** | 影响该 surface 参与者的预期(作者要回来跟进了)— same boundary as thread unfollow 公示. |
 
 Wiring: the fire path needs handler-package helpers, so the fire executor is a
 `*handler.Handler` method (`FireDueReminders`); preferred wiring is exposing the handler from
@@ -146,12 +175,15 @@ Pattern: `cmd_channel.go` (newAPIClient → cli.APIContext → PostJSON). No top
 >   restarts, are visible to your team, and wake you with the anchored context. Use
 >   `multica reminder snooze/update/cancel` to manage them; do not busy-wait.
 
-## Acceptance (from PRD §6.4)
+## Acceptance (from PRD §6.4 + #329 system-message contract)
 
 1. schedule → 到点唤醒 author agent 一次 directed run,run 里可见 reminder 上下文(title+锚点)。
 2. snooze / update / cancel 生效;list 可查。
 3. 到点时 agent 离线 → 入队待上线(durable queue 既有行为)。
 4. 重复 fire 幂等(claim 原子性 + 单行状态机)。
 5. per-agent 数量上限显式报错(409 coded)。
-6. anchored surface 出现 fire 回执(或记录可见性 gap)。
-7. 生命周期事件进 agent_activity_event。
+6. fire 回执出现在锚定 surface 的**人类可见时间线**(thread 锚定时出现在 thread 内)。
+7. 回执以 `type=system` 进入其他 agent 的 unread bundle(可读、通常不回)。
+8. 回执**不触发任何唤醒**(directed/ambient 均不触发;ambient 高频 fire 下 run 数不随回执数增长)。
+9. schedule/snooze/update/cancel 无广播消息(静默,`reminder list` + Activity 可查)。
+10. 生命周期事件进 agent_activity_event(fail-soft)。

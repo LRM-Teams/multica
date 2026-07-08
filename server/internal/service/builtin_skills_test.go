@@ -514,6 +514,37 @@ func TestProjectsAndResourcesSkillCoversDurableContext(t *testing.T) {
 	}
 }
 
+func TestAttachmentsSkillCoversUploadAndLinkingContract(t *testing.T) {
+	skill, ok := findSkill(t, "multica-attachments")
+	if !ok {
+		return
+	}
+	fm, body, _ := splitFrontmatter(skill.Content)
+
+	if got := strings.TrimSpace(fm["user-invocable"]); got != "false" {
+		t.Errorf("user-invocable = %q, want false (attachment guidance triggers from context)", got)
+	}
+	if got := strings.TrimSpace(fm["allowed-tools"]); !strings.Contains(got, "Bash(multica *)") {
+		t.Errorf("allowed-tools = %q, want access to the Multica CLI", got)
+	}
+
+	mustContain := []string{
+		"multica send --attachment",
+		"Only local file paths",
+		"multica-stickers",
+		"references/attachments-source-map.md",
+	}
+	for _, want := range mustContain {
+		if !strings.Contains(body, want) {
+			t.Errorf("attachments skill missing %q", want)
+		}
+	}
+
+	if !skillHasFile(skill, "references/attachments-source-map.md") {
+		t.Errorf("attachments skill missing supporting file references/attachments-source-map.md")
+	}
+}
+
 func findSkill(t *testing.T, name string) (AgentSkillData, bool) {
 	t.Helper()
 	for _, s := range loadBuiltinSkills() {

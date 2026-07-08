@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -21,18 +22,26 @@ import (
 
 // EnvDispatchRequest is the body of POST /api/v1/env-dispatch (spec §6.3).
 type EnvDispatchRequest struct {
-	Mode           string                `json:"mode"`
-	EnvID          string                `json:"env_id"`
-	Domain         string                `json:"domain,omitempty"`
-	DispatchType   string                `json:"dispatch_type"`
-	GroupSize      int                   `json:"group_size"`
-	AgentID        string                `json:"agent_id"`
-	SquadID        string                `json:"squad_id,omitempty"`
-	TrainAgentID   string                `json:"train_agent_id,omitempty"`
-	CriticAgentID  string                `json:"critic_agent_id,omitempty"`
-	IdempotencyKey string                `json:"idempotency_key,omitempty"`
-	Issue          *IssueDispatchInput   `json:"issue,omitempty"`
-	Message        *MessageDispatchInput `json:"message,omitempty"`
+	Mode           string                 `json:"mode"`
+	EnvID          string                 `json:"env_id"`
+	Domain         string                 `json:"domain,omitempty"`
+	DispatchType   string                 `json:"dispatch_type"`
+	GroupSize      int                    `json:"group_size"`
+	AgentID        string                 `json:"agent_id"`
+	SquadID        string                 `json:"squad_id,omitempty"`
+	TrainAgentID   string                 `json:"train_agent_id,omitempty"`
+	CriticAgentID  string                 `json:"critic_agent_id,omitempty"`
+	IdempotencyKey string                 `json:"idempotency_key,omitempty"`
+	Issue          *IssueDispatchInput    `json:"issue,omitempty"`
+	Message        *MessageDispatchInput  `json:"message,omitempty"`
+	PerAgentEnv    map[string]PerAgentEnvRequest `json:"per_agent_env,omitempty"`
+}
+
+// PerAgentEnvRequest carries one squad member's sandbox template or base env
+// intent. The map key in EnvDispatchRequest is the agent_id.
+type PerAgentEnvRequest struct {
+	Template  string `json:"template,omitempty"`
+	BaseEnvID string `json:"base_env_id,omitempty"`
 }
 
 type IssueDispatchInput struct {
@@ -53,12 +62,14 @@ type EnvDispatchResponse struct {
 }
 
 type EnvRolloutResponse struct {
-	EnvID         string `json:"env_id"`
-	ProjectID     string `json:"project_id"`
-	IssueID       string `json:"issue_id,omitempty"`
-	ChatSessionID string `json:"chat_session_id,omitempty"`
-	AgentRunID    string `json:"agent_run_id,omitempty"`
-	Error         string `json:"error,omitempty"`
+	EnvID         string                          `json:"env_id"`
+	ProjectID     string                          `json:"project_id"`
+	IssueID       string                          `json:"issue_id,omitempty"`
+	ChatSessionID string                          `json:"chat_session_id,omitempty"`
+	AgentRunID    string                          `json:"agent_run_id,omitempty"`
+	Error         string                          `json:"error,omitempty"`
+	SandboxRefs   []service.SandboxInstanceRef    `json:"sandbox_refs,omitempty"`
+	AgentSandboxRefs map[string]service.SandboxInstanceRef `json:"agent_sandbox_refs,omitempty"`
 }
 
 // EnvDispatch handles POST /api/v1/env-dispatch.
@@ -123,12 +134,13 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		Domain:       service.EnvDomain(req.Domain),
 		DispatchType: service.EnvDispatchType(req.DispatchType),
 		GroupSize:    req.GroupSize, AgentID: req.AgentID,
-		SquadID:        req.SquadID,
-		TrainAgentID:   req.TrainAgentID,
-		CriticAgentID:  req.CriticAgentID,
-		IdempotencyKey: req.IdempotencyKey,
-		Issue:          mapIssueInput(req.Issue),
-		Message:        mapMessageInput(req.Message),
+		SquadID:          req.SquadID,
+		TrainAgentID:     req.TrainAgentID,
+		CriticAgentID:    req.CriticAgentID,
+		IdempotencyKey:   req.IdempotencyKey,
+		Issue:            mapIssueInput(req.Issue),
+		Message:          mapMessageInput(req.Message),
+		PerAgentEnvSpecs: mapPerAgentEnvSpecs(req.PerAgentEnv),
 	})
 	if err != nil {
 		writeEnvDispatchError(w, err, res)
@@ -197,12 +209,37 @@ func mapMessageInput(m *MessageDispatchInput) *service.MessageInput {
 	return &service.MessageInput{Content: m.Content}
 }
 
+// mapPerAgentEnvSpecs converts the request's agent_id→spec map into the sorted
+// service-layer slice. Map iteration order is non-deterministic, so keys are
+// sorted for reproducible validation/creation order.
+func mapPerAgentEnvSpecs(m map[string]PerAgentEnvRequest) []service.PerAgentEnvSpec {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]service.PerAgentEnvSpec, 0, len(m))
+	for _, k := range keys {
+		out = append(out, service.PerAgentEnvSpec{
+			AgentID:   k,
+			Template:  m[k].Template,
+			BaseEnvID: m[k].BaseEnvID,
+		})
+	}
+	return out
+}
+
 func mapRollouts(rs []service.EnvRollout) []EnvRolloutResponse {
 	out := make([]EnvRolloutResponse, 0, len(rs))
 	for _, r := range rs {
 		out = append(out, EnvRolloutResponse{
 			EnvID: r.EnvID, ProjectID: r.ProjectID, IssueID: r.IssueID,
 			ChatSessionID: r.ChatSessionID, AgentRunID: r.AgentRunID, Error: r.Error,
+			SandboxRefs:      r.SandboxRefs,
+			AgentSandboxRefs: r.AgentSandboxRefs,
 		})
 	}
 	return out

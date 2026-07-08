@@ -65,8 +65,26 @@ func NewEnvSandboxLifecycleService(deps EnvSandboxLifecycleDeps, timeout time.Du
 	return &EnvSandboxLifecycleService{deps: deps, timeout: timeout}
 }
 
+// Compile-time check: *EnvSandboxLifecycleService satisfies SandboxInstanceCreator
+// so env-dispatch can inject it via WithSandboxLifecycle.
+var _ SandboxInstanceCreator = (*EnvSandboxLifecycleService)(nil)
+
 func (s *EnvSandboxLifecycleService) Save(ctx context.Context, ref SandboxInstanceRef, actorUserID string) (SandboxLifecycleJobResult, error) {
 	return s.enqueue(ctx, ref, actorUserID, "stop", nil)
+}
+
+// CreateSandboxInstance satisfies the SandboxInstanceCreator interface used by
+// env-dispatch. It delegates to Create so *EnvSandboxLifecycleService can be
+// injected via WithSandboxLifecycle.
+func (s *EnvSandboxLifecycleService) CreateSandboxInstance(ctx context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error) {
+	return s.Create(ctx, in, actorUserID)
+}
+
+// GetSandboxInstanceRef satisfies the SandboxInstanceCreator interface, letting
+// env-dispatch resolve a source sandbox_instance's template for branch-from-
+// template. Delegates to the deps lookup.
+func (s *EnvSandboxLifecycleService) GetSandboxInstanceRef(ctx context.Context, workspaceID, instanceID string) (SandboxInstanceRef, error) {
+	return s.deps.GetSandboxInstanceRef(ctx, workspaceID, instanceID)
 }
 
 // Create inserts a pending sandbox_instance row, enqueues the existing

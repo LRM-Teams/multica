@@ -462,3 +462,97 @@ func TestMaybeCloseTrainingSession_NoTrainingDispatch_FallbackReward(t *testing.
 		t.Fatalf("SetReward reward = %f, want fallback %f", rl.setRewardCalls[0].reward, trainingDefaultReward)
 	}
 }
+
+// --- checkpoint trigger tests ---
+
+type fakeCheckpointTrigger struct {
+	calls []fakeCheckpointTriggerCall
+	err   error
+}
+
+type fakeCheckpointTriggerCall struct {
+	task      db.AgentTaskQueue
+	projectID pgtype.UUID
+}
+
+func (f *fakeCheckpointTrigger) TriggerCheckpoint(_ context.Context, task db.AgentTaskQueue, projectID pgtype.UUID) error {
+	f.calls = append(f.calls, fakeCheckpointTriggerCall{task, projectID})
+	return f.err
+}
+
+func TestTrainingCheckpointTriggerCreatesForTrainedStructuralEvent(t *testing.T) {
+	trigger := &fakeCheckpointTrigger{}
+	deps := &TrainingSessionDeps{CheckpointTrigger: trigger}
+	task := db.AgentTaskQueue{ID: util.MustParseUUID(testTrainingTaskID)}
+	projectID := util.MustParseUUID(testTrainingProjectID)
+
+	maybeTriggerCheckpoint(context.Background(), deps, task, projectID)
+
+	if len(trigger.calls) != 1 {
+		t.Fatalf("want 1 trigger call, got %d", len(trigger.calls))
+	}
+	if util.UUIDToString(trigger.calls[0].projectID) != testTrainingProjectID {
+		t.Fatalf("projectID mismatch: got %s", util.UUIDToString(trigger.calls[0].projectID))
+	}
+}
+
+func TestTrainingCheckpointTriggerSkipsNonTrainingProject(t *testing.T) {
+	// When no trigger is configured (non-training deployment or feature off),
+	// maybeTriggerCheckpoint is a no-op — no panic, no call.
+	trigger := &fakeCheckpointTrigger{}
+	deps := &TrainingSessionDeps{CheckpointTrigger: nil}
+	task := db.AgentTaskQueue{ID: util.MustParseUUID(testTrainingTaskID)}
+
+	maybeTriggerCheckpoint(context.Background(), deps, task, util.MustParseUUID(testTrainingProjectID))
+
+	if len(trigger.calls) != 0 {
+		t.Fatalf("want 0 trigger calls when no trigger configured, got %d", len(trigger.calls))
+	}
+}
+
+func TestTrainingCheckpointTriggerSkipsSweeperAutopilotAndSandboxLifecycleEvents(t *testing.T) {
+	trigger := &fakeCheckpointTrigger{}
+	deps := &TrainingSessionDeps{CheckpointTrigger: trigger}
+	projectID := util.MustParseUUID(testTrainingProjectID)
+	baseTask := db.AgentTaskQueue{ID: util.MustParseUUID(testTrainingTaskID)}
+
+	t.Run("autopilot", func(t *testing.T) {
+		trigger.calls = nil
+		task := baseTask
+		task.AutopilotRunID = util.MustParseUUID(testTrainingProjectID)
+		maybeTriggerCheckpoint(context.Background(), deps, task, projectID)
+		if len(trigger.calls) != 0 {
+			t.Fatalf("autopilot task must not trigger checkpoint, got %d calls", len(trigger.calls))
+		}
+	})
+
+	t.Run("sweeper_queued_expired", func(t *testing.T) {
+		trigger.calls = nil
+		task := baseTask
+		task.FailureReason = pgtype.Text{String: "queued_expired", Valid: true}
+		maybeTriggerCheckpoint(context.Background(), deps, task, projectID)
+		if len(trigger.calls) != 0 {
+			t.Fatalf("sweeper-failed task must not trigger checkpoint, got %d calls", len(trigger.calls))
+		}
+	})
+
+	t.Run("sweeper_runtime_offline", func(t *testing.T) {
+		trigger.calls = nil
+		task := baseTask
+		task.FailureReason = pgtype.Text{String: "runtime_offline", Valid: true}
+		maybeTriggerCheckpoint(context.Background(), deps, task, projectID)
+		if len(trigger.calls) != 0 {
+			t.Fatalf("runtime-offline task must not trigger checkpoint, got %d calls", len(trigger.calls))
+		}
+	})
+
+	t.Run("sandbox_lifecycle", func(t *testing.T) {
+		trigger.calls = nil
+		task := baseTask
+		task.Context = []byte(`{"sandbox_lifecycle": {"job_type": "stop"}}`)
+		maybeTriggerCheckpoint(context.Background(), deps, task, projectID)
+		if len(trigger.calls) != 0 {
+			t.Fatalf("sandbox lifecycle task must not trigger checkpoint, got %d calls", len(trigger.calls))
+		}
+	})
+}

@@ -19,8 +19,8 @@ import { ChannelMessageBubble } from "./channel-message-bubble";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 import { useMessageDayDividers } from "../../i18n/use-message-time";
 import { useT } from "../../i18n/use-t";
-import { maxSeqOrNull, useNewMessagesDivider } from "../hooks/use-new-messages-divider";
-import { computeNewArrivals } from "../hooks/use-new-arrivals-pill";
+import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
+import { useNewMessagesPill } from "../hooks/use-new-arrivals-pill";
 
 // Small centered date pill (Iris #303 A) — the inline date divider at each local
 // day boundary.
@@ -256,51 +256,23 @@ function MessageViewport({
     return messages.findIndex((m) => m.id === newMessagesDivider.anchorMessageId);
   }, [messages, newMessagesDivider]);
 
-  // Floating "N new messages ↓" pill (#303 follow-up). Two boundaries, combined:
-  //  - entry high-water: the latest message present on entry, snapshotted per
-  //    conversation visit (same ref pattern as the divider);
-  //  - caughtUpSeq: bumped forward whenever you reach the bottom or click the
-  //    pill — set only in event handlers, never a derived-state effect.
-  // `newArrivals` = messages from others past that boundary, i.e. they arrived
-  // live while you're scrolled up. The pill renders only when not at the bottom.
-  const entryHighWaterRef = useRef<{ channelId: string | null; seq: number | null }>({
-    channelId: null,
-    seq: null,
+  // Floating "N new messages ↓" pill (#303) — self-contained plugin hook (#325
+  // phase-2 block 1). It owns its own boundary/scroll state; the core list just
+  // renders `pill` and forwards the callbacks. `isNearBottom` stays in the core
+  // (followOutput reads it); the pill hook never touches it.
+  const { pill, onReachedBottom, onPillClick } = useNewMessagesPill({
+    messages,
+    currentUserId,
+    firstItemIndex,
+    virtuosoRef,
   });
-  const pillKey = channelId ?? null;
-  if (entryHighWaterRef.current.channelId !== pillKey) {
-    entryHighWaterRef.current = { channelId: pillKey, seq: maxSeqOrNull(messages) };
-  } else if (entryHighWaterRef.current.seq === null && messages.length > 0) {
-    entryHighWaterRef.current.seq = maxSeqOrNull(messages);
-  }
-  const [caughtUpSeq, setCaughtUpSeq] = useState<number | null>(null);
-  const arrivalsBoundary = caughtUpSeq ?? entryHighWaterRef.current.seq;
-  const newArrivals = useMemo(
-    () => computeNewArrivals(messages, arrivalsBoundary, currentUserId),
-    [messages, arrivalsBoundary, currentUserId],
-  );
   const handleAtBottomStateChange = useCallback(
     (atBottom: boolean) => {
       setIsNearBottom(atBottom);
-      // At the bottom = caught up to the latest; the pill has nothing to show.
-      if (atBottom) setCaughtUpSeq(maxSeqOrNull(messages));
+      if (atBottom) onReachedBottom();
     },
-    [messages],
+    [onReachedBottom],
   );
-  const handleNewArrivalsClick = useCallback(() => {
-    const target = newArrivals
-      ? messages.findIndex((m) => m.id === newArrivals.firstMessageId)
-      : -1;
-    if (target >= 0) {
-      virtuosoRef.current?.scrollToIndex({
-        index: firstItemIndex + target,
-        align: "start",
-        behavior: "smooth",
-      });
-    }
-    // Clicking = caught up: dismiss the pill until more arrive.
-    setCaughtUpSeq(maxSeqOrNull(messages));
-  }, [newArrivals, messages, firstItemIndex]);
 
   // Fallback-only: captures the pre-prepend scroll offset so the layout
   // effect below can restore it once the older page's rows are in the DOM.
@@ -529,8 +501,8 @@ function MessageViewport({
         }}
         itemContent={(_, msg) => renderRow(msg)}
       />
-      {!isNearBottom && newArrivals && (
-        <NewMessagesPill count={newArrivals.count} onClick={handleNewArrivalsClick} />
+      {!isNearBottom && pill && (
+        <NewMessagesPill count={pill.count} onClick={onPillClick} />
       )}
     </div>
   );

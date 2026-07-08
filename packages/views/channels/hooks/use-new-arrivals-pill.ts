@@ -1,3 +1,8 @@
+import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
+import type { VirtuosoHandle } from "react-virtuoso";
+import type { ChannelMessage } from "@multica/core/types";
+import { maxSeqOrNull } from "./use-new-messages-divider";
+
 export interface NewArrivalsPill {
   /** How many messages from others arrived live after you last caught up. */
   count: number;
@@ -34,4 +39,60 @@ export function computeNewArrivals(
     }
   }
   return firstMessageId === null ? null : { count, firstMessageId };
+}
+
+/**
+ * #325 phase-2 block 1: the floating "N new messages ↓" pill as a self-contained
+ * plugin hook. Owns its own boundary state (the per-visit entry high-water + the
+ * `caughtUpSeq` bumped at the bottom / on click, set only in event handlers) and
+ * its imperative "jump to first new" scroll — the core list just renders `pill`
+ * and forwards `onReachedBottom`/`onPillClick`. It only READS `messages`/
+ * `firstItemIndex` and scrolls via the Virtuoso ref; it never touches the core
+ * render/scroll ownership (`isNearBottom` stays in the core, passed in nowhere —
+ * the caller gates the pill's visibility on it).
+ */
+export function useNewMessagesPill({
+  messages,
+  currentUserId,
+  firstItemIndex,
+  virtuosoRef,
+}: {
+  messages: readonly ChannelMessage[];
+  currentUserId: string | null;
+  firstItemIndex: number;
+  virtuosoRef: RefObject<VirtuosoHandle | null>;
+}): { pill: NewArrivalsPill | null; onReachedBottom: () => void; onPillClick: () => void } {
+  const channelId = messages[0]?.channel_id ?? null;
+  const entryHighWaterRef = useRef<{ channelId: string | null; seq: number | null }>({
+    channelId: null,
+    seq: null,
+  });
+  if (entryHighWaterRef.current.channelId !== channelId) {
+    entryHighWaterRef.current = { channelId, seq: maxSeqOrNull(messages) };
+  } else if (entryHighWaterRef.current.seq === null && messages.length > 0) {
+    entryHighWaterRef.current.seq = maxSeqOrNull(messages);
+  }
+  const [caughtUpSeq, setCaughtUpSeq] = useState<number | null>(null);
+  const arrivalsBoundary = caughtUpSeq ?? entryHighWaterRef.current.seq;
+  const pill = useMemo(
+    () => computeNewArrivals(messages, arrivalsBoundary, currentUserId),
+    [messages, arrivalsBoundary, currentUserId],
+  );
+  // At the bottom = caught up to the latest; nothing for the pill to show.
+  const onReachedBottom = useCallback(() => {
+    setCaughtUpSeq(maxSeqOrNull(messages));
+  }, [messages]);
+  const onPillClick = useCallback(() => {
+    const target = pill ? messages.findIndex((m) => m.id === pill.firstMessageId) : -1;
+    if (target >= 0) {
+      virtuosoRef.current?.scrollToIndex({
+        index: firstItemIndex + target,
+        align: "start",
+        behavior: "smooth",
+      });
+    }
+    // Clicking = caught up: dismiss the pill until more arrive.
+    setCaughtUpSeq(maxSeqOrNull(messages));
+  }, [pill, messages, firstItemIndex, virtuosoRef]);
+  return { pill, onReachedBottom, onPillClick };
 }

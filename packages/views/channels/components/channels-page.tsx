@@ -188,10 +188,8 @@ import {
   MutedIndicator,
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
-import {
-  buildPinnedConversationEntries,
-  PinnedConversationsSection,
-} from "./pinned-conversations-section";
+import { buildPinnedConversationEntries } from "./pinned-conversations";
+import { PinnedConversationsSection } from "./pinned-conversations-section";
 import { AgentFilesPanel } from "./agent-files-panel";
 
 export interface TypingActor {

@@ -276,7 +276,7 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByText("Bob Display")).toBeInTheDocument();
   });
 
-  it("applies a warm self-mention wash when the body @-mentions the viewer", () => {
+  it("applies a cool self-mention wash when the body @-mentions the viewer", () => {
     const msg = makeMessage({
       type: "user",
       author_id: "user-2",
@@ -287,7 +287,7 @@ describe("ChannelMessageBubble", () => {
 
     const bubble = screen.getByTestId("message-bubble");
     expect(bubble).toHaveAttribute("data-self-mentioned", "true");
-    expect(bubble.className).toContain("bg-warning/10");
+    expect(bubble.className).toContain("bg-brand/[0.04]");
   });
 
   it("applies the self-mention wash for @all broadcasts", () => {
@@ -316,7 +316,7 @@ describe("ChannelMessageBubble", () => {
 
     const bubble = screen.getByTestId("message-bubble");
     expect(bubble).not.toHaveAttribute("data-self-mentioned");
-    expect(bubble.className).not.toContain("bg-warning/10");
+    expect(bubble.className).not.toContain("bg-brand/[0.04]");
   });
 
   it("lets deep-link highlight take visual priority over the self-mention wash", () => {

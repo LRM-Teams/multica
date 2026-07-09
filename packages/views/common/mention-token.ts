@@ -1,20 +1,27 @@
 import { cn } from "@multica/ui/lib/utils";
 
 /**
- * Semantic mention-token kinds for body @mentions (Iris / Slack-like).
+ * Semantic mention kinds for body @mentions.
  *
- * Mentions are a *semantic* signal ("someone was addressed"), not an identity
- * palette. Member, agent, and squad share one low-sat brand hue; @all and
- * self stay in the same family with a light emphasis. Per-actor rainbow colors
- * (`agentColor`) stay on avatars only.
+ * Mentions are prose emphasis ("someone was addressed"), not chips/tags.
+ * Baseline (Linear / GitHub / restrained Slack): brand-ink text in the flow.
+ * Permanent fill is reserved for the *message row* when the viewer is
+ * addressed — not every token. Per-actor rainbow colors (`agentColor`) stay
+ * on avatars only.
+ *
+ * Visual language:
+ * - default / agent / squad → brand ink, medium weight, no rest fill
+ * - @all / self → same ink, semibold only (no permanent wash)
+ * - hover / focus → soft brand wash (progressive)
+ * - self-mentioned row → cool brand row wash (the real "you" signal)
  */
 export type MentionTokenKind = "default" | "all" | "self";
 
 /**
  * Resolve the visual kind for a mention:// token.
- * - `all` → broadcast emphasis
- * - member id matching the viewer → self emphasis
- * - everything else (member/agent/squad/…) → default semantic pill
+ * - `all` → broadcast emphasis (weight only at token level)
+ * - member id matching the viewer → self emphasis (weight; row wash elsewhere)
+ * - everything else (member/agent/squad/…) → default
  */
 export function resolveMentionTokenKind(
   type: string,
@@ -27,22 +34,28 @@ export function resolveMentionTokenKind(
 }
 
 /**
- * Shared class string for body/editor mention chips.
- * Hover + focus-visible deepen the brand wash; no per-id inline colors.
+ * Shared class string for body/editor mention text.
+ * Reads as inline brand-ink prose — no chip padding, no rest-state fill.
  */
 export function mentionTokenClassName(
   kind: MentionTokenKind = "default",
   className?: string,
 ): string {
   return cn(
-    "mention not-prose inline rounded-[0.3125rem] px-[0.3125rem] py-px mx-0.5",
-    "font-semibold text-brand bg-brand/10",
+    "mention not-prose inline rounded-sm",
+    "font-medium text-brand",
     "transition-colors duration-100",
-    "hover:bg-brand/20",
-    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 focus-visible:bg-brand/20",
-    kind === "all" &&
-      "bg-brand/[0.16] ring-1 ring-inset ring-brand/20 hover:bg-brand/25 focus-visible:bg-brand/25",
-    kind === "self" && "bg-brand/[0.14] hover:bg-brand/22 focus-visible:bg-brand/22",
+    "hover:bg-brand/[0.08]",
+    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/30 focus-visible:bg-brand/[0.08]",
+    // @all / self: weight step only — the row wash carries "you were addressed".
+    (kind === "all" || kind === "self") && "font-semibold",
     className,
   );
 }
+
+/**
+ * Message-row wash when the body addresses the viewer (@me / @all).
+ * Cool brand tint — product family. Deep-link highlight layers above via cn order.
+ */
+export const SELF_MENTION_ROW_CLASS =
+  "bg-brand/[0.04] hover:bg-brand/[0.07] focus-within:bg-brand/[0.07]";

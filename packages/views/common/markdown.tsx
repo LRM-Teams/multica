@@ -10,11 +10,10 @@ import {
 import { useConfigStore } from "@multica/core/config";
 import { api } from "@multica/core/api";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
-import { MentionHoverCard } from "@multica/ui/components/common/mention-hover-card";
 import { useWorkspacePaths, useCurrentWorkspace } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useAuthStore } from "@multica/core/auth";
-import { useT } from "../i18n/use-t";
+import { ActorProfileTrigger } from "./actor-profile-popover";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
 import { AppLink } from "../navigation/app-link";
@@ -57,11 +56,12 @@ function ProjectMentionCard({ projectId }: { projectId: string }): React.ReactNo
 }
 
 /**
- * Member / agent / @all / squad mention — a low-sat brand semantic pill
- * (Iris / Slack-like), matching the editor composer chips. Not a per-actor
- * identity color: avatars keep `agentColor`, tokens stay one hue family.
- * The name is resolved from the workspace cache (same resolver as ActorAvatar)
- * so renames reflect immediately.
+ * Member / agent / @all / squad mention — brand-ink prose token (not a chip
+ * and not a per-actor identity color). Avatars keep `agentColor`; tokens share
+ * one hue family via `mentionTokenClassName`.
+ *
+ * Member/agent use the full profile popover (same surface as message author
+ * avatars/names). @all is a broadcast keyword: token only, no profile card.
  */
 function ActorMention({
   type,
@@ -74,7 +74,6 @@ function ActorMention({
   label?: string;
   highlightQuery?: string;
 }): React.JSX.Element {
-  const { t } = useT("editor");
   const actorNames = useActorName();
   const { getActorName } = actorNames;
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
@@ -82,17 +81,6 @@ function ActorMention({
   // it, and use it as the fallback when the id isn't in the workspace cache.
   const fallback = label ? label.replace(/^@+/, "").trim() || undefined : undefined;
   const name = type === "all" ? "all" : getActorName(type, id, fallback);
-  const handle = "getActorHandle" in actorNames ? actorNames.getActorHandle(type, id) : undefined;
-  const typeLabel =
-    type === "agent"
-      ? t(($) => $.mention.type_agent)
-      : type === "member"
-        ? t(($) => $.mention.type_member)
-        : undefined;
-  const role = [
-    handle ? `@${handle.replace(/^@+/, "")}` : null,
-    typeLabel,
-  ].filter(Boolean).join(" · ");
   const kind = resolveMentionTokenKind(type, id, viewerUserId);
   const chip = (
     <span
@@ -103,30 +91,21 @@ function ActorMention({
       {highlightSearchText(`@${name}`, highlightQuery)}
     </span>
   );
-  return (
-    <MentionHoverCard
-      type={type}
-      id={id}
-      name={type === "all" ? t(($) => $.mention.all_members) : name}
-      initials={
-        type === "all"
-          ? ""
-          : "getActorInitials" in actorNames
-            ? actorNames.getActorInitials(type, id)
-            : name.slice(0, 2).toUpperCase()
-      }
-      avatarUrl={
-        type === "all"
-          ? null
-          : "getActorAvatarUrl" in actorNames
-            ? actorNames.getActorAvatarUrl(type, id)
-            : null
-      }
-      role={role || undefined}
-    >
-      {chip}
-    </MentionHoverCard>
-  );
+
+  if (type === "member" || type === "agent") {
+    return (
+      <ActorProfileTrigger
+        memberType={type === "agent" ? "agent" : "user"}
+        memberId={id}
+        triggerElement="span"
+      >
+        {chip}
+      </ActorProfileTrigger>
+    );
+  }
+
+  // @all / squad (and any other non-person mention type) — token only, no card.
+  return chip;
 }
 
 function defaultRenderMention(

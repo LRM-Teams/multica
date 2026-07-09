@@ -13,20 +13,20 @@ name: Deploy
 #
 # Test gate: the CI workflow runs on every PR into `dev`. The team's workflow is
 # feature branch → PR → merge to `dev`, which builds images and deploys to s89.
-# Main deploys as a separate stack on the same host when PRs are merged to `main`.
+# `main` deploys through .github/workflows/deploy-main.yml as a separate stack.
 #
 # One-time server + repo setup is documented in docs/deploy-s89.md.
 
 on:
-  # Deploy only when a PR is MERGED into `dev` or `main`.
+  # Deploy only when a PR is MERGED into `dev`.
   # Direct pushes do NOT deploy — the disciplined flow is
-  # feature branch → PR → merge to target branch → deploy.
+  # feature branch → PR → merge to dev → deploy.
   # Docs-only PRs (#354 bug) are excluded — they don't change any code, so
   # triggering a backend rebuild/restart would disconnect all WS connections
   # for zero benefit.
   pull_request:
     types: [closed]
-    branches: [dev, main]
+    branches: [dev]
     paths-ignore:
       - "docs/**"
       - "*.md"
@@ -38,9 +38,9 @@ on:
         required: false
         default: ""
 
-# Never run two deploys for the same stack at once; never cancel an in-flight restart.
+# Never run two dev deploys at once; never cancel an in-flight restart.
 concurrency:
-  group: deploy-s89-${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.ref_name }}
+  group: deploy-s89
   cancel-in-progress: false
 
 jobs:
@@ -150,7 +150,8 @@ jobs:
         ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != '')
             && github.event.inputs.image_tag
             || needs.build.outputs.tag }}
-      TARGET_BRANCH: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.ref_name }}
+      DEPLOY_DIR: /data/multica
+      COMPOSE_PROJECT: multica
     steps:
       # Pull only the compose file from the deployed commit, so the running
       # topology always matches the repo. Non-secret config comes from the
@@ -189,23 +190,7 @@ jobs:
             echo "::error::POSTGRES_PASSWORD secret is empty — s89 Environment secret not wired. Aborting to avoid deploying with the wrong DB password."
             exit 1
           fi
-          case "${TARGET_BRANCH}" in
-            dev)
-              DEPLOY_DIR=/data/multica
-              COMPOSE_PROJECT=multica
-              HEALTH_URL=http://127.0.0.1:8080/readyz
-              ;;
-            main)
-              DEPLOY_DIR=/data/multica-main
-              COMPOSE_PROJECT=multica-main
-              HEALTH_URL=http://127.0.0.1:18080/readyz
-              ;;
-            *)
-              echo "::error::Unsupported deploy target branch: ${TARGET_BRANCH}"
-              exit 1
-              ;;
-          esac
-          echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) to ${TARGET_BRANCH} on $(hostname)"
+          echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) to dev on $(hostname)"
           compose() {
             docker compose \
               -p "${COMPOSE_PROJECT}" \
@@ -224,37 +209,12 @@ jobs:
           # Prune unused Docker images to prevent disk from filling up (#327).
           docker image prune -af
 
-          if [ "${TARGET_BRANCH}" = "main" ]; then
-            if ! docker container inspect multica-main-caddy >/dev/null 2>&1; then
-              docker run -d \
-                --name multica-main-caddy \
-                --restart unless-stopped \
-                --network multica-main_default \
-                -p 18090:18090 \
-                -v /data/multica-main/Caddyfile:/etc/caddy/Caddyfile:ro \
-                caddy:2
-            else
-              docker start multica-main-caddy >/dev/null 2>&1 || true
-            fi
-          fi
 
       - name: Health check (/readyz)
         run: |
           set -euo pipefail
-          case "${TARGET_BRANCH}" in
-            dev)
-              HEALTH_URL=http://127.0.0.1:8080/readyz
-              BACKEND_CONTAINER=multica-backend-1
-              ;;
-            main)
-              HEALTH_URL=http://127.0.0.1:18080/readyz
-              BACKEND_CONTAINER=multica-main-backend-1
-              ;;
-            *)
-              echo "::error::Unsupported deploy target branch: ${TARGET_BRANCH}"
-              exit 1
-              ;;
-          esac
+          HEALTH_URL=http://127.0.0.1:8080/readyz
+          BACKEND_CONTAINER=multica-backend-1
           for i in $(seq 1 30); do
             if curl -fsS "${HEALTH_URL}" >/dev/null 2>&1; then
               echo "Backend healthy after $((i * 2))s."

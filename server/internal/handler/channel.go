@@ -3634,10 +3634,28 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 		b.WriteString("\n")
 	}
 	if trigger.ReplyToMessageID != nil {
-		if parent, ok := h.channelMessageByID(ctx, ch.WorkspaceID, ch.ID, *trigger.ReplyToMessageID); ok {
+		if trigger.ReplyTo != nil {
+			b.WriteString("Direct reply target for the current message:\n")
+			fmt.Fprintf(&b, "%s\n\n", formatChannelMessageReplyLine(*trigger.ReplyTo))
+		} else if parent, ok := h.channelMessageByID(ctx, ch.WorkspaceID, ch.ID, *trigger.ReplyToMessageID); ok {
 			b.WriteString("Direct reply target for the current message:\n")
 			fmt.Fprintf(&b, "%s\n\n", formatChannelMessageLine(parent))
 		}
+	}
+	if trigger.QuoteMessageID != nil {
+		b.WriteString("Direct quote target for the current message:\n")
+		if trigger.Quote != nil && trigger.Quote.Status == "active" && trigger.Quote.Snapshot != nil {
+			fmt.Fprintf(&b, "%s\n\n", formatChannelMessageQuoteSnapshotLine(*trigger.Quote.Snapshot))
+		} else if quoted, ok := h.channelMessageByID(ctx, ch.WorkspaceID, ch.ID, *trigger.QuoteMessageID); ok {
+			fmt.Fprintf(&b, "%s\n\n", formatChannelMessageLine(quoted))
+		} else if trigger.Quote != nil && strings.TrimSpace(trigger.Quote.Status) != "" {
+			fmt.Fprintf(&b, "[%s] unavailable (%s)\n\n", *trigger.QuoteMessageID, trigger.Quote.Status)
+		} else {
+			fmt.Fprintf(&b, "[%s] unavailable\n\n", *trigger.QuoteMessageID)
+		}
+	}
+	if trigger.ReplyToMessageID != nil || trigger.QuoteMessageID != nil {
+		b.WriteString("When answering, treat the current message text as the user's question/request and the direct reply/quote target as the referenced message content. Do not confuse the two.\n\n")
 	}
 	b.WriteString("Current message to respond to:\n")
 	fmt.Fprintf(&b, "%s (%s): %s", trigger.AuthorName, trigger.Type, trigger.Content)

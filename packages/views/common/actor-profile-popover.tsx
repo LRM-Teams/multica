@@ -17,7 +17,6 @@ import { cn } from "@multica/ui/lib/utils";
 import {
   memberProfileOptions,
   useAgentPresenceDetail,
-  type AgentPresenceDetail,
 } from "@multica/core/agents";
 import type {
   MemberProfile,
@@ -31,25 +30,10 @@ import {
   resolveActorIdentityPresentation,
   shouldShowActorHandleLabel,
 } from "@multica/core/identity";
-import { presenceStatusToken } from "../agents/presence";
+import { formatPresenceStatus } from "../agents/presence";
 import { useT } from "../i18n/use-t";
 
 type ChannelsT = ReturnType<typeof useT<"channels">>["t"];
-type AgentsT = ReturnType<typeof useT<"agents">>["t"];
-
-// #288: status word must agree with the presence source. Workload word only
-// while online; otherwise the availability word. Never a bare raw status
-// (the old gray-dot-vs-idle bug). Rendered as plain text — no pill/chip.
-function presenceStatusLabel(
-  presence: AgentPresenceDetail | "loading",
-  t: AgentsT,
-): string | null {
-  const token = presenceStatusToken(presence);
-  if (!token) return null;
-  return token.kind === "workload"
-    ? t(($) => $.workload[token.value])
-    : t(($) => $.availability[token.value]);
-}
 
 type ProfileMemberType = "agent" | "user";
 type ProfilePopoverSide = "top" | "right" | "bottom" | "left" | "inline-start" | "inline-end";
@@ -210,8 +194,9 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
     profile.member_type === "user"
       ? roleLabel(profile.role, t)
       : null;
+  // Plain text on the name row — shared #288 rule + agents i18n.
   const agentStatus =
-    profile.member_type === "agent" ? presenceStatusLabel(presence, tAgents) : null;
+    profile.member_type === "agent" ? formatPresenceStatus(presence, tAgents) : null;
   const handle = resolveActorHandle(identity);
   const handleLabel = formatActorHandleLabel(handle);
   const showHandle =

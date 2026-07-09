@@ -247,11 +247,18 @@ export function AgentFilesPanel({
   currentUserId,
   members,
   onClose,
+  hideHeader = false,
 }: {
   agent: Agent;
   currentUserId: string | null;
   members: readonly MemberWithUser[];
   onClose: () => void;
+  /**
+   * Skips the identity/info header and the outer `<aside>` chrome — used
+   * when this panel is embedded as a tab inside AgentSidePanel, which
+   * already renders its own header shared across tabs.
+   */
+  hideHeader?: boolean;
 }) {
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
   const [includeHidden, setIncludeHidden] = useState(false);
@@ -273,23 +280,16 @@ export function AgentFilesPanel({
 
   const status = data?.status ?? "error";
 
-  return (
-    <aside className="flex h-full min-h-0 flex-col border-l bg-background">
-      <div className="flex items-start justify-between gap-3 border-b p-4">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">{agent.display_name || agent.name}</p>
-          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{agent.description || agent.name}</p>
+  const body = (
+    <>
+      {!hideHeader && (
+        <div className="space-y-2 border-b p-4 text-xs">
+          <InfoRow label="ID" value={agent.id} mono />
+          <InfoRow label="Created" value={formatDate(agent.created_at)} />
+          <InfoRow label="Creator" value={ownerName(agent, members)} />
+          <InfoRow label="Status" value={agent.status} />
         </div>
-        <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close agent panel">
-          <X className="size-4" />
-        </Button>
-      </div>
-      <div className="space-y-2 border-b p-4 text-xs">
-        <InfoRow label="ID" value={agent.id} mono />
-        <InfoRow label="Created" value={formatDate(agent.created_at)} />
-        <InfoRow label="Creator" value={ownerName(agent, members)} />
-        <InfoRow label="Status" value={agent.status} />
-      </div>
+      )}
       {!isOwner ? (
         <CenteredNote>{OWNER_ONLY_FILES_MESSAGE}</CenteredNote>
       ) : (
@@ -340,6 +340,25 @@ export function AgentFilesPanel({
         </div>
       )}
       {isOwner && <AgentFileEditorDialog agentId={agent.id} path={selectedPath} onClose={() => setSelectedPath(null)} />}
+    </>
+  );
+
+  if (hideHeader) {
+    return <div className="flex h-full min-h-0 flex-col">{body}</div>;
+  }
+
+  return (
+    <aside className="flex h-full min-h-0 flex-col border-l bg-background">
+      <div className="flex items-start justify-between gap-3 border-b p-4">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">{agent.display_name || agent.name}</p>
+          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{agent.description || agent.name}</p>
+        </div>
+        <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close agent panel">
+          <X className="size-4" />
+        </Button>
+      </div>
+      {body}
     </aside>
   );
 }

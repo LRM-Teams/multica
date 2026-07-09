@@ -201,6 +201,8 @@
   },
   "tabs": {
     "activity": "动态",
+    "profile": "资料",
+    "files": "文件",
     "tasks": "Tasks",
     "instructions": "指令",
     "skills": "Skills",
@@ -455,6 +457,15 @@
     "skills_label": "Skills",
     "owner_label": "所有者",
     "unknown_runtime": "未知运行时"
+  },
+  "side_panel": {
+    "close_aria": "关闭 agent 面板",
+    "no_description": "暂无简介",
+    "model_label": "模型",
+    "reasoning_label": "推理强度",
+    "created_label": "创建时间",
+    "owner_label": "所有者",
+    "reasoning_default": "默认"
   },
   "live_peek": {
     "current_issue_label": "正在处理",

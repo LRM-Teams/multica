@@ -128,7 +128,6 @@ func (s *TaskService) leanEnvSnapshot(ctx context.Context, projectID pgtype.UUID
 
 // discoverDelegationParent resolves the trained parent task that posted
 // triggerCommentID: the comment's agent author's active task on the issue whose
-// context carries areal_proxy (a trained rollout). Returns ok=false when there
 // is no such parent (e.g. a user-authored mention, or the parent is not a
 // trained run) so the caller skips the delegation seam. Best-effort: any lookup
 // miss yields ok=false.

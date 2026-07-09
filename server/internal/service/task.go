@@ -1818,6 +1818,11 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 	// Retry creates a fresh queued row, same status transition (∅ → queued)
 	// as EnqueueTaskFor*. Broadcast queued first, then notify the daemon —
 	// see EnqueueTaskForIssue for ordering rationale.
+	// D9: open a FRESH areal RL session for the retry child before announcing it
+	// (mirrors enqueueMentionTask's open->broadcast->notify order). The child's
+	// context was stripped of areal_proxy (Task 6), so maybeOpenTrainingSession's
+	// idempotency guard passes and a new session is opened + mapped (D10).
+	s.openFreshSessionForRetryChild(ctx, child)
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, child)
 	s.NotifyTaskEnqueued(ctx, child)
 

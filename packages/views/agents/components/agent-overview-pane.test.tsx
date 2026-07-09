@@ -139,14 +139,17 @@ describe("AgentOverviewPane MCP tab visibility", () => {
     expect(screen.getByRole("button", { name: /^MCP$/i })).toBeInTheDocument();
   });
 
-  it("hides the MCP tab for providers whose backend does not read mcp_config", () => {
-    // Saving an MCP config on e.g. Gemini would be a silent no-op at run
-    // time — that's the bug this hiding logic is meant to prevent.
-    renderPane([makeRuntime("gemini")]);
-    expect(
-      screen.queryByRole("button", { name: /^MCP$/i }),
-    ).not.toBeInTheDocument();
-  });
+  it.each([["Gemini", "gemini"], ["Pi", "pi"], ["Grok", "grok"]])(
+    "hides the MCP tab for %s (backend does not read mcp_config)",
+    (_label, provider) => {
+      // Saving an MCP config on these providers would be a silent no-op at
+      // run time — that's the bug this hiding logic is meant to prevent.
+      renderPane([makeRuntime(provider)]);
+      expect(
+        screen.queryByRole("button", { name: /^MCP$/i }),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it("keeps the MCP tab visible when the runtime row hasn't loaded yet", () => {
     // Empty runtimes[] mimics the brief window between the page mounting and

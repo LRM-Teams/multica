@@ -2670,6 +2670,11 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 		return
 	}
 	for _, agent := range h.channelThreadTargetAgents(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID) {
+		// Skip agents who have muted this channel (#313 gate).
+		// @-mentions always pierce mute, so this only affects thread ambient.
+		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
+			continue
+		}
 		h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
 	}
 }
@@ -3135,6 +3140,10 @@ func (h *Handler) dispatchChannelAmbientObservation(ctx context.Context, ch Chan
 		return
 	}
 	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
+		// Skip agents who have muted this channel (#313 gate).
+		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
+			continue
+		}
 		h.dispatchSingleChannelAmbientObservation(ctx, ch, trigger, initiatorUserID, agent)
 	}
 }

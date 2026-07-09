@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
-import { mapThreadParticipants, mapThreadWakeAnnotations } from "./thread-read-model";
+import { mapThreadParticipants } from "./thread-read-model";
 
 function root(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
   return {
@@ -53,40 +53,5 @@ describe("mapThreadParticipants (#251)", () => {
 
     expect(participants).toHaveLength(1);
     expect(participants[0]).toMatchObject({ key: "agent:agent-x", memberType: "agent", displayName: "agent-x" });
-  });
-});
-
-describe("mapThreadWakeAnnotations (#251 / #196)", () => {
-  it("keeps only agent records and coalesces a null reason to undefined", () => {
-    const annotations = mapThreadWakeAnnotations(
-      root({
-        thread_wake_annotations: [
-          { key: "agent:agent-c", member_type: "agent", member_id: "agent-c", display_name: "Cy", state: "no_reply", reason: null },
-          // A human is never woken — it must not survive the mapping.
-          { key: "user:user-a", member_type: "user", member_id: "user-a", display_name: "Ann", state: "pending" },
-        ],
-      }),
-    );
-
-    expect(annotations).toHaveLength(1);
-    expect(annotations[0]).toMatchObject({ key: "agent:agent-c", memberType: "agent", state: "no_reply" });
-    expect(annotations[0]?.reason).toBeUndefined();
-  });
-
-  it("passes an unknown/future state through untouched (the strip owns dropping it)", () => {
-    const annotations = mapThreadWakeAnnotations(
-      root({
-        thread_wake_annotations: [
-          { key: "agent:agent-z", member_type: "agent", member_id: "agent-z", display_name: "Zed", state: "escalated" },
-        ],
-      }),
-    );
-
-    expect(annotations).toHaveLength(1);
-    expect(annotations[0]?.state).toBe("escalated");
-  });
-
-  it("returns empty when the BE sent no annotations", () => {
-    expect(mapThreadWakeAnnotations(root())).toEqual([]);
   });
 });

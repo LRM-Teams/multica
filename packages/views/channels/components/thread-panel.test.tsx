@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { ChannelMessage } from "@multica/core/types";
-import { ThreadPanel, ThreadOriginTag, type ThreadWakeAnnotation } from "./thread-panel";
+import { ThreadPanel, ThreadOriginTag } from "./thread-panel";
 import { deriveThreadParticipants } from "./thread-participants";
 
 // Capture the props ThreadPanel hands the reply list so the "no nesting"
@@ -72,11 +72,6 @@ const RESOURCES = {
     back_to_conversation: "Back to conversation",
     show_in_channel_label: "Also show in channel",
     from_thread_badge: "From thread",
-    wake_pending: "Awaiting reply",
-    wake_replied: "Replied",
-    wake_acked: "Acknowledged",
-    wake_delivered: "Delivered",
-    wake_no_reply: "No reply",
   },
   composer: { send: "Send" },
 };
@@ -173,21 +168,6 @@ describe("ThreadPanel", () => {
     expect(screen.getByText("From thread")).toBeInTheDocument();
   });
 
-  it("renders the wake state for each participant and never surfaces a non-participant", () => {
-    const annotations: ThreadWakeAnnotation[] = [
-      { key: "agent:agent-c", displayName: "Cy", memberType: "agent", state: "pending" },
-      { key: "agent:agent-e", displayName: "Eve", memberType: "agent", state: "no_reply", reason: "not mentioned" },
-    ];
-    render(<ThreadPanel {...baseProps()} wakeAnnotations={annotations} />);
-
-    const strip = screen.getByTestId("thread-wake-strip");
-    expect(within(strip).getByText("Awaiting reply")).toBeInTheDocument();
-    expect(within(strip).getByText("No reply")).toBeInTheDocument();
-    expect(within(strip).getByText(/not mentioned/)).toBeInTheDocument();
-    // A member who was never a participant must not appear as woken.
-    expect(within(strip).queryByText("Zed")).not.toBeInTheDocument();
-  });
-
   it("gives an explicit back-to-conversation control on mobile", () => {
     const onBack = vi.fn();
     render(<ThreadPanel {...baseProps()} isMobile onBack={onBack} />);
@@ -197,49 +177,7 @@ describe("ThreadPanel", () => {
   });
 });
 
-describe("ThreadPanel wake strip render rules (#196)", () => {
-  it("is agent-only and drops an unknown/future state (low-noise, never raw)", () => {
-    const annotations: ThreadWakeAnnotation[] = [
-      { key: "agent:agent-c", displayName: "Cy", memberType: "agent", state: "delivered" },
-      // A human is never woken — a stray record must not read as woken.
-      { key: "user:user-a", displayName: "Ann", memberType: "user", state: "pending" },
-      // No vetted copy for an unknown state → dropped, not shown as a raw token.
-      { key: "agent:agent-z", displayName: "Zed", memberType: "agent", state: "escalated" },
-    ];
-    render(<ThreadPanel {...baseProps()} wakeAnnotations={annotations} />);
-
-    const strip = screen.getByTestId("thread-wake-strip");
-    expect(within(strip).getByText("Delivered")).toBeInTheDocument();
-    expect(within(strip).queryByText("Ann")).not.toBeInTheDocument();
-    expect(within(strip).queryByText("Zed")).not.toBeInTheDocument();
-    expect(within(strip).queryByText("escalated")).not.toBeInTheDocument();
-  });
-
-  it("presents no_reply neutrally (received, no reply needed — not a refusal)", () => {
-    const annotations: ThreadWakeAnnotation[] = [
-      { key: "agent:agent-c", displayName: "Cy", memberType: "agent", state: "no_reply", reason: "nothing to add" },
-    ];
-    render(<ThreadPanel {...baseProps()} wakeAnnotations={annotations} />);
-
-    const row = screen
-      .getByTestId("thread-wake-strip")
-      .querySelector('[data-wake-state="no_reply"]');
-    expect(row).not.toBeNull();
-    const chip = within(row as HTMLElement).getByText("No reply");
-    // Muted, not primary/emphatic — reads as informational, never an error.
-    expect(chip.className).toContain("bg-muted");
-    expect(chip.className).not.toContain("bg-primary");
-    expect(within(row as HTMLElement).getByText(/nothing to add/)).toBeInTheDocument();
-  });
-
-  it("renders no strip at all when every record is filtered out", () => {
-    const annotations: ThreadWakeAnnotation[] = [
-      { key: "user:user-a", displayName: "Ann", memberType: "user", state: "pending" },
-    ];
-    render(<ThreadPanel {...baseProps()} wakeAnnotations={annotations} />);
-    expect(screen.queryByTestId("thread-wake-strip")).not.toBeInTheDocument();
-  });
-
+describe("ThreadPanel composer rules", () => {
   it("hides the show-in-channel checkbox when no change handler is supplied (#256 cut)", () => {
     render(
       <ThreadPanel

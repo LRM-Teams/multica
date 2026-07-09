@@ -149,12 +149,7 @@
     "composer_placeholder": "スレッドで返信...",
     "back_to_conversation": "会話に戻る",
     "show_in_channel_label": "チャンネルにも表示",
-    "from_thread_badge": "スレッドから",
-    "wake_pending": "返信待ち",
-    "wake_replied": "返信済み",
-    "wake_acked": "確認済み",
-    "wake_delivered": "配信済み",
-    "wake_no_reply": "返信なし"
+    "from_thread_badge": "スレッドから"
   },
   "typing": {
     "single": "{{name}} が入力中",

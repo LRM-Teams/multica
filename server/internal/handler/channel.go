@@ -158,9 +158,10 @@ type ChannelMessagesPageResponse struct {
 	NextCursor *ChannelMessagesCursorResponse `json:"next_cursor,omitempty"`
 
 	// around_seq mode only:
-	AnchorIndex  int                            `json:"anchor_index"`
-	HasMoreAfter bool                           `json:"has_more_after,omitempty"`
-	AfterCursor  *ChannelMessagesCursorResponse `json:"after_cursor,omitempty"`
+	AnchorIndex   int                            `json:"anchor_index"`
+	HasMoreAfter  bool                           `json:"has_more_after,omitempty"`
+	AfterCursor   *ChannelMessagesCursorResponse `json:"after_cursor,omitempty"`
+	UnreadTotal   *int64                         `json:"unread_total,omitempty"`
 }
 
 type ChannelThreadMessagesCursorResponse struct {
@@ -1199,6 +1200,22 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 	}
 	attachChannelMessageExtras(out)
 
+	// Count of unread messages (seq > aroundSeq, not own) for the divider.
+	// Computed in the same query snapshot as the around response.
+	var unreadTotal int64
+	err = h.DB.QueryRow(r.Context(), `
+		SELECT COUNT(*)::bigint FROM channel_message
+		WHERE channel_id = $1
+		  AND workspace_id = $2
+		  AND seq > $3
+		  AND (thread_root_message_id IS NULL OR main_timeline_visible)
+		  AND deleted_at IS NULL
+		  AND author_id != $4`,
+		channelID, parseUUID(workspaceIDStr), aroundSeq, userID).Scan(&unreadTotal)
+	if err != nil {
+		unreadTotal = 0
+	}
+
 	writeJSON(w, http.StatusOK, ChannelMessagesPageResponse{
 		Messages:     out,
 		Limit:        limit,
@@ -1207,6 +1224,7 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 		AnchorIndex:  anchorIndex,
 		HasMoreAfter: hasMoreAfter,
 		AfterCursor:  afterCursor,
+		UnreadTotal:  &unreadTotal,
 	})
 }
 

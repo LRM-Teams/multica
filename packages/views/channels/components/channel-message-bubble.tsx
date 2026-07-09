@@ -647,7 +647,7 @@ export function ChannelMessageBubble({
         ) : (
           <div
             className={cn(
-              "relative min-w-0 max-w-full select-text break-words text-sm leading-6 text-foreground",
+              "message-surface relative min-w-0 max-w-full select-text break-words text-sm leading-6 text-foreground",
               isContentCollapsed && "overflow-hidden",
               isContentCollapsed ? HISTORY_MESSAGE_COLLAPSE_HEIGHT_CLASS : "overflow-visible",
               searchHighlighted && "rounded-md bg-primary/5",

@@ -252,6 +252,11 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
   });
 
+  it("scopes the message body as message-surface for Slack-aligned image caps", () => {
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+    expect(screen.getByTestId("message-body")).toHaveClass("message-surface");
+  });
+
   it("renders the current user's own message right-aligned without an Agent pill", () => {
     const msg = makeMessage({
       type: "user",

@@ -187,7 +187,7 @@ func (h *Handler) channelAmbientUnreadMessages(ctx context.Context, exec db.DBTX
 		limit = channelContextMessageLimit
 	}
 	rows, err := exec.Query(ctx, `
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at, quote_message_id, quote_snapshot
 		FROM channel_message
 		WHERE channel_id = $1
 		  AND workspace_id = $2

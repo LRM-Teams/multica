@@ -2272,6 +2272,111 @@ func TestChannelMessageEditDeleteOwnOnlyKeepsTombstoneNoWake(t *testing.T) {
 	}
 }
 
+func TestSendChannelMessageQuoteStoresSnapshotAndDegradesAfterDelete(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "quote-message-"+uuid.NewString(), testUserID)
+	source, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "quoted original", []protocol.MessagePart{{Type: protocol.MessagePartTypeText, Text: "quoted original"}}, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("quote-source"), 0)
+	if err != nil {
+		t.Fatalf("insert quoted source: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO attachment (workspace_id, channel_id, channel_message_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+		VALUES ($1, $2, $3, 'member', $4, 'quoted.png', 's3://quoted.png', 'image/png', 42)`, testWorkspaceID, channelID, source.ID, testUserID); err != nil {
+		t.Fatalf("seed quoted attachment: %v", err)
+	}
+
+	rec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content":          "with quote",
+		"quote_message_id": source.ID,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send quote: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode quoted message: %v", err)
+	}
+	if created.QuoteMessageID == nil || *created.QuoteMessageID != source.ID || created.Quote == nil {
+		t.Fatalf("created quote = %#v id=%v, want source quote", created.Quote, created.QuoteMessageID)
+	}
+	if created.Quote.Status != "available" || created.Quote.Snapshot.Content != "quoted original" || len(created.Quote.Snapshot.AttachmentRefs) != 1 {
+		t.Fatalf("created quote summary = %#v, want available snapshot with attachment", created.Quote)
+	}
+
+	if _, err := testPool.Exec(ctx, `UPDATE channel_message SET content = 'edited later' WHERE id = $1`, source.ID); err != nil {
+		t.Fatalf("edit source directly: %v", err)
+	}
+	listed := listedMessagesForUser(t, channelID, testUserID)
+	var quoted *ChannelMessageResponse
+	for i := range listed {
+		if listed[i].ID == created.ID {
+			quoted = &listed[i]
+		}
+	}
+	if quoted == nil || quoted.Quote == nil || quoted.Quote.Snapshot.Content != "quoted original" {
+		t.Fatalf("listed quote after source edit = %#v, want immutable original snapshot", quoted)
+	}
+
+	req := newRequest(http.MethodDelete, "/api/channels/"+channelID+"/messages/"+source.ID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withRouteParams(req, "channelId", channelID, "messageId", source.ID)
+	rec = httptest.NewRecorder()
+	testHandler.DeleteChannelMessage(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete source: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	listed = listedMessagesForUser(t, channelID, testUserID)
+	quoted = nil
+	for i := range listed {
+		if listed[i].ID == created.ID {
+			quoted = &listed[i]
+		}
+	}
+	if quoted == nil || quoted.Quote == nil || quoted.Quote.Status != "unavailable" {
+		t.Fatalf("quote after delete = %#v, want unavailable", quoted)
+	}
+	if quoted.Quote.Snapshot.Content != "" || len(quoted.Quote.Snapshot.Parts) != 0 || len(quoted.Quote.Snapshot.AttachmentRefs) != 0 {
+		t.Fatalf("unavailable quote leaked snapshot = %#v", quoted.Quote.Snapshot)
+	}
+}
+
+func TestSendChannelMessageQuoteRejectsCrossChannelAndThreadContext(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "quote-guards-"+uuid.NewString(), testUserID)
+	otherChannelID := seedChannelForTest(t, "quote-guards-other-"+uuid.NewString(), testUserID)
+	source, err := testHandler.insertChannelMessage(ctx, parseUUID(otherChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "other channel", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("other-channel"), 0)
+	if err != nil {
+		t.Fatalf("insert other channel source: %v", err)
+	}
+	if rec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{"content": "bad", "quote_message_id": source.ID}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("cross-channel quote status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("quote-thread"), 0)
+	if err != nil {
+		t.Fatalf("insert root: %v", err)
+	}
+	reply, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "reply", "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("quote-thread"), 0)
+	if err != nil {
+		t.Fatalf("insert reply: %v", err)
+	}
+	if rec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{"content": "bad", "quote_message_id": reply.ID}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("top-level quoting thread reply status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+
+	if rec := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{"content": "thread quote", "quote_message_id": reply.ID}); rec.Code != http.StatusCreated {
+		t.Fatalf("thread quote status=%d body=%s, want 201", rec.Code, rec.Body.String())
+	}
+}
+
 func TestChannelMessageDeleteWithoutRepliesDisappearsFromReadModel(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -86,6 +86,25 @@ export interface ChannelThreadWakeAnnotation {
   reason?: string | null;
 }
 
+export interface ChannelMessageQuote {
+  messageId: string;
+  snapshot: {
+    type: "user" | "agent" | "lark" | "system" | (string & {});
+    author_id?: string | null;
+    author_name: string;
+    content?: string;
+    parts?: MessagePart[];
+    attachment_refs?: Array<{
+      id: string;
+      filename: string;
+      content_type: string;
+      size_bytes: number;
+    }>;
+    created_at: string;
+  };
+  status: "available" | "unavailable" | (string & {});
+}
+
 export interface ChannelMessage {
   id: string;
   channel_id: string;
@@ -101,6 +120,8 @@ export interface ChannelMessage {
   client_message_id: string | null;
   reply_to_message_id?: string | null;
   reply_to?: ChannelMessageReply | null;
+  quote_message_id?: string | null;
+  quote?: ChannelMessageQuote | null;
   thread_root_message_id?: string | null;
   thread_root?: ChannelMessageReply | null;
   thread_reply_count?: number;

@@ -493,7 +493,7 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, task
 	if err != nil {
 		return ChannelMessageResponse{}, false, "", err
 	}
-	msg, err := insertChannelMessageWithPartsExec(ctx, tx, input.ChannelID, input.WorkspaceID, "agent", input.AuthorID, input.AuthorName, input.Content, input.Parts, "multica", nil, input.ClientMessageID, pgtype.UUID{}, input.ThreadRootMessageID, input.ThreadID, input.TriggerDepth, input.MainTimelineVisible)
+	msg, err := insertChannelMessageWithPartsExec(ctx, tx, input.ChannelID, input.WorkspaceID, "agent", input.AuthorID, input.AuthorName, input.Content, input.Parts, "multica", nil, input.ClientMessageID, pgtype.UUID{}, input.ThreadRootMessageID, pgtype.UUID{}, nil, input.ThreadID, input.TriggerDepth, input.MainTimelineVisible)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		if isUniqueViolation(err) {
@@ -564,7 +564,7 @@ func (h *Handler) resolveDuplicateAgentTransportMessage(ctx context.Context, tas
 
 func (h *Handler) findAgentChannelMessageByClientID(ctx context.Context, workspaceID, channelID, authorID pgtype.UUID, clientMessageID string) (ChannelMessageResponse, bool, error) {
 	row := h.DB.QueryRow(ctx, `
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at, quote_message_id, quote_snapshot
 		FROM channel_message
 		WHERE workspace_id = $1 AND channel_id = $2 AND author_type = 'agent' AND author_id = $3 AND client_message_id = $4`,
 		workspaceID, channelID, authorID, clientMessageID)

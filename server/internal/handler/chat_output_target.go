@@ -202,7 +202,7 @@ func (h *Handler) loadChannelThreadRootForOutputTarget(ctx context.Context, work
 		lookupID = threadRootID
 	}
 	row := h.DB.QueryRow(ctx, `
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at, quote_message_id, quote_snapshot
 		FROM channel_message
 		WHERE id = $1 AND channel_id = $2 AND workspace_id = $3 AND thread_root_message_id IS NULL AND author_type <> 'system'`,
 		lookupID, channelID, workspaceID)

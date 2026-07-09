@@ -91,7 +91,7 @@ describe("ApiClient", () => {
 
     await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-1");
     await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-2", false);
-    await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-3", true);
+    await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-3", true, "quote-1");
 
     const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
     expect(bodies[0]).not.toHaveProperty("show_in_channel");
@@ -100,6 +100,7 @@ describe("ApiClient", () => {
       content: "hello",
       client_message_id: "client-3",
       show_in_channel: true,
+      quote_message_id: "quote-1",
     });
   });
 

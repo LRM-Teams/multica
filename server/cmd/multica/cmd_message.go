@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -23,8 +22,8 @@ func newMessageSendCmd() *cobra.Command {
 			"may be omitted for the current channel/thread, set to #channel, " +
 			"#channel:<message-id>, or dm:@handle. Use --sticker for a sticker-only " +
 			"reply, or combine --sticker with --message for an acknowledgement sticker " +
-			"followed by explanatory text in one message. Use --attachment (repeatable) " +
-			"to upload and attach local files.",
+			"followed by explanatory text in one message. Attach files with " +
+			"--attachment-id from `multica attachment upload` (repeatable).",
 		RunE: runAgentMessageSend,
 	}
 	cmd.Flags().String("target", "", "Target: omit for current surface, #channel, #channel:<message-id>, or dm:@handle")
@@ -32,7 +31,7 @@ func newMessageSendCmd() *cobra.Command {
 	cmd.Flags().Bool("message-stdin", false, "Read the message from stdin (preserves multi-line content verbatim)")
 	cmd.Flags().String("message-file", "", "Read the message from a UTF-8 file")
 	cmd.Flags().String("sticker", "", "Builtin sticker id (see `multica sticker list`); sticker-only when --message is omitted")
-	cmd.Flags().StringSlice("attachment", nil, "Local file path(s) to attach (repeatable); URLs are not supported")
+	cmd.Flags().StringSlice("attachment-id", nil, "Attachment id to link (repeatable). Get one from `multica attachment upload`")
 	cmd.Flags().String("client-message-id", "", "Idempotency key; generated automatically when omitted")
 	cmd.Flags().Bool("show-in-channel", false, "For thread targets, also show the reply on the parent channel timeline")
 	cmd.Flags().String("output", "json", "Output format: json or text")
@@ -116,9 +115,10 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	if contentOK {
 		text = strings.TrimSpace(content)
 	}
-	attachments, _ := cmd.Flags().GetStringSlice("attachment")
-	if stickerID == "" && text == "" && len(attachments) == 0 {
-		return fmt.Errorf("message, sticker, or attachment is required; pass --message, --message-stdin, --message-file, --sticker, and/or --attachment")
+	attachmentIDs, _ := cmd.Flags().GetStringSlice("attachment-id")
+	attachmentIDs = appendUniqueStrings(nil, attachmentIDs...)
+	if stickerID == "" && text == "" && len(attachmentIDs) == 0 {
+		return fmt.Errorf("message, sticker, or attachment is required; pass --message, --message-stdin, --message-file, --sticker, and/or --attachment-id")
 	}
 
 	client, err := newAPIClient(cmd)
@@ -126,18 +126,8 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Use a longer timeout when attachments are present (file uploads can be slow).
-	timeout := cli.APITimeout()
-	if len(attachments) > 0 {
-		timeout = cli.AtLeastAPITimeout(60 * time.Second)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
 	defer cancel()
-
-	attachmentIDs, err := uploadCLIAttachments(ctx, client, attachments, "")
-	if err != nil {
-		return err
-	}
 
 	body := map[string]any{
 		"target":            flagString(cmd, "target"),

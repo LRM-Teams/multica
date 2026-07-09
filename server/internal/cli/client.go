@@ -404,9 +404,22 @@ type AttachmentResponse struct {
 	CreatedAt   string `json:"created_at"`
 }
 
+// UploadFileOptions controls optional multipart fields on /api/upload-file.
+type UploadFileOptions struct {
+	IssueID   string // optional issue UUID to bind at upload time
+	ChannelID string // optional channel UUID to bind at upload time
+}
+
 // UploadFile uploads a file via multipart form to /api/upload-file.
 // It returns the attachment ID from the server response.
+// Prefer UploadFileOpts when channel_id (or other options) are needed.
 func (c *APIClient) UploadFile(ctx context.Context, fileData []byte, filename string, issueID string) (string, error) {
+	return c.UploadFileOpts(ctx, fileData, filename, UploadFileOptions{IssueID: issueID})
+}
+
+// UploadFileOpts uploads a file via multipart form to /api/upload-file with
+// optional issue_id / channel_id bindings. Returns the attachment ID.
+func (c *APIClient) UploadFileOpts(ctx context.Context, fileData []byte, filename string, opts UploadFileOptions) (string, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -418,9 +431,14 @@ func (c *APIClient) UploadFile(ctx context.Context, fileData []byte, filename st
 		return "", fmt.Errorf("write file data: %w", err)
 	}
 
-	if issueID != "" {
-		if err := writer.WriteField("issue_id", issueID); err != nil {
+	if opts.IssueID != "" {
+		if err := writer.WriteField("issue_id", opts.IssueID); err != nil {
 			return "", fmt.Errorf("write issue_id field: %w", err)
+		}
+	}
+	if opts.ChannelID != "" {
+		if err := writer.WriteField("channel_id", opts.ChannelID); err != nil {
+			return "", fmt.Errorf("write channel_id field: %w", err)
 		}
 	}
 

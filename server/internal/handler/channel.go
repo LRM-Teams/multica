@@ -36,10 +36,11 @@ const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
 const channelOutputContractInstruction = "Channel output contract: follow the runtime brief's Output section for visible chat output in this run. Do not print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, missing-tool diagnostics, or described commands as the final answer."
-const channelDirectedReplyInstruction = "This run is directly addressed to you. You must produce a visible result using the output mechanism described in the runtime brief. A sticker reply counts as a visible result. If the mention is only a casual greeting (hi/你好/在吗) with no question or task, reply with a greeting sticker only — do not add a text introduction, role pitch, or follow-up question. For substantive requests, answer helpfully; when an acknowledgement sticker fits, send sticker plus your explanation in one message (sticker first). Do not return no_reply, stay_silent, JSON, or any other silent/protocol outcome for a direct mention, direct question, assigned task, or DM-style continuation."
+const channelDirectedReplyInstruction = "This run is directly addressed to you. A visible result is required for human DMs, human @mentions, direct questions, assigned tasks, or DM-style continuations. Exception: an agent-to-agent channel @mention is a weak notification unless it asks you for an immediate deliverable, review, decision, or direct answer. For a weak notification, finish without a visible reply; do not acknowledge, do not say no_reply, and do not explain that you are staying silent. If the mention is only a casual greeting (hi/你好/在吗) with no question or task, reply with a greeting sticker only — do not add a text introduction, role pitch, or follow-up question. For substantive requests that need your action, answer helpfully; when an acknowledgement sticker fits, send sticker plus your explanation in one message (sticker first). Do not return no_reply, stay_silent, JSON, or any other silent/protocol outcome."
 const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not use the visible-output path, and do not print no_reply, stay_silent, JSON, or CLI/protocol text."
 const channelAmbientGreetingReactionInstruction = "If the current channel message or unread bundle is only a casual greeting or small talk (for example hi, hello, hey, 你好, 在吗) with no @-mention, no question, and no task request, respond with a 👋 reaction to the reaction target only and do not create a text reply. This also applies when you are the only agent in the channel: treat the greeting as directed to you, but keep the action reaction-only unless the user includes a question or request. If reactions are unavailable, finish without visible output rather than explaining that no reply is needed."
 const channelStickerReplyInstruction = "Sticker replies: when this run is directly addressed to you (@-mention or clear direct request), chat like a person — use stickers for short social beats (hi/你好, ok/好的, 收到/明白, 谢谢, 赞). When no extra explanation is needed, send only a sticker. When you also need to explain or answer substantively, send one message with an acknowledgement sticker plus your text (sticker first, then the explanation). For ambient/unaddressed runs, send a sticker only when the user explicitly asks for a sticker/表情包 or for a genuine welcome of a new member; do not send stickers for ordinary greetings, acknowledgements, thanks, or closings that are not directed at you — use a 👋 reaction or no visible output instead. Use the runtime brief's chat output path for stickers; do not print JSON envelopes, action objects, or protocol text as final output."
+const channelContinuationInstruction = "Collaborative discussion rule: do not keep a thread alive just because you were mentioned. Reply only when your response moves the topic toward a decision, owner, or completed action. End with @-mentions only when you are assigning a concrete immediate action, asking a specific unresolved question, or escalating to a human decision-maker. Never @ someone for thanks, acknowledgements, status-only updates, future handoffs, or to invite generic opinions. If the topic already has an owner and you have no immediate contribution, finish without visible output."
 const channelNameTakenCode = "channel_name_taken"
 const channelNameUniqueConstraint = "channel_workspace_id_name_key"
 
@@ -3380,6 +3381,8 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
 	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, use a reaction when the runtime brief supports reactions and a reaction is sufficient; otherwise send a short acknowledgement.\n")
 	b.WriteString(channelStickerReplyInstruction)
+	b.WriteString("\n")
+	b.WriteString(channelContinuationInstruction)
 	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
 	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))
@@ -3412,9 +3415,8 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	b.WriteString("\n")
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\n")
-	b.WriteString("This is a collaborative discussion — keep it going until the topic is actually resolved, not just one exchange. ")
-	b.WriteString("If the discussion is not finished (you need input, have a follow-up question, disagree, or want to push the topic forward), END your reply by @-mentioning the specific member(s) you want to continue with, using their exact mention links as listed below. You may @ several members at once. ")
-	b.WriteString("Only stop @-mentioning when you have reached a final conclusion and there is genuinely nothing left to discuss — a one-line acknowledgement is not a conclusion.\n")
+	b.WriteString(channelContinuationInstruction)
+	b.WriteString("\n")
 	fmt.Fprintf(&b, "To prevent runaway loops, this channel run is limited to %d automatic agent turns; current trigger depth is %d. As you near the limit, steer the discussion toward a concrete conclusion.\n\n", channelRunTriggerLimit, trigger.TriggerDepth)
 	if len(members) > 0 {
 		// Give the exact mention link per member (humans included), not just a

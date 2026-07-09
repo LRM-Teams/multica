@@ -10,6 +10,7 @@
     "no_conversation_matches": "没有匹配会话",
     "search_scope_hint": "左侧只过滤会话列表；要搜索消息正文，请打开会话后使用右上角消息搜索。",
     "groups": "频道",
+    "pinned_section": "置顶",
     "name_placeholder": "群聊名称",
     "lark_placeholder": "可选飞书群 chat_id (oc_...)",
     "create_aria": "新建群聊",

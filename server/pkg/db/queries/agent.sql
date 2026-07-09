@@ -504,6 +504,19 @@ UPDATE agent_task_queue
 SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object('areal_proxy', $2::jsonb)
 WHERE id = $1;
 
+-- name: StripArealProxyFromTaskContext :exec
+-- Removes the areal_proxy sub-object from the task's context JSONB. Used by the
+-- retry path (D9): CreateRetryTask copies the parent's context verbatim, so the
+-- child would inherit the parent's (now-closed) RL session; stripping forces the
+-- child to open a fresh session at its own session-open chokepoint. The `-`
+-- operator drops only areal_proxy, preserving every other top-level key (e.g.
+-- squad_id) and the chat session_id/work_dir resume pointers (separate columns).
+-- No-op when the key is absent. Propagates errors (the strip is load-bearing for
+-- D9, not best-effort).
+UPDATE agent_task_queue
+SET context = COALESCE(context, '{}'::jsonb) - 'areal_proxy'
+WHERE id = $1;
+
 -- name: RecoverOrphanedTasksForRuntime :many
 -- Called by the daemon at startup. Atomically fails any dispatched/running/
 -- waiting_local_directory task that the prior incarnation of this runtime

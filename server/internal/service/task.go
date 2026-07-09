@@ -1832,7 +1832,18 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 
 func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context, parentID pgtype.UUID) (db.AgentTaskQueue, error) {
 	if s.TxStarter == nil {
-		return s.Queries.CreateRetryTask(ctx, parentID)
+		child, err := s.Queries.CreateRetryTask(ctx, parentID)
+		if err != nil {
+			return db.AgentTaskQueue{}, fmt.Errorf("create retry task: %w", err)
+		}
+		// D9: CreateRetryTask copies the parent's context verbatim, so the child
+		// would inherit the parent's (now-closed) RL session. Strip areal_proxy so
+		// the child opens a fresh session at its own session-open chokepoint. maybe
+		// OpenTrainingSession re-loads the task from DB, so no in-memory fixup needed.
+		if err := s.Queries.StripArealProxyFromTaskContext(ctx, child.ID); err != nil {
+			return db.AgentTaskQueue{}, fmt.Errorf("strip areal_proxy from retry child: %w", err)
+		}
+		return child, nil
 	}
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
@@ -1844,6 +1855,9 @@ func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context
 	child, err := qtx.CreateRetryTask(ctx, parentID)
 	if err != nil {
 		return db.AgentTaskQueue{}, fmt.Errorf("create retry task: %w", err)
+	}
+	if err := qtx.StripArealProxyFromTaskContext(ctx, child.ID); err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("strip areal_proxy from retry child: %w", err)
 	}
 	if err := transferQueuedPendingWakeTask(ctx, tx, parentID, child.ID); err != nil {
 		return db.AgentTaskQueue{}, err

@@ -3043,3 +3043,20 @@ func (q *Queries) MergeTaskArealProxyContext(ctx context.Context, arg MergeTaskA
 	_, err := q.db.Exec(ctx, mergeTaskArealProxyContext, arg.ID, arg.ArealProxy)
 	return err
 }
+
+const stripArealProxyFromTaskContext = `-- name: StripArealProxyFromTaskContext :exec
+UPDATE agent_task_queue
+SET context = COALESCE(context, '{}'::jsonb) - 'areal_proxy'
+WHERE id = $1
+`
+
+// Removes the areal_proxy sub-object from the task's context JSONB. Used by the
+// retry path (D9): CreateRetryTask copies the parent's context verbatim, so the
+// child would inherit the parent's (now-closed) RL session; stripping forces the
+// child to open a fresh session at its own session-open chokepoint. The `-`
+// operator drops only areal_proxy, preserving every other top-level key and the
+// chat session_id/work_dir resume pointers (separate columns). No-op when absent.
+func (q *Queries) StripArealProxyFromTaskContext(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, stripArealProxyFromTaskContext, id)
+	return err
+}

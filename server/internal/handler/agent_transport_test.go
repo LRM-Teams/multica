@@ -415,6 +415,53 @@ func TestAgentTransportAutoRetryReassignsPendingWake(t *testing.T) {
 	}
 }
 
+// TestAgentTransportAutoRetryStripsArealProxyFromChildContext verifies D9: a
+// retry child does NOT inherit the parent's areal_proxy RL-session config.
+// CreateRetryTask copies the parent's context verbatim, so the retry path strips
+// areal_proxy (keeping other keys + the chat session_id/work_dir resume pointers)
+// so the child opens a fresh areal session at its own session-open chokepoint.
+func TestAgentTransportAutoRetryStripsArealProxyFromChildContext(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	taskID, _ := createChannelCompletionTask(t, "group")
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_task_queue
+		SET status = 'failed', failure_reason = 'runtime_offline', attempt = 1, max_attempts = 3,
+		    context = '{"areal_proxy":{"session_id":"sess-parent","api_key":"key-parent"},"squad_id":"squad-9"}'::jsonb
+		WHERE id = $1`, taskID); err != nil {
+		t.Fatalf("seed failed parent with areal_proxy context: %v", err)
+	}
+	parent, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(taskID))
+	if err != nil {
+		t.Fatalf("load failed parent task: %v", err)
+	}
+	child, err := testHandler.TaskService.MaybeRetryFailedTask(ctx, parent)
+	if err != nil {
+		t.Fatalf("MaybeRetryFailedTask: %v", err)
+	}
+	if child == nil {
+		t.Fatal("MaybeRetryFailedTask returned nil child")
+	}
+	// Re-fetch: MaybeRetryFailedTask returns the pre-strip in-memory row; the
+	// strip is a DB UPDATE inside createRetryTaskWithPendingWakeTransfer's tx.
+	reloaded, err := testHandler.Queries.GetAgentTask(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("load retry child: %v", err)
+	}
+	var ctxMap map[string]json.RawMessage
+	if err := json.Unmarshal(reloaded.Context, &ctxMap); err != nil {
+		t.Fatalf("unmarshal child context: %v", err)
+	}
+	if _, ok := ctxMap["areal_proxy"]; ok {
+		t.Errorf("retry child inherited areal_proxy (D9 violation); context=%s", string(reloaded.Context))
+	}
+	if _, ok := ctxMap["squad_id"]; !ok {
+		t.Errorf("retry child lost squad_id; want it preserved, context=%s", string(reloaded.Context))
+	}
+}
+
 func TestAgentTransportAutoRetryFailsClosedForSettledPendingWake(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

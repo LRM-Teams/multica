@@ -55,7 +55,19 @@ function HoverCardContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
-        className="isolate z-50"
+        // Base UI marks this element `data-anchor-hidden` when its own
+        // hit-testing decides the trigger is clipped/off-screen relative to
+        // its collision boundary — but that computation can run mid-reflow
+        // (e.g. while message content above the trigger is still settling
+        // layout), landing the popup at a stale/fallback position that never
+        // gets corrected once the trigger is actually visible again (#344:
+        // the card renders far from a trigger that's plainly on-screen).
+        // Rather than trust that one frame's position is right, hide the
+        // popup whenever Base UI itself doesn't trust its anchor — it
+        // reappears at the correct spot the instant `anchorHidden` clears on
+        // the next accurate position recompute, so this never shows a
+        // mispositioned card instead of just skipping a transient frame.
+        className="isolate z-50 data-anchor-hidden:invisible"
       >
         <PreviewCardPrimitive.Popup
           data-slot="hover-card-content"

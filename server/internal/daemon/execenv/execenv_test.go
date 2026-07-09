@@ -819,6 +819,8 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 
 	s := string(content)
 	for _, want := range []string{
+		"## Pinned Rules",
+		"Pinned rules are high-frequency or safety-critical",
 		"## Available Commands",
 		"core agent loop and common issue create/update tasks",
 		"`multica <command> --help`",
@@ -833,6 +835,8 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 		"multica issue comment add <issue-id>",
 		"multica issue comment add --help",
 		"multica squad member set-role <squad-id>",
+		"## Lazy References",
+		"CLI details: inspect `multica ... --help`",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("AGENTS.md missing core command/help text %q\n---\n%s", want, s)
@@ -892,6 +896,7 @@ func TestInjectRuntimeConfigGemini(t *testing.T) {
 	s := string(content)
 	for _, want := range []string{
 		"Multica Agent Runtime",
+		"Pinned Rules",
 		"multica issue get",
 		"Writing",
 	} {

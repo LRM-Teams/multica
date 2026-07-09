@@ -66,6 +66,11 @@ export const BaseMentionExtension = Mention.extend({
   },
   renderMarkdown: (node: any) => {
     const { id, label, type = "member" } = node.attrs || {};
+    // Broadcast token is a fixed protocol string — never serialize the picker
+    // description ("All members") into the message body.
+    if (type === "all") {
+      return "[@all](mention://all/all)";
+    }
     const prefix = type === "project" ? "" : "@";
     // Escape square brackets in the label so the markdown link syntax
     // is not broken when the name contains [ or ] (e.g. "David[TF]").

@@ -330,16 +330,16 @@ function createComponents(
             if (rendered) return <>{rendered}</>
           }
 
-          // Fallback: brand semantic pill (matches views mentionTokenClassName
-          // when the host does not supply renderMention).
+          // Fallback: brand-ink prose mention (matches views
+          // mentionTokenClassName when the host does not supply renderMention).
           return (
-            <span className="mention text-brand font-semibold mx-0.5 rounded-[0.3125rem] px-[0.3125rem] py-px bg-brand/10">
+            <span className="mention font-medium text-brand">
               {highlight(children)}
             </span>
           )
         }
         return (
-          <span className="mention text-brand font-semibold mx-0.5 rounded-[0.3125rem] px-[0.3125rem] py-px bg-brand/10">
+          <span className="mention font-medium text-brand">
             {highlight(children)}
           </span>
         )

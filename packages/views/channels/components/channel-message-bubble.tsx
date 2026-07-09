@@ -33,6 +33,7 @@ import {
 import { MessageBody } from "./message-body";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
+import { SELF_MENTION_ROW_CLASS } from "../../common/mention-token";
 
 const LONG_PRESS_MS = 450;
 const TOUCH_MOVE_CANCEL_PX = 8;
@@ -487,14 +488,17 @@ export function ChannelMessageBubble({
     clearLongPressTimer();
   };
 
-  // Slack-like self-mention wash (Iris B): warm row tint when the body
-  // addresses the viewer (@me or @all). Deep-link `highlighted` keeps its
-  // primary ring and wins over the wash; mobile tap feedback also wins.
-  const selfMentioned = messageMentionsViewer(
+  // Self-mention row wash: cool brand tint when *someone else* addresses the
+  // viewer (@me or @all). Own messages never wash — the author already knows
+  // they typed the mention; the wash is a scan aid for incoming address.
+  // Deep-link `highlighted` keeps its primary ring and wins over the wash;
+  // mobile tap feedback also wins.
+  const addressedToViewer = messageMentionsViewer(
     message.content,
     currentUserId,
     message.parts,
   );
+  const selfMentioned = addressedToViewer && !isOwn;
 
   return (
     <div
@@ -504,8 +508,7 @@ export function ChannelMessageBubble({
       data-self-mentioned={selfMentioned ? "true" : undefined}
       className={cn(
         "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 py-1.5 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35",
-        selfMentioned &&
-          "bg-warning/10 hover:bg-warning/[0.14] focus-within:bg-warning/[0.14]",
+        selfMentioned && SELF_MENTION_ROW_CLASS,
         highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0 hover:bg-primary/10 focus-within:bg-primary/10",
         mobileThreadTapActive && "bg-primary/[0.04] ring-1 ring-primary/45 duration-75",
       )}

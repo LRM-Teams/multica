@@ -56,15 +56,12 @@ function ProjectMentionCard({ projectId }: { projectId: string }): React.ReactNo
 }
 
 /**
- * Member / agent / @all / squad mention — a low-sat brand semantic pill
- * (Iris / Slack-like), matching the editor composer chips. Not a per-actor
- * identity color: avatars keep `agentColor`, tokens stay one hue family.
- * The name is resolved from the workspace cache (same resolver as ActorAvatar)
- * so renames reflect immediately.
+ * Member / agent / @all / squad mention — brand-ink prose token (not a chip
+ * and not a per-actor identity color). Avatars keep `agentColor`; tokens share
+ * one hue family via `mentionTokenClassName`.
  *
- * Member/agent chips use the full profile popover (same surface as message
- * author avatars/names). @all is a broadcast keyword (Slack-style): styled
- * pill only, no hover card — it is not a person/profile entity.
+ * Member/agent use the full profile popover (same surface as message author
+ * avatars/names). @all is a broadcast keyword: token only, no profile card.
  */
 function ActorMention({
   type,
@@ -107,7 +104,7 @@ function ActorMention({
     );
   }
 
-  // @all / squad (and any other non-person mention type) — pill only, no card.
+  // @all / squad (and any other non-person mention type) — token only, no card.
   return chip;
 }
 

@@ -84,4 +84,18 @@ describe("mention tokenizer", () => {
     const token = tokenize("- [ ] [MUL-123](mention://issue/aaa-bbb)");
     expect(token).toBeUndefined();
   });
+
+  it("serializes @all as the fixed protocol token regardless of node label", () => {
+    // Picker descriptions must not leak into the wire format / message body.
+    expect(
+      renderMarkdown({
+        attrs: { id: "all", label: "All members", type: "all" },
+      }),
+    ).toBe("[@all](mention://all/all)");
+    expect(
+      renderMarkdown({
+        attrs: { id: "all", label: "所有成员", type: "all" },
+      }),
+    ).toBe("[@all](mention://all/all)");
+  });
 });

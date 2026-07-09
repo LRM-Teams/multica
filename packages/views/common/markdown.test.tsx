@@ -247,12 +247,13 @@ describe("Markdown", () => {
     expect(agent).toHaveAttribute("data-mention-kind", "default");
     expect(all).toHaveAttribute("data-mention-kind", "all");
 
-    // Shared brand semantic classes — no per-id inline style rainbow.
+    // Brand-ink prose — no per-id inline style rainbow, no chip fill/padding.
     for (const el of [member, agent, all]) {
       expect(el).toHaveClass("text-brand");
       expect(el).not.toHaveAttribute("style");
     }
-    expect(all).toHaveClass("bg-brand/[0.16]");
+    expect(member).toHaveClass("font-medium");
+    expect(all).toHaveClass("font-semibold");
   });
 
   it("marks a mention of the current viewer as self kind", () => {
@@ -262,7 +263,7 @@ describe("Markdown", () => {
 
     const self = container.querySelector('[data-mention-type="member"]');
     expect(self).toHaveAttribute("data-mention-kind", "self");
-    expect(self).toHaveClass("bg-brand/[0.14]");
+    expect(self).toHaveClass("font-semibold");
   });
 
   it("does not highlight inline code text", () => {

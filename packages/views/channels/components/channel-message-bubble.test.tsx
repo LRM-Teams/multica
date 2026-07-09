@@ -276,7 +276,7 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByText("Bob Display")).toBeInTheDocument();
   });
 
-  it("applies a warm self-mention wash when the body @-mentions the viewer", () => {
+  it("applies a cool self-mention wash when someone else @-mentions the viewer", () => {
     const msg = makeMessage({
       type: "user",
       author_id: "user-2",
@@ -287,10 +287,10 @@ describe("ChannelMessageBubble", () => {
 
     const bubble = screen.getByTestId("message-bubble");
     expect(bubble).toHaveAttribute("data-self-mentioned", "true");
-    expect(bubble.className).toContain("bg-warning/10");
+    expect(bubble.className).toContain("bg-brand/[0.04]");
   });
 
-  it("applies the self-mention wash for @all broadcasts", () => {
+  it("applies the self-mention wash for @all from another author", () => {
     const msg = makeMessage({
       type: "user",
       author_id: "user-2",
@@ -305,6 +305,35 @@ describe("ChannelMessageBubble", () => {
     );
   });
 
+  it("does not wash the viewer's own messages even when they @ themselves or @all", () => {
+    const selfPing = makeMessage({
+      type: "user",
+      author_id: "user-1",
+      author_name: "alice",
+      content: "note to self [@Alice](mention://member/user-1)",
+    });
+    const { rerender } = render(
+      <ChannelMessageBubble message={selfPing} currentUserId="user-1" />,
+    );
+    expect(screen.getByTestId("message-bubble")).not.toHaveAttribute(
+      "data-self-mentioned",
+    );
+    expect(screen.getByTestId("message-bubble").className).not.toContain(
+      "bg-brand/[0.04]",
+    );
+
+    const ownAll = makeMessage({
+      type: "user",
+      author_id: "user-1",
+      author_name: "alice",
+      content: "[@all](mention://all/all) heads up",
+    });
+    rerender(<ChannelMessageBubble message={ownAll} currentUserId="user-1" />);
+    expect(screen.getByTestId("message-bubble")).not.toHaveAttribute(
+      "data-self-mentioned",
+    );
+  });
+
   it("does not self-mention-wash messages that only mention others", () => {
     const msg = makeMessage({
       type: "user",
@@ -316,7 +345,7 @@ describe("ChannelMessageBubble", () => {
 
     const bubble = screen.getByTestId("message-bubble");
     expect(bubble).not.toHaveAttribute("data-self-mentioned");
-    expect(bubble.className).not.toContain("bg-warning/10");
+    expect(bubble.className).not.toContain("bg-brand/[0.04]");
   });
 
   it("lets deep-link highlight take visual priority over the self-mention wash", () => {

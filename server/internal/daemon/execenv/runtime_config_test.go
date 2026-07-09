@@ -335,6 +335,7 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 		"$CODEX_HOME/skills/issue-triage/SKILL.md",
 		"## Mention Safety",
 		"After the command succeeds",
+		compactCloseoutStatusInstruction,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("chat brief missing %q\n---\n%s", want, out)
@@ -471,10 +472,36 @@ func TestIssueRuntimeBriefKeepsIssueWorkflowContract(t *testing.T) {
 		"## Mentions",
 		"Final results MUST be delivered via `multica issue comment add`",
 		"You are responsible for managing the issue status throughout your work",
+		compactCloseoutStatusInstruction,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("issue brief missing %q", want)
 		}
+	}
+}
+
+func TestCloseoutStatusInstructionStaysCompact(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		ctx  TaskContextForEnv
+	}{
+		{name: "issue", ctx: TaskContextForEnv{IssueID: "11111111-2222-3333-4444-555555555555"}},
+		{name: "chat", ctx: TaskContextForEnv{ChatSessionID: "chat-1"}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := buildMetaSkillContent("codex", tc.ctx)
+			count := strings.Count(out, compactCloseoutStatusInstruction)
+			if count != 1 {
+				t.Fatalf("closeout status instruction count = %d, want 1\n---\n%s", count, out)
+			}
+			if strings.Contains(out, "## Closeout") || strings.Contains(out, "## Handoff") {
+				t.Fatalf("closeout guidance must stay as one compact line, not a new prompt section\n---\n%s", out)
+			}
+		})
 	}
 }
 

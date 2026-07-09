@@ -237,7 +237,21 @@
     "composer_placeholder": "{{name}}에게 메시지…"
   },
   "quote": {
-    "jump_to": "원본 메시지로 이동"
+    "action": "인용",
+    "jump_to": "원본 메시지로 이동",
+    "cancel": "인용 취소",
+    "unavailable_title": "원본 메시지를 사용할 수 없습니다",
+    "unavailable_summary": "삭제되었거나 볼 권한이 없을 수 있습니다.",
+    "type_user": "메시지",
+    "type_agent": "Agent",
+    "type_lark": "Feishu",
+    "type_system": "시스템",
+    "type_unknown": "메시지",
+    "attachment_summary": "첨부 파일",
+    "attachments_summary": "첨부 파일 {{count}}개",
+    "image_summary": "이미지",
+    "images_summary": "이미지 {{count}}개",
+    "empty_summary": "미리보기 없음"
   },
   "message_loading": {
     "load_older": "이전 메시지 불러오기",

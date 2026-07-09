@@ -238,6 +238,8 @@ export type {
   ChannelMemberBrief,
   ChannelLastMessage,
   ChannelMessage,
+  ChannelMessageQuote,
+  ChannelMessageQuoteSnapshot,
   ChannelMessagesCursor,
   ChannelMessagesPage,
   MarkChannelReadResult,

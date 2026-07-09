@@ -193,6 +193,8 @@
   },
   "tabs": {
     "activity": "アクティビティ",
+    "profile": "プロフィール",
+    "files": "ファイル",
     "tasks": "タスク",
     "instructions": "指示",
     "skills": "スキル",
@@ -447,6 +449,15 @@
     "skills_label": "スキル",
     "owner_label": "オーナー",
     "unknown_runtime": "不明なランタイム"
+  },
+  "side_panel": {
+    "close_aria": "エージェントパネルを閉じる",
+    "no_description": "説明はまだありません",
+    "model_label": "モデル",
+    "reasoning_label": "推論",
+    "created_label": "作成日",
+    "owner_label": "オーナー",
+    "reasoning_default": "デフォルト"
   },
   "live_peek": {
     "current_issue_label": "現在の作業",

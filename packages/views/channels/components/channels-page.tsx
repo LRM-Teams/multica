@@ -188,7 +188,7 @@ import {
 } from "./conversation-muted";
 import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
-import { AgentFilesPanel } from "./agent-files-panel";
+import { AgentSidePanel } from "./agent-side-panel";
 
 export interface TypingActor {
   key: string;
@@ -2150,7 +2150,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     ) : null;
   const agentPanel =
     active && selectedAgentPanel ? (
-      <AgentFilesPanel
+      <AgentSidePanel
         agent={selectedAgentPanel}
         currentUserId={currentUserId}
         members={workspaceMembers}

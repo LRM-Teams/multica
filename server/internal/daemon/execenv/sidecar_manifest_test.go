@@ -156,6 +156,7 @@ var allFileBasedProviders = []string{
 	"kiro",
 	"antigravity",
 	"gemini",
+	"grok",
 }
 
 // TestPrepareThenCleanupSidecarsRoundTripEmptyWorkdir is the headline
@@ -233,6 +234,7 @@ func TestPrepareThenCleanupSidecarsPreservesUserSkillSibling(t *testing.T) {
 		{"kimi", filepath.Join(".kimi", "skills", "my-own"), "SKILL.md"},
 		{"kiro", filepath.Join(".kiro", "skills", "my-own"), "SKILL.md"},
 		{"antigravity", filepath.Join(".agents", "skills", "my-own"), "SKILL.md"},
+		{"grok", filepath.Join(".grok", "skills", "my-own"), "SKILL.md"},
 		{"hermes", filepath.Join(".agent_context", "skills", "my-own"), "SKILL.md"},
 		{"gemini", filepath.Join(".agent_context", "skills", "my-own"), "SKILL.md"},
 	}
@@ -297,6 +299,7 @@ func TestPrepareThenCleanupSidecarsPreservesUnrelatedUserFiles(t *testing.T) {
 		{"kimi", filepath.Join(".kimi", "config.json")},
 		{"kiro", filepath.Join(".kiro", "config.json")},
 		{"antigravity", filepath.Join(".agents", "config.json")},
+		{"grok", filepath.Join(".grok", "config.toml")},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -624,6 +627,7 @@ var sameSlugSkillProviderCases = []struct {
 	{"kimi", filepath.Join(".kimi", "skills", "issue-review")},
 	{"kiro", filepath.Join(".kiro", "skills", "issue-review")},
 	{"antigravity", filepath.Join(".agents", "skills", "issue-review")},
+	{"grok", filepath.Join(".grok", "skills", "issue-review")},
 	{"hermes", filepath.Join(".agent_context", "skills", "issue-review")},
 	{"gemini", filepath.Join(".agent_context", "skills", "issue-review")},
 }

@@ -191,6 +191,7 @@ import {
 import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
 import { AgentSidePanel } from "./agent-side-panel";
+import { AgentPanelProvider } from "../../common/agent-panel-context";
 
 export interface TypingActor {
   key: string;
@@ -2617,6 +2618,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   }
 
   return (
+    <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
     <div className="flex h-full min-h-0 flex-col">
       {isMobile ? (
         // Mobile: single full-width column — the list, or (when a conversation
@@ -2794,5 +2796,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    </AgentPanelProvider>
   );
 }

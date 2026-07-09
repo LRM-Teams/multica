@@ -68,16 +68,13 @@ vi.mock("../i18n/use-t", () => {
   };
 });
 
-vi.mock("../i18n/use-time-ago", () => ({
-  useTimeAgo: () => () => "just now",
-}));
-
 function makeActivity(index: number): MemberProfileActivityItem {
   return {
     id: `activity-${index}`,
     kind: "task",
     label: `Activity ${index}`,
-    occurred_at: `2026-06-30T00:0${index}:00Z`,
+    // Fixed UTC times so clock formatting is stable across locales.
+    occurred_at: `2026-06-30T12:0${index}:0${index}Z`,
     status: "completed",
   };
 }
@@ -117,33 +114,48 @@ beforeEach(() => {
 });
 
 describe("ActorProfileContentLoaded", () => {
-  it("renders all five recent activity rows returned by the profile API", () => {
+  it("renders all five recent activity rows as time · dot · label", () => {
     render(<ActorProfileContentLoaded profile={makeProfile(5)} />);
 
     for (let index = 1; index <= 5; index += 1) {
       expect(screen.getByText(`Activity ${index}`)).toBeInTheDocument();
     }
-    expect(screen.getAllByText("just now")).toHaveLength(5);
+    // Clock column uses HH:mm:ss — one entry per activity row.
+    expect(document.querySelectorAll(".tabular-nums")).toHaveLength(5);
+    // Relative "just now" is gone; no icon pills either.
+    expect(screen.queryByText(/just now/i)).toBeNull();
   });
 
-  it("status pill shows the availability word (Offline), not a workload word, when offline", () => {
-    // Dot is gray (offline); the pill must agree — never "Idle"/"Working"/the
+  it("name-row status shows the availability word (Offline), not a workload word, when offline", () => {
+    // Dot is gray (offline); the status word must agree — never "Idle"/"Working"/the
     // raw `status: 'working'`. This is Frank's #288 card contradiction.
     mockPresence.current = presence({ availability: "offline", workload: "idle" });
 
     render(<ActorProfileContentLoaded profile={makeProfile(0)} />);
 
-    expect(screen.getByText("Agent · Offline")).toBeInTheDocument();
+    expect(screen.getByText("Offline")).toBeInTheDocument();
     expect(screen.queryByText(/Idle/)).toBeNull();
     expect(screen.queryByText(/Working/)).toBeNull();
   });
 
-  it("status pill shows the workload word while online", () => {
+  it("name-row status shows the workload word while online", () => {
     mockPresence.current = presence({ availability: "online", workload: "working" });
 
     render(<ActorProfileContentLoaded profile={makeProfile(0)} />);
 
-    expect(screen.getByText("Agent · Working")).toBeInTheDocument();
+    expect(screen.getByText("Working")).toBeInTheDocument();
+  });
+
+  it("places status on the same row as the display name (fills header width)", () => {
+    mockPresence.current = presence({ availability: "online", workload: "working" });
+
+    render(<ActorProfileContentLoaded profile={makeProfile(0)} />);
+
+    const name = screen.getByText("Aegis");
+    const status = screen.getByText("Working");
+    // Name and status share a flex row so short names don't leave a dead
+    // empty half on the right of the header.
+    expect(name.parentElement).toBe(status.parentElement);
   });
 
   it("omits the description section when the profile has no description", () => {

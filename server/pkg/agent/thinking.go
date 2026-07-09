@@ -533,7 +533,10 @@ func ValidateThinkingLevel(ctx context.Context, providerType, executablePath, mo
 			}
 		}
 		if target == "" {
-			if providerType == "opencode" || providerType == "pi" {
+			// OpenCode / Pi / Grok all attach a thinking catalog to every
+			// advertised model, so an empty agent.model (runtime default)
+			// should still accept known effort tokens rather than fail closed.
+			if providerType == "opencode" || providerType == "pi" || providerType == "grok" {
 				return anyModelSupportsThinkingValue(models, value), nil
 			}
 			return false, nil
@@ -617,6 +620,16 @@ var providerThinkingEnums = map[string]map[string]bool{
 		"medium":  true,
 		"high":    true,
 		"xhigh":   true,
+	},
+	// Grok headless --reasoning-effort / --effort levels (docs + grok 0.2.93).
+	"grok": {
+		"none":    true,
+		"minimal": true,
+		"low":     true,
+		"medium":  true,
+		"high":    true,
+		"xhigh":   true,
+		"max":     true,
 	},
 }
 

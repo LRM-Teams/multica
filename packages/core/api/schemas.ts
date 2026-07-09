@@ -303,6 +303,21 @@ const ChannelMessageReplySchema = z.object({
   created_at: z.string().default(""),
 }).loose();
 
+const ChannelMessageQuoteSnapshotSchema = z.object({
+  type: z.string().default(""),
+  authorId: z.string().nullable().optional(),
+  authorName: z.string().default(""),
+  content: z.string().default(""),
+  parts: z.array(z.unknown()).optional(),
+  createdAt: z.string().default(""),
+}).loose();
+
+const ChannelMessageQuoteSchema = z.object({
+  messageId: z.string().default(""),
+  snapshot: ChannelMessageQuoteSnapshotSchema.nullable().optional(),
+  status: z.string().default("inaccessible"),
+}).loose();
+
 const ChannelThreadParticipantSchema = z.object({
   key: z.string().default(""),
   member_type: z.string().default(""),
@@ -335,6 +350,8 @@ const ChannelMessageSchema = z.object({
   client_message_id: z.string().nullable().optional(),
   reply_to_message_id: z.string().nullable().optional(),
   reply_to: ChannelMessageReplySchema.nullable().optional(),
+  quote_message_id: z.string().nullable().optional(),
+  quote: ChannelMessageQuoteSchema.nullable().optional(),
   thread_root_message_id: z.string().nullable().optional(),
   thread_root: ChannelMessageReplySchema.nullable().optional(),
   thread_reply_count: z.number().default(0).optional(),

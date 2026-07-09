@@ -2226,11 +2226,13 @@ export class ApiClient {
     replyToMessageId?: string | null,
     parts?: MessagePart[],
     clientMessageId?: string | null,
+    quoteMessageId?: string | null,
   ): Promise<ChannelMessage> {
     const body: {
       content: string;
       attachment_ids?: string[];
       reply_to_message_id?: string;
+      quote_message_id?: string;
       parts?: MessagePart[];
       client_message_id?: string;
     } = { content };
@@ -2239,6 +2241,9 @@ export class ApiClient {
     }
     if (replyToMessageId) {
       body.reply_to_message_id = replyToMessageId;
+    }
+    if (quoteMessageId) {
+      body.quote_message_id = quoteMessageId;
     }
     if (parts && parts.length > 0) {
       body.parts = parts;
@@ -2296,11 +2301,13 @@ export class ApiClient {
     parts?: MessagePart[],
     clientMessageId?: string | null,
     showInChannel?: boolean,
+    quoteMessageId?: string | null,
   ): Promise<ChannelMessage> {
     const body: {
       content: string;
       attachment_ids?: string[];
       reply_to_message_id?: string;
+      quote_message_id?: string;
       parts?: MessagePart[];
       client_message_id?: string;
       show_in_channel?: boolean;
@@ -2310,6 +2317,9 @@ export class ApiClient {
     }
     if (replyToMessageId) {
       body.reply_to_message_id = replyToMessageId;
+    }
+    if (quoteMessageId) {
+      body.quote_message_id = quoteMessageId;
     }
     if (parts && parts.length > 0) {
       body.parts = parts;

@@ -158,7 +158,7 @@ func buildQuickCreatePrompt(task Task) string {
 		}
 	}
 	b.WriteString("- **status**: omit (defaults to `todo`).\n")
-	b.WriteString("- **attachments**: do NOT pass `--attachment`. The flag only accepts LOCAL file paths. Any image URL in the user input is already markdown — keep it inline in `--description` instead.\n\n")
+	b.WriteString("- **attachments**: pass existing attachment UUIDs with `--attachment-id` (from prior `multica attachment upload` or from this message's attachment list). Do NOT try to re-upload image URLs — keep markdown images inline in `--description`.\n\n")
 
 	// output format
 	b.WriteString("Output format:\n")
@@ -336,8 +336,8 @@ func buildChatPrompt(task Task, agentRoot string) string {
 	// the CLI. We deliberately do NOT inline the URL: chat attachments
 	// live behind a signed CDN with a short TTL, so by the time the agent
 	// has finished thinking the URL embedded in the markdown body may
-	// have expired. `multica attachment download <id>` re-signs at click
-	// time and is the only reliable path.
+	// have expired. `multica attachment view --id <id> --output <path>`
+	// re-signs at download time and is the only reliable path.
 	if len(task.ChatMessageAttachments) > 0 {
 		b.WriteString("\nAttachments on this message:\n")
 		for _, a := range task.ChatMessageAttachments {
@@ -347,7 +347,7 @@ func buildChatPrompt(task Task, agentRoot string) string {
 				fmt.Fprintf(&b, "- id=%s filename=%q\n", a.ID, a.Filename)
 			}
 		}
-		b.WriteString("Use `multica attachment download <id>` to fetch each file locally before referring to it.\n")
+		b.WriteString("Use `multica attachment view --id <id> --output <path>` to fetch each file locally before referring to it.\n")
 		b.WriteString("When creating an issue that should preserve one of these attachments, pass `--attachment-id <id>` to `multica issue create` in addition to keeping the attachment markdown inline.\n")
 	}
 	return b.String()

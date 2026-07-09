@@ -119,7 +119,7 @@ vi.mock("../../i18n", () => ({
     t: (
       selector: (resources: {
         message: { add_reaction: string; agent_badge: string; feishu_badge: string };
-        quote: { jump_to: string };
+        quote: { jump_to: string; action: string };
         thread: { reply: string; reply_count: string };
       }) => string,
     ) =>
@@ -130,6 +130,7 @@ vi.mock("../../i18n", () => ({
           feishu_badge: "Feishu",
         },
         quote: {
+          action: "Quote",
           jump_to: "Jump to original message",
         },
         thread: {
@@ -170,7 +171,23 @@ vi.mock("../../i18n/use-t", () => ({
           save_edit: "Save",
           cancel_edit: "Cancel",
         },
-        quote: { jump_to: "Jump to original message" },
+        quote: {
+          action: "Quote",
+          jump_to: "Jump to original message",
+          cancel: "Cancel quote",
+          unavailable_title: "Original message unavailable",
+          unavailable_summary: "It may have been deleted or you may not have access.",
+          type_user: "Message",
+          type_agent: "Agent",
+          type_lark: "Feishu",
+          type_system: "System",
+          type_unknown: "Message",
+          attachment_summary: "Attachment",
+          attachments_summary: "{{count}} attachments",
+          image_summary: "Image",
+          images_summary: "{{count}} images",
+          empty_summary: "No preview available",
+        },
         thread: { reply: "Reply in thread", reply_count: "2 replies" },
         time: { today: "Today", yesterday: "Yesterday", new_messages: "{{count}} new" },
       });

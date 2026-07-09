@@ -168,6 +168,8 @@ import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
 import { mapThreadWakeAnnotations } from "./thread-read-model";
+import { ComposerQuotePreview } from "./message-quote";
+import type { QuoteTarget } from "./message-quote-types";
 import {
   Composer,
   ConversationHeader,
@@ -188,7 +190,8 @@ import {
 } from "./conversation-muted";
 import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
-import { AgentFilesPanel } from "./agent-files-panel";
+import { AgentSidePanel } from "./agent-side-panel";
+import { AgentPanelProvider } from "../../common/agent-panel-context";
 
 export interface TypingActor {
   key: string;
@@ -556,6 +559,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // reply, and vice versa.
   const channelSend = useComposerSend();
   const threadSend = useComposerSend();
+  const [quoteState, setQuoteState] = useState<{
+    channelId: string | null;
+    target: QuoteTarget | null;
+    threadRootId: string | null;
+    threadTarget: QuoteTarget | null;
+  }>({ channelId: null, target: null, threadRootId: null, threadTarget: null });
   const threadEditorRef = useRef<ContentEditorRef>(null);
   const focusThreadComposerOnOpenRef = useRef(false);
   const [sidePanelState, setSidePanelState] = useState<{
@@ -671,6 +680,24 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const activeDraftKey = active ? (`channel:${active.id}` as const) : null;
   const activeDraft = activeDraftKey ? (composerDrafts[activeDraftKey]?.content ?? "") : "";
   const activeDraftEmpty = !activeDraft.trim();
+  const quoteChannelId = active?.id ?? null;
+  const quoteThreadRootId = openThreadRoot?.id ?? null;
+  if (quoteState.channelId !== quoteChannelId || quoteState.threadRootId !== quoteThreadRootId) {
+    setQuoteState({
+      channelId: quoteChannelId,
+      target: null,
+      threadRootId: quoteThreadRootId,
+      threadTarget: null,
+    });
+  }
+  const quoteTarget = quoteState.channelId === quoteChannelId ? quoteState.target : null;
+  const threadQuoteTarget = quoteState.threadRootId === quoteThreadRootId ? quoteState.threadTarget : null;
+  const setQuoteTarget = useCallback((target: QuoteTarget | null) => {
+    setQuoteState((current) => ({ ...current, target }));
+  }, []);
+  const setThreadQuoteTarget = useCallback((target: QuoteTarget | null) => {
+    setQuoteState((current) => ({ ...current, threadTarget: target }));
+  }, []);
   const setConversationDraft = useCallback((key: ComposerDraftKey, value: string) => {
     if (!value.trim()) {
       storeClearComposerDraft(key);
@@ -1389,17 +1416,19 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     // Send lock (N held/auto-repeat Enter → 1 request) + payload-bound
     // client_message_id + the 3-way outcome, all owned by useComposerSend.
     const dispatched = channelSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds),
+      payloadKey: composePayloadKey(content, attachmentIds, quoteTarget?.id ?? ""),
       buildVars: (clientMessageId) => ({
         channelId: active.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        quoteMessageId: quoteTarget?.id ?? undefined,
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
       onCommitted: () => {
         editorRef.current?.clearContent();
         uploadMapRef.current.clear();
+        setQuoteTarget(null);
         if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
       },
       // 200-dedup is silent (onCommitted); a 409 or any other failure always
@@ -1422,18 +1451,24 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       if (content.includes(url)) attachmentIds.push(id);
     }
     threadSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds, threadRoot.id),
+      payloadKey: composePayloadKey(
+        content,
+        attachmentIds,
+        `${threadRoot.id}:${threadQuoteTarget?.id ?? ""}`,
+      ),
       buildVars: (clientMessageId) => ({
         channelId: active.id,
         messageId: threadRoot.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        quoteMessageId: threadQuoteTarget?.id ?? undefined,
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
       onCommitted: () => {
         threadEditorRef.current?.clearContent();
         threadUploadMapRef.current.clear();
+        setThreadQuoteTarget(null);
         setThreadDraftEmpty(true);
       },
       onVisibleError: () => toast.error(t(($) => $.thread.send_failed)),
@@ -2093,6 +2128,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         loadError={threadError}
         onRetry={() => refetchThread()}
         onReact={handleReactToMessage}
+        onQuoteMessage={setThreadQuoteTarget}
+        quoteTarget={threadQuoteTarget}
+        onClearQuote={() => setThreadQuoteTarget(null)}
         editor={
           <ContentEditor
             key={`thread-editor:${threadRoot.id}`}
@@ -2150,7 +2188,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     ) : null;
   const agentPanel =
     active && selectedAgentPanel ? (
-      <AgentFilesPanel
+      <AgentSidePanel
         agent={selectedAgentPanel}
         currentUserId={currentUserId}
         members={workspaceMembers}
@@ -2398,6 +2436,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 onOpenThread={isActiveArchived ? undefined : handleOpenThread}
                 onScrollToMessage={setHighlightMessageId}
                 onReact={handleReactToMessage}
+                onQuoteMessage={isActiveArchived ? undefined : setQuoteTarget}
                 onEditMessage={isActiveArchived ? undefined : handleEditMessage}
                 onDeleteMessage={isActiveArchived ? undefined : handleDeleteMessage}
                 onOpenAgent={handleOpenAgentPanel}
@@ -2450,6 +2489,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     sending={sendMessage.isPending}
                     onSend={handleSend}
                     isMobile={isMobile}
+                    prefix={quoteTarget ? (
+                      <ComposerQuotePreview
+                        quote={quoteTarget}
+                        onCancel={() => setQuoteTarget(null)}
+                        cancelLabel={t(($) => $.quote.cancel)}
+                      />
+                    ) : undefined}
                     editor={
                       <ContentEditor
                         key={active.id}
@@ -2572,6 +2618,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   }
 
   return (
+    <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
     <div className="flex h-full min-h-0 flex-col">
       {isMobile ? (
         // Mobile: single full-width column — the list, or (when a conversation
@@ -2749,5 +2796,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    </AgentPanelProvider>
   );
 }

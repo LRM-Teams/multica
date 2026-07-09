@@ -159,6 +159,8 @@ Agent-specific overrides:
 | `MULTICA_PI_MODEL` | Override the Pi model used |
 | `MULTICA_CURSOR_PATH` | Custom path to the `cursor-agent` binary |
 | `MULTICA_CURSOR_MODEL` | Override the Cursor Agent model used |
+| `MULTICA_GROK_PATH` | Custom path to the `grok` binary |
+| `MULTICA_GROK_MODEL` | Override the Grok model used |
 
 ## Database Setup
 

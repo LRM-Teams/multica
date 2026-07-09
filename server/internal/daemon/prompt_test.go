@@ -298,7 +298,7 @@ func TestBuildChatPromptAttachmentIDsCanBeBoundToCreatedIssues(t *testing.T) {
 	for _, want := range []string{
 		"Attachments on this message:",
 		"id=019ec09d-6222-722b-bdfa-427b105d80be",
-		"multica attachment download <id>",
+		"multica attachment view --id <id> --output <path>",
 		"--attachment-id <id>",
 	} {
 		if !strings.Contains(out, want) {

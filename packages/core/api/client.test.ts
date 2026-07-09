@@ -91,7 +91,7 @@ describe("ApiClient", () => {
 
     await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-1");
     await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-2", false);
-    await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-3", true);
+    await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-3", true, "quote-1");
 
     const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
     expect(bodies[0]).not.toHaveProperty("show_in_channel");
@@ -100,7 +100,37 @@ describe("ApiClient", () => {
       content: "hello",
       client_message_id: "client-3",
       show_in_channel: true,
+      quote_message_id: "quote-1",
     });
+  });
+
+  it("sends quote_message_id for channel and thread quoted messages", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ id: "m-1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+
+    await client.sendChannelMessage("ch-1", "hello", undefined, undefined, undefined, "client-1", "quote-1");
+    await client.sendChannelThreadMessage("ch-1", "root-1", "reply", undefined, undefined, undefined, "client-2", undefined, "quote-2");
+
+    const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+    expect(bodies[0]).toMatchObject({
+      content: "hello",
+      client_message_id: "client-1",
+      quote_message_id: "quote-1",
+    });
+    expect(bodies[1]).toMatchObject({
+      content: "reply",
+      client_message_id: "client-2",
+      quote_message_id: "quote-2",
+    });
+    expect(bodies[0]).not.toHaveProperty("reply_to_message_id");
+    expect(bodies[1]).not.toHaveProperty("reply_to_message_id");
   });
 
   it("uses the expected HTTP contract for autopilot endpoints", async () => {

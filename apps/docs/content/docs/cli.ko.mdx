@@ -140,7 +140,8 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 | `multica config` | 로컬 CLI 구성 보기 또는 편집 |
 | `multica version` | CLI 버전 출력 |
 | `multica update` | CLI를 최신 릴리스로 업그레이드 |
-| `multica attachment download <id>` | 이슈나 댓글에서 첨부 파일 다운로드 |
+| `multica attachment view --id <id> --output <path>` | 첨부 파일을 로컬 경로로 다운로드 |
+| `multica attachment upload --path <file> [--target '#channel']` | 파일 업로드 후 반환 id를 `--attachment-id`에 사용 |
 
 ## 전체 플래그 확인하기
 

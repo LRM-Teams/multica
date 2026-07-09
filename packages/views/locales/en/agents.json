@@ -206,6 +206,8 @@
   },
   "tabs": {
     "activity": "Activity",
+    "profile": "Profile",
+    "files": "Files",
     "tasks": "Tasks",
     "instructions": "Instructions",
     "skills": "Skills",
@@ -465,6 +467,15 @@
     "skills_label": "Skills",
     "owner_label": "Owner",
     "unknown_runtime": "Unknown runtime"
+  },
+  "side_panel": {
+    "close_aria": "Close agent panel",
+    "no_description": "No description yet",
+    "model_label": "Model",
+    "reasoning_label": "Reasoning",
+    "created_label": "Created",
+    "owner_label": "Owner",
+    "reasoning_default": "Default"
   },
   "live_peek": {
     "current_issue_label": "Now on",

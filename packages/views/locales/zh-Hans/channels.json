@@ -219,7 +219,7 @@
     "agent_meta": "智能体",
     "human_meta": "成员",
     "new_title": "新建私信",
-    "search_placeholder": "搜索人或 agent…",
+    "search_placeholder": "搜索人或智能体…",
     "no_results": "无匹配结果",
     "send_message": "发消息",
     "files": "文件",
@@ -237,7 +237,21 @@
     "composer_placeholder": "发消息给 {{name}}…"
   },
   "quote": {
-    "jump_to": "跳转到原消息"
+    "action": "引用",
+    "jump_to": "跳转到原消息",
+    "cancel": "取消引用",
+    "unavailable_title": "原消息不可用",
+    "unavailable_summary": "消息可能已删除，或你无权查看。",
+    "type_user": "消息",
+    "type_agent": "Agent",
+    "type_lark": "飞书",
+    "type_system": "系统",
+    "type_unknown": "消息",
+    "attachment_summary": "附件",
+    "attachments_summary": "{{count}} 个附件",
+    "image_summary": "图片",
+    "images_summary": "{{count}} 张图片",
+    "empty_summary": "暂无预览"
   },
   "message_loading": {
     "load_older": "加载更早消息",

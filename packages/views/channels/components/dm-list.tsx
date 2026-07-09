@@ -315,6 +315,7 @@ export function DmList({
 
 function DmPickerContent({ onClose }: { onClose: () => void }) {
   const { t } = useT("channels");
+  const isMobile = useIsMobile();
   const wsId = useWorkspaceId();
   const currentUser = useAuthStore((s) => s.user);
   const { openDM, isPending } = useOpenDM();
@@ -362,8 +363,10 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
   const isLoading = agentsLoading || membersLoading;
 
   const handleSelect = async (item: { kind: "agent" | "user"; id: string }) => {
-    await openDM({ peer_type: item.kind, peer_id: item.id });
-    onClose();
+    // openDM swallows errors and returns null after toasting — keep the
+    // picker open so the user can retry without re-opening the overlay.
+    const dm = await openDM({ peer_type: item.kind, peer_id: item.id });
+    if (dm) onClose();
   };
 
   return (
@@ -375,7 +378,9 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
           onChange={(e) => setSearch(e.target.value)}
           placeholder={t(($) => $.dm.search_placeholder)}
           className="h-8 pl-8 text-sm"
-          autoFocus
+          // Desktop popover can autofocus; mobile drawer + virtual keyboard
+          // fight focus traps when the input steals focus on open.
+          autoFocus={!isMobile}
         />
       </div>
       <div className="mt-1 max-h-60 overflow-y-auto">
@@ -409,6 +414,11 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
                 showHandle={item.presentation.showHandleLabel}
                 primaryClassName="truncate text-sm font-medium text-foreground"
               />
+              <span className="shrink-0 text-[11px] text-muted-foreground">
+                {item.kind === "agent"
+                  ? t(($) => $.dm.agent_meta)
+                  : t(($) => $.dm.human_meta)}
+              </span>
             </button>
           ))
         )}

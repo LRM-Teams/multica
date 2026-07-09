@@ -158,9 +158,10 @@ type ChannelMessagesPageResponse struct {
 	NextCursor *ChannelMessagesCursorResponse `json:"next_cursor,omitempty"`
 
 	// around_seq mode only:
-	AnchorIndex  int                            `json:"anchor_index"`
-	HasMoreAfter bool                           `json:"has_more_after,omitempty"`
-	AfterCursor  *ChannelMessagesCursorResponse `json:"after_cursor,omitempty"`
+	AnchorIndex      int                            `json:"anchor_index"`
+	HasMoreAfter     bool                           `json:"has_more_after,omitempty"`
+	AfterCursor      *ChannelMessagesCursorResponse `json:"after_cursor,omitempty"`
+	UnreadTotal int                            `json:"unread_total,omitempty"`
 }
 
 type ChannelThreadMessagesCursorResponse struct {
@@ -1148,6 +1149,20 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 		actualBefore = len(beforeMsgs)
 	}
 
+	// Unread total: visible messages after the anchor, excluding the caller's
+	// own (matching sidebar real_unread_count exactly — same filter, same SQL).
+	// Serves as the primary divider count source in around mode (single-response
+	// snapshot = entry freeze is automatic).
+	var unreadTotal int
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT COUNT(*) FROM channel_message m
+		WHERE m.channel_id = $1 AND m.workspace_id = $2
+		  AND m.seq > $3::bigint
+		  AND (m.thread_root_message_id IS NULL OR m.main_timeline_visible)
+		  AND m.deleted_at IS NULL
+		  AND NOT (m.author_type = 'user' AND m.author_id = $4::uuid)`, channelID, workspaceID, pgtype.Int8{Int64: aroundSeq, Valid: true}, parseUUID(userIDStr)).Scan(&unreadTotal); err != nil {
+		unreadTotal = 0
+	}
 	// Calculate cursor for the before (older) direction
 	var nextCursor *ChannelMessagesCursorResponse
 	if hasMore && actualBefore > 0 {
@@ -1200,13 +1215,14 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 	attachChannelMessageExtras(out)
 
 	writeJSON(w, http.StatusOK, ChannelMessagesPageResponse{
-		Messages:     out,
-		Limit:        limit,
-		HasMore:      hasMore,
-		NextCursor:   nextCursor,
-		AnchorIndex:  anchorIndex,
-		HasMoreAfter: hasMoreAfter,
-		AfterCursor:  afterCursor,
+Messages:         out,
+		Limit:            limit,
+		HasMore:          hasMore,
+		NextCursor:       nextCursor,
+		AnchorIndex:      anchorIndex,
+		HasMoreAfter:     hasMoreAfter,
+		AfterCursor:      afterCursor,
+		UnreadTotal: unreadTotal,
 	})
 }
 

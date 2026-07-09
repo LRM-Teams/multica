@@ -3,6 +3,7 @@
 - Date: 2026-07-09
 - Status: Draft plan
 - Owner: Multica platform
+- Follow-up: `docs/superpowers/specs/2026-07-09-memory-evolution-center-integration-spec.md`
 - Scope: Platform-side automatic and manual memory organization for Multica agent workspaces.
 
 ## Background
@@ -94,9 +95,10 @@ The platform runs four daily stages. The first three are the memory-recording/or
 
 ### Timezone
 
-- Scheduling uses the workspace timezone when configured; otherwise UTC.
+- Default scheduling for this workspace uses Beijing time: `Asia/Shanghai`.
+- L1/L2/L3/L4 default times are 01:00/02:00/03:00/04:00 in `Asia/Shanghai`.
 - Each job stores `plan_date` and `timezone` in audit metadata.
-- For daily windows, `YYYY-MM-DD` means the workspace-local calendar day.
+- For daily windows, `YYYY-MM-DD` means the Beijing-local calendar day unless a future workspace timezone override is explicitly configured.
 
 ### Stage L1: Daily Recorder
 
@@ -561,8 +563,7 @@ Recommended rollout:
 
 ## Open Questions
 
-- What exact workspace timezone source should schedule jobs use when a workspace has users in multiple timezones?
 - Should L3 mirror whole files into `agent_memory`, individual promoted entries, or both?
-- What UI should review `needs_human_review` entries: Agent Memory tab, Settings, or a dedicated Review queue?
-- What default token/size budgets should `USER.md`, `MEMORY.md`, and `STATE.md` enforce?
 - Should inactive/offline agents be curated every day or only when they have new evidence?
+- Which review actions should also appear in the per-agent Memory tab besides the Evolution Center?
+- Which local embedding option, if any, should be packaged first after the no-API-key lexical dedupe MVP?

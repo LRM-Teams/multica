@@ -38,7 +38,6 @@ import { AppLink } from "../../../navigation";
 import { TranscriptButton } from "../../../common/task-transcript";
 import { taskStatusConfig } from "../../config";
 import { failureReasonLabel } from "./task-failure";
-import { HealthBlock } from "./health-block";
 import { Sparkline } from "../sparkline";
 import { useT, useTimeAgo } from "../../../i18n";
 
@@ -153,10 +152,6 @@ export function ActivityTab({ agent }: ActivityTabProps) {
 
   return (
     <div className="flex flex-col gap-4 p-6">
-      {/* Runtime connectivity health (#178 / #266) — read-only, sits above
-          the workload sections. #267 Runs / #268 Cost are separate blocks not
-          implemented here. */}
-      <HealthBlock agent={agent} />
       <NowSection tasks={activeTasks} issueMap={issueMap} agent={agent} />
       <Last30dSection activity={activity} avgDurationMs={avgDurationMs} />
       <RecentWorkSection

@@ -1,13 +1,13 @@
 import { render, screen, cleanup } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { MemberProfile, MemberProfileActivityItem } from "@multica/core/types";
-import type { AgentPresenceDetail } from "@multica/core/agents";
+import type { AgentLiveStatusView } from "../agents/resolve-agent-live-status";
 import { ActorProfileContentLoaded } from "./actor-profile-popover";
 
-// The status pill now reads live presence (same source as the dot), so the
-// component pulls in useWorkspaceId + useAgentPresenceDetail — stub both.
-const mockPresence = vi.hoisted(
-  () => ({ current: "loading" as AgentPresenceDetail | "loading" }),
+// Live status is resolved by useAgentLiveStatus (snapshot + task-messages +
+// presence). Stub the hook so layout tests stay free of QueryClient.
+const mockLiveStatus = vi.hoisted(
+  () => ({ current: null as AgentLiveStatusView | null }),
 );
 
 vi.mock("@multica/ui/components/common/actor-avatar", () => ({
@@ -22,16 +22,12 @@ vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
 
-vi.mock("@multica/core/agents", async () => {
-  const actual =
-    await vi.importActual<typeof import("@multica/core/agents")>(
-      "@multica/core/agents",
-    );
-  return { ...actual, useAgentPresenceDetail: () => mockPresence.current };
-});
+vi.mock("../agents/use-agent-live-status", () => ({
+  useAgentLiveStatus: () => mockLiveStatus.current,
+}));
 
-// Namespace-aware i18n stub: `channels` gets the profile_popover copy, `agents`
-// gets the workload/availability labels the pill now renders from.
+// Namespace-aware i18n stub: only the channels profile_popover copy is needed
+// for layout/description tests (live status labels come from the hook stub).
 vi.mock("../i18n/use-t", () => {
   const CHANNELS_RES = {
     profile_popover: {
@@ -50,20 +46,10 @@ vi.mock("../i18n/use-t", () => {
       },
     },
   };
-  const AGENTS_RES = {
-    workload: { working: "Working", queued: "Queued", idle: "Idle" },
-    availability: {
-      online: "Online",
-      unstable: "Unstable",
-      offline: "Offline",
-      archived: "Archived",
-    },
-  };
   return {
-    useT: (ns: string) => ({
+    useT: () => ({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      t: (selector: (r: any) => string) =>
-        selector(ns === "agents" ? AGENTS_RES : CHANNELS_RES),
+      t: (selector: (r: any) => string) => selector(CHANNELS_RES),
     }),
   };
 });
@@ -88,8 +74,6 @@ function makeProfile(activityCount: number): MemberProfile {
     avatar_url: null,
     description: "Builds and reviews changes.",
     role: "agent",
-    // Raw status is intentionally a lie here — the pill must ignore it and use
-    // live presence instead.
     status: "working",
     recent_activity: Array.from({ length: activityCount }, (_, index) =>
       makeActivity(index + 1),
@@ -97,20 +81,21 @@ function makeProfile(activityCount: number): MemberProfile {
   };
 }
 
-function presence(over: Partial<AgentPresenceDetail>): AgentPresenceDetail {
+function live(
+  label: string,
+  over: Partial<AgentLiveStatusView> = {},
+): AgentLiveStatusView {
   return {
-    availability: "online",
-    workload: "idle",
-    runningCount: 0,
-    queuedCount: 0,
-    capacity: 1,
+    label,
+    textClass: "text-muted-foreground",
+    dotClass: "bg-muted-foreground/40",
     ...over,
   };
 }
 
 beforeEach(() => {
   cleanup();
-  mockPresence.current = presence({ availability: "online", workload: "idle" });
+  mockLiveStatus.current = live("Idle");
 });
 
 describe("ActorProfileContentLoaded", () => {
@@ -126,10 +111,8 @@ describe("ActorProfileContentLoaded", () => {
     expect(screen.queryByText(/just now/i)).toBeNull();
   });
 
-  it("name-row status shows the availability word (Offline), not a workload word, when offline", () => {
-    // Dot is gray (offline); the status word must agree — never "Idle"/"Working"/the
-    // raw `status: 'working'`. This is Frank's #288 card contradiction.
-    mockPresence.current = presence({ availability: "offline", workload: "idle" });
+  it("name-row status shows Offline when the live hook reports Offline", () => {
+    mockLiveStatus.current = live("Offline");
 
     render(<ActorProfileContentLoaded profile={makeProfile(0)} />);
 
@@ -138,24 +121,34 @@ describe("ActorProfileContentLoaded", () => {
     expect(screen.queryByText(/Working/)).toBeNull();
   });
 
-  it("name-row status shows the workload word while online", () => {
-    mockPresence.current = presence({ availability: "online", workload: "working" });
+  it("name-row status shows detailed stage labels from the live hook", () => {
+    mockLiveStatus.current = live("Running a command", {
+      textClass: "text-brand",
+      dotClass: "bg-brand",
+    });
 
     render(<ActorProfileContentLoaded profile={makeProfile(0)} />);
 
-    expect(screen.getByText("Working")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-live-status")).toHaveTextContent(
+      "Running a command",
+    );
   });
 
-  it("places status on the same row as the display name (fills header width)", () => {
-    mockPresence.current = presence({ availability: "online", workload: "working" });
+  it("places live status immediately after the display name (not far-right)", () => {
+    mockLiveStatus.current = live("Thinking", {
+      textClass: "text-brand",
+      dotClass: "bg-brand",
+    });
 
     render(<ActorProfileContentLoaded profile={makeProfile(0)} />);
 
     const name = screen.getByText("Aegis");
-    const status = screen.getByText("Working");
-    // Name and status share a flex row so short names don't leave a dead
-    // empty half on the right of the header.
+    const status = screen.getByTestId("agent-live-status");
+    // Name and status share a flex row; the name must not flex-grow, or a
+    // short name would shove status to the far edge of the card.
     expect(name.parentElement).toBe(status.parentElement);
+    expect(name.className).not.toMatch(/\bflex-1\b/);
+    expect(status).toHaveTextContent("Thinking");
   });
 
   it("omits the description section when the profile has no description", () => {

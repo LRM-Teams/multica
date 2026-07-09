@@ -229,11 +229,30 @@ jobs:
               -f "${GITHUB_WORKSPACE}/docker-compose.selfhost.yml" "$@"
           }
 
-          # main is an independent stack: bring up ALL services (postgres included).
-          # `up -d` is idempotent — on later deploys postgres is already running and
-          # this is a no-op for it, while backend/frontend roll to the new image.
+          # main is an independent stack. Bring postgres up first, then ensure
+          # the DB named by the copied dev env exists even when the persistent
+          # main pgdata volume was initialized earlier with a different DB name.
           compose pull
-          compose up -d
+          compose up -d postgres
+          compose exec -T postgres sh -lc '
+            set -eu
+            db="${POSTGRES_DB:-multica}"
+            user="${POSTGRES_USER:-multica}"
+            for i in $(seq 1 30); do
+              if pg_isready -U "$user" -d postgres >/dev/null 2>&1; then
+                break
+              fi
+              sleep 2
+            done
+            if ! psql -U "$user" -d "$db" -tAc "SELECT 1" >/dev/null 2>&1; then
+              echo "Creating missing database $db in isolated main postgres volume"
+              createdb -U "$user" "$db"
+            fi
+          '
+          # Start frontend before backend so Caddy can resolve the frontend DNS
+          # name before backend health checks or proxy requests race container DNS.
+          compose up -d frontend
+          compose up -d backend
           # Prune unused images so the second stack doesn't fill the disk.
           docker image prune -af
 

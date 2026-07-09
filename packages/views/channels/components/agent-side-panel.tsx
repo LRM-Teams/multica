@@ -16,8 +16,8 @@ import { useT } from "../../i18n/use-t";
 type OwnerTab = "activity" | "profile" | "files";
 
 const OWNER_TABS: { id: OwnerTab; icon: typeof Activity }[] = [
-  { id: "activity", icon: Activity },
   { id: "profile", icon: User },
+  { id: "activity", icon: Activity },
   { id: "files", icon: FileText },
 ];
 
@@ -32,15 +32,16 @@ interface AgentSidePanelProps {
  * Right-pane surface opened by clicking an agent's avatar/name in the
  * conversation — mutually exclusive with the thread panel (same slot,
  * per Frank's direction 2026-07-09: inline panel, not a route jump).
- * Per Frank's follow-up correction: owner sees Activity/Profile/Files,
- * non-owner sees Profile only (Files was always owner-gated; Activity
- * follows the same gate here per his explicit call, not a generic
- * observability surface for this panel).
+ * Per Frank's follow-up correction: owner sees Profile/Activity/Files
+ * (Profile first + default — the one tab that's always present, identity
+ * before observation), non-owner sees Profile only (Files was always
+ * owner-gated; Activity follows the same gate here per his explicit call,
+ * not a generic observability surface for this panel).
  */
 export function AgentSidePanel({ agent, currentUserId, members, onClose }: AgentSidePanelProps) {
   const { t } = useT("agents");
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
-  const [tab, setTab] = useState<OwnerTab>(isOwner ? "activity" : "profile");
+  const [tab, setTab] = useState<OwnerTab>("profile");
   const displayName = resolveActorDisplayName(agent, agent.id);
   const initials = initialsOf(displayName);
 

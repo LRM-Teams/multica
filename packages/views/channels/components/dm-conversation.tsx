@@ -50,6 +50,7 @@ import { useT } from "../../i18n/use-t";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
+import { useEntryAroundSeq } from "../hooks/use-entry-around-seq";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
@@ -382,6 +383,9 @@ function DmChannelConversation({
   const setTyping = useSetChannelTyping();
   const { uploadWithToast } = useFileUpload(api);
 
+  // #340: anchor the cold message load on the entry read cursor (frozen per DM)
+  // so the first render lands on the unread divider — see useEntryAroundSeq.
+  const entryAroundSeq = useEntryAroundSeq(channelId, dm.last_read_seq);
   const {
     data: messagePages,
     isLoading: messagesLoading,
@@ -390,7 +394,9 @@ function DmChannelConversation({
     fetchNextPage: fetchOlderMessages,
     hasNextPage: hasOlderMessages,
     isFetchingNextPage: isFetchingOlderMessages,
-  } = useInfiniteQuery(channelMessagesPageOptions(channelId));
+  } = useInfiniteQuery(
+    channelMessagesPageOptions(channelId, { aroundSeq: entryAroundSeq }),
+  );
   const messages = useMemo(() => flattenChannelMessagePages(messagePages), [messagePages]);
   const messagesFirstItemIndex = useMemo(
     () => channelMessagesFirstItemIndex(messagePages, messages.length > 0),

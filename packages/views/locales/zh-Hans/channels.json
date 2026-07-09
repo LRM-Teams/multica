@@ -149,12 +149,7 @@
     "composer_placeholder": "在线程中回复...",
     "back_to_conversation": "返回对话",
     "show_in_channel_label": "同时在频道显示",
-    "from_thread_badge": "来自话题",
-    "wake_pending": "等待回复",
-    "wake_replied": "已回复",
-    "wake_acked": "已确认",
-    "wake_delivered": "已送达",
-    "wake_no_reply": "未回复"
+    "from_thread_badge": "来自话题"
   },
   "typing": {
     "single": "{{name}} 正在输入",

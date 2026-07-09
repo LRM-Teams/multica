@@ -149,12 +149,7 @@
     "composer_placeholder": "스레드에서 답장...",
     "back_to_conversation": "대화로 돌아가기",
     "show_in_channel_label": "채널에도 표시",
-    "from_thread_badge": "스레드에서",
-    "wake_pending": "답장 대기 중",
-    "wake_replied": "답장함",
-    "wake_acked": "확인함",
-    "wake_delivered": "전달됨",
-    "wake_no_reply": "답장 없음"
+    "from_thread_badge": "스레드에서"
   },
   "typing": {
     "single": "{{name}} 님이 입력 중",

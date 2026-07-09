@@ -167,7 +167,6 @@ import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
-import { mapThreadWakeAnnotations } from "./thread-read-model";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import {
@@ -748,12 +747,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       return threadRoot ? messages.filter((msg) => msg.id !== threadRoot.id) : messages;
     },
     [threadPage?.messages, threadRoot],
-  );
-  // "Why no reply" wake strip (#196), agent-only + neutral, from the root's
-  // read-model annotations (#251).
-  const threadWakeAnnotations = useMemo(
-    () => (threadRoot ? mapThreadWakeAnnotations(threadRoot) : []),
-    [threadRoot],
   );
   const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
@@ -2117,7 +2110,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         replies={threadReplies}
         currentUserId={currentUserId}
         currentUserName={currentUserName ?? undefined}
-        wakeAnnotations={threadWakeAnnotations}
         isMobile={isMobile}
         onBack={() => setOpenThreadRoot(null)}
         onViewParent={() => {

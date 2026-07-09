@@ -149,12 +149,7 @@
     "composer_placeholder": "Reply in thread...",
     "back_to_conversation": "Back to conversation",
     "show_in_channel_label": "Also show in channel",
-    "from_thread_badge": "From thread",
-    "wake_pending": "Awaiting reply",
-    "wake_replied": "Replied",
-    "wake_acked": "Acknowledged",
-    "wake_delivered": "Delivered",
-    "wake_no_reply": "No reply"
+    "from_thread_badge": "From thread"
   },
   "typing": {
     "single": "{{name}} is typing",

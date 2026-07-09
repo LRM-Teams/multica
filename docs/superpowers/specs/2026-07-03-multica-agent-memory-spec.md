@@ -336,6 +336,16 @@ V1 can continue syncing candidate JSONL through the existing daemon/server evolu
 7. Add platform notes sync for channels, agents, and project maps.
 8. Extend server memory item typing/scope when the product UI needs structured editing.
 
+## V2 Curation Hooks
+
+The first platform-owned curation implementation adds:
+
+- `multica memory curate` for manual local-agent backlog processing.
+- Scheduler jobs `memory_l1_daily_record`, `memory_l2_review_extract`, `memory_l3_promote`, and `memory_l4_curator`.
+- `memory_curation_run` and `memory_curation_watermark` tables for audit/status tracking.
+- Workspace admin APIs under `/api/workspaces/{id}/memory-curation/runs` and agent status under `/api/agents/{id}/memory-curation/status`.
+- Deterministic file stages that keep `REVIEW.md` as a short-lived queue and promote only high-confidence candidates to `USER.md`, `MEMORY.md`, or lifecycle-tagged `STATE.md` entries.
+
 ## V1 Acceptance Criteria
 
 - New managed runs create `.multica/agents/<agent_id>` with `MEMORY.md`, `USER.md`, `STATE.md`, `REVIEW.md`, `notes/`, `projects/`, `skills/`, `inbox/`, `shared-cache/`, `feedback/`, and `sync_queue/`.

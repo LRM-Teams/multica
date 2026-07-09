@@ -382,9 +382,20 @@ func main() {
 	// logging them on the tick that fails and retrying on the next
 	// cycle, so a temporary outage does not crash the server.
 	schedulerMgr := scheduler.NewManager(pool, scheduler.Options{})
+	schedulerRegistered := false
 	if err := schedulerMgr.Register(scheduler.TaskUsageHourlyJob(pool)); err != nil {
 		slog.Warn("scheduler: failed to register task_usage_hourly rollup job", "error", err)
 	} else {
+		schedulerRegistered = true
+	}
+	for _, job := range scheduler.MemoryCurationJobs(pool) {
+		if err := schedulerMgr.Register(job); err != nil {
+			slog.Warn("scheduler: failed to register memory curation job", "job", job.Name, "error", err)
+		} else {
+			schedulerRegistered = true
+		}
+	}
+	if schedulerRegistered {
 		go func() {
 			_ = schedulerMgr.Run(sweepCtx)
 		}()

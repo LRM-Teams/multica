@@ -624,6 +624,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
 					r.Put("/", h.UpdateWorkspace)
 					r.Patch("/", h.UpdateWorkspace)
+					r.Post("/memory-curation/runs", h.StartMemoryCurationRun)
+					r.Get("/memory-curation/runs/{runId}", h.GetMemoryCurationRun)
 					r.Post("/members", h.CreateInvitation)
 					r.Route("/members/{memberId}", func(r chi.Router) {
 						r.Patch("/", h.UpdateMember)
@@ -933,6 +935,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/skill-suggestions", h.ListAgentSkillSuggestions)
 					r.Post("/skill-suggestions/{suggestionId}/decision", h.DecideAgentSkillSuggestion)
 					r.Get("/memories", h.ListAgentMemories)
+					r.Get("/memory-curation/status", h.GetAgentMemoryCurationStatus)
 					r.Get("/files", h.ListAgentFiles)
 					r.Get("/files/content", h.GetAgentFileContent)
 					r.Put("/files/content", h.UpdateAgentFileContent)

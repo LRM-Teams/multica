@@ -87,8 +87,11 @@ export function ActorProfileTrigger({
   if (!memberId) return <>{children}</>;
 
   const content = <ActorProfileContent memberType={memberType} memberId={memberId} />;
+  // Message rows are CSS grid with default align-items:stretch. Without hug-
+  // content sizing the trigger becomes as tall as the whole bubble (incl.
+  // images) and Floating UI anchors the profile card mid-row.
   const triggerClassName = cn(
-    "inline-flex cursor-pointer rounded-md border-0 bg-transparent p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+    "inline-flex h-fit w-fit shrink-0 self-start cursor-pointer rounded-md border-0 bg-transparent p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
     className,
   );
   const triggerRender = triggerElement === "span"

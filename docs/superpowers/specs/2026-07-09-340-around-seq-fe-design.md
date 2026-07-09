@@ -21,13 +21,14 @@
 1. **`anchor_index,omitempty`**：`AnchorIndex int json:"anchor_index,omitempty"` —— `omitempty` 会让 `anchor_index=0`（首条即锚点）从 JSON 里被**省略**。FE 端 `resp.anchor_index ?? 0` 恰好能兜（缺失→0、-1→-1），但这是巧合、脆弱。建议 BE 去掉该字段的 `omitempty`，让 0 正常序列化。
 2. **对称回填只做了一半**：`limitBefore=limit/2` 先取、`remainingAfter=limit-actualBefore` 后取——**before 短→after 补** 有；但**after 短→before 补没有**（before 已被 cap 在 limitBefore）。设计文档 §2 明确要求"未读只有 3 条、锚点贴最新"时 before 也要补足到 `limit-实际after`。现状小未读会话窗口只有 `limit/2 + 少量`，上滑立刻二次加载。要不要这轮一起补？（不阻塞 FE 结构，但影响小未读 UX。）
 
-## 2. FE 定位数学（核心）
-**UX 修正（Iris + Felix 2026-07-09，已定）**：divider 渲染在**第一条未读之上**。若 pin 到第一条未读 + align:start，divider 会被顶出视口顶、裁掉不可见（昨晚 settle 靠 96px `ANCHOR_TOP_BAND` 下压 anchor 行给 divider 留空间；mount-prop 没这个 band）。故定位目标 = **最后一条已读**：
-- **未读冷开**：`initialTopMostItemIndex = firstItemIndex + anchor_index`（= 最后一条已读行）+ `align="start"`。视口顶=最后一条已读、其下紧跟 divider + 第一条未读，divider 可见、贴 Frank 认可的"已读在上 / divider / 未读在下"视觉。
-  - 空边界 `anchor_index === -1`（全窗皆未读、无已读）→ `firstItemIndex + 0`（钉最早一条；divider 在最顶、其下即未读）。
-- **深链 / 搜索 / highlight（#343 同一数据路径）**：`initialTopMostItemIndex = firstItemIndex + anchor_index`（around_seq 传目标消息 seq、锚点即目标）+ `align="center"` + 高亮。
-- **实现落地注意**：现有组件用 `unreadAnchorIndex = messages.findIndex(第一条未读)` = `anchor_index + 1`。未读定位目标 = `unreadAnchorIndex - 1`（= 最后一条已读 = BE anchor_index）。写清楚、别反向再踩一次 off-by-one。
-- 验收硬指标（Iris）：① **divider 可见不裁** ② isNearBottom 时序（settle 到位后新消息别拽回底）。
+## 2. FE 定位数学（核心）— 终版（Frank + 全队 2026-07-09 拍板："不兜底"）
+> 演进记录：早期一版曾定"pin 最后一条已读给已读上下文 + settle 当兜底"。Parker 核了代码事实——**divider 是第一条未读渲染单元的头部**（channel-message-list.tsx renderRow，DateDivider→UnreadDivider→message-row 同属一个 Virtuoso item）——推翻了它：pin 第一条未读根本不会裁 divider（item 顶就是 divider），且**构造性消灭超长已读边界 → 零 settle/零兜底**。终版如下。
+
+- **未读冷开**：`initialTopMostItemIndex = firstItemIndex + unreadAnchorIndex`（= **第一条未读** = BE `anchor_index + 1`）+ `align="start"`。divider 是这个 item 的头部 → 构造性钉在视口顶、**跟消息高度彻底无关**（不 pin 那条可能超长的已读，所以没有"超长已读顶掉 divider"的边界）。未读紧随其下。**首屏不带已读上下文**（Slack "new messages 线"标准；以后想要走纯 CSS scrollMargin/padding、不进机制）。
+  - 空边界 `anchor_index === -1`（全窗皆未读）→ `unreadAnchorIndex === 0` → `firstItemIndex + 0`（钉第一条=第一条未读；divider 在最顶）。同一原理、无需特殊处理。
+- **深链 / 搜索 / highlight（#343 同一数据路径）**：`initialTopMostItemIndex = firstItemIndex + highlightIndex`（around_seq 传目标消息 seq、锚点即目标）+ `align="center"` + 高亮。
+- **#883 mount 竞态**：`initialTopMostItemIndex` 是 Virtuoso 官方开局定位 API、跟当年 racy 的 scrollToIndex 不是同一路径；**不预写防御**，真机没证实出问题前不加一行兜底。
+- 验收硬指标（Iris，可 agent-browser 验，无 rAF）：① divider 钉视口顶、跟消息高度无关 ② 未读紧随 ③ 全窗皆未读也钉顶 ④ 大量未读（锚点不在最新页）照样落对。
 
 ## 3. `around_seq` 取值来源（别等 markRead 回声）
 - 冷开请求的 `around_seq` = **进会话前 sidebar/列表响应里的 `last_read_seq` 快照**（已在返回，`COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)`）。不等 markRead 回声（省一个串行 RTT）。
@@ -41,8 +42,9 @@ around_seq 请求**只在 user-visible entry 时发**：visible + focus + 用户
 - 向旧（上滑到顶）：沿用现有 `has_more`/`next_cursor` + `before_*` 请求路径，**不改**。
 - 向新（下滑到底、锚点上方有更多）：新增 `has_more_after`/`after_cursor` → 用 `after_seq`(或 after cursor 三元组) 向新翻页。Virtuoso `endReached` / `followOutput` 交互需处理：向新翻页 append 到底部，不应触发 followOutput 贴底跳动（已有 #376 ownership + isNearBottom 判定）。
 
-## 6. settle 降级为兜底
-- `useUnreadAnchorScroll` + `scrollToIndexUntilSettled` + #376 `isAnchorSettling` **全部保留**，但正常路径不再依赖：around_seq 首屏落对后，锚点已在 mount 位置。settle 仅在 around 数据异常 / Virtuoso 未精确定位等残余情况兜底。#341 两条 settle 边界自动降优先级。
+## 6. settle — around 路径零 settle/零兜底（终版）
+- around 路径**不跑 settle、不兜底、不做前置判断**：mount-prop（`initialTopMostItemIndex`）首屏一步落对，pin 第一条未读构造性消灭了唯一需要兜底的边界（超长已读），#883 按"不预写防御"处理。
+- `useUnreadAnchorScroll` + `scrollToIndexUntilSettled` + #376 `isAnchorSettling` **代码本身没删、也没改**，只服务于**尚未切 around 的 legacy 路径**；around 路径下它即便运行也是幂等 no-op（第一条未读已被 mount-prop 钉在顶）。整套 settle 随 **#342** 退役；#341 的两条 settle 边界（near-end 误超时 / timeout 目的地）随之重新评估或直接废弃。cleanup 归口 Miles thread #multica:c639124f（owner Felix、#340 核心验过后精确定范围）。
 
 ## 7. 数据层改动（已摸清现状，方案如下）
 

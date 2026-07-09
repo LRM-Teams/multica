@@ -23,6 +23,7 @@ import { useNavigation } from "../../navigation";
 import { IssueChip } from "../../issues/components/issue-chip";
 import { ProjectChip } from "../../projects/components/project-chip";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
+import { useOpenAgentPanel } from "../../common/agent-panel-context";
 import {
   mentionTokenClassName,
   resolveMentionTokenKind,
@@ -30,6 +31,7 @@ import {
 
 export function MentionView({ node }: NodeViewProps) {
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
+  const openAgentPanel = useOpenAgentPanel();
   const { type, id, label } = node.attrs;
 
   if (type === "issue") {
@@ -72,6 +74,9 @@ export function MentionView({ node }: NodeViewProps) {
           memberType={type === "agent" ? "agent" : "user"}
           memberId={id}
           triggerElement="span"
+          onClickCapture={
+            type === "agent" && openAgentPanel ? () => openAgentPanel(id) : undefined
+          }
         >
           {chip}
         </ActorProfileTrigger>

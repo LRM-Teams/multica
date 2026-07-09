@@ -1066,7 +1066,7 @@ type ChatMessageResponse struct {
 	// Attachments linked to this message via chat_message_id. The chat
 	// bubble renders file cards from these, and the daemon claim path
 	// (daemon.go) pulls structured metadata from the same source so the
-	// agent can `multica attachment download <id>` rather than guessing
+	// agent can `multica attachment view --id <id> --output <path>` rather than guessing
 	// from a markdown URL that may expire.
 	Attachments []AttachmentResponse `json:"attachments,omitempty"`
 }

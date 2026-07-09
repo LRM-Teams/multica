@@ -1,9 +1,9 @@
-const COOKIE_NAME = "multica_logged_in";
+import { multicaCookieName } from "@multica/core/cookies";
 
 export function setLoggedInCookie() {
-  document.cookie = `${COOKIE_NAME}=1; path=/; max-age=31536000; samesite=lax`;
+  document.cookie = `${multicaCookieName("loggedIn")}=1; path=/; max-age=31536000; samesite=lax`;
 }
 
 export function clearLoggedInCookie() {
-  document.cookie = `${COOKIE_NAME}=; path=/; max-age=0`;
+  document.cookie = `${multicaCookieName("loggedIn")}=; path=/; max-age=0`;
 }

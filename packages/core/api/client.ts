@@ -170,6 +170,7 @@ import { type Logger, noopLogger } from "../logger";
 import { createRequestId } from "../utils";
 import { getCurrentSlug } from "../platform/workspace-storage";
 import { parseWithFallback } from "./schema";
+import { multicaCookieName } from "../cookies";
 import {
   AgentTemplateSchema,
   AgentTemplateSummaryListSchema,
@@ -350,7 +351,7 @@ export class ApiClient {
     if (typeof document === "undefined") return null;
     const match = document.cookie
       .split("; ")
-      .find((c) => c.startsWith("multica_csrf="));
+      .find((c) => c.startsWith(`${multicaCookieName("csrf")}=`));
     return match ? match.split("=")[1] ?? null : null;
   }
 

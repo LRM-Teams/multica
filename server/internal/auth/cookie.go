@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	AuthCookieName      = "multica_auth"
-	CSRFCookieName      = "multica_csrf"
-	defaultAuthTokenTTL = 30 * 24 * time.Hour // 30 days
+	DefaultAuthCookieName = "multica_auth"
+	DefaultCSRFCookieName = "multica_csrf"
+	defaultAuthTokenTTL   = 30 * 24 * time.Hour // 30 days
 )
 
 var (
@@ -28,6 +28,44 @@ var (
 	authTokenTTLOnce       sync.Once
 	authTokenTTLCached     time.Duration
 )
+
+func sanitizeCookiePrefix(raw string) string {
+	prefix := strings.TrimSpace(raw)
+	if prefix == "" || prefix == "multica" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range prefix {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	safe := strings.Trim(b.String(), "_-")
+	if safe == "" || safe == "multica" {
+		return ""
+	}
+	return safe
+}
+
+func cookiePrefix() string {
+	return sanitizeCookiePrefix(os.Getenv("MULTICA_COOKIE_PREFIX"))
+}
+
+func AuthCookieName() string {
+	if prefix := cookiePrefix(); prefix != "" {
+		return prefix + "_auth"
+	}
+	return DefaultAuthCookieName
+}
+
+func CSRFCookieName() string {
+	if prefix := cookiePrefix(); prefix != "" {
+		return prefix + "_csrf"
+	}
+	return DefaultCSRFCookieName
+}
 
 // parseAuthTokenTTL parses a raw AUTH_TOKEN_TTL value into a duration.
 // It first tries time.ParseDuration (e.g. "8760h", "720h30m"), then falls
@@ -153,7 +191,7 @@ func SetAuthCookies(w http.ResponseWriter, token string) error {
 	now := time.Now()
 
 	http.SetCookie(w, &http.Cookie{
-		Name:     AuthCookieName,
+		Name:     AuthCookieName(),
 		Value:    token,
 		Path:     "/",
 		Domain:   domain,
@@ -170,7 +208,7 @@ func SetAuthCookies(w http.ResponseWriter, token string) error {
 	}
 
 	http.SetCookie(w, &http.Cookie{
-		Name:     CSRFCookieName,
+		Name:     CSRFCookieName(),
 		Value:    csrfToken,
 		Path:     "/",
 		Domain:   domain,
@@ -190,7 +228,7 @@ func ClearAuthCookies(w http.ResponseWriter) {
 	secure := isSecureCookie()
 
 	http.SetCookie(w, &http.Cookie{
-		Name:     AuthCookieName,
+		Name:     AuthCookieName(),
 		Value:    "",
 		Path:     "/",
 		Domain:   domain,
@@ -202,7 +240,7 @@ func ClearAuthCookies(w http.ResponseWriter) {
 	})
 
 	http.SetCookie(w, &http.Cookie{
-		Name:     CSRFCookieName,
+		Name:     CSRFCookieName(),
 		Value:    "",
 		Path:     "/",
 		Domain:   domain,
@@ -229,7 +267,7 @@ func ValidateCSRF(r *http.Request) bool {
 		return false
 	}
 
-	authCookie, err := r.Cookie(AuthCookieName)
+	authCookie, err := r.Cookie(AuthCookieName())
 	if err != nil || authCookie.Value == "" {
 		return false
 	}

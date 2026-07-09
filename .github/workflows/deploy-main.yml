@@ -182,11 +182,20 @@ jobs:
             exit 1
           fi
           mkdir -p "${DEPLOY_DIR}"
-          tmp_env="$(mktemp "${DEPLOY_DIR}/.env.tmp.XXXXXX")"
-          cp "${DEV_ENV_FILE}" "${tmp_env}"
-          chmod 600 "${tmp_env}" || true
-          mv "${tmp_env}" "${DEPLOY_DIR}/.env"
-          echo "Synced ${DEPLOY_DIR}/.env from ${DEV_ENV_FILE} (separate copy, not a shared file)."
+          if [ -w "${DEPLOY_DIR}" ]; then
+            DEPLOY_ENV_FILE="${DEPLOY_DIR}/.env"
+            tmp_env="$(mktemp "${DEPLOY_DIR}/.env.tmp.XXXXXX")"
+            cp "${DEV_ENV_FILE}" "${tmp_env}"
+            chmod 600 "${tmp_env}" || true
+            mv "${tmp_env}" "${DEPLOY_ENV_FILE}"
+            echo "Synced ${DEPLOY_ENV_FILE} from ${DEV_ENV_FILE} (separate copy, not a shared file)."
+          else
+            DEPLOY_ENV_FILE="${RUNNER_TEMP:-/tmp}/multica-main.env"
+            cp "${DEV_ENV_FILE}" "${DEPLOY_ENV_FILE}"
+            chmod 600 "${DEPLOY_ENV_FILE}" || true
+            echo "Using runtime env copy ${DEPLOY_ENV_FILE} from ${DEV_ENV_FILE}; ${DEPLOY_DIR} is not writable."
+          fi
+          export DEPLOY_ENV_FILE
 
           owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
           export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
@@ -205,6 +214,7 @@ jobs:
           export MULTICA_PUBLIC_URL="${API_ORIGIN}"
           export CORS_ALLOWED_ORIGINS="${PUBLIC_ORIGIN}"
           export COOKIE_DOMAIN=""
+          export MULTICA_COOKIE_PREFIX="multica_main"
           export GOOGLE_REDIRECT_URI="${PUBLIC_ORIGIN}/auth/callback"
 
           echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) as project '${COMPOSE_PROJECT}' on $(hostname)"
@@ -215,7 +225,7 @@ jobs:
             docker compose \
               -p "${COMPOSE_PROJECT}" \
               --project-directory "${DEPLOY_DIR}" \
-              --env-file "${DEPLOY_DIR}/.env" \
+              --env-file "${DEPLOY_ENV_FILE}" \
               -f "${GITHUB_WORKSPACE}/docker-compose.selfhost.yml" "$@"
           }
 

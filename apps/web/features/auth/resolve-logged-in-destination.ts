@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { chooseWorkspaceDestination, paths, pickLastActiveSlug } from "@multica/core/paths";
+import { multicaCookieName } from "@multica/core/cookies";
 import { api } from "@multica/core/api";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import type { Workspace } from "@multica/core/types";
@@ -35,7 +36,7 @@ export async function resolveLoggedInDestination(
       // Network blip on the invite lookup is non-fatal — fall through.
     }
   }
-  const cookieSlug = readCookie("last_workspace_slug");
+  const cookieSlug = readCookie(multicaCookieName("lastWorkspaceSlug"));
   return chooseWorkspaceDestination(
     workspaces,
     hasOnboarded,

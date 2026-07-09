@@ -8,6 +8,7 @@ import {
   useHasOnboarded,
 } from "@multica/core/paths";
 import { workspaceListOptions } from "@multica/core/workspace/queries";
+import { multicaCookieName } from "@multica/core/cookies";
 import { useNavigation } from "../navigation";
 import { useLogout } from "../auth";
 import { DragStrip } from "../platform";
@@ -37,7 +38,7 @@ export function NoAccessPage() {
   // No-op outside the browser (desktop renderer also has document, harmless).
   useEffect(() => {
     if (typeof document === "undefined") return;
-    document.cookie = "last_workspace_slug=; path=/; max-age=0; SameSite=Lax";
+    document.cookie = `${multicaCookieName("lastWorkspaceSlug")}=; path=/; max-age=0; SameSite=Lax`;
   }, []);
 
   // replace, not push: the failed `/<bad-slug>` URL must not stay in history,

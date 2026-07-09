@@ -34,11 +34,11 @@ sudo chown "$USER":"$USER" /data/multica-main
 ```
 
 Do **not** hand-maintain `/data/multica-main/.env`. The workflow copies
-`/data/multica/.env` to `/data/multica-main/.env` on every deploy, so main starts
-from the same env values as dev while still using its own file. This is a deep
-copy, not a symlink or shared mount: editing `/data/multica-main/.env` never
-mutates `/data/multica/.env`, and the next deploy refreshes the main copy from
-dev.
+`/data/multica/.env` for the main deploy, so main starts from the same env values
+as dev while still using its own env copy. If `/data/multica-main` is writable,
+the copy is persisted at `/data/multica-main/.env`; otherwise the workflow uses a
+private runner-temp env file for that deploy. Either way this is a deep copy,
+not a symlink or shared mount: the main deploy never mutates `/data/multica/.env`.
 
 After copying dev's env, the workflow overlays only the isolated main-stack
 values via shell exports:
@@ -51,13 +51,16 @@ MULTICA_APP_URL=http://82.157.184.89:18090
 MULTICA_PUBLIC_URL=http://82.157.184.89:18090
 CORS_ALLOWED_ORIGINS=http://82.157.184.89:18090
 COOKIE_DOMAIN=
+MULTICA_COOKIE_PREFIX=multica_main
 GOOGLE_REDIRECT_URI=http://82.157.184.89:18090/auth/callback
 ```
 
 Everything else, including `APP_ENV` and `MULTICA_DEV_VERIFICATION_CODE`, comes
 from dev's `/data/multica/.env`. If dev is configured with
 `APP_ENV=development` and `MULTICA_DEV_VERIFICATION_CODE=888888`, then the main
-`:18090` stack gets the same behavior after deploy.
+`:18090` stack gets the same behavior after deploy. `MULTICA_COOKIE_PREFIX=multica_main`
+keeps browser cookies separate from the dev stack on `:8090` even though both
+ports share the same IP host.
 
 ### 2. First-run bring up the isolated stack
 

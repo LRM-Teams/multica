@@ -61,7 +61,6 @@ import {
   useAddChannelReaction,
   useRemoveChannelReaction,
   useMarkChannelThreadRead,
-  useSetChannelThreadFollowed,
   useSetChannelTyping,
   useComposerDraftStore,
   type ComposerDraftKey,
@@ -168,8 +167,7 @@ import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
-import { deriveThreadParticipants } from "./thread-participants";
-import { mapThreadParticipants, mapThreadWakeAnnotations } from "./thread-read-model";
+import { mapThreadWakeAnnotations } from "./thread-read-model";
 import {
   Composer,
   ConversationHeader,
@@ -724,14 +722,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     },
     [threadPage?.messages, threadRoot],
   );
-  // Participant chips prefer the BE-provided read-model list (#251) and fall
-  // back to the structural derivation only when the BE sent none, so the panel
-  // is never empty-chipped for an older payload.
-  const threadParticipants = useMemo(() => {
-    if (!threadRoot) return [];
-    const beList = mapThreadParticipants(threadRoot);
-    return beList.length > 0 ? beList : deriveThreadParticipants(threadRoot, threadReplies);
-  }, [threadRoot, threadReplies]);
   // "Why no reply" wake strip (#196), agent-only + neutral, from the root's
   // read-model annotations (#251).
   const threadWakeAnnotations = useMemo(
@@ -756,7 +746,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const editChannelMessage = useEditChannelMessage();
   const deleteChannelMessage = useDeleteChannelMessage();
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
-  const setThreadFollowed = useSetChannelThreadFollowed();
   const setTyping = useSetChannelTyping();
   // Edit is a PATCH of an existing message (H5) — it routes through
   // editChannelMessage, never the send path, so it can never produce a new wake.
@@ -1462,17 +1451,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     setSelectedAgentPanelId(agentId);
   };
 
-  const handleToggleThreadFollow = useCallback(
-    (next: boolean) => {
-      if (!activeChannelId || !threadRoot) return;
-      setThreadFollowed.mutate(
-        { channelId: activeChannelId, messageId: threadRoot.id, followed: next },
-        { onError: () => toast.error(t(($) => $.dm.action_failed)) },
-      );
-    },
-    [activeChannelId, threadRoot, setThreadFollowed, t],
-  );
-
   const toggleInvite = (key: string) => {
     setSelectedInvites((prev) => {
       const next = new Set(prev);
@@ -2104,9 +2082,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         replies={threadReplies}
         currentUserId={currentUserId}
         currentUserName={currentUserName ?? undefined}
-        participants={threadParticipants}
-        followed={threadRoot.thread_followed ?? false}
-        onToggleFollow={handleToggleThreadFollow}
         wakeAnnotations={threadWakeAnnotations}
         isMobile={isMobile}
         onBack={() => setOpenThreadRoot(null)}

@@ -70,9 +70,6 @@ const RESOURCES = {
     view_parent: "Back to main chat",
     close_aria: "Close thread",
     back_to_conversation: "Back to conversation",
-    participants_label: "Participants",
-    follow: "Follow thread",
-    following: "Following",
     show_in_channel_label: "Also show in channel",
     from_thread_badge: "From thread",
     wake_pending: "Awaiting reply",
@@ -109,9 +106,6 @@ function baseProps() {
       makeMessage({ id: "r1", type: "agent", author_id: "agent-c", author_name: "Cy", content: "First reply" }),
     ],
     currentUserId: "user-a",
-    participants: deriveThreadParticipants(makeMessage(), []),
-    followed: false,
-    onToggleFollow: vi.fn(),
     showInChannel: false,
     onShowInChannelChange: vi.fn(),
     isMobile: false,
@@ -164,44 +158,6 @@ describe("ThreadPanel", () => {
     expect(container.querySelector('[data-composer-surface="thread"]')).not.toBeNull();
     // No nesting: the reply list is never handed an open-thread callback.
     expect(messageListProps.mock.calls.at(-1)?.[0].onOpenThread).toBeUndefined();
-  });
-
-  it("shows participant chips for the union and toggles thread follow explicitly", () => {
-    const root = makeMessage({ content: "start [@Bea](mention://member/user-b)" });
-    const replies = [makeMessage({ id: "r1", type: "agent", author_id: "agent-c", author_name: "Cy", content: "hi" })];
-    const props = baseProps();
-    const onToggleFollow = vi.fn();
-    const { rerender } = render(
-      <ThreadPanel
-        {...props}
-        root={root}
-        replies={replies}
-        participants={deriveThreadParticipants(root, replies)}
-        followed={false}
-        onToggleFollow={onToggleFollow}
-      />,
-    );
-
-    const chips = screen.getByTestId("thread-participants");
-    expect(within(chips).getByText("Ann")).toBeInTheDocument();
-    expect(within(chips).getByText("Bea")).toBeInTheDocument();
-    expect(within(chips).getByText("Cy")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Follow thread" }));
-    expect(onToggleFollow).toHaveBeenCalledWith(true);
-
-    rerender(
-      <ThreadPanel
-        {...props}
-        root={root}
-        replies={replies}
-        participants={deriveThreadParticipants(root, replies)}
-        followed
-        onToggleFollow={onToggleFollow}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Following" }));
-    expect(onToggleFollow).toHaveBeenCalledWith(false);
   });
 
   it("defaults show-in-channel off and reports explicit toggles; the main-timeline surface is marked from-thread", () => {

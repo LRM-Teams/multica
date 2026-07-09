@@ -90,6 +90,7 @@ func runMemoryCurate(cmd *cobra.Command, _ []string) error {
 		DryRun:         dryRun,
 		Force:          force,
 		Now:            now,
+		Timezone:       memorycuration.DefaultTimezone,
 	})
 	if err != nil {
 		return err

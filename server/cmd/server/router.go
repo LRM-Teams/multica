@@ -800,6 +800,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Task messages (user-facing, not daemon auth)
 			r.Get("/api/tasks/{taskId}/messages", h.ListTaskMessagesByUser)
 
+			r.Get("/api/evolution/metrics", h.GetEvolutionMetrics)
+
 			r.Route("/api/evolution/submissions", func(r chi.Router) {
 				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
 				r.Get("/", h.ListEvolutionReviewSubmissions)

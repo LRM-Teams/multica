@@ -111,6 +111,8 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	res, runErr := memorycuration.NewEngine().Run(memorycuration.Options{
+		Context:        r.Context(),
+		DB:             h.DB,
 		WorkspacesRoot: root,
 		WorkspaceID:    workspaceID,
 		AgentIDs:       agentIDs,
@@ -122,6 +124,7 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 		DryRun:         req.DryRun,
 		Force:          req.Force,
 		Now:            now,
+		Timezone:       memorycuration.DefaultTimezone,
 	})
 	statsJSON, _ := json.Marshal(res)
 	status := "succeeded"

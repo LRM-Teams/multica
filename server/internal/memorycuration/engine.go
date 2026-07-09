@@ -1,6 +1,7 @@
 package memorycuration
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,6 +23,12 @@ func (e *Engine) Run(opts Options) (Result, error) {
 	if opts.Now.IsZero() {
 		opts.Now = time.Now().UTC()
 	}
+	if opts.Context == nil {
+		opts.Context = context.Background()
+	}
+	if opts.Timezone == "" {
+		opts.Timezone = DefaultTimezone
+	}
 	if opts.Until.IsZero() {
 		opts.Until = opts.Now.AddDate(0, 0, -1)
 	}
@@ -39,6 +46,7 @@ func (e *Engine) Run(opts Options) (Result, error) {
 		DateTo:         formatDate(opts.Until),
 		DryRun:         opts.DryRun,
 		Force:          opts.Force,
+		Timezone:       opts.Timezone,
 	}
 	roots, err := discoverAgentRoots(opts.WorkspacesRoot, opts.WorkspaceID, opts.AgentIDs, opts.AllAgents)
 	if err != nil {
@@ -94,6 +102,7 @@ func (e *Engine) Run(opts Options) (Result, error) {
 		res.EntriesArchived += ar.EntriesArchived
 		res.DuplicatesMerged += ar.DuplicatesMerged
 		res.ConflictsFound += ar.ConflictsFound
+		res.EvidenceCollected += ar.EvidenceCollected
 		res.AgentResults = append(res.AgentResults, ar)
 	}
 	return res, nil
@@ -116,13 +125,18 @@ func (e *Engine) runL1(root agentRoot, opts Options) (AgentRunResult, error) {
 				continue
 			}
 		}
-		if workLog == "" && scratch == "" {
-			if err := appendAudit(root.Root, "l1", d, map[string]any{"outcome": "no_relevant_activity"}, opts.DryRun); err != nil {
+		evidence, err := CollectDBEvidence(opts.Context, opts.DB, root.WorkspaceID, root.AgentID, d, d)
+		if err != nil {
+			return ar, err
+		}
+		ar.EvidenceCollected += len(evidence)
+		if workLog == "" && scratch == "" && len(evidence) == 0 {
+			if err := appendAudit(root.Root, "l1", d, map[string]any{"outcome": "no_relevant_activity", "timezone": opts.Timezone}, opts.DryRun); err != nil {
 				return ar, err
 			}
 			continue
 		}
-		content := dailyContent(root, d, workLog, scratch, opts.Now)
+		content := dailyContent(root, d, workLog, scratch, evidence, opts.Now, opts.Timezone)
 		changed, err := writeIfChanged(path, content, opts.DryRun)
 		if err != nil {
 			return ar, err
@@ -131,27 +145,41 @@ func (e *Engine) runL1(root agentRoot, opts Options) (AgentRunResult, error) {
 			ar.Changed = true
 			ar.DailyFilesWritten++
 		}
-		if err := appendAudit(root.Root, "l1", d, map[string]any{"outcome": "daily_written", "path": filepath.ToSlash(filepath.Join("memory", "daily", formatDate(d)+".md"))}, opts.DryRun); err != nil {
+		if err := appendAudit(root.Root, "l1", d, map[string]any{"outcome": "daily_written", "path": filepath.ToSlash(filepath.Join("memory", "daily", formatDate(d)+".md")), "evidence_collected": len(evidence), "timezone": opts.Timezone}, opts.DryRun); err != nil {
 			return ar, err
 		}
 	}
 	return ar, nil
 }
 
-func dailyContent(root agentRoot, d time.Time, workLog, scratch string, now time.Time) string {
+func dailyContent(root agentRoot, d time.Time, workLog, scratch string, evidence []EvidenceItem, now time.Time, timezone string) string {
 	var activity []string
 	var temporary []string
+	var evidenceLines []string
 	if workLog != "" {
 		activity = append(activity, bulletize(workLog)...)
+		evidenceLines = append(evidenceLines, "local_notes:work-log.md - Agent-local work log summary.")
 	}
 	if scratch != "" {
 		temporary = append(temporary, bulletize(scratch)...)
+		evidenceLines = append(evidenceLines, "local_memory:SCRATCHPAD.md - Agent-local transient notes.")
+	}
+	for _, item := range evidence {
+		detail := item.Title
+		if detail == "" {
+			detail = item.Snippet
+		}
+		activity = append(activity, fmt.Sprintf("%s - %s", item.Reference(), detail))
+		evidenceLines = append(evidenceLines, fmt.Sprintf("%s - %s", item.Reference(), detail))
 	}
 	if len(activity) == 0 {
-		activity = []string{"Local agent notes changed; no platform transcript was copied."}
+		activity = []string{"No relevant DB or local activity was found for this agent."}
 	}
 	if len(temporary) == 0 {
 		temporary = []string{"No temporary follow-ups extracted by the deterministic recorder."}
+	}
+	if len(evidenceLines) == 0 {
+		evidenceLines = []string{"no_evidence - No platform or local evidence collected."}
 	}
 	return fmt.Sprintf(`# Daily Memory - %s
 
@@ -168,15 +196,15 @@ func dailyContent(root agentRoot, d time.Time, workLog, scratch string, now time
 %s
 
 ## Evidence Index
-- local_notes:work-log.md - Agent-local work log summary.
-- local_memory:SCRATCHPAD.md - Agent-local transient notes.
+%s
 
 ## Curation Status
+- timezone: %s
 - l1_recorded_at: %s
 - l2_extracted_at:
 - l3_promoted_at:
 - l4_curated_at:
-`, formatDate(d), joinBullets(activity), joinBullets(temporary), now.UTC().Format(time.RFC3339))
+`, formatDate(d), joinBullets(activity), joinBullets(temporary), joinBullets(evidenceLines), timezone, now.UTC().Format(time.RFC3339))
 }
 
 func bulletize(text string) []string {
@@ -233,7 +261,7 @@ func (e *Engine) runL2(root agentRoot, opts Options) (AgentRunResult, error) {
 		}
 		candidates := candidatesFromDaily(content, d)
 		for _, c := range candidates {
-			if seen[c.HashKey()] {
+			if seen[c.HashKey()] || hasSemanticDuplicate(entries, c) || hasSemanticDuplicate(newEntries, c) {
 				ar.DuplicatesMerged++
 				continue
 			}
@@ -294,6 +322,18 @@ func candidatesFromDaily(content string, sourceDate time.Time) []reviewEntry {
 		add("temporary", "STATE.md", sentenceTitle(line), line)
 	}
 	return out
+}
+
+func hasSemanticDuplicate(entries []reviewEntry, candidate reviewEntry) bool {
+	for _, entry := range entries {
+		if entry.Type != candidate.Type || entry.ProposedDestination != candidate.ProposedDestination || entry.Scope != candidate.Scope || entry.Sensitivity != candidate.Sensitivity {
+			continue
+		}
+		if semanticDuplicate(entry.Body, candidate.Body) {
+			return true
+		}
+	}
+	return false
 }
 
 func sentenceTitle(s string) string {
@@ -370,7 +410,7 @@ func promoteEntry(destPath string, entry reviewEntry, dryRun bool) (promoted boo
 	}
 	content := string(b)
 	body := strings.TrimSpace(entry.Body)
-	if strings.Contains(normalizeForDedupe(content), normalizeForDedupe(body)) {
+	if strings.Contains(normalizeForDedupe(content), normalizeForDedupe(body)) || existingSemanticDuplicate(content, body) {
 		return false, true, nil
 	}
 	block := fmt.Sprintf("\n§\n[type:%s]\n[source:%s]\n[evidence:%s]\n- %s\n", entry.Type, entry.SourceDate, strings.Join(entry.Evidence, ","), body)
@@ -385,6 +425,19 @@ func promoteEntry(destPath string, entry reviewEntry, dryRun bool) (promoted boo
 }
 
 var dateRE = regexp.MustCompile(`\b(20\d{2}-\d{2}-\d{2})\b`)
+
+func existingSemanticDuplicate(content, body string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "-"))
+		if line == "" || strings.HasPrefix(line, "[") || strings.HasPrefix(line, "#") || line == "§" {
+			continue
+		}
+		if semanticDuplicate(line, body) {
+			return true
+		}
+	}
+	return false
+}
 
 func inferExpiresAt(body, sourceDate string) string {
 	if m := dateRE.FindStringSubmatch(body); len(m) == 2 {

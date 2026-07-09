@@ -1,6 +1,9 @@
 package memorycuration
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type Stage string
 
@@ -13,6 +16,8 @@ const (
 )
 
 type Options struct {
+	Context        context.Context
+	DB             EvidenceDB
 	WorkspacesRoot string
 	WorkspaceID    string
 	AgentIDs       []string
@@ -24,6 +29,7 @@ type Options struct {
 	DryRun         bool
 	Force          bool
 	Now            time.Time
+	Timezone       string
 }
 
 type Result struct {
@@ -42,6 +48,8 @@ type Result struct {
 	EntriesArchived       int              `json:"entries_archived"`
 	DuplicatesMerged      int              `json:"duplicates_merged"`
 	ConflictsFound        int              `json:"conflicts_found"`
+	EvidenceCollected     int              `json:"evidence_collected"`
+	Timezone              string           `json:"timezone,omitempty"`
 	Errors                []AgentError     `json:"errors,omitempty"`
 	AgentResults          []AgentRunResult `json:"agent_results,omitempty"`
 }
@@ -64,4 +72,5 @@ type AgentRunResult struct {
 	EntriesArchived       int    `json:"entries_archived"`
 	DuplicatesMerged      int    `json:"duplicates_merged"`
 	ConflictsFound        int    `json:"conflicts_found"`
+	EvidenceCollected     int    `json:"evidence_collected"`
 }

@@ -14,11 +14,12 @@ import (
 )
 
 const (
-	memoryHeader  = "# Agent Memory\n\nSource of truth: Multica agent settings. This file supplements live agent instructions; it does not override them.\n"
-	userHeader    = "# User Preferences\n\nDurable user preferences relevant to this Multica agent.\n"
-	stateHeader   = "# Agent State\n\nCurrent dated state, temporary facts, and active initiatives.\n"
-	reviewHeader  = "# Memory Review\n\nPending memory candidates, conflicts, and curator review notes.\n"
-	scratchHeader = "# Scratchpad\n\nTransient notes that should not be treated as durable memory.\n"
+	DefaultTimezone = "Asia/Shanghai"
+	memoryHeader    = "# Agent Memory\n\nSource of truth: Multica agent settings. This file supplements live agent instructions; it does not override them.\n"
+	userHeader      = "# User Preferences\n\nDurable user preferences relevant to this Multica agent.\n"
+	stateHeader     = "# Agent State\n\nCurrent dated state, temporary facts, and active initiatives.\n"
+	reviewHeader    = "# Memory Review\n\nPending memory candidates, conflicts, and curator review notes.\n"
+	scratchHeader   = "# Scratchpad\n\nTransient notes that should not be treated as durable memory.\n"
 )
 
 type agentRoot struct {

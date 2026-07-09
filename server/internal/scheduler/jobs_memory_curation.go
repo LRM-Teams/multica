@@ -17,16 +17,16 @@ const (
 	JobNameMemoryL4Curator       = "memory_l4_curator"
 )
 
-func MemoryCurationJobs(_ *pgxpool.Pool) []JobSpec {
+func MemoryCurationJobs(pool *pgxpool.Pool) []JobSpec {
 	return []JobSpec{
-		memoryCurationJob(JobNameMemoryL1DailyRecord, memorycuration.StageL1, 1),
-		memoryCurationJob(JobNameMemoryL2ReviewExtract, memorycuration.StageL2, 2),
-		memoryCurationJob(JobNameMemoryL3Promote, memorycuration.StageL3, 3),
-		memoryCurationJob(JobNameMemoryL4Curator, memorycuration.StageL4, 4),
+		memoryCurationJob(pool, JobNameMemoryL1DailyRecord, memorycuration.StageL1, 1),
+		memoryCurationJob(pool, JobNameMemoryL2ReviewExtract, memorycuration.StageL2, 2),
+		memoryCurationJob(pool, JobNameMemoryL3Promote, memorycuration.StageL3, 3),
+		memoryCurationJob(pool, JobNameMemoryL4Curator, memorycuration.StageL4, 4),
 	}
 }
 
-func memoryCurationJob(name string, stage memorycuration.Stage, utcHour int) JobSpec {
+func memoryCurationJob(pool *pgxpool.Pool, name string, stage memorycuration.Stage, beijingHour int) JobSpec {
 	return JobSpec{
 		Name:              name,
 		Cadence:           time.Hour,
@@ -45,14 +45,19 @@ func memoryCurationJob(name string, stage memorycuration.Stage, utcHour int) Job
 			30 * time.Minute,
 		},
 		Scopes:  StaticScopes(ScopeGlobal),
-		Handler: makeMemoryCurationHandler(stage, utcHour),
+		Handler: makeMemoryCurationHandler(pool, stage, beijingHour),
 	}
 }
 
-func makeMemoryCurationHandler(stage memorycuration.Stage, utcHour int) Handler {
+func makeMemoryCurationHandler(pool *pgxpool.Pool, stage memorycuration.Stage, beijingHour int) Handler {
 	return func(ctx context.Context, in HandlerInput) (HandlerResult, error) {
-		if in.PlanTime.UTC().Hour() != utcHour {
-			return HandlerResult{Result: map[string]any{"skipped": true, "reason": "outside_stage_hour", "stage": stage}}, nil
+		loc, err := time.LoadLocation(memorycuration.DefaultTimezone)
+		if err != nil {
+			loc = time.FixedZone("CST", 8*60*60)
+		}
+		planLocal := in.PlanTime.In(loc)
+		if planLocal.Hour() != beijingHour {
+			return HandlerResult{Result: map[string]any{"skipped": true, "reason": "outside_stage_hour", "stage": stage, "timezone": memorycuration.DefaultTimezone}}, nil
 		}
 		root := memoryCurationWorkspacesRoot()
 		if root == "" {
@@ -64,14 +69,21 @@ func makeMemoryCurationHandler(stage memorycuration.Stage, utcHour int) Handler 
 			}
 			return HandlerResult{}, err
 		}
-		planDate := in.PlanTime.UTC().AddDate(0, 0, -1)
+		planDate := planLocal.AddDate(0, 0, -1)
+		var evidenceDB memorycuration.EvidenceDB
+		if pool != nil {
+			evidenceDB = pool
+		}
 		res, err := memorycuration.NewEngine().Run(memorycuration.Options{
+			Context:        ctx,
+			DB:             evidenceDB,
 			WorkspacesRoot: root,
 			AllAgents:      true,
 			Stage:          stage,
 			Since:          planDate,
 			Until:          planDate,
 			Now:            time.Now().UTC(),
+			Timezone:       memorycuration.DefaultTimezone,
 		})
 		if in.Heartbeat != nil {
 			_ = in.Heartbeat(ctx)
@@ -89,6 +101,8 @@ func makeMemoryCurationHandler(stage memorycuration.Stage, utcHour int) Handler 
 			"entries_promoted":        res.EntriesPromoted,
 			"entries_archived":        res.EntriesArchived,
 			"duplicates_merged":       res.DuplicatesMerged,
+			"evidence_collected":      res.EvidenceCollected,
+			"timezone":                memorycuration.DefaultTimezone,
 			"errors":                  len(res.Errors),
 		}}, nil
 	}

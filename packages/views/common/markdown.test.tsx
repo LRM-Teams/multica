@@ -69,6 +69,26 @@ vi.mock("../projects/components/project-chip", () => ({
   ),
 }));
 
+vi.mock("./actor-profile-popover", () => ({
+  ActorProfileTrigger: ({
+    memberType,
+    memberId,
+    children,
+  }: {
+    memberType: string;
+    memberId: string;
+    children: ReactNode;
+  }) => (
+    <span
+      data-testid="actor-profile-trigger"
+      data-member-type={memberType}
+      data-member-id={memberId}
+    >
+      {children}
+    </span>
+  ),
+}));
+
 const ligatureClasses = [
   "[font-variant-ligatures:none]",
   "[font-feature-settings:'liga'_0]",
@@ -179,6 +199,32 @@ describe("Markdown", () => {
 
     expect(container.textContent).toContain("@Alice");
     expect(container.querySelector("mark")?.textContent).toBe("Ali");
+  });
+
+  it("wraps member mentions in the full profile popover trigger", () => {
+    render(<Markdown>{"Ping [@Alice](mention://member/user-1)"}</Markdown>);
+
+    const trigger = screen.getByTestId("actor-profile-trigger");
+    expect(trigger).toHaveAttribute("data-member-type", "user");
+    expect(trigger).toHaveAttribute("data-member-id", "user-1");
+    expect(trigger.textContent).toContain("@Alice");
+  });
+
+  it("wraps agent mentions in the full profile popover trigger", () => {
+    render(<Markdown>{"Ping [@Bot](mention://agent/agent-9)"}</Markdown>);
+
+    const trigger = screen.getByTestId("actor-profile-trigger");
+    expect(trigger).toHaveAttribute("data-member-type", "agent");
+    expect(trigger).toHaveAttribute("data-member-id", "agent-9");
+  });
+
+  it("renders @all as a styled pill without a profile hover card", () => {
+    const { container } = render(
+      <Markdown>{"Ping [@all](mention://all/all)"}</Markdown>,
+    );
+
+    expect(container.textContent).toContain("@all");
+    expect(screen.queryByTestId("actor-profile-trigger")).toBeNull();
   });
 
   it("renders member/agent/@all mentions as brand semantic tokens, not identity colors", () => {

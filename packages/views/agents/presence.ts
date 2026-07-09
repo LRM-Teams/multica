@@ -8,6 +8,7 @@ import {
   PlugZap,
   type LucideIcon,
 } from "lucide-react";
+import type { TFunction } from "i18next";
 import type {
   AgentAvailability,
   AgentPresenceDetail,
@@ -139,4 +140,35 @@ export function presenceStatusToken(
   return presence.availability === "online"
     ? { kind: "workload", value: presence.workload }
     : { kind: "availability", value: presence.availability };
+}
+
+/**
+ * One-line localized status word for cards/pills/hover profiles.
+ *
+ * Token rule stays in `presenceStatusToken` (#288); this is just the shared
+ * token → copy step so every surface doesn't re-implement the i18n branch.
+ * Returns null while presence is loading/unknown.
+ *
+ * `t` is the agents-namespace translator (`useT("agents").t`).
+ */
+export function formatPresenceStatus(
+  presence: AgentPresenceDetail | "loading" | null | undefined,
+  t: TFunction<"agents">,
+): string | null {
+  const token = presenceStatusToken(presence);
+  if (!token) return null;
+  return token.kind === "workload"
+    ? t(($) => $.workload[token.value])
+    : t(($) => $.availability[token.value]);
+}
+
+/** Visual config (icon / textClass / optional dot) for the same status token. */
+export function presenceStatusVisual(
+  presence: AgentPresenceDetail | "loading" | null | undefined,
+): AvailabilityVisual | WorkloadVisual | null {
+  const token = presenceStatusToken(presence);
+  if (!token) return null;
+  return token.kind === "workload"
+    ? workloadConfig[token.value]
+    : availabilityConfig[token.value];
 }

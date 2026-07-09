@@ -146,16 +146,18 @@ describe("ActorProfileContentLoaded", () => {
     expect(screen.getByText("Working")).toBeInTheDocument();
   });
 
-  it("places status on the same row as the display name (fills header width)", () => {
+  it("places live status immediately after the display name (not far-right)", () => {
     mockPresence.current = presence({ availability: "online", workload: "working" });
 
     render(<ActorProfileContentLoaded profile={makeProfile(0)} />);
 
     const name = screen.getByText("Aegis");
-    const status = screen.getByText("Working");
-    // Name and status share a flex row so short names don't leave a dead
-    // empty half on the right of the header.
+    const status = screen.getByTestId("agent-live-status");
+    // Name and status share a flex row; the name must not flex-grow, or a
+    // short name would shove status to the far edge of the card.
     expect(name.parentElement).toBe(status.parentElement);
+    expect(name.className).not.toMatch(/\bflex-1\b/);
+    expect(status).toHaveTextContent("Working");
   });
 
   it("omits the description section when the profile has no description", () => {

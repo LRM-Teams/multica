@@ -30,7 +30,11 @@ import {
   resolveActorIdentityPresentation,
   shouldShowActorHandleLabel,
 } from "@multica/core/identity";
-import { formatPresenceStatus } from "../agents/presence";
+import {
+  formatPresenceStatus,
+  presenceStatusDotClass,
+  presenceStatusVisual,
+} from "../agents/presence";
 import { useT } from "../i18n/use-t";
 
 type ChannelsT = ReturnType<typeof useT<"channels">>["t"];
@@ -188,15 +192,19 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
     .toUpperCase()
     .slice(0, 2);
   const description = profile.description?.trim() || "";
-  // Members: role text on the name row. Agents: live presence status as plain
-  // muted text on the name row so the header fills width — no pill/chip.
+  // Members: role text on the name row. Agents: live presence status
+  // immediately after the name (dot + word) — same #288 source as the avatar
+  // presence dot, not a far-right filler and not a pill.
   const memberRole =
     profile.member_type === "user"
       ? roleLabel(profile.role, t)
       : null;
-  // Plain text on the name row — shared #288 rule + agents i18n.
   const agentStatus =
     profile.member_type === "agent" ? formatPresenceStatus(presence, tAgents) : null;
+  const agentStatusVisual =
+    profile.member_type === "agent" ? presenceStatusVisual(presence) : null;
+  const agentStatusDot =
+    profile.member_type === "agent" ? presenceStatusDotClass(presence) : null;
   const handle = resolveActorHandle(identity);
   const handleLabel = formatActorHandleLabel(handle);
   const showHandle =
@@ -220,11 +228,23 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
         />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
-            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+            {/* No flex-1 on the name — status must sit right after the name
+                (Slack/IM style), not get pushed to the far edge of the card. */}
+            <span className="min-w-0 truncate text-sm font-semibold text-foreground">
               {displayName}
             </span>
-            {agentStatus ? (
-              <span className="shrink-0 text-xs text-muted-foreground">
+            {agentStatus && agentStatusVisual && agentStatusDot ? (
+              <span
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1 text-xs",
+                  agentStatusVisual.textClass,
+                )}
+                data-testid="agent-live-status"
+              >
+                <span
+                  className={cn("size-1.5 rounded-full", agentStatusDot)}
+                  aria-hidden
+                />
                 {agentStatus}
               </span>
             ) : null}

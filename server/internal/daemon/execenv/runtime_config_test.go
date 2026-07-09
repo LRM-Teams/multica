@@ -328,7 +328,7 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 		"add comments with `multica issue comment add`",
 		"Issue metadata: inspect or update issue-specific persistent facts",
 		"multica repo checkout <url>",
-		"multica attachment download <id>",
+		"multica attachment view --id <id> --output <path>",
 		"## Repositories",
 		"## Project Context",
 		"## Skills",
@@ -719,7 +719,7 @@ func TestMetaSkillDocumentsAgentDMToExplicitHumanMember(t *testing.T) {
 	for _, want := range []string{
 		"### Direct messages",
 		"multica dm --to <member-id|user-id|name|display-name|email>",
-		"even when they did not trigger the current task",
+		"--message-stdin << 'MULTICAMSG'",
 		"Omit `--to` only when you intentionally want the current task initiator",
 		"task-scoped `MULTICA_TOKEN`",
 		"Agent-to-agent DMs are not supported",

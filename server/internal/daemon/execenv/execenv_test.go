@@ -849,7 +849,7 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 		"multica squad list",
 		"multica issue runs",
 		"multica issue run-messages",
-		"multica attachment download",
+		"multica attachment view",
 		"multica autopilot list",
 		"multica autopilot create",
 		"multica autopilot update",

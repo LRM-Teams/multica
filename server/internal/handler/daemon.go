@@ -1539,7 +1539,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			// messages after the last assistant message (every completed or
 			// failed run writes an assistant row, so that anchor advances each
 			// turn). Attachments are collected from each included message so
-			// the agent can `multica attachment download <id>` — the markdown
+			// the agent can `multica attachment view --id <id> --output <path>` — the markdown
 			// URL alone is signed and 30-min expiring on the private CDN.
 			if msgs, err := h.Queries.ListChatMessages(r.Context(), cs.ID); err == nil && len(msgs) > 0 {
 				chatMessages = msgs

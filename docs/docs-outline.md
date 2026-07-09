@@ -792,7 +792,7 @@ multica issue assign <issue-id> --agent <agent-slug>
     - **Repo**：`repo checkout`
     - **Daemon**：`daemon install / login / start / stop / status / logs`
     - **Runtime**：`runtime list / usage / activity / ping / update`
-    - **Misc**：`config / version / update / attachment download`
+    - **Misc**：`config / version / update / attachment view / attachment upload`
   - 每条命令：1 行描述 + 最常用 flag
   - 末尾指引："完整 flag / exit code / examples 见 v2 详细 CLI reference（开发中）"
 - **不写**: 每条命令的深入 reference（v2）、shell completion

@@ -190,7 +190,6 @@
     "add_reaction": "リアクションを追加",
     "actions_menu": "メッセージ操作",
     "copy_action": "コピー",
-    "quote_action": "引用",
     "expand_action": "全文を表示",
     "copied_toast": "コピーしました",
     "copy_failed_toast": "コピーに失敗しました",
@@ -238,10 +237,21 @@
     "composer_placeholder": "{{name}} にメッセージ…"
   },
   "quote": {
+    "action": "引用",
     "jump_to": "元のメッセージへジャンプ",
     "cancel": "引用をキャンセル",
-    "deleted": "元のメッセージは削除されました",
-    "inaccessible": "元のメッセージを利用できません"
+    "unavailable_title": "元のメッセージを表示できません",
+    "unavailable_summary": "削除されたか、表示権限がない可能性があります。",
+    "type_user": "メッセージ",
+    "type_agent": "Agent",
+    "type_lark": "Feishu",
+    "type_system": "システム",
+    "type_unknown": "メッセージ",
+    "attachment_summary": "添付ファイル",
+    "attachments_summary": "{{count}} 件の添付ファイル",
+    "image_summary": "画像",
+    "images_summary": "{{count}} 枚の画像",
+    "empty_summary": "プレビューはありません"
   },
   "message_loading": {
     "load_older": "過去のメッセージを読み込む",

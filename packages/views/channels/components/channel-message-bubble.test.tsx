@@ -99,7 +99,6 @@ vi.mock("../../i18n/use-t", () => ({
           agent_badge: string;
           feishu_badge: string;
           copy_action: string;
-          quote_action: string;
           expand_action: string;
           copied_toast: string;
           copy_failed_toast: string;
@@ -115,7 +114,23 @@ vi.mock("../../i18n/use-t", () => ({
           save_edit: string;
           cancel_edit: string;
         };
-        quote: { jump_to: string; cancel: string; deleted: string; inaccessible: string };
+        quote: {
+          action: string;
+          jump_to: string;
+          cancel: string;
+          unavailable_title: string;
+          unavailable_summary: string;
+          type_user: string;
+          type_agent: string;
+          type_lark: string;
+          type_system: string;
+          type_unknown: string;
+          attachment_summary: string;
+          attachments_summary: string;
+          image_summary: string;
+          images_summary: string;
+          empty_summary: string;
+        };
         thread: { reply: string; reply_count: string };
         time: { today: string; yesterday: string };
       }) => string,
@@ -127,7 +142,6 @@ vi.mock("../../i18n/use-t", () => ({
           feishu_badge: "Feishu",
           actions_menu: "Message actions",
           copy_action: "Copy",
-          quote_action: "Quote",
           expand_action: "Show full message",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
@@ -143,10 +157,21 @@ vi.mock("../../i18n/use-t", () => ({
           cancel_edit: "Cancel",
         },
         quote: {
+          action: "Quote",
           jump_to: "Jump to original message",
           cancel: "Cancel quote",
-          deleted: "Original message was deleted",
-          inaccessible: "Original message is unavailable",
+          unavailable_title: "Original message unavailable",
+          unavailable_summary: "It may have been deleted or you may not have access.",
+          type_user: "Message",
+          type_agent: "Agent",
+          type_lark: "Feishu",
+          type_system: "System",
+          type_unknown: "Message",
+          attachment_summary: "Attachment",
+          attachments_summary: "Attachments",
+          image_summary: "Image",
+          images_summary: "Images",
+          empty_summary: "No preview available",
         },
         thread: {
           reply: "Reply in thread",
@@ -408,21 +433,24 @@ describe("ChannelMessageBubble", () => {
     expect(box).toHaveStyle({ width: "28px", height: "28px" });
   });
 
-  it("resolves quoted reply author names through live identity", () => {
+  it("resolves quoted snapshot author names through live identity", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({
           type: "user",
           author_id: "user-2",
           author_name: "bob",
-          reply_to_message_id: "m0",
-          reply_to: {
-            id: "m0",
-            type: "user",
-            author_id: "user-1",
-            author_name: "alice",
-            content: "Earlier point",
-            created_at: "2026-06-17T09:10:00Z",
+          quote_message_id: "m0",
+          quote: {
+            messageId: "m0",
+            status: "active",
+            snapshot: {
+              type: "user",
+              authorId: "user-1",
+              authorName: "alice",
+              content: "Earlier point",
+              createdAt: "2026-06-17T09:10:00Z",
+            },
           },
         })}
         currentUserId="user-2"
@@ -430,6 +458,7 @@ describe("ChannelMessageBubble", () => {
     );
 
     expect(screen.getByText("Alice Display")).toBeInTheDocument();
+    expect(screen.getByText("Message")).toBeInTheDocument();
     expect(screen.queryByText("alice")).not.toBeInTheDocument();
   });
 
@@ -447,31 +476,23 @@ describe("ChannelMessageBubble", () => {
     const { rerender } = render(
       <ChannelMessageBubble
         message={makeMessage({
-          reply_to_message_id: "m0",
-          reply_to: {
-            id: "m0",
-            type: "user",
-            author_id: "user-1",
-            author_name: "alice",
-            content: "Earlier point",
-            status: "deleted",
-            created_at: "2026-06-17T09:10:00Z",
-          },
+          quote_message_id: "m0",
+          quote: { messageId: "m0", status: "deleted" },
         })}
         currentUserId="user-2"
       />,
     );
 
-    expect(screen.getByText("Original message was deleted")).toBeInTheDocument();
+    expect(screen.getByText("Original message unavailable")).toBeInTheDocument();
 
     rerender(
       <ChannelMessageBubble
-        message={makeMessage({ reply_to_message_id: "missing", reply_to: null })}
+        message={makeMessage({ quote_message_id: "missing", quote: null })}
         currentUserId="user-2"
       />,
     );
 
-    expect(screen.getByText("Original message is unavailable")).toBeInTheDocument();
+    expect(screen.getByText("It may have been deleted or you may not have access.")).toBeInTheDocument();
   });
 
   it("passes the search query to markdown only for search hits", () => {

@@ -190,7 +190,6 @@
     "add_reaction": "添加表情回应",
     "actions_menu": "消息操作",
     "copy_action": "复制",
-    "quote_action": "引用",
     "expand_action": "展开全文",
     "copied_toast": "已复制",
     "copy_failed_toast": "复制失败",
@@ -238,10 +237,21 @@
     "composer_placeholder": "发消息给 {{name}}…"
   },
   "quote": {
+    "action": "引用",
     "jump_to": "跳转到原消息",
     "cancel": "取消引用",
-    "deleted": "原消息已删除",
-    "inaccessible": "原消息不可用"
+    "unavailable_title": "原消息不可用",
+    "unavailable_summary": "消息可能已删除，或你无权查看。",
+    "type_user": "消息",
+    "type_agent": "Agent",
+    "type_lark": "飞书",
+    "type_system": "系统",
+    "type_unknown": "消息",
+    "attachment_summary": "附件",
+    "attachments_summary": "{{count}} 个附件",
+    "image_summary": "图片",
+    "images_summary": "{{count}} 张图片",
+    "empty_summary": "暂无预览"
   },
   "message_loading": {
     "load_older": "加载更早消息",

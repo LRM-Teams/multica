@@ -314,13 +314,6 @@ export function ChannelMessageBubble({
     ownName,
     getActorName,
   });
-  const replyAuthorName = message.reply_to
-    ? resolveChannelAuthorDisplayName(message.reply_to, {
-        currentUserId,
-        ownName,
-        getActorName,
-      })
-    : "";
   const profileActorType =
     message.type === "agent"
       ? "agent"
@@ -614,8 +607,8 @@ export function ChannelMessageBubble({
                 type="button"
                 onClick={handleQuote}
                 className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
-                aria-label={t(($) => $.message.quote_action)}
-                title={t(($) => $.message.quote_action)}
+                aria-label={t(($) => $.quote.action)}
+                title={t(($) => $.quote.action)}
               >
                 <Quote className="size-3.5" />
               </button>
@@ -677,17 +670,13 @@ export function ChannelMessageBubble({
             data-collapsed={isContentCollapsed ? "true" : undefined}
             style={{ WebkitTouchCallout: "default" }}
           >
-            {(message.reply_to || message.reply_to_message_id) && (
+            {(message.quote || message.quote_message_id) && (
               <MessageQuoteCard
-                quote={message.reply_to}
-                replyToMessageId={message.reply_to_message_id}
-                authorName={replyAuthorName}
+                quote={message.quote}
+                quoteMessageId={message.quote_message_id}
+                currentUserId={currentUserId}
+                ownName={ownName}
                 onJump={onScrollTo}
-                labels={{
-                  jumpTo: t(($) => $.quote.jump_to),
-                  deleted: t(($) => $.quote.deleted),
-                  inaccessible: t(($) => $.quote.inaccessible),
-                }}
               />
             )}
             <MessageBody
@@ -771,7 +760,7 @@ export function ChannelMessageBubble({
                     className="inline-flex h-11 items-center gap-3 rounded-xl px-3 text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
                   >
                     <Quote className="size-4" />
-                    <span>{t(($) => $.message.quote_action)}</span>
+                    <span>{t(($) => $.quote.action)}</span>
                   </button>
                 )}
                 {canEdit && (
@@ -842,7 +831,7 @@ export function ChannelMessageBubble({
       <ContextMenuContent>
         <ContextMenuItem onClick={handleQuote}>
           <Quote className="mr-2 size-3.5" />
-          {t(($) => $.message.quote_action)}
+          {t(($) => $.quote.action)}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

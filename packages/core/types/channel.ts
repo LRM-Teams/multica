@@ -101,6 +101,8 @@ export interface ChannelMessage {
   client_message_id: string | null;
   reply_to_message_id?: string | null;
   reply_to?: ChannelMessageReply | null;
+  quote_message_id?: string | null;
+  quote?: ChannelMessageQuote | null;
   thread_root_message_id?: string | null;
   thread_root?: ChannelMessageReply | null;
   thread_reply_count?: number;
@@ -194,9 +196,22 @@ export interface ChannelMessageReply {
   author_name: string;
   content: string;
   parts?: MessagePart[];
-  status?: "available" | "deleted" | "inaccessible" | (string & {});
-  deleted_at?: string | null;
   created_at: string;
+}
+
+export interface ChannelMessageQuoteSnapshot {
+  type: "user" | "agent" | "lark" | "system";
+  authorId?: string | null;
+  authorName: string;
+  content: string;
+  parts?: MessagePart[];
+  createdAt: string;
+}
+
+export interface ChannelMessageQuote {
+  messageId: string;
+  snapshot?: ChannelMessageQuoteSnapshot | null;
+  status: "active" | "deleted" | "inaccessible" | (string & {});
 }
 
 export interface ChannelMessageSearchResult {

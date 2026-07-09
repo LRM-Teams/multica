@@ -237,7 +237,13 @@
     "composer_placeholder": "{{name}} にメッセージ…"
   },
   "quote": {
-    "jump_to": "元のメッセージへジャンプ"
+    "jump_to": "元のメッセージへジャンプ",
+    "reply_action": "引用返信",
+    "replying_to": "{{name}} に返信中",
+    "cancel_action": "引用をキャンセル",
+    "empty_preview": "メッセージ",
+    "unavailable_title": "元のメッセージは利用できません",
+    "unavailable_body": "削除されたか、アクセス権がなくなった可能性があります。"
   },
   "message_loading": {
     "load_older": "過去のメッセージを読み込む",

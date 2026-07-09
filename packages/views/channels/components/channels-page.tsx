@@ -167,6 +167,7 @@ import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
+import { QuoteReplyPreview } from "./quote-reply-preview";
 import { mapThreadWakeAnnotations } from "./thread-read-model";
 import {
   Composer,
@@ -567,6 +568,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     selectedAgentPanelId: null,
     threadDraftEmpty: true,
   });
+  const [quoteTarget, setQuoteTarget] = useState<ChannelMessage | null>(null);
+  const [threadQuoteTarget, setThreadQuoteTarget] = useState<ChannelMessage | null>(null);
   const { openThreadRoot, selectedAgentPanelId, threadDraftEmpty } = sidePanelState;
   const setOpenThreadRoot = useCallback((next: ChannelMessage | null) => {
     setSidePanelState((current) => ({ ...current, openThreadRoot: next }));
@@ -1388,18 +1391,21 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     }
     // Send lock (N held/auto-repeat Enter → 1 request) + payload-bound
     // client_message_id + the 3-way outcome, all owned by useComposerSend.
+    const replyToMessageId = quoteTarget?.channel_id === active.id ? quoteTarget.id : null;
     const dispatched = channelSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds),
+      payloadKey: composePayloadKey(content, attachmentIds, replyToMessageId ?? undefined),
       buildVars: (clientMessageId) => ({
         channelId: active.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        replyToMessageId,
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
       onCommitted: () => {
         editorRef.current?.clearContent();
         uploadMapRef.current.clear();
+        setQuoteTarget(null);
         if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
       },
       // 200-dedup is silent (onCommitted); a 409 or any other failure always
@@ -1421,19 +1427,22 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     for (const [url, id] of threadUploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
+    const replyToMessageId = threadQuoteTarget?.channel_id === active.id ? threadQuoteTarget.id : null;
     threadSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds, threadRoot.id),
+      payloadKey: composePayloadKey(content, attachmentIds, `${threadRoot.id}:${replyToMessageId ?? ""}`),
       buildVars: (clientMessageId) => ({
         channelId: active.id,
         messageId: threadRoot.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        replyToMessageId,
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
       onCommitted: () => {
         threadEditorRef.current?.clearContent();
         threadUploadMapRef.current.clear();
+        setThreadQuoteTarget(null);
         setThreadDraftEmpty(true);
       },
       onVisibleError: () => toast.error(t(($) => $.thread.send_failed)),
@@ -1442,8 +1451,19 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
 
   const handleOpenThread = (message: ChannelMessage) => {
     focusThreadComposerOnOpenRef.current = true;
+    setThreadQuoteTarget(null);
     setSelectedAgentPanelId(null);
     setOpenThreadRoot(message);
+  };
+
+  const handleQuoteMessage = (message: ChannelMessage) => {
+    setQuoteTarget(message);
+    editorRef.current?.focus();
+  };
+
+  const handleQuoteThreadMessage = (message: ChannelMessage) => {
+    setThreadQuoteTarget(message);
+    threadEditorRef.current?.focus();
   };
 
   const handleOpenAgentPanel = (agentId: string) => {
@@ -2093,6 +2113,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         loadError={threadError}
         onRetry={() => refetchThread()}
         onReact={handleReactToMessage}
+        onQuoteMessage={isActiveArchived ? undefined : handleQuoteThreadMessage}
         editor={
           <ContentEditor
             key={`thread-editor:${threadRoot.id}`}
@@ -2109,6 +2130,16 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         onSend={handleThreadSend}
         sendDisabled={threadDraftEmpty}
         sending={sendThreadMessage.isPending}
+        composerPrefix={
+          threadQuoteTarget && threadQuoteTarget.channel_id === active.id ? (
+            <QuoteReplyPreview
+              message={threadQuoteTarget}
+              currentUserId={currentUserId}
+              ownName={currentUserName ?? undefined}
+              onCancel={() => setThreadQuoteTarget(null)}
+            />
+          ) : null
+        }
         composerLeadingActions={
           <>
             <input
@@ -2396,6 +2427,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 onRetry={() => refetchMessages()}
                 emptyLabel={t(($) => $.thread.empty)}
                 onOpenThread={isActiveArchived ? undefined : handleOpenThread}
+                onQuoteMessage={isActiveArchived ? undefined : handleQuoteMessage}
                 onScrollToMessage={setHighlightMessageId}
                 onReact={handleReactToMessage}
                 onEditMessage={isActiveArchived ? undefined : handleEditMessage}
@@ -2450,6 +2482,16 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     sending={sendMessage.isPending}
                     onSend={handleSend}
                     isMobile={isMobile}
+                    prefix={
+                      quoteTarget && quoteTarget.channel_id === active.id ? (
+                        <QuoteReplyPreview
+                          message={quoteTarget}
+                          currentUserId={currentUserId}
+                          ownName={currentUserName ?? undefined}
+                          onCancel={() => setQuoteTarget(null)}
+                        />
+                      ) : null
+                    }
                     editor={
                       <ContentEditor
                         key={active.id}

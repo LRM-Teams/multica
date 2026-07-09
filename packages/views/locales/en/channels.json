@@ -237,7 +237,13 @@
     "composer_placeholder": "Message {{name}}…"
   },
   "quote": {
-    "jump_to": "Jump to original message"
+    "jump_to": "Jump to original message",
+    "reply_action": "Quote reply",
+    "replying_to": "Replying to {{name}}",
+    "cancel_action": "Cancel quote",
+    "empty_preview": "Message",
+    "unavailable_title": "Original message unavailable",
+    "unavailable_body": "It may have been deleted or you may no longer have access."
   },
   "message_loading": {
     "load_older": "Load older messages",

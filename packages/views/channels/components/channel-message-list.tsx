@@ -130,6 +130,8 @@ type MessageViewportProps = {
   initialScroll?: "bottom" | "top";
   /** Called when the user opens the message's side thread. */
   onOpenThread?: (message: ChannelMessage) => void;
+  /** Selects this message as the composer quote/reply target. */
+  onQuoteMessage?: (message: ChannelMessage) => void;
   /**
    * Called when the user clicks an inline quote block to jump to the original.
    * The parent updates `highlightMessageId` so the list scrolls + highlights.
@@ -180,6 +182,7 @@ function MessageViewport({
   header,
   initialScroll = "bottom",
   onOpenThread,
+  onQuoteMessage,
   onScrollToMessage,
   onReact,
   onEditMessage,
@@ -418,6 +421,7 @@ function MessageViewport({
             ownName={ownName}
             highlighted={msg.id === highlightMessageId}
             onOpenThread={onOpenThread}
+            onQuote={onQuoteMessage}
             onScrollTo={onScrollToMessage}
             onReact={onReact}
             onEdit={onEditMessage}

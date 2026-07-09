@@ -237,7 +237,13 @@
     "composer_placeholder": "{{name}}에게 메시지…"
   },
   "quote": {
-    "jump_to": "원본 메시지로 이동"
+    "jump_to": "원본 메시지로 이동",
+    "reply_action": "인용 답장",
+    "replying_to": "{{name}}에게 답장 중",
+    "cancel_action": "인용 취소",
+    "empty_preview": "메시지",
+    "unavailable_title": "원본 메시지를 사용할 수 없습니다",
+    "unavailable_body": "삭제되었거나 더 이상 접근 권한이 없을 수 있습니다."
   },
   "message_loading": {
     "load_older": "이전 메시지 불러오기",

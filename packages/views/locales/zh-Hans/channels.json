@@ -237,7 +237,13 @@
     "composer_placeholder": "发消息给 {{name}}…"
   },
   "quote": {
-    "jump_to": "跳转到原消息"
+    "jump_to": "跳转到原消息",
+    "reply_action": "引用回复",
+    "replying_to": "正在引用 {{name}}",
+    "cancel_action": "取消引用",
+    "empty_preview": "消息",
+    "unavailable_title": "原消息不可用",
+    "unavailable_body": "可能已被删除，或你不再有权限查看。"
   },
   "message_loading": {
     "load_older": "加载更早消息",

@@ -114,7 +114,12 @@ vi.mock("../../i18n/use-t", () => ({
           save_edit: string;
           cancel_edit: string;
         };
-        quote: { jump_to: string };
+        quote: {
+          jump_to: string;
+          reply_action: string;
+          unavailable_title: string;
+          unavailable_body: string;
+        };
         thread: { reply: string; reply_count: string };
         time: { today: string; yesterday: string };
       }) => string,
@@ -142,6 +147,9 @@ vi.mock("../../i18n/use-t", () => ({
         },
         quote: {
           jump_to: "Jump to original message",
+          reply_action: "Quote reply",
+          unavailable_title: "Original message unavailable",
+          unavailable_body: "It may have been deleted or you may no longer have access.",
         },
         thread: {
           reply: "Reply in thread",
@@ -971,13 +979,14 @@ describe("ChannelMessageBubble", () => {
     await waitFor(() => expect(onOpenThread).toHaveBeenCalledWith(message));
   });
 
-  it("opens mobile message actions from a long press without a thread menu item", async () => {
+  it("opens mobile message actions from a long press with quote but without a thread menu item", async () => {
     setMobileViewport();
     render(
       <ChannelMessageBubble
         message={makeMessage()}
         currentUserId="user-1"
         onOpenThread={vi.fn()}
+        onQuote={vi.fn()}
         onReact={vi.fn()}
       />,
     );
@@ -989,8 +998,38 @@ describe("ChannelMessageBubble", () => {
     expect(menu).toBeInTheDocument();
     expect(within(menu).getByRole("button", { name: "Add reaction" })).toBeInTheDocument();
     expect(within(menu).getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(within(menu).getByRole("button", { name: "Quote reply" })).toBeInTheDocument();
     expect(within(menu).queryByRole("button", { name: "Reply in thread" })).not.toBeInTheDocument();
-    expect(within(menu).queryByRole("button", { name: "Quote reply" })).not.toBeInTheDocument();
+  });
+
+  it("selects quote reply from the mobile action sheet and closes it", async () => {
+    setMobileViewport();
+    const onQuote = vi.fn();
+    const message = makeMessage();
+    render(<ChannelMessageBubble message={message} currentUserId="user-1" onQuote={onQuote} />);
+
+    const bubble = screen.getByTestId("message-bubble");
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+
+    const menu = await screen.findByRole("dialog", { name: "Message actions" });
+    await userEvent.click(within(menu).getByRole("button", { name: "Quote reply" }));
+
+    expect(onQuote).toHaveBeenCalledWith(message);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("renders unavailable quote state when the backend rejects or omits the quoted message", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ reply_to_message_id: "missing-1", reply_to: null })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("Original message unavailable")).toBeInTheDocument();
+    expect(screen.getByText("It may have been deleted or you may no longer have access.")).toBeInTheDocument();
   });
 
   it("closes the mobile action sheet after a copy action", async () => {

@@ -7,7 +7,7 @@ import {
   useState,
   type PointerEvent,
 } from "react";
-import { Copy, MessageSquare, Pencil, Trash2 } from "lucide-react";
+import { Copy, MessageSquare, Pencil, Quote, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
@@ -181,6 +181,7 @@ export function ChannelMessageBubble({
   ownName,
   highlighted = false,
   onOpenThread,
+  onQuote,
   onScrollTo,
   onReact,
   onEdit,
@@ -198,6 +199,8 @@ export function ChannelMessageBubble({
   highlighted?: boolean;
   /** Called when the user opens the message's side thread. */
   onOpenThread?: (message: ChannelMessage) => void;
+  /** Selects this message as the composer quote/reply target. */
+  onQuote?: (message: ChannelMessage) => void;
   /** Called when the user clicks the inline quote block to jump to the original. */
   onScrollTo?: (messageId: string) => void;
   /** Toggle/add a lightweight emoji reaction on this message. */
@@ -353,6 +356,7 @@ export function ChannelMessageBubble({
   );
 
   const canOpenThread = !!onOpenThread && !message.thread_root_message_id;
+  const canQuote = !!onQuote;
   const threadReplyCount = message.thread_reply_count ?? 0;
   const threadUnreadCount = message.thread_unread_count ?? 0;
   const hasThreadActivity = threadReplyCount > 0 || threadUnreadCount > 0;
@@ -414,6 +418,7 @@ export function ChannelMessageBubble({
       onOpenAgent?.(message.author_id);
     }
   };
+  const handleQuote = () => onQuote?.(message);
   const handleOpenAgentCapture = isAgent && onOpenAgent ? handleOpenAgent : undefined;
   const clearLongPressTimer = () => {
     if (longPressTimerRef.current) {
@@ -599,6 +604,17 @@ export function ChannelMessageBubble({
             >
               <Copy className="size-3.5" />
             </button>
+            {canQuote && (
+              <button
+                type="button"
+                onClick={handleQuote}
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                aria-label={t(($) => $.quote.reply_action)}
+                title={t(($) => $.quote.reply_action)}
+              >
+                <Quote className="size-3.5" />
+              </button>
+            )}
             {canOpenThread && (
               <button
                 type="button"
@@ -657,7 +673,7 @@ export function ChannelMessageBubble({
             style={{ WebkitTouchCallout: "default" }}
           >
             {/* Inline quote block: rendered when reply_to is present (BE task #23) */}
-            {message.reply_to && (
+            {(message.reply_to || message.reply_to_message_id) && (
               <button
                 type="button"
                 onClick={() =>
@@ -667,12 +683,14 @@ export function ChannelMessageBubble({
                 aria-label={t(($) => $.quote.jump_to)}
               >
                 <p className="truncate text-[11px] font-semibold text-foreground/70">
-                  {replyAuthorName}
+                  {message.reply_to ? replyAuthorName : t(($) => $.quote.unavailable_title)}
                 </p>
                 <p className="line-clamp-1 text-[11px] text-muted-foreground">
-                  {formatMessagePartsPreview(message.reply_to.parts) ??
-                    unwrapStructuredPreviewContent(message.reply_to.content) ??
-                    message.reply_to.content}
+                  {message.reply_to
+                    ? formatMessagePartsPreview(message.reply_to.parts) ??
+                      unwrapStructuredPreviewContent(message.reply_to.content) ??
+                      message.reply_to.content
+                    : t(($) => $.quote.unavailable_body)}
                 </p>
               </button>
             )}
@@ -750,6 +768,16 @@ export function ChannelMessageBubble({
                   <Copy className="size-4" />
                   <span>{t(($) => $.message.copy_action)}</span>
                 </button>
+                {canQuote && (
+                  <button
+                    type="button"
+                    onClick={() => runMobileAction(handleQuote)}
+                    className="inline-flex h-11 items-center gap-3 rounded-xl px-3 text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                  >
+                    <Quote className="size-4" />
+                    <span>{t(($) => $.quote.reply_action)}</span>
+                  </button>
+                )}
                 {canEdit && (
                   <button
                     type="button"

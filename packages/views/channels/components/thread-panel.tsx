@@ -140,11 +140,13 @@ export interface ThreadPanelProps {
   loadError?: boolean;
   onRetry?: () => void;
   onReact?: (message: ChannelMessage, emoji: string) => void;
+  onQuoteMessage?: (message: ChannelMessage) => void;
   // Composer (surface="thread") wiring — the surface owns the editor + send.
   editor: ReactNode;
   onSend: () => void;
   sendDisabled: boolean;
   sending?: boolean;
+  composerPrefix?: ReactNode;
   composerLeadingActions?: ReactNode;
   /** Read-only surface (archived channel) → banner instead of composer. */
   readOnly?: boolean;
@@ -177,10 +179,12 @@ export function ThreadPanel({
   loadError,
   onRetry,
   onReact,
+  onQuoteMessage,
   editor,
   onSend,
   sendDisabled,
   sending,
+  composerPrefix,
   composerLeadingActions,
   readOnly = false,
   readOnlyContent,
@@ -281,6 +285,7 @@ export function ThreadPanel({
         loadErrorLabel={loadError ? t(($) => $.thread.load_failed) : undefined}
         onRetry={onRetry}
         onReact={onReact}
+        onQuoteMessage={onQuoteMessage}
       />
 
       {wakeAnnotations ? <ThreadWakeStrip annotations={wakeAnnotations} /> : null}
@@ -298,6 +303,7 @@ export function ThreadPanel({
             sending={sending}
             onSend={onSend}
             isMobile={isMobile}
+            prefix={composerPrefix}
             leadingActions={composerActions}
           />
         </>

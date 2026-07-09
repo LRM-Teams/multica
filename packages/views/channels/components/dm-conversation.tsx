@@ -61,6 +61,7 @@ import {
 } from "./channels-page";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 import { isTypingActorVisible } from "./conversation-typing";
+import { QuoteReplyPreview } from "./quote-reply-preview";
 
 /**
  * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
@@ -344,6 +345,8 @@ function DmChannelConversation({
     typingActors,
   }, dispatch] = useReducer(dmChannelReducer, initialDmChannelState);
   const [stoppingTaskId, setStoppingTaskId] = useState<string | null>(null);
+  const [quoteTarget, setQuoteTarget] = useState<ChannelMessage | null>(null);
+  const [threadQuoteTarget, setThreadQuoteTarget] = useState<ChannelMessage | null>(null);
 
   const { mutate: markChannelRead } = useMarkChannelRead();
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
@@ -684,18 +687,21 @@ function DmChannelConversation({
     }
     // Stop typing before the send lock so a dropped (held-Enter) trigger still
     // clears the indicator.
+    const replyToMessageId = quoteTarget?.channel_id === channelId ? quoteTarget.id : null;
     const dispatched = dmSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds),
+      payloadKey: composePayloadKey(content, attachmentIds, replyToMessageId ?? undefined),
       buildVars: (clientMessageId) => ({
         channelId,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        replyToMessageId,
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
       onCommitted: () => {
         editorRef.current?.clearContent();
         uploadMapRef.current.clear();
+        setQuoteTarget(null);
         onDraftClear?.();
       },
       // 200-dedup is silent (handled by onCommitted); 409/other always surface,
@@ -716,19 +722,22 @@ function DmChannelConversation({
     for (const [url, id] of threadUploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
+    const replyToMessageId = threadQuoteTarget?.channel_id === channelId ? threadQuoteTarget.id : null;
     threadSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds, threadRoot.id),
+      payloadKey: composePayloadKey(content, attachmentIds, `${threadRoot.id}:${replyToMessageId ?? ""}`),
       buildVars: (clientMessageId) => ({
         channelId,
         messageId: threadRoot.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        replyToMessageId,
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
       onCommitted: () => {
         threadEditorRef.current?.clearContent();
         threadUploadMapRef.current.clear();
+        setThreadQuoteTarget(null);
         dispatch({ type: "setThreadDraftEmpty", empty: true });
       },
       onVisibleError: () => toast.error(t(($) => $.thread.send_failed)),
@@ -737,7 +746,18 @@ function DmChannelConversation({
 
   const handleOpenThread = (message: ChannelMessage) => {
     focusThreadComposerOnOpenRef.current = true;
+    setThreadQuoteTarget(null);
     dispatch({ type: "openThread", message });
+  };
+
+  const handleQuoteMessage = (message: ChannelMessage) => {
+    setQuoteTarget(message);
+    editorRef.current?.focus();
+  };
+
+  const handleQuoteThreadMessage = (message: ChannelMessage) => {
+    setThreadQuoteTarget(message);
+    threadEditorRef.current?.focus();
   };
 
   const threadPanel =
@@ -806,6 +826,7 @@ function DmChannelConversation({
           loadErrorLabel={threadError ? t(($) => $.thread.load_failed) : undefined}
           onRetry={() => refetchThread()}
           onReact={handleReactToMessage}
+          onQuoteMessage={handleQuoteThreadMessage}
           onEditMessage={handleEditMessage}
           onDeleteMessage={handleDeleteMessage}
         />
@@ -821,6 +842,16 @@ function DmChannelConversation({
           sending={sendThreadMessage.isPending}
           onSend={handleThreadSend}
           isMobile={isMobile}
+          prefix={
+            threadQuoteTarget && threadQuoteTarget.channel_id === channelId ? (
+              <QuoteReplyPreview
+                message={threadQuoteTarget}
+                currentUserId={currentUserId}
+                ownName={currentUserName ?? undefined}
+                onCancel={() => setThreadQuoteTarget(null)}
+              />
+            ) : null
+          }
           editor={
             <ContentEditor
               key={`dm-thread-editor:${threadRoot.id}`}
@@ -966,6 +997,7 @@ function DmChannelConversation({
         onRetry={() => refetchMessages()}
         emptyLabel={t(($) => $.dm.thread_empty)}
         onOpenThread={handleOpenThread}
+        onQuoteMessage={handleQuoteMessage}
         onReact={handleReactToMessage}
         onEditMessage={handleEditMessage}
         onDeleteMessage={handleDeleteMessage}
@@ -983,6 +1015,16 @@ function DmChannelConversation({
         sending={sendMessage.isPending}
         onSend={handleSend}
         isMobile={isMobile}
+        prefix={
+          quoteTarget && quoteTarget.channel_id === channelId ? (
+            <QuoteReplyPreview
+              message={quoteTarget}
+              currentUserId={currentUserId}
+              ownName={currentUserName ?? undefined}
+              onCancel={() => setQuoteTarget(null)}
+            />
+          ) : null
+        }
         editor={
             <ContentEditor
               key={channelId}

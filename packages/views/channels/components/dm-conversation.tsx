@@ -61,7 +61,6 @@ import {
 } from "./channels-page";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 import { isTypingActorVisible } from "./conversation-typing";
-import { QuoteReplyPreview } from "./quote-reply-preview";
 
 /**
  * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
@@ -842,15 +841,13 @@ function DmChannelConversation({
           sending={sendThreadMessage.isPending}
           onSend={handleThreadSend}
           isMobile={isMobile}
-          prefix={
-            threadQuoteTarget && threadQuoteTarget.channel_id === channelId ? (
-              <QuoteReplyPreview
-                message={threadQuoteTarget}
-                currentUserId={currentUserId}
-                ownName={currentUserName ?? undefined}
-                onCancel={() => setThreadQuoteTarget(null)}
-              />
-            ) : null
+          quotePreview={
+            threadQuoteTarget && threadQuoteTarget.channel_id === channelId ? {
+              message: threadQuoteTarget,
+              currentUserId,
+              ownName: currentUserName ?? undefined,
+              onCancel: () => setThreadQuoteTarget(null),
+            } : undefined
           }
           editor={
             <ContentEditor
@@ -1015,15 +1012,13 @@ function DmChannelConversation({
         sending={sendMessage.isPending}
         onSend={handleSend}
         isMobile={isMobile}
-        prefix={
-          quoteTarget && quoteTarget.channel_id === channelId ? (
-            <QuoteReplyPreview
-              message={quoteTarget}
-              currentUserId={currentUserId}
-              ownName={currentUserName ?? undefined}
-              onCancel={() => setQuoteTarget(null)}
-            />
-          ) : null
+        quotePreview={
+          quoteTarget && quoteTarget.channel_id === channelId ? {
+            message: quoteTarget,
+            currentUserId,
+            ownName: currentUserName ?? undefined,
+            onCancel: () => setQuoteTarget(null),
+          } : undefined
         }
         editor={
             <ContentEditor

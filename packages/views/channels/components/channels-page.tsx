@@ -167,7 +167,6 @@ import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
-import { QuoteReplyPreview } from "./quote-reply-preview";
 import { mapThreadWakeAnnotations } from "./thread-read-model";
 import {
   Composer,
@@ -2091,6 +2090,18 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // can return to the list.
   const showChannelDetailSkeleton =
     isLoading || (!!activeId && !activeDmId && !active);
+  const quoteComposerPreview = quoteTarget && active && quoteTarget.channel_id === active.id ? {
+    message: quoteTarget,
+    currentUserId,
+    ownName: currentUserName ?? undefined,
+    onCancel: () => setQuoteTarget(null),
+  } : undefined;
+  const threadQuoteComposerPreview = threadQuoteTarget && active && threadQuoteTarget.channel_id === active.id ? {
+    message: threadQuoteTarget,
+    currentUserId,
+    ownName: currentUserName ?? undefined,
+    onCancel: () => setThreadQuoteTarget(null),
+  } : undefined;
   // The thread surface is the shared <ThreadPanel> (pinned root + flat replies +
   // participant chips + wake strip), fed the #251 read-model off the root
   // message. also-send is CUT this round (#256), so no also-send props are
@@ -2130,16 +2141,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         onSend={handleThreadSend}
         sendDisabled={threadDraftEmpty}
         sending={sendThreadMessage.isPending}
-        composerPrefix={
-          threadQuoteTarget && threadQuoteTarget.channel_id === active.id ? (
-            <QuoteReplyPreview
-              message={threadQuoteTarget}
-              currentUserId={currentUserId}
-              ownName={currentUserName ?? undefined}
-              onCancel={() => setThreadQuoteTarget(null)}
-            />
-          ) : null
-        }
+        composerQuotePreview={threadQuoteComposerPreview}
         composerLeadingActions={
           <>
             <input
@@ -2482,16 +2484,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     sending={sendMessage.isPending}
                     onSend={handleSend}
                     isMobile={isMobile}
-                    prefix={
-                      quoteTarget && quoteTarget.channel_id === active.id ? (
-                        <QuoteReplyPreview
-                          message={quoteTarget}
-                          currentUserId={currentUserId}
-                          ownName={currentUserName ?? undefined}
-                          onCancel={() => setQuoteTarget(null)}
-                        />
-                      ) : null
-                    }
+                    quotePreview={quoteComposerPreview}
                     editor={
                       <ContentEditor
                         key={active.id}

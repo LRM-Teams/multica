@@ -2,9 +2,11 @@
 
 import type { ReactNode } from "react";
 import { Send } from "lucide-react";
+import type { ChannelMessage } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
+import { QuoteReplyPreview } from "./quote-reply-preview";
 
 /**
  * The conversation surface a composer belongs to. The composer shell is
@@ -13,6 +15,13 @@ import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
  * shell renders everywhere.
  */
 export type ComposerSurface = "channel" | "dm_channel" | "legacy_dm" | "thread";
+
+export interface ComposerQuotePreviewProps {
+  message: ChannelMessage;
+  currentUserId: string | null;
+  ownName?: string;
+  onCancel: () => void;
+}
 
 export interface ComposerProps {
   /** Which of the four surfaces this composer is mounted in. */
@@ -27,6 +36,8 @@ export interface ComposerProps {
   isMobile: boolean;
   /** Optional content pinned above the editor (e.g. a reply-to preview). */
   prefix?: ReactNode;
+  /** Quote target rendered inside the shell without passing JSX through parents. */
+  quotePreview?: ComposerQuotePreviewProps;
   /** Action-row controls left of Send (attach, mention, issue-ref, project). */
   leadingActions?: ReactNode;
   /**
@@ -56,6 +67,7 @@ export function Composer({
   onSend,
   isMobile,
   prefix,
+  quotePreview,
   leadingActions,
   tray,
   readOnly = false,
@@ -77,6 +89,7 @@ export function Composer({
         data-composer-surface={surface}
       >
         {prefix}
+        {quotePreview ? <QuoteReplyPreview {...quotePreview} /> : null}
         {tray ? (
           <div className="min-w-0 px-2 pt-2" data-slot="composer-tray">
             {tray}

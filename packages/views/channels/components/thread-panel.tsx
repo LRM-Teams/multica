@@ -8,7 +8,7 @@ import type { ChannelMessage } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
 import { ChannelMessageList } from "./channel-message-list";
 import { ThreadRootPreview } from "./thread-root-preview";
-import { Composer } from "./composer";
+import { Composer, type ComposerQuotePreviewProps } from "./composer";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
 import { ConversationHeader } from "./conversation-surface";
 import type { ThreadMemberType } from "./thread-participants";
@@ -146,7 +146,7 @@ export interface ThreadPanelProps {
   onSend: () => void;
   sendDisabled: boolean;
   sending?: boolean;
-  composerPrefix?: ReactNode;
+  composerQuotePreview?: ComposerQuotePreviewProps;
   composerLeadingActions?: ReactNode;
   /** Read-only surface (archived channel) → banner instead of composer. */
   readOnly?: boolean;
@@ -184,7 +184,7 @@ export function ThreadPanel({
   onSend,
   sendDisabled,
   sending,
-  composerPrefix,
+  composerQuotePreview,
   composerLeadingActions,
   readOnly = false,
   readOnlyContent,
@@ -303,7 +303,7 @@ export function ThreadPanel({
             sending={sending}
             onSend={onSend}
             isMobile={isMobile}
-            prefix={composerPrefix}
+            quotePreview={composerQuotePreview}
             leadingActions={composerActions}
           />
         </>

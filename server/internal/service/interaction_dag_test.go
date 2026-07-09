@@ -84,10 +84,29 @@ func (f *fakeInteractionDAGStore) InsertInteractionDAGEdge(_ context.Context, ar
 	return nil
 }
 
-// GetInteractionDAGSegmentByAgentRun satisfies InteractionDAGStore. Task 3 only
-// records session_runs; segment recording + parent-segment lookup arrive in
-// Task 4, so until then a lookup finds no rows.
+// GetInteractionDAGSegmentByAgentRun satisfies InteractionDAGStore. Returns the
+// latest segment recorded for the run (one-segment-per-task in change 1; the
+// reverse scan keeps this stable under a future multi-segment model, mirroring
+// the real query's ORDER BY created_at DESC LIMIT 1).
 func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByAgentRun(_ context.Context, agentRunID string) (db.InteractionDAGSegment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := len(f.segmentSnapshots) - 1; i >= 0; i-- {
+		s := f.segmentSnapshots[i]
+		if s.AgentRunID == agentRunID {
+			return db.InteractionDAGSegment{
+				SegmentID:                 s.SegmentID,
+				ProjectID:                 s.ProjectID,
+				AgentRunID:                s.AgentRunID,
+				IssueID:                   s.IssueID,
+				TaskID:                    s.TaskID,
+				TrajectoryID:              s.TrajectoryID,
+				TensorRef:                 s.TensorRef,
+				ClosingEvent:              s.ClosingEvent,
+				ClosingEventTargetSegment: s.ClosingEventTargetSegment,
+			}, nil
+		}
+	}
 	return db.InteractionDAGSegment{}, pgx.ErrNoRows
 }
 

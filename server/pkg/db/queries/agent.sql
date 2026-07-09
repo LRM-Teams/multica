@@ -484,6 +484,15 @@ SET session_id = COALESCE(sqlc.narg('session_id'), session_id),
     work_dir  = COALESCE(sqlc.narg('work_dir'), work_dir)
 WHERE id = $1 AND status IN ('dispatched', 'running');
 
+-- name: SetTaskParentTaskID :exec
+-- Links a mention-delegated child task to its trained parent (D11 delegation
+-- edge). CreateAgentTask has no parent_task_id parameter, so this post-insert
+-- UPDATE sets it. Used so the delegation edge parent->child can be recorded at
+-- the child's close via SegmentIDForAgentRun(parent_task_id).
+UPDATE agent_task_queue
+SET parent_task_id = $2
+WHERE id = $1;
+
 -- name: MergeTaskArealProxyContext :exec
 -- Merges the training RL proxy config into the task's context JSONB via a
 -- single read-modify-write. COALESCE handles a NULL/empty context; the `||`

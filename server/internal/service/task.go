@@ -612,6 +612,19 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 	// Training session-open chokepoint (spec §4.3): leader @mention delegation
 	// of a teammate — the trained member's task is typically created here.
 	s.tryOpenTrainingSession(ctx, task, issue.ProjectID, "")
+	// Delegation event seam (D11): the trained parent that posted the trigger
+	// comment delegates to this child. Close the parent's segment and link the
+	// child to its parent so the delegation edge is recorded at the child's
+	// close. No-op when there is no trained parent (plain user mention).
+	if parent, ok := s.discoverDelegationParent(ctx, issue.ID, triggerCommentID); ok {
+		projectID := util.UUIDToString(issue.ProjectID)
+		s.closeSegmentForDelegation(ctx, parent, projectID, s.leanEnvSnapshot(ctx, issue.ProjectID))
+		if err := s.Queries.SetTaskParentTaskID(ctx, db.SetTaskParentTaskIDParams{ID: task.ID, ParentTaskID: parent.ID}); err != nil {
+			slog.Warn("interaction_dag: set child parent_task_id failed", "child", util.UUIDToString(task.ID), "err", err)
+		} else {
+			task.ParentTaskID = parent.ID
+		}
+	}
 	// See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
 	s.interruptInFlightIssueTasksForFollowup(ctx, task)
@@ -1422,6 +1435,15 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 
 	slog.Info("task completed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
 	s.captureTaskCompleted(ctx, task)
+	// Completion/leaf event seam (D11): close this task's segment before
+	// RouteTerminalTrainingTask ends the RL session (CloseSegmentForEvent exports
+	// the just-closed trajectory over the live session). One-segment-per-task;
+	// the delegation edge to the parent is recorded here at the child's close.
+	if task.IssueID.Valid {
+		if issue, err := s.Queries.GetIssue(ctx, task.IssueID); err == nil {
+			s.closeSegmentForTerminal(ctx, task, util.UUIDToString(issue.ProjectID), s.leanEnvSnapshot(ctx, issue.ProjectID))
+		}
+	}
 	s.RouteTerminalTrainingTask(ctx, task)
 
 	// Invariant: every completed issue task must have at least one agent

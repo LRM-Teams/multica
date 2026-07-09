@@ -3002,6 +3002,26 @@ func (q *Queries) UpdateAgentTaskSession(ctx context.Context, arg UpdateAgentTas
 	return err
 }
 
+const setTaskParentTaskID = `-- name: SetTaskParentTaskID :exec
+UPDATE agent_task_queue
+SET parent_task_id = $2
+WHERE id = $1
+`
+
+type SetTaskParentTaskIDParams struct {
+	ID           pgtype.UUID `json:"id"`
+	ParentTaskID pgtype.UUID `json:"parent_task_id"`
+}
+
+// Links a mention-delegated child task to its trained parent (D11 delegation
+// edge). CreateAgentTask has no parent_task_id parameter, so this post-insert
+// UPDATE sets it. Used so the delegation edge parent->child can be recorded at
+// the child's close via SegmentIDForAgentRun(parent_task_id).
+func (q *Queries) SetTaskParentTaskID(ctx context.Context, arg SetTaskParentTaskIDParams) error {
+	_, err := q.db.Exec(ctx, setTaskParentTaskID, arg.ID, arg.ParentTaskID)
+	return err
+}
+
 const mergeTaskArealProxyContext = `-- name: MergeTaskArealProxyContext :exec
 UPDATE agent_task_queue
 SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object('areal_proxy', $2::jsonb)

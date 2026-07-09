@@ -2285,7 +2285,8 @@ func (h *Handler) setChannelThreadReadOrFollow(w http.ResponseWriter, r *http.Re
 	}
 	if followed {
 		h.followChannelThreadUser(r.Context(), channelID, rootID, parseUUID(userID), markRead)
-	} else if _, err := h.DB.Exec(r.Context(), `
+	} else {
+		if _, err := h.DB.Exec(r.Context(), `
 		WITH updated AS (
 		  UPDATE channel_thread_state
 		  SET followed_at = NULL, updated_at = now()
@@ -2298,9 +2299,14 @@ func (h *Handler) setChannelThreadReadOrFollow(w http.ResponseWriter, r *http.Re
 		WHERE tp.root_message_id = updated.root_message_id
 		  AND tp.member_type = 'user'
 		  AND tp.member_id = updated.user_id`, rootID, parseUUID(userID)); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to unfollow channel thread")
-		return
+			writeError(w, http.StatusInternalServerError, "failed to unfollow channel thread")
+			return
+		}
+
+		// #329: emit a system message when a thread is unfollowed.
+		h.emitThreadUnfollowedEvent(w, r.Context(), workspaceID, channelID, rootID, userID)
 	}
+
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

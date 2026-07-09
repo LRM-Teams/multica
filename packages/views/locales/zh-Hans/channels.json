@@ -237,7 +237,10 @@
     "composer_placeholder": "发消息给 {{name}}…"
   },
   "quote": {
-    "jump_to": "跳转到原消息"
+    "action": "引用回复",
+    "jump_to": "跳转到原消息",
+    "unavailable_author": "原消息",
+    "unavailable_body": "消息已删除或不可见"
   },
   "message_loading": {
     "load_older": "加载更早消息",

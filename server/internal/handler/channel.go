@@ -1423,7 +1423,7 @@ func (h *Handler) attachChannelMessageReplySummaries(ctx context.Context, worksp
 	rows, err := h.DB.Query(ctx, `
 		SELECT id, author_type, author_id, author_name, content, parts, created_at
 		FROM channel_message
-		WHERE workspace_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL`,
+		WHERE workspace_id = $1 AND id = ANY($2::uuid[])`,
 		parseUUID(workspaceID), replyIDs)
 	if err != nil {
 		slog.Warn("channel reply summary: load failed", "workspace", workspaceID, "error", err)

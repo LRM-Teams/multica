@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Send } from "lucide-react";
+import { Send, X } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
@@ -27,6 +27,8 @@ export interface ComposerProps {
   isMobile: boolean;
   /** Optional content pinned above the editor (e.g. a reply-to preview). */
   prefix?: ReactNode;
+  quotePreview?: { authorName: string; preview: string } | null;
+  onClearQuote?: () => void;
   /** Action-row controls left of Send (attach, mention, issue-ref, project). */
   leadingActions?: ReactNode;
   /**
@@ -56,6 +58,8 @@ export function Composer({
   onSend,
   isMobile,
   prefix,
+  quotePreview,
+  onClearQuote,
   leadingActions,
   tray,
   readOnly = false,
@@ -77,6 +81,26 @@ export function Composer({
         data-composer-surface={surface}
       >
         {prefix}
+        {quotePreview ? (
+          <div
+            className="flex items-start gap-2 border-b border-border/30 px-3 py-2"
+            data-testid="composer-quote-preview"
+          >
+            <div className="mt-0.5 h-8 w-0.5 shrink-0 rounded-full bg-primary/50" />
+            <div className="min-w-0 flex-1 text-xs">
+              <p className="truncate font-medium text-foreground/80">{quotePreview.authorName}</p>
+              <p className="truncate text-muted-foreground">{quotePreview.preview}</p>
+            </div>
+            <button
+              type="button"
+              onClick={onClearQuote}
+              className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              aria-label="Cancel quote"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        ) : null}
         {tray ? (
           <div className="min-w-0 px-2 pt-2" data-slot="composer-tray">
             {tray}

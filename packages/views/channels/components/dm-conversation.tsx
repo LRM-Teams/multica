@@ -56,6 +56,10 @@ import { ChannelFilesPanel } from "./channel-files-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
 import { ThreadRootPreview } from "./thread-root-preview";
 import {
+  formatChannelMessagePreview,
+  resolveChannelAuthorDisplayName,
+} from "./message-preview";
+import {
   ConversationActivityStrip,
   type TypingActor,
 } from "./channels-page";
@@ -94,6 +98,8 @@ interface DmChannelState {
   threadDraftEmpty: boolean;
   convSearch: ConversationSearchState;
   threadParentHighlightId: string | null;
+  replyTarget: ChannelMessage | null;
+  threadReplyTarget: ChannelMessage | null;
   typingActors: Record<string, TypingActor>;
 }
 
@@ -103,6 +109,8 @@ type DmChannelAction =
   | { type: "resetForChannel" }
   | { type: "setThreadDraftEmpty"; empty: boolean }
   | { type: "setThreadParentHighlightId"; id: string | null }
+  | { type: "setReplyTarget"; message: ChannelMessage | null }
+  | { type: "setThreadReplyTarget"; message: ChannelMessage | null }
   | { type: "openSearch" }
   | { type: "closeSearch" }
   | { type: "setSearchQuery"; query: string }
@@ -126,13 +134,15 @@ const initialDmChannelState: DmChannelState = {
   threadDraftEmpty: true,
   convSearch: initialConversationSearchState,
   threadParentHighlightId: null,
+  replyTarget: null,
+  threadReplyTarget: null,
   typingActors: {},
 };
 
 function dmChannelReducer(state: DmChannelState, action: DmChannelAction): DmChannelState {
   switch (action.type) {
     case "openThread":
-      return { ...state, openThreadRoot: action.message };
+      return { ...state, openThreadRoot: action.message, threadReplyTarget: null };
     case "closeThread":
       return { ...state, openThreadRoot: null };
     case "resetForChannel":
@@ -141,6 +151,10 @@ function dmChannelReducer(state: DmChannelState, action: DmChannelAction): DmCha
       return state.threadDraftEmpty === action.empty ? state : { ...state, threadDraftEmpty: action.empty };
     case "setThreadParentHighlightId":
       return state.threadParentHighlightId === action.id ? state : { ...state, threadParentHighlightId: action.id };
+    case "setReplyTarget":
+      return { ...state, replyTarget: action.message };
+    case "setThreadReplyTarget":
+      return { ...state, threadReplyTarget: action.message };
     case "openSearch":
       return { ...state, convSearch: { ...state.convSearch, open: true } };
     case "closeSearch":
@@ -341,6 +355,8 @@ function DmChannelConversation({
     threadDraftEmpty,
     convSearch,
     threadParentHighlightId,
+    replyTarget,
+    threadReplyTarget,
     typingActors,
   }, dispatch] = useReducer(dmChannelReducer, initialDmChannelState);
   const [stoppingTaskId, setStoppingTaskId] = useState<string | null>(null);
@@ -453,6 +469,29 @@ function DmChannelConversation({
   // an allowlist the picker defaults to the whole workspace, which is wrong for
   // a 1-on-1 (only the peer is reachable here).
   const mentionAllowedActorIds = useMemo(() => new Set([dm.peer.id]), [dm.peer.id]);
+
+  const resolveMentionPreview = useCallback((_type: "member" | "agent", id: string, fallback: string) => {
+    if (id === dm.peer.id) return dm.peer.name;
+    if (id === currentUserId) return currentUserName ?? fallback;
+    return fallback;
+  }, [currentUserId, currentUserName, dm.peer.id, dm.peer.name]);
+  const buildQuotePreview = useCallback((message: ChannelMessage) => {
+    const authorName = resolveChannelAuthorDisplayName(message, {
+      currentUserId,
+      ownName: currentUserName ?? undefined,
+    });
+    return {
+      authorName,
+      preview: formatChannelMessagePreview(
+        authorName,
+        message.content,
+        resolveMentionPreview,
+        message.parts,
+      ).trim() || t(($) => $.quote.unavailable_body),
+    };
+  }, [currentUserId, currentUserName, resolveMentionPreview, t]);
+  const dmQuotePreview = replyTarget ? buildQuotePreview(replyTarget) : null;
+  const threadQuotePreview = threadReplyTarget ? buildQuotePreview(threadReplyTarget) : null;
 
   const searchHitIds = useMemo(
     () =>
@@ -685,17 +724,19 @@ function DmChannelConversation({
     // Stop typing before the send lock so a dropped (held-Enter) trigger still
     // clears the indicator.
     const dispatched = dmSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds),
+      payloadKey: composePayloadKey(content, attachmentIds, replyTarget?.id ?? ""),
       buildVars: (clientMessageId) => ({
         channelId,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        replyToMessageId: replyTarget?.id,
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
       onCommitted: () => {
         editorRef.current?.clearContent();
         uploadMapRef.current.clear();
+        dispatch({ type: "setReplyTarget", message: null });
         onDraftClear?.();
       },
       // 200-dedup is silent (handled by onCommitted); 409/other always surface,
@@ -717,18 +758,20 @@ function DmChannelConversation({
       if (content.includes(url)) attachmentIds.push(id);
     }
     threadSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds, threadRoot.id),
+      payloadKey: composePayloadKey(content, attachmentIds, `${threadRoot.id}:${threadReplyTarget?.id ?? ""}`),
       buildVars: (clientMessageId) => ({
         channelId,
         messageId: threadRoot.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        replyToMessageId: threadReplyTarget?.id,
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
       onCommitted: () => {
         threadEditorRef.current?.clearContent();
         threadUploadMapRef.current.clear();
+        dispatch({ type: "setThreadReplyTarget", message: null });
         dispatch({ type: "setThreadDraftEmpty", empty: true });
       },
       onVisibleError: () => toast.error(t(($) => $.thread.send_failed)),
@@ -806,6 +849,7 @@ function DmChannelConversation({
           loadErrorLabel={threadError ? t(($) => $.thread.load_failed) : undefined}
           onRetry={() => refetchThread()}
           onReact={handleReactToMessage}
+          onQuoteMessage={(message) => dispatch({ type: "setThreadReplyTarget", message })}
           onEditMessage={handleEditMessage}
           onDeleteMessage={handleDeleteMessage}
         />
@@ -821,6 +865,8 @@ function DmChannelConversation({
           sending={sendThreadMessage.isPending}
           onSend={handleThreadSend}
           isMobile={isMobile}
+          quotePreview={threadQuotePreview}
+          onClearQuote={() => dispatch({ type: "setThreadReplyTarget", message: null })}
           editor={
             <ContentEditor
               key={`dm-thread-editor:${threadRoot.id}`}
@@ -969,6 +1015,7 @@ function DmChannelConversation({
         onReact={handleReactToMessage}
         onEditMessage={handleEditMessage}
         onDeleteMessage={handleDeleteMessage}
+        onQuoteMessage={(message) => dispatch({ type: "setReplyTarget", message })}
       />
       <ConversationActivityStrip
         typingActors={activeTypingActors}
@@ -983,6 +1030,8 @@ function DmChannelConversation({
         sending={sendMessage.isPending}
         onSend={handleSend}
         isMobile={isMobile}
+        quotePreview={dmQuotePreview}
+        onClearQuote={() => dispatch({ type: "setReplyTarget", message: null })}
         editor={
             <ContentEditor
               key={channelId}

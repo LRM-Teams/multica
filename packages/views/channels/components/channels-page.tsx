@@ -562,12 +562,16 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     openThreadRoot: ChannelMessage | null;
     selectedAgentPanelId: string | null;
     threadDraftEmpty: boolean;
+    replyTarget: ChannelMessage | null;
+    threadReplyTarget: ChannelMessage | null;
   }>({
     openThreadRoot: null,
     selectedAgentPanelId: null,
     threadDraftEmpty: true,
+    replyTarget: null,
+    threadReplyTarget: null,
   });
-  const { openThreadRoot, selectedAgentPanelId, threadDraftEmpty } = sidePanelState;
+  const { openThreadRoot, selectedAgentPanelId, threadDraftEmpty, replyTarget, threadReplyTarget } = sidePanelState;
   const setOpenThreadRoot = useCallback((next: ChannelMessage | null) => {
     setSidePanelState((current) => ({ ...current, openThreadRoot: next }));
   }, []);
@@ -577,11 +581,19 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const setThreadDraftEmpty = useCallback((next: boolean) => {
     setSidePanelState((current) => ({ ...current, threadDraftEmpty: next }));
   }, []);
+  const setReplyTarget = useCallback((next: ChannelMessage | null) => {
+    setSidePanelState((current) => ({ ...current, replyTarget: next }));
+  }, []);
+  const setThreadReplyTarget = useCallback((next: ChannelMessage | null) => {
+    setSidePanelState((current) => ({ ...current, threadReplyTarget: next }));
+  }, []);
   const resetSidePanelState = useCallback(() => {
     setSidePanelState({
       openThreadRoot: null,
       selectedAgentPanelId: null,
       threadDraftEmpty: true,
+      replyTarget: null,
+      threadReplyTarget: null,
     });
   }, []);
   const [convSearchOpen, setConvSearchOpen] = useState(false);
@@ -628,6 +640,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     if (!channelId) {
       setActiveId(null);
       setActiveDmId(null);
+      resetSidePanelState();
       reconciledRouteIdRef.current = undefined;
     } else if (channelId === activeId || channelId === activeDmId) {
       reconciledRouteIdRef.current = channelId;
@@ -637,10 +650,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     ) {
       setActiveId(channelId);
       setActiveDmId(null);
+      resetSidePanelState();
       reconciledRouteIdRef.current = channelId;
     } else if (dms.some((d) => d.id === channelId)) {
       setActiveId(null);
       setActiveDmId(channelId);
+      resetSidePanelState();
       reconciledRouteIdRef.current = channelId;
     }
     // else: lists still loading — leave the ref unadvanced to retry.
@@ -1389,17 +1404,19 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     // Send lock (N held/auto-repeat Enter → 1 request) + payload-bound
     // client_message_id + the 3-way outcome, all owned by useComposerSend.
     const dispatched = channelSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds),
+      payloadKey: composePayloadKey(content, attachmentIds, replyTarget?.id ?? ""),
       buildVars: (clientMessageId) => ({
         channelId: active.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        replyToMessageId: replyTarget?.id,
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
       onCommitted: () => {
         editorRef.current?.clearContent();
         uploadMapRef.current.clear();
+        setReplyTarget(null);
         if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
       },
       // 200-dedup is silent (onCommitted); a 409 or any other failure always
@@ -1422,18 +1439,20 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       if (content.includes(url)) attachmentIds.push(id);
     }
     threadSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds, threadRoot.id),
+      payloadKey: composePayloadKey(content, attachmentIds, `${threadRoot.id}:${threadReplyTarget?.id ?? ""}`),
       buildVars: (clientMessageId) => ({
         channelId: active.id,
         messageId: threadRoot.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        replyToMessageId: threadReplyTarget?.id,
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
       onCommitted: () => {
         threadEditorRef.current?.clearContent();
         threadUploadMapRef.current.clear();
+        setThreadReplyTarget(null);
         setThreadDraftEmpty(true);
       },
       onVisibleError: () => toast.error(t(($) => $.thread.send_failed)),
@@ -1443,6 +1462,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const handleOpenThread = (message: ChannelMessage) => {
     focusThreadComposerOnOpenRef.current = true;
     setSelectedAgentPanelId(null);
+    setThreadReplyTarget(null);
     setOpenThreadRoot(message);
   };
 
@@ -1450,6 +1470,42 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     setOpenThreadRoot(null);
     setSelectedAgentPanelId(agentId);
   };
+
+  const quotePreview = useCallback((message: ChannelMessage) => {
+    return (
+      formatChannelMessagePreview(
+        resolveChannelAuthorDisplayName(message, {
+          currentUserId,
+          ownName: currentUserName ?? undefined,
+          getActorName: (type, id, fallback) => resolveMentionPreview(type, id, fallback),
+        }),
+        message.content,
+        resolveMentionPreview,
+        message.parts,
+      ).trim() || t(($) => $.quote.unavailable_body)
+    );
+  }, [currentUserId, currentUserName, resolveMentionPreview, t]);
+
+  const channelQuotePreview = replyTarget
+    ? {
+        authorName: resolveChannelAuthorDisplayName(replyTarget, {
+          currentUserId,
+          ownName: currentUserName ?? undefined,
+          getActorName: (type, id, fallback) => resolveMentionPreview(type, id, fallback),
+        }),
+        preview: quotePreview(replyTarget),
+      }
+    : null;
+  const threadQuotePreview = threadReplyTarget
+    ? {
+        authorName: resolveChannelAuthorDisplayName(threadReplyTarget, {
+          currentUserId,
+          ownName: currentUserName ?? undefined,
+          getActorName: (type, id, fallback) => resolveMentionPreview(type, id, fallback),
+        }),
+        preview: quotePreview(threadReplyTarget),
+      }
+    : null;
 
   const toggleInvite = (key: string) => {
     setSelectedInvites((prev) => {
@@ -2093,6 +2149,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         loadError={threadError}
         onRetry={() => refetchThread()}
         onReact={handleReactToMessage}
+        onQuoteMessage={setThreadReplyTarget}
         editor={
           <ContentEditor
             key={`thread-editor:${threadRoot.id}`}
@@ -2109,6 +2166,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         onSend={handleThreadSend}
         sendDisabled={threadDraftEmpty}
         sending={sendThreadMessage.isPending}
+        quotePreview={threadQuotePreview}
+        onClearQuote={() => setThreadReplyTarget(null)}
         composerLeadingActions={
           <>
             <input
@@ -2400,6 +2459,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 onReact={handleReactToMessage}
                 onEditMessage={isActiveArchived ? undefined : handleEditMessage}
                 onDeleteMessage={isActiveArchived ? undefined : handleDeleteMessage}
+                onQuoteMessage={isActiveArchived ? undefined : setReplyTarget}
                 onOpenAgent={handleOpenAgentPanel}
               />
 
@@ -2450,6 +2510,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     sending={sendMessage.isPending}
                     onSend={handleSend}
                     isMobile={isMobile}
+                    quotePreview={channelQuotePreview}
+                    onClearQuote={() => setReplyTarget(null)}
                     editor={
                       <ContentEditor
                         key={active.id}

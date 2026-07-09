@@ -5,9 +5,10 @@ import {
   useEffect,
   useRef,
   useState,
+  type MouseEvent,
   type PointerEvent,
 } from "react";
-import { Copy, MessageSquare, Pencil, Trash2 } from "lucide-react";
+import { Copy, MessageSquare, Pencil, Quote, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
@@ -185,6 +186,7 @@ export function ChannelMessageBubble({
   onReact,
   onEdit,
   onDelete,
+  onQuote,
   onOpenAgent,
   searchHighlighted = false,
   searchQuery,
@@ -209,6 +211,8 @@ export function ChannelMessageBubble({
   onEdit?: (message: ChannelMessage, content: string) => void;
   /** Soft-delete the viewer's own message; the bubble then renders a tombstone. */
   onDelete?: (message: ChannelMessage) => void;
+  /** Quote this message in the active composer. */
+  onQuote?: (message: ChannelMessage) => void;
   /** Opens the side agent file/public-info panel for agent-authored messages. */
   onOpenAgent?: (agentId: string) => void;
   /** Search hit: marks matching visible text while search is open. */
@@ -223,6 +227,7 @@ export function ChannelMessageBubble({
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
+  const [desktopActionsPoint, setDesktopActionsPoint] = useState<{ x: number; y: number } | null>(null);
   const [expandedContentKey, setExpandedContentKey] = useState<string | null>(null);
   const [mobileThreadTapActive, setMobileThreadTapActive] = useState(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -239,6 +244,20 @@ export function ChannelMessageBubble({
       if (tapFeedbackTimerRef.current) clearTimeout(tapFeedbackTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!desktopActionsPoint) return;
+    const close = () => setDesktopActionsPoint(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [desktopActionsPoint]);
 
   const showMobileActionsDialog = useCallback((dialog: HTMLDialogElement | null) => {
     mobileActionsDialogRef.current = dialog;
@@ -409,6 +428,7 @@ export function ChannelMessageBubble({
     setEditDraft(null);
   };
   const handleDelete = () => onDelete?.(message);
+  const handleQuote = () => onQuote?.(message);
   const handleOpenAgent = () => {
     if (isAgent && message.author_id) {
       onOpenAgent?.(message.author_id);
@@ -488,6 +508,17 @@ export function ChannelMessageBubble({
     clearLongPressTimer();
   };
 
+  const handleContextMenu = (event: MouseEvent<HTMLDivElement>) => {
+    if (!onQuote || isInteractiveMessageTarget(event.target) || hasActiveTextSelection()) return;
+    event.preventDefault();
+    setDesktopActionsPoint({ x: event.clientX, y: event.clientY });
+  };
+
+  const runDesktopAction = (action: () => void | Promise<void>) => {
+    setDesktopActionsPoint(null);
+    void action();
+  };
+
   // Self-mention row wash: cool brand tint when *someone else* addresses the
   // viewer (@me or @all). Own messages never wash — the author already knows
   // they typed the mention; the wash is a scan aid for incoming address.
@@ -517,6 +548,7 @@ export function ChannelMessageBubble({
       onPointerUp={handlePointerEnd}
       onPointerCancel={cancelTouchGesture}
       onPointerLeave={cancelTouchGesture}
+      onContextMenu={handleContextMenu}
     >
       {profileActorType && profileActorId ? (
         <ActorProfileTrigger
@@ -577,6 +609,17 @@ export function ChannelMessageBubble({
             data-message-action-surface="true"
             className="pointer-events-none absolute right-3 top-2 z-10 hidden items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity md:flex md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
           >
+            {onQuote && (
+              <button
+                type="button"
+                onClick={handleQuote}
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                aria-label={t(($) => $.quote.action)}
+                title={t(($) => $.quote.action)}
+              >
+                <Quote className="size-3.5" />
+              </button>
+            )}
             {onReact && (
               <QuickEmojiPicker
                 onSelect={(emoji) => onReact(message, emoji)}
@@ -657,7 +700,7 @@ export function ChannelMessageBubble({
             style={{ WebkitTouchCallout: "default" }}
           >
             {/* Inline quote block: rendered when reply_to is present (BE task #23) */}
-            {message.reply_to && (
+            {message.reply_to_message_id && (
               <button
                 type="button"
                 onClick={() =>
@@ -667,12 +710,14 @@ export function ChannelMessageBubble({
                 aria-label={t(($) => $.quote.jump_to)}
               >
                 <p className="truncate text-[11px] font-semibold text-foreground/70">
-                  {replyAuthorName}
+                  {message.reply_to ? replyAuthorName : t(($) => $.quote.unavailable_author)}
                 </p>
                 <p className="line-clamp-1 text-[11px] text-muted-foreground">
-                  {formatMessagePartsPreview(message.reply_to.parts) ??
-                    unwrapStructuredPreviewContent(message.reply_to.content) ??
-                    message.reply_to.content}
+                  {message.reply_to
+                    ? (formatMessagePartsPreview(message.reply_to.parts) ??
+                        unwrapStructuredPreviewContent(message.reply_to.content) ??
+                        message.reply_to.content).trim() || t(($) => $.quote.unavailable_body)
+                    : t(($) => $.quote.unavailable_body)}
                 </p>
               </button>
             )}
@@ -728,6 +773,16 @@ export function ChannelMessageBubble({
             >
               <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-muted-foreground/25" />
               <div className="flex flex-col gap-1">
+                {onQuote && (
+                  <button
+                    type="button"
+                    onClick={() => runMobileAction(handleQuote)}
+                    className="inline-flex h-11 items-center gap-3 rounded-xl px-3 text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                  >
+                    <Quote className="size-4" />
+                    <span>{t(($) => $.quote.action)}</span>
+                  </button>
+                )}
                 {onReact && (
                   <QuickEmojiPicker
                     onSelect={handleMobileReactionSelect}
@@ -773,6 +828,47 @@ export function ChannelMessageBubble({
               </div>
             </div>
           </dialog>
+        )}
+        {!isEditing && desktopActionsPoint && onQuote && (
+          <div
+            role="menu"
+            aria-label={t(($) => $.message.actions_menu)}
+            data-testid="desktop-message-actions"
+            data-message-action-surface="true"
+            className="fixed z-50 min-w-44 rounded-lg border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
+            style={{ left: desktopActionsPoint.x, top: desktopActionsPoint.y }}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => runDesktopAction(handleQuote)}
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+            >
+              <Quote className="size-4" />
+              <span>{t(($) => $.quote.action)}</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => runDesktopAction(handleCopy)}
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+            >
+              <Copy className="size-4" />
+              <span>{t(($) => $.message.copy_action)}</span>
+            </button>
+            {canDelete && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runDesktopAction(handleDelete)}
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-destructive hover:bg-destructive/10 focus-visible:bg-destructive/10 focus-visible:outline-none"
+              >
+                <Trash2 className="size-4" />
+                <span>{t(($) => $.message.delete_action)}</span>
+              </button>
+            )}
+          </div>
         )}
         {!isEditing && hasFeedback && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">

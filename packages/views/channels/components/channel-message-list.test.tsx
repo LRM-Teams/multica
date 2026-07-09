@@ -119,7 +119,7 @@ vi.mock("../../i18n", () => ({
     t: (
       selector: (resources: {
         message: { add_reaction: string; agent_badge: string; feishu_badge: string };
-        quote: { jump_to: string };
+        quote: { action: string; jump_to: string; unavailable_author: string; unavailable_body: string };
         thread: { reply: string; reply_count: string };
       }) => string,
     ) =>
@@ -130,7 +130,10 @@ vi.mock("../../i18n", () => ({
           feishu_badge: "Feishu",
         },
         quote: {
+          action: "Quote reply",
           jump_to: "Jump to original message",
+          unavailable_author: "Original message",
+          unavailable_body: "Message deleted or unavailable",
         },
         thread: {
           reply: "Reply in thread",
@@ -170,7 +173,7 @@ vi.mock("../../i18n/use-t", () => ({
           save_edit: "Save",
           cancel_edit: "Cancel",
         },
-        quote: { jump_to: "Jump to original message" },
+        quote: { action: "Quote reply", jump_to: "Jump to original message", unavailable_author: "Original message", unavailable_body: "Message deleted or unavailable" },
         thread: { reply: "Reply in thread", reply_count: "2 replies" },
         time: { today: "Today", yesterday: "Yesterday", new_messages: "{{count}} new" },
       });

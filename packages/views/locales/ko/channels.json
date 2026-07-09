@@ -237,7 +237,10 @@
     "composer_placeholder": "{{name}}에게 메시지…"
   },
   "quote": {
-    "jump_to": "원본 메시지로 이동"
+    "action": "인용 답장",
+    "jump_to": "원본 메시지로 이동",
+    "unavailable_author": "원본 메시지",
+    "unavailable_body": "메시지가 삭제되었거나 볼 수 없습니다"
   },
   "message_loading": {
     "load_older": "이전 메시지 불러오기",

@@ -237,7 +237,10 @@
     "composer_placeholder": "Message {{name}}…"
   },
   "quote": {
-    "jump_to": "Jump to original message"
+    "action": "Quote reply",
+    "jump_to": "Jump to original message",
+    "unavailable_author": "Original message",
+    "unavailable_body": "Message deleted or unavailable"
   },
   "message_loading": {
     "load_older": "Load older messages",

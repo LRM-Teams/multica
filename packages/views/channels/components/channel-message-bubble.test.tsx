@@ -114,7 +114,7 @@ vi.mock("../../i18n/use-t", () => ({
           save_edit: string;
           cancel_edit: string;
         };
-        quote: { jump_to: string };
+        quote: { action: string; jump_to: string; unavailable_author: string; unavailable_body: string };
         thread: { reply: string; reply_count: string };
         time: { today: string; yesterday: string };
       }) => string,
@@ -141,7 +141,10 @@ vi.mock("../../i18n/use-t", () => ({
           cancel_edit: "Cancel",
         },
         quote: {
+          action: "Quote reply",
           jump_to: "Jump to original message",
+          unavailable_author: "Original message",
+          unavailable_body: "Message deleted or unavailable",
         },
         thread: {
           reply: "Reply in thread",
@@ -500,11 +503,11 @@ describe("ChannelMessageBubble", () => {
   });
 
   it("allows native copy context menu when message body text is selected", () => {
-    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" onQuote={vi.fn()} />);
 
     const body = screen.getByTestId("message-body");
     const text = screen.getByText("Here is the data.");
-    vi.spyOn(window, "getSelection").mockReturnValue({
+    const selectionSpy = vi.spyOn(window, "getSelection").mockReturnValue({
       isCollapsed: false,
       anchorNode: text.firstChild,
       focusNode: text.firstChild,
@@ -516,6 +519,8 @@ describe("ChannelMessageBubble", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(body).toHaveClass("select-text");
+    expect(screen.queryByRole("menu", { name: "Message actions" })).not.toBeInTheDocument();
+    selectionSpy.mockRestore();
   });
 
   it("keeps long history as full DOM content behind a readable collapsed preview", async () => {
@@ -991,6 +996,63 @@ describe("ChannelMessageBubble", () => {
     expect(within(menu).getByRole("button", { name: "Copy" })).toBeInTheDocument();
     expect(within(menu).queryByRole("button", { name: "Reply in thread" })).not.toBeInTheDocument();
     expect(within(menu).queryByRole("button", { name: "Quote reply" })).not.toBeInTheDocument();
+  });
+
+  it("opens mobile message actions with a quote reply action", async () => {
+    setMobileViewport();
+    const onQuote = vi.fn();
+    const message = makeMessage();
+    render(
+      <ChannelMessageBubble
+        message={message}
+        currentUserId="user-1"
+        onQuote={onQuote}
+      />,
+    );
+
+    const bubble = screen.getByTestId("message-bubble");
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+
+    const menu = await screen.findByRole("dialog", { name: "Message actions" });
+    await userEvent.click(within(menu).getByRole("button", { name: "Quote reply" }));
+
+    expect(onQuote).toHaveBeenCalledWith(message);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("routes desktop right-click quote reply without blocking selected-text native menu", async () => {
+    const onQuote = vi.fn();
+    const message = makeMessage();
+    render(
+      <ChannelMessageBubble
+        message={message}
+        currentUserId="user-1"
+        onQuote={onQuote}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByTestId("message-bubble"), {
+      clientX: 14,
+      clientY: 28,
+    });
+    const menu = screen.getByRole("menu", { name: "Message actions" });
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Quote reply" }));
+
+    expect(onQuote).toHaveBeenCalledWith(message);
+  });
+
+  it("renders a deleted or unavailable quote fallback", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ reply_to_message_id: "deleted-parent", reply_to: null })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("Original message")).toBeInTheDocument();
+    expect(screen.getByText("Message deleted or unavailable")).toBeInTheDocument();
   });
 
   it("closes the mobile action sheet after a copy action", async () => {

@@ -1477,6 +1477,28 @@ func TestSendChannelMessageClientMessageIDDedupesTopLevelWithSideEffects(t *test
 	}
 }
 
+func TestSendChannelMessageRejectsReplyTargetOutsideChannel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "quote-reject-"+uuid.NewString(), testUserID)
+	otherChannelID := seedChannelForTest(t, "quote-reject-other-"+uuid.NewString(), testUserID)
+	otherMessage, err := testHandler.insertChannelMessage(ctx, parseUUID(otherChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "not visible here", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("quote-reject-other-thread"), 0)
+	if err != nil {
+		t.Fatalf("insert other channel message: %v", err)
+	}
+
+	rec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content":             "cross-channel quote",
+		"reply_to_message_id": otherMessage.ID,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("cross-channel reply target: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSendChannelMessageClientMessageIDConflictOnChangedPayload(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

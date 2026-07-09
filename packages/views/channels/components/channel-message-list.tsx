@@ -146,6 +146,8 @@ type MessageViewportProps = {
   onEditMessage?: (message: ChannelMessage, content: string) => void;
   /** Soft-delete the viewer's own message; the bubble then renders a tombstone. */
   onDeleteMessage?: (message: ChannelMessage) => void;
+  /** Quote this message in the active composer. */
+  onQuoteMessage?: (message: ChannelMessage) => void;
   /** Opens the side agent file/public-info panel for an agent-authored message. */
   onOpenAgent?: (agentId: string) => void;
   /** Search hit ids - all matching messages get inline keyword marks while search is open. */
@@ -184,6 +186,7 @@ function MessageViewport({
   onReact,
   onEditMessage,
   onDeleteMessage,
+  onQuoteMessage,
   onOpenAgent,
   searchHitIds,
   searchQuery,
@@ -422,6 +425,7 @@ function MessageViewport({
             onReact={onReact}
             onEdit={onEditMessage}
             onDelete={onDeleteMessage}
+            onQuote={onQuoteMessage}
             onOpenAgent={onOpenAgent}
             searchHighlighted={searchHighlighted}
             searchQuery={searchHighlighted ? searchQuery : undefined}

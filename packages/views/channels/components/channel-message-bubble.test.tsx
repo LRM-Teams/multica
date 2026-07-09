@@ -276,6 +276,66 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByText("Bob Display")).toBeInTheDocument();
   });
 
+  it("applies a warm self-mention wash when the body @-mentions the viewer", () => {
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: "hey [@Alice](mention://member/user-1) please look",
+    });
+    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+    const bubble = screen.getByTestId("message-bubble");
+    expect(bubble).toHaveAttribute("data-self-mentioned", "true");
+    expect(bubble.className).toContain("bg-warning/10");
+  });
+
+  it("applies the self-mention wash for @all broadcasts", () => {
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: "[@all](mention://all/all) standup in 5",
+    });
+    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+    expect(screen.getByTestId("message-bubble")).toHaveAttribute(
+      "data-self-mentioned",
+      "true",
+    );
+  });
+
+  it("does not self-mention-wash messages that only mention others", () => {
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: "hey [@Carol](mention://member/user-3) and [@Bot](mention://agent/agent-1)",
+    });
+    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+    const bubble = screen.getByTestId("message-bubble");
+    expect(bubble).not.toHaveAttribute("data-self-mentioned");
+    expect(bubble.className).not.toContain("bg-warning/10");
+  });
+
+  it("lets deep-link highlight take visual priority over the self-mention wash", () => {
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: "hey [@Alice](mention://member/user-1)",
+    });
+    render(
+      <ChannelMessageBubble message={msg} currentUserId="user-1" highlighted />,
+    );
+
+    const bubble = screen.getByTestId("message-bubble");
+    expect(bubble).toHaveAttribute("data-self-mentioned", "true");
+    expect(bubble.className).toContain("bg-primary/10");
+    expect(bubble.className).toContain("ring-primary/25");
+  });
+
   it("shows a presence status dot on agent message avatars only", () => {
     const { rerender } = render(
       <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />,

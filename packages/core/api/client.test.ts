@@ -598,6 +598,56 @@ describe("ApiClient", () => {
       expect(page.next_cursor).toEqual({ seq: 42, created_at: channelMessage.created_at, id: channelMessage.id });
     });
 
+    it("uses around_seq (task #340) and parses the bidirectional page fields", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({
+          messages: [channelMessage],
+          limit: 50,
+          has_more: true,
+          next_cursor: { seq: 30, created_at: channelMessage.created_at, id: "older-1" },
+          anchor_index: 3,
+          has_more_after: true,
+          after_cursor: { seq: 60, created_at: channelMessage.created_at, id: "newer-1" },
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      const page = await client.listChannelMessagesPage("channel-1", { around: 42 });
+
+      expect(fetchMock.mock.calls[0]![0]).toBe(
+        "https://api.example.test/api/channels/channel-1/messages?limit=50&around_seq=42",
+      );
+      expect(page.anchor_index).toBe(3);
+      expect(page.has_more_after).toBe(true);
+      expect(page.after_cursor).toEqual({ seq: 60, created_at: channelMessage.created_at, id: "newer-1" });
+      // Older-side cursor still carried in around mode.
+      expect(page.next_cursor).toEqual({ seq: 30, created_at: channelMessage.created_at, id: "older-1" });
+    });
+
+    it("prefers around_seq over before when both are supplied (server rejects both)", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ messages: [], limit: 50, has_more: false }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      await client.listChannelMessagesPage("channel-1", {
+        around: 42,
+        before: { seq: 99, created_at: channelMessage.created_at, id: channelMessage.id },
+      });
+
+      const url = fetchMock.mock.calls[0]![0] as string;
+      expect(url).toContain("around_seq=42");
+      expect(url).not.toContain("before_seq");
+    });
+
     it("uses and returns before_seq for thread cursors", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
         new Response(JSON.stringify({

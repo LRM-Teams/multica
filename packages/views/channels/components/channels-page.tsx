@@ -161,6 +161,7 @@ import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
+import { useEntryAroundSeq } from "../hooks/use-entry-around-seq";
 import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
@@ -677,6 +678,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     }
     storeSetComposerDraft(key, value);
   }, [storeSetComposerDraft, storeClearComposerDraft]);
+  // #340: anchor the cold message load on the entry read cursor so the first
+  // render lands on the unread divider (frozen per conversation — see the hook).
+  const entryAroundSeq = useEntryAroundSeq(active?.id, active?.last_read_seq);
   const {
     data: messagePages,
     isLoading: messagesLoading,
@@ -685,7 +689,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     fetchNextPage: fetchOlderMessages,
     hasNextPage: hasOlderMessages,
     isFetchingNextPage: isFetchingOlderMessages,
-  } = useInfiniteQuery(channelMessagesPageOptions(active?.id ?? ""));
+  } = useInfiniteQuery(
+    channelMessagesPageOptions(active?.id ?? "", { aroundSeq: entryAroundSeq }),
+  );
   const activeChannelId = active?.id ?? "";
   const messages = useMemo(() => flattenChannelMessagePages(activeChannelId ? messagePages : undefined), [activeChannelId, messagePages]);
   const messagesFirstItemIndex = useMemo(

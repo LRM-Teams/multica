@@ -488,14 +488,17 @@ export function ChannelMessageBubble({
     clearLongPressTimer();
   };
 
-  // Self-mention row wash: cool brand tint when the body addresses the viewer
-  // (@me or @all). Deep-link `highlighted` keeps its primary ring and wins
-  // over the wash; mobile tap feedback also wins.
-  const selfMentioned = messageMentionsViewer(
+  // Self-mention row wash: cool brand tint when *someone else* addresses the
+  // viewer (@me or @all). Own messages never wash — the author already knows
+  // they typed the mention; the wash is a scan aid for incoming address.
+  // Deep-link `highlighted` keeps its primary ring and wins over the wash;
+  // mobile tap feedback also wins.
+  const addressedToViewer = messageMentionsViewer(
     message.content,
     currentUserId,
     message.parts,
   );
+  const selfMentioned = addressedToViewer && !isOwn;
 
   return (
     <div

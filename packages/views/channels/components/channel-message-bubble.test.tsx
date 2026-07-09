@@ -276,7 +276,7 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByText("Bob Display")).toBeInTheDocument();
   });
 
-  it("applies a cool self-mention wash when the body @-mentions the viewer", () => {
+  it("applies a cool self-mention wash when someone else @-mentions the viewer", () => {
     const msg = makeMessage({
       type: "user",
       author_id: "user-2",
@@ -290,7 +290,7 @@ describe("ChannelMessageBubble", () => {
     expect(bubble.className).toContain("bg-brand/[0.04]");
   });
 
-  it("applies the self-mention wash for @all broadcasts", () => {
+  it("applies the self-mention wash for @all from another author", () => {
     const msg = makeMessage({
       type: "user",
       author_id: "user-2",
@@ -302,6 +302,35 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-bubble")).toHaveAttribute(
       "data-self-mentioned",
       "true",
+    );
+  });
+
+  it("does not wash the viewer's own messages even when they @ themselves or @all", () => {
+    const selfPing = makeMessage({
+      type: "user",
+      author_id: "user-1",
+      author_name: "alice",
+      content: "note to self [@Alice](mention://member/user-1)",
+    });
+    const { rerender } = render(
+      <ChannelMessageBubble message={selfPing} currentUserId="user-1" />,
+    );
+    expect(screen.getByTestId("message-bubble")).not.toHaveAttribute(
+      "data-self-mentioned",
+    );
+    expect(screen.getByTestId("message-bubble").className).not.toContain(
+      "bg-brand/[0.04]",
+    );
+
+    const ownAll = makeMessage({
+      type: "user",
+      author_id: "user-1",
+      author_name: "alice",
+      content: "[@all](mention://all/all) heads up",
+    });
+    rerender(<ChannelMessageBubble message={ownAll} currentUserId="user-1" />);
+    expect(screen.getByTestId("message-bubble")).not.toHaveAttribute(
+      "data-self-mentioned",
     );
   });
 

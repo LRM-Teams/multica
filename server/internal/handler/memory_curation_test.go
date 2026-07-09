@@ -36,8 +36,8 @@ func TestAgentIDsBelongToWorkspaceRejectsForeignAgent(t *testing.T) {
 
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, name, device_name, user_id)
-		VALUES ($1, 'foreign memory runtime', 'foreign memory runtime', $2)
+		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, device_info, owner_id)
+		VALUES ($1, 'foreign memory runtime', 'local', 'legacy_local', 'foreign memory runtime', $2)
 		RETURNING id
 	`, otherWorkspaceID, testUserID).Scan(&runtimeID); err != nil {
 		t.Fatal(err)

@@ -719,6 +719,7 @@ func TestMetaSkillDocumentsAgentDMToExplicitHumanMember(t *testing.T) {
 		"### Direct messages",
 		"multica dm --to <member-id|user-id|name|display-name|email>",
 		"--message-stdin << 'MULTICAMSG'",
+		"even when they did not trigger the current task",
 		"Omit `--to` only when you intentionally want the current task initiator",
 		"task-scoped `MULTICA_TOKEN`",
 		"Agent-to-agent DMs are not supported",

@@ -2231,7 +2231,7 @@ export class ApiClient {
       content: string;
       attachment_ids?: string[];
       reply_to_message_id?: string;
-      quoteMessageId?: string;
+      quote_message_id?: string;
       parts?: MessagePart[];
       client_message_id?: string;
     } = { content };
@@ -2241,14 +2241,14 @@ export class ApiClient {
     if (replyToMessageId) {
       body.reply_to_message_id = replyToMessageId;
     }
+    if (quoteMessageId) {
+      body.quote_message_id = quoteMessageId;
+    }
     if (parts && parts.length > 0) {
       body.parts = parts;
     }
     if (clientMessageId) {
       body.client_message_id = clientMessageId;
-    }
-    if (quoteMessageId) {
-      body.quoteMessageId = quoteMessageId;
     }
     return this.fetch(`/api/channels/${channelId}/messages`, {
       method: "POST",
@@ -2306,7 +2306,7 @@ export class ApiClient {
       content: string;
       attachment_ids?: string[];
       reply_to_message_id?: string;
-      quoteMessageId?: string;
+      quote_message_id?: string;
       parts?: MessagePart[];
       client_message_id?: string;
       show_in_channel?: boolean;
@@ -2317,6 +2317,9 @@ export class ApiClient {
     if (replyToMessageId) {
       body.reply_to_message_id = replyToMessageId;
     }
+    if (quoteMessageId) {
+      body.quote_message_id = quoteMessageId;
+    }
     if (parts && parts.length > 0) {
       body.parts = parts;
     }
@@ -2325,9 +2328,6 @@ export class ApiClient {
     }
     if (showInChannel === true) {
       body.show_in_channel = true;
-    }
-    if (quoteMessageId) {
-      body.quoteMessageId = quoteMessageId;
     }
     return this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread`, {
       method: "POST",

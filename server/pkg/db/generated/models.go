@@ -250,6 +250,8 @@ type ChannelMessage struct {
 	Source            string             `json:"source"`
 	ExternalMessageID pgtype.Text        `json:"external_message_id"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	QuoteMessageID    pgtype.UUID        `json:"quote_message_id"`
+	QuoteSnapshot     []byte             `json:"quote_snapshot"`
 	ThreadID          pgtype.Text        `json:"thread_id"`
 	TriggerDepth      int32              `json:"trigger_depth"`
 }

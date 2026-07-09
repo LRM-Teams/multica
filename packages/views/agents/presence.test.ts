@@ -3,6 +3,7 @@ import type { TFunction } from "i18next";
 import type { AgentPresenceDetail } from "@multica/core/agents";
 import {
   formatPresenceStatus,
+  presenceStatusDotClass,
   presenceStatusToken,
   presenceStatusVisual,
   workloadConfig,
@@ -81,5 +82,29 @@ describe("presenceStatusVisual", () => {
       value: "offline",
     });
     expect(presenceStatusVisual(offline)).toBe(availabilityConfig.offline);
+  });
+});
+
+describe("presenceStatusDotClass", () => {
+  it("returns null while loading", () => {
+    expect(presenceStatusDotClass("loading")).toBeNull();
+    expect(presenceStatusDotClass(null)).toBeNull();
+  });
+
+  it("maps workload to semantic fills while online", () => {
+    expect(
+      presenceStatusDotClass(presence({ availability: "online", workload: "working" })),
+    ).toBe("bg-brand");
+    expect(
+      presenceStatusDotClass(presence({ availability: "online", workload: "queued" })),
+    ).toBe("bg-warning");
+    expect(
+      presenceStatusDotClass(presence({ availability: "online", workload: "idle" })),
+    ).toBe("bg-muted-foreground/40");
+  });
+
+  it("reuses availabilityConfig.dotClass when offline", () => {
+    const offline = presence({ availability: "offline", workload: "idle" });
+    expect(presenceStatusDotClass(offline)).toBe(availabilityConfig.offline.dotClass);
   });
 });

@@ -172,3 +172,28 @@ export function presenceStatusVisual(
     ? workloadConfig[token.value]
     : availabilityConfig[token.value];
 }
+
+/**
+ * Compact status-dot fill for name-row / timeline chips.
+ *
+ * Availability reuses `availabilityConfig.dotClass` so the word matches the
+ * avatar presence dot. Workload has no list-level dot palette — map it to the
+ * same semantic colours as `workloadConfig.textClass` (brand / warning / muted).
+ */
+export function presenceStatusDotClass(
+  presence: AgentPresenceDetail | "loading" | null | undefined,
+): string | null {
+  const token = presenceStatusToken(presence);
+  if (!token) return null;
+  if (token.kind === "availability") {
+    return availabilityConfig[token.value].dotClass;
+  }
+  switch (token.value) {
+    case "working":
+      return "bg-brand";
+    case "queued":
+      return "bg-warning";
+    case "idle":
+      return "bg-muted-foreground/40";
+  }
+}

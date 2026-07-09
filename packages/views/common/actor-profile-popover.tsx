@@ -14,10 +14,7 @@ import {
 } from "@multica/ui/components/ui/hover-card";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
-import {
-  memberProfileOptions,
-  useAgentPresenceDetail,
-} from "@multica/core/agents";
+import { memberProfileOptions } from "@multica/core/agents";
 import type {
   MemberProfile,
   MemberProfileActivityItem,
@@ -30,7 +27,7 @@ import {
   resolveActorIdentityPresentation,
   shouldShowActorHandleLabel,
 } from "@multica/core/identity";
-import { formatPresenceStatus } from "../agents/presence";
+import { useAgentLiveStatus } from "../agents/use-agent-live-status";
 import { useT } from "../i18n/use-t";
 
 type ChannelsT = ReturnType<typeof useT<"channels">>["t"];
@@ -167,11 +164,12 @@ function ActorProfileContent({
 
 export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
   const { t } = useT("channels");
-  const { t: tAgents } = useT("agents");
   const wsId = useWorkspaceId();
-  // #288: the name-row status reads the same availability/health source as
-  // the presence dot (via useAgentPresenceDetail), so the two can never disagree.
-  const presence = useAgentPresenceDetail(
+  // Agents: stage-detail live status (Thinking / Running a command / …)
+  // when a task is active; coarse presence word (Idle / Offline) when idle.
+  // Same snapshot + task-messages caches as the chat status pill / avatar
+  // presence dot, so the three surfaces stay in lockstep via WS.
+  const liveStatus = useAgentLiveStatus(
     wsId,
     profile.member_type === "agent" ? profile.member_id : undefined,
   );
@@ -188,15 +186,12 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
     .toUpperCase()
     .slice(0, 2);
   const description = profile.description?.trim() || "";
-  // Members: role text on the name row. Agents: live presence status as plain
-  // muted text on the name row so the header fills width — no pill/chip.
+  // Members: role text on the name row. Agents: live status immediately
+  // after the name (dot + word) — not a far-right filler and not a pill.
   const memberRole =
     profile.member_type === "user"
       ? roleLabel(profile.role, t)
       : null;
-  // Plain text on the name row — shared #288 rule + agents i18n.
-  const agentStatus =
-    profile.member_type === "agent" ? formatPresenceStatus(presence, tAgents) : null;
   const handle = resolveActorHandle(identity);
   const handleLabel = formatActorHandleLabel(handle);
   const showHandle =
@@ -220,12 +215,24 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
         />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
-            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+            {/* No flex-1 on the name — status must sit right after the name
+                (Slack/IM style), not get pushed to the far edge of the card. */}
+            <span className="min-w-0 truncate text-sm font-semibold text-foreground">
               {displayName}
             </span>
-            {agentStatus ? (
-              <span className="shrink-0 text-xs text-muted-foreground">
-                {agentStatus}
+            {liveStatus ? (
+              <span
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1 text-xs",
+                  liveStatus.textClass,
+                )}
+                data-testid="agent-live-status"
+              >
+                <span
+                  className={cn("size-1.5 rounded-full", liveStatus.dotClass)}
+                  aria-hidden
+                />
+                {liveStatus.label}
               </span>
             ) : null}
             {memberRole ? (

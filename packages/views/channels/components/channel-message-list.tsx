@@ -108,6 +108,14 @@ type MessageViewportProps = {
    */
   lastReadSeq?: number | null;
   /**
+   * True unread count frozen at entry (sidebar-same source), for the "N new
+   * messages" divider (#340). The loaded window holds only ~limit/2 messages
+   * past the anchor, so counting unread within it undercounts large-unread
+   * conversations — this carries the real total. Omitted → fall back to the
+   * count within the loaded window.
+   */
+  unreadCount?: number | null;
+  /**
    * Virtuoso's stable prepend anchor (see `channelMessagesFirstItemIndex`).
    * Callers with paginated history must recompute and pass this so loading
    * an older page doesn't jump the viewport; callers without pagination
@@ -166,6 +174,7 @@ function MessageViewport({
   ownName,
   highlightMessageId,
   lastReadSeq,
+  unreadCount,
   firstItemIndex = 0,
   emptyLabel,
   header,
@@ -387,7 +396,11 @@ function MessageViewport({
     return (
       <Fragment key={msg.id}>
         {dividerLabel && <DateDivider label={dividerLabel} />}
-        {isUnreadAnchor && <UnreadDivider count={newMessagesDivider.count} />}
+        {isUnreadAnchor && (
+          // #340: real unread total frozen at entry (sidebar-same source); the
+          // window-local count is only a fallback when it's unavailable.
+          <UnreadDivider count={unreadCount ?? newMessagesDivider.count} />
+        )}
         <div
           ref={(node) => {
             if (node) {

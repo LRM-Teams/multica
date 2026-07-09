@@ -149,29 +149,12 @@ vi.mock("../../common/use-viewing-timezone", () => ({
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
+    // Interpolates {{count}} so the "N new messages" divider count is assertable.
     t: (
-      selector: (resources: {
-        message: {
-          add_reaction: string;
-          agent_badge: string;
-          feishu_badge: string;
-          copy_action: string;
-          expand_action: string;
-          copied_toast: string;
-          copy_failed_toast: string;
-          edit_action: string;
-          delete_action: string;
-          edited_label: string;
-          deleted_placeholder: string;
-          save_edit: string;
-          cancel_edit: string;
-        };
-        quote: { jump_to: string };
-        thread: { reply: string; reply_count: string };
-        time: { today: string; yesterday: string; new_messages: string };
-      }) => string,
-    ) =>
-      selector({
+      selector: (resources: any) => string,
+      params?: Record<string, unknown>,
+    ) => {
+      const raw = selector({
         message: {
           add_reaction: "Add reaction",
           agent_badge: "Agent",
@@ -189,8 +172,12 @@ vi.mock("../../i18n/use-t", () => ({
         },
         quote: { jump_to: "Jump to original message" },
         thread: { reply: "Reply in thread", reply_count: "2 replies" },
-        time: { today: "Today", yesterday: "Yesterday", new_messages: "New messages" },
-      }),
+        time: { today: "Today", yesterday: "Yesterday", new_messages: "{{count}} new" },
+      });
+      return params
+        ? raw.replace(/\{\{(\w+)\}\}/g, (_, k) => String(params[k] ?? ""))
+        : raw;
+    },
   }),
 }));
 
@@ -314,6 +301,44 @@ describe("MessageViewport", () => {
     // (align:start) — the divider is rendered at the head of that row's unit, so
     // it lands at the very top of the viewport. Not the latest message.
     expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute("data-initial-index", "2");
+  });
+
+  it("#340: the divider shows the real unread count (frozen at entry), not the loaded-window count", () => {
+    // Large-unread marquee case: only 2 unread are in the loaded around window,
+    // but the conversation has 486 unread. The divider must say 486, not 2.
+    const messages = [
+      { ...makeMessage("m5", "Read"), seq: 5 },
+      { ...makeMessage("m6", "Unread one"), seq: 6 },
+      { ...makeMessage("m7", "Unread two"), seq: 7 },
+    ];
+    render(
+      <MessageViewport
+        messages={messages}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        lastReadSeq={5}
+        unreadCount={486}
+      />,
+    );
+    expect(screen.getByTestId("unread-divider")).toHaveTextContent("486 new");
+  });
+
+  it("falls back to the loaded-window count when no entry unread count is provided", () => {
+    const messages = [
+      { ...makeMessage("m5", "Read"), seq: 5 },
+      { ...makeMessage("m6", "Unread one"), seq: 6 },
+      { ...makeMessage("m7", "Unread two"), seq: 7 },
+    ];
+    render(
+      <MessageViewport
+        messages={messages}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        lastReadSeq={5}
+      />,
+    );
+    // Two unread messages loaded, no frozen count → window count of 2.
+    expect(screen.getByTestId("unread-divider")).toHaveTextContent("2 new");
   });
 
   it("only collapses already-read history messages, never unread messages", () => {

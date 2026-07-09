@@ -161,7 +161,7 @@ import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
-import { useEntryAroundSeq } from "../hooks/use-entry-around-seq";
+import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
@@ -678,9 +678,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     }
     storeSetComposerDraft(key, value);
   }, [storeSetComposerDraft, storeClearComposerDraft]);
-  // #340: anchor the cold message load on the entry read cursor so the first
-  // render lands on the unread divider (frozen per conversation — see the hook).
-  const entryAroundSeq = useEntryAroundSeq(active?.id, active?.last_read_seq);
+  // #340: freeze the entry read cursor + true unread count (sidebar-same source)
+  // at entry — anchors the cold load on the unread divider and gives the divider
+  // the real "N new" (not the count within the loaded window). See the hook.
+  const entryAnchor = useEntryAnchor(
+    active?.id,
+    active?.last_read_seq,
+    active?.real_unread_count ?? active?.unread_count,
+  );
   const {
     data: messagePages,
     isLoading: messagesLoading,
@@ -690,7 +695,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     hasNextPage: hasOlderMessages,
     isFetchingNextPage: isFetchingOlderMessages,
   } = useInfiniteQuery(
-    channelMessagesPageOptions(active?.id ?? "", { aroundSeq: entryAroundSeq }),
+    channelMessagesPageOptions(active?.id ?? "", {
+      aroundSeq: entryAnchor.aroundSeq,
+    }),
   );
   const activeChannelId = active?.id ?? "";
   const messages = useMemo(() => flattenChannelMessagePages(activeChannelId ? messagePages : undefined), [activeChannelId, messagePages]);
@@ -2344,6 +2351,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 ownName={currentUserName ?? undefined}
                 highlightMessageId={effectiveHighlightId}
                 lastReadSeq={dividerLastReadSeq}
+                // #340 divider count, most-authoritative first: the around
+                // response's server-computed total → the entry-frozen list count
+                // → (in MessageViewport) the loaded-window count.
+                unreadCount={
+                  messagePages?.pages?.[0]?.unread_total ??
+                  entryAnchor.unreadCount
+                }
                 firstItemIndex={messagesFirstItemIndex}
                 searchHitIds={searchHitIds}
                 searchQuery={searchHighlightQuery}

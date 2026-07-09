@@ -1,40 +1,53 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { renderHook } from "@testing-library/react";
-import { useEntryAroundSeq } from "./use-entry-around-seq";
+import { useEntryAnchor } from "./use-entry-around-seq";
 
-describe("useEntryAroundSeq (#340)", () => {
-  it("freezes the entry read cursor as the around anchor", () => {
+describe("useEntryAnchor (#340)", () => {
+  it("freezes the entry read cursor and unread count as the anchor", () => {
     const { result, rerender } = renderHook(
-      ({ id, seq }: { id: string; seq: number | null }) =>
-        useEntryAroundSeq(id, seq),
-      { initialProps: { id: "c1", seq: 42 } },
+      ({ id, seq, count }: { id: string; seq: number | null; count: number | null }) =>
+        useEntryAnchor(id, seq, count),
+      { initialProps: { id: "c1", seq: 42, count: 486 } },
     );
-    expect(result.current).toBe(42);
+    expect(result.current).toEqual({ aroundSeq: 42, unreadCount: 486 });
 
-    // The list cursor advancing after entry (mark-read echo) must NOT move the
-    // anchor — it stays frozen for the visit.
-    rerender({ id: "c1", seq: 99 });
-    expect(result.current).toBe(42);
+    // The list advancing after entry (mark-read echo / new messages) must NOT
+    // move the anchor or the divider count — both stay frozen for the visit.
+    rerender({ id: "c1", seq: 99, count: 3 });
+    expect(result.current).toEqual({ aroundSeq: 42, unreadCount: 486 });
   });
 
   it("re-freezes when switching conversations", () => {
     const { result, rerender } = renderHook(
-      ({ id, seq }: { id: string; seq: number | null }) =>
-        useEntryAroundSeq(id, seq),
-      { initialProps: { id: "c1", seq: 42 } },
+      ({ id, seq, count }: { id: string; seq: number | null; count: number | null }) =>
+        useEntryAnchor(id, seq, count),
+      { initialProps: { id: "c1", seq: 42, count: 5 } },
     );
-    expect(result.current).toBe(42);
-    rerender({ id: "c2", seq: 7 });
-    expect(result.current).toBe(7);
+    expect(result.current).toEqual({ aroundSeq: 42, unreadCount: 5 });
+    rerender({ id: "c2", seq: 7, count: 2 });
+    expect(result.current).toEqual({ aroundSeq: 7, unreadCount: 2 });
   });
 
-  it("returns null when there is nothing unread (cursor <= 0 or absent)", () => {
-    const zero = renderHook(() => useEntryAroundSeq("c1", 0));
-    expect(zero.result.current).toBeNull();
-    const absent = renderHook(() => useEntryAroundSeq("c2", null));
-    expect(absent.result.current).toBeNull();
-    const undef = renderHook(() => useEntryAroundSeq("c3", undefined));
-    expect(undef.result.current).toBeNull();
+  it("returns nulls when there is nothing unread (cursor / count <= 0 or absent)", () => {
+    expect(renderHook(() => useEntryAnchor("c1", 0, 0)).result.current).toEqual({
+      aroundSeq: null,
+      unreadCount: null,
+    });
+    expect(
+      renderHook(() => useEntryAnchor("c2", null, undefined)).result.current,
+    ).toEqual({ aroundSeq: null, unreadCount: null });
+  });
+
+  it("carries a real count even when the read cursor is absent, and vice versa", () => {
+    // Defensive: the two freeze independently.
+    expect(renderHook(() => useEntryAnchor("c1", 10, null)).result.current).toEqual({
+      aroundSeq: 10,
+      unreadCount: null,
+    });
+    expect(renderHook(() => useEntryAnchor("c2", null, 4)).result.current).toEqual({
+      aroundSeq: null,
+      unreadCount: 4,
+    });
   });
 });

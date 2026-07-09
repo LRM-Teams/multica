@@ -103,7 +103,7 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 			"directly addressed to you",
 			"Human DMs, human @mentions, direct questions",
 			"Agent-to-agent channel @mentions are weak notifications",
-			"finish without a visible reply",
+			"finish without visible output",
 			"Never return no_reply",
 			"greeting sticker only",
 			"Substantive requests get a helpful answer",

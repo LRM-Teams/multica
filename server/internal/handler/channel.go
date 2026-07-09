@@ -161,7 +161,7 @@ type ChannelMessagesPageResponse struct {
 	AnchorIndex      int                            `json:"anchor_index"`
 	HasMoreAfter     bool                           `json:"has_more_after,omitempty"`
 	AfterCursor      *ChannelMessagesCursorResponse `json:"after_cursor,omitempty"`
-	TotalUnreadAfter int                            `json:"total_unread_after,omitempty"`
+	UnreadTotal int                            `json:"unread_total,omitempty"`
 }
 
 type ChannelThreadMessagesCursorResponse struct {
@@ -1132,13 +1132,16 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 		actualBefore = len(beforeMsgs)
 	}
 
-	// Total visible unread messages after the anchor, for the divider count.
-	var totalUnreadAfter int
+	// Unread total: visible messages after anchor, excluding the caller's own
+	// (matching isNewFromOther semantics). Serves as the primary count source
+	// for the divider in around mode (single-response snapshot = entry freeze).
+	var unreadTotal int
 	if err := h.DB.QueryRow(r.Context(), `
 		SELECT COUNT(*) FROM channel_message m
 		WHERE `+channelMessageWhereClause+`
-		AND m.seq > $3::bigint`, channelID, workspaceID, pgtype.Int8{Int64: aroundSeq, Valid: true}).Scan(&totalUnreadAfter); err != nil {
-		totalUnreadAfter = 0
+		AND m.seq > $3::bigint
+		AND (m.author_id IS NULL OR m.author_id <> $4::uuid)`, channelID, workspaceID, pgtype.Int8{Int64: aroundSeq, Valid: true}, parseUUID(userIDStr)).Scan(&unreadTotal); err != nil {
+		unreadTotal = 0
 	}
 
 	// Calculate cursor for the before (older) direction
@@ -1200,7 +1203,7 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 		AnchorIndex:      anchorIndex,
 		HasMoreAfter:     hasMoreAfter,
 		AfterCursor:      afterCursor,
-		TotalUnreadAfter: totalUnreadAfter,
+		UnreadTotal: unreadTotal,
 	})
 }
 

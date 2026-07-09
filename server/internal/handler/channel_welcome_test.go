@@ -138,6 +138,57 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 	}
 }
 
+func TestBuildChannelMentionPromptIncludesCurrentReplyAndQuoteTargets(t *testing.T) {
+	h := &Handler{DB: channelPromptNoopDB{}}
+	ch := ChannelResponse{
+		ID:          "22222222-2222-2222-2222-222222222222",
+		WorkspaceID: "11111111-1111-1111-1111-111111111111",
+		Name:        "multica-dev",
+	}
+	replyID := "33333333-3333-3333-3333-333333333333"
+	quoteID := "44444444-4444-4444-4444-444444444444"
+	trigger := ChannelMessageResponse{
+		ID:               "55555555-5555-5555-5555-555555555555",
+		AuthorName:       "用户",
+		Type:             "user",
+		Content:          "这条我说了什么",
+		ReplyToMessageID: &replyID,
+		ReplyTo: &ChannelMessageReply{
+			ID:         replyID,
+			Type:       "user",
+			AuthorName: "用户",
+			Content:    "继续",
+			CreatedAt:  "2026-07-09T10:00:00Z",
+		},
+		QuoteMessageID: &quoteID,
+		Quote: &ChannelMessageQuote{
+			MessageID: quoteID,
+			Status:    "active",
+			Snapshot: &ChannelMessageQuoteSnapshot{
+				Type:       "user",
+				AuthorName: "用户",
+				Content:    "继续",
+				CreatedAt:  "2026-07-09T10:00:00Z",
+			},
+		},
+	}
+
+	p := h.buildChannelMentionPrompt(context.Background(), ch, trigger)
+	for _, want := range []string{
+		"Direct reply target for the current message:",
+		"Direct quote target for the current message:",
+		"[2026-07-09T10:00:00Z] 用户 (user): 继续",
+		"treat the current message text as the user's question/request",
+		"direct reply/quote target as the referenced message content",
+		"Current message to respond to:",
+		"用户 (user): 这条我说了什么",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("mention prompt missing %q:\n%s", want, p)
+		}
+	}
+}
+
 func TestFormatChannelMessageLineTruncatesHistoryContent(t *testing.T) {
 	longContent := strings.Repeat("a", channelHistoryMessageMaxChars+50)
 	line := formatChannelMessageLine(ChannelMessageResponse{AuthorName: "Frank", Type: "user", Content: longContent})

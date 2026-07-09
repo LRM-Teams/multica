@@ -139,6 +139,14 @@ func formatChannelMessageLine(msg ChannelMessageResponse) string {
 	return fmt.Sprintf("[%s] %s (%s): %s", msg.CreatedAt, msg.AuthorName, msg.Type, truncateChannelHistoryContent(msg.Content))
 }
 
+func formatChannelMessageReplyLine(msg ChannelMessageReply) string {
+	return fmt.Sprintf("[%s] %s (%s): %s", msg.CreatedAt, msg.AuthorName, msg.Type, truncateChannelHistoryContent(msg.Content))
+}
+
+func formatChannelMessageQuoteSnapshotLine(msg ChannelMessageQuoteSnapshot) string {
+	return fmt.Sprintf("[%s] %s (%s): %s", msg.CreatedAt, msg.AuthorName, msg.Type, truncateChannelHistoryContent(msg.Content))
+}
+
 func truncateChannelHistoryContent(content string) string {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	content = strings.ReplaceAll(content, "\r", "\n")

@@ -47,6 +47,8 @@ const (
 	// file's existence is preserved exactly across the inject→cleanup
 	// cycle, including empty / whitespace-only pre-existing files.
 	runtimeManagedSeparator = "\n\n"
+
+	compactCloseoutStatusInstruction = "When closing out code/issue work, include only the handoff fields that matter: status, branch/PR/base, validation, risk, and next owner; omit fields that do not apply."
 )
 
 // runtimeGOOS is the host-platform string used by buildMetaSkillContent and
@@ -772,6 +774,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`.** The user does NOT see your terminal output, assistant chat text, or run logs — only comments on the issue. A task that finishes without a result comment is invisible to the user, even if the work itself was correct.\n\n")
 		}
 		b.WriteString("Keep comments concise and natural — state the outcome, not the process.\n")
+		b.WriteString(compactCloseoutStatusInstruction)
+		b.WriteString("\n")
 		b.WriteString("Good: \"Fixed the login redirect. PR: https://...\"\n")
 		b.WriteString("Bad: \"1. Read the issue 2. Found the bug in auth.go 3. Created branch 4. ...\"\n")
 		b.WriteString("When referencing an issue in a comment, use the issue mention format `[MUL-123](mention://issue/<issue-id>)` so it renders as a clickable link. (Issue mentions have no side effect; only member/agent mentions do — see the Mentions section above.)\n")
@@ -848,8 +852,12 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("## Output\n\n")
 	if ctx.ChatCLITransportUnavailable {
 		b.WriteString("For visible chat replies, write the user-facing message as your final assistant output. Keep it concise and natural, state the outcome rather than the process, and never mention compatibility mode, missing tools, tokens, CLI transport, or runtime setup.\n")
+		b.WriteString(compactCloseoutStatusInstruction)
+		b.WriteString("\n")
 	} else {
 		b.WriteString("For visible chat replies, run `multica message send` or `multica message react`. After the command succeeds, leave final assistant output empty or minimal so the platform does not receive a duplicate answer. Keep sent messages concise and natural, and state the outcome rather than the process.\n")
+		b.WriteString(compactCloseoutStatusInstruction)
+		b.WriteString("\n")
 	}
 }
 

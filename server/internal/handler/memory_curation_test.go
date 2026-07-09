@@ -34,12 +34,21 @@ func TestAgentIDsBelongToWorkspaceRejectsForeignAgent(t *testing.T) {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, otherWorkspaceID)
 	})
 
+	var runtimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, name, device_name, user_id)
+		VALUES ($1, 'foreign memory runtime', 'foreign memory runtime', $2)
+		RETURNING id
+	`, otherWorkspaceID, testUserID).Scan(&runtimeID); err != nil {
+		t.Fatal(err)
+	}
+
 	var foreignAgentID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, runtime_mode, owner_id)
-		VALUES ($1, 'foreign memory curation agent', 'local', $2)
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id)
+		VALUES ($1, 'foreign memory curation agent', 'local', $2, $3)
 		RETURNING id
-	`, otherWorkspaceID, testUserID).Scan(&foreignAgentID); err != nil {
+	`, otherWorkspaceID, runtimeID, testUserID).Scan(&foreignAgentID); err != nil {
 		t.Fatal(err)
 	}
 

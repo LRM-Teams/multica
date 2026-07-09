@@ -12,7 +12,7 @@ import { api } from "@multica/core/api";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
 import { useWorkspacePaths, useCurrentWorkspace } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
-import { agentColor } from "./agent-color";
+import { useAuthStore } from "@multica/core/auth";
 import { ActorProfileTrigger } from "./actor-profile-popover";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
@@ -21,6 +21,10 @@ import { Attachment as AttachmentRenderer } from "../editor/attachment";
 import { AttachmentDownloadProvider } from "../editor/attachment-download-context";
 import { WindyCreateAgentLink } from "./windy-create-agent-links";
 import { isWindyCreateAgentLink } from "./windy-create-agent-link-utils";
+import {
+  mentionTokenClassName,
+  resolveMentionTokenKind,
+} from "./mention-token";
 
 export type { RenderMode };
 
@@ -52,9 +56,11 @@ function ProjectMentionCard({ projectId }: { projectId: string }): React.ReactNo
 }
 
 /**
- * Member / agent / @all mention — a colored identity pill matching the editor
- * composer's mention chips. The name is resolved from the workspace cache
- * (same resolver as ActorAvatar) so renames reflect immediately.
+ * Member / agent / @all / squad mention — a low-sat brand semantic pill
+ * (Iris / Slack-like), matching the editor composer chips. Not a per-actor
+ * identity color: avatars keep `agentColor`, tokens stay one hue family.
+ * The name is resolved from the workspace cache (same resolver as ActorAvatar)
+ * so renames reflect immediately.
  *
  * Member/agent chips use the full profile popover (same surface as message
  * author avatars/names). @all is a broadcast keyword (Slack-style): styled
@@ -73,20 +79,17 @@ function ActorMention({
 }): React.JSX.Element {
   const actorNames = useActorName();
   const { getActorName } = actorNames;
+  const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
   // The link text is usually "@Name"; strip the leading @ so we don't double
   // it, and use it as the fallback when the id isn't in the workspace cache.
   const fallback = label ? label.replace(/^@+/, "").trim() || undefined : undefined;
   const name = type === "all" ? "all" : getActorName(type, id, fallback);
-  const color = agentColor(id);
+  const kind = resolveMentionTokenKind(type, id, viewerUserId);
   const chip = (
     <span
-      className="not-prose font-semibold"
-      style={{
-        color: color.fg,
-        backgroundColor: color.bg,
-        borderRadius: "0.3125rem",
-        padding: "0.0625rem 0.3125rem",
-      }}
+      className={mentionTokenClassName(kind)}
+      data-mention-kind={kind}
+      data-mention-type={type}
     >
       {highlightSearchText(`@${name}`, highlightQuery)}
     </span>
@@ -104,7 +107,7 @@ function ActorMention({
     );
   }
 
-  // @all (and any other non-person mention type) — pill only, no card.
+  // @all / squad (and any other non-person mention type) — pill only, no card.
   return chip;
 }
 

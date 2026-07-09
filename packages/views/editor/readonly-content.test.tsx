@@ -14,6 +14,11 @@ vi.mock("@multica/core/api", () => ({
   PreviewUnsupportedError: class extends Error {},
 }));
 
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (selector: (state: { user: { id: string } | null }) => unknown) =>
+    selector({ user: { id: "viewer-1" } }),
+}));
+
 vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({
     issueDetail: (id: string) => `/test/issues/${id}`,

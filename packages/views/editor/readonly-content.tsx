@@ -36,7 +36,11 @@ import { useNavigation } from "../navigation";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
 import { ActorProfileTrigger } from "../common/actor-profile-popover";
-import { agentColor } from "../common/agent-color";
+import {
+  mentionTokenClassName,
+  resolveMentionTokenKind,
+} from "../common/mention-token";
+import { useAuthStore } from "@multica/core/auth";
 import { useLinkHover, LinkHoverCard } from "./link-hover-card";
 import { openLink, isMentionHref } from "./utils/link-handler";
 import { isAllowedFileCardHref } from "@multica/ui/markdown";
@@ -169,13 +173,14 @@ function ReadonlyLink({
   children?: React.ReactNode;
 }) {
   const slug = useWorkspaceSlug();
+  const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
 
   if (href?.startsWith("slash://skill/")) {
     return <span className="slash-command">{children}</span>;
   }
 
   if (isMentionHref(href)) {
-    const match = href.match(/^mention:\/\/(member|agent|issue|project|all)\/(.+)$/);
+    const match = href.match(/^mention:\/\/(member|agent|issue|project|all|squad)\/(.+)$/);
     if (match?.[1] === "issue" && match[2]) {
       const label =
         typeof children === "string"
@@ -195,23 +200,33 @@ function ReadonlyLink({
       return <ProjectMentionLink projectId={match[2]} label={label} />;
     }
     // Member / agent — full profile popover (parity with editor MentionView
-    // and message author hover). @all stays a plain chip (no single profile).
-    if ((match?.[1] === "member" || match?.[1] === "agent") && match[2]) {
-      const color = agentColor(match[2]);
-      return (
-        <ActorProfileTrigger
-          memberType={match[1] === "agent" ? "agent" : "user"}
-          memberId={match[2]}
-          triggerElement="span"
+    // and message author hover). Brand semantic token (not per-actor color).
+    // @all / squad stay pill-only (broadcast / group keywords, Slack-style).
+    if (match?.[1] && match[2]) {
+      const type = match[1];
+      const id = match[2];
+      const kind = resolveMentionTokenKind(type, id, viewerUserId);
+      const chip = (
+        <span
+          className={mentionTokenClassName(kind)}
+          data-mention-kind={kind}
+          data-mention-type={type}
         >
-          <span
-            className="mention"
-            style={{ color: color.fg, backgroundColor: color.bg }}
-          >
-            {children}
-          </span>
-        </ActorProfileTrigger>
+          {children}
+        </span>
       );
+      if (type === "member" || type === "agent") {
+        return (
+          <ActorProfileTrigger
+            memberType={type === "agent" ? "agent" : "user"}
+            memberId={id}
+            triggerElement="span"
+          >
+            {chip}
+          </ActorProfileTrigger>
+        );
+      }
+      return chip;
     }
     return <span className="mention">{children}</span>;
   }

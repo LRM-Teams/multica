@@ -173,37 +173,16 @@ describe("DmList new-DM picker", () => {
     expect(screen.getByText("New message")).toBeInTheDocument();
   });
 
-  it("gives pinned DM rows a full-row neutral background in light and dark themes", () => {
+  it("excludes pinned DMs from the list (they belong in the unified PINNED section)", () => {
     mockQueryData.dms = [
-      makeDm({ pinned_at: "2026-07-03T00:00:00Z" }),
+      makeDm({ id: "dm-pinned", pinned_at: "2026-07-03T00:00:00Z", peer: { type: "user", id: "p1", name: "Pinned Person" } }),
+      makeDm({ id: "dm-free", peer: { type: "user", id: "p2", name: "Free Person" } }),
     ];
 
     renderDmList();
 
-    const row = screen
-      .getByRole("button", { name: /Pinned Person/i })
-      .closest("[data-pinned='true']");
-
-    expect(row).toHaveClass("bg-muted/55");
-    expect(row).toHaveClass("hover:bg-muted/75");
-    expect(row).toHaveClass("dark:bg-muted/25");
-    expect(row).toHaveClass("dark:hover:bg-muted/35");
-  });
-
-  it("keeps a distinct selected style when the pinned DM is active", () => {
-    mockQueryData.dms = [
-      makeDm({ pinned_at: "2026-07-03T00:00:00Z" }),
-    ];
-
-    renderDmList({ activeId: "dm-1" });
-
-    const row = screen
-      .getByRole("button", { name: /Pinned Person/i })
-      .closest("[data-pinned='true']");
-
-    expect(row).toHaveClass("bg-muted/80");
-    expect(row).toHaveClass("ring-1");
-    expect(row).toHaveClass("dark:bg-muted/45");
+    expect(screen.queryByRole("button", { name: /Pinned Person/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Free Person/i })).toBeInTheDocument();
   });
 });
 

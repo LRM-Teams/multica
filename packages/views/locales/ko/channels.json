@@ -10,6 +10,7 @@
     "no_conversation_matches": "일치하는 대화가 없습니다",
     "search_scope_hint": "왼쪽은 대화 목록만 필터링합니다. 메시지 본문은 대화를 연 뒤 오른쪽 위 메시지 검색을 사용하세요.",
     "groups": "채널",
+    "pinned_section": "고정",
     "name_placeholder": "채널 이름",
     "lark_placeholder": "선택 Feishu chat_id (oc_...)",
     "create_aria": "채널 만들기",

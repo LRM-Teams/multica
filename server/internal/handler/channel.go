@@ -3132,7 +3132,7 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 	// tasks FIFO, so each request is answered in turn. interruptActive is left on
 	// the signature but no longer triggers a cancel.
 	interruptingActiveTask := false
-	promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, trigger)
+	promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, ch.Kind, trigger)
 	if err != nil {
 		slog.Warn(logScope+": create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
@@ -3210,7 +3210,7 @@ func (h *Handler) dispatchChannelMemberWelcome(ctx context.Context, workspaceID 
 			slog.Warn("channel welcome: ensure session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 			continue
 		}
-		promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, synthetic)
+		promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, ch.Kind, synthetic)
 		if err != nil {
 			h.publishChannelAgentTyping(ctx, ch, agent, false)
 			slog.Warn("channel welcome: create prompt failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
@@ -3753,11 +3753,11 @@ func (h *Handler) channelThreadContextMessages(ctx context.Context, workspaceID,
 	return out
 }
 
-func (h *Handler) createChannelAgentPromptMessage(ctx context.Context, chatSessionID pgtype.UUID, prompt string, trigger ChannelMessageResponse) (db.ChatMessage, error) {
-	return h.createChannelAgentPromptMessageWithDB(ctx, h.DB, chatSessionID, prompt, trigger)
+func (h *Handler) createChannelAgentPromptMessage(ctx context.Context, chatSessionID pgtype.UUID, prompt, channelKind string, trigger ChannelMessageResponse) (db.ChatMessage, error) {
+	return h.createChannelAgentPromptMessageWithDB(ctx, h.DB, chatSessionID, prompt, channelKind, trigger)
 }
 
-func (h *Handler) createChannelAgentPromptMessageWithDB(ctx context.Context, exec db.DBTX, chatSessionID pgtype.UUID, prompt string, trigger ChannelMessageResponse) (db.ChatMessage, error) {
+func (h *Handler) createChannelAgentPromptMessageWithDB(ctx context.Context, exec db.DBTX, chatSessionID pgtype.UUID, prompt, channelKind string, trigger ChannelMessageResponse) (db.ChatMessage, error) {
 	threadID := trigger.ThreadID
 	if threadID == nil || strings.TrimSpace(*threadID) == "" {
 		fresh := uuid.NewString()
@@ -3766,6 +3766,9 @@ func (h *Handler) createChannelAgentPromptMessageWithDB(ctx context.Context, exe
 	var threadRootMessageID any
 	if trigger.ThreadRootMessageID != nil {
 		threadRootMessageID = parseUUID(*trigger.ThreadRootMessageID)
+	} else if channelKind == "group" && strings.TrimSpace(trigger.ID) != "" {
+		// Top-level group-channel prompts should default agent output into a thread under the trigger.
+		threadRootMessageID = parseUUID(trigger.ID)
 	}
 	row := exec.QueryRow(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, thread_id, channel_thread_root_message_id, trigger_depth)

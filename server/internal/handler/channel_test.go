@@ -123,19 +123,19 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {
 		t.Fatalf("channel agent session not created: %v", err)
 	}
-	var threadID string
+	var threadID, promptRoot string
 	var depth int
 	var prompt string
 	if err := testPool.QueryRow(ctx, `
-		SELECT thread_id, trigger_depth, content
+		SELECT thread_id, channel_thread_root_message_id, trigger_depth, content
 		FROM chat_message
 		WHERE chat_session_id = $1 AND role = 'user'
 		ORDER BY created_at DESC
-		LIMIT 1`, sessionID).Scan(&threadID, &depth, &prompt); err != nil {
+		LIMIT 1`, sessionID).Scan(&threadID, &promptRoot, &depth, &prompt); err != nil {
 		t.Fatalf("load prompt message: %v", err)
 	}
-	if threadID != "debate-thread" || depth != 2 {
-		t.Fatalf("prompt thread/depth = %q/%d, want debate-thread/2", threadID, depth)
+	if threadID != "debate-thread" || promptRoot != trigger.ID || depth != 2 {
+		t.Fatalf("prompt thread/root/depth = %q/%q/%d, want debate-thread/%s/2", threadID, promptRoot, depth, trigger.ID)
 	}
 	if strings.Contains(prompt, "Recent channel messages from this channel only (bounded window):") {
 		t.Fatalf("prompt should not repeat the trigger in recent channel context:\n%s", prompt)
@@ -154,15 +154,16 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 		LIMIT 1`, channelID).Scan(&authorType, &replyThread, &replyDepth); err == nil {
 		t.Fatalf("unexpected bracketed reply row: %s %s %d", authorType, replyThread, replyDepth)
 	}
+	var replyRoot string
 	if err := testPool.QueryRow(ctx, `
-		SELECT author_type, thread_id, trigger_depth
+		SELECT author_type, thread_id, thread_root_message_id, trigger_depth
 		FROM channel_message
 		WHERE channel_id = $1 AND content = '@Channel Helper says hi'
-		LIMIT 1`, channelID).Scan(&authorType, &replyThread, &replyDepth); err != nil {
+		LIMIT 1`, channelID).Scan(&authorType, &replyThread, &replyRoot, &replyDepth); err != nil {
 		t.Fatalf("load bridged reply: %v", err)
 	}
-	if authorType != "agent" || replyThread != "debate-thread" || replyDepth != 3 {
-		t.Fatalf("bridged reply = %s/%q/%d, want agent/debate-thread/3", authorType, replyThread, replyDepth)
+	if authorType != "agent" || replyThread != "debate-thread" || replyRoot != trigger.ID || replyDepth != 3 {
+		t.Fatalf("bridged reply = %s/%q/%q/%d, want agent/debate-thread/%s/3", authorType, replyThread, replyRoot, replyDepth, trigger.ID)
 	}
 }
 

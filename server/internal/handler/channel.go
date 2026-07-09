@@ -410,9 +410,26 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 	// conversation's current last_seq (original behavior).
 	var req struct {
 		LastReadSeq *int64 `json:"last_read_seq"`
+		Rewind      bool   `json:"rewind"`
 	}
 	// Body is optional — ignore decode errors (empty body = mark to latest).
 	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	// rewind=true: owner/admin may set last_read_seq to any value (including
+	// backwards) in both channel_read and conversation_member, bypassing the
+	// GREATEST monotonic guard. For staging/testing use only.
+	if req.Rewind {
+		if req.LastReadSeq == nil {
+			writeError(w, http.StatusBadRequest, "rewind requires last_read_seq")
+			return
+		}
+		if !h.isWorkspaceOwnerOrAdmin(r.Context(), workspaceID, parseUUID(userID)) {
+			writeError(w, http.StatusForbidden, "rewind requires workspace owner or admin role")
+			return
+		}
+		h.rewindChannelRead(w, r, workspaceID, channelID, parseUUID(userID), *req.LastReadSeq)
+		return
+	}
 
 	// Read the previous last_read_seq before upsert, so the response can echo
 	// it back for FE race-free divider positioning (Frank's requirement).
@@ -1146,7 +1163,6 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 		  AND NOT (m.author_type = 'user' AND m.author_id = $4::uuid)`, channelID, workspaceID, pgtype.Int8{Int64: aroundSeq, Valid: true}, parseUUID(userIDStr)).Scan(&unreadTotal); err != nil {
 		unreadTotal = 0
 	}
-
 	// Calculate cursor for the before (older) direction
 	var nextCursor *ChannelMessagesCursorResponse
 	if hasMore && actualBefore > 0 {
@@ -1199,7 +1215,7 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 	attachChannelMessageExtras(out)
 
 	writeJSON(w, http.StatusOK, ChannelMessagesPageResponse{
-		Messages:         out,
+Messages:         out,
 		Limit:            limit,
 		HasMore:          hasMore,
 		NextCursor:       nextCursor,

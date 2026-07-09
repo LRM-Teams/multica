@@ -30,7 +30,9 @@ vi.mock("react-virtuoso", async () => {
           List?: React.ComponentType<React.HTMLAttributes<HTMLDivElement>>;
         };
         data?: ChannelMessage[];
-        initialTopMostItemIndex?: number;
+        // Real Virtuoso accepts a number or an { index, align } location (#340
+        // uses the object form to pin last-read with align:start).
+        initialTopMostItemIndex?: number | { index: number; align?: string };
         firstItemIndex?: number;
         startReached?: () => void;
         // #325 phase 1: Virtuoso owns its scroller and reports it via scrollerRef.
@@ -45,7 +47,11 @@ vi.mock("react-virtuoso", async () => {
       const Header = components.Header;
       const List = components.List ?? "div";
       const Footer = components.Footer;
-      const localTarget = Math.max(0, (initialTopMostItemIndex ?? firstItemIndex) - firstItemIndex);
+      const initialIndex =
+        typeof initialTopMostItemIndex === "object" && initialTopMostItemIndex !== null
+          ? initialTopMostItemIndex.index
+          : initialTopMostItemIndex;
+      const localTarget = Math.max(0, (initialIndex ?? firstItemIndex) - firstItemIndex);
       const targetIndex = Math.max(0, Math.min(localTarget, data.length - 1));
       const start = Math.max(0, Math.min(targetIndex - 1, data.length - 2));
       const windowedData = data.slice(start, start + 2);
@@ -54,7 +60,7 @@ vi.mock("react-virtuoso", async () => {
         <div
           ref={scrollerRef}
           data-testid="virtuoso-scroller"
-          data-initial-index={initialTopMostItemIndex ?? "unset"}
+          data-initial-index={initialIndex ?? "unset"}
           data-first-item-index={firstItemIndex}
         >
           {startReached && (
@@ -150,6 +156,7 @@ vi.mock("../../i18n/use-t", () => ({
           agent_badge: string;
           feishu_badge: string;
           copy_action: string;
+          expand_action: string;
           copied_toast: string;
           copy_failed_toast: string;
           edit_action: string;
@@ -170,6 +177,7 @@ vi.mock("../../i18n/use-t", () => ({
           agent_badge: "Agent",
           feishu_badge: "Feishu",
           copy_action: "Copy",
+          expand_action: "Show full message",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
           edit_action: "Edit",
@@ -302,8 +310,32 @@ describe("MessageViewport", () => {
     );
 
     expect(screen.getByTestId("unread-divider")).toBeInTheDocument();
-    // Opens scrolled to the divider anchor (index 2), not the latest message.
+    // #340: opens with the first-unread row (m7, index 2) pinned to the top
+    // (align:start) — the divider is rendered at the head of that row's unit, so
+    // it lands at the very top of the viewport. Not the latest message.
     expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute("data-initial-index", "2");
+  });
+
+  it("only collapses already-read history messages, never unread messages", () => {
+    const longText = Array.from({ length: 13 }, (_, index) => `History line ${index}`).join("\n");
+    const messages = [
+      { ...makeMessage("m1", longText), seq: 1 },
+      { ...makeMessage("m2", longText), seq: 2 },
+    ];
+    render(
+      <MessageViewport
+        messages={messages}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        lastReadSeq={1}
+      />,
+    );
+
+    const bodies = screen.getAllByTestId("message-body");
+    expect(bodies[0]).toHaveTextContent("History line 12");
+    expect(bodies[0]).toHaveAttribute("data-collapsed", "true");
+    expect(bodies[1]).toHaveTextContent("History line 12");
+    expect(bodies[1]).not.toHaveAttribute("data-collapsed");
   });
 
   it("renders no divider when the cursor is unknown (BE field absent)", () => {

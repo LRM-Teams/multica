@@ -189,6 +189,28 @@ function MessageViewport({
 }: MessageViewportProps) {
   const scrollRef = useRef<HTMLElement | null>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  // `virtuosoRef.current` alone can't gate a mount-time effect: ref attachment
+  // doesn't trigger a re-render, so an effect that fires the instant its OTHER
+  // dependencies are satisfied (e.g. `scrollContainerEl`) can run while the
+  // handle is still null and never gets a second chance (#348 root cause).
+  //
+  // The fix is a BOOLEAN readiness flag, not the handle object itself (tried
+  // and reverted — #365 incident): react-virtuoso hands the callback ref a
+  // different object identity across some renders, so a reference-equality
+  // bail on a handle-object state (`prev === node ? prev : node`) doesn't
+  // actually bail — it cascades into setState → re-render → new handle
+  // object → setState → ... an infinite loop that crashed the message pages
+  // in production. A boolean compares by VALUE: React's built-in same-value
+  // bailout (`Object.is`) skips the re-render whenever attached-ness doesn't
+  // change, regardless of how many different object identities the ref
+  // receives underneath. The handle itself is still read live off
+  // `virtuosoRef.current` when actually needed — only the readiness SIGNAL
+  // goes through state.
+  const [handleAttached, setHandleAttached] = useState(false);
+  const handleVirtuosoRef = useCallback((node: VirtuosoHandle | null) => {
+    virtuosoRef.current = node;
+    setHandleAttached(!!node);
+  }, []);
   const messageRefs = useRef<Map<string, HTMLDivElement> | null>(null);
   // Only the direct-fallback path needs manual scroll-position preservation:
   // it renders plain divs with no virtualization, so prepending an older page
@@ -238,12 +260,16 @@ function MessageViewport({
   // (#325 phase-2 block 2). Owns the anchor derivation, the once-per-visit guard,
   // and the measure-safe (#883) settle-scroll; the core just reads back
   // `unreadAnchorIndex` to seed the Virtuoso mount position below.
-  const { unreadAnchorIndex } = useUnreadAnchorScroll({
+  const { unreadAnchorIndex, isAnchorSettling } = useUnreadAnchorScroll({
     channelId,
     messages,
     newMessagesDivider,
     highlightMessageId,
     firstItemIndex,
+    // A value-comparable readiness signal so the settle effect re-runs the
+    // instant Virtuoso attaches, instead of possibly having already run (and
+    // no-op'd) while the handle was still null with no second chance.
+    handleAttached,
     virtuosoRef,
     // The scroll container gates the anchor scroll (Virtuoso only mounts once it
     // exists) and its rect tells the settle helper when the anchor row arrives.
@@ -357,6 +383,7 @@ function MessageViewport({
     const searchHighlighted = searchHitIds?.has(msg.id) ?? false;
     const dividerLabel = dayDividers.get(msg.id);
     const isUnreadAnchor = newMessagesDivider?.anchorMessageId === msg.id;
+    const collapseLongContent = lastReadSeq != null && msg.seq <= lastReadSeq;
     return (
       <Fragment key={msg.id}>
         {dividerLabel && <DateDivider label={dividerLabel} />}
@@ -385,6 +412,7 @@ function MessageViewport({
             onOpenAgent={onOpenAgent}
             searchHighlighted={searchHighlighted}
             searchQuery={searchHighlighted ? searchQuery : undefined}
+            collapseLongContent={collapseLongContent}
           />
         </div>
       </Fragment>
@@ -440,11 +468,25 @@ function MessageViewport({
   // Open scrolled to: a deep-link target first, else the "new messages" divider
   // so the viewer starts where they left off (#303, Iris), else the chat
   // default (latest / thread root).
-  const initialTopMostItemIndex =
+  //
+  // #340: with `around_seq` the window is loaded centered on the anchor, so this
+  // mount-only prop lands the first render correctly — no post-mount scroll
+  // chase, no settle fallback. Unread opens pin the FIRST-UNREAD row to the top
+  // (align:start): the "N new messages" divider is rendered at the HEAD of that
+  // row's render unit, so pinning it puts the divider at the very top of the
+  // viewport CONSTRUCTIVELY — independent of message height — with the unread
+  // messages right below it. There is no "tall last-read pushes the divider off
+  // screen" edge to catch, because the last-read row is never the pin target.
+  // (Read context above the divider is intentionally omitted in v1 — Slack's
+  // "new messages" convention; add later via pure CSS if wanted, not mechanism.)
+  // Deep-link/search centers on the target.
+  const initialTopMostItemIndex:
+    | number
+    | { index: number; align: "start" | "center" } =
     highlightIndex >= 0
-      ? firstItemIndex + highlightIndex
+      ? { index: firstItemIndex + highlightIndex, align: "center" }
       : unreadAnchorIndex >= 0
-        ? firstItemIndex + unreadAnchorIndex
+        ? { index: firstItemIndex + unreadAnchorIndex, align: "start" }
         : initialScroll === "bottom"
           ? firstItemIndex + Math.max(0, messages.length - 1)
           : firstItemIndex;
@@ -457,7 +499,7 @@ function MessageViewport({
         data-testid="message-scroller"
       >
         <Virtuoso
-          ref={virtuosoRef}
+          ref={handleVirtuosoRef}
           customScrollParent={scrollContainerEl}
           data={messages}
           firstItemIndex={firstItemIndex}
@@ -465,7 +507,17 @@ function MessageViewport({
           increaseViewportBy={{ top: 320, bottom: 520 }}
           atBottomThreshold={120}
           atBottomStateChange={handleAtBottomStateChange}
-          followOutput={() => (!loadingOlder && isNearBottom ? "smooth" : false)}
+          // Scroll position has exactly one owner at a time (#348 postmortem):
+          // while the unread-anchor settle loop is in flight it's re-issuing
+          // `scrollToIndex` toward the anchor every frame — `followOutput`
+          // smooth-scrolling back to the bottom during that window (its
+          // `isNearBottom` default is `true` before the real cold-load
+          // position is known) fights it, so `hasReached()` never sees the
+          // anchor arrive and the settle loop times out at the bottom,
+          // indistinguishable from never having tried. Gate it off for the
+          // duration; the anchor hook hands ownership back the moment it
+          // reaches or gives up.
+          followOutput={() => (!loadingOlder && !isAnchorSettling && isNearBottom ? "smooth" : false)}
           startReached={() => {
             if (canLoadOlder) onLoadOlder?.();
           }}

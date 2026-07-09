@@ -323,6 +323,98 @@ func walkWorkdirFilesWithOptions(root string, maxEntries, maxDepth int, opts wor
 	return nodes, truncated, nil
 }
 
+func (d *Daemon) handleSeedAgentContextRequest(req protocol.SeedAgentContextRequestPayload, writes chan<- []byte) {
+	resp := protocol.SeedAgentContextResponsePayload{RequestID: req.RequestID}
+	root, _, err := confinedWorkdirPath(d.cfg.WorkspacesRoot, req.RelPath, "")
+	if err != nil {
+		resp.Error = "workspaces root unavailable"
+		d.sendDaemonFrame(protocol.EventDaemonSeedAgentContextResponse, resp, req.RequestID, writes)
+		return
+	}
+	maxBytes := req.MaxBytes
+	if maxBytes <= 0 || maxBytes > defaultWriteFileMaxBytes {
+		maxBytes = defaultWriteFileMaxBytes
+	}
+	written, seedErr := seedAgentContextFiles(root, req.InitialNotes, req.InitialMemory, maxBytes)
+	resp.Written = written
+	if seedErr != nil {
+		if errors.Is(seedErr, errSeedContextTooLarge) {
+			resp.TooLarge = true
+		} else {
+			resp.Error = "failed to seed agent context"
+		}
+	}
+	d.sendDaemonFrame(protocol.EventDaemonSeedAgentContextResponse, resp, req.RequestID, writes)
+}
+
+var errSeedContextTooLarge = errors.New("seed context too large")
+
+func seedAgentContextFiles(root string, notes, memory map[string]string, maxBytes int) ([]string, error) {
+	if err := ensureMulticaAgentRoot(root); err != nil {
+		return nil, err
+	}
+	written := []string{}
+	for rel, content := range notes {
+		path := filepath.ToSlash(filepath.Clean(rel))
+		if !allowedInitialNotePath(path) || strings.TrimSpace(content) == "" {
+			continue
+		}
+		if err := appendSeedContextFile(root, path, content, maxBytes); err != nil {
+			return written, err
+		}
+		written = append(written, path)
+	}
+	for rel, content := range memory {
+		path := filepath.ToSlash(filepath.Clean(rel))
+		if !allowedInitialMemoryPath(path) || strings.TrimSpace(content) == "" {
+			continue
+		}
+		if err := appendSeedContextFile(root, path, content, maxBytes); err != nil {
+			return written, err
+		}
+		written = append(written, path)
+	}
+	return written, nil
+}
+
+func allowedInitialNotePath(path string) bool {
+	switch path {
+	case "notes/agents.md", "notes/channels.md", "notes/project-map.md", "notes/relationship-map.md", "notes/role-playbook.md", "notes/work-log.md", "notes/decisions.md":
+		return true
+	default:
+		return false
+	}
+}
+
+func allowedInitialMemoryPath(path string) bool {
+	switch path {
+	case "memory/MEMORY.md", "memory/STATE.md":
+		return true
+	default:
+		return false
+	}
+}
+
+func appendSeedContextFile(root, rel, content string, maxBytes int) error {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return nil
+	}
+	if len([]byte(trimmed)) > maxBytes {
+		return errSeedContextTooLarge
+	}
+	target := filepath.Join(root, filepath.FromSlash(rel))
+	current, err := os.ReadFile(target)
+	if err != nil {
+		return err
+	}
+	block := "\n\n## Initial Context\n\n" + trimmed + "\n"
+	if len(current)+len([]byte(block)) > maxBytes {
+		return errSeedContextTooLarge
+	}
+	return os.WriteFile(target, append(current, []byte(block)...), 0o644)
+}
+
 func writeWorkdirTextFile(root, filePath, content, expectedContentHash string, maxBytes int) protocol.WriteWorkdirFileResponsePayload {
 	resp := protocol.WriteWorkdirFileResponsePayload{}
 	if maxBytes <= 0 || maxBytes > defaultWriteFileMaxBytes {

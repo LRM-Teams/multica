@@ -224,6 +224,20 @@ func (h *Hub) RequestWriteFile(ctx context.Context, req protocol.WriteWorkdirFil
 	return &resp, nil
 }
 
+// RequestSeedAgentContext pushes Wendy-created initial notes/memory to the
+// daemon that owns req.RuntimeID. ErrRuntimeOffline if no daemon is connected.
+func (h *Hub) RequestSeedAgentContext(ctx context.Context, req protocol.SeedAgentContextRequestPayload) (*protocol.SeedAgentContextResponsePayload, error) {
+	raw, err := h.requestDaemon(ctx, req.RuntimeID, req.RequestID, protocol.EventDaemonSeedAgentContextRequest, req)
+	if err != nil {
+		return nil, err
+	}
+	var resp protocol.SeedAgentContextResponsePayload
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // SetHeartbeatHandler installs the callback used for daemon:heartbeat frames.
 // Wiring is done after handler construction because the handler depends on
 // DB queries that aren't available when the hub is built. A nil handler

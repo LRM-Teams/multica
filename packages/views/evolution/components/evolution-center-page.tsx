@@ -36,6 +36,7 @@ import type {
   DashboardUsageByAgent,
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
+  EvolutionUnitMetric,
 } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
@@ -150,6 +151,13 @@ const EMPTY_AGENTS: Agent[] = [];
 const EMPTY_RUNTIME: DashboardAgentRunTime[] = [];
 const EMPTY_USAGE_BY_AGENT: DashboardUsageByAgent[] = [];
 const EMPTY_SUBMISSIONS: EvolutionReviewSubmission[] = [];
+const EMPTY_UNIT_METRICS: EvolutionUnitMetric[] = [];
+const MEMORY_CURATION_STAGES = [
+  ["L1", "01:00", "Daily recorder", COPY.dbEvidence],
+  ["L2", "02:00", "Review extractor", COPY.semanticDedupe],
+  ["L3", "03:00", "Promotion writer", COPY.promotion],
+  ["L4", "04:00", "Curator", COPY.curated],
+] as const;
 
 type AgentEvolutionRow = {
   agent: Agent;
@@ -278,7 +286,7 @@ export function EvolutionCenterPage() {
   const candidateQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "candidate"));
   const promotedQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "promoted"));
   const rejectedQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "rejected"));
-  const metricsQuery = useQuery(evolutionMetricsOptions(wsId));
+  const { data: metricsData } = useQuery(evolutionMetricsOptions(wsId));
 
   const agents = agentsQuery.data ?? EMPTY_AGENTS;
   const usageRows = usageQuery.data ?? EMPTY_USAGE_BY_AGENT;
@@ -287,7 +295,7 @@ export function EvolutionCenterPage() {
   const candidateSubmissions = candidateQuery.data ?? EMPTY_SUBMISSIONS;
   const promotedSubmissions = promotedQuery.data ?? EMPTY_SUBMISSIONS;
   const rejectedSubmissions = rejectedQuery.data ?? EMPTY_SUBMISSIONS;
-  const unitMetrics = metricsQuery.data?.unit_metrics ?? [];
+  const unitMetrics = metricsData?.unit_metrics ?? EMPTY_UNIT_METRICS;
   const submissionsByStatus = useMemo(
     () => ({
       needs_review: needsReviewSubmissions,
@@ -710,12 +718,6 @@ function SubmissionCard({ submission }: { submission: EvolutionReviewSubmission 
 }
 
 function MemoryCurationCard() {
-  const stages = [
-    ["L1", "01:00", "Daily recorder", COPY.dbEvidence],
-    ["L2", "02:00", "Review extractor", COPY.semanticDedupe],
-    ["L3", "03:00", "Promotion writer", COPY.promotion],
-    ["L4", "04:00", "Curator", COPY.curated],
-  ] as const;
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
@@ -723,7 +725,7 @@ function MemoryCurationCard() {
         <p className="text-sm text-muted-foreground">{COPY.memoryOpsHint}</p>
       </CardHeader>
       <CardContent className="space-y-3">
-        {stages.map(([stage, time, title, detail]) => (
+        {MEMORY_CURATION_STAGES.map(([stage, time, title, detail]) => (
           <div key={stage} className="flex items-center gap-3 rounded-2xl border bg-muted/20 p-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-foreground text-xs font-semibold text-background">{stage}</div>
             <div className="min-w-0 flex-1">
@@ -738,7 +740,7 @@ function MemoryCurationCard() {
   );
 }
 
-function UnitMetricsCard({ metrics }: { metrics: Array<{ unit_id?: string | null; local_unit_id: string; unit_type: string; title: string; used_count: number; success_count: number; failure_count: number; conflict_count: number; success_rate: number }> }) {
+function UnitMetricsCard({ metrics }: { metrics: EvolutionUnitMetric[] }) {
   const top = metrics.toSorted((a, b) => b.used_count - a.used_count || b.success_count - a.success_count).slice(0, 8);
   return (
     <Card className="bg-background/85 backdrop-blur">

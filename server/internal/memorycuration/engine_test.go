@@ -100,6 +100,21 @@ func TestL4ExpiresStateAndClosedReviewEntries(t *testing.T) {
 	assertContains(t, filepath.Join(agentRoot, "memory", "REVIEW.md"), "Open item")
 }
 
+func TestMergeAgentRunResultIncludesEvidence(t *testing.T) {
+	dst := AgentRunResult{WorkspaceID: "ws-1", AgentID: "agent-1"}
+	mergeAgentRunResult(&dst, AgentRunResult{Changed: true, EvidenceCollected: 2, DailyFilesWritten: 1})
+	mergeAgentRunResult(&dst, AgentRunResult{EvidenceCollected: 3, ReviewCandidatesAdded: 4})
+	if !dst.Changed {
+		t.Fatal("Changed = false, want true")
+	}
+	if dst.EvidenceCollected != 5 {
+		t.Fatalf("EvidenceCollected = %d, want 5", dst.EvidenceCollected)
+	}
+	if dst.DailyFilesWritten != 1 || dst.ReviewCandidatesAdded != 4 {
+		t.Fatalf("merged counters = %#v", dst)
+	}
+}
+
 func mustDate(s string) time.Time {
 	t, err := time.Parse("2006-01-02", s)
 	if err != nil {

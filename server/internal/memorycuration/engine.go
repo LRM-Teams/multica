@@ -85,13 +85,7 @@ func (e *Engine) Run(opts Options) (Result, error) {
 				res.Errors = append(res.Errors, AgentError{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Stage: st, Error: err.Error()})
 				continue
 			}
-			ar.Changed = ar.Changed || sr.Changed
-			ar.DailyFilesWritten += sr.DailyFilesWritten
-			ar.ReviewCandidatesAdded += sr.ReviewCandidatesAdded
-			ar.EntriesPromoted += sr.EntriesPromoted
-			ar.EntriesArchived += sr.EntriesArchived
-			ar.DuplicatesMerged += sr.DuplicatesMerged
-			ar.ConflictsFound += sr.ConflictsFound
+			mergeAgentRunResult(&ar, sr)
 		}
 		if ar.Changed {
 			res.AgentsChanged++
@@ -106,6 +100,17 @@ func (e *Engine) Run(opts Options) (Result, error) {
 		res.AgentResults = append(res.AgentResults, ar)
 	}
 	return res, nil
+}
+
+func mergeAgentRunResult(dst *AgentRunResult, src AgentRunResult) {
+	dst.Changed = dst.Changed || src.Changed
+	dst.DailyFilesWritten += src.DailyFilesWritten
+	dst.ReviewCandidatesAdded += src.ReviewCandidatesAdded
+	dst.EntriesPromoted += src.EntriesPromoted
+	dst.EntriesArchived += src.EntriesArchived
+	dst.DuplicatesMerged += src.DuplicatesMerged
+	dst.ConflictsFound += src.ConflictsFound
+	dst.EvidenceCollected += src.EvidenceCollected
 }
 
 func (e *Engine) runL1(root agentRoot, opts Options) (AgentRunResult, error) {

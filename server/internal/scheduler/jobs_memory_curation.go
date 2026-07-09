@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"time"
 
@@ -74,6 +75,29 @@ func makeMemoryCurationHandler(pool *pgxpool.Pool, stage memorycuration.Stage, b
 		if pool != nil {
 			evidenceDB = pool
 		}
+		runIDs := map[string]string{}
+		if pool != nil {
+			rows, err := pool.Query(ctx, `
+				INSERT INTO memory_curation_run (workspace_id, agent_id, stage, trigger_kind, status, date_from, date_to, started_at)
+				SELECT id, NULL, $1, 'scheduled', 'running', $2, $3, now()
+				  FROM workspace
+				RETURNING workspace_id::text, id::text
+			`, memorycuration.DBStageName(stage), planDate, planDate)
+			if err != nil {
+				return HandlerResult{}, err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var workspaceID, runID string
+				if err := rows.Scan(&workspaceID, &runID); err != nil {
+					return HandlerResult{}, err
+				}
+				runIDs[workspaceID] = runID
+			}
+			if err := rows.Err(); err != nil {
+				return HandlerResult{}, err
+			}
+		}
 		res, err := memorycuration.NewEngine().Run(memorycuration.Options{
 			Context:        ctx,
 			DB:             evidenceDB,
@@ -87,6 +111,71 @@ func makeMemoryCurationHandler(pool *pgxpool.Pool, stage memorycuration.Stage, b
 		})
 		if in.Heartbeat != nil {
 			_ = in.Heartbeat(ctx)
+		}
+		status := "succeeded"
+		errText := ""
+		if err != nil || len(res.Errors) > 0 {
+			status = "failed"
+			if err != nil {
+				errText = err.Error()
+			} else {
+				errText = "one or more agents failed"
+			}
+		}
+		if len(runIDs) > 0 && pool != nil {
+			statsByWorkspace := map[string]memorycuration.Result{}
+			for workspaceID := range runIDs {
+				statsByWorkspace[workspaceID] = memorycuration.Result{
+					Stage:          res.Stage,
+					WorkspacesRoot: res.WorkspacesRoot,
+					WorkspaceID:    workspaceID,
+					DateFrom:       res.DateFrom,
+					DateTo:         res.DateTo,
+					DryRun:         res.DryRun,
+					Force:          res.Force,
+					Timezone:       res.Timezone,
+				}
+			}
+			for _, agent := range res.AgentResults {
+				stats := statsByWorkspace[agent.WorkspaceID]
+				stats.WorkspaceID = agent.WorkspaceID
+				stats.AgentResults = append(stats.AgentResults, agent)
+				stats.AgentsScanned++
+				if agent.Changed {
+					stats.AgentsChanged++
+				}
+				stats.DailyFilesWritten += agent.DailyFilesWritten
+				stats.ReviewCandidatesAdded += agent.ReviewCandidatesAdded
+				stats.EntriesPromoted += agent.EntriesPromoted
+				stats.EntriesArchived += agent.EntriesArchived
+				stats.DuplicatesMerged += agent.DuplicatesMerged
+				stats.ConflictsFound += agent.ConflictsFound
+				stats.EvidenceCollected += agent.EvidenceCollected
+				statsByWorkspace[agent.WorkspaceID] = stats
+			}
+			for _, agentErr := range res.Errors {
+				stats := statsByWorkspace[agentErr.WorkspaceID]
+				stats.WorkspaceID = agentErr.WorkspaceID
+				stats.Errors = append(stats.Errors, agentErr)
+				statsByWorkspace[agentErr.WorkspaceID] = stats
+			}
+			for workspaceID, runID := range runIDs {
+				stats := statsByWorkspace[workspaceID]
+				statsJSON, _ := json.Marshal(stats)
+				workspaceStatus := status
+				workspaceErr := errText
+				if err == nil && len(stats.Errors) == 0 {
+					workspaceStatus = "succeeded"
+					workspaceErr = ""
+				}
+				if _, updateErr := pool.Exec(ctx, `
+					UPDATE memory_curation_run
+					   SET status = $2, stats = $3::jsonb, error = $4, finished_at = now()
+					 WHERE id = $1
+				`, runID, workspaceStatus, string(statsJSON), workspaceErr); updateErr != nil {
+					return HandlerResult{}, updateErr
+				}
+			}
 		}
 		if err != nil {
 			return HandlerResult{}, err

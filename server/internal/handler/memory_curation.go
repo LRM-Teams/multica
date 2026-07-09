@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
@@ -62,9 +64,24 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 	if req.AgentID != "" {
 		agentIDs = append(agentIDs, req.AgentID)
 	}
+	agentIDs, ok := parseUniqueAgentIDsOrBadRequest(w, agentIDs)
+	if !ok {
+		return
+	}
 	if len(agentIDs) == 0 && !req.AllAgents {
 		writeError(w, http.StatusBadRequest, "agent_id, agent_ids, or all_agents is required")
 		return
+	}
+	if len(agentIDs) > 0 {
+		valid, err := h.agentIDsBelongToWorkspace(r.Context(), workspaceID, agentIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to validate agent scope")
+			return
+		}
+		if !valid {
+			writeError(w, http.StatusNotFound, "agent not found")
+			return
+		}
 	}
 	now := time.Now().UTC()
 	until := now.AddDate(0, 0, -1)
@@ -88,14 +105,14 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "workspaces root is not configured")
 		return
 	}
-	dbStage := dbStageName(stage)
+	dbStage := memorycuration.DBStageName(stage)
 	trigger := "manual"
 	if req.IncludeHistory {
 		trigger = "backfill"
 	}
 	var agentForRun any
 	if len(agentIDs) == 1 && !req.AllAgents {
-		agentForRun = agentIDs[0]
+		agentForRun = parseUUID(agentIDs[0])
 	}
 	var requestedBy any
 	if m, ok := ctxMember(r.Context()); ok {
@@ -154,8 +171,11 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 
 func (h *Handler) GetMemoryCurationRun(w http.ResponseWriter, r *http.Request) {
 	workspaceID := workspaceIDFromURL(r, "id")
-	runID := chi.URLParam(r, "runId")
-	row, err := h.loadMemoryCurationRun(r, workspaceID, runID)
+	runUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "runId"), "run id")
+	if !ok {
+		return
+	}
+	row, err := h.loadMemoryCurationRun(r, workspaceID, runUUID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			writeError(w, http.StatusNotFound, "memory curation run not found")
@@ -168,13 +188,22 @@ func (h *Handler) GetMemoryCurationRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetAgentMemoryCurationStatus(w http.ResponseWriter, r *http.Request) {
-	agentID := chi.URLParam(r, "id")
+	agentUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "agent id")
+	if !ok {
+		return
+	}
+	agentID := uuidToString(agentUUID)
 	var workspaceID string
 	var pending int
 	var lastRun json.RawMessage
 	err := h.DB.QueryRow(r.Context(), `
 		SELECT a.workspace_id::text,
-		       COALESCE((SELECT count(*) FROM memory_curation_run r WHERE r.agent_id = a.id AND r.status IN ('queued','running')), 0),
+		       COALESCE((
+		         SELECT count(*)
+		           FROM memory_curation_run r
+		          WHERE (r.agent_id = a.id OR (r.agent_id IS NULL AND r.workspace_id = a.workspace_id))
+		            AND r.status IN ('queued','running')
+		       ), 0),
 		       COALESCE((
 		         SELECT jsonb_build_object('id', r.id, 'stage', r.stage, 'status', r.status, 'created_at', r.created_at, 'finished_at', r.finished_at)
 		           FROM memory_curation_run r
@@ -184,7 +213,7 @@ func (h *Handler) GetAgentMemoryCurationStatus(w http.ResponseWriter, r *http.Re
 		       ), '{}'::jsonb)
 		  FROM agent a
 		 WHERE a.id = $1
-	`, agentID).Scan(&workspaceID, &pending, &lastRun)
+	`, agentUUID).Scan(&workspaceID, &pending, &lastRun)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			writeError(w, http.StatusNotFound, "agent not found")
@@ -200,7 +229,7 @@ func (h *Handler) GetAgentMemoryCurationStatus(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]any{"agent_id": agentID, "workspace_id": workspaceID, "pending_runs": pending, "last_run": lastRun})
 }
 
-func (h *Handler) loadMemoryCurationRun(r *http.Request, workspaceID, runID string) (memoryCurationRunResponse, error) {
+func (h *Handler) loadMemoryCurationRun(r *http.Request, workspaceID string, runID pgtype.UUID) (memoryCurationRunResponse, error) {
 	var resp memoryCurationRunResponse
 	var stats []byte
 	var agentID, dateFrom, dateTo string
@@ -235,17 +264,38 @@ func (h *Handler) loadMemoryCurationRun(r *http.Request, workspaceID, runID stri
 	return resp, nil
 }
 
-func dbStageName(stage memorycuration.Stage) string {
-	switch stage {
-	case memorycuration.StageL1:
-		return "l1_daily"
-	case memorycuration.StageL2:
-		return "l2_review"
-	case memorycuration.StageL3:
-		return "l3_promote"
-	case memorycuration.StageL4:
-		return "l4_curator"
-	default:
-		return "all"
+func parseUniqueAgentIDsOrBadRequest(w http.ResponseWriter, rawIDs []string) ([]string, bool) {
+	seen := make(map[string]struct{}, len(rawIDs))
+	agentIDs := make([]string, 0, len(rawIDs))
+	for _, raw := range rawIDs {
+		if raw == "" {
+			continue
+		}
+		agentUUID, ok := parseUUIDOrBadRequest(w, raw, "agent_id")
+		if !ok {
+			return nil, false
+		}
+		agentID := uuidToString(agentUUID)
+		if _, exists := seen[agentID]; exists {
+			continue
+		}
+		seen[agentID] = struct{}{}
+		agentIDs = append(agentIDs, agentID)
 	}
+	return agentIDs, true
+}
+
+func (h *Handler) agentIDsBelongToWorkspace(ctx context.Context, workspaceID string, agentIDs []string) (bool, error) {
+	if len(agentIDs) == 0 {
+		return true, nil
+	}
+	var count int
+	if err := h.DB.QueryRow(ctx, `
+		SELECT count(*)
+		  FROM agent
+		 WHERE workspace_id = $1 AND id::text = ANY($2)
+	`, workspaceID, agentIDs).Scan(&count); err != nil {
+		return false, err
+	}
+	return count == len(agentIDs), nil
 }

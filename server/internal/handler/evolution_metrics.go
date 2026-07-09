@@ -73,7 +73,7 @@ func (h *Handler) GetEvolutionMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	var resp EvolutionMetricsResponse
+	resp := EvolutionMetricsResponse{UnitMetrics: []EvolutionUnitMetricResponse{}}
 	for rows.Next() {
 		var item EvolutionUnitMetricResponse
 		var unitID, lastUsedAt string

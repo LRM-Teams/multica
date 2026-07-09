@@ -99,6 +99,7 @@ vi.mock("../../i18n/use-t", () => ({
           agent_badge: string;
           feishu_badge: string;
           copy_action: string;
+          quote_action: string;
           expand_action: string;
           copied_toast: string;
           copy_failed_toast: string;
@@ -114,7 +115,7 @@ vi.mock("../../i18n/use-t", () => ({
           save_edit: string;
           cancel_edit: string;
         };
-        quote: { jump_to: string };
+        quote: { jump_to: string; cancel: string; deleted: string; inaccessible: string };
         thread: { reply: string; reply_count: string };
         time: { today: string; yesterday: string };
       }) => string,
@@ -126,6 +127,7 @@ vi.mock("../../i18n/use-t", () => ({
           feishu_badge: "Feishu",
           actions_menu: "Message actions",
           copy_action: "Copy",
+          quote_action: "Quote",
           expand_action: "Show full message",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
@@ -142,6 +144,9 @@ vi.mock("../../i18n/use-t", () => ({
         },
         quote: {
           jump_to: "Jump to original message",
+          cancel: "Cancel quote",
+          deleted: "Original message was deleted",
+          inaccessible: "Original message is unavailable",
         },
         thread: {
           reply: "Reply in thread",
@@ -426,6 +431,47 @@ describe("ChannelMessageBubble", () => {
 
     expect(screen.getByText("Alice Display")).toBeInTheDocument();
     expect(screen.queryByText("alice")).not.toBeInTheDocument();
+  });
+
+  it("starts quoting from the desktop message context menu", async () => {
+    const onQuote = vi.fn();
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" onQuote={onQuote} />);
+
+    fireEvent.contextMenu(screen.getByTestId("message-bubble"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /Quote/ }));
+
+    expect(onQuote).toHaveBeenCalledWith(expect.objectContaining({ id: "m1" }));
+  });
+
+  it("renders deleted and inaccessible quote fallbacks", () => {
+    const { rerender } = render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          reply_to_message_id: "m0",
+          reply_to: {
+            id: "m0",
+            type: "user",
+            author_id: "user-1",
+            author_name: "alice",
+            content: "Earlier point",
+            status: "deleted",
+            created_at: "2026-06-17T09:10:00Z",
+          },
+        })}
+        currentUserId="user-2"
+      />,
+    );
+
+    expect(screen.getByText("Original message was deleted")).toBeInTheDocument();
+
+    rerender(
+      <ChannelMessageBubble
+        message={makeMessage({ reply_to_message_id: "missing", reply_to: null })}
+        currentUserId="user-2"
+      />,
+    );
+
+    expect(screen.getByText("Original message is unavailable")).toBeInTheDocument();
   });
 
   it("passes the search query to markdown only for search hits", () => {

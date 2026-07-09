@@ -190,6 +190,7 @@
     "add_reaction": "반응 추가",
     "actions_menu": "메시지 작업",
     "copy_action": "복사",
+    "quote_action": "인용",
     "expand_action": "전체 메시지 보기",
     "copied_toast": "복사했습니다",
     "copy_failed_toast": "복사 실패",
@@ -237,7 +238,10 @@
     "composer_placeholder": "{{name}}에게 메시지…"
   },
   "quote": {
-    "jump_to": "원본 메시지로 이동"
+    "jump_to": "원본 메시지로 이동",
+    "cancel": "인용 취소",
+    "deleted": "원본 메시지가 삭제되었습니다",
+    "inaccessible": "원본 메시지를 사용할 수 없습니다"
   },
   "message_loading": {
     "load_older": "이전 메시지 불러오기",

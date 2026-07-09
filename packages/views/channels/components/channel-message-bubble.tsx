@@ -7,13 +7,19 @@ import {
   useState,
   type PointerEvent,
 } from "react";
-import { Copy, MessageSquare, Pencil, Trash2 } from "lucide-react";
+import { Copy, MessageSquare, Pencil, Quote, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@multica/ui/components/ui/context-menu";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
 import { AttachmentList } from "../../issues/components/comment-card";
@@ -26,11 +32,11 @@ import { useMessageTime } from "../../i18n/use-message-time";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
 import {
   formatMessagePartsCopyText,
-  formatMessagePartsPreview,
   resolveMessageParts,
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
 import { MessageBody } from "./message-body";
+import { MessageQuoteCard } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import { SELF_MENTION_ROW_CLASS } from "../../common/mention-token";
@@ -183,6 +189,7 @@ export function ChannelMessageBubble({
   onOpenThread,
   onScrollTo,
   onReact,
+  onQuote,
   onEdit,
   onDelete,
   onOpenAgent,
@@ -202,6 +209,8 @@ export function ChannelMessageBubble({
   onScrollTo?: (messageId: string) => void;
   /** Toggle/add a lightweight emoji reaction on this message. */
   onReact?: (message: ChannelMessage, emoji: string) => void;
+  /** Set this message as the composer quote target. */
+  onQuote?: (message: ChannelMessage) => void;
   /**
    * Save an inline edit of the viewer's own message. H5: this is an edit, never
    * a re-send — it must not go through a send/dispatch path (no new wake).
@@ -381,6 +390,7 @@ export function ChannelMessageBubble({
   const handleMobileReactionSelect = (emoji: string) => {
     runMobileAction(() => onReact?.(message, emoji));
   };
+  const handleQuote = () => onQuote?.(message);
 
   // Edit / delete are viewer-own affordances only. H5: saving an edit routes
   // through onEdit (a PATCH), never a re-send — it cannot produce a new wake.
@@ -500,7 +510,7 @@ export function ChannelMessageBubble({
   );
   const selfMentioned = addressedToViewer && !isOwn;
 
-  return (
+  const bubble = (
     <div
       id={`message-${message.id}`}
       data-testid="message-bubble"
@@ -599,6 +609,17 @@ export function ChannelMessageBubble({
             >
               <Copy className="size-3.5" />
             </button>
+            {onQuote && (
+              <button
+                type="button"
+                onClick={handleQuote}
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                aria-label={t(($) => $.message.quote_action)}
+                title={t(($) => $.message.quote_action)}
+              >
+                <Quote className="size-3.5" />
+              </button>
+            )}
             {canOpenThread && (
               <button
                 type="button"
@@ -656,25 +677,18 @@ export function ChannelMessageBubble({
             data-collapsed={isContentCollapsed ? "true" : undefined}
             style={{ WebkitTouchCallout: "default" }}
           >
-            {/* Inline quote block: rendered when reply_to is present (BE task #23) */}
-            {message.reply_to && (
-              <button
-                type="button"
-                onClick={() =>
-                  message.reply_to_message_id && onScrollTo?.(message.reply_to_message_id)
-                }
-                className="mb-2 w-full cursor-pointer rounded border-l-2 border-muted-foreground/30 bg-muted/30 px-2 py-1 text-left transition-opacity hover:opacity-80"
-                aria-label={t(($) => $.quote.jump_to)}
-              >
-                <p className="truncate text-[11px] font-semibold text-foreground/70">
-                  {replyAuthorName}
-                </p>
-                <p className="line-clamp-1 text-[11px] text-muted-foreground">
-                  {formatMessagePartsPreview(message.reply_to.parts) ??
-                    unwrapStructuredPreviewContent(message.reply_to.content) ??
-                    message.reply_to.content}
-                </p>
-              </button>
+            {(message.reply_to || message.reply_to_message_id) && (
+              <MessageQuoteCard
+                quote={message.reply_to}
+                replyToMessageId={message.reply_to_message_id}
+                authorName={replyAuthorName}
+                onJump={onScrollTo}
+                labels={{
+                  jumpTo: t(($) => $.quote.jump_to),
+                  deleted: t(($) => $.quote.deleted),
+                  inaccessible: t(($) => $.quote.inaccessible),
+                }}
+              />
             )}
             <MessageBody
               content={message.content}
@@ -750,6 +764,16 @@ export function ChannelMessageBubble({
                   <Copy className="size-4" />
                   <span>{t(($) => $.message.copy_action)}</span>
                 </button>
+                {onQuote && (
+                  <button
+                    type="button"
+                    onClick={() => runMobileAction(handleQuote)}
+                    className="inline-flex h-11 items-center gap-3 rounded-xl px-3 text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                  >
+                    <Quote className="size-4" />
+                    <span>{t(($) => $.message.quote_action)}</span>
+                  </button>
+                )}
                 {canEdit && (
                   <button
                     type="button"
@@ -808,5 +832,19 @@ export function ChannelMessageBubble({
         )}
       </div>
     </div>
+  );
+
+  if (!onQuote || isEditing) return bubble;
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger render={bubble} />
+      <ContextMenuContent>
+        <ContextMenuItem onClick={handleQuote}>
+          <Quote className="mr-2 size-3.5" />
+          {t(($) => $.message.quote_action)}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

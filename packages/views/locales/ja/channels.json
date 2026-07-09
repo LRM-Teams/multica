@@ -190,6 +190,7 @@
     "add_reaction": "リアクションを追加",
     "actions_menu": "メッセージ操作",
     "copy_action": "コピー",
+    "quote_action": "引用",
     "expand_action": "全文を表示",
     "copied_toast": "コピーしました",
     "copy_failed_toast": "コピーに失敗しました",
@@ -237,7 +238,10 @@
     "composer_placeholder": "{{name}} にメッセージ…"
   },
   "quote": {
-    "jump_to": "元のメッセージへジャンプ"
+    "jump_to": "元のメッセージへジャンプ",
+    "cancel": "引用をキャンセル",
+    "deleted": "元のメッセージは削除されました",
+    "inaccessible": "元のメッセージを利用できません"
   },
   "message_loading": {
     "load_older": "過去のメッセージを読み込む",

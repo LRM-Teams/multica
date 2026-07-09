@@ -190,6 +190,7 @@
     "add_reaction": "Add reaction",
     "actions_menu": "Message actions",
     "copy_action": "Copy",
+    "quote_action": "Quote",
     "expand_action": "Show full message",
     "copied_toast": "Copied",
     "copy_failed_toast": "Copy failed",
@@ -237,7 +238,10 @@
     "composer_placeholder": "Message {{name}}…"
   },
   "quote": {
-    "jump_to": "Jump to original message"
+    "jump_to": "Jump to original message",
+    "cancel": "Cancel quote",
+    "deleted": "Original message was deleted",
+    "inaccessible": "Original message is unavailable"
   },
   "message_loading": {
     "load_older": "Load older messages",

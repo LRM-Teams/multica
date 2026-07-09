@@ -194,6 +194,8 @@ export interface ChannelMessageReply {
   author_name: string;
   content: string;
   parts?: MessagePart[];
+  status?: "available" | "deleted" | "inaccessible" | (string & {});
+  deleted_at?: string | null;
   created_at: string;
 }
 

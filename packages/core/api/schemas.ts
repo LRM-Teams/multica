@@ -300,6 +300,8 @@ const ChannelMessageReplySchema = z.object({
   author_name: z.string().default(""),
   content: z.string().default(""),
   parts: z.array(z.unknown()).optional(),
+  status: z.string().optional(),
+  deleted_at: z.string().nullable().optional(),
   created_at: z.string().default(""),
 }).loose();
 

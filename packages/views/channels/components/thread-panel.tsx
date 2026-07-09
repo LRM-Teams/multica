@@ -7,6 +7,7 @@ import { cn } from "@multica/ui/lib/utils";
 import type { ChannelMessage } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
 import { ChannelMessageList } from "./channel-message-list";
+import { ComposerQuotePreview, type QuoteTarget } from "./message-quote";
 import { ThreadRootPreview } from "./thread-root-preview";
 import { Composer } from "./composer";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
@@ -140,6 +141,9 @@ export interface ThreadPanelProps {
   loadError?: boolean;
   onRetry?: () => void;
   onReact?: (message: ChannelMessage, emoji: string) => void;
+  onQuoteMessage?: (message: ChannelMessage) => void;
+  quoteTarget?: QuoteTarget | null;
+  onClearQuote?: () => void;
   // Composer (surface="thread") wiring — the surface owns the editor + send.
   editor: ReactNode;
   onSend: () => void;
@@ -177,6 +181,9 @@ export function ThreadPanel({
   loadError,
   onRetry,
   onReact,
+  onQuoteMessage,
+  quoteTarget,
+  onClearQuote,
   editor,
   onSend,
   sendDisabled,
@@ -281,6 +288,7 @@ export function ThreadPanel({
         loadErrorLabel={loadError ? t(($) => $.thread.load_failed) : undefined}
         onRetry={onRetry}
         onReact={onReact}
+        onQuoteMessage={onQuoteMessage}
       />
 
       {wakeAnnotations ? <ThreadWakeStrip annotations={wakeAnnotations} /> : null}
@@ -298,6 +306,13 @@ export function ThreadPanel({
             sending={sending}
             onSend={onSend}
             isMobile={isMobile}
+            prefix={quoteTarget ? (
+              <ComposerQuotePreview
+                quote={quoteTarget}
+                onCancel={onClearQuote ?? (() => {})}
+                cancelLabel={t(($) => $.quote.cancel)}
+              />
+            ) : undefined}
             leadingActions={composerActions}
           />
         </>

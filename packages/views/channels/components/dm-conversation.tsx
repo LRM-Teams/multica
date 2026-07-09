@@ -55,6 +55,7 @@ import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
 import { ThreadRootPreview } from "./thread-root-preview";
+import { ComposerQuotePreview, type QuoteTarget } from "./message-quote";
 import {
   ConversationActivityStrip,
   type TypingActor,
@@ -92,6 +93,8 @@ interface ConversationSearchState {
 interface DmChannelState {
   openThreadRoot: ChannelMessage | null;
   threadDraftEmpty: boolean;
+  quoteTarget: QuoteTarget | null;
+  threadQuoteTarget: QuoteTarget | null;
   convSearch: ConversationSearchState;
   threadParentHighlightId: string | null;
   typingActors: Record<string, TypingActor>;
@@ -101,6 +104,8 @@ type DmChannelAction =
   | { type: "openThread"; message: ChannelMessage }
   | { type: "closeThread" }
   | { type: "resetForChannel" }
+  | { type: "setQuote"; message: QuoteTarget | null }
+  | { type: "setThreadQuote"; message: QuoteTarget | null }
   | { type: "setThreadDraftEmpty"; empty: boolean }
   | { type: "setThreadParentHighlightId"; id: string | null }
   | { type: "openSearch" }
@@ -124,6 +129,8 @@ const initialConversationSearchState: ConversationSearchState = {
 const initialDmChannelState: DmChannelState = {
   openThreadRoot: null,
   threadDraftEmpty: true,
+  quoteTarget: null,
+  threadQuoteTarget: null,
   convSearch: initialConversationSearchState,
   threadParentHighlightId: null,
   typingActors: {},
@@ -132,11 +139,15 @@ const initialDmChannelState: DmChannelState = {
 function dmChannelReducer(state: DmChannelState, action: DmChannelAction): DmChannelState {
   switch (action.type) {
     case "openThread":
-      return { ...state, openThreadRoot: action.message };
+      return { ...state, openThreadRoot: action.message, threadQuoteTarget: null };
     case "closeThread":
-      return { ...state, openThreadRoot: null };
+      return { ...state, openThreadRoot: null, threadQuoteTarget: null };
     case "resetForChannel":
       return initialDmChannelState;
+    case "setQuote":
+      return { ...state, quoteTarget: action.message };
+    case "setThreadQuote":
+      return { ...state, threadQuoteTarget: action.message };
     case "setThreadDraftEmpty":
       return state.threadDraftEmpty === action.empty ? state : { ...state, threadDraftEmpty: action.empty };
     case "setThreadParentHighlightId":
@@ -339,11 +350,19 @@ function DmChannelConversation({
   const [{
     openThreadRoot,
     threadDraftEmpty,
+    quoteTarget,
+    threadQuoteTarget,
     convSearch,
     threadParentHighlightId,
     typingActors,
   }, dispatch] = useReducer(dmChannelReducer, initialDmChannelState);
   const [stoppingTaskId, setStoppingTaskId] = useState<string | null>(null);
+  const setQuoteTarget = useCallback((message: QuoteTarget | null) => {
+    dispatch({ type: "setQuote", message });
+  }, []);
+  const setThreadQuoteTarget = useCallback((message: QuoteTarget | null) => {
+    dispatch({ type: "setThreadQuote", message });
+  }, []);
 
   const { mutate: markChannelRead } = useMarkChannelRead();
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
@@ -685,17 +704,19 @@ function DmChannelConversation({
     // Stop typing before the send lock so a dropped (held-Enter) trigger still
     // clears the indicator.
     const dispatched = dmSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds),
+      payloadKey: composePayloadKey(content, attachmentIds, quoteTarget?.id ?? ""),
       buildVars: (clientMessageId) => ({
         channelId,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        replyToMessageId: quoteTarget?.id ?? undefined,
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
       onCommitted: () => {
         editorRef.current?.clearContent();
         uploadMapRef.current.clear();
+        setQuoteTarget(null);
         onDraftClear?.();
       },
       // 200-dedup is silent (handled by onCommitted); 409/other always surface,
@@ -717,18 +738,24 @@ function DmChannelConversation({
       if (content.includes(url)) attachmentIds.push(id);
     }
     threadSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds, threadRoot.id),
+      payloadKey: composePayloadKey(
+        content,
+        attachmentIds,
+        `${threadRoot.id}:${threadQuoteTarget?.id ?? ""}`,
+      ),
       buildVars: (clientMessageId) => ({
         channelId,
         messageId: threadRoot.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        replyToMessageId: threadQuoteTarget?.id ?? undefined,
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
       onCommitted: () => {
         threadEditorRef.current?.clearContent();
         threadUploadMapRef.current.clear();
+        setThreadQuoteTarget(null);
         dispatch({ type: "setThreadDraftEmpty", empty: true });
       },
       onVisibleError: () => toast.error(t(($) => $.thread.send_failed)),
@@ -806,6 +833,7 @@ function DmChannelConversation({
           loadErrorLabel={threadError ? t(($) => $.thread.load_failed) : undefined}
           onRetry={() => refetchThread()}
           onReact={handleReactToMessage}
+          onQuoteMessage={setThreadQuoteTarget}
           onEditMessage={handleEditMessage}
           onDeleteMessage={handleDeleteMessage}
         />
@@ -821,6 +849,13 @@ function DmChannelConversation({
           sending={sendThreadMessage.isPending}
           onSend={handleThreadSend}
           isMobile={isMobile}
+          prefix={threadQuoteTarget ? (
+            <ComposerQuotePreview
+              quote={threadQuoteTarget}
+              onCancel={() => setThreadQuoteTarget(null)}
+              cancelLabel={t(($) => $.quote.cancel)}
+            />
+          ) : undefined}
           editor={
             <ContentEditor
               key={`dm-thread-editor:${threadRoot.id}`}
@@ -967,6 +1002,7 @@ function DmChannelConversation({
         emptyLabel={t(($) => $.dm.thread_empty)}
         onOpenThread={handleOpenThread}
         onReact={handleReactToMessage}
+        onQuoteMessage={setQuoteTarget}
         onEditMessage={handleEditMessage}
         onDeleteMessage={handleDeleteMessage}
       />
@@ -983,6 +1019,13 @@ function DmChannelConversation({
         sending={sendMessage.isPending}
         onSend={handleSend}
         isMobile={isMobile}
+        prefix={quoteTarget ? (
+          <ComposerQuotePreview
+            quote={quoteTarget}
+            onCancel={() => setQuoteTarget(null)}
+            cancelLabel={t(($) => $.quote.cancel)}
+          />
+        ) : undefined}
         editor={
             <ContentEditor
               key={channelId}

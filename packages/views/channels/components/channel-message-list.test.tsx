@@ -118,8 +118,8 @@ vi.mock("../../i18n", () => ({
   useT: () => ({
     t: (
       selector: (resources: {
-        message: { add_reaction: string; agent_badge: string; feishu_badge: string };
-        quote: { jump_to: string };
+        message: { add_reaction: string; agent_badge: string; feishu_badge: string; quote_action: string };
+        quote: { jump_to: string; cancel: string; deleted: string; inaccessible: string };
         thread: { reply: string; reply_count: string };
       }) => string,
     ) =>
@@ -128,9 +128,13 @@ vi.mock("../../i18n", () => ({
           add_reaction: "Add reaction",
           agent_badge: "Agent",
           feishu_badge: "Feishu",
+          quote_action: "Quote",
         },
         quote: {
           jump_to: "Jump to original message",
+          cancel: "Cancel quote",
+          deleted: "Original message was deleted",
+          inaccessible: "Original message is unavailable",
         },
         thread: {
           reply: "Reply in thread",
@@ -160,6 +164,7 @@ vi.mock("../../i18n/use-t", () => ({
           agent_badge: "Agent",
           feishu_badge: "Feishu",
           copy_action: "Copy",
+          quote_action: "Quote",
           expand_action: "Show full message",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
@@ -170,7 +175,12 @@ vi.mock("../../i18n/use-t", () => ({
           save_edit: "Save",
           cancel_edit: "Cancel",
         },
-        quote: { jump_to: "Jump to original message" },
+        quote: {
+          jump_to: "Jump to original message",
+          cancel: "Cancel quote",
+          deleted: "Original message was deleted",
+          inaccessible: "Original message is unavailable",
+        },
         thread: { reply: "Reply in thread", reply_count: "2 replies" },
         time: { today: "Today", yesterday: "Yesterday", new_messages: "{{count}} new" },
       });

@@ -190,6 +190,7 @@
     "add_reaction": "添加表情回应",
     "actions_menu": "消息操作",
     "copy_action": "复制",
+    "quote_action": "引用",
     "expand_action": "展开全文",
     "copied_toast": "已复制",
     "copy_failed_toast": "复制失败",
@@ -237,7 +238,10 @@
     "composer_placeholder": "发消息给 {{name}}…"
   },
   "quote": {
-    "jump_to": "跳转到原消息"
+    "jump_to": "跳转到原消息",
+    "cancel": "取消引用",
+    "deleted": "原消息已删除",
+    "inaccessible": "原消息不可用"
   },
   "message_loading": {
     "load_older": "加载更早消息",

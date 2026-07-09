@@ -75,6 +75,7 @@ export function useSendChannelMessage() {
       replyToMessageId,
       parts,
       clientMessageId,
+      quoteMessageId,
     }: {
       channelId: string;
       content: string;
@@ -82,7 +83,8 @@ export function useSendChannelMessage() {
       replyToMessageId?: string | null;
       parts?: MessagePart[];
       clientMessageId?: string | null;
-    }) => api.sendChannelMessage(channelId, content, attachmentIds, replyToMessageId, parts, clientMessageId),
+      quoteMessageId?: string | null;
+    }) => api.sendChannelMessage(channelId, content, attachmentIds, replyToMessageId, parts, clientMessageId, quoteMessageId),
     onSuccess: (msg) => {
       upsertChannelMessageInCache(qc, msg);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
@@ -157,6 +159,7 @@ export function useSendChannelThreadMessage() {
       parts,
       clientMessageId,
       showInChannel,
+      quoteMessageId,
     }: {
       channelId: string;
       messageId: string;
@@ -166,7 +169,8 @@ export function useSendChannelThreadMessage() {
       parts?: MessagePart[];
       clientMessageId?: string | null;
       showInChannel?: boolean;
-    }) => api.sendChannelThreadMessage(channelId, messageId, content, attachmentIds, replyToMessageId, parts, clientMessageId, showInChannel),
+      quoteMessageId?: string | null;
+    }) => api.sendChannelThreadMessage(channelId, messageId, content, attachmentIds, replyToMessageId, parts, clientMessageId, showInChannel, quoteMessageId),
     onSuccess: (msg) => {
       const rootId = msg.thread_root_message_id;
       if (rootId) {

@@ -92,4 +92,22 @@ describe("Composer", () => {
     // Send stays reachable alongside the tray.
     expect(screen.getByRole("button", { name: /send/i })).toBeInTheDocument();
   });
+
+  it("mounts a prefix above tray and editor for quote previews", () => {
+    render(
+      <Composer
+        surface="channel"
+        {...baseProps}
+        sendDisabled={false}
+        prefix={<div data-testid="composer-prefix-content">quote</div>}
+        tray={<div data-testid="composer-tray-content">tray</div>}
+      />,
+    );
+
+    const shell = screen.getByTestId("composer-editor").closest('[data-slot="composer-shell"]');
+    const prefix = screen.getByTestId("composer-prefix-content");
+    const tray = screen.getByTestId("composer-tray-content").closest('[data-slot="composer-tray"]');
+    expect(shell?.firstElementChild).toBe(prefix);
+    expect(prefix.compareDocumentPosition(tray as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });

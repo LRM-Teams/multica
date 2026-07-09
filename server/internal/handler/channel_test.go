@@ -1349,6 +1349,116 @@ func TestSendChannelMessageReplyReturnsSummary(t *testing.T) {
 	t.Fatalf("created message %s missing from list", created.ID)
 }
 
+func TestSendChannelMessageQuoteCapturesSnapshotAndHidesDeletedSource(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "quote-snapshot-"+uuid.NewString(), testUserID)
+	source, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "quoted before edit", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("quote-source"), 0)
+	if err != nil {
+		t.Fatalf("insert source message: %v", err)
+	}
+
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages", map[string]any{
+		"content":        "new message",
+		"quoteMessageId": source.ID,
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send quote: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created message: %v", err)
+	}
+	if created.QuoteMessageID == nil || *created.QuoteMessageID != source.ID {
+		t.Fatalf("created quote_message_id = %v, want %s", created.QuoteMessageID, source.ID)
+	}
+	if created.Quote == nil || created.Quote.Status != "active" || created.Quote.Snapshot == nil || created.Quote.Snapshot.Content != "quoted before edit" {
+		t.Fatalf("created quote = %+v, want active snapshot", created.Quote)
+	}
+
+	if _, err := testPool.Exec(ctx, `UPDATE channel_message SET content = 'edited source', edited_at = now() WHERE id = $1`, source.ID); err != nil {
+		t.Fatalf("edit source: %v", err)
+	}
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list messages after edit: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var page ChannelMessagesPageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode listed messages: %v", err)
+	}
+	listed := findChannelMessageForTest(page.Messages, created.ID)
+	if listed == nil || listed.Quote == nil || listed.Quote.Snapshot == nil || listed.Quote.Snapshot.Content != "quoted before edit" {
+		t.Fatalf("listed quote after edit = %+v, want original snapshot", listed)
+	}
+
+	if _, err := testPool.Exec(ctx, `UPDATE channel_message SET content = '', parts = '[]'::jsonb, deleted_at = now() WHERE id = $1`, source.ID); err != nil {
+		t.Fatalf("delete source: %v", err)
+	}
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list messages after delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	page = ChannelMessagesPageResponse{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode listed messages after delete: %v", err)
+	}
+	listed = findChannelMessageForTest(page.Messages, created.ID)
+	if listed == nil || listed.Quote == nil || listed.Quote.Status != "deleted" || listed.Quote.Snapshot != nil {
+		t.Fatalf("listed quote after delete = %+v, want deleted without snapshot", listed)
+	}
+}
+
+func TestSendChannelMessageQuoteRejectsCrossChannelTarget(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "quote-cross-channel-"+uuid.NewString(), testUserID)
+	otherChannelID := seedChannelForTest(t, "quote-cross-channel-other-"+uuid.NewString(), testUserID)
+	other, err := testHandler.insertChannelMessage(ctx, parseUUID(otherChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "other channel", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("quote-other"), 0)
+	if err != nil {
+		t.Fatalf("insert other message: %v", err)
+	}
+
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages", map[string]any{
+		"content":        "new message",
+		"quoteMessageId": other.ID,
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("send cross-channel quote status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+func findChannelMessageForTest(messages []ChannelMessageResponse, id string) *ChannelMessageResponse {
+	for i := range messages {
+		if messages[i].ID == id {
+			return &messages[i]
+		}
+	}
+	return nil
+}
+
 func TestSendChannelMessagePublishesOnlyChannelMemberRecipients(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

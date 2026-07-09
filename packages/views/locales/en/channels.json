@@ -237,13 +237,21 @@
     "composer_placeholder": "Message {{name}}…"
   },
   "quote": {
+    "action": "Quote",
     "jump_to": "Jump to original message",
-    "reply_action": "Quote reply",
-    "replying_to": "Replying to {{name}}",
-    "cancel_action": "Cancel quote",
-    "empty_preview": "Message",
+    "cancel": "Cancel quote",
     "unavailable_title": "Original message unavailable",
-    "unavailable_body": "It may have been deleted or you may no longer have access."
+    "unavailable_summary": "It may have been deleted or you may not have access.",
+    "type_user": "Message",
+    "type_agent": "Agent",
+    "type_lark": "Feishu",
+    "type_system": "System",
+    "type_unknown": "Message",
+    "attachment_summary": "Attachment",
+    "attachments_summary": "{{count}} attachments",
+    "image_summary": "Image",
+    "images_summary": "{{count}} images",
+    "empty_summary": "No preview available"
   },
   "message_loading": {
     "load_older": "Load older messages",

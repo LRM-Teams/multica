@@ -130,8 +130,6 @@ type MessageViewportProps = {
   initialScroll?: "bottom" | "top";
   /** Called when the user opens the message's side thread. */
   onOpenThread?: (message: ChannelMessage) => void;
-  /** Selects this message as the composer quote/reply target. */
-  onQuoteMessage?: (message: ChannelMessage) => void;
   /**
    * Called when the user clicks an inline quote block to jump to the original.
    * The parent updates `highlightMessageId` so the list scrolls + highlights.
@@ -139,6 +137,8 @@ type MessageViewportProps = {
   onScrollToMessage?: (messageId: string) => void;
   /** Toggle/add a lightweight emoji reaction on this message. */
   onReact?: (message: ChannelMessage, emoji: string) => void;
+  /** Set a message as the caller-owned composer quote target. */
+  onQuoteMessage?: (message: ChannelMessage) => void;
   /**
    * Save an inline edit of the viewer's own message. H5: this is an edit (a
    * PATCH), never a re-send — it must not go through a send/dispatch path.
@@ -182,9 +182,9 @@ function MessageViewport({
   header,
   initialScroll = "bottom",
   onOpenThread,
-  onQuoteMessage,
   onScrollToMessage,
   onReact,
+  onQuoteMessage,
   onEditMessage,
   onDeleteMessage,
   onOpenAgent,
@@ -421,9 +421,9 @@ function MessageViewport({
             ownName={ownName}
             highlighted={msg.id === highlightMessageId}
             onOpenThread={onOpenThread}
-            onQuote={onQuoteMessage}
             onScrollTo={onScrollToMessage}
             onReact={onReact}
+            onQuote={onQuoteMessage}
             onEdit={onEditMessage}
             onDelete={onDeleteMessage}
             onOpenAgent={onOpenAgent}

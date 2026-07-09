@@ -7,8 +7,10 @@ import { cn } from "@multica/ui/lib/utils";
 import type { ChannelMessage } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
 import { ChannelMessageList } from "./channel-message-list";
+import { ComposerQuotePreview } from "./message-quote";
+import type { QuoteTarget } from "./message-quote-types";
 import { ThreadRootPreview } from "./thread-root-preview";
-import { Composer, type ComposerQuotePreviewProps } from "./composer";
+import { Composer } from "./composer";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
 import { ConversationHeader } from "./conversation-surface";
 import type { ThreadMemberType } from "./thread-participants";
@@ -141,12 +143,13 @@ export interface ThreadPanelProps {
   onRetry?: () => void;
   onReact?: (message: ChannelMessage, emoji: string) => void;
   onQuoteMessage?: (message: ChannelMessage) => void;
+  quoteTarget?: QuoteTarget | null;
+  onClearQuote?: () => void;
   // Composer (surface="thread") wiring — the surface owns the editor + send.
   editor: ReactNode;
   onSend: () => void;
   sendDisabled: boolean;
   sending?: boolean;
-  composerQuotePreview?: ComposerQuotePreviewProps;
   composerLeadingActions?: ReactNode;
   /** Read-only surface (archived channel) → banner instead of composer. */
   readOnly?: boolean;
@@ -180,11 +183,12 @@ export function ThreadPanel({
   onRetry,
   onReact,
   onQuoteMessage,
+  quoteTarget,
+  onClearQuote,
   editor,
   onSend,
   sendDisabled,
   sending,
-  composerQuotePreview,
   composerLeadingActions,
   readOnly = false,
   readOnlyContent,
@@ -303,7 +307,13 @@ export function ThreadPanel({
             sending={sending}
             onSend={onSend}
             isMobile={isMobile}
-            quotePreview={composerQuotePreview}
+            prefix={quoteTarget ? (
+              <ComposerQuotePreview
+                quote={quoteTarget}
+                onCancel={onClearQuote ?? (() => {})}
+                cancelLabel={t(($) => $.quote.cancel)}
+              />
+            ) : undefined}
             leadingActions={composerActions}
           />
         </>

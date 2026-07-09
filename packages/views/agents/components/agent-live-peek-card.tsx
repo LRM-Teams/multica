@@ -18,7 +18,7 @@ import type { AgentTask } from "@multica/core/types";
 import { AlertTriangle } from "lucide-react";
 import { AppLink } from "../../navigation";
 import { useT, useTimeAgo } from "../../i18n";
-import { availabilityConfig, presenceStatusToken, workloadConfig } from "../presence";
+import { formatPresenceStatus, presenceStatusVisual } from "../presence";
 
 interface AgentLivePeekCardProps {
   agentId: string;
@@ -76,24 +76,13 @@ export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
     .toUpperCase()
     .slice(0, 2);
 
-  // The status word must agree with the availability dot (single source).
-  // Workload ("Idle"/"Working") is a modulation that only reads correctly
-  // while the agent is online — offline/unstable/archived would make "Idle"
-  // falsely imply "available", so surface the availability word instead.
-  // Archived flows through here too ("Archived"), replacing the old
-  // archived-only special case.
-  const statusToken = presenceStatusToken(presence);
-  const status = statusToken
-    ? statusToken.kind === "workload"
-      ? {
-          visual: workloadConfig[statusToken.value],
-          label: t(($) => $.workload[statusToken.value]),
-        }
-      : {
-          visual: availabilityConfig[statusToken.value],
-          label: t(($) => $.availability[statusToken.value]),
-        }
-    : null;
+  // Shared #288 status word + visual (token rule lives in presence.ts).
+  const statusLabel = formatPresenceStatus(presence, t);
+  const statusVisual = presenceStatusVisual(presence);
+  const status =
+    statusLabel && statusVisual
+      ? { label: statusLabel, visual: statusVisual }
+      : null;
 
   return (
     <div className="flex flex-col gap-3 text-left">

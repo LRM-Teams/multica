@@ -325,6 +325,10 @@ visibility: private | workspace | channel
 
 V1 can continue syncing candidate JSONL through the existing daemon/server evolution path.
 
+## Related Designs
+
+- [Agent Memory Curation Pipeline](./2026-07-09-agent-memory-curation-plan.md) describes the follow-up platform scheduler that turns chat/issue/task history into `daily/`, `REVIEW.md`, `USER.md`, `MEMORY.md`, and `STATE.md`, with automatic daily stages plus manual backfill.
+
 ## Implementation Plan
 
 1. Add provider-neutral `.multica/agents/<agent_id>` root helpers in the daemon.

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, waitFor } from "@testing-library/react";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { readFileSync } from "node:fs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -28,6 +28,26 @@ vi.mock("../navigation", () => ({
 vi.mock("../issues/components/issue-mention-card", () => ({
   IssueMentionCard: ({ issueId, fallbackLabel }: { issueId: string; fallbackLabel?: string }) => (
     <span data-testid="issue-mention-card">{fallbackLabel ?? issueId}</span>
+  ),
+}));
+
+vi.mock("../common/actor-profile-popover", () => ({
+  ActorProfileTrigger: ({
+    memberType,
+    memberId,
+    children,
+  }: {
+    memberType: string;
+    memberId: string;
+    children: ReactNode;
+  }) => (
+    <span
+      data-testid="actor-profile-trigger"
+      data-member-type={memberType}
+      data-member-id={memberId}
+    >
+      {children}
+    </span>
   ),
 }));
 
@@ -219,6 +239,27 @@ describe("ReadonlyContent issue mention Markdown", () => {
 
     expect(container.querySelector('input[type="checkbox"]')).not.toBeNull();
     expect(getByTestId("issue-mention-card").textContent).toBe("MUL-123");
+  });
+
+  it("wraps member mentions in the full profile popover trigger", () => {
+    const { getByTestId, container } = render(
+      <ReadonlyContent content="Hey [@Alice](mention://member/user-1)" />,
+    );
+
+    const trigger = getByTestId("actor-profile-trigger");
+    expect(trigger).toHaveAttribute("data-member-type", "user");
+    expect(trigger).toHaveAttribute("data-member-id", "user-1");
+    expect(container.querySelector(".mention")?.textContent).toContain("@Alice");
+  });
+
+  it("wraps agent mentions in the full profile popover trigger", () => {
+    const { getByTestId } = render(
+      <ReadonlyContent content="Hey [@Bot](mention://agent/agent-9)" />,
+    );
+
+    const trigger = getByTestId("actor-profile-trigger");
+    expect(trigger).toHaveAttribute("data-member-type", "agent");
+    expect(trigger).toHaveAttribute("data-member-id", "agent-9");
   });
 
   it("documents the CommonMark quoted-emphasis edge case before Korean particles", () => {

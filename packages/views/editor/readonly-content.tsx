@@ -35,6 +35,8 @@ import type { Attachment } from "@multica/core/types";
 import { useNavigation } from "../navigation";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
+import { ActorProfileTrigger } from "../common/actor-profile-popover";
+import { agentColor } from "../common/agent-color";
 import { useLinkHover, LinkHoverCard } from "./link-hover-card";
 import { openLink, isMentionHref } from "./utils/link-handler";
 import { isAllowedFileCardHref } from "@multica/ui/markdown";
@@ -192,7 +194,25 @@ function ReadonlyLink({
             : undefined;
       return <ProjectMentionLink projectId={match[2]} label={label} />;
     }
-    // Member / agent / all mentions
+    // Member / agent — full profile popover (parity with editor MentionView
+    // and message author hover). @all stays a plain chip (no single profile).
+    if ((match?.[1] === "member" || match?.[1] === "agent") && match[2]) {
+      const color = agentColor(match[2]);
+      return (
+        <ActorProfileTrigger
+          memberType={match[1] === "agent" ? "agent" : "user"}
+          memberId={match[2]}
+          triggerElement="span"
+        >
+          <span
+            className="mention"
+            style={{ color: color.fg, backgroundColor: color.bg }}
+          >
+            {children}
+          </span>
+        </ActorProfileTrigger>
+      );
+    }
     return <span className="mention">{children}</span>;
   }
 

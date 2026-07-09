@@ -14,7 +14,7 @@ import { MentionHoverCard } from "@multica/ui/components/common/mention-hover-ca
 import { useWorkspacePaths, useCurrentWorkspace } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { agentColor } from "./agent-color";
-import { useT } from "../i18n/use-t";
+import { ActorProfileTrigger } from "./actor-profile-popover";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
 import { AppLink } from "../navigation/app-link";
@@ -56,6 +56,10 @@ function ProjectMentionCard({ projectId }: { projectId: string }): React.ReactNo
  * Member / agent / @all mention — a colored identity pill matching the editor
  * composer's mention chips. The name is resolved from the workspace cache
  * (same resolver as ActorAvatar) so renames reflect immediately.
+ *
+ * Member/agent chips use the full profile popover (same surface as message
+ * author avatars/names). @all keeps the lightweight informational card —
+ * there is no single member profile to load.
  */
 function ActorMention({
   type,
@@ -68,24 +72,12 @@ function ActorMention({
   label?: string;
   highlightQuery?: string;
 }): React.JSX.Element {
-  const { t } = useT("editor");
   const actorNames = useActorName();
   const { getActorName } = actorNames;
   // The link text is usually "@Name"; strip the leading @ so we don't double
   // it, and use it as the fallback when the id isn't in the workspace cache.
   const fallback = label ? label.replace(/^@+/, "").trim() || undefined : undefined;
   const name = type === "all" ? "all" : getActorName(type, id, fallback);
-  const handle = "getActorHandle" in actorNames ? actorNames.getActorHandle(type, id) : undefined;
-  const typeLabel =
-    type === "agent"
-      ? t(($) => $.mention.type_agent)
-      : type === "member"
-        ? t(($) => $.mention.type_member)
-        : undefined;
-  const role = [
-    handle ? `@${handle.replace(/^@+/, "")}` : null,
-    typeLabel,
-  ].filter(Boolean).join(" · ");
   const color = agentColor(id);
   const chip = (
     <span
@@ -100,26 +92,26 @@ function ActorMention({
       {highlightSearchText(`@${name}`, highlightQuery)}
     </span>
   );
+
+  if (type === "member" || type === "agent") {
+    return (
+      <ActorProfileTrigger
+        memberType={type === "agent" ? "agent" : "user"}
+        memberId={id}
+        triggerElement="span"
+      >
+        {chip}
+      </ActorProfileTrigger>
+    );
+  }
+
   return (
     <MentionHoverCard
       type={type}
       id={id}
       name={type === "all" ? "All members" : name}
-      initials={
-        type === "all"
-          ? ""
-          : "getActorInitials" in actorNames
-            ? actorNames.getActorInitials(type, id)
-            : name.slice(0, 2).toUpperCase()
-      }
-      avatarUrl={
-        type === "all"
-          ? null
-          : "getActorAvatarUrl" in actorNames
-            ? actorNames.getActorAvatarUrl(type, id)
-            : null
-      }
-      role={role || undefined}
+      initials=""
+      avatarUrl={null}
     >
       {chip}
     </MentionHoverCard>

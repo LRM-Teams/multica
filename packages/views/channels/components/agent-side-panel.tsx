@@ -9,6 +9,7 @@ import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/ac
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
+import { initialsOf } from "../../common/initials";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
 
@@ -38,12 +39,7 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
   const { t } = useT("agents");
   const [tab, setTab] = useState<AgentSidePanelTab>("activity");
   const displayName = resolveActorDisplayName(agent, agent.id);
-  const initials = displayName
-    .split(" ")
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
+  const initials = initialsOf(displayName);
 
   return (
     <aside className="flex h-full min-h-0 flex-col border-l bg-background">

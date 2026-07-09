@@ -101,11 +101,14 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 		for _, want := range []string{
 			"Multica group chat #产品讨论",
 			"directly addressed to you",
-			"visible result using the output mechanism described in the runtime brief",
+			"visible result is required for human DMs",
+			"agent-to-agent channel @mention is a weak notification",
+			"finish without a visible reply",
 			"Do not return no_reply",
-			"A sticker reply counts as a visible result",
 			"greeting sticker only",
 			"directly addressed to you (@-mention",
+			"Collaborative discussion rule",
+			"Never @ someone for thanks",
 			"Do not print JSON envelopes",
 			"Current message to respond to",
 			trigger.Content,
@@ -114,8 +117,14 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 				t.Errorf("mention prompt missing %q:\n%s", want, p)
 			}
 		}
-		if strings.Contains(p, "internal no_reply is allowed") {
-			t.Errorf("direct mention prompt must not allow silent no_reply:\n%s", p)
+		for _, banned := range []string{
+			"internal no_reply is allowed",
+			"END your reply by @-mentioning",
+			"Only stop @-mentioning when you have reached a final conclusion",
+		} {
+			if strings.Contains(p, banned) {
+				t.Errorf("direct mention prompt contains loop-prone instruction %q:\n%s", banned, p)
+			}
 		}
 		for _, banned := range []string{"multica send", "multica react", "multica message send", "multica message react", "multica message read", "multica message search"} {
 			if strings.Contains(p, banned) {

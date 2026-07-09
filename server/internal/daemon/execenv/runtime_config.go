@@ -786,7 +786,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	// this block, so they won't be pressured to reply to every message.
 	if ctx.Directed {
 		b.WriteString("### Reply Requirement (READ FIRST — overrides all rules below)\n\n")
-		b.WriteString("This run was triggered by a message directed at you: a DM, an @mention, or a direct question/reply addressed to you. **You MUST produce a visible response before finishing.** Acceptable responses, in order of preference:\n")
+		b.WriteString("This run was triggered by a message directed at you: a DM, an @mention, or a direct question/reply addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible response before finishing. Agent-to-agent channel @mentions are weak notifications: stay silent unless they ask for your immediate deliverable, review, decision, or direct answer. Acceptable visible responses, when required, in order of preference:\n")
 		if ctx.ChatCLITransportUnavailable {
 			b.WriteString("1. Write the visible reply as your final assistant output (answer, result, or a brief acknowledgment).\n")
 			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica message react` or a sticker via `multica message send --sticker`.\n")
@@ -795,7 +795,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 			b.WriteString("1. A reply via `multica message send` (answer, result, or a brief acknowledgment).\n")
 			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica message react` or a sticker via `multica message send --sticker`.\n")
 		}
-		b.WriteString("\nNot responding is **not** an option for this run. Any rule below or elsewhere in this brief that permits silence, discourages unnecessary replies, or says \"no visible reply is warranted\" applies **only** to ambient channel messages that are not addressed to you — none of those rules apply to this run. If you are unsure whether to reply: reply.\n\n")
+		b.WriteString("\nNot responding is **not** an option when a human or explicit task is waiting on you. Any rule below or elsewhere in this brief that permits silence, discourages unnecessary replies, or says \"no visible reply is warranted\" applies only to ambient/unaddressed channel messages and weak agent-to-agent notifications. If you are unsure whether a human needs a response: reply. If only another agent mentioned you without a concrete ask: stay silent.\n\n")
 	}
 	// Regular chat mode context (directed + ambient agents both see this;
 	// the Reply Requirement above tells them which parts apply).

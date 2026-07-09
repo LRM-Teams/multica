@@ -64,8 +64,10 @@ ports share the same IP host.
 
 ### 2. First-run bring up the isolated stack
 
-The first deploy must create the `multica-main` postgres volume + container and
-run the initial migration. Either:
+The first deploy creates the `multica-main` postgres volume + container and runs
+the initial migration. On every deploy, the workflow also checks that the
+`POSTGRES_DB` copied from dev exists in the isolated main Postgres volume and
+creates it if the volume was initialized earlier with a different DB name. Either:
 
 - **(preferred)** just merge the first `main` PR — the workflow's
   `compose up -d` will create everything on first run, **or**

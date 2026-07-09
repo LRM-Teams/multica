@@ -158,9 +158,10 @@ type ChannelMessagesPageResponse struct {
 	NextCursor *ChannelMessagesCursorResponse `json:"next_cursor,omitempty"`
 
 	// around_seq mode only:
-	AnchorIndex  int                            `json:"anchor_index"`
-	HasMoreAfter bool                           `json:"has_more_after,omitempty"`
-	AfterCursor  *ChannelMessagesCursorResponse `json:"after_cursor,omitempty"`
+	AnchorIndex      int                            `json:"anchor_index"`
+	HasMoreAfter     bool                           `json:"has_more_after,omitempty"`
+	AfterCursor      *ChannelMessagesCursorResponse `json:"after_cursor,omitempty"`
+	TotalUnreadAfter int                            `json:"total_unread_after,omitempty"`
 }
 
 type ChannelThreadMessagesCursorResponse struct {
@@ -1131,6 +1132,15 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 		actualBefore = len(beforeMsgs)
 	}
 
+	// Total visible unread messages after the anchor, for the divider count.
+	var totalUnreadAfter int
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT COUNT(*) FROM channel_message m
+		WHERE `+channelMessageWhereClause+`
+		AND m.seq > $3::bigint`, channelID, workspaceID, pgtype.Int8{Int64: aroundSeq, Valid: true}).Scan(&totalUnreadAfter); err != nil {
+		totalUnreadAfter = 0
+	}
+
 	// Calculate cursor for the before (older) direction
 	var nextCursor *ChannelMessagesCursorResponse
 	if hasMore && actualBefore > 0 {
@@ -1183,13 +1193,14 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 	attachChannelMessageExtras(out)
 
 	writeJSON(w, http.StatusOK, ChannelMessagesPageResponse{
-		Messages:     out,
-		Limit:        limit,
-		HasMore:      hasMore,
-		NextCursor:   nextCursor,
-		AnchorIndex:  anchorIndex,
-		HasMoreAfter: hasMoreAfter,
-		AfterCursor:  afterCursor,
+		Messages:         out,
+		Limit:            limit,
+		HasMore:          hasMore,
+		NextCursor:       nextCursor,
+		AnchorIndex:      anchorIndex,
+		HasMoreAfter:     hasMoreAfter,
+		AfterCursor:      afterCursor,
+		TotalUnreadAfter: totalUnreadAfter,
 	})
 }
 

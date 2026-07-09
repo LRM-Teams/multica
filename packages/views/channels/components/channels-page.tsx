@@ -167,6 +167,7 @@ import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
+import { ComposerQuotePreview } from "./message-quote";
 import { mapThreadWakeAnnotations } from "./thread-read-model";
 import {
   Composer,
@@ -562,12 +563,16 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     openThreadRoot: ChannelMessage | null;
     selectedAgentPanelId: string | null;
     threadDraftEmpty: boolean;
+    channelQuote: ChannelMessage | null;
+    threadQuote: ChannelMessage | null;
   }>({
     openThreadRoot: null,
     selectedAgentPanelId: null,
     threadDraftEmpty: true,
+    channelQuote: null,
+    threadQuote: null,
   });
-  const { openThreadRoot, selectedAgentPanelId, threadDraftEmpty } = sidePanelState;
+  const { openThreadRoot, selectedAgentPanelId, threadDraftEmpty, channelQuote, threadQuote } = sidePanelState;
   const setOpenThreadRoot = useCallback((next: ChannelMessage | null) => {
     setSidePanelState((current) => ({ ...current, openThreadRoot: next }));
   }, []);
@@ -577,11 +582,19 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const setThreadDraftEmpty = useCallback((next: boolean) => {
     setSidePanelState((current) => ({ ...current, threadDraftEmpty: next }));
   }, []);
+  const setChannelQuote = useCallback((next: ChannelMessage | null) => {
+    setSidePanelState((current) => ({ ...current, channelQuote: next }));
+  }, []);
+  const setThreadQuote = useCallback((next: ChannelMessage | null) => {
+    setSidePanelState((current) => ({ ...current, threadQuote: next }));
+  }, []);
   const resetSidePanelState = useCallback(() => {
     setSidePanelState({
       openThreadRoot: null,
       selectedAgentPanelId: null,
       threadDraftEmpty: true,
+      channelQuote: null,
+      threadQuote: null,
     });
   }, []);
   const [convSearchOpen, setConvSearchOpen] = useState(false);
@@ -994,14 +1007,17 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     return () => clearTimeout(clear);
   }, [highlightMessageId, convSearchOpen, jumpTargetLoaded]);
 
-  // Clear search state when the active channel changes.
+  // Clear search and quote state when the active channel changes.
+  // react-doctor-disable-next-line react-doctor/no-chain-state-updates -- route/list reconciliation owns channel switching; resetting dependent conversation state here matches existing lifecycle cleanup.
   useEffect(() => {
     setConvSearchOpen(false);
     setConvSearchQuery("");
     setConvSearchResults([]);
     setConvSearchTotal(0);
     setConvSearchIndex(0);
-  }, [active?.id]);
+    // react-doctor-disable-next-line react-doctor/no-chain-state-updates -- quote state is dependent on the selected channel lifecycle.
+    setChannelQuote(null);
+  }, [active?.id, setChannelQuote]);
 
   // Debounced in-conversation search.
   useEffect(() => {
@@ -1053,10 +1069,16 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     if (typingPulseTimerRef.current) window.clearTimeout(typingPulseTimerRef.current);
   }, [active?.id]);
 
+  // react-doctor-disable-next-line react-doctor/no-chain-state-updates -- threadRoot is derived from paged data; the quote state must clear when that derived root disappears.
   useEffect(() => {
-    if (!activeChannelId || !threadRoot) return;
+    if (!threadRoot) {
+      // react-doctor-disable-next-line react-doctor/no-chain-state-updates -- quote state is dependent on the selected thread lifecycle.
+      setThreadQuote(null);
+      return;
+    }
+    if (!activeChannelId) return;
     markThreadRead({ channelId: activeChannelId, messageId: threadRoot.id });
-  }, [activeChannelId, threadRoot, markThreadRead]);
+  }, [activeChannelId, threadRoot, markThreadRead, setThreadQuote]);
 
   useEffect(() => {
     if (!threadRoot || !focusThreadComposerOnOpenRef.current) return;
@@ -1388,18 +1410,21 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     }
     // Send lock (N held/auto-repeat Enter → 1 request) + payload-bound
     // client_message_id + the 3-way outcome, all owned by useComposerSend.
+    const replyToMessageId = channelQuote?.id ?? null;
     const dispatched = channelSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds),
+      payloadKey: composePayloadKey(content, attachmentIds, replyToMessageId ?? ""),
       buildVars: (clientMessageId) => ({
         channelId: active.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        replyToMessageId,
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
       onCommitted: () => {
         editorRef.current?.clearContent();
         uploadMapRef.current.clear();
+        setChannelQuote(null);
         if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
       },
       // 200-dedup is silent (onCommitted); a 409 or any other failure always
@@ -1421,19 +1446,22 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     for (const [url, id] of threadUploadMapRef.current) {
       if (content.includes(url)) attachmentIds.push(id);
     }
+    const replyToMessageId = threadQuote?.id ?? null;
     threadSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds, threadRoot.id),
+      payloadKey: composePayloadKey(content, attachmentIds, `${threadRoot.id}:${replyToMessageId ?? ""}`),
       buildVars: (clientMessageId) => ({
         channelId: active.id,
         messageId: threadRoot.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        replyToMessageId,
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
       onCommitted: () => {
         threadEditorRef.current?.clearContent();
         threadUploadMapRef.current.clear();
+        setThreadQuote(null);
         setThreadDraftEmpty(true);
       },
       onVisibleError: () => toast.error(t(($) => $.thread.send_failed)),
@@ -1444,6 +1472,17 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     focusThreadComposerOnOpenRef.current = true;
     setSelectedAgentPanelId(null);
     setOpenThreadRoot(message);
+  };
+
+  const handleQuoteMessage = (message: ChannelMessage) => {
+    if (message.thread_root_message_id) {
+      if (!threadRoot || threadRoot.id !== message.thread_root_message_id) return;
+      setThreadQuote(message);
+      threadEditorRef.current?.focus();
+      return;
+    }
+    setChannelQuote(message);
+    editorRef.current?.focus();
   };
 
   const handleOpenAgentPanel = (agentId: string) => {
@@ -2093,6 +2132,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         loadError={threadError}
         onRetry={() => refetchThread()}
         onReact={handleReactToMessage}
+        onQuote={handleQuoteMessage}
         editor={
           <ContentEditor
             key={`thread-editor:${threadRoot.id}`}
@@ -2109,6 +2149,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         onSend={handleThreadSend}
         sendDisabled={threadDraftEmpty}
         sending={sendThreadMessage.isPending}
+        prefix={threadQuote ? (
+          <ComposerQuotePreview
+            message={threadQuote}
+            currentUserId={currentUserId}
+            ownName={currentUserName ?? undefined}
+            onCancel={() => setThreadQuote(null)}
+          />
+        ) : undefined}
         composerLeadingActions={
           <>
             <input
@@ -2398,6 +2446,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 onOpenThread={isActiveArchived ? undefined : handleOpenThread}
                 onScrollToMessage={setHighlightMessageId}
                 onReact={handleReactToMessage}
+                onQuoteMessage={isActiveArchived ? undefined : handleQuoteMessage}
                 onEditMessage={isActiveArchived ? undefined : handleEditMessage}
                 onDeleteMessage={isActiveArchived ? undefined : handleDeleteMessage}
                 onOpenAgent={handleOpenAgentPanel}
@@ -2450,6 +2499,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     sending={sendMessage.isPending}
                     onSend={handleSend}
                     isMobile={isMobile}
+                    prefix={channelQuote ? (
+                      <ComposerQuotePreview
+                        message={channelQuote}
+                        currentUserId={currentUserId}
+                        ownName={currentUserName ?? undefined}
+                        onCancel={() => setChannelQuote(null)}
+                      />
+                    ) : undefined}
                     editor={
                       <ContentEditor
                         key={active.id}

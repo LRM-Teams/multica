@@ -159,10 +159,10 @@ type ChannelMessagesPageResponse struct {
 	NextCursor *ChannelMessagesCursorResponse `json:"next_cursor,omitempty"`
 
 	// around_seq mode only:
-	AnchorIndex      int                            `json:"anchor_index"`
-	HasMoreAfter     bool                           `json:"has_more_after,omitempty"`
-	AfterCursor      *ChannelMessagesCursorResponse `json:"after_cursor,omitempty"`
-	UnreadTotal int                            `json:"unread_total,omitempty"`
+	AnchorIndex  int                            `json:"anchor_index"`
+	HasMoreAfter bool                           `json:"has_more_after,omitempty"`
+	AfterCursor  *ChannelMessagesCursorResponse `json:"after_cursor,omitempty"`
+	UnreadTotal  int                            `json:"unread_total,omitempty"`
 }
 
 type ChannelThreadMessagesCursorResponse struct {
@@ -177,13 +177,14 @@ type ChannelThreadMessagesPageResponse struct {
 }
 
 type ChannelMessageReply struct {
-	ID         string                 `json:"id"`
-	Type       string                 `json:"type"`
-	AuthorID   *string                `json:"author_id"`
-	AuthorName string                 `json:"author_name"`
-	Content    string                 `json:"content"`
-	Parts      []protocol.MessagePart `json:"parts,omitempty"`
-	CreatedAt  string                 `json:"created_at"`
+	ID          string                 `json:"id"`
+	Type        string                 `json:"type"`
+	AuthorID    *string                `json:"author_id"`
+	AuthorName  string                 `json:"author_name"`
+	Content     string                 `json:"content"`
+	Parts       []protocol.MessagePart `json:"parts,omitempty"`
+	Attachments []AttachmentResponse   `json:"attachments,omitempty"`
+	CreatedAt   string                 `json:"created_at"`
 }
 
 type ChannelReactionResponse struct {
@@ -337,7 +338,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		var realUnread, unread int
 		var hasMention bool
 		var kind string
-			var lastReadSeq int64
+		var lastReadSeq int64
 		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt, &kind,
 			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &mutedAt, &lastType, &lastName, &lastContent, &lastParts, &lastAt, &realUnread, &unread, &hasMention, &lastReadSeq); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channels")
@@ -1216,14 +1217,14 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 	attachChannelMessageExtras(out)
 
 	writeJSON(w, http.StatusOK, ChannelMessagesPageResponse{
-Messages:         out,
-		Limit:            limit,
-		HasMore:          hasMore,
-		NextCursor:       nextCursor,
-		AnchorIndex:      anchorIndex,
-		HasMoreAfter:     hasMoreAfter,
-		AfterCursor:      afterCursor,
-		UnreadTotal: unreadTotal,
+		Messages:     out,
+		Limit:        limit,
+		HasMore:      hasMore,
+		NextCursor:   nextCursor,
+		AnchorIndex:  anchorIndex,
+		HasMoreAfter: hasMoreAfter,
+		AfterCursor:  afterCursor,
+		UnreadTotal:  unreadTotal,
 	})
 }
 
@@ -1430,6 +1431,7 @@ func (h *Handler) attachChannelMessageReplySummaries(ctx context.Context, worksp
 		return
 	}
 	defer rows.Close()
+	attachmentGroups := h.groupChannelMessageAttachments(ctx, workspaceID, replyIDs)
 	byID := map[string]ChannelMessageReply{}
 	for rows.Next() {
 		var id, authorID pgtype.UUID
@@ -1441,13 +1443,14 @@ func (h *Handler) attachChannelMessageReplySummaries(ctx context.Context, worksp
 		}
 		key := uuidToString(id)
 		byID[key] = ChannelMessageReply{
-			ID:         key,
-			Type:       authorType,
-			AuthorID:   uuidToPtr(authorID),
-			AuthorName: authorName,
-			Content:    content,
-			Parts:      messageparts.Decode(parts),
-			CreatedAt:  timestampToString(createdAt),
+			ID:          key,
+			Type:        authorType,
+			AuthorID:    uuidToPtr(authorID),
+			AuthorName:  authorName,
+			Content:     content,
+			Parts:       messageparts.Decode(parts),
+			Attachments: attachmentGroups[key],
+			CreatedAt:   timestampToString(createdAt),
 		}
 	}
 	for i := range messages {
@@ -2985,8 +2988,8 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 		map[string]any{
 			"trigger_message_id": trigger.ID,
 			"trigger_author":     trigger.AuthorName,
-			"trigger_content":   truncateForActivity(trigger.Content, 100),
-			"thread_root":       trigger.ThreadRootMessageID,
+			"trigger_content":    truncateForActivity(trigger.Content, 100),
+			"thread_root":        trigger.ThreadRootMessageID,
 		},
 	)
 }

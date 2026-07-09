@@ -76,6 +76,6 @@ export function composePayloadKey(
   attachmentIds: readonly string[] = [],
   scope = "",
 ): string {
-  // NUL separator so no scope/content/attachment combination can alias another.
+  // NUL separator so no scope/content/attachment/reply combination can alias another.
   return [scope, content, attachmentIds.join(",")].join("\u0000");
 }

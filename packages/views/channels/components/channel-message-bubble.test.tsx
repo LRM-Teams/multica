@@ -114,7 +114,23 @@ vi.mock("../../i18n/use-t", () => ({
           save_edit: string;
           cancel_edit: string;
         };
-        quote: { jump_to: string };
+        quote: {
+          action: string;
+          jump_to: string;
+          cancel: string;
+          unavailable_title: string;
+          unavailable_summary: string;
+          type_user: string;
+          type_agent: string;
+          type_lark: string;
+          type_system: string;
+          type_unknown: string;
+          attachment_summary: string;
+          attachments_summary: string;
+          image_summary: string;
+          images_summary: string;
+          empty_summary: string;
+        };
         thread: { reply: string; reply_count: string };
         time: { today: string; yesterday: string };
       }) => string,
@@ -141,7 +157,21 @@ vi.mock("../../i18n/use-t", () => ({
           cancel_edit: "Cancel",
         },
         quote: {
+          action: "Quote",
           jump_to: "Jump to original message",
+          cancel: "Cancel quote",
+          unavailable_title: "Original message unavailable",
+          unavailable_summary: "It may have been deleted or you may not have access.",
+          type_user: "Message",
+          type_agent: "Agent",
+          type_lark: "Feishu",
+          type_system: "System",
+          type_unknown: "Message",
+          attachment_summary: "Attachment",
+          attachments_summary: "Attachments",
+          image_summary: "Image",
+          images_summary: "Images",
+          empty_summary: "No preview available",
         },
         thread: {
           reply: "Reply in thread",
@@ -425,7 +455,43 @@ describe("ChannelMessageBubble", () => {
     );
 
     expect(screen.getByText("Alice Display")).toBeInTheDocument();
+    expect(screen.getByText("Message")).toBeInTheDocument();
     expect(screen.queryByText("alice")).not.toBeInTheDocument();
+  });
+
+  it("renders a private fallback when a quoted original is unavailable", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-2",
+          author_name: "bob",
+          reply_to_message_id: "m0",
+          reply_to: null,
+        })}
+        currentUserId="user-2"
+      />,
+    );
+
+    expect(screen.getByText("Original message unavailable")).toBeInTheDocument();
+    expect(screen.getByText("It may have been deleted or you may not have access.")).toBeInTheDocument();
+    expect(screen.queryByText("Earlier point")).not.toBeInTheDocument();
+  });
+
+  it("shows quote in the desktop action bar and invokes the quote handler", async () => {
+    const user = userEvent.setup();
+    const onQuote = vi.fn();
+    render(
+      <ChannelMessageBubble
+        message={makeMessage()}
+        currentUserId="user-1"
+        onQuote={onQuote}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Quote" }));
+
+    expect(onQuote).toHaveBeenCalledWith(expect.objectContaining({ id: "m1" }));
   });
 
   it("passes the search query to markdown only for search hits", () => {

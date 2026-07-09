@@ -137,6 +137,8 @@ type MessageViewportProps = {
   onScrollToMessage?: (messageId: string) => void;
   /** Toggle/add a lightweight emoji reaction on this message. */
   onReact?: (message: ChannelMessage, emoji: string) => void;
+  /** Quote this message into the active composer. */
+  onQuoteMessage?: (message: ChannelMessage) => void;
   /**
    * Save an inline edit of the viewer's own message. H5: this is an edit (a
    * PATCH), never a re-send — it must not go through a send/dispatch path.
@@ -182,6 +184,7 @@ function MessageViewport({
   onOpenThread,
   onScrollToMessage,
   onReact,
+  onQuoteMessage,
   onEditMessage,
   onDeleteMessage,
   onOpenAgent,
@@ -420,6 +423,7 @@ function MessageViewport({
             onOpenThread={onOpenThread}
             onScrollTo={onScrollToMessage}
             onReact={onReact}
+            onQuote={onQuoteMessage}
             onEdit={onEditMessage}
             onDelete={onDeleteMessage}
             onOpenAgent={onOpenAgent}

@@ -78,6 +78,33 @@ describe("ApiClient", () => {
     }
   });
 
+  it("sends reply_to_message_id for channel and thread quoted messages", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ id: "m-1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+
+    await client.sendChannelMessage("ch-1", "hello", undefined, "quoted-1", undefined, "client-1");
+    await client.sendChannelThreadMessage("ch-1", "root-1", "reply", undefined, "reply-1", undefined, "client-2");
+
+    const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+    expect(bodies[0]).toMatchObject({
+      content: "hello",
+      client_message_id: "client-1",
+      reply_to_message_id: "quoted-1",
+    });
+    expect(bodies[1]).toMatchObject({
+      content: "reply",
+      client_message_id: "client-2",
+      reply_to_message_id: "reply-1",
+    });
+  });
+
   it("sends explicit show_in_channel only for thread main-timeline display requests", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({ id: "m-1" }), {

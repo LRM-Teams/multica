@@ -5,9 +5,10 @@ import {
   useEffect,
   useRef,
   useState,
+  type MouseEvent,
   type PointerEvent,
 } from "react";
-import { Copy, MessageSquare, Pencil, Trash2 } from "lucide-react";
+import { Copy, MessageSquare, Pencil, Quote, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
@@ -26,11 +27,11 @@ import { useMessageTime } from "../../i18n/use-message-time";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
 import {
   formatMessagePartsCopyText,
-  formatMessagePartsPreview,
   resolveMessageParts,
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
 import { MessageBody } from "./message-body";
+import { InlineMessageQuote } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import { SELF_MENTION_ROW_CLASS } from "../../common/mention-token";
@@ -175,6 +176,9 @@ function MessageInlineEditor({
  * as an IM-style message item, while quote/attachment/code-like content keeps
  * local structure inside the shared Markdown pipeline.
  */
+// This row owns independent UI toggles (edit, long-content expansion, touch feedback, native-menu position).
+// Folding them into one reducer would obscure the separate gesture paths without reducing real render fan-out.
+// react-doctor-disable-next-line react-doctor/prefer-useReducer
 export function ChannelMessageBubble({
   message,
   currentUserId,
@@ -183,6 +187,7 @@ export function ChannelMessageBubble({
   onOpenThread,
   onScrollTo,
   onReact,
+  onQuote,
   onEdit,
   onDelete,
   onOpenAgent,
@@ -202,6 +207,8 @@ export function ChannelMessageBubble({
   onScrollTo?: (messageId: string) => void;
   /** Toggle/add a lightweight emoji reaction on this message. */
   onReact?: (message: ChannelMessage, emoji: string) => void;
+  /** Quote this message into the active composer. */
+  onQuote?: (message: ChannelMessage) => void;
   /**
    * Save an inline edit of the viewer's own message. H5: this is an edit, never
    * a re-send — it must not go through a send/dispatch path (no new wake).
@@ -217,12 +224,14 @@ export function ChannelMessageBubble({
   searchQuery?: string;
   /** Visually clamp already-read long history while keeping the full DOM/copy payload intact. */
   collapseLongContent?: boolean;
+// react-doctor-disable-next-line react-doctor/prefer-useReducer -- these states back independent gesture/edit/preview controls rather than one coupled transition.
 }) {
   const { t } = useT("channels");
   const { getActorAvatarUrl, getActorName } = useActorName();
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
+  const [desktopMenuPosition, setDesktopMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const [expandedContentKey, setExpandedContentKey] = useState<string | null>(null);
   const [mobileThreadTapActive, setMobileThreadTapActive] = useState(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -239,6 +248,20 @@ export function ChannelMessageBubble({
       if (tapFeedbackTimerRef.current) clearTimeout(tapFeedbackTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!desktopMenuPosition) return;
+    const close = () => setDesktopMenuPosition(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [desktopMenuPosition]);
 
   const showMobileActionsDialog = useCallback((dialog: HTMLDialogElement | null) => {
     mobileActionsDialogRef.current = dialog;
@@ -305,13 +328,6 @@ export function ChannelMessageBubble({
     ownName,
     getActorName,
   });
-  const replyAuthorName = message.reply_to
-    ? resolveChannelAuthorDisplayName(message.reply_to, {
-        currentUserId,
-        ownName,
-        getActorName,
-      })
-    : "";
   const profileActorType =
     message.type === "agent"
       ? "agent"
@@ -408,6 +424,7 @@ export function ChannelMessageBubble({
     }
     setEditDraft(null);
   };
+  const handleQuote = () => onQuote?.(message);
   const handleDelete = () => onDelete?.(message);
   const handleOpenAgent = () => {
     if (isAgent && message.author_id) {
@@ -482,6 +499,16 @@ export function ChannelMessageBubble({
     }
     openMobileActions();
   };
+  const handleContextMenu = (event: MouseEvent<HTMLDivElement>) => {
+    if (!onQuote || isMobileActionViewport() || isEditing) return;
+    if (isInteractiveMessageTarget(event.target) || hasActiveTextSelection()) return;
+    event.preventDefault();
+    setDesktopMenuPosition({ x: event.clientX, y: event.clientY });
+  };
+  const runDesktopMenuAction = (action: () => void | Promise<void>) => {
+    setDesktopMenuPosition(null);
+    void action();
+  };
   const cancelTouchGesture = () => {
     touchCancelledRef.current = true;
     touchStartRef.current = null;
@@ -500,7 +527,7 @@ export function ChannelMessageBubble({
   );
   const selfMentioned = addressedToViewer && !isOwn;
 
-  return (
+  const bubble = (
     <div
       id={`message-${message.id}`}
       data-testid="message-bubble"
@@ -517,6 +544,7 @@ export function ChannelMessageBubble({
       onPointerUp={handlePointerEnd}
       onPointerCancel={cancelTouchGesture}
       onPointerLeave={cancelTouchGesture}
+      onContextMenu={handleContextMenu}
     >
       {profileActorType && profileActorId ? (
         <ActorProfileTrigger
@@ -599,6 +627,17 @@ export function ChannelMessageBubble({
             >
               <Copy className="size-3.5" />
             </button>
+            {onQuote && (
+              <button
+                type="button"
+                onClick={handleQuote}
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                aria-label={t(($) => $.quote.action)}
+                title={t(($) => $.quote.action)}
+              >
+                <Quote className="size-3.5" />
+              </button>
+            )}
             {canOpenThread && (
               <button
                 type="button"
@@ -656,26 +695,13 @@ export function ChannelMessageBubble({
             data-collapsed={isContentCollapsed ? "true" : undefined}
             style={{ WebkitTouchCallout: "default" }}
           >
-            {/* Inline quote block: rendered when reply_to is present (BE task #23) */}
-            {message.reply_to && (
-              <button
-                type="button"
-                onClick={() =>
-                  message.reply_to_message_id && onScrollTo?.(message.reply_to_message_id)
-                }
-                className="mb-2 w-full cursor-pointer rounded border-l-2 border-muted-foreground/30 bg-muted/30 px-2 py-1 text-left transition-opacity hover:opacity-80"
-                aria-label={t(($) => $.quote.jump_to)}
-              >
-                <p className="truncate text-[11px] font-semibold text-foreground/70">
-                  {replyAuthorName}
-                </p>
-                <p className="line-clamp-1 text-[11px] text-muted-foreground">
-                  {formatMessagePartsPreview(message.reply_to.parts) ??
-                    unwrapStructuredPreviewContent(message.reply_to.content) ??
-                    message.reply_to.content}
-                </p>
-              </button>
-            )}
+            <InlineMessageQuote
+              replyTo={message.reply_to}
+              replyToMessageId={message.reply_to_message_id}
+              currentUserId={currentUserId}
+              ownName={ownName}
+              onJump={onScrollTo}
+            />
             <MessageBody
               content={message.content}
               parts={message.parts}
@@ -750,6 +776,16 @@ export function ChannelMessageBubble({
                   <Copy className="size-4" />
                   <span>{t(($) => $.message.copy_action)}</span>
                 </button>
+                {onQuote && (
+                  <button
+                    type="button"
+                    onClick={() => runMobileAction(handleQuote)}
+                    className="inline-flex h-11 items-center gap-3 rounded-xl px-3 text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                  >
+                    <Quote className="size-4" />
+                    <span>{t(($) => $.quote.action)}</span>
+                  </button>
+                )}
                 {canEdit && (
                   <button
                     type="button"
@@ -808,5 +844,62 @@ export function ChannelMessageBubble({
         )}
       </div>
     </div>
+  );
+
+  return (
+    <>
+      {bubble}
+      {desktopMenuPosition && (
+        <div
+          data-testid="desktop-message-actions"
+          data-message-action-surface="true"
+          className="fixed z-50 min-w-36 rounded-lg bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10"
+          style={{ left: desktopMenuPosition.x, top: desktopMenuPosition.y }}
+          role="menu"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => runDesktopMenuAction(handleCopy)}
+            className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
+          >
+            <Copy className="size-4" />
+            {t(($) => $.message.copy_action)}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => runDesktopMenuAction(handleQuote)}
+            className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
+          >
+            <Quote className="size-4" />
+            {t(($) => $.quote.action)}
+          </button>
+          {canOpenThread && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => runDesktopMenuAction(() => onOpenThread?.(message))}
+              className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
+            >
+              <MessageSquare className="size-4" />
+              {t(($) => $.thread.reply)}
+            </button>
+          )}
+          {canDelete && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => runDesktopMenuAction(handleDelete)}
+              className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-destructive outline-none transition-colors hover:bg-destructive/10 focus-visible:bg-destructive/10"
+            >
+              <Trash2 className="size-4" />
+              {t(($) => $.message.delete_action)}
+            </button>
+          )}
+        </div>
+      )}
+    </>
   );
 }

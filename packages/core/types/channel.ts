@@ -194,6 +194,7 @@ export interface ChannelMessageReply {
   author_name: string;
   content: string;
   parts?: MessagePart[];
+  attachments?: import("./attachment").Attachment[];
   created_at: string;
 }
 

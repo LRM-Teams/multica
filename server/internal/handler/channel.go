@@ -1133,14 +1133,14 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Unread total: visible messages after anchor, excluding the caller's own
-	// (matching isNewFromOther semantics). Serves as the primary count source
-	// for the divider in around mode (single-response snapshot = entry freeze).
+	// (matching sidebar real_unread_count semantics). Serves as the primary
+	// count source for the divider in around mode (single-response snapshot).
 	var unreadTotal int
 	if err := h.DB.QueryRow(r.Context(), `
 		SELECT COUNT(*) FROM channel_message m
 		WHERE `+channelMessageWhereClause+`
 		AND m.seq > $3::bigint
-		AND (m.author_id IS NULL OR m.author_id <> $4::uuid)`, channelID, workspaceID, pgtype.Int8{Int64: aroundSeq, Valid: true}, parseUUID(userIDStr)).Scan(&unreadTotal); err != nil {
+		AND NOT (m.author_type = 'user' AND m.author_id = $4::uuid)`, channelID, workspaceID, pgtype.Int8{Int64: aroundSeq, Valid: true}, parseUUID(userIDStr)).Scan(&unreadTotal); err != nil {
 		unreadTotal = 0
 	}
 

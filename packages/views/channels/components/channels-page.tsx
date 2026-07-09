@@ -168,7 +168,8 @@ import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
 import { mapThreadWakeAnnotations } from "./thread-read-model";
-import { ComposerQuotePreview, type QuoteTarget } from "./message-quote";
+import { ComposerQuotePreview } from "./message-quote";
+import type { QuoteTarget } from "./message-quote-types";
 import {
   Composer,
   ConversationHeader,

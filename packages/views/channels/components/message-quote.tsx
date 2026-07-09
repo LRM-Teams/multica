@@ -2,47 +2,8 @@
 
 import { X } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
-import type { ChannelMessage, ChannelMessageReply } from "@multica/core/types";
-import { formatMessagePartsPreview, unwrapStructuredPreviewContent } from "./message-parts-preview";
-
-export type MessageQuoteStatus = "available" | "deleted" | "inaccessible" | (string & {});
-
-export type QuoteTarget = Pick<
-  ChannelMessage,
-  "id" | "channel_id" | "author_name" | "content" | "parts" | "attachments"
->;
-
-type QuoteSource = (ChannelMessageReply & {
-  status?: MessageQuoteStatus | null;
-  deleted_at?: string | null;
-  attachments?: ChannelMessage["attachments"];
-}) | null | undefined;
-
-function attachmentSummary(attachments: ChannelMessage["attachments"] | undefined) {
-  if (!attachments || attachments.length === 0) return null;
-  if (attachments.length === 1) return attachments[0]?.filename ?? "Attachment";
-  return `${attachments.length} attachments`;
-}
-
-export function getMessageQuotePreview(source: {
-  content?: string | null;
-  parts?: ChannelMessage["parts"];
-  attachments?: ChannelMessage["attachments"];
-}) {
-  const text =
-    formatMessagePartsPreview(source.parts) ??
-    unwrapStructuredPreviewContent(source.content ?? "") ??
-    source.content?.trim() ??
-    "";
-  return text || attachmentSummary(source.attachments) || "Attachment";
-}
-
-export function getMessageQuoteStatus(source: QuoteSource, replyToMessageId?: string | null) {
-  if (source?.status === "deleted" || source?.deleted_at) return "deleted";
-  if (source?.status === "inaccessible") return "inaccessible";
-  if (!source && replyToMessageId) return "inaccessible";
-  return "available";
-}
+import { getMessageQuotePreview, getMessageQuoteStatus } from "./message-quote-utils";
+import type { QuoteSource, QuoteTarget } from "./message-quote-types";
 
 export function ComposerQuotePreview({
   quote,

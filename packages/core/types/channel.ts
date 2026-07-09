@@ -155,6 +155,17 @@ export interface ChannelMessagesPage {
   has_more_after?: boolean;
   /** Cursor to page toward NEWER messages, mirroring `next_cursor` (around_seq mode). */
   after_cursor?: ChannelMessagesCursor | null;
+  /**
+   * True unread total for the "N new messages" divider (around_seq mode) —
+   * messages with `seq > around_seq`, main-timeline-visible, authored by someone
+   * other than the viewer. Computed server-side in the SAME around query, so it
+   * is a snapshot of the entry moment by construction (the response is fetched
+   * once). This is the PREFERRED divider count: the loaded window holds only
+   * ~limit/2 messages past the anchor, so counting within it undercounts large
+   * unread. Absent on older servers → fall back to the entry-frozen list count,
+   * then the window count.
+   */
+  unread_total?: number;
 }
 
 /** Response of `POST /channels/{id}/read`. `previous_last_read_seq` echoes the

@@ -372,6 +372,7 @@ export const ChannelMessagesPageSchema = z.object({
   anchor_index: z.number().optional(),
   has_more_after: z.boolean().optional(),
   after_cursor: ChannelMessagesCursorSchema.nullable().optional(),
+  unread_total: z.number().optional(),
 }).loose();
 
 export const EMPTY_CHANNEL_MESSAGES_PAGE: ChannelMessagesPage = {

@@ -2351,7 +2351,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 ownName={currentUserName ?? undefined}
                 highlightMessageId={effectiveHighlightId}
                 lastReadSeq={dividerLastReadSeq}
-                unreadCount={entryAnchor.unreadCount}
+                // #340 divider count, most-authoritative first: the around
+                // response's server-computed total → the entry-frozen list count
+                // → (in MessageViewport) the loaded-window count.
+                unreadCount={
+                  messagePages?.pages?.[0]?.unread_total ??
+                  entryAnchor.unreadCount
+                }
                 firstItemIndex={messagesFirstItemIndex}
                 searchHitIds={searchHitIds}
                 searchQuery={searchHighlightQuery}

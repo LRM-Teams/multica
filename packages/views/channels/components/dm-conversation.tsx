@@ -950,7 +950,9 @@ function DmChannelConversation({
         ownName={currentUserName ?? undefined}
         highlightMessageId={highlightMessageId}
         lastReadSeq={dividerLastReadSeq}
-        unreadCount={entryAnchor.unreadCount}
+        // #340 divider count, most-authoritative first: around response total →
+        // entry-frozen list count → (in MessageViewport) loaded-window count.
+        unreadCount={messagePages?.pages?.[0]?.unread_total ?? entryAnchor.unreadCount}
         firstItemIndex={messagesFirstItemIndex}
         searchHitIds={searchHitIds}
         searchQuery={searchHighlightQuery}

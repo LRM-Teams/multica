@@ -190,7 +190,10 @@ async function openThread() {
   await act(async () => {
     listCapture.onOpenThread?.(threadRootMessage());
   });
-  return screen.findByTestId("thread-participants");
+  // The wake strip renders from the root's #251 read-model — proves the panel
+  // mounted AND the parent wired the read-model (the old anchor was the now-
+  // deleted participants row; the wake strip is the surviving read-model proof).
+  return screen.findByTestId("thread-wake-strip");
 }
 
 describe("ChannelsPage → ThreadPanel mount wiring (#240 B2)", () => {
@@ -198,12 +201,11 @@ describe("ChannelsPage → ThreadPanel mount wiring (#240 B2)", () => {
     listCapture.onOpenThread = null;
   });
 
-  it("mounts ThreadPanel and renders participant chips from the root's thread_participants (#251)", async () => {
-    const chips = await openThread();
-    // ThreadPanel's own strip — the old inline thread render had no chips, so
-    // this rendering proves the mount is live.
-    expect(within(chips).getByText("Alice")).toBeInTheDocument();
-    expect(within(chips).getByText("Iris")).toBeInTheDocument();
+  it("mounts ThreadPanel and wires the read-model; the participants row + follow toggle are gone", async () => {
+    await openThread(); // resolves the read-model wake strip → mount + wiring proven
+    // The participants row + explicit follow toggle are removed (following is implicit).
+    expect(screen.queryByTestId("thread-participants")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Follow thread" })).not.toBeInTheDocument();
   });
 
   it("renders a neutral 'why no reply' wake annotation for the agent, and none for the human (#196)", async () => {

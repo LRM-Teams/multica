@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { LOCALE_COOKIE } from "@multica/core/i18n";
+import { multicaCookieName } from "@multica/core/cookies";
 import {
   MULTICA_LOCALE_HEADER,
   resolveLocaleFromSignals,
@@ -45,8 +46,8 @@ function nextWithLocale(req: NextRequest): NextResponse {
 // edge.
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  const hasSession = req.cookies.has("multica_logged_in");
-  const lastSlug = req.cookies.get("last_workspace_slug")?.value;
+  const hasSession = req.cookies.has(multicaCookieName("loggedIn"));
+  const lastSlug = req.cookies.get(multicaCookieName("lastWorkspaceSlug"))?.value;
 
   // --- Legacy URL redirect: /issues/... → /{slug}/issues/... ---
   // Old bookmarks and clients that hit us before the slug migration would

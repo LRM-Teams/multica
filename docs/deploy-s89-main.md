@@ -51,13 +51,16 @@ MULTICA_APP_URL=http://82.157.184.89:18090
 MULTICA_PUBLIC_URL=http://82.157.184.89:18090
 CORS_ALLOWED_ORIGINS=http://82.157.184.89:18090
 COOKIE_DOMAIN=
+MULTICA_COOKIE_PREFIX=multica_main
 GOOGLE_REDIRECT_URI=http://82.157.184.89:18090/auth/callback
 ```
 
 Everything else, including `APP_ENV` and `MULTICA_DEV_VERIFICATION_CODE`, comes
 from dev's `/data/multica/.env`. If dev is configured with
 `APP_ENV=development` and `MULTICA_DEV_VERIFICATION_CODE=888888`, then the main
-`:18090` stack gets the same behavior after deploy.
+`:18090` stack gets the same behavior after deploy. `MULTICA_COOKIE_PREFIX=multica_main`
+keeps browser cookies separate from the dev stack on `:8090` even though both
+ports share the same IP host.
 
 ### 2. First-run bring up the isolated stack
 

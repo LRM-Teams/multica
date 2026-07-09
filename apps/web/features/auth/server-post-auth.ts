@@ -9,7 +9,7 @@ export interface AuthedContext {
 
 /**
  * Fetch the authenticated user + their workspaces server-to-server, forwarding
- * the given cookie header (the HttpOnly `multica_auth` session). Returns null
+ * the given cookie header (the HttpOnly `auth` session). Returns null
  * when the session is not valid — missing/expired cookie, non-2xx, or a network
  * error — so callers never mis-read a failure as authenticated. GETs need no
  * CSRF. Shared by the landing Server Component and the OAuth callback route
@@ -35,7 +35,7 @@ export async function fetchAuthedContext(cookieHeader: string): Promise<AuthedCo
 /**
  * The post-auth destination for an authenticated context (`next` / invite are
  * resolved by callers before this). Last-active precedence: the
- * `last_workspace_slug` cookie if accessible → the accessible workspace with the
+ * `last workspace slug` cookie if accessible → the accessible workspace with the
  * newest `last_active_at` (#225 server signal, restores last-active after a
  * logout that cleared the cookie) → the deterministic default.
  */

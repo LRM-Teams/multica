@@ -4,6 +4,7 @@ import { paths } from "@multica/core/paths";
 import type { Invitation } from "@multica/core/types";
 import { resolveRemoteApiUrl } from "@/config/runtime-urls";
 import { fetchAuthedContext, postAuthDestination } from "@/features/auth/server-post-auth";
+import { multicaCookieName } from "@multica/core/cookies";
 
 // Raw cookie value (as it appears in a Set-Cookie header, before attributes) so
 // we can forward the session on a server-to-server GET. Not decoded — a Cookie
@@ -96,7 +97,7 @@ export async function GET(request: NextRequest) {
   // (drops SameSite/Secure/Domain/Expires) and never allowlist (misses the
   // CloudFront signed cookies). Standard BFF/reverse-proxy behaviour.
   const setCookies = loginRes.headers.getSetCookie();
-  const authValue = cookieValueFromSetCookies(setCookies, "multica_auth");
+  const authValue = cookieValueFromSetCookies(setCookies, multicaCookieName("auth"));
   if (!authValue) return toLogin("login_failed");
 
   const nextPart = stateParts.find((s) => s.startsWith("next:"));
@@ -104,7 +105,7 @@ export async function GET(request: NextRequest) {
 
   // Compute the destination with the freshly-issued session, reusing the same
   // shared logic as the landing page (last-active precedence incl. #225).
-  const ctx = await fetchAuthedContext(`multica_auth=${authValue}`);
+  const ctx = await fetchAuthedContext(`${multicaCookieName("auth")}=${authValue}`);
 
   let destination: string;
   if (nextUrl) {
@@ -123,7 +124,7 @@ export async function GET(request: NextRequest) {
     if (!onboarded) {
       try {
         const invRes = await fetch(`${base}/api/invitations`, {
-          headers: { cookie: `multica_auth=${authValue}` },
+          headers: { cookie: `${multicaCookieName("auth")}=${authValue}` },
           cache: "no-store",
         });
         if (invRes.ok) {
@@ -134,7 +135,7 @@ export async function GET(request: NextRequest) {
         /* non-fatal — fall through to the normal destination */
       }
     }
-    const cookieSlug = request.cookies.get("last_workspace_slug")?.value ?? null;
+    const cookieSlug = request.cookies.get(multicaCookieName("lastWorkspaceSlug"))?.value ?? null;
     destination = inviteDest ?? postAuthDestination(ctx, cookieSlug);
   }
 
@@ -148,6 +149,6 @@ export async function GET(request: NextRequest) {
     res.headers.append("set-cookie", sc);
   }
   // Sentinel so proxy.ts fast-path + client auth see the session.
-  res.headers.append("set-cookie", "multica_logged_in=1; Path=/; Max-Age=31536000; SameSite=Lax");
+  res.headers.append("set-cookie", `${multicaCookieName("loggedIn")}=1; Path=/; Max-Age=31536000; SameSite=Lax`);
   return res;
 }

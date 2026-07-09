@@ -4,6 +4,7 @@ import { use, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { WorkspaceSlugProvider, paths } from "@multica/core/paths";
+import { multicaCookieName } from "@multica/core/cookies";
 import { workspaceBySlugOptions } from "@multica/core/workspace";
 import { setCurrentWorkspace } from "@multica/core/platform";
 import { useAuthStore } from "@multica/core/auth";
@@ -66,7 +67,7 @@ export default function WorkspaceLayout({
     if (!workspace || typeof document === "undefined") return;
     const oneYear = 60 * 60 * 24 * 365;
     const secure = location.protocol === "https:" ? "; Secure" : "";
-    document.cookie = `last_workspace_slug=${encodeURIComponent(workspaceSlug)}; path=/; max-age=${oneYear}; SameSite=Lax${secure}`;
+    document.cookie = `${multicaCookieName("lastWorkspaceSlug")}=${encodeURIComponent(workspaceSlug)}; path=/; max-age=${oneYear}; SameSite=Lax${secure}`;
   }, [workspace, workspaceSlug]);
 
   // Remember whether this slug has resolved before. Used below to avoid

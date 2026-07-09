@@ -6,6 +6,7 @@ import { useAuthStore } from "@multica/core/auth";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { clearWorkspaceStorage, defaultStorage } from "@multica/core/platform";
 import { paths } from "@multica/core/paths";
+import { multicaCookieName } from "@multica/core/cookies";
 import type { Workspace } from "@multica/core/types";
 import { useNavigation } from "../navigation";
 
@@ -42,8 +43,7 @@ export function useLogout() {
     // the next user gets redirected by the proxy to the previous user's
     // last workspace, then bounced to NoAccessPage — confusing.
     if (typeof document !== "undefined") {
-      document.cookie =
-        "last_workspace_slug=; path=/; max-age=0; SameSite=Lax";
+      document.cookie = `${multicaCookieName("lastWorkspaceSlug")}=; path=/; max-age=0; SameSite=Lax`;
     }
 
     // Clear desktop tab state. Tab paths can contain workspace slugs and

@@ -1,6 +1,7 @@
 // Server-only by construction: `next/headers` (cookies()/headers()) throws if
 // imported into a Client Component, so this module can never leak client-side.
 import { cookies, headers } from "next/headers";
+import { multicaCookieName } from "@multica/core/cookies";
 import { fetchAuthedContext, postAuthDestination } from "@/features/auth/server-post-auth";
 
 /**
@@ -17,12 +18,12 @@ import { fetchAuthedContext, postAuthDestination } from "@/features/auth/server-
 export async function resolveServerPostAuthDestination(): Promise<string | null> {
   const cookieStore = await cookies();
   // No session cookie → definitely unauthenticated; don't hit the backend.
-  if (!cookieStore.get("multica_auth")?.value) return null;
+  if (!cookieStore.get(multicaCookieName("auth"))?.value) return null;
 
   const cookieHeader = (await headers()).get("cookie") ?? "";
   const ctx = await fetchAuthedContext(cookieHeader);
   if (!ctx) return null;
 
-  const cookieSlug = cookieStore.get("last_workspace_slug")?.value ?? null;
+  const cookieSlug = cookieStore.get(multicaCookieName("lastWorkspaceSlug"))?.value ?? null;
   return postAuthDestination(ctx, cookieSlug);
 }

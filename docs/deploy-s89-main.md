@@ -5,7 +5,10 @@ This documents the **server-side, one-time setup** required before
 alongside the existing `dev` → :8090 stack on the same s89 host.
 
 The two stacks are fully isolated (separate Compose project, directory, Postgres
-volume, and ports) so they never interfere. The dev pipeline
+volume, and ports) so they never interfere. The main deploy deep-copies
+`/data/multica/.env` into `/data/multica-main/.env` on every deploy, then
+overlays only the values that must differ for the `:18090` stack. The two env
+files are separate copies, not a shared file. The dev pipeline
 (`.github/workflows/deploy.yml`) is unchanged.
 
 ## How it is wired
@@ -23,31 +26,38 @@ volume, and ports) so they never interfere. The dev pipeline
 
 ## One-time server setup (run on s89 as the deploy user)
 
-### 1. Create the directory and `.env`
+### 1. Create the directory
 
 ```bash
 sudo mkdir -p /data/multica-main
 sudo chown "$USER":"$USER" /data/multica-main
-
-cp /data/multica/.env /data/multica-main/.env
 ```
 
-Then edit `/data/multica-main/.env` and **change at least**:
+Do **not** hand-maintain `/data/multica-main/.env`. The workflow copies
+`/data/multica/.env` to `/data/multica-main/.env` on every deploy, so main starts
+from the same env values as dev while still using its own file. This is a deep
+copy, not a symlink or shared mount: editing `/data/multica-main/.env` never
+mutates `/data/multica/.env`, and the next deploy refreshes the main copy from
+dev.
 
-- `JWT_SECRET` — generate a new one (`openssl rand -hex 32`). Do NOT reuse dev's.
-- `POSTGRES_PASSWORD` — can stay the same value as dev's; it only seeds this
-  stack's OWN fresh postgres volume. The deploy injects the `s89` Environment
-  secret `POSTGRES_PASSWORD` and it must match whatever you set here for the
-  backend's `DATABASE_URL`. Simplest: keep it equal to dev's.
-- `POSTGRES_DB` / `POSTGRES_USER` — leave as `multica` is fine (separate volume).
-
-The deploy workflow **forces** `BACKEND_PORT=18080` and `FRONTEND_PORT=13000`
-via env vars, so those in `.env` are informational; set them too for clarity:
+After copying dev's env, the workflow overlays only the isolated main-stack
+values via shell exports:
 
 ```env
 BACKEND_PORT=18080
 FRONTEND_PORT=13000
+FRONTEND_ORIGIN=http://82.157.184.89:18090
+MULTICA_APP_URL=http://82.157.184.89:18090
+MULTICA_PUBLIC_URL=http://82.157.184.89:18090
+CORS_ALLOWED_ORIGINS=http://82.157.184.89:18090
+COOKIE_DOMAIN=
+GOOGLE_REDIRECT_URI=http://82.157.184.89:18090/auth/callback
 ```
+
+Everything else, including `APP_ENV` and `MULTICA_DEV_VERIFICATION_CODE`, comes
+from dev's `/data/multica/.env`. If dev is configured with
+`APP_ENV=development` and `MULTICA_DEV_VERIFICATION_CODE=888888`, then the main
+`:18090` stack gets the same behavior after deploy.
 
 ### 2. First-run bring up the isolated stack
 
@@ -99,17 +109,18 @@ if Caddy runs in a container).
 ### 4. (Optional) dedicated GitHub Environment
 
 The workflow reuses the `s89` Environment (for `secrets.POSTGRES_PASSWORD`).
-To give `main` its own approval gate / rollback history, create an Environment
-`Actions secrets/Variables → Environments → s89-main`, add `POSTGRES_PASSWORD`
-there, and change `environment: s89` → `environment: s89-main` in
-`deploy-main.yml`.
+Keep that secret equal to the dev stack's Postgres password because main starts
+from a copied dev `.env` and then runs against its own `multica-main_pgdata`
+volume. To give `main` its own approval gate / rollback history, create an
+Environment `s89-main`, add the same `POSTGRES_PASSWORD` there, and change
+`environment: s89` -> `environment: s89-main` in `deploy-main.yml`.
 
 ## Verify after first deploy
 
 ```bash
 docker compose -p multica-main ps                         # 3 services up
 curl -fsS http://127.0.0.1:18080/readyz && echo OK        # backend
-curl -fsS http://127.0.0.1:18090/ && echo OK              # public via Caddy
+curl -fsS http://127.0.0.1:18090/api/config && echo OK     # public via Caddy
 docker compose -p multica-main logs --tail 50 backend     # migrate ok
 ```
 

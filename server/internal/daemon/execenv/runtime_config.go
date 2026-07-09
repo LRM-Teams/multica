@@ -816,22 +816,20 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 
 	b.WriteString("## Available Commands\n\n")
 	b.WriteString("Use `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help` to discover exact flags. Prefer `--output json` when reading data.\n\n")
-	b.WriteString("Common capabilities available when the user asks or the answer needs platform data:\n")
+	b.WriteString("Common capabilities; use help for exact flags and only call platform commands when relevant:\n")
 	if !ctx.ChatCLITransportUnavailable {
-		b.WriteString("- Chat output: send a visible reply via `multica message send --message-stdin << 'MULTICAMSG'` with the message body on the following lines, terminated by `MULTICAMSG` on its own line. Use single-quote heredoc to preserve `backticks`, $dollar_signs, and special characters verbatim — do NOT use `--message \"...\"` for messages containing backticks or other shell-special characters. For short plain-text messages without special chars, `--message \"...\"` is fine. For sticker replies use `multica message send --sticker <id>` for sticker-only social beats, or `--sticker <id> --message \"...\"` when you also need explanatory text. Omit `--target` for the current DM/channel/thread; use `--target \"#channel\"`, `--target \"#channel:<message-id>\"`, or `--target \"dm:@handle\"` only when intentionally targeting another chat surface. After successful `multica message send`, do not repeat the same content in final assistant output.\n")
-		b.WriteString("- Chat reactions: add a reaction with `multica message react --message-id <message-id> --emoji \"...\"`; after successful `multica message react`, do not add a second visible final reply.\n")
-		b.WriteString("- Chat history: read the current or targeted surface with `multica message read [--target ...] [--limit N] --output json`, and search with `multica message search \"query\" [--target ...] --output json`.\n")
+		b.WriteString("- Chat output: use `multica message send --message-stdin` for multiline/shell-special text, `multica message send --message \"...\"` for short plain text, and `multica message send --sticker <id>` for sticker replies. Omit `--target` for the current surface; after a successful send, do not repeat the content in final output.\n")
+		b.WriteString("- Chat reactions/history: `multica message react --message-id <id> --emoji \"...\"`; `multica message read [--target ...] [--limit N] --output json`; `multica message search \"query\" [--target ...] --output json`.\n")
 	}
-	b.WriteString("- Issues: list/get/search issues; use `multica issue list --mine --output json` for issues assigned to the running agent. Existing-issue writes follow the Raft claim-first model: claim/own the issue before status/comment/field writes, do not mutate issues you did not claim, do not self-approve `in_review -> done`, and keep writes visible through message/system events.\n")
-	b.WriteString("- Comments: read issue comments with `multica issue comment list`; add comments with `multica issue comment add` only when you are operating on a claimed/owned issue or the user explicitly asks you to work on that issue.\n")
-	b.WriteString("- Issue metadata: inspect or update issue-specific persistent facts when explicitly working on an issue: `multica issue metadata list <issue-id>`, `multica issue metadata set <issue-id> --key <k> --value <v> [--type string|number|bool]`, `multica issue metadata delete <issue-id> --key <k>`.\n")
-	b.WriteString("- Projects/repos: inspect project resources and check out code with `multica repo checkout <url>`; use `--ref <branch-or-sha>` when you need an exact revision.\n")
-	b.WriteString("- Attachments: download with `multica attachment view --id <id> --output <path>`; upload with `multica attachment upload --path <file> [--target '#channel']` then pass `--attachment-id` to message send / issue create.\n")
-	b.WriteString("- Workspace: inspect workspace info, members, agents, and squads when needed.\n")
-	b.WriteString("- Channels: list channels you are a member of with `multica channel list`, inspect members with `multica channel members --target \"#channel\"`.\n")
-	b.WriteString("- Channel attention: mute a channel (`multica channel mute --target \"#channel\"`) or unmute it (`multica channel unmute --target \"#channel\"`). Muting stops ambient delivery; personal @mentions and DMs still arrive.\n")
+	b.WriteString("- Issues: list/get/search issues; use `multica issue list --mine --output json` for assigned work. For existing issues, follow the Raft claim-first model: claim/own before writes, do not self-approve `in_review -> done`, and keep writes visible.\n")
+	b.WriteString("- Comments: read issue comments with `multica issue comment list`; add comments with `multica issue comment add` only for claimed/owned issues or explicit user requests.\n")
+	b.WriteString("- Issue metadata: inspect or update issue-specific persistent facts with `multica issue metadata list <issue-id>`, `multica issue metadata set <issue-id> --key <k> --value <v> [--type string|number|bool]`, and `multica issue metadata delete <issue-id> --key <k>`.\n")
+	b.WriteString("- Projects/repos: inspect project resources; check out code with `multica repo checkout <url>` and add `--ref <branch-or-sha>` for an exact revision.\n")
+	b.WriteString("- Attachments: download with `multica attachment view --id <id> --output <path>`; upload with `multica attachment upload --path <file>` and pass `--attachment-id` to message send / issue create.\n")
+	b.WriteString("- Workspace/channels/squads: inspect workspace info; list channels or members with `multica channel list` and `multica channel members --target \"#channel\"`.\n")
+	b.WriteString("- Attention controls: `multica channel mute/unmute --target \"#channel\"` for ambient delivery; personal @mentions and DMs still arrive.\n")
 	if !ctx.ChatCLITransportUnavailable {
-		b.WriteString("- Thread attention: unfollow a thread with `multica thread unfollow --target \"#channel:<message-id>\"`. Personal @mentions still arrive; posting re-follows automatically.\n")
+		b.WriteString("- Threads: `multica thread unfollow --target \"#channel:<message-id>\"`; personal @mentions still arrive, and posting re-follows automatically.\n")
 	}
 	b.WriteString("\n")
 	b.WriteString("Do not run issue commands just because you are in chat. Use them only when the user asks about an issue/task/project/repo or the answer needs that platform data.\n\n")

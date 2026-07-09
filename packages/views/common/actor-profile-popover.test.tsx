@@ -145,4 +145,20 @@ describe("ActorProfileContentLoaded", () => {
 
     expect(screen.getByText("Agent · Working")).toBeInTheDocument();
   });
+
+  it("omits the description section when the profile has no description", () => {
+    const profile = makeProfile(0);
+    profile.description = "";
+
+    render(<ActorProfileContentLoaded profile={profile} />);
+
+    expect(screen.queryByText("No description")).toBeNull();
+    expect(screen.queryByText("Builds and reviews changes.")).toBeNull();
+  });
+
+  it("renders a real description when present", () => {
+    render(<ActorProfileContentLoaded profile={makeProfile(0)} />);
+
+    expect(screen.getByText("Builds and reviews changes.")).toBeInTheDocument();
+  });
 });

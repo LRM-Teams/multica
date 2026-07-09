@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
@@ -296,8 +295,7 @@ func init() {
 	issueCreateCmd.Flags().String("due-date", "", "Due date (calendar day, YYYY-MM-DD)")
 	issueCreateCmd.Flags().Bool("allow-duplicate", false, "Allow creating an issue even when an active duplicate exists")
 	issueCreateCmd.Flags().String("output", "json", "Output format: table or json")
-	issueCreateCmd.Flags().StringSlice("attachment", nil, "File path(s) to attach (can be specified multiple times)")
-	issueCreateCmd.Flags().StringSlice("attachment-id", nil, "Existing attachment UUID(s) to bind to the created issue (can be specified multiple times)")
+	issueCreateCmd.Flags().StringSlice("attachment-id", nil, "Existing attachment UUID(s) from `multica attachment upload` to bind to the created issue (repeatable)")
 
 	// issue update
 	issueUpdateCmd.Flags().String("title", "", "New title")
@@ -353,7 +351,7 @@ func init() {
 	issueCommentAddCmd.Flags().Bool("content-stdin", false, "Read comment content from stdin (preserves multi-line content verbatim)")
 	issueCommentAddCmd.Flags().String("content-file", "", "Read comment content from a UTF-8 file (preserves multi-line content verbatim; use this on Windows when stdin piping mangles non-ASCII bytes)")
 	issueCommentAddCmd.Flags().String("parent", "", "Parent comment ID (reply to a specific comment)")
-	issueCommentAddCmd.Flags().StringSlice("attachment", nil, "File path(s) to attach (can be specified multiple times)")
+	issueCommentAddCmd.Flags().StringSlice("attachment-id", nil, "Existing attachment UUID(s) from `multica attachment upload` (repeatable)")
 	issueCommentAddCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// issue search
@@ -642,45 +640,6 @@ func runIssueGet(cmd *cobra.Command, args []string) error {
 	return cli.PrintJSON(os.Stdout, issue)
 }
 
-// isHTTPURL reports whether path is an http:// or https:// URL.
-// Used to skip URL-shaped values passed to --attachment, which only
-// accepts local file paths. Trims surrounding whitespace because
-// agent-generated commands sometimes copy URLs with stray spaces.
-func isHTTPURL(path string) bool {
-	p := strings.TrimSpace(path)
-	return strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://")
-}
-
-// uploadCLIAttachments uploads each local path in attachments via
-// client.UploadFile and returns the resulting attachment IDs. URL-shaped
-// paths are skipped with a stderr warning — --attachment only accepts local
-// file paths. issueID is passed through to UploadFile to associate the
-// attachment with an issue; pass "" when there's no owning issue (e.g.
-// sending a chat/channel message). Aborts on the first read or upload
-// failure, so callers that upload before mutating server state (unlike
-// `issue create`, which uploads after creating the issue and only warns on
-// failure) get a clean all-or-nothing result.
-func uploadCLIAttachments(ctx context.Context, client *cli.APIClient, attachments []string, issueID string) ([]string, error) {
-	var attachmentIDs []string
-	for _, filePath := range attachments {
-		if isHTTPURL(filePath) {
-			fmt.Fprintf(os.Stderr, "Skipping --attachment %q: URLs are not supported here, only local file paths.\n", filePath)
-			continue
-		}
-		data, readErr := os.ReadFile(filePath)
-		if readErr != nil {
-			return nil, fmt.Errorf("read attachment %s: %w", filePath, readErr)
-		}
-		id, uploadErr := client.UploadFile(ctx, data, filePath, issueID)
-		if uploadErr != nil {
-			return nil, fmt.Errorf("upload attachment %s: %w", filePath, uploadErr)
-		}
-		attachmentIDs = append(attachmentIDs, id)
-		fmt.Fprintf(os.Stderr, "Uploaded %s\n", filePath)
-	}
-	return attachmentIDs, nil
-}
-
 func appendUniqueStrings(dst []string, values ...string) []string {
 	seen := make(map[string]struct{}, len(dst)+len(values))
 	out := make([]string, 0, len(dst)+len(values))
@@ -721,13 +680,7 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Use a longer timeout when attachments are present (file uploads can be slow).
-	timeout := cli.APITimeout()
-	attachments, _ := cmd.Flags().GetStringSlice("attachment")
-	if len(attachments) > 0 {
-		timeout = cli.AtLeastAPITimeout(60 * time.Second)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
 	defer cancel()
 
 	body := map[string]any{"title": title}
@@ -797,56 +750,12 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 		body["attachment_ids"] = attachmentIDs
 	}
 
-	// Pre-validate attachments BEFORE creating the issue so a bad path
-	// can never produce a half-created issue (which would otherwise
-	// trigger callers — especially the agent doing quick-create — to
-	// retry the whole `issue create` and end up with duplicates).
-	//
-	//   - http(s) URLs are not local files; the API only accepts local
-	//     paths here. Warn and skip rather than fail — a markdown image
-	//     URL embedded in the prompt should never be re-attached, and
-	//     skipping is the safest outcome for that case.
-	//   - Anything else is treated as a local path and read upfront.
-	//     A read failure here is a real user/agent mistake (typo,
-	//     missing file) and we surface it pre-create so the issue
-	//     never lands.
-	type pendingAttachment struct {
-		path string
-		data []byte
-	}
-	pending := make([]pendingAttachment, 0, len(attachments))
-	for _, filePath := range attachments {
-		if isHTTPURL(filePath) {
-			fmt.Fprintf(os.Stderr, "Skipping --attachment %q: URLs are not supported here, only local file paths.\n", filePath)
-			continue
-		}
-		data, readErr := os.ReadFile(filePath)
-		if readErr != nil {
-			return fmt.Errorf("read attachment %s: %w", filePath, readErr)
-		}
-		pending = append(pending, pendingAttachment{path: filePath, data: data})
-	}
-
 	var result map[string]any
 	if err := client.PostJSON(ctx, "/api/issues", body, &result); err != nil {
 		if msg, ok := activeDuplicateIssueCreateMessage(err); ok {
 			return errors.New(msg)
 		}
 		return fmt.Errorf("create issue: %w", err)
-	}
-
-	// Upload attachments and link them to the newly created issue.
-	// Failures here are partial-success: the issue exists already, so
-	// turning a non-zero exit on the caller would invite a retry that
-	// duplicates the issue. Warn on stderr and continue.
-	issueID := strVal(result, "id")
-	for _, att := range pending {
-		if _, uploadErr := client.UploadFile(ctx, att.data, att.path, issueID); uploadErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: upload attachment %s failed (issue already created, %s): %v\n",
-				att.path, strVal(result, "identifier"), uploadErr)
-			continue
-		}
-		fmt.Fprintf(os.Stderr, "Uploaded %s\n", att.path)
 	}
 
 	output, _ := cmd.Flags().GetString("output")
@@ -1258,13 +1167,7 @@ func runIssueCommentAdd(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Use a longer timeout when attachments are present (file uploads can be slow).
-	timeout := cli.APITimeout()
-	attachments, _ := cmd.Flags().GetStringSlice("attachment")
-	if len(attachments) > 0 {
-		timeout = cli.AtLeastAPITimeout(60 * time.Second)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
 	defer cancel()
 
 	issueRef, err := resolveIssueRef(ctx, client, args[0])
@@ -1273,15 +1176,8 @@ func runIssueCommentAdd(cmd *cobra.Command, args []string) error {
 	}
 	issueID := issueRef.ID
 
-	// A markdown image URL embedded in agent-supplied content should never
-	// be re-uploaded as if it were a file — uploadCLIAttachments skips
-	// URL-shaped paths. Unlike `issue create`, this path uploads BEFORE
-	// posting the comment, so a hard failure on a real (local) attachment
-	// correctly aborts the whole call.
-	attachmentIDs, err := uploadCLIAttachments(ctx, client, attachments, issueID)
-	if err != nil {
-		return err
-	}
+	attachmentIDs, _ := cmd.Flags().GetStringSlice("attachment-id")
+	attachmentIDs = appendUniqueStrings(nil, attachmentIDs...)
 
 	body := map[string]any{"content": content}
 	if parentID, _ := cmd.Flags().GetString("parent"); parentID != "" {

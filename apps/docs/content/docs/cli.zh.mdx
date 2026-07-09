@@ -140,7 +140,8 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 | `multica config` | 查看 / 修改 CLI 本地配置 |
 | `multica version` | 显示 CLI 版本 |
 | `multica update` | 升级 CLI 到最新版 |
-| `multica attachment download <id>` | 下载 issue / 评论的附件 |
+| `multica attachment view --id <id> --output <path>` | 将附件下载到本地文件路径 |
+| `multica attachment upload --path <file> [--target '#channel']` | 上传文件；返回的 id 用于 `--attachment-id` |
 
 ## 查完整 flag
 

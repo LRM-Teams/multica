@@ -328,7 +328,7 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 		"add comments with `multica issue comment add`",
 		"Issue metadata: inspect or update issue-specific persistent facts",
 		"multica repo checkout <url>",
-		"multica attachment download <id>",
+		"multica attachment view --id <id> --output <path>",
 		"## Repositories",
 		"## Project Context",
 		"## Skills",

@@ -242,6 +242,8 @@ export type {
   ChannelMessagesPage,
   MarkChannelReadResult,
   ChannelMessageReply,
+  ChannelMessageQuote,
+  ChannelMessageQuoteSnapshot,
   ChannelReaction,
   ChannelThreadMessagesCursor,
   ChannelThreadMessagesPage,

@@ -1835,6 +1835,49 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 	return &child, nil
 }
 
+// openFreshSessionForRetryChild opens a FRESH areal RL session for a retry child
+// before the child is broadcast/announced to the daemon, mirroring
+// enqueueMentionTask's open->broadcast->notify order (D9). Task 6 stripped
+// areal_proxy from the child's context (createRetryTaskWithPendingWakeTransfer),
+// so maybeOpenTrainingSession's idempotency guard passes and a new session is
+// opened + mapped (D10 RecordSessionAgentRun fires for the child's task.ID).
+// The parent's session was already closed by RouteTerminalTrainingTask.
+//
+// Resolution mirrors the other Enqueue* chokepoints (enqueueMentionTask):
+// child.IssueID -> GetIssue -> issue.ProjectID -> GetProject -> proj.EnvID, then
+// tryOpenTrainingSession. tryOpenTrainingSession already gates on s.Training ==
+// nil and logs errors loudly without failing the enqueue, so this helper is
+// best-effort: a resolution miss or session-open error is logged and skipped,
+// never failing the retry.
+func (s *TaskService) openFreshSessionForRetryChild(ctx context.Context, child db.AgentTaskQueue) {
+	if !child.IssueID.Valid {
+		return
+	}
+	issue, err := s.Queries.GetIssue(ctx, child.IssueID)
+	if err != nil {
+		slog.Warn("interaction_dag: retry child session open skipped: issue lookup failed",
+			"child_task_id", util.UUIDToString(child.ID),
+			"issue_id", util.UUIDToString(child.IssueID),
+			"error", err,
+		)
+		return
+	}
+	if !issue.ProjectID.Valid {
+		return
+	}
+	envID := ""
+	if proj, err := s.Queries.GetProject(ctx, issue.ProjectID); err == nil {
+		envID = util.UUIDToString(proj.EnvID)
+	} else {
+		slog.Warn("interaction_dag: retry child session open: project lookup failed",
+			"child_task_id", util.UUIDToString(child.ID),
+			"project_id", util.UUIDToString(issue.ProjectID),
+			"error", err,
+		)
+	}
+	s.tryOpenTrainingSession(ctx, child, issue.ProjectID, envID)
+}
+
 func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context, parentID pgtype.UUID) (db.AgentTaskQueue, error) {
 	if s.TxStarter == nil {
 		child, err := s.Queries.CreateRetryTask(ctx, parentID)

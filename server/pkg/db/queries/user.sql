@@ -21,22 +21,22 @@ WHERE name = $1;
 -- doesn't intend to write.
 --
 -- `timezone` (Viewing-tz preference) participates in
--- the same shape but uses sqlc.narg + a sentinel-string convention:
+-- the same shape but uses a sentinel-string convention:
 -- the handler passes the empty string "" to mean "clear back to NULL"
 -- (browser-detected fallback), an IANA name like "Asia/Shanghai" to
--- pin a value, and `sqlc.narg('timezone') IS NULL` (no value at all)
+-- pin a value, and a NULL $6 (no value at all)
 -- to leave the existing column untouched. Folding it into UpdateUser
 -- rather than carrying a dedicated UpdateUserTimezone keeps the
 -- profile-patch shape uniform between Preferences fields.
 UPDATE "user" SET
-    display_name = COALESCE(sqlc.narg('display_name'), display_name),
+    display_name = COALESCE($2, display_name),
     avatar_url = COALESCE($3, avatar_url),
     language = COALESCE($4, language),
-    profile_description = COALESCE(sqlc.narg('profile_description'), profile_description),
+    profile_description = COALESCE($5, profile_description),
     timezone = CASE
-        WHEN sqlc.narg('timezone')::text IS NULL THEN timezone
-        WHEN sqlc.narg('timezone')::text = ''    THEN NULL
-        ELSE sqlc.narg('timezone')::text
+        WHEN $6::text IS NULL THEN timezone
+        WHEN $6::text = ''    THEN NULL
+        ELSE $6::text
     END,
     updated_at = now()
 WHERE id = $1

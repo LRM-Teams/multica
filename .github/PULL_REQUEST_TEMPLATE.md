@@ -43,6 +43,7 @@ Closes #
 - [ ] If I added a new runtime / coding tool / UI tab, I synced the change to **landing copy** (`apps/web/features/landing/i18n/`) and **relevant docs** (`apps/docs/content/docs/`)
 - [ ] If this PR touches Chinese product copy, I checked it against `apps/docs/content/docs/developers/conventions.zh.mdx` (terminology, mixed-rule for `task` / `issue` / `skill`)
 - [ ] I have considered and documented any risks above
+- [ ] **Change takes effect at:** server deploy / daemon release / both (pick one)
 - [ ] I will address all reviewer comments before requesting merge
 
 ## AI Disclosure

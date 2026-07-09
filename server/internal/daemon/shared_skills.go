@@ -77,7 +77,7 @@ func sharedSkillScanRoot(cfg Config, provider string) (string, bool) {
 	if dir := strings.TrimSpace(cfg.SharedSkillsDir); dir != "" {
 		return dir, true
 	}
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return "", false
 	}

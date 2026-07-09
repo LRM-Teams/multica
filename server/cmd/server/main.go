@@ -332,6 +332,12 @@ func main() {
 	taskSvc := service.NewTaskService(queries, pool, hub, bus, daemonWakeup)
 	taskSvc.Analytics = analyticsClient
 	taskSvc.Metrics = businessMetrics
+	if tc := service.LoadTrainingConfig(); tc.BridgeStubURL != "" {
+		taskSvc.WithTraining(service.NewTrainingSessionDeps(tc, queries))
+		slog.Info("training bridge configured", "stub_url", tc.BridgeStubURL)
+	} else {
+		slog.Info("training bridge not configured (AREAL_BRIDGE_STUB_URL unset) — training hooks disabled")
+	}
 	autopilotSvc := service.NewAutopilotService(queries, pool, bus, taskSvc)
 	registerAutopilotListeners(bus, autopilotSvc)
 
@@ -345,7 +351,7 @@ func main() {
 	}
 
 	// Start background sweeper to mark stale runtimes as offline.
-	go runRuntimeSweeper(sweepCtx, queries, liveness, taskSvc, bus)
+	go runRuntimeSweeper(sweepCtx, queries, pool, liveness, taskSvc, bus)
 	go heartbeatScheduler.Run(sweepCtx)
 	go runAutopilotScheduler(autopilotCtx, queries, autopilotSvc)
 	go runAutopilotFailureMonitor(autopilotCtx, queries, bus, envFailureMonitorConfig())

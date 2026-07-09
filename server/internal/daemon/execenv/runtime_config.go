@@ -621,9 +621,9 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- Conversation context is scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
 		b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary. Do not load the entire parent channel/DM history by default.\n")
 		b.WriteString("- You have full access to the `multica` CLI to look up issues, workspace info, members, agents, etc.\n")
-		b.WriteString("- If asked about issues, use `multica issue list --output json` or `multica issue get <id> --output json`\n")
+		b.WriteString("- If asked about your assigned issues, use `multica issue list --mine --output json`; for general issue browsing, use `multica issue list --output json`, `multica issue get <id> --output json`, `multica issue search <query> --output json`, or `multica issue comment list <issue-id> --output json`\n")
 		b.WriteString("- If asked about the workspace, use `multica workspace get --output json`\n")
-		b.WriteString("- If asked to perform actions (create issues, update status, etc.), use the appropriate CLI commands\n")
+		b.WriteString("- Issue writes follow the Raft claim-first model: claim/own the issue before status/comment/field writes, do not mutate issues you did not claim, do not self-approve `in_review -> done`, and rely on message/system-event visibility for auditability.\n")
 		b.WriteString("- If the task requires code changes, use `multica repo checkout <url>` to get the code first. Use `--ref <branch-or-sha>` when you need an exact revision\n")
 		b.WriteString("- Keep responses concise and direct\n\n")
 	} else if ctx.QuickCreatePrompt != "" {
@@ -781,7 +781,29 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
 	b.WriteString("## Chat Mode\n\n")
-	b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Reply conversationally and directly; your final assistant output is sent back to the chat. Do not post issue comments or change issue status unless the user explicitly asks you to operate on an issue.\n\n")
+	// Directed reply requirement — only rendered for directed runs (DM,
+	// @mention, direct question, priority >= 2). Ambient runs never see
+	// this block, so they won't be pressured to reply to every message.
+	if ctx.Directed {
+		b.WriteString("### Reply Requirement (READ FIRST — overrides all rules below)\n\n")
+		b.WriteString("This run was triggered by a message directed at you: a DM, an @mention, or a direct question/reply addressed to you. **You MUST produce a visible response before finishing.** Acceptable responses, in order of preference:\n")
+		if ctx.ChatCLITransportUnavailable {
+			b.WriteString("1. Write the visible reply as your final assistant output (answer, result, or a brief acknowledgment).\n")
+			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica message react` or a sticker via `multica message send --sticker`.\n")
+			b.WriteString("Producing empty final output is **not** an option for this run.\n")
+		} else {
+			b.WriteString("1. A reply via `multica message send` (answer, result, or a brief acknowledgment).\n")
+			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica message react` or a sticker via `multica message send --sticker`.\n")
+		}
+		b.WriteString("\nNot responding is **not** an option for this run. Any rule below or elsewhere in this brief that permits silence, discourages unnecessary replies, or says \"no visible reply is warranted\" applies **only** to ambient channel messages that are not addressed to you — none of those rules apply to this run. If you are unsure whether to reply: reply.\n\n")
+	}
+	// Regular chat mode context (directed + ambient agents both see this;
+	// the Reply Requirement above tells them which parts apply).
+	if ctx.ChatCLITransportUnavailable {
+		b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Reply conversationally and directly. This run is using compatibility chat output: write the visible reply as your final assistant output, and the platform will deliver it to the current conversation. Do not try to find, install, or discuss chat send/react commands, missing tools, tokens, transport, or runtime setup. Do not print JSON envelopes, action objects, no_reply/stay_silent tokens, protocol text, debugging notes, or explanations that no visible reply is needed as the final answer. Any permission to finish with empty output here applies **only** to ambient channel messages not addressed to you — never to DMs, @mentions, or direct questions. Do not mutate issues as an incidental side effect of browsing; issue writes follow the claim-first issue model described below.\n\n")
+	} else {
+		b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Reply conversationally and directly by using the task-scoped Multica CLI transport for visible chat output. If no visible reply is warranted, do not send a message and do not print a no-reply rationale as final output (this applies **only** to ambient channel messages not addressed to you — never to DMs, @mentions, or direct questions). Do not mutate issues as an incidental side effect of browsing; issue writes follow the claim-first issue model described below.\n\n")
+	}
 	b.WriteString("Context boundaries:\n")
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
 	b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary; do not load the entire parent channel/DM history by default.\n")
@@ -790,12 +812,23 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("## Available Commands\n\n")
 	b.WriteString("Use `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help` to discover exact flags. Prefer `--output json` when reading data.\n\n")
 	b.WriteString("Common capabilities available when the user asks or the answer needs platform data:\n")
-	b.WriteString("- Issues: list/get/create/update issues, including status, assignee, parent/sub-issue, project, and due-date changes.\n")
-	b.WriteString("- Comments: read or add issue comments, including `multica issue comment add`, when the user explicitly asks you to work on an issue.\n")
+	if !ctx.ChatCLITransportUnavailable {
+		b.WriteString("- Chat output: send a visible reply with `multica message send --message \"...\"`, or use `--message-stdin` / `--message-file <path>` for longer bodies. For sticker replies use `multica message send --sticker <id>` for sticker-only social beats, or `multica message send --sticker <id> --message \"...\"` when you also need explanatory text in the same message (sticker first). Omit `--target` for the current DM/channel/thread; use `--target \"#channel\"`, `--target \"#channel:<message-id>\"`, or `--target \"dm:@handle\"` only when intentionally targeting another chat surface. After successful `multica message send`, do not repeat the same content in final assistant output.\n")
+		b.WriteString("- Chat reactions: add a reaction with `multica message react --message-id <message-id> --emoji \"...\"`; after successful `multica message react`, do not add a second visible final reply.\n")
+		b.WriteString("- Chat history: read the current or targeted surface with `multica message read [--target ...] [--limit N] --output json`, and search with `multica message search \"query\" [--target ...] --output json`.\n")
+	}
+	b.WriteString("- Issues: list/get/search issues; use `multica issue list --mine --output json` for issues assigned to the running agent. Existing-issue writes follow the Raft claim-first model: claim/own the issue before status/comment/field writes, do not mutate issues you did not claim, do not self-approve `in_review -> done`, and keep writes visible through message/system events.\n")
+	b.WriteString("- Comments: read issue comments with `multica issue comment list`; add comments with `multica issue comment add` only when you are operating on a claimed/owned issue or the user explicitly asks you to work on that issue.\n")
 	b.WriteString("- Issue metadata: inspect or update issue-specific persistent facts when explicitly working on an issue: `multica issue metadata list <issue-id>`, `multica issue metadata set <issue-id> --key <k> --value <v> [--type string|number|bool]`, `multica issue metadata delete <issue-id> --key <k>`.\n")
 	b.WriteString("- Projects/repos: inspect project resources and check out code with `multica repo checkout <url>`; use `--ref <branch-or-sha>` when you need an exact revision.\n")
 	b.WriteString("- Attachments: download chat or issue attachments with `multica attachment download <id>`.\n")
-	b.WriteString("- Workspace: inspect workspace info, members, agents, and squads when needed.\n\n")
+	b.WriteString("- Workspace: inspect workspace info, members, agents, and squads when needed.\n")
+	b.WriteString("- Channels: list channels you are a member of with `multica channel list`, inspect members with `multica channel members --target \"#channel\"`.\n")
+	b.WriteString("- Channel attention: mute a channel (`multica channel mute --target \"#channel\"`) or unmute it (`multica channel unmute --target \"#channel\"`). Muting stops ambient delivery; personal @mentions and DMs still arrive.\n")
+	if !ctx.ChatCLITransportUnavailable {
+		b.WriteString("- Thread attention: unfollow a thread with `multica thread unfollow --target \"#channel:<message-id>\"`. Personal @mentions still arrive; posting re-follows automatically.\n")
+	}
+	b.WriteString("\n")
 	b.WriteString("Do not run issue commands just because you are in chat. Use them only when the user asks about an issue/task/project/repo or the answer needs that platform data.\n\n")
 
 	renderRepositoryContext(b, ctx)
@@ -812,7 +845,11 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("All interactions with Multica platform resources — issues, comments, attachments, images, files, and platform data — must go through the `multica` CLI. Do NOT use `curl`, `wget`, or other HTTP clients to access Multica URLs or APIs directly.\n\n")
 
 	b.WriteString("## Output\n\n")
-	b.WriteString("Reply directly in your final assistant output. The platform sends that output to the chat. Keep responses concise and natural, and state the outcome rather than the process.\n")
+	if ctx.ChatCLITransportUnavailable {
+		b.WriteString("For visible chat replies, write the user-facing message as your final assistant output. Keep it concise and natural, state the outcome rather than the process, and never mention compatibility mode, missing tools, tokens, CLI transport, or runtime setup.\n")
+	} else {
+		b.WriteString("For visible chat replies, run `multica message send` or `multica message react`. After the command succeeds, leave final assistant output empty or minimal so the platform does not receive a duplicate answer. Keep sent messages concise and natural, and state the outcome rather than the process.\n")
+	}
 }
 
 func renderRepositoryContext(b *strings.Builder, ctx TaskContextForEnv) {

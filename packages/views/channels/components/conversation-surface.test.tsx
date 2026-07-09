@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
-  ChannelComposer,
+  Composer,
   getMobileVisualViewportStyle,
   MobileThreadDrawerContent,
 } from "./conversation-surface";
@@ -32,10 +32,11 @@ describe("mobile thread drawer viewport sizing", () => {
   });
 });
 
-describe("ChannelComposer", () => {
+describe("Composer (re-exported from conversation-surface)", () => {
   it("keeps editor media in the scroll area while actions stay fixed below it", () => {
     render(
-      <ChannelComposer
+      <Composer
+        surface="channel"
         editor={<div data-testid="composer-editor">Editor</div>}
         sendLabel="Send"
         sendDisabled={false}

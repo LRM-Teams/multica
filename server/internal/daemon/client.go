@@ -216,13 +216,19 @@ func (c *Client) ReportTaskMessages(ctx context.Context, taskID string, messages
 	}, nil)
 }
 
-func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, action, outputType, sessionID, workDir string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload) error {
+func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, action, target string, options *protocol.ChatOutputOptions, outputType, sessionID, workDir string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload) error {
 	body := map[string]any{"output": output}
 	if branchName != "" {
 		body["branch_name"] = branchName
 	}
 	if action != "" {
 		body["action"] = action
+	}
+	if target != "" {
+		body["target"] = target
+	}
+	if options != nil {
+		body["options"] = options
 	}
 	if outputType != "" {
 		body["type"] = outputType

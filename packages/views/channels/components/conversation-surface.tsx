@@ -1,10 +1,14 @@
 "use client";
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { Send } from "lucide-react";
-import { Button } from "@multica/ui/components/ui/button";
 import { DrawerContent } from "@multica/ui/components/ui/drawer";
 import { cn } from "@multica/ui/lib/utils";
+
+// The composer shell moved into its own module (`composer.tsx`) as the unified
+// `<Composer surface=... />` (#198 B1). Re-exported here so existing importers
+// keep working while call sites migrate.
+export { Composer, type ComposerSurface, type ComposerProps } from "./composer";
+export { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
 
 export function ConversationHeader({
   isMobile,
@@ -28,7 +32,16 @@ export function ConversationHeader({
         isMobile ? "px-2" : "px-5",
       )}
     >
-      <div className={cn("flex min-w-0 items-center", isMobile ? "gap-2" : "gap-2.5")}>
+      {/* Desktop `pl-2` aligns the header avatar + title with the message
+          column (message rows sit at px-5 + the bubble's px-2 = a matching
+          left edge), so the header avatar and every message avatar share one
+          vertical line. Mobile keeps its tighter gutter. */}
+      <div
+        className={cn(
+          "flex min-w-0 items-center",
+          isMobile ? "gap-2" : "gap-2.5 pl-2",
+        )}
+      >
         {leading}
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-1.5 text-sm font-semibold leading-5">
@@ -48,30 +61,6 @@ export function ConversationHeader({
         </div>
       )}
     </header>
-  );
-}
-
-export function ComposerShell({
-  children,
-  isMobile = false,
-}: {
-  children: ReactNode;
-  isMobile?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        "shrink-0",
-        isMobile ? "px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]" : "px-5 pb-4",
-      )}
-    >
-      <div
-        className="composer-shell min-w-0 rounded-lg border border-border/35 bg-background shadow-none"
-        data-slot="composer-shell"
-      >
-        {children}
-      </div>
-    </div>
   );
 }
 
@@ -139,65 +128,3 @@ export function MobileThreadDrawerContent({
   );
 }
 
-export function ChannelComposer({
-  editor,
-  sendLabel,
-  sendDisabled,
-  sending = false,
-  onSend,
-  isMobile,
-  prefix,
-  leadingActions,
-}: {
-  editor: ReactNode;
-  sendLabel: string;
-  sendDisabled: boolean;
-  sending?: boolean;
-  onSend: () => void;
-  isMobile: boolean;
-  prefix?: ReactNode;
-  leadingActions?: ReactNode;
-}) {
-  return (
-    <ComposerShell isMobile={isMobile}>
-      {prefix}
-      <div
-        className={cn(
-          "composer-editor-scroll min-h-16 overflow-y-auto px-4 pt-3 overscroll-contain",
-          isMobile ? "max-h-[28dvh]" : "max-h-40",
-        )}
-        data-slot="composer-editor-scroll"
-      >
-        {editor}
-      </div>
-      <div
-        className={cn("flex items-center justify-between px-2 pb-2", isMobile && "gap-2")}
-        data-slot="composer-action-row"
-      >
-        <div className="flex min-h-8 min-w-0 flex-1 items-center gap-0.5 overflow-x-auto text-muted-foreground">
-          {leadingActions}
-        </div>
-        <Button
-          onClick={onSend}
-          disabled={sendDisabled || sending}
-          size="sm"
-          className={cn("shrink-0", isMobile && "min-h-10 px-4")}
-        >
-          <Send className="size-4" /> {sendLabel}
-        </Button>
-      </div>
-    </ComposerShell>
-  );
-}
-
-export function ReadOnlyConversationBanner({
-  children,
-}: {
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-2 border-t border-border/25 px-5 py-3 text-sm text-muted-foreground">
-      {children}
-    </div>
-  );
-}

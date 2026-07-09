@@ -131,6 +131,144 @@ func TestGetMemberProfile_UserOmitsEmailAndUsesProfileDescription(t *testing.T) 
 	}
 }
 
+func TestListWorkspaces_LastActiveWorkspaceContract(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	const slug = "handler-tests-last-active"
+	const secondaryEmail = "handler-tests-last-active-secondary@multica.ai"
+	_, _ = testPool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, slug)
+	_, _ = testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, secondaryEmail)
+
+	var secondaryUserID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO "user" (name, email)
+VALUES ($1, $2)
+RETURNING id
+`, "Last Active Secondary", secondaryEmail).Scan(&secondaryUserID); err != nil {
+		t.Fatalf("create secondary user: %v", err)
+	}
+
+	var wsID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO workspace (name, slug, description, issue_prefix)
+VALUES ($1, $2, $3, $4)
+RETURNING id
+`, "Last Active Workspace", slug, "last-active contract test", "LAW").Scan(&wsID); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, wsID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, secondaryUserID)
+	})
+
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO member (workspace_id, user_id, role)
+VALUES ($1, $2, 'owner'), ($1, $3, 'member')
+`, wsID, testUserID, secondaryUserID); err != nil {
+		t.Fatalf("create members: %v", err)
+	}
+
+	var initiallyActive bool
+	if err := testPool.QueryRow(ctx, `
+SELECT last_active_at IS NOT NULL
+FROM member
+WHERE workspace_id = $1 AND user_id = $2
+`, wsID, testUserID).Scan(&initiallyActive); err != nil {
+		t.Fatalf("query initial last_active_at: %v", err)
+	}
+	if initiallyActive {
+		t.Fatal("expected new member last_active_at to start NULL")
+	}
+
+	wRequire := httptest.NewRecorder()
+	reqRequire := newRequestAs(testUserID, http.MethodGet, "/api/workspaces/"+wsID, nil)
+	if _, ok := testHandler.requireWorkspaceMember(wRequire, reqRequire, wsID, "workspace not found"); !ok {
+		t.Fatalf("requireWorkspaceMember failed: %d %s", wRequire.Code, wRequire.Body.String())
+	}
+
+	var touched bool
+	if err := testPool.QueryRow(ctx, `
+SELECT last_active_at IS NOT NULL
+FROM member
+WHERE workspace_id = $1 AND user_id = $2
+`, wsID, testUserID).Scan(&touched); err != nil {
+		t.Fatalf("query touched last_active_at: %v", err)
+	}
+	if !touched {
+		t.Fatal("expected workspace membership validation to persist last_active_at")
+	}
+
+	listWorkspaces := func(userID string) []WorkspaceResponse {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := newRequestAs(userID, http.MethodGet, "/api/workspaces", nil)
+		testHandler.ListWorkspaces(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("ListWorkspaces(%s): expected 200, got %d: %s", userID, w.Code, w.Body.String())
+		}
+		var resp []WorkspaceResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode ListWorkspaces(%s): %v", userID, err)
+		}
+		return resp
+	}
+	findWorkspace := func(workspaces []WorkspaceResponse, id string) (WorkspaceResponse, bool) {
+		t.Helper()
+		for _, ws := range workspaces {
+			if ws.ID == id {
+				return ws, true
+			}
+		}
+		return WorkspaceResponse{}, false
+	}
+
+	resp, ok := findWorkspace(listWorkspaces(testUserID), wsID)
+	if !ok {
+		t.Fatalf("touched workspace %s missing from owner ListWorkspaces", wsID)
+	}
+	if resp.LastActiveAt == nil || *resp.LastActiveAt == "" {
+		t.Fatalf("owner ListWorkspaces last_active_at = %v, want non-empty", resp.LastActiveAt)
+	}
+
+	wLogout := httptest.NewRecorder()
+	testHandler.Logout(wLogout, newRequestAs(testUserID, http.MethodPost, "/api/logout", nil))
+	if wLogout.Code != http.StatusOK {
+		t.Fatalf("Logout: expected 200, got %d: %s", wLogout.Code, wLogout.Body.String())
+	}
+	var stillActive bool
+	if err := testPool.QueryRow(ctx, `
+SELECT last_active_at IS NOT NULL
+FROM member
+WHERE workspace_id = $1 AND user_id = $2
+`, wsID, testUserID).Scan(&stillActive); err != nil {
+		t.Fatalf("query post-logout last_active_at: %v", err)
+	}
+	if !stillActive {
+		t.Fatal("logout must not clear server-side member last_active_at")
+	}
+
+	secondaryResp, ok := findWorkspace(listWorkspaces(secondaryUserID), wsID)
+	if !ok {
+		t.Fatalf("shared workspace %s missing from secondary user's ListWorkspaces", wsID)
+	}
+	if secondaryResp.LastActiveAt != nil {
+		t.Fatalf("secondary user saw owner last_active_at %q; want nil member-scoped value", *secondaryResp.LastActiveAt)
+	}
+
+	if _, err := testPool.Exec(ctx, `
+DELETE FROM member
+WHERE workspace_id = $1 AND user_id = $2
+`, wsID, testUserID); err != nil {
+		t.Fatalf("remove owner membership: %v", err)
+	}
+	if inaccessible, ok := findWorkspace(listWorkspaces(testUserID), wsID); ok {
+		t.Fatalf("inaccessible workspace still surfaced in ListWorkspaces: %#v", inaccessible)
+	}
+}
+
 // TestCreateWorkspace_DoesNotMarkOnboarded guards the onboarding
 // contract: creating a workspace MUST leave user.onboarded_at NULL so
 // the route guard in apps/web/app/[workspaceSlug]/layout.tsx (and the

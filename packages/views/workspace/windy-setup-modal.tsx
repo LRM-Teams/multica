@@ -9,7 +9,7 @@ import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { dmKeys } from "@multica/core/dm";
 import { runtimeListOptions } from "@multica/core/runtimes";
-import { memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
+import { agentListOptions, memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import type { Agent } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -31,6 +31,7 @@ import {
   WINDY_DESCRIPTION,
   WINDY_INSTRUCTIONS,
 } from "../onboarding/templates";
+import { accountHasConfiguredWindy } from "./windy-setup-detection";
 
 const WINDY_SETUP_VERSION = "2026-07-03-windy-v1";
 
@@ -50,14 +51,24 @@ function isStorageKeyDone(storageKey: string | null): boolean {
   return !!storageKey && typeof window !== "undefined" && window.localStorage.getItem(storageKey) === "done";
 }
 
-export function WindySetupModal() {
+type WindySetupModalProps = {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  onConfigured?: (agent: Agent, dmId?: string) => void;
+};
+
+export function WindySetupModal({ open, onOpenChange, onConfigured }: WindySetupModalProps = {}) {
   const { t } = useT("workspace");
   const wsId = useWorkspaceId();
   const user = useAuthStore((s) => s.user);
   const qc = useQueryClient();
   const { data: runtimes = [], isLoading: runtimesLoading, refetch: refetchRuntimes } = useQuery(runtimeListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: agents = [], isFetched: agentsFetched } = useQuery(agentListOptions(wsId));
   const storageKey = user ? setupStorageKey(wsId, user.id) : null;
+  // An account that already has a Wendy agent with a runtime configured has
+  // been through setup — a WINDY_SETUP_VERSION bump must not re-block it (#219).
+  const hasConfiguredWendy = useMemo(() => accountHasConfiguredWindy(agents), [agents]);
   const [{ configuredKey, selectedRuntimeId, model, thinkingLevel, saving }, updateState] = useReducer(
     (state: WindySetupState, patch: Partial<WindySetupState>) => ({ ...state, ...patch }),
     {
@@ -79,9 +90,32 @@ export function WindySetupModal() {
     [effectiveRuntimeId, runtimes],
   );
 
-  if (!user || !storageKey || configuredKey === storageKey || isStorageKeyDone(storageKey)) return null;
+  const manualOpen = open === true;
+  const autoOpen =
+    open === undefined &&
+    !!user &&
+    !!storageKey &&
+    configuredKey !== storageKey &&
+    !isStorageKeyDone(storageKey) &&
+    agentsFetched &&
+    !hasConfiguredWendy;
+
+  if (!user || !storageKey || !agentsFetched || (!manualOpen && !autoOpen)) {
+    return null;
+  }
 
   const hasUsableRuntime = runtimes.some((r) => isRuntimeUsableForUser(r, user.id));
+
+  // Dismiss without setting up — the setup is a one-time nudge, never a hard
+  // block. Mark the version done so declining (or a failed discovery) doesn't
+  // re-trap the user out of channels/issues.
+  const handleDismiss = () => {
+    if (open === undefined) {
+      if (storageKey && typeof window !== "undefined") window.localStorage.setItem(storageKey, "done");
+      updateState({ configuredKey: storageKey });
+    }
+    onOpenChange?.(false);
+  };
 
   const handleSubmit = async () => {
     if (!storageKey || !effectiveRuntimeId || saving) return;
@@ -111,18 +145,24 @@ export function WindySetupModal() {
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
       window.localStorage.setItem(storageKey, "done");
       updateState({ configuredKey: storageKey });
-      toast.success("Windy is ready and pinned in Direct Messages.");
+      onConfigured?.(updated, ensured.dm_id);
+      onOpenChange?.(false);
+      toast.success("Wendy is ready and pinned in Direct Messages.");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to set up Windy");
+      toast.error(err instanceof Error ? err.message : "Failed to set up Wendy");
     } finally {
       updateState({ saving: false });
     }
   };
 
   return (
-    <Dialog open onOpenChange={() => {}}>
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) handleDismiss();
+      }}
+    >
       <DialogContent
-        showCloseButton={false}
         className="max-h-[90vh] max-w-[min(920px,calc(100vw-2rem))] gap-0 overflow-hidden border-0 bg-background p-0 shadow-2xl sm:rounded-3xl"
       >
         <DialogHeader className="relative overflow-hidden border-b bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.16),transparent_34%),linear-gradient(135deg,hsl(var(--muted)/0.78),hsl(var(--background))_58%)] px-6 py-5">
@@ -212,15 +252,20 @@ export function WindySetupModal() {
           <p className="text-xs text-muted-foreground">
             {t(($) => $.windy_setup.runtime_move_note)}
           </p>
-          <Button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!effectiveRuntimeId || saving || !hasUsableRuntime}
-            className={cn("min-w-32", saving && "cursor-wait")}
-          >
-            {saving ? <Loader2 className="size-4 animate-spin" /> : null}
-            {t(($) => $.windy_setup.update)}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="ghost" onClick={handleDismiss} disabled={saving}>
+              {t(($) => $.windy_setup.later)}
+            </Button>
+            <Button
+              type="button"
+              onClick={handleSubmit}
+              disabled={!effectiveRuntimeId || saving || !hasUsableRuntime}
+              className={cn("min-w-32", saving && "cursor-wait")}
+            >
+              {saving ? <Loader2 className="size-4 animate-spin" /> : null}
+              {t(($) => $.windy_setup.update)}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

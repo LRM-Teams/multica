@@ -78,6 +78,18 @@ INSERT INTO issue (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
 ) RETURNING *;
 
+-- name: CreateIssueWithMetadata :one
+-- Same as CreateIssue but accepts a pre-built metadata JSONB object so the
+-- env-dispatch adapter can stamp acceptance_criteria / fail_to_pass /
+-- pass_to_pass in one round trip instead of three SetIssueMetadataKey calls.
+INSERT INTO issue (
+    workspace_id, title, description, status, priority,
+    assignee_type, assignee_id, creator_type, creator_id,
+    parent_issue_id, position, start_date, due_date, number, project_id, metadata
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+) RETURNING *;
+
 -- name: GetIssueByNumber :one
 SELECT * FROM issue
 WHERE workspace_id = $1 AND number = $2;
@@ -314,3 +326,17 @@ UPDATE issue
 SET first_executed_at = now()
 WHERE id = $1 AND first_executed_at IS NULL
 RETURNING id, workspace_id, creator_type, creator_id, first_executed_at;
+
+-- name: ListIssuesByProject :many
+SELECT * FROM issue
+WHERE project_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC;
+
+-- name: SetIssueAssignee :exec
+-- Sets an issue's assignee (type + id) within its workspace. Used by
+-- env-dispatch squad dispatch to mark the issue assignee_type='squad' so the
+-- squad-leader task ownership rules apply. The workspace_id predicate keeps
+-- the tenant invariant a SQL-layer guarantee (see DeleteIssue).
+UPDATE issue
+   SET assignee_type = $2, assignee_id = $3
+ WHERE id = $1 AND workspace_id = $4;

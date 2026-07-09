@@ -5,6 +5,7 @@
   },
   "sidebar": {
     "heading": "メッセージ",
+    "mention_indicator": "メンションされました",
     "search": "会話を検索...",
     "no_conversation_matches": "一致する会話がありません",
     "search_scope_hint": "左側は会話リストのみを絞り込みます。メッセージ本文を検索するには、会話を開いて右上のメッセージ検索を使ってください。",
@@ -144,7 +145,18 @@
     "empty_replies": "返信はまだありません。",
     "load_failed": "スレッドの読み込みに失敗しました。",
     "send_failed": "スレッド返信の送信に失敗しました。",
-    "composer_placeholder": "スレッドで返信..."
+    "composer_placeholder": "スレッドで返信...",
+    "back_to_conversation": "会話に戻る",
+    "participants_label": "参加者",
+    "follow": "スレッドをフォロー",
+    "following": "フォロー中",
+    "show_in_channel_label": "チャンネルにも表示",
+    "from_thread_badge": "スレッドから",
+    "wake_pending": "返信待ち",
+    "wake_replied": "返信済み",
+    "wake_acked": "確認済み",
+    "wake_delivered": "配信済み",
+    "wake_no_reply": "返信なし"
   },
   "typing": {
     "single": "{{name}} が入力中",
@@ -178,7 +190,9 @@
   },
   "message": {
     "add_reaction": "リアクションを追加",
+    "actions_menu": "メッセージ操作",
     "copy_action": "コピー",
+    "expand_action": "全文を表示",
     "copied_toast": "コピーしました",
     "copy_failed_toast": "コピーに失敗しました",
     "sticker_alt": "ステッカー",
@@ -186,12 +200,22 @@
     "sticker_failed": "ステッカーを読み込めませんでした",
     "sticker_unavailable": "ステッカーは利用できません",
     "agent_badge": "Agent",
-    "feishu_badge": "Feishu"
+    "feishu_badge": "Feishu",
+    "edit_action": "編集",
+    "delete_action": "削除",
+    "edited_label": "（編集済み）",
+    "deleted_placeholder": "このメッセージは削除されました",
+    "save_edit": "保存",
+    "cancel_edit": "キャンセル",
+    "edit_failed_toast": "メッセージを編集できませんでした",
+    "delete_failed_toast": "メッセージを削除できませんでした"
   },
   "dm": {
     "heading": "ダイレクトメッセージ",
     "empty": "ダイレクトメッセージはまだありません。",
     "empty_cta": "チャットを始める",
+    "wendy_title": "Ask Wendy",
+    "wendy_description": "Wendy can help you turn real work into useful agents.",
     "new_aria": "新しいダイレクトメッセージ",
     "menu_aria": "ダイレクトメッセージの操作",
     "agent_meta": "エージェント",

@@ -6,11 +6,8 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { sanitizeNextUrl, useAuthStore } from "@multica/core/auth";
 import { useConfigStore } from "@multica/core/config";
 import { workspaceKeys } from "@multica/core/workspace/queries";
-import {
-  paths,
-  resolvePostAuthDestination,
-  useHasOnboarded,
-} from "@multica/core/paths";
+import { paths, useHasOnboarded } from "@multica/core/paths";
+import { resolveLoggedInDestination } from "@/features/auth/resolve-logged-in-destination";
 import { api } from "@multica/core/api";
 import type { Workspace } from "@multica/core/types";
 import {
@@ -35,25 +32,6 @@ import { useT } from "@multica/views/i18n";
  * resolver. A network blip on listMyInvitations is non-fatal — we fall
  * through rather than trap the user on an error screen.
  */
-async function resolveLoggedInDestination(
-  qc: QueryClient,
-  hasOnboarded: boolean,
-  workspaces: Workspace[],
-): Promise<string> {
-  if (!hasOnboarded) {
-    try {
-      const invites = await api.listMyInvitations();
-      if (invites.length > 0) {
-        qc.setQueryData(workspaceKeys.myInvitations(), invites);
-        return paths.invitations();
-      }
-    } catch {
-      // fall through
-    }
-  }
-  return resolvePostAuthDestination(workspaces, hasOnboarded);
-}
-
 function LoginPageContent() {
   const router = useRouter();
   const qc = useQueryClient();
@@ -73,6 +51,24 @@ function LoginPageContent() {
   // the user's workspace list. Sanitize first so a crafted `?next=https://evil`
   // cannot bounce the user off-origin after a successful login.
   const nextUrl = sanitizeNextUrl(searchParams.get("next"));
+
+  // The OAuth callback route redirects failures back to /login?error=<code>
+  // (confined to missing_code / access_denied / login_failed). Map the known
+  // codes to localized copy and fall back to a generic message for anything
+  // else — never render a raw provider string. Seeds the LoginPage error line
+  // so a bounced sign-in explains itself instead of showing a blank form.
+  const errorParam = searchParams.get("error");
+  const initialError = errorParam
+    ? t(($) =>
+        errorParam === "access_denied"
+          ? $.errors.oauth_access_denied
+          : errorParam === "missing_code"
+            ? $.errors.oauth_missing_code
+            : errorParam === "login_failed"
+              ? $.errors.oauth_login_failed
+              : $.errors.oauth_generic,
+      )
+    : undefined;
 
   const [desktopToken, setDesktopToken] = useState<string | null>(null);
   const [desktopError, setDesktopError] = useState("");
@@ -187,6 +183,7 @@ function LoginPageContent() {
   return (
     <LoginPage
       onSuccess={handleSuccess}
+      initialError={initialError}
       google={
         googleClientId
           ? {

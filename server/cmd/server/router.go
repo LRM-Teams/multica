@@ -922,12 +922,20 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/archive", h.ArchiveAgent)
 					r.Post("/restore", h.RestoreAgent)
 					r.Post("/cancel-tasks", h.CancelAgentTasks)
+					r.Get("/health", h.GetAgentHealth)
+					r.Get("/activity", h.ListAgentActivity)
+					r.Get("/activity/{activityId}", h.GetAgentActivity)
+					r.Get("/activity/{activityId}/steps", h.ListAgentActivitySteps)
+					r.Get("/activity/{activityId}/diagnostic", h.GetAgentActivityDiagnostic)
 					r.Get("/tasks", h.ListAgentTasks)
 					r.Get("/skills", h.ListAgentSkills)
 					r.Put("/skills", h.SetAgentSkills)
 					r.Get("/skill-suggestions", h.ListAgentSkillSuggestions)
 					r.Post("/skill-suggestions/{suggestionId}/decision", h.DecideAgentSkillSuggestion)
 					r.Get("/memories", h.ListAgentMemories)
+					r.Get("/files", h.ListAgentFiles)
+					r.Get("/files/content", h.GetAgentFileContent)
+					r.Put("/files/content", h.UpdateAgentFileContent)
 					r.Post("/skills/add", h.AddAgentSkills)
 					// Dedicated env-management endpoint. Owner/admin only;
 					// agent actors are denied. Every reveal / write is
@@ -951,6 +959,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/", h.ListSkills)
 				r.Post("/", h.CreateSkill)
 				r.Get("/search", h.SearchSkills)
+				r.Get("/platform", h.ListPlatformSkills)
+				r.Post("/platform/{name}/install", h.InstallPlatformSkill)
 				r.Post("/import", h.ImportSkill)
 				r.Route("/{id}", func(r chi.Router) {
 					r.Get("/", h.GetSkill)
@@ -1014,7 +1024,23 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/nodes/reboot", h.RebootCloudRuntimeNode)
 				r.Post("/nodes/status", h.GetCloudRuntimeNodeStatus)
 				r.Post("/nodes/exec", h.ExecCloudRuntimeNode)
+				r.Post("/sandboxes/{sandboxID}/snapshot", h.SnapshotCloudRuntimeSandbox)
+				r.Post("/sandboxes/fork", h.ForkCloudRuntimeSandbox)
 			})
+
+			// Unified env-dispatch API (spec §6). Replaces the SWE-Lego-only
+			// route group with the four endpoints backing the env-state model.
+			r.Post("/api/v1/env", h.CreateEnv)
+			r.Delete("/api/v1/env/{envID}", h.DeleteEnv)
+			r.Post("/api/v1/env-dispatch", h.EnvDispatch)
+			r.Delete("/api/v1/env-dispatch/{projectID}", h.DeleteEnvDispatchProject)
+
+			// Env-checkpoint APIs. Gated by ENV_CHECKPOINTS_ENABLED; handlers
+			// return 404 when disabled so AReaL clients can detect the gate.
+			r.Post("/api/v1/env-checkpoints", h.CreateEnvCheckpoint)
+			r.Get("/api/v1/env-checkpoints/{checkpointID}", h.GetEnvCheckpoint)
+			r.Post("/api/v1/env-checkpoints/{checkpointID}/resume", h.ResumeEnvCheckpoint)
+			r.Get("/api/v1/projects/{projectID}/env-checkpoints", h.ListEnvCheckpoints)
 
 			// Tasks (user-facing, with ownership check)
 			r.Post("/api/tasks/{taskId}/cancel", h.CancelTaskByUser)
@@ -1051,6 +1077,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Agent-initiated 1:1 DM to the human it's working for. Agent-only
 			// (resolveActor must be "agent"); human callers get 403.
 			r.Post("/api/chat/agent-dm", h.AgentDirectMessage)
+
+			// Agent task-token chat transport. These routes intentionally live
+			// on the regular Auth API so task tokens use the same workspace and
+			// permission chain as other channel operations.
+			r.Post("/api/agent/messages/send", h.AgentTransportSendMessage)
+			r.Post("/api/agent/messages/react", h.AgentTransportReactMessage)
+			r.Post("/api/agent/messages/read", h.AgentTransportReadMessages)
+			r.Post("/api/agent/messages/search", h.AgentTransportSearchMessages)
 
 			// Unified 1-on-1 DM list (kind='dm' channels ∪ legacy unbound chat
 			// sessions) plus idempotent create-or-find. Sole data source for the
@@ -1096,6 +1130,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/messages", h.ListChannelMessages)
 					r.Get("/messages/search", h.SearchChannelMessages)
 					r.Post("/messages", h.SendChannelMessage)
+					r.Patch("/messages/{messageId}", h.UpdateChannelMessage)
+					r.Delete("/messages/{messageId}", h.DeleteChannelMessage)
 					r.Get("/messages/{messageId}/thread", h.ListChannelMessageThread)
 					r.Post("/messages/{messageId}/reactions", h.AddChannelMessageReaction)
 					r.Delete("/messages/{messageId}/reactions", h.RemoveChannelMessageReaction)

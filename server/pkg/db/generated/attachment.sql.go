@@ -231,6 +231,43 @@ func (q *Queries) LinkAttachmentsToIssue(ctx context.Context, arg LinkAttachment
 	return err
 }
 
+const linkOwnedAttachmentsToChannelMessage = `-- name: LinkOwnedAttachmentsToChannelMessage :exec
+UPDATE attachment
+SET channel_id = $1, channel_message_id = $2
+WHERE workspace_id = $3
+  AND uploader_type = $4
+  AND uploader_id = $5
+  AND channel_id IS NULL
+  AND channel_message_id IS NULL
+  AND id = ANY($6::uuid[])
+`
+
+type LinkOwnedAttachmentsToChannelMessageParams struct {
+	ChannelID        pgtype.UUID   `json:"channel_id"`
+	ChannelMessageID pgtype.UUID   `json:"channel_message_id"`
+	WorkspaceID      pgtype.UUID   `json:"workspace_id"`
+	UploaderType     string        `json:"uploader_type"`
+	UploaderID       pgtype.UUID   `json:"uploader_id"`
+	AttachmentIds    []pgtype.UUID `json:"attachment_ids"`
+}
+
+// Binds channel_id + channel_message_id together for attachments the CLI
+// uploaded unbound (target channel isn't known until send-time server-side
+// resolution). Scoped by uploader ownership instead of a pre-existing
+// channel_id match, since the human-message upload flow's channel_id-set-at-
+// upload-time authorization isn't available here.
+func (q *Queries) LinkOwnedAttachmentsToChannelMessage(ctx context.Context, arg LinkOwnedAttachmentsToChannelMessageParams) error {
+	_, err := q.db.Exec(ctx, linkOwnedAttachmentsToChannelMessage,
+		arg.ChannelID,
+		arg.ChannelMessageID,
+		arg.WorkspaceID,
+		arg.UploaderType,
+		arg.UploaderID,
+		arg.AttachmentIds,
+	)
+	return err
+}
+
 const listAttachmentURLsByCommentID = `-- name: ListAttachmentURLsByCommentID :many
 SELECT url FROM attachment
 WHERE comment_id = $1

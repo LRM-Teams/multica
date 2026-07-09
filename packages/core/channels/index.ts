@@ -38,6 +38,8 @@ export {
   useSetChannelMuted,
   useSendChannelMessage,
   useSendChannelThreadMessage,
+  useEditChannelMessage,
+  useDeleteChannelMessage,
   useAddChannelReaction,
   useRemoveChannelReaction,
   useMarkChannelRead,
@@ -49,3 +51,4 @@ export {
   useAddChannelMembers,
   useRemoveChannelMember,
 } from "./mutations";
+export { useComposerDraftStore, type ComposerDraftKey } from "./stores";

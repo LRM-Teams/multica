@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -94,6 +95,12 @@ type SkillSearchCandidateResponse struct {
 	InstallCount *int64  `json:"install_count"`
 	GitHubStars  *int64  `json:"github_stars"`
 	Description  string  `json:"description"`
+}
+
+type PlatformSkillSummaryResponse struct {
+	Name             string  `json:"name"`
+	Description      string  `json:"description"`
+	InstalledSkillID *string `json:"installed_skill_id,omitempty"`
 }
 
 type SkillWithFilesResponse struct {
@@ -315,6 +322,99 @@ func (h *Handler) SearchSkills(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, candidates)
+}
+
+func (h *Handler) ListPlatformSkills(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	workspaceUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+
+	installable := service.ListInstallableSkills()
+	resp := make([]PlatformSkillSummaryResponse, 0, len(installable))
+	for _, sk := range installable {
+		item := PlatformSkillSummaryResponse{Name: sk.Name, Description: sk.Description}
+		if existing, err := h.Queries.GetSkillByWorkspaceAndName(r.Context(), db.GetSkillByWorkspaceAndNameParams{
+			WorkspaceID: workspaceUUID,
+			Name:        sk.Name,
+		}); err == nil {
+			id := uuidToString(existing.ID)
+			item.InstalledSkillID = &id
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "failed to list platform skills")
+			return
+		}
+		resp = append(resp, item)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) InstallPlatformSkill(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	creatorID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+
+	name := chi.URLParam(r, "name")
+	bundle, found := service.LoadInstallableSkill(name)
+	if !found {
+		writeError(w, http.StatusNotFound, "platform skill not found")
+		return
+	}
+
+	if existing, err := h.Queries.GetSkillByWorkspaceAndName(r.Context(), db.GetSkillByWorkspaceAndNameParams{
+		WorkspaceID: workspaceUUID,
+		Name:        bundle.Name,
+	}); err == nil {
+		files, err := h.Queries.ListSkillFiles(r.Context(), existing.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list skill files")
+			return
+		}
+		fileResps := make([]SkillFileResponse, len(files))
+		for i, f := range files {
+			fileResps[i] = skillFileToResponse(f)
+		}
+		writeJSON(w, http.StatusOK, SkillWithFilesResponse{SkillResponse: skillToResponse(existing), Files: fileResps})
+		return
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "failed to install platform skill")
+		return
+	}
+
+	files := make([]CreateSkillFileRequest, 0, len(bundle.Files))
+	for _, f := range bundle.Files {
+		files = append(files, CreateSkillFileRequest{Path: f.Path, Content: f.Content})
+	}
+	resp, err := h.createSkillWithFiles(r.Context(), skillCreateInput{
+		WorkspaceID: workspaceUUID,
+		CreatorID:   parseUUID(creatorID),
+		Name:        bundle.Name,
+		Description: bundle.Description,
+		Content:     bundle.Content,
+		Config: map[string]any{
+			"origin": map[string]any{
+				"type": "platform",
+				"key":  bundle.Name,
+			},
+		},
+		Files: files,
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			writeError(w, http.StatusConflict, "a skill with this name already exists")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to install platform skill")
+		return
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 func (h *Handler) GetSkill(w http.ResponseWriter, r *http.Request) {
@@ -2241,6 +2341,6 @@ func (h *Handler) writeUpdatedAgentSkills(w http.ResponseWriter, r *http.Request
 		)
 	}
 	actorType, actorID := h.resolveActor(r, requestUserID(r), uuidToString(agent.WorkspaceID))
-	h.publish(protocol.EventAgentStatus, uuidToString(agent.WorkspaceID), actorType, actorID, map[string]any{"agent_id": uuidToString(agent.ID), "skills": resp})
+	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(agent.WorkspaceID), actorType, actorID, agent, map[string]any{"agent_id": uuidToString(agent.ID), "skills": resp})
 	writeJSON(w, http.StatusOK, resp)
 }

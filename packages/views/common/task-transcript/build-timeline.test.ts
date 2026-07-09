@@ -101,4 +101,29 @@ describe("task transcript timeline", () => {
 
     expect(items[0]?.created_at).toBe("2026-06-09T09:00:00.000Z");
   });
+
+  it("preserves safe action read-model fields for UI narrative rows", () => {
+    const items = buildTimeline([
+      {
+        task_id: "task-1",
+        issue_id: "issue-1",
+        seq: 1,
+        type: "tool_use",
+        tool: "exec_command",
+        input: { cmd: "/bin/zsh -lc secret" },
+        action_label: "Ran a command",
+        summary: "Ran a command.",
+      },
+    ]);
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        seq: 1,
+        type: "tool_use",
+        tool: "exec_command",
+        action_label: "Ran a command",
+        summary: "Ran a command.",
+      }),
+    ]);
+  });
 });

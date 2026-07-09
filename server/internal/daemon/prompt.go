@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // BuildPrompt constructs the task prompt for an agent CLI.
@@ -14,14 +15,14 @@ import (
 // is provider-agnostic now (Linux/macOS → quoted-HEREDOC stdin, Windows →
 // file) because the shell-layer corruption it guards against is not specific
 // to any one provider (MUL-2904).
-func BuildPrompt(task Task, provider string) string {
+func BuildPrompt(task Task, provider string, agentRoot string) string {
 	if task.ChatSessionID != "" {
 		if provider == "pi" {
 			if command, ok := piNativeSlashChatCommand(task.ChatMessage); ok {
 				return command
 			}
 		}
-		return buildChatPrompt(task)
+		return buildChatPrompt(task, agentRoot)
 	}
 	if task.TriggerCommentID != "" {
 		return buildCommentPrompt(task, provider)
@@ -80,6 +81,11 @@ func buildQuickCreatePrompt(task Task) string {
 	b.WriteString("You are running as a quick-create assistant for a Multica workspace.\n\n")
 	b.WriteString("A user captured the following input via the quick-create modal. There is NO existing issue. Your job is to create a well-formed issue from this input with a single `multica issue create` command.\n\n")
 	fmt.Fprintf(&b, "User input:\n> %s\n\n", task.QuickCreatePrompt)
+	if task.QuickCreateSource != nil {
+		b.WriteString("Source chat context:\n")
+		b.WriteString(formatQuickCreateSourceContext(task.QuickCreateSource))
+		b.WriteString("\n\n")
+	}
 
 	b.WriteString("Field rules:\n\n")
 
@@ -87,10 +93,11 @@ func buildQuickCreatePrompt(task Task) string {
 	b.WriteString("- **title**: required. A concise but semantically rich summary. If the input references external resources (PRs, issues, URLs), use your judgment on whether fetching the resource would produce a meaningfully better title — e.g. \"review PR #123\" → \"Review PR #123: Refactor auth module to OAuth2\". Strip filler words but preserve key semantic information.\n\n")
 
 	// description — the core optimization
-	b.WriteString("- **description**: The description is the executing agent's primary context. Aim for high fidelity — they should grasp the user's intent as if they had read the raw input themselves. Use a two-section structure:\n\n")
+	b.WriteString("- **description**: The description is the executing agent's primary context. Aim for high fidelity — they should grasp the user's intent as if they had read the raw input themselves. Use this section structure:\n\n")
 	b.WriteString("  1. **User request** — Faithfully restate what the user wants in their own words. Preserve specific names, identifiers, file paths, code snippets, and technical terms verbatim. Strip non-spec material before writing it (this is removal, not paraphrasing): verbal routing wrappers about creating the issue or routing it (e.g. \"create an issue\", \"分配给 X\", \"让 @X 处理\") and pure conversational fillers (e.g. \"对吧？\"). When in doubt, keep it.\n\n")
 	b.WriteString("     CC exception: `multica issue create` has no `--subscriber` flag, and the platform auto-subscribes members whose `[@Name](mention://member/<uuid>)` link appears in the description. When the user wrote \"cc @Y\", strip the verbal \"cc\" wrapper from the User request body and append a final `CC: <mention link(s)>` line to the description so the cc routing still fires.\n\n")
 	b.WriteString("  2. **Context** — include ONLY when the input cited external resources AND you successfully fetched them AND they produced verifiable facts worth recording. Summarize facts only (e.g. \"PR #45 changes auth to JWT\"), not interpretation or unsolicited reference implementations. If you have nothing factual to add, omit the section entirely — never use it as an apology log for resources you could not fetch.\n\n")
+	b.WriteString("  3. **Source chat context** — include ONLY when a `Source chat context` block is present in this prompt. Copy the source surface, thread root message ID, source message ID, source quote/excerpt, attachment IDs, and bounded visible summary into this section so the created issue can be audited back to the chat/DM/thread that spawned it. Do not add internal run IDs, queue IDs, event payloads, or hidden conversation data.\n\n")
 	b.WriteString("  Hard rules: never invent requirements, implementation details, or acceptance criteria the user did not express; never reduce multi-sentence input to a single vague sentence; never echo the title.\n\n")
 
 	// priority
@@ -163,6 +170,45 @@ func buildQuickCreatePrompt(task Task) string {
 	return b.String()
 }
 
+func formatQuickCreateSourceContext(src *protocol.QuickCreateSourceContext) string {
+	if src == nil {
+		return ""
+	}
+	var b strings.Builder
+	surface := "channel"
+	if src.ChannelKind == "dm" {
+		surface = "DM"
+	} else if src.ChannelName != "" {
+		surface = "channel #" + src.ChannelName
+	}
+	fmt.Fprintf(&b, "- Source surface: %s\n", surface)
+	fmt.Fprintf(&b, "- Channel ID: %s\n", src.ChannelID)
+	fmt.Fprintf(&b, "- Thread root message ID: %s\n", src.ThreadRootMessageID)
+	fmt.Fprintf(&b, "- Source message ID: %s\n", src.SourceMessageID)
+	if src.SourceAuthorName != "" || src.SourceAuthorType != "" {
+		fmt.Fprintf(&b, "- Source author: %s", src.SourceAuthorName)
+		if src.SourceAuthorType != "" {
+			fmt.Fprintf(&b, " (%s)", src.SourceAuthorType)
+		}
+		if src.SourceAuthorID != "" {
+			fmt.Fprintf(&b, " [%s]", src.SourceAuthorID)
+		}
+		b.WriteString("\n")
+	}
+	if src.SourceExcerpt != "" {
+		fmt.Fprintf(&b, "- Source excerpt: %s\n", src.SourceExcerpt)
+	}
+	if len(src.AttachmentIDs) > 0 {
+		fmt.Fprintf(&b, "- Source attachment IDs: %s\n", strings.Join(src.AttachmentIDs, ", "))
+	}
+	if strings.TrimSpace(src.Summary) != "" {
+		b.WriteString("\nBounded visible summary:\n")
+		b.WriteString(strings.TrimSpace(src.Summary))
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
+}
+
 // buildCommentPrompt constructs a prompt for comment-triggered tasks.
 // The triggering comment content is embedded directly so the agent cannot
 // miss it, even when stale output files exist in a reused workdir.
@@ -211,11 +257,36 @@ func buildCommentPrompt(task Task, provider string) string {
 	return b.String()
 }
 
+// writeAgentRootSection writes the agent's personal workspace directory into
+// the prompt so the agent can answer "where is my memory / work dir" with the
+// real absolute path the daemon writes to (PI_AGENT_ROOT / PI_MEMORY_DIR).
+//
+// Layout is layered: the three primary surfaces the agent actually reads and
+// writes during chat (memory, skills, notes) get their own line with sub-files;
+// the remaining subdirs created by ensureMulticaAgentRoot are collapsed into a
+// single "other local dirs" line to keep the prompt short. Full per-subdir
+// detail is intentionally omitted — they are either agent-managed caches
+// (runtime/, sessions/, repos/), team-sync plumbing (inbox/, shared-cache/,
+// sync_queue/, feedback/), or rarely used scratch space (projects/).
+func writeAgentRootSection(b *strings.Builder, agentRoot string) {
+	if strings.TrimSpace(agentRoot) == "" {
+		return
+	}
+	b.WriteString("Your personal workspace directory (one per agent, persists across runs):\n")
+	fmt.Fprintf(b, "%s/\n", agentRoot)
+	fmt.Fprintf(b, "- memory: %s/memory/  (MEMORY.md, USER.md, STATE.md, REVIEW.md, daily/)\n", agentRoot)
+	fmt.Fprintf(b, "- skills: %s/skills/  (drafts/, generated/, enabled/)\n", agentRoot)
+	fmt.Fprintf(b, "- notes:  %s/notes/  (agents.md, channels.md, project-map.md, relationship-map.md, role-playbook.md, work-log.md, decisions.md)\n", agentRoot)
+	fmt.Fprintf(b, "Other local dirs (agent-managed caches & team-sync plumbing; not usually needed): projects/, repos/, sessions/, runtime/, profile/, feedback/, sync_queue/, inbox/, shared-cache/.\n")
+	b.WriteString("When asked where your memory or files live, give these absolute paths.\n\n")
+}
+
 // buildChatPrompt constructs a prompt for interactive chat tasks.
-func buildChatPrompt(task Task) string {
+func buildChatPrompt(task Task, agentRoot string) string {
 	var b strings.Builder
 	b.WriteString("You are running as a chat assistant for a Multica workspace.\n")
 	b.WriteString("A user is chatting with you directly. Respond to their message.\n\n")
+	writeAgentRootSection(&b, agentRoot)
 	b.WriteString("Context assembly rules:\n")
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread only. Do not assume visibility into other DMs, channels, issues, or threads unless the user explicitly references them and the Multica CLI allows access.\n")
 	b.WriteString("- For thread-triggered runs, the thread root and recent replies are the relevant conversation boundary; do not infer the entire parent channel/DM history.\n")

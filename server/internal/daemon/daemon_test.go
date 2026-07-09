@@ -142,6 +142,25 @@ func TestTriggerRestart_BrewPrefixUnavailable_NoKnownPrefix_KeepsExecutable(t *t
 	}
 }
 
+func writeFakeMulticaVersion(t *testing.T, dir, version string) string {
+	t.Helper()
+	name := "multica"
+	if runtime.GOOS == "windows" {
+		name += ".bat"
+	}
+	path := filepath.Join(dir, name)
+	var content []byte
+	if runtime.GOOS == "windows" {
+		content = []byte("@echo off\r\necho multica " + version + " (commit: test)\r\n")
+	} else {
+		content = []byte("#!/usr/bin/env sh\necho 'multica " + version + " (commit: test)'\n")
+	}
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatalf("write fake multica: %v", err)
+	}
+	return path
+}
+
 func TestHandleUpdateReportsFailedWhenStableBinaryStillOld(t *testing.T) {
 	withFastUpdateReportBackoffs(t)
 
@@ -157,10 +176,7 @@ func TestHandleUpdateReportsFailedWhenStableBinaryStillOld(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatalf("mkdir brew bin: %v", err)
 	}
-	binaryPath := filepath.Join(binDir, "multica")
-	if err := os.WriteFile(binaryPath, []byte("#!/usr/bin/env sh\necho 'multica 0.3.35 (commit: test)'\n"), 0o755); err != nil {
-		t.Fatalf("write fake multica: %v", err)
-	}
+	writeFakeMulticaVersion(t, binDir, "0.3.35")
 	isBrewInstall = func() bool { return true }
 	getBrewPrefix = func() string { return prefix }
 
@@ -588,7 +604,7 @@ func TestBuildPromptContainsIssueID(t *testing.T) {
 				{Name: "Concise", Content: "Be concise."},
 			},
 		},
-	}, "claude")
+	}, "claude", "")
 
 	// Prompt should contain the issue ID and CLI hint.
 	for _, want := range []string{
@@ -614,7 +630,7 @@ func TestBuildPromptNoIssueDetails(t *testing.T) {
 	prompt := BuildPrompt(Task{
 		IssueID: "test-id",
 		Agent:   &AgentData{Name: "Test"},
-	}, "claude")
+	}, "claude", "")
 
 	// Prompt should not contain issue title/description (agent fetches via CLI).
 	for _, absent := range []string{"**Issue:**", "**Summary:**"} {
@@ -633,7 +649,7 @@ func TestBuildPromptAutopilotRunOnly(t *testing.T) {
 		AutopilotTitle:       "Daily dependency check",
 		AutopilotDescription: "Check dependencies and report outdated packages.",
 		AutopilotSource:      "manual",
-	}, "claude")
+	}, "claude", "")
 
 	for _, want := range []string{
 		"run-only mode",
@@ -665,7 +681,7 @@ func TestBuildPromptCommentTriggered(t *testing.T) {
 		TriggerCommentID:      commentID,
 		TriggerCommentContent: commentContent,
 		Agent:                 &AgentData{Name: "Test"},
-	}, "claude")
+	}, "claude", "")
 
 	// Prompt should contain the comment content, the trigger comment id, and
 	// the full reply command with --parent. Re-emitting --parent on every turn
@@ -710,7 +726,7 @@ func TestBuildPromptCommentTriggeredByAgent(t *testing.T) {
 		TriggerAuthorType:     "agent",
 		TriggerAuthorName:     "Atlas",
 		Agent:                 &AgentData{Name: "Test"},
-	}, "claude")
+	}, "claude", "")
 
 	for _, want := range []string{
 		"Another agent (Atlas)",
@@ -736,7 +752,7 @@ func TestBuildPromptCommentTriggeredByMember(t *testing.T) {
 		TriggerAuthorType:     "member",
 		TriggerAuthorName:     "Alice",
 		Agent:                 &AgentData{Name: "Test"},
-	}, "claude")
+	}, "claude", "")
 
 	if !strings.Contains(prompt, "A user just left a new comment") {
 		t.Fatalf("member-triggered prompt should label the author as a user\n---\n%s", prompt)
@@ -765,7 +781,7 @@ func TestBuildPromptCommentTriggeredNoContent(t *testing.T) {
 		IssueID:          "test-id",
 		TriggerCommentID: "comment-id",
 		Agent:            &AgentData{Name: "Test"},
-	}, "claude")
+	}, "claude", "")
 
 	if !strings.Contains(prompt, "multica issue get") {
 		t.Fatal("prompt missing CLI hint")
@@ -789,7 +805,7 @@ func TestBuildPromptSquadLeaderNoActionProhibition(t *testing.T) {
 			Name:         "Leader",
 			Instructions: "You lead the team.\n\n## Squad Operating Protocol\n\nYou are the LEADER.",
 		},
-	}, "claude")
+	}, "claude", "")
 
 	for _, want := range []string{
 		"Squad leader no_action rule",
@@ -812,7 +828,7 @@ func TestBuildPromptSquadLeaderNoActionProhibition(t *testing.T) {
 			Name:         "Regular",
 			Instructions: "You are a regular agent.",
 		},
-	}, "claude")
+	}, "claude", "")
 
 	if strings.Contains(nonLeaderPrompt, "Squad leader no_action rule") {
 		t.Fatalf("non-squad-leader prompt should NOT contain squad leader rule\n---\n%s", nonLeaderPrompt)
@@ -1165,6 +1181,32 @@ func TestPiAgentEnvUsesTopLevelAgentIDFallback(t *testing.T) {
 	}
 }
 
+func TestPiAgentEnvDisablesExpensiveAutomaticMemoryWork(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{}
+	addPiAgentEnv(env, Config{WorkspacesRoot: t.TempDir()}, "workspace-1", "agent-1")
+
+	want := map[string]string{
+		"PI_MEMORY_BACKGROUND_SHUTDOWN":          "off",
+		"PI_MEMORY_LEARNING":                     "off",
+		"PI_MEMORY_SKILL_DRAFTS":                 "off",
+		"PI_MEMORY_QMD_UPDATE":                   "off",
+		"PI_MEMORY_AUTO_SYNC":                    "0",
+		"PI_MEMORY_AUTO_SYNC_PULL":               "0",
+		"PI_MEMORY_AUTO_SYNC_PULL_ON_START":      "0",
+		"PI_MEMORY_AUTO_SYNC_UPLOAD":             "0",
+		"PI_MEMORY_AUTO_SYNC_UPLOAD_ON_SHUTDOWN": "0",
+		"PI_MEMORY_NO_SEARCH":                    "1",
+		"PI_MEMORY_REVIEW_STARTUP_HINT":          "0",
+	}
+	for key, value := range want {
+		if got := env[key]; got != value {
+			t.Fatalf("%s = %q, want %q", key, got, value)
+		}
+	}
+}
+
 func TestMulticaAgentEnvUsesProviderNeutralRoot(t *testing.T) {
 	t.Parallel()
 
@@ -1195,6 +1237,11 @@ func TestBlockedEnvKeyBlocksPiMemoryOverrides(t *testing.T) {
 	for _, key := range []string{"PI_AGENT_ROOT", "PI_MEMORY_DIR", "PI_SKILL_DRAFTS_DIR", "PI_AGENT_SYNC_QUEUE_DIR", "MULTICA_AGENT_ROOT", "MULTICA_AGENT_MEMORY_DIR", "MULTICA_PROJECT_MEMORY_DIR"} {
 		if !isBlockedEnvKey(key) {
 			t.Fatalf("%s should be blocked from custom_env", key)
+		}
+	}
+	for _, key := range []string{"PI_MEMORY_LEARNING", "PI_MEMORY_QMD_UPDATE", "PI_MEMORY_AUTO_SYNC"} {
+		if isBlockedEnvKey(key) {
+			t.Fatalf("%s should remain configurable via custom_env", key)
 		}
 	}
 }

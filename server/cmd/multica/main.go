@@ -52,6 +52,11 @@ func init() {
 	repoCmd.GroupID = groupCore
 	skillCmd.GroupID = groupCore
 	squadCmd.GroupID = groupCore
+	sendCmd.GroupID = groupCore
+	reactCmd.GroupID = groupCore
+	messageCmd.GroupID = groupCore
+	channelCmd.GroupID = groupCore
+	threadCmd.GroupID = groupCore
 
 	// Runtime commands
 	daemonCmd.GroupID = groupRuntime
@@ -76,6 +81,9 @@ func init() {
 	rootCmd.AddCommand(repoCmd)
 	rootCmd.AddCommand(skillCmd)
 	rootCmd.AddCommand(squadCmd)
+	rootCmd.AddCommand(sendCmd)
+	rootCmd.AddCommand(reactCmd)
+	rootCmd.AddCommand(messageCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(runtimeCmd)
 	rootCmd.AddCommand(authCmd)
@@ -87,6 +95,8 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(dmCmd)
+	rootCmd.AddCommand(channelCmd)
+	rootCmd.AddCommand(threadCmd)
 	rootCmd.AddCommand(stickerCmd)
 	rootCmd.AddCommand(sandboxdCmd)
 

@@ -5,6 +5,7 @@
   },
   "sidebar": {
     "heading": "Messages",
+    "mention_indicator": "You were mentioned",
     "search": "Search conversations...",
     "no_conversation_matches": "No matching conversations",
     "search_scope_hint": "This filters the conversation list only. Open a conversation and use the top-right message search to search message text.",
@@ -144,7 +145,18 @@
     "empty_replies": "No replies yet.",
     "load_failed": "Failed to load thread.",
     "send_failed": "Failed to send thread reply.",
-    "composer_placeholder": "Reply in thread..."
+    "composer_placeholder": "Reply in thread...",
+    "back_to_conversation": "Back to conversation",
+    "participants_label": "Participants",
+    "follow": "Follow thread",
+    "following": "Following",
+    "show_in_channel_label": "Also show in channel",
+    "from_thread_badge": "From thread",
+    "wake_pending": "Awaiting reply",
+    "wake_replied": "Replied",
+    "wake_acked": "Acknowledged",
+    "wake_delivered": "Delivered",
+    "wake_no_reply": "No reply"
   },
   "typing": {
     "single": "{{name}} is typing",
@@ -178,7 +190,9 @@
   },
   "message": {
     "add_reaction": "Add reaction",
+    "actions_menu": "Message actions",
     "copy_action": "Copy",
+    "expand_action": "Show full message",
     "copied_toast": "Copied",
     "copy_failed_toast": "Copy failed",
     "sticker_alt": "Sticker",
@@ -186,12 +200,22 @@
     "sticker_failed": "Sticker failed to load",
     "sticker_unavailable": "Sticker unavailable",
     "agent_badge": "Agent",
-    "feishu_badge": "Feishu"
+    "feishu_badge": "Feishu",
+    "edit_action": "Edit",
+    "delete_action": "Delete",
+    "edited_label": "(edited)",
+    "deleted_placeholder": "This message was deleted",
+    "save_edit": "Save",
+    "cancel_edit": "Cancel",
+    "edit_failed_toast": "Couldn't edit message",
+    "delete_failed_toast": "Couldn't delete message"
   },
   "dm": {
     "heading": "Direct messages",
     "empty": "No direct messages yet.",
     "empty_cta": "Start a chat",
+    "wendy_title": "Ask Wendy",
+    "wendy_description": "Wendy can help you turn real work into useful agents.",
     "new_aria": "New direct message",
     "menu_aria": "Direct message actions",
     "agent_meta": "Agent",

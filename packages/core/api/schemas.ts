@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type {
   Agent,
+  AgentFileContentResponse,
+  AgentFilesResponse,
   AgentTemplate,
   AgentTemplateSummary,
   Attachment,
@@ -17,12 +19,16 @@ import type {
   CreateBillingPortalSessionResponse,
   GroupedIssuesResponse,
   ChannelMessageSearchResponse,
+  ChannelMessagesPage,
+  ChannelThreadMessagesPage,
+  AgentHealthResponse,
   StickerCatalogResponse,
   ListIssuesResponse,
   ListWebhookDeliveriesResponse,
   Squad,
   TimelineEntry,
   User,
+  UpdateAgentFileContentResponse,
   WebhookDelivery,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
@@ -277,6 +283,112 @@ const ChannelMessageSearchResultSchema = z.object({
   created_at: z.string().default(""),
 }).loose();
 
+const ChannelReactionSchema = z.object({
+  id: z.string().default(""),
+  channel_id: z.string().default(""),
+  message_id: z.string().default(""),
+  actor_type: z.string().default(""),
+  actor_id: z.string().default(""),
+  emoji: z.string().default(""),
+  created_at: z.string().default(""),
+}).loose();
+
+const ChannelMessageReplySchema = z.object({
+  id: z.string().default(""),
+  type: z.string().default(""),
+  author_id: z.string().nullable().default(null),
+  author_name: z.string().default(""),
+  content: z.string().default(""),
+  parts: z.array(z.unknown()).optional(),
+  created_at: z.string().default(""),
+}).loose();
+
+const ChannelThreadParticipantSchema = z.object({
+  key: z.string().default(""),
+  member_type: z.string().default(""),
+  member_id: z.string().default(""),
+  name: z.string().default(""),
+  display_name: z.string().default(""),
+  followed: z.boolean().default(false),
+}).loose();
+
+const ChannelThreadWakeAnnotationSchema = z.object({
+  key: z.string().default(""),
+  member_type: z.string().default(""),
+  member_id: z.string().default(""),
+  display_name: z.string().default(""),
+  state: z.string().default(""),
+  reason: z.string().nullable().optional(),
+}).loose();
+
+const ChannelMessageSchema = z.object({
+  id: z.string().default(""),
+  channel_id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  type: z.string().default(""),
+  author_id: z.string().nullable().default(null),
+  author_name: z.string().default(""),
+  content: z.string().default(""),
+  parts: z.array(z.unknown()).optional(),
+  source: z.string().default(""),
+  external_message_id: z.string().nullable().default(null),
+  client_message_id: z.string().nullable().optional(),
+  reply_to_message_id: z.string().nullable().optional(),
+  reply_to: ChannelMessageReplySchema.nullable().optional(),
+  thread_root_message_id: z.string().nullable().optional(),
+  thread_root: ChannelMessageReplySchema.nullable().optional(),
+  thread_reply_count: z.number().default(0).optional(),
+  thread_last_reply_at: z.string().nullable().optional(),
+  thread_unread_count: z.number().default(0).optional(),
+  thread_followed: z.boolean().default(false).optional(),
+  thread_participants: z.array(ChannelThreadParticipantSchema).nullish().transform((value) => value ?? []).optional(),
+  thread_wake_annotations: z.array(ChannelThreadWakeAnnotationSchema).nullish().transform((value) => value ?? []).optional(),
+  thread_id: z.string().nullable().optional(),
+  trigger_depth: z.number().default(0).optional(),
+  seq: z.number().default(0).optional(),
+  reactions: z.array(ChannelReactionSchema).default([]).optional(),
+  attachments: z.array(AttachmentSchema).default([]).optional(),
+  created_at: z.string().default(""),
+  edited_at: z.string().nullable().optional(),
+  deleted_at: z.string().nullable().optional(),
+}).loose();
+
+const ChannelMessagesCursorSchema = z.object({
+  seq: z.number().default(0),
+  created_at: z.string().default(""),
+  id: z.string().default(""),
+}).loose();
+
+export const ChannelMessagesPageSchema = z.object({
+  messages: z.array(ChannelMessageSchema).default([]),
+  limit: z.number().default(50),
+  has_more: z.boolean().default(false),
+  next_cursor: ChannelMessagesCursorSchema.nullable().optional().default(null),
+}).loose();
+
+export const EMPTY_CHANNEL_MESSAGES_PAGE: ChannelMessagesPage = {
+  messages: [],
+  limit: 50,
+  has_more: false,
+  next_cursor: null,
+};
+
+const ChannelThreadMessagesCursorSchema = z.object({
+  before_seq: z.number().optional(),
+  before: z.string().default(""),
+  before_id: z.string().default(""),
+}).loose();
+
+export const ChannelThreadMessagesPageSchema = z.object({
+  messages: z.array(ChannelMessageSchema).default([]),
+  next_cursor: ChannelThreadMessagesCursorSchema.nullable().optional().default(null),
+}).loose();
+
+export const EMPTY_CHANNEL_THREAD_MESSAGES_PAGE: ChannelThreadMessagesPage = {
+  messages: [],
+  next_cursor: null,
+};
+
 export const ChannelMessageSearchResponseSchema = z.object({
   query: z.string().default(""),
   total: z.number().default(0),
@@ -502,6 +614,105 @@ const RuntimeUsageSchema = z.object({
 }).loose();
 
 export const RuntimeUsageListSchema = z.array(RuntimeUsageSchema);
+
+const AgentHealthSummarySchema = z.object({
+  agent_id: z.string().default(""),
+  runtime_id: z.string().nullable().default(null),
+  state: z.string().default("offline"),
+  reason_code: z.string().default(""),
+  state_since: z.string().nullable().default(null),
+  last_seen_at: z.string().nullable().default(null),
+  last_event_at: z.string().nullable().default(null),
+}).loose();
+
+const AgentHealthEventSchema = z.object({
+  id: z.string().default(""),
+  agent_id: z.string().default(""),
+  runtime_id: z.string().nullable().default(null),
+  type: z.string().default("server_ping_received"),
+  state_after: z.string().default("offline"),
+  reason_code: z.string().default(""),
+  message: z.string().default(""),
+  occurred_at: z.string().default(""),
+  details: z.record(z.string(), z.unknown()).optional(),
+  synthetic: z.boolean().optional(),
+}).loose();
+
+export const AgentHealthResponseSchema = z.object({
+  health_summary: AgentHealthSummarySchema.default({
+    agent_id: "",
+    runtime_id: null,
+    state: "offline",
+    reason_code: "schema_fallback",
+    state_since: null,
+    last_seen_at: null,
+    last_event_at: null,
+  }),
+  health_events: z.array(AgentHealthEventSchema).default([]),
+}).loose();
+
+export const EMPTY_AGENT_HEALTH_RESPONSE: AgentHealthResponse = {
+  health_summary: {
+    agent_id: "",
+    runtime_id: null,
+    state: "offline",
+    reason_code: "empty",
+    state_since: null,
+    last_seen_at: null,
+    last_event_at: null,
+  },
+  health_events: [],
+};
+
+const AgentFileNodeSchema = z.object({
+  path: z.string(),
+  is_dir: z.boolean().default(false),
+  size: z.number().optional(),
+}).loose();
+
+export const AgentFilesResponseSchema = z.object({
+  agent_id: z.string().default(""),
+  status: z.string().default("error"),
+  nodes: z.array(AgentFileNodeSchema),
+  truncated: z.boolean().default(false),
+}).loose();
+
+export const EMPTY_AGENT_FILES_RESPONSE: AgentFilesResponse = {
+  agent_id: "",
+  status: "error",
+  nodes: [],
+  truncated: false,
+};
+
+export const AgentFileContentResponseSchema = z.object({
+  content: z.string().default(""),
+  encoding: z.string().default(""),
+  mime_type: z.string().default(""),
+  content_hash: z.string().default(""),
+  truncated: z.boolean().default(false),
+  too_large: z.boolean().default(false),
+  binary: z.boolean().default(false),
+}).loose();
+
+export const EMPTY_AGENT_FILE_CONTENT_RESPONSE: AgentFileContentResponse = {
+  content: "",
+  encoding: "",
+  mime_type: "",
+  content_hash: "",
+  truncated: false,
+  too_large: false,
+  binary: false,
+};
+
+export const UpdateAgentFileContentResponseSchema = z.object({
+  content_hash: z.string().default(""),
+  conflict: z.boolean().default(false),
+}).loose();
+
+export const EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE: UpdateAgentFileContentResponse = {
+  content_hash: "",
+  conflict: false,
+};
 
 const RuntimeHourlyActivitySchema = z.object({
   hour: z.number().default(0),

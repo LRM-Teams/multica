@@ -3,6 +3,8 @@ package daemon
 import (
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // TestBuildQuickCreatePromptRules locks in the rules that govern how the
@@ -203,6 +205,41 @@ func TestBuildQuickCreatePromptParentPinning(t *testing.T) {
 	}
 }
 
+func TestBuildQuickCreatePromptIncludesSourceContext(t *testing.T) {
+	out := buildQuickCreatePrompt(Task{
+		QuickCreatePrompt: "turn this thread into an issue",
+		QuickCreateSource: &protocol.QuickCreateSourceContext{
+			ChannelID:           "channel-1",
+			ChannelKind:         "group",
+			ChannelName:         "product",
+			ThreadRootMessageID: "root-1",
+			SourceMessageID:     "source-1",
+			SourceAuthorType:    "member",
+			SourceAuthorID:      "member-1",
+			SourceAuthorName:    "Frank",
+			SourceExcerpt:       "this is broken",
+			Summary:             "Recent visible messages from the source thread:\n- Frank: this is broken",
+			AttachmentIDs:       []string{"att-1", "att-2"},
+		},
+	})
+	mustContain := []string{
+		"Source chat context:",
+		"channel #product",
+		"Thread root message ID: root-1",
+		"Source message ID: source-1",
+		"Source excerpt: this is broken",
+		"Source attachment IDs: att-1, att-2",
+		"Source chat context** — include ONLY when a `Source chat context` block is present",
+		"created issue can be audited back to the chat/DM/thread",
+		"Do not add internal run IDs, queue IDs, event payloads",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("buildQuickCreatePrompt with source missing %q\n--- output ---\n%s", s, out)
+		}
+	}
+}
+
 // TestBuildPromptSquadLeaderNoActionForMemberTrigger verifies that the
 // squad leader no_action prohibition is injected in the per-turn prompt
 // regardless of whether the triggering comment was posted by an agent or
@@ -221,7 +258,7 @@ func TestBuildPromptSquadLeaderNoActionForMemberTrigger(t *testing.T) {
 			Instructions: "Some instructions\n\n## Squad Operating Protocol\n\nYou are the LEADER...",
 		},
 	}
-	out := BuildPrompt(task, "claude")
+	out := BuildPrompt(task, "claude", "")
 	if !strings.Contains(out, "Squad leader no_action rule") {
 		t.Errorf("buildCommentPrompt must inject squad leader no_action rule for member-triggered comments, got:\n%s", out)
 	}
@@ -243,7 +280,7 @@ func TestBuildPromptSquadLeaderNoActionForAgentTrigger(t *testing.T) {
 			Instructions: "Some instructions\n\n## Squad Operating Protocol\n\nYou are the LEADER...",
 		},
 	}
-	out := BuildPrompt(task, "claude")
+	out := BuildPrompt(task, "claude", "")
 	if !strings.Contains(out, "Squad leader no_action rule") {
 		t.Errorf("buildCommentPrompt must inject squad leader no_action rule for agent-triggered comments, got:\n%s", out)
 	}
@@ -257,7 +294,7 @@ func TestBuildChatPromptAttachmentIDsCanBeBoundToCreatedIssues(t *testing.T) {
 			{ID: "019ec09d-6222-722b-bdfa-427b105d80be", Filename: "shot.png", ContentType: "image/png"},
 		},
 	}
-	out := BuildPrompt(task, "claude")
+	out := BuildPrompt(task, "claude", "")
 	for _, want := range []string{
 		"Attachments on this message:",
 		"id=019ec09d-6222-722b-bdfa-427b105d80be",
@@ -275,7 +312,7 @@ func TestBuildPromptIncludesChatContextSummary(t *testing.T) {
 		ChatSessionID:      "chat-1",
 		ChatContextSummary: "Native resume skipped.\nRecent messages:\n- user: old question",
 		ChatMessage:        "current question",
-	}, "codex")
+	}, "codex", "")
 	for _, want := range []string{"Conversation surface context:", "Native resume skipped.", "Recent messages:", "User message:\ncurrent question"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, out)
@@ -291,7 +328,7 @@ func TestBuildPromptPiNativeSlashChatCommands(t *testing.T) {
 		"/memory-review list",
 	}
 	for _, in := range tests {
-		out := BuildPrompt(Task{ChatSessionID: "sess-1", ChatMessage: in}, "pi")
+		out := BuildPrompt(Task{ChatSessionID: "sess-1", ChatMessage: in}, "pi", "")
 		if out != strings.TrimSpace(in) {
 			t.Fatalf("Pi slash command %q should pass through raw, got:\n%s", in, out)
 		}
@@ -299,14 +336,14 @@ func TestBuildPromptPiNativeSlashChatCommands(t *testing.T) {
 }
 
 func TestBuildPromptPiNativeSlashChatCommandsArePiOnly(t *testing.T) {
-	out := BuildPrompt(Task{ChatSessionID: "sess-1", ChatMessage: "/pet hi"}, "codex")
+	out := BuildPrompt(Task{ChatSessionID: "sess-1", ChatMessage: "/pet hi"}, "codex", "")
 	if !strings.Contains(out, "User message:\n/pet hi") {
 		t.Fatalf("non-Pi runtimes must keep slash text as normal chat, got:\n%s", out)
 	}
 }
 
 func TestBuildPromptPiUnknownSlashFallsBackToChat(t *testing.T) {
-	out := BuildPrompt(Task{ChatSessionID: "sess-1", ChatMessage: "/not-a-pi-command hi"}, "pi")
+	out := BuildPrompt(Task{ChatSessionID: "sess-1", ChatMessage: "/not-a-pi-command hi"}, "pi", "")
 	if !strings.Contains(out, "User message:\n/not-a-pi-command hi") {
 		t.Fatalf("unknown Pi slash command should fall back to normal chat, got:\n%s", out)
 	}
@@ -321,7 +358,7 @@ func TestBuildChatPromptSlashSkills(t *testing.T) {
 				Skills: []SkillData{{ID: "abc-123", Name: "deploy"}},
 			},
 		}
-		out := buildChatPrompt(task)
+		out := buildChatPrompt(task, "")
 		if !strings.Contains(out, "Explicitly selected skills:\n- deploy\n") {
 			t.Fatalf("expected selected skills block, got:\n%s", out)
 		}
@@ -338,7 +375,7 @@ func TestBuildChatPromptSlashSkills(t *testing.T) {
 				Skills: []SkillData{{ID: "good-id", Name: "deploy"}},
 			},
 		}
-		out := buildChatPrompt(task)
+		out := buildChatPrompt(task, "")
 		if strings.Contains(out, "Explicitly selected skills") {
 			t.Fatalf("should not inject block for unknown skill ID, got:\n%s", out)
 		}
@@ -352,7 +389,7 @@ func TestBuildChatPromptSlashSkills(t *testing.T) {
 				Skills: []SkillData{{ID: "real-id", Name: "deploy"}},
 			},
 		}
-		out := buildChatPrompt(task)
+		out := buildChatPrompt(task, "")
 		if strings.Contains(out, "Explicitly selected skills") {
 			t.Fatalf("matching label with wrong ID must not pass, got:\n%s", out)
 		}
@@ -366,7 +403,7 @@ func TestBuildChatPromptSlashSkills(t *testing.T) {
 				Skills: []SkillData{{ID: "real-id", Name: "deploy"}},
 			},
 		}
-		out := buildChatPrompt(task)
+		out := buildChatPrompt(task, "")
 		if !strings.Contains(out, "- deploy\n") {
 			t.Fatalf("expected canonical name 'deploy', got:\n%s", out)
 		}
@@ -386,7 +423,7 @@ func TestBuildChatPromptSlashSkills(t *testing.T) {
 				Skills: []SkillData{{ID: "a", Name: "deploy"}},
 			},
 		}
-		out := buildChatPrompt(task)
+		out := buildChatPrompt(task, "")
 		if strings.Count(out, "- deploy") != 1 {
 			t.Fatalf("expected exactly 1 '- deploy', got:\n%s", out)
 		}
@@ -398,7 +435,7 @@ func TestBuildChatPromptSlashSkills(t *testing.T) {
 			ChatMessage:   "just a normal message",
 			Agent:         &AgentData{Skills: []SkillData{{ID: "a", Name: "deploy"}}},
 		}
-		out := buildChatPrompt(task)
+		out := buildChatPrompt(task, "")
 		if strings.Contains(out, "Explicitly selected skills") {
 			t.Fatalf("should not inject block when no slash links, got:\n%s", out)
 		}
@@ -410,7 +447,7 @@ func TestBuildChatPromptSlashSkills(t *testing.T) {
 			ChatMessage:   "[/deploy](slash://skill/abc-123)",
 			Agent:         &AgentData{},
 		}
-		out := buildChatPrompt(task)
+		out := buildChatPrompt(task, "")
 		if strings.Contains(out, "Explicitly selected skills") {
 			t.Fatalf("should not inject block for agent with no skills, got:\n%s", out)
 		}
@@ -423,7 +460,7 @@ func TestBuildChatPromptSlashSkills(t *testing.T) {
 // to the flat dump, even though it cannot anchor a --thread without a
 // trigger comment id.
 func TestBuildPromptDefaultMentionsRecent(t *testing.T) {
-	out := BuildPrompt(Task{IssueID: "issue-default-1"}, "claude")
+	out := BuildPrompt(Task{IssueID: "issue-default-1"}, "claude", "")
 	for _, s := range []string{
 		"--recent 20 --output json",
 		"Next thread cursor:",
@@ -459,7 +496,7 @@ func TestBuildPromptNonSquadLeaderNoRule(t *testing.T) {
 			Instructions: "Some instructions without the squad marker",
 		},
 	}
-	out := BuildPrompt(task, "claude")
+	out := BuildPrompt(task, "claude", "")
 	if strings.Contains(out, "Squad leader no_action rule") {
 		t.Errorf("buildCommentPrompt must NOT inject squad leader no_action rule for non-squad-leader agents, got:\n%s", out)
 	}
@@ -484,7 +521,7 @@ func TestBuildPromptNewCommentsHint(t *testing.T) {
 		NewCommentCount:       3,
 		NewCommentsSince:      since,
 	}
-	out := BuildPrompt(task, "claude")
+	out := BuildPrompt(task, "claude", "")
 
 	// Issue-wide count (reverted from the thread-scoped wording).
 	if !strings.Contains(out, "3 new comment(s) on this issue since your last run") {
@@ -526,7 +563,7 @@ func TestBuildPromptColdStartThreadRead(t *testing.T) {
 		NewCommentCount:       0,
 		NewCommentsSince:      "",
 	}
-	out := BuildPrompt(task, "claude")
+	out := BuildPrompt(task, "claude", "")
 	if strings.Contains(out, "new comment(s) since your last run") {
 		t.Errorf("no since-delta hint should render on cold start, got:\n%s", out)
 	}
@@ -551,7 +588,7 @@ func TestBuildPromptResumedNoDeltaDoesNotForceThreadRead(t *testing.T) {
 		NewCommentCount:       0,
 		NewCommentsSince:      "",
 	}
-	out := BuildPrompt(task, "claude")
+	out := BuildPrompt(task, "claude", "")
 
 	for _, want := range []string{
 		"triggering comment is already included above",
@@ -572,5 +609,50 @@ func TestBuildPromptResumedNoDeltaDoesNotForceThreadRead(t *testing.T) {
 	}
 	if strings.Contains(out, "Read the triggering conversation first") {
 		t.Errorf("resumed/no-delta prompt must not use the cold-start forced-read wording, got:\n%s", out)
+	}
+}
+
+// TestWriteAgentRootSection asserts the layered layout: the three primary
+// surfaces (memory, skills, notes) get their own detailed line, the remaining
+// managed subdirs collapse into a single "Other local dirs" line, and an empty
+// root omits the section entirely.
+func TestWriteAgentRootSection(t *testing.T) {
+	t.Run("empty root is omitted", func(t *testing.T) {
+		var b strings.Builder
+		writeAgentRootSection(&b, "")
+		if b.Len() != 0 {
+			t.Fatalf("empty agentRoot must produce no output, got: %q", b.String())
+		}
+	})
+
+	const root = "/tmp/multica/ws-1/.multica/agents/agent-1"
+	var b strings.Builder
+	writeAgentRootSection(&b, root)
+	out := b.String()
+
+	// Three primary surfaces, each with its own line + absolute path.
+	for _, want := range []string{
+		"Your personal workspace directory (one per agent, persists across runs):",
+		root + "/",
+		"- memory: " + root + "/memory/  (MEMORY.md, USER.md, STATE.md, REVIEW.md, daily/)",
+		"- skills: " + root + "/skills/  (drafts/, generated/, enabled/)",
+		"- notes:  " + root + "/notes/  (agents.md, channels.md, project-map.md, relationship-map.md, role-playbook.md, work-log.md, decisions.md)",
+		"When asked where your memory or files live, give these absolute paths.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("prompt missing %q:\n%s", want, out)
+		}
+	}
+
+	// Collapsed "other local dirs" line names every remaining managed subdir
+	// without spending a full line on each.
+	for _, sub := range []string{
+		"Other local dirs",
+		"projects/", "repos/", "sessions/", "runtime/", "profile/",
+		"feedback/", "sync_queue/", "inbox/", "shared-cache/",
+	} {
+		if !strings.Contains(out, sub) {
+			t.Errorf("collapsed other-dirs line missing %q:\n%s", sub, out)
+		}
 	}
 }

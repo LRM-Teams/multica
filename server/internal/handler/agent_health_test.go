@@ -1,0 +1,399 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
+)
+
+func TestGetAgentHealth_MapsRuntimeAndHealthEvents(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentID, runtimeID := createAgentHealthFixture(t, "online", time.Now().Add(-20*time.Second), time.Now().Add(-15*time.Second))
+	eventID := createAgentHealthEvent(t, agentID, runtimeID, agentHealthEventTransportRecover, agentHealthStateRecovered, "transport_reconnected")
+
+	w := httptest.NewRecorder()
+	testHandler.GetAgentHealth(w, withURLParam(newRequest("GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentHealth: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp AgentHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Summary.AgentID != agentID {
+		t.Fatalf("summary agent_id = %q, want %q", resp.Summary.AgentID, agentID)
+	}
+	if resp.Summary.RuntimeID == nil || *resp.Summary.RuntimeID != runtimeID {
+		t.Fatalf("summary runtime_id = %#v, want %s", resp.Summary.RuntimeID, runtimeID)
+	}
+	if resp.Summary.State != agentHealthStateRecovered {
+		t.Fatalf("summary state = %q, want %q", resp.Summary.State, agentHealthStateRecovered)
+	}
+	if len(resp.Events) == 0 {
+		t.Fatalf("expected health events")
+	}
+	if resp.Events[0].ID != eventID {
+		t.Fatalf("first event id = %q, want persisted event %q", resp.Events[0].ID, eventID)
+	}
+	if resp.Events[0].Type != agentHealthEventTransportRecover || resp.Events[0].StateAfter != agentHealthStateRecovered {
+		t.Fatalf("first event = %s/%s, want recovered transport event", resp.Events[0].Type, resp.Events[0].StateAfter)
+	}
+}
+
+func TestGetAgentHealth_OfflineAgesIntoReconnecting(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentID, _ := createAgentHealthFixture(t, "offline", time.Now().Add(-15*time.Minute), time.Now().Add(-10*time.Minute))
+
+	w := httptest.NewRecorder()
+	testHandler.GetAgentHealth(w, withURLParam(newRequest("GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentHealth: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp AgentHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Summary.State != agentHealthStateReconnecting {
+		t.Fatalf("summary state = %q, want %q", resp.Summary.State, agentHealthStateReconnecting)
+	}
+	if len(resp.Events) == 0 || resp.Events[0].Type != agentHealthEventProbeTimeout {
+		t.Fatalf("expected synthetic probe-timeout event, got %+v", resp.Events)
+	}
+}
+
+func TestGetAgentHealth_PrivateAgentForbidsPlainMember(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentID, ownerID, memberID := privateAgentTestFixture(t)
+
+	w := httptest.NewRecorder()
+	testHandler.GetAgentHealth(w, withURLParam(newRequestAs(ownerID, "GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentHealth as owner: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	testHandler.GetAgentHealth(w, withURLParam(newRequestAs(memberID, "GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("GetAgentHealth as plain member: expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAgentHealthEventStateMapping(t *testing.T) {
+	tests := []struct {
+		eventType string
+		state     string
+	}{
+		{agentHealthEventServerPing, agentHealthStateOnline},
+		{agentHealthEventLivenessProbe, agentHealthStateSuspectedDisconnect},
+		{agentHealthEventProbeTimeout, agentHealthStateReconnecting},
+		{agentHealthEventTransportRecover, agentHealthStateRecovered},
+	}
+	for _, tt := range tests {
+		if got := agentHealthEventState(tt.eventType); got != tt.state {
+			t.Fatalf("agentHealthEventState(%q) = %q, want %q", tt.eventType, got, tt.state)
+		}
+	}
+}
+
+func TestAgentHealthMissingRuntimeSummary_OfflineEmptyState(t *testing.T) {
+	agent := dbAgentForHealthTest(t)
+	summary := agentHealthMissingRuntimeSummary(agent)
+	if summary.AgentID != uuidToString(agent.ID) {
+		t.Fatalf("summary agent_id = %q, want %q", summary.AgentID, uuidToString(agent.ID))
+	}
+	if summary.State != agentHealthStateOffline || summary.ReasonCode != "runtime_missing" {
+		t.Fatalf("missing runtime summary = %+v", summary)
+	}
+	if summary.RuntimeID != nil {
+		t.Fatalf("missing runtime should return null runtime_id, got %#v", summary.RuntimeID)
+	}
+}
+
+func TestGetAgentHealth_StaleOnlineRuntimeShowsSuspectedDisconnect(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	// Runtime row says "online" but heartbeat is older than the stale
+	// threshold (150s). The health summary must not show online. (#284)
+	agentID, _ := createAgentHealthFixture(t, "online",
+		time.Now().Add(-3*time.Minute), // last_seen_at: 3 min ago — stale
+		time.Now().Add(-2*time.Minute), // updated_at
+	)
+
+	w := httptest.NewRecorder()
+	testHandler.GetAgentHealth(w, withURLParam(newRequest("GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentHealth: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp AgentHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Summary.State != agentHealthStateSuspectedDisconnect {
+		t.Fatalf("summary state = %q, want %q (stale online runtime must not show as online)", resp.Summary.State, agentHealthStateSuspectedDisconnect)
+	}
+}
+
+func TestGetAgentHealth_VeryStaleOnlineRuntimeShowsReconnecting(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	// Runtime row says "online" but heartbeat is older than the reconnect
+	// window (5 min). Must show reconnecting, not online. (#284)
+	agentID, _ := createAgentHealthFixture(t, "online",
+		time.Now().Add(-7*time.Minute), // last_seen_at: 7 min ago — very stale
+		time.Now().Add(-6*time.Minute),
+	)
+
+	w := httptest.NewRecorder()
+	testHandler.GetAgentHealth(w, withURLParam(newRequest("GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentHealth: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp AgentHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Summary.State != agentHealthStateReconnecting {
+		t.Fatalf("summary state = %q, want %q (very stale runtime must show reconnecting)", resp.Summary.State, agentHealthStateReconnecting)
+	}
+}
+
+func TestGetAgentHealth_FreshOnlineRuntimeStaysOnline(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	// Runtime is genuinely online with a recent heartbeat — must stay online. (#284)
+	agentID, _ := createAgentHealthFixture(t, "online",
+		time.Now().Add(-10*time.Second), // last_seen_at: 10s ago — fresh
+		time.Now().Add(-5*time.Second),
+	)
+
+	w := httptest.NewRecorder()
+	testHandler.GetAgentHealth(w, withURLParam(newRequest("GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentHealth: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp AgentHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Summary.State != agentHealthStateOnline {
+		t.Fatalf("summary state = %q, want %q (fresh online runtime must stay online)", resp.Summary.State, agentHealthStateOnline)
+	}
+}
+
+func TestGetAgentHealth_PrivateRuntimeOwnedByAnotherMemberCountsMissing(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeOwnerID := createWorkspaceMemberUser(t, "Health Runtime Owner", "health-runtime-owner-"+randomID()+"@multica.test")
+	agentID, runtimeID := createAgentHealthFixtureWithRuntimeAccess(t, "online",
+		time.Now().Add(-10*time.Second),
+		time.Now().Add(-5*time.Second),
+		runtimeOwnerID,
+		"private",
+	)
+
+	w := httptest.NewRecorder()
+	testHandler.GetAgentHealth(w, withURLParam(newRequest("GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentHealth: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp AgentHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Summary.State != agentHealthStateOffline || resp.Summary.ReasonCode != "runtime_missing" {
+		t.Fatalf("summary = %+v, want offline runtime_missing for non-runnable private runtime %s", resp.Summary, runtimeID)
+	}
+	if resp.Summary.RuntimeID != nil {
+		t.Fatalf("non-runnable private runtime should be hidden as missing, got runtime_id=%q", *resp.Summary.RuntimeID)
+	}
+	if len(resp.Events) != 0 {
+		t.Fatalf("non-runnable private runtime should not expose health events, got %+v", resp.Events)
+	}
+}
+
+func TestGetAgentHealth_PublicRuntimeOwnedByAnotherMemberStaysOnline(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeOwnerID := createWorkspaceMemberUser(t, "Health Public Runtime Owner", "health-public-runtime-owner-"+randomID()+"@multica.test")
+	agentID, _ := createAgentHealthFixtureWithRuntimeAccess(t, "online",
+		time.Now().Add(-10*time.Second),
+		time.Now().Add(-5*time.Second),
+		runtimeOwnerID,
+		"public",
+	)
+
+	w := httptest.NewRecorder()
+	testHandler.GetAgentHealth(w, withURLParam(newRequest("GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentHealth: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp AgentHealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Summary.State != agentHealthStateOnline {
+		t.Fatalf("summary state = %q, want %q for public fresh runtime", resp.Summary.State, agentHealthStateOnline)
+	}
+}
+
+func TestAgentRuntimeRunnableForAgent_Pure(t *testing.T) {
+	ownerID := parseUUID("11111111-1111-1111-1111-111111111111")
+	otherID := parseUUID("22222222-2222-2222-2222-222222222222")
+	tests := []struct {
+		name    string
+		agent   db.Agent
+		runtime db.AgentRuntime
+		want    bool
+	}{
+		{
+			name: "workspace agent can use public runtime",
+			agent: db.Agent{
+				Visibility: "workspace",
+				OwnerID:    ownerID,
+			},
+			runtime: db.AgentRuntime{
+				Visibility: "public",
+				OwnerID:    otherID,
+			},
+			want: true,
+		},
+		{
+			name: "workspace agent cannot count private runtime as shared capacity",
+			agent: db.Agent{
+				Visibility: "workspace",
+				OwnerID:    ownerID,
+			},
+			runtime: db.AgentRuntime{
+				Visibility: "private",
+				OwnerID:    ownerID,
+			},
+			want: false,
+		},
+		{
+			name: "private agent can use same-owner private runtime",
+			agent: db.Agent{
+				Visibility: "private",
+				OwnerID:    ownerID,
+			},
+			runtime: db.AgentRuntime{
+				Visibility: "private",
+				OwnerID:    ownerID,
+			},
+			want: true,
+		},
+		{
+			name: "private agent cannot use another owner's private runtime",
+			agent: db.Agent{
+				Visibility: "private",
+				OwnerID:    ownerID,
+			},
+			runtime: db.AgentRuntime{
+				Visibility: "private",
+				OwnerID:    otherID,
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := agentRuntimeRunnableForAgent(tt.agent, tt.runtime); got != tt.want {
+				t.Fatalf("agentRuntimeRunnableForAgent() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func createAgentHealthFixture(t *testing.T, status string, lastSeen, updatedAt time.Time) (agentID, runtimeID string) {
+	return createAgentHealthFixtureWithRuntimeAccess(t, status, lastSeen, updatedAt, testUserID, "public")
+}
+
+func createAgentHealthFixtureWithRuntimeAccess(t *testing.T, status string, lastSeen, updatedAt time.Time, runtimeOwnerID, visibility string) (agentID, runtimeID string) {
+	t.Helper()
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider,
+			status, device_info, metadata, last_seen_at, updated_at, owner_id, visibility
+		)
+		VALUES ($1, NULL, $2, 'cloud', 'health-test',
+			$3, '', '{}'::jsonb, $4, $5, $6, $7)
+		RETURNING id
+	`, testWorkspaceID, "health-runtime-"+randomID(), status, lastSeen, updatedAt, runtimeOwnerID, visibility).Scan(&runtimeID); err != nil {
+		t.Fatalf("create health runtime: %v", err)
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, visibility, max_concurrent_tasks, owner_id,
+			instructions, custom_env, custom_args, mcp_config
+		)
+		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1, $4, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)
+		RETURNING id
+	`, testWorkspaceID, "health-agent-"+randomID(), runtimeID, testUserID).Scan(&agentID); err != nil {
+		t.Fatalf("create health agent: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_activity_event WHERE agent_id = $1`, agentID)
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+	return agentID, runtimeID
+}
+
+func createAgentHealthEvent(t *testing.T, agentID, runtimeID, eventType, state, reasonCode string) string {
+	t.Helper()
+	var eventID string
+	details := map[string]any{"state_after": state}
+	raw, err := json.Marshal(details)
+	if err != nil {
+		t.Fatalf("marshal event details: %v", err)
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_activity_event (
+			workspace_id, agent_id, runtime_id, event_kind, event_type, severity,
+			target_kind, target_id, reason_code, message, details
+		)
+		VALUES ($1, $2, $3, 'lifecycle', $4, 'info', 'agent', $2, $5, 'health event', $6::jsonb)
+		RETURNING id
+	`, testWorkspaceID, agentID, runtimeID, eventType, reasonCode, string(raw)).Scan(&eventID); err != nil {
+		t.Fatalf("create health event: %v", err)
+	}
+	return eventID
+}
+
+func dbAgentForHealthTest(t *testing.T) db.Agent {
+	t.Helper()
+	var agent db.Agent
+	agent.ID = parseUUID("11111111-1111-1111-1111-111111111111")
+	return agent
+}

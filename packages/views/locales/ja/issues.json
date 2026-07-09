@@ -237,6 +237,8 @@
     "due_date_removed": "期限を削除しました",
     "title_renamed": "このイシューのタイトルを \"{{from}}\" から \"{{to}}\" に変更しました",
     "description_updated": "説明を更新しました",
+    "execution_result": "アクティビティの更新",
+    "view_activity_run": "アクティビティを表示",
     "task_completed_other": "タスクを完了しました（{{count}} 回）",
     "task_failed_other": "タスクが失敗しました（{{count}} 回）",
     "squad_leader_evaluated": "スクワッドのトリガーを評価しました",

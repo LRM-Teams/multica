@@ -167,6 +167,49 @@ describe("SourceBackfillModal", () => {
     );
   });
 
+  it("dismisses on Submit and stays closed when the store still reports source-empty (task #230)", async () => {
+    // Reproduces the reported "Submit doesn't dismiss": a committed answer
+    // must close the modal and never be reopened this session — even if the
+    // auth store hasn't yet reflected the new source (stale re-emit / a
+    // parse-fallback user), which would otherwise let `needsSourceBackfill`
+    // re-corner the user.
+    setUser({
+      id: "u1",
+      onboarded_at: "2026-01-01T00:00:00Z",
+      onboarding_questionnaire: { source: [] },
+    });
+    const user = userEvent.setup();
+    const { rerender } = renderModal();
+    await user.click(await screen.findByText("Friends or colleagues"));
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => {
+      expect(mockSaveQuestionnaire).toHaveBeenCalledTimes(1);
+    });
+    // Modal is gone right after a successful Submit.
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/How did you hear about Multica/i),
+      ).not.toBeInTheDocument();
+    });
+    // The store re-emits a still-source-empty user (not yet refreshed). The
+    // terminal latch must keep the modal closed.
+    act(() => {
+      setUser({
+        id: "u1",
+        onboarded_at: "2026-01-01T00:00:00Z",
+        onboarding_questionnaire: { source: [] },
+      });
+    });
+    rerender(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <SourceBackfillModal />
+      </I18nProvider>,
+    );
+    expect(
+      screen.queryByText(/How did you hear about Multica/i),
+    ).not.toBeInTheDocument();
+  });
+
   it("Skip PATCHes source_skipped=true preserving role / use_case", async () => {
     setUser({
       id: "u1",

@@ -9,6 +9,8 @@ export interface TimelineItem {
   content?: string;
   input?: Record<string, unknown>;
   output?: string;
+  action_label?: string;
+  summary?: string;
   created_at?: string;
 }
 
@@ -27,6 +29,8 @@ export function coalesceTimelineItems(items: TimelineItem[]): TimelineItem[] {
       out[out.length - 1] = {
         ...prev,
         content: `${prev.content ?? ""}${item.content ?? ""}`,
+        action_label: item.action_label ?? prev.action_label,
+        summary: item.summary ?? prev.summary,
         created_at: item.created_at ?? prev.created_at,
       };
       continue;
@@ -60,6 +64,8 @@ export function buildTimeline(msgs: TaskMessagePayload[]): TimelineItem[] {
       content: msg.content,
       input: msg.input,
       output: msg.output,
+      action_label: msg.action_label,
+      summary: msg.summary,
       created_at: msg.created_at,
     });
   }

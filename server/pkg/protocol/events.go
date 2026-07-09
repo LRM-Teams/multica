@@ -38,6 +38,7 @@ const (
 	EventTaskCompleted             = "task:completed" // running → completed
 	EventTaskFailed                = "task:failed"    // running → failed
 	EventTaskMessage               = "task:message"
+	EventAgentActivityStep         = "agent_activity:step"
 	EventTaskCancelled             = "task:cancelled" // * → cancelled
 
 	// Inbox events
@@ -140,6 +141,16 @@ const (
 	// text content. Correlated by RequestID. See protocol.ReadWorkdirFile*.
 	EventDaemonReadFileRequest  = "daemon:read_file_request"
 	EventDaemonReadFileResponse = "daemon:read_file_response"
+	// Workdir single-file write RPC: server pushes a bounded UTF-8 text write,
+	// daemon writes inside the confined workdir root and replies with a content
+	// hash or conflict/error. Correlated by RequestID.
+	EventDaemonWriteFileRequest  = "daemon:write_file_request"
+	EventDaemonWriteFileResponse = "daemon:write_file_response"
+	// Agent initial-context seed RPC: server pushes Wendy-created notes/memory
+	// metadata after agent creation; daemon initializes the agent root and appends
+	// only whitelisted markdown files. Correlated by RequestID.
+	EventDaemonSeedAgentContextRequest  = "daemon:seed_agent_context_request"
+	EventDaemonSeedAgentContextResponse = "daemon:seed_agent_context_response"
 
 	// GitHub integration events
 	EventGitHubInstallationCreated = "github_installation:created"

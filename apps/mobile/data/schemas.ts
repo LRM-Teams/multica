@@ -614,6 +614,24 @@ export const RuntimeSchema: z.ZodType<RuntimeDevice> = z.object({
   last_seen_at: z.string().nullable().default(null),
   device_info: z.string().default(""),
   metadata: z.record(z.string(), z.unknown()).default({}),
+  capabilities: z.array(z.string()).optional(),
+  current_version: z.string().nullable().default(null),
+  target_version: z.string().nullable().optional(),
+  update_state: z
+    .enum([
+      "idle",
+      "pending",
+      "running",
+      "completed",
+      "ready_to_apply",
+      "failed",
+      "timed_out",
+    ])
+    .catch("idle"),
+  runtime_health: z
+    .enum(["ok", "update_available", "updating", "failed", "offline"])
+    .catch("ok"),
+  update_error: z.string().nullable().optional(),
   owner_id: z.string().nullable().default(null),
   visibility: z.string().catch("private") as unknown as z.ZodType<
     RuntimeDevice["visibility"]

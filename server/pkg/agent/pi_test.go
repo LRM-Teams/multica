@@ -219,6 +219,79 @@ func TestPiExecuteFailsAssistantStopReasonError(t *testing.T) {
 	}
 }
 
+func TestPiStopReasonAllowsEarlyComplete(t *testing.T) {
+	// Strict allowlist: only a genuinely terminal "stop" turn early-completes.
+	allow := []string{"stop", "STOP", " stop "}
+	for _, s := range allow {
+		if !piStopReasonAllowsEarlyComplete(s) {
+			t.Errorf("piStopReasonAllowsEarlyComplete(%q) = false, want true", s)
+		}
+	}
+	// Tool-use continuations and any unseen/empty reason must NOT early-complete
+	// (fail direction is "slow", never "mute").
+	deny := []string{"toolUse", "tool_use", "error", "", "endTurn", "maxTokens", "length", "unknown"}
+	for _, s := range deny {
+		if piStopReasonAllowsEarlyComplete(s) {
+			t.Errorf("piStopReasonAllowsEarlyComplete(%q) = true, want false", s)
+		}
+	}
+}
+
+// TestPiExecuteToolUseTurnDoesNotEarlyComplete guards the "先查后答" silent-DM
+// regression: a chat run whose first turn ends by calling a tool
+// (stopReason=toolUse) must NOT early-complete on that turn_end. Doing so
+// makes the daemon kill Pi before the follow-up turn that produces the
+// visible answer, yielding an empty output the daemon mis-reads as no_reply.
+// The fixed backend early-completes only on the later terminal turn, so the
+// Result carries the model's actual answer emitted after the tool result.
+func TestPiExecuteToolUseTurnDoesNotEarlyComplete(t *testing.T) {
+	t.Parallel()
+
+	fakePath := filepath.Join(t.TempDir(), "pi")
+	// Turn 1 ends with a tool call (toolUse) — the model has not answered yet.
+	// Turn 2 streams the real answer and ends terminally (stopReason=stop).
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' '{\"type\":\"agent_start\"}'\n" +
+		"printf '%s\\n' '{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"model\":\"test\",\"stopReason\":\"toolUse\",\"usage\":{\"input\":1,\"output\":1,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":2}}}'\n" +
+		"printf '%s\\n' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"final answer\"}}'\n" +
+		"printf '%s\\n' '{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"model\":\"test\",\"stopReason\":\"stop\",\"usage\":{\"input\":1,\"output\":2,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":3}}}'\n" +
+		"exit 0\n"
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	backend, err := New("pi", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("new pi backend: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+
+	select {
+	case result, ok := <-session.Result:
+		if !ok {
+			t.Fatal("result channel closed without a value")
+		}
+		if result.Status != "completed" {
+			t.Fatalf("expected status=completed, got %q (error=%q)", result.Status, result.Error)
+		}
+		// With the bug, early-complete fired on the toolUse turn_end and the
+		// Result carried an empty output. The fix defers to the terminal turn.
+		if result.Output != "final answer" {
+			t.Fatalf("expected output %q (answer produced after the tool turn), got %q — toolUse turn_end must not early-complete", "final answer", result.Output)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for result")
+	}
+}
+
 func TestFlushPiTextBufferKeepsUnmatchedToolPrefixes(t *testing.T) {
 	tests := []string{
 		"plain response: see below",

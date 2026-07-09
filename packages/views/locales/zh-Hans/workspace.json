@@ -32,17 +32,18 @@
     "sign_in_different": "使用其他账号登录"
   },
   "windy_setup": {
-    "title": "Set up Windy HR",
-    "description": "Required update for every member: choose where Windy runs, then we will refresh its runtime, model, and instructions.",
-    "intro": "Windy recruits useful agents from your chat and keeps the generated hiring card in the current conversation. Its Direct Message is pinned after setup.",
+    "title": "Set up Wendy HR",
+    "description": "为此工作区设置 Wendy HR：选择它的运行位置，我们会配好它的 runtime、模型和指令。你也可以稍后在 Wendy 设置里完成。",
+    "intro": "Wendy recruits useful agents from your chat and keeps the generated hiring card in the current conversation. Its Direct Message is pinned after setup.",
     "runtime_required_title": "Connect or share a runtime first",
-    "runtime_required_description": "Windy needs an available runtime before it can recruit agents or update its own instructions.",
+    "runtime_required_description": "Wendy needs an available runtime before it can recruit agents or update its own instructions.",
     "refresh_runtimes": "Refresh runtimes",
-    "one_time_note": "This prompt is one-time per member for the current Windy update.",
-    "update": "Update Windy",
+    "one_time_note": "这个设置提示只会出现一次——你随时可以稍后再完成。",
+    "update": "Update Wendy",
+    "later": "稍后",
     "badge_label": "Personal agent HR",
-    "intro_title": "Windy turns conversations into hires",
+    "intro_title": "Wendy turns conversations into hires",
     "one_time_label": "One-time update",
-    "runtime_move_note": "Pick any usable runtime now; Windy can be moved later from its agent settings."
+    "runtime_move_note": "Pick any usable runtime now; Wendy can be moved later from its agent settings."
   }
 }

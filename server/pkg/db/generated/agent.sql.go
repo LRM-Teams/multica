@@ -3001,3 +3001,25 @@ func (q *Queries) UpdateAgentTaskSession(ctx context.Context, arg UpdateAgentTas
 	_, err := q.db.Exec(ctx, updateAgentTaskSession, arg.ID, arg.SessionID, arg.WorkDir)
 	return err
 }
+
+const mergeTaskArealProxyContext = `-- name: MergeTaskArealProxyContext :exec
+UPDATE agent_task_queue
+SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object('areal_proxy', $2::jsonb)
+WHERE id = $1
+`
+
+type MergeTaskArealProxyContextParams struct {
+	ID         pgtype.UUID `json:"id"`
+	ArealProxy []byte      `json:"areal_proxy"`
+}
+
+// Merges the training RL proxy config into the task's context JSONB via a
+// single read-modify-write. COALESCE handles a NULL/empty context; the `||`
+// operator preserves every existing top-level key (e.g. squad_id) and
+// overwrites only the areal_proxy sub-object. Used by the session-open hook.
+// This intentionally does NOT touch agent_task_queue.session_id, which is the
+// runtime/chat session pointer, not the RL session.
+func (q *Queries) MergeTaskArealProxyContext(ctx context.Context, arg MergeTaskArealProxyContextParams) error {
+	_, err := q.db.Exec(ctx, mergeTaskArealProxyContext, arg.ID, arg.ArealProxy)
+	return err
+}

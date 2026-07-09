@@ -12,6 +12,8 @@ import type {
   ListIssuesParams,
   ListGroupedIssuesParams,
   Agent,
+  AgentFileContentResponse,
+  AgentFilesResponse,
   CreateAgentRequest,
   CreateAgentDraftRequest,
   AgentCreationDraft,
@@ -27,7 +29,10 @@ import type {
   UpdateAgentRequest,
   AgentEnvResponse,
   UpdateAgentEnvRequest,
+  UpdateAgentFileContentRequest,
+  UpdateAgentFileContentResponse,
   AgentTask,
+  AgentHealthResponse,
   AgentActivityBucket,
   AgentRunCount,
   AgentRuntime,
@@ -44,6 +49,7 @@ import type {
   User,
   Skill,
   SkillSummary,
+  PlatformSkillSummary,
   AgentMemory,
   ListAgentSkillSuggestionsResponse,
   DecideAgentSkillSuggestionRequest,
@@ -84,6 +90,7 @@ import type {
   ChannelMember,
   ChannelMessage,
   ChannelMessagesPage,
+  MarkChannelReadResult,
   ChannelReaction,
   ChannelMessageSearchResponse,
   ChannelThreadMessagesPage,
@@ -179,6 +186,9 @@ import {
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
   EMPTY_AGENT_TEMPLATE_DETAIL,
+  EMPTY_AGENT_FILE_CONTENT_RESPONSE,
+  EMPTY_AGENT_FILES_RESPONSE,
+  EMPTY_AGENT_HEALTH_RESPONSE,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
   EMPTY_ATTACHMENT,
@@ -197,7 +207,14 @@ import {
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
   AppConfigSchema,
+  AgentFileContentResponseSchema,
+  AgentFilesResponseSchema,
+  AgentHealthResponseSchema,
+  ChannelMessagesPageSchema,
+  ChannelThreadMessagesPageSchema,
   ChannelMessageSearchResponseSchema,
+  EMPTY_CHANNEL_MESSAGES_PAGE,
+  EMPTY_CHANNEL_THREAD_MESSAGES_PAGE,
   StickerCatalogResponseSchema,
   type AppConfigResponse,
   GroupedIssuesResponseSchema,
@@ -232,8 +249,10 @@ import {
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
   EMPTY_CANCEL_TASK_RESPONSE,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
+  EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE,
   EvolutionReviewSubmissionListSchema,
   EvolutionReviewSubmissionSchema,
+  UpdateAgentFileContentResponseSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -298,6 +317,14 @@ export class PreviewUnsupportedError extends Error {
     this.name = "PreviewUnsupportedError";
   }
 }
+
+// Composer sends must never hang forever: a stalled fetch (network stall,
+// held-open connection, stuck backend) is aborted after this window so the
+// composer lock releases and a visible retry error shows instead of an endless
+// spinner. Aborting an already-landed send is harmless — retries dedupe via
+// client_message_id. Per-request on purpose: uploads / long queries keep their
+// own (or no) timeout (#294).
+const SEND_TIMEOUT_MS = 30_000;
 
 export class ApiClient {
   private baseUrl: string;
@@ -607,6 +634,11 @@ export class ApiClient {
     project_id?: string | null;
     parent_issue_id?: string | null;
     attachment_ids?: string[];
+    source?: {
+      channel_id: string;
+      message_id?: string | null;
+      thread_root_message_id?: string | null;
+    } | null;
   }): Promise<{ task_id: string }> {
     return this.fetch("/api/issues/quick-create", {
       method: "POST",
@@ -896,6 +928,13 @@ export class ApiClient {
     return this.fetch(`/api/agents/${id}/archive`, { method: "POST" });
   }
 
+  async getAgentHealth(id: string): Promise<AgentHealthResponse> {
+    const raw = await this.fetch<unknown>(`/api/agents/${id}/health`);
+    return parseWithFallback(raw, AgentHealthResponseSchema, EMPTY_AGENT_HEALTH_RESPONSE, {
+      endpoint: "GET /api/agents/:id/health",
+    });
+  }
+
   /**
    * Returns the plaintext `custom_env` map for an agent. Owner/admin
    * only; calls from agent-actor sessions get a 403. Every successful
@@ -919,6 +958,40 @@ export class ApiClient {
       method: "PUT",
       body: JSON.stringify(data),
     });
+  }
+
+  async listAgentFiles(id: string, params?: { include_hidden?: boolean }): Promise<AgentFilesResponse> {
+    const search = new URLSearchParams();
+    if (params?.include_hidden) search.set("include_hidden", "true");
+    const suffix = search.toString() ? `?${search}` : "";
+    const raw = await this.fetch<unknown>(`/api/agents/${id}/files${suffix}`);
+    return parseWithFallback(raw, AgentFilesResponseSchema, EMPTY_AGENT_FILES_RESPONSE, {
+      endpoint: "GET /api/agents/:id/files",
+    });
+  }
+
+  async getAgentFileContent(id: string, path: string): Promise<AgentFileContentResponse> {
+    const search = new URLSearchParams({ path });
+    const raw = await this.fetch<unknown>(`/api/agents/${id}/files/content?${search}`);
+    return parseWithFallback(raw, AgentFileContentResponseSchema, EMPTY_AGENT_FILE_CONTENT_RESPONSE, {
+      endpoint: "GET /api/agents/:id/files/content",
+    });
+  }
+
+  async updateAgentFileContent(
+    id: string,
+    data: UpdateAgentFileContentRequest,
+  ): Promise<UpdateAgentFileContentResponse> {
+    const raw = await this.fetch<unknown>(`/api/agents/${id}/files/content`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(
+      raw,
+      UpdateAgentFileContentResponseSchema,
+      EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE,
+      { endpoint: "PUT /api/agents/:id/files/content" },
+    );
   }
 
   async restoreAgent(id: string): Promise<Agent> {
@@ -1694,6 +1767,16 @@ export class ApiClient {
     });
   }
 
+  async listPlatformSkills(): Promise<PlatformSkillSummary[]> {
+    return this.fetch("/api/skills/platform");
+  }
+
+  async installPlatformSkill(name: string): Promise<Skill> {
+    return this.fetch(`/api/skills/platform/${encodeURIComponent(name)}/install`, {
+      method: "POST",
+    });
+  }
+
   async updateSkill(id: string, data: UpdateSkillRequest): Promise<Skill> {
     return this.fetch(`/api/skills/${id}`, {
       method: "PUT",
@@ -1924,6 +2007,7 @@ export class ApiClient {
     return this.fetch(`/api/chat/sessions/${sessionId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
   }
 
@@ -2073,18 +2157,15 @@ export class ApiClient {
         params.set("before_id", options.before.id);
       }
     }
-    const raw = await this.fetch<ChannelMessage[] | Partial<ChannelMessagesPage>>(
+    const raw = await this.fetch<unknown>(
       `/api/channels/${channelId}/messages?${params.toString()}`,
     );
-    if (Array.isArray(raw)) {
-      return { messages: raw, limit, has_more: false, next_cursor: null };
-    }
-    return {
-      messages: raw.messages ?? [],
-      limit: raw.limit ?? limit,
-      has_more: raw.has_more ?? false,
-      next_cursor: raw.next_cursor ?? null,
-    };
+    return parseWithFallback(
+      raw,
+      ChannelMessagesPageSchema,
+      { ...EMPTY_CHANNEL_MESSAGES_PAGE, limit },
+      { endpoint: "GET /api/channels/{channelId}/messages" },
+    );
   }
 
   async listChannelMessageThread(
@@ -2103,24 +2184,15 @@ export class ApiClient {
       params.set("before_id", options.beforeId);
     }
     const suffix = params.toString();
-    const res = await this.fetchRaw(
+    const raw = await this.fetch<unknown>(
       `/api/channels/${channelId}/messages/${messageId}/thread${suffix ? `?${suffix}` : ""}`,
-      { extraHeaders: { "Content-Type": "application/json" } },
     );
-    const messages = await res.json() as ChannelMessage[];
-    const beforeSeq = res.headers.get("X-Next-Before-Seq");
-    const before = res.headers.get("X-Next-Before");
-    const beforeId = res.headers.get("X-Next-Before-Id");
-    return {
-      messages,
-      next_cursor: before && beforeId
-        ? {
-            before,
-            before_id: beforeId,
-            before_seq: beforeSeq ? Number.parseInt(beforeSeq, 10) : undefined,
-          }
-        : null,
-    };
+    return parseWithFallback(
+      raw,
+      ChannelThreadMessagesPageSchema,
+      EMPTY_CHANNEL_THREAD_MESSAGES_PAGE,
+      { endpoint: "GET /api/channels/{channelId}/messages/{messageId}/thread" },
+    );
   }
 
   async searchChannelMessages(channelId: string, query: string, limit?: number): Promise<ChannelMessageSearchResponse> {
@@ -2164,7 +2236,28 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
+  }
+
+  async editChannelMessage(
+    channelId: string,
+    messageId: string,
+    content: string,
+    parts?: MessagePart[],
+  ): Promise<ChannelMessage> {
+    const body: { content: string; parts?: MessagePart[] } = { content };
+    if (parts && parts.length > 0) {
+      body.parts = parts;
+    }
+    return this.fetch(`/api/channels/${channelId}/messages/${messageId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async deleteChannelMessage(channelId: string, messageId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/messages/${messageId}`, { method: "DELETE" });
   }
 
   async addChannelReaction(channelId: string, messageId: string, emoji: string): Promise<ChannelReaction> {
@@ -2189,6 +2282,7 @@ export class ApiClient {
     replyToMessageId?: string | null,
     parts?: MessagePart[],
     clientMessageId?: string | null,
+    showInChannel?: boolean,
   ): Promise<ChannelMessage> {
     const body: {
       content: string;
@@ -2196,6 +2290,7 @@ export class ApiClient {
       reply_to_message_id?: string;
       parts?: MessagePart[];
       client_message_id?: string;
+      show_in_channel?: boolean;
     } = { content };
     if (attachmentIds && attachmentIds.length > 0) {
       body.attachment_ids = attachmentIds;
@@ -2209,9 +2304,13 @@ export class ApiClient {
     if (clientMessageId) {
       body.client_message_id = clientMessageId;
     }
+    if (showInChannel === true) {
+      body.show_in_channel = true;
+    }
     return this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread`, {
       method: "POST",
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
   }
 
@@ -2247,8 +2346,10 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/active-tasks`);
   }
 
-  async markChannelRead(channelId: string): Promise<void> {
-    await this.fetch(`/api/channels/${channelId}/read`, { method: "POST" });
+  async markChannelRead(channelId: string): Promise<MarkChannelReadResult> {
+    return this.fetch<MarkChannelReadResult>(`/api/channels/${channelId}/read`, {
+      method: "POST",
+    });
   }
 
   async setChannelTyping(channelId: string, isTyping: boolean): Promise<void> {

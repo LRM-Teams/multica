@@ -11,7 +11,7 @@ import { useT } from "../i18n";
 /**
  * Shared "Send message" affordance behaviour for the three DM entry points
  * (Cmd+K results, agent hover card, channel member row): create-or-find the DM
- * with the peer, then open it in the Messages view via the `?dm=` deep link.
+ * with the peer, then open it in the Messages view via the channel detail path.
  *
  * Idempotent on the server, so repeated clicks resolve to the same DM. The
  * returned promise resolves with the DMItem in case the caller wants to react
@@ -30,7 +30,7 @@ export function useOpenDM(): {
     async (body: CreateOrFindDMBody): Promise<DMItem | null> => {
       try {
         const dm = await createOrFind.mutateAsync(body);
-        push(`${paths.channels()}?dm=${dm.id}`);
+        push(paths.channelDetail(dm.id));
         return dm;
       } catch {
         toast.error(t(($) => $.dm.open_failed));

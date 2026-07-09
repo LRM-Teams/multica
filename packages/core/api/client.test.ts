@@ -78,6 +78,31 @@ describe("ApiClient", () => {
     }
   });
 
+  it("sends explicit show_in_channel only for thread main-timeline display requests", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ id: "m-1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+
+    await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-1");
+    await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-2", false);
+    await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-3", true);
+
+    const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+    expect(bodies[0]).not.toHaveProperty("show_in_channel");
+    expect(bodies[1]).not.toHaveProperty("show_in_channel");
+    expect(bodies[2]).toMatchObject({
+      content: "hello",
+      client_message_id: "client-3",
+      show_in_channel: true,
+    });
+  });
+
   it("uses the expected HTTP contract for autopilot endpoints", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({ autopilots: [], runs: [], total: 0 }), {
@@ -575,14 +600,16 @@ describe("ApiClient", () => {
 
     it("uses and returns before_seq for thread cursors", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
-        new Response(JSON.stringify([channelMessage]), {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "X-Next-Before-Seq": "42",
-            "X-Next-Before": channelMessage.created_at,
-            "X-Next-Before-Id": channelMessage.id,
+        new Response(JSON.stringify({
+          messages: [channelMessage],
+          next_cursor: {
+            before_seq: 42,
+            before: channelMessage.created_at,
+            before_id: channelMessage.id,
           },
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
         }),
       );
       vi.stubGlobal("fetch", fetchMock);
@@ -602,6 +629,36 @@ describe("ApiClient", () => {
         before: channelMessage.created_at,
         before_id: channelMessage.id,
       });
+    });
+
+    it("falls back when channel messages page response is malformed", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ messages: null }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      const page = await client.listChannelMessagesPage("channel-1", { limit: 25 });
+
+      expect(page).toEqual({ messages: [], limit: 25, has_more: false, next_cursor: null });
+    });
+
+    it("falls back when channel thread response is malformed", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ messages: null }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      const page = await client.listChannelMessageThread("channel-1", "root-1");
+
+      expect(page).toEqual({ messages: [], next_cursor: null });
     });
   });
 

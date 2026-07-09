@@ -305,6 +305,7 @@ var knownBrewPrefixes = []string{"/opt/homebrew", "/usr/local", "/home/linuxbrew
 // `brew --prefix`: callers reach for it when `brew --prefix` is unavailable
 // (brew not on PATH) but the binary's path still betrays its install root.
 func MatchKnownBrewPrefix(path string) string {
+	path = filepath.ToSlash(path)
 	for _, prefix := range knownBrewPrefixes {
 		if strings.HasPrefix(path, prefix+"/Cellar/") {
 			return prefix
@@ -351,7 +352,7 @@ func updateTargetPath(exePath string) (string, error) {
 
 func updateTargetPathFromResolved(resolved string) string {
 	if prefix := MatchKnownBrewPrefix(resolved); prefix != "" {
-		return filepath.Join(prefix, "bin", "multica")
+		return prefix + "/bin/multica"
 	}
 	return resolved
 }

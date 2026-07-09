@@ -21,9 +21,16 @@ on:
   # Deploy only when a PR is MERGED into `dev` or `main`.
   # Direct pushes do NOT deploy — the disciplined flow is
   # feature branch → PR → merge to target branch → deploy.
+  # Docs-only PRs (#354 bug) are excluded — they don't change any code, so
+  # triggering a backend rebuild/restart would disconnect all WS connections
+  # for zero benefit.
   pull_request:
     types: [closed]
     branches: [dev, main]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "**/*.md"
   workflow_dispatch:
     inputs:
       image_tag:
@@ -206,10 +213,16 @@ jobs:
               --env-file "${DEPLOY_DIR}/.env" \
               -f "${GITHUB_WORKSPACE}/docker-compose.selfhost.yml" "$@"
           }
-          # Postgres is left running; only the app services roll. The backend
-          # container runs `migrate up` on start (entrypoint.sh).
-          compose pull backend frontend
-          compose up -d backend frontend
+          # postgres + caddy are left running; only the app services roll.
+          # The backend container runs `migrate up` on start (entrypoint.sh).
+          compose pull frontend backend
+          # Start frontend before backend so Caddy can resolve the frontend DNS name
+          # before the backend health check begins — avoids the container-restart
+          # DNS race that caused intermittent 'no such host' errors (#324).
+          compose up -d frontend
+          compose up -d backend
+          # Prune unused Docker images to prevent disk from filling up (#327).
+          docker image prune -af
 
           if [ "${TARGET_BRANCH}" = "main" ]; then
             if ! docker container inspect multica-main-caddy >/dev/null 2>&1; then

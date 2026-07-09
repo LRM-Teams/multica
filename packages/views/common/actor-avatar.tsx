@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import {
   HoverCard,
@@ -8,8 +9,12 @@ import {
   HoverCardContent,
 } from "@multica/ui/components/ui/hover-card";
 import { useActorName } from "@multica/core/workspace/hooks";
-import { useAgentPresenceDetail } from "@multica/core/agents";
+import {
+  useAgentHealth,
+  useAgentPresenceDetail,
+} from "@multica/core/agents";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
+import { resolveHealthDotClass } from "../agents/health";
 import { AgentProfileCard } from "../agents/components/agent-profile-card";
 import { AgentLivePeekCard } from "../agents/components/agent-live-peek-card";
 import { MemberProfileCard } from "../members/member-profile-card";
@@ -102,15 +107,14 @@ export function ActorAvatar({
   );
 
   // Optional presence dot overlay. Only meaningful for agents — members have
-  // no presence backbone. Wrapping unconditionally with relative inline-flex
-  // would create extra DOM for every avatar; we only wrap when a dot is asked
-  // for.
+  // no presence backbone. Wrapping unconditionally would create extra DOM for
+  // every avatar; we only wrap when a dot is asked for. `AgentPresenceOverlay`
+  // is the single, stretch-proof presence container (see its doc comment).
   const wrapDot = showStatusDot && actorType === "agent";
   const dotted = wrapDot ? (
-    <span className="relative inline-flex">
+    <AgentPresenceOverlay agentId={actorId} size={size}>
       {avatar}
-      <AgentStatusDot agentId={actorId} size={size} />
-    </span>
+    </AgentPresenceOverlay>
   ) : (
     avatar
   );
@@ -196,26 +200,107 @@ function ActorAvatarProfileLink({
   );
 }
 
+/**
+ * The single, stretch-proof presence container. Renders a **fixed-size,
+ * non-stretchable** box exactly the avatar's size, with the status dot
+ * absolutely anchored to its bottom-right.
+ *
+ * Root cause this guards against: the old wrapper was a bare
+ * `relative inline-flex` whose height was `auto`, so when its parent was a CSS
+ * grid / flex row with the default `align-items: stretch` (e.g. the channel
+ * message bubble's `grid grid-cols-[28px_…]`), the wrapper stretched to the
+ * full row height. The dot's `absolute bottom-0 right-0` then anchored to the
+ * stretched box's bottom — i.e. the message's bottom-left — instead of the
+ * avatar. Pinning an **explicit** width/height (not `self-start`) makes the
+ * box immune to stretch — `align-items: stretch` only stretches items whose
+ * cross size is `auto` — while preserving centering in `items-center` rows, so
+ * every existing face keeps its alignment and the dot can never detach.
+ *
+ * This is the ONE implementation of avatar + presence; all faces route through
+ * it (via `ActorAvatar showStatusDot` or, for surfaces holding a base avatar,
+ * directly) so there are no hand-rolled, stretch-fragile wrappers.
+ */
+export function AgentPresenceOverlay({
+  agentId,
+  size,
+  className,
+  children,
+}: {
+  agentId: string;
+  size?: number;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  // Base avatar defaults to 20px when `size` is omitted — keep the box in sync
+  // so it hugs the avatar exactly.
+  const boxSize = size ?? 20;
+  return (
+    <span
+      data-slot="agent-presence"
+      className={cn("relative inline-flex shrink-0", className)}
+      style={{ width: boxSize, height: boxSize }}
+    >
+      {children}
+      <AgentStatusDot agentId={agentId} size={size} />
+    </span>
+  );
+}
+
 // Small presence indicator overlaid on the bottom-right of an agent avatar.
-// Only renders on hover-enabled surfaces so dense decorative chips (e.g. the
-// 14 px owner sub-avatar in agents-list rows) stay visually clean. The dot
-// scales with the avatar size — anything ≥24 px gets the standard 8 px dot,
-// smaller avatars use a 6 px dot so the indicator doesn't overwhelm them.
-// Exported for surfaces that render the base avatar directly (e.g. comment
-// trigger chips) but still want the standard presence dot.
+// Must live inside a fixed-size container (see `AgentPresenceOverlay`) so its
+// absolute anchoring lands on the avatar, not a stretched grid cell. The dot
+// diameter is proportional to the avatar size (≈28%, clamped to a legible
+// minimum) so it reads correctly on both dense participant stacks (14–18px)
+// and large avatars. Exported for surfaces that render the base avatar
+// directly (e.g. comment trigger chips) but still want the standard dot.
 export function AgentStatusDot({ agentId, size }: { agentId: string; size?: number }) {
   const ws = useCurrentWorkspace();
   const detail = useAgentPresenceDetail(ws?.id, agentId);
+  // COLOR source: connectivity health (Iris §1) — the SAME source as the
+  // Activity tab Health block, so the dot can never drift from the tab.
+  const { summary: healthSummary } = useAgentHealth(agentId);
   if (detail === "loading") return null;
 
-  const { dotClass, label } = availabilityConfig[detail.availability];
-  const dotSize = (size ?? 24) >= 24 ? "h-1.5 w-1.5" : "h-1 w-1";
+  const { dotClass: availabilityDotClass, label } =
+    availabilityConfig[detail.availability];
+  // TODO(#266): once the BE health API is live, health_summary.state is the
+  // SOLE dot color source. Until then the dot degrades to the availability
+  // color when the summary is missing (endpoint not deployed / loading) so it
+  // never blanks or crashes. STRUCTURE (fixed box, proportional dot, cut-out
+  // ring) and PULSE (a workload overlay, below) are unchanged — orthogonal to
+  // color.
+  const dotClass = resolveHealthDotClass(healthSummary, availabilityDotClass);
+  // Diameter tracks the avatar so the indicator is proportional everywhere,
+  // with a floor so it never disappears on the smallest (14–16px) avatars.
+  const diameter = Math.max(5, Math.round((size ?? 24) * 0.28));
+  const dotStyle = { width: diameter, height: diameter };
   // "Working" is a motion cue layered on top of the online color, not a new
   // color — amber is already taken by `unstable`. A slow breathing pulse
   // communicates "online + actively running a task" without colliding with
   // the availability palette. `idle` / `queued` / non-online stay static.
-  const isWorking = detail.availability === "online" && detail.workload === "working";
+  //
+  // Gate the pulse on the SAME connectivity axis as the dot color (Iris): a
+  // disconnected agent must never appear to be "working". When health is known,
+  // pulse only on a healthy link (online / recovered); when the summary is
+  // absent (transitional / no record yet) fall back to the availability signal,
+  // consistent with the color fallback above.
+  const connectivityOk = healthSummary
+    ? healthSummary.state === "online" || healthSummary.state === "recovered"
+    : detail.availability === "online";
+  const isWorking = connectivityOk && detail.workload === "working";
   const statusLabel = isWorking ? `${label} · Working` : label;
+
+  // §3-v2 ①: an OFFLINE agent's dot is a HOLLOW gray ring (ring-only, no fill)
+  // so "unavailable" reads distinctly from the filled active states. On tiny
+  // participant-stack dots (~5px) a hollow ring is unreadable, so those fall
+  // back to the filled gray. Only the known-offline health state is hollow;
+  // the transitional availability fallback and all other states stay filled.
+  const HOLLOW_MIN_PX = 8;
+  const isOfflineHollow =
+    healthSummary?.state === "offline" && diameter >= HOLLOW_MIN_PX;
+  const dotColorClass = isOfflineHollow
+    ? "border-2 border-muted-foreground/50 bg-transparent"
+    : dotClass;
 
   return (
     <span className="absolute bottom-0 right-0 inline-flex">
@@ -225,14 +310,18 @@ export function AgentStatusDot({ agentId, size }: { agentId: string; size?: numb
         // aria-hidden: the label on the static dot already conveys "Working".
         <span
           aria-hidden="true"
-          className={`absolute inline-flex ${dotSize} animate-ping rounded-full ${dotClass} opacity-60 motion-reduce:hidden`}
+          style={dotStyle}
+          className={`absolute inline-flex animate-ping rounded-full ${dotClass} opacity-60 motion-reduce:hidden`}
         />
       )}
+      {/* `ring-background` is a cut-out ring the color of the surface behind the
+          dot, so it stays legible on dark/light/hover/selected backgrounds. */}
       <span
         aria-label={`Status: ${statusLabel}`}
         title={statusLabel}
-        className={`relative rounded-full ring-1 ring-background ${dotClass} ${dotSize} ${
-          isWorking ? "motion-reduce:ring-2 motion-reduce:ring-brand" : ""
+        style={dotStyle}
+        className={`relative rounded-full ring-2 ring-background ${dotColorClass} ${
+          isWorking ? "motion-reduce:ring-brand" : ""
         }`}
       />
     </span>

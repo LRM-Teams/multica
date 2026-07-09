@@ -12,6 +12,22 @@ vi.mock("../../issues/components/comment-card", () => ({
   AttachmentList: () => null,
 }));
 
+vi.mock("./message-parts-renderer", () => ({
+  MessagePartsRenderer: ({
+    parts,
+  }: {
+    parts: { type: string; sticker_id?: string; alt?: string }[];
+  }) => (
+    <div data-testid="message-parts-renderer">
+      {parts.map((part, index) =>
+        part.type === "sticker" ? (
+          <img key={index} data-testid="message-sticker" alt={part.alt ?? ""} />
+        ) : null,
+      )}
+    </div>
+  ),
+}));
+
 vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: ({ actorId }: { actorId: string }) => (
     <span data-testid="actor-avatar">{actorId}</span>
@@ -29,16 +45,22 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   }),
 }));
 
+vi.mock("../../common/use-viewing-timezone", () => ({
+  useViewingTimezone: () => "UTC",
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (
       selector: (resources: {
         message: { agent_badge: string };
         thread: { collapse_message: string; show_full_message: string; view_parent: string };
+        time: { today: string; yesterday: string };
       }) => string,
     ) =>
       selector({
         message: { agent_badge: "Agent" },
+        time: { today: "Today", yesterday: "Yesterday" },
         thread: {
           collapse_message: "Collapse message",
           show_full_message: "Show full message",
@@ -114,7 +136,11 @@ describe("ThreadRootPreview", () => {
     expect(screen.queryByText("andong3")).not.toBeInTheDocument();
   });
 
-  it("uses compact part text for sticker root previews", () => {
+  // Sticker root previews must render the sticker as an IMAGE, matching the
+  // channel message bubble (MessagePartsRenderer) — not the flattened
+  // `[Sticker] …` label. This is what keeps channel and thread rendering
+  // consistent for the same message.
+  it("renders sticker parts as images in the root preview", () => {
     render(
       <ThreadRootPreview
         message={makeMessage({
@@ -125,7 +151,29 @@ describe("ThreadRootPreview", () => {
       />,
     );
 
-    expect(screen.getByText("[Sticker] Hi sticker")).toBeInTheDocument();
+    expect(screen.getByTestId("message-sticker")).toBeInTheDocument();
+    expect(screen.queryByText("[Sticker] Hi sticker")).not.toBeInTheDocument();
     expect(screen.queryByText(":sticker:hi:")).not.toBeInTheDocument();
+  });
+
+  // GAP 2 — load-bearing invariant. A structured-action envelope with no
+  // renderable text parts and no output must unwrap to the neutral "…"
+  // placeholder, which keeps `compactBody` truthy so the compact body NEVER
+  // falls through to rendering the raw envelope JSON as markdown. If a future
+  // change made the placeholder empty, `compactBody` would become falsy and the
+  // raw JSON would leak — this test would then fail.
+  it("shows the neutral placeholder, never raw envelope JSON, for a root with no renderable text", () => {
+    const raw = '{"action":"message_send","parts":[{"type":"image","url":"x"}]}';
+    const { container } = render(
+      <ThreadRootPreview
+        message={makeMessage({ content: raw, parts: [] })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("…")).toBeInTheDocument();
+    expect(container.textContent).not.toContain('"action"');
+    expect(container.textContent).not.toContain("{");
+    expect(container.textContent).not.toContain("image");
   });
 });

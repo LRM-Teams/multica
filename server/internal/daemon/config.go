@@ -571,7 +571,7 @@ func ResolveWorkspacesRoot(profile, override string) (string, error) {
 		root = override
 	}
 	if root == "" {
-		home, err := os.UserHomeDir()
+		home, err := userHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("resolve home directory: %w (set MULTICA_WORKSPACES_ROOT to override)", err)
 		}
@@ -645,7 +645,7 @@ var codexDesktopAppBundlePaths = func() []string {
 	paths := []string{
 		"/Applications/Codex.app/Contents/Resources/codex",
 	}
-	if home, err := os.UserHomeDir(); err == nil {
+	if home, err := userHomeDir(); err == nil {
 		paths = append(paths, filepath.Join(home, "Applications", "Codex.app", "Contents", "Resources", "codex"))
 	}
 	return paths

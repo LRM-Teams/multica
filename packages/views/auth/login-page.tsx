@@ -61,6 +61,11 @@ interface LoginPageProps {
    *  app?" prompt; desktop omits it (a download prompt inside the app
    *  would be absurd). */
   extra?: ReactNode;
+  /** Pre-seeded error message, e.g. an OAuth-callback `?error=` code
+   *  mapped to localized copy by the host page. Rendered in the same
+   *  destructive line as interactive errors; cleared as soon as the user
+   *  acts (submits / edits), so it never sticks across a real attempt. */
+  initialError?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,13 +110,16 @@ export function LoginPage({
   onTokenObtained,
   onGoogleLogin,
   extra,
+  initialError,
 }: LoginPageProps) {
   const { t } = useT("auth");
   const qc = useQueryClient();
   const [step, setStep] = useState<"email" | "code" | "cli_confirm">("email");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
-  const [error, setError] = useState("");
+  // Seed from a host-supplied error (e.g. an OAuth-callback `?error=`), so a
+  // redirect back to /login surfaces why sign-in failed instead of a blank form.
+  const [error, setError] = useState(initialError ?? "");
   const [loading, setLoading] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   const [existingUser, setExistingUser] = useState<User | null>(null);

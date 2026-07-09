@@ -59,6 +59,10 @@ type ListWorkdirFilesRequestPayload struct {
 	RelPath    string `json:"rel_path"`
 	MaxEntries int    `json:"max_entries,omitempty"`
 	MaxDepth   int    `json:"max_depth,omitempty"`
+	// HideDotfiles skips files/directories whose basename starts with ".".
+	// Project file browsing leaves this false; agent config browsing toggles it
+	// from the UI's "show hidden files" eye button.
+	HideDotfiles bool `json:"hide_dotfiles,omitempty"`
 }
 
 // WorkdirFileNode is one entry in a flat workdir listing. Path is relative to
@@ -100,15 +104,61 @@ type ReadWorkdirFileRequestPayload struct {
 // set (no Content) for non-text files that aren't a known media type; TooLarge
 // when over the byte cap; Truncated when text was cut to the cap.
 type ReadWorkdirFileResponsePayload struct {
-	RequestID string `json:"request_id"`
-	Content   string `json:"content,omitempty"`
-	Encoding  string `json:"encoding,omitempty"`
-	MimeType  string `json:"mime_type,omitempty"`
-	Truncated bool   `json:"truncated,omitempty"`
-	TooLarge  bool   `json:"too_large,omitempty"`
-	Binary    bool   `json:"binary,omitempty"`
-	Missing   bool   `json:"missing,omitempty"`
-	Error     string `json:"error,omitempty"`
+	RequestID   string `json:"request_id"`
+	Content     string `json:"content,omitempty"`
+	Encoding    string `json:"encoding,omitempty"`
+	MimeType    string `json:"mime_type,omitempty"`
+	ContentHash string `json:"content_hash,omitempty"`
+	Truncated   bool   `json:"truncated,omitempty"`
+	TooLarge    bool   `json:"too_large,omitempty"`
+	Binary      bool   `json:"binary,omitempty"`
+	Missing     bool   `json:"missing,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// WriteWorkdirFileRequestPayload is pushed server→daemon to replace one UTF-8
+// text file inside a confined workdir root. ExpectedContentHash, when present,
+// must match the current file hash or the daemon returns Conflict without
+// modifying the file.
+type WriteWorkdirFileRequestPayload struct {
+	RequestID           string `json:"request_id"`
+	RuntimeID           string `json:"runtime_id"`
+	RelPath             string `json:"rel_path"`
+	FilePath            string `json:"file_path"`
+	Content             string `json:"content"`
+	ExpectedContentHash string `json:"expected_content_hash,omitempty"`
+	MaxBytes            int    `json:"max_bytes,omitempty"`
+}
+
+// WriteWorkdirFileResponsePayload is the daemon→server reply for a text write.
+type WriteWorkdirFileResponsePayload struct {
+	RequestID   string `json:"request_id"`
+	ContentHash string `json:"content_hash,omitempty"`
+	Conflict    bool   `json:"conflict,omitempty"`
+	TooLarge    bool   `json:"too_large,omitempty"`
+	Binary      bool   `json:"binary,omitempty"`
+	Missing     bool   `json:"missing,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// SeedAgentContextRequestPayload asks the daemon that owns RuntimeID to create
+// the target Multica agent root (if missing) and append Wendy-provided initial
+// notes/memory into whitelisted markdown files under RelPath.
+type SeedAgentContextRequestPayload struct {
+	RequestID     string            `json:"request_id"`
+	RuntimeID     string            `json:"runtime_id"`
+	RelPath       string            `json:"rel_path"`
+	InitialNotes  map[string]string `json:"initial_notes,omitempty"`
+	InitialMemory map[string]string `json:"initial_memory,omitempty"`
+	MaxBytes      int               `json:"max_bytes,omitempty"`
+}
+
+// SeedAgentContextResponsePayload is the daemon reply for initial context seeding.
+type SeedAgentContextResponsePayload struct {
+	RequestID string   `json:"request_id"`
+	Written   []string `json:"written,omitempty"`
+	TooLarge  bool     `json:"too_large,omitempty"`
+	Error     string   `json:"error,omitempty"`
 }
 
 // TaskProgressPayload is sent from daemon to server during task execution.
@@ -124,6 +174,8 @@ type TaskCompletedPayload struct {
 	TaskID                 string               `json:"task_id"`
 	PRURL                  string               `json:"pr_url,omitempty"`
 	Action                 string               `json:"action,omitempty"`
+	Target                 string               `json:"target,omitempty"`
+	Options                *ChatOutputOptions   `json:"options,omitempty"`
 	Type                   string               `json:"type,omitempty"`
 	Output                 string               `json:"output,omitempty"`
 	Parts                  []MessagePart        `json:"parts,omitempty"`
@@ -146,17 +198,42 @@ const (
 
 const (
 	DaemonCapabilityChannelOutputActions = "channel_output_actions"
+	DaemonCapabilityAgentCLITransport    = "agent_cli_transport"
 )
 
 const (
 	ChannelOutputSuppressedReasonDaemonOutdated       = "daemon_outdated"
+	ChannelOutputSuppressedReasonLegacyProtocolOutput = "legacy_protocol_output"
+	ChannelOutputSuppressedReasonNoReplyRationale     = "no_reply_rationale"
+	ChannelOutputSuppressedReasonToolTransportOutput  = "tool_transport_output"
 	ChannelOutputSuppressedReasonInvalidOutput        = "invalid_output"
 	ChannelOutputSuppressedReasonInvalidAction        = "invalid_action"
 	ChannelOutputSuppressedReasonInvalidType          = "invalid_type"
 	ChannelOutputSuppressedReasonEmptyMessage         = "empty_message"
 	ChannelOutputSuppressedReasonInvalidReaction      = "invalid_reaction"
 	ChannelOutputSuppressedReasonMessageMissingAction = "message_missing_action"
+	ChannelOutputSuppressedReasonInvalidTarget        = "invalid_target"
+	ChannelOutputSuppressedReasonUnsentFinalOutput    = "unsent_final_output"
 )
+
+type ChatOutputOptions struct {
+	ShowInChannel     *bool `json:"show_in_channel,omitempty"`
+	AlsoSendToChannel *bool `json:"also_send_to_channel,omitempty"` // legacy #252 name; not part of the new contract.
+}
+
+func (o *ChatOutputOptions) HasChannelDisplayOption() bool {
+	return o != nil && (o.ShowInChannel != nil || o.AlsoSendToChannel != nil)
+}
+
+func (o *ChatOutputOptions) ShowInChannelValue() bool {
+	if o == nil {
+		return false
+	}
+	if o.ShowInChannel != nil {
+		return *o.ShowInChannel
+	}
+	return o.AlsoSendToChannel != nil && *o.AlsoSendToChannel
+}
 
 type ChatReactionPayload struct {
 	MessageID string `json:"message_id,omitempty"`
@@ -168,9 +245,9 @@ func NormalizeChatOutputAction(action string) (string, error) {
 	switch normalized {
 	case "":
 		return "", nil
-	case ChatOutputActionMessageSend:
+	case ChatOutputActionMessageSend, "send":
 		return ChatOutputActionMessageSend, nil
-	case ChatOutputActionMessageReact, "react_message", "message_reaction", "send_reaction":
+	case ChatOutputActionMessageReact, "react", "react_message", "message_reaction", "send_reaction":
 		return ChatOutputActionMessageReact, nil
 	case ChatOutputActionNoReply, "stay_silent":
 		return ChatOutputActionNoReply, nil
@@ -220,131 +297,19 @@ func ErrInvalidChatOutputType(outputType string) error {
 	return fmt.Errorf("invalid chat output type %q", outputType)
 }
 
-func ParseMessageSendCommand(output string) (string, bool) {
-	const prefix = "multica message send"
-	body := strings.TrimSpace(output)
-	if body != prefix && !strings.HasPrefix(body, prefix+" ") {
-		return "", false
-	}
-	rest := strings.TrimSpace(strings.TrimPrefix(body, prefix))
-	if rest == "" {
-		return "", true
-	}
-	if strings.HasPrefix(rest, "--channel ") {
-		_, after, ok := splitFirstCommandArg(strings.TrimSpace(strings.TrimPrefix(rest, "--channel ")))
-		if !ok {
-			return "", true
-		}
-		rest = strings.TrimSpace(after)
-	}
-	if strings.HasPrefix(rest, "--message ") {
-		rest = strings.TrimSpace(strings.TrimPrefix(rest, "--message "))
-	} else if strings.HasPrefix(rest, "-m ") {
-		rest = strings.TrimSpace(strings.TrimPrefix(rest, "-m "))
-	}
-	return trimMatchingCommandQuotes(rest), true
-}
-
-func ParseMessageReactCommand(output string) (*ChatReactionPayload, bool) {
-	body := strings.TrimSpace(output)
-	const messageReactPrefix = "multica message react"
-	if body == messageReactPrefix || strings.HasPrefix(body, messageReactPrefix+" ") {
-		rest := strings.TrimSpace(strings.TrimPrefix(body, messageReactPrefix))
-		if rest == "" {
-			return &ChatReactionPayload{}, true
-		}
-		fields := strings.Fields(rest)
-		var messageID string
-		var emoji string
-		for i := 0; i < len(fields); i++ {
-			switch fields[i] {
-			case "--message", "--message-id":
-				if i+1 < len(fields) {
-					messageID = fields[i+1]
-					i++
-				}
-			case "--emoji":
-				if i+1 < len(fields) {
-					emoji = trimMatchingCommandQuotes(fields[i+1])
-					i++
-				}
-			default:
-				if messageID == "" {
-					messageID = fields[i]
-				} else if emoji == "" {
-					emoji = trimMatchingCommandQuotes(fields[i])
-				}
-			}
-		}
-		return &ChatReactionPayload{
-			MessageID: strings.TrimSpace(messageID),
-			Emoji:     strings.TrimSpace(emoji),
-		}, true
-	}
-
-	const prefix = "multica channel react "
-	if !strings.HasPrefix(body, prefix) {
-		return nil, false
-	}
-	rest := strings.TrimSpace(strings.TrimPrefix(body, prefix))
-	messageID, emoji, ok := strings.Cut(rest, " ")
-	if !ok {
-		return &ChatReactionPayload{}, true
-	}
-	return &ChatReactionPayload{
-		MessageID: strings.TrimSpace(messageID),
-		Emoji:     strings.TrimSpace(emoji),
-	}, true
-}
-
-func ParseLegacyChatReactionCommand(output string) (*ChatReactionPayload, bool) {
-	return ParseMessageReactCommand(output)
-}
-
-func splitFirstCommandArg(input string) (string, string, bool) {
-	input = strings.TrimSpace(input)
-	if input == "" {
-		return "", "", false
-	}
-	quote := byte(0)
-	if input[0] == '"' || input[0] == '\'' {
-		quote = input[0]
-		for i := 1; i < len(input); i++ {
-			if input[i] == quote {
-				return input[1:i], input[i+1:], true
-			}
-		}
-		return "", "", false
-	}
-	arg, rest, ok := strings.Cut(input, " ")
-	if !ok {
-		return input, "", true
-	}
-	return arg, rest, true
-}
-
-func trimMatchingCommandQuotes(input string) string {
-	input = strings.TrimSpace(input)
-	if len(input) < 2 {
-		return input
-	}
-	if (input[0] == '"' && input[len(input)-1] == '"') || (input[0] == '\'' && input[len(input)-1] == '\'') {
-		return input[1 : len(input)-1]
-	}
-	return input
-}
-
 // TaskMessagePayload represents a single agent execution message (tool call, text, etc.)
 type TaskMessagePayload struct {
-	TaskID    string         `json:"task_id"`
-	IssueID   string         `json:"issue_id,omitempty"`
-	Seq       int            `json:"seq"`
-	Type      string         `json:"type"`              // "text", "tool_use", "tool_result", "error"
-	Tool      string         `json:"tool,omitempty"`    // tool name for tool_use/tool_result
-	Content   string         `json:"content,omitempty"` // text content
-	Input     map[string]any `json:"input,omitempty"`   // tool input (tool_use only)
-	Output    string         `json:"output,omitempty"`  // tool output (tool_result only)
-	CreatedAt string         `json:"created_at,omitempty"`
+	TaskID      string         `json:"task_id"`
+	IssueID     string         `json:"issue_id,omitempty"`
+	Seq         int            `json:"seq"`
+	Type        string         `json:"type"`              // "text", "tool_use", "tool_result", "error"
+	Tool        string         `json:"tool,omitempty"`    // tool name for tool_use/tool_result
+	Content     string         `json:"content,omitempty"` // text content
+	Input       map[string]any `json:"input,omitempty"`   // tool input (tool_use only)
+	Output      string         `json:"output,omitempty"`  // tool output (tool_result only)
+	ActionLabel string         `json:"action_label"`      // safe human label for the default UI narrative
+	Summary     string         `json:"summary"`           // safe one-sentence summary; raw details stay diagnostic
+	CreatedAt   string         `json:"created_at,omitempty"`
 }
 
 // DaemonRegisterPayload is sent from daemon to server on connection.
@@ -381,6 +346,8 @@ type ChatDonePayload struct {
 	ChatSessionID          string               `json:"chat_session_id"`
 	TaskID                 string               `json:"task_id"`
 	Type                   string               `json:"type,omitempty"`
+	Target                 string               `json:"target,omitempty"`
+	Options                *ChatOutputOptions   `json:"options,omitempty"`
 	MessageID              string               `json:"message_id,omitempty"`
 	Content                string               `json:"content,omitempty"`
 	Parts                  []MessagePart        `json:"parts,omitempty"`

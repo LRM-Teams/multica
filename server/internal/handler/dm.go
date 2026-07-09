@@ -48,6 +48,8 @@ type DMItem struct {
 	PinnedAt       *string             `json:"pinned_at,omitempty"`
 	MutedAt        *string             `json:"muted_at,omitempty"`
 	Muted          bool                `json:"muted,omitempty"`
+	HasMention     bool                `json:"has_mention,omitempty"`
+	LastReadSeq    *int64              `json:"last_read_seq,omitempty"`
 	UpdatedAt      string              `json:"updated_at"`
 }
 
@@ -180,7 +182,7 @@ func (h *Handler) createDMChannel(ctx context.Context, w http.ResponseWriter, wo
 	// members), so it must never be committed half-built.
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create direct message")
+		writeDMCreateError(w)
 		return ChannelResponse{}, false
 	}
 	defer tx.Rollback(ctx) // no-op once committed
@@ -200,7 +202,7 @@ func (h *Handler) createDMChannel(ctx context.Context, w http.ResponseWriter, wo
 				return existing, true
 			}
 		}
-		writeError(w, http.StatusInternalServerError, "failed to create direct message")
+		writeDMCreateError(w)
 		return ChannelResponse{}, false
 	}
 	for _, m := range members {
@@ -208,16 +210,22 @@ func (h *Handler) createDMChannel(ctx context.Context, w http.ResponseWriter, wo
 			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 			VALUES ($1, $2, $3, $4)
 			ON CONFLICT DO NOTHING`, parseUUID(ch.ID), parseUUID(workspaceID), m.memberType, m.memberID); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to create direct message")
+			writeDMCreateError(w)
 			return ChannelResponse{}, false
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create direct message")
+		writeDMCreateError(w)
 		return ChannelResponse{}, false
 	}
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", creatorID, ch)
 	return ch, true
+}
+
+func writeDMCreateError(w http.ResponseWriter) {
+	if w != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create direct message")
+	}
 }
 
 // dmItemForChannel builds a create-or-find response item for a dm channel.
@@ -328,20 +336,37 @@ func (h *Handler) setDMPeerPin(ctx context.Context, workspaceID, userID string, 
 }
 
 func (h *Handler) setDMPeerMute(ctx context.Context, workspaceID, userID string, peer dmPeerRef, muted bool) error {
-	if muted {
-		_, err := h.DB.Exec(ctx, `
-			INSERT INTO dm_peer_state (workspace_id, user_id, peer_type, peer_id, muted_at, updated_at)
-			VALUES ($1, $2, $3, $4, now(), now())
-			ON CONFLICT (workspace_id, user_id, peer_type, peer_id)
-			DO UPDATE SET muted_at = now(), updated_at = now()`,
-			parseUUID(workspaceID), parseUUID(userID), peer.Type, peer.ID)
-		return err
-	}
 	_, err := h.DB.Exec(ctx, `
-		UPDATE dm_peer_state
-		SET muted_at = NULL, updated_at = now()
-		WHERE workspace_id = $1 AND user_id = $2 AND peer_type = $3 AND peer_id = $4`,
-		parseUUID(workspaceID), parseUUID(userID), peer.Type, peer.ID)
+		WITH peer_state AS (
+		  INSERT INTO dm_peer_state (workspace_id, user_id, peer_type, peer_id, muted_at, updated_at)
+		  VALUES ($1, $2, $3, $4, CASE WHEN $5 THEN now() ELSE NULL END, now())
+		  ON CONFLICT (workspace_id, user_id, peer_type, peer_id)
+		  DO UPDATE SET muted_at = EXCLUDED.muted_at, updated_at = now()
+		  RETURNING workspace_id, user_id, peer_type, peer_id, muted_at
+		),
+		dm_conv AS (
+		  SELECT c.id
+		  FROM conversation c
+		  JOIN channel_member self
+		    ON self.channel_id = c.channel_id
+		   AND self.member_type = 'user'
+		   AND self.member_id = $2
+		  JOIN channel_member peer
+		    ON peer.channel_id = c.channel_id
+		   AND peer.member_type = $3
+		   AND peer.member_id = $4
+		  WHERE c.workspace_id = $1
+		    AND c.kind = 'dm'
+		)
+		UPDATE conversation_member cm
+		SET muted_at = peer_state.muted_at,
+		    updated_at = now()
+		FROM peer_state, dm_conv
+		WHERE cm.conversation_id = dm_conv.id
+		  AND cm.workspace_id = peer_state.workspace_id
+		  AND cm.member_type = 'user'
+		  AND cm.member_id = peer_state.user_id`,
+		parseUUID(workspaceID), parseUUID(userID), peer.Type, peer.ID, muted)
 	return err
 }
 
@@ -357,19 +382,72 @@ func (h *Handler) markDMPeerUnread(ctx context.Context, workspaceID, userID stri
 
 func (h *Handler) closeDMPeer(ctx context.Context, workspaceID, userID string, peer dmPeerRef) error {
 	_, err := h.DB.Exec(ctx, `
-		INSERT INTO dm_peer_state (workspace_id, user_id, peer_type, peer_id, hidden_at, manual_unread_at, updated_at)
-		VALUES ($1, $2, $3, $4, now(), NULL, now())
-		ON CONFLICT (workspace_id, user_id, peer_type, peer_id)
-		DO UPDATE SET hidden_at = now(), manual_unread_at = NULL, updated_at = now()`,
+		WITH peer_state AS (
+		  INSERT INTO dm_peer_state (workspace_id, user_id, peer_type, peer_id, hidden_at, manual_unread_at, updated_at)
+		  VALUES ($1, $2, $3, $4, now(), NULL, now())
+		  ON CONFLICT (workspace_id, user_id, peer_type, peer_id)
+		  DO UPDATE SET hidden_at = now(), manual_unread_at = NULL, updated_at = now()
+		  RETURNING workspace_id, user_id, peer_type, peer_id, hidden_at
+		),
+		dm_conv AS (
+		  SELECT c.id
+		  FROM conversation c
+		  JOIN channel_member self
+		    ON self.channel_id = c.channel_id
+		   AND self.member_type = 'user'
+		   AND self.member_id = $2
+		  JOIN channel_member peer
+		    ON peer.channel_id = c.channel_id
+		   AND peer.member_type = $3
+		   AND peer.member_id = $4
+		  WHERE c.workspace_id = $1
+		    AND c.kind = 'dm'
+		)
+		UPDATE conversation_member cm
+		SET closed_at = peer_state.hidden_at,
+		    updated_at = now()
+		FROM peer_state, dm_conv
+		WHERE cm.conversation_id = dm_conv.id
+		  AND cm.workspace_id = peer_state.workspace_id
+		  AND cm.member_type = 'user'
+		  AND cm.member_id = peer_state.user_id`,
 		parseUUID(workspaceID), parseUUID(userID), peer.Type, peer.ID)
 	return err
 }
 
 func (h *Handler) clearDMPeerHidden(ctx context.Context, workspaceID, userID string, peer dmPeerRef) {
 	if _, err := h.DB.Exec(ctx, `
-		UPDATE dm_peer_state
-		SET hidden_at = NULL, updated_at = now()
-		WHERE workspace_id = $1 AND user_id = $2 AND peer_type = $3 AND peer_id = $4 AND hidden_at IS NOT NULL`,
+		WITH cleared_peer AS (
+		  UPDATE dm_peer_state
+		  SET hidden_at = NULL, updated_at = now()
+		  WHERE workspace_id = $1 AND user_id = $2 AND peer_type = $3 AND peer_id = $4 AND hidden_at IS NOT NULL
+		  RETURNING workspace_id, user_id, peer_type, peer_id
+		),
+		dm_conv AS (
+		  SELECT c.id, $2::uuid AS user_id
+		  FROM conversation c
+		  JOIN channel_member self
+		    ON self.channel_id = c.channel_id
+		   AND self.member_type = 'user'
+		   AND self.member_id = $2
+		  JOIN channel_member peer
+		    ON peer.channel_id = c.channel_id
+		   AND peer.member_type = $3
+		   AND peer.member_id = $4
+		  WHERE c.workspace_id = $1
+		    AND c.kind = 'dm'
+		)
+		UPDATE conversation_member cm
+		SET closed_at = NULL,
+		    updated_at = now()
+		FROM dm_conv
+		LEFT JOIN cleared_peer
+		  ON cleared_peer.user_id = dm_conv.user_id
+		WHERE cm.conversation_id = dm_conv.id
+		  AND cm.workspace_id = $1
+		  AND cm.member_type = 'user'
+		  AND cm.member_id = dm_conv.user_id
+		  AND cm.closed_at IS NOT NULL`,
 		parseUUID(workspaceID), parseUUID(userID), peer.Type, peer.ID); err != nil {
 		slog.Warn("dm: clear hidden state failed", "workspace", workspaceID, "user", userID, "peer_type", peer.Type, "error", err)
 	}
@@ -410,15 +488,31 @@ func (h *Handler) clearDMHiddenForChannelMembers(ctx context.Context, workspaceI
 				LIMIT 1
 			) peer ON true
 			WHERE cm.channel_id = $1 AND cm.workspace_id = $2 AND cm.member_type = 'user'
+		),
+		cleared_peer AS (
+		  UPDATE dm_peer_state s
+		  SET hidden_at = NULL, updated_at = now()
+		  FROM user_peers p
+		  WHERE s.workspace_id = $2
+		    AND s.user_id = p.user_id
+		    AND s.peer_type = p.peer_type
+		    AND s.peer_id = p.peer_id
+		    AND s.hidden_at IS NOT NULL
+		  RETURNING s.user_id
+		),
+		conv AS (
+		  SELECT id
+		  FROM conversation
+		  WHERE channel_id = $1
 		)
-		UPDATE dm_peer_state s
-		SET hidden_at = NULL, updated_at = now()
-		FROM user_peers p
-		WHERE s.workspace_id = $2
-		  AND s.user_id = p.user_id
-		  AND s.peer_type = p.peer_type
-		  AND s.peer_id = p.peer_id
-		  AND s.hidden_at IS NOT NULL`, channelID, parseUUID(workspaceID)); err != nil {
+		UPDATE conversation_member cm
+		SET closed_at = NULL,
+		    updated_at = now()
+		FROM conv
+		WHERE cm.conversation_id = conv.id
+		  AND cm.workspace_id = $2
+		  AND cm.member_type = 'user'
+		  AND cm.closed_at IS NOT NULL`, channelID, parseUUID(workspaceID)); err != nil {
 		slog.Warn("dm: clear channel hidden state failed", "workspace", workspaceID, "channel", uuidToString(channelID), "error", err)
 	}
 }
@@ -611,11 +705,18 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		       peer.member_type, peer.member_id,
 		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '') AS peer_name,
 		       a.avatar_url AS peer_avatar,
-		       lm.author_type, lm.author_name, lm.content, lm.created_at,
+		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
 		       COALESCE(uc.cnt, 0) AS real_unread,
-		       state.pinned_at, state.manual_unread_at, state.muted_at
+		       state.pinned_at, state.manual_unread_at, COALESCE(vcm.muted_at, state.muted_at),
+		       COALESCE(hm.has_mention, false),
+		       COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)::bigint
 		FROM channel ch
 		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
+		JOIN conversation conv ON conv.channel_id = ch.id
+		LEFT JOIN conversation_member vcm
+		  ON vcm.conversation_id = conv.id
+		 AND vcm.member_type = 'user'
+		 AND vcm.member_id = $2
 		JOIN LATERAL (
 			SELECT member_type, member_id
 			FROM channel_member m2
@@ -626,7 +727,7 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		LEFT JOIN "user" u ON peer.member_type = 'user' AND u.id = peer.member_id
 		LEFT JOIN agent a ON peer.member_type = 'agent' AND a.id = peer.member_id
 		LEFT JOIN LATERAL (
-			SELECT author_type, author_name, content, created_at
+			SELECT author_type, author_name, content, parts, created_at
 			FROM channel_message m WHERE m.channel_id = ch.id
 			ORDER BY m.seq DESC LIMIT 1
 		) lm ON true
@@ -634,16 +735,28 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		LEFT JOIN LATERAL (
 			SELECT count(*) AS cnt FROM channel_message m
 			WHERE m.channel_id = ch.id
-			  AND m.seq > COALESCE(cr.last_read_seq, 0)
+			  AND m.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
 			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
 			  AND m.thread_root_message_id IS NULL
 		) uc ON true
+		LEFT JOIN LATERAL (
+			SELECT EXISTS (
+				SELECT 1 FROM channel_message m
+				WHERE m.channel_id = ch.id
+				  AND m.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
+				  AND NOT (m.author_type = 'user' AND m.author_id = $2)
+				  AND m.deleted_at IS NULL
+				  AND (m.content ILIKE '%@' || (
+				    SELECT name FROM "user" WHERE id = $2
+				  ) || '%' OR m.parts::text ILIKE '%mention://' || $2::text || '%')
+			) AS has_mention
+		) hm ON true
 		LEFT JOIN dm_peer_state state
 		  ON state.workspace_id = ch.workspace_id
 		 AND state.user_id = $2
 		 AND state.peer_type = peer.member_type
 		 AND state.peer_id = peer.member_id
-		WHERE ch.workspace_id = $1 AND ch.kind = 'dm' AND state.hidden_at IS NULL
+		WHERE ch.workspace_id = $1 AND ch.kind = 'dm' AND COALESCE(vcm.closed_at, state.hidden_at) IS NULL
 		ORDER BY ch.updated_at DESC`, parseUUID(workspaceID), uid)
 	if err != nil {
 		slog.Warn("list dm channels failed", "workspace", workspaceID, "error", err)
@@ -656,9 +769,12 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		var updatedAt, lastAt, pinnedAt, manualUnreadAt, mutedAt pgtype.Timestamptz
 		var peerType, peerName string
 		var peerAvatar, lastType, lastName, lastContent pgtype.Text
+		var lastParts []byte
 		var unread int
+		var hasMention bool
+		var lastReadSeq int64
 		if err := rows.Scan(&id, &updatedAt, &peerType, &peerID, &peerName, &peerAvatar,
-			&lastType, &lastName, &lastContent, &lastAt, &unread, &pinnedAt, &manualUnreadAt, &mutedAt); err != nil {
+			&lastType, &lastName, &lastContent, &lastParts, &lastAt, &unread, &pinnedAt, &manualUnreadAt, &mutedAt, &hasMention, &lastReadSeq); err != nil {
 			continue
 		}
 		if peerType == "agent" {
@@ -676,16 +792,15 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 			PinnedAt:       timestampToPtr(pinnedAt),
 			MutedAt:        timestampToPtr(mutedAt),
 			Muted:          mutedAt.Valid,
+			HasMention:     hasMention,
+			LastReadSeq:    &lastReadSeq,
 			UpdatedAt:      timestampToString(updatedAt),
 		}
 		if item.ManuallyUnread && item.Unread == 0 {
 			item.Unread = 1
 		}
 		if lastContent.Valid {
-			item.LastMessage = &ChannelLastMessage{
-				Type: lastType.String, AuthorName: lastName.String,
-				Content: lastContent.String, CreatedAt: timestampToString(lastAt),
-			}
+			item.LastMessage = channelLastMessage(lastType.String, lastName.String, lastContent.String, lastParts, lastAt)
 		}
 		out = append(out, item)
 	}

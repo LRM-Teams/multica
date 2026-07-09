@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { MulticaLanding } from "@/features/landing/components/multica-landing";
-import { RedirectIfAuthenticated } from "@/features/landing/components/redirect-if-authenticated";
+import { resolveServerPostAuthDestination } from "@/features/landing/resolve-server-destination";
 
 export const metadata: Metadata = {
   title: {
@@ -19,11 +20,12 @@ export const metadata: Metadata = {
   },
 };
 
-export default function LandingPage() {
-  return (
-    <>
-      <RedirectIfAuthenticated />
-      <MulticaLanding />
-    </>
-  );
+export default async function LandingPage() {
+  // Authenticated visitors are redirected server-side (before render), so there
+  // is no flash of the marketing page and no client-side redirect effect (#223).
+  const destination = await resolveServerPostAuthDestination();
+  if (destination) {
+    redirect(destination);
+  }
+  return <MulticaLanding />;
 }

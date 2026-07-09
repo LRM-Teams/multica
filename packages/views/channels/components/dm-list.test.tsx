@@ -206,3 +206,50 @@ describe("DmList new-DM picker", () => {
     expect(row).toHaveClass("dark:bg-muted/45");
   });
 });
+
+// Anchor 7 (A4 / A6) — the row must surface the read-model `real_unread`-backed
+// REAL count and present muted DMs silently, never a fabricated number.
+describe("DmList unread affordance (read-model)", () => {
+  beforeEach(() => {
+    mockViewport.isMobile = false;
+    mockQueryData.dms = [];
+    mockQueryData.agents = [];
+    mockQueryData.members = [];
+    mockQueryData.squads = [];
+  });
+
+  it("renders the real unread count from the read-model, not a constant", () => {
+    mockQueryData.dms = [makeDm({ unread: 7, real_unread: 7 })];
+
+    const { container } = renderDmList();
+
+    const badge = container.querySelector("span.bg-primary");
+    expect(badge).not.toBeNull();
+    expect(badge).toHaveTextContent("7");
+  });
+
+  it("dims the badge for a muted DM — silent, no primary/red count (A6)", () => {
+    mockQueryData.dms = [makeDm({ unread: 4, real_unread: 4, muted: true })];
+
+    const { container } = renderDmList();
+
+    const badge = container.querySelector("span.bg-muted-foreground\\/25");
+    expect(badge).not.toBeNull();
+    expect(badge).toHaveTextContent("4");
+    expect(container.querySelector("span.bg-primary")).toBeNull();
+  });
+
+  it("shows a manual-unread DOT, never the server's bumped '1' (Parker gate)", () => {
+    // Manual unread bumps `unread` to 1 while `real_unread` stays 0 — the row
+    // must render a marker dot, not a fake numeric badge.
+    mockQueryData.dms = [
+      makeDm({ unread: 1, real_unread: 0, manually_unread: true }),
+    ];
+
+    const { container } = renderDmList();
+
+    expect(screen.queryByText("1")).not.toBeInTheDocument();
+    const dot = container.querySelector("span.size-2.rounded-full");
+    expect(dot).not.toBeNull();
+  });
+});

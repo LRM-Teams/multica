@@ -47,6 +47,20 @@ type Agent struct {
 	DisplayName        string             `json:"display_name"`
 }
 
+type AgentMemory struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	Name        string             `json:"name"`
+	Content     string             `json:"content"`
+	Config      []byte             `json:"config"`
+	SyncKey     string             `json:"sync_key"`
+	ContentHash string             `json:"content_hash"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AgentRuntime struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
@@ -63,6 +77,31 @@ type AgentRuntime struct {
 	OwnerID        pgtype.UUID        `json:"owner_id"`
 	LegacyDaemonID pgtype.Text        `json:"legacy_daemon_id"`
 	Visibility     string             `json:"visibility"`
+}
+
+type AgentSharedSkill struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Content     string             `json:"content"`
+	Config      []byte             `json:"config"`
+	SyncKey     string             `json:"sync_key"`
+	ContentHash string             `json:"content_hash"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentSharedSkillFile struct {
+	ID                 pgtype.UUID        `json:"id"`
+	AgentSharedSkillID pgtype.UUID        `json:"agent_shared_skill_id"`
+	AgentID            pgtype.UUID        `json:"agent_id"`
+	Path               string             `json:"path"`
+	Content            string             `json:"content"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
 type AgentSkill struct {
@@ -182,6 +221,7 @@ type Channel struct {
 	CreatedBy   pgtype.UUID        `json:"created_by"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
 }
 
 type ChannelAgentSession struct {
@@ -214,6 +254,12 @@ type ChannelMessage struct {
 	TriggerDepth      int32              `json:"trigger_depth"`
 }
 
+type ChannelRead struct {
+	ChannelID  pgtype.UUID        `json:"channel_id"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	LastReadAt pgtype.Timestamptz `json:"last_read_at"`
+}
+
 type ChatMessage struct {
 	ID            pgtype.UUID        `json:"id"`
 	ChatSessionID pgtype.UUID        `json:"chat_session_id"`
@@ -241,6 +287,7 @@ type ChatSession struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	UnreadSince pgtype.Timestamptz `json:"unread_since"`
 	RuntimeID   pgtype.UUID        `json:"runtime_id"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
 }
 
 type Comment struct {
@@ -304,6 +351,42 @@ type DaemonToken struct {
 	DaemonID    string             `json:"daemon_id"`
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type EnvCheckpoint struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	EventRef       string             `json:"event_ref"`
+	CheckpointKind string             `json:"checkpoint_kind"`
+	EnvIDMap       []byte             `json:"env_id_map"`
+	SandboxRefs    []byte             `json:"sandbox_refs"`
+	DbSnapshot     []byte             `json:"db_snapshot"`
+	EntropyScore   pgtype.Float8      `json:"entropy_score"`
+	SaveTimeoutMs  int32              `json:"save_timeout_ms"`
+	SaveStatus     string             `json:"save_status"`
+	SaveError      pgtype.Text        `json:"save_error"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type EnvDispatchRequest struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	IdempotencyKey pgtype.UUID        `json:"idempotency_key"`
+	Response       []byte             `json:"response"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type Environment struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	SandboxIds  []string           `json:"sandbox_ids"`
+	ParentEnvID pgtype.UUID        `json:"parent_env_id"`
+	Mode        string             `json:"mode"`
+	Domain      pgtype.Text        `json:"domain"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Feedback struct {
@@ -406,6 +489,9 @@ type Issue struct {
 	FirstExecutedAt    pgtype.Timestamptz `json:"first_executed_at"`
 	StartDate          pgtype.Date        `json:"start_date"`
 	Metadata           []byte             `json:"metadata"`
+	ForkedFromIssueID  pgtype.UUID        `json:"forked_from_issue_id"`
+	ForkedAtSeq        pgtype.Int4        `json:"forked_at_seq"`
+	ForkedAtTaskID     pgtype.UUID        `json:"forked_at_task_id"`
 }
 
 type IssueDependency struct {
@@ -535,11 +621,12 @@ type LarkUserBinding struct {
 }
 
 type Member struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	UserID      pgtype.UUID        `json:"user_id"`
-	Role        string             `json:"role"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	Role         string             `json:"role"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	LastActiveAt pgtype.Timestamptz `json:"last_active_at"`
 }
 
 type NotificationPreference struct {
@@ -584,6 +671,7 @@ type Project struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	Priority    string             `json:"priority"`
+	EnvID       pgtype.UUID        `json:"env_id"`
 }
 
 type ProjectResource struct {
@@ -596,6 +684,7 @@ type ProjectResource struct {
 	Position     int32              `json:"position"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	CreatedBy    pgtype.UUID        `json:"created_by"`
+	Managed      bool               `json:"managed"`
 }
 
 type Skill struct {
@@ -618,45 +707,6 @@ type SkillFile struct {
 	Content   string             `json:"content"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
-}
-
-type AgentMemory struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	AgentID     pgtype.UUID        `json:"agent_id"`
-	Name        string             `json:"name"`
-	Content     string             `json:"content"`
-	Config      []byte             `json:"config"`
-	SyncKey     string             `json:"sync_key"`
-	ContentHash string             `json:"content_hash"`
-	CreatedBy   pgtype.UUID        `json:"created_by"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-}
-
-type AgentSharedSkill struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	AgentID     pgtype.UUID        `json:"agent_id"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	Content     string             `json:"content"`
-	Config      []byte             `json:"config"`
-	SyncKey     string             `json:"sync_key"`
-	ContentHash string             `json:"content_hash"`
-	CreatedBy   pgtype.UUID        `json:"created_by"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-}
-
-type AgentSharedSkillFile struct {
-	ID                 pgtype.UUID        `json:"id"`
-	AgentSharedSkillID pgtype.UUID        `json:"agent_shared_skill_id"`
-	AgentID            pgtype.UUID        `json:"agent_id"`
-	Path               string             `json:"path"`
-	Content            string             `json:"content"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
 type EvolutionUnitSubmission struct {
@@ -1023,18 +1073,19 @@ type SandboxJob struct {
 }
 
 type Workspace struct {
-	ID           pgtype.UUID        `json:"id"`
-	Name         string             `json:"name"`
-	Slug         string             `json:"slug"`
-	Description  pgtype.Text        `json:"description"`
-	Settings     []byte             `json:"settings"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-	Context      pgtype.Text        `json:"context"`
-	Repos        []byte             `json:"repos"`
-	IssuePrefix  string             `json:"issue_prefix"`
-	IssueCounter int32              `json:"issue_counter"`
-	AvatarUrl    pgtype.Text        `json:"avatar_url"`
+	ID                   pgtype.UUID        `json:"id"`
+	Name                 string             `json:"name"`
+	Slug                 string             `json:"slug"`
+	Description          pgtype.Text        `json:"description"`
+	Settings             []byte             `json:"settings"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	Context              pgtype.Text        `json:"context"`
+	Repos                []byte             `json:"repos"`
+	IssuePrefix          string             `json:"issue_prefix"`
+	IssueCounter         int32              `json:"issue_counter"`
+	AvatarUrl            pgtype.Text        `json:"avatar_url"`
+	DefaultSelfPlayEnvID pgtype.UUID        `json:"default_self_play_env_id"`
 }
 
 type WorkspaceInvitation struct {

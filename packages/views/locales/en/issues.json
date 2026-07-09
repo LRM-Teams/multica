@@ -240,6 +240,8 @@
     "due_date_removed": "removed due date",
     "title_renamed": "renamed this issue from \"{{from}}\" to \"{{to}}\"",
     "description_updated": "updated the description",
+    "execution_result": "Activity update",
+    "view_activity_run": "View activity",
     "task_completed_one": "completed the task",
     "task_completed_other": "completed the task ({{count}} times)",
     "task_failed_one": "task failed",

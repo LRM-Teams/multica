@@ -121,6 +121,47 @@ export interface AgentTaskFeedPage {
   next_cursor?: AgentTaskFeedCursor | null;
 }
 
+export type AgentHealthState =
+  | "online"
+  | "suspected_disconnect"
+  | "reconnecting"
+  | "recovered"
+  | "offline";
+
+export type AgentHealthEventType =
+  | "server_ping_received"
+  | "daemon_liveness_probe_sent"
+  | "probe_timeout_reconnect"
+  | "transport_reconnected";
+
+export interface AgentHealthSummary {
+  agent_id: string;
+  runtime_id: string | null;
+  state: AgentHealthState;
+  reason_code: string;
+  state_since: string | null;
+  last_seen_at: string | null;
+  last_event_at: string | null;
+}
+
+export interface AgentHealthEvent {
+  id: string;
+  agent_id: string;
+  runtime_id: string | null;
+  type: AgentHealthEventType;
+  state_after: AgentHealthState;
+  reason_code: string;
+  message: string;
+  occurred_at: string;
+  details?: Record<string, unknown>;
+  synthetic?: boolean;
+}
+
+export interface AgentHealthResponse {
+  health_summary: AgentHealthSummary;
+  health_events: AgentHealthEvent[];
+}
+
 // Overview "tasks done" KPI — completed/failed/total counts over ALL agent
 // tasks in the workspace (issue, chat, and channel-reply tasks alike), so a
 // channel reply counts as a finished task, matching the agent activity feed.
@@ -313,6 +354,8 @@ export interface AgentCreationDraft {
   can_execute_code: boolean;
   suggested_channels: string[];
   recommended_tools: string[];
+  initial_notes?: Record<string, string>;
+  initial_memory?: Record<string, string>;
   status: "draft" | "used" | "dismissed";
   used_agent_id?: string | null;
   created_at: string;
@@ -331,6 +374,8 @@ export interface CreateAgentDraftRequest {
   can_execute_code?: boolean;
   suggested_channels?: string[];
   recommended_tools?: string[];
+  initial_notes?: Record<string, string>;
+  initial_memory?: Record<string, string>;
 }
 
 export interface EnsureWindyResponse {
@@ -355,10 +400,14 @@ export interface CreateAgentRequest {
   model?: string;
   /** Optional runtime-native reasoning/effort token. See `Agent.thinking_level`. */
   thinking_level?: string;
+  /** Optional non-URL seed context for new agent notes. Prefer draft_id for Wendy flows. */
+  initial_notes?: Record<string, string>;
+  /** Optional non-URL seed context for durable memory. Prefer draft_id for Wendy flows. */
+  initial_memory?: Record<string, string>;
   /** Optional template slug used by the onboarding agent picker. Surfaced
    *  as the `template` property on the `agent_created` PostHog event. */
   template?: string;
-  /** Agent creation draft consumed by this create call, usually produced by Windy. */
+  /** Agent creation draft consumed by this create call, usually produced by Wendy. */
   draft_id?: string;
 }
 
@@ -536,6 +585,12 @@ export interface SkillFile {
   updated_at: string;
 }
 
+export interface PlatformSkillSummary {
+  name: string;
+  description: string;
+  installed_skill_id?: string;
+}
+
 export interface AgentMemory {
   id: string;
   workspace_id: string;
@@ -548,6 +603,42 @@ export interface AgentMemory {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface AgentFileNode {
+  path: string;
+  is_dir: boolean;
+  size?: number;
+}
+
+export type AgentFilesStatus = "ok" | "offline" | "missing" | "error";
+
+export interface AgentFilesResponse {
+  agent_id: string;
+  status: AgentFilesStatus;
+  nodes: AgentFileNode[];
+  truncated: boolean;
+}
+
+export interface AgentFileContentResponse {
+  content: string;
+  encoding: string;
+  mime_type: string;
+  content_hash: string;
+  truncated: boolean;
+  too_large: boolean;
+  binary: boolean;
+}
+
+export interface UpdateAgentFileContentRequest {
+  path: string;
+  content: string;
+  expected_content_hash?: string;
+}
+
+export interface UpdateAgentFileContentResponse {
+  content_hash: string;
+  conflict: boolean;
 }
 
 export type AgentSkillSuggestionAction = "add" | "remove";

@@ -240,6 +240,8 @@
     "due_date_removed": "마감일을 제거했습니다",
     "title_renamed": "이슈 제목을 \"{{from}}\"에서 \"{{to}}\"로 바꿨습니다",
     "description_updated": "설명을 업데이트했습니다",
+    "execution_result": "활동 업데이트",
+    "view_activity_run": "활동 보기",
     "task_completed_one": "작업을 완료했습니다",
     "task_completed_other": "작업을 완료했습니다({{count}}회)",
     "task_failed_one": "작업이 실패했습니다",

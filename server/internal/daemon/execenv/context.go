@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 	"gopkg.in/yaml.v3"
 )
 
@@ -523,6 +524,11 @@ func renderQuickCreateContext(ctx TaskContextForEnv) string {
 	b.WriteString("> ")
 	b.WriteString(ctx.QuickCreatePrompt)
 	b.WriteString("\n\n")
+	if ctx.QuickCreateSource != nil {
+		b.WriteString("## Source chat context\n\n")
+		b.WriteString(renderQuickCreateSourceContext(ctx.QuickCreateSource))
+		b.WriteString("\n\n")
+	}
 	if len(ctx.AgentSkills) > 0 {
 		b.WriteString("## Agent Skills\n\n")
 		for _, skill := range ctx.AgentSkills {
@@ -531,6 +537,45 @@ func renderQuickCreateContext(ctx TaskContextForEnv) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func renderQuickCreateSourceContext(src *protocol.QuickCreateSourceContext) string {
+	if src == nil {
+		return ""
+	}
+	var b strings.Builder
+	if src.ChannelKind == "dm" {
+		b.WriteString("- Source surface: DM thread\n")
+	} else if strings.TrimSpace(src.ChannelName) != "" {
+		fmt.Fprintf(&b, "- Source surface: channel #%s thread\n", src.ChannelName)
+	} else {
+		b.WriteString("- Source surface: channel thread\n")
+	}
+	fmt.Fprintf(&b, "- Channel ID: %s\n", src.ChannelID)
+	fmt.Fprintf(&b, "- Thread root message ID: %s\n", src.ThreadRootMessageID)
+	fmt.Fprintf(&b, "- Source message ID: %s\n", src.SourceMessageID)
+	if src.SourceAuthorName != "" || src.SourceAuthorType != "" {
+		fmt.Fprintf(&b, "- Source author: %s", src.SourceAuthorName)
+		if src.SourceAuthorType != "" {
+			fmt.Fprintf(&b, " (%s)", src.SourceAuthorType)
+		}
+		if src.SourceAuthorID != "" {
+			fmt.Fprintf(&b, " [%s]", src.SourceAuthorID)
+		}
+		b.WriteString("\n")
+	}
+	if src.SourceExcerpt != "" {
+		fmt.Fprintf(&b, "- Source excerpt: %s\n", src.SourceExcerpt)
+	}
+	if len(src.AttachmentIDs) > 0 {
+		fmt.Fprintf(&b, "- Source attachment IDs: %s\n", strings.Join(src.AttachmentIDs, ", "))
+	}
+	if strings.TrimSpace(src.Summary) != "" {
+		b.WriteString("\n")
+		b.WriteString(strings.TrimSpace(src.Summary))
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func renderAutopilotContext(ctx TaskContextForEnv) string {

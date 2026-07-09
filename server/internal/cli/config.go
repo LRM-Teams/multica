@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const defaultCLIConfigPath = ".multica/config.json"
@@ -68,6 +69,13 @@ type OpenClawOverride struct {
 	StateDir   string `json:"state_dir,omitempty"`
 }
 
+func userHomeDir() (string, error) {
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return home, nil
+	}
+	return os.UserHomeDir()
+}
+
 // CLIConfigPath returns the default path for the CLI config file.
 func CLIConfigPath() (string, error) {
 	return CLIConfigPathForProfile("")
@@ -77,7 +85,7 @@ func CLIConfigPath() (string, error) {
 // An empty profile returns the default path (~/.multica/config.json).
 // A named profile returns ~/.multica/profiles/<name>/config.json.
 func CLIConfigPathForProfile(profile string) (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve CLI config path: %w", err)
 	}
@@ -90,7 +98,7 @@ func CLIConfigPathForProfile(profile string) (string, error) {
 // ProfileDir returns the base directory for a profile's state files (pid, log).
 // An empty profile returns ~/.multica/. A named profile returns ~/.multica/profiles/<name>/.
 func ProfileDir(profile string) (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve profile dir: %w", err)
 	}

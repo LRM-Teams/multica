@@ -65,6 +65,25 @@ vi.mock("@multica/core/auth", async () => {
   return { ...actual, useAuthStore };
 });
 
+// The timezone <Select> renders every option from `timezoneOptions`, which
+// enumerates ~600 IANA zones. Querying that list through the Base UI popup is
+// what made these tests time out on slow CI (task #298). Stub the source to a
+// handful of zones — these tests exercise pick→PATCH→store, not the IANA
+// catalogue — so they run fast and deterministically.
+vi.mock("../../common/timezone-select", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../common/timezone-select")>(
+      "../../common/timezone-select",
+    );
+  const ZONES = ["Asia/Shanghai", "Asia/Tokyo", "America/New_York", "UTC"];
+  return {
+    ...actual,
+    browserTimezone: () => "Asia/Shanghai",
+    timezoneOptions: (current: string) =>
+      ZONES.includes(current) ? ZONES : [current, ...ZONES],
+  };
+});
+
 import { PreferencesTab } from "./preferences-tab";
 
 const TEST_RESOURCES = {
@@ -214,7 +233,7 @@ describe("PreferencesTab — Timezone section", () => {
       expect(mockUpdateMe).toHaveBeenCalledWith({ timezone: "Asia/Tokyo" });
       expect(mockSetUser).toHaveBeenCalledWith(updatedUser);
     });
-  }, 20000);
+  });
 
   it("surfaces a toast when the PATCH fails", async () => {
     userRef.current = { id: "user-1", timezone: "Asia/Shanghai" };
@@ -229,7 +248,7 @@ describe("PreferencesTab — Timezone section", () => {
       expect(mockToastError).toHaveBeenCalledTimes(1);
     });
     expect(mockSetUser).not.toHaveBeenCalled();
-  }, 20000);
+  });
 
   it("clearing the preference sends an empty-string timezone", async () => {
     userRef.current = { id: "user-1", timezone: "Asia/Shanghai" };
@@ -248,5 +267,5 @@ describe("PreferencesTab — Timezone section", () => {
       // so the picker switches back to "(browser)" without a refetch.
       expect(mockSetUser).toHaveBeenCalledWith(clearedUser);
     });
-  }, 20000);
+  });
 });

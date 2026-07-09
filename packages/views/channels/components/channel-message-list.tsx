@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -16,6 +17,65 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
+import { useMessageDayDividers } from "../../i18n/use-message-time";
+import { useT } from "../../i18n/use-t";
+import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
+import { useNewMessagesPill } from "../hooks/use-new-arrivals-pill";
+import { useUnreadAnchorScroll } from "../hooks/use-unread-anchor-scroll";
+
+// Small centered date pill (Iris #303 A) — the inline date divider at each local
+// day boundary.
+function DatePill({ label }: { label: string }) {
+  return (
+    <span className="rounded-full border border-border/60 bg-background/90 px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm">
+      {label}
+    </span>
+  );
+}
+
+// Inserted before the first message of each local day.
+function DateDivider({ label }: { label: string }) {
+  return (
+    <div className="flex justify-center px-5 py-2" data-testid="date-divider">
+      <DatePill label={label} />
+    </div>
+  );
+}
+
+// "N new messages" separator pinned above the first unread message (#303). Brand
+// tint (vs the muted date divider) so it reads as the "you're here" locator,
+// glanceable but not loud — per Iris's spec.
+function UnreadDivider({ count }: { count: number }) {
+  const { t } = useT("common");
+  return (
+    <div className="flex items-center gap-3 px-5 py-2" data-testid="unread-divider">
+      <div className="h-px flex-1 bg-brand/50" />
+      <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-brand">
+        {t(($) => $.time.new_messages, { count })}
+      </span>
+      <div className="h-px flex-1 bg-brand/50" />
+    </div>
+  );
+}
+
+// Floating "N new messages ↓" jump pill (#303 follow-up). Shown when you're
+// scrolled up and messages arrive live below you; clicking jumps to the first
+// one. Same brand language as the divider; anchored bottom-center above the
+// composer, pinned to the viewport (doesn't scroll with messages).
+function NewMessagesPill({ count, onClick }: { count: number; onClick: () => void }) {
+  const { t } = useT("common");
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full bg-brand px-3 py-1.5 text-xs font-medium text-white shadow-md transition-colors hover:bg-brand/90"
+      data-testid="new-messages-pill"
+    >
+      <span>{t(($) => $.time.new_messages, { count })}</span>
+      <span aria-hidden="true">↓</span>
+    </button>
+  );
+}
 
 /**
  * Virtualized message list shared by the group conversation (channels-page)
@@ -41,6 +101,13 @@ type MessageViewportProps = {
   /** Deep-link target id - scrolls to and ring-highlights that bubble. */
   highlightMessageId?: string | null;
   /**
+   * Viewer's read cursor for this conversation (BE `last_read_seq`). Drives the
+   * "N new messages" divider: the list pins it above the first message past the
+   * cursor as snapshotted on entry, and opens scrolled there. Omitted/undefined
+   * → no divider (feature stays dark until the BE field lands).
+   */
+  lastReadSeq?: number | null;
+  /**
    * Virtuoso's stable prepend anchor (see `channelMessagesFirstItemIndex`).
    * Callers with paginated history must recompute and pass this so loading
    * an older page doesn't jump the viewport; callers without pagination
@@ -62,6 +129,17 @@ type MessageViewportProps = {
   onScrollToMessage?: (messageId: string) => void;
   /** Toggle/add a lightweight emoji reaction on this message. */
   onReact?: (message: ChannelMessage, emoji: string) => void;
+  /**
+   * Save an inline edit of the viewer's own message. H5: this is an edit (a
+   * PATCH), never a re-send — it must not go through a send/dispatch path.
+   * Threaded to the bubble, which only exposes the edit affordance on own
+   * messages when this is provided.
+   */
+  onEditMessage?: (message: ChannelMessage, content: string) => void;
+  /** Soft-delete the viewer's own message; the bubble then renders a tombstone. */
+  onDeleteMessage?: (message: ChannelMessage) => void;
+  /** Opens the side agent file/public-info panel for an agent-authored message. */
+  onOpenAgent?: (agentId: string) => void;
   /** Search hit ids - all matching messages get inline keyword marks while search is open. */
   searchHitIds?: Set<string>;
   /** Conversation search phrase used for inline keyword marks within search hits. */
@@ -87,6 +165,7 @@ function MessageViewport({
   currentUserId,
   ownName,
   highlightMessageId,
+  lastReadSeq,
   firstItemIndex = 0,
   emptyLabel,
   header,
@@ -94,6 +173,9 @@ function MessageViewport({
   onOpenThread,
   onScrollToMessage,
   onReact,
+  onEditMessage,
+  onDeleteMessage,
+  onOpenAgent,
   searchHitIds,
   searchQuery,
   loading,
@@ -105,8 +187,30 @@ function MessageViewport({
   loadErrorLabel,
   onRetry,
 }: MessageViewportProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLElement | null>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  // `virtuosoRef.current` alone can't gate a mount-time effect: ref attachment
+  // doesn't trigger a re-render, so an effect that fires the instant its OTHER
+  // dependencies are satisfied (e.g. `scrollContainerEl`) can run while the
+  // handle is still null and never gets a second chance (#348 root cause).
+  //
+  // The fix is a BOOLEAN readiness flag, not the handle object itself (tried
+  // and reverted — #365 incident): react-virtuoso hands the callback ref a
+  // different object identity across some renders, so a reference-equality
+  // bail on a handle-object state (`prev === node ? prev : node`) doesn't
+  // actually bail — it cascades into setState → re-render → new handle
+  // object → setState → ... an infinite loop that crashed the message pages
+  // in production. A boolean compares by VALUE: React's built-in same-value
+  // bailout (`Object.is`) skips the re-render whenever attached-ness doesn't
+  // change, regardless of how many different object identities the ref
+  // receives underneath. The handle itself is still read live off
+  // `virtuosoRef.current` when actually needed — only the readiness SIGNAL
+  // goes through state.
+  const [handleAttached, setHandleAttached] = useState(false);
+  const handleVirtuosoRef = useCallback((node: VirtuosoHandle | null) => {
+    virtuosoRef.current = node;
+    setHandleAttached(!!node);
+  }, []);
   const messageRefs = useRef<Map<string, HTMLDivElement> | null>(null);
   // Only the direct-fallback path needs manual scroll-position preservation:
   // it renders plain divs with no virtualization, so prepending an older page
@@ -115,17 +219,33 @@ function MessageViewport({
   // prepend-without-jump, and fighting that with a second scrollTop write is
   // exactly what caused the viewport jumping this replaces.
   const preserveScrollDeltaRef = useRef<number | null>(null);
-  const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
   const [directFallbackChannelId, setDirectFallbackChannelId] = useState<string | null>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
+  const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
   const channelId = messages[0]?.channel_id;
   const canLoadOlder = !!hasOlder && !loadingOlder && !!onLoadOlder;
+  const dayDividers = useMessageDayDividers(messages);
+  const newMessagesDivider = useNewMessagesDivider(
+    channelId,
+    messages,
+    lastReadSeq,
+    currentUserId,
+  );
 
   if (!messageRefs.current) {
     messageRefs.current = new Map<string, HTMLDivElement>();
   }
   const messageRefMap = messageRefs.current;
   const useDirectFallback = directFallbackChannelId === channelId;
+  // #325: Virtuoso scrolls a caller-owned parent (`customScrollParent`), not its
+  // own div. We render the scroll container ourselves and capture it into
+  // `scrollContainerEl`, which (a) is Virtuoso's scroll parent, (b) gates the
+  // mount-time scroll effects until the container exists — the first render is a
+  // bare placeholder scroller, so Virtuoso only mounts on the second render once
+  // this ref has set the state and the parent is laid out (this is what makes
+  // `initialTopMostItemIndex` land correctly; giving Virtuoso its own flex
+  // scroller regressed cold-load positioning), and (c) backs the fallback
+  // scroll-position preservation + the render-detection probe via `scrollRef`.
   const setScrollContainerRef = useCallback((node: HTMLDivElement | null) => {
     scrollRef.current = node;
     setScrollContainerEl(node);
@@ -135,6 +255,45 @@ function MessageViewport({
     if (!highlightMessageId) return -1;
     return messages.findIndex((m) => m.id === highlightMessageId);
   }, [messages, highlightMessageId]);
+
+  // "Open scrolled to the unread divider" (#303) — self-contained plugin hook
+  // (#325 phase-2 block 2). Owns the anchor derivation, the once-per-visit guard,
+  // and the measure-safe (#883) settle-scroll; the core just reads back
+  // `unreadAnchorIndex` to seed the Virtuoso mount position below.
+  const { unreadAnchorIndex } = useUnreadAnchorScroll({
+    channelId,
+    messages,
+    newMessagesDivider,
+    highlightMessageId,
+    firstItemIndex,
+    // A value-comparable readiness signal so the settle effect re-runs the
+    // instant Virtuoso attaches, instead of possibly having already run (and
+    // no-op'd) while the handle was still null with no second chance.
+    handleAttached,
+    virtuosoRef,
+    // The scroll container gates the anchor scroll (Virtuoso only mounts once it
+    // exists) and its rect tells the settle helper when the anchor row arrives.
+    scrollContainerEl,
+    messageRefMap,
+  });
+
+  // Floating "N new messages ↓" pill (#303) — self-contained plugin hook (#325
+  // phase-2 block 1). It owns its own boundary/scroll state; the core list just
+  // renders `pill` and forwards the callbacks. `isNearBottom` stays in the core
+  // (followOutput reads it); the pill hook never touches it.
+  const { pill, onReachedBottom, onPillClick } = useNewMessagesPill({
+    messages,
+    currentUserId,
+    firstItemIndex,
+    virtuosoRef,
+  });
+  const handleAtBottomStateChange = useCallback(
+    (atBottom: boolean) => {
+      setIsNearBottom(atBottom);
+      if (atBottom) onReachedBottom();
+    },
+    [onReachedBottom],
+  );
 
   // Fallback-only: captures the pre-prepend scroll offset so the layout
   // effect below can restore it once the older page's rows are in the DOM.
@@ -166,15 +325,13 @@ function MessageViewport({
     return () => window.clearTimeout(timer);
   }, [channelId, messages.length, useDirectFallback]);
 
-  // Scrolls to a deep-linked / search-hit message. Deliberately does NOT
-  // depend on `messages` — bottom-follow for newly-arrived messages is
-  // Virtuoso's own `followOutput` job now; re-running this on every new
-  // message during an open search used to re-fire scrollToIndex repeatedly.
-  // Does depend on `scrollContainerEl`: the first render returns a bare
-  // placeholder (Virtuoso isn't mounted yet, so `virtuosoRef.current` is
-  // still null), and this effect must re-fire once Virtuoso actually mounts
-  // on the following render — otherwise a highlight set before first mount
-  // (e.g. opening a channel via a deep link) never scrolls into view.
+  // Scrolls to a deep-linked / search-hit message. Deliberately does NOT depend
+  // on `messages` — bottom-follow for newly-arrived messages is Virtuoso's own
+  // `followOutput` job; re-running on every new message during an open search
+  // used to re-fire scrollToIndex repeatedly. Depends on `scrollContainerEl`: the
+  // first render is a bare placeholder scroller (Virtuoso isn't mounted yet, so
+  // `virtuosoRef.current` is still null), and this effect must re-fire once the
+  // container exists and Virtuoso has mounted.
   useEffect(() => {
     if (!highlightMessageId || highlightIndex < 0 || !scrollContainerEl) return;
     virtuosoRef.current?.scrollToIndex({
@@ -224,34 +381,48 @@ function MessageViewport({
 
   const renderRow = (msg: ChannelMessage) => {
     const searchHighlighted = searchHitIds?.has(msg.id) ?? false;
+    const dividerLabel = dayDividers.get(msg.id);
+    const isUnreadAnchor = newMessagesDivider?.anchorMessageId === msg.id;
+    const collapseLongContent = lastReadSeq != null && msg.seq <= lastReadSeq;
     return (
-      <div
-        key={msg.id}
-        ref={(node) => {
-          if (node) {
-            messageRefMap.set(msg.id, node);
-          } else {
-            messageRefMap.delete(msg.id);
-          }
-        }}
-        className="px-5 pt-1.5"
-        data-testid="message-row"
-      >
-        <ChannelMessageBubble
-          message={msg}
-          currentUserId={currentUserId}
-          ownName={ownName}
-          highlighted={msg.id === highlightMessageId}
-          onOpenThread={onOpenThread}
-          onScrollTo={onScrollToMessage}
-          onReact={onReact}
-          searchHighlighted={searchHighlighted}
-          searchQuery={searchHighlighted ? searchQuery : undefined}
-        />
-      </div>
+      <Fragment key={msg.id}>
+        {dividerLabel && <DateDivider label={dividerLabel} />}
+        {isUnreadAnchor && <UnreadDivider count={newMessagesDivider.count} />}
+        <div
+          ref={(node) => {
+            if (node) {
+              messageRefMap.set(msg.id, node);
+            } else {
+              messageRefMap.delete(msg.id);
+            }
+          }}
+          className="px-5 pt-1.5"
+          data-testid="message-row"
+        >
+          <ChannelMessageBubble
+            message={msg}
+            currentUserId={currentUserId}
+            ownName={ownName}
+            highlighted={msg.id === highlightMessageId}
+            onOpenThread={onOpenThread}
+            onScrollTo={onScrollToMessage}
+            onReact={onReact}
+            onEdit={onEditMessage}
+            onDelete={onDeleteMessage}
+            onOpenAgent={onOpenAgent}
+            searchHighlighted={searchHighlighted}
+            searchQuery={searchHighlighted ? searchQuery : undefined}
+            collapseLongContent={collapseLongContent}
+          />
+        </div>
+      </Fragment>
     );
   };
 
+  // First render: no scroll container captured yet. Render a bare scroller div
+  // whose ref sets `scrollContainerEl`; the next render mounts Virtuoso against
+  // this now-laid-out parent (`customScrollParent`), which is what lets
+  // `initialTopMostItemIndex` position correctly on cold load.
   if (!scrollContainerEl) {
     return (
       <div
@@ -294,53 +465,63 @@ function MessageViewport({
     );
   }
 
+  // Open scrolled to: a deep-link target first, else the "new messages" divider
+  // so the viewer starts where they left off (#303, Iris), else the chat
+  // default (latest / thread root).
   const initialTopMostItemIndex =
     highlightIndex >= 0
       ? firstItemIndex + highlightIndex
-      : initialScroll === "bottom"
-        ? firstItemIndex + Math.max(0, messages.length - 1)
-        : firstItemIndex;
+      : unreadAnchorIndex >= 0
+        ? firstItemIndex + unreadAnchorIndex
+        : initialScroll === "bottom"
+          ? firstItemIndex + Math.max(0, messages.length - 1)
+          : firstItemIndex;
 
   return (
-    <div
-      ref={setScrollContainerRef}
-      className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
-      data-testid="message-scroller"
-    >
-      <Virtuoso
-        ref={virtuosoRef}
-        customScrollParent={scrollContainerEl}
-        data={messages}
-        firstItemIndex={firstItemIndex}
-        initialTopMostItemIndex={initialTopMostItemIndex}
-        increaseViewportBy={{ top: 320, bottom: 520 }}
-        atBottomThreshold={120}
-        atBottomStateChange={setIsNearBottom}
-        followOutput={() => (!loadingOlder && isNearBottom ? "smooth" : false)}
-        startReached={() => {
-          if (canLoadOlder) onLoadOlder?.();
-        }}
-        computeItemKey={(_, msg) => msg.id}
-        components={{
-          List: VirtuosoItemList,
-          Header: () => (
-            <>
-              {header}
-              <div className={header ? "pt-2" : "pt-3"}>
-                <LoadOlderAffordance
-                  hasOlder={hasOlder}
-                  loadingOlder={loadingOlder}
-                  loadingOlderLabel={loadingOlderLabel}
-                  loadOlderLabel={loadOlderLabel}
-                  onLoadOlder={() => onLoadOlder?.()}
-                />
-              </div>
-            </>
-          ),
-          Footer: () => <div className="pb-5" />,
-        }}
-        itemContent={(_, msg) => renderRow(msg)}
-      />
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <div
+        ref={setScrollContainerRef}
+        className="virtuoso-scroller min-h-0 min-w-0 flex-1 overflow-y-auto"
+        data-testid="message-scroller"
+      >
+        <Virtuoso
+          ref={handleVirtuosoRef}
+          customScrollParent={scrollContainerEl}
+          data={messages}
+          firstItemIndex={firstItemIndex}
+          initialTopMostItemIndex={initialTopMostItemIndex}
+          increaseViewportBy={{ top: 320, bottom: 520 }}
+          atBottomThreshold={120}
+          atBottomStateChange={handleAtBottomStateChange}
+          followOutput={() => (!loadingOlder && isNearBottom ? "smooth" : false)}
+          startReached={() => {
+            if (canLoadOlder) onLoadOlder?.();
+          }}
+          computeItemKey={(_, msg) => msg.id}
+          components={{
+            List: VirtuosoItemList,
+            Header: () => (
+              <>
+                {header}
+                <div className={header ? "pt-2" : "pt-3"}>
+                  <LoadOlderAffordance
+                    hasOlder={hasOlder}
+                    loadingOlder={loadingOlder}
+                    loadingOlderLabel={loadingOlderLabel}
+                    loadOlderLabel={loadOlderLabel}
+                    onLoadOlder={() => onLoadOlder?.()}
+                  />
+                </div>
+              </>
+            ),
+            Footer: () => <div className="pb-5" />,
+          }}
+          itemContent={(_, msg) => renderRow(msg)}
+        />
+      </div>
+      {!isNearBottom && pill && (
+        <NewMessagesPill count={pill.count} onClick={onPillClick} />
+      )}
     </div>
   );
 }

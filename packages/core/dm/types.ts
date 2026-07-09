@@ -28,8 +28,8 @@ export interface DMItem {
   unread: number;
   updated_at: string;
   /**
-   * Set when the conversation is pinned to the top of DIRECT MESSAGES.
-   * Absent/undefined = not pinned.
+   * Set when the conversation is in the unified Messages sidebar PINNED
+   * section (Slack-style starred/pinned group). Absent/undefined = not pinned.
    */
   pinned_at?: string;
   /** Set when the conversation is muted for the current user. */

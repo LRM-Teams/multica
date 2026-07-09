@@ -10,6 +10,7 @@
     "no_conversation_matches": "No matching conversations",
     "search_scope_hint": "This filters the conversation list only. Open a conversation and use the top-right message search to search message text.",
     "groups": "Channels",
+    "pinned_section": "Pinned",
     "name_placeholder": "Channel name",
     "lark_placeholder": "Optional Feishu chat_id (oc_...)",
     "create_aria": "Create channel",

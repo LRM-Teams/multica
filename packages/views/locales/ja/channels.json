@@ -10,6 +10,7 @@
     "no_conversation_matches": "一致する会話がありません",
     "search_scope_hint": "左側は会話リストのみを絞り込みます。メッセージ本文を検索するには、会話を開いて右上のメッセージ検索を使ってください。",
     "groups": "チャンネル",
+    "pinned_section": "ピン留め",
     "name_placeholder": "チャンネル名",
     "lark_placeholder": "任意の Feishu chat_id (oc_...)",
     "create_aria": "チャンネルを作成",

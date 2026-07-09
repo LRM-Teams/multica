@@ -109,6 +109,7 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 			"directly addressed to you (@-mention",
 			"Collaborative discussion rule",
 			"Never @ someone for thanks",
+			"delivering a requested completion/blocker summary to the responsible human",
 			"Do not print JSON envelopes",
 			"Current message to respond to",
 			trigger.Content,

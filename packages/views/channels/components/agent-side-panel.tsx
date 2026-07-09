@@ -13,9 +13,9 @@ import { initialsOf } from "../../common/initials";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
 
-type AgentSidePanelTab = "activity" | "profile" | "files";
+type OwnerTab = "activity" | "profile" | "files";
 
-const TABS: { id: AgentSidePanelTab; icon: typeof Activity }[] = [
+const OWNER_TABS: { id: OwnerTab; icon: typeof Activity }[] = [
   { id: "activity", icon: Activity },
   { id: "profile", icon: User },
   { id: "files", icon: FileText },
@@ -32,12 +32,15 @@ interface AgentSidePanelProps {
  * Right-pane surface opened by clicking an agent's avatar/name in the
  * conversation — mutually exclusive with the thread panel (same slot,
  * per Frank's direction 2026-07-09: inline panel, not a route jump).
- * Activity reuses the same ActivityTab as the full agent detail page, so
- * there's a single source of truth for "what is this agent doing".
+ * Per Frank's follow-up correction: owner sees Activity/Profile/Files,
+ * non-owner sees Profile only (Files was always owner-gated; Activity
+ * follows the same gate here per his explicit call, not a generic
+ * observability surface for this panel).
  */
 export function AgentSidePanel({ agent, currentUserId, members, onClose }: AgentSidePanelProps) {
   const { t } = useT("agents");
-  const [tab, setTab] = useState<AgentSidePanelTab>("activity");
+  const isOwner = !!currentUserId && agent.owner_id === currentUserId;
+  const [tab, setTab] = useState<OwnerTab>(isOwner ? "activity" : "profile");
   const displayName = resolveActorDisplayName(agent, agent.id);
   const initials = initialsOf(displayName);
 
@@ -66,38 +69,45 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
         </Button>
       </div>
 
-      <div className="flex shrink-0 items-center gap-0 border-b px-2">
-        {TABS.map((tabDef) => (
-          <button
-            key={tabDef.id}
-            type="button"
-            onClick={() => setTab(tabDef.id)}
-            className={cn(
-              "flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
-              tab === tabDef.id
-                ? "border-foreground text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
+      {isOwner ? (
+        <>
+          <div className="flex shrink-0 items-center gap-0 border-b px-2">
+            {OWNER_TABS.map((tabDef) => (
+              <button
+                key={tabDef.id}
+                type="button"
+                onClick={() => setTab(tabDef.id)}
+                className={cn(
+                  "flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+                  tab === tabDef.id
+                    ? "border-foreground text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <tabDef.icon className="size-3.5" />
+                {t(($) => $.tabs[tabDef.id])}
+              </button>
+            ))}
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {tab === "activity" && <ActivityTab agent={agent} />}
+            {tab === "profile" && <AgentProfileTabContent agent={agent} members={members} />}
+            {tab === "files" && (
+              <AgentFilesPanel
+                agent={agent}
+                currentUserId={currentUserId}
+                members={members}
+                onClose={onClose}
+                hideHeader
+              />
             )}
-          >
-            <tabDef.icon className="size-3.5" />
-            {t(($) => $.tabs[tabDef.id])}
-          </button>
-        ))}
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {tab === "activity" && <ActivityTab agent={agent} />}
-        {tab === "profile" && <AgentProfileTabContent agent={agent} members={members} />}
-        {tab === "files" && (
-          <AgentFilesPanel
-            agent={agent}
-            currentUserId={currentUserId}
-            members={members}
-            onClose={onClose}
-            hideHeader
-          />
-        )}
-      </div>
+          </div>
+        </>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <AgentProfileTabContent agent={agent} members={members} />
+        </div>
+      )}
     </aside>
   );
 }

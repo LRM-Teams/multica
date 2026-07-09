@@ -14,6 +14,11 @@ vi.mock("@multica/core/api", () => ({
   api: { getBaseUrl: () => "" },
 }));
 
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (selector: (state: { user: { id: string } | null }) => unknown) =>
+    selector({ user: { id: "user-1" } }),
+}));
+
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorName: (_type: string, _id: string, fallback?: string) => fallback ?? "Alice",
@@ -174,6 +179,44 @@ describe("Markdown", () => {
 
     expect(container.textContent).toContain("@Alice");
     expect(container.querySelector("mark")?.textContent).toBe("Ali");
+  });
+
+  it("renders member/agent/@all mentions as brand semantic tokens, not identity colors", () => {
+    const { container } = render(
+      <Markdown>
+        {
+          "Ping [@Alice](mention://member/user-2) [@Bot](mention://agent/agent-1) [@all](mention://all/all)"
+        }
+      </Markdown>,
+    );
+
+    const tokens = container.querySelectorAll("[data-mention-kind]");
+    expect(tokens.length).toBeGreaterThanOrEqual(3);
+
+    const member = container.querySelector('[data-mention-type="member"]');
+    const agent = container.querySelector('[data-mention-type="agent"]');
+    const all = container.querySelector('[data-mention-type="all"]');
+
+    expect(member).toHaveAttribute("data-mention-kind", "default");
+    expect(agent).toHaveAttribute("data-mention-kind", "default");
+    expect(all).toHaveAttribute("data-mention-kind", "all");
+
+    // Shared brand semantic classes — no per-id inline style rainbow.
+    for (const el of [member, agent, all]) {
+      expect(el).toHaveClass("text-brand");
+      expect(el).not.toHaveAttribute("style");
+    }
+    expect(all).toHaveClass("bg-brand/[0.16]");
+  });
+
+  it("marks a mention of the current viewer as self kind", () => {
+    const { container } = render(
+      <Markdown>{"Hey [@me](mention://member/user-1)"}</Markdown>,
+    );
+
+    const self = container.querySelector('[data-mention-type="member"]');
+    expect(self).toHaveAttribute("data-mention-kind", "self");
+    expect(self).toHaveClass("bg-brand/[0.14]");
   });
 
   it("does not highlight inline code text", () => {

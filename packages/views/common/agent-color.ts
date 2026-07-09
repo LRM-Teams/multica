@@ -11,6 +11,9 @@
  * hue for the avatar fill. These are deliberate identity colors (like label
  * colors), not theme styling — hence raw values applied via inline style
  * rather than semantic design tokens.
+ *
+ * Scope: avatars / monograms only. Body @mention tokens use the shared brand
+ * semantic pill (`mentionTokenClassName`) — do not reuse this palette there.
  */
 export interface AgentColor {
   /** Saturated color for the monogram text / bot icon. */

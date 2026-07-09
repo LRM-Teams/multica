@@ -3,7 +3,8 @@
 /**
  * MentionView — NodeView for rendering @mentions inline in the editor.
  *
- * Member/agent mentions: plain "@Name" text with .mention class styling.
+ * Member/agent/squad/@all: brand semantic pill via `mentionTokenClassName`
+ * (Iris / Slack-like — not per-actor identity colors).
  * Issue mentions: IssueChip inside a custom <a> that supports cmd/shift-click
  * to open in a new tab (AppLink doesn't expose that intent hook).
  *
@@ -17,15 +18,20 @@
 import { NodeViewWrapper } from "@tiptap/react";
 import type { NodeViewProps } from "@tiptap/react";
 import { useWorkspacePaths } from "@multica/core/paths";
+import { useAuthStore } from "@multica/core/auth";
 import { useNavigation } from "../../navigation";
-import { agentColor } from "../../common/agent-color";
 import { IssueChip } from "../../issues/components/issue-chip";
 import { ProjectChip } from "../../projects/components/project-chip";
 import { useT } from "../../i18n";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
+import {
+  mentionTokenClassName,
+  resolveMentionTokenKind,
+} from "../../common/mention-token";
 
 export function MentionView({ node }: NodeViewProps) {
   const { t } = useT("editor");
+  const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
   const { type, id, label } = node.attrs;
 
   if (type === "issue") {
@@ -44,14 +50,19 @@ export function MentionView({ node }: NodeViewProps) {
     );
   }
 
-  // Member / agent / squad / all → a colored identity pill so each actor is
-  // distinguishable at a glance (same palette as group-chat avatars).
-  const color = agentColor(id);
+  // Member / agent / squad / all → one low-sat brand semantic pill (Iris /
+  // Slack-like). Identity differentiation stays on avatars (`agentColor`), not
+  // the token fill.
   // The @all node stores an English label so its rendered "@all" text matches
   // the backend check; localize the display here.
   const displayLabel = type === "all" ? t(($) => $.mention.all_members) : (label ?? id);
+  const kind = resolveMentionTokenKind(type, id, viewerUserId);
   const chip = (
-    <span className="mention" style={{ color: color.fg, backgroundColor: color.bg }}>
+    <span
+      className={mentionTokenClassName(kind)}
+      data-mention-kind={kind}
+      data-mention-type={type}
+    >
       @{displayLabel}
     </span>
   );

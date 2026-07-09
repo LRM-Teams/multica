@@ -195,7 +195,7 @@ func (h *Handler) createChannelAmbientPromptTaskRowTx(ctx context.Context, tx pg
 		slog.Warn("channel ambient observation: ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return db.ChatSession{}, db.AgentTaskQueue{}, false
 	}
-	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, trigger)
+	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, ch.Kind, trigger)
 	if err != nil {
 		slog.Warn("channel ambient observation: create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return db.ChatSession{}, db.AgentTaskQueue{}, false

@@ -278,7 +278,7 @@ func (h *Handler) settleChannelAmbientWakeForTask(ctx context.Context, taskID pg
 	if !session.ID.Valid {
 		return
 	}
-	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, trigger)
+	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, ch.Kind, trigger)
 	if err != nil {
 		slog.Warn("channel ambient wake: create drain prompt failed", "task", uuidToString(taskID), "error", err)
 		return

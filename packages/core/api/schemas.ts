@@ -364,6 +364,15 @@ export const ChannelMessagesPageSchema = z.object({
   limit: z.number().default(50),
   has_more: z.boolean().default(false),
   next_cursor: ChannelMessagesCursorSchema.nullable().optional().default(null),
+  // around_seq mode only (task #340). Left undefined (not defaulted) so a
+  // caller can tell "absent" from a real value; the server only sends these
+  // for around_seq requests. NOTE: the server currently omits anchor_index
+  // when it is 0 (omitempty), so an around-mode caller must treat a missing
+  // value as 0, not as "not around mode".
+  anchor_index: z.number().optional(),
+  has_more_after: z.boolean().optional(),
+  after_cursor: ChannelMessagesCursorSchema.nullable().optional(),
+  unread_total: z.number().optional(),
 }).loose();
 
 export const EMPTY_CHANNEL_MESSAGES_PAGE: ChannelMessagesPage = {

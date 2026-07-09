@@ -167,7 +167,7 @@ describe("createMentionSuggestion", () => {
       <I18nWrapper>
         <MentionList
           items={[
-            { id: "all", label: "All members", type: "all" },
+            { id: "all", label: "all", type: "all" },
             { id: "u1", label: "Alice", type: "member", handle: "alice", secondaryLabel: "@alice" },
             { id: "a1", label: "Aegis", type: "agent", handle: "agent_aegis", secondaryLabel: "@agent_aegis" },
           ]}

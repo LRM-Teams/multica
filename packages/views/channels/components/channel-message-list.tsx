@@ -108,6 +108,14 @@ type MessageViewportProps = {
    */
   lastReadSeq?: number | null;
   /**
+   * True unread count frozen at entry (sidebar-same source), for the "N new
+   * messages" divider (#340). The loaded window holds only ~limit/2 messages
+   * past the anchor, so counting unread within it undercounts large-unread
+   * conversations — this carries the real total. Omitted → fall back to the
+   * count within the loaded window.
+   */
+  unreadCount?: number | null;
+  /**
    * Virtuoso's stable prepend anchor (see `channelMessagesFirstItemIndex`).
    * Callers with paginated history must recompute and pass this so loading
    * an older page doesn't jump the viewport; callers without pagination
@@ -166,6 +174,7 @@ function MessageViewport({
   ownName,
   highlightMessageId,
   lastReadSeq,
+  unreadCount,
   firstItemIndex = 0,
   emptyLabel,
   header,
@@ -260,7 +269,7 @@ function MessageViewport({
   // (#325 phase-2 block 2). Owns the anchor derivation, the once-per-visit guard,
   // and the measure-safe (#883) settle-scroll; the core just reads back
   // `unreadAnchorIndex` to seed the Virtuoso mount position below.
-  const { unreadAnchorIndex } = useUnreadAnchorScroll({
+  const { unreadAnchorIndex, isAnchorSettling } = useUnreadAnchorScroll({
     channelId,
     messages,
     newMessagesDivider,
@@ -387,7 +396,11 @@ function MessageViewport({
     return (
       <Fragment key={msg.id}>
         {dividerLabel && <DateDivider label={dividerLabel} />}
-        {isUnreadAnchor && <UnreadDivider count={newMessagesDivider.count} />}
+        {isUnreadAnchor && (
+          // #340: real unread total frozen at entry (sidebar-same source); the
+          // window-local count is only a fallback when it's unavailable.
+          <UnreadDivider count={unreadCount ?? newMessagesDivider.count} />
+        )}
         <div
           ref={(node) => {
             if (node) {
@@ -468,11 +481,25 @@ function MessageViewport({
   // Open scrolled to: a deep-link target first, else the "new messages" divider
   // so the viewer starts where they left off (#303, Iris), else the chat
   // default (latest / thread root).
-  const initialTopMostItemIndex =
+  //
+  // #340: with `around_seq` the window is loaded centered on the anchor, so this
+  // mount-only prop lands the first render correctly — no post-mount scroll
+  // chase, no settle fallback. Unread opens pin the FIRST-UNREAD row to the top
+  // (align:start): the "N new messages" divider is rendered at the HEAD of that
+  // row's render unit, so pinning it puts the divider at the very top of the
+  // viewport CONSTRUCTIVELY — independent of message height — with the unread
+  // messages right below it. There is no "tall last-read pushes the divider off
+  // screen" edge to catch, because the last-read row is never the pin target.
+  // (Read context above the divider is intentionally omitted in v1 — Slack's
+  // "new messages" convention; add later via pure CSS if wanted, not mechanism.)
+  // Deep-link/search centers on the target.
+  const initialTopMostItemIndex:
+    | number
+    | { index: number; align: "start" | "center" } =
     highlightIndex >= 0
-      ? firstItemIndex + highlightIndex
+      ? { index: firstItemIndex + highlightIndex, align: "center" }
       : unreadAnchorIndex >= 0
-        ? firstItemIndex + unreadAnchorIndex
+        ? { index: firstItemIndex + unreadAnchorIndex, align: "start" }
         : initialScroll === "bottom"
           ? firstItemIndex + Math.max(0, messages.length - 1)
           : firstItemIndex;
@@ -493,7 +520,17 @@ function MessageViewport({
           increaseViewportBy={{ top: 320, bottom: 520 }}
           atBottomThreshold={120}
           atBottomStateChange={handleAtBottomStateChange}
-          followOutput={() => (!loadingOlder && isNearBottom ? "smooth" : false)}
+          // Scroll position has exactly one owner at a time (#348 postmortem):
+          // while the unread-anchor settle loop is in flight it's re-issuing
+          // `scrollToIndex` toward the anchor every frame — `followOutput`
+          // smooth-scrolling back to the bottom during that window (its
+          // `isNearBottom` default is `true` before the real cold-load
+          // position is known) fights it, so `hasReached()` never sees the
+          // anchor arrive and the settle loop times out at the bottom,
+          // indistinguishable from never having tried. Gate it off for the
+          // duration; the anchor hook hands ownership back the moment it
+          // reaches or gives up.
+          followOutput={() => (!loadingOlder && !isAnchorSettling && isNearBottom ? "smooth" : false)}
           startReached={() => {
             if (canLoadOlder) onLoadOlder?.();
           }}

@@ -362,16 +362,17 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		ChatSessionID: "chat-1",
-		Directed:      true,
+		ChatSessionID:               "chat-1",
+		Directed:                    true,
 		ChatCLITransportUnavailable: false,
 	}
 	out := buildMetaSkillContent("codex", ctx)
 
 	for _, want := range []string{
 		"### Reply Requirement (READ FIRST",
-		"You MUST produce a visible response before finishing",
-		"Not responding is **not** an option",
+		"Human DMs, human @mentions, direct questions, assigned tasks",
+		"Agent-to-agent channel @mentions are weak notifications",
+		"Not responding is **not** an option when a human or explicit task is waiting on you",
 		"Reply Requirement",
 	} {
 		if !strings.Contains(out, want) {
@@ -388,8 +389,8 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		ChatSessionID: "chat-1",
-		Directed:      false, // ambient run
+		ChatSessionID:               "chat-1",
+		Directed:                    false, // ambient run
 		ChatCLITransportUnavailable: false,
 	}
 	out := buildMetaSkillContent("codex", ctx)
@@ -397,7 +398,7 @@ func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
 	// Must NOT contain the Reply Requirement block.
 	for _, banned := range []string{
 		"Reply Requirement",
-		"You MUST produce a visible response",
+		"Human DMs, human @mentions, direct questions, assigned tasks",
 		"Not responding is **not** an option",
 	} {
 		if strings.Contains(out, banned) {

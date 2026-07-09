@@ -52,14 +52,8 @@ export function useEntryReadCursor(
 
   useEffect(() => {
     if (!channelId) return;
-    // TEMP DIAGNOSTIC (#348 branch A/B split) — remove after the s89 verify.
-    // eslint-disable-next-line no-console
-    console.log("[#348 diag] markRead firing on entry", { channelId, payloadLastReadSeq });
     markRead(channelId, {
       onSuccess: (result) => {
-        // TEMP DIAGNOSTIC (#348 branch A/B split) — remove after the s89 verify.
-        // eslint-disable-next-line no-console
-        console.log("[#348 diag] markRead onSuccess", { channelId, result });
         setEchoed((prev) =>
           prev?.channelId === channelId
             ? prev
@@ -73,16 +67,17 @@ export function useEntryReadCursor(
 
   const payloadSnap =
     payloadSnapRef.current.channelId === key ? payloadSnapRef.current.seq : null;
+  // NOTE (#340 cold-start race analysis, Felix 2026-07-09): under the CURRENT
+  // channels-page / dm-conversation entries this echo fallback is not actually
+  // reachable — the message load AND this hook's mark-read both gate on
+  // `active?.id` (channels-page) / the DM prop (dm-conversation), which only
+  // exist once the list has loaded and contains this conversation. So the
+  // payload snapshot is always the pre-advance value and wins; mark-read's
+  // effect structurally cannot have run before the freeze render. The echo is
+  // kept deliberately: it is harmless, and B3 (deep-link `around_seq`) may add
+  // an entry where channelId precedes the list — that path MUST re-run this
+  // analysis. Do not delete it as dead code, and do not copy it as "already
+  // protected" elsewhere without re-verifying the mount/gating order.
   const echoedSeq = echoed && echoed.channelId === channelId ? echoed.seq : null;
-  const result = payloadSnap ?? echoedSeq;
-  // TEMP DIAGNOSTIC (#348 branch A/B split) — remove after the s89 verify.
-  // eslint-disable-next-line no-console
-  console.log("[#348 diag] useEntryReadCursor result", {
-    channelId,
-    payloadLastReadSeq,
-    payloadSnap,
-    echoedSeq,
-    result,
-  });
-  return result;
+  return payloadSnap ?? echoedSeq;
 }

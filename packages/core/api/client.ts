@@ -2146,11 +2146,23 @@ export class ApiClient {
 
   async listChannelMessagesPage(
     channelId: string,
-    options: { limit?: number; before?: { seq?: number; created_at: string; id: string } | null } = {},
+    options: {
+      limit?: number;
+      before?: { seq?: number; created_at: string; id: string } | null;
+      /**
+       * Anchor sequence for a centered ("around") page (task #340). Loads a
+       * window straddling this seq — the unread cursor on cold-open, or a
+       * deep-link/search target. Mutually exclusive with `before` (the server
+       * rejects both); when set, `before` is ignored.
+       */
+      around?: number | null;
+    } = {},
   ): Promise<ChannelMessagesPage> {
     const limit = options.limit ?? 50;
     const params = new URLSearchParams({ limit: String(limit) });
-    if (options.before) {
+    if (options.around != null) {
+      params.set("around_seq", String(options.around));
+    } else if (options.before) {
       if (typeof options.before.seq === "number") {
         params.set("before_seq", String(options.before.seq));
       } else {

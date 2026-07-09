@@ -140,6 +140,32 @@ export interface ChannelMessagesPage {
   limit: number;
   has_more: boolean;
   next_cursor?: ChannelMessagesCursor | null;
+
+  // around_seq mode only (task #340). Absent for the default/before-cursor page.
+  /**
+   * Index in `messages` (ascending) of the last already-read message — the
+   * anchor. The first UNREAD row is `anchor_index + 1` (what an unread cold-open
+   * pins to the top). `-1` when the window has no read message (whole window is
+   * unread) → pin the first row. Only meaningful when the request used
+   * `around_seq`; the caller decides based on the request it made (the server
+   * omits the field entirely, and its `0` value, outside around mode).
+   */
+  anchor_index?: number;
+  /** More messages exist NEWER than the window (around_seq mode). */
+  has_more_after?: boolean;
+  /** Cursor to page toward NEWER messages, mirroring `next_cursor` (around_seq mode). */
+  after_cursor?: ChannelMessagesCursor | null;
+  /**
+   * True unread total for the "N new messages" divider (around_seq mode) —
+   * messages with `seq > around_seq`, main-timeline-visible, authored by someone
+   * other than the viewer. Computed server-side in the SAME around query, so it
+   * is a snapshot of the entry moment by construction (the response is fetched
+   * once). This is the PREFERRED divider count: the loaded window holds only
+   * ~limit/2 messages past the anchor, so counting within it undercounts large
+   * unread. Absent on older servers → fall back to the entry-frozen list count,
+   * then the window count.
+   */
+  unread_total?: number;
 }
 
 /** Response of `POST /channels/{id}/read`. `previous_last_read_seq` echoes the

@@ -317,6 +317,67 @@ describe("useUnreadAnchorScroll", () => {
     warnSpy.mockRestore();
   });
 
+  it("REGRESSION (#348 ownership): claims scroll ownership while settling, releases it once the anchor is reached", () => {
+    // The actual bug this closes: Virtuoso's own `followOutput` ("stick to
+    // bottom") defaults on before the real cold-load position is known, and
+    // fights the settle loop's scrollToIndex every frame — `hasReached()`
+    // never sees the anchor arrive because something else keeps scrolling
+    // back to the bottom. `isAnchorSettling` is the signal the caller must
+    // gate `followOutput` on; it must be true for the whole in-flight window
+    // and flip back to false the instant settle resolves (reached or timed
+    // out), or `followOutput` would stay gated off forever.
+    const pending: FrameRequestCallback[] = [];
+    globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+      pending.push(cb);
+      return pending.length;
+    }) as typeof globalThis.requestAnimationFrame;
+
+    const { ref } = handleWithSpy();
+    const messageRefMap = new Map<string, HTMLElement>(); // anchor not yet virtualized in
+    const { result, rerender } = renderHook(() =>
+      useUnreadAnchorScroll({
+        channelId: "c1",
+        messages: messages(["m1", "m2", "m3"]),
+        newMessagesDivider: { anchorMessageId: "m3", count: 1 },
+        highlightMessageId: null,
+        firstItemIndex: 0,
+        handleAttached: true,
+        virtuosoRef: ref,
+        scrollContainerEl: elAt(0),
+        messageRefMap,
+      }),
+    );
+    // Frame 1 ran synchronously (no reach yet) — settle is in flight, ownership claimed.
+    expect(result.current.isAnchorSettling).toBe(true);
+
+    // Anchor row virtualizes in; the next queued frame finds it and reaches.
+    messageRefMap.set("m3", elAt(0));
+    const nextFrame = pending.pop();
+    nextFrame?.(0);
+    rerender();
+    expect(result.current.isAnchorSettling).toBe(false);
+  });
+
+  it("REGRESSION (#348 ownership): releases scroll ownership on settle timeout, not just on success", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { ref } = handleWithSpy();
+    const { result } = renderHook(() =>
+      useUnreadAnchorScroll({
+        channelId: "c1",
+        messages: messages(["m1", "m2", "m3", "m4", "m5"]),
+        newMessagesDivider: { anchorMessageId: "m3", count: 1 },
+        highlightMessageId: null,
+        firstItemIndex: 0,
+        handleAttached: true,
+        virtuosoRef: ref,
+        scrollContainerEl: elAt(0),
+        messageRefMap: new Map(), // anchor never gets virtualized in — forces timeout
+      }),
+    );
+    expect(result.current.isAnchorSettling).toBe(false);
+    warnSpy.mockRestore();
+  });
+
   it("reports no anchor and never scrolls when there is no unread divider", () => {
     const { scrollToIndex, ref } = handleWithSpy();
     const { result } = renderHook(() =>

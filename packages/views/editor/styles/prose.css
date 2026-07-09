@@ -357,16 +357,11 @@
   text-decoration: none;
 }
 
-/* Mentions */
+/* Mentions — layout/typography fallback. Visual color + wash come from the
+   shared `mentionTokenClassName` utilities (brand semantic, not per-actor
+   identity colors). Keep this block style-light so it does not fight Tailwind. */
 .rich-text-editor .mention {
-  color: var(--primary);
-  font-weight: 600;
   text-decoration: none;
-  margin: 0 0.0625rem;
-  border-radius: 0.3125rem;
-  padding: 0.0625rem 0.3125rem;
-  /* color + background are set per-actor via inline style (agentColor);
-     the values above are the fallback when no tint is provided. */
 }
 
 /* Slash command pills */

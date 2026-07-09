@@ -252,6 +252,11 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
   });
 
+  it("scopes the message body as message-surface for Slack-aligned image caps", () => {
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+    expect(screen.getByTestId("message-body")).toHaveClass("message-surface");
+  });
+
   it("renders the current user's own message right-aligned without an Agent pill", () => {
     const msg = makeMessage({
       type: "user",
@@ -274,6 +279,95 @@ describe("ChannelMessageBubble", () => {
 
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
     expect(screen.getByText("Bob Display")).toBeInTheDocument();
+  });
+
+  it("applies a cool self-mention wash when someone else @-mentions the viewer", () => {
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: "hey [@Alice](mention://member/user-1) please look",
+    });
+    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+    const bubble = screen.getByTestId("message-bubble");
+    expect(bubble).toHaveAttribute("data-self-mentioned", "true");
+    expect(bubble.className).toContain("bg-brand/[0.04]");
+  });
+
+  it("applies the self-mention wash for @all from another author", () => {
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: "[@all](mention://all/all) standup in 5",
+    });
+    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+    expect(screen.getByTestId("message-bubble")).toHaveAttribute(
+      "data-self-mentioned",
+      "true",
+    );
+  });
+
+  it("does not wash the viewer's own messages even when they @ themselves or @all", () => {
+    const selfPing = makeMessage({
+      type: "user",
+      author_id: "user-1",
+      author_name: "alice",
+      content: "note to self [@Alice](mention://member/user-1)",
+    });
+    const { rerender } = render(
+      <ChannelMessageBubble message={selfPing} currentUserId="user-1" />,
+    );
+    expect(screen.getByTestId("message-bubble")).not.toHaveAttribute(
+      "data-self-mentioned",
+    );
+    expect(screen.getByTestId("message-bubble").className).not.toContain(
+      "bg-brand/[0.04]",
+    );
+
+    const ownAll = makeMessage({
+      type: "user",
+      author_id: "user-1",
+      author_name: "alice",
+      content: "[@all](mention://all/all) heads up",
+    });
+    rerender(<ChannelMessageBubble message={ownAll} currentUserId="user-1" />);
+    expect(screen.getByTestId("message-bubble")).not.toHaveAttribute(
+      "data-self-mentioned",
+    );
+  });
+
+  it("does not self-mention-wash messages that only mention others", () => {
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: "hey [@Carol](mention://member/user-3) and [@Bot](mention://agent/agent-1)",
+    });
+    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+    const bubble = screen.getByTestId("message-bubble");
+    expect(bubble).not.toHaveAttribute("data-self-mentioned");
+    expect(bubble.className).not.toContain("bg-brand/[0.04]");
+  });
+
+  it("lets deep-link highlight take visual priority over the self-mention wash", () => {
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: "hey [@Alice](mention://member/user-1)",
+    });
+    render(
+      <ChannelMessageBubble message={msg} currentUserId="user-1" highlighted />,
+    );
+
+    const bubble = screen.getByTestId("message-bubble");
+    expect(bubble).toHaveAttribute("data-self-mentioned", "true");
+    expect(bubble.className).toContain("bg-primary/10");
+    expect(bubble.className).toContain("ring-primary/25");
   });
 
   it("shows a presence status dot on agent message avatars only", () => {

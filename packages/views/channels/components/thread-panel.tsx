@@ -11,9 +11,7 @@ import { ThreadRootPreview } from "./thread-root-preview";
 import { Composer } from "./composer";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
 import { ConversationHeader } from "./conversation-surface";
-import type { ThreadMemberType, ThreadParticipant } from "./thread-participants";
-
-export type { ThreadMemberType, ThreadParticipant, ThreadParticipantSource, ThreadAssignee } from "./thread-participants";
+import type { ThreadMemberType } from "./thread-participants";
 
 export type ThreadWakeState = "pending" | "replied" | "acked" | "delivered" | "no_reply";
 
@@ -30,57 +28,6 @@ export interface ThreadWakeAnnotation {
   state: ThreadWakeState | (string & {});
   /** "Why no reply" — surfaced next to a `no_reply` record. */
   reason?: string;
-}
-
-function ParticipantChip({ participant }: { participant: ThreadParticipant }) {
-  return (
-    <span
-      data-testid="thread-participant"
-      data-participant-key={participant.key}
-      className="inline-flex items-center gap-1 rounded-full border border-border/40 bg-muted/40 px-2 py-0.5 text-xs text-foreground/90"
-    >
-      {participant.memberType === "agent" ? (
-        <Bot className="size-3 text-primary" aria-hidden="true" />
-      ) : null}
-      <span className="max-w-[10rem] truncate">{participant.displayName}</span>
-    </span>
-  );
-}
-
-function ThreadParticipants({
-  participants,
-  followed,
-  onToggleFollow,
-}: {
-  participants: ThreadParticipant[];
-  followed: boolean;
-  onToggleFollow: (next: boolean) => void;
-}) {
-  const { t } = useT("channels");
-  if (participants.length === 0) return null;
-  return (
-    <div
-      data-testid="thread-participants"
-      className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border/30 px-5 py-2"
-    >
-      <span className="mr-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        {t(($) => $.thread.participants_label)}
-      </span>
-      {participants.map((participant) => (
-        <ParticipantChip key={participant.key} participant={participant} />
-      ))}
-      <Button
-        type="button"
-        variant={followed ? "secondary" : "outline"}
-        size="sm"
-        className="ml-auto h-7 px-2.5 text-xs"
-        aria-pressed={followed}
-        onClick={() => onToggleFollow(!followed)}
-      >
-        {followed ? t(($) => $.thread.following) : t(($) => $.thread.follow)}
-      </Button>
-    </div>
-  );
 }
 
 function ThreadWakeStrip({ annotations }: { annotations: ThreadWakeAnnotation[] }) {
@@ -171,11 +118,6 @@ export interface ThreadPanelProps {
   replies: ChannelMessage[];
   currentUserId: string | null;
   currentUserName?: string;
-  /** Derived participant union (see {@link deriveThreadParticipants}). */
-  participants: ThreadParticipant[];
-  /** Whether the viewer follows this thread. */
-  followed: boolean;
-  onToggleFollow: (next: boolean) => void;
   /**
    * Show this reply in the main timeline too. Optional: when
    * `onShowInChannelChange` is omitted the checkbox is not rendered at all —
@@ -213,20 +155,18 @@ export interface ThreadPanelProps {
 
 /**
  * The thread panel: a pinned read-only root, a FLAT reply list (no nesting —
- * the reply list is never given an open-thread affordance), participant
- * visibility with an explicit follow toggle, the reused `<Composer
- * surface="thread">` (an optional show-in-channel action, hidden unless a
- * handler is supplied — deferred to the #256 main-timeline projection), and —
- * when the read-model wake state is supplied — a per-participant wake strip.
+ * the reply list is never given an open-thread affordance), the reused
+ * `<Composer surface="thread">` (an optional show-in-channel action, hidden
+ * unless a handler is supplied — deferred to the #256 main-timeline
+ * projection), and — when the read-model wake state is supplied — a
+ * per-participant wake strip. Following is implicit (replying follows the
+ * thread); there is no explicit follow toggle.
  */
 export function ThreadPanel({
   root,
   replies,
   currentUserId,
   currentUserName,
-  participants,
-  followed,
-  onToggleFollow,
   showInChannel = false,
   onShowInChannelChange,
   wakeAnnotations,
@@ -320,12 +260,6 @@ export function ThreadPanel({
           replies.length > 0 ? t(($) => $.thread.meta_count, { count: replies.length }) : undefined
         }
         actions={headerActions}
-      />
-
-      <ThreadParticipants
-        participants={participants}
-        followed={followed}
-        onToggleFollow={onToggleFollow}
       />
 
       <ChannelMessageList

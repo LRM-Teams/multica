@@ -14,6 +14,11 @@ vi.mock("@multica/core/api", () => ({
   api: { getBaseUrl: () => "" },
 }));
 
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (selector: (state: { user: { id: string } | null }) => unknown) =>
+    selector({ user: { id: "user-1" } }),
+}));
+
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorName: (_type: string, _id: string, fallback?: string) => fallback ?? "Alice",
@@ -61,6 +66,26 @@ vi.mock("../navigation/app-link", () => ({
 vi.mock("../projects/components/project-chip", () => ({
   ProjectChip: ({ projectId }: { projectId: string }) => (
     <span data-testid="project-chip">{projectId}</span>
+  ),
+}));
+
+vi.mock("./actor-profile-popover", () => ({
+  ActorProfileTrigger: ({
+    memberType,
+    memberId,
+    children,
+  }: {
+    memberType: string;
+    memberId: string;
+    children: ReactNode;
+  }) => (
+    <span
+      data-testid="actor-profile-trigger"
+      data-member-type={memberType}
+      data-member-id={memberId}
+    >
+      {children}
+    </span>
   ),
 }));
 
@@ -174,6 +199,71 @@ describe("Markdown", () => {
 
     expect(container.textContent).toContain("@Alice");
     expect(container.querySelector("mark")?.textContent).toBe("Ali");
+  });
+
+  it("wraps member mentions in the full profile popover trigger", () => {
+    render(<Markdown>{"Ping [@Alice](mention://member/user-1)"}</Markdown>);
+
+    const trigger = screen.getByTestId("actor-profile-trigger");
+    expect(trigger).toHaveAttribute("data-member-type", "user");
+    expect(trigger).toHaveAttribute("data-member-id", "user-1");
+    expect(trigger.textContent).toContain("@Alice");
+  });
+
+  it("wraps agent mentions in the full profile popover trigger", () => {
+    render(<Markdown>{"Ping [@Bot](mention://agent/agent-9)"}</Markdown>);
+
+    const trigger = screen.getByTestId("actor-profile-trigger");
+    expect(trigger).toHaveAttribute("data-member-type", "agent");
+    expect(trigger).toHaveAttribute("data-member-id", "agent-9");
+  });
+
+  it("renders @all as a styled pill without a profile hover card", () => {
+    const { container } = render(
+      <Markdown>{"Ping [@all](mention://all/all)"}</Markdown>,
+    );
+
+    expect(container.textContent).toContain("@all");
+    expect(screen.queryByTestId("actor-profile-trigger")).toBeNull();
+  });
+
+  it("renders member/agent/@all mentions as brand semantic tokens, not identity colors", () => {
+    const { container } = render(
+      <Markdown>
+        {
+          "Ping [@Alice](mention://member/user-2) [@Bot](mention://agent/agent-1) [@all](mention://all/all)"
+        }
+      </Markdown>,
+    );
+
+    const tokens = container.querySelectorAll("[data-mention-kind]");
+    expect(tokens.length).toBeGreaterThanOrEqual(3);
+
+    const member = container.querySelector('[data-mention-type="member"]');
+    const agent = container.querySelector('[data-mention-type="agent"]');
+    const all = container.querySelector('[data-mention-type="all"]');
+
+    expect(member).toHaveAttribute("data-mention-kind", "default");
+    expect(agent).toHaveAttribute("data-mention-kind", "default");
+    expect(all).toHaveAttribute("data-mention-kind", "all");
+
+    // Brand-ink prose — no per-id inline style rainbow, no chip fill/padding.
+    for (const el of [member, agent, all]) {
+      expect(el).toHaveClass("text-brand");
+      expect(el).not.toHaveAttribute("style");
+    }
+    expect(member).toHaveClass("font-medium");
+    expect(all).toHaveClass("font-semibold");
+  });
+
+  it("marks a mention of the current viewer as self kind", () => {
+    const { container } = render(
+      <Markdown>{"Hey [@me](mention://member/user-1)"}</Markdown>,
+    );
+
+    const self = container.querySelector('[data-mention-type="member"]');
+    expect(self).toHaveAttribute("data-mention-kind", "self");
+    expect(self).toHaveClass("font-semibold");
   });
 
   it("does not highlight inline code text", () => {

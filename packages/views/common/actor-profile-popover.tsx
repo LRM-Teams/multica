@@ -140,7 +140,9 @@ export function ActorProfileTrigger({
         align={align}
         side={side}
         sideOffset={sideOffset}
-        className="w-[360px] p-0"
+        // IM-density profile peek: one shared size for author + @mention.
+        // ~300px is closer to Slack/Discord hover cards than a 360 panel.
+        className="w-[300px] p-0"
       >
         {content}
       </HoverCardContent>
@@ -204,7 +206,7 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
     .join("")
     .toUpperCase()
     .slice(0, 2);
-  const safeDescription = profile.description?.trim() || t(($) => $.profile_popover.no_description);
+  const description = profile.description?.trim() || "";
   const role = roleLabel(profile.role ?? (profile.member_type === "agent" ? "agent" : null), t);
   const agentStatus =
     profile.member_type === "agent" ? presenceStatusLabel(presence, tAgents) : null;
@@ -212,26 +214,31 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
 
   return (
     <div className="text-left">
-      <div className="grid grid-cols-[48px_minmax(0,1fr)] gap-3 border-b p-4">
+      <div
+        className={cn(
+          "grid grid-cols-[40px_minmax(0,1fr)] gap-2.5 p-3",
+          (description || profile.member_type === "agent") && "border-b",
+        )}
+      >
         <ActorAvatarBase
           name={displayName}
           initials={initials}
           avatarUrl={resolvePublicFileUrl(profile.avatar_url)}
           isAgent={profile.member_type === "agent"}
-          size={48}
+          size={40}
           className={profile.member_type === "agent" ? "rounded-md" : "rounded-full"}
         />
         <div className="min-w-0">
           <ActorIdentityRow
             identity={identity}
             displayName={displayName}
-            primaryClassName="truncate text-base font-semibold text-foreground"
+            primaryClassName="truncate text-sm font-semibold text-foreground"
             secondaryClassName="mt-0.5 truncate text-xs text-muted-foreground"
             className="block min-w-0"
           />
           {metadata ? (
-            <div className="mt-2">
-              <span className="inline-flex max-w-full items-center rounded-full border bg-muted/35 px-2 py-0.5 text-xs text-muted-foreground">
+            <div className="mt-1.5">
+              <span className="inline-flex max-w-full items-center rounded-full border bg-muted/35 px-1.5 py-px text-[11px] text-muted-foreground">
                 {metadata}
               </span>
             </div>
@@ -239,14 +246,15 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
         </div>
       </div>
 
-      <section className="border-b p-4 last:border-b-0">
-        <p className={cn(
-          "line-clamp-3 text-sm leading-6",
-          profile.description?.trim() ? "text-foreground/85" : "text-muted-foreground",
-        )}>
-          {safeDescription}
-        </p>
-      </section>
+      {/* Only render when there is real copy — empty "No description yet"
+          pads the card and is the main reason member peeks felt oversized. */}
+      {description ? (
+        <section className={cn("border-b p-3 last:border-b-0")}>
+          <p className="line-clamp-2 text-xs leading-5 text-foreground/85">
+            {description}
+          </p>
+        </section>
+      ) : null}
       {profile.member_type === "agent" ? (
         <ProfileSection title={t(($) => $.profile_popover.recent_activity)}>
           {(profile.recent_activity ?? []).length > 0 ? (
@@ -256,7 +264,7 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
               ))}
             </div>
           ) : (
-            <div className="rounded-md bg-muted/45 px-3 py-2 text-xs text-muted-foreground">
+            <div className="rounded-md bg-muted/45 px-2.5 py-1.5 text-xs text-muted-foreground">
               {t(($) => $.profile_popover.no_recent_activity)}
             </div>
           )}
@@ -274,8 +282,8 @@ function ProfileSection({
   children: React.ReactNode;
 }) {
   return (
-    <section className="border-b p-4 last:border-b-0">
-      <div className="mb-2 text-[11px] font-medium uppercase tracking-normal text-muted-foreground">
+    <section className="border-b p-3 last:border-b-0">
+      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-normal text-muted-foreground">
         {title}
       </div>
       {children}
@@ -291,8 +299,8 @@ function ActivityRow({ activity }: { activity: MemberProfileActivityItem }) {
   const label = activity.label?.trim() || meta.label;
 
   return (
-    <div className="grid grid-cols-[22px_minmax(0,1fr)] gap-2.5 border-t py-2.5 first:border-t-0 first:pt-0 last:pb-0">
-      <span className="flex size-[22px] items-center justify-center rounded-full bg-muted text-muted-foreground">
+    <div className="grid grid-cols-[20px_minmax(0,1fr)] gap-2 border-t py-2 first:border-t-0 first:pt-0 last:pb-0">
+      <span className="flex size-5 items-center justify-center rounded-full bg-muted text-muted-foreground">
         <Icon className="size-3" />
       </span>
       <div className="min-w-0">
@@ -308,7 +316,7 @@ function ActivityRow({ activity }: { activity: MemberProfileActivityItem }) {
 }
 
 function UnavailableProfile({ message }: { message: string }) {
-  return <div className="p-4 text-xs text-muted-foreground">{message}</div>;
+  return <div className="p-3 text-xs text-muted-foreground">{message}</div>;
 }
 
 function roleLabel(

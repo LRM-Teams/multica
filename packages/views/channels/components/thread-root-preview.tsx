@@ -109,7 +109,7 @@ export function ThreadRootPreview({
               {messageTime.format(message.created_at)}
             </span>
           </div>
-          <div className="mt-1 min-w-0 overflow-hidden text-sm leading-6 text-foreground">
+          <div className="message-surface mt-1 min-w-0 overflow-hidden text-sm leading-6 text-foreground">
             <MessageBody
               content={message.content}
               parts={message.parts}

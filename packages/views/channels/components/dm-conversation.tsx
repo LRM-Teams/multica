@@ -50,6 +50,7 @@ import { useT } from "../../i18n/use-t";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
+import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
@@ -382,6 +383,14 @@ function DmChannelConversation({
   const setTyping = useSetChannelTyping();
   const { uploadWithToast } = useFileUpload(api);
 
+  // #340: freeze the entry read cursor + true unread count (sidebar-same source)
+  // per DM — anchors the cold load on the unread divider and gives the divider
+  // the real "N new" (not the count within the loaded window). See useEntryAnchor.
+  const entryAnchor = useEntryAnchor(
+    channelId,
+    dm.last_read_seq,
+    dm.real_unread ?? dm.unread,
+  );
   const {
     data: messagePages,
     isLoading: messagesLoading,
@@ -390,7 +399,9 @@ function DmChannelConversation({
     fetchNextPage: fetchOlderMessages,
     hasNextPage: hasOlderMessages,
     isFetchingNextPage: isFetchingOlderMessages,
-  } = useInfiniteQuery(channelMessagesPageOptions(channelId));
+  } = useInfiniteQuery(
+    channelMessagesPageOptions(channelId, { aroundSeq: entryAnchor.aroundSeq }),
+  );
   const messages = useMemo(() => flattenChannelMessagePages(messagePages), [messagePages]);
   const messagesFirstItemIndex = useMemo(
     () => channelMessagesFirstItemIndex(messagePages, messages.length > 0),
@@ -939,6 +950,9 @@ function DmChannelConversation({
         ownName={currentUserName ?? undefined}
         highlightMessageId={highlightMessageId}
         lastReadSeq={dividerLastReadSeq}
+        // #340 divider count, most-authoritative first: around response total →
+        // entry-frozen list count → (in MessageViewport) loaded-window count.
+        unreadCount={messagePages?.pages?.[0]?.unread_total ?? entryAnchor.unreadCount}
         firstItemIndex={messagesFirstItemIndex}
         searchHitIds={searchHitIds}
         searchQuery={searchHighlightQuery}

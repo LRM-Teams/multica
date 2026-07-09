@@ -330,15 +330,16 @@ function createComponents(
             if (rendered) return <>{rendered}</>
           }
 
-          // Fallback: render as a simple styled span
+          // Fallback: brand-ink prose mention (matches views
+          // mentionTokenClassName when the host does not supply renderMention).
           return (
-            <span className="text-primary font-semibold mx-0.5">
+            <span className="mention font-medium text-brand">
               {highlight(children)}
             </span>
           )
         }
         return (
-          <span className="text-primary font-semibold mx-0.5">
+          <span className="mention font-medium text-brand">
             {highlight(children)}
           </span>
         )

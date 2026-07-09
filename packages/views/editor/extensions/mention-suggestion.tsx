@@ -643,13 +643,12 @@ export function createMentionSuggestion(
 
     // @all is offered in channel-scoped mode too (allow set): in a group chat
     // it means "everyone in this channel", which the backend honors by
-    // triggering every agent member (contentMentionsAll). The stored label
-    // stays English ("All members") so the rendered "@all" text keeps matching
-    // the backend check regardless of UI locale; display is localized in the
-    // picker row and the mention chip.
+    // triggering every agent member (contentMentionsAll). Stored chip label is
+    // the fixed protocol token "all" (composer + message body both show
+    // `@all`); the picker row localizes the human description separately.
     const allItem: MentionItem[] =
       "all members".includes(q) || "all".includes(q)
-        ? [{ id: "all", label: "All members", type: "all" as const }]
+        ? [{ id: "all", label: "all", type: "all" as const }]
         : [];
 
     const memberItems: MentionItem[] = members

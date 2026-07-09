@@ -107,7 +107,7 @@ function ActorMention({
     <MentionHoverCard
       type={type}
       id={id}
-      name={type === "all" ? "All members" : name}
+      name={type === "all" ? t(($) => $.mention.all_members) : name}
       initials={
         type === "all"
           ? ""

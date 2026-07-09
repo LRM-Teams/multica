@@ -22,7 +22,6 @@ import { useAuthStore } from "@multica/core/auth";
 import { useNavigation } from "../../navigation";
 import { IssueChip } from "../../issues/components/issue-chip";
 import { ProjectChip } from "../../projects/components/project-chip";
-import { useT } from "../../i18n";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import {
   mentionTokenClassName,
@@ -30,7 +29,6 @@ import {
 } from "../../common/mention-token";
 
 export function MentionView({ node }: NodeViewProps) {
-  const { t } = useT("editor");
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
   const { type, id, label } = node.attrs;
 
@@ -50,12 +48,12 @@ export function MentionView({ node }: NodeViewProps) {
     );
   }
 
-  // Member / agent / squad / all → one low-sat brand semantic pill (Iris /
-  // Slack-like). Identity differentiation stays on avatars (`agentColor`), not
-  // the token fill.
-  // The @all node stores an English label so its rendered "@all" text matches
-  // the backend check; localize the display here.
-  const displayLabel = type === "all" ? t(($) => $.mention.all_members) : (label ?? id);
+  // Member / agent / squad / all → brand-ink prose token. Identity colors stay
+  // on avatars (`agentColor`), not the token fill.
+  // @all is a fixed protocol token (same as message renderer + markdown
+  // `[@all](mention://all/all)`). Picker shows the localized "All members"
+  // description; the chip always reads `@all`.
+  const displayLabel = type === "all" ? "all" : (label ?? id);
   const kind = resolveMentionTokenKind(type, id, viewerUserId);
   const chip = (
     <span

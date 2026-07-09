@@ -184,7 +184,7 @@ func TestInteractionDAG_CloseSegmentForEvent_RecordsSegment(t *testing.T) {
 	store := newFakeInteractionDAGStore()
 	client := &fakeArealSegmentClient{
 		closeSegmentID: 7,
-		exportPayload:  json.RawMessage(`{"tensor_ref":{"shard_id":"shard-1"}}`),
+		exportPayload:  json.RawMessage(`{"input_ids":{"type":"dataclass","class_path":"areal.infra.rpc.rtensor.RTensor","data":{"shard":{"type":"dataclass","class_path":"areal.infra.rpc.rtensor.TensorShardInfo","data":{"shard_id":"shard-1","node_addr":"10.0.0.1:8000"}},"data":{"shape":[1,4]}}},"attention_mask":{"type":"dataclass","class_path":"areal.infra.rpc.rtensor.RTensor","data":{"shard":{"type":"dataclass","class_path":"areal.infra.rpc.rtensor.TensorShardInfo","data":{"shard_id":"shard-2","node_addr":"10.0.0.1:8000"}},"data":{"shape":[1,4]}}}}`),
 	}
 	svc := NewInteractionDAGService(store, client, true)
 
@@ -213,7 +213,7 @@ func TestInteractionDAG_CloseSegmentForEvent_RecordsSegment(t *testing.T) {
 	assert.Equal(t, "run-1", row.AgentRunID, "agent_run_id must come from the session lookup, not the caller")
 	assert.Equal(t, ptrText("issue-1"), row.IssueID, "issue_id must come from the session lookup")
 	assert.EqualValues(t, 7, row.TrajectoryID)
-	assert.JSONEq(t, `{"shard_id":"shard-1"}`, string(row.TensorRef))
+	assert.JSONEq(t, `{"input_ids":{"shard_id":"shard-1","node_addr":"10.0.0.1:8000"},"attention_mask":{"shard_id":"shard-2","node_addr":"10.0.0.1:8000"}}`, string(row.TensorRef))
 	assert.Equal(t, ptrText("delegation"), row.ClosingEvent)
 	// Env-snapshot fields are 1:1 with the segment (atomic insert).
 	assert.JSONEq(t, `["sbx-1"]`, string(row.SandboxIDs))
@@ -227,7 +227,7 @@ func TestInteractionDAG_CloseSegmentForEvent_LeafSegmentClosingEventEmpty(t *tes
 	store := newFakeInteractionDAGStore()
 	client := &fakeArealSegmentClient{
 		closeSegmentID: 3,
-		exportPayload:  json.RawMessage(`{"shard_id":"shard-leaf"}`),
+		exportPayload:  json.RawMessage(`{"input_ids":{"shard_id":"shard-leaf","node_addr":"10.0.0.2:8000"}}`),
 	}
 	svc := NewInteractionDAGService(store, client, true)
 	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-2", "run-2", ""))
@@ -238,8 +238,78 @@ func TestInteractionDAG_CloseSegmentForEvent_LeafSegmentClosingEventEmpty(t *tes
 
 	require.Len(t, store.segmentSnapshots, 1)
 	assert.False(t, store.segmentSnapshots[0].ClosingEvent.Valid, "leaf segment closing_event must be NULL")
-	// tensor_ref decoded from a payload that is itself the ref object.
-	assert.JSONEq(t, `{"shard_id":"shard-leaf"}`, string(store.segmentSnapshots[0].TensorRef))
+	// tensor_ref decoded from a payload that has a bare shard ref per field.
+	assert.JSONEq(t, `{"input_ids":{"shard_id":"shard-leaf","node_addr":"10.0.0.2:8000"}}`, string(store.segmentSnapshots[0].TensorRef))
+}
+
+func TestDecodeTensorRef_MultiShardEnvelope(t *testing.T) {
+	// Real areal export shape: each field is a serialized RTensor dataclass whose
+	// data.shard.data carries {shard_id, node_addr}.
+	traj := map[string]any{
+		"input_ids": map[string]any{
+			"type": "dataclass", "class_path": "areal.infra.rpc.rtensor.RTensor",
+			"data": map[string]any{
+				"shard": map[string]any{
+					"type": "dataclass", "class_path": "areal.infra.rpc.rtensor.TensorShardInfo",
+					"data": map[string]any{"shard_id": "shard-input-1", "node_addr": "10.0.0.1:8000"},
+				},
+				"data": map[string]any{"shape": []int{1, 4}},
+			},
+		},
+		"attention_mask": map[string]any{
+			"type": "dataclass", "class_path": "areal.infra.rpc.rtensor.RTensor",
+			"data": map[string]any{
+				"shard": map[string]any{
+					"type": "dataclass", "class_path": "areal.infra.rpc.rtensor.TensorShardInfo",
+					"data": map[string]any{"shard_id": "shard-mask-1", "node_addr": "10.0.0.1:8000"},
+				},
+				"data": map[string]any{"shape": []int{1, 4}},
+			},
+		},
+	}
+	raw, _ := json.Marshal(traj)
+	out, err := decodeTensorRef(raw)
+	if err != nil {
+		t.Fatalf("decodeTensorRef: %v", err)
+	}
+	var ref map[string]map[string]string
+	if err := json.Unmarshal(out, &ref); err != nil {
+		t.Fatalf("unmarshal decoded: %v", err)
+	}
+	if ref["input_ids"]["shard_id"] != "shard-input-1" {
+		t.Fatalf("input_ids shard_id = %q", ref["input_ids"]["shard_id"])
+	}
+	if ref["attention_mask"]["node_addr"] != "10.0.0.1:8000" {
+		t.Fatalf("attention_mask node_addr = %q", ref["attention_mask"]["node_addr"])
+	}
+	if _, ok := ref["shard_id"]; ok {
+		t.Fatalf("must not be a single shard_id map; got %v", ref)
+	}
+}
+
+func TestDecodeTensorRef_BareShardRef(t *testing.T) {
+	// Tolerant: a bare {"shard_id":...} per field is also accepted.
+	traj := map[string]any{
+		"input_ids": map[string]any{"shard_id": "s1", "node_addr": "h:1"},
+	}
+	raw, _ := json.Marshal(traj)
+	out, err := decodeTensorRef(raw)
+	if err != nil {
+		t.Fatalf("decodeTensorRef: %v", err)
+	}
+	var ref map[string]map[string]string
+	_ = json.Unmarshal(out, &ref)
+	if ref["input_ids"]["shard_id"] != "s1" {
+		t.Fatalf("got %v", ref)
+	}
+}
+
+func TestDecodeTensorRef_MissingShardIDIsError(t *testing.T) {
+	traj := map[string]any{"input_ids": map[string]any{"data": "no shard"}}
+	raw, _ := json.Marshal(traj)
+	if _, err := decodeTensorRef(raw); err == nil {
+		t.Fatal("expected error for field missing shard_id")
+	}
 }
 
 // TestCloseSegmentForEvent_MissingSessionLookupErrors verifies that when no
@@ -247,7 +317,7 @@ func TestInteractionDAG_CloseSegmentForEvent_LeafSegmentClosingEventEmpty(t *tes
 // call CloseSegment (no dangling trajectory close on the bridge).
 func TestInteractionDAG_CloseSegmentForEvent_MissingSessionLookupErrors(t *testing.T) {
 	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{closeSegmentID: 1, exportPayload: json.RawMessage(`{"tensor_ref":{"shard_id":"s"}}`)}
+	client := &fakeArealSegmentClient{closeSegmentID: 1, exportPayload: json.RawMessage(`{"input_ids":{"type":"dataclass","class_path":"areal.infra.rpc.rtensor.RTensor","data":{"shard":{"type":"dataclass","class_path":"areal.infra.rpc.rtensor.TensorShardInfo","data":{"shard_id":"s","node_addr":"10.0.0.1:8000"}},"data":{"shape":[1,4]}}}}`)}
 	svc := NewInteractionDAGService(store, client, true)
 
 	_, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "unknown-sess", "pk", "delegation", nil)
@@ -314,7 +384,7 @@ func TestInteractionDAG_CloseSegmentForEvent_StoreInsertErrorPropagates(t *testi
 	store.insertSegmentSnapshotErr = errors.New("db write failed")
 	client := &fakeArealSegmentClient{
 		closeSegmentID: 5,
-		exportPayload:  json.RawMessage(`{"tensor_ref":{"shard_id":"s"}}`),
+		exportPayload:  json.RawMessage(`{"input_ids":{"shard_id":"s","node_addr":"10.0.0.1:8000"}}`),
 	}
 	svc := NewInteractionDAGService(store, client, true)
 	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"))
@@ -376,7 +446,7 @@ func TestInteractionDAG_AddEdge_RejectsMissingIDs(t *testing.T) {
 // (INTERACTION_DAG_ENABLED=false) touches neither the store nor the bridge.
 func TestInteractionDAGService_DisabledIsNoOp(t *testing.T) {
 	store := newFakeInteractionDAGStore()
-	client := &fakeArealSegmentClient{closeSegmentID: 1, exportPayload: json.RawMessage(`{"tensor_ref":{"shard_id":"s"}}`)}
+	client := &fakeArealSegmentClient{closeSegmentID: 1, exportPayload: json.RawMessage(`{"input_ids":{"shard_id":"s","node_addr":"10.0.0.1:8000"}}`)}
 	svc := NewInteractionDAGService(store, client, false)
 
 	assert.NoError(t, svc.RecordSessionAgentRun(context.Background(), "p", "s", "r", "i"))
@@ -398,9 +468,9 @@ func TestInteractionDAG_CloseSegmentForEvent_FanOutDeterministic(t *testing.T) {
 	client := &fakeArealSegmentClient{
 		closeSegmentID: 100,
 		exportCallForTraj: map[int]json.RawMessage{
-			100: json.RawMessage(`{"tensor_ref":{"shard_id":"sh-0"}}`),
-			101: json.RawMessage(`{"tensor_ref":{"shard_id":"sh-1"}}`),
-			102: json.RawMessage(`{"tensor_ref":{"shard_id":"sh-2"}}`),
+			100: json.RawMessage(`{"input_ids":{"shard_id":"sh-0","node_addr":"10.0.0.1:8000"}}`),
+			101: json.RawMessage(`{"input_ids":{"shard_id":"sh-1","node_addr":"10.0.0.1:8000"}}`),
+			102: json.RawMessage(`{"input_ids":{"shard_id":"sh-2","node_addr":"10.0.0.1:8000"}}`),
 		},
 	}
 	svc := NewInteractionDAGService(store, client, true)

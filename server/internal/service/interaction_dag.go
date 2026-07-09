@@ -224,37 +224,72 @@ func (s *InteractionDAGService) AddEdge(ctx context.Context, projectID, srcSegme
 	})
 }
 
-// decodeTensorRef extracts the tensor_ref JSON object from the raw exported
-// trajectory payload. The areal export contract pins tensor_ref as a JSON
-// object ({"shard_id": str}); it may appear either as a top-level "tensor_ref"
-// field or, when the export returns the ref object directly, as the payload
-// itself. The result is stored as jsonb verbatim - no fields are hardcoded.
-//
-// Absence (no object found) is reported as an error rather than default-filled:
-// a fabricated default would destroy the only signal downstream layers have
-// (boundary: absence stays distinguishable).
-//
-// The exact export shape is finalized by U6/U8; this decode is intentionally
-// tolerant of both plausible shapes and is a U7.2 integration concern.
+// decodeTensorRef extracts a field->shard map from the areal /export_trajectories
+// traj dict. The real export emits one serialized RTensor per tensor field
+// (input_ids, attention_mask, logprobs, loss_mask, versions); each RTensor's
+// data.shard.data carries {shard_id, node_addr}. We store that field->ref map as
+// the segment's tensor_ref jsonb. Absence (a field with no shard_id) is an error,
+// not a default - downstream resolution would KeyError on a masked None.
 func decodeTensorRef(raw json.RawMessage) ([]byte, error) {
 	if len(raw) == 0 {
 		return nil, errors.New("empty export payload, no tensor_ref")
 	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &m); err != nil {
+	var traj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &traj); err != nil {
 		return nil, fmt.Errorf("decode export payload: %w", err)
 	}
-	if ref, ok := m["tensor_ref"]; ok && len(ref) > 0 && string(ref) != "null" {
-		return ref, nil
+	if len(traj) == 0 {
+		return nil, errors.New("empty export payload, no tensor fields")
 	}
-	// Fallback: the payload itself is the ref object (e.g. {"shard_id":...}).
-	var probe any
-	if err := json.Unmarshal(raw, &probe); err == nil {
-		if _, isObj := probe.(map[string]any); isObj {
-			return raw, nil
+	out := make(map[string]map[string]string, len(traj))
+	for field, fieldRaw := range traj {
+		ref, err := extractShardRef(fieldRaw)
+		if err != nil {
+			return nil, fmt.Errorf("tensor_ref field %q: %w", field, err)
+		}
+		out[field] = ref
+	}
+	return json.Marshal(out)
+}
+
+// extractShardRef tolerates either a bare {"shard_id","node_addr"} ref or the
+// full serialized RTensor dataclass envelope (data.shard.data.{shard_id,node_addr}).
+func extractShardRef(fieldRaw json.RawMessage) (map[string]string, error) {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(fieldRaw, &probe); err != nil {
+		return nil, fmt.Errorf("not an object: %w", err)
+	}
+	if sidRaw, ok := probe["shard_id"]; ok {
+		var s string
+		if err := json.Unmarshal(sidRaw, &s); err == nil && s != "" {
+			ref := map[string]string{"shard_id": s}
+			if na, ok := probe["node_addr"]; ok {
+				var nodeAddr string
+				_ = json.Unmarshal(na, &nodeAddr)
+				ref["node_addr"] = nodeAddr
+			}
+			return ref, nil
 		}
 	}
-	return nil, errors.New("tensor_ref not found in export payload")
+	type shardInfo struct {
+		ShardID  string `json:"shard_id"`
+		NodeAddr string `json:"node_addr"`
+	}
+	type envelope struct {
+		Data struct {
+			Shard struct {
+				Data shardInfo `json:"data"`
+			} `json:"shard"`
+		} `json:"data"`
+	}
+	var env envelope
+	if err := json.Unmarshal(fieldRaw, &env); err != nil {
+		return nil, fmt.Errorf("no shard_id and not an RTensor envelope: %w", err)
+	}
+	if env.Data.Shard.Data.ShardID == "" {
+		return nil, errors.New("RTensor envelope missing shard_id")
+	}
+	return map[string]string{"shard_id": env.Data.Shard.Data.ShardID, "node_addr": env.Data.Shard.Data.NodeAddr}, nil
 }
 
 // encodeEnvSnapshot splits a generic env-snapshot map into the three

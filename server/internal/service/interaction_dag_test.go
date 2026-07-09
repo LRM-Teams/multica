@@ -21,17 +21,15 @@ import (
 
 // fakeInteractionDAGStore is an in-memory InteractionDAGStore for unit tests.
 type fakeInteractionDAGStore struct {
-	mu          sync.Mutex
-	sessionRuns map[string]db.InteractionDAGSessionRun
-	segments    []db.InsertInteractionDAGSegmentParams
-	snapshots   []db.InsertInteractionDAGEnvSnapshotParams
-	edges       []db.InsertInteractionDAGEdgeParams
+	mu               sync.Mutex
+	sessionRuns      map[string]db.InteractionDAGSessionRun
+	segmentSnapshots []db.InsertInteractionDAGSegmentWithSnapshotParams
+	edges            []db.InsertInteractionDAGEdgeParams
 
-	upsertErr        error
-	getSessionRunErr error
-	insertSegmentErr error
-	insertSnapErr    error
-	insertEdgeErr    error
+	upsertErr                error
+	getSessionRunErr         error
+	insertSegmentSnapshotErr error
+	insertEdgeErr            error
 }
 
 func newFakeInteractionDAGStore() *fakeInteractionDAGStore {
@@ -66,23 +64,13 @@ func (f *fakeInteractionDAGStore) GetInteractionDAGSessionRun(_ context.Context,
 	return row, nil
 }
 
-func (f *fakeInteractionDAGStore) InsertInteractionDAGSegment(_ context.Context, arg db.InsertInteractionDAGSegmentParams) error {
+func (f *fakeInteractionDAGStore) InsertInteractionDAGSegmentWithSnapshot(_ context.Context, arg db.InsertInteractionDAGSegmentWithSnapshotParams) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.insertSegmentErr != nil {
-		return f.insertSegmentErr
+	if f.insertSegmentSnapshotErr != nil {
+		return f.insertSegmentSnapshotErr
 	}
-	f.segments = append(f.segments, arg)
-	return nil
-}
-
-func (f *fakeInteractionDAGStore) InsertInteractionDAGEnvSnapshot(_ context.Context, arg db.InsertInteractionDAGEnvSnapshotParams) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.insertSnapErr != nil {
-		return f.insertSnapErr
-	}
-	f.snapshots = append(f.snapshots, arg)
+	f.segmentSnapshots = append(f.segmentSnapshots, arg)
 	return nil
 }
 
@@ -209,25 +197,21 @@ func TestInteractionDAG_CloseSegmentForEvent_RecordsSegment(t *testing.T) {
 	assert.Equal(t, "sess-1", client.exportCalls[0].sessionID)
 	assert.Equal(t, 7, client.exportCalls[0].trajectoryID)
 
-	// Segment row carries the looked-up agent_run_id + issue_id, the trajectory
-	// id, the decoded tensor_ref, and the closing event.
-	require.Len(t, store.segments, 1)
-	seg := store.segments[0]
-	assert.Equal(t, "sess-1-7", seg.SegmentID)
-	assert.Equal(t, "proj-1", seg.ProjectID)
-	assert.Equal(t, "run-1", seg.AgentRunID, "agent_run_id must come from the session lookup, not the caller")
-	assert.Equal(t, ptrText("issue-1"), seg.IssueID, "issue_id must come from the session lookup")
-	assert.EqualValues(t, 7, seg.TrajectoryID)
-	assert.JSONEq(t, `{"shard_id":"shard-1"}`, string(seg.TensorRef))
-	assert.Equal(t, ptrText("delegation"), seg.ClosingEvent)
-
-	// Env snapshot row is 1:1 with the segment.
-	require.Len(t, store.snapshots, 1)
-	snap := store.snapshots[0]
-	assert.Equal(t, "sess-1-7", snap.SegmentID)
-	assert.JSONEq(t, `["sbx-1"]`, string(snap.SandboxIDs))
-	assert.Equal(t, ptrText("snap-1"), snap.IssueSnapshotID)
-	assert.JSONEq(t, `{"k":"v"}`, string(snap.EnvState))
+	// The combined insert records both segment fields and env-snapshot fields in
+	// a single atomic call (CTE), carrying the looked-up agent_run_id + issue_id.
+	require.Len(t, store.segmentSnapshots, 1)
+	row := store.segmentSnapshots[0]
+	assert.Equal(t, "sess-1-7", row.SegmentID)
+	assert.Equal(t, "proj-1", row.ProjectID)
+	assert.Equal(t, "run-1", row.AgentRunID, "agent_run_id must come from the session lookup, not the caller")
+	assert.Equal(t, ptrText("issue-1"), row.IssueID, "issue_id must come from the session lookup")
+	assert.EqualValues(t, 7, row.TrajectoryID)
+	assert.JSONEq(t, `{"shard_id":"shard-1"}`, string(row.TensorRef))
+	assert.Equal(t, ptrText("delegation"), row.ClosingEvent)
+	// Env-snapshot fields are 1:1 with the segment (atomic insert).
+	assert.JSONEq(t, `["sbx-1"]`, string(row.SandboxIDs))
+	assert.Equal(t, ptrText("snap-1"), row.IssueSnapshotID)
+	assert.JSONEq(t, `{"k":"v"}`, string(row.EnvState))
 }
 
 // TestCloseSegmentForEvent_LeafSegmentClosingEventEmpty verifies a leaf
@@ -245,10 +229,10 @@ func TestInteractionDAG_CloseSegmentForEvent_LeafSegmentClosingEventEmpty(t *tes
 		map[string]any{"sandbox_ids": []string{"sbx-1"}})
 	require.NoError(t, err)
 
-	require.Len(t, store.segments, 1)
-	assert.False(t, store.segments[0].ClosingEvent.Valid, "leaf segment closing_event must be NULL")
+	require.Len(t, store.segmentSnapshots, 1)
+	assert.False(t, store.segmentSnapshots[0].ClosingEvent.Valid, "leaf segment closing_event must be NULL")
 	// tensor_ref decoded from a payload that is itself the ref object.
-	assert.JSONEq(t, `{"shard_id":"shard-leaf"}`, string(store.segments[0].TensorRef))
+	assert.JSONEq(t, `{"shard_id":"shard-leaf"}`, string(store.segmentSnapshots[0].TensorRef))
 }
 
 // TestCloseSegmentForEvent_MissingSessionLookupErrors verifies that when no
@@ -278,7 +262,7 @@ func TestInteractionDAG_CloseSegmentForEvent_CloseSegmentErrorPropagates(t *test
 	_, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.Error(t, err)
 	assert.Empty(t, client.exportCalls, "must not export after a close failure")
-	assert.Empty(t, store.segments, "must not record a segment after a close failure")
+	assert.Empty(t, store.segmentSnapshots, "must not record a segment after a close failure")
 }
 
 // TestCloseSegmentForEvent_ExportErrorPropagates verifies an export error is
@@ -294,7 +278,7 @@ func TestInteractionDAG_CloseSegmentForEvent_ExportErrorPropagates(t *testing.T)
 
 	_, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.Error(t, err)
-	assert.Empty(t, store.segments, "must not record a segment after an export failure")
+	assert.Empty(t, store.segmentSnapshots, "must not record a segment after an export failure")
 }
 
 // TestCloseSegmentForEvent_BadTensorRefErrors verifies that an export payload
@@ -311,7 +295,26 @@ func TestInteractionDAG_CloseSegmentForEvent_BadTensorRefErrors(t *testing.T) {
 
 	_, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.Error(t, err)
-	assert.Empty(t, store.segments, "must not record a segment when tensor_ref is undecodable")
+	assert.Empty(t, store.segmentSnapshots, "must not record a segment when tensor_ref is undecodable")
+}
+
+// TestCloseSegmentForEvent_StoreInsertErrorPropagates verifies that when the
+// atomic segment+snapshot store insert fails, the error is returned and nothing
+// is persisted to the fake store. (With the real DB the CTE guarantees neither
+// row survives; the unit test asserts the call was attempted but rejected.)
+func TestInteractionDAG_CloseSegmentForEvent_StoreInsertErrorPropagates(t *testing.T) {
+	store := newFakeInteractionDAGStore()
+	store.insertSegmentSnapshotErr = errors.New("db write failed")
+	client := &fakeArealSegmentClient{
+		closeSegmentID: 5,
+		exportPayload:  json.RawMessage(`{"tensor_ref":{"shard_id":"s"}}`),
+	}
+	svc := NewInteractionDAGService(store, client, true)
+	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"))
+
+	_, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
+	require.Error(t, err)
+	assert.Empty(t, store.segmentSnapshots, "must not persist on insert error")
 }
 
 // TestAddEdge_StoresTypedEdge verifies each allowed edge type is stored.
@@ -375,7 +378,7 @@ func TestInteractionDAGService_DisabledIsNoOp(t *testing.T) {
 	assert.NoError(t, svc.AddEdge(context.Background(), "p", "a", "b", EdgeTypeDelegation))
 
 	assert.Empty(t, store.sessionRuns)
-	assert.Empty(t, store.segments)
+	assert.Empty(t, store.segmentSnapshots)
 	assert.Empty(t, store.edges)
 	assert.Empty(t, client.closeCalls)
 }
@@ -414,6 +417,8 @@ func TestInteractionDAG_CloseSegmentForEvent_FanOutDeterministic(t *testing.T) {
 	assert.Len(t, ids, 3, "segment ids must be distinct")
 	assert.Equal(t, "sess-1-101", child1)
 	assert.Equal(t, "sess-1-102", child2)
+	// Three atomic segment+snapshot inserts recorded.
+	require.Len(t, store.segmentSnapshots, 3)
 
 	// Fan-out edges root -> child1, root -> child2 (acyclic, deterministic).
 	require.NoError(t, svc.AddEdge(context.Background(), "proj-1", rootID, child1, EdgeTypeDelegation))
@@ -421,6 +426,26 @@ func TestInteractionDAG_CloseSegmentForEvent_FanOutDeterministic(t *testing.T) {
 	require.Len(t, store.edges, 2)
 	assert.Equal(t, rootID, store.edges[0].SrcSegmentID)
 	assert.Equal(t, child1, store.edges[0].DstSegmentID)
+}
+
+// TestEncodeEnvSnapshot_NilOrEmpty verifies that a nil or empty env-snapshot
+// map yields "{}" for env_state (not JSON "null"), matching the column's
+// DEFAULT '{}'::jsonb intent. Minor #2: json.Marshal(nil map) returns "null".
+func TestInteractionDAG_EncodeEnvSnapshot_NilOrEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		snap map[string]any
+	}{
+		{"nil", nil},
+		{"empty", map[string]any{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sandboxIDs, issueSnapshotID, envState := encodeEnvSnapshot(tc.snap)
+			assert.JSONEq(t, `[]`, string(sandboxIDs))
+			assert.False(t, issueSnapshotID.Valid)
+			assert.JSONEq(t, `{}`, string(envState), "nil/empty snapshot must yield {} not null")
+		})
+	}
 }
 
 // --- Integration test against a real Postgres (skipped without DATABASE_URL) ---
@@ -441,9 +466,9 @@ func interactionDAGTestPool(t *testing.T) *pgxpool.Pool {
 }
 
 // TestInteractionDAGQueries_Integration exercises the hand-written *db.Queries
-// methods (Upsert/Get session_run, Insert segment/edge/env_snapshot) inside a
-// transaction that rolls back, so it is hermetic. Catches SQL/typing errors
-// the fake-based unit tests cannot.
+// methods (Upsert/Get session_run, Insert segment+env_snapshot via the atomic
+// CTE, Insert edge) inside a transaction that rolls back, so it is hermetic.
+// Catches SQL/typing errors the fake-based unit tests cannot.
 func TestInteractionDAGQueries_Integration(t *testing.T) {
 	pool := interactionDAGTestPool(t)
 	defer pool.Close()
@@ -472,15 +497,14 @@ func TestInteractionDAGQueries_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, got2.IssueID.Valid)
 
-	// Insert segment + env_snapshot (FK cascade).
+	// Insert segment + env_snapshot atomically via the CTE (FK satisfied within
+	// the single statement; both rows commit or roll back together).
 	segID := "int-sess-1-42"
-	require.NoError(t, q.InsertInteractionDAGSegment(ctx, db.InsertInteractionDAGSegmentParams{
+	require.NoError(t, q.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
 		SegmentID: segID, ProjectID: "int-proj", AgentRunID: "int-run",
 		IssueID: ptrText("int-issue"), TrajectoryID: 42,
 		TensorRef: []byte(`{"shard_id":"int-shard"}`), ClosingEvent: ptrText("delegation"),
-	}))
-	require.NoError(t, q.InsertInteractionDAGEnvSnapshot(ctx, db.InsertInteractionDAGEnvSnapshotParams{
-		SegmentID: segID, SandboxIDs: []byte(`["sbx"]`), EnvState: []byte(`{}`),
+		SandboxIDs: []byte(`["sbx"]`), EnvState: []byte(`{}`),
 	}))
 
 	// Insert typed edges (CHECK constraint accepts the 3 types).

@@ -36,10 +36,13 @@ var validEdgeTypes = map[string]bool{
 type InteractionDAGStore interface {
 	UpsertInteractionDAGSessionRun(ctx context.Context, arg db.UpsertInteractionDAGSessionRunParams) error
 	GetInteractionDAGSessionRun(ctx context.Context, sessionID string) (db.InteractionDAGSessionRun, error)
-	InsertInteractionDAGSegment(ctx context.Context, arg db.InsertInteractionDAGSegmentParams) error
-	InsertInteractionDAGEnvSnapshot(ctx context.Context, arg db.InsertInteractionDAGEnvSnapshotParams) error
+	InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg db.InsertInteractionDAGSegmentWithSnapshotParams) error
 	InsertInteractionDAGEdge(ctx context.Context, arg db.InsertInteractionDAGEdgeParams) error
 }
+
+// Compile-time guarantee that *db.Queries satisfies InteractionDAGStore, so a
+// generated-method signature drift fails at compile time now, not at U7.2 wiring.
+var _ InteractionDAGStore = (*db.Queries)(nil)
 
 // ArealSegmentClient is the areal RL bridge seam for closing+exporting a
 // segment. *arealrl.Client satisfies it; tests inject a fake. The client
@@ -153,28 +156,25 @@ func (s *InteractionDAGService) CloseSegmentForEvent(
 		return "", fmt.Errorf("interaction_dag: decode tensor_ref for session %s: %w", sessionID, err)
 	}
 
-	// (e) record the segment + env snapshot.
+	// (e) record the segment + env snapshot atomically: a single data-modifying
+	// CTE inserts both rows in one statement so a snapshot failure can never
+	// orphan the segment (paired operations stay together). segment_id is known
+	// ahead of time (<sessionID>-<trajectoryID>) and is reused as the snapshot FK.
 	segmentID := fmt.Sprintf("%s-%d", sessionID, trajectoryID)
-	if err := s.store.InsertInteractionDAGSegment(ctx, db.InsertInteractionDAGSegmentParams{
-		SegmentID:    segmentID,
-		ProjectID:    projectID,
-		AgentRunID:   run.AgentRunID,
-		IssueID:      run.IssueID, // carry the looked-up issue_id (do not re-derive)
-		TrajectoryID: int64(trajectoryID),
-		TensorRef:    tensorRef,
-		ClosingEvent: pgText(closingEvent),
-	}); err != nil {
-		return "", fmt.Errorf("interaction_dag: insert segment %s: %w", segmentID, err)
-	}
-
 	sandboxIDs, issueSnapshotID, envState := encodeEnvSnapshot(envSnapshot)
-	if err := s.store.InsertInteractionDAGEnvSnapshot(ctx, db.InsertInteractionDAGEnvSnapshotParams{
+	if err := s.store.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
 		SegmentID:       segmentID,
+		ProjectID:       projectID,
+		AgentRunID:      run.AgentRunID,
+		IssueID:         run.IssueID, // carry the looked-up issue_id (do not re-derive)
+		TrajectoryID:    int64(trajectoryID),
+		TensorRef:       tensorRef,
+		ClosingEvent:    pgText(closingEvent),
 		SandboxIDs:      sandboxIDs,
 		IssueSnapshotID: issueSnapshotID,
 		EnvState:        envState,
 	}); err != nil {
-		return "", fmt.Errorf("interaction_dag: insert env_snapshot %s: %w", segmentID, err)
+		return "", fmt.Errorf("interaction_dag: insert segment+env_snapshot %s: %w", segmentID, err)
 	}
 
 	return segmentID, nil
@@ -255,6 +255,10 @@ func encodeEnvSnapshot(snap map[string]any) (sandboxIDs []byte, issueSnapshotID 
 	}
 	if v, ok := snap["env_state"]; ok {
 		envState, _ = json.Marshal(v)
+	} else if len(snap) == 0 {
+		// nil/empty snapshot: json.Marshal(nil map) yields "null"; use "{}" to
+		// match the column's DEFAULT '{}'::jsonb intent.
+		envState = []byte("{}")
 	} else {
 		envState, _ = json.Marshal(snap)
 	}

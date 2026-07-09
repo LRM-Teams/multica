@@ -101,12 +101,16 @@ func (q *Queries) GetInteractionDAGSessionRun(ctx context.Context, sessionID str
 	return i, err
 }
 
-const insertInteractionDAGSegment = `-- name: InsertInteractionDAGSegment :exec
-INSERT INTO interaction_dag_segment (segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+const insertInteractionDAGSegmentWithSnapshot = `-- name: InsertInteractionDAGSegmentWithSnapshot :exec
+WITH seg AS (
+  INSERT INTO interaction_dag_segment (segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+)
+INSERT INTO interaction_dag_env_snapshot (segment_id, sandbox_ids, issue_snapshot_id, env_state)
+VALUES ($1, $10, $11, $12)
 `
 
-type InsertInteractionDAGSegmentParams struct {
+type InsertInteractionDAGSegmentWithSnapshotParams struct {
 	SegmentID                 string      `json:"segment_id"`
 	ProjectID                 string      `json:"project_id"`
 	AgentRunID                string      `json:"agent_run_id"`
@@ -116,10 +120,13 @@ type InsertInteractionDAGSegmentParams struct {
 	TensorRef                 []byte      `json:"tensor_ref"`
 	ClosingEvent              pgtype.Text `json:"closing_event"`
 	ClosingEventTargetSegment pgtype.Text `json:"closing_event_target_segment"`
+	SandboxIDs                []byte      `json:"sandbox_ids"`
+	IssueSnapshotID           pgtype.Text `json:"issue_snapshot_id"`
+	EnvState                  []byte      `json:"env_state"`
 }
 
-func (q *Queries) InsertInteractionDAGSegment(ctx context.Context, arg InsertInteractionDAGSegmentParams) error {
-	_, err := q.db.Exec(ctx, insertInteractionDAGSegment,
+func (q *Queries) InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg InsertInteractionDAGSegmentWithSnapshotParams) error {
+	_, err := q.db.Exec(ctx, insertInteractionDAGSegmentWithSnapshot,
 		arg.SegmentID,
 		arg.ProjectID,
 		arg.AgentRunID,
@@ -129,25 +136,6 @@ func (q *Queries) InsertInteractionDAGSegment(ctx context.Context, arg InsertInt
 		arg.TensorRef,
 		arg.ClosingEvent,
 		arg.ClosingEventTargetSegment,
-	)
-	return err
-}
-
-const insertInteractionDAGEnvSnapshot = `-- name: InsertInteractionDAGEnvSnapshot :exec
-INSERT INTO interaction_dag_env_snapshot (segment_id, sandbox_ids, issue_snapshot_id, env_state)
-VALUES ($1, $2, $3, $4)
-`
-
-type InsertInteractionDAGEnvSnapshotParams struct {
-	SegmentID       string      `json:"segment_id"`
-	SandboxIDs      []byte      `json:"sandbox_ids"`
-	IssueSnapshotID pgtype.Text `json:"issue_snapshot_id"`
-	EnvState        []byte      `json:"env_state"`
-}
-
-func (q *Queries) InsertInteractionDAGEnvSnapshot(ctx context.Context, arg InsertInteractionDAGEnvSnapshotParams) error {
-	_, err := q.db.Exec(ctx, insertInteractionDAGEnvSnapshot,
-		arg.SegmentID,
 		arg.SandboxIDs,
 		arg.IssueSnapshotID,
 		arg.EnvState,

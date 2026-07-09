@@ -1065,9 +1065,11 @@ function AgentRailRow({
   return (
     // Outer div (not a button) lets us nest two independent buttons:
     // the avatar (→ open DM) and the content area (→ select in detail).
+    // Horizontal padding lives inside each button so the flex gap is not a
+    // dead click zone between the two targets.
     <div
       className={cn(
-        "flex w-full items-center gap-3 border-l-2 px-3 py-2.5 transition-colors",
+        "flex w-full items-stretch border-l-2 transition-colors",
         selected
           ? "border-primary bg-accent"
           : "border-transparent hover:bg-accent/50",
@@ -1079,7 +1081,7 @@ function AgentRailRow({
         onClick={() => void openDM({ peer_type: "agent", peer_id: agent.id })}
         title={t(($) => $.profile_card.send_message)}
         aria-label={t(($) => $.profile_card.send_message)}
-        className="shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+        className="shrink-0 self-center rounded-full py-2.5 pl-3 pr-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
       >
         <ActorAvatar
           actorType="agent"
@@ -1092,7 +1094,7 @@ function AgentRailRow({
       <button
         type="button"
         onClick={onClick}
-        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-1.5 pr-3 text-left"
       >
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-foreground">{displayName}</p>

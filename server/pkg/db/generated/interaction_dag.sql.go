@@ -101,6 +101,36 @@ func (q *Queries) GetInteractionDAGSessionRun(ctx context.Context, sessionID str
 	return i, err
 }
 
+const getInteractionDAGSegmentByAgentRun = `-- name: GetInteractionDAGSegmentByAgentRun :one
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at FROM interaction_dag_segment
+WHERE agent_run_id = $1
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+// GetInteractionDAGSegmentByAgentRun resolves a task's segment by agent_run_id
+// (task.ID). For change 1 each trained task has one segment; ORDER BY
+// created_at DESC LIMIT 1 keeps this stable under a future multi-segment model.
+// Used by the DELEGATION-edge recorder (D11) to find the parent's segment at
+// the child's close. Returns pgx.ErrNoRows when no segment exists yet.
+func (q *Queries) GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID string) (InteractionDAGSegment, error) {
+	row := q.db.QueryRow(ctx, getInteractionDAGSegmentByAgentRun, agentRunID)
+	var i InteractionDAGSegment
+	err := row.Scan(
+		&i.SegmentID,
+		&i.ProjectID,
+		&i.AgentRunID,
+		&i.IssueID,
+		&i.TaskID,
+		&i.TrajectoryID,
+		&i.TensorRef,
+		&i.ClosingEvent,
+		&i.ClosingEventTargetSegment,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const insertInteractionDAGSegmentWithSnapshot = `-- name: InsertInteractionDAGSegmentWithSnapshot :exec
 WITH seg AS (
   INSERT INTO interaction_dag_segment (segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment)

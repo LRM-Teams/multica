@@ -38,6 +38,7 @@ type InteractionDAGStore interface {
 	GetInteractionDAGSessionRun(ctx context.Context, sessionID string) (db.InteractionDAGSessionRun, error)
 	InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg db.InsertInteractionDAGSegmentWithSnapshotParams) error
 	InsertInteractionDAGEdge(ctx context.Context, arg db.InsertInteractionDAGEdgeParams) error
+	GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID string) (db.InteractionDAGSegment, error)
 }
 
 // Compile-time guarantee that *db.Queries satisfies InteractionDAGStore, so a
@@ -100,6 +101,26 @@ func (s *InteractionDAGService) RecordSessionAgentRun(ctx context.Context, proje
 		AgentRunID: agentRunID,
 		IssueID:    pgText(issueID),
 	})
+}
+
+// SegmentIDForAgentRun resolves the segment_id recorded for a task by
+// agent_run_id (= task.ID, D8). Used by the DELEGATION-edge hook (D11) to find
+// the parent's segment at the child's close. Returns ("", nil) when the service
+// is disabled; returns ("", pgx.ErrNoRows) when no segment exists yet (the
+// parent has not been closed/recorded) so the caller can skip the edge
+// best-effort without logging a warning.
+func (s *InteractionDAGService) SegmentIDForAgentRun(ctx context.Context, agentRunID string) (string, error) {
+	if !s.enabled || s.store == nil {
+		return "", nil
+	}
+	if agentRunID == "" {
+		return "", errors.New("interaction_dag: SegmentIDForAgentRun requires agent_run_id")
+	}
+	seg, err := s.store.GetInteractionDAGSegmentByAgentRun(ctx, agentRunID)
+	if err != nil {
+		return "", err
+	}
+	return seg.SegmentID, nil
 }
 
 // CloseSegmentForEvent closes the session's current segment via the arealrl

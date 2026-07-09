@@ -22,18 +22,18 @@ import (
 
 // EnvDispatchRequest is the body of POST /api/v1/env-dispatch (spec §6.3).
 type EnvDispatchRequest struct {
-	Mode           string                 `json:"mode"`
-	EnvID          string                 `json:"env_id"`
-	Domain         string                 `json:"domain,omitempty"`
-	DispatchType   string                 `json:"dispatch_type"`
-	GroupSize      int                    `json:"group_size"`
-	AgentID        string                 `json:"agent_id"`
-	SquadID        string                 `json:"squad_id,omitempty"`
-	TrainAgentID   string                 `json:"train_agent_id,omitempty"`
-	CriticAgentID  string                 `json:"critic_agent_id,omitempty"`
-	IdempotencyKey string                 `json:"idempotency_key,omitempty"`
-	Issue          *IssueDispatchInput    `json:"issue,omitempty"`
-	Message        *MessageDispatchInput  `json:"message,omitempty"`
+	Mode           string                        `json:"mode"`
+	EnvID          string                        `json:"env_id"`
+	Domain         string                        `json:"domain,omitempty"`
+	DispatchType   string                        `json:"dispatch_type"`
+	GroupSize      int                           `json:"group_size"`
+	AgentID        string                        `json:"agent_id"`
+	SquadID        string                        `json:"squad_id,omitempty"`
+	TrainAgentID   string                        `json:"train_agent_id,omitempty"`
+	CriticAgentID  string                        `json:"critic_agent_id,omitempty"`
+	IdempotencyKey string                        `json:"idempotency_key,omitempty"`
+	Issue          *IssueDispatchInput           `json:"issue,omitempty"`
+	Message        *MessageDispatchInput         `json:"message,omitempty"`
 	PerAgentEnv    map[string]PerAgentEnvRequest `json:"per_agent_env,omitempty"`
 }
 
@@ -58,17 +58,18 @@ type MessageDispatchInput struct {
 
 // EnvDispatchResponse is the 201 response (spec §6.3).
 type EnvDispatchResponse struct {
-	Rollouts []EnvRolloutResponse `json:"rollouts"`
+	ProjectID string               `json:"project_id"`
+	Rollouts  []EnvRolloutResponse `json:"rollouts"`
 }
 
 type EnvRolloutResponse struct {
-	EnvID         string                          `json:"env_id"`
-	ProjectID     string                          `json:"project_id"`
-	IssueID       string                          `json:"issue_id,omitempty"`
-	ChatSessionID string                          `json:"chat_session_id,omitempty"`
-	AgentRunID    string                          `json:"agent_run_id,omitempty"`
-	Error         string                          `json:"error,omitempty"`
-	SandboxRefs   []service.SandboxInstanceRef    `json:"sandbox_refs,omitempty"`
+	EnvID            string                                `json:"env_id"`
+	ProjectID        string                                `json:"project_id"`
+	IssueID          string                                `json:"issue_id,omitempty"`
+	ChatSessionID    string                                `json:"chat_session_id,omitempty"`
+	AgentRunID       string                                `json:"agent_run_id,omitempty"`
+	Error            string                                `json:"error,omitempty"`
+	SandboxRefs      []service.SandboxInstanceRef          `json:"sandbox_refs,omitempty"`
 	AgentSandboxRefs map[string]service.SandboxInstanceRef `json:"agent_sandbox_refs,omitempty"`
 }
 
@@ -149,7 +150,7 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		writeEnvDispatchError(w, err, res)
 		return
 	}
-	writeJSON(w, http.StatusCreated, EnvDispatchResponse{Rollouts: mapRollouts(res.Rollouts)})
+	writeJSON(w, http.StatusCreated, EnvDispatchResponse{ProjectID: res.ProjectID, Rollouts: mapRollouts(res.Rollouts)})
 }
 
 // DeleteEnvDispatchProject handles DELETE /api/v1/env-dispatch/{projectID}.
@@ -178,7 +179,7 @@ func writeEnvDispatchError(w http.ResponseWriter, err error, res service.EnvDisp
 	msg := err.Error()
 	switch {
 	case errors.Is(err, service.ErrAllDispatchFailed):
-		writeJSON(w, http.StatusInternalServerError, EnvDispatchResponse{Rollouts: mapRollouts(res.Rollouts)})
+		writeJSON(w, http.StatusInternalServerError, EnvDispatchResponse{ProjectID: res.ProjectID, Rollouts: mapRollouts(res.Rollouts)})
 	case strings.Contains(msg, "validation_failed"):
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "validation_failed", "message": msg})
 	case strings.Contains(msg, "not_implemented"):

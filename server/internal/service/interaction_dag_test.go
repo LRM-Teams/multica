@@ -84,6 +84,13 @@ func (f *fakeInteractionDAGStore) InsertInteractionDAGEdge(_ context.Context, ar
 	return nil
 }
 
+// GetInteractionDAGSegmentByAgentRun satisfies InteractionDAGStore. Task 3 only
+// records session_runs; segment recording + parent-segment lookup arrive in
+// Task 4, so until then a lookup finds no rows.
+func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByAgentRun(_ context.Context, agentRunID string) (db.InteractionDAGSegment, error) {
+	return db.InteractionDAGSegment{}, pgx.ErrNoRows
+}
+
 var _ InteractionDAGStore = (*fakeInteractionDAGStore)(nil)
 
 // fakeArealSegmentClient is an in-memory ArealSegmentClient for unit tests.

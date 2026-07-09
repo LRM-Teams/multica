@@ -21,11 +21,13 @@
 1. **`anchor_index,omitempty`**：`AnchorIndex int json:"anchor_index,omitempty"` —— `omitempty` 会让 `anchor_index=0`（首条即锚点）从 JSON 里被**省略**。FE 端 `resp.anchor_index ?? 0` 恰好能兜（缺失→0、-1→-1），但这是巧合、脆弱。建议 BE 去掉该字段的 `omitempty`，让 0 正常序列化。
 2. **对称回填只做了一半**：`limitBefore=limit/2` 先取、`remainingAfter=limit-actualBefore` 后取——**before 短→after 补** 有；但**after 短→before 补没有**（before 已被 cap 在 limitBefore）。设计文档 §2 明确要求"未读只有 3 条、锚点贴最新"时 before 也要补足到 `limit-实际after`。现状小未读会话窗口只有 `limit/2 + 少量`，上滑立刻二次加载。要不要这轮一起补？（不阻塞 FE 结构，但影响小未读 UX。）
 
-## 2. FE 定位数学（核心，别踩 +1）
-- **未读冷开**：`initialTopMostItemIndex = firstItemIndex + (anchor_index + 1)`，`align="start"`（divider 钉视口顶、第一条未读在其下）。
-  - 空边界 `anchor_index === -1`（无已读）→ `firstItemIndex + 0`（钉最早一条）。
-- **深链 / 搜索 / highlight（#343 同一数据路径）**：`initialTopMostItemIndex = firstItemIndex + anchor_index`（此时 `around_seq` 传的是目标消息 seq，锚点即目标），`align="center"` + 高亮。
-- 术语对齐：Iris 口径里的 "anchorIndex（第一条未读）" = BE `anchor_index + 1`。FE 统一命名 `firstUnreadIndex = anchor_index + 1`，杜绝二次 +1。
+## 2. FE 定位数学（核心）
+**UX 修正（Iris + Felix 2026-07-09，已定）**：divider 渲染在**第一条未读之上**。若 pin 到第一条未读 + align:start，divider 会被顶出视口顶、裁掉不可见（昨晚 settle 靠 96px `ANCHOR_TOP_BAND` 下压 anchor 行给 divider 留空间；mount-prop 没这个 band）。故定位目标 = **最后一条已读**：
+- **未读冷开**：`initialTopMostItemIndex = firstItemIndex + anchor_index`（= 最后一条已读行）+ `align="start"`。视口顶=最后一条已读、其下紧跟 divider + 第一条未读，divider 可见、贴 Frank 认可的"已读在上 / divider / 未读在下"视觉。
+  - 空边界 `anchor_index === -1`（全窗皆未读、无已读）→ `firstItemIndex + 0`（钉最早一条；divider 在最顶、其下即未读）。
+- **深链 / 搜索 / highlight（#343 同一数据路径）**：`initialTopMostItemIndex = firstItemIndex + anchor_index`（around_seq 传目标消息 seq、锚点即目标）+ `align="center"` + 高亮。
+- **实现落地注意**：现有组件用 `unreadAnchorIndex = messages.findIndex(第一条未读)` = `anchor_index + 1`。未读定位目标 = `unreadAnchorIndex - 1`（= 最后一条已读 = BE anchor_index）。写清楚、别反向再踩一次 off-by-one。
+- 验收硬指标（Iris）：① **divider 可见不裁** ② isNearBottom 时序（settle 到位后新消息别拽回底）。
 
 ## 3. `around_seq` 取值来源（别等 markRead 回声）
 - 冷开请求的 `around_seq` = **进会话前 sidebar/列表响应里的 `last_read_seq` 快照**（已在返回，`COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)`）。不等 markRead 回声（省一个串行 RTT）。

@@ -140,6 +140,21 @@ export interface ChannelMessagesPage {
   limit: number;
   has_more: boolean;
   next_cursor?: ChannelMessagesCursor | null;
+
+  // around_seq mode only (task #340). Absent for the default/before-cursor page.
+  /**
+   * Index in `messages` (ascending) of the last already-read message — the
+   * anchor. The first UNREAD row is `anchor_index + 1` (what an unread cold-open
+   * pins to the top). `-1` when the window has no read message (whole window is
+   * unread) → pin the first row. Only meaningful when the request used
+   * `around_seq`; the caller decides based on the request it made (the server
+   * omits the field entirely, and its `0` value, outside around mode).
+   */
+  anchor_index?: number;
+  /** More messages exist NEWER than the window (around_seq mode). */
+  has_more_after?: boolean;
+  /** Cursor to page toward NEWER messages, mirroring `next_cursor` (around_seq mode). */
+  after_cursor?: ChannelMessagesCursor | null;
 }
 
 /** Response of `POST /channels/{id}/read`. `previous_last_read_seq` echoes the

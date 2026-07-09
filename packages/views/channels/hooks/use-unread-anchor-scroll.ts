@@ -172,20 +172,10 @@ export function useUnreadAnchorScroll({
     // scrollTop check — it can't be fooled by scrollToIndex's async lag (which
     // reads scrollTop=0 for the first frames). Until the row is virtualized into
     // the DOM and reaches the top, keep re-issuing.
-    // TEMP DIAGNOSTIC (#348 H2 retest) — remove only after Iris confirms PASS.
-    let frameNum = 0;
     const hasReached = () => {
-      frameNum += 1;
       if (!anchorId) return false;
       const el = messageRefMap.get(anchorId);
       const reached = !!el && el.getBoundingClientRect().top - scrollContainerEl.getBoundingClientRect().top <= ANCHOR_TOP_BAND_PX;
-      // eslint-disable-next-line no-console
-      console.log("[#348 H2 diag] frame", frameNum, {
-        elFound: !!el,
-        reached,
-        scrollContainerElScrollTop: scrollContainerEl.scrollTop,
-        target: { index: firstItemIndex + unreadAnchorIndex, align: "start" },
-      });
       if (reached) {
         scrolledDividerChannelRef.current = channelId ?? null;
         setIsAnchorSettling(false);

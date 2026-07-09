@@ -10,7 +10,6 @@ import {
 import { useConfigStore } from "@multica/core/config";
 import { api } from "@multica/core/api";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
-import { MentionHoverCard } from "@multica/ui/components/common/mention-hover-card";
 import { useWorkspacePaths, useCurrentWorkspace } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { agentColor } from "./agent-color";
@@ -58,8 +57,8 @@ function ProjectMentionCard({ projectId }: { projectId: string }): React.ReactNo
  * (same resolver as ActorAvatar) so renames reflect immediately.
  *
  * Member/agent chips use the full profile popover (same surface as message
- * author avatars/names). @all keeps the lightweight informational card —
- * there is no single member profile to load.
+ * author avatars/names). @all is a broadcast keyword (Slack-style): styled
+ * pill only, no hover card — it is not a person/profile entity.
  */
 function ActorMention({
   type,
@@ -105,17 +104,8 @@ function ActorMention({
     );
   }
 
-  return (
-    <MentionHoverCard
-      type={type}
-      id={id}
-      name={type === "all" ? "All members" : name}
-      initials=""
-      avatarUrl={null}
-    >
-      {chip}
-    </MentionHoverCard>
-  );
+  // @all (and any other non-person mention type) — pill only, no card.
+  return chip;
 }
 
 function defaultRenderMention(

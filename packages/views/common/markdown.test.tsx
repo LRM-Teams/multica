@@ -213,6 +213,15 @@ describe("Markdown", () => {
     expect(trigger).toHaveAttribute("data-member-id", "agent-9");
   });
 
+  it("renders @all as a styled pill without a profile hover card", () => {
+    const { container } = render(
+      <Markdown>{"Ping [@all](mention://all/all)"}</Markdown>,
+    );
+
+    expect(container.textContent).toContain("@all");
+    expect(screen.queryByTestId("actor-profile-trigger")).toBeNull();
+  });
+
   it("does not highlight inline code text", () => {
     const { container } = render(
       <Markdown highlightQuery="abc">{"abc stays visible, `abc` stays code"}</Markdown>,

@@ -189,6 +189,24 @@ Rules:
 - Mark sensitive/private candidates and do not promote secrets automatically.
 - Keep uncertain or contradictory claims as `status: needs_human_review`.
 - For candidates useful beyond one agent, write governed JSONL to `sync_queue/memory-candidates.jsonl` instead of direct cross-agent writes.
+- Treat `REVIEW.md` as a short-lived queue, not as a permanent archive.
+
+Review queue lifecycle:
+
+| Status | Meaning | Cleanup behavior |
+|---|---|---|
+| `candidate` | Newly extracted and awaiting L3 promotion. | Keep until processed or until `review_expires_at`. |
+| `promoted` | Written to `USER.md`, `MEMORY.md`, `STATE.md`, or another approved destination. | Remove from `REVIEW.md` after the audit row is written. |
+| `rejected` | Not useful, too weak, duplicated, or out of scope. | Remove from `REVIEW.md` after the audit row is written. |
+| `expired` | Candidate was time-sensitive and no longer relevant before promotion. | Remove from `REVIEW.md`; never promote. |
+| `needs_human_review` | Requires a user or admin decision. | Keep only until the configured review TTL, then archive to audit/escalation. |
+| `conflict` | Contradicts live instructions or canonical memory. | Keep until resolved, then remove after audit. |
+
+Cleanup guarantees:
+
+- L3 must not leave processed review entries in `REVIEW.md`; it writes a compact audit record instead.
+- L4 must sweep expired or stale review entries that L3 could not process.
+- `REVIEW.md` should stay small enough for manual inspection and should not be injected into agent prompts by default.
 
 ### Stage L3: Promotion Writer
 
@@ -219,6 +237,16 @@ Promotion should update review entry status to `promoted` and record:
 - server `agent_memory` id when mirrored;
 - reason when skipped/rejected.
 
+After recording the audit row, L3 should delete or compact processed `REVIEW.md` entries instead of keeping a growing review history in the live review file.
+
+Canonical memory write policy:
+
+- `MEMORY.md` receives only durable, high-signal agent/project/team knowledge; it must not receive raw conversation summaries, low-confidence candidates, expired review items, or every promoted daily detail.
+- `USER.md` receives only stable user preferences/profile facts and should merge updates into existing entries instead of appending duplicates.
+- `STATE.md` receives temporary/event/quota entries with explicit lifecycle metadata so they can expire automatically.
+- `daily/*.md` is the append-only chronological record; canonical files are curated indexes, not logs.
+- Processed, rejected, expired, or superseded material belongs in `memory/audit/*.jsonl` or old `daily/` files, not in active prompt-loaded memory.
+
 ### Stage L4: Curator
 
 The curator runs once per day after L3, default 04:00. It keeps canonical memory concise and current.
@@ -230,7 +258,8 @@ Responsibilities:
 - archive expired `STATE.md` entries;
 - mark past events as `archived` or move them to daily/audit;
 - remove stale temporary facts from prompt-loaded sections;
-- keep `USER.md` and `MEMORY.md` within configured size budgets;
+- sweep `REVIEW.md` entries that are promoted, rejected, expired, superseded, or past TTL;
+- keep `REVIEW.md`, `USER.md`, and `MEMORY.md` within configured size budgets;
 - preserve managed markers and human-authored protected sections;
 - write an audit report under `memory/audit/curator-YYYY-MM-DD.jsonl`.
 
@@ -243,6 +272,17 @@ Expiration rules:
 | `quota` after reset date | Mark reset/past; optionally keep latest active quota only. |
 | future task/date commitment | Keep active until date passes, then archive on the next curator run. |
 | user preference | Never expire automatically; only update/merge. |
+| promoted/rejected review item | Remove from live `REVIEW.md` after audit; keep only compact audit metadata. |
+| expired review item | Remove from live `REVIEW.md`; do not promote. |
+
+Default file budgets:
+
+| File | Default budget | Overflow behavior |
+|---|---:|---|
+| `REVIEW.md` | 200 open entries or 256 KiB | Process, expire, or move closed items to audit. |
+| `USER.md` | 128 KiB | Merge equivalent preferences and keep the latest evidence pointer. |
+| `MEMORY.md` | 256 KiB | Summarize related durable facts and move detail to notes/audit. |
+| `STATE.md` | 256 KiB | Archive inactive/expired state before prompt injection. |
 
 ## Manual Pipeline
 

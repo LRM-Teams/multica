@@ -69,13 +69,14 @@ func appendFileSection(out *strings.Builder, root, title, rel string) {
 
 func (b *ContextBuilder) appendDBSections(ctx context.Context, out *strings.Builder, workspaceID, agentID string) error {
 	if err := appendRows(ctx, out, b.db, "Assigned Issues", `
-		SELECT identifier || ' ' || title || ' [' || status || ']'
-		FROM issue
-		WHERE workspace_id = $1::uuid
-		  AND assignee_type = 'agent'
-		  AND assignee_id = $2::uuid
-		  AND status NOT IN ('done', 'cancelled')
-		ORDER BY updated_at DESC
+		SELECT w.issue_prefix || '-' || i.number::text || ' ' || i.title || ' [' || i.status || ']'
+		FROM issue i
+		JOIN workspace w ON w.id = i.workspace_id
+		WHERE i.workspace_id = $1::uuid
+		  AND i.assignee_type = 'agent'
+		  AND i.assignee_id = $2::uuid
+		  AND i.status NOT IN ('done', 'cancelled')
+		ORDER BY i.updated_at DESC
 		LIMIT 10
 	`, workspaceID, agentID); err != nil {
 		return err

@@ -19,6 +19,10 @@ type TrainingConfig struct {
 	AdminAPIKey   string  // AREAL_ADMIN_API_KEY — authenticates start_session
 	DefaultReward float64 // TRAINING_DEFAULT_REWARD — fallback reward (default 1.0)
 	ProxyURL      string  // AREAL_PROXY_URL — URL the trained pi routes to (default http://db_bridge_stub:9100/v1)
+	// InteractionDAGEnabled gates segment-DAG recording for trained rollouts
+	// (INTERACTION_DAG_ENABLED). Defaults true (on for trained rollouts); set
+	// "false"/"0" to disable. A disabled recorder is a no-op at the seams.
+	InteractionDAGEnabled bool
 }
 
 const (
@@ -26,6 +30,7 @@ const (
 	arealAdminAPIKeyEnv      = "AREAL_ADMIN_API_KEY"
 	trainingDefaultRewardEnv = "TRAINING_DEFAULT_REWARD"
 	arealProxyURLEnv         = "AREAL_PROXY_URL"
+	interactionDAGEnabledEnv = "INTERACTION_DAG_ENABLED"
 	defaultProxyURL          = "http://db_bridge_stub:9100/v1"
 )
 
@@ -49,6 +54,16 @@ func LoadTrainingConfig() TrainingConfig {
 			slog.Warn("invalid env var, using default", "name", trainingDefaultRewardEnv, "value", raw, "default", 1.0, "error", err)
 		} else {
 			cfg.DefaultReward = v
+		}
+	}
+
+	cfg.InteractionDAGEnabled = true // default: on for trained rollouts
+	if raw := os.Getenv(interactionDAGEnabledEnv); raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			slog.Warn("invalid env var, using default", "name", interactionDAGEnabledEnv, "value", raw, "default", true, "error", err)
+		} else {
+			cfg.InteractionDAGEnabled = v
 		}
 	}
 
@@ -102,5 +117,6 @@ func NewTrainingSessionDeps(cfg TrainingConfig, q *db.Queries) *TrainingSessionD
 		Closer:        client,
 		ProxyURL:      cfg.ProxyURL,
 		DefaultReward: cfg.DefaultReward,
+		DAG:           NewInteractionDAGService(q, client, cfg.InteractionDAGEnabled),
 	}
 }

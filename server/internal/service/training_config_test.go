@@ -20,6 +20,7 @@ func TestLoadTrainingConfig_DisabledByDefault(t *testing.T) {
 	assert.Empty(t, cfg.AdminAPIKey)
 	assert.Equal(t, 1.0, cfg.DefaultReward)
 	assert.Equal(t, "http://db_bridge_stub:9100/v1", cfg.ProxyURL)
+	assert.True(t, cfg.InteractionDAGEnabled, "DAG recording defaults on for trained rollouts")
 }
 
 func TestLoadTrainingConfig_Enabled(t *testing.T) {
@@ -35,6 +36,7 @@ func TestLoadTrainingConfig_Enabled(t *testing.T) {
 	assert.Equal(t, "test-key-123", cfg.AdminAPIKey)
 	assert.Equal(t, 0.5, cfg.DefaultReward)
 	assert.Equal(t, "http://custom-proxy:9100/v1", cfg.ProxyURL)
+	assert.True(t, cfg.InteractionDAGEnabled)
 }
 
 func TestLoadTrainingConfig_InvalidDefaultReward(t *testing.T) {
@@ -125,6 +127,53 @@ func TestNewTrainingSessionDeps_GuardDepsWhenConfigMissing(t *testing.T) {
 	assert.NotNil(t, deps.Lookup)
 }
 
+// In the production path (q != nil) with config present, NewTrainingSessionDeps
+// must wire a non-nil DAG whose enabled flag mirrors cfg.InteractionDAGEnabled.
+// This is the U10 seam that makes segment-DAG recording active in prod; until
+// wired, the recording hooks no-op (interaction_dag_seams.go gates on DAG==nil).
+func TestNewTrainingSessionDeps_DAGWiredInProductionPath(t *testing.T) {
+	clearTrainingEnv(t)
+
+	q := db.New(nil)
+
+	// Enabled (the default): DAG is non-nil and active.
+	cfg := TrainingConfig{
+		BridgeStubURL:         "http://localhost:9100/v1",
+		AdminAPIKey:           "test-key-123",
+		InteractionDAGEnabled: true,
+	}
+	deps := NewTrainingSessionDeps(cfg, q)
+	assert.NotNil(t, deps)
+	assert.NotNil(t, deps.DAG, "DAG must be wired in the config-present production path")
+	assert.True(t, deps.DAG.Enabled())
+
+	// Disabled: DAG is still wired (non-nil) but reports disabled.
+	cfg.InteractionDAGEnabled = false
+	deps = NewTrainingSessionDeps(cfg, q)
+	assert.NotNil(t, deps.DAG)
+	assert.False(t, deps.DAG.Enabled())
+}
+
+// INTERACTION_DAG_ENABLED unset -> defaults true; "false"/"0" -> false.
+func TestLoadTrainingConfig_DAGEnabledDefaultAndDisable(t *testing.T) {
+	clearTrainingEnv(t)
+
+	cfg := LoadTrainingConfig()
+	assert.True(t, cfg.InteractionDAGEnabled, "unset -> default true")
+
+	os.Setenv("INTERACTION_DAG_ENABLED", "false")
+	cfg = LoadTrainingConfig()
+	assert.False(t, cfg.InteractionDAGEnabled)
+
+	os.Setenv("INTERACTION_DAG_ENABLED", "0")
+	cfg = LoadTrainingConfig()
+	assert.False(t, cfg.InteractionDAGEnabled)
+
+	os.Setenv("INTERACTION_DAG_ENABLED", "true")
+	cfg = LoadTrainingConfig()
+	assert.True(t, cfg.InteractionDAGEnabled)
+}
+
 func TestTaskService_WithTraining(t *testing.T) {
 	svc := &TaskService{}
 	assert.Nil(t, svc.Training)
@@ -147,6 +196,7 @@ func clearTrainingEnv(t *testing.T) {
 		"AREAL_ADMIN_API_KEY",
 		"TRAINING_DEFAULT_REWARD",
 		"AREAL_PROXY_URL",
+		"INTERACTION_DAG_ENABLED",
 	}
 	for _, env := range envVars {
 		if err := os.Unsetenv(env); err != nil {

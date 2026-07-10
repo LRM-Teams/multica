@@ -263,7 +263,20 @@ function DmHeader({
   // #371: agent peers show live presence (Online / Idle / Queued…) — same word
   // table + visual as the hover card. Tight after the name (Slack/IM style),
   // never under it. Human peers keep the static "Human" meta under the name
-  // (no runtime presence).
+  // (no runtime presence). Memoized so the `status` prop is a stable element
+  // (react-doctor jsx-no-jsx-as-prop).
+  const agentStatus = useMemo(
+    () =>
+      isAgentPeer ? (
+        <AgentPresenceStatusLine
+          agentId={dm.peer.id}
+          // Cap width so long localized stage words don't shove the title
+          // (or the search/files cluster) off a narrow header.
+          className="max-w-[9rem]"
+        />
+      ) : null,
+    [isAgentPeer, dm.peer.id],
+  );
   const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
   const peerAvatar = (
     <ActorAvatar
@@ -316,16 +329,7 @@ function DmHeader({
       }
       title={wrapPeerTrigger(<span className="truncate">{dm.peer.name}</span>)}
       meta={meta}
-      status={
-        isAgentPeer ? (
-          <AgentPresenceStatusLine
-            agentId={dm.peer.id}
-            // Cap width so long localized stage words don't shove the title
-            // (or the search/files cluster) off a narrow header.
-            className="max-w-[9rem]"
-          />
-        ) : null
-      }
+      status={agentStatus}
       badges={
         isConversationMuted(dm) ? (
           <MutedIndicator label={t(($) => $.dm.muted_label)} />

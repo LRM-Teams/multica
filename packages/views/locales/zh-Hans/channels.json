@@ -202,7 +202,12 @@
     "save_edit": "保存",
     "cancel_edit": "取消",
     "edit_failed_toast": "无法编辑消息",
-    "delete_failed_toast": "无法删除消息"
+    "delete_failed_toast": "无法删除消息",
+    "system_event": {
+      "member_added": "{target} 被 {actor} 加入了频道",
+      "member_removed": "{target} 被 {actor} 移出了频道",
+      "member_left": "{target} 离开了频道"
+    }
   },
   "dm": {
     "heading": "私信",

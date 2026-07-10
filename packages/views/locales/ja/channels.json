@@ -202,7 +202,12 @@
     "save_edit": "保存",
     "cancel_edit": "キャンセル",
     "edit_failed_toast": "メッセージを編集できませんでした",
-    "delete_failed_toast": "メッセージを削除できませんでした"
+    "delete_failed_toast": "メッセージを削除できませんでした",
+    "system_event": {
+      "member_added": "{target} が {actor} によってチャンネルに追加されました",
+      "member_removed": "{target} が {actor} によってチャンネルから削除されました",
+      "member_left": "{target} がチャンネルから退出しました"
+    }
   },
   "dm": {
     "heading": "ダイレクトメッセージ",

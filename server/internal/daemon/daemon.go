@@ -2848,7 +2848,11 @@ func (d *Daemon) renewInboxLeaseUntil(ctx context.Context, lease AgentInboxLease
 
 func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessionID, workDir, failureReason string, taskLog *slog.Logger) {
 	if task.isInboxTask() {
-		if err := d.client.FailAgentInboxEvent(ctx, *task.InboxEvent, errMsg); err != nil {
+		reasonCode := failureReason
+		if strings.Contains(errMsg, agent.ProviderAuthRequiredMarker) {
+			reasonCode = agent.ProviderAuthRequiredMarker
+		}
+		if err := d.client.FailAgentInboxEvent(ctx, *task.InboxEvent, errMsg, failureReason, reasonCode); err != nil {
 			taskLog.Error("report failed inbox event failed", "error", err)
 		}
 		return

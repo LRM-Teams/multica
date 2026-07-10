@@ -1289,9 +1289,11 @@ func TestChannelAgentInboxFailDirectedMention(t *testing.T) {
 	got := drainResp.Events[0]
 
 	failReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/fail", FailAgentInboxEventRequest{
-		DeliveryID: got.DeliveryID,
-		LeaseToken: got.LeaseToken,
-		Error:      "model crashed",
+		DeliveryID:    got.DeliveryID,
+		LeaseToken:    got.LeaseToken,
+		Error:         "provider_auth_required: grok not logged in",
+		FailureReason: "agent_error.provider_auth_or_access",
+		ReasonCode:    "provider_auth_required",
 	}, testWorkspaceID, "agent-inbox-fail-daemon")
 	failReq = withURLParam(failReq, "eventId", got.ID)
 	failRec := httptest.NewRecorder()
@@ -1308,8 +1310,24 @@ func TestChannelAgentInboxFailDirectedMention(t *testing.T) {
 		WHERE e.id = $1 AND d.id = $2`, got.ID, got.DeliveryID).Scan(&eventStatus, &deliveryStatus, &lastError); err != nil {
 		t.Fatalf("load failed inbox event: %v", err)
 	}
-	if eventStatus != "failed" || deliveryStatus != "failed" || !strings.Contains(lastError, "model crashed") {
-		t.Fatalf("failed inbox states = event:%q delivery:%q error:%q, want failed/failed/model crashed", eventStatus, deliveryStatus, lastError)
+	if eventStatus != "failed" || deliveryStatus != "failed" || !strings.Contains(lastError, "grok not logged in") {
+		t.Fatalf("failed inbox states = event:%q delivery:%q error:%q, want failed/failed/grok not logged in", eventStatus, deliveryStatus, lastError)
+	}
+
+	var activityReason, activityFailureReason, activityMessage string
+	if err := testPool.QueryRow(ctx, `
+		SELECT reason_code, details->>'failure_reason', message
+		FROM agent_activity_event
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND event_type = 'agent_inbox_failed'
+		  AND details->>'inbox_event_id' = $3
+		ORDER BY created_at DESC
+		LIMIT 1`, testWorkspaceID, agentID, got.ID).Scan(&activityReason, &activityFailureReason, &activityMessage); err != nil {
+		t.Fatalf("load inbox failure activity event: %v", err)
+	}
+	if activityReason != "provider_auth_required" || activityFailureReason != "agent_error.provider_auth_or_access" || !strings.Contains(activityMessage, "grok not logged in") {
+		t.Fatalf("activity event = reason:%q failure:%q message:%q, want provider_auth_required/provider_auth/grok not logged in", activityReason, activityFailureReason, activityMessage)
 	}
 }
 

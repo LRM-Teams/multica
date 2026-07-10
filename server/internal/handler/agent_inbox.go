@@ -16,6 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/redact"
@@ -70,9 +71,11 @@ type RenewAgentInboxEventRequest struct {
 }
 
 type FailAgentInboxEventRequest struct {
-	DeliveryID string `json:"delivery_id"`
-	LeaseToken string `json:"lease_token"`
-	Error      string `json:"error"`
+	DeliveryID    string `json:"delivery_id"`
+	LeaseToken    string `json:"lease_token"`
+	Error         string `json:"error"`
+	FailureReason string `json:"failure_reason,omitempty"`
+	ReasonCode    string `json:"reason_code,omitempty"`
 }
 
 type CompleteAgentInboxEventRequest struct {
@@ -322,12 +325,13 @@ func (h *Handler) FailAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 	if errText == "" {
 		errText = "agent inbox delivery failed"
 	}
-	if _, err := h.Queries.FailAgentInboxDelivery(r.Context(), db.FailAgentInboxDeliveryParams{
+	failed, err := h.Queries.FailAgentInboxDelivery(r.Context(), db.FailAgentInboxDeliveryParams{
 		ID:           deliveryID,
 		InboxEventID: event.ID,
 		LastError:    strToText(errText),
 		LeaseToken:   leaseToken,
-	}); err != nil {
+	})
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusConflict, "delivery lease is no longer active")
 			return
@@ -335,6 +339,41 @@ func (h *Handler) FailAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to mark inbox delivery failed")
 		return
 	}
+
+	failureReason := strings.TrimSpace(req.FailureReason)
+	reasonCode := strings.TrimSpace(req.ReasonCode)
+	if reasonCode == "" {
+		reasonCode = failureReason
+	}
+	if strings.Contains(errText, agent.ProviderAuthRequiredMarker) {
+		reasonCode = agent.ProviderAuthRequiredMarker
+	}
+	delivery, err := h.Queries.GetAgentEventDelivery(r.Context(), deliveryID)
+	if err != nil {
+		slog.Warn("agent inbox fail: failed to reload delivery for activity event", "delivery_id", uuidToString(deliveryID), "error", err)
+	}
+	targetKind := "agent"
+	targetID := failed.AgentID
+	if failed.ChannelID.Valid {
+		targetKind = "channel"
+		targetID = failed.ChannelID
+	} else if failed.ChatSessionID.Valid {
+		targetKind = "dm"
+		targetID = failed.ChatSessionID
+	}
+	recordAgentActivityEvent(r.Context(), h.DB,
+		failed.WorkspaceID, failed.AgentID, delivery.RuntimeID, pgtype.UUID{},
+		"lifecycle", "agent_inbox_failed", "error",
+		targetKind, targetID, "",
+		reasonCode, "Agent inbox delivery failed: "+truncateForActivity(errText, 200),
+		map[string]any{
+			"failure_reason":    failureReason,
+			"reason_code":       reasonCode,
+			"inbox_event_id":    uuidToString(failed.ID),
+			"delivery_id":       uuidToString(deliveryID),
+			"source_message_id": uuidToString(failed.SourceMessageID),
+		},
+	)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

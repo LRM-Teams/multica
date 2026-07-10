@@ -117,6 +117,10 @@
     "preview_empty": "（空文件）",
     "preview_too_large": "文件过大，无法预览"
   },
+  "radar": {
+    "recent_title": "最近雷达巡检",
+    "action_count": "{{count}} 个动作"
+  },
   "stats": {
     "title": "活跃度",
     "messages": "消息",

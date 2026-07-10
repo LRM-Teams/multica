@@ -117,6 +117,10 @@
     "preview_empty": "(빈 파일)",
     "preview_too_large": "파일이 너무 커서 미리볼 수 없습니다"
   },
+  "radar": {
+    "recent_title": "Recent Radar",
+    "action_count": "{{count}} action(s)"
+  },
   "stats": {
     "title": "활동",
     "messages": "메시지",

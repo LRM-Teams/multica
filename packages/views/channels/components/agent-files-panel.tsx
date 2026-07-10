@@ -23,6 +23,7 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
+import { useT } from "../../i18n/use-t";
 import { FileTree } from "./file-tree";
 import { buildFileTree, fileLanguage } from "./file-tree-utils";
 
@@ -260,6 +261,7 @@ export function AgentFilesPanel({
    */
   hideHeader?: boolean;
 }) {
+  const { t } = useT("channels");
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
   const [includeHidden, setIncludeHidden] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -344,7 +346,7 @@ export function AgentFilesPanel({
           </div>
           {radarData?.runs?.length ? (
             <div className="border-t p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Recent Radar</p>
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t(($) => $.radar.recent_title)}</p>
               <div className="space-y-2">
                 {radarData.runs.slice(0, 3).map((run) => (
                   <div key={run.id} className="rounded-md border bg-muted/30 p-2 text-xs">
@@ -356,7 +358,7 @@ export function AgentFilesPanel({
                       <p className="mt-1 line-clamp-2 text-muted-foreground">{run.context_summary}</p>
                     )}
                     {run.actions.length > 0 && (
-                      <p className="mt-1 text-muted-foreground">{run.actions.length} action(s)</p>
+                      <p className="mt-1 text-muted-foreground">{t(($) => $.radar.action_count, { count: run.actions.length })}</p>
                     )}
                   </div>
                 ))}

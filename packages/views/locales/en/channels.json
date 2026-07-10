@@ -117,6 +117,10 @@
     "preview_empty": "(empty file)",
     "preview_too_large": "File too large to preview"
   },
+  "radar": {
+    "recent_title": "Recent Radar",
+    "action_count": "{{count}} action(s)"
+  },
   "stats": {
     "title": "Activity",
     "messages": "Messages",

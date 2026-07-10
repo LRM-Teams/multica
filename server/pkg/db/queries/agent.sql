@@ -763,3 +763,28 @@ SET status = CASE WHEN EXISTS (
     updated_at = now()
 WHERE a.id = $1
 RETURNING *;
+
+-- name: ResetInFlightTaskForResume :one
+-- Re-activates a specific in-flight task for resume-from-checkpoint by
+-- returning it to `queued` so the resumed runtime's claim loop re-claims it.
+-- Only non-terminal (running/dispatched) tasks bound to the given runtime are
+-- eligible; a terminal task or a runtime mismatch returns no rows (caller
+-- treats that as a stale/unresumable trigger). Preserves context/runtime_id/
+-- issue_id/chat_session_id - this is the SAME task row, not a new one.
+UPDATE agent_task_queue
+SET status = 'queued', started_at = NULL, dispatched_at = NULL, updated_at = now()
+WHERE id = @task_id
+  AND runtime_id = @runtime_id
+  AND status IN ('running', 'dispatched')
+RETURNING *;
+
+-- name: ListInFlightTasksForProject :many
+-- Resolves a project's in-flight (running/dispatched) agent tasks for
+-- resume-trigger capture at checkpoint-create time. Joins via issue or
+-- chat_session to the project; project_id is workspace-scoped by nature.
+SELECT atq.* FROM agent_task_queue atq
+LEFT JOIN issue i ON atq.issue_id = i.id
+LEFT JOIN chat_session cs ON atq.chat_session_id = cs.id
+WHERE (i.project_id = @project_id OR cs.project_id = @project_id)
+  AND atq.status IN ('running', 'dispatched')
+ORDER BY atq.created_at ASC;

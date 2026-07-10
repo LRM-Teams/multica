@@ -368,6 +368,7 @@ type EnvCheckpoint struct {
 	SaveError      pgtype.Text        `json:"save_error"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	ResumeTrigger  []byte             `json:"resume_trigger"`
 }
 
 type EnvDispatchRequest struct {

@@ -3060,3 +3060,118 @@ func (q *Queries) StripArealProxyFromTaskContext(ctx context.Context, id pgtype.
 	_, err := q.db.Exec(ctx, stripArealProxyFromTaskContext, id)
 	return err
 }
+
+const listInFlightTasksForProject = `-- name: ListInFlightTasksForProject :many
+SELECT atq.id, atq.agent_id, atq.issue_id, atq.status, atq.priority, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.created_at, atq.context, atq.runtime_id, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.chat_session_id, atq.autopilot_run_id, atq.attempt, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id FROM agent_task_queue atq
+LEFT JOIN issue i ON atq.issue_id = i.id
+LEFT JOIN chat_session cs ON atq.chat_session_id = cs.id
+WHERE (i.project_id = $1 OR cs.project_id = $1)
+  AND atq.status IN ('running', 'dispatched')
+ORDER BY atq.created_at ASC
+`
+
+// Resolves a project's in-flight (running/dispatched) agent tasks for
+// resume-trigger capture at checkpoint-create time. Joins via issue or
+// chat_session to the project; project_id is workspace-scoped by nature.
+func (q *Queries) ListInFlightTasksForProject(ctx context.Context, projectID pgtype.UUID) ([]AgentTaskQueue, error) {
+	rows, err := q.db.Query(ctx, listInFlightTasksForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentTaskQueue{}
+	for rows.Next() {
+		var i AgentTaskQueue
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.IssueID,
+			&i.Status,
+			&i.Priority,
+			&i.DispatchedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.Result,
+			&i.Error,
+			&i.CreatedAt,
+			&i.Context,
+			&i.RuntimeID,
+			&i.SessionID,
+			&i.WorkDir,
+			&i.TriggerCommentID,
+			&i.ChatSessionID,
+			&i.AutopilotRunID,
+			&i.Attempt,
+			&i.MaxAttempts,
+			&i.ParentTaskID,
+			&i.FailureReason,
+			&i.TriggerSummary,
+			&i.ForceFreshSession,
+			&i.IsLeaderTask,
+			&i.WaitReason,
+			&i.InitiatorUserID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const resetInFlightTaskForResume = `-- name: ResetInFlightTaskForResume :one
+UPDATE agent_task_queue
+SET status = 'queued', started_at = NULL, dispatched_at = NULL, updated_at = now()
+WHERE id = $1
+  AND runtime_id = $2
+  AND status IN ('running', 'dispatched')
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
+`
+
+type ResetInFlightTaskForResumeParams struct {
+	TaskID    pgtype.UUID `json:"task_id"`
+	RuntimeID pgtype.UUID `json:"runtime_id"`
+}
+
+// Re-activates a specific in-flight task for resume-from-checkpoint by
+// returning it to `queued` so the resumed runtime's claim loop re-claims it.
+// Only non-terminal (running/dispatched) tasks bound to the given runtime are
+// eligible; a terminal task or a runtime mismatch returns no rows (caller
+// treats that as a stale/unresumable trigger). Preserves context/runtime_id/
+// issue_id/chat_session_id - this is the SAME task row, not a new one.
+func (q *Queries) ResetInFlightTaskForResume(ctx context.Context, arg ResetInFlightTaskForResumeParams) (AgentTaskQueue, error) {
+	row := q.db.QueryRow(ctx, resetInFlightTaskForResume, arg.TaskID, arg.RuntimeID)
+	var i AgentTaskQueue
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.IssueID,
+		&i.Status,
+		&i.Priority,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.CreatedAt,
+		&i.Context,
+		&i.RuntimeID,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.ChatSessionID,
+		&i.AutopilotRunID,
+		&i.Attempt,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
+	)
+	return i, err
+}

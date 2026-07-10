@@ -612,6 +612,23 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 	// Training session-open chokepoint (spec §4.3): leader @mention delegation
 	// of a teammate — the trained member's task is typically created here.
 	s.tryOpenTrainingSession(ctx, task, issue.ProjectID, "")
+	// Delegation event seam (D11): the trained parent that posted the trigger
+	// comment delegates to this child. Close the parent's segment and link the
+	// child to its parent so the delegation edge is recorded at the child's
+	// close. No-op when there is no trained parent (plain user mention).
+	if parent, ok := s.discoverDelegationParent(ctx, issue.ID, triggerCommentID, task.ID); ok {
+		projectID := util.UUIDToString(issue.ProjectID)
+		if isSquadContextHandoff(parent, isLeader) {
+			s.closeSegmentForSquadContextDelegation(ctx, parent, projectID, s.leanEnvSnapshot(ctx, issue.ProjectID))
+		} else {
+			s.closeSegmentForDelegation(ctx, parent, projectID, s.leanEnvSnapshot(ctx, issue.ProjectID))
+		}
+		if err := s.Queries.SetTaskParentTaskID(ctx, db.SetTaskParentTaskIDParams{ID: task.ID, ParentTaskID: parent.ID}); err != nil {
+			slog.Warn("interaction_dag: set child parent_task_id failed", "child", util.UUIDToString(task.ID), "err", err)
+		} else {
+			task.ParentTaskID = parent.ID
+		}
+	}
 	// See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
 	s.interruptInFlightIssueTasksForFollowup(ctx, task)
@@ -1471,6 +1488,15 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 
 	slog.Info("task completed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
 	s.captureTaskCompleted(ctx, task)
+	// Completion/leaf event seam (D11): close this task's segment before
+	// RouteTerminalTrainingTask ends the RL session (CloseSegmentForEvent exports
+	// the just-closed trajectory over the live session). One-segment-per-task;
+	// the delegation edge to the parent is recorded here at the child's close.
+	if task.IssueID.Valid {
+		if issue, err := s.Queries.GetIssue(ctx, task.IssueID); err == nil {
+			s.closeSegmentForTerminal(ctx, task, util.UUIDToString(issue.ProjectID), s.leanEnvSnapshot(ctx, issue.ProjectID))
+		}
+	}
 	s.RouteTerminalTrainingTask(ctx, task)
 
 	// Invariant: every completed issue task must have at least one agent
@@ -1845,6 +1871,11 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 	// Retry creates a fresh queued row, same status transition (∅ → queued)
 	// as EnqueueTaskFor*. Broadcast queued first, then notify the daemon —
 	// see EnqueueTaskForIssue for ordering rationale.
+	// D9: open a FRESH areal RL session for the retry child before announcing it
+	// (mirrors enqueueMentionTask's open->broadcast->notify order). The child's
+	// context was stripped of areal_proxy (Task 6), so maybeOpenTrainingSession's
+	// idempotency guard passes and a new session is opened + mapped (D10).
+	s.openFreshSessionForRetryChild(ctx, child)
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, child)
 	s.NotifyTaskEnqueued(ctx, child)
 
@@ -1857,9 +1888,63 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 	return &child, nil
 }
 
+// openFreshSessionForRetryChild opens a FRESH areal RL session for a retry child
+// before the child is broadcast/announced to the daemon, mirroring
+// enqueueMentionTask's open->broadcast->notify order (D9). Task 6 stripped
+// areal_proxy from the child's context (createRetryTaskWithPendingWakeTransfer),
+// so maybeOpenTrainingSession's idempotency guard passes and a new session is
+// opened + mapped (D10 RecordSessionAgentRun fires for the child's task.ID).
+// The parent's session was already closed by RouteTerminalTrainingTask.
+//
+// Resolution mirrors the other Enqueue* chokepoints (enqueueMentionTask):
+// child.IssueID -> GetIssue -> issue.ProjectID -> GetProject -> proj.EnvID, then
+// tryOpenTrainingSession. tryOpenTrainingSession already gates on s.Training ==
+// nil and logs errors loudly without failing the enqueue, so this helper is
+// best-effort: a resolution miss or session-open error is logged and skipped,
+// never failing the retry.
+func (s *TaskService) openFreshSessionForRetryChild(ctx context.Context, child db.AgentTaskQueue) {
+	if !child.IssueID.Valid {
+		return
+	}
+	issue, err := s.Queries.GetIssue(ctx, child.IssueID)
+	if err != nil {
+		slog.Warn("interaction_dag: retry child session open skipped: issue lookup failed",
+			"child_task_id", util.UUIDToString(child.ID),
+			"issue_id", util.UUIDToString(child.IssueID),
+			"error", err,
+		)
+		return
+	}
+	if !issue.ProjectID.Valid {
+		return
+	}
+	envID := ""
+	if proj, err := s.Queries.GetProject(ctx, issue.ProjectID); err == nil {
+		envID = util.UUIDToString(proj.EnvID)
+	} else {
+		slog.Warn("interaction_dag: retry child session open: project lookup failed",
+			"child_task_id", util.UUIDToString(child.ID),
+			"project_id", util.UUIDToString(issue.ProjectID),
+			"error", err,
+		)
+	}
+	s.tryOpenTrainingSession(ctx, child, issue.ProjectID, envID)
+}
+
 func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context, parentID pgtype.UUID) (db.AgentTaskQueue, error) {
 	if s.TxStarter == nil {
-		return s.Queries.CreateRetryTask(ctx, parentID)
+		child, err := s.Queries.CreateRetryTask(ctx, parentID)
+		if err != nil {
+			return db.AgentTaskQueue{}, fmt.Errorf("create retry task: %w", err)
+		}
+		// D9: CreateRetryTask copies the parent's context verbatim, so the child
+		// would inherit the parent's (now-closed) RL session. Strip areal_proxy so
+		// the child opens a fresh session at its own session-open chokepoint. maybe
+		// OpenTrainingSession re-loads the task from DB, so no in-memory fixup needed.
+		if err := s.Queries.StripArealProxyFromTaskContext(ctx, child.ID); err != nil {
+			return db.AgentTaskQueue{}, fmt.Errorf("strip areal_proxy from retry child: %w", err)
+		}
+		return child, nil
 	}
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
@@ -1871,6 +1956,9 @@ func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context
 	child, err := qtx.CreateRetryTask(ctx, parentID)
 	if err != nil {
 		return db.AgentTaskQueue{}, fmt.Errorf("create retry task: %w", err)
+	}
+	if err := qtx.StripArealProxyFromTaskContext(ctx, child.ID); err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("strip areal_proxy from retry child: %w", err)
 	}
 	if err := transferQueuedPendingWakeTask(ctx, tx, parentID, child.ID); err != nil {
 		return db.AgentTaskQueue{}, err

@@ -62,6 +62,23 @@ func (q *Queries) DeleteTaskMessages(ctx context.Context, taskID pgtype.UUID) er
 	return err
 }
 
+const getMaxTaskMessageSeq = `-- name: GetMaxTaskMessageSeq :one
+SELECT COALESCE(MAX(seq), 0)::integer AS max_seq
+FROM task_message
+WHERE task_id::text = $1::text
+`
+
+// GetMaxTaskMessageSeq returns the highest task_message.seq for a task, or 0 when none exist.
+// Used by CloseSegmentForEvent to compute the closing segment's end_seq. Both sides are
+// text so the caller passes the text agent_run_id (= task.ID) without UUID parsing;
+// the underlying task_id column is UUID (index not used on this path).
+func (q *Queries) GetMaxTaskMessageSeq(ctx context.Context, taskIDText string) (int32, error) {
+	row := q.db.QueryRow(ctx, getMaxTaskMessageSeq, taskIDText)
+	var maxSeq int32
+	err := row.Scan(&maxSeq)
+	return maxSeq, err
+}
+
 const listTaskMessages = `-- name: ListTaskMessages :many
 SELECT id, task_id, seq, type, tool, content, input, output, created_at FROM task_message
 WHERE task_id = $1

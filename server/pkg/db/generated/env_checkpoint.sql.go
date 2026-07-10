@@ -15,13 +15,13 @@ const createEnvCheckpoint = `-- name: CreateEnvCheckpoint :one
 INSERT INTO env_checkpoint (
     workspace_id, project_id, event_ref, checkpoint_kind,
     env_id_map, sandbox_refs, db_snapshot, entropy_score,
-    save_timeout_ms, save_status, save_error
+    save_timeout_ms, save_status, save_error, resume_trigger
 ) VALUES (
     $1, $2, $3, $4,
     $5, $6, $7, $8,
-    $9, $10, $11
+    $9, $10, $11, $12
 )
-RETURNING id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at
+RETURNING id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger
 `
 
 type CreateEnvCheckpointParams struct {
@@ -36,6 +36,7 @@ type CreateEnvCheckpointParams struct {
 	SaveTimeoutMs  int32         `json:"save_timeout_ms"`
 	SaveStatus     string        `json:"save_status"`
 	SaveError      pgtype.Text   `json:"save_error"`
+	ResumeTrigger  []byte        `json:"resume_trigger"`
 }
 
 func (q *Queries) CreateEnvCheckpoint(ctx context.Context, arg CreateEnvCheckpointParams) (EnvCheckpoint, error) {
@@ -51,6 +52,7 @@ func (q *Queries) CreateEnvCheckpoint(ctx context.Context, arg CreateEnvCheckpoi
 		arg.SaveTimeoutMs,
 		arg.SaveStatus,
 		arg.SaveError,
+		arg.ResumeTrigger,
 	)
 	var i EnvCheckpoint
 	err := row.Scan(
@@ -68,12 +70,13 @@ func (q *Queries) CreateEnvCheckpoint(ctx context.Context, arg CreateEnvCheckpoi
 		&i.SaveError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResumeTrigger,
 	)
 	return i, err
 }
 
 const getEnvCheckpointForWorkspace = `-- name: GetEnvCheckpointForWorkspace :one
-SELECT id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at FROM env_checkpoint
+SELECT id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger FROM env_checkpoint
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -100,12 +103,13 @@ func (q *Queries) GetEnvCheckpointForWorkspace(ctx context.Context, arg GetEnvCh
 		&i.SaveError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResumeTrigger,
 	)
 	return i, err
 }
 
 const listEnvCheckpointsForProject = `-- name: ListEnvCheckpointsForProject :many
-SELECT id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at FROM env_checkpoint
+SELECT id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger FROM env_checkpoint
 WHERE workspace_id = $1 AND project_id = $2
 ORDER BY created_at DESC
 `
@@ -139,6 +143,7 @@ func (q *Queries) ListEnvCheckpointsForProject(ctx context.Context, arg ListEnvC
 			&i.SaveError,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResumeTrigger,
 		); err != nil {
 			return nil, err
 		}
@@ -154,7 +159,7 @@ const updateEnvCheckpointSaveStatus = `-- name: UpdateEnvCheckpointSaveStatus :o
 UPDATE env_checkpoint
 SET save_status = $1, save_error = $2, updated_at = now()
 WHERE id = $3 AND workspace_id = $4
-RETURNING id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at
+RETURNING id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger
 `
 
 type UpdateEnvCheckpointSaveStatusParams struct {
@@ -187,6 +192,7 @@ func (q *Queries) UpdateEnvCheckpointSaveStatus(ctx context.Context, arg UpdateE
 		&i.SaveError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResumeTrigger,
 	)
 	return i, err
 }

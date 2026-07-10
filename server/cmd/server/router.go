@@ -1046,6 +1046,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Delete("/api/v1/env/{envID}", h.DeleteEnv)
 			r.Post("/api/v1/env-dispatch", h.EnvDispatch)
 			r.Delete("/api/v1/env-dispatch/{projectID}", h.DeleteEnvDispatchProject)
+			r.Get("/api/v1/env-dispatch/{projectID}/dag", h.GetDag)
 
 			// Env-checkpoint APIs. Gated by ENV_CHECKPOINTS_ENABLED; handlers
 			// return 404 when disabled so AReaL clients can detect the gate.

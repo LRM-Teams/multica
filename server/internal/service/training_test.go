@@ -218,6 +218,67 @@ func TestMaybeOpenTrainingSession_AlreadyOpen_Idempotent(t *testing.T) {
 	}
 }
 
+// (e) D10: a trained-target session open records the {session_id -> agent_run_id,
+// issue_id} mapping via the interaction DAG exactly once. agent_run_id is task.ID
+// (D8); a re-open that finds an already-proxied session does not re-record.
+func TestMaybeOpenTrainingSession_RecordsSessionAgentRun(t *testing.T) {
+	lookup := &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}
+	store := &fakeTaskStore{
+		task: db.AgentTaskQueue{
+			IssueID: util.MustParseUUID(testTrainingProjectID),
+		},
+	}
+	rl := &fakeRLClient{creds: arealrl.SessionCreds{SessionID: "sess-d10", ProxyKey: "pk-d10"}}
+	dagStore := newFakeInteractionDAGStore()
+	dag := NewInteractionDAGService(dagStore, &fakeArealSegmentClient{}, true)
+
+	deps := newTrainingDeps(lookup, store, rl)
+	deps.DAG = dag
+
+	if err := maybeOpenTrainingSession(
+		context.Background(),
+		deps,
+		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "",
+	); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	dagStore.mu.Lock()
+	gotCount := len(dagStore.sessionRuns)
+	run, ok := dagStore.sessionRuns["sess-d10"]
+	dagStore.mu.Unlock()
+	if gotCount != 1 {
+		t.Fatalf("session_runs = %d, want 1 after open", gotCount)
+	}
+	if !ok {
+		t.Fatalf("no session_run recorded for sess-d10")
+	}
+	if run.AgentRunID != testTrainingTaskID {
+		t.Fatalf("agent_run_id = %q, want %q (D8: agent_run_id = task.ID)", run.AgentRunID, testTrainingTaskID)
+	}
+	if !run.IssueID.Valid || run.IssueID.String != testTrainingProjectID {
+		t.Fatalf("issue_id = %+v, want %q", run.IssueID, testTrainingProjectID)
+	}
+
+	// Idempotent: a re-open that finds an already-proxied session must not
+	// re-record. The fake store does not mirror the persisted areal_proxy back
+	// into task.Context, so simulate the post-open state explicitly.
+	store.task.Context = []byte(`{"areal_proxy":{"provider":"areal","session_id":"sess-d10"}}`)
+	if err := maybeOpenTrainingSession(
+		context.Background(),
+		deps,
+		testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "",
+	); err != nil {
+		t.Fatalf("unexpected error on re-open: %v", err)
+	}
+	dagStore.mu.Lock()
+	gotCount = len(dagStore.sessionRuns)
+	dagStore.mu.Unlock()
+	if gotCount != 1 {
+		t.Fatalf("session_runs = %d after re-open, want 1 (idempotent)", gotCount)
+	}
+}
+
 // nil deps (training not configured) -> no-op, no error.
 func TestMaybeOpenTrainingSession_NilDeps_NoOp(t *testing.T) {
 	if err := maybeOpenTrainingSession(

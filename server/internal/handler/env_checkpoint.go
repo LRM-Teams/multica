@@ -38,20 +38,21 @@ type CreateEnvCheckpointRequest struct {
 
 // EnvCheckpointResponse is the HTTP response body for a single checkpoint.
 type EnvCheckpointResponse struct {
-	ID            string                          `json:"id"`
-	WorkspaceID   string                          `json:"workspace_id"`
-	ProjectID     string                          `json:"project_id"`
-	EventRef      string                          `json:"event_ref"`
-	Kind          string                          `json:"kind"`
-	EnvIDMap      map[string]string               `json:"env_id_map,omitempty"`
-	SandboxRefs   []service.SandboxInstanceRef    `json:"sandbox_refs,omitempty"`
-	DBSnapshot    json.RawMessage                 `json:"db_snapshot,omitempty"`
-	EntropyScore  *float64                        `json:"entropy_score,omitempty"`
-	SaveTimeoutMs int                             `json:"save_timeout_ms"`
-	SaveStatus    string                          `json:"save_status"`
-	SaveError     string                          `json:"save_error,omitempty"`
-	CreatedAt     time.Time                       `json:"created_at"`
-	UpdatedAt     time.Time                       `json:"updated_at"`
+	ID            string                       `json:"id"`
+	WorkspaceID   string                       `json:"workspace_id"`
+	ProjectID     string                       `json:"project_id"`
+	EventRef      string                       `json:"event_ref"`
+	Kind          string                       `json:"kind"`
+	EnvIDMap      map[string]string            `json:"env_id_map,omitempty"`
+	SandboxRefs   []service.SandboxInstanceRef `json:"sandbox_refs,omitempty"`
+	DBSnapshot    json.RawMessage              `json:"db_snapshot,omitempty"`
+	ResumeTrigger json.RawMessage              `json:"resume_trigger,omitempty"`
+	EntropyScore  *float64                     `json:"entropy_score,omitempty"`
+	SaveTimeoutMs int                          `json:"save_timeout_ms"`
+	SaveStatus    string                       `json:"save_status"`
+	SaveError     string                       `json:"save_error,omitempty"`
+	CreatedAt     time.Time                    `json:"created_at"`
+	UpdatedAt     time.Time                    `json:"updated_at"`
 }
 
 // EnvCheckpointListResponse wraps a checkpoint slice for list responses.
@@ -197,6 +198,7 @@ func mapEnvCheckpointResponse(cp service.EnvCheckpoint) EnvCheckpointResponse {
 		EnvIDMap:      cp.EnvIDMap,
 		SandboxRefs:   cp.SandboxRefs,
 		DBSnapshot:    cp.DBSnapshot,
+		ResumeTrigger: cp.ResumeTrigger,
 		EntropyScore:  cp.EntropyScore,
 		SaveTimeoutMs: cp.SaveTimeoutMs,
 		SaveStatus:    string(cp.SaveStatus),
@@ -242,11 +244,12 @@ type EnvCheckpointServiceAPI interface {
 
 // ResumeFromCheckpointResponse is the HTTP response body for POST /api/v1/env-checkpoints/{checkpointID}/resume.
 type ResumeFromCheckpointResponse struct {
-	CheckpointID  string                          `json:"checkpoint_id"`
-	ProjectID     string                          `json:"project_id"`
-	EnvIDMap      map[string]string               `json:"env_id_map,omitempty"`
-	SandboxRefs   []service.SandboxInstanceRef    `json:"sandbox_refs,omitempty"`
-	RolloutHandle string                          `json:"rollout_handle"`
+	CheckpointID  string                       `json:"checkpoint_id"`
+	ProjectID     string                       `json:"project_id"`
+	EnvIDMap      map[string]string            `json:"env_id_map,omitempty"`
+	SandboxRefs   []service.SandboxInstanceRef `json:"sandbox_refs,omitempty"`
+	RolloutHandle string                       `json:"rollout_handle"`
+	TriggerStatus string                       `json:"trigger_status"`
 }
 
 // ResumeEnvCheckpoint handles POST /api/v1/env-checkpoints/{checkpointID}/resume.
@@ -293,5 +296,6 @@ func (h *Handler) ResumeEnvCheckpoint(w http.ResponseWriter, r *http.Request) {
 		EnvIDMap:      res.EnvIDMap,
 		SandboxRefs:   res.SandboxRefs,
 		RolloutHandle: res.RolloutHandle,
+		TriggerStatus: string(res.TriggerStatus),
 	})
 }

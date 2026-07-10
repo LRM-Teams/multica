@@ -364,8 +364,8 @@
         "thinking": "思考中",
         "output": "输出",
         "working": "工作中",
-        "failed": "Failed",
-        "waiting": "Waiting",
+        "failed": "失败",
+        "waiting": "等待中",
         "running_command": "运行命令",
         "writing_file": "写入文件",
         "editing_file": "编辑文件",
@@ -378,8 +378,8 @@
       "subtexts": {
         "message_received": "收到消息",
         "compacting_context": "压缩上下文",
-        "compaction_finished": "Compaction finished",
-        "subagent_activity": "Subagent activity"
+        "compaction_finished": "上下文压缩完成",
+        "subagent_activity": "子智能体"
       },
       "view_diagnostics": "查看诊断详情",
       "hide_diagnostics": "收起诊断详情",

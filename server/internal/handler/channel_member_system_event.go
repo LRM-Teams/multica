@@ -17,10 +17,16 @@ const (
 )
 
 type channelMemberSystemEventParams struct {
-	ActorID    string `json:"actor_id,omitempty"`
-	ActorName  string `json:"actor_name,omitempty"`
-	TargetID   string `json:"target_id"`
-	TargetName string `json:"target_name"`
+	ActorID           string `json:"actor_id,omitempty"`
+	ActorType         string `json:"actor_type,omitempty"`
+	ActorHandle       string `json:"actor_handle,omitempty"`
+	ActorDisplayName  string `json:"actor_display_name,omitempty"`
+	ActorName         string `json:"actor_name,omitempty"`
+	TargetID          string `json:"target_id"`
+	TargetType        string `json:"target_type"`
+	TargetHandle      string `json:"target_handle,omitempty"`
+	TargetDisplayName string `json:"target_display_name,omitempty"`
+	TargetName        string `json:"target_name"`
 }
 
 type channelMemberSystemEventPart struct {
@@ -29,15 +35,21 @@ type channelMemberSystemEventPart struct {
 }
 
 func (h *Handler) emitChannelMemberSystemEvent(ctx context.Context, workspaceID string, channelID pgtype.UUID, event string, actorID pgtype.UUID, targetType string, targetID pgtype.UUID) {
-	actorName := h.channelMemberSystemEventDisplayName(ctx, workspaceID, "user", actorID)
-	targetName := h.channelMemberSystemEventDisplayName(ctx, workspaceID, targetType, targetID)
+	actorRef := h.channelMemberSystemEventActorRef(ctx, workspaceID, "user", actorID)
+	targetRef := h.channelMemberSystemEventActorRef(ctx, workspaceID, targetType, targetID)
 	params := channelMemberSystemEventParams{
-		ActorID:    uuidToString(actorID),
-		ActorName:  actorName,
-		TargetID:   uuidToString(targetID),
-		TargetName: targetName,
+		ActorID:           uuidToString(actorID),
+		ActorType:         actorRef.Type,
+		ActorHandle:       actorRef.Handle,
+		ActorDisplayName:  actorRef.DisplayName,
+		ActorName:         actorRef.DisplayName,
+		TargetID:          uuidToString(targetID),
+		TargetType:        targetRef.Type,
+		TargetHandle:      targetRef.Handle,
+		TargetDisplayName: targetRef.DisplayName,
+		TargetName:        targetRef.DisplayName,
 	}
-	content := channelMemberSystemEventCanonicalContent(event, actorName, targetName)
+	content := channelMemberSystemEventCanonicalContent(event, actorRef.DisplayName, targetRef.DisplayName)
 	rawPart, err := json.Marshal(channelMemberSystemEventPart{Event: event, Params: params})
 	if err != nil {
 		slog.Warn("channel member system event: marshal part failed", "event", event, "channel", channelID.String(), "error", err)
@@ -66,29 +78,47 @@ func (h *Handler) emitChannelMemberSystemEvent(ctx context.Context, workspaceID 
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, workspaceID, "system", "", channelID, msg)
 }
 
-func (h *Handler) channelMemberSystemEventDisplayName(ctx context.Context, workspaceID, memberType string, memberID pgtype.UUID) string {
-	var displayName string
+type channelMemberSystemEventActorRef struct {
+	Type        string
+	Handle      string
+	DisplayName string
+}
+
+func (h *Handler) channelMemberSystemEventActorRef(ctx context.Context, workspaceID, memberType string, memberID pgtype.UUID) channelMemberSystemEventActorRef {
+	ref := channelMemberSystemEventActorRef{Type: channelMemberSystemEventPublicType(memberType)}
 	var err error
 	switch memberType {
 	case "agent":
 		err = h.DB.QueryRow(ctx, `
-			SELECT COALESCE(NULLIF(display_name, ''), name, 'Agent')
+			SELECT COALESCE(NULLIF(name, ''), 'agent'),
+			       COALESCE(NULLIF(display_name, ''), NULLIF(name, ''), 'Agent')
 			FROM agent
-			WHERE workspace_id = $1 AND id = $2`, parseUUID(workspaceID), memberID).Scan(&displayName)
+			WHERE workspace_id = $1 AND id = $2`, parseUUID(workspaceID), memberID).Scan(&ref.Handle, &ref.DisplayName)
 	default:
 		err = h.DB.QueryRow(ctx, `
-			SELECT COALESCE(NULLIF(u.display_name, ''), u.name, u.email, 'User')
+			SELECT COALESCE(NULLIF(u.name, ''), NULLIF(u.email, ''), 'user'),
+			       COALESCE(NULLIF(u.display_name, ''), NULLIF(u.name, ''), NULLIF(u.email, ''), 'User')
 			FROM "user" u
 			JOIN member m ON m.user_id = u.id AND m.workspace_id = $1
-			WHERE u.id = $2`, parseUUID(workspaceID), memberID).Scan(&displayName)
+			WHERE u.id = $2`, parseUUID(workspaceID), memberID).Scan(&ref.Handle, &ref.DisplayName)
 	}
-	if err != nil || displayName == "" {
-		if memberType == "agent" {
-			return "Agent"
+	if err != nil || ref.DisplayName == "" {
+		if ref.Type == "agent" {
+			ref.Handle = firstNonEmpty(ref.Handle, "agent")
+			ref.DisplayName = "Agent"
+			return ref
 		}
-		return "User"
+		ref.Handle = firstNonEmpty(ref.Handle, "user")
+		ref.DisplayName = "User"
 	}
-	return displayName
+	return ref
+}
+
+func channelMemberSystemEventPublicType(memberType string) string {
+	if memberType == "agent" {
+		return "agent"
+	}
+	return "human"
 }
 
 func channelMemberSystemEventCanonicalContent(event, actorName, targetName string) string {

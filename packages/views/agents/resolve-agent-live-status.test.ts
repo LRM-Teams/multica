@@ -61,7 +61,7 @@ const CHAT = {
       reconnecting: "Reconnecting",
       queued: "Queued",
       waiting_local_directory: "Waiting for local directory",
-      starting_up: "Starting up",
+      starting_up: "Working",
       thinking: "Thinking",
       typing: "Typing",
     },

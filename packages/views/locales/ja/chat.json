@@ -114,7 +114,7 @@
       "reconnecting": "再接続中",
       "queued": "待機中",
       "waiting_local_directory": "ローカルディレクトリを待機中",
-      "starting_up": "起動中",
+      "starting_up": "作業中",
       "thinking": "考え中",
       "typing": "入力中"
     },

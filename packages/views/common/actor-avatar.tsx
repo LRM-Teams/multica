@@ -102,8 +102,11 @@ export function ActorAvatar({
   // Agents always get a stable identity tint (message bubbles already do this
   // via agentColor). Auto-apply here so DM header / list / detail can't fall
   // back to muted gray while the same agent is green/teal in the transcript.
+  // Skip when actorId is missing — agentColor still tolerates it, but no id
+  // means there is nothing to hash into a real identity color.
   const resolvedTint =
-    tint ?? (actorType === "agent" ? agentColor(actorId) : undefined);
+    tint ??
+    (actorType === "agent" && actorId ? agentColor(actorId) : undefined);
   const avatar = (
     <ActorAvatarBase
       name={getActorName(actorType, actorId)}

@@ -15,21 +15,37 @@ import (
 // interaction_dag closing_event values recorded at the D11 event seams. An empty
 // closing_event is a leaf (root-completion) segment, stored as NULL.
 const (
-	closingEventDelegation = "delegation"
-	closingEventCompletion = "completion"
+	closingEventDelegation    = "delegation"
+	closingEventCompletion    = "completion"
+	closingEventSquadBriefing = "squad_briefing"
 )
 
-// closeSegmentForDelegation is the delegation event seam (D11): the trained
-// parent that posted the trigger comment is delegating to a child task. It
-// closes the parent's segment (closing_event="delegation") and, if the parent
-// was itself delegated to, records the grandparent->parent delegation edge.
-//
-// One-segment-per-task (interaction_dag.sql.go GetInteractionDAGSegmentByAgentRun
-// doc): if the parent already has a segment (it delegated earlier), this is a
-// no-op. Best-effort: errors are logged and the run continues. envSnapshot is
-// the lean {sandbox_ids, env_state} shape resolved by the caller (SandboxRefs
-// are not in hand at the task.go seams).
+// closeSegmentForDelegation is the normal delegation event seam (D11): the
+// trained parent that posted the trigger comment is delegating to a child task.
 func (s *TaskService) closeSegmentForDelegation(ctx context.Context, parent db.AgentTaskQueue, projectID string, envSnapshot map[string]any) {
+	s.closeSegmentForDelegationEvent(ctx, parent, projectID, closingEventDelegation, envSnapshot)
+}
+
+// closeSegmentForSquadContextDelegation closes the producer/parent segment for
+// a squad-context handoff. The segment records squad-specific provenance via
+// closing_event="squad_briefing", while the graph edge remains structural
+// delegation when the child later closes.
+func (s *TaskService) closeSegmentForSquadContextDelegation(ctx context.Context, parent db.AgentTaskQueue, projectID string, envSnapshot map[string]any) {
+	s.closeSegmentForDelegationEvent(ctx, parent, projectID, closingEventSquadBriefing, envSnapshot)
+}
+
+func isSquadContextHandoff(parent db.AgentTaskQueue, childIsSquadLeader bool) bool {
+	return childIsSquadLeader || parent.IsLeaderTask
+}
+
+// closeSegmentForDelegationEvent closes the parent's segment for a handoff and,
+// if the parent was itself delegated to, records the grandparent->parent
+// delegation edge. One-segment-per-task (interaction_dag.sql.go
+// GetInteractionDAGSegmentByAgentRun doc): if the parent already has a segment
+// (it delegated earlier), this is a no-op. Best-effort: errors are logged and
+// the run continues. envSnapshot is the lean {sandbox_ids, env_state} shape
+// resolved by the caller (SandboxRefs are not in hand at the task.go seams).
+func (s *TaskService) closeSegmentForDelegationEvent(ctx context.Context, parent db.AgentTaskQueue, projectID string, closingEvent string, envSnapshot map[string]any) {
 	if s.Training == nil || s.Training.DAG == nil || !s.Training.DAG.Enabled() {
 		return
 	}
@@ -44,7 +60,7 @@ func (s *TaskService) closeSegmentForDelegation(ctx context.Context, parent db.A
 	if existing, err := s.Training.DAG.SegmentIDForAgentRun(ctx, parentRunID); err == nil && existing != "" {
 		return
 	}
-	segID, err := s.Training.DAG.CloseSegmentForEvent(ctx, projectID, cfg.SessionID, cfg.APIKey, closingEventDelegation, envSnapshot)
+	segID, err := s.Training.DAG.CloseSegmentForEvent(ctx, projectID, cfg.SessionID, cfg.APIKey, closingEvent, envSnapshot)
 	if err != nil {
 		slog.Warn("interaction_dag: delegation segment close failed", "task_id", parentRunID, "err", err)
 		return

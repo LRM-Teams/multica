@@ -618,7 +618,11 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 	// close. No-op when there is no trained parent (plain user mention).
 	if parent, ok := s.discoverDelegationParent(ctx, issue.ID, triggerCommentID); ok {
 		projectID := util.UUIDToString(issue.ProjectID)
-		s.closeSegmentForDelegation(ctx, parent, projectID, s.leanEnvSnapshot(ctx, issue.ProjectID))
+		if isSquadContextHandoff(parent, isLeader) {
+			s.closeSegmentForSquadContextDelegation(ctx, parent, projectID, s.leanEnvSnapshot(ctx, issue.ProjectID))
+		} else {
+			s.closeSegmentForDelegation(ctx, parent, projectID, s.leanEnvSnapshot(ctx, issue.ProjectID))
+		}
 		if err := s.Queries.SetTaskParentTaskID(ctx, db.SetTaskParentTaskIDParams{ID: task.ID, ParentTaskID: parent.ID}); err != nil {
 			slog.Warn("interaction_dag: set child parent_task_id failed", "child", util.UUIDToString(task.ID), "err", err)
 		} else {

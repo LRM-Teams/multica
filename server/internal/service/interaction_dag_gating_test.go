@@ -22,13 +22,9 @@ import (
 // AND the task carries an areal_proxy context (a trained rollout). Recording is
 // best-effort: close/edge errors are slog.Warn'd and the run continues.
 //
-// The squad_briefing seam is DEFERRED. It is impossible as written: SandboxRefs
-// are in scope only at service env_dispatch.dispatchOne, while the trained
-// session+proxyKey are in scope only at handler env_dispatch.go:712 (after
-// MaybeOpenTrainingSession) - the two never coexist. Closing a segment at
-// dispatch time (before any turns) would also hit the empty-segment ValueError
-// (design line 140-141). Recorded as a known gap; revisit when the squad-briefing
-// semantics (which segment, when, how SandboxRefs reach the session) are specified.
+// Squad-context handoff is intentionally handled at the producer/parent
+// delegation seam, not at daemon-claim time. The child/receiver session is not
+// closed until it has emitted its own model output.
 
 // TestInteractionDAG_NonTrainedRolloutRecordsNothing verifies every gating
 // condition records no segment/edge across both seams: Training nil, DAG

@@ -35,16 +35,10 @@ type DiagnosisAgentRunner struct {
 	backend        agentpkg.Backend
 }
 
-const diagnosisSystemPrompt = `You are a diagnosis agent that evaluates the contribution of each LLM output (turn) to completing a task.
-Score each turn with an integer in the specified range, where higher scores indicate more valuable contributions.
-Return only a JSON array of step reward objects. Do not include any other text or markdown.
-Each object must have these fields:
-- "segment_id": string identifier of the segment
-- "seq": positive integer sequence number of the turn within the segment
-- "score": integer score within the specified range
-- "rationale": string explaining the score`
-
-func NewDiagnosisAgentRunner(cfg DiagnosisAgentConfig) *DiagnosisAgentRunner {
+// NewDiagnosisAgentRunner constructs a diagnosis runner. It returns an error
+// if no Backend is supplied and the agent backend cannot be created, rather
+// than returning a runner that silently fails at Diagnose time.
+func NewDiagnosisAgentRunner(cfg DiagnosisAgentConfig) (*DiagnosisAgentRunner, error) {
 	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
 	if provider == "" {
 		provider = "pi"
@@ -61,12 +55,25 @@ func NewDiagnosisAgentRunner(cfg DiagnosisAgentConfig) *DiagnosisAgentRunner {
 	if backend == nil {
 		created, err := agentpkg.New(provider, agentpkg.Config{ExecutablePath: strings.TrimSpace(cfg.ExecutablePath)})
 		if err != nil {
-			// Backend creation failed, but we'll return the runner anyway (Diagnose will handle error)
-			return &DiagnosisAgentRunner{provider: provider, executablePath: strings.TrimSpace(cfg.ExecutablePath), model: strings.TrimSpace(cfg.Model), timeout: timeout, scoreMax: scoreMax, backend: nil}
+			return nil, fmt.Errorf("diagnosis agent: create %q backend: %w", provider, err)
 		}
 		backend = created
 	}
-	return &DiagnosisAgentRunner{provider: provider, executablePath: strings.TrimSpace(cfg.ExecutablePath), model: strings.TrimSpace(cfg.Model), timeout: timeout, scoreMax: scoreMax, backend: backend}
+	return &DiagnosisAgentRunner{provider: provider, executablePath: strings.TrimSpace(cfg.ExecutablePath), model: strings.TrimSpace(cfg.Model), timeout: timeout, scoreMax: scoreMax, backend: backend}, nil
+}
+
+// systemPrompt builds the diagnosis system prompt, embedding the concrete
+// [0, scoreMax] scoring range so the model scores each turn within valid
+// bounds rather than an unspecified "specified range".
+func (r *DiagnosisAgentRunner) systemPrompt() string {
+	return fmt.Sprintf(`You are a diagnosis agent that evaluates the contribution of each LLM output (turn) to completing a task.
+Score each turn with an integer between 0 and %d inclusive, where higher scores indicate more valuable contributions.
+Return only a JSON array of step reward objects. Do not include any other text or markdown.
+Each object must have these fields:
+- "segment_id": string identifier of the segment
+- "seq": positive integer sequence number of the turn within the segment
+- "score": integer score between 0 and %d inclusive
+- "rationale": string explaining the score`, r.scoreMax, r.scoreMax)
 }
 
 func parseStepRewards(output string, scoreMax int) ([]StepReward, error) {
@@ -114,13 +121,16 @@ func parseStepRewards(output string, scoreMax int) ([]StepReward, error) {
 	return result, nil
 }
 
+// Diagnose runs the diagnosis agent for a project and returns one StepReward
+// per LLM output. The rich prompt (AssembledDag, per-supernode turn listing)
+// is assembled in a later task; here the runner exercises the backend and
+// parses its JSON output.
 func (r *DiagnosisAgentRunner) Diagnose(ctx context.Context, projectID string) ([]StepReward, error) {
-	// TODO: Build the actual prompt using project ID (not implemented yet; stub)
-	prompt := fmt.Sprintf("Diagnose project %s. ScoreMax is %d.", projectID, r.scoreMax)
-
 	if r.backend == nil {
 		return nil, fmt.Errorf("diagnosis agent backend not initialized")
 	}
+
+	prompt := fmt.Sprintf("Diagnose project %s. ScoreMax is %d.", projectID, r.scoreMax)
 
 	customArgs := []string(nil)
 	if r.provider == "pi" {
@@ -128,15 +138,13 @@ func (r *DiagnosisAgentRunner) Diagnose(ctx context.Context, projectID string) (
 	}
 	session, err := r.backend.Execute(ctx, prompt, agentpkg.ExecOptions{
 		Model:        r.model,
-		SystemPrompt: diagnosisSystemPrompt,
+		SystemPrompt: r.systemPrompt(),
 		ThreadName:   "diagnosis",
 		Timeout:      r.timeout,
 		CustomArgs:   customArgs,
 	})
 	if err != nil {
 		return nil, err
-	}
-	for range session.Messages {
 	}
 	result, ok := <-session.Result
 	if !ok {

@@ -296,6 +296,47 @@ func (q *Queries) ListCandidateEvolutionSubmissions(ctx context.Context, arg Lis
 	return items, rows.Err()
 }
 
+const claimEvolutionCandidate = `-- name: ClaimEvolutionCandidate :one
+UPDATE evolution_unit_submission
+SET status = 'clustered',
+    review_metadata = jsonb_set(review_metadata, '{candidate_claim}', jsonb_build_object('token', $3::text), true),
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+  AND (status = 'candidate' OR (status = 'clustered' AND updated_at < now() - interval '5 minutes'))
+RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
+`
+
+type ClaimEvolutionCandidateParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ClaimToken  pgtype.UUID `json:"claim_token"`
+}
+
+func (q *Queries) ClaimEvolutionCandidate(ctx context.Context, arg ClaimEvolutionCandidateParams) (EvolutionUnitSubmission, error) {
+	row := q.db.QueryRow(ctx, claimEvolutionCandidate, arg.ID, arg.WorkspaceID, arg.ClaimToken)
+	return scanEvolutionUnitSubmission(row)
+}
+
+const releaseEvolutionCandidate = `-- name: ReleaseEvolutionCandidate :exec
+UPDATE evolution_unit_submission
+SET status = 'candidate',
+    review_metadata = review_metadata - 'candidate_claim',
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND status = 'clustered'
+  AND review_metadata->'candidate_claim'->>'token' = $3
+`
+
+type ReleaseEvolutionCandidateParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ClaimToken  string      `json:"claim_token"`
+}
+
+func (q *Queries) ReleaseEvolutionCandidate(ctx context.Context, arg ReleaseEvolutionCandidateParams) error {
+	_, err := q.db.Exec(ctx, releaseEvolutionCandidate, arg.ID, arg.WorkspaceID, arg.ClaimToken)
+	return err
+}
+
 const listEvolutionSubmissionFiles = `-- name: ListEvolutionSubmissionFiles :many
 SELECT id, workspace_id, submission_id, path, content, content_hash, mime_type, size_bytes, created_at FROM evolution_unit_submission_file
 WHERE workspace_id = $1 AND submission_id = $2
@@ -327,7 +368,7 @@ func (q *Queries) ListEvolutionSubmissionFiles(ctx context.Context, arg ListEvol
 const rejectEvolutionSubmission = `-- name: RejectEvolutionSubmission :one
 UPDATE evolution_unit_submission
 SET status = 'rejected', reject_reason = $3, updated_at = now()
-WHERE id = $1 AND workspace_id = $2 AND status = 'candidate'
+WHERE id = $1 AND workspace_id = $2 AND status = 'clustered'
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
@@ -353,7 +394,7 @@ SET status = 'rejected',
     review_metadata = $8,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2 AND status IN ('candidate', 'needs_review')
+WHERE id = $1 AND workspace_id = $2 AND status IN ('clustered', 'needs_review')
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
@@ -383,7 +424,7 @@ SET status = 'needs_review',
     review_metadata = $7,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2 AND status = 'candidate'
+WHERE id = $1 AND workspace_id = $2 AND status = 'clustered'
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
@@ -583,8 +624,9 @@ func (q *Queries) SyncSharedEvolutionUnitMatchMetadata(ctx context.Context, arg 
 
 const markEvolutionSubmissionPromoted = `-- name: MarkEvolutionSubmissionPromoted :one
 UPDATE evolution_unit_submission
-SET status = 'promoted', promoted_unit_id = $3, updated_at = now()
-WHERE id = $1 AND workspace_id = $2 AND status = 'candidate'
+SET status = 'promoted', promoted_unit_id = $3,
+    review_metadata = review_metadata - 'candidate_claim', updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND status = 'clustered'
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
@@ -610,7 +652,7 @@ SET status = 'promoted',
     review_metadata = $8,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2 AND status IN ('candidate', 'needs_review')
+WHERE id = $1 AND workspace_id = $2 AND status IN ('clustered', 'needs_review')
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
@@ -661,7 +703,6 @@ func (q *Queries) UpsertSharedEvolutionUnitFile(ctx context.Context, arg UpsertS
 	err := row.Scan(&item.ID, &item.WorkspaceID, &item.UnitID, &item.VersionID, &item.Path, &item.Content, &item.ContentHash, &item.MimeType, &item.SizeBytes, &item.CreatedAt)
 	return item, err
 }
-
 
 func scanEvolutionUnitSubmission(row pgx.Row) (EvolutionUnitSubmission, error) {
 	var i EvolutionUnitSubmission

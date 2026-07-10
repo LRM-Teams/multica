@@ -22,6 +22,7 @@ import type {
   AgentTemplateSummary,
   CreateAgentFromTemplateRequest,
   CreateAgentFromTemplateResponse,
+  EvolutionMetricsResponse,
   EvolutionReviewDecisionRequest,
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
@@ -248,8 +249,10 @@ import {
   EMPTY_BILLING_CHECKOUT_SESSION_STATUS,
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
   EMPTY_CANCEL_TASK_RESPONSE,
+  EMPTY_EVOLUTION_METRICS,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
   EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE,
+  EvolutionMetricsSchema,
   EvolutionReviewSubmissionListSchema,
   EvolutionReviewSubmissionSchema,
   UpdateAgentFileContentResponseSchema,
@@ -1833,6 +1836,16 @@ export class ApiClient {
       EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
       { endpoint: "GET /api/evolution/submissions" },
     );
+  }
+
+  async getEvolutionMetrics(params?: { unit_type?: string }): Promise<EvolutionMetricsResponse> {
+    const search = new URLSearchParams();
+    if (params?.unit_type) search.set("unit_type", params.unit_type);
+    const suffix = search.toString();
+    const raw = await this.fetch<unknown>(`/api/evolution/metrics${suffix ? `?${suffix}` : ""}`);
+    return parseWithFallback(raw, EvolutionMetricsSchema, EMPTY_EVOLUTION_METRICS, {
+      endpoint: "GET /api/evolution/metrics",
+    });
   }
 
   async getEvolutionReviewSubmission(id: string): Promise<EvolutionReviewSubmission | null> {

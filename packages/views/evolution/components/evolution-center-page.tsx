@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import {
   Activity,
   ArrowUpRight,
-  Award,
   Bot,
   BrainCircuit,
   CheckCircle2,
@@ -27,6 +26,7 @@ import {
   dashboardUsageByAgentOptions,
 } from "@multica/core/dashboard";
 import {
+  evolutionMetricsOptions,
   evolutionReviewSubmissionListOptions,
 } from "@multica/core/evolution";
 import type {
@@ -35,6 +35,7 @@ import type {
   DashboardUsageByAgent,
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
+  EvolutionUnitMetric,
 } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
@@ -67,9 +68,10 @@ const COPY = {
   liveSystem: "Live system",
   thirtyDays: "Last 30 days",
   agentBoard: "Agent leaderboard",
-  agentBoardHint: "Score blends throughput, success rate, learning output, and cost discipline.",
   learningQueue: "Learning queue",
   learningQueueHint: "Review-first memory and skill candidates waiting for a human decision.",
+  memoryOps: "Memory curation",
+  memoryOpsHint: "Three organizer stages plus one daily curator, scheduled on Beijing time.",
   curatorOps: "Curator operations",
   curatorOpsHint: "Multi-agent curation, promotion, sharing, and safety checks.",
   starAgents: "Star agents",
@@ -104,6 +106,7 @@ const COPY = {
   tabOverview: "Overview",
   tabAgents: "Agents",
   tabLearning: "Learning",
+  tabMemory: "Memory",
   tabOps: "Ops",
   healthy: "Healthy",
   attention: "Attention",
@@ -116,6 +119,11 @@ const COPY = {
   approve: "Approve",
   enable: "Enable",
   feedback: "Feedback",
+  beijingTime: "Beijing time",
+  dbEvidence: "DB evidence",
+  semanticDedupe: "Local semantic dedupe",
+  successSignals: "Success signals",
+  used: "Used",
   insight1: "High-signal candidates become proposals, not silent memories.",
   insight2: "Skill drafts stay disabled until explicitly enabled for an agent.",
   insight3: "Shared knowledge is queued with provenance, scope, and safety metadata.",
@@ -141,6 +149,13 @@ const EMPTY_AGENTS: Agent[] = [];
 const EMPTY_RUNTIME: DashboardAgentRunTime[] = [];
 const EMPTY_USAGE_BY_AGENT: DashboardUsageByAgent[] = [];
 const EMPTY_SUBMISSIONS: EvolutionReviewSubmission[] = [];
+const EMPTY_UNIT_METRICS: EvolutionUnitMetric[] = [];
+const MEMORY_CURATION_STAGES = [
+  ["L1", "01:00", "Daily recorder", COPY.dbEvidence],
+  ["L2", "02:00", "Review extractor", COPY.semanticDedupe],
+  ["L3", "03:00", "Promotion writer", COPY.promotion],
+  ["L4", "04:00", "Curator", COPY.curated],
+] as const;
 
 type AgentEvolutionRow = {
   agent: Agent;
@@ -269,6 +284,7 @@ export function EvolutionCenterPage() {
   const candidateQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "candidate"));
   const promotedQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "promoted"));
   const rejectedQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "rejected"));
+  const { data: metricsData } = useQuery(evolutionMetricsOptions(wsId));
 
   const agents = agentsQuery.data ?? EMPTY_AGENTS;
   const usageRows = usageQuery.data ?? EMPTY_USAGE_BY_AGENT;
@@ -277,6 +293,7 @@ export function EvolutionCenterPage() {
   const candidateSubmissions = candidateQuery.data ?? EMPTY_SUBMISSIONS;
   const promotedSubmissions = promotedQuery.data ?? EMPTY_SUBMISSIONS;
   const rejectedSubmissions = rejectedQuery.data ?? EMPTY_SUBMISSIONS;
+  const unitMetrics = metricsData?.unit_metrics ?? EMPTY_UNIT_METRICS;
   const submissionsByStatus = useMemo(
     () => ({
       needs_review: needsReviewSubmissions,
@@ -312,8 +329,10 @@ export function EvolutionCenterPage() {
       promoted: submissionsByStatus.promoted.length,
       skillDrafts: submissions.filter((item) => normalizeUnitType(item.unit_type) === "skill").length,
       memoryItems: submissions.filter((item) => normalizeUnitType(item.unit_type) === "memory" || normalizeUnitType(item.unit_type) === "preference").length,
+      memoryUsed: unitMetrics.filter((item) => normalizeUnitType(item.unit_type) === "memory" || normalizeUnitType(item.unit_type) === "preference").reduce((sum, item) => sum + item.used_count, 0),
+      skillUsed: unitMetrics.filter((item) => normalizeUnitType(item.unit_type) === "skill").reduce((sum, item) => sum + item.used_count, 0),
     };
-  }, [rows, submissions, submissionsByStatus.candidate.length, submissionsByStatus.needs_review.length, submissionsByStatus.promoted.length]);
+  }, [rows, submissions, submissionsByStatus.candidate.length, submissionsByStatus.needs_review.length, submissionsByStatus.promoted.length, unitMetrics]);
 
   const filteredSubmissions = submissions.filter((submission) => {
     const unit = normalizeUnitType(submission.unit_type);
@@ -382,15 +401,13 @@ export function EvolutionCenterPage() {
               <TabsTrigger value="overview" className="px-3">{COPY.tabOverview}</TabsTrigger>
               <TabsTrigger value="agents" className="px-3">{COPY.tabAgents}</TabsTrigger>
               <TabsTrigger value="learning" className="px-3">{COPY.tabLearning}</TabsTrigger>
+              <TabsTrigger value="memory" className="px-3">{COPY.tabMemory}</TabsTrigger>
               <TabsTrigger value="ops" className="px-3">{COPY.tabOps}</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="overview" className="grid gap-4 xl:grid-cols-[1.35fr_.65fr]">
-              <AgentLeaderboardCard rows={topAgents} loading={loading} />
-              <div className="grid gap-4">
-                <LearningPulseCard submissions={submissions} />
-                <CoachingCard rows={coachingRows} />
-              </div>
+            <TabsContent value="overview" className="grid gap-4 md:grid-cols-2">
+              <LearningPulseCard submissions={submissions} />
+              <CoachingCard rows={coachingRows} />
             </TabsContent>
 
             <TabsContent value="agents" className="grid gap-4">
@@ -406,10 +423,15 @@ export function EvolutionCenterPage() {
               />
             </TabsContent>
 
+            <TabsContent value="memory" className="grid gap-4 xl:grid-cols-[.8fr_1.2fr]">
+              <MemoryCurationCard />
+              <UnitMetricsCard metrics={unitMetrics} />
+            </TabsContent>
+
             <TabsContent value="ops" className="grid gap-4 lg:grid-cols-3">
               <OpsCard icon={RefreshCw} title={COPY.lastRun} value={COPY.loopBackend} detail={COPY.rootsProcessed} status={COPY.healthy} />
               <OpsCard icon={ShieldCheck} title={COPY.review} value={COPY.protected} detail={COPY.failuresZero} status={COPY.healthy} />
-              <OpsCard icon={LineChart} title={COPY.projected} value={COPY.feedback} detail={COPY.insight3} status={COPY.attention} />
+              <OpsCard icon={LineChart} title={COPY.projected} value={`${totals.memoryUsed}/${totals.skillUsed}`} detail={COPY.successSignals} status={COPY.attention} />
               <ProcessCard />
             </TabsContent>
           </Tabs>
@@ -448,7 +470,7 @@ function MetricCard({ icon: Icon, label, value, detail, tone }: { icon: typeof B
   };
   return (
     <Card className="border-white/40 bg-background/80 shadow-sm backdrop-blur">
-      <CardContent className="flex items-start gap-3 pt-1">
+      <CardContent className="flex items-start gap-3">
         <div className={cn("rounded-2xl bg-gradient-to-br p-3", tones[tone])}>
           <Icon className="h-5 w-5" />
         </div>
@@ -459,51 +481,6 @@ function MetricCard({ icon: Icon, label, value, detail, tone }: { icon: typeof B
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-function AgentLeaderboardCard({ rows, loading }: { rows: AgentEvolutionRow[]; loading: boolean }) {
-  return (
-    <Card className="bg-background/85 backdrop-blur">
-      <CardHeader>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <CardTitle className="flex items-center gap-2"><Award className="h-4 w-4 text-amber-500" />{COPY.agentBoard}</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">{COPY.agentBoardHint}</p>
-          </div>
-          <Badge variant="secondary">{COPY.thirtyDays}</Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {loading ? <LeaderboardSkeleton /> : rows.length === 0 ? <EmptyState text={COPY.noAgents} /> : rows.map((row, index) => <AgentScoreRow key={row.agent.id} row={row} index={index} />)}
-      </CardContent>
-    </Card>
-  );
-}
-
-function AgentScoreRow({ row, index }: { row: AgentEvolutionRow; index: number }) {
-  const medal = index === 0 ? "bg-amber-500 text-white" : index === 1 ? "bg-slate-400 text-white" : index === 2 ? "bg-orange-500 text-white" : "bg-muted text-muted-foreground";
-  return (
-    <div className="group rounded-2xl border bg-card/70 p-3 transition-all hover:-translate-y-0.5 hover:border-brand/30 hover:shadow-md">
-      <div className="flex items-center gap-3">
-        <div className={cn("flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold", medal)}>{index + 1}</div>
-        <ActorAvatar actorType="agent" actorId={row.agent.id} size={34} showStatusDot enableHoverCard />
-        <div className="min-w-0 flex-1">
-          <div className="truncate font-medium">{row.agent.display_name || row.agent.name}</div>
-          <div className="text-xs text-muted-foreground">{row.taskCount} {COPY.tasks.toLowerCase()} {"·"} {pct(row.successRate)} {COPY.successRate.toLowerCase()}</div>
-        </div>
-        <div className="text-right">
-          <div className="text-lg font-semibold tabular-nums">{row.score}</div>
-          <div className="text-[11px] text-muted-foreground">{COPY.score}</div>
-        </div>
-      </div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-4">
-        <MiniStat label={COPY.cost} value={money(row.cost)} />
-        <MiniStat label={COPY.learned} value={String(row.learnedCount)} />
-        <MiniStat label={COPY.runtime} value={formatDuration(row.seconds, "<1m")} />
-        <MiniStat label={COPY.costPerSuccess} value={money(row.costPerSuccess)} />
-      </div>
-    </div>
   );
 }
 
@@ -687,6 +664,65 @@ function SubmissionCard({ submission }: { submission: EvolutionReviewSubmission 
         <span>{COPY.source}: {submission.bundle_ref || shortId(submission.local_unit_id)}</span>
       </div>
     </div>
+  );
+}
+
+function MemoryCurationCard() {
+  return (
+    <Card className="bg-background/85 backdrop-blur">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><RefreshCw className="h-4 w-4 text-brand" />{COPY.memoryOps}</CardTitle>
+        <p className="text-sm text-muted-foreground">{COPY.memoryOpsHint}</p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {MEMORY_CURATION_STAGES.map(([stage, time, title, detail]) => (
+          <div key={stage} className="flex items-center gap-3 rounded-2xl border bg-muted/20 p-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-foreground text-xs font-semibold text-background">{stage}</div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium">{title}</div>
+              <div className="text-xs text-muted-foreground">{time} {COPY.beijingTime} {"·"} {detail}</div>
+            </div>
+            <Badge variant="secondary">{COPY.healthy}</Badge>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function UnitMetricsCard({ metrics }: { metrics: EvolutionUnitMetric[] }) {
+  const top = metrics.toSorted((a, b) => b.used_count - a.used_count || b.success_count - a.success_count).slice(0, 8);
+  return (
+    <Card className="bg-background/85 backdrop-blur">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><LineChart className="h-4 w-4 text-emerald-500" />{COPY.successSignals}</CardTitle>
+        <p className="text-sm text-muted-foreground">{COPY.insight3}</p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {top.length === 0 ? <EmptyState text={COPY.noCandidates} /> : top.map((item) => (
+          <div key={`${item.unit_type}:${item.unit_id ?? item.local_unit_id}`} className="rounded-2xl border bg-card/70 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <Badge variant="secondary">{unitLabel(item.unit_type)}</Badge>
+                  <Badge variant={item.success_rate >= 0.8 ? "secondary" : "outline"}>{pct(item.success_rate)}</Badge>
+                </div>
+                <div className="mt-2 truncate font-medium">{item.title || item.local_unit_id}</div>
+              </div>
+              <div className="text-right text-sm tabular-nums">
+                <div className="font-semibold">{item.used_count}</div>
+                <div className="text-xs text-muted-foreground">{COPY.used}</div>
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              <MiniStat label={COPY.successRate} value={String(item.success_count)} />
+              <MiniStat label={COPY.failures} value={String(item.failure_count)} />
+              <MiniStat label={COPY.attention} value={String(item.conflict_count)} />
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 

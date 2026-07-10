@@ -938,6 +938,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/skill-suggestions/{suggestionId}/decision", h.DecideAgentSkillSuggestion)
 					r.Get("/memories", h.ListAgentMemories)
 					r.Get("/memory-curation/status", h.GetAgentMemoryCurationStatus)
+					r.Get("/radar-runs", h.ListAgentRadarRuns)
 					r.Get("/files", h.ListAgentFiles)
 					r.Get("/files/content", h.GetAgentFileContent)
 					r.Put("/files/content", h.UpdateAgentFileContent)

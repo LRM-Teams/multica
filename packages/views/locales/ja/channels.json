@@ -193,6 +193,7 @@
     "sticker_failed": "ステッカーを読み込めませんでした",
     "sticker_unavailable": "ステッカーは利用できません",
     "agent_badge": "Agent",
+    "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",
     "edit_action": "編集",
     "delete_action": "削除",

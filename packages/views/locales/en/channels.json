@@ -193,6 +193,7 @@
     "sticker_failed": "Sticker failed to load",
     "sticker_unavailable": "Sticker unavailable",
     "agent_badge": "Agent",
+    "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",
     "edit_action": "Edit",
     "delete_action": "Delete",

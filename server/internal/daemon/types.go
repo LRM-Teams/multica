@@ -40,9 +40,9 @@ type ProjectResourceData struct {
 // Agent data (name, skills) is populated by the claim endpoint.
 type Task struct {
 	ID          string `json:"id"`
-	AgentID       string `json:"agent_id"`
-	RuntimeID     string `json:"runtime_id"`
-	Priority      int    `json:"priority,omitempty"`
+	AgentID     string `json:"agent_id"`
+	RuntimeID   string `json:"runtime_id"`
+	Priority    int    `json:"priority,omitempty"`
 	IssueID     string `json:"issue_id"`
 	WorkspaceID string `json:"workspace_id"`
 	// WorkspaceContext mirrors workspace.context (the per-workspace system
@@ -84,6 +84,7 @@ type Task struct {
 	QuickCreatePrompt        string                             `json:"quick_create_prompt,omitempty"`         // user's natural-language input for quick-create tasks
 	QuickCreateAttachmentIDs []string                           `json:"quick_create_attachment_ids,omitempty"` // attachments uploaded in the quick-create prompt and bound by issue create
 	QuickCreateSource        *protocol.QuickCreateSourceContext `json:"quick_create_source,omitempty"`         // bounded chat/thread source context for quick-create tasks
+	AgentRadarPrompt         string                             `json:"agent_radar_prompt,omitempty"`          // full prompt for proactive radar tasks
 	SquadID                  string                             `json:"squad_id,omitempty"`                    // when the picker was a squad, the squad's UUID; Agent is still the resolved leader
 	SquadName                string                             `json:"squad_name,omitempty"`                  // display name for the picker squad, used in prompt text
 	ParentIssueID            string                             `json:"parent_issue_id,omitempty"`             // for quick-create tasks opened from "Add sub issue" — UUID of the parent issue the new issue should be filed under

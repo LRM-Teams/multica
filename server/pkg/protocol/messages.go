@@ -141,6 +141,26 @@ type WriteWorkdirFileResponsePayload struct {
 	Error       string `json:"error,omitempty"`
 }
 
+// SeedAgentContextRequestPayload asks the daemon that owns RuntimeID to create
+// the target Multica agent root (if missing) and append Wendy-provided initial
+// notes/memory into whitelisted markdown files under RelPath.
+type SeedAgentContextRequestPayload struct {
+	RequestID     string            `json:"request_id"`
+	RuntimeID     string            `json:"runtime_id"`
+	RelPath       string            `json:"rel_path"`
+	InitialNotes  map[string]string `json:"initial_notes,omitempty"`
+	InitialMemory map[string]string `json:"initial_memory,omitempty"`
+	MaxBytes      int               `json:"max_bytes,omitempty"`
+}
+
+// SeedAgentContextResponsePayload is the daemon reply for initial context seeding.
+type SeedAgentContextResponsePayload struct {
+	RequestID string   `json:"request_id"`
+	Written   []string `json:"written,omitempty"`
+	TooLarge  bool     `json:"too_large,omitempty"`
+	Error     string   `json:"error,omitempty"`
+}
+
 // TaskProgressPayload is sent from daemon to server during task execution.
 type TaskProgressPayload struct {
 	TaskID  string `json:"task_id"`

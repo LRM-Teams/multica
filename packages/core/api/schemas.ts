@@ -3,6 +3,7 @@ import type {
   Agent,
   AgentFileContentResponse,
   AgentFilesResponse,
+  ListAgentRadarRunsResponse,
   AgentTemplate,
   AgentTemplateSummary,
   Attachment,
@@ -14,6 +15,7 @@ import type {
   BillingTransactionsPage,
   CancelTaskResponse,
   CreateAgentFromTemplateResponse,
+  EvolutionMetricsResponse,
   EvolutionReviewSubmission,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
@@ -271,6 +273,27 @@ export const EvolutionReviewSubmissionListSchema = z.array(EvolutionReviewSubmis
 
 export const EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST: EvolutionReviewSubmission[] = [];
 
+const EvolutionUnitMetricSchema = z.object({
+  unit_id: z.string().nullable().optional(),
+  local_unit_id: z.string().default(""),
+  unit_type: z.string().default(""),
+  title: z.string().default(""),
+  injected_count: z.number().default(0),
+  used_count: z.number().default(0),
+  success_count: z.number().default(0),
+  failure_count: z.number().default(0),
+  ignored_count: z.number().default(0),
+  conflict_count: z.number().default(0),
+  success_rate: z.number().default(0),
+  last_used_at: z.string().nullable().optional(),
+}).loose();
+
+export const EvolutionMetricsSchema = z.object({
+  unit_metrics: z.array(EvolutionUnitMetricSchema).default([]),
+}).loose();
+
+export const EMPTY_EVOLUTION_METRICS: EvolutionMetricsResponse = { unit_metrics: [] };
+
 const ChannelMessageSearchResultSchema = z.object({
   message_id: z.string().default(""),
   channel_id: z.string().default(""),
@@ -301,6 +324,21 @@ const ChannelMessageReplySchema = z.object({
   content: z.string().default(""),
   parts: z.array(z.unknown()).optional(),
   created_at: z.string().default(""),
+}).loose();
+
+const ChannelMessageQuoteSnapshotSchema = z.object({
+  type: z.string().default(""),
+  authorId: z.string().nullable().optional(),
+  authorName: z.string().default(""),
+  content: z.string().default(""),
+  parts: z.array(z.unknown()).optional(),
+  createdAt: z.string().default(""),
+}).loose();
+
+const ChannelMessageQuoteSchema = z.object({
+  messageId: z.string().default(""),
+  snapshot: ChannelMessageQuoteSnapshotSchema.nullable().optional(),
+  status: z.string().default("inaccessible"),
 }).loose();
 
 const ChannelThreadParticipantSchema = z.object({
@@ -335,6 +373,8 @@ const ChannelMessageSchema = z.object({
   client_message_id: z.string().nullable().optional(),
   reply_to_message_id: z.string().nullable().optional(),
   reply_to: ChannelMessageReplySchema.nullable().optional(),
+  quote_message_id: z.string().nullable().optional(),
+  quote: ChannelMessageQuoteSchema.nullable().optional(),
   thread_root_message_id: z.string().nullable().optional(),
   thread_root: ChannelMessageReplySchema.nullable().optional(),
   thread_reply_count: z.number().default(0).optional(),
@@ -364,6 +404,15 @@ export const ChannelMessagesPageSchema = z.object({
   limit: z.number().default(50),
   has_more: z.boolean().default(false),
   next_cursor: ChannelMessagesCursorSchema.nullable().optional().default(null),
+  // around_seq mode only (task #340). Left undefined (not defaulted) so a
+  // caller can tell "absent" from a real value; the server only sends these
+  // for around_seq requests. NOTE: the server currently omits anchor_index
+  // when it is 0 (omitempty), so an around-mode caller must treat a missing
+  // value as 0, not as "not around mode".
+  anchor_index: z.number().optional(),
+  has_more_after: z.boolean().optional(),
+  after_cursor: ChannelMessagesCursorSchema.nullable().optional(),
+  unread_total: z.number().optional(),
 }).loose();
 
 export const EMPTY_CHANNEL_MESSAGES_PAGE: ChannelMessagesPage = {
@@ -712,6 +761,41 @@ export const UpdateAgentFileContentResponseSchema = z.object({
 export const EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE: UpdateAgentFileContentResponse = {
   content_hash: "",
   conflict: false,
+};
+
+const AgentRadarActionSchema = z.object({
+  id: z.string().default(""),
+  type: z.string().default(""),
+  status: z.string().default(""),
+  risk_level: z.string().default("low"),
+  confidence: z.string().default("medium"),
+  dedupe_key: z.string().default(""),
+  reason: z.string().default(""),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+const AgentRadarRunSchema = z.object({
+  id: z.string().default(""),
+  agent_id: z.string().default(""),
+  status: z.string().default(""),
+  trigger_kind: z.string().default(""),
+  trigger_ref: z.string().default(""),
+  context_summary: z.string().default(""),
+  error: z.string().default(""),
+  scheduled_for: z.string().default(""),
+  started_at: z.string().nullable().default(null),
+  finished_at: z.string().nullable().default(null),
+  created_at: z.string().default(""),
+  actions: z.array(AgentRadarActionSchema).default([]),
+}).loose();
+
+export const AgentRadarRunsResponseSchema = z.object({
+  runs: z.array(AgentRadarRunSchema).default([]),
+}).loose();
+
+export const EMPTY_AGENT_RADAR_RUNS_RESPONSE: ListAgentRadarRunsResponse = {
+  runs: [],
 };
 
 const RuntimeHourlyActivitySchema = z.object({

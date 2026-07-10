@@ -521,6 +521,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Get("/workspaces/{workspaceId}/repos", h.GetDaemonWorkspaceRepos)
 
 		r.Post("/runtimes/{runtimeId}/tasks/claim", h.ClaimTaskByRuntime)
+		r.Post("/runtimes/{runtimeId}/agent-inbox/drain", h.DrainAgentInboxByRuntime)
 		r.Get("/runtimes/{runtimeId}/tasks/pending", h.ListPendingTasksByRuntime)
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
@@ -538,6 +539,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/tasks/{taskId}/usage", h.ReportTaskUsage)
 		r.Post("/tasks/{taskId}/messages", h.ReportTaskMessages)
 		r.Get("/tasks/{taskId}/messages", h.ListTaskMessages)
+		r.Post("/agent-inbox/events/{eventId}/ack", h.AckAgentInboxEvent)
+		r.Post("/agent-inbox/events/{eventId}/fail", h.FailAgentInboxEvent)
 
 		r.Post("/projects/{projectId}/managed-workdir", h.RegisterManagedWorkdir)
 
@@ -624,6 +627,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
 					r.Put("/", h.UpdateWorkspace)
 					r.Patch("/", h.UpdateWorkspace)
+					r.Post("/memory-curation/runs", h.StartMemoryCurationRun)
+					r.Get("/memory-curation/runs/{runId}", h.GetMemoryCurationRun)
 					r.Post("/members", h.CreateInvitation)
 					r.Route("/members/{memberId}", func(r chi.Router) {
 						r.Patch("/", h.UpdateMember)
@@ -798,6 +803,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Task messages (user-facing, not daemon auth)
 			r.Get("/api/tasks/{taskId}/messages", h.ListTaskMessagesByUser)
 
+			r.Get("/api/evolution/metrics", h.GetEvolutionMetrics)
+
 			r.Route("/api/evolution/submissions", func(r chi.Router) {
 				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
 				r.Get("/", h.ListEvolutionReviewSubmissions)
@@ -933,6 +940,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/skill-suggestions", h.ListAgentSkillSuggestions)
 					r.Post("/skill-suggestions/{suggestionId}/decision", h.DecideAgentSkillSuggestion)
 					r.Get("/memories", h.ListAgentMemories)
+					r.Get("/memory-curation/status", h.GetAgentMemoryCurationStatus)
+					r.Get("/radar-runs", h.ListAgentRadarRuns)
 					r.Get("/files", h.ListAgentFiles)
 					r.Get("/files/content", h.GetAgentFileContent)
 					r.Put("/files/content", h.UpdateAgentFileContent)
@@ -1118,6 +1127,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/pin", h.UnpinChannel)
 					r.Put("/mute", h.MuteChannel)
 					r.Delete("/mute", h.UnmuteChannel)
+					r.Put("/agent-mute", h.MuteChannelAgent)
+					r.Delete("/agent-mute", h.UnmuteChannelAgent)
 					r.Post("/unread", h.MarkChannelUnread)
 					r.Get("/project", h.GetChannelProject)
 					r.Put("/project", h.SetChannelProject)

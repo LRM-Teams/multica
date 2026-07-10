@@ -354,6 +354,8 @@ export interface AgentCreationDraft {
   can_execute_code: boolean;
   suggested_channels: string[];
   recommended_tools: string[];
+  initial_notes?: Record<string, string>;
+  initial_memory?: Record<string, string>;
   status: "draft" | "used" | "dismissed";
   used_agent_id?: string | null;
   created_at: string;
@@ -372,6 +374,8 @@ export interface CreateAgentDraftRequest {
   can_execute_code?: boolean;
   suggested_channels?: string[];
   recommended_tools?: string[];
+  initial_notes?: Record<string, string>;
+  initial_memory?: Record<string, string>;
 }
 
 export interface EnsureWindyResponse {
@@ -396,6 +400,10 @@ export interface CreateAgentRequest {
   model?: string;
   /** Optional runtime-native reasoning/effort token. See `Agent.thinking_level`. */
   thinking_level?: string;
+  /** Optional non-URL seed context for new agent notes. Prefer draft_id for Wendy flows. */
+  initial_notes?: Record<string, string>;
+  /** Optional non-URL seed context for durable memory. Prefer draft_id for Wendy flows. */
+  initial_memory?: Record<string, string>;
   /** Optional template slug used by the onboarding agent picker. Surfaced
    *  as the `template` property on the `agent_created` PostHog event. */
   template?: string;
@@ -631,6 +639,37 @@ export interface UpdateAgentFileContentRequest {
 export interface UpdateAgentFileContentResponse {
   content_hash: string;
   conflict: boolean;
+}
+
+export interface AgentRadarAction {
+  id: string;
+  type: string;
+  status: string;
+  risk_level: string;
+  confidence: string;
+  dedupe_key: string;
+  reason: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentRadarRun {
+  id: string;
+  agent_id: string;
+  status: string;
+  trigger_kind: string;
+  trigger_ref: string;
+  context_summary: string;
+  error: string;
+  scheduled_for: string;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  actions: AgentRadarAction[];
+}
+
+export interface ListAgentRadarRunsResponse {
+  runs: AgentRadarRun[];
 }
 
 export type AgentSkillSuggestionAction = "add" | "remove";

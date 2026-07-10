@@ -312,6 +312,13 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				continue
 			}
 			d.handleWriteFileRequest(req, writes)
+		case protocol.EventDaemonSeedAgentContextRequest:
+			var req protocol.SeedAgentContextRequestPayload
+			if err := json.Unmarshal(msg.Payload, &req); err != nil {
+				d.logger.Debug("seed agent context request invalid payload", "error", err)
+				continue
+			}
+			d.handleSeedAgentContextRequest(req, writes)
 		}
 	}
 }

@@ -35,11 +35,12 @@ const channelMessagesMaxLimit = 100
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
-const channelOutputContractInstruction = "Channel output contract: follow the runtime brief's Output section for visible chat output in this run. Do not print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, missing-tool diagnostics, or described commands as the final answer."
-const channelDirectedReplyInstruction = "This run is directly addressed to you. You must produce a visible result using the output mechanism described in the runtime brief. A sticker reply counts as a visible result. If the mention is only a casual greeting (hi/你好/在吗) with no question or task, reply with a greeting sticker only — do not add a text introduction, role pitch, or follow-up question. For substantive requests, answer helpfully; when an acknowledgement sticker fits, send sticker plus your explanation in one message (sticker first). Do not return no_reply, stay_silent, JSON, or any other silent/protocol outcome for a direct mention, direct question, assigned task, or DM-style continuation."
+const channelOutputContractInstruction = "Channel output contract: use the runtime brief as the source of truth for visible output. Never print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, missing-tool diagnostics, or described commands as the final answer."
+const channelDirectedReplyInstruction = "This run is directly addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible result. Agent-to-agent channel @mentions are weak notifications unless they ask for an immediate deliverable, review, decision, or direct answer; weak notifications should finish without visible output. Pure greetings (hi/你好/在吗) get a greeting sticker only. Substantive requests get a helpful answer, optionally with one acknowledgement sticker. Never return no_reply, stay_silent, JSON, or other protocol text."
 const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not use the visible-output path, and do not print no_reply, stay_silent, JSON, or CLI/protocol text."
 const channelAmbientGreetingReactionInstruction = "If the current channel message or unread bundle is only a casual greeting or small talk (for example hi, hello, hey, 你好, 在吗) with no @-mention, no question, and no task request, respond with a 👋 reaction to the reaction target only and do not create a text reply. This also applies when you are the only agent in the channel: treat the greeting as directed to you, but keep the action reaction-only unless the user includes a question or request. If reactions are unavailable, finish without visible output rather than explaining that no reply is needed."
-const channelStickerReplyInstruction = "Sticker replies: when this run is directly addressed to you (@-mention or clear direct request), chat like a person — use stickers for short social beats (hi/你好, ok/好的, 收到/明白, 谢谢, 赞). When no extra explanation is needed, send only a sticker. When you also need to explain or answer substantively, send one message with an acknowledgement sticker plus your text (sticker first, then the explanation). For ambient/unaddressed runs, send a sticker only when the user explicitly asks for a sticker/表情包 or for a genuine welcome of a new member; do not send stickers for ordinary greetings, acknowledgements, thanks, or closings that are not directed at you — use a 👋 reaction or no visible output instead. Use the runtime brief's chat output path for stickers; do not print JSON envelopes, action objects, or protocol text as final output."
+const channelStickerReplyInstruction = "Sticker replies: for directed short social beats (hi/你好, ok/好的, 收到/明白, 谢谢, 赞), use a sticker; for substantive answers, send at most one acknowledgement sticker plus text. For ambient/unaddressed runs, use stickers only when explicitly requested or genuinely welcoming someone; otherwise react or stay silent. Follow the runtime output path and never print protocol text."
+const channelContinuationInstruction = "Collaborative discussion rule: reply only when you move the topic toward a decision, owner, or completed action. For a requested completion/blocker summary in a group chat, you may @-mention the responsible human once. Use @-mentions only for concrete actions, unresolved questions, human escalation, or requested completion/blocker delivery; never for thanks, generic status, future handoffs, or generic opinion invites. If the topic already has an owner and you add nothing immediate, finish without visible output."
 const channelNameTakenCode = "channel_name_taken"
 const channelNameUniqueConstraint = "channel_workspace_id_name_key"
 
@@ -94,20 +95,23 @@ type ChannelMemberResponse struct {
 }
 
 type ChannelMessageResponse struct {
-	ID                    string                        `json:"id"`
-	ChannelID             string                        `json:"channel_id"`
-	WorkspaceID           string                        `json:"workspace_id"`
-	Seq                   int64                         `json:"seq"`
-	Type                  string                        `json:"type"`
-	AuthorID              *string                       `json:"author_id"`
-	AuthorName            string                        `json:"author_name"`
-	Content               string                        `json:"content"`
-	Parts                 []protocol.MessagePart        `json:"parts,omitempty"`
-	Source                string                        `json:"source"`
-	ExternalMessageID     *string                       `json:"external_message_id"`
-	ClientMessageID       *string                       `json:"client_message_id"`
-	ReplyToMessageID      *string                       `json:"reply_to_message_id,omitempty"`
-	ReplyTo               *ChannelMessageReply          `json:"reply_to,omitempty"`
+	ID                    string                 `json:"id"`
+	ChannelID             string                 `json:"channel_id"`
+	WorkspaceID           string                 `json:"workspace_id"`
+	Seq                   int64                  `json:"seq"`
+	Type                  string                 `json:"type"`
+	AuthorID              *string                `json:"author_id"`
+	AuthorName            string                 `json:"author_name"`
+	Content               string                 `json:"content"`
+	Parts                 []protocol.MessagePart `json:"parts,omitempty"`
+	Source                string                 `json:"source"`
+	ExternalMessageID     *string                `json:"external_message_id"`
+	ClientMessageID       *string                `json:"client_message_id"`
+	ReplyToMessageID      *string                `json:"reply_to_message_id,omitempty"`
+	ReplyTo               *ChannelMessageReply   `json:"reply_to,omitempty"`
+	QuoteMessageID        *string                `json:"quote_message_id,omitempty"`
+	Quote                 *ChannelMessageQuote   `json:"quote,omitempty"`
+	quoteSnapshotRaw      []byte
 	ThreadRootMessageID   *string                       `json:"thread_root_message_id,omitempty"`
 	ThreadRoot            *ChannelMessageReply          `json:"thread_root,omitempty"`
 	ThreadReplyCount      int                           `json:"thread_reply_count,omitempty"`
@@ -156,6 +160,12 @@ type ChannelMessagesPageResponse struct {
 	Limit      int                            `json:"limit"`
 	HasMore    bool                           `json:"has_more"`
 	NextCursor *ChannelMessagesCursorResponse `json:"next_cursor,omitempty"`
+
+	// around_seq mode only:
+	AnchorIndex  int                            `json:"anchor_index"`
+	HasMoreAfter bool                           `json:"has_more_after,omitempty"`
+	AfterCursor  *ChannelMessagesCursorResponse `json:"after_cursor,omitempty"`
+	UnreadTotal  int                            `json:"unread_total,omitempty"`
 }
 
 type ChannelThreadMessagesCursorResponse struct {
@@ -177,6 +187,21 @@ type ChannelMessageReply struct {
 	Content    string                 `json:"content"`
 	Parts      []protocol.MessagePart `json:"parts,omitempty"`
 	CreatedAt  string                 `json:"created_at"`
+}
+
+type ChannelMessageQuote struct {
+	MessageID string                       `json:"messageId"`
+	Snapshot  *ChannelMessageQuoteSnapshot `json:"snapshot,omitempty"`
+	Status    string                       `json:"status"`
+}
+
+type ChannelMessageQuoteSnapshot struct {
+	Type       string                 `json:"type"`
+	AuthorID   *string                `json:"authorId,omitempty"`
+	AuthorName string                 `json:"authorName"`
+	Content    string                 `json:"content"`
+	Parts      []protocol.MessagePart `json:"parts,omitempty"`
+	CreatedAt  string                 `json:"createdAt"`
 }
 
 type ChannelReactionResponse struct {
@@ -224,12 +249,14 @@ type AddChannelMemberRequest struct {
 }
 
 type SendChannelMessageRequest struct {
-	Content          string                 `json:"content"`
-	Parts            []protocol.MessagePart `json:"parts"`
-	AttachmentIDs    []string               `json:"attachment_ids"`
-	ReplyToMessageID *string                `json:"reply_to_message_id"`
-	ClientMessageID  *string                `json:"client_message_id"`
-	ShowInChannel    *bool                  `json:"show_in_channel,omitempty"`
+	Content             string                 `json:"content"`
+	Parts               []protocol.MessagePart `json:"parts"`
+	AttachmentIDs       []string               `json:"attachment_ids"`
+	ReplyToMessageID    *string                `json:"reply_to_message_id"`
+	QuoteMessageID      *string                `json:"quote_message_id"`
+	QuoteMessageIDCamel *string                `json:"quoteMessageId"`
+	ClientMessageID     *string                `json:"client_message_id"`
+	ShowInChannel       *bool                  `json:"show_in_channel,omitempty"`
 	// Legacy #252 name accepted only as a transition fallback. New clients use show_in_channel.
 	AlsoSendToChannel *bool `json:"also_send_to_channel,omitempty"`
 }
@@ -330,7 +357,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		var realUnread, unread int
 		var hasMention bool
 		var kind string
-			var lastReadSeq int64
+		var lastReadSeq int64
 		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt, &kind,
 			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &mutedAt, &lastType, &lastName, &lastContent, &lastParts, &lastAt, &realUnread, &unread, &hasMention, &lastReadSeq); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channels")
@@ -404,9 +431,26 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 	// conversation's current last_seq (original behavior).
 	var req struct {
 		LastReadSeq *int64 `json:"last_read_seq"`
+		Rewind      bool   `json:"rewind"`
 	}
 	// Body is optional — ignore decode errors (empty body = mark to latest).
 	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	// rewind=true: owner/admin may set last_read_seq to any value (including
+	// backwards) in both channel_read and conversation_member, bypassing the
+	// GREATEST monotonic guard. For staging/testing use only.
+	if req.Rewind {
+		if req.LastReadSeq == nil {
+			writeError(w, http.StatusBadRequest, "rewind requires last_read_seq")
+			return
+		}
+		if !h.isWorkspaceOwnerOrAdmin(r.Context(), workspaceID, parseUUID(userID)) {
+			writeError(w, http.StatusForbidden, "rewind requires workspace owner or admin role")
+			return
+		}
+		h.rewindChannelRead(w, r, workspaceID, channelID, parseUUID(userID), *req.LastReadSeq)
+		return
+	}
 
 	// Read the previous last_read_seq before upsert, so the response can echo
 	// it back for FE race-free divider positioning (Frank's requirement).
@@ -933,13 +977,19 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
 		return
 	}
-	limit, beforeSeq, beforeCreatedAt, beforeID, err := parseChannelMessagesPageParams(r)
+	limit, beforeSeq, beforeCreatedAt, beforeID, aroundSeq, err := parseChannelMessagesPageParams(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	if aroundSeq > 0 {
+		h.listChannelMessagesAround(w, r, channelID, workspaceID, userID, limit, aroundSeq)
+		return
+	}
+
 	rows, err := h.DB.Query(r.Context(), `
-			SELECT m.id, m.channel_id, m.workspace_id, m.author_type, m.author_id, m.author_name, m.content, m.parts, m.source, m.external_message_id, m.client_message_id, m.reply_to_message_id, m.thread_root_message_id, m.thread_id, m.trigger_depth, m.seq, m.created_at, m.edited_at, m.deleted_at
+			SELECT m.id, m.channel_id, m.workspace_id, m.author_type, m.author_id, m.author_name, m.content, m.parts, m.source, m.external_message_id, m.client_message_id, m.reply_to_message_id, m.quote_message_id, m.quote_snapshot, m.thread_root_message_id, m.thread_id, m.trigger_depth, m.seq, m.created_at, m.edited_at, m.deleted_at
 		FROM channel_message m
 		WHERE m.channel_id = $1 AND m.workspace_id = $2
 		  AND (m.thread_root_message_id IS NULL OR m.main_timeline_visible)
@@ -992,25 +1042,210 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	for i := len(desc) - 1; i >= 0; i-- {
 		out = append(out, desc[i])
 	}
-	messageIDs := make([]pgtype.UUID, len(out))
-	for i, m := range out {
-		messageIDs[i] = parseUUID(m.ID)
+	attachChannelMessageExtras := func(msgs []ChannelMessageResponse) {
+		messageIDs := make([]pgtype.UUID, len(msgs))
+		for i, m := range msgs {
+			messageIDs[i] = parseUUID(m.ID)
+		}
+		grouped := h.groupChannelMessageAttachments(r.Context(), workspaceID, messageIDs)
+		for i := range msgs {
+			msgs[i].Attachments = grouped[msgs[i].ID]
+		}
+		h.attachChannelMessageReactions(r.Context(), workspaceID, msgs)
+		h.attachChannelMessageReplySummaries(r.Context(), workspaceID, msgs)
+		h.attachChannelMessageQuotes(r.Context(), workspaceID, msgs)
+		h.attachChannelMessageThreadRootSummaries(r.Context(), workspaceID, msgs)
+		h.attachChannelMessageThreadMetadata(r.Context(), workspaceID, parseUUID(userID), msgs)
+		h.attachChannelMessageThreadReadModel(r.Context(), workspaceID, msgs)
+		applyChannelMessageTombstoneReadModel(msgs)
 	}
-	grouped := h.groupChannelMessageAttachments(r.Context(), workspaceID, messageIDs)
-	for i := range out {
-		out[i].Attachments = grouped[out[i].ID]
-	}
-	h.attachChannelMessageReactions(r.Context(), workspaceID, out)
-	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
-	h.attachChannelMessageThreadRootSummaries(r.Context(), workspaceID, out)
-	h.attachChannelMessageThreadMetadata(r.Context(), workspaceID, parseUUID(userID), out)
-	h.attachChannelMessageThreadReadModel(r.Context(), workspaceID, out)
-	applyChannelMessageTombstoneReadModel(out)
+	attachChannelMessageExtras(out)
 	writeJSON(w, http.StatusOK, ChannelMessagesPageResponse{
 		Messages:   out,
 		Limit:      limit,
 		HasMore:    hasMore,
 		NextCursor: nextCursor,
+	})
+}
+
+// channelMessageColumnList is the SELECT column list for channel_message queries.
+const channelMessageColumnList = `m.id, m.channel_id, m.workspace_id, m.author_type, m.author_id, m.author_name, m.content, m.parts, m.source, m.external_message_id, m.client_message_id, m.reply_to_message_id, m.quote_message_id, m.quote_snapshot, m.thread_root_message_id, m.thread_id, m.trigger_depth, m.seq, m.created_at, m.edited_at, m.deleted_at`
+
+// channelMessageWhereClause is the WHERE clause for listing visible channel messages (shared by before/around paths).
+const channelMessageWhereClause = `m.channel_id = $1 AND m.workspace_id = $2
+	  AND (m.thread_root_message_id IS NULL OR m.main_timeline_visible)
+	  AND (
+	    m.deleted_at IS NULL
+	    OR EXISTS (
+	      SELECT 1
+	      FROM channel_message replies
+	      WHERE replies.workspace_id = m.workspace_id
+	        AND replies.channel_id = m.channel_id
+	        AND replies.thread_root_message_id = m.id
+	        AND replies.deleted_at IS NULL
+	    )
+	  )`
+
+func (h *Handler) queryChannelMessages(ctx context.Context, channelID, workspaceID pgtype.UUID, whereExtra string, args ...interface{}) ([]ChannelMessageResponse, error) {
+	query := fmt.Sprintf(`SELECT `+channelMessageColumnList+`
+		FROM channel_message m
+		WHERE `+channelMessageWhereClause+`
+		AND %s`, whereExtra)
+	allArgs := make([]interface{}, 0, 2+len(args))
+	allArgs = append(allArgs, channelID, workspaceID)
+	allArgs = append(allArgs, args...)
+	rows, err := h.DB.Query(ctx, query, allArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var msgs []ChannelMessageResponse
+	for rows.Next() {
+		msg, err := scanChannelMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs, rows.Err()
+}
+
+func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Request, channelID pgtype.UUID, workspaceIDStr string, userIDStr string, limit int, aroundSeq int64) {
+	workspaceID := parseUUID(workspaceIDStr)
+	userID := parseUUID(userIDStr)
+	limitBefore := limit / 2
+
+	// Query A: messages before or at anchor (seq <= aroundSeq), newest-first
+	beforeMsgs, err := h.queryChannelMessages(r.Context(), channelID, workspaceID,
+		`m.seq <= $3::bigint
+		ORDER BY m.seq DESC
+		LIMIT $4`, pgtype.Int8{Int64: aroundSeq, Valid: true}, pgtype.Int8{Int64: int64(limitBefore + 1), Valid: true})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list channel messages")
+		return
+	}
+
+	hasMore := len(beforeMsgs) > limitBefore
+	if hasMore {
+		beforeMsgs = beforeMsgs[:limitBefore]
+	}
+
+	// Symmetric backfill: if before side is short, after side gets the remaining capacity
+	actualBefore := len(beforeMsgs)
+	remainingAfter := limit - actualBefore
+
+	// Query B: messages after anchor (seq > aroundSeq), oldest-first
+	afterMsgs, err := h.queryChannelMessages(r.Context(), channelID, workspaceID,
+		`m.seq > $3::bigint
+		ORDER BY m.seq ASC
+		LIMIT $4`, pgtype.Int8{Int64: aroundSeq, Valid: true}, pgtype.Int8{Int64: int64(remainingAfter + 1), Valid: true})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list channel messages")
+		return
+	}
+
+	hasMoreAfter := len(afterMsgs) > remainingAfter
+	if hasMoreAfter {
+		afterMsgs = afterMsgs[:remainingAfter]
+	}
+
+	actualAfter := len(afterMsgs)
+
+	// Reverse symmetric backfill: if after side is short AND before side was at full capacity,
+	// re-query before side with the unused capacity (anchor near end of history)
+	if actualAfter < remainingAfter && actualBefore == limitBefore {
+		extraBefore := remainingAfter - actualAfter
+		limitBeforeExtra := limitBefore + extraBefore
+		beforeMsgs, err = h.queryChannelMessages(r.Context(), channelID, workspaceID,
+			`m.seq <= $3::bigint
+			ORDER BY m.seq DESC
+			LIMIT $4`, pgtype.Int8{Int64: aroundSeq, Valid: true}, pgtype.Int8{Int64: int64(limitBeforeExtra + 1), Valid: true})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list channel messages")
+			return
+		}
+		hasMore = len(beforeMsgs) > limitBeforeExtra
+		if hasMore {
+			beforeMsgs = beforeMsgs[:limitBeforeExtra]
+		}
+		actualBefore = len(beforeMsgs)
+	}
+
+	// Unread total: visible messages after the anchor, excluding the caller's
+	// own (matching sidebar real_unread_count exactly — same filter, same SQL).
+	// Serves as the primary divider count source in around mode (single-response
+	// snapshot = entry freeze is automatic).
+	var unreadTotal int
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT COUNT(*) FROM channel_message m
+		WHERE m.channel_id = $1 AND m.workspace_id = $2
+		  AND m.seq > $3::bigint
+		  AND (m.thread_root_message_id IS NULL OR m.main_timeline_visible)
+		  AND m.deleted_at IS NULL
+		  AND NOT (m.author_type = 'user' AND m.author_id = $4::uuid)`, channelID, workspaceID, pgtype.Int8{Int64: aroundSeq, Valid: true}, parseUUID(userIDStr)).Scan(&unreadTotal); err != nil {
+		unreadTotal = 0
+	}
+	// Calculate cursor for the before (older) direction
+	var nextCursor *ChannelMessagesCursorResponse
+	if hasMore && actualBefore > 0 {
+		oldestBefore := beforeMsgs[actualBefore-1] // last in DESC order = oldest seq
+		nextCursor = &ChannelMessagesCursorResponse{
+			CreatedAt: oldestBefore.CreatedAt,
+			ID:        oldestBefore.ID,
+			Seq:       oldestBefore.Seq,
+		}
+	}
+
+	// Calculate cursor for the after (newer) direction
+	var afterCursor *ChannelMessagesCursorResponse
+	if hasMoreAfter && actualAfter > 0 {
+		newestAfter := afterMsgs[len(afterMsgs)-1] // last in ASC order = newest seq
+		afterCursor = &ChannelMessagesCursorResponse{
+			CreatedAt: newestAfter.CreatedAt,
+			ID:        newestAfter.ID,
+			Seq:       newestAfter.Seq,
+		}
+	}
+
+	// Reverse beforeMsgs to ASC order for the merged result
+	out := make([]ChannelMessageResponse, 0, len(beforeMsgs)+len(afterMsgs))
+	for i := len(beforeMsgs) - 1; i >= 0; i-- {
+		out = append(out, beforeMsgs[i])
+	}
+	out = append(out, afterMsgs...)
+
+	// Anchor index: last message with seq <= aroundSeq (0-based in the ASC-ordered merged array)
+	anchorIndex := actualBefore - 1
+
+	// Attach extras
+	attachChannelMessageExtras := func(msgs []ChannelMessageResponse) {
+		messageIDs := make([]pgtype.UUID, len(msgs))
+		for i, m := range msgs {
+			messageIDs[i] = parseUUID(m.ID)
+		}
+		grouped := h.groupChannelMessageAttachments(r.Context(), workspaceIDStr, messageIDs)
+		for i := range msgs {
+			msgs[i].Attachments = grouped[msgs[i].ID]
+		}
+		h.attachChannelMessageReactions(r.Context(), workspaceIDStr, msgs)
+		h.attachChannelMessageReplySummaries(r.Context(), workspaceIDStr, msgs)
+		h.attachChannelMessageQuotes(r.Context(), workspaceIDStr, msgs)
+		h.attachChannelMessageThreadRootSummaries(r.Context(), workspaceIDStr, msgs)
+		h.attachChannelMessageThreadMetadata(r.Context(), workspaceIDStr, userID, msgs)
+		h.attachChannelMessageThreadReadModel(r.Context(), workspaceIDStr, msgs)
+		applyChannelMessageTombstoneReadModel(msgs)
+	}
+	attachChannelMessageExtras(out)
+
+	writeJSON(w, http.StatusOK, ChannelMessagesPageResponse{
+		Messages:     out,
+		Limit:        limit,
+		HasMore:      hasMore,
+		NextCursor:   nextCursor,
+		AnchorIndex:  anchorIndex,
+		HasMoreAfter: hasMoreAfter,
+		AfterCursor:  afterCursor,
+		UnreadTotal:  unreadTotal,
 	})
 }
 
@@ -1101,10 +1336,80 @@ func (h *Handler) validateChannelReplyTarget(w http.ResponseWriter, ctx context.
 	return replyToID, true
 }
 
+func (h *Handler) resolveChannelQuoteTarget(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID pgtype.UUID, rawSnake, rawCamel *string, threadRootID pgtype.UUID) (pgtype.UUID, []byte, bool) {
+	raw := rawSnake
+	if rawCamel != nil {
+		if raw != nil && strings.TrimSpace(*raw) != strings.TrimSpace(*rawCamel) {
+			writeError(w, http.StatusBadRequest, "quote_message_id conflicts with quoteMessageId")
+			return pgtype.UUID{}, nil, false
+		}
+		raw = rawCamel
+	}
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return pgtype.UUID{}, nil, true
+	}
+	quoteID, ok := parseUUIDOrBadRequest(w, strings.TrimSpace(*raw), "quote_message_id")
+	if !ok {
+		return pgtype.UUID{}, nil, false
+	}
+
+	whereContext := "AND (thread_root_message_id IS NULL OR main_timeline_visible)"
+	args := []any{quoteID, channelID, parseUUID(workspaceID)}
+	if threadRootID.Valid {
+		whereContext = "AND (id = $4 OR thread_root_message_id = $4)"
+		args = append(args, threadRootID)
+	}
+	row := h.DB.QueryRow(ctx, `
+		SELECT author_type, author_id, author_name, content, parts, created_at
+		FROM channel_message
+		WHERE id = $1 AND channel_id = $2 AND workspace_id = $3
+		  AND author_type <> 'system'
+		  AND deleted_at IS NULL
+		  `+whereContext, args...)
+	var authorType, authorName, content string
+	var authorID pgtype.UUID
+	var parts []byte
+	var createdAt pgtype.Timestamptz
+	if err := row.Scan(&authorType, &authorID, &authorName, &content, &parts, &createdAt); err != nil {
+		if errorsIsNoRows(err) {
+			if threadRootID.Valid {
+				writeError(w, http.StatusBadRequest, "quote_message_id must reference this thread")
+			} else {
+				writeError(w, http.StatusBadRequest, "quote_message_id must reference a visible message in this channel")
+			}
+			return pgtype.UUID{}, nil, false
+		}
+		writeError(w, http.StatusInternalServerError, "failed to validate quote target")
+		return pgtype.UUID{}, nil, false
+	}
+	decodedParts := messageparts.Decode(parts)
+	if authorType == "agent" {
+		if unwrappedContent, unwrappedParts, unwrapped, err := messageparts.UnwrapStructuredMessageSend(content, decodedParts); err == nil && unwrapped {
+			content = unwrappedContent
+			decodedParts = unwrappedParts
+		}
+	}
+	snapshot := ChannelMessageQuoteSnapshot{
+		Type:       authorType,
+		AuthorID:   uuidToPtr(authorID),
+		AuthorName: authorName,
+		Content:    content,
+		Parts:      decodedParts,
+		CreatedAt:  timestampToString(createdAt),
+	}
+	rawSnapshot, err := json.Marshal(snapshot)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to capture quote snapshot")
+		return pgtype.UUID{}, nil, false
+	}
+	return quoteID, rawSnapshot, true
+}
+
 func (h *Handler) attachChannelMessageReplySummary(ctx context.Context, workspaceID string, msg ChannelMessageResponse) ChannelMessageResponse {
 	messages := []ChannelMessageResponse{msg}
 	h.attachChannelMessageReplySummaries(ctx, workspaceID, messages)
 	h.attachChannelMessageReactions(ctx, workspaceID, messages)
+	h.attachChannelMessageQuotes(ctx, workspaceID, messages)
 	return messages[0]
 }
 
@@ -1112,6 +1417,7 @@ func (h *Handler) attachSingleChannelMessageDetails(ctx context.Context, workspa
 	messages := []ChannelMessageResponse{msg}
 	h.attachChannelMessageReplySummaries(ctx, workspaceID, messages)
 	h.attachChannelMessageReactions(ctx, workspaceID, messages)
+	h.attachChannelMessageQuotes(ctx, workspaceID, messages)
 	h.attachChannelMessageThreadMetadata(ctx, workspaceID, userID, messages)
 	h.attachChannelMessageThreadReadModel(ctx, workspaceID, messages)
 	msg = messages[0]
@@ -1135,6 +1441,7 @@ func applyChannelMessageTombstone(msg *ChannelMessageResponse) {
 	msg.Attachments = nil
 	msg.Reactions = nil
 	msg.ReplyTo = nil
+	msg.Quote = nil
 	msg.ThreadRoot = nil
 	msg.ThreadParticipants = nil
 	msg.ThreadWakeAnnotations = nil
@@ -1244,6 +1551,86 @@ func (h *Handler) attachChannelMessageReplySummaries(ctx context.Context, worksp
 		if reply, ok := byID[*messages[i].ReplyToMessageID]; ok {
 			messages[i].ReplyTo = &reply
 		}
+	}
+}
+
+func (h *Handler) attachChannelMessageQuotes(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
+	quoteIDs := []pgtype.UUID{}
+	seen := map[string]bool{}
+	for _, msg := range messages {
+		if msg.DeletedAt != nil || msg.QuoteMessageID == nil || seen[*msg.QuoteMessageID] {
+			continue
+		}
+		seen[*msg.QuoteMessageID] = true
+		quoteIDs = append(quoteIDs, parseUUID(*msg.QuoteMessageID))
+	}
+	if len(quoteIDs) == 0 {
+		return
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT id, channel_id, author_type, author_id, author_name, content, parts, created_at, deleted_at
+		FROM channel_message
+		WHERE workspace_id = $1 AND id = ANY($2::uuid[])`, parseUUID(workspaceID), quoteIDs)
+	if err != nil {
+		slog.Warn("channel quote: load failed", "workspace", workspaceID, "error", err)
+		return
+	}
+	defer rows.Close()
+	type quoteSource struct {
+		channelID string
+		deleted   bool
+		snapshot  ChannelMessageQuoteSnapshot
+	}
+	byID := map[string]quoteSource{}
+	for rows.Next() {
+		var id, channelID, authorID pgtype.UUID
+		var authorType, authorName, content string
+		var parts []byte
+		var createdAt, deletedAt pgtype.Timestamptz
+		if err := rows.Scan(&id, &channelID, &authorType, &authorID, &authorName, &content, &parts, &createdAt, &deletedAt); err != nil {
+			continue
+		}
+		decodedParts := messageparts.Decode(parts)
+		if !deletedAt.Valid && authorType == "agent" {
+			if unwrappedContent, unwrappedParts, unwrapped, err := messageparts.UnwrapStructuredMessageSend(content, decodedParts); err == nil && unwrapped {
+				content = unwrappedContent
+				decodedParts = unwrappedParts
+			}
+		}
+		byID[uuidToString(id)] = quoteSource{
+			channelID: uuidToString(channelID),
+			deleted:   deletedAt.Valid,
+			snapshot: ChannelMessageQuoteSnapshot{
+				Type:       authorType,
+				AuthorID:   uuidToPtr(authorID),
+				AuthorName: authorName,
+				Content:    content,
+				Parts:      decodedParts,
+				CreatedAt:  timestampToString(createdAt),
+			},
+		}
+	}
+	for i := range messages {
+		if messages[i].QuoteMessageID == nil {
+			continue
+		}
+		quote := ChannelMessageQuote{MessageID: *messages[i].QuoteMessageID, Status: "inaccessible"}
+		source, ok := byID[*messages[i].QuoteMessageID]
+		if ok && source.channelID == messages[i].ChannelID {
+			if source.deleted {
+				quote.Status = "deleted"
+			} else {
+				quote.Status = "active"
+				snapshot := source.snapshot
+				if len(messages[i].quoteSnapshotRaw) > 0 {
+					if err := json.Unmarshal(messages[i].quoteSnapshotRaw, &snapshot); err != nil {
+						slog.Warn("channel quote: invalid stored snapshot", "message", messages[i].ID, "error", err)
+					}
+				}
+				quote.Snapshot = &snapshot
+			}
+		}
+		messages[i].Quote = &quote
 	}
 }
 
@@ -1389,51 +1776,76 @@ func (h *Handler) attachChannelMessageThreadReadModel(ctx context.Context, works
 		return
 	}
 	rows, err := h.DB.Query(ctx, `
-		WITH latest_task AS (
-		  SELECT DISTINCT ON (cm.channel_thread_root_message_id, atq.agent_id)
-		         cm.channel_thread_root_message_id AS root_message_id,
-		         atq.agent_id,
-		         atq.status,
-		         COALESCE(atq.result::text, '{}') AS result,
-		         cm.created_at AS prompt_created_at
-		  FROM chat_message cm
-		  JOIN agent_task_queue atq ON atq.id = cm.task_id
-		  WHERE cm.channel_thread_root_message_id = ANY($1::uuid[])
-		    AND cm.role = 'user'
-		    AND cm.task_id IS NOT NULL
-		  ORDER BY cm.channel_thread_root_message_id, atq.agent_id, atq.created_at DESC, atq.id DESC
-		),
-		latest_agent_reply AS (
-		  SELECT DISTINCT ON (thread_root_message_id, author_id)
-		         thread_root_message_id AS root_message_id,
-		         author_id AS agent_id
-		  FROM channel_message reply
-		  LEFT JOIN latest_task lt
-		    ON lt.root_message_id = reply.thread_root_message_id
-		   AND lt.agent_id = reply.author_id
-		  WHERE reply.workspace_id = $2
-		    AND reply.thread_root_message_id = ANY($1::uuid[])
-		    AND reply.author_type = 'agent'
-		    AND reply.deleted_at IS NULL
-		    AND (lt.prompt_created_at IS NULL OR reply.created_at > lt.prompt_created_at)
-		  ORDER BY reply.thread_root_message_id, reply.author_id, reply.seq DESC
-		)
+			WITH latest_task AS (
+			  SELECT DISTINCT ON (cm.channel_thread_root_message_id, atq.agent_id)
+			         cm.channel_thread_root_message_id AS root_message_id,
+			         atq.agent_id,
+			         atq.status,
+			         COALESCE(atq.result::text, '{}') AS result,
+			         cm.created_at AS prompt_created_at,
+			         atq.created_at AS wake_created_at
+			  FROM chat_message cm
+			  JOIN agent_task_queue atq ON atq.id = cm.task_id
+			  WHERE cm.channel_thread_root_message_id = ANY($1::uuid[])
+			    AND cm.role = 'user'
+			    AND cm.task_id IS NOT NULL
+			  ORDER BY cm.channel_thread_root_message_id, atq.agent_id, atq.created_at DESC, atq.id DESC
+			),
+			latest_inbox_event AS (
+			  SELECT DISTINCT ON (trigger.thread_root_message_id, e.agent_id)
+			         trigger.thread_root_message_id AS root_message_id,
+			         e.agent_id,
+			         e.status,
+			         '{}' AS result,
+			         trigger.created_at AS prompt_created_at,
+			         e.created_at AS wake_created_at
+			  FROM agent_inbox_event e
+			  JOIN channel_message trigger ON trigger.id = e.source_message_id
+			  WHERE trigger.thread_root_message_id = ANY($1::uuid[])
+			    AND e.requires_wake
+			  ORDER BY trigger.thread_root_message_id, e.agent_id, e.created_at DESC, e.id DESC
+			),
+			latest_wake AS (
+			  SELECT DISTINCT ON (root_message_id, agent_id)
+			         root_message_id, agent_id, status, result, prompt_created_at
+			  FROM (
+			    SELECT * FROM latest_task
+			    UNION ALL
+			    SELECT * FROM latest_inbox_event
+			  ) wake
+			  ORDER BY root_message_id, agent_id, wake_created_at DESC
+			),
+			latest_agent_reply AS (
+			  SELECT DISTINCT ON (thread_root_message_id, author_id)
+			         thread_root_message_id AS root_message_id,
+			         author_id AS agent_id
+			  FROM channel_message reply
+			  LEFT JOIN latest_wake lw
+			    ON lw.root_message_id = reply.thread_root_message_id
+			   AND lw.agent_id = reply.author_id
+			  WHERE reply.workspace_id = $2
+			    AND reply.thread_root_message_id = ANY($1::uuid[])
+			    AND reply.author_type = 'agent'
+			    AND reply.deleted_at IS NULL
+			    AND (lw.prompt_created_at IS NULL OR reply.created_at > lw.prompt_created_at)
+			  ORDER BY reply.thread_root_message_id, reply.author_id, reply.seq DESC
+			)
 		SELECT tp.root_message_id,
 		       tp.member_type,
 		       tp.member_id,
 		       COALESCE(u.name, a.name, '') AS name,
 		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '') AS display_name,
 		       COALESCE(tp.followed_at IS NOT NULL, false) AS followed,
-		       COALESCE(lt.status, '') AS task_status,
-		       COALESCE(lt.result, '{}') AS task_result,
-		       (lar.agent_id IS NOT NULL) AS has_agent_reply
+			       COALESCE(lw.status, '') AS task_status,
+			       COALESCE(lw.result, '{}') AS task_result,
+			       (lar.agent_id IS NOT NULL) AS has_agent_reply
 		FROM thread_participant tp
 		LEFT JOIN "user" u ON tp.member_type = 'user' AND u.id = tp.member_id
 		LEFT JOIN agent a ON tp.member_type = 'agent' AND a.id = tp.member_id
-		LEFT JOIN latest_task lt
-		  ON tp.member_type = 'agent'
-		 AND lt.root_message_id = tp.root_message_id
-		 AND lt.agent_id = tp.member_id
+			LEFT JOIN latest_wake lw
+			  ON tp.member_type = 'agent'
+			 AND lw.root_message_id = tp.root_message_id
+			 AND lw.agent_id = tp.member_id
 		LEFT JOIN latest_agent_reply lar
 		  ON tp.member_type = 'agent'
 		 AND lar.root_message_id = tp.root_message_id
@@ -1503,18 +1915,21 @@ func channelThreadWakeAnnotationState(memberType, taskStatus, taskResult string,
 	if memberType != "agent" {
 		return "", nil, false
 	}
+	if hasAgentReply {
+		return "replied", nil, true
+	}
 	switch taskStatus {
-	case "queued":
+	case "queued", "pending":
 		return "pending", nil, true
-	case "dispatched", "running", "waiting_local_directory":
+	case "dispatched", "running", "waiting_local_directory", "draining":
 		return "delivered", nil, true
+	case "acked":
+		return "acked", nil, true
 	case "completed":
 		action, outputType, reason := channelTaskResultAction(taskResult)
 		switch {
 		case action == protocol.ChatOutputActionNoReply || outputType == protocol.ChatOutputKindNoReply:
 			return "no_reply", reason, true
-		case hasAgentReply:
-			return "replied", nil, true
 		case action == protocol.ChatOutputActionMessageReact || outputType == protocol.ChatOutputKindReaction:
 			return "acked", nil, true
 		case action == protocol.ChatOutputActionMessageSend || outputType == protocol.ChatOutputKindMessage:
@@ -1523,9 +1938,6 @@ func channelThreadWakeAnnotationState(memberType, taskStatus, taskResult string,
 			return "", nil, false
 		}
 	default:
-		if hasAgentReply {
-			return "replied", nil, true
-		}
 		return "", nil, false
 	}
 }
@@ -1593,7 +2005,7 @@ func (h *Handler) UpdateChannelMessage(w http.ResponseWriter, r *http.Request) {
 		  AND author_type = 'user'
 		  AND author_id = $4
 		  AND deleted_at IS NULL
-		RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at`,
+		RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at`,
 		messageID, channelID, parseUUID(workspaceID), parseUUID(userID), content, messageparts.MustJSON(parts)))
 	if err != nil {
 		if errorsIsNoRows(err) {
@@ -1642,7 +2054,7 @@ func (h *Handler) DeleteChannelMessage(w http.ResponseWriter, r *http.Request) {
 		  AND author_type = 'user'
 		  AND author_id = $4
 		  AND deleted_at IS NULL
-		RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at`,
+		RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at`,
 		messageID, channelID, parseUUID(workspaceID), parseUUID(userID)))
 	if err != nil {
 		_ = tx.Rollback(r.Context())
@@ -1837,7 +2249,7 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	rows, err := h.DB.Query(r.Context(), `
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 		FROM channel_message
 		WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id = $3
 		  AND deleted_at IS NULL
@@ -1898,6 +2310,7 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	}
 	h.attachChannelMessageReactions(r.Context(), workspaceID, out)
 	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
+	h.attachChannelMessageQuotes(r.Context(), workspaceID, out)
 	h.attachChannelMessageThreadMetadata(r.Context(), workspaceID, parseUUID(userID), out[:1])
 	h.attachChannelMessageThreadReadModel(r.Context(), workspaceID, out[:1])
 	applyChannelMessageTombstoneReadModel(out)
@@ -1979,6 +2392,10 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
+	quoteMessageID, quoteSnapshot, ok := h.resolveChannelQuoteTarget(w, r.Context(), workspaceID, channelID, req.QuoteMessageID, req.QuoteMessageIDCamel, rootID)
+	if !ok {
+		return
+	}
 	threadID := root.ThreadID
 	if threadID == nil || strings.TrimSpace(*threadID) == "" {
 		fresh := uuid.NewString()
@@ -1993,6 +2410,8 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		Content:             content,
 		Parts:               parts,
 		ReplyToMessageID:    replyToMessageID,
+		QuoteMessageID:      quoteMessageID,
+		QuoteSnapshot:       quoteSnapshot,
 		ThreadRootMessageID: rootID,
 		ThreadID:            threadID,
 		ClientMessageID:     clientMessageID,
@@ -2007,7 +2426,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		return
 	}
 	msg := result.Message
-	if msg.ReplyToMessageID != nil {
+	if msg.ReplyToMessageID != nil || msg.QuoteMessageID != nil {
 		msg = h.attachChannelMessageReplySummary(r.Context(), workspaceID, msg)
 	}
 	if showInChannel {
@@ -2073,7 +2492,8 @@ func (h *Handler) setChannelThreadReadOrFollow(w http.ResponseWriter, r *http.Re
 	}
 	if followed {
 		h.followChannelThreadUser(r.Context(), channelID, rootID, parseUUID(userID), markRead)
-	} else if _, err := h.DB.Exec(r.Context(), `
+	} else {
+		if _, err := h.DB.Exec(r.Context(), `
 		WITH updated AS (
 		  UPDATE channel_thread_state
 		  SET followed_at = NULL, updated_at = now()
@@ -2086,15 +2506,20 @@ func (h *Handler) setChannelThreadReadOrFollow(w http.ResponseWriter, r *http.Re
 		WHERE tp.root_message_id = updated.root_message_id
 		  AND tp.member_type = 'user'
 		  AND tp.member_id = updated.user_id`, rootID, parseUUID(userID)); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to unfollow channel thread")
-		return
+			writeError(w, http.StatusInternalServerError, "failed to unfollow channel thread")
+			return
+		}
+
+		// #329: emit a system message when a thread is unfollowed.
+		h.emitThreadUnfollowedEvent(w, r.Context(), workspaceID, channelID, rootID, userID)
 	}
+
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (h *Handler) loadChannelThreadRoot(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID, rootID pgtype.UUID) (ChannelMessageResponse, bool) {
 	row := h.DB.QueryRow(ctx, `
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 		FROM channel_message
 		WHERE id = $1 AND channel_id = $2 AND workspace_id = $3`,
 		rootID, channelID, parseUUID(workspaceID))
@@ -2267,41 +2692,56 @@ func parseChannelThreadPageParams(w http.ResponseWriter, r *http.Request) (int, 
 	return limit, 0, pgtype.Timestamptz{Time: t, Valid: true}, id, false, true, true
 }
 
-func parseChannelMessagesPageParams(r *http.Request) (int, int64, pgtype.Timestamptz, pgtype.UUID, error) {
+func parseChannelMessagesPageParams(r *http.Request) (int, int64, pgtype.Timestamptz, pgtype.UUID, int64, error) {
 	limit := channelMessagesDefaultLimit
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 1 || parsed > channelMessagesMaxLimit {
-			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid limit")
+			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, errors.New("invalid limit")
 		}
 		limit = parsed
 	}
 
-	if rawBeforeSeq := strings.TrimSpace(r.URL.Query().Get("before_seq")); rawBeforeSeq != "" {
-		beforeSeq, err := strconv.ParseInt(rawBeforeSeq, 10, 64)
-		if err != nil || beforeSeq < 1 {
-			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
-		}
-		return limit, beforeSeq, pgtype.Timestamptz{}, pgtype.UUID{}, nil
-	}
-
+	aroundSeqStr := strings.TrimSpace(r.URL.Query().Get("around_seq"))
+	beforeSeqStr := strings.TrimSpace(r.URL.Query().Get("before_seq"))
 	rawBeforeCreatedAt := strings.TrimSpace(r.URL.Query().Get("before_created_at"))
 	rawBeforeID := strings.TrimSpace(r.URL.Query().Get("before_id"))
+
+	// around_seq is mutually exclusive with before_seq / before_created_at+before_id
+	if aroundSeqStr != "" {
+		if beforeSeqStr != "" || rawBeforeCreatedAt != "" || rawBeforeID != "" {
+			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, errors.New("around_seq is mutually exclusive with before_* cursors")
+		}
+		aroundSeq, err := strconv.ParseInt(aroundSeqStr, 10, 64)
+		if err != nil || aroundSeq < 1 {
+			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, errors.New("invalid around_seq")
+		}
+		return limit, 0, pgtype.Timestamptz{}, pgtype.UUID{}, aroundSeq, nil
+	}
+
+	if beforeSeqStr != "" {
+		beforeSeq, err := strconv.ParseInt(beforeSeqStr, 10, 64)
+		if err != nil || beforeSeq < 1 {
+			return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, errors.New("invalid cursor")
+		}
+		return limit, beforeSeq, pgtype.Timestamptz{}, pgtype.UUID{}, 0, nil
+	}
+
 	if rawBeforeCreatedAt == "" && rawBeforeID == "" {
-		return limit, 0, pgtype.Timestamptz{}, pgtype.UUID{}, nil
+		return limit, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, nil
 	}
 	if rawBeforeCreatedAt == "" || rawBeforeID == "" {
-		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, errors.New("invalid cursor")
 	}
 	beforeTime, err := time.Parse(time.RFC3339Nano, rawBeforeCreatedAt)
 	if err != nil {
-		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, errors.New("invalid cursor")
 	}
 	beforeID, err := util.ParseUUID(rawBeforeID)
 	if err != nil {
-		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+		return 0, 0, pgtype.Timestamptz{}, pgtype.UUID{}, 0, errors.New("invalid cursor")
 	}
-	return limit, 0, pgtype.Timestamptz{Time: beforeTime, Valid: true}, beforeID, nil
+	return limit, 0, pgtype.Timestamptz{Time: beforeTime, Valid: true}, beforeID, 0, nil
 }
 
 type ChannelAuthorStat struct {
@@ -2478,6 +2918,10 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	quoteMessageID, quoteSnapshot, ok := h.resolveChannelQuoteTarget(w, r.Context(), workspaceID, channelID, req.QuoteMessageID, req.QuoteMessageIDCamel, pgtype.UUID{})
+	if !ok {
+		return
+	}
 	authorName := h.channelAuthorName(r.Context(), userID)
 	threadID := uuid.NewString()
 	result, err := h.createUserChannelMessageWithIdempotency(r.Context(), channelMessageInsertInput{
@@ -2488,6 +2932,8 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		Content:          content,
 		Parts:            parts,
 		ReplyToMessageID: replyToMessageID,
+		QuoteMessageID:   quoteMessageID,
+		QuoteSnapshot:    quoteSnapshot,
 		ThreadID:         &threadID,
 		ClientMessageID:  clientMessageID,
 	}, attachmentIDs)
@@ -2500,7 +2946,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	msg := result.Message
-	if msg.ReplyToMessageID != nil {
+	if msg.ReplyToMessageID != nil || msg.QuoteMessageID != nil {
 		msg = h.attachChannelMessageReplySummary(r.Context(), workspaceID, msg)
 	}
 	msg.Attachments = h.groupChannelMessageAttachments(r.Context(), workspaceID, []pgtype.UUID{parseUUID(msg.ID)})[msg.ID]
@@ -2621,15 +3067,7 @@ func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch Channel
 		}
 		return
 	}
-	// #328: do NOT skip ambient fan-out just because the message contains an "@".
-	// A message can @ a human (or any non-agent) while still being a collective
-	// instruction to the agents — e.g. "一起 @newperson 打个招呼" @s the newcomer, not
-	// the agents, yet every agent should still greet. The server's job is delivery,
-	// not judging semantics: fan out to the channel's agents and let each model
-	// decide whether it's addressed to them (the ambient prompt's collective-response
-	// clause + silence rules do the judging). Cost stays bounded by the #214 ambient
-	// volume gate ("by volume, not by meaning"), never by a "contains @" heuristic.
-	h.dispatchChannelAmbientObservation(ctx, ch, trigger, initiatorUserID)
+	h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
 }
 
 func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
@@ -2645,22 +3083,14 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 		}
 		return
 	}
-	// #328: don't skip thread ambient fan-out on a bare "@" (see
-	// dispatchChannelMessageToAgents). Only skip when there's no thread root to fan
-	// out to — a collective instruction in a thread can @ a human and still be for
-	// the thread's agents; the model judges relevance, not a "contains @" check.
-	if trigger.ThreadRootMessageID == nil {
-		return
-	}
-	for _, agent := range h.channelThreadTargetAgents(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID) {
-		h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
-	}
+	h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
 }
 
 // dispatchChannelAgentReply runs one agent's reply to a triggering message:
-// ensure the channel<->agent chat session, persist the user-role prompt, enqueue
-// the agent task, and tag the prompt with the task. Shared by @-mention dispatch
-// (group channels) and DM auto-dispatch (1-on-1 channel whose peer is an agent).
+// ensure the channel<->agent chat session, persist the user-role prompt, create
+// an agent session, and write a wake-required inbox event. Shared by @-mention
+// dispatch (group channels) and DM auto-dispatch (1-on-1 channel whose peer is
+// an agent).
 //
 // Two guards keep the agent-reply loop bounded and prevent self-conversation and
 // MUST be preserved for both callers:
@@ -2678,10 +3108,14 @@ func (h *Handler) dispatchChannelAgentReply(ctx context.Context, ch ChannelRespo
 	if trigger.ThreadRootMessageID != nil {
 		h.followChannelThreadAgent(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
 	}
-	h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger), "channel agent reply", true, true, true, false)
+	reason := "mention"
+	if ch.Kind == "dm" {
+		reason = "dm"
+	}
+	h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger), "channel agent reply", true, reason, 10)
 }
 
-func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, logScope string, showTyping, forceFresh, interruptActive, lowPriority bool) {
+func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, logScope string, showTyping bool, reason string, priority int32) {
 	typingActive := false
 	if showTyping {
 		h.publishChannelAgentTyping(ctx, ch, agent, true)
@@ -2692,62 +3126,83 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 			h.publishChannelAgentTyping(ctx, ch, agent, false)
 		}
 	}()
-	session, err := h.ensureChannelAgentSession(ctx, ch, agent.ID, initiatorUserID)
+	if h.TxStarter == nil {
+		slog.Warn(logScope+": transaction starter missing", "channel", ch.ID, "agent", uuidToString(agent.ID))
+		return
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		slog.Warn(logScope+": begin transaction failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.Queries.WithTx(tx)
+
+	session, err := h.ensureChannelAgentSessionWithDB(ctx, qtx, tx, ch, agent.ID, initiatorUserID)
 	if err != nil {
 		slog.Warn(logScope+": ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
 	}
-	// #311: the system no longer cancels an in-flight directed chat run when a
-	// newer mention arrives for the same channel agent. A directed request must
-	// never be silently dropped — different requesters' asks are independent
-	// must-answer work, and a same-requester follow-up should merge/queue, not
-	// kill the earlier run (the Frank+海鹏 double-joke case). New mentions queue
-	// instead: ClaimAgentChatTask serializes per chat_session and runs queued
-	// tasks FIFO, so each request is answered in turn. interruptActive is left on
-	// the signature but no longer triggers a cancel.
-	interruptingActiveTask := false
-	promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, trigger)
-	if err != nil {
+	if _, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, ch.Kind, trigger); err != nil {
 		slog.Warn(logScope+": create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
 	}
-	var task db.AgentTaskQueue
-	if lowPriority && !interruptingActiveTask {
-		task, err = h.TaskService.EnqueueAmbientChatTask(ctx, session, initiatorUserID)
-	} else if interruptingActiveTask || forceFresh {
-		task, err = h.TaskService.EnqueueFreshChatTask(ctx, session, initiatorUserID)
-	} else {
-		task, err = h.TaskService.EnqueueChatTask(ctx, session, initiatorUserID)
-	}
+	conversationID, err := h.channelConversationIDWithDB(ctx, tx, parseUUID(ch.ID))
 	if err != nil {
-		slog.Warn(logScope+": enqueue chat task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		slog.Warn(logScope+": load conversation failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	agentSession, err := qtx.UpsertAgentSession(ctx, db.UpsertAgentSessionParams{
+		WorkspaceID:    parseUUID(ch.WorkspaceID),
+		AgentID:        agent.ID,
+		ConversationID: conversationID,
+		Scope:          channelAgentSessionScope(ch.Kind),
+		ChannelID:      parseUUID(ch.ID),
+		ChatSessionID:  session.ID,
+	})
+	if err != nil {
+		slog.Warn(logScope+": upsert agent session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	seq := trigger.Seq
+	event, err := qtx.CreateAgentInboxEvent(ctx, db.CreateAgentInboxEventParams{
+		WorkspaceID:     parseUUID(ch.WorkspaceID),
+		AgentSessionID:  agentSession.ID,
+		ConversationID:  conversationID,
+		AgentID:         agent.ID,
+		Reason:          reason,
+		RequiresWake:    true,
+		Priority:        priority,
+		SeqFrom:         seq,
+		SeqTo:           seq,
+		ChannelID:       parseUUID(ch.ID),
+		ChatSessionID:   session.ID,
+		SourceMessageID: channelAmbientTriggerID(trigger),
+	})
+	if err != nil {
+		slog.Warn(logScope+": create inbox event failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Warn(logScope+": commit failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "inbox_event", uuidToString(event.ID), "error", err)
 		return
 	}
 	typingActive = false
-	if _, err := h.DB.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
-		slog.Warn(logScope+": tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
-	}
 
 	// Record a wake-trigger activity event so the agent's Activity timeline
-	// shows why this run started (mention / ambient / DM / thread reply).
-	wakeReason := "mention"
-	if lowPriority {
-		wakeReason = "ambient"
-	} else if ch.Kind == "dm" {
-		wakeReason = "dm"
-	} else if trigger.ThreadRootMessageID != nil {
-		wakeReason = "thread_reply"
-	}
+	// shows why this session needs to drain.
 	recordAgentActivityEvent(ctx, h.DB,
-		parseUUID(ch.WorkspaceID), agent.ID, agent.RuntimeID, task.ID,
+		parseUUID(ch.WorkspaceID), agent.ID, agent.RuntimeID, pgtype.UUID{},
 		"lifecycle", "task_dispatched", "info",
 		"channel", parseUUID(ch.ID), ch.Name,
-		wakeReason, "Agent woken by "+wakeReason,
+		reason, "Agent woken by "+reason,
 		map[string]any{
 			"trigger_message_id": trigger.ID,
 			"trigger_author":     trigger.AuthorName,
-			"trigger_content":   truncateForActivity(trigger.Content, 100),
-			"thread_root":       trigger.ThreadRootMessageID,
+			"trigger_content":    truncateForActivity(trigger.Content, 100),
+			"thread_root":        trigger.ThreadRootMessageID,
+			"agent_session_id":   uuidToString(agentSession.ID),
+			"inbox_event_id":     uuidToString(event.ID),
 		},
 	)
 }
@@ -2784,7 +3239,7 @@ func (h *Handler) dispatchChannelMemberWelcome(ctx context.Context, workspaceID 
 			slog.Warn("channel welcome: ensure session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 			continue
 		}
-		promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, synthetic)
+		promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, ch.Kind, synthetic)
 		if err != nil {
 			h.publishChannelAgentTyping(ctx, ch, agent, false)
 			slog.Warn("channel welcome: create prompt failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
@@ -2989,7 +3444,6 @@ func (h *Handler) publishChannelAgentTyping(ctx context.Context, ch ChannelRespo
 
 func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, channelID, content string) []db.Agent {
 	mentions := util.ParseMentions(content)
-	mentionAll := util.HasMentionAll(mentions) || contentMentionsAll(content)
 	mentionedAgents := map[string]struct{}{}
 	for _, mention := range mentions {
 		if mention.Type == "agent" {
@@ -3014,7 +3468,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 			continue
 		}
 		_, mentionedByID := mentionedAgents[uuidToString(a.ID)]
-		if mentionAll || mentionedByID || contentMentionsAgent(content, a.Name) || contentMentionsAgent(content, a.DisplayName) {
+		if mentionedByID || contentMentionsAgent(content, a.Name) || contentMentionsAgent(content, a.DisplayName) {
 			out = append(out, a)
 		}
 	}
@@ -3101,10 +3555,6 @@ func (h *Handler) channelThreadAgentsFromQuery(ctx context.Context, query string
 	return out
 }
 
-func contentMentionsAll(content string) bool {
-	return strings.Contains(strings.ToLower(content), "@all")
-}
-
 func contentMentionsAgent(content, name string) bool {
 	needle := "@" + strings.ToLower(strings.TrimSpace(name))
 	if needle == "@" {
@@ -3118,8 +3568,89 @@ func (h *Handler) dispatchChannelAmbientObservation(ctx context.Context, ch Chan
 		return
 	}
 	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
+		// Skip agents who have muted this channel (#313 gate).
+		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
+			continue
+		}
 		h.dispatchSingleChannelAmbientObservation(ctx, ch, trigger, initiatorUserID, agent)
 	}
+}
+
+func (h *Handler) dispatchChannelAmbientDelivery(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse) {
+	if trigger.Type == "agent" {
+		return
+	}
+	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
+		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
+			continue
+		}
+		h.recordChannelAmbientInboxEvent(ctx, ch, trigger, agent)
+	}
+}
+
+func (h *Handler) recordChannelAmbientInboxEvent(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, agent db.Agent) {
+	if h.TxStarter == nil {
+		slog.Warn("channel ambient delivery: transaction starter missing", "channel", ch.ID, "agent", uuidToString(agent.ID))
+		return
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		slog.Warn("channel ambient delivery: begin failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	conversationID, workspaceID, cursorSeq, pendingToSeq, ok := h.channelAmbientWakeCursorTx(ctx, tx, ch, agent, trigger)
+	if !ok {
+		return
+	}
+	if pendingToSeq <= cursorSeq {
+		if err := tx.Commit(ctx); err != nil {
+			slog.Warn("channel ambient delivery: commit empty cursor failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		}
+		return
+	}
+	qtx := h.Queries.WithTx(tx)
+	agentSession, err := qtx.UpsertAgentSession(ctx, db.UpsertAgentSessionParams{
+		WorkspaceID:    workspaceID,
+		AgentID:        agent.ID,
+		ConversationID: conversationID,
+		Scope:          channelAgentSessionScope(ch.Kind),
+		ChannelID:      parseUUID(ch.ID),
+	})
+	if err != nil {
+		slog.Warn("channel ambient delivery: upsert agent session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	if _, err := qtx.UpsertAmbientAgentInboxEvent(ctx, db.UpsertAmbientAgentInboxEventParams{
+		WorkspaceID:     workspaceID,
+		AgentSessionID:  agentSession.ID,
+		ConversationID:  conversationID,
+		ChannelID:       parseUUID(ch.ID),
+		AgentID:         agent.ID,
+		SeqFrom:         cursorSeq + 1,
+		SeqTo:           pendingToSeq,
+		SourceMessageID: channelAmbientTriggerID(trigger),
+	}); err != nil {
+		slog.Warn("channel ambient delivery: upsert inbox failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Warn("channel ambient delivery: commit failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+	}
+}
+
+func channelAgentSessionScope(channelKind string) string {
+	if channelKind == "dm" {
+		return "dm"
+	}
+	return "channel"
+}
+
+func (h *Handler) channelConversationIDWithDB(ctx context.Context, exec db.DBTX, channelID pgtype.UUID) (pgtype.UUID, error) {
+	var conversationID pgtype.UUID
+	err := exec.QueryRow(ctx, `SELECT id FROM conversation WHERE channel_id = $1`, channelID).Scan(&conversationID)
+	return conversationID, err
 }
 
 func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse) string {
@@ -3134,10 +3665,11 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString("\n")
 	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, finish without visible output; do not print no_reply or protocol text.\n")
 	b.WriteString("If the message directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: write a visible plain-text reply or acknowledgement, and do not return no_reply.\n")
-	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and produce one short visible message. Do not stay silent or print no_reply for that case.\n")
 	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
 	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, use a reaction when the runtime brief supports reactions and a reaction is sufficient; otherwise send a short acknowledgement.\n")
 	b.WriteString(channelStickerReplyInstruction)
+	b.WriteString("\n")
+	b.WriteString(channelContinuationInstruction)
 	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
 	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))
@@ -3161,18 +3693,16 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	messages = channelContextMessagesExcludingTrigger(messages, trigger.ID)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are participating in the Multica group chat #%s.\n", ch.Name)
-	b.WriteString("Only respond as yourself. Do not impersonate other agents or users.\n")
-	b.WriteString("Use the bounded channel context below, but answer the current mention directly. If key context seems missing, fetch or search more channel/thread history before guessing.\n")
+	fmt.Fprintf(&b, "You are participating in the Multica group chat #%s. Respond only as yourself.\n", ch.Name)
+	b.WriteString("Use the bounded context below; fetch/search more only if needed to answer the current mention.\n")
 	b.WriteString(channelOutputContractInstruction)
 	b.WriteString("\n")
 	b.WriteString(channelDirectedReplyInstruction)
 	b.WriteString("\n")
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\n")
-	b.WriteString("This is a collaborative discussion — keep it going until the topic is actually resolved, not just one exchange. ")
-	b.WriteString("If the discussion is not finished (you need input, have a follow-up question, disagree, or want to push the topic forward), END your reply by @-mentioning the specific member(s) you want to continue with, using their exact mention links as listed below. You may @ several members at once. ")
-	b.WriteString("Only stop @-mentioning when you have reached a final conclusion and there is genuinely nothing left to discuss — a one-line acknowledgement is not a conclusion.\n")
+	b.WriteString(channelContinuationInstruction)
+	b.WriteString("\n")
 	fmt.Fprintf(&b, "To prevent runaway loops, this channel run is limited to %d automatic agent turns; current trigger depth is %d. As you near the limit, steer the discussion toward a concrete conclusion.\n\n", channelRunTriggerLimit, trigger.TriggerDepth)
 	if len(members) > 0 {
 		// Give the exact mention link per member (humans included), not just a
@@ -3203,10 +3733,28 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 		b.WriteString("\n")
 	}
 	if trigger.ReplyToMessageID != nil {
-		if parent, ok := h.channelMessageByID(ctx, ch.WorkspaceID, ch.ID, *trigger.ReplyToMessageID); ok {
+		if trigger.ReplyTo != nil {
+			b.WriteString("Direct reply target for the current message:\n")
+			fmt.Fprintf(&b, "%s\n\n", formatChannelMessageReplyLine(*trigger.ReplyTo))
+		} else if parent, ok := h.channelMessageByID(ctx, ch.WorkspaceID, ch.ID, *trigger.ReplyToMessageID); ok {
 			b.WriteString("Direct reply target for the current message:\n")
 			fmt.Fprintf(&b, "%s\n\n", formatChannelMessageLine(parent))
 		}
+	}
+	if trigger.QuoteMessageID != nil {
+		b.WriteString("Direct quote target for the current message:\n")
+		if trigger.Quote != nil && trigger.Quote.Status == "active" && trigger.Quote.Snapshot != nil {
+			fmt.Fprintf(&b, "%s\n\n", formatChannelMessageQuoteSnapshotLine(*trigger.Quote.Snapshot))
+		} else if quoted, ok := h.channelMessageByID(ctx, ch.WorkspaceID, ch.ID, *trigger.QuoteMessageID); ok {
+			fmt.Fprintf(&b, "%s\n\n", formatChannelMessageLine(quoted))
+		} else if trigger.Quote != nil && strings.TrimSpace(trigger.Quote.Status) != "" {
+			fmt.Fprintf(&b, "[%s] unavailable (%s)\n\n", *trigger.QuoteMessageID, trigger.Quote.Status)
+		} else {
+			fmt.Fprintf(&b, "[%s] unavailable\n\n", *trigger.QuoteMessageID)
+		}
+	}
+	if trigger.ReplyToMessageID != nil || trigger.QuoteMessageID != nil {
+		b.WriteString("When answering, treat the current message text as the user's question/request and the direct reply/quote target as the referenced message content. Do not confuse the two.\n\n")
 	}
 	b.WriteString("Current message to respond to:\n")
 	fmt.Fprintf(&b, "%s (%s): %s", trigger.AuthorName, trigger.Type, trigger.Content)
@@ -3218,7 +3766,7 @@ func (h *Handler) channelMessageByID(ctx context.Context, workspaceID, channelID
 		return ChannelMessageResponse{}, false
 	}
 	row := h.DB.QueryRow(ctx, `
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 		FROM channel_message
 		WHERE id = $1 AND channel_id = $2 AND workspace_id = $3`, parseUUID(messageID), parseUUID(channelID), parseUUID(workspaceID))
 	msg, err := scanChannelMessage(row)
@@ -3258,9 +3806,9 @@ func (h *Handler) channelMemberSummaries(ctx context.Context, workspaceID, chann
 
 func (h *Handler) recentChannelMessages(ctx context.Context, workspaceID, channelID string, limit int) []ChannelMessageResponse {
 	rows, err := h.DB.Query(ctx, `
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 		FROM (
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 			FROM channel_message
 			WHERE channel_id = $1
 			  AND workspace_id = $2
@@ -3291,19 +3839,19 @@ func (h *Handler) channelThreadContextMessages(ctx context.Context, workspaceID,
 	}
 	rows, err := h.DB.Query(ctx, `
 		WITH replies AS (
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 			FROM channel_message
 			WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id = $3 AND author_type <> 'system'
 			ORDER BY seq DESC
 			LIMIT $4
 		)
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 		FROM (
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 			FROM channel_message
 			WHERE id = $3 AND channel_id = $1 AND workspace_id = $2 AND author_type <> 'system'
 			UNION ALL
-			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 			FROM replies
 		) thread_context
 		ORDER BY seq ASC`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID), limit-1)
@@ -3322,11 +3870,11 @@ func (h *Handler) channelThreadContextMessages(ctx context.Context, workspaceID,
 	return out
 }
 
-func (h *Handler) createChannelAgentPromptMessage(ctx context.Context, chatSessionID pgtype.UUID, prompt string, trigger ChannelMessageResponse) (db.ChatMessage, error) {
-	return h.createChannelAgentPromptMessageWithDB(ctx, h.DB, chatSessionID, prompt, trigger)
+func (h *Handler) createChannelAgentPromptMessage(ctx context.Context, chatSessionID pgtype.UUID, prompt, channelKind string, trigger ChannelMessageResponse) (db.ChatMessage, error) {
+	return h.createChannelAgentPromptMessageWithDB(ctx, h.DB, chatSessionID, prompt, channelKind, trigger)
 }
 
-func (h *Handler) createChannelAgentPromptMessageWithDB(ctx context.Context, exec db.DBTX, chatSessionID pgtype.UUID, prompt string, trigger ChannelMessageResponse) (db.ChatMessage, error) {
+func (h *Handler) createChannelAgentPromptMessageWithDB(ctx context.Context, exec db.DBTX, chatSessionID pgtype.UUID, prompt, channelKind string, trigger ChannelMessageResponse) (db.ChatMessage, error) {
 	threadID := trigger.ThreadID
 	if threadID == nil || strings.TrimSpace(*threadID) == "" {
 		fresh := uuid.NewString()
@@ -3335,6 +3883,9 @@ func (h *Handler) createChannelAgentPromptMessageWithDB(ctx context.Context, exe
 	var threadRootMessageID any
 	if trigger.ThreadRootMessageID != nil {
 		threadRootMessageID = parseUUID(*trigger.ThreadRootMessageID)
+	} else if channelKind == "group" && strings.TrimSpace(trigger.ID) != "" {
+		// Top-level group-channel prompts should default agent output into a thread under the trigger.
+		threadRootMessageID = parseUUID(trigger.ID)
 	}
 	row := exec.QueryRow(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, thread_id, channel_thread_root_message_id, trigger_depth)
@@ -3654,6 +4205,8 @@ type channelMessageInsertInput struct {
 	Content             string
 	Parts               []protocol.MessagePart
 	ReplyToMessageID    pgtype.UUID
+	QuoteMessageID      pgtype.UUID
+	QuoteSnapshot       []byte
 	ThreadRootMessageID pgtype.UUID
 	ThreadID            *string
 	TriggerDepth        int
@@ -3686,7 +4239,7 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 	if err != nil {
 		return channelMessageCreateResult{}, err
 	}
-	msg, err := insertChannelMessageWithPartsExec(ctx, tx, in.ChannelID, in.WorkspaceID, "user", in.AuthorID, in.AuthorName, in.Content, in.Parts, "multica", nil, in.ClientMessageID, in.ReplyToMessageID, in.ThreadRootMessageID, in.ThreadID, in.TriggerDepth, in.MainTimelineVisible)
+	msg, err := insertChannelMessageWithPartsExec(ctx, tx, in.ChannelID, in.WorkspaceID, "user", in.AuthorID, in.AuthorName, in.Content, in.Parts, "multica", nil, in.ClientMessageID, in.ReplyToMessageID, in.QuoteMessageID, in.QuoteSnapshot, in.ThreadRootMessageID, in.ThreadID, in.TriggerDepth, in.MainTimelineVisible)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		if in.ClientMessageID != nil && isUniqueViolation(err) {
@@ -3731,7 +4284,7 @@ func (h *Handler) resolveDuplicateUserChannelMessage(ctx context.Context, in cha
 
 func (h *Handler) findUserChannelMessageByClientID(ctx context.Context, workspaceID, channelID, authorID pgtype.UUID, clientMessageID string) (ChannelMessageResponse, bool, error) {
 	row := h.DB.QueryRow(ctx, `
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 		FROM channel_message
 		WHERE workspace_id = $1 AND channel_id = $2 AND author_type = 'user' AND author_id = $3 AND client_message_id = $4`,
 		workspaceID, channelID, authorID, clientMessageID)
@@ -3752,7 +4305,7 @@ func (h *Handler) matchesChannelMessageIdempotencyPayload(ctx context.Context, e
 	if string(messageparts.MustJSON(existing.Parts)) != string(messageparts.MustJSON(in.Parts)) {
 		return false, nil
 	}
-	if !sameNullableUUID(existing.ReplyToMessageID, in.ReplyToMessageID) || !sameNullableUUID(existing.ThreadRootMessageID, in.ThreadRootMessageID) {
+	if !sameNullableUUID(existing.ReplyToMessageID, in.ReplyToMessageID) || !sameNullableUUID(existing.QuoteMessageID, in.QuoteMessageID) || !sameNullableUUID(existing.ThreadRootMessageID, in.ThreadRootMessageID) {
 		return false, nil
 	}
 	var visible bool
@@ -3832,15 +4385,15 @@ func (h *Handler) insertChannelMessageWithParts(ctx context.Context, channelID, 
 }
 
 func (h *Handler) insertChannelMessageWithPartsMainProjection(ctx context.Context, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content string, parts []protocol.MessagePart, source string, externalID *string, replyToMessageID, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int, mainTimelineVisible bool) (ChannelMessageResponse, error) {
-	return insertChannelMessageWithPartsExec(ctx, h.DB, channelID, workspaceID, authorType, authorID, authorName, content, parts, source, externalID, nil, replyToMessageID, threadRootMessageID, threadID, triggerDepth, mainTimelineVisible)
+	return insertChannelMessageWithPartsExec(ctx, h.DB, channelID, workspaceID, authorType, authorID, authorName, content, parts, source, externalID, nil, replyToMessageID, pgtype.UUID{}, nil, threadRootMessageID, threadID, triggerDepth, mainTimelineVisible)
 }
 
-func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content string, parts []protocol.MessagePart, source string, externalID, clientMessageID *string, replyToMessageID, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int, mainTimelineVisible bool) (ChannelMessageResponse, error) {
+func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content string, parts []protocol.MessagePart, source string, externalID, clientMessageID *string, replyToMessageID, quoteMessageID pgtype.UUID, quoteSnapshot []byte, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int, mainTimelineVisible bool) (ChannelMessageResponse, error) {
 	row := exec.QueryRow(ctx, `
-			INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, main_timeline_visible)
-			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15)
-			RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at`,
-		channelID, workspaceID, authorType, nullableUUID(authorID), authorName, content, messageparts.MustJSON(parts), source, externalID, clientMessageID, nullableUUID(replyToMessageID), nullableUUID(threadRootMessageID), threadID, triggerDepth, mainTimelineVisible)
+			INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, main_timeline_visible)
+			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17)
+			RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at`,
+		channelID, workspaceID, authorType, nullableUUID(authorID), authorName, content, messageparts.MustJSON(parts), source, externalID, clientMessageID, nullableUUID(replyToMessageID), nullableUUID(quoteMessageID), nullableJSONB(quoteSnapshot), nullableUUID(threadRootMessageID), threadID, triggerDepth, mainTimelineVisible)
 	return scanChannelMessage(row)
 }
 
@@ -4037,14 +4590,14 @@ func channelLastMessage(authorType, authorName, content string, rawParts []byte,
 }
 
 func scanChannelMessage(row rowScanner) (ChannelMessageResponse, error) {
-	var id, channelID, wsID, authorID, replyToMessageID, threadRootMessageID pgtype.UUID
+	var id, channelID, wsID, authorID, replyToMessageID, quoteMessageID, threadRootMessageID pgtype.UUID
 	var authorType, authorName, content, source string
-	var parts []byte
+	var parts, quoteSnapshot []byte
 	var external, client, thread pgtype.Text
 	var triggerDepth int
 	var seq int64
 	var createdAt, editedAt, deletedAt pgtype.Timestamptz
-	if err := row.Scan(&id, &channelID, &wsID, &authorType, &authorID, &authorName, &content, &parts, &source, &external, &client, &replyToMessageID, &threadRootMessageID, &thread, &triggerDepth, &seq, &createdAt, &editedAt, &deletedAt); err != nil {
+	if err := row.Scan(&id, &channelID, &wsID, &authorType, &authorID, &authorName, &content, &parts, &source, &external, &client, &replyToMessageID, &quoteMessageID, &quoteSnapshot, &threadRootMessageID, &thread, &triggerDepth, &seq, &createdAt, &editedAt, &deletedAt); err != nil {
 		return ChannelMessageResponse{}, err
 	}
 	decodedParts := messageparts.Decode(parts)
@@ -4058,7 +4611,7 @@ func scanChannelMessage(row rowScanner) (ChannelMessageResponse, error) {
 			decodedParts = unwrappedParts
 		}
 	}
-	return ChannelMessageResponse{ID: uuidToString(id), ChannelID: uuidToString(channelID), WorkspaceID: uuidToString(wsID), Seq: seq, Type: authorType, AuthorID: uuidToPtr(authorID), AuthorName: authorName, Content: content, Parts: decodedParts, Source: source, ExternalMessageID: textToPtr(external), ClientMessageID: textToPtr(client), ReplyToMessageID: uuidToPtr(replyToMessageID), ThreadRootMessageID: uuidToPtr(threadRootMessageID), ThreadID: textToPtr(thread), TriggerDepth: triggerDepth, CreatedAt: timestampToString(createdAt), EditedAt: timestampToPtr(editedAt), DeletedAt: deletedAtPtr}, nil
+	return ChannelMessageResponse{ID: uuidToString(id), ChannelID: uuidToString(channelID), WorkspaceID: uuidToString(wsID), Seq: seq, Type: authorType, AuthorID: uuidToPtr(authorID), AuthorName: authorName, Content: content, Parts: decodedParts, Source: source, ExternalMessageID: textToPtr(external), ClientMessageID: textToPtr(client), ReplyToMessageID: uuidToPtr(replyToMessageID), QuoteMessageID: uuidToPtr(quoteMessageID), quoteSnapshotRaw: quoteSnapshot, ThreadRootMessageID: uuidToPtr(threadRootMessageID), ThreadID: textToPtr(thread), TriggerDepth: triggerDepth, CreatedAt: timestampToString(createdAt), EditedAt: timestampToPtr(editedAt), DeletedAt: deletedAtPtr}, nil
 }
 
 func trimTextPtr(s *string) *string {
@@ -4077,6 +4630,13 @@ func nullableUUID(u pgtype.UUID) any {
 		return nil
 	}
 	return u
+}
+
+func nullableJSONB(raw []byte) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return string(raw)
 }
 
 func ptrString(s *string) string {

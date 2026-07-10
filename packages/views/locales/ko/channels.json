@@ -10,6 +10,7 @@
     "no_conversation_matches": "일치하는 대화가 없습니다",
     "search_scope_hint": "왼쪽은 대화 목록만 필터링합니다. 메시지 본문은 대화를 연 뒤 오른쪽 위 메시지 검색을 사용하세요.",
     "groups": "채널",
+    "pinned_section": "고정",
     "name_placeholder": "채널 이름",
     "lark_placeholder": "선택 Feishu chat_id (oc_...)",
     "create_aria": "채널 만들기",
@@ -147,16 +148,8 @@
     "send_failed": "스레드 답글을 보내지 못했습니다.",
     "composer_placeholder": "스레드에서 답장...",
     "back_to_conversation": "대화로 돌아가기",
-    "participants_label": "참여자",
-    "follow": "스레드 팔로우",
-    "following": "팔로우 중",
     "show_in_channel_label": "채널에도 표시",
-    "from_thread_badge": "스레드에서",
-    "wake_pending": "답장 대기 중",
-    "wake_replied": "답장함",
-    "wake_acked": "확인함",
-    "wake_delivered": "전달됨",
-    "wake_no_reply": "답장 없음"
+    "from_thread_badge": "스레드에서"
   },
   "typing": {
     "single": "{{name}} 님이 입력 중",
@@ -192,6 +185,7 @@
     "add_reaction": "반응 추가",
     "actions_menu": "메시지 작업",
     "copy_action": "복사",
+    "expand_action": "전체 메시지 보기",
     "copied_toast": "복사했습니다",
     "copy_failed_toast": "복사 실패",
     "sticker_alt": "스티커",
@@ -199,6 +193,7 @@
     "sticker_failed": "스티커를 불러오지 못했습니다",
     "sticker_unavailable": "스티커를 사용할 수 없습니다",
     "agent_badge": "Agent",
+    "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",
     "edit_action": "편집",
     "delete_action": "삭제",
@@ -238,7 +233,21 @@
     "composer_placeholder": "{{name}}에게 메시지…"
   },
   "quote": {
-    "jump_to": "원본 메시지로 이동"
+    "action": "인용",
+    "jump_to": "원본 메시지로 이동",
+    "cancel": "인용 취소",
+    "unavailable_title": "원본 메시지를 사용할 수 없습니다",
+    "unavailable_summary": "삭제되었거나 볼 권한이 없을 수 있습니다.",
+    "type_user": "메시지",
+    "type_agent": "Agent",
+    "type_lark": "Feishu",
+    "type_system": "시스템",
+    "type_unknown": "메시지",
+    "attachment_summary": "첨부 파일",
+    "attachments_summary": "첨부 파일 {{count}}개",
+    "image_summary": "이미지",
+    "images_summary": "이미지 {{count}}개",
+    "empty_summary": "미리보기 없음"
   },
   "message_loading": {
     "load_older": "이전 메시지 불러오기",

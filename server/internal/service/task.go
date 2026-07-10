@@ -674,6 +674,17 @@ type QuickCreateContext struct {
 // QuickCreateContextType marks a task as a quick-create job.
 const QuickCreateContextType = "quick_create"
 
+// AgentRadarContextType marks a task as an agent radar job.
+const AgentRadarContextType = "agent_radar"
+
+// AgentRadarContext is the JSON payload stored on radar tasks. The daemon
+// treats Prompt as the full turn prompt and returns a structured action plan.
+type AgentRadarContext struct {
+	Type       string `json:"type"`
+	RadarRunID string `json:"radar_run_id"`
+	Prompt     string `json:"prompt"`
+}
+
 // EnqueueQuickCreateTask creates a queued task that has no issue / chat /
 // autopilot link — the user's natural-language prompt is stored in the
 // task's context JSONB and the agent is expected to translate it into a
@@ -766,6 +777,44 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	// cycle. Without this the user perceives "quick create never
 	// triggered" because the modal closes immediately and the task
 	// sits in 'queued' until the next sleepWithContextOrWakeup tick.
+	s.NotifyTaskEnqueued(ctx, task)
+	return task, nil
+}
+
+func (s *TaskService) EnqueueAgentRadarTask(ctx context.Context, agentID pgtype.UUID, radarRunID string, prompt string) (db.AgentTaskQueue, error) {
+	agent, err := s.Queries.GetAgent(ctx, agentID)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
+	}
+	if agent.ArchivedAt.Valid {
+		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
+	}
+	if !agent.RuntimeID.Valid {
+		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
+	}
+	payload := AgentRadarContext{
+		Type:       AgentRadarContextType,
+		RadarRunID: radarRunID,
+		Prompt:     prompt,
+	}
+	contextJSON, err := json.Marshal(payload)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("marshal radar context: %w", err)
+	}
+	task, err := s.Queries.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
+		AgentID:   agentID,
+		RuntimeID: agent.RuntimeID,
+		Priority:  priorityToInt("low"),
+		Context:   contextJSON,
+	})
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("create radar task: %w", err)
+	}
+	slog.Info("agent radar task enqueued",
+		"task_id", util.UUIDToString(task.ID),
+		"agent_id", util.UUIDToString(agentID),
+		"radar_run_id", radarRunID,
+	)
 	s.NotifyTaskEnqueued(ctx, task)
 	return task, nil
 }

@@ -47,6 +47,8 @@ const (
 	// file's existence is preserved exactly across the inject→cleanup
 	// cycle, including empty / whitespace-only pre-existing files.
 	runtimeManagedSeparator = "\n\n"
+
+	compactCloseoutStatusInstruction = "When closing out code/issue work, include only the handoff fields that matter: status, branch/PR/base, validation, risk, and next owner; omit fields that do not apply."
 )
 
 // runtimeGOOS is the host-platform string used by buildMetaSkillContent and
@@ -160,6 +162,7 @@ func formatProjectResource(r ProjectResourceForEnv) string {
 // For Kimi:        writes {workDir}/AGENTS.md  (Kimi Code CLI reads AGENTS.md natively; skills auto-discovered from project skills dirs)
 // For Kiro:        writes {workDir}/AGENTS.md  (Kiro CLI reads AGENTS.md natively; skills auto-discovered from project skills dirs)
 // For Antigravity: writes {workDir}/AGENTS.md  (agy CLI reads AGENTS.md natively; skills discovered natively from .agents/skills/ — see https://antigravity.google/docs/gcli-migration)
+// For Grok:        writes {workDir}/AGENTS.md  (Grok CLI reads AGENTS.md natively; skills from .grok/skills/)
 func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) (string, error) {
 	content := buildMetaSkillContent(provider, ctx)
 	path := runtimeConfigPath(workDir, provider)
@@ -179,7 +182,7 @@ func runtimeConfigPath(workDir, provider string) string {
 	switch provider {
 	case "claude", "codebuddy":
 		return filepath.Join(workDir, "CLAUDE.md")
-	case "codex", "copilot", "opencode", "openclaw", "hermes", "pi", "cursor", "kimi", "kiro", "antigravity":
+	case "codex", "copilot", "opencode", "openclaw", "hermes", "pi", "cursor", "kimi", "kiro", "antigravity", "grok":
 		return filepath.Join(workDir, "AGENTS.md")
 	case "gemini":
 		return filepath.Join(workDir, "GEMINI.md")
@@ -499,13 +502,20 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		return b.String()
 	}
 
+	b.WriteString("## Pinned Rules\n\n")
+	b.WriteString("Pinned rules are high-frequency or safety-critical and must stay in mind for every issue run:\n\n")
+	b.WriteString("- Use the `multica` CLI for all Multica platform reads/writes; never bypass it with raw HTTP clients.\n")
+	b.WriteString("- Use `--output json` for structured data. Human table output may use routable issue keys and short UUID prefixes; use `--full-id` on list commands when canonical UUIDs matter.\n")
+	b.WriteString("- For issue writes, operate only within your Agent Identity and the workflow below; do not self-approve `in_review -> done`.\n")
+	b.WriteString("- For agent-authored issue comments, never inline `--content`; use the platform-correct non-inline mode in ## Comment Formatting.\n")
+	b.WriteString("- Mention links can notify humans or enqueue agents. Use them only for intentional notification, escalation, or delegation.\n\n")
+
 	b.WriteString("## Available Commands\n\n")
-	b.WriteString("**Use `--output json` for structured data.** Human table output now prints routable issue keys (for example `MUL-123`) and short UUID prefixes for workspace resources; use `--full-id` on list commands when you need canonical UUIDs.\n\n")
-	b.WriteString("The default brief includes the commands needed for the core agent loop and common issue create/update tasks. For everything else, run `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help`; prefer `--output json` when the command supports it.\n\n")
+	b.WriteString("The default brief includes only always-needed command forms for the core agent loop and common issue create/update tasks. For less common operations, progressively load the exact syntax with `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help`; prefer `--output json` when the command supports it.\n\n")
 	b.WriteString("### Core\n")
 	b.WriteString("- `multica issue get <id> --output json` — Get full issue details.\n")
 	b.WriteString("- `multica issue comment list <issue-id> [--thread <comment-id> [--tail N] | --recent N] [--before <ts> --before-id <uuid>] [--since <RFC3339>] --output json` — List comments on an issue. Default returns the full flat timeline (server cap 2000). On busy issues prefer the thread-aware reads: `--thread <comment-id>` returns one conversation (root + every reply); `--thread <id> --tail N` caps replies to the N most recent (root is always included, even at `--tail 0`); `--recent N` returns the N most recently active threads. `--before` / `--before-id` walks older replies under `--thread --tail` (stderr label: `Next reply cursor`) or older threads under `--recent` (stderr label: `Next thread cursor`). `--since` is for incremental polling and may combine with `--thread` (with or without `--tail`) or `--recent`.\n")
-	b.WriteString("- `multica issue create --title \"...\" [--description \"...\" | --description-stdin | --description-file <path>] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>] [--attachment <path>]` — Create a new issue; `--attachment` may be repeated.\n")
+	b.WriteString("- `multica issue create --title \"...\" [--description \"...\" | --description-stdin | --description-file <path>] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>] [--attachment-id <uuid>]` — Create a new issue; pass attachment ids from `multica attachment upload` (repeatable).\n")
 	b.WriteString("- `multica issue update <id> [--title X] [--description X | --description-stdin | --description-file <path>] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>]` — Update issue fields; use `--parent \"\"` to clear parent.\n")
 	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>]` — Check out a repository into the working directory (creates a git worktree with a dedicated branch; use `--ref` for review/QA on a specific branch, tag, or commit)\n")
 	b.WriteString("- `multica issue status <id> <status>` — Shortcut for `issue update --status` when you only need to flip status (todo, in_progress, in_review, done, blocked, backlog, cancelled)\n")
@@ -525,12 +535,10 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	//     non-UTF-8 codepage (issues #2198 / #2236 / #2376) — which is why
 	//     Windows uses `--content-file`, not stdin.
 	// Because the corruption is shell-driven, the guardrail is provider-agnostic.
-	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-stdin | --content-file <path>] [--parent <comment-id>] [--attachment <path>]` — Post a comment. For agent-authored bodies, do NOT inline `--content` — the shell can rewrite backticks, `$()`, quotes, or newlines before the CLI sees them; use the platform-correct non-inline mode shown in ## Comment Formatting below. Run `multica issue comment add --help` for details.\n")
-	b.WriteString("- `multica issue metadata list <issue-id> [--output json]` — List every metadata key pinned to an issue. Empty `{}` is normal.\n")
-	b.WriteString("- `multica issue metadata set <issue-id> --key <k> --value <v> [--type string|number|bool]` — Pin (or overwrite) a single metadata key. The CLI auto-infers JSON primitives, so URLs and plain text are stored as strings — pass `--type number` or `--type bool` only when the semantic type matters.\n")
-	b.WriteString("- `multica issue metadata delete <issue-id> --key <k>` — Remove a metadata key.\n\n")
+	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-stdin | --content-file <path>] [--parent <comment-id>] [--attachment-id <uuid>]` — Post a comment. For agent-authored bodies, do NOT inline `--content` — the shell can rewrite backticks, `$()`, quotes, or newlines before the CLI sees them; use the platform-correct non-inline mode shown in ## Comment Formatting below. Run `multica issue comment add --help` for details.\n")
+	b.WriteString("- `multica issue metadata list|set|delete ...` — Read or pin a small issue-specific KV fact only when explicitly working on that issue. Run `multica issue metadata --help` or the subcommand help for exact flags; issue tasks include the semantic bar in their metadata section.\n\n")
 	b.WriteString("### Direct messages\n")
-	b.WriteString("- `multica dm --to <member-id|user-id|name|display-name|email> [--message \"...\" | --message-stdin | --message-file <path>]` — Send a 1:1 DM from yourself (the running agent) to a human workspace member, even when they did not trigger the current task. Omit `--to` only when you intentionally want the current task initiator (falling back to your owner). This command uses the task-scoped `MULTICA_TOKEN` injected by the daemon; do not ask for or print any token. Agent-to-agent DMs are not supported — use a channel and @mention the other agent instead.\n\n")
+	b.WriteString("- `multica dm --to <member-id|user-id|name|display-name|email> --message-stdin` — Send a 1:1 DM from yourself. Use a single-quote heredoc or `--message-file` for agent-authored bodies; omit `--to` only when intentionally DMing the current task initiator. Human DMs are allowed, agent-to-agent DMs are not. Run `multica dm --help` for exact flags.\n\n")
 	b.WriteString("### Squad maintenance\n")
 	b.WriteString("- `multica squad member set-role <squad-id> --member-id <id> --member-type <agent|member> --role <role> [--output json]` — Change a squad member role in place; use this instead of remove+add when only the role changes.\n\n")
 
@@ -572,28 +580,13 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	// Inject project-scoped context (resources attached to the issue's project).
 	// The full structured payload is also available at .multica/project/resources.json
 	// so skills can consume it programmatically.
-	if ctx.ProjectID != "" || len(ctx.ProjectResources) > 0 {
-		b.WriteString("## Project Context\n\n")
-		if ctx.ProjectTitle != "" {
-			fmt.Fprintf(&b, "This issue belongs to **%s**.\n\n", ctx.ProjectTitle)
-		}
-		if len(ctx.ProjectResources) > 0 {
-			b.WriteString("Project resources (also written to `.multica/project/resources.json`):\n\n")
-			for _, r := range ctx.ProjectResources {
-				fmt.Fprintf(&b, "- %s\n", formatProjectResource(r))
-			}
-			b.WriteString("\nResources are pointers — open them only when relevant to the task. ")
-			b.WriteString("For `github_repo` resources, use `multica repo checkout <url>` to fetch the code. Add `--ref <branch-or-sha>` when a task or handoff names an exact revision.\n\n")
-		} else {
-			b.WriteString("This project has no resources attached yet.\n\n")
-		}
-	}
+	renderProjectContext(&b, ctx)
 
 	// Issue Metadata semantics — emitted only for tasks that operate on a real
 	// issue (comment-triggered or assignment-triggered). Chat / quick-create /
 	// run-only autopilot don't carry an issue id and would just generate a
 	// failed `metadata list` call on every entry.
-	hasIssueContext := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == ""
+	hasIssueContext := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.AgentRadarPrompt == ""
 	if hasIssueContext {
 		b.WriteString("## Issue Metadata\n\n")
 		b.WriteString("Each issue carries a small KV `metadata` bag — a high-signal scratchpad where agents pin the handful of facts that future runs on this same issue will look up over and over (the PR URL, the deploy URL, what we're blocked on). It is NOT a place to record every fact you discover — that's what comments and the description are for. Most runs write **zero** new keys; that's the expected case, not a failure.\n\n")
@@ -604,7 +597,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- **Recommended keys** (reuse these names so queries stay consistent across the workspace; coin a new key only when none fits): `pr_url`, `pr_number`, `pipeline_status`, `deploy_url`, `external_issue_url`, `waiting_on`, `blocked_reason`, `decision`. Use snake_case ASCII. The list is short on purpose — most issues only need 1-2 of these pinned, not the full set.\n\n")
 	}
 
-	isAssignmentTriggered := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.TriggerCommentID == ""
+	isAssignmentTriggered := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.AgentRadarPrompt == "" && ctx.TriggerCommentID == ""
 	if isAssignmentTriggered {
 		b.WriteString("## Instruction Precedence\n\n")
 		b.WriteString("Agent Identity instructions have priority over the assignment workflow below. ")
@@ -640,6 +633,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- Run exactly one `multica issue create` invocation, then exit.\n")
 		b.WriteString("- Do NOT call `multica issue get`, `multica issue status`, or `multica issue comment add` for this task — there is no issue to query, transition, or comment on. The platform writes the user's success/failure inbox notification automatically based on whether `multica issue create` succeeded.\n")
 		b.WriteString("- If the CLI returns an error, exit with that error as the only output. Do not retry.\n\n")
+	} else if ctx.AgentRadarPrompt != "" {
+		b.WriteString("**This task was triggered by Agent Radar.** Return only the structured JSON action plan requested in the radar prompt. Do not call platform mutating commands directly; the server-side policy executor applies approved actions after the run.\n\n")
 	} else if ctx.AutopilotRunID != "" {
 		// Autopilot run_only task: no issue exists, so the agent must not
 		// follow the assignment/comment workflow.
@@ -718,7 +713,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	// `done`, and the agent has nothing to do or avoid on that path.
 	// Section is skipped for chat, quick-create, and run-only autopilot
 	// runs (no parent/child semantics there).
-	if ctx.IssueID != "" && ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" {
+	if ctx.IssueID != "" && ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.AgentRadarPrompt == "" {
 		b.WriteString("## Sub-issue Creation\n\n")
 		b.WriteString("**Choosing `--status` when creating sub-issues.** `--status todo` = **start now** (the default — an agent assignee fires immediately). `--status backlog` = **wait** (assignee is set but no trigger fires; promote later with `multica issue status <child-id> todo`). Parallel children: all `--status todo`. Strict serial Step 1→2→3: only Step 1 is `todo`; Steps 2/3 are `--status backlog` from the start, promoted in turn.\n\n")
 	}
@@ -745,8 +740,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("Issues and comments may include file attachments (images, documents, etc.).\n")
 	b.WriteString("When a task includes attachment IDs and you need the files, inspect `multica attachment --help` and use the authenticated CLI path. Do not open Multica resource URLs directly.\n\n")
 
-	b.WriteString("## Lazy Context\n\n")
-	b.WriteString("The default prompt intentionally contains only bounded, surface-scoped conversation context plus a lightweight skill index. Load these only when relevant: full issue timeline, full chat history, attachment contents, repository files, complete `SKILL.md` files, historical session summaries, long-term memory, and external web pages.\n\n")
+	renderLazyReferences(&b, false, false, ctx.ProjectID != "" || len(ctx.ProjectResources) > 0, len(ctx.AgentSkills) > 0)
 
 	b.WriteString("## Important: Always Use the `multica` CLI\n\n")
 	b.WriteString("All interactions with Multica platform resources — including issues, comments, attachments, images, files, and any other platform data — **must** go through the `multica` CLI. ")
@@ -764,6 +758,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- Do NOT call `multica issue comment add` — the issue you just created has no conversation context for this run.\n")
 		b.WriteString("- Print exactly one final line: `Created <identifier-or-id>: <title>` after a successful `multica issue create`. Use the created issue's `identifier` from JSON output when available; otherwise use its `id`. Do not assume any workspace issue prefix such as `MUL-`; workspaces can use custom prefixes.\n")
 		b.WriteString("- On CLI failure, exit with the CLI error as the only output. The platform translates that into a `quick_create_failed` inbox item carrying the original prompt for the user.\n")
+	case ctx.AgentRadarPrompt != "":
+		b.WriteString("This is an Agent Radar task. Return only the JSON action plan requested by the prompt. Do not add prose outside the JSON.\n")
 	default:
 		if ctx.IsSquadLeader {
 			b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`** — unless your outcome is `no_action`. When you evaluate a trigger and decide no action is needed, calling `multica squad activity <issue-id> no_action --reason \"...\"` alone is sufficient; you MUST exit without posting any comment. DO NOT post a comment that announces no_action, acknowledges another agent, or says you are exiting silently — such comments are noise. For all other outcomes (`action`, `failed`), a comment is still mandatory.\n\n")
@@ -771,6 +767,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`.** The user does NOT see your terminal output, assistant chat text, or run logs — only comments on the issue. A task that finishes without a result comment is invisible to the user, even if the work itself was correct.\n\n")
 		}
 		b.WriteString("Keep comments concise and natural — state the outcome, not the process.\n")
+		b.WriteString(compactCloseoutStatusInstruction)
+		b.WriteString("\n")
 		b.WriteString("Good: \"Fixed the login redirect. PR: https://...\"\n")
 		b.WriteString("Bad: \"1. Read the issue 2. Found the bug in auth.go 3. Created branch 4. ...\"\n")
 		b.WriteString("When referencing an issue in a comment, use the issue mention format `[MUL-123](mention://issue/<issue-id>)` so it renders as a clickable link. (Issue mentions have no side effect; only member/agent mentions do — see the Mentions section above.)\n")
@@ -786,7 +784,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	// this block, so they won't be pressured to reply to every message.
 	if ctx.Directed {
 		b.WriteString("### Reply Requirement (READ FIRST — overrides all rules below)\n\n")
-		b.WriteString("This run was triggered by a message directed at you: a DM, an @mention, or a direct question/reply addressed to you. **You MUST produce a visible response before finishing.** Acceptable responses, in order of preference:\n")
+		b.WriteString("This run was triggered by a message directed at you: a DM, an @mention, or a direct question/reply addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible response before finishing. Agent-to-agent channel @mentions are weak notifications: stay silent unless they ask for your immediate deliverable, review, decision, or direct answer. Acceptable visible responses, when required, in order of preference:\n")
 		if ctx.ChatCLITransportUnavailable {
 			b.WriteString("1. Write the visible reply as your final assistant output (answer, result, or a brief acknowledgment).\n")
 			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica message react` or a sticker via `multica message send --sticker`.\n")
@@ -795,7 +793,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 			b.WriteString("1. A reply via `multica message send` (answer, result, or a brief acknowledgment).\n")
 			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica message react` or a sticker via `multica message send --sticker`.\n")
 		}
-		b.WriteString("\nNot responding is **not** an option for this run. Any rule below or elsewhere in this brief that permits silence, discourages unnecessary replies, or says \"no visible reply is warranted\" applies **only** to ambient channel messages that are not addressed to you — none of those rules apply to this run. If you are unsure whether to reply: reply.\n\n")
+		b.WriteString("\nNot responding is **not** an option when a human or explicit task is waiting on you. Any rule below or elsewhere in this brief that permits silence, discourages unnecessary replies, or says \"no visible reply is warranted\" applies only to ambient/unaddressed channel messages and weak agent-to-agent notifications. If you are unsure whether a human needs a response: reply. If only another agent mentioned you without a concrete ask: stay silent.\n\n")
 	}
 	// Regular chat mode context (directed + ambient agents both see this;
 	// the Reply Requirement above tells them which parts apply).
@@ -809,26 +807,26 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary; do not load the entire parent channel/DM history by default.\n")
 	b.WriteString("- Load broader chat history, issue timelines, repositories, attachments, complete `SKILL.md` files, memories, or web pages only when relevant to the user's request.\n\n")
 
+	b.WriteString("## Pinned Rules\n\n")
+	b.WriteString("Pinned rules are high-frequency or safety-critical and must stay in mind for every chat run:\n\n")
+	b.WriteString("- Use the task-scoped Multica chat output path for visible replies; do not duplicate successfully sent content in final output.\n")
+	b.WriteString("- Treat injected conversation context as scoped to the current DM/channel/thread; fetch broader history only when the request needs it.\n")
+	b.WriteString("- Use the `multica` CLI for Multica platform reads/writes; never bypass it with raw HTTP clients.\n")
+	b.WriteString("- Issue writes from chat are incidental only when explicitly requested or required; follow claim-first and do not self-approve `in_review -> done`.\n")
+	b.WriteString("- Mention links can notify humans or enqueue agents. Use them only for intentional notification, escalation, or delegation.\n\n")
+
 	b.WriteString("## Available Commands\n\n")
-	b.WriteString("Use `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help` to discover exact flags. Prefer `--output json` when reading data.\n\n")
-	b.WriteString("Common capabilities available when the user asks or the answer needs platform data:\n")
+	b.WriteString("Use `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help` to progressively load exact flags. Prefer `--output json` when reading data.\n\n")
+	b.WriteString("Common capability index — run the relevant help command before low-frequency or destructive operations:\n")
 	if !ctx.ChatCLITransportUnavailable {
-		b.WriteString("- Chat output: send a visible reply with `multica message send --message \"...\"`, or use `--message-stdin` / `--message-file <path>` for longer bodies. For sticker replies use `multica message send --sticker <id>` for sticker-only social beats, or `multica message send --sticker <id> --message \"...\"` when you also need explanatory text in the same message (sticker first). Omit `--target` for the current DM/channel/thread; use `--target \"#channel\"`, `--target \"#channel:<message-id>\"`, or `--target \"dm:@handle\"` only when intentionally targeting another chat surface. After successful `multica message send`, do not repeat the same content in final assistant output.\n")
-		b.WriteString("- Chat reactions: add a reaction with `multica message react --message-id <message-id> --emoji \"...\"`; after successful `multica message react`, do not add a second visible final reply.\n")
-		b.WriteString("- Chat history: read the current or targeted surface with `multica message read [--target ...] [--limit N] --output json`, and search with `multica message search \"query\" [--target ...] --output json`.\n")
+		b.WriteString("- Chat output: use `multica message send`; prefer `--message-stdin` with a single-quote heredoc or `--message-file` for agent-authored text, `--sticker` for sticker replies, and omit `--target` for the current surface. After a successful send, do not duplicate the reply in final output.\n")
+		b.WriteString("- Chat reactions/history: `multica message react`, `multica message read`, and `multica message search` are available when a reaction or more bounded chat context is needed.\n")
 	}
-	b.WriteString("- Issues: list/get/search issues; use `multica issue list --mine --output json` for issues assigned to the running agent. Existing-issue writes follow the Raft claim-first model: claim/own the issue before status/comment/field writes, do not mutate issues you did not claim, do not self-approve `in_review -> done`, and keep writes visible through message/system events.\n")
-	b.WriteString("- Comments: read issue comments with `multica issue comment list`; add comments with `multica issue comment add` only when you are operating on a claimed/owned issue or the user explicitly asks you to work on that issue.\n")
-	b.WriteString("- Issue metadata: inspect or update issue-specific persistent facts when explicitly working on an issue: `multica issue metadata list <issue-id>`, `multica issue metadata set <issue-id> --key <k> --value <v> [--type string|number|bool]`, `multica issue metadata delete <issue-id> --key <k>`.\n")
-	b.WriteString("- Projects/repos: inspect project resources and check out code with `multica repo checkout <url>`; use `--ref <branch-or-sha>` when you need an exact revision.\n")
-	b.WriteString("- Attachments: download chat or issue attachments with `multica attachment download <id>`.\n")
-	b.WriteString("- Workspace: inspect workspace info, members, agents, and squads when needed.\n")
-	b.WriteString("- Channels: list channels you are a member of with `multica channel list`, inspect members with `multica channel members --target \"#channel\"`.\n")
-	b.WriteString("- Channel attention: mute a channel (`multica channel mute --target \"#channel\"`) or unmute it (`multica channel unmute --target \"#channel\"`). Muting stops ambient delivery; personal @mentions and DMs still arrive.\n")
-	if !ctx.ChatCLITransportUnavailable {
-		b.WriteString("- Thread attention: unfollow a thread with `multica thread unfollow --target \"#channel:<message-id>\"`. Personal @mentions still arrive; posting re-follows automatically.\n")
-	}
-	b.WriteString("\n")
+	b.WriteString("- Issues/comments: `multica issue list|get|search|comment ...`; use `issue list --mine --output json` for assigned issues. Existing-issue writes require claim/ownership, must remain visible through message/system events, and must not self-approve `in_review -> done`.\n")
+	b.WriteString("- Issue metadata: `multica issue metadata list|set|delete ...` only when explicitly working on an issue and a durable high-signal fact is worth pinning; load subcommand help for exact flags.\n")
+	b.WriteString("- Projects/repos: inspect project resources and use `multica repo checkout <url> [--ref <branch-or-sha>]` only when code access is relevant.\n")
+	b.WriteString("- Attachments: `multica attachment view <id> --output <path>` for downloads; `multica attachment upload --path <file>` then pass `--attachment-id` when sending or creating.\n")
+	b.WriteString("- Workspace/channel/squad: list or inspect only when the request needs those resources; use `channel mute|unmute` or `thread unfollow` only for explicit attention-management needs.\n\n")
 	b.WriteString("Do not run issue commands just because you are in chat. Use them only when the user asks about an issue/task/project/repo or the answer needs that platform data.\n\n")
 
 	renderRepositoryContext(b, ctx)
@@ -839,7 +837,9 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("Mention links are side-effecting actions, not just formatting: `mention://member/...` notifies a human and `mention://agent/...` enqueues a new agent run. Use plain names in prose. Only include a mention link when you are intentionally notifying, escalating, or delegating.\n\n")
 
 	b.WriteString("## Attachments\n\n")
-	b.WriteString("When a message includes attachment IDs and you need the files, use the authenticated CLI path: `multica attachment download <id>`. Do not open Multica resource URLs directly.\n\n")
+	b.WriteString("When a message includes attachment IDs and you need the files, use the authenticated CLI path: `multica attachment view <id> --output <path>` (or inspect `multica attachment view --help`). Do not open Multica resource URLs directly.\n\n")
+
+	renderLazyReferences(b, true, !ctx.ChatCLITransportUnavailable, ctx.ProjectID != "" || len(ctx.ProjectResources) > 0, len(ctx.AgentSkills) > 0)
 
 	b.WriteString("## Important: Always Use the `multica` CLI\n\n")
 	b.WriteString("All interactions with Multica platform resources — issues, comments, attachments, images, files, and platform data — must go through the `multica` CLI. Do NOT use `curl`, `wget`, or other HTTP clients to access Multica URLs or APIs directly.\n\n")
@@ -847,8 +847,12 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("## Output\n\n")
 	if ctx.ChatCLITransportUnavailable {
 		b.WriteString("For visible chat replies, write the user-facing message as your final assistant output. Keep it concise and natural, state the outcome rather than the process, and never mention compatibility mode, missing tools, tokens, CLI transport, or runtime setup.\n")
+		b.WriteString(compactCloseoutStatusInstruction)
+		b.WriteString("\n")
 	} else {
 		b.WriteString("For visible chat replies, run `multica message send` or `multica message react`. After the command succeeds, leave final assistant output empty or minimal so the platform does not receive a duplicate answer. Keep sent messages concise and natural, and state the outcome rather than the process.\n")
+		b.WriteString(compactCloseoutStatusInstruction)
+		b.WriteString("\n")
 	}
 }
 
@@ -857,7 +861,7 @@ func renderRepositoryContext(b *strings.Builder, ctx TaskContextForEnv) {
 		return
 	}
 	b.WriteString("## Repositories\n\n")
-	b.WriteString("The following code repositories are available in this workspace. Use `multica repo checkout <url>` when code access is relevant to the user's request. Add `--ref <branch-or-sha>` when a task or handoff names an exact revision.\n\n")
+	b.WriteString("Pinned repo handles available in this workspace. Use `multica repo checkout <url>` when code access is relevant. Add `--ref <branch-or-sha>` when a task or handoff names an exact revision.\n\n")
 	for _, repo := range ctx.Repos {
 		if repo.Description != "" {
 			fmt.Fprintf(b, "- %s — %s\n", repo.URL, repo.Description)
@@ -874,17 +878,41 @@ func renderProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 	}
 	b.WriteString("## Project Context\n\n")
 	if ctx.ProjectTitle != "" {
-		fmt.Fprintf(b, "This conversation is associated with **%s**.\n\n", ctx.ProjectTitle)
+		if ctx.ChatSessionID != "" {
+			fmt.Fprintf(b, "This conversation is associated with **%s**.\n\n", ctx.ProjectTitle)
+		} else {
+			fmt.Fprintf(b, "This issue belongs to **%s**.\n\n", ctx.ProjectTitle)
+		}
 	}
 	if len(ctx.ProjectResources) > 0 {
-		b.WriteString("Project resources (also written to `.multica/project/resources.json`):\n\n")
+		b.WriteString("Pinned project resources (full structured payload is in `.multica/project/resources.json`):\n\n")
 		for _, r := range ctx.ProjectResources {
 			fmt.Fprintf(b, "- %s\n", formatProjectResource(r))
 		}
-		b.WriteString("\nResources are pointers — open them only when relevant to the chat request. For `github_repo` resources, use `multica repo checkout <url>` to fetch the code.\n\n")
+		b.WriteString("\nKeep these pointers visible because they often carry default repos/branches. Open resource details only when relevant. For `github_repo` resources, use `multica repo checkout <url>` to fetch code; add `--ref <branch-or-sha>` when a task, handoff, or default branch hint names an exact revision.\n\n")
 	} else {
-		b.WriteString("This project has no resources attached yet.\n\n")
+		b.WriteString("This project has no resources attached yet; `.multica/project/resources.json` is still the durable project-context reference when present.\n\n")
 	}
+}
+
+func renderLazyReferences(b *strings.Builder, isChat, chatCLIAvailable, hasProject, hasSkills bool) {
+	b.WriteString("## Lazy References\n\n")
+	b.WriteString("The prompt pins high-frequency rules and lightweight indexes only. Load larger context only when it is relevant to the current request:\n\n")
+	if isChat && chatCLIAvailable {
+		b.WriteString("- Chat history: use `multica message read` or `multica message search` only when the bounded DM/channel/thread context is insufficient.\n")
+	} else if isChat {
+		b.WriteString("- Chat history: rely on the injected bounded DM/channel/thread context unless the user explicitly provides or asks for more context.\n")
+	} else {
+		b.WriteString("- Issue history: use `multica issue comment list` paging/thread flags for the timeline you need instead of assuming injected snippets are complete.\n")
+	}
+	b.WriteString("- CLI details: inspect `multica ... --help` for low-frequency flags instead of relying on this brief as a full manual.\n")
+	if hasProject {
+		b.WriteString("- Project resources: read `.multica/project/resources.json` or `multica project resource list <project-id> --output json` when labels, local paths, or full `resource_ref` fields matter.\n")
+	}
+	if hasSkills {
+		b.WriteString("- Skills: open the relevant `SKILL.md` only after its name/description matches the task; do not preload every skill.\n")
+	}
+	b.WriteString("- Attachments, repositories, memories, session logs, and web pages: fetch them on demand, not speculatively.\n\n")
 }
 
 func renderSkillIndex(b *strings.Builder, provider string, skills []SkillContextForEnv) {
@@ -898,14 +926,15 @@ func renderSkillIndex(b *strings.Builder, provider string, skills []SkillContext
 		case "claude", "codebuddy":
 			// Claude/CodeBuddy discovers skills natively from .claude/skills/ — just list names.
 			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
-		case "codex", "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro", "antigravity":
-			// Codex, Copilot, OpenCode, OpenClaw, Pi, Cursor, Kimi, Kiro, and
-			// Antigravity discover skills natively from their respective paths.
-			// For OpenClaw, the daemon also writes a per-task openclaw-config.json
-			// (exported via OPENCLAW_CONFIG_PATH) that pins agents.defaults.workspace
-			// to the task workdir so the CLI's scanner picks up {workDir}/skills/.
-			// Antigravity inherits Gemini CLI's workspace skill layout —
-			// {workDir}/.agents/skills/ — see resolveSkillsDir.
+		case "codex", "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro", "antigravity", "grok":
+			// Codex, Copilot, OpenCode, OpenClaw, Pi, Cursor, Kimi, Kiro,
+			// Antigravity, and Grok discover skills natively from their
+			// respective paths. For OpenClaw, the daemon also writes a per-task
+			// openclaw-config.json (exported via OPENCLAW_CONFIG_PATH) that pins
+			// agents.defaults.workspace to the task workdir so the CLI's scanner
+			// picks up {workDir}/skills/. Antigravity inherits Gemini CLI's
+			// workspace skill layout — {workDir}/.agents/skills/ — see
+			// resolveSkillsDir. Grok scans {workDir}/.grok/skills/.
 			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
 		case "gemini", "hermes":
 			// Gemini reads GEMINI.md directly. Hermes has no native skill
@@ -939,6 +968,8 @@ func renderSkillIndex(b *strings.Builder, provider string, skills []SkillContext
 				location = fmt.Sprintf(".kiro/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
 			case "antigravity":
 				location = fmt.Sprintf(".agents/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
+			case "grok":
+				location = fmt.Sprintf(".grok/skills/%s/SKILL.md", sanitizeSkillName(skill.Name))
 			}
 			if desc := strings.TrimSpace(skill.Description); desc != "" {
 				fmt.Fprintf(b, "- **%s** — %s (location: `%s`)\n", skill.Name, desc, location)

@@ -819,8 +819,10 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 
 	s := string(content)
 	for _, want := range []string{
+		"## Pinned Rules",
+		"Pinned rules are high-frequency or safety-critical",
 		"## Available Commands",
-		"core agent loop and common issue create/update tasks",
+		"always-needed command forms for the core agent loop",
 		"`multica <command> --help`",
 		"multica issue get <id> --output json",
 		"multica issue comment list <issue-id>",
@@ -833,6 +835,8 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 		"multica issue comment add <issue-id>",
 		"multica issue comment add --help",
 		"multica squad member set-role <squad-id>",
+		"## Lazy References",
+		"CLI details: inspect `multica ... --help`",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("AGENTS.md missing core command/help text %q\n---\n%s", want, s)
@@ -849,7 +853,7 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 		"multica squad list",
 		"multica issue runs",
 		"multica issue run-messages",
-		"multica attachment download",
+		"multica attachment view",
 		"multica autopilot list",
 		"multica autopilot create",
 		"multica autopilot update",
@@ -892,6 +896,7 @@ func TestInjectRuntimeConfigGemini(t *testing.T) {
 	s := string(content)
 	for _, want := range []string{
 		"Multica Agent Runtime",
+		"Pinned Rules",
 		"multica issue get",
 		"Writing",
 	} {
@@ -3961,14 +3966,12 @@ func TestInjectRuntimeConfigAssignmentTriggerMentionsRecent(t *testing.T) {
 func TestInjectRuntimeConfigIssueMetadataSectionScope(t *testing.T) {
 	t.Parallel()
 
-	// Discovery lines in Available Commands → Core must appear in EVERY
-	// runtime config, regardless of trigger type. These are the single
-	// discovery point for the CLI when an agent decides to read or write
-	// metadata outside the numbered workflow.
+	// Metadata discovery must appear in EVERY runtime config, regardless of
+	// trigger type, but as a compact progressive-loading index instead of full
+	// subcommand syntax.
 	coreDiscoveryLines := []string{
-		"multica issue metadata list <issue-id>",
-		"multica issue metadata set <issue-id> --key <k> --value <v> [--type string|number|bool]",
-		"multica issue metadata delete <issue-id> --key <k>",
+		"multica issue metadata list|set|delete ...",
+		"subcommand help for exact flags",
 	}
 
 	type wantSection struct {

@@ -40,9 +40,9 @@ type ProjectResourceData struct {
 // Agent data (name, skills) is populated by the claim endpoint.
 type Task struct {
 	ID          string `json:"id"`
-	AgentID       string `json:"agent_id"`
-	RuntimeID     string `json:"runtime_id"`
-	Priority      int    `json:"priority,omitempty"`
+	AgentID     string `json:"agent_id"`
+	RuntimeID   string `json:"runtime_id"`
+	Priority    int    `json:"priority,omitempty"`
 	IssueID     string `json:"issue_id"`
 	WorkspaceID string `json:"workspace_id"`
 	// WorkspaceContext mirrors workspace.context (the per-workspace system
@@ -74,7 +74,7 @@ type Task struct {
 	ChatSessionID            string                             `json:"chat_session_id,omitempty"`             // non-empty for chat tasks
 	ChatMessage              string                             `json:"chat_message,omitempty"`                // user message content for chat tasks
 	ChatContextSummary       string                             `json:"chat_context_summary,omitempty"`        // compact surface-scoped context handoff when native resume is skipped
-	ChatMessageAttachments   []ChatAttachmentMeta               `json:"chat_message_attachments,omitempty"`    // attachments linked to the chat message; agent uses these to `multica attachment download <id>`
+	ChatMessageAttachments   []ChatAttachmentMeta               `json:"chat_message_attachments,omitempty"`    // attachments linked to the chat message; agent uses these to `multica attachment view --id <id> --output <path>`
 	AutopilotRunID           string                             `json:"autopilot_run_id,omitempty"`            // non-empty for autopilot run_only tasks
 	AutopilotID              string                             `json:"autopilot_id,omitempty"`                // autopilot that spawned this run
 	AutopilotTitle           string                             `json:"autopilot_title,omitempty"`             // autopilot title used as task context
@@ -84,6 +84,7 @@ type Task struct {
 	QuickCreatePrompt        string                             `json:"quick_create_prompt,omitempty"`         // user's natural-language input for quick-create tasks
 	QuickCreateAttachmentIDs []string                           `json:"quick_create_attachment_ids,omitempty"` // attachments uploaded in the quick-create prompt and bound by issue create
 	QuickCreateSource        *protocol.QuickCreateSourceContext `json:"quick_create_source,omitempty"`         // bounded chat/thread source context for quick-create tasks
+	AgentRadarPrompt         string                             `json:"agent_radar_prompt,omitempty"`          // full prompt for proactive radar tasks
 	SquadID                  string                             `json:"squad_id,omitempty"`                    // when the picker was a squad, the squad's UUID; Agent is still the resolved leader
 	SquadName                string                             `json:"squad_name,omitempty"`                  // display name for the picker squad, used in prompt text
 	ParentIssueID            string                             `json:"parent_issue_id,omitempty"`             // for quick-create tasks opened from "Add sub issue" — UUID of the parent issue the new issue should be filed under
@@ -129,8 +130,8 @@ type Task struct {
 // ChatAttachmentMeta is the structured attachment metadata the daemon
 // hands to the agent for chat tasks. We pass id + filename + content_type
 // so the chat prompt can list them explicitly and instruct the agent to
-// run `multica attachment download <id>` instead of guessing from a
-// signed CDN URL (which expires).
+// run `multica attachment view --id <id> --output <path>` instead of
+// guessing from a signed CDN URL (which expires).
 type ChatAttachmentMeta struct {
 	ID          string `json:"id"`
 	Filename    string `json:"filename"`

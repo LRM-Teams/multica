@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 vi.mock("../i18n", () => ({
   useT: () => ({
@@ -13,6 +14,7 @@ vi.mock("../i18n", () => ({
         attachment: {
           preview: "Preview",
           preview_loading: "Loading preview…",
+          remove: "Remove attachment",
           open_file: "Open {{filename}}",
           file_type: {
             image: "Image",
@@ -174,5 +176,79 @@ describe("AttachmentCard — open / download", () => {
     // proves the uploading branch was selected without depending on the
     // interpolation behavior of the mock.
     expect(screen.getByText("Uploading {{filename}}")).toBeTruthy();
+  });
+});
+
+describe("AttachmentCard — meta, truncation, keyboard order", () => {
+  it("shows the size · type meta line and picks the type glyph by extension", () => {
+    render(
+      <AttachmentCard
+        filename="2026-Q3-report.pdf"
+        contentType="application/pdf"
+        sizeBytes={1468006}
+        href="https://cdn.example/r.pdf"
+        onPreview={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    // "{human size} · {type}" — and the type resolves to the PDF bucket.
+    expect(screen.getByText("1.4 MB · PDF")).toBeTruthy();
+    // react-file-icon renders an <svg> glyph inside the card.
+    expect(document.querySelector("svg")).toBeTruthy();
+  });
+
+  it.each([
+    ["logs-2026.zip", "application/zip", "240 KB · Archive", 245760],
+    ["server.go", "", "18 B · Code", 18],
+  ])("labels %s as %s", (filename, contentType, expected, sizeBytes) => {
+    render(
+      <AttachmentCard
+        filename={filename}
+        contentType={contentType}
+        sizeBytes={sizeBytes}
+        href={`https://cdn.example/${filename}`}
+        onPreview={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    expect(screen.getByText(expected)).toBeTruthy();
+  });
+
+  it("truncates a long filename but keeps the full name in a title tooltip", () => {
+    const long =
+      "this-is-an-intentionally-very-long-attachment-filename-to-verify-truncation-2026-07-08.txt";
+    render(
+      <AttachmentCard
+        filename={long}
+        contentType="text/plain"
+        href="https://cdn.example/x.txt"
+        onPreview={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    const nameEl = screen.getByTitle(long);
+    expect(nameEl.className).toContain("truncate");
+  });
+
+  it("tabs in reading order: primary Open → Download → Delete", async () => {
+    const user = userEvent.setup();
+    render(
+      <AttachmentCard
+        filename="manual.pdf"
+        contentType="application/pdf"
+        href="https://cdn.example/manual.pdf"
+        onPreview={() => {}}
+        onDownload={() => {}}
+        onDelete={() => {}}
+      />,
+    );
+    await user.tab();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: /open/i }),
+    );
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByTitle("Download"));
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByTitle("Remove attachment"));
   });
 });

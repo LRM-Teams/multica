@@ -77,10 +77,10 @@ const newDmTriggerCls =
   "flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
 
 /**
- * DIRECT MESSAGES sidebar region — the top half of the unified Messages
- * sidebar (GROUPS sits below). Fed by `GET /api/dm`; the visible R2 surface is
- * `dm_channel` only. The header is collapsible and, when collapsed, surfaces
- * the aggregate unread count.
+ * DIRECT MESSAGES sidebar region. Fed by `GET /api/dm`; the visible R2 surface
+ * is `dm_channel` only. The header is collapsible and, when collapsed, surfaces
+ * the aggregate unread count for *unpinned* DMs (pinned ones live in the unified
+ * PINNED section above — Slack-style, not float-to-top within this list).
  *
  * Selection is unified with groups by the parent: `activeId` is the currently
  * open conversation id regardless of region, so opening a DM clears the group
@@ -112,39 +112,23 @@ export function DmList({
 
   const windyEntry = useWindyEntryAction(wsId, agents);
 
-  const setPinned = useSetDMPinned();
-  const markUnread = useMarkDMUnread();
-  const closeDM = useCloseDM();
-  const muteDM = useMuteDM();
+  const dmActions = useDmRowActions();
 
-  const visibleDms = dms;
-  const onError = () => toast.error(t(($) => $.dm.action_failed));
-  const handleTogglePin = (dm: DMItem) =>
-    setPinned.mutate({ source: dm.source, id: dm.id, pinned: !dm.pinned_at }, { onError });
-  const handleMarkUnread = (dm: DMItem) =>
-    markUnread.mutate({ source: dm.source, id: dm.id }, { onError });
-  const handleClose = (dm: DMItem) =>
-    closeDM.mutate({ source: dm.source, id: dm.id }, { onError });
-  const handleToggleMute = (dm: DMItem) =>
-    muteDM.mutate({ source: dm.source, id: dm.id, muted: !isConversationMuted(dm) }, { onError });
+  // Pinned DMs belong in the unified PINNED section (parent), not here.
+  const unpinnedDms = useMemo(() => dms.filter((dm) => !dm.pinned_at), [dms]);
 
   const aggregateUnread = useMemo(
     () =>
       sumUnmutedUnreadCounts(
-        visibleDms,
+        unpinnedDms,
         (dm) => dm.real_unread ?? dm.unread ?? 0,
         (dm) => isConversationMuted(dm),
       ),
-    [visibleDms],
+    [unpinnedDms],
   );
 
-  // Pinned conversations float to the top of DIRECT MESSAGES; the server keeps
-  // each group recency-sorted, so a stable sort preserves that order within the
-  // pinned and unpinned groups.
-  const sortedDms = useMemo(
-    () => visibleDms.toSorted((a, b) => (b.pinned_at ? 1 : 0) - (a.pinned_at ? 1 : 0)),
-    [visibleDms],
-  );
+  // Server already returns recency order; do not float pinned items — they live
+  // in the unified PINNED section above (Slack Starred / 置顶分组 semantics).
   const resolveMentionPreview = useMemo<MentionPreviewResolver>(
     () => (type, id, fallbackLabel) => {
       if (type === "agent") {
@@ -158,14 +142,16 @@ export function DmList({
   );
   const filteredDms = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return sortedDms;
-    return sortedDms.filter((dm) => dm.peer.name.toLowerCase().includes(q));
-  }, [searchQuery, sortedDms]);
+    if (!q) return unpinnedDms;
+    return unpinnedDms.filter((dm) => dm.peer.name.toLowerCase().includes(q));
+  }, [searchQuery, unpinnedDms]);
   const hasSearchQuery = searchQuery.trim().length > 0;
-  const hasWindyDM = !!windyEntry.windyAgent && visibleDms.some((dm) => dm.peer.type === "agent" && dm.peer.id === windyEntry.windyAgent?.id);
+  // Wendy presence checks all DMs (including pinned) so we don't re-nudge after pin.
+  const hasWindyDM = !!windyEntry.windyAgent && dms.some((dm) => dm.peer.type === "agent" && dm.peer.id === windyEntry.windyAgent?.id);
   const showWindyNudge = windyEntry.hasConfiguredWendy && !hasWindyDM && !hasSearchQuery;
 
-  const showHeaderTrigger = isLoading || visibleDms.length > 0 || showWindyNudge;
+  // Header "+" still available when the only DMs are pinned (they live above).
+  const showHeaderTrigger = isLoading || dms.length > 0 || showWindyNudge;
   const openPicker = () => setPickerOpen(true);
   const closePicker = () => setPickerOpen(false);
 
@@ -193,14 +179,14 @@ export function DmList({
         <Skeleton className="h-12" />
         <Skeleton className="h-12" />
       </div>
-    ) : hasSearchQuery && filteredDms.length === 0 ? (
+    ) : hasSearchQuery && filteredDms.length === 0 && unpinnedDms.length > 0 ? (
       <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
         <p className="font-medium text-foreground">
           {t(($) => $.sidebar.no_conversation_matches)}
         </p>
         <p>{t(($) => $.sidebar.search_scope_hint)}</p>
       </div>
-    ) : visibleDms.length === 0 ? (
+    ) : dms.length === 0 ? (
       <div className="flex flex-col items-center gap-2 px-3 py-3">
         {windyNudge}
         <p className="text-xs text-muted-foreground">{t(($) => $.dm.empty)}</p>
@@ -230,7 +216,7 @@ export function DmList({
       <>
         {windyNudge}
         {filteredDms.map((dm) => (
-        <DmRow
+        <DmConversationRow
           key={`${dm.source}:${dm.id}`}
           dm={dm}
           active={activeId === dm.id}
@@ -240,10 +226,10 @@ export function DmList({
           members={members}
           agents={agents}
           onSelect={() => onSelect(dm)}
-          onTogglePin={() => handleTogglePin(dm)}
-          onMarkUnread={() => handleMarkUnread(dm)}
-          onToggleMute={() => handleToggleMute(dm)}
-          onClose={() => handleClose(dm)}
+          onTogglePin={() => dmActions.togglePin(dm)}
+          onMarkUnread={() => dmActions.markUnread(dm)}
+          onToggleMute={() => dmActions.toggleMute(dm)}
+          onClose={() => dmActions.close(dm)}
         />
         ))}
       </>
@@ -329,6 +315,7 @@ export function DmList({
 
 function DmPickerContent({ onClose }: { onClose: () => void }) {
   const { t } = useT("channels");
+  const isMobile = useIsMobile();
   const wsId = useWorkspaceId();
   const currentUser = useAuthStore((s) => s.user);
   const { openDM, isPending } = useOpenDM();
@@ -376,8 +363,10 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
   const isLoading = agentsLoading || membersLoading;
 
   const handleSelect = async (item: { kind: "agent" | "user"; id: string }) => {
-    await openDM({ peer_type: item.kind, peer_id: item.id });
-    onClose();
+    // openDM swallows errors and returns null after toasting — keep the
+    // picker open so the user can retry without re-opening the overlay.
+    const dm = await openDM({ peer_type: item.kind, peer_id: item.id });
+    if (dm) onClose();
   };
 
   return (
@@ -389,7 +378,9 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
           onChange={(e) => setSearch(e.target.value)}
           placeholder={t(($) => $.dm.search_placeholder)}
           className="h-8 pl-8 text-sm"
-          autoFocus
+          // Desktop popover can autofocus; mobile drawer + virtual keyboard
+          // fight focus traps when the input steals focus on open.
+          autoFocus={!isMobile}
         />
       </div>
       <div className="mt-1 max-h-60 overflow-y-auto">
@@ -423,6 +414,11 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
                 showHandle={item.presentation.showHandleLabel}
                 primaryClassName="truncate text-sm font-medium text-foreground"
               />
+              <span className="shrink-0 text-[11px] text-muted-foreground">
+                {item.kind === "agent"
+                  ? t(($) => $.dm.agent_meta)
+                  : t(($) => $.dm.human_meta)}
+              </span>
             </button>
           ))
         )}
@@ -432,10 +428,10 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
 }
 
 // ---------------------------------------------------------------------------
-// DM list row
+// DM list row (also used by the unified PINNED section)
 // ---------------------------------------------------------------------------
 
-function DmRow({
+export function DmConversationRow({
   dm,
   active,
   currentUserName,
@@ -498,13 +494,7 @@ function DmRow({
             data-pinned={pinned ? "true" : undefined}
             className={cn(
               "group/row relative mb-0.5 rounded-lg transition-colors",
-              pinned
-                ? active
-                  ? "bg-muted/80 ring-1 ring-border/70 hover:bg-muted/80 dark:bg-muted/45 dark:ring-border/60 dark:hover:bg-muted/55"
-                  : "bg-muted/55 hover:bg-muted/75 dark:bg-muted/25 dark:hover:bg-muted/35"
-                : active
-                  ? "bg-primary/[0.08]"
-                  : "hover:bg-accent",
+              active ? "bg-primary/[0.08]" : "hover:bg-accent",
             )}
           />
         }
@@ -595,6 +585,33 @@ function DmRow({
       </ContextMenuContent>
     </ContextMenu>
   );
+}
+
+/**
+ * Pin/mute/unread/close handlers for a DM row — shared by DmList and the
+ * unified PINNED section so both surfaces stay in lockstep.
+ */
+export function useDmRowActions() {
+  const { t } = useT("channels");
+  const setPinned = useSetDMPinned();
+  const markUnread = useMarkDMUnread();
+  const closeDM = useCloseDM();
+  const muteDM = useMuteDM();
+  const onError = () => toast.error(t(($) => $.dm.action_failed));
+
+  return {
+    togglePin: (dm: DMItem) =>
+      setPinned.mutate({ source: dm.source, id: dm.id, pinned: !dm.pinned_at }, { onError }),
+    markUnread: (dm: DMItem) =>
+      markUnread.mutate({ source: dm.source, id: dm.id }, { onError }),
+    toggleMute: (dm: DMItem) =>
+      muteDM.mutate(
+        { source: dm.source, id: dm.id, muted: !isConversationMuted(dm) },
+        { onError },
+      ),
+    close: (dm: DMItem) =>
+      closeDM.mutate({ source: dm.source, id: dm.id }, { onError }),
+  };
 }
 
 function DmContextMenuItems({

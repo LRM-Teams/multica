@@ -10,6 +10,7 @@
     "no_conversation_matches": "No matching conversations",
     "search_scope_hint": "This filters the conversation list only. Open a conversation and use the top-right message search to search message text.",
     "groups": "Channels",
+    "pinned_section": "Pinned",
     "name_placeholder": "Channel name",
     "lark_placeholder": "Optional Feishu chat_id (oc_...)",
     "create_aria": "Create channel",
@@ -147,16 +148,8 @@
     "send_failed": "Failed to send thread reply.",
     "composer_placeholder": "Reply in thread...",
     "back_to_conversation": "Back to conversation",
-    "participants_label": "Participants",
-    "follow": "Follow thread",
-    "following": "Following",
     "show_in_channel_label": "Also show in channel",
-    "from_thread_badge": "From thread",
-    "wake_pending": "Awaiting reply",
-    "wake_replied": "Replied",
-    "wake_acked": "Acknowledged",
-    "wake_delivered": "Delivered",
-    "wake_no_reply": "No reply"
+    "from_thread_badge": "From thread"
   },
   "typing": {
     "single": "{{name}} is typing",
@@ -192,6 +185,7 @@
     "add_reaction": "Add reaction",
     "actions_menu": "Message actions",
     "copy_action": "Copy",
+    "expand_action": "Show full message",
     "copied_toast": "Copied",
     "copy_failed_toast": "Copy failed",
     "sticker_alt": "Sticker",
@@ -199,6 +193,7 @@
     "sticker_failed": "Sticker failed to load",
     "sticker_unavailable": "Sticker unavailable",
     "agent_badge": "Agent",
+    "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",
     "edit_action": "Edit",
     "delete_action": "Delete",
@@ -238,7 +233,21 @@
     "composer_placeholder": "Message {{name}}…"
   },
   "quote": {
-    "jump_to": "Jump to original message"
+    "action": "Quote",
+    "jump_to": "Jump to original message",
+    "cancel": "Cancel quote",
+    "unavailable_title": "Original message unavailable",
+    "unavailable_summary": "It may have been deleted or you may not have access.",
+    "type_user": "Message",
+    "type_agent": "Agent",
+    "type_lark": "Feishu",
+    "type_system": "System",
+    "type_unknown": "Message",
+    "attachment_summary": "Attachment",
+    "attachments_summary": "{{count}} attachments",
+    "image_summary": "Image",
+    "images_summary": "{{count}} images",
+    "empty_summary": "No preview available"
   },
   "message_loading": {
     "load_older": "Load older messages",

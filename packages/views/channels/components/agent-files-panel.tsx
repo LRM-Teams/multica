@@ -41,6 +41,11 @@ const OWNER_ONLY_FILES_MESSAGE =
 const FILES_LABEL = "Files";
 const NO_FILES_FOUND = "No files found.";
 const FILE_LIST_TRUNCATED = "File list truncated.";
+const RECENT_RADAR_LABEL = "Recent Radar";
+
+function radarActionCountLabel(count: number): string {
+  return `${count} action${count === 1 ? "" : "s"}`;
+}
 
 function ownerName(agent: Agent, members: readonly MemberWithUser[]): string {
   if (!agent.owner_id) return "Unknown";
@@ -247,11 +252,18 @@ export function AgentFilesPanel({
   currentUserId,
   members,
   onClose,
+  hideHeader = false,
 }: {
   agent: Agent;
   currentUserId: string | null;
   members: readonly MemberWithUser[];
   onClose: () => void;
+  /**
+   * Skips the identity/info header and the outer `<aside>` chrome — used
+   * when this panel is embedded as a tab inside AgentSidePanel, which
+   * already renders its own header shared across tabs.
+   */
+  hideHeader?: boolean;
 }) {
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
   const [includeHidden, setIncludeHidden] = useState(false);
@@ -260,6 +272,11 @@ export function AgentFilesPanel({
   const { data, isPending } = useQuery({
     queryKey: agentFilesQueryKey(agent.id, includeHidden),
     queryFn: () => api.listAgentFiles(agent.id, { include_hidden: includeHidden }),
+    enabled: isOwner,
+  });
+  const { data: radarData } = useQuery({
+    queryKey: ["agent-radar-runs", agent.id],
+    queryFn: () => api.listAgentRadarRuns(agent.id),
     enabled: isOwner,
   });
   const tree = useMemo(() => buildFileTree(data?.nodes ?? []), [data?.nodes]);
@@ -273,23 +290,16 @@ export function AgentFilesPanel({
 
   const status = data?.status ?? "error";
 
-  return (
-    <aside className="flex h-full min-h-0 flex-col border-l bg-background">
-      <div className="flex items-start justify-between gap-3 border-b p-4">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">{agent.display_name || agent.name}</p>
-          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{agent.description || agent.name}</p>
+  const body = (
+    <>
+      {!hideHeader && (
+        <div className="space-y-2 border-b p-4 text-xs">
+          <InfoRow label="ID" value={agent.id} mono />
+          <InfoRow label="Created" value={formatDate(agent.created_at)} />
+          <InfoRow label="Creator" value={ownerName(agent, members)} />
+          <InfoRow label="Status" value={agent.status} />
         </div>
-        <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close agent panel">
-          <X className="size-4" />
-        </Button>
-      </div>
-      <div className="space-y-2 border-b p-4 text-xs">
-        <InfoRow label="ID" value={agent.id} mono />
-        <InfoRow label="Created" value={formatDate(agent.created_at)} />
-        <InfoRow label="Creator" value={ownerName(agent, members)} />
-        <InfoRow label="Status" value={agent.status} />
-      </div>
+      )}
       {!isOwner ? (
         <CenteredNote>{OWNER_ONLY_FILES_MESSAGE}</CenteredNote>
       ) : (
@@ -337,9 +347,51 @@ export function AgentFilesPanel({
               </>
             )}
           </div>
+          {radarData?.runs?.length ? (
+            <div className="border-t p-3">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {RECENT_RADAR_LABEL}
+              </p>
+              <div className="space-y-2">
+                {radarData.runs.slice(0, 3).map((run) => (
+                  <div key={run.id} className="rounded-md border bg-muted/30 p-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium">{run.status}</span>
+                      <span className="text-muted-foreground">{run.trigger_kind}</span>
+                    </div>
+                    {run.context_summary && (
+                      <p className="mt-1 line-clamp-2 text-muted-foreground">{run.context_summary}</p>
+                    )}
+                    {run.actions.length > 0 && (
+                      <p className="mt-1 text-muted-foreground">{radarActionCountLabel(run.actions.length)}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
       {isOwner && <AgentFileEditorDialog agentId={agent.id} path={selectedPath} onClose={() => setSelectedPath(null)} />}
+    </>
+  );
+
+  if (hideHeader) {
+    return <div className="flex h-full min-h-0 flex-col">{body}</div>;
+  }
+
+  return (
+    <aside className="flex h-full min-h-0 flex-col border-l bg-background">
+      <div className="flex items-start justify-between gap-3 border-b p-4">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">{agent.display_name || agent.name}</p>
+          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{agent.description || agent.name}</p>
+        </div>
+        <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close agent panel">
+          <X className="size-4" />
+        </Button>
+      </div>
+      {body}
     </aside>
   );
 }

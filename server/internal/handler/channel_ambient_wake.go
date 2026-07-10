@@ -86,7 +86,7 @@ func (h *Handler) createOrCoalesceChannelAmbientWakeTx(ctx context.Context, tx p
 
 func (h *Handler) channelAmbientWakeCursorTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse) (pgtype.UUID, pgtype.UUID, int64, int64, bool) {
 	var conversationID, workspaceID pgtype.UUID
-	var lastSeq, lastReadSeq, lastDeliveredSeq int64
+	var lastSeq, lastReadSeq, lastDeliveredSeq, lastDrainedSeq int64
 	err := tx.QueryRow(ctx, `
 		WITH conv AS (
 		  SELECT id, workspace_id, last_seq
@@ -103,10 +103,19 @@ func (h *Handler) channelAmbientWakeCursorTx(ctx context.Context, tx pgx.Tx, ch 
 		  DO UPDATE SET wake_state = 'active', updated_at = now()
 		  RETURNING conversation_id, last_read_seq, last_delivered_seq
 		)
-		SELECT conv.id, conv.workspace_id, conv.last_seq, member_state.last_read_seq, member_state.last_delivered_seq
+		SELECT conv.id,
+		       conv.workspace_id,
+		       conv.last_seq,
+		       member_state.last_read_seq,
+		       member_state.last_delivered_seq,
+		       COALESCE(session_state.last_drained_seq, 0)
 		FROM conv
-		JOIN member_state ON member_state.conversation_id = conv.id`,
-		parseUUID(ch.ID), agent.ID).Scan(&conversationID, &workspaceID, &lastSeq, &lastReadSeq, &lastDeliveredSeq)
+		JOIN member_state ON member_state.conversation_id = conv.id
+		LEFT JOIN agent_session session_state
+		  ON session_state.workspace_id = conv.workspace_id
+		 AND session_state.conversation_id = conv.id
+		 AND session_state.agent_id = $2`,
+		parseUUID(ch.ID), agent.ID).Scan(&conversationID, &workspaceID, &lastSeq, &lastReadSeq, &lastDeliveredSeq, &lastDrainedSeq)
 	if err != nil {
 		slog.Warn("channel ambient wake: load cursor failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return pgtype.UUID{}, pgtype.UUID{}, 0, 0, false
@@ -114,6 +123,9 @@ func (h *Handler) channelAmbientWakeCursorTx(ctx context.Context, tx pgx.Tx, ch 
 	cursorSeq := lastReadSeq
 	if lastDeliveredSeq > cursorSeq {
 		cursorSeq = lastDeliveredSeq
+	}
+	if lastDrainedSeq > cursorSeq {
+		cursorSeq = lastDrainedSeq
 	}
 	pendingToSeq := lastSeq
 	if trigger.Seq > pendingToSeq {
@@ -158,9 +170,10 @@ func (h *Handler) buildChannelAmbientUnreadPromptWithDB(ctx context.Context, exe
 	b.WriteString("\n")
 	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, finish without visible output; do not print no_reply or protocol text.\n")
 	b.WriteString("If the unread bundle directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: write a visible plain-text reply or acknowledgement, and do not return no_reply.\n")
-	b.WriteString("If the bundle explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and produce one short visible message. Do not stay silent or print no_reply for that case.\n")
 	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, use a reaction when the runtime brief supports reactions and a reaction is sufficient; otherwise send a short acknowledgement.\n")
 	b.WriteString(channelStickerReplyInstruction)
+	b.WriteString("\n")
+	b.WriteString(channelContinuationInstruction)
 	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
 	fmt.Fprintf(&b, "Ambient cursor range: seq > %d and seq <= %d\n", cursorSeq, pendingToSeq)
@@ -185,16 +198,20 @@ func (h *Handler) channelAmbientUnreadMessages(ctx context.Context, exec db.DBTX
 		limit = channelContextMessageLimit
 	}
 	rows, err := exec.Query(ctx, `
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
-		FROM channel_message
-		WHERE channel_id = $1
-		  AND workspace_id = $2
-		  AND thread_root_message_id IS NULL
-		  AND author_type <> 'system'
-		  AND seq > $3
-		  AND seq <= $4
-		ORDER BY seq ASC
-		LIMIT $5`, parseUUID(channelID), parseUUID(workspaceID), cursorSeq, pendingToSeq, limit)
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+		FROM (
+		  SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+		  FROM channel_message
+		  WHERE channel_id = $1
+		    AND workspace_id = $2
+		    AND thread_root_message_id IS NULL
+		    AND author_type <> 'system'
+		    AND seq > $3
+		    AND seq <= $4
+		  ORDER BY seq DESC
+		  LIMIT $5
+		) recent
+		ORDER BY seq ASC`, parseUUID(channelID), parseUUID(workspaceID), cursorSeq, pendingToSeq, limit)
 	if err != nil {
 		return nil
 	}
@@ -276,7 +293,7 @@ func (h *Handler) settleChannelAmbientWakeForTask(ctx context.Context, taskID pg
 	if !session.ID.Valid {
 		return
 	}
-	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, trigger)
+	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, ch.Kind, trigger)
 	if err != nil {
 		slog.Warn("channel ambient wake: create drain prompt failed", "task", uuidToString(taskID), "error", err)
 		return

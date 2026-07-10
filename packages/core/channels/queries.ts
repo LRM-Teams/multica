@@ -40,15 +40,50 @@ export function channelMessagesOptions(channelId: string) {
   });
 }
 
-export function channelMessagesPageOptions(channelId: string, limit = 50) {
+/**
+ * Page cursor for the messages infinite query. Either the centered anchor for a
+ * cold "around" load (task #340), or a `before` cursor for walking OLDER history
+ * (the pre-existing backward path). NEWER-direction paging (after_cursor) is a
+ * separate follow-up (#340 B2) and not modeled here yet.
+ */
+export type ChannelMessagesPageParam =
+  | { around: number }
+  | { seq?: number; created_at: string; id: string }
+  | null;
+
+function isAroundPageParam(
+  p: ChannelMessagesPageParam,
+): p is { around: number } {
+  return !!p && "around" in p;
+}
+
+export function channelMessagesPageOptions(
+  channelId: string,
+  options: { limit?: number; aroundSeq?: number | null } = {},
+) {
+  const limit = options.limit ?? 50;
+  const aroundSeq = options.aroundSeq ?? null;
   return infiniteQueryOptions({
     queryKey: channelKeys.messagesPage(channelId),
     queryFn: ({ pageParam }) =>
-      api.listChannelMessagesPage(channelId, {
-        before: pageParam,
-        limit,
-      }),
-    initialPageParam: null as { seq?: number; created_at: string; id: string } | null,
+      api.listChannelMessagesPage(
+        channelId,
+        isAroundPageParam(pageParam)
+          ? { around: pageParam.around, limit }
+          : { before: pageParam, limit },
+      ),
+    // `around_seq` anchors ONLY the cold first fetch: `initialPageParam` is used
+    // only when there is no cached data, so reopening a channel (a cache hit
+    // under staleTime:Infinity) reuses the existing window and never
+    // re-anchors — and the query key stays channel-only so the cache is shared
+    // across visits. Callers MUST fix `aroundSeq` at entry (a ref / entry-time
+    // memo), never a value that updates on the mark-read echo, or a jittering
+    // param would fight this stability.
+    initialPageParam: (aroundSeq != null
+      ? { around: aroundSeq }
+      : null) as ChannelMessagesPageParam,
+    // Older direction (unchanged): next_cursor is a `before` cursor, so the next
+    // fetched page walks back in time and appends to the pages tail.
     getNextPageParam: (lastPage) =>
       lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined,
     enabled: !!channelId,

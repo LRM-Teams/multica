@@ -229,7 +229,7 @@ type AgentTaskResponse struct {
 	ChatSessionID            string                             `json:"chat_session_id,omitempty"`             // non-empty for chat tasks
 	ChatMessage              string                             `json:"chat_message,omitempty"`                // user message for chat tasks
 	ChatContextSummary       string                             `json:"chat_context_summary,omitempty"`        // compact surface-scoped context handoff when native resume is skipped
-	ChatMessageAttachments   []ChatAttachmentMeta               `json:"chat_message_attachments,omitempty"`    // attachments on the user message — agent calls `multica attachment download <id>` per entry
+	ChatMessageAttachments   []ChatAttachmentMeta               `json:"chat_message_attachments,omitempty"`    // attachments on the user message — agent calls `multica attachment view --id <id> --output <path>` per entry
 	AutopilotRunID           string                             `json:"autopilot_run_id,omitempty"`            // non-empty for autopilot-spawned tasks
 	AutopilotID              string                             `json:"autopilot_id,omitempty"`                // autopilot that spawned this task
 	AutopilotTitle           string                             `json:"autopilot_title,omitempty"`             // autopilot title used as task context
@@ -239,6 +239,7 @@ type AgentTaskResponse struct {
 	QuickCreatePrompt        string                             `json:"quick_create_prompt,omitempty"`         // user's natural-language input for quick-create tasks
 	QuickCreateAttachmentIDs []string                           `json:"quick_create_attachment_ids,omitempty"` // attachment ids uploaded in the quick-create prompt and bound on issue create
 	QuickCreateSource        *protocol.QuickCreateSourceContext `json:"quick_create_source,omitempty"`         // bounded chat/thread source context for quick-create tasks
+	AgentRadarPrompt         string                             `json:"agent_radar_prompt,omitempty"`          // full prompt for platform-scheduled proactive radar tasks
 	SquadID                  string                             `json:"squad_id,omitempty"`                    // for quick-create tasks where the picker was a squad; Agent is still the resolved leader
 	SquadName                string                             `json:"squad_name,omitempty"`                  // display name for the picker squad
 	ParentIssueID            string                             `json:"parent_issue_id,omitempty"`             // for quick-create tasks opened from "Add sub issue" — UUID of the parent issue the new issue should be filed under
@@ -282,7 +283,7 @@ type AgentTaskResponse struct {
 
 // ChatAttachmentMeta is the structured attachment metadata embedded in
 // claim responses for chat tasks. The agent uses these to run
-// `multica attachment download <id>` rather than guessing from the
+// `multica attachment view --id <id> --output <path>` rather than guessing from the
 // markdown URL (which is signed and 30-min expiring on private CDN).
 // The mirror struct on the daemon side lives in internal/daemon/types.go
 // and uses the same JSON field names.
@@ -657,6 +658,8 @@ type CreateAgentRequest struct {
 	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
 	Model              string            `json:"model"`
 	ThinkingLevel      string            `json:"thinking_level"`
+	InitialNotes       map[string]string `json:"initial_notes"`
+	InitialMemory      map[string]string `json:"initial_memory"`
 	// Template records which template slug was used to seed this agent
 	// (e.g. "coding" / "planning" / "writing" / "assistant"). Empty when
 	// the caller didn't come from a template picker — the `agent_created`
@@ -789,6 +792,14 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	draftID := extractDraftID(rawFields)
+	initialNotes := cleanInitialContextMap(req.InitialNotes, allowedInitialNoteSeedPath)
+	initialMemory := cleanInitialContextMap(req.InitialMemory, allowedInitialMemorySeedPath)
+	if draftID.Valid {
+		if draftNotes, draftMemory := h.loadAgentDraftInitialContext(r, workspaceID, ownerID, draftID); len(draftNotes) > 0 || len(draftMemory) > 0 {
+			initialNotes = draftNotes
+			initialMemory = draftMemory
+		}
+	}
 
 	created, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
 		WorkspaceID:        wsUUID,
@@ -814,7 +825,10 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
 	if draftID.Valid {
-		h.MarkAgentDraftUsed(r, workspaceID, draftID, created.ID)
+		h.MarkAgentDraftUsed(r, workspaceID, ownerID, draftID, created.ID)
+	}
+	if len(initialNotes) > 0 || len(initialMemory) > 0 {
+		h.seedAgentInitialContext(r, created, initialNotes, initialMemory)
 	}
 
 	h.refreshAgentSkillSuggestions(r.Context(), created)
@@ -840,6 +854,29 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+func (h *Handler) seedAgentInitialContext(r *http.Request, agent db.Agent, initialNotes, initialMemory map[string]string) {
+	if h == nil || h.DaemonHub == nil || !agent.RuntimeID.Valid {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), agentFileRPCTimeout)
+	defer cancel()
+	resp, err := h.DaemonHub.RequestSeedAgentContext(ctx, protocol.SeedAgentContextRequestPayload{
+		RequestID:     randomID(),
+		RuntimeID:     uuidToString(agent.RuntimeID),
+		RelPath:       agentRootRelPath(agent),
+		InitialNotes:  initialNotes,
+		InitialMemory: initialMemory,
+		MaxBytes:      256 * 1024,
+	})
+	if err != nil {
+		slog.Warn("seed agent initial context failed", append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID))...)
+		return
+	}
+	if resp.Error != "" || resp.TooLarge {
+		slog.Warn("seed agent initial context rejected", append(logger.RequestAttrs(r), "error", resp.Error, "too_large", resp.TooLarge, "agent_id", uuidToString(agent.ID))...)
+	}
 }
 
 type UpdateAgentRequest struct {

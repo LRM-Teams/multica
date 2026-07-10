@@ -1,14 +1,6 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import {
-  Activity,
-  AlertCircle,
-  Ban,
-  Clock,
-  ListTodo,
-  type LucideIcon,
-} from "lucide-react";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import {
   Drawer,
@@ -22,40 +14,23 @@ import {
 } from "@multica/ui/components/ui/hover-card";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
-import {
-  memberProfileOptions,
-  useAgentPresenceDetail,
-  type AgentPresenceDetail,
-} from "@multica/core/agents";
+import { memberProfileOptions } from "@multica/core/agents";
 import type {
   MemberProfile,
   MemberProfileActivityItem,
 } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
-import { resolveActorIdentityPresentation } from "@multica/core/identity";
-import { ActorIdentityRow } from "./actor-identity-row";
-import { presenceStatusToken } from "../agents/presence";
+import {
+  formatActorHandleLabel,
+  resolveActorHandle,
+  resolveActorIdentityPresentation,
+  shouldShowActorHandleLabel,
+} from "@multica/core/identity";
+import { useAgentLiveStatus } from "../agents/use-agent-live-status";
 import { useT } from "../i18n/use-t";
-import { useTimeAgo } from "../i18n/use-time-ago";
 
 type ChannelsT = ReturnType<typeof useT<"channels">>["t"];
-type AgentsT = ReturnType<typeof useT<"agents">>["t"];
-
-// #288: the status pill must agree with the presence dot — both read the
-// availability/health source. A workload word ("空闲/处理中") shows only while
-// online; offline/unstable/archived show the availability word ("离线" etc.).
-// Never a bare raw status (that was the "gray dot vs idle" contradiction).
-function presenceStatusLabel(
-  presence: AgentPresenceDetail | "loading",
-  t: AgentsT,
-): string | null {
-  const token = presenceStatusToken(presence);
-  if (!token) return null;
-  return token.kind === "workload"
-    ? t(($) => $.workload[token.value])
-    : t(($) => $.availability[token.value]);
-}
 
 type ProfileMemberType = "agent" | "user";
 type ProfilePopoverSide = "top" | "right" | "bottom" | "left" | "inline-start" | "inline-end";
@@ -87,8 +62,11 @@ export function ActorProfileTrigger({
   if (!memberId) return <>{children}</>;
 
   const content = <ActorProfileContent memberType={memberType} memberId={memberId} />;
+  // Message rows are CSS grid with default align-items:stretch. Without hug-
+  // content sizing the trigger becomes as tall as the whole bubble (incl.
+  // images) and Floating UI anchors the profile card mid-row.
   const triggerClassName = cn(
-    "inline-flex cursor-pointer rounded-md border-0 bg-transparent p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+    "inline-flex h-fit w-fit shrink-0 self-start cursor-pointer rounded-md border-0 bg-transparent p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
     className,
   );
   const triggerRender = triggerElement === "span"
@@ -140,7 +118,9 @@ export function ActorProfileTrigger({
         align={align}
         side={side}
         sideOffset={sideOffset}
-        className="w-[360px] p-0"
+        // IM-density profile peek: one shared size for author + @mention.
+        // ~300px is closer to Slack/Discord hover cards than a 360 panel.
+        className="w-[300px] p-0"
       >
         {content}
       </HoverCardContent>
@@ -184,11 +164,12 @@ function ActorProfileContent({
 
 export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
   const { t } = useT("channels");
-  const { t: tAgents } = useT("agents");
   const wsId = useWorkspaceId();
-  // #288: the status pill reads the same availability/health source as the
-  // presence dot (via useAgentPresenceDetail), so the two can never disagree.
-  const presence = useAgentPresenceDetail(
+  // Agents: stage-detail live status (Thinking / Running a command / …)
+  // when a task is active; coarse presence word (Idle / Offline) when idle.
+  // Same snapshot + task-messages caches as the chat status pill / avatar
+  // presence dot, so the three surfaces stay in lockstep via WS.
+  const liveStatus = useAgentLiveStatus(
     wsId,
     profile.member_type === "agent" ? profile.member_id : undefined,
   );
@@ -204,15 +185,26 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
     .join("")
     .toUpperCase()
     .slice(0, 2);
-  const safeDescription = profile.description?.trim() || t(($) => $.profile_popover.no_description);
-  const role = roleLabel(profile.role ?? (profile.member_type === "agent" ? "agent" : null), t);
-  const agentStatus =
-    profile.member_type === "agent" ? presenceStatusLabel(presence, tAgents) : null;
-  const metadata = [role, agentStatus].filter(Boolean).join(" · ");
+  const description = profile.description?.trim() || "";
+  // Members: role text on the name row. Agents: live status immediately
+  // after the name (dot + word) — not a far-right filler and not a pill.
+  const memberRole =
+    profile.member_type === "user"
+      ? roleLabel(profile.role, t)
+      : null;
+  const handle = resolveActorHandle(identity);
+  const handleLabel = formatActorHandleLabel(handle);
+  const showHandle =
+    handleLabel !== null && shouldShowActorHandleLabel(displayName, handle);
 
   return (
     <div className="text-left">
-      <div className="grid grid-cols-[48px_minmax(0,1fr)] gap-3 border-b p-4">
+      <div
+        className={cn(
+          "flex items-start gap-3 p-3",
+          (description || profile.member_type === "agent") && "border-b",
+        )}
+      >
         <ActorAvatarBase
           name={displayName}
           initials={initials}
@@ -221,32 +213,51 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
           size={48}
           className={profile.member_type === "agent" ? "rounded-md" : "rounded-full"}
         />
-        <div className="min-w-0">
-          <ActorIdentityRow
-            identity={identity}
-            displayName={displayName}
-            primaryClassName="truncate text-base font-semibold text-foreground"
-            secondaryClassName="mt-0.5 truncate text-xs text-muted-foreground"
-            className="block min-w-0"
-          />
-          {metadata ? (
-            <div className="mt-2">
-              <span className="inline-flex max-w-full items-center rounded-full border bg-muted/35 px-2 py-0.5 text-xs text-muted-foreground">
-                {metadata}
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-1.5">
+            {/* No flex-1 on the name — status must sit right after the name
+                (Slack/IM style), not get pushed to the far edge of the card. */}
+            <span className="min-w-0 truncate text-sm font-semibold text-foreground">
+              {displayName}
+            </span>
+            {liveStatus ? (
+              <span
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1 text-xs",
+                  liveStatus.textClass,
+                )}
+                data-testid="agent-live-status"
+              >
+                <span
+                  className={cn("size-1.5 rounded-full", liveStatus.dotClass)}
+                  aria-hidden
+                />
+                {liveStatus.label}
               </span>
-            </div>
+            ) : null}
+            {memberRole ? (
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {memberRole}
+              </span>
+            ) : null}
+          </div>
+          {showHandle && handleLabel ? (
+            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+              {handleLabel}
+            </span>
           ) : null}
         </div>
       </div>
 
-      <section className="border-b p-4 last:border-b-0">
-        <p className={cn(
-          "line-clamp-3 text-sm leading-6",
-          profile.description?.trim() ? "text-foreground/85" : "text-muted-foreground",
-        )}>
-          {safeDescription}
-        </p>
-      </section>
+      {/* Only render when there is real copy — empty "No description yet"
+          pads the card and is the main reason member peeks felt oversized. */}
+      {description ? (
+        <section className={cn("border-b p-3 last:border-b-0")}>
+          <p className="line-clamp-2 text-xs leading-5 text-foreground/85">
+            {description}
+          </p>
+        </section>
+      ) : null}
       {profile.member_type === "agent" ? (
         <ProfileSection title={t(($) => $.profile_popover.recent_activity)}>
           {(profile.recent_activity ?? []).length > 0 ? (
@@ -256,7 +267,7 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
               ))}
             </div>
           ) : (
-            <div className="rounded-md bg-muted/45 px-3 py-2 text-xs text-muted-foreground">
+            <div className="rounded-md bg-muted/45 px-2.5 py-1.5 text-xs text-muted-foreground">
               {t(($) => $.profile_popover.no_recent_activity)}
             </div>
           )}
@@ -274,8 +285,8 @@ function ProfileSection({
   children: React.ReactNode;
 }) {
   return (
-    <section className="border-b p-4 last:border-b-0">
-      <div className="mb-2 text-[11px] font-medium uppercase tracking-normal text-muted-foreground">
+    <section className="border-b p-3 last:border-b-0">
+      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-normal text-muted-foreground">
         {title}
       </div>
       {children}
@@ -285,30 +296,31 @@ function ProfileSection({
 
 function ActivityRow({ activity }: { activity: MemberProfileActivityItem }) {
   const { t } = useT("channels");
-  const timeAgo = useTimeAgo();
-  const meta = activityMeta(activity.kind, t);
-  const Icon = meta.icon;
-  const label = activity.label?.trim() || meta.label;
+  const label = activity.label?.trim() || activityFallbackLabel(activity.kind, t);
+  const clock = formatActivityClock(activity.occurred_at);
 
   return (
-    <div className="grid grid-cols-[22px_minmax(0,1fr)] gap-2.5 border-t py-2.5 first:border-t-0 first:pt-0 last:pb-0">
-      <span className="flex size-[22px] items-center justify-center rounded-full bg-muted text-muted-foreground">
-        <Icon className="size-3" />
+    <div className="flex min-w-0 items-center gap-2 py-1 text-xs first:pt-0 last:pb-0">
+      <span
+        className="w-[4.75rem] shrink-0 tabular-nums text-muted-foreground"
+        title={formatAbsoluteTime(activity.occurred_at)}
+      >
+        {clock}
       </span>
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-baseline gap-2 text-xs">
-          <span className="font-medium text-foreground">{label}</span>
-          <span className="shrink-0 text-muted-foreground" title={formatAbsoluteTime(activity.occurred_at)}>
-            {timeAgo(activity.occurred_at)}
-          </span>
-        </div>
-      </div>
+      <span
+        className={cn(
+          "size-1.5 shrink-0 rounded-full",
+          activityStatusDotClass(activity.status),
+        )}
+        aria-hidden
+      />
+      <span className="min-w-0 truncate text-foreground">{label}</span>
     </div>
   );
 }
 
 function UnavailableProfile({ message }: { message: string }) {
-  return <div className="p-4 text-xs text-muted-foreground">{message}</div>;
+  return <div className="p-3 text-xs text-muted-foreground">{message}</div>;
 }
 
 function roleLabel(
@@ -322,22 +334,57 @@ function roleLabel(
   return null;
 }
 
-function activityMeta(
+function activityFallbackLabel(
   kind: MemberProfileActivityItem["kind"],
   t: ChannelsT,
-): { label: string; icon: LucideIcon } {
+): string {
   switch (kind) {
     case "queued":
-      return { label: t(($) => $.profile_popover.activity.queued), icon: Clock };
+      return t(($) => $.profile_popover.activity.queued);
     case "failed":
-      return { label: t(($) => $.profile_popover.activity.failed), icon: AlertCircle };
+      return t(($) => $.profile_popover.activity.failed);
     case "cancelled":
-      return { label: t(($) => $.profile_popover.activity.cancelled), icon: Ban };
+      return t(($) => $.profile_popover.activity.cancelled);
     case "task":
-      return { label: t(($) => $.profile_popover.activity.task), icon: ListTodo };
+      return t(($) => $.profile_popover.activity.task);
     case "working":
     default:
-      return { label: t(($) => $.profile_popover.activity.working), icon: Activity };
+      return t(($) => $.profile_popover.activity.working);
+  }
+}
+
+// Compact status dot for the timeline row — mirrors the IM-style activity log
+// (time · colored dot · label) rather than icon-in-circle + relative "just now".
+function activityStatusDotClass(
+  status: MemberProfileActivityItem["status"],
+): string {
+  switch (status) {
+    case "running":
+    case "dispatched":
+      return "bg-success";
+    case "queued":
+    case "waiting_local_directory":
+      return "bg-warning";
+    case "failed":
+      return "bg-destructive";
+    case "completed":
+    case "cancelled":
+    default:
+      return "bg-muted-foreground/40";
+  }
+}
+
+// Clock for the activity column: "16:05:14" (local, 24h, fixed width).
+function formatActivityClock(value: string): string {
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    const hh = String(date.getHours()).padStart(2, "0");
+    const mm = String(date.getMinutes()).padStart(2, "0");
+    const ss = String(date.getSeconds()).padStart(2, "0");
+    return `${hh}:${mm}:${ss}`;
+  } catch {
+    return value;
   }
 }
 

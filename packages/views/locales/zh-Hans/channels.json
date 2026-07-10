@@ -10,6 +10,7 @@
     "no_conversation_matches": "没有匹配会话",
     "search_scope_hint": "左侧只过滤会话列表；要搜索消息正文，请打开会话后使用右上角消息搜索。",
     "groups": "频道",
+    "pinned_section": "置顶",
     "name_placeholder": "群聊名称",
     "lark_placeholder": "可选飞书群 chat_id (oc_...)",
     "create_aria": "新建群聊",
@@ -147,16 +148,8 @@
     "send_failed": "发送线程回复失败。",
     "composer_placeholder": "在线程中回复...",
     "back_to_conversation": "返回对话",
-    "participants_label": "参与者",
-    "follow": "关注话题",
-    "following": "已关注",
     "show_in_channel_label": "同时在频道显示",
-    "from_thread_badge": "来自话题",
-    "wake_pending": "等待回复",
-    "wake_replied": "已回复",
-    "wake_acked": "已确认",
-    "wake_delivered": "已送达",
-    "wake_no_reply": "未回复"
+    "from_thread_badge": "来自话题"
   },
   "typing": {
     "single": "{{name}} 正在输入",
@@ -192,6 +185,7 @@
     "add_reaction": "添加表情回应",
     "actions_menu": "消息操作",
     "copy_action": "复制",
+    "expand_action": "展开全文",
     "copied_toast": "已复制",
     "copy_failed_toast": "复制失败",
     "sticker_alt": "表情包",
@@ -199,6 +193,7 @@
     "sticker_failed": "表情包加载失败",
     "sticker_unavailable": "表情包暂不可用",
     "agent_badge": "Agent",
+    "radar_badge": "主动发现",
     "feishu_badge": "飞书",
     "edit_action": "编辑",
     "delete_action": "删除",
@@ -220,7 +215,7 @@
     "agent_meta": "智能体",
     "human_meta": "成员",
     "new_title": "新建私信",
-    "search_placeholder": "搜索人或 agent…",
+    "search_placeholder": "搜索人或智能体…",
     "no_results": "无匹配结果",
     "send_message": "发消息",
     "files": "文件",
@@ -238,7 +233,21 @@
     "composer_placeholder": "发消息给 {{name}}…"
   },
   "quote": {
-    "jump_to": "跳转到原消息"
+    "action": "引用",
+    "jump_to": "跳转到原消息",
+    "cancel": "取消引用",
+    "unavailable_title": "原消息不可用",
+    "unavailable_summary": "消息可能已删除，或你无权查看。",
+    "type_user": "消息",
+    "type_agent": "Agent",
+    "type_lark": "飞书",
+    "type_system": "系统",
+    "type_unknown": "消息",
+    "attachment_summary": "附件",
+    "attachments_summary": "{{count}} 个附件",
+    "image_summary": "图片",
+    "images_summary": "{{count}} 张图片",
+    "empty_summary": "暂无预览"
   },
   "message_loading": {
     "load_older": "加载更早消息",

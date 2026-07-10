@@ -10,6 +10,7 @@
     "no_conversation_matches": "一致する会話がありません",
     "search_scope_hint": "左側は会話リストのみを絞り込みます。メッセージ本文を検索するには、会話を開いて右上のメッセージ検索を使ってください。",
     "groups": "チャンネル",
+    "pinned_section": "ピン留め",
     "name_placeholder": "チャンネル名",
     "lark_placeholder": "任意の Feishu chat_id (oc_...)",
     "create_aria": "チャンネルを作成",
@@ -147,16 +148,8 @@
     "send_failed": "スレッド返信の送信に失敗しました。",
     "composer_placeholder": "スレッドで返信...",
     "back_to_conversation": "会話に戻る",
-    "participants_label": "参加者",
-    "follow": "スレッドをフォロー",
-    "following": "フォロー中",
     "show_in_channel_label": "チャンネルにも表示",
-    "from_thread_badge": "スレッドから",
-    "wake_pending": "返信待ち",
-    "wake_replied": "返信済み",
-    "wake_acked": "確認済み",
-    "wake_delivered": "配信済み",
-    "wake_no_reply": "返信なし"
+    "from_thread_badge": "スレッドから"
   },
   "typing": {
     "single": "{{name}} が入力中",
@@ -192,6 +185,7 @@
     "add_reaction": "リアクションを追加",
     "actions_menu": "メッセージ操作",
     "copy_action": "コピー",
+    "expand_action": "全文を表示",
     "copied_toast": "コピーしました",
     "copy_failed_toast": "コピーに失敗しました",
     "sticker_alt": "ステッカー",
@@ -199,6 +193,7 @@
     "sticker_failed": "ステッカーを読み込めませんでした",
     "sticker_unavailable": "ステッカーは利用できません",
     "agent_badge": "Agent",
+    "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",
     "edit_action": "編集",
     "delete_action": "削除",
@@ -238,7 +233,21 @@
     "composer_placeholder": "{{name}} にメッセージ…"
   },
   "quote": {
-    "jump_to": "元のメッセージへジャンプ"
+    "action": "引用",
+    "jump_to": "元のメッセージへジャンプ",
+    "cancel": "引用をキャンセル",
+    "unavailable_title": "元のメッセージを表示できません",
+    "unavailable_summary": "削除されたか、表示権限がない可能性があります。",
+    "type_user": "メッセージ",
+    "type_agent": "Agent",
+    "type_lark": "Feishu",
+    "type_system": "システム",
+    "type_unknown": "メッセージ",
+    "attachment_summary": "添付ファイル",
+    "attachments_summary": "{{count}} 件の添付ファイル",
+    "image_summary": "画像",
+    "images_summary": "{{count}} 枚の画像",
+    "empty_summary": "プレビューはありません"
   },
   "message_loading": {
     "load_older": "過去のメッセージを読み込む",

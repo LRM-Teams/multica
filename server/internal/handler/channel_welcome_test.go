@@ -26,15 +26,13 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 		"do not print no_reply",
 		"directly addresses your agent name",
 		"全体",
-		"Do not stay silent",
 		"runtime brief",
-		"visible message",
 		"reaction",
 		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
 		"short acknowledgement",
 		"respond with a 👋 reaction",
-		"explicitly asks for a sticker",
-		"Do not print JSON envelopes",
+		"use stickers only when explicitly requested",
+		"Never print JSON envelopes",
 		"全体总监以上欢迎一下新同事",
 	} {
 		if !strings.Contains(p, want) {
@@ -44,6 +42,11 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 	for _, banned := range []string{"multica send", "multica react", "multica message send", "multica message react", "multica message read", "multica message search"} {
 		if strings.Contains(p, banned) {
 			t.Errorf("ambient prompt should not hardcode chat CLI command %q:\n%s", banned, p)
+		}
+	}
+	for _, banned := range []string{"everyone/all agents", "Do not stay silent"} {
+		if strings.Contains(p, banned) {
+			t.Errorf("ambient prompt should not contain old all-agents force-reply rule %q:\n%s", banned, p)
 		}
 	}
 	if strings.Contains(p, "Recent channel messages") {
@@ -66,7 +69,6 @@ func TestBuildChannelAmbientUnreadPromptUsesRuntimeOutputContract(t *testing.T) 
 
 	for _, want := range []string{
 		"runtime brief",
-		"visible message",
 		"reaction",
 		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
 		"Ambient cursor range: seq > 1 and seq <= 2",
@@ -79,6 +81,11 @@ func TestBuildChannelAmbientUnreadPromptUsesRuntimeOutputContract(t *testing.T) 
 	for _, banned := range []string{"multica send", "multica react", "multica message send", "multica message react", "multica message read", "multica message search"} {
 		if strings.Contains(p, banned) {
 			t.Errorf("ambient unread prompt should not hardcode chat CLI command %q:\n%s", banned, p)
+		}
+	}
+	for _, banned := range []string{"everyone/all agents", "Do not stay silent"} {
+		if strings.Contains(p, banned) {
+			t.Errorf("ambient unread prompt should not contain old all-agents force-reply rule %q:\n%s", banned, p)
 		}
 	}
 }
@@ -101,12 +108,16 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 		for _, want := range []string{
 			"Multica group chat #产品讨论",
 			"directly addressed to you",
-			"visible result using the output mechanism described in the runtime brief",
-			"Do not return no_reply",
-			"A sticker reply counts as a visible result",
+			"Human DMs, human @mentions, direct questions",
+			"Agent-to-agent channel @mentions are weak notifications",
+			"finish without visible output",
+			"Never return no_reply",
 			"greeting sticker only",
-			"directly addressed to you (@-mention",
-			"Do not print JSON envelopes",
+			"Substantive requests get a helpful answer",
+			"Collaborative discussion rule",
+			"never for thanks",
+			"requested completion/blocker delivery",
+			"Never print JSON envelopes",
 			"Current message to respond to",
 			trigger.Content,
 		} {
@@ -114,8 +125,14 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 				t.Errorf("mention prompt missing %q:\n%s", want, p)
 			}
 		}
-		if strings.Contains(p, "internal no_reply is allowed") {
-			t.Errorf("direct mention prompt must not allow silent no_reply:\n%s", p)
+		for _, banned := range []string{
+			"internal no_reply is allowed",
+			"END your reply by @-mentioning",
+			"Only stop @-mentioning when you have reached a final conclusion",
+		} {
+			if strings.Contains(p, banned) {
+				t.Errorf("direct mention prompt contains loop-prone instruction %q:\n%s", banned, p)
+			}
 		}
 		for _, banned := range []string{"multica send", "multica react", "multica message send", "multica message react", "multica message read", "multica message search"} {
 			if strings.Contains(p, banned) {
@@ -124,6 +141,57 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 		}
 		if strings.Contains(p, "\"action\"") || strings.Contains(p, "\"parts\"") {
 			t.Errorf("direct mention prompt must not teach JSON action envelopes during transition:\n%s", p)
+		}
+	}
+}
+
+func TestBuildChannelMentionPromptIncludesCurrentReplyAndQuoteTargets(t *testing.T) {
+	h := &Handler{DB: channelPromptNoopDB{}}
+	ch := ChannelResponse{
+		ID:          "22222222-2222-2222-2222-222222222222",
+		WorkspaceID: "11111111-1111-1111-1111-111111111111",
+		Name:        "multica-dev",
+	}
+	replyID := "33333333-3333-3333-3333-333333333333"
+	quoteID := "44444444-4444-4444-4444-444444444444"
+	trigger := ChannelMessageResponse{
+		ID:               "55555555-5555-5555-5555-555555555555",
+		AuthorName:       "用户",
+		Type:             "user",
+		Content:          "这条我说了什么",
+		ReplyToMessageID: &replyID,
+		ReplyTo: &ChannelMessageReply{
+			ID:         replyID,
+			Type:       "user",
+			AuthorName: "用户",
+			Content:    "继续",
+			CreatedAt:  "2026-07-09T10:00:00Z",
+		},
+		QuoteMessageID: &quoteID,
+		Quote: &ChannelMessageQuote{
+			MessageID: quoteID,
+			Status:    "active",
+			Snapshot: &ChannelMessageQuoteSnapshot{
+				Type:       "user",
+				AuthorName: "用户",
+				Content:    "继续",
+				CreatedAt:  "2026-07-09T10:00:00Z",
+			},
+		},
+	}
+
+	p := h.buildChannelMentionPrompt(context.Background(), ch, trigger)
+	for _, want := range []string{
+		"Direct reply target for the current message:",
+		"Direct quote target for the current message:",
+		"[2026-07-09T10:00:00Z] 用户 (user): 继续",
+		"treat the current message text as the user's question/request",
+		"direct reply/quote target as the referenced message content",
+		"Current message to respond to:",
+		"用户 (user): 这条我说了什么",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("mention prompt missing %q:\n%s", want, p)
 		}
 	}
 }

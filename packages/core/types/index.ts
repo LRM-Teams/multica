@@ -40,6 +40,9 @@ export type {
   AgentFileContentResponse,
   UpdateAgentFileContentRequest,
   UpdateAgentFileContentResponse,
+  AgentRadarAction,
+  AgentRadarRun,
+  ListAgentRadarRunsResponse,
   Skill,
   SkillSummary,
   AgentSkillSummary,
@@ -84,10 +87,12 @@ export type {
 export type {
   EvolutionReviewDecision,
   EvolutionReviewDecisionRequest,
+  EvolutionMetricsResponse,
   EvolutionReviewFile,
   EvolutionReviewRiskLevel,
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
+  EvolutionUnitMetric,
   PromoteEvolutionReviewSubmissionResponse,
 } from "./evolution";
 export type {
@@ -238,6 +243,8 @@ export type {
   ChannelMemberBrief,
   ChannelLastMessage,
   ChannelMessage,
+  ChannelMessageQuote,
+  ChannelMessageQuoteSnapshot,
   ChannelMessagesCursor,
   ChannelMessagesPage,
   MarkChannelReadResult,

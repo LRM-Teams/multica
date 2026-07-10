@@ -204,6 +204,21 @@ describe("Attachment — image dispatch", () => {
     expect(screen.queryByTitle("Delete")).toBeNull();
   });
 
+  it("clicking the inline image opens the lightbox (preview modal dialog)", () => {
+    // Iris couldn't trigger this via agent-browser synthetic clicks on s89;
+    // assert the wiring here so the lightbox is covered without a live browser.
+    // The image dispatch (onView → useAttachmentPreview → AttachmentPreviewModal)
+    // is the pre-existing path #339 reuses unchanged.
+    const att = makeRecord();
+    renderWithQuery(<Attachment attachment={{ kind: "record", attachment: att }} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const figure = document.querySelector('.image-figure[data-clickable="true"]');
+    expect(figure).toBeTruthy();
+    fireEvent.click(figure!);
+    // AttachmentPreviewModal renders as a role="dialog" portal.
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
   it("editable image exposes the compose toolbar (View/Download/Copy link)", () => {
     const att = makeRecord();
     renderWithQuery(

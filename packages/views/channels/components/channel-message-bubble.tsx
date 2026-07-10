@@ -7,13 +7,19 @@ import {
   useState,
   type PointerEvent,
 } from "react";
-import { Copy, MessageSquare, Pencil, Trash2 } from "lucide-react";
+import { Copy, MessageSquare, Pencil, Quote, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@multica/ui/components/ui/context-menu";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
 import { AttachmentList } from "../../issues/components/comment-card";
@@ -26,16 +32,21 @@ import { useMessageTime } from "../../i18n/use-message-time";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
 import {
   formatMessagePartsCopyText,
-  formatMessagePartsPreview,
   resolveMessageParts,
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
 import { MessageBody } from "./message-body";
+import { MessageQuoteCard } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
+import { messageMentionsViewer } from "../../common/content-mentions-viewer";
+import { SELF_MENTION_ROW_CLASS } from "../../common/mention-token";
 
 const LONG_PRESS_MS = 450;
 const TOUCH_MOVE_CANCEL_PX = 8;
 const MOBILE_THREAD_TAP_FEEDBACK_MS = 120;
+const HISTORY_MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[min(260px,55vh)] md:max-h-[360px]";
+const HISTORY_MESSAGE_COLLAPSE_MIN_CHARS = 800;
+const HISTORY_MESSAGE_COLLAPSE_MIN_LINES = 12;
 
 function isInteractiveMessageTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) return false;
@@ -57,6 +68,13 @@ function isMobileActionViewport() {
     window.innerWidth < 768 ||
     window.matchMedia?.("(max-width: 767px)").matches ||
     window.matchMedia?.("(pointer: coarse)").matches
+  );
+}
+
+function isLongHistoryMessageText(text: string) {
+  return (
+    text.length >= HISTORY_MESSAGE_COLLAPSE_MIN_CHARS ||
+    text.split(/\r?\n/).length >= HISTORY_MESSAGE_COLLAPSE_MIN_LINES
   );
 }
 
@@ -171,11 +189,13 @@ export function ChannelMessageBubble({
   onOpenThread,
   onScrollTo,
   onReact,
+  onQuote,
   onEdit,
   onDelete,
   onOpenAgent,
   searchHighlighted = false,
   searchQuery,
+  collapseLongContent = false,
 }: {
   message: ChannelMessage;
   currentUserId: string | null;
@@ -189,6 +209,8 @@ export function ChannelMessageBubble({
   onScrollTo?: (messageId: string) => void;
   /** Toggle/add a lightweight emoji reaction on this message. */
   onReact?: (message: ChannelMessage, emoji: string) => void;
+  /** Set this message as the composer quote target. */
+  onQuote?: (message: ChannelMessage) => void;
   /**
    * Save an inline edit of the viewer's own message. H5: this is an edit, never
    * a re-send — it must not go through a send/dispatch path (no new wake).
@@ -202,18 +224,22 @@ export function ChannelMessageBubble({
   searchHighlighted?: boolean;
   /** Trimmed conversation search phrase to mark inside this hit's visible text. */
   searchQuery?: string;
+  /** Visually clamp already-read long history while keeping the full DOM/copy payload intact. */
+  collapseLongContent?: boolean;
 }) {
   const { t } = useT("channels");
   const { getActorAvatarUrl, getActorName } = useActorName();
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
+  const [expandedContentKey, setExpandedContentKey] = useState<string | null>(null);
   const [mobileThreadTapActive, setMobileThreadTapActive] = useState(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mobileActionsDialogRef = useRef<HTMLDialogElement | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const touchCancelledRef = useRef(false);
+
 
   // react-doctor-disable-next-line react-doctor/exhaustive-deps -- unmount needs to clear whichever touch timers are currently pending.
   useEffect(() => {
@@ -288,13 +314,7 @@ export function ChannelMessageBubble({
     ownName,
     getActorName,
   });
-  const replyAuthorName = message.reply_to
-    ? resolveChannelAuthorDisplayName(message.reply_to, {
-        currentUserId,
-        ownName,
-        getActorName,
-      })
-    : "";
+  const isRadarMessage = isAgent && message.content.trimStart().startsWith("主动发现：");
   const profileActorType =
     message.type === "agent"
       ? "agent"
@@ -364,6 +384,7 @@ export function ChannelMessageBubble({
   const handleMobileReactionSelect = (emoji: string) => {
     runMobileAction(() => onReact?.(message, emoji));
   };
+  const handleQuote = () => onQuote?.(message);
 
   // Edit / delete are viewer-own affordances only. H5: saving an edit routes
   // through onEdit (a PATCH), never a re-send — it cannot produce a new wake.
@@ -375,6 +396,13 @@ export function ChannelMessageBubble({
   const canEdit = false;
   const canDelete = isOwn && !!onDelete;
   const isEdited = !!message.edited_at;
+  const collapseText =
+    formatMessagePartsCopyText(effectiveParts) ??
+    unwrapStructuredPreviewContent(message.content) ??
+    message.content;
+  const contentCollapseKey = `${message.id}:${collapseLongContent ? "collapsed" : "open"}`;
+  const canCollapseContent = collapseLongContent && isLongHistoryMessageText(collapseText);
+  const isContentCollapsed = canCollapseContent && expandedContentKey !== contentCollapseKey;
   const handleStartEdit = () => setEditDraft(message.content);
   const handleCancelEdit = () => setEditDraft(null);
   const handleSaveEdit = () => {
@@ -464,14 +492,28 @@ export function ChannelMessageBubble({
     clearLongPressTimer();
   };
 
-  return (
+  // Self-mention row wash: cool brand tint when *someone else* addresses the
+  // viewer (@me or @all). Own messages never wash — the author already knows
+  // they typed the mention; the wash is a scan aid for incoming address.
+  // Deep-link `highlighted` keeps its primary ring and wins over the wash;
+  // mobile tap feedback also wins.
+  const addressedToViewer = messageMentionsViewer(
+    message.content,
+    currentUserId,
+    message.parts,
+  );
+  const selfMentioned = addressedToViewer && !isOwn;
+
+  const bubble = (
     <div
       id={`message-${message.id}`}
       data-testid="message-bubble"
       data-own={isOwn}
+      data-self-mentioned={selfMentioned ? "true" : undefined}
       className={cn(
         "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 py-1.5 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35",
-        highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0",
+        selfMentioned && SELF_MENTION_ROW_CLASS,
+        highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0 hover:bg-primary/10 focus-within:bg-primary/10",
         mobileThreadTapActive && "bg-primary/[0.04] ring-1 ring-primary/45 duration-75",
       )}
       onPointerDown={handlePointerDown}
@@ -511,6 +553,11 @@ export function ChannelMessageBubble({
           {isAgent && (
             <span className="shrink-0 rounded-full border border-primary/20 bg-primary/[0.08] px-2 py-0.5 text-[11px] font-normal leading-none text-primary">
               {t(($) => $.message.agent_badge)}
+            </span>
+          )}
+          {isRadarMessage && (
+            <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-normal leading-none text-amber-700 dark:text-amber-300">
+              {t(($) => $.message.radar_badge)}
             </span>
           )}
           {isExternal && (
@@ -561,6 +608,17 @@ export function ChannelMessageBubble({
             >
               <Copy className="size-3.5" />
             </button>
+            {onQuote && (
+              <button
+                type="button"
+                onClick={handleQuote}
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                aria-label={t(($) => $.quote.action)}
+                title={t(($) => $.quote.action)}
+              >
+                <Quote className="size-3.5" />
+              </button>
+            )}
             {canOpenThread && (
               <button
                 type="button"
@@ -609,31 +667,23 @@ export function ChannelMessageBubble({
         ) : (
           <div
             className={cn(
-              "min-w-0 max-w-full select-text overflow-hidden break-words text-sm leading-6 text-foreground",
+              "message-surface relative min-w-0 max-w-full select-text break-words text-sm leading-6 text-foreground",
+              isContentCollapsed && "overflow-hidden",
+              isContentCollapsed ? HISTORY_MESSAGE_COLLAPSE_HEIGHT_CLASS : "overflow-visible",
               searchHighlighted && "rounded-md bg-primary/5",
             )}
             data-testid="message-body"
+            data-collapsed={isContentCollapsed ? "true" : undefined}
             style={{ WebkitTouchCallout: "default" }}
           >
-            {/* Inline quote block: rendered when reply_to is present (BE task #23) */}
-            {message.reply_to && (
-              <button
-                type="button"
-                onClick={() =>
-                  message.reply_to_message_id && onScrollTo?.(message.reply_to_message_id)
-                }
-                className="mb-2 w-full cursor-pointer rounded border-l-2 border-muted-foreground/30 bg-muted/30 px-2 py-1 text-left transition-opacity hover:opacity-80"
-                aria-label={t(($) => $.quote.jump_to)}
-              >
-                <p className="truncate text-[11px] font-semibold text-foreground/70">
-                  {replyAuthorName}
-                </p>
-                <p className="line-clamp-1 text-[11px] text-muted-foreground">
-                  {formatMessagePartsPreview(message.reply_to.parts) ??
-                    unwrapStructuredPreviewContent(message.reply_to.content) ??
-                    message.reply_to.content}
-                </p>
-              </button>
+            {(message.quote || message.quote_message_id) && (
+              <MessageQuoteCard
+                quote={message.quote}
+                quoteMessageId={message.quote_message_id}
+                currentUserId={currentUserId}
+                ownName={ownName}
+                onJump={onScrollTo}
+              />
             )}
             <MessageBody
               content={message.content}
@@ -646,6 +696,20 @@ export function ChannelMessageBubble({
               content={effectiveParts ? "" : message.content}
               className="mt-1.5"
             />
+            {isContentCollapsed && (
+              <div
+                className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-background via-background/95 to-transparent pb-1.5 pt-12"
+                data-testid="message-collapse-fade"
+              >
+                <button
+                  type="button"
+                  className="pointer-events-auto inline-flex min-h-11 items-center rounded-full border border-border bg-background px-3 text-xs font-medium text-foreground shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:min-h-8"
+                  onClick={() => setExpandedContentKey(contentCollapseKey)}
+                >
+                  {t(($) => $.message.expand_action)}
+                </button>
+              </div>
+            )}
           </div>
         )}
         {!isEditing && mobileActionsOpen && (
@@ -695,6 +759,16 @@ export function ChannelMessageBubble({
                   <Copy className="size-4" />
                   <span>{t(($) => $.message.copy_action)}</span>
                 </button>
+                {onQuote && (
+                  <button
+                    type="button"
+                    onClick={() => runMobileAction(handleQuote)}
+                    className="inline-flex h-11 items-center gap-3 rounded-xl px-3 text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                  >
+                    <Quote className="size-4" />
+                    <span>{t(($) => $.quote.action)}</span>
+                  </button>
+                )}
                 {canEdit && (
                   <button
                     type="button"
@@ -753,5 +827,19 @@ export function ChannelMessageBubble({
         )}
       </div>
     </div>
+  );
+
+  if (!onQuote || isEditing) return bubble;
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger render={bubble} />
+      <ContextMenuContent>
+        <ContextMenuItem onClick={handleQuote}>
+          <Quote className="mr-2 size-3.5" />
+          {t(($) => $.quote.action)}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

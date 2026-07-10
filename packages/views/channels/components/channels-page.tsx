@@ -61,7 +61,6 @@ import {
   useAddChannelReaction,
   useRemoveChannelReaction,
   useMarkChannelThreadRead,
-  useSetChannelThreadFollowed,
   useSetChannelTyping,
   useComposerDraftStore,
   type ComposerDraftKey,
@@ -161,20 +160,21 @@ import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
+import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
-import { deriveThreadParticipants } from "./thread-participants";
-import { mapThreadParticipants, mapThreadWakeAnnotations } from "./thread-read-model";
+import { ComposerQuotePreview } from "./message-quote";
+import type { QuoteTarget } from "./message-quote-types";
 import {
   Composer,
   ConversationHeader,
   ReadOnlyConversationBanner,
 } from "./conversation-surface";
-import { DmList } from "./dm-list";
+import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
 import { DmConversation } from "./dm-conversation";
 import {
   formatChannelMessagePreview,
@@ -187,7 +187,10 @@ import {
   MutedIndicator,
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
-import { AgentFilesPanel } from "./agent-files-panel";
+import { buildPinnedConversationEntries } from "./pinned-conversations";
+import { PinnedConversationsSection } from "./pinned-conversations-section";
+import { AgentSidePanel } from "./agent-side-panel";
+import { AgentPanelProvider } from "../../common/agent-panel-context";
 
 export interface TypingActor {
   key: string;
@@ -555,6 +558,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // reply, and vice versa.
   const channelSend = useComposerSend();
   const threadSend = useComposerSend();
+  const [quoteState, setQuoteState] = useState<{
+    channelId: string | null;
+    target: QuoteTarget | null;
+    threadRootId: string | null;
+    threadTarget: QuoteTarget | null;
+  }>({ channelId: null, target: null, threadRootId: null, threadTarget: null });
   const threadEditorRef = useRef<ContentEditorRef>(null);
   const focusThreadComposerOnOpenRef = useRef(false);
   const [sidePanelState, setSidePanelState] = useState<{
@@ -670,6 +679,24 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const activeDraftKey = active ? (`channel:${active.id}` as const) : null;
   const activeDraft = activeDraftKey ? (composerDrafts[activeDraftKey]?.content ?? "") : "";
   const activeDraftEmpty = !activeDraft.trim();
+  const quoteChannelId = active?.id ?? null;
+  const quoteThreadRootId = openThreadRoot?.id ?? null;
+  if (quoteState.channelId !== quoteChannelId || quoteState.threadRootId !== quoteThreadRootId) {
+    setQuoteState({
+      channelId: quoteChannelId,
+      target: null,
+      threadRootId: quoteThreadRootId,
+      threadTarget: null,
+    });
+  }
+  const quoteTarget = quoteState.channelId === quoteChannelId ? quoteState.target : null;
+  const threadQuoteTarget = quoteState.threadRootId === quoteThreadRootId ? quoteState.threadTarget : null;
+  const setQuoteTarget = useCallback((target: QuoteTarget | null) => {
+    setQuoteState((current) => ({ ...current, target }));
+  }, []);
+  const setThreadQuoteTarget = useCallback((target: QuoteTarget | null) => {
+    setQuoteState((current) => ({ ...current, threadTarget: target }));
+  }, []);
   const setConversationDraft = useCallback((key: ComposerDraftKey, value: string) => {
     if (!value.trim()) {
       storeClearComposerDraft(key);
@@ -677,6 +704,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     }
     storeSetComposerDraft(key, value);
   }, [storeSetComposerDraft, storeClearComposerDraft]);
+  // #340: freeze the entry read cursor + true unread count (sidebar-same source)
+  // at entry — anchors the cold load on the unread divider and gives the divider
+  // the real "N new" (not the count within the loaded window). See the hook.
+  const entryAnchor = useEntryAnchor(
+    active?.id,
+    active?.last_read_seq,
+    active?.real_unread_count ?? active?.unread_count,
+  );
   const {
     data: messagePages,
     isLoading: messagesLoading,
@@ -685,7 +720,11 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     fetchNextPage: fetchOlderMessages,
     hasNextPage: hasOlderMessages,
     isFetchingNextPage: isFetchingOlderMessages,
-  } = useInfiniteQuery(channelMessagesPageOptions(active?.id ?? ""));
+  } = useInfiniteQuery(
+    channelMessagesPageOptions(active?.id ?? "", {
+      aroundSeq: entryAnchor.aroundSeq,
+    }),
+  );
   const activeChannelId = active?.id ?? "";
   const messages = useMemo(() => flattenChannelMessagePages(activeChannelId ? messagePages : undefined), [activeChannelId, messagePages]);
   const messagesFirstItemIndex = useMemo(
@@ -709,20 +748,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     },
     [threadPage?.messages, threadRoot],
   );
-  // Participant chips prefer the BE-provided read-model list (#251) and fall
-  // back to the structural derivation only when the BE sent none, so the panel
-  // is never empty-chipped for an older payload.
-  const threadParticipants = useMemo(() => {
-    if (!threadRoot) return [];
-    const beList = mapThreadParticipants(threadRoot);
-    return beList.length > 0 ? beList : deriveThreadParticipants(threadRoot, threadReplies);
-  }, [threadRoot, threadReplies]);
-  // "Why no reply" wake strip (#196), agent-only + neutral, from the root's
-  // read-model annotations (#251).
-  const threadWakeAnnotations = useMemo(
-    () => (threadRoot ? mapThreadWakeAnnotations(threadRoot) : []),
-    [threadRoot],
-  );
   const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
@@ -741,7 +766,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const editChannelMessage = useEditChannelMessage();
   const deleteChannelMessage = useDeleteChannelMessage();
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
-  const setThreadFollowed = useSetChannelThreadFollowed();
   const setTyping = useSetChannelTyping();
   // Edit is a PATCH of an existing message (H5) — it routes through
   // editChannelMessage, never the send path, so it can never produce a new wake.
@@ -866,15 +890,30 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     },
     [channelMembers, t],
   );
-  const sortedChannels = useMemo(
-    () => [...channels].sort((a, b) => (b.pinned_at ? 1 : 0) - (a.pinned_at ? 1 : 0)),
+  // Pinned conversations live in the unified PINNED section (Slack-style),
+  // not floated to the top of Channels / Direct messages.
+  const unpinnedChannels = useMemo(
+    () => channels.filter((c) => !c.pinned_at),
     [channels],
   );
   const filteredChannels = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return q ? sortedChannels.filter((c) => c.name.toLowerCase().includes(q)) : sortedChannels;
-  }, [sortedChannels, search]);
+    return q ? unpinnedChannels.filter((c) => c.name.toLowerCase().includes(q)) : unpinnedChannels;
+  }, [unpinnedChannels, search]);
+  const pinnedEntries = useMemo(
+    () => buildPinnedConversationEntries(dms, channels),
+    [dms, channels],
+  );
+  const filteredPinnedEntries = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return pinnedEntries;
+    return pinnedEntries.filter((entry) => {
+      if (entry.kind === "dm") return entry.dm.peer.name.toLowerCase().includes(q);
+      return entry.channel.name.toLowerCase().includes(q);
+    });
+  }, [pinnedEntries, search]);
   const hasSidebarSearch = search.trim().length > 0;
+  const dmActions = useDmRowActions();
   const currentUserRole = useMemo(
     () => workspaceMembers.find((m) => m.user_id === currentUserId)?.role ?? "member",
     [workspaceMembers, currentUserId],
@@ -886,14 +925,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       currentUserRole === "admin",
     [currentUserId, currentUserRole],
   );
+  // Collapsed CHANNELS badge covers unpinned only — pinned rows sit in PINNED.
   const aggregateChannelUnread = useMemo(
     () =>
       sumUnmutedUnreadCounts(
-        channels,
+        unpinnedChannels,
         (c) => c.real_unread_count ?? c.unread_count ?? 0,
         (c) => isConversationMuted(c),
       ),
-    [channels],
+    [unpinnedChannels],
   );
 
   useEffect(() => {
@@ -1369,17 +1409,19 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     // Send lock (N held/auto-repeat Enter → 1 request) + payload-bound
     // client_message_id + the 3-way outcome, all owned by useComposerSend.
     const dispatched = channelSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds),
+      payloadKey: composePayloadKey(content, attachmentIds, quoteTarget?.id ?? ""),
       buildVars: (clientMessageId) => ({
         channelId: active.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        quoteMessageId: quoteTarget?.id ?? undefined,
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
       onCommitted: () => {
         editorRef.current?.clearContent();
         uploadMapRef.current.clear();
+        setQuoteTarget(null);
         if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
       },
       // 200-dedup is silent (onCommitted); a 409 or any other failure always
@@ -1402,18 +1444,24 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       if (content.includes(url)) attachmentIds.push(id);
     }
     threadSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds, threadRoot.id),
+      payloadKey: composePayloadKey(
+        content,
+        attachmentIds,
+        `${threadRoot.id}:${threadQuoteTarget?.id ?? ""}`,
+      ),
       buildVars: (clientMessageId) => ({
         channelId: active.id,
         messageId: threadRoot.id,
         content,
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        quoteMessageId: threadQuoteTarget?.id ?? undefined,
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
       onCommitted: () => {
         threadEditorRef.current?.clearContent();
         threadUploadMapRef.current.clear();
+        setThreadQuoteTarget(null);
         setThreadDraftEmpty(true);
       },
       onVisibleError: () => toast.error(t(($) => $.thread.send_failed)),
@@ -1430,17 +1478,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     setOpenThreadRoot(null);
     setSelectedAgentPanelId(agentId);
   };
-
-  const handleToggleThreadFollow = useCallback(
-    (next: boolean) => {
-      if (!activeChannelId || !threadRoot) return;
-      setThreadFollowed.mutate(
-        { channelId: activeChannelId, messageId: threadRoot.id, followed: next },
-        { onError: () => toast.error(t(($) => $.dm.action_failed)) },
-      );
-    },
-    [activeChannelId, threadRoot, setThreadFollowed, t],
-  );
 
   const toggleInvite = (key: string) => {
     setSelectedInvites((prev) => {
@@ -1630,6 +1667,173 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     </>
   ) : null;
 
+  // Shared channel row for the unified PINNED section and the CHANNELS list.
+  const renderChannelSidebarRow = (channel: Channel) => {
+    const realUnread = channel.real_unread_count ?? channel.unread_count ?? 0;
+    const isManualDot = !!channel.manually_unread && realUnread === 0;
+    const isMuted = isConversationMuted(channel);
+    const last = channel.last_message;
+    const preview = last
+      ? formatChannelMessagePreview(
+          resolveChannelAuthorDisplayName(last, {
+            members: workspaceMembers,
+            agents,
+          }),
+          last.content,
+          resolveMentionPreview,
+          last.parts,
+        )
+      : "";
+    const pinned = !!channel.pinned_at;
+    const archiveAllowed = canArchive(channel);
+    const channelMenuItems = (
+      <>
+        <ContextMenuItem onClick={() => handleMarkChannelUnread(channel.id)}>
+          <Mail className="size-4" />
+          {t(($) => $.sidebar.mark_unread)}
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => handleToggleChannelPin(channel)}>
+          {pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+          {pinned ? t(($) => $.sidebar.unpin) : t(($) => $.sidebar.pin)}
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => handleToggleChannelMute(channel)}>
+          {isMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+          {isMuted ? t(($) => $.sidebar.unmute) : t(($) => $.sidebar.mute)}
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        {archiveAllowed ? (
+          <ContextMenuItem onClick={() => setArchiveTarget(channel)}>
+            <Archive className="size-4" />
+            {t(($) => $.sidebar.archive)}
+          </ContextMenuItem>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger>
+              <ContextMenuItem
+                aria-disabled
+                onClick={() => toast.error(t(($) => $.sidebar.archive_permission))}
+                className="opacity-50"
+              >
+                <Archive className="size-4" />
+                {t(($) => $.sidebar.archive)}
+              </ContextMenuItem>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              {t(($) => $.sidebar.archive_permission)}
+            </TooltipContent>
+          </Tooltip>
+        )}
+      </>
+    );
+    return (
+      <ContextMenu key={channel.id}>
+        <ContextMenuTrigger
+          render={
+            <div
+              data-pinned={pinned ? "true" : undefined}
+              className={cn(
+                "group/row relative mb-0.5 rounded-lg transition-colors",
+                active?.id === channel.id ? "bg-primary/[0.08]" : "hover:bg-accent",
+              )}
+            />
+          }
+        >
+          <button
+            type="button"
+            onClick={() => selectChannel(channel.id)}
+            className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
+          >
+            <ChannelGroupAvatar members={channel.members ?? []} size={40} />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-foreground">
+                  {pinned && (
+                    <Pin className="size-3 shrink-0 -rotate-45 fill-muted-foreground/70 text-muted-foreground/70" />
+                  )}
+                  <span className="truncate">{channel.name}</span>
+                  {isMuted && (
+                    <MutedIndicator label={t(($) => $.sidebar.muted_label)} />
+                  )}
+                  {channel.lark_chat_id && (
+                    <Smartphone className="size-3 shrink-0 text-emerald-600" />
+                  )}
+                </span>
+                {last && (
+                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                    {timeAgo(last.created_at)}
+                  </span>
+                )}
+              </div>
+              <div className="mt-0.5 flex items-center justify-between gap-2">
+                <span className="truncate text-xs text-muted-foreground">{preview}</span>
+                <ConversationUnreadAffordance
+                  realUnread={realUnread}
+                  isManualDot={isManualDot}
+                  isMuted={isMuted}
+                  hasMention={!!channel.has_mention}
+                  mentionLabel={t(($) => $.sidebar.mention_indicator)}
+                />
+              </div>
+            </div>
+          </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={t(($) => $.sidebar.menu_aria)}
+                  className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 data-[popup-open]:opacity-100"
+                >
+                  <MoreHorizontal className="size-4" />
+                </button>
+              }
+            />
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => handleMarkChannelUnread(channel.id)}>
+                <Mail className="size-4" />
+                {t(($) => $.sidebar.mark_unread)}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleToggleChannelPin(channel)}>
+                {pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+                {pinned ? t(($) => $.sidebar.unpin) : t(($) => $.sidebar.pin)}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleToggleChannelMute(channel)}>
+                {isMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+                {isMuted ? t(($) => $.sidebar.unmute) : t(($) => $.sidebar.mute)}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {archiveAllowed ? (
+                <DropdownMenuItem onClick={() => setArchiveTarget(channel)}>
+                  <Archive className="size-4" />
+                  {t(($) => $.sidebar.archive)}
+                </DropdownMenuItem>
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger>
+                    <DropdownMenuItem
+                      aria-disabled
+                      onClick={() => toast.error(t(($) => $.sidebar.archive_permission))}
+                      className="opacity-50"
+                    >
+                      <Archive className="size-4" />
+                      {t(($) => $.sidebar.archive)}
+                    </DropdownMenuItem>
+                  </TooltipTrigger>
+                  <TooltipContent side="left">
+                    {t(($) => $.sidebar.archive_permission)}
+                  </TooltipContent>
+                </Tooltip>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          {channelMenuItems}
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  };
+
   // Channel list pane. Full-width on mobile (list-first); a 280px sidebar on
   // desktop. The `border-r` only makes sense beside the stream pane, so it's
   // dropped on mobile where the list stands alone.
@@ -1656,6 +1860,34 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+            {/* Unified PINNED section (Slack Starred / 置顶分组) — DMs + channels */}
+            <PinnedConversationsSection entries={filteredPinnedEntries}>
+              {filteredPinnedEntries.map((entry) => {
+                if (entry.kind === "dm") {
+                  const dm = entry.dm;
+                  return (
+                    <DmConversationRow
+                      key={`pinned-dm:${dm.source}:${dm.id}`}
+                      dm={dm}
+                      active={activeDmId === dm.id}
+                      currentUserName={currentUserName}
+                      timeAgo={timeAgo}
+                      resolveMentionPreview={resolveMentionPreview}
+                      members={workspaceMembers}
+                      agents={agents}
+                      onSelect={() => selectDm(dm)}
+                      onTogglePin={() => dmActions.togglePin(dm)}
+                      onMarkUnread={() => dmActions.markUnread(dm)}
+                      onToggleMute={() => dmActions.toggleMute(dm)}
+                      onClose={() => dmActions.close(dm)}
+                    />
+                  );
+                }
+                const channel = entry.channel;
+                return renderChannelSidebarRow(channel);
+              })}
+            </PinnedConversationsSection>
+
             <DmList
               activeId={activeDmId}
               currentUserName={currentUserName}
@@ -1736,7 +1968,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     <Skeleton className="h-12" />
                     <Skeleton className="h-12" />
                   </div>
-                ) : hasSidebarSearch && filteredChannels.length === 0 ? (
+                ) : hasSidebarSearch && filteredChannels.length === 0 && unpinnedChannels.length > 0 ? (
                   <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
                     <p className="font-medium text-foreground">
                       {t(($) => $.sidebar.no_conversation_matches)}
@@ -1746,170 +1978,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 ) : channels.length === 0 ? (
                   <div className="p-3 text-sm text-muted-foreground">{t(($) => $.sidebar.empty)}</div>
                 ) : (
-                  filteredChannels.map((channel) => {
-                    const realUnread = channel.real_unread_count ?? channel.unread_count ?? 0;
-                    const isManualDot = !!channel.manually_unread && realUnread === 0;
-                    const isMuted = isConversationMuted(channel);
-                    const last = channel.last_message;
-                    const preview = last
-                      ? formatChannelMessagePreview(
-                          resolveChannelAuthorDisplayName(last, {
-                            members: workspaceMembers,
-                            agents,
-                          }),
-                          last.content,
-                          resolveMentionPreview,
-                          last.parts,
-                        )
-                      : "";
-                    const pinned = !!channel.pinned_at;
-                    const archiveAllowed = canArchive(channel);
-                    const channelMenuItems = (
-                      <>
-                        <ContextMenuItem onClick={() => handleMarkChannelUnread(channel.id)}>
-                          <Mail className="size-4" />
-                          {t(($) => $.sidebar.mark_unread)}
-                        </ContextMenuItem>
-                        <ContextMenuItem onClick={() => handleToggleChannelPin(channel)}>
-                          {pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
-                          {pinned ? t(($) => $.sidebar.unpin) : t(($) => $.sidebar.pin)}
-                        </ContextMenuItem>
-                        <ContextMenuItem onClick={() => handleToggleChannelMute(channel)}>
-                          {isMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
-                          {isMuted ? t(($) => $.sidebar.unmute) : t(($) => $.sidebar.mute)}
-                        </ContextMenuItem>
-                        <ContextMenuSeparator />
-                        {archiveAllowed ? (
-                          <ContextMenuItem onClick={() => setArchiveTarget(channel)}>
-                            <Archive className="size-4" />
-                            {t(($) => $.sidebar.archive)}
-                          </ContextMenuItem>
-                        ) : (
-                          <Tooltip>
-                            <TooltipTrigger>
-                              <ContextMenuItem
-                                aria-disabled
-                                onClick={() => toast.error(t(($) => $.sidebar.archive_permission))}
-                                className="opacity-50"
-                              >
-                                <Archive className="size-4" />
-                                {t(($) => $.sidebar.archive)}
-                              </ContextMenuItem>
-                            </TooltipTrigger>
-                            <TooltipContent side="right">
-                              {t(($) => $.sidebar.archive_permission)}
-                            </TooltipContent>
-                          </Tooltip>
-                        )}
-                      </>
-                    );
-                    return (
-                      <ContextMenu key={channel.id}>
-                        <ContextMenuTrigger
-                          render={
-                            <div
-                              className={cn(
-                                "group/row relative mb-0.5 rounded-lg transition-colors",
-                                active?.id === channel.id ? "bg-primary/[0.08]" : "hover:bg-accent",
-                              )}
-                            />
-                          }
-                        >
-                          <button
-                            type="button"
-                            onClick={() => selectChannel(channel.id)}
-                            className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
-                          >
-                            <ChannelGroupAvatar members={channel.members ?? []} size={40} />
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-foreground">
-                                  {pinned && (
-                                    <Pin className="size-3 shrink-0 -rotate-45 fill-muted-foreground/70 text-muted-foreground/70" />
-                                  )}
-                                  <span className="truncate">{channel.name}</span>
-                                  {isMuted && (
-                                    <MutedIndicator label={t(($) => $.sidebar.muted_label)} />
-                                  )}
-                                  {channel.lark_chat_id && (
-                                    <Smartphone className="size-3 shrink-0 text-emerald-600" />
-                                  )}
-                                </span>
-                                {last && (
-                                  <span className="shrink-0 text-[11px] text-muted-foreground">
-                                    {timeAgo(last.created_at)}
-                                  </span>
-                                )}
-                              </div>
-                              <div className="mt-0.5 flex items-center justify-between gap-2">
-                                <span className="truncate text-xs text-muted-foreground">{preview}</span>
-                                <ConversationUnreadAffordance
-                                  realUnread={realUnread}
-                                  isManualDot={isManualDot}
-                                  isMuted={isMuted}
-                                  hasMention={!!channel.has_mention}
-                                  mentionLabel={t(($) => $.sidebar.mention_indicator)}
-                                />
-                              </div>
-                            </div>
-                          </button>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger
-                              render={
-                                <button
-                                  type="button"
-                                  aria-label={t(($) => $.sidebar.menu_aria)}
-                                  className="absolute right-1 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 data-[popup-open]:opacity-100"
-                                >
-                                  <MoreHorizontal className="size-4" />
-                                </button>
-                              }
-                            />
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => handleMarkChannelUnread(channel.id)}>
-                                <Mail className="size-4" />
-                                {t(($) => $.sidebar.mark_unread)}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => handleToggleChannelPin(channel)}>
-                                {pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
-                                {pinned ? t(($) => $.sidebar.unpin) : t(($) => $.sidebar.pin)}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => handleToggleChannelMute(channel)}>
-                                {isMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
-                                {isMuted ? t(($) => $.sidebar.unmute) : t(($) => $.sidebar.mute)}
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              {archiveAllowed ? (
-                                <DropdownMenuItem onClick={() => setArchiveTarget(channel)}>
-                                  <Archive className="size-4" />
-                                  {t(($) => $.sidebar.archive)}
-                                </DropdownMenuItem>
-                              ) : (
-                                <Tooltip>
-                                  <TooltipTrigger>
-                                    <DropdownMenuItem
-                                      aria-disabled
-                                      onClick={() => toast.error(t(($) => $.sidebar.archive_permission))}
-                                      className="opacity-50"
-                                    >
-                                      <Archive className="size-4" />
-                                      {t(($) => $.sidebar.archive)}
-                                    </DropdownMenuItem>
-                                  </TooltipTrigger>
-                                  <TooltipContent side="left">
-                                    {t(($) => $.sidebar.archive_permission)}
-                                  </TooltipContent>
-                                </Tooltip>
-                              )}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </ContextMenuTrigger>
-                        <ContextMenuContent>
-                          {channelMenuItems}
-                        </ContextMenuContent>
-                      </ContextMenu>
-                    );
-                  })
+                  filteredChannels.map((channel) => renderChannelSidebarRow(channel))
                 )
               )}
 
@@ -2041,10 +2110,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         replies={threadReplies}
         currentUserId={currentUserId}
         currentUserName={currentUserName ?? undefined}
-        participants={threadParticipants}
-        followed={threadRoot.thread_followed ?? false}
-        onToggleFollow={handleToggleThreadFollow}
-        wakeAnnotations={threadWakeAnnotations}
         isMobile={isMobile}
         onBack={() => setOpenThreadRoot(null)}
         onViewParent={() => {
@@ -2055,6 +2120,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         loadError={threadError}
         onRetry={() => refetchThread()}
         onReact={handleReactToMessage}
+        onQuoteMessage={setThreadQuoteTarget}
+        quoteTarget={threadQuoteTarget}
+        onClearQuote={() => setThreadQuoteTarget(null)}
         editor={
           <ContentEditor
             key={`thread-editor:${threadRoot.id}`}
@@ -2112,7 +2180,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     ) : null;
   const agentPanel =
     active && selectedAgentPanel ? (
-      <AgentFilesPanel
+      <AgentSidePanel
         agent={selectedAgentPanel}
         currentUserId={currentUserId}
         members={workspaceMembers}
@@ -2338,6 +2406,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 ownName={currentUserName ?? undefined}
                 highlightMessageId={effectiveHighlightId}
                 lastReadSeq={dividerLastReadSeq}
+                // #340 divider count, most-authoritative first: the around
+                // response's server-computed total → the entry-frozen list count
+                // → (in MessageViewport) the loaded-window count.
+                unreadCount={
+                  messagePages?.pages?.[0]?.unread_total ??
+                  entryAnchor.unreadCount
+                }
                 firstItemIndex={messagesFirstItemIndex}
                 searchHitIds={searchHitIds}
                 searchQuery={searchHighlightQuery}
@@ -2353,6 +2428,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 onOpenThread={isActiveArchived ? undefined : handleOpenThread}
                 onScrollToMessage={setHighlightMessageId}
                 onReact={handleReactToMessage}
+                onQuoteMessage={isActiveArchived ? undefined : setQuoteTarget}
                 onEditMessage={isActiveArchived ? undefined : handleEditMessage}
                 onDeleteMessage={isActiveArchived ? undefined : handleDeleteMessage}
                 onOpenAgent={handleOpenAgentPanel}
@@ -2405,6 +2481,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     sending={sendMessage.isPending}
                     onSend={handleSend}
                     isMobile={isMobile}
+                    prefix={quoteTarget ? (
+                      <ComposerQuotePreview
+                        quote={quoteTarget}
+                        onCancel={() => setQuoteTarget(null)}
+                        cancelLabel={t(($) => $.quote.cancel)}
+                      />
+                    ) : undefined}
                     editor={
                       <ContentEditor
                         key={active.id}
@@ -2527,6 +2610,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   }
 
   return (
+    <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
     <div className="flex h-full min-h-0 flex-col">
       {isMobile ? (
         // Mobile: single full-width column — the list, or (when a conversation
@@ -2704,5 +2788,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    </AgentPanelProvider>
   );
 }

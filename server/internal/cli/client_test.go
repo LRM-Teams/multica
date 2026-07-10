@@ -236,6 +236,41 @@ func TestDownloadFile(t *testing.T) {
 	})
 }
 
+func TestUploadFileOptsWritesChannelID(t *testing.T) {
+	var gotChannel, gotIssue string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("parse multipart: %v", err)
+		}
+		gotChannel = r.FormValue("channel_id")
+		gotIssue = r.FormValue("issue_id")
+		if _, _, err := r.FormFile("file"); err != nil {
+			t.Fatalf("missing file: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"id": "att-chan-1"})
+	}))
+	defer srv.Close()
+
+	client := NewAPIClient(srv.URL, "ws-1", "tok")
+	id, err := client.UploadFileOpts(context.Background(), []byte("hi"), "a.txt", UploadFileOptions{
+		ChannelID: "chan-uuid",
+		IssueID:   "issue-uuid",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "att-chan-1" {
+		t.Fatalf("id = %q", id)
+	}
+	if gotChannel != "chan-uuid" {
+		t.Fatalf("channel_id = %q, want chan-uuid", gotChannel)
+	}
+	if gotIssue != "issue-uuid" {
+		t.Fatalf("issue_id = %q, want issue-uuid", gotIssue)
+	}
+}
+
 func TestUploadFileWithURL(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

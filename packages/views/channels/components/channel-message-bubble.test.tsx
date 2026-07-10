@@ -97,8 +97,10 @@ vi.mock("../../i18n/use-t", () => ({
         message: {
           add_reaction: string;
           agent_badge: string;
+          radar_badge: string;
           feishu_badge: string;
           copy_action: string;
+          expand_action: string;
           copied_toast: string;
           copy_failed_toast: string;
           sticker_alt: string;
@@ -113,7 +115,23 @@ vi.mock("../../i18n/use-t", () => ({
           save_edit: string;
           cancel_edit: string;
         };
-        quote: { jump_to: string };
+        quote: {
+          action: string;
+          jump_to: string;
+          cancel: string;
+          unavailable_title: string;
+          unavailable_summary: string;
+          type_user: string;
+          type_agent: string;
+          type_lark: string;
+          type_system: string;
+          type_unknown: string;
+          attachment_summary: string;
+          attachments_summary: string;
+          image_summary: string;
+          images_summary: string;
+          empty_summary: string;
+        };
         thread: { reply: string; reply_count: string };
         time: { today: string; yesterday: string };
       }) => string,
@@ -122,9 +140,11 @@ vi.mock("../../i18n/use-t", () => ({
         message: {
           add_reaction: "Add reaction",
           agent_badge: "Agent",
+          radar_badge: "Project Radar",
           feishu_badge: "Feishu",
           actions_menu: "Message actions",
           copy_action: "Copy",
+          expand_action: "Show full message",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
           sticker_alt: "Sticker",
@@ -139,7 +159,21 @@ vi.mock("../../i18n/use-t", () => ({
           cancel_edit: "Cancel",
         },
         quote: {
+          action: "Quote",
           jump_to: "Jump to original message",
+          cancel: "Cancel quote",
+          unavailable_title: "Original message unavailable",
+          unavailable_summary: "It may have been deleted or you may not have access.",
+          type_user: "Message",
+          type_agent: "Agent",
+          type_lark: "Feishu",
+          type_system: "System",
+          type_unknown: "Message",
+          attachment_summary: "Attachment",
+          attachments_summary: "Attachments",
+          image_summary: "Image",
+          images_summary: "Images",
+          empty_summary: "No preview available",
         },
         thread: {
           reply: "Reply in thread",
@@ -250,6 +284,22 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
   });
 
+  it("marks proactive radar messages with a Project Radar pill", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: "主动发现：CI has failed twice." })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("Project Radar")).toBeInTheDocument();
+  });
+
+  it("scopes the message body as message-surface for Slack-aligned image caps", () => {
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+    expect(screen.getByTestId("message-body")).toHaveClass("message-surface");
+  });
+
   it("renders the current user's own message right-aligned without an Agent pill", () => {
     const msg = makeMessage({
       type: "user",
@@ -272,6 +322,95 @@ describe("ChannelMessageBubble", () => {
 
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
     expect(screen.getByText("Bob Display")).toBeInTheDocument();
+  });
+
+  it("applies a cool self-mention wash when someone else @-mentions the viewer", () => {
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: "hey [@Alice](mention://member/user-1) please look",
+    });
+    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+    const bubble = screen.getByTestId("message-bubble");
+    expect(bubble).toHaveAttribute("data-self-mentioned", "true");
+    expect(bubble.className).toContain("bg-brand/[0.04]");
+  });
+
+  it("applies the self-mention wash for @all from another author", () => {
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: "[@all](mention://all/all) standup in 5",
+    });
+    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+    expect(screen.getByTestId("message-bubble")).toHaveAttribute(
+      "data-self-mentioned",
+      "true",
+    );
+  });
+
+  it("does not wash the viewer's own messages even when they @ themselves or @all", () => {
+    const selfPing = makeMessage({
+      type: "user",
+      author_id: "user-1",
+      author_name: "alice",
+      content: "note to self [@Alice](mention://member/user-1)",
+    });
+    const { rerender } = render(
+      <ChannelMessageBubble message={selfPing} currentUserId="user-1" />,
+    );
+    expect(screen.getByTestId("message-bubble")).not.toHaveAttribute(
+      "data-self-mentioned",
+    );
+    expect(screen.getByTestId("message-bubble").className).not.toContain(
+      "bg-brand/[0.04]",
+    );
+
+    const ownAll = makeMessage({
+      type: "user",
+      author_id: "user-1",
+      author_name: "alice",
+      content: "[@all](mention://all/all) heads up",
+    });
+    rerender(<ChannelMessageBubble message={ownAll} currentUserId="user-1" />);
+    expect(screen.getByTestId("message-bubble")).not.toHaveAttribute(
+      "data-self-mentioned",
+    );
+  });
+
+  it("does not self-mention-wash messages that only mention others", () => {
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: "hey [@Carol](mention://member/user-3) and [@Bot](mention://agent/agent-1)",
+    });
+    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+    const bubble = screen.getByTestId("message-bubble");
+    expect(bubble).not.toHaveAttribute("data-self-mentioned");
+    expect(bubble.className).not.toContain("bg-brand/[0.04]");
+  });
+
+  it("lets deep-link highlight take visual priority over the self-mention wash", () => {
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: "hey [@Alice](mention://member/user-1)",
+    });
+    render(
+      <ChannelMessageBubble message={msg} currentUserId="user-1" highlighted />,
+    );
+
+    const bubble = screen.getByTestId("message-bubble");
+    expect(bubble).toHaveAttribute("data-self-mentioned", "true");
+    expect(bubble.className).toContain("bg-primary/10");
+    expect(bubble.className).toContain("ring-primary/25");
   });
 
   it("shows a presence status dot on agent message avatars only", () => {
@@ -307,21 +446,24 @@ describe("ChannelMessageBubble", () => {
     expect(box).toHaveStyle({ width: "28px", height: "28px" });
   });
 
-  it("resolves quoted reply author names through live identity", () => {
+  it("resolves quoted snapshot author names through live identity", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({
           type: "user",
           author_id: "user-2",
           author_name: "bob",
-          reply_to_message_id: "m0",
-          reply_to: {
-            id: "m0",
-            type: "user",
-            author_id: "user-1",
-            author_name: "alice",
-            content: "Earlier point",
-            created_at: "2026-06-17T09:10:00Z",
+          quote_message_id: "m0",
+          quote: {
+            messageId: "m0",
+            status: "active",
+            snapshot: {
+              type: "user",
+              authorId: "user-1",
+              authorName: "alice",
+              content: "Earlier point",
+              createdAt: "2026-06-17T09:10:00Z",
+            },
           },
         })}
         currentUserId="user-2"
@@ -329,7 +471,41 @@ describe("ChannelMessageBubble", () => {
     );
 
     expect(screen.getByText("Alice Display")).toBeInTheDocument();
+    expect(screen.getByText("Message")).toBeInTheDocument();
     expect(screen.queryByText("alice")).not.toBeInTheDocument();
+  });
+
+  it("starts quoting from the desktop message context menu", async () => {
+    const onQuote = vi.fn();
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" onQuote={onQuote} />);
+
+    fireEvent.contextMenu(screen.getByTestId("message-bubble"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /Quote/ }));
+
+    expect(onQuote).toHaveBeenCalledWith(expect.objectContaining({ id: "m1" }));
+  });
+
+  it("renders deleted and inaccessible quote fallbacks", () => {
+    const { rerender } = render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          quote_message_id: "m0",
+          quote: { messageId: "m0", status: "deleted" },
+        })}
+        currentUserId="user-2"
+      />,
+    );
+
+    expect(screen.getByText("Original message unavailable")).toBeInTheDocument();
+
+    rerender(
+      <ChannelMessageBubble
+        message={makeMessage({ quote_message_id: "missing", quote: null })}
+        currentUserId="user-2"
+      />,
+    );
+
+    expect(screen.getByText("It may have been deleted or you may not have access.")).toBeInTheDocument();
   });
 
   it("passes the search query to markdown only for search hits", () => {
@@ -420,6 +596,39 @@ describe("ChannelMessageBubble", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(body).toHaveClass("select-text");
+  });
+
+  it("keeps long history as full DOM content behind a readable collapsed preview", async () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: Array.from({ length: 13 }, (_, index) => `Line ${index}`).join("\n") })}
+        currentUserId="user-1"
+        collapseLongContent
+      />,
+    );
+
+    const body = screen.getByTestId("message-body");
+    expect(body).toHaveAttribute("data-collapsed", "true");
+    expect(body).toHaveClass("max-h-[min(260px,55vh)]");
+    expect(body).toHaveTextContent("Line 12");
+
+    await userEvent.click(screen.getByRole("button", { name: "Show full message" }));
+
+    expect(body).not.toHaveAttribute("data-collapsed");
+    expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
+  });
+
+  it("does not show the history collapse affordance for short messages", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: "Short historical answer" })}
+        currentUserId="user-1"
+        collapseLongContent
+      />,
+    );
+
+    expect(screen.getByTestId("message-body")).not.toHaveAttribute("data-collapsed");
+    expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
   });
 
   it("copies the message content from the visible action button", async () => {

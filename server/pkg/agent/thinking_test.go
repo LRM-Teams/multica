@@ -268,6 +268,10 @@ func TestIsKnownThinkingValue(t *testing.T) {
 		{"pi", "max", false},
 		{"hermes", "", true},
 		{"hermes", "low", false}, // hermes has no thinking concept
+		{"grok", "", true},
+		{"grok", "high", true},
+		{"grok", "max", true},
+		{"grok", "turbo", false},
 	}
 	for _, tc := range tests {
 		if got := IsKnownThinkingValue(tc.provider, tc.value); got != tc.want {

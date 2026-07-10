@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enChannels from "../../locales/en/channels.json";
 import type { DMItem } from "@multica/core/dm";
@@ -12,9 +12,13 @@ const TEST_RESOURCES = { en: { channels: enChannels } };
 const mockViewport = vi.hoisted(() => ({ isMobile: false }));
 const mockQueryData = vi.hoisted(() => ({
   dms: [] as DMItem[],
-  agents: [],
-  members: [],
-  squads: [],
+  agents: [] as Array<Record<string, unknown>>,
+  members: [] as Array<Record<string, unknown>>,
+  squads: [] as Array<Record<string, unknown>>,
+}));
+const openDMMocks = vi.hoisted(() => ({
+  openDM: vi.fn(),
+  isPending: false,
 }));
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
@@ -50,7 +54,10 @@ vi.mock("@multica/core/workspace/queries", () => ({
 }));
 
 vi.mock("../../common/use-open-dm", () => ({
-  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
+  useOpenDM: () => ({
+    openDM: openDMMocks.openDM,
+    isPending: openDMMocks.isPending,
+  }),
 }));
 
 vi.mock("../../common/actor-avatar", () => ({
@@ -109,7 +116,7 @@ vi.mock("@multica/ui/components/ui/popover", () => {
       </div>
     ),
     PopoverContent: ({ children }: { children: ReactNode }) =>
-      state.open ? <div>{children}</div> : null,
+      state.open ? <div data-testid="dm-picker-content">{children}</div> : null,
   };
 });
 
@@ -134,12 +141,46 @@ function makeDm(overrides: Partial<DMItem> = {}): DMItem {
   };
 }
 
+function seedPickerPeers() {
+  mockQueryData.agents = [
+    {
+      id: "agent-1",
+      name: "helper",
+      display_name: "Helpful Bot",
+      archived_at: null,
+    },
+    {
+      id: "agent-archived",
+      name: "retired",
+      display_name: "Retired Bot",
+      archived_at: "2026-01-01T00:00:00Z",
+    },
+  ];
+  mockQueryData.members = [
+    {
+      user_id: "user-1",
+      name: "me",
+      display_name: "Current User",
+    },
+    {
+      user_id: "user-2",
+      name: "alice",
+      display_name: "Alice",
+    },
+  ];
+}
+
 function renderDmList(props: Partial<Parameters<typeof DmList>[0]> = {}) {
   return render(
     <I18nProvider resources={TEST_RESOURCES} locale="en">
       <DmList activeId={null} currentUserName="Test User" onSelect={vi.fn()} {...props} />
     </I18nProvider>,
   );
+}
+
+function openDesktopPicker() {
+  fireEvent.click(screen.getByText("Start a chat"));
+  expect(screen.getByText("New message")).toBeInTheDocument();
 }
 
 describe("DmList new-DM picker", () => {
@@ -149,6 +190,9 @@ describe("DmList new-DM picker", () => {
     mockQueryData.agents = [];
     mockQueryData.members = [];
     mockQueryData.squads = [];
+    openDMMocks.isPending = false;
+    openDMMocks.openDM.mockReset();
+    openDMMocks.openDM.mockResolvedValue(makeDm({ id: "dm-created" }));
   });
 
   it("opens the desktop picker from the empty-state CTA", () => {
@@ -173,37 +217,91 @@ describe("DmList new-DM picker", () => {
     expect(screen.getByText("New message")).toBeInTheDocument();
   });
 
-  it("gives pinned DM rows a full-row neutral background in light and dark themes", () => {
+  it("excludes pinned DMs from the list (they belong in the unified PINNED section)", () => {
     mockQueryData.dms = [
-      makeDm({ pinned_at: "2026-07-03T00:00:00Z" }),
+      makeDm({ id: "dm-pinned", pinned_at: "2026-07-03T00:00:00Z", peer: { type: "user", id: "p1", name: "Pinned Person" } }),
+      makeDm({ id: "dm-free", peer: { type: "user", id: "p2", name: "Free Person" } }),
     ];
 
     renderDmList();
 
-    const row = screen
-      .getByRole("button", { name: /Pinned Person/i })
-      .closest("[data-pinned='true']");
-
-    expect(row).toHaveClass("bg-muted/55");
-    expect(row).toHaveClass("hover:bg-muted/75");
-    expect(row).toHaveClass("dark:bg-muted/25");
-    expect(row).toHaveClass("dark:hover:bg-muted/35");
+    expect(screen.queryByRole("button", { name: /Pinned Person/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Free Person/i })).toBeInTheDocument();
   });
 
-  it("keeps a distinct selected style when the pinned DM is active", () => {
-    mockQueryData.dms = [
-      makeDm({ pinned_at: "2026-07-03T00:00:00Z" }),
-    ];
+  it("lists active agents and other members, excluding self and archived agents", () => {
+    seedPickerPeers();
+    renderDmList();
+    openDesktopPicker();
 
-    renderDmList({ activeId: "dm-1" });
+    expect(screen.getByText("Helpful Bot")).toBeInTheDocument();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(screen.queryByText("Retired Bot")).not.toBeInTheDocument();
+    expect(screen.queryByText("Current User")).not.toBeInTheDocument();
+    // Type labels distinguish agent vs human peers.
+    expect(screen.getByText("Agent")).toBeInTheDocument();
+    expect(screen.getByText("Human")).toBeInTheDocument();
+  });
 
-    const row = screen
-      .getByRole("button", { name: /Pinned Person/i })
-      .closest("[data-pinned='true']");
+  it("filters picker results by search query", () => {
+    seedPickerPeers();
+    renderDmList();
+    openDesktopPicker();
 
-    expect(row).toHaveClass("bg-muted/80");
-    expect(row).toHaveClass("ring-1");
-    expect(row).toHaveClass("dark:bg-muted/45");
+    fireEvent.change(screen.getByPlaceholderText("Search people or agents…"), {
+      target: { value: "alice" },
+    });
+
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(screen.queryByText("Helpful Bot")).not.toBeInTheDocument();
+  });
+
+  it("opens a DM with the selected peer and closes the picker on success", async () => {
+    seedPickerPeers();
+    renderDmList();
+    openDesktopPicker();
+
+    fireEvent.click(screen.getByText("Alice"));
+
+    await waitFor(() => {
+      expect(openDMMocks.openDM).toHaveBeenCalledWith({
+        peer_type: "user",
+        peer_id: "user-2",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("New message")).not.toBeInTheDocument();
+    });
+  });
+
+  it("opens a DM with an agent peer", async () => {
+    seedPickerPeers();
+    renderDmList();
+    openDesktopPicker();
+
+    fireEvent.click(screen.getByText("Helpful Bot"));
+
+    await waitFor(() => {
+      expect(openDMMocks.openDM).toHaveBeenCalledWith({
+        peer_type: "agent",
+        peer_id: "agent-1",
+      });
+    });
+  });
+
+  it("keeps the picker open when openDM fails", async () => {
+    openDMMocks.openDM.mockResolvedValueOnce(null);
+    seedPickerPeers();
+    renderDmList();
+    openDesktopPicker();
+
+    fireEvent.click(screen.getByText("Alice"));
+
+    await waitFor(() => {
+      expect(openDMMocks.openDM).toHaveBeenCalled();
+    });
+    expect(screen.getByText("New message")).toBeInTheDocument();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
   });
 });
 
@@ -216,6 +314,8 @@ describe("DmList unread affordance (read-model)", () => {
     mockQueryData.agents = [];
     mockQueryData.members = [];
     mockQueryData.squads = [];
+    openDMMocks.openDM.mockReset();
+    openDMMocks.openDM.mockResolvedValue(makeDm({ id: "dm-created" }));
   });
 
   it("renders the real unread count from the read-model, not a constant", () => {

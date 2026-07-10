@@ -103,6 +103,10 @@ func ListModels(ctx context.Context, providerType, executablePath string) ([]Mod
 		return models, nil
 	case "gemini":
 		return geminiStaticModels(), nil
+	case "grok":
+		return cachedDiscovery(discoveryCacheKey(providerType, executablePath), func() ([]Model, error) {
+			return discoverGrokModels(ctx, executablePath)
+		})
 	case "antigravity":
 		// agy 1.0.6 added a `--model` flag plus an `agy models` catalog
 		// command (MUL-3125). Enumerate it on demand like the other
@@ -266,6 +270,132 @@ func geminiStaticModels() []Model {
 		{ID: "gemini-2.5-flash", Label: "Gemini 2.5 Flash", Provider: "google"},
 		{ID: "gemini-2.5-flash-lite", Label: "Gemini 2.5 Flash Lite", Provider: "google"},
 	}
+}
+
+// grokStaticModels is the fallback catalog used when `grok models` is
+// unavailable (binary missing, offline, not logged in). Verified against
+// grok 0.2.93 which advertised grok-4.5 (default) and grok-composer-2.5-fast.
+func grokStaticModels() []Model {
+	thinking := grokModelThinking()
+	return []Model{
+		{ID: "grok-4.5", Label: "Grok 4.5", Provider: "grok", Default: true, Thinking: thinking},
+		{ID: "grok-composer-2.5-fast", Label: "Grok Composer 2.5 Fast", Provider: "grok", Thinking: thinking},
+	}
+}
+
+// grokModelThinking lists --reasoning-effort values accepted by the Grok CLI.
+func grokModelThinking() *ModelThinking {
+	return &ModelThinking{
+		SupportedLevels: []ThinkingLevel{
+			{Value: "none", Label: "None"},
+			{Value: "minimal", Label: "Minimal"},
+			{Value: "low", Label: "Low"},
+			{Value: "medium", Label: "Medium"},
+			{Value: "high", Label: "High"},
+			{Value: "xhigh", Label: "Extra high"},
+			{Value: "max", Label: "Max"},
+		},
+		// Observed default on grok 0.2.93 session summaries.
+		DefaultLevel: "high",
+	}
+}
+
+// discoverGrokModels runs `grok models` and parses the human-readable catalog.
+// Falls back to grokStaticModels on any failure so the UI stays usable.
+func discoverGrokModels(ctx context.Context, executablePath string) ([]Model, error) {
+	if executablePath == "" {
+		executablePath = "grok"
+	}
+	if _, err := exec.LookPath(executablePath); err != nil {
+		return grokStaticModels(), nil
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, executablePath, "models")
+	hideAgentWindow(cmd)
+	out, err := cmd.Output()
+	if err != nil && len(out) == 0 {
+		return grokStaticModels(), nil
+	}
+	models := parseGrokModels(string(out))
+	if len(models) == 0 {
+		return grokStaticModels(), nil
+	}
+	return models, nil
+}
+
+// parseGrokModels turns `grok models` text output into Model entries.
+// Example (grok 0.2.93):
+//
+//	Default model: grok-4.5
+//	Available models:
+//	  * grok-4.5 (default)
+//	  - grok-composer-2.5-fast
+func parseGrokModels(output string) []Model {
+	thinking := grokModelThinking()
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var models []Model
+	seen := map[string]bool{}
+	defaultFromHeader := ""
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		lower := strings.ToLower(line)
+		if idx := strings.Index(lower, "default model:"); idx >= 0 {
+			defaultFromHeader = strings.TrimSpace(line[idx+len("default model:"):])
+			continue
+		}
+		// Rows look like: "* grok-4.5 (default)" or "- grok-composer-2.5-fast"
+		id := ""
+		isDefault := false
+		switch {
+		case strings.HasPrefix(line, "* "):
+			id = strings.TrimSpace(strings.TrimPrefix(line, "* "))
+		case strings.HasPrefix(line, "- "):
+			id = strings.TrimSpace(strings.TrimPrefix(line, "- "))
+		case strings.HasPrefix(line, "• "):
+			id = strings.TrimSpace(strings.TrimPrefix(line, "• "))
+		default:
+			continue
+		}
+		if strings.Contains(strings.ToLower(id), "(default)") {
+			isDefault = true
+		}
+		// Model id is the first whitespace-delimited token.
+		if i := strings.IndexAny(id, " \t"); i > 0 {
+			id = id[:i]
+		}
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if defaultFromHeader != "" && id == defaultFromHeader {
+			isDefault = true
+		}
+		models = append(models, Model{
+			ID:       id,
+			Label:    id,
+			Provider: "grok",
+			Default:  isDefault,
+			Thinking: thinking,
+		})
+	}
+	// Ensure exactly one default when the CLI marked one.
+	hasDefault := false
+	for _, m := range models {
+		if m.Default {
+			hasDefault = true
+			break
+		}
+	}
+	if !hasDefault && len(models) > 0 {
+		models[0].Default = true
+	}
+	return models
 }
 
 // cursorStaticModels is a minimal fallback used when

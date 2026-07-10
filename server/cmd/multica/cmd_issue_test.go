@@ -241,7 +241,6 @@ func newIssueCreateTestCmd() *cobra.Command {
 	cmd.Flags().String("due-date", "", "")
 	cmd.Flags().Bool("allow-duplicate", false, "")
 	cmd.Flags().String("output", "json", "")
-	cmd.Flags().StringSlice("attachment", nil, "")
 	cmd.Flags().StringSlice("attachment-id", nil, "")
 	return cmd
 }

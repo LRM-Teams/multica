@@ -14,6 +14,7 @@ import type {
   Agent,
   AgentFileContentResponse,
   AgentFilesResponse,
+  ListAgentRadarRunsResponse,
   CreateAgentRequest,
   CreateAgentDraftRequest,
   AgentCreationDraft,
@@ -22,6 +23,7 @@ import type {
   AgentTemplateSummary,
   CreateAgentFromTemplateRequest,
   CreateAgentFromTemplateResponse,
+  EvolutionMetricsResponse,
   EvolutionReviewDecisionRequest,
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
@@ -188,6 +190,7 @@ import {
   EMPTY_AGENT_TEMPLATE_DETAIL,
   EMPTY_AGENT_FILE_CONTENT_RESPONSE,
   EMPTY_AGENT_FILES_RESPONSE,
+  EMPTY_AGENT_RADAR_RUNS_RESPONSE,
   EMPTY_AGENT_HEALTH_RESPONSE,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
@@ -209,6 +212,7 @@ import {
   AppConfigSchema,
   AgentFileContentResponseSchema,
   AgentFilesResponseSchema,
+  AgentRadarRunsResponseSchema,
   AgentHealthResponseSchema,
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
@@ -248,8 +252,10 @@ import {
   EMPTY_BILLING_CHECKOUT_SESSION_STATUS,
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
   EMPTY_CANCEL_TASK_RESPONSE,
+  EMPTY_EVOLUTION_METRICS,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
   EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE,
+  EvolutionMetricsSchema,
   EvolutionReviewSubmissionListSchema,
   EvolutionReviewSubmissionSchema,
   UpdateAgentFileContentResponseSchema,
@@ -967,6 +973,13 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/agents/${id}/files${suffix}`);
     return parseWithFallback(raw, AgentFilesResponseSchema, EMPTY_AGENT_FILES_RESPONSE, {
       endpoint: "GET /api/agents/:id/files",
+    });
+  }
+
+  async listAgentRadarRuns(id: string): Promise<ListAgentRadarRunsResponse> {
+    const raw = await this.fetch<unknown>(`/api/agents/${id}/radar-runs`);
+    return parseWithFallback(raw, AgentRadarRunsResponseSchema, EMPTY_AGENT_RADAR_RUNS_RESPONSE, {
+      endpoint: "GET /api/agents/:id/radar-runs",
     });
   }
 
@@ -1835,6 +1848,16 @@ export class ApiClient {
     );
   }
 
+  async getEvolutionMetrics(params?: { unit_type?: string }): Promise<EvolutionMetricsResponse> {
+    const search = new URLSearchParams();
+    if (params?.unit_type) search.set("unit_type", params.unit_type);
+    const suffix = search.toString();
+    const raw = await this.fetch<unknown>(`/api/evolution/metrics${suffix ? `?${suffix}` : ""}`);
+    return parseWithFallback(raw, EvolutionMetricsSchema, EMPTY_EVOLUTION_METRICS, {
+      endpoint: "GET /api/evolution/metrics",
+    });
+  }
+
   async getEvolutionReviewSubmission(id: string): Promise<EvolutionReviewSubmission | null> {
     const raw = await this.fetch<unknown>(`/api/evolution/submissions/${id}`);
     return parseWithFallback(raw, EvolutionReviewSubmissionSchema, null, {
@@ -2145,11 +2168,23 @@ export class ApiClient {
 
   async listChannelMessagesPage(
     channelId: string,
-    options: { limit?: number; before?: { seq?: number; created_at: string; id: string } | null } = {},
+    options: {
+      limit?: number;
+      before?: { seq?: number; created_at: string; id: string } | null;
+      /**
+       * Anchor sequence for a centered ("around") page (task #340). Loads a
+       * window straddling this seq — the unread cursor on cold-open, or a
+       * deep-link/search target. Mutually exclusive with `before` (the server
+       * rejects both); when set, `before` is ignored.
+       */
+      around?: number | null;
+    } = {},
   ): Promise<ChannelMessagesPage> {
     const limit = options.limit ?? 50;
     const params = new URLSearchParams({ limit: String(limit) });
-    if (options.before) {
+    if (options.around != null) {
+      params.set("around_seq", String(options.around));
+    } else if (options.before) {
       if (typeof options.before.seq === "number") {
         params.set("before_seq", String(options.before.seq));
       } else {
@@ -2213,11 +2248,13 @@ export class ApiClient {
     replyToMessageId?: string | null,
     parts?: MessagePart[],
     clientMessageId?: string | null,
+    quoteMessageId?: string | null,
   ): Promise<ChannelMessage> {
     const body: {
       content: string;
       attachment_ids?: string[];
       reply_to_message_id?: string;
+      quote_message_id?: string;
       parts?: MessagePart[];
       client_message_id?: string;
     } = { content };
@@ -2226,6 +2263,9 @@ export class ApiClient {
     }
     if (replyToMessageId) {
       body.reply_to_message_id = replyToMessageId;
+    }
+    if (quoteMessageId) {
+      body.quote_message_id = quoteMessageId;
     }
     if (parts && parts.length > 0) {
       body.parts = parts;
@@ -2283,11 +2323,13 @@ export class ApiClient {
     parts?: MessagePart[],
     clientMessageId?: string | null,
     showInChannel?: boolean,
+    quoteMessageId?: string | null,
   ): Promise<ChannelMessage> {
     const body: {
       content: string;
       attachment_ids?: string[];
       reply_to_message_id?: string;
+      quote_message_id?: string;
       parts?: MessagePart[];
       client_message_id?: string;
       show_in_channel?: boolean;
@@ -2297,6 +2339,9 @@ export class ApiClient {
     }
     if (replyToMessageId) {
       body.reply_to_message_id = replyToMessageId;
+    }
+    if (quoteMessageId) {
+      body.quote_message_id = quoteMessageId;
     }
     if (parts && parts.length > 0) {
       body.parts = parts;

@@ -75,11 +75,7 @@ vi.mock("react-virtuoso", async () => {
       },
       ref: React.ForwardedRef<{ scrollToIndex: (...args: unknown[]) => void }>,
     ) => {
-      // Empty deps: a stable handle object across re-renders (matching a
-      // well-behaved forwardRef component) — without it a consumer that syncs
-      // the handle into state (channel-message-list.tsx's `handleVirtuosoRef`)
-      // sees a "new" ref every render and loops.
-      React.useImperativeHandle(ref, () => ({ scrollToIndex: vi.fn() }), []);
+      React.useImperativeHandle(ref, () => ({ scrollToIndex: vi.fn() }));
       const Header = components.Header;
       const List = components.List ?? "div";
       const Footer = components.Footer;

@@ -728,6 +728,56 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 	return out, rows.Err()
 }
 
+func (h *Handler) hydrateAgentActivityTimelineEvent(ctx context.Context, workspaceID string, agentID, eventID pgtype.UUID) *AgentActivityTimelineEvent {
+	if h == nil || h.DB == nil {
+		return nil
+	}
+	row, err := scanAgentActivityRow(h.DB.QueryRow(ctx, `
+		SELECT
+			aae.event_kind AS kind,
+			aae.id,
+			aae.agent_id,
+			aae.runtime_id,
+			aae.task_id,
+			NULL::uuid AS issue_id,
+			NULL::uuid AS chat_session_id,
+			aae.event_type,
+			aae.severity,
+			aae.target_kind,
+			aae.target_id,
+			aae.target_slug,
+			aae.reason_code,
+			aae.reason_label,
+			aae.message,
+			aae.details,
+			aae.visibility,
+			aae.action_label,
+			aae.summary,
+			aae.tone,
+			NULL::text AS status,
+			NULL::text AS trigger_summary,
+			NULL::jsonb AS result,
+			NULL::text AS failure_reason,
+			aae.created_at,
+			NULL::timestamptz AS started_at,
+			NULL::timestamptz AS completed_at,
+			0::bigint AS step_count,
+			'[]'::jsonb AS usage_json,
+			NULL::uuid AS result_message_id,
+			NULL::text AS result_message_kind
+		FROM agent_activity_event aae
+		WHERE aae.workspace_id = $1
+		  AND aae.agent_id = $2
+		  AND aae.id = $3
+	`, parseUUID(workspaceID), agentID, eventID))
+	if err != nil {
+		return nil
+	}
+	targetRef := h.agentTimelineTargetRef(ctx, workspaceID, row)
+	event := agentActivityTimelineEvent(row, targetRef)
+	return &event
+}
+
 func (h *Handler) queryAgentActivityRow(ctx context.Context, reqCtx agentActivityRequestContext, activityID pgtype.UUID) (agentActivityRawRow, error) {
 	row := h.DB.QueryRow(ctx, agentActivityUnionSQL+`
 		SELECT *
@@ -1159,6 +1209,30 @@ func (h *Handler) agentTimelineTargetVisibility(ctx context.Context, workspaceID
 	return h.agentEventTargetVisibility(ctx, workspaceID, userID, row)
 }
 
+func (h *Handler) agentTimelineTargetRef(ctx context.Context, workspaceID string, row agentActivityRawRow) AgentActivityTargetRef {
+	if row.IssueID.Valid {
+		return AgentActivityTargetRef{Kind: "issue", ID: stringPtr(uuidToString(row.IssueID))}
+	}
+	if row.ChatSessionID.Valid {
+		channelID := h.channelIDForChatSession(ctx, row.ChatSessionID)
+		if channelID != "" {
+			if root := h.threadRootIDForChatSession(ctx, row.ChatSessionID); root != nil {
+				return AgentActivityTargetRef{Kind: "thread", ID: root, Slug: stringPtr(channelID)}
+			}
+			return AgentActivityTargetRef{Kind: "channel", ID: stringPtr(channelID)}
+		}
+		return AgentActivityTargetRef{Kind: "dm", ID: stringPtr(uuidToString(row.ChatSessionID))}
+	}
+	kind := textOrDefault(row.TargetKind, "none")
+	ref := AgentActivityTargetRef{Kind: kind, ID: uuidToPtr(row.TargetID), Slug: textToPtr(row.TargetSlug)}
+	if ref.Kind == "thread" && ref.Slug == nil && row.TargetID.Valid {
+		if channelID, err := h.channelIDForThreadRoot(ctx, workspaceID, row.TargetID); err == nil && channelID.Valid {
+			ref.Slug = stringPtr(uuidToString(channelID))
+		}
+	}
+	return ref
+}
+
 func (h *Handler) issueBelongsToWorkspace(ctx context.Context, workspaceID string, issueID pgtype.UUID) (bool, error) {
 	var exists bool
 	err := h.DB.QueryRow(ctx, `
@@ -1191,6 +1265,78 @@ func (h *Handler) channelIDForThreadRoot(ctx context.Context, workspaceID string
 		return pgtype.UUID{}, nil
 	}
 	return channelID, err
+}
+
+func (h *Handler) publishAgentActivityRealtimeEvent(ctx context.Context, workspaceID, agentID, eventID string, event *AgentActivityTimelineEvent, targetRef AgentActivityTargetRef) {
+	if h == nil || h.Bus == nil {
+		return
+	}
+	payload := AgentActivityEventRealtimePayload{AgentID: agentID, EventID: eventID}
+	if event != nil {
+		payload.Event = event
+		targetRef = event.TargetRef
+	}
+	if recipientIDs, scoped := h.agentActivityRealtimeRecipientUserIDs(ctx, workspaceID, targetRef); scoped {
+		h.publishToUsers(protocol.EventAgentActivityEvent, workspaceID, "system", "", recipientIDs, payload)
+		return
+	}
+	h.publish(protocol.EventAgentActivityEvent, workspaceID, "system", "", payload)
+}
+
+func (h *Handler) agentActivityRealtimeRecipientUserIDs(ctx context.Context, workspaceID string, targetRef AgentActivityTargetRef) ([]string, bool) {
+	switch targetRef.Kind {
+	case "dm":
+		if targetRef.ID == nil {
+			return []string{}, true
+		}
+		chatSessionID, err := util.ParseUUID(*targetRef.ID)
+		if err != nil {
+			return []string{}, true
+		}
+		creatorID, ok := h.chatSessionCreatorUserID(ctx, workspaceID, chatSessionID)
+		if !ok {
+			return []string{}, true
+		}
+		return []string{creatorID}, true
+	case "channel":
+		if targetRef.ID == nil {
+			return []string{}, true
+		}
+		return recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, workspaceID, *targetRef.ID)), true
+	case "thread":
+		channelID := ""
+		if targetRef.Slug != nil {
+			channelID = *targetRef.Slug
+		} else if targetRef.ID != nil {
+			rootID, err := util.ParseUUID(*targetRef.ID)
+			if err == nil {
+				if id, err := h.channelIDForThreadRoot(ctx, workspaceID, rootID); err == nil && id.Valid {
+					channelID = uuidToString(id)
+				}
+			}
+		}
+		if channelID == "" {
+			return []string{}, true
+		}
+		return recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, workspaceID, channelID)), true
+	default:
+		return nil, false
+	}
+}
+
+func (h *Handler) chatSessionCreatorUserID(ctx context.Context, workspaceID string, chatSessionID pgtype.UUID) (string, bool) {
+	if !chatSessionID.Valid || h == nil || h.DB == nil {
+		return "", false
+	}
+	var creatorID pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+		SELECT creator_id
+		FROM chat_session
+		WHERE id = $1 AND workspace_id = $2`, chatSessionID, parseUUID(workspaceID)).Scan(&creatorID)
+	if err != nil || !creatorID.Valid {
+		return "", false
+	}
+	return uuidToString(creatorID), true
 }
 
 func agentActivityRunSummary(row agentActivityRawRow) *AgentActivityRunSummary {
@@ -1396,6 +1542,73 @@ func agentActivityEventSummary(row agentActivityRawRow) *AgentActivityEventSumma
 		Message:    textToPtr(row.Message),
 		Details:    agentActivityEventDetails(eventType, row.Details),
 	}
+}
+
+func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspaceID string, task db.AgentTaskQueue, message db.TaskMessage) *AgentActivityTimelineEvent {
+	details := map[string]any{
+		"task_message_id": uuidToString(message.ID),
+		"task_id":         uuidToString(message.TaskID),
+		"seq":             message.Seq,
+	}
+	if message.Tool.Valid && strings.TrimSpace(message.Tool.String) != "" {
+		details["tool"] = strings.TrimSpace(message.Tool.String)
+	}
+	detailsJSON, _ := json.Marshal(details)
+	row := agentActivityRawRow{
+		Kind:          taskMessageActivityKind(message.Type),
+		ID:            message.ID,
+		AgentID:       task.AgentID,
+		RuntimeID:     task.RuntimeID,
+		EventTaskID:   task.ID,
+		IssueID:       task.IssueID,
+		ChatSessionID: task.ChatSessionID,
+		EventType:     pgtype.Text{String: message.Type, Valid: strings.TrimSpace(message.Type) != ""},
+		Severity:      pgtype.Text{String: "info", Valid: true},
+		ReasonCode:    pgtype.Text{String: "", Valid: true},
+		ReasonLabel:   pgtype.Text{String: "", Valid: true},
+		Message:       taskMessageActivityText(message),
+		Details:       detailsJSON,
+		Visibility:    pgtype.Text{String: message.Visibility, Valid: strings.TrimSpace(message.Visibility) != ""},
+		ActionLabel:   pgtype.Text{String: message.ActionLabel, Valid: strings.TrimSpace(message.ActionLabel) != ""},
+		Summary:       pgtype.Text{String: message.Summary, Valid: strings.TrimSpace(message.Summary) != ""},
+		Tone:          pgtype.Text{String: message.Tone, Valid: strings.TrimSpace(message.Tone) != ""},
+		CreatedAt:     message.CreatedAt,
+		UsageJSON:     []byte("[]"),
+	}
+	if message.Type == "error" {
+		row.Severity = pgtype.Text{String: "error", Valid: true}
+	}
+	targetRef := h.agentTimelineTargetRef(ctx, workspaceID, row)
+	event := agentActivityTimelineEvent(row, targetRef)
+	return &event
+}
+
+func taskMessageActivityKind(messageType string) string {
+	switch messageType {
+	case "thinking":
+		return activityKindThinking
+	case "tool_use":
+		return activityKindToolCall
+	case "tool_result":
+		return activityKindToolOutput
+	case "error":
+		return activityKindError
+	default:
+		return activityKindText
+	}
+}
+
+func taskMessageActivityText(message db.TaskMessage) pgtype.Text {
+	switch message.Type {
+	case "thinking", "text", "error":
+		if message.Content.Valid && strings.TrimSpace(message.Content.String) != "" {
+			return message.Content
+		}
+		if message.Output.Valid && strings.TrimSpace(message.Output.String) != "" {
+			return message.Output
+		}
+	}
+	return pgtype.Text{}
 }
 
 func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivityTargetRef) AgentActivityTimelineEvent {

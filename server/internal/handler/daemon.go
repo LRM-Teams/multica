@@ -2852,10 +2852,8 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		if workspaceID != "" {
 			h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID,
 				taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
-			h.publish(protocol.EventAgentActivityEvent, workspaceID, "system", "", AgentActivityEventRealtimePayload{
-				AgentID: uuidToString(task.AgentID),
-				EventID: uuidToString(created.ID),
-			})
+			event := h.taskMessageActivityTimelineEvent(r.Context(), workspaceID, task, created)
+			h.publishAgentActivityRealtimeEvent(r.Context(), workspaceID, uuidToString(task.AgentID), uuidToString(created.ID), event, AgentActivityTargetRef{Kind: "none"})
 		}
 	}
 

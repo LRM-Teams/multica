@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const (
@@ -124,10 +123,13 @@ func (h *Handler) recordAgentActivityEvent(
 	if !ok || h == nil || h.Bus == nil {
 		return
 	}
-	h.publish(protocol.EventAgentActivityEvent, uuidToString(workspaceID), "system", "", AgentActivityEventRealtimePayload{
-		AgentID: uuidToString(agentID),
-		EventID: uuidToString(id),
-	})
+	workspaceIDString := uuidToString(workspaceID)
+	event := h.hydrateAgentActivityTimelineEvent(ctx, workspaceIDString, agentID, id)
+	targetRef := AgentActivityTargetRef{Kind: textOrDefault(pgtype.Text{String: targetKind, Valid: strings.TrimSpace(targetKind) != ""}, "none"), ID: uuidToPtr(targetID)}
+	if strings.TrimSpace(targetSlug) != "" {
+		targetRef.Slug = stringPtr(strings.TrimSpace(targetSlug))
+	}
+	h.publishAgentActivityRealtimeEvent(ctx, workspaceIDString, uuidToString(agentID), uuidToString(id), event, targetRef)
 }
 
 type activityNarrative struct {

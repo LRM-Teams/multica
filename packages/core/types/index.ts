@@ -84,10 +84,12 @@ export type {
 export type {
   EvolutionReviewDecision,
   EvolutionReviewDecisionRequest,
+  EvolutionMetricsResponse,
   EvolutionReviewFile,
   EvolutionReviewRiskLevel,
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
+  EvolutionUnitMetric,
   PromoteEvolutionReviewSubmissionResponse,
 } from "./evolution";
 export type {

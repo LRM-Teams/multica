@@ -797,6 +797,12 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	})
 
 	const reply = "Plain final reply from inbox complete"
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_event_delivery
+		SET lease_expires_at = now() - interval '1 second'
+		WHERE id = $1`, got.DeliveryID); err != nil {
+		t.Fatalf("expire delivery before complete: %v", err)
+	}
 	completeReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/complete", CompleteAgentInboxEventRequest{
 		DeliveryID: got.DeliveryID,
 		LeaseToken: got.LeaseToken,
@@ -818,6 +824,85 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	}
 	if status != "acked" {
 		t.Fatalf("inbox event status = %q, want acked", status)
+	}
+}
+
+func TestChannelAgentInboxDrainReclaimsExpiredDelivery(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentName := "Inbox Reclaim Agent " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	runtimeID := handlerTestRuntimeID(t)
+	channelID := seedChannelForTest(t, "agent-inbox-reclaim-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") please answer", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-reclaim"), 0)
+	if err != nil {
+		t.Fatalf("insert mention trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-reclaim-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("first drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode first drain response: %v", err)
+	}
+	if len(drainResp.Events) != 1 {
+		t.Fatalf("first drain returned %d events, want 1: %s", len(drainResp.Events), drainRec.Body.String())
+	}
+	firstDelivery := drainResp.Events[0]
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_event_delivery
+		SET lease_expires_at = now() - interval '1 second'
+		WHERE id = $1`, firstDelivery.DeliveryID); err != nil {
+		t.Fatalf("expire first delivery: %v", err)
+	}
+
+	drainReq = newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-reclaim-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec = httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("second drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode second drain response: %v", err)
+	}
+	if len(drainResp.Events) != 1 {
+		t.Fatalf("second drain returned %d events, want 1: %s", len(drainResp.Events), drainRec.Body.String())
+	}
+	secondDelivery := drainResp.Events[0]
+	if secondDelivery.ID != firstDelivery.ID || secondDelivery.DeliveryID == firstDelivery.DeliveryID {
+		t.Fatalf("second drain = %+v, want same event with a new delivery after expiry", secondDelivery)
+	}
+
+	var eventStatus, oldDeliveryStatus, newDeliveryStatus string
+	if err := testPool.QueryRow(ctx, `
+		SELECT e.status, old_delivery.status, new_delivery.status
+		FROM agent_inbox_event e
+		JOIN agent_event_delivery old_delivery ON old_delivery.id = $2
+		JOIN agent_event_delivery new_delivery ON new_delivery.id = $3
+		WHERE e.id = $1`, firstDelivery.ID, firstDelivery.DeliveryID, secondDelivery.DeliveryID).Scan(&eventStatus, &oldDeliveryStatus, &newDeliveryStatus); err != nil {
+		t.Fatalf("load reclaimed inbox states: %v", err)
+	}
+	if eventStatus != "draining" || oldDeliveryStatus != "expired" || newDeliveryStatus != "leased" {
+		t.Fatalf("reclaimed states = event:%q old:%q new:%q, want draining/expired/leased", eventStatus, oldDeliveryStatus, newDeliveryStatus)
 	}
 }
 

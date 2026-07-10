@@ -2878,6 +2878,35 @@ func TestCompleteTask_GroupChannelNoReplyRationaleOutputIsSuppressedWithCLITrans
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
 }
 
+func TestCompleteTask_DirectedRuntimeDiagnosticOutputIsSanitized(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTask(t, "dm")
+	rawOutput := `“？” 是在确认我是否在线。先修好 multica send 的鉴权，再发一条可见回复。改用任务态 token 的 multica 包装器发送回复。在The background search finished after the reply was already sent; nothing else needed for this turn.`
+	sanitized := `“？” 是在确认我是否在线。`
+
+	w := completeTaskForTest(t, taskID, map[string]any{"output": rawOutput})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertNoChannelMessageContent(t, channelID, rawOutput)
+	assertChannelMessageContentCount(t, channelID, sanitized, 1)
+	assertTaskOutputSuppressedReason(t, taskID, "")
+}
+
+func TestSanitizeRuntimeDiagnosticFinalTextFallsBackWhenOnlyLogRemains(t *testing.T) {
+	got, ok := sanitizeRuntimeDiagnosticFinalText("在The background search finished after the reply was already sent; nothing else needed for this turn.", nil)
+	if !ok {
+		t.Fatal("sanitizeRuntimeDiagnosticFinalText ok=false, want true")
+	}
+	if got != "在的。" {
+		t.Fatalf("sanitizeRuntimeDiagnosticFinalText = %q, want fallback", got)
+	}
+}
+
 func TestCompleteTask_GroupChannelNoReplyPhraseInsideNormalTextIsNotSuppressed(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

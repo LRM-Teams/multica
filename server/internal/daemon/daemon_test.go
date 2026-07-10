@@ -1045,9 +1045,23 @@ func TestHandleTask_InboxCompleteUsesInboxEndpoint(t *testing.T) {
 	t.Parallel()
 
 	var completeSeen atomic.Bool
+	var renewSeen atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/api/daemon/tasks/") {
 			t.Fatalf("inbox run called legacy task endpoint: %s", r.URL.Path)
+		}
+		if r.URL.Path == "/api/daemon/agent-inbox/events/event-123/renew" {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode renew body: %v", err)
+			}
+			if body["delivery_id"] != "delivery-123" || body["lease_token"] != "lease-123" {
+				t.Fatalf("renew body = %#v, want lease", body)
+			}
+			renewSeen.Store(true)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+			return
 		}
 		if r.URL.Path != "/api/daemon/agent-inbox/events/event-123/complete" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -1070,7 +1084,7 @@ func TestHandleTask_InboxCompleteUsesInboxEndpoint(t *testing.T) {
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:         make(map[string]*workspaceState),
 		runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
-		cancelPollInterval: time.Hour,
+		cancelPollInterval: 10 * time.Millisecond,
 	}
 	d.runner = taskRunnerFunc(func(_ context.Context, _ Task, _ string, _ int, _ *slog.Logger) (TaskResult, error) {
 		return TaskResult{Status: "completed", Comment: "inbox reply"}, nil
@@ -1090,6 +1104,9 @@ func TestHandleTask_InboxCompleteUsesInboxEndpoint(t *testing.T) {
 	}, 0)
 	if !completeSeen.Load() {
 		t.Fatal("inbox complete endpoint was not called")
+	}
+	if !renewSeen.Load() {
+		t.Fatal("inbox renew endpoint was not called")
 	}
 }
 

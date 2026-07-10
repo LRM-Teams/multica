@@ -2543,6 +2543,8 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 			case <-runCtx.Done():
 			}
 		}()
+	} else {
+		d.renewInboxLeaseUntil(runCtx, *task.InboxEvent, pollInterval, taskLog)
 	}
 
 	result, err := d.runner.run(runCtx, task, provider, slot, taskLog)
@@ -2812,6 +2814,36 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 		taskLog.Info("task did not complete, reporting failure", "status", result.Status, "failure_reason", failureReason)
 		d.reportTaskFailure(ctx, task, result.Comment, result.SessionID, result.WorkDir, failureReason, taskLog)
 	}
+}
+
+func (d *Daemon) renewInboxLeaseUntil(ctx context.Context, lease AgentInboxLease, interval time.Duration, taskLog *slog.Logger) {
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	renew := func() {
+		if err := d.client.RenewAgentInboxEvent(ctx, lease); err != nil {
+			if isTransientError(err) {
+				taskLog.Debug("agent inbox lease renew transient failure", "event", shortID(lease.ID), "error", err)
+			} else {
+				taskLog.Warn("agent inbox lease renew rejected; terminal callback will decide stale vs recoverable", "event", shortID(lease.ID), "error", err)
+			}
+			return
+		}
+		taskLog.Debug("agent inbox lease renewed", "event", shortID(lease.ID))
+	}
+	renew()
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				renew()
+			}
+		}
+	}()
 }
 
 func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessionID, workDir, failureReason string, taskLog *slog.Logger) {

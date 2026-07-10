@@ -827,6 +827,110 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	}
 }
 
+func TestChannelAgentInboxTransportCanSendStickerAndSuppressesFinalOutput(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentName := "Inbox Sticker Agent " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	runtimeID := handlerTestRuntimeID(t)
+	if _, err := testPool.Exec(ctx, `UPDATE agent_runtime SET owner_id = $1 WHERE id = $2`, testUserID, runtimeID); err != nil {
+		t.Fatalf("seed runtime owner: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET owner_id = NULL WHERE id = $1`, runtimeID)
+	})
+	channelID := seedChannelForTest(t, "agent-inbox-sticker-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") send a sticker", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-sticker"), 0)
+	if err != nil {
+		t.Fatalf("insert mention trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-sticker-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode drain response: %v", err)
+	}
+	if len(drainResp.Events) != 1 || drainResp.Events[0].Task == nil || drainResp.Events[0].Task.AuthToken == "" {
+		t.Fatalf("drain response missing inbox task auth token: %s", drainRec.Body.String())
+	}
+	got := drainResp.Events[0]
+
+	clientID := "inbox-sticker-" + uuid.NewString()
+	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
+		"parts": []protocol.MessagePart{{
+			Type:      protocol.MessagePartTypeSticker,
+			StickerID: "huaji",
+		}},
+		"client_message_id": clientID,
+	})
+	sendReq = withChatTestWorkspaceCtx(t, sendReq)
+	sendReq.Header.Set("X-Actor-Source", "agent_inbox_token")
+	sendReq.Header.Set("X-Agent-ID", agentID)
+	sendReq.Header.Set("X-Agent-Inbox-Event-ID", got.ID)
+	sendReq.Header.Set("X-Agent-Inbox-Delivery-ID", got.DeliveryID)
+	sendReq.Header.Set("X-Task-ID", got.ID)
+	sendRec := httptest.NewRecorder()
+	testHandler.AgentTransportSendMessage(sendRec, sendReq)
+	if sendRec.Code != http.StatusCreated {
+		t.Fatalf("inbox transport sticker send: status=%d body=%s", sendRec.Code, sendRec.Body.String())
+	}
+	var sendBody AgentTransportSendResponse
+	if err := json.Unmarshal(sendRec.Body.Bytes(), &sendBody); err != nil {
+		t.Fatalf("decode inbox transport send: %v", err)
+	}
+	if len(sendBody.Message.Parts) != 1 || sendBody.Message.Parts[0].Type != protocol.MessagePartTypeSticker || sendBody.Message.Parts[0].StickerID != "huaji" {
+		t.Fatalf("sticker message parts = %+v, want huaji sticker", sendBody.Message.Parts)
+	}
+	var taskAuditRows, inboxAuditRows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (WHERE task_id IS NOT NULL),
+			count(*) FILTER (WHERE inbox_event_id = $1)
+		FROM agent_task_transport_audit
+		WHERE agent_id = $2 AND action = 'message_send'`,
+		got.ID, agentID).Scan(&taskAuditRows, &inboxAuditRows); err != nil {
+		t.Fatalf("count transport audit rows: %v", err)
+	}
+	if taskAuditRows != 0 || inboxAuditRows != 1 {
+		t.Fatalf("transport audit task rows=%d inbox rows=%d, want 0/1", taskAuditRows, inboxAuditRows)
+	}
+
+	finalText := "duplicate final after inbox sticker " + uuid.NewString()
+	completeReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/complete", CompleteAgentInboxEventRequest{
+		DeliveryID: got.DeliveryID,
+		LeaseToken: got.LeaseToken,
+		TaskCompleteRequest: TaskCompleteRequest{
+			Output: finalText,
+		},
+	}, testWorkspaceID, "agent-inbox-sticker-daemon")
+	completeReq = withURLParam(completeReq, "eventId", got.ID)
+	completeRec := httptest.NewRecorder()
+	testHandler.CompleteAgentInboxEvent(completeRec, completeReq)
+	if completeRec.Code != http.StatusOK {
+		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
+	}
+	assertNoChannelMessageContent(t, channelID, finalText)
+}
+
 func TestChannelAgentInboxDrainReclaimsExpiredDelivery(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

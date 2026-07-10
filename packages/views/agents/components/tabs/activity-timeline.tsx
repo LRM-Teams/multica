@@ -24,9 +24,11 @@ function ActivityRow({ event, time }: { event: ActivityEvent; time: string }) {
   const [expanded, setExpanded] = useState(false);
   const presentation = activityPresentation(event);
   const rawLabel = t(($) => $.tab_body.activity.labels[presentation.labelKey]);
-  // The trailing "…" is raft's in-progress signal: keep it only while the row is
-  // active, drop it once the action has settled (a static historical row).
-  const label = presentation.tone === "active" ? rawLabel : rawLabel.replace(/…$/, "");
+  // Locale values are base form (no ellipsis). The trailing "…" is raft's
+  // in-progress signal, appended at render for an active tool action only —
+  // never on settled rows or non-tool states (wake / compaction / reply).
+  const label =
+    event.kind === "tool_call" && presentation.tone === "active" ? `${rawLabel}…` : rawLabel;
   const subtext = presentation.subtextKey
     ? t(($) => $.tab_body.activity.subtexts[presentation.subtextKey!])
     : presentation.subtext;

@@ -361,23 +361,23 @@
     "activity": {
       "timeline_empty": "暂无活动",
       "labels": {
-        "thinking": "Thinking",
-        "output": "Output",
-        "working": "Working",
+        "thinking": "思考中",
+        "output": "输出",
+        "working": "工作中",
         "failed": "Failed",
         "waiting": "Waiting",
-        "running_command": "Running command…",
-        "writing_file": "Writing file…",
-        "editing_file": "Editing file…",
-        "reading_file": "Reading file…",
-        "searching_files": "Searching files…",
-        "searching_code": "Searching code…",
-        "searching_web": "Searching web…",
-        "sending_message": "Sending message…"
+        "running_command": "运行命令",
+        "writing_file": "写入文件",
+        "editing_file": "编辑文件",
+        "reading_file": "读取文件",
+        "searching_files": "搜索文件",
+        "searching_code": "搜索代码",
+        "searching_web": "搜索网页",
+        "sending_message": "发送消息"
       },
       "subtexts": {
-        "message_received": "Message received",
-        "compacting_context": "Compacting context",
+        "message_received": "收到消息",
+        "compacting_context": "压缩上下文",
         "compaction_finished": "Compaction finished",
         "subagent_activity": "Subagent activity"
       },

@@ -353,23 +353,23 @@
     "activity": {
       "timeline_empty": "アクティビティはまだありません",
       "labels": {
-        "thinking": "Thinking",
-        "output": "Output",
-        "working": "Working",
+        "thinking": "思考中",
+        "output": "出力",
+        "working": "実行中",
         "failed": "Failed",
         "waiting": "Waiting",
-        "running_command": "Running command…",
-        "writing_file": "Writing file…",
-        "editing_file": "Editing file…",
-        "reading_file": "Reading file…",
-        "searching_files": "Searching files…",
-        "searching_code": "Searching code…",
-        "searching_web": "Searching web…",
-        "sending_message": "Sending message…"
+        "running_command": "コマンド実行",
+        "writing_file": "ファイル書き込み",
+        "editing_file": "ファイル編集",
+        "reading_file": "ファイル読み込み",
+        "searching_files": "ファイル検索",
+        "searching_code": "コード検索",
+        "searching_web": "ウェブ検索",
+        "sending_message": "メッセージ送信"
       },
       "subtexts": {
-        "message_received": "Message received",
-        "compacting_context": "Compacting context",
+        "message_received": "メッセージを受信",
+        "compacting_context": "コンテキスト圧縮",
         "compaction_finished": "Compaction finished",
         "subagent_activity": "Subagent activity"
       },

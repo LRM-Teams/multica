@@ -374,14 +374,14 @@
         "working": "Working",
         "failed": "Failed",
         "waiting": "Waiting",
-        "running_command": "Running command…",
-        "writing_file": "Writing file…",
-        "editing_file": "Editing file…",
-        "reading_file": "Reading file…",
-        "searching_files": "Searching files…",
-        "searching_code": "Searching code…",
-        "searching_web": "Searching web…",
-        "sending_message": "Sending message…"
+        "running_command": "Running command",
+        "writing_file": "Writing file",
+        "editing_file": "Editing file",
+        "reading_file": "Reading file",
+        "searching_files": "Searching files",
+        "searching_code": "Searching code",
+        "searching_web": "Searching web",
+        "sending_message": "Sending message"
       },
       "subtexts": {
         "message_received": "Message received",

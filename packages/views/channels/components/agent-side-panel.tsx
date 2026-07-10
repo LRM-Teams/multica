@@ -9,6 +9,7 @@ import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/ac
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
+import { AgentPresenceStatusLine } from "../../agents/components/agent-presence-status-line";
 import { initialsOf } from "../../common/initials";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
@@ -57,7 +58,12 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
             size={32}
             className="rounded-md"
           />
-          <p className="truncate text-sm font-semibold">{displayName}</p>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">{displayName}</p>
+            {/* #371: live presence at the top of the panel, so the state is
+                visible before opening the Activity tab. */}
+            <AgentPresenceStatusLine agentId={agent.id} className="mt-0.5" />
+          </div>
         </div>
         <Button
           type="button"

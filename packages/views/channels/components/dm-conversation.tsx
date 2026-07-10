@@ -46,6 +46,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { AgentPresenceStatusLine } from "../../agents/components/agent-presence-status-line";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
 import { useT } from "../../i18n/use-t";
@@ -259,7 +260,20 @@ function DmHeader({
   const actorType = dm.peer.type === "agent" ? "agent" : "member";
   const memberType = dm.peer.type === "agent" ? "agent" : "user";
   const isAgentPeer = dm.peer.type === "agent";
-  const meta = dm.peer.type === "agent" ? t(($) => $.dm.agent_meta) : t(($) => $.dm.human_meta);
+  // #371: an agent peer's header shows live presence (Online / Idle / Starting
+  // up…) in place of the static "Agent" label — the same word table + visual as
+  // the hover card, so the header can't drift. Human peers keep the static label
+  // (no runtime presence). Memoized so the header's `meta` slot isn't handed a
+  // fresh element every render.
+  const meta = useMemo(
+    () =>
+      isAgentPeer ? (
+        <AgentPresenceStatusLine agentId={dm.peer.id} />
+      ) : (
+        t(($) => $.dm.human_meta)
+      ),
+    [isAgentPeer, dm.peer.id, t],
+  );
   const peerAvatar = (
     <ActorAvatar
       actorType={actorType}

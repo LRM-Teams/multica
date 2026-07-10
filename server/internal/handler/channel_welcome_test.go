@@ -113,6 +113,8 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 			"finish without visible output",
 			"Never return no_reply",
 			"greeting sticker only",
+			"keep them on the main channel instead of starting a thread",
+			"Reserve threads for substantive questions, tasks, investigations, or decisions",
 			"Substantive requests get a helpful answer",
 			"Collaborative discussion rule",
 			"never for thanks",
@@ -142,6 +144,35 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 		if strings.Contains(p, "\"action\"") || strings.Contains(p, "\"parts\"") {
 			t.Errorf("direct mention prompt must not teach JSON action envelopes during transition:\n%s", p)
 		}
+	}
+}
+
+func TestChannelAgentReplyThreadDefaultPolicy(t *testing.T) {
+	group := "group"
+	messageID := "11111111-1111-1111-1111-111111111111"
+	for _, tc := range []struct {
+		name    string
+		kind    string
+		content string
+		want    bool
+	}{
+		{name: "greeting", kind: group, content: "[@Atlas](mention://agent/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa) hi", want: false},
+		{name: "availability check", kind: group, content: "@Atlas 在么", want: false},
+		{name: "acknowledgement", kind: group, content: "@Atlas 收到，谢谢", want: false},
+		{name: "greeting with name", kind: group, content: "@Atlas hi Atlas", want: false},
+		{name: "light factual answer", kind: group, content: "@Atlas 现在是 3 点", want: false},
+		{name: "question", kind: group, content: "@Atlas 登录为什么失败？", want: true},
+		{name: "task", kind: group, content: "@Atlas 请修复登录问题", want: true},
+		{name: "explicit thread request", kind: group, content: "@Atlas 在线程里给个方案", want: true},
+		{name: "greeting plus task", kind: group, content: "@Atlas hi 请修复登录问题", want: true},
+		{name: "dm", kind: "dm", content: "请修复登录问题", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			trigger := ChannelMessageResponse{ID: messageID, Content: tc.content}
+			if got := shouldDefaultChannelAgentReplyToThread(tc.kind, trigger); got != tc.want {
+				t.Fatalf("shouldDefaultChannelAgentReplyToThread(%q, %q) = %v, want %v", tc.kind, tc.content, got, tc.want)
+			}
+		})
 	}
 }
 

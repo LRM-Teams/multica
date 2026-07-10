@@ -46,8 +46,12 @@ function normalizedTool(event: ActivityEvent): string {
   return event.tool?.trim().toLowerCase() ?? "";
 }
 
+// Subtext is ONLY the BE-provided safe summary (`tool_target`: a path basename /
+// clipped query / pattern). Never fall back to the raw `event.tool` slug — for an
+// unknown provider tool that would leak the raw name into the row (#382 gate:
+// unknown tools show no raw slug in label OR subtext).
 function toolTarget(event: ActivityEvent): string | undefined {
-  return event.tool_target?.trim() || event.tool?.trim() || undefined;
+  return event.tool_target?.trim() || undefined;
 }
 
 function isActiveStatus(status: string | undefined): boolean {

@@ -42,10 +42,23 @@ describe("activityPresentation — tool normalization", () => {
     expect(activityPresentation(toolEvent(tool)).label).toBe(label);
   });
 
-  it("falls back to a neutral working row for an unknown provider tool (never echoes the raw slug)", () => {
+  it("falls back to a neutral working row for an unknown provider tool without leaking the raw slug in label OR subtext", () => {
     const p = activityPresentation(toolEvent("some_mystery_tool"));
     expect(p.label).toBe("Working…");
     expect(p.label).not.toContain("mystery");
+    // The raw slug must not leak via subtext either (no safe tool_target here).
+    expect(p.subtext ?? "").not.toContain("mystery");
+  });
+
+  it("never uses the raw tool slug as subtext when no safe tool_target is present", () => {
+    // Known tool, no tool_target → label conveys the action, subtext stays empty
+    // rather than echoing the raw slug.
+    expect(activityPresentation(toolEvent("bash")).subtext).toBeUndefined();
+  });
+
+  it("uses the BE-provided safe tool_target as subtext when present", () => {
+    const event: ActivityEvent = { ...toolEvent("read_file"), tool_target: "src/app.ts" };
+    expect(activityPresentation(event).subtext).toBe("src/app.ts");
   });
 
   it("keeps the trailing … only while the tool is active, drops it once settled", () => {

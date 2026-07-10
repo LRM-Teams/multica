@@ -119,14 +119,14 @@
       "waiting_local_directory": "로컬 디렉터리 대기 중",
       "starting_up": "작업 중",
       "thinking": "생각 중",
-      "typing": "입력 중"
+      "typing": "출력"
     },
     "tools": {
-      "running_command": "명령 실행 중",
-      "reading_files": "파일 읽는 중",
-      "searching_code": "코드 검색 중",
-      "making_edits": "수정 중",
-      "searching_web": "웹 검색 중",
+      "running_command": "명령 실행 중…",
+      "reading_files": "파일 읽는 중…",
+      "searching_code": "코드 검색 중…",
+      "making_edits": "파일 편집 중…",
+      "searching_web": "웹 검색 중…",
       "fallback": "작업 중"
     }
   }

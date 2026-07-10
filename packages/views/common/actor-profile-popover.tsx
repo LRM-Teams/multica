@@ -167,7 +167,7 @@ function ActorProfileContent({
 export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
   const { t } = useT("channels");
   const wsId = useWorkspaceId();
-  // Agents: stage-detail live status (Thinking / Running a command / …)
+  // Agents: stage-detail live status (Thinking / Running command… / …)
   // when a task is active; coarse presence word (Idle / Offline) when idle.
   // Same snapshot + task-messages caches as the chat status pill / avatar
   // presence dot, so the three surfaces stay in lockstep via WS.

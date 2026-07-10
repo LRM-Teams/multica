@@ -282,6 +282,9 @@ export interface AgentActivityTimelineEvent {
   occurred_at: string;
   visibility: "user_facing" | "diagnostic_only";
   text?: string;
+  tool?: string;
+  tool_target?: string;
+  status?: string;
   reason_code?: string;
   target_ref: AgentActivityTargetRef;
   source_refs?: AgentActivitySourceRef[];

@@ -247,14 +247,14 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	if items[0].ID != newerID || items[0].Kind != "tool_use" || items[0].Status != "running" {
 		t.Fatalf("newest activity = %#v, want running file activity %s", items[0], newerID)
 	}
-	if items[0].Label != "Editing file" {
-		t.Fatalf("newest activity projection = %#v, want Editing file", items[0])
+	if items[0].Label != "Editing file…" {
+		t.Fatalf("newest activity projection = %#v, want Editing file…", items[0])
 	}
 	if items[1].ID != olderID || items[1].Kind != "command" || items[1].Status != "failed" {
 		t.Fatalf("older activity = %#v, want command task %s", items[1], olderID)
 	}
-	if items[1].Label != "Ran command" {
-		t.Fatalf("command activity label = %q, want Ran command", items[1].Label)
+	if items[1].Label != "Running command" {
+		t.Fatalf("command activity label = %q, want Running command", items[1].Label)
 	}
 	body := w.Body.String()
 	for _, leak := range []string{
@@ -295,8 +295,8 @@ func TestProjectTextActivity_ProjectsActionWithoutSummary(t *testing.T) {
 		if !ok {
 			t.Fatalf("projectTextActivity returned ok=false for %q", content)
 		}
-		if item.Label != "Writing response" {
-			t.Fatalf("label = %q, want Writing response", item.Label)
+		if item.Label != "Output" {
+			t.Fatalf("label = %q, want Output", item.Label)
 		}
 	}
 }

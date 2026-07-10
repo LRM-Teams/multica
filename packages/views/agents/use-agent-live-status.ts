@@ -16,7 +16,7 @@ import {
 
 /**
  * Live name-row status for an agent: stage-detail when a task is active
- * (Thinking / Running a command / …), presence word when idle. Snapshot +
+ * (Thinking / Running command… / …), presence word when idle. Snapshot +
  * task-messages are the same caches the chat pill and presence dots use, so
  * WS task:message / task lifecycle events keep this in lockstep with chat.
  */

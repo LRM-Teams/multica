@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { cn } from "@multica/ui/lib/utils";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import { useT } from "../../../i18n";
@@ -9,10 +9,12 @@ import {
   type ActivityTone,
   activityPresentation,
   formatActivityTime,
+  isNarrativeActivityEvent,
 } from "./activity-event";
 
 const TONE_DOT: Record<ActivityTone, string> = {
   neutral: "bg-muted-foreground/40",
+  active: "bg-brand animate-pulse",
   waiting: "bg-warning",
   failure: "bg-destructive",
 };
@@ -45,15 +47,13 @@ function ActivityRow({ event, time }: { event: ActivityEvent; time: string }) {
 /**
  * Read-only agent-activity narrative timeline (#267). One time-ordered stream —
  * each row = `time · source dot · human label · optional subtext`. Default shows
- * only BE `user_facing` events; `diagnostic_only` events (raw
- * command/error/freshness plumbing) stay behind an explicit "view diagnostics"
- * toggle in the same coherent surface. Never renders raw command/output for
- * tool rows. Shared by the Activity tab (full) and the profile/hover card
- * (compact subset, no diagnostics toggle).
+ * only BE `user_facing` narrative events; `diagnostic_only` and internal
+ * boundary events stay out of the ordinary surface. Never renders raw
+ * command/output for tool rows. Shared by the Activity tab (full) and the
+ * profile/hover card (compact subset).
  */
 export function ActivityTimeline({
   events,
-  compact = false,
 }: {
   events: ActivityEvent[];
   /** Profile-card mode: user-facing rows only, no diagnostics toggle. */
@@ -61,16 +61,13 @@ export function ActivityTimeline({
 }) {
   const { t } = useT("agents");
   const tz = useViewingTimezone();
-  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
-  const userFacing = useMemo(
-    () => events.filter((e) => e.visibility === "user_facing"),
+  const shown = useMemo(
+    () => events.filter(isNarrativeActivityEvent),
     [events],
   );
-  const hasDiagnostics = !compact && events.length > userFacing.length;
-  const shown = showDiagnostics ? events : userFacing;
 
-  if (userFacing.length === 0 && !showDiagnostics) {
+  if (shown.length === 0) {
     return (
       <p className="text-xs italic text-muted-foreground/60">
         {t(($) => $.tab_body.activity.timeline_empty)}
@@ -87,17 +84,6 @@ export function ActivityTimeline({
           time={formatActivityTime(event.occurred_at, tz)}
         />
       ))}
-      {hasDiagnostics && (
-        <button
-          type="button"
-          onClick={() => setShowDiagnostics((s) => !s)}
-          className="mt-1.5 self-start text-xs text-muted-foreground transition-colors hover:text-foreground"
-        >
-          {showDiagnostics
-            ? t(($) => $.tab_body.activity.hide_diagnostics)
-            : t(($) => $.tab_body.activity.view_diagnostics)}
-        </button>
-      )}
     </div>
   );
 }

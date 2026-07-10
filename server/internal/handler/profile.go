@@ -270,26 +270,36 @@ func projectTextActivity(msg recentTaskActivityMessage, status string) (AgentRec
 }
 
 func toolActivityLabel(tool, status string) (label string, kind string) {
+	active := isActiveTaskStatus(status)
 	switch {
 	case isCommandTool(tool):
-		if isActiveTaskStatus(status) {
-			return "Running command", "command"
-		}
-		return "Ran command", "command"
+		return activeActivityLabel("Running command…", active), "command"
+	case strings.Contains(tool, "send_message"):
+		return activeActivityLabel("Sending message…", active), "tool_use"
+	case strings.Contains(tool, "write"):
+		return activeActivityLabel("Writing file…", active), "tool_use"
 	case isFileEditTool(tool):
-		return "Editing file", "tool_use"
+		return activeActivityLabel("Editing file…", active), "tool_use"
+	case strings.Contains(tool, "web_search") || strings.Contains(tool, "websearch"):
+		return activeActivityLabel("Searching web…", active), "tool_use"
+	case strings.Contains(tool, "glob"):
+		return activeActivityLabel("Searching files…", active), "tool_use"
 	case isSearchTool(tool):
-		if strings.Contains(tool, "issue") {
-			return "Searching issues", "tool_use"
-		}
-		return "Reading context", "tool_use"
+		return activeActivityLabel("Searching code…", active), "tool_use"
 	case isFileReadTool(tool):
-		return "Reading files", "tool_use"
+		return activeActivityLabel("Reading file…", active), "tool_use"
 	case tool != "":
-		return "Reading context", "tool_use"
+		return activeActivityLabel("Working…", active), "tool_use"
 	default:
 		return "", ""
 	}
+}
+
+func activeActivityLabel(label string, active bool) string {
+	if active {
+		return label
+	}
+	return strings.TrimSuffix(label, "…")
 }
 
 func isCommandTool(tool string) bool {
@@ -354,17 +364,14 @@ func recentActivityFallbackLabel(status string) string {
 	case "dispatched", "running", "waiting_local_directory":
 		return "Thinking"
 	case "failed":
-		return "Writing response"
+		return "Failed"
 	case "cancelled":
-		return "Writing response"
+		return "Cancelled"
 	default:
-		return "Writing response"
+		return "Output"
 	}
 }
 
 func textActivityLabel(status string) string {
-	if isActiveTaskStatus(status) {
-		return "Replying"
-	}
-	return "Writing response"
+	return "Output"
 }

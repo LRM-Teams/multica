@@ -2,7 +2,6 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { ActivityTimeline } from "./activity-timeline";
 import { formatActivityTime, type ActivityEvent } from "./activity-event";
 
@@ -46,6 +45,67 @@ const DIAG: ActivityEvent = {
   reason_code: "freshness_check",
   target_ref: { kind: "agent", id: "agent-1" },
 };
+const WAKE: ActivityEvent = {
+  id: "w1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:08Z",
+  kind: "wake_attempt",
+  event_type: "wake_attempt",
+  visibility: "user_facing",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
+const TOOL: ActivityEvent = {
+  id: "tc1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:09Z",
+  kind: "tool_call",
+  event_type: "tool_use",
+  visibility: "user_facing",
+  tool: "bash",
+  tool_target: "bash",
+  status: "running",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
+const EDIT: ActivityEvent = {
+  id: "edit1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:10Z",
+  kind: "tool_call",
+  event_type: "tool_use",
+  visibility: "user_facing",
+  tool: "edit_file",
+  tool_target: "profile.go",
+  status: "completed",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
+const TEXT: ActivityEvent = {
+  id: "txt1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:11Z",
+  kind: "text",
+  event_type: "text",
+  visibility: "user_facing",
+  text: "Done.",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
+const COMPACTION: ActivityEvent = {
+  id: "cmp1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:12Z",
+  kind: "compaction_started",
+  event_type: "compaction_started",
+  visibility: "user_facing",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
+const TURN_END: ActivityEvent = {
+  id: "done1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:13Z",
+  kind: "turn_end",
+  event_type: "task_completed",
+  visibility: "user_facing",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
 
 describe("ActivityTimeline", () => {
   beforeEach(() => cleanup());
@@ -54,16 +114,8 @@ describe("ActivityTimeline", () => {
     render(<ActivityTimeline events={[USER, DIAG]} />);
     expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.getByText("Built the project.")).toBeInTheDocument();
-    expect(screen.queryByText("Waiting · freshness check")).toBeNull();
-    expect(screen.getByText("View diagnostic details")).toBeInTheDocument();
-  });
-
-  it("reveals diagnostic_only events when the toggle is clicked", async () => {
-    const user = userEvent.setup();
-    render(<ActivityTimeline events={[USER, DIAG]} />);
-    await user.click(screen.getByText("View diagnostic details"));
-    expect(screen.getByText("Waiting · freshness check")).toBeInTheDocument();
-    expect(screen.getByText("Hide diagnostic details")).toBeInTheDocument();
+    expect(screen.queryByText("Waiting")).toBeNull();
+    expect(screen.queryByText("View diagnostic details")).toBeNull();
   });
 
   it("compact mode: user_facing only, no diagnostics toggle", () => {
@@ -81,8 +133,27 @@ describe("ActivityTimeline", () => {
   it("never renders raw command text — labels come from the read model", () => {
     // A diagnostic row's raw content is not exposed unless explicitly toggled;
     // and even then it's the BE-provided label, never a raw command string.
-    render(<ActivityTimeline events={[USER]} />);
+    render(<ActivityTimeline events={[TOOL, EDIT]} />);
+    expect(screen.getByText("Running command…")).toBeInTheDocument();
+    expect(screen.getByText("Editing file")).toBeInTheDocument();
+    expect(screen.getByText("profile.go")).toBeInTheDocument();
     expect(screen.queryByText(/\/bin\/|--target|raft message/)).toBeNull();
+    expect(screen.queryByText("Ran a command")).toBeNull();
+  });
+
+  it("projects Raft-style wake and reply labels without leaking old presentation copy", () => {
+    render(<ActivityTimeline events={[WAKE, TEXT]} />);
+    expect(screen.getByText("Working")).toBeInTheDocument();
+    expect(screen.getByText("Message received")).toBeInTheDocument();
+    expect(screen.getByText("Output")).toBeInTheDocument();
+    expect(screen.queryByText("Woken")).toBeNull();
+    expect(screen.queryByText("Sent a message")).toBeNull();
+  });
+
+  it("shows source-confirmed visible lifecycle and hides internal turn_end rows", () => {
+    render(<ActivityTimeline events={[COMPACTION, TURN_END]} />);
+    expect(screen.getByText("Compacting context")).toBeInTheDocument();
+    expect(screen.queryByText("Done")).toBeNull();
   });
 });
 

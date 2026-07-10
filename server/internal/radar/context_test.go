@@ -82,8 +82,8 @@ func TestContextBuilderAssignedIssuesUsesWorkspacePrefixAndNumber(t *testing.T) 
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(t.Context(), `
-		INSERT INTO issue (workspace_id, number, title, status, priority, assignee_type, assignee_id, creator_type, position)
-		VALUES ($1, 7, 'Investigate radar', 'todo', 'none', 'agent', $2, 'member', 0)
+		INSERT INTO issue (workspace_id, number, title, status, priority, assignee_type, assignee_id, creator_type, creator_id, position)
+		VALUES ($1, 7, 'Investigate radar', 'todo', 'none', 'agent', $2, 'agent', $2, 0)
 	`, workspaceID, agentID); err != nil {
 		t.Fatal(err)
 	}

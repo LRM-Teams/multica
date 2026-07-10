@@ -29,6 +29,15 @@ func TestLocalMemoryCurationRuntimesPreferOnlinePi(t *testing.T) {
 	}
 }
 
+func TestLocalMemoryCurationPlanDateUsesBeijingYesterday(t *testing.T) {
+	loc := time.FixedZone("CST", 8*60*60)
+	localNow := time.Date(2026, 7, 10, 1, 0, 0, 0, loc)
+	planDate := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
+	if got := planDate.Format("2006-01-02"); got != "2026-07-09" {
+		t.Fatalf("planDate = %s, want 2026-07-09", got)
+	}
+}
+
 func TestClaimLocalMemoryCurationRunOncePerBeijingDate(t *testing.T) {
 	d := &Daemon{memoryCurationRuns: map[string]string{}}
 	now := time.Date(2026, 7, 10, 3, 0, 0, 0, time.FixedZone("CST", 8*60*60))

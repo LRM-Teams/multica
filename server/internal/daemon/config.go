@@ -486,11 +486,11 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	memoryCurationL3ReviewEnabled := true
+	memoryCurationL3ReviewEnabled := false
 	if v := strings.TrimSpace(os.Getenv("MEMORY_CURATION_L3_REVIEW_ENABLED")); v != "" {
 		switch strings.ToLower(v) {
-		case "false", "0", "no", "off":
-			memoryCurationL3ReviewEnabled = false
+		case "true", "1", "yes", "on":
+			memoryCurationL3ReviewEnabled = true
 		}
 	}
 	memoryCurationL3ReviewTimeout := 30 * time.Second

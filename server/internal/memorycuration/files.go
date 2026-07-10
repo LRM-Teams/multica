@@ -196,6 +196,36 @@ func fileContentWithoutTemplate(path string) (string, error) {
 	return strings.TrimSpace(strings.Join(out, "\n")), nil
 }
 
+func acquireAgentRootFileLock(root string, dryRun bool, now time.Time) (func(), error) {
+	if dryRun {
+		return func() {}, nil
+	}
+	lockPath := filepath.Join(root, "memory", ".curation.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		return nil, err
+	}
+	acquire := func() (*os.File, error) {
+		return os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	}
+	f, err := acquire()
+	if os.IsExist(err) {
+		info, statErr := os.Stat(lockPath)
+		if statErr == nil && now.Sub(info.ModTime()) > 2*time.Hour {
+			_ = os.Remove(lockPath)
+			f, err = acquire()
+		}
+	}
+	if err != nil {
+		if os.IsExist(err) {
+			return nil, fmt.Errorf("memory curation already running for agent root")
+		}
+		return nil, err
+	}
+	_, _ = fmt.Fprintf(f, "pid=%d\nstarted_at=%s\n", os.Getpid(), now.UTC().Format(time.RFC3339))
+	_ = f.Close()
+	return func() { _ = os.Remove(lockPath) }, nil
+}
+
 func writeIfChanged(path, content string, dryRun bool) (bool, error) {
 	old, err := os.ReadFile(path)
 	if err == nil && string(old) == content {

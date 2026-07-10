@@ -17,10 +17,10 @@ type Engine struct {
 	l3Reviewer L3Reviewer
 }
 
-var l3AgentLocks sync.Map
+var agentRootLocks sync.Map
 
-func lockL3Agent(root string) func() {
-	value, _ := l3AgentLocks.LoadOrStore(root, &sync.Mutex{})
+func lockAgentRoot(root string) func() {
+	value, _ := agentRootLocks.LoadOrStore(root, &sync.Mutex{})
 	mu := value.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
@@ -81,6 +81,14 @@ func (e *Engine) Run(opts Options) (Result, error) {
 				continue
 			}
 		}
+		unlock := lockAgentRoot(root.Root)
+		releaseFileLock, lockErr := acquireAgentRootFileLock(root.Root, opts.DryRun, opts.Now)
+		if lockErr != nil {
+			unlock()
+			res.Errors = append(res.Errors, AgentError{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Stage: stage, Error: lockErr.Error()})
+			res.AgentResults = append(res.AgentResults, ar)
+			continue
+		}
 		stages := []Stage{stage}
 		if stage == StageAll {
 			stages = []Stage{StageL1, StageL2, StageL3, StageL4}
@@ -100,12 +108,14 @@ func (e *Engine) Run(opts Options) (Result, error) {
 			default:
 				err = fmt.Errorf("unsupported stage %q", st)
 			}
+			mergeAgentRunResult(&ar, sr)
 			if err != nil {
 				res.Errors = append(res.Errors, AgentError{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Stage: st, Error: err.Error()})
 				continue
 			}
-			mergeAgentRunResult(&ar, sr)
 		}
+		releaseFileLock()
+		unlock()
 		if ar.Changed {
 			res.AgentsChanged++
 		}
@@ -403,8 +413,6 @@ func sentenceTitle(s string) string {
 }
 
 func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
-	unlock := lockL3Agent(root.Root)
-	defer unlock()
 	ar := AgentRunResult{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Root: root.Root}
 	reviewPath := filepath.Join(root.Root, "memory", "REVIEW.md")
 	reviewBytes, err := os.ReadFile(reviewPath)
@@ -706,15 +714,10 @@ func (e *Engine) applyL3Decision(root agentRoot, opts Options, original reviewEn
 		ar.SkillCandidatesAdded++
 	}
 
-	syncPending := false
-	if shouldShare && !opts.DryRun {
-		synced, syncErr := syncSharedMemoryCandidate(opts.Context, opts.DB, root, sharedCandidate)
-		if syncErr != nil {
-			syncPending = true
-		} else if synced {
-			ar.SharedCandidatesSynced++
-		}
-	}
+	// The durable local queue is the source of truth. The daemon uploads it after
+	// this local transaction commits, avoiding an irreversible DB side effect
+	// before REVIEW.md and the audit record are safely updated.
+	syncPending := shouldShare && !opts.DryRun
 	return true, syncPending, nil
 }
 

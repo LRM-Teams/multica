@@ -120,7 +120,7 @@ Return strict JSON only, with no markdown, in this shape:
 {"reviews":[{"entry_id":"string","route":"memory|skill|split|discard","confidence":0.0,"rationale":"string","memory":{"title":"string","body":"string"},"skill":{"name":"kebab-case-name","description":"string","instructions":"markdown body","tags":[],"tools":[],"task_types":[]}}]}`
 
 func NewL3ReviewerFromEnv() L3Reviewer {
-	enabled := envBoolDefault("MEMORY_CURATION_L3_REVIEW_ENABLED", true)
+	enabled := envBoolDefault("MEMORY_CURATION_L3_REVIEW_ENABLED", false)
 	provider := strings.ToLower(strings.TrimSpace(os.Getenv("MEMORY_CURATION_L3_REVIEW_PROVIDER")))
 	if provider == "" {
 		provider = "pi"

@@ -38,17 +38,8 @@ func TestNewAgentL3ReviewerRejectsProvidersWithoutNoToolsIsolation(t *testing.T)
 	}
 }
 
-func TestNewL3ReviewerFromEnvDefaultsEnabled(t *testing.T) {
+func TestNewL3ReviewerFromEnvDefaultsDisabled(t *testing.T) {
 	t.Setenv("MEMORY_CURATION_L3_REVIEW_ENABLED", "")
-	t.Setenv("MEMORY_CURATION_L3_REVIEW_AGENT_PATH", "/missing/pi")
-	reviewer := NewL3ReviewerFromEnv()
-	if _, ok := reviewer.(*AgentL3Reviewer); !ok {
-		t.Fatalf("reviewer = %T, want *AgentL3Reviewer", reviewer)
-	}
-}
-
-func TestNewL3ReviewerFromEnvCanBeDisabled(t *testing.T) {
-	t.Setenv("MEMORY_CURATION_L3_REVIEW_ENABLED", "false")
 	reviewer := NewL3ReviewerFromEnv()
 	if _, ok := reviewer.(unavailableL3Reviewer); !ok {
 		t.Fatalf("reviewer = %T, want unavailableL3Reviewer", reviewer)

@@ -35,14 +35,37 @@ func (d *Daemon) sharedSkillsSyncLoop(ctx context.Context) {
 	}
 }
 
-func (d *Daemon) syncSharedSkillsOnce(ctx context.Context) {
+func (d *Daemon) localMemoryCurationLoop(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	d.runLocalMemoryCurationOnce(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			d.runLocalMemoryCurationOnce(ctx)
+		}
+	}
+}
+
+func (d *Daemon) runLocalMemoryCurationOnce(ctx context.Context) {
 	if !d.ready.Load() {
 		return
 	}
 	for _, rt := range d.localMemoryCurationRuntimes() {
-		if err := d.runLocalMemoryCuration(ctx, rt); err != nil && ctx.Err() == nil {
-			d.logger.Warn("local memory curation failed", "runtime_id", rt.ID, "provider", rt.Provider, "error", err)
-		}
+		runtime := rt
+		go func() {
+			if err := d.runLocalMemoryCuration(ctx, runtime); err != nil && ctx.Err() == nil {
+				d.logger.Warn("local memory curation failed", "runtime_id", runtime.ID, "provider", runtime.Provider, "error", err)
+			}
+		}()
+	}
+}
+
+func (d *Daemon) syncSharedSkillsOnce(ctx context.Context) {
+	if !d.ready.Load() {
+		return
 	}
 	for _, rt := range d.sharedSkillSyncRuntimes() {
 		if err := d.syncSharedSkillsForRuntime(ctx, rt); err != nil && ctx.Err() == nil {
@@ -74,8 +97,9 @@ func (d *Daemon) runLocalMemoryCuration(ctx context.Context, rt Runtime) error {
 		{memorycuration.StageL3, 3},
 		{memorycuration.StageL4, 4},
 	}
+	planDate := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
 	for _, scheduled := range stageHours {
-		if localNow.Hour() != scheduled.hour || !d.claimLocalMemoryCurationRun(rt.WorkspaceID, scheduled.stage, localNow) {
+		if localNow.Hour() < scheduled.hour || !d.claimLocalMemoryCurationRun(rt.WorkspaceID, scheduled.stage, localNow) {
 			continue
 		}
 		reviewer := memorycuration.NewConfiguredL3Reviewer(d.cfg.MemoryCurationL3ReviewEnabled, memorycuration.AgentL3ReviewerConfig{
@@ -83,16 +107,16 @@ func (d *Daemon) runLocalMemoryCuration(ctx context.Context, rt Runtime) error {
 		})
 		res, runErr := memorycuration.NewEngine(reviewer).Run(memorycuration.Options{
 			Context: ctx, WorkspacesRoot: d.cfg.WorkspacesRoot, WorkspaceID: rt.WorkspaceID,
-			AllAgents: true, Stage: scheduled.stage, Since: now.AddDate(0, 0, -1), Until: now.AddDate(0, 0, -1),
+			AllAgents: true, Stage: scheduled.stage, Since: planDate, Until: planDate,
 			Now: now, Timezone: memorycuration.DefaultTimezone,
 		})
 		if runErr != nil {
 			d.releaseLocalMemoryCurationRun(rt.WorkspaceID, scheduled.stage)
 			return runErr
 		}
-		if len(res.Errors) > 0 {
+		if len(res.Errors) > 0 || (scheduled.stage == memorycuration.StageL3 && res.ReviewDeferred > 0 && res.EntriesReviewed == 0) {
 			d.releaseLocalMemoryCurationRun(rt.WorkspaceID, scheduled.stage)
-			return fmt.Errorf("%d agent memory curation runs failed", len(res.Errors))
+			return fmt.Errorf("local memory curation deferred or failed: errors=%d deferred=%d", len(res.Errors), res.ReviewDeferred)
 		}
 	}
 	return nil

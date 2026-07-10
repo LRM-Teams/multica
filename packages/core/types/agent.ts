@@ -641,6 +641,37 @@ export interface UpdateAgentFileContentResponse {
   conflict: boolean;
 }
 
+export interface AgentRadarAction {
+  id: string;
+  type: string;
+  status: string;
+  risk_level: string;
+  confidence: string;
+  dedupe_key: string;
+  reason: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentRadarRun {
+  id: string;
+  agent_id: string;
+  status: string;
+  trigger_kind: string;
+  trigger_ref: string;
+  context_summary: string;
+  error: string;
+  scheduled_for: string;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  actions: AgentRadarAction[];
+}
+
+export interface ListAgentRadarRunsResponse {
+  runs: AgentRadarRun[];
+}
+
 export type AgentSkillSuggestionAction = "add" | "remove";
 
 export type AgentSkillSuggestionStatus = "pending" | "accepted" | "dismissed";

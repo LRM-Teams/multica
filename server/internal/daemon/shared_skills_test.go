@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -61,6 +62,7 @@ func TestEnsureMulticaAgentRootSeedsManagedFiles(t *testing.T) {
 		filepath.Join(root, "memory", "MEMORY.md"),
 		filepath.Join(root, "memory", "USER.md"),
 		filepath.Join(root, "memory", "REVIEW.md"),
+		filepath.Join(root, "notes", "agent-plan.md"),
 		filepath.Join(root, "notes", "channels.md"),
 		filepath.Join(root, "notes", "relationship-map.md"),
 		filepath.Join(root, "notes", "role-playbook.md"),
@@ -70,6 +72,27 @@ func TestEnsureMulticaAgentRootSeedsManagedFiles(t *testing.T) {
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected %s to exist: %v", path, err)
+		}
+	}
+	plan, err := os.ReadFile(filepath.Join(root, "notes", "agent-plan.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"# Agent Plan",
+		"## Mission",
+		"## Ownership",
+		"## Current Project State",
+		"## Active Work",
+		"## Watchlist",
+		"## Completed Work",
+		"## Future Bets",
+		"## Collaboration Map",
+		"## Initiative Rules",
+		"## Last Checks",
+	} {
+		if !strings.Contains(string(plan), want) {
+			t.Fatalf("agent-plan.md missing %q:\n%s", want, plan)
 		}
 	}
 

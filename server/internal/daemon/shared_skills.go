@@ -150,6 +150,7 @@ func ensureMulticaAgentRoot(root string) error {
 		filepath.Join(root, "memory", "STATE.md"):           "# Agent State\n\nCurrent dated state, temporary facts, and active initiatives.\n",
 		filepath.Join(root, "memory", "REVIEW.md"):          "# Memory Review\n\nPending memory candidates, conflicts, and curator review notes.\n",
 		filepath.Join(root, "memory", "SCRATCHPAD.md"):      "# Scratchpad\n\nTransient notes that should not be treated as durable memory.\n",
+		filepath.Join(root, "notes", "agent-plan.md"):       defaultAgentPlanTemplate(),
 		filepath.Join(root, "notes", "agents.md"):           "# Agents\n\nKnown teammates, roles, and collaboration boundaries.\n",
 		filepath.Join(root, "notes", "channels.md"):         "# Channels\n\nChannel and DM purpose, participants, language, and routing context.\n",
 		filepath.Join(root, "notes", "project-map.md"):      "# Project Map\n\nWorkspace/project orientation, repos, commands, risks, and conventions.\n",
@@ -164,6 +165,45 @@ func ensureMulticaAgentRoot(root string) error {
 		}
 	}
 	return nil
+}
+
+func defaultAgentPlanTemplate() string {
+	return `# Agent Plan
+
+Source of truth: Multica agent settings and live user instructions. This file is the agent's long-lived operating plan for proactive work; it supplements memory and must not override instructions.
+
+## Mission
+- What this agent is responsible for over time.
+- What successful work looks like.
+
+## Ownership
+- Projects, modules, directories, channels, issue types, or domains this agent should watch.
+
+## Current Project State
+- Current understanding of project progress, risks, and recent changes.
+
+## Active Work
+- Work this agent is currently driving or should keep following.
+
+## Watchlist
+- Code, issues, PRs, CI signals, user feedback, or technical debt to inspect periodically.
+
+## Completed Work
+- Important completed work, decisions, outcomes, and remaining follow-ups.
+
+## Future Bets
+- Ideas or hypotheses worth revisiting when there is new evidence.
+
+## Collaboration Map
+- Humans and agents this agent should coordinate with, including ownership boundaries.
+
+## Initiative Rules
+- Speak up when there is new evidence tied to this plan, a meaningful blocker, a risk, or a concrete next step.
+- Stay silent when there is no new evidence, the issue is already being handled, or the action would only add noise.
+
+## Last Checks
+- Record recent radar checks, actions taken, and no-action reasons to avoid repeated noise.
+`
 }
 
 func ensureFile(path, content string) error {

@@ -193,6 +193,7 @@
     "sticker_failed": "表情包加载失败",
     "sticker_unavailable": "表情包暂不可用",
     "agent_badge": "Agent",
+    "radar_badge": "主动发现",
     "feishu_badge": "飞书",
     "edit_action": "编辑",
     "delete_action": "删除",

@@ -860,9 +860,14 @@ export class ApiClient {
   // #302 Activity: REST first-paint for one agent's tagged event timeline. The
   // BE aggregates + tags each row (kind/label/tone/visibility/refs); live
   // updates arrive over the `agent_activity:event` WS as full events the FE
-  // upserts by id.
+  // upserts by id. This route scopes the workspace via an explicit
+  // `workspace_slug` query param (not the X-Workspace-Slug header the other
+  // agent endpoints rely on) — without it the BE 400s and the timeline reads
+  // as empty. Mirror the same slug the header uses.
   async getAgentActivityEvents(agentId: string): Promise<AgentActivityTimelineEvent[]> {
-    return this.fetch(`/api/agents/${agentId}/activity/events`);
+    const slug = getCurrentSlug();
+    const qs = slug ? `?workspace_slug=${encodeURIComponent(slug)}` : "";
+    return this.fetch(`/api/agents/${agentId}/activity/events${qs}`);
   }
 
   async createAgent(data: CreateAgentRequest): Promise<Agent> {

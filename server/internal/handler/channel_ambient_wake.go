@@ -86,7 +86,7 @@ func (h *Handler) createOrCoalesceChannelAmbientWakeTx(ctx context.Context, tx p
 
 func (h *Handler) channelAmbientWakeCursorTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse) (pgtype.UUID, pgtype.UUID, int64, int64, bool) {
 	var conversationID, workspaceID pgtype.UUID
-	var lastSeq, lastReadSeq, lastDeliveredSeq int64
+	var lastSeq, lastReadSeq, lastDeliveredSeq, lastDrainedSeq int64
 	err := tx.QueryRow(ctx, `
 		WITH conv AS (
 		  SELECT id, workspace_id, last_seq
@@ -103,10 +103,19 @@ func (h *Handler) channelAmbientWakeCursorTx(ctx context.Context, tx pgx.Tx, ch 
 		  DO UPDATE SET wake_state = 'active', updated_at = now()
 		  RETURNING conversation_id, last_read_seq, last_delivered_seq
 		)
-		SELECT conv.id, conv.workspace_id, conv.last_seq, member_state.last_read_seq, member_state.last_delivered_seq
+		SELECT conv.id,
+		       conv.workspace_id,
+		       conv.last_seq,
+		       member_state.last_read_seq,
+		       member_state.last_delivered_seq,
+		       COALESCE(session_state.last_drained_seq, 0)
 		FROM conv
-		JOIN member_state ON member_state.conversation_id = conv.id`,
-		parseUUID(ch.ID), agent.ID).Scan(&conversationID, &workspaceID, &lastSeq, &lastReadSeq, &lastDeliveredSeq)
+		JOIN member_state ON member_state.conversation_id = conv.id
+		LEFT JOIN agent_session session_state
+		  ON session_state.workspace_id = conv.workspace_id
+		 AND session_state.conversation_id = conv.id
+		 AND session_state.agent_id = $2`,
+		parseUUID(ch.ID), agent.ID).Scan(&conversationID, &workspaceID, &lastSeq, &lastReadSeq, &lastDeliveredSeq, &lastDrainedSeq)
 	if err != nil {
 		slog.Warn("channel ambient wake: load cursor failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return pgtype.UUID{}, pgtype.UUID{}, 0, 0, false
@@ -114,6 +123,9 @@ func (h *Handler) channelAmbientWakeCursorTx(ctx context.Context, tx pgx.Tx, ch 
 	cursorSeq := lastReadSeq
 	if lastDeliveredSeq > cursorSeq {
 		cursorSeq = lastDeliveredSeq
+	}
+	if lastDrainedSeq > cursorSeq {
+		cursorSeq = lastDrainedSeq
 	}
 	pendingToSeq := lastSeq
 	if trigger.Seq > pendingToSeq {
@@ -158,12 +170,11 @@ func (h *Handler) buildChannelAmbientUnreadPromptWithDB(ctx context.Context, exe
 	b.WriteString("\n")
 	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, finish without visible output; do not print no_reply or protocol text.\n")
 	b.WriteString("If the unread bundle directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: write a visible plain-text reply or acknowledgement, and do not return no_reply.\n")
-	b.WriteString("If the bundle explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and produce one short visible message. Do not stay silent or print no_reply for that case.\n")
 	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, use a reaction when the runtime brief supports reactions and a reaction is sufficient; otherwise send a short acknowledgement.\n")
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\n")
 	b.WriteString(channelContinuationInstruction)
-	b.WriteString("\nDo not @-mention anyone from this ambient observation unless the user explicitly asks everyone/all agents to greet or respond to a mentioned person; in that case, include the requested mention.\n\n")
+	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
 	fmt.Fprintf(&b, "Ambient cursor range: seq > %d and seq <= %d\n", cursorSeq, pendingToSeq)
 	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))

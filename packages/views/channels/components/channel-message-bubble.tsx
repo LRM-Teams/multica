@@ -314,6 +314,7 @@ export function ChannelMessageBubble({
     ownName,
     getActorName,
   });
+  const isRadarMessage = isAgent && message.content.trimStart().startsWith("主动发现：");
   const profileActorType =
     message.type === "agent"
       ? "agent"
@@ -552,6 +553,11 @@ export function ChannelMessageBubble({
           {isAgent && (
             <span className="shrink-0 rounded-full border border-primary/20 bg-primary/[0.08] px-2 py-0.5 text-[11px] font-normal leading-none text-primary">
               {t(($) => $.message.agent_badge)}
+            </span>
+          )}
+          {isRadarMessage && (
+            <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-normal leading-none text-amber-700 dark:text-amber-300">
+              {t(($) => $.message.radar_badge)}
             </span>
           )}
           {isExternal && (

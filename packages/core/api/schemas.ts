@@ -3,6 +3,7 @@ import type {
   Agent,
   AgentFileContentResponse,
   AgentFilesResponse,
+  ListAgentRadarRunsResponse,
   AgentTemplate,
   AgentTemplateSummary,
   Attachment,
@@ -816,6 +817,41 @@ export const UpdateAgentFileContentResponseSchema = z.object({
 export const EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE: UpdateAgentFileContentResponse = {
   content_hash: "",
   conflict: false,
+};
+
+const AgentRadarActionSchema = z.object({
+  id: z.string().default(""),
+  type: z.string().default(""),
+  status: z.string().default(""),
+  risk_level: z.string().default("low"),
+  confidence: z.string().default("medium"),
+  dedupe_key: z.string().default(""),
+  reason: z.string().default(""),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+const AgentRadarRunSchema = z.object({
+  id: z.string().default(""),
+  agent_id: z.string().default(""),
+  status: z.string().default(""),
+  trigger_kind: z.string().default(""),
+  trigger_ref: z.string().default(""),
+  context_summary: z.string().default(""),
+  error: z.string().default(""),
+  scheduled_for: z.string().default(""),
+  started_at: z.string().nullable().default(null),
+  finished_at: z.string().nullable().default(null),
+  created_at: z.string().default(""),
+  actions: z.array(AgentRadarActionSchema).default([]),
+}).loose();
+
+export const AgentRadarRunsResponseSchema = z.object({
+  runs: z.array(AgentRadarRunSchema).default([]),
+}).loose();
+
+export const EMPTY_AGENT_RADAR_RUNS_RESPONSE: ListAgentRadarRunsResponse = {
+  runs: [],
 };
 
 const RuntimeHourlyActivitySchema = z.object({

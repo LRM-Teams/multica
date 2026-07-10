@@ -23,7 +23,7 @@ type Backend interface {
 // ProviderAuthRequiredMarker prefixes fail-closed auth preflight errors from
 // provider CLIs. Daemon code may classify this as a terminal, user-visible
 // provider-auth failure rather than retrying or launching an interactive login.
-const ProviderAuthRequiredMarker = "provider auth required"
+const ProviderAuthRequiredMarker = "provider_auth_required"
 
 // AuthPreflight is an optional contract for backends that can detect missing
 // non-interactive credentials before spawning their provider CLI. Implementers

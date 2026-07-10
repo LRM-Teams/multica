@@ -338,11 +338,17 @@ func (c *Client) FailTask(ctx context.Context, taskID, errMsg, sessionID, workDi
 	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/tasks/%s/fail", taskID), body, nil, defaultTerminalRetrySchedule)
 }
 
-func (c *Client) FailAgentInboxEvent(ctx context.Context, lease AgentInboxLease, errMsg string) error {
+func (c *Client) FailAgentInboxEvent(ctx context.Context, lease AgentInboxLease, errMsg, failureReason, reasonCode string) error {
 	body := map[string]any{
 		"delivery_id": lease.DeliveryID,
 		"lease_token": lease.LeaseToken,
 		"error":       errMsg,
+	}
+	if failureReason != "" {
+		body["failure_reason"] = failureReason
+	}
+	if reasonCode != "" {
+		body["reason_code"] = reasonCode
 	}
 	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/fail", lease.ID), body, nil, defaultTerminalRetrySchedule)
 }

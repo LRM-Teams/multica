@@ -202,6 +202,11 @@ function normalizeUnitType(value: string): "memory" | "skill" | "workflow" | "pr
   return "other";
 }
 
+function isMemoryLikeUnitType(value: string): boolean {
+  const normalized = normalizeUnitType(value);
+  return normalized === "memory" || normalized === "preference" || normalized === "workflow";
+}
+
 function unitLabel(value: string): string {
   const normalized = normalizeUnitType(value);
   if (normalized === "memory") return COPY.memory;
@@ -247,7 +252,7 @@ function buildAgentRows(
     current.total += 1;
     const unit = normalizeUnitType(submission.unit_type);
     if (unit === "skill") current.skill += 1;
-    if (unit === "memory" || unit === "preference") current.memory += 1;
+    if (isMemoryLikeUnitType(submission.unit_type)) current.memory += 1;
     learningByAgent.set(submission.source_agent_id, current);
   }
 
@@ -332,15 +337,15 @@ export function EvolutionCenterPage() {
       pending: submissionsByStatus.needs_review.length + submissionsByStatus.candidate.length,
       promoted: submissionsByStatus.promoted.length,
       skillDrafts: submissions.filter((item) => normalizeUnitType(item.unit_type) === "skill").length,
-      memoryItems: submissions.filter((item) => normalizeUnitType(item.unit_type) === "memory" || normalizeUnitType(item.unit_type) === "preference").length,
-      memoryUsed: unitMetrics.filter((item) => normalizeUnitType(item.unit_type) === "memory" || normalizeUnitType(item.unit_type) === "preference").reduce((sum, item) => sum + item.used_count, 0),
+      memoryItems: submissions.filter((item) => isMemoryLikeUnitType(item.unit_type)).length,
+      memoryUsed: unitMetrics.filter((item) => isMemoryLikeUnitType(item.unit_type)).reduce((sum, item) => sum + item.used_count, 0),
       skillUsed: unitMetrics.filter((item) => normalizeUnitType(item.unit_type) === "skill").reduce((sum, item) => sum + item.used_count, 0),
     };
   }, [rows, submissions, submissionsByStatus.candidate.length, submissionsByStatus.needs_review.length, submissionsByStatus.promoted.length, unitMetrics]);
 
   const filteredSubmissions = submissions.filter((submission) => {
     const unit = normalizeUnitType(submission.unit_type);
-    if (learningFilter === "memory") return unit === "memory" || unit === "preference";
+    if (learningFilter === "memory") return isMemoryLikeUnitType(submission.unit_type);
     if (learningFilter === "skill") return unit === "skill";
     return true;
   });
@@ -498,7 +503,7 @@ function MiniStat({ label, value }: { label: string; value: string }) {
 }
 
 function LearningPulseCard({ submissions }: { submissions: EvolutionReviewSubmission[] }) {
-  const memory = submissions.filter((s) => normalizeUnitType(s.unit_type) === "memory" || normalizeUnitType(s.unit_type) === "preference").length;
+  const memory = submissions.filter((s) => isMemoryLikeUnitType(s.unit_type)).length;
   const skill = submissions.filter((s) => normalizeUnitType(s.unit_type) === "skill").length;
   const promoted = submissions.filter((s) => s.status === "promoted").length;
   const total = Math.max(1, submissions.length);
@@ -670,7 +675,7 @@ function SubmissionCard({ submission }: { submission: EvolutionReviewSubmission 
 }
 
 function MemoryCurationCard({ submissions }: { submissions: EvolutionReviewSubmission[] }) {
-  const memorySubmissions = submissions.filter((item) => normalizeUnitType(item.unit_type) === "memory" || normalizeUnitType(item.unit_type) === "preference");
+  const memorySubmissions = submissions.filter((item) => isMemoryLikeUnitType(item.unit_type));
   const sharedCandidates = memorySubmissions.filter((item) => item.status === "candidate" || item.status === "needs_review").length;
   const promoted = memorySubmissions.filter((item) => item.status === "promoted").length;
   return (

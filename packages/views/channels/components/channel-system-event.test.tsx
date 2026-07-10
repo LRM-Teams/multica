@@ -107,6 +107,28 @@ describe("parseMemberSystemEvent", () => {
     });
   });
 
+  it("extracts the #456 fact-layer fields (type + canonical handle)", () => {
+    const event = parseMemberSystemEvent(
+      systemMessage({
+        event: "channel_member_removed",
+        params: {
+          actor_id: "user-1",
+          actor_type: "human",
+          actor_handle: "frank",
+          target_id: "agent-9",
+          target_type: "agent",
+          target_handle: "nova",
+        },
+      }),
+    );
+    expect(event).toMatchObject({
+      actorType: "human",
+      actorHandle: "frank",
+      targetType: "agent",
+      targetHandle: "nova",
+    });
+  });
+
   it("returns null for a non-system message", () => {
     expect(
       parseMemberSystemEvent(
@@ -180,5 +202,43 @@ describe("MemberSystemEventContent", () => {
     );
     expect(document.body.textContent).toBe("@frank left this channel");
     expect(screen.getAllByTestId("actor-token")).toHaveLength(1);
+  });
+
+  it("uses the #456 fact layer so a removed member no longer in the cache stays clickable", () => {
+    // ghost-x is NOT in mockAgents/mockMembers — the bridge path would degrade it
+    // to plain text. With target_type/handle from the fact layer it stays a
+    // clickable member token.
+    render(
+      <MemberSystemEventContent
+        event={{
+          event: "channel_member_left",
+          targetId: "ghost-x",
+          targetType: "human",
+          targetHandle: "ghost",
+          targetName: "Ghost",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@ghost left this channel");
+    const token = screen.getByTestId("actor-token");
+    expect(token).toHaveAttribute("data-member-type", "user");
+    expect(token).toHaveAttribute("data-member-id", "ghost-x");
+  });
+
+  it("routes a fact-layer agent target to the side panel", () => {
+    render(
+      <MemberSystemEventContent
+        event={{
+          event: "channel_member_left",
+          targetId: "agent-x",
+          targetType: "agent",
+          targetHandle: "atlas",
+        }}
+      />,
+    );
+    const token = screen.getByTestId("actor-token");
+    expect(token).toHaveAttribute("data-member-type", "agent");
+    fireEvent.click(token);
+    expect(openPanelMock).toHaveBeenCalledWith("agent-x");
   });
 });

@@ -24,9 +24,22 @@ const MEMBER_EVENT_KINDS = new Set<string>(Object.values(MEMBER_EVENTS));
 export interface MemberSystemEvent {
   event: MemberSystemEventKind;
   actorId?: string;
+  /** #456 fact layer: "human" | "agent". Absent on older/bridge messages. */
+  actorType?: string;
+  /** #456: canonical @handle (username). Absent on older messages. */
+  actorHandle?: string;
   actorName?: string;
   targetId: string;
+  /** #456 fact layer: "human" | "agent". Absent on older/bridge messages. */
+  targetType?: string;
+  /** #456: canonical @handle (username). Absent on older messages. */
+  targetHandle?: string;
   targetName?: string;
+}
+
+function optString(params: Record<string, unknown>, key: string): string | undefined {
+  const value = params[key];
+  return typeof value === "string" && value ? value : undefined;
 }
 
 /**
@@ -52,14 +65,18 @@ export function parseMemberSystemEvent(message: ChannelMessage): MemberSystemEve
     const event = (parsed as { event?: unknown }).event;
     if (typeof event !== "string" || !MEMBER_EVENT_KINDS.has(event)) continue;
     const params = ((parsed as { params?: unknown }).params ?? {}) as Record<string, unknown>;
-    const targetId = typeof params.target_id === "string" ? params.target_id : "";
+    const targetId = optString(params, "target_id");
     if (!targetId) continue;
     return {
       event: event as MemberSystemEventKind,
-      actorId: typeof params.actor_id === "string" ? params.actor_id || undefined : undefined,
-      actorName: typeof params.actor_name === "string" ? params.actor_name || undefined : undefined,
+      actorId: optString(params, "actor_id"),
+      actorType: optString(params, "actor_type"),
+      actorHandle: optString(params, "actor_handle"),
+      actorName: optString(params, "actor_name"),
       targetId,
-      targetName: typeof params.target_name === "string" ? params.target_name || undefined : undefined,
+      targetType: optString(params, "target_type"),
+      targetHandle: optString(params, "target_handle"),
+      targetName: optString(params, "target_name"),
     };
   }
   return null;

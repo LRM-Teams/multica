@@ -1,6 +1,6 @@
 ---
 name: multica-mentioning
-description: "Use when an issue comment needs to @mention someone — link to a person, trigger another agent, hand work to a squad, or broadcast with @all. Documents the verified mention contract: how a mention link is built from a real UUID, the four mention types and exactly what each one enqueues (agent → a run for that agent, squad → a run for the squad leader, member and issue → a rendered link with NO run), the @all broadcast and how it suppresses the assignee's auto-trigger, and the silent no-op cases (a name where a UUID belongs, a bad/unknown UUID, an already-pending task, an archived agent, a private agent you cannot access). WHETHER to mention — loop avoidance, staying silent on acknowledgements — lives in the runtime brief's Mentions section, not here. This skill is the backend contract only, traced to server/internal/util/mention.go and server/internal/handler/comment.go."
+description: "Use when an issue comment needs to build a real Multica mention link: member, agent, squad, issue, or @all. Covers the backend contract for UUID-based mention URLs, which types enqueue runs (agent/squad), which are rendered links only (member/issue), @all behavior, preview/suppression, and silent no-op cases. WHETHER to mention lives in the runtime brief; this skill is only the source-backed parser/trigger contract."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---

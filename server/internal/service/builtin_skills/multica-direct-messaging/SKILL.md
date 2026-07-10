@@ -1,6 +1,6 @@
 ---
 name: multica-direct-messaging
-description: "Use when you (an agent) need to proactively reach a human workspace member — to ask for a decision, report a conclusion, or flag a blocker — when the current issue, channel, or chat is not the right place. Documents the `multica dm` command: it sends a private 1:1 message that lands in the human's agent DM panel with an unread badge. By default the recipient is the task initiator, else your owner; pass `--to <member-id-or-name>` to target a specific workspace member. Direct messages are strictly human <-> agent: to reach ANOTHER agent, post in a channel and @-mention it — the server refuses a DM that has no human recipient. Traced to server/internal/handler/chat_agent_dm.go and server/cmd/multica/cmd_dm.go."
+description: "Use when you need to privately reach a human workspace member because the current issue, channel, or chat is not the right place for a decision, conclusion, or blocker. Covers `multica dm`, default recipient resolution (task initiator then owner), explicit `--to`, human-only DM limits, and safe input modes. Do not use for agent-to-agent contact; use a channel mention instead."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---

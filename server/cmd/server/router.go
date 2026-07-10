@@ -808,10 +808,19 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			r.Get("/api/evolution/metrics", h.GetEvolutionMetrics)
 
+			r.Route("/api/evolution/units/{unitId}/versions", func(r chi.Router) {
+				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
+				r.Get("/", h.ListEvolutionSkillVersions)
+				r.Get("/{versionId}", h.GetEvolutionSkillVersion)
+				r.Get("/{versionId}/eval", h.GetEvolutionSkillVersionEval)
+				r.Post("/{versionId}/rollback", h.RollbackEvolutionSkillVersion)
+			})
+
 			r.Route("/api/evolution/submissions", func(r chi.Router) {
 				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
 				r.Get("/", h.ListEvolutionReviewSubmissions)
 				r.Get("/{submissionId}", h.GetEvolutionReviewSubmission)
+				r.Post("/{submissionId}/rerun", h.RerunEvolutionCandidate)
 				r.Post("/{submissionId}/promote", h.PromoteEvolutionReviewSubmission)
 				r.Post("/{submissionId}/reject", h.RejectEvolutionReviewSubmission)
 				r.Put("/{submissionId}/source-skill", h.SetEvolutionSourceSkillAssignment)

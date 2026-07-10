@@ -1,16 +1,23 @@
 package handler
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -96,6 +103,22 @@ type evolutionSourceSkillRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
+type EvolutionCandidateRerunResponse struct {
+	SubmissionID string  `json:"submission_id"`
+	Status       string  `json:"status"`
+	UnitID       *string `json:"unit_id,omitempty"`
+	Matched      bool    `json:"matched"`
+	Idempotent   bool    `json:"idempotent"`
+}
+
+const evolutionCandidateRerunActivity = "evolution_candidate_rerun"
+
+type evolutionCandidateRerunAudit struct {
+	SubmissionID       string                          `json:"submission_id"`
+	IdempotencyKeyHash string                          `json:"idempotency_key_hash"`
+	Response           EvolutionCandidateRerunResponse `json:"response"`
+}
+
 func (h *Handler) ListEvolutionReviewSubmissions(w http.ResponseWriter, r *http.Request) {
 	workspaceID, wsUUID, ok := evolutionReviewWorkspace(w, r)
 	if !ok {
@@ -167,6 +190,125 @@ func (h *Handler) GetEvolutionReviewSubmission(w http.ResponseWriter, r *http.Re
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// RerunEvolutionCandidate re-evaluates one candidate under a per-submission
+// transaction lock. A successful audit row is the idempotency record, so the
+// state transition and its retriable response commit together.
+func (h *Handler) RerunEvolutionCandidate(w http.ResponseWriter, r *http.Request) {
+	workspaceID, wsUUID, ok := evolutionReviewWorkspace(w, r)
+	if !ok {
+		return
+	}
+	member, ok := middleware.MemberFromContext(r.Context())
+	if !ok || !roleAllowed(member.Role, "owner", "admin") {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+	actorType, _ := h.resolveActor(r, requestUserID(r), workspaceID)
+	if actorType == "agent" {
+		writeError(w, http.StatusForbidden, "agents may not rerun evolution candidates")
+		return
+	}
+	submissionID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "submissionId"), "submission id")
+	if !ok {
+		return
+	}
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		writeError(w, http.StatusBadRequest, "Idempotency-Key is required")
+		return
+	}
+	if len(idempotencyKey) > 128 {
+		writeError(w, http.StatusBadRequest, "Idempotency-Key is too long")
+		return
+	}
+
+	keyHash, auditID := evolutionCandidateRerunIdentity(workspaceID, uuidToString(submissionID), idempotencyKey)
+	if response, found, err := h.loadEvolutionCandidateRerun(r.Context(), wsUUID, submissionID, keyHash, auditID); err != nil {
+		writeError(w, http.StatusConflict, "Idempotency-Key is already bound to another operation")
+		return
+	} else if found {
+		response.Idempotent = true
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+
+	hook := func(ctx context.Context, tx pgx.Tx, result service.EvolutionCandidateRerunResult) error {
+		response := EvolutionCandidateRerunResponse{
+			SubmissionID: uuidToString(submissionID),
+			Status:       result.Status,
+			UnitID:       uuidToPtr(result.UnitID),
+			Matched:      result.Matched,
+		}
+		details, _ := json.Marshal(evolutionCandidateRerunAudit{SubmissionID: response.SubmissionID, IdempotencyKeyHash: keyHash, Response: response})
+		_, err := tx.Exec(ctx, `
+			INSERT INTO activity_log (id, workspace_id, actor_type, actor_id, action, details)
+			VALUES ($1, $2, 'member', $3, $4, $5)
+		`, auditID, wsUUID, member.UserID, evolutionCandidateRerunActivity, details)
+		return err
+	}
+	result, err := service.NewEvolutionServiceWithReviewerAndTx(h.Queries, h.TxStarter, h.cfg.EvolutionReviewer, h.cfg.EvolutionReviewEnabled).RerunCandidate(r.Context(), wsUUID, submissionID, hook)
+	if errors.Is(err, service.ErrEvolutionCandidateClaimed) {
+		for range 20 {
+			time.Sleep(50 * time.Millisecond)
+			response, found, replayErr := h.loadEvolutionCandidateRerun(r.Context(), wsUUID, submissionID, keyHash, auditID)
+			if replayErr != nil {
+				writeError(w, http.StatusConflict, "Idempotency-Key is already bound to another operation")
+				return
+			}
+			if found {
+				response.Idempotent = true
+				writeJSON(w, http.StatusOK, response)
+				return
+			}
+		}
+	}
+	if err != nil {
+		if response, found, replayErr := h.loadEvolutionCandidateRerun(r.Context(), wsUUID, submissionID, keyHash, auditID); replayErr == nil && found {
+			response.Idempotent = true
+			writeJSON(w, http.StatusOK, response)
+			return
+		}
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			writeError(w, http.StatusNotFound, "evolution submission not found")
+		case errors.Is(err, service.ErrEvolutionSubmissionNotCandidate), errors.Is(err, service.ErrEvolutionCandidateClaimed), errors.Is(err, service.ErrEvolutionCandidateChanged):
+			writeError(w, http.StatusConflict, err.Error())
+		default:
+			slog.Error("evolution candidate rerun failed", append(logger.RequestAttrs(r), "error", err, "submission_id", uuidToString(submissionID))...)
+			writeError(w, http.StatusInternalServerError, "failed to rerun evolution candidate")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, EvolutionCandidateRerunResponse{SubmissionID: uuidToString(submissionID), Status: result.Status, UnitID: uuidToPtr(result.UnitID), Matched: result.Matched})
+}
+
+func evolutionCandidateRerunIdentity(workspaceID, submissionID, key string) (string, pgtype.UUID) {
+	keyDigest := sha256.Sum256([]byte("multica:evolution-candidate-rerun:idempotency-key:v1\x00" + key))
+	keyHash := "sha256:" + hex.EncodeToString(keyDigest[:])
+	recordDigest := sha256.Sum256([]byte("multica:evolution-candidate-rerun:audit-id:v1\x00" + workspaceID + "\x00" + submissionID + "\x00" + keyHash))
+	var id pgtype.UUID
+	copy(id.Bytes[:], recordDigest[:16])
+	id.Bytes[6] = (id.Bytes[6] & 0x0f) | 0x50
+	id.Bytes[8] = (id.Bytes[8] & 0x3f) | 0x80
+	id.Valid = true
+	return keyHash, id
+}
+
+func (h *Handler) loadEvolutionCandidateRerun(ctx context.Context, workspaceID, submissionID pgtype.UUID, keyHash string, auditID pgtype.UUID) (EvolutionCandidateRerunResponse, bool, error) {
+	activity, err := h.Queries.GetActivity(ctx, auditID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return EvolutionCandidateRerunResponse{}, false, nil
+	}
+	if err != nil {
+		return EvolutionCandidateRerunResponse{}, false, err
+	}
+	var audit evolutionCandidateRerunAudit
+	if activity.WorkspaceID != workspaceID || activity.Action != evolutionCandidateRerunActivity || json.Unmarshal(activity.Details, &audit) != nil || audit.SubmissionID != uuidToString(submissionID) || audit.IdempotencyKeyHash != keyHash {
+		return EvolutionCandidateRerunResponse{}, false, errors.New("idempotency audit collision")
+	}
+	return audit.Response, true, nil
 }
 
 func (h *Handler) PromoteEvolutionReviewSubmission(w http.ResponseWriter, r *http.Request) {

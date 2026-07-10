@@ -91,6 +91,23 @@ SELECT * FROM evolution_unit_submission
 WHERE id = @id AND workspace_id = @workspace_id AND status = 'needs_review'
 FOR UPDATE;
 
+-- name: ClaimEvolutionCandidate :one
+UPDATE evolution_unit_submission
+SET status = 'clustered',
+    review_metadata = jsonb_set(review_metadata, '{candidate_claim}', jsonb_build_object('token', @claim_token::text), true),
+    updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id
+  AND (status = 'candidate' OR (status = 'clustered' AND updated_at < now() - interval '5 minutes'))
+RETURNING *;
+
+-- name: ReleaseEvolutionCandidate :exec
+UPDATE evolution_unit_submission
+SET status = 'candidate',
+    review_metadata = review_metadata - 'candidate_claim',
+    updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id AND status = 'clustered'
+  AND review_metadata->'candidate_claim'->>'token' = @claim_token;
+
 -- name: ListEvolutionSubmissionFiles :many
 SELECT * FROM evolution_unit_submission_file
 WHERE workspace_id = @workspace_id AND submission_id = @submission_id
@@ -99,7 +116,7 @@ ORDER BY path ASC;
 -- name: RejectEvolutionSubmission :one
 UPDATE evolution_unit_submission
 SET status = 'rejected', reject_reason = @reject_reason, updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+WHERE id = @id AND workspace_id = @workspace_id AND status = 'clustered'
 RETURNING *;
 
 -- name: RejectEvolutionSubmissionWithReview :one
@@ -113,7 +130,7 @@ SET status = 'rejected',
     review_metadata = @review_metadata,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+WHERE id = @id AND workspace_id = @workspace_id AND status IN ('clustered', 'needs_review')
 RETURNING *;
 
 -- name: MarkEvolutionSubmissionNeedsReview :one
@@ -126,7 +143,7 @@ SET status = 'needs_review',
     review_metadata = @review_metadata,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+WHERE id = @id AND workspace_id = @workspace_id AND status = 'clustered'
 RETURNING *;
 
 -- name: ListEvolutionSubmissionsForReview :many
@@ -185,8 +202,9 @@ RETURNING *;
 
 -- name: MarkEvolutionSubmissionPromoted :one
 UPDATE evolution_unit_submission
-SET status = 'promoted', promoted_unit_id = @promoted_unit_id, updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+SET status = 'promoted', promoted_unit_id = @promoted_unit_id,
+    review_metadata = review_metadata - 'candidate_claim', updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id AND status = 'clustered'
 RETURNING *;
 
 -- name: MarkEvolutionSubmissionPromotedWithReview :one
@@ -200,7 +218,7 @@ SET status = 'promoted',
     review_metadata = @review_metadata,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+WHERE id = @id AND workspace_id = @workspace_id AND status IN ('clustered', 'needs_review')
 RETURNING *;
 
 -- name: UpsertSharedEvolutionUnitFile :one
@@ -220,3 +238,43 @@ RETURNING *;
 SELECT * FROM shared_evolution_unit_file
 WHERE workspace_id = @workspace_id AND unit_id = @unit_id AND version_id = @version_id
 ORDER BY path ASC;
+
+-- name: GetSharedEvolutionUnitCurrentVersionID :one
+SELECT current_version_id
+FROM shared_evolution_unit
+WHERE workspace_id = @workspace_id AND id = @unit_id AND unit_type = 'skill' AND status = 'active';
+
+-- name: RecordEvolutionSkillInjection :exec
+INSERT INTO evolution_unit_feedback_event (
+  workspace_id, agent_id, task_id, unit_type, unit_id, event, outcome, source, metadata
+)
+SELECT @workspace_id, @agent_id, @task_id, 'skill', @unit_id, 'injected', '', 'runtime',
+       jsonb_build_object('version_id', @version_id::uuid, 'execution_id', @execution_id::uuid)
+WHERE NOT EXISTS (
+  SELECT 1 FROM evolution_unit_feedback_event
+  WHERE unit_type = 'skill' AND unit_id = @unit_id AND event = 'injected'
+    AND metadata->>'execution_id' = @execution_id::text
+    AND metadata->>'version_id' = @version_id::text
+);
+
+-- name: RecordEvolutionSkillOutcome :exec
+INSERT INTO evolution_unit_feedback_event (
+  workspace_id, agent_id, task_id, unit_type, unit_id, event, outcome, source, metadata
+)
+SELECT DISTINCT workspace_id, agent_id, task_id, unit_type, unit_id,
+       @event::text, @outcome::text, 'runtime',
+       jsonb_build_object('version_id', metadata->>'version_id', 'execution_id', @execution_id::uuid)
+FROM evolution_unit_feedback_event
+WHERE unit_type = 'skill'
+  AND event = 'injected'
+  AND metadata->>'execution_id' = @execution_id::text
+  AND COALESCE(metadata->>'version_id', '') <> ''
+  AND NOT EXISTS (
+    SELECT 1 FROM evolution_unit_feedback_event recorded
+    WHERE recorded.unit_type = evolution_unit_feedback_event.unit_type
+      AND recorded.unit_id = evolution_unit_feedback_event.unit_id
+      AND recorded.event = @event::text
+      AND recorded.outcome = @outcome::text
+      AND recorded.metadata->>'execution_id' = @execution_id::text
+      AND recorded.metadata->>'version_id' = evolution_unit_feedback_event.metadata->>'version_id'
+  );

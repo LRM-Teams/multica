@@ -311,6 +311,47 @@ func (q *Queries) GetEvolutionSubmissionForReview(ctx context.Context, arg GetEv
 	return scanEvolutionUnitSubmission(q.db.QueryRow(ctx, getEvolutionSubmissionForReview, arg.ID, arg.WorkspaceID))
 }
 
+const claimEvolutionCandidate = `-- name: ClaimEvolutionCandidate :one
+UPDATE evolution_unit_submission
+SET status = 'clustered',
+    review_metadata = jsonb_set(review_metadata, '{candidate_claim}', jsonb_build_object('token', $3::text), true),
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+  AND (status = 'candidate' OR (status = 'clustered' AND updated_at < now() - interval '5 minutes'))
+RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
+`
+
+type ClaimEvolutionCandidateParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ClaimToken  pgtype.UUID `json:"claim_token"`
+}
+
+func (q *Queries) ClaimEvolutionCandidate(ctx context.Context, arg ClaimEvolutionCandidateParams) (EvolutionUnitSubmission, error) {
+	row := q.db.QueryRow(ctx, claimEvolutionCandidate, arg.ID, arg.WorkspaceID, arg.ClaimToken)
+	return scanEvolutionUnitSubmission(row)
+}
+
+const releaseEvolutionCandidate = `-- name: ReleaseEvolutionCandidate :exec
+UPDATE evolution_unit_submission
+SET status = 'candidate',
+    review_metadata = review_metadata - 'candidate_claim',
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND status = 'clustered'
+  AND review_metadata->'candidate_claim'->>'token' = $3
+`
+
+type ReleaseEvolutionCandidateParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ClaimToken  string      `json:"claim_token"`
+}
+
+func (q *Queries) ReleaseEvolutionCandidate(ctx context.Context, arg ReleaseEvolutionCandidateParams) error {
+	_, err := q.db.Exec(ctx, releaseEvolutionCandidate, arg.ID, arg.WorkspaceID, arg.ClaimToken)
+	return err
+}
+
 const listEvolutionSubmissionFiles = `-- name: ListEvolutionSubmissionFiles :many
 SELECT id, workspace_id, submission_id, path, content, content_hash, mime_type, size_bytes, created_at FROM evolution_unit_submission_file
 WHERE workspace_id = $1 AND submission_id = $2
@@ -342,7 +383,7 @@ func (q *Queries) ListEvolutionSubmissionFiles(ctx context.Context, arg ListEvol
 const rejectEvolutionSubmission = `-- name: RejectEvolutionSubmission :one
 UPDATE evolution_unit_submission
 SET status = 'rejected', reject_reason = $3, updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = $1 AND workspace_id = $2 AND status = 'clustered'
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
@@ -368,7 +409,7 @@ SET status = 'rejected',
     review_metadata = $8,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = $1 AND workspace_id = $2 AND status IN ('clustered', 'needs_review')
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
@@ -398,7 +439,7 @@ SET status = 'needs_review',
     review_metadata = $7,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = $1 AND workspace_id = $2 AND status = 'clustered'
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
@@ -598,8 +639,9 @@ func (q *Queries) SyncSharedEvolutionUnitMatchMetadata(ctx context.Context, arg 
 
 const markEvolutionSubmissionPromoted = `-- name: MarkEvolutionSubmissionPromoted :one
 UPDATE evolution_unit_submission
-SET status = 'promoted', promoted_unit_id = $3, updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+SET status = 'promoted', promoted_unit_id = $3,
+    review_metadata = review_metadata - 'candidate_claim', updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND status = 'clustered'
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
@@ -625,7 +667,7 @@ SET status = 'promoted',
     review_metadata = $8,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = $1 AND workspace_id = $2 AND status IN ('clustered', 'needs_review')
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
@@ -675,6 +717,116 @@ func (q *Queries) UpsertSharedEvolutionUnitFile(ctx context.Context, arg UpsertS
 	var item SharedEvolutionUnitFile
 	err := row.Scan(&item.ID, &item.WorkspaceID, &item.UnitID, &item.VersionID, &item.Path, &item.Content, &item.ContentHash, &item.MimeType, &item.SizeBytes, &item.CreatedAt)
 	return item, err
+}
+
+const listSharedEvolutionUnitFiles = `-- name: ListSharedEvolutionUnitFiles :many
+SELECT id, workspace_id, unit_id, version_id, path, content, content_hash, mime_type, size_bytes, created_at
+FROM shared_evolution_unit_file
+WHERE workspace_id = $1 AND unit_id = $2 AND version_id = $3
+ORDER BY path ASC
+`
+
+type ListSharedEvolutionUnitFilesParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UnitID      pgtype.UUID `json:"unit_id"`
+	VersionID   pgtype.UUID `json:"version_id"`
+}
+
+func (q *Queries) ListSharedEvolutionUnitFiles(ctx context.Context, arg ListSharedEvolutionUnitFilesParams) ([]SharedEvolutionUnitFile, error) {
+	rows, err := q.db.Query(ctx, listSharedEvolutionUnitFiles, arg.WorkspaceID, arg.UnitID, arg.VersionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SharedEvolutionUnitFile
+	for rows.Next() {
+		var item SharedEvolutionUnitFile
+		if err := rows.Scan(&item.ID, &item.WorkspaceID, &item.UnitID, &item.VersionID, &item.Path, &item.Content, &item.ContentHash, &item.MimeType, &item.SizeBytes, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+const getSharedEvolutionUnitCurrentVersionID = `-- name: GetSharedEvolutionUnitCurrentVersionID :one
+SELECT current_version_id
+FROM shared_evolution_unit
+WHERE workspace_id = $1 AND id = $2 AND unit_type = 'skill' AND status = 'active'
+`
+
+type GetSharedEvolutionUnitCurrentVersionIDParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UnitID      pgtype.UUID `json:"unit_id"`
+}
+
+func (q *Queries) GetSharedEvolutionUnitCurrentVersionID(ctx context.Context, arg GetSharedEvolutionUnitCurrentVersionIDParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getSharedEvolutionUnitCurrentVersionID, arg.WorkspaceID, arg.UnitID)
+	var currentVersionID pgtype.UUID
+	err := row.Scan(&currentVersionID)
+	return currentVersionID, err
+}
+
+const recordEvolutionSkillInjection = `-- name: RecordEvolutionSkillInjection :exec
+INSERT INTO evolution_unit_feedback_event (
+  workspace_id, agent_id, task_id, unit_type, unit_id, event, outcome, source, metadata
+)
+SELECT $1, $2, $3, 'skill', $4, 'injected', '', 'runtime',
+       jsonb_build_object('version_id', $5::uuid, 'execution_id', $6::uuid)
+WHERE NOT EXISTS (
+  SELECT 1 FROM evolution_unit_feedback_event
+  WHERE unit_type = 'skill' AND unit_id = $4 AND event = 'injected'
+    AND metadata->>'execution_id' = $6::text
+    AND metadata->>'version_id' = $5::text
+)
+`
+
+type RecordEvolutionSkillInjectionParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentID     pgtype.UUID `json:"agent_id"`
+	TaskID      pgtype.UUID `json:"task_id"`
+	UnitID      pgtype.UUID `json:"unit_id"`
+	VersionID   pgtype.UUID `json:"version_id"`
+	ExecutionID pgtype.UUID `json:"execution_id"`
+}
+
+func (q *Queries) RecordEvolutionSkillInjection(ctx context.Context, arg RecordEvolutionSkillInjectionParams) error {
+	_, err := q.db.Exec(ctx, recordEvolutionSkillInjection, arg.WorkspaceID, arg.AgentID, arg.TaskID, arg.UnitID, arg.VersionID, arg.ExecutionID)
+	return err
+}
+
+const recordEvolutionSkillOutcome = `-- name: RecordEvolutionSkillOutcome :exec
+INSERT INTO evolution_unit_feedback_event (
+  workspace_id, agent_id, task_id, unit_type, unit_id, event, outcome, source, metadata
+)
+SELECT DISTINCT workspace_id, agent_id, task_id, unit_type, unit_id,
+       $1::text, $2::text, 'runtime',
+       jsonb_build_object('version_id', metadata->>'version_id', 'execution_id', $3::uuid)
+FROM evolution_unit_feedback_event
+WHERE unit_type = 'skill'
+  AND event = 'injected'
+  AND metadata->>'execution_id' = $3::text
+  AND COALESCE(metadata->>'version_id', '') <> ''
+  AND NOT EXISTS (
+    SELECT 1 FROM evolution_unit_feedback_event recorded
+    WHERE recorded.unit_type = evolution_unit_feedback_event.unit_type
+      AND recorded.unit_id = evolution_unit_feedback_event.unit_id
+      AND recorded.event = $1::text
+      AND recorded.outcome = $2::text
+      AND recorded.metadata->>'execution_id' = $3::text
+      AND recorded.metadata->>'version_id' = evolution_unit_feedback_event.metadata->>'version_id'
+  )
+`
+
+type RecordEvolutionSkillOutcomeParams struct {
+	Event       string      `json:"event"`
+	Outcome     string      `json:"outcome"`
+	ExecutionID pgtype.UUID `json:"execution_id"`
+}
+
+func (q *Queries) RecordEvolutionSkillOutcome(ctx context.Context, arg RecordEvolutionSkillOutcomeParams) error {
+	_, err := q.db.Exec(ctx, recordEvolutionSkillOutcome, arg.Event, arg.Outcome, arg.ExecutionID)
+	return err
 }
 
 func scanEvolutionUnitSubmission(row pgx.Row) (EvolutionUnitSubmission, error) {

@@ -368,6 +368,27 @@
     },
     "activity": {
       "timeline_empty": "아직 활동이 없습니다",
+      "labels": {
+        "thinking": "생각 중",
+        "output": "출력",
+        "working": "작업 중",
+        "failed": "실패",
+        "waiting": "대기 중",
+        "running_command": "명령 실행",
+        "writing_file": "파일 쓰기",
+        "editing_file": "파일 편집",
+        "reading_file": "파일 읽기",
+        "searching_files": "파일 검색",
+        "searching_code": "코드 검색",
+        "searching_web": "웹 검색",
+        "sending_message": "메시지 전송"
+      },
+      "subtexts": {
+        "message_received": "메시지 수신",
+        "compacting_context": "컨텍스트 압축",
+        "compaction_finished": "압축 완료",
+        "subagent_activity": "서브에이전트 활동"
+      },
       "view_diagnostics": "진단 세부정보 보기",
       "hide_diagnostics": "진단 세부정보 숨기기",
       "section_now": "현재",

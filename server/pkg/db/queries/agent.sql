@@ -732,6 +732,15 @@ SELECT atq.* FROM agent_task_queue atq
 JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
   AND atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+  AND (
+    atq.issue_id IS NOT NULL
+    OR atq.chat_session_id IS NOT NULL
+    OR atq.autopilot_run_id IS NOT NULL
+    OR (
+      atq.context->>'type' = 'quick_create'
+      AND atq.context->>'workspace_id' = $1::text
+    )
+  )
 
 UNION ALL
 
@@ -741,6 +750,15 @@ SELECT t.* FROM (
   JOIN agent a ON a.id = atq.agent_id
   WHERE a.workspace_id = $1
     AND atq.status IN ('completed', 'failed')
+    AND (
+      atq.issue_id IS NOT NULL
+      OR atq.chat_session_id IS NOT NULL
+      OR atq.autopilot_run_id IS NOT NULL
+      OR (
+        atq.context->>'type' = 'quick_create'
+        AND atq.context->>'workspace_id' = $1::text
+      )
+    )
   ORDER BY atq.agent_id, atq.completed_at DESC NULLS LAST
 ) t;
 

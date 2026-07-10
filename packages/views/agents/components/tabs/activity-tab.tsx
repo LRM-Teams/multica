@@ -18,9 +18,8 @@ interface ActivityTabProps {
  * The render is the shared #267 `ActivityTimeline` (which also powers the
  * profile/hover card in `compact` mode — one surface, one source). All rows
  * come from the #302 raw `ActivityEvent` facts; FE projects display label/tone
- * from stable kind/reason fields and never renders raw command output.
- * Diagnostics-level events sit behind the timeline's own "view diagnostics"
- * toggle.
+ * from stable kind/reason fields and never renders raw command output. The
+ * default user surface does not expose diagnostics controls.
  */
 export function ActivityTab({ agent }: ActivityTabProps) {
   const { events } = useAgentActivityEvents(agent.id);

@@ -9,7 +9,7 @@ import { AgentLiveStatusMark } from "./agent-live-status-mark";
  * (DM header, side panel, live peek).
  *
  * Data: `useAgentLiveStatus` — stage word when a task is active
- * (Thinking / Running a command / Queued…), coarse presence when idle
+ * (Thinking / Running command… / Queued…), coarse presence when idle
  * (Idle / Offline / …). Same source as the profile hover card.
  *
  * Visual: `AgentLiveStatusMark` — coloured dot + word (never a Lucide

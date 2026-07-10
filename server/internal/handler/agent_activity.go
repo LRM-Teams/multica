@@ -114,6 +114,9 @@ type AgentActivityTimelineEvent struct {
 	OccurredAt string                   `json:"occurred_at"`
 	Visibility string                   `json:"visibility"`
 	Text       *string                  `json:"text,omitempty"`
+	Tool       *string                  `json:"tool,omitempty"`
+	ToolTarget *string                  `json:"tool_target,omitempty"`
+	Status     *string                  `json:"status,omitempty"`
 	ReasonCode string                   `json:"reason_code,omitempty"`
 	TargetRef  AgentActivityTargetRef   `json:"target_ref"`
 	SourceRefs []AgentActivitySourceRef `json:"source_refs,omitempty"`
@@ -670,10 +673,21 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 				'task_message_id', tm.id,
 				'task_id', tm.task_id,
 				'seq', tm.seq,
-				'tool', tm.tool
+				'tool', tm.tool,
+				'tool_target',
+					CASE
+						WHEN tm.type <> 'tool_use' THEN NULL
+						WHEN tm.input ? 'path' THEN regexp_replace(tm.input->>'path', '^.*/', '')
+						WHEN tm.input ? 'file_path' THEN regexp_replace(tm.input->>'file_path', '^.*/', '')
+						WHEN tm.input ? 'filepath' THEN regexp_replace(tm.input->>'filepath', '^.*/', '')
+						WHEN tm.input ? 'query' THEN left(tm.input->>'query', 80)
+						WHEN tm.input ? 'pattern' THEN left(tm.input->>'pattern', 80)
+						WHEN NULLIF(tm.tool, '') IS NOT NULL THEN tm.tool
+						ELSE NULL
+					END
 			)) AS details,
 			tm.visibility,
-			NULL::text AS status,
+			atq.status AS status,
 			NULL::text AS trigger_summary,
 			NULL::jsonb AS result,
 			NULL::text AS failure_reason,
@@ -1513,6 +1527,9 @@ func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspac
 	if message.Tool.Valid && strings.TrimSpace(message.Tool.String) != "" {
 		details["tool"] = strings.TrimSpace(message.Tool.String)
 	}
+	if target := taskMessageActivityToolTarget(message); target != "" {
+		details["tool_target"] = target
+	}
 	detailsJSON, _ := json.Marshal(details)
 	row := agentActivityRawRow{
 		Kind:          taskMessageActivityKind(message.Type),
@@ -1528,6 +1545,7 @@ func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspac
 		Message:       taskMessageActivityText(message),
 		Details:       detailsJSON,
 		Visibility:    pgtype.Text{String: message.Visibility, Valid: strings.TrimSpace(message.Visibility) != ""},
+		Status:        pgtype.Text{String: task.Status, Valid: strings.TrimSpace(task.Status) != ""},
 		CreatedAt:     message.CreatedAt,
 		UsageJSON:     []byte("[]"),
 	}
@@ -1568,6 +1586,7 @@ func taskMessageActivityText(message db.TaskMessage) pgtype.Text {
 }
 
 func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivityTargetRef) AgentActivityTimelineEvent {
+	details := jsonObject(row.Details)
 	return AgentActivityTimelineEvent{
 		ID:         uuidToString(row.ID),
 		AgentID:    uuidToString(row.AgentID),
@@ -1578,10 +1597,32 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		OccurredAt: timestampToString(row.CreatedAt),
 		Visibility: textOrDefault(row.Visibility, "user_facing"),
 		Text:       textToPtr(row.Message),
+		Tool:       stringPtrFromMap(details, "tool"),
+		ToolTarget: stringPtrFromMap(details, "tool_target"),
+		Status:     textToPtr(row.Status),
 		ReasonCode: textOrDefault(row.ReasonCode, ""),
 		TargetRef:  targetRef,
 		SourceRefs: agentActivitySourceRefs(row),
 	}
+}
+
+func taskMessageActivityToolTarget(message db.TaskMessage) string {
+	if message.Type != "tool_use" {
+		return ""
+	}
+	tool := strings.TrimSpace(message.Tool.String)
+	input := jsonObject(message.Input)
+	for _, key := range []string{"path", "file_path", "filepath"} {
+		if value := basenameFromMap(input, key); value != "" {
+			return value
+		}
+	}
+	for _, key := range []string{"query", "pattern"} {
+		if value := clippedStringFromMap(input, key, 80); value != "" {
+			return value
+		}
+	}
+	return tool
 }
 
 func agentActivityTimelineTaskID(row agentActivityRawRow) *string {
@@ -1696,6 +1737,39 @@ func agentActivityDiagnostic(row agentActivityRawRow) map[string]any {
 		out["reason_code"] = reason
 	}
 	return out
+}
+
+func stringPtrFromMap(m map[string]any, key string) *string {
+	if value := stringFromMap(m, key); value != "" {
+		return &value
+	}
+	return nil
+}
+
+func basenameFromMap(m map[string]any, key string) string {
+	value := stringFromMap(m, key)
+	if value == "" {
+		return ""
+	}
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	if len(parts) == 0 {
+		return value
+	}
+	return parts[len(parts)-1]
+}
+
+func clippedStringFromMap(m map[string]any, key string, limit int) string {
+	value := stringFromMap(m, key)
+	if value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
 }
 
 func agentActivityStepToResponse(row agentActivityStepRawRow) AgentActivityStep {

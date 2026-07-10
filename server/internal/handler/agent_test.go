@@ -68,21 +68,31 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	}
 
 	insertedIDs := make([]string, 0, len(fixtures))
+	quickCreateContext := fmt.Sprintf(`{"type":"quick_create","workspace_id":%q,"prompt":"snapshot fixture"}`, testWorkspaceID)
 	for _, f := range fixtures {
 		var id string
 		var query string
 		if f.completedAt == "" {
-			query = `INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority)
-			         VALUES ($1, $2, $3, 0) RETURNING id`
+			query = `INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, context)
+			         VALUES ($1, $2, $3, 0, $4::jsonb) RETURNING id`
 		} else {
-			query = `INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, completed_at)
-			         VALUES ($1, $2, $3, 0, ` + f.completedAt + `) RETURNING id`
+			query = `INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, completed_at, context)
+			         VALUES ($1, $2, $3, 0, ` + f.completedAt + `, $4::jsonb) RETURNING id`
 		}
-		if err := testPool.QueryRow(ctx, query, f.agentID, testRuntimeID, f.status).Scan(&id); err != nil {
+		if err := testPool.QueryRow(ctx, query, f.agentID, testRuntimeID, f.status, quickCreateContext).Scan(&id); err != nil {
 			t.Fatalf("insert %s: %v", f.label, err)
 		}
 		insertedIDs = append(insertedIDs, id)
 	}
+	var malformedID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority)
+		VALUES ($1, $2, 'queued', 0)
+		RETURNING id
+	`, agentA, testRuntimeID).Scan(&malformedID); err != nil {
+		t.Fatalf("insert malformed no-source active task: %v", err)
+	}
+	insertedIDs = append(insertedIDs, malformedID)
 	t.Cleanup(func() {
 		for _, id := range insertedIDs {
 			testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, id)
@@ -135,6 +145,9 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	// The OLD failed terminal on agent A must be excluded.
 	if counts[key{agentA, "failed"}] != 0 {
 		t.Errorf("agent A old failed must be superseded by newer completed; got %d", counts[key{agentA, "failed"}])
+	}
+	if counts[key{agentA, "queued"}] != 1 {
+		t.Errorf("agent A malformed no-source queued task must be excluded; queued count = %d", counts[key{agentA, "queued"}])
 	}
 
 	// No cancelled row may ever appear in the snapshot — they're filtered at
@@ -247,14 +260,14 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	if items[0].ID != newerID || items[0].Kind != "tool_use" || items[0].Status != "running" {
 		t.Fatalf("newest activity = %#v, want running file activity %s", items[0], newerID)
 	}
-	if items[0].Label != "Editing file" {
-		t.Fatalf("newest activity projection = %#v, want Editing file", items[0])
+	if items[0].Label != "Editing file…" {
+		t.Fatalf("newest activity projection = %#v, want Editing file…", items[0])
 	}
 	if items[1].ID != olderID || items[1].Kind != "command" || items[1].Status != "failed" {
 		t.Fatalf("older activity = %#v, want command task %s", items[1], olderID)
 	}
-	if items[1].Label != "Ran command" {
-		t.Fatalf("command activity label = %q, want Ran command", items[1].Label)
+	if items[1].Label != "Running command" {
+		t.Fatalf("command activity label = %q, want Running command", items[1].Label)
 	}
 	body := w.Body.String()
 	for _, leak := range []string{
@@ -295,8 +308,8 @@ func TestProjectTextActivity_ProjectsActionWithoutSummary(t *testing.T) {
 		if !ok {
 			t.Fatalf("projectTextActivity returned ok=false for %q", content)
 		}
-		if item.Label != "Writing response" {
-			t.Fatalf("label = %q, want Writing response", item.Label)
+		if item.Label != "Output" {
+			t.Fatalf("label = %q, want Output", item.Label)
 		}
 	}
 }

@@ -352,6 +352,27 @@
     },
     "activity": {
       "timeline_empty": "アクティビティはまだありません",
+      "labels": {
+        "thinking": "思考中",
+        "output": "出力",
+        "working": "実行中",
+        "failed": "失敗",
+        "waiting": "待機中",
+        "running_command": "コマンド実行",
+        "writing_file": "ファイル書き込み",
+        "editing_file": "ファイル編集",
+        "reading_file": "ファイル読み込み",
+        "searching_files": "ファイル検索",
+        "searching_code": "コード検索",
+        "searching_web": "ウェブ検索",
+        "sending_message": "メッセージ送信"
+      },
+      "subtexts": {
+        "message_received": "メッセージを受信",
+        "compacting_context": "コンテキスト圧縮",
+        "compaction_finished": "圧縮完了",
+        "subagent_activity": "サブエージェント活動"
+      },
       "view_diagnostics": "診断の詳細を表示",
       "hide_diagnostics": "診断の詳細を非表示",
       "section_now": "現在",

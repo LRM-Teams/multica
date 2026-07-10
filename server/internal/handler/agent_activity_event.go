@@ -90,7 +90,7 @@ func insertAgentActivityEvent(
 		eventKind, eventType, severity,
 		targetKind, targetID, targetSlug,
 		reasonCode, message, string(payload),
-		activityVisibilityFor(eventKind, severity, reasonCode),
+		activityVisibilityFor(eventKind, eventType, severity, reasonCode),
 	).Scan(&id)
 	if err != nil {
 		slog.Warn("agent activity event: insert failed",
@@ -131,16 +131,17 @@ func (h *Handler) recordAgentActivityEvent(
 	h.publishAgentActivityRealtimeEvent(ctx, workspaceIDString, uuidToString(agentID), uuidToString(id), event, targetRef)
 }
 
-func activityVisibilityFor(eventKind, severity, reasonCode string) string {
+func activityVisibilityFor(eventKind, eventType, severity, reasonCode string) string {
 	visibility := "user_facing"
 	switch eventKind {
 	case activityKindToolOutput,
 		activityKindTelemetry,
-		activityKindCompactionStarted,
-		activityKindCompactionFinished,
 		activityKindTransport,
 		activityKindCustom:
 		visibility = "diagnostic_only"
+	}
+	if eventKind == activityKindCustom && strings.Contains(eventType, "subagent") {
+		visibility = "user_facing"
 	}
 	if strings.Contains(reasonCode, "freshness") {
 		visibility = "diagnostic_only"

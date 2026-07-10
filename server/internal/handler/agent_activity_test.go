@@ -267,8 +267,10 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 		t.Fatalf("insert thinking task message: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO task_message (task_id, seq, type, tool, content, visibility)
-		VALUES ($1, 2, 'tool_use', 'exec_command', 'tool input is not the public narrative', 'user_facing')
+		INSERT INTO task_message (task_id, seq, type, tool, input, content, visibility)
+		VALUES ($1, 2, 'tool_use', 'exec_command',
+		        '{"cmd":"pnpm --filter @multica/web build --token sk-proj-secret"}',
+		        'tool input is not the public narrative', 'user_facing')
 		RETURNING id
 	`, taskID).Scan(&toolID); err != nil {
 		t.Fatalf("insert tool task message: %v", err)
@@ -303,10 +305,36 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 	if tool.Kind != activityKindToolCall || tool.EventType != "tool_use" {
 		t.Fatalf("tool event kind/type = %q/%q", tool.Kind, tool.EventType)
 	}
+	if tool.Tool == nil || *tool.Tool != "exec_command" {
+		t.Fatalf("tool event raw tool = %+v, want exec_command", tool.Tool)
+	}
+	if tool.ToolTarget == nil || *tool.ToolTarget != "exec_command" {
+		t.Fatalf("tool event tool_target = %+v, want safe command name", tool.ToolTarget)
+	}
+	if tool.Status == nil || *tool.Status != "running" {
+		t.Fatalf("tool event status = %+v, want running", tool.Status)
+	}
+	for _, leak := range []string{"pnpm --filter", "--token", "sk-proj-secret", "tool input is not the public narrative"} {
+		if strings.Contains(ownerEvents.raw, leak) {
+			t.Fatalf("activity event leaked raw tool content %q: %s", leak, ownerEvents.raw)
+		}
+	}
 
 	outsiderEvents := listAgentActivityEventsForUser(t, outsiderID, agentID, "")
 	if got := findActivityTimelineEvent(outsiderEvents, thinkingID); got != nil {
 		t.Fatalf("non-creator must not see owner DM task-message event: %+v", *got)
+	}
+}
+
+func TestActivityVisibilityFor_SourceBackedLifecycle(t *testing.T) {
+	if got := activityVisibilityFor(activityKindCompactionStarted, "compaction_started", "info", ""); got != "user_facing" {
+		t.Fatalf("compaction_started visibility = %q, want user_facing", got)
+	}
+	if got := activityVisibilityFor(activityKindCustom, "subagent_started", "info", "auto_retry"); got != "user_facing" {
+		t.Fatalf("subagent custom visibility = %q, want user_facing", got)
+	}
+	if got := activityVisibilityFor(activityKindTransport, "runtime_progress", "info", ""); got != "diagnostic_only" {
+		t.Fatalf("transport visibility = %q, want diagnostic_only", got)
 	}
 }
 

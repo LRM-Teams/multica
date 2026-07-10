@@ -116,14 +116,14 @@
       "waiting_local_directory": "ローカルディレクトリを待機中",
       "starting_up": "作業中",
       "thinking": "考え中",
-      "typing": "入力中"
+      "typing": "出力"
     },
     "tools": {
-      "running_command": "コマンドを実行中",
-      "reading_files": "ファイルを読み込み中",
-      "searching_code": "コードを検索中",
-      "making_edits": "編集中",
-      "searching_web": "ウェブを検索中",
+      "running_command": "コマンドを実行中…",
+      "reading_files": "ファイルを読み込み中…",
+      "searching_code": "コードを検索中…",
+      "making_edits": "ファイルを編集中…",
+      "searching_web": "ウェブを検索中…",
       "fallback": "作業中"
     }
   }

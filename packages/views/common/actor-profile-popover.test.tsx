@@ -122,7 +122,7 @@ describe("ActorProfileContentLoaded", () => {
   });
 
   it("name-row status shows detailed stage labels from the live hook", () => {
-    mockLiveStatus.current = live("Running a command", {
+    mockLiveStatus.current = live("Running command…", {
       textClass: "text-brand",
       dotClass: "bg-brand",
     });
@@ -130,7 +130,7 @@ describe("ActorProfileContentLoaded", () => {
     render(<ActorProfileContentLoaded profile={makeProfile(0)} />);
 
     expect(screen.getByTestId("agent-live-status")).toHaveTextContent(
-      "Running a command",
+      "Running command…",
     );
   });
 

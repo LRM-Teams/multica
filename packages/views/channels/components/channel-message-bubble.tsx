@@ -38,6 +38,8 @@ import {
 import { MessageBody } from "./message-body";
 import { MessageQuoteCard } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
+import { parseMemberSystemEvent } from "./channel-system-event";
+import { MemberSystemEventContent } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import { SELF_MENTION_ROW_CLASS } from "../../common/mention-token";
 
@@ -88,22 +90,31 @@ function ChannelSystemMessageRow({
   systemText: string;
 }) {
   const messageTime = useMessageTime();
+  // Member-change events (#450) carry a structured part the FE composes into a
+  // Raft/Slack-style row with clickable @username tokens; everything else falls
+  // back to the plain canonical text.
+  const memberEvent = parseMemberSystemEvent(message);
   return (
     <div
       id={`message-${message.id}`}
       data-testid="system-message-row"
       data-message-kind="system"
       className={cn(
-        "mx-auto flex max-w-[min(720px,100%)] flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-md px-2 py-1.5 text-center text-xs text-muted-foreground outline-none transition-colors duration-1000",
-        highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0",
+        // Quiet, left-aligned inline row on the message stream's left edge with
+        // the timestamp leading (Slack/Raft-style, #369) — no centered capsule,
+        // avatar, or bubble.
+        "flex flex-wrap items-baseline gap-x-2 gap-y-0.5 px-2 py-1 text-xs text-muted-foreground outline-none transition-colors duration-1000",
+        highlighted && "rounded-md bg-primary/10 ring-1 ring-primary/25 duration-0",
       )}
     >
-      <span className="min-w-0 break-words">{systemText}</span>
       <span
-        className="shrink-0 text-[11px] text-muted-foreground/70"
+        className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/60"
         title={messageTime.full(message.created_at)}
       >
         {messageTime.format(message.created_at)}
+      </span>
+      <span className="min-w-0 break-words">
+        {memberEvent ? <MemberSystemEventContent event={memberEvent} /> : systemText}
       </span>
     </div>
   );

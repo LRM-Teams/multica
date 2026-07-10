@@ -53,7 +53,6 @@ func init() {
 	skillCmd.GroupID = groupCore
 	memoryCmd.GroupID = groupCore
 	squadCmd.GroupID = groupCore
-	sendCmd.GroupID = groupCore
 	reactCmd.GroupID = groupCore
 	messageCmd.GroupID = groupCore
 	channelCmd.GroupID = groupCore
@@ -84,7 +83,6 @@ func init() {
 	rootCmd.AddCommand(skillCmd)
 	rootCmd.AddCommand(memoryCmd)
 	rootCmd.AddCommand(squadCmd)
-	rootCmd.AddCommand(sendCmd)
 	rootCmd.AddCommand(reactCmd)
 	rootCmd.AddCommand(messageCmd)
 	rootCmd.AddCommand(daemonCmd)

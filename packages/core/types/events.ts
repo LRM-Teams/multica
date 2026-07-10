@@ -300,6 +300,29 @@ export interface AgentActivityEventRealtimePayload {
   event?: AgentActivityTimelineEvent;
 }
 
+/**
+ * Keyset cursor for `AgentActivityEventsPage` pagination — the BE pages on
+ * `(occurred_at, kind, id)`, so the cursor is an object, not an opaque string.
+ * The FE echoes it back verbatim on the next page request; nothing renders it.
+ */
+export interface AgentActivityEventsCursor {
+  created_at: string;
+  kind: AgentActivityKind;
+  id: string;
+}
+
+/**
+ * REST response for `GET /api/agents/{id}/activity/events` — an intentional
+ * pagination envelope (#474), NOT a bare array. The FE reads `.events` for the
+ * timeline and keeps `has_more`/`next_cursor` for cursor pagination follow-up.
+ */
+export interface AgentActivityEventsPage {
+  events: AgentActivityTimelineEvent[];
+  limit: number;
+  has_more: boolean;
+  next_cursor?: AgentActivityEventsCursor | null;
+}
+
 export interface TaskQueuedPayload {
   task_id: string;
   agent_id: string;

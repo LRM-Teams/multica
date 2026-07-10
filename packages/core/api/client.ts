@@ -35,7 +35,7 @@ import type {
   UpdateAgentFileContentRequest,
   UpdateAgentFileContentResponse,
   AgentTask,
-  AgentActivityTimelineEvent,
+  AgentActivityEventsPage,
   AgentHealthResponse,
   AgentActivityBucket,
   AgentRunCount,
@@ -863,8 +863,10 @@ export class ApiClient {
   // upserts by id. This route scopes the workspace via an explicit
   // `workspace_slug` query param (not the X-Workspace-Slug header the other
   // agent endpoints rely on) — without it the BE 400s and the timeline reads
-  // as empty. Mirror the same slug the header uses.
-  async getAgentActivityEvents(agentId: string): Promise<AgentActivityTimelineEvent[]> {
+  // as empty. Mirror the same slug the header uses. The response is a pagination
+  // envelope (`{ events, limit, has_more, next_cursor }`), not a bare array —
+  // callers read `.events` (see `agentActivityEventsOptions`).
+  async getAgentActivityEvents(agentId: string): Promise<AgentActivityEventsPage> {
     const slug = getCurrentSlug();
     const qs = slug ? `?workspace_slug=${encodeURIComponent(slug)}` : "";
     return this.fetch(`/api/agents/${agentId}/activity/events${qs}`);

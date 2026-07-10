@@ -26,6 +26,7 @@ const defaultGrokFirstStreamEventTimeout = 30 * time.Second
 // first streaming-json event. This is distinct from a normal long-running turn:
 // no turn has started yet, so the daemon must not leave the run silently alive.
 const GrokFirstStreamEventTimeoutMarker = "grok first stream event timeout"
+const GrokNoStreamingJSONEventsMarker = "grok exited without emitting any streaming-json events"
 
 // grokBackend implements Backend by spawning the Grok CLI (https://grok.com)
 // in headless mode with --output-format streaming-json.
@@ -264,7 +265,7 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 			finalError = "execution cancelled"
 		} else if !firstStreamEventObserved.Load() {
 			finalStatus = "failed"
-			finalError = "grok exited without emitting any streaming-json events"
+			finalError = GrokNoStreamingJSONEventsMarker
 		} else if waitErr != nil && finalStatus == "completed" {
 			finalStatus = "failed"
 			finalError = withAgentStderr(fmt.Sprintf("grok exited with error: %v", waitErr), "grok", stderrBuf.Tail())

@@ -1288,6 +1288,16 @@ func TestChannelAgentInboxFailDirectedMention(t *testing.T) {
 	}
 	got := drainResp.Events[0]
 
+	var chatDoneEvents int
+	if testHandler.Bus != nil {
+		testHandler.Bus.Subscribe(protocol.EventChatDone, func(e events.Event) {
+			payload, ok := e.Payload.(protocol.ChatDonePayload)
+			if ok && payload.TaskID == got.ID {
+				chatDoneEvents++
+			}
+		})
+	}
+
 	failReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/fail", FailAgentInboxEventRequest{
 		DeliveryID:    got.DeliveryID,
 		LeaseToken:    got.LeaseToken,
@@ -1314,18 +1324,33 @@ func TestChannelAgentInboxFailDirectedMention(t *testing.T) {
 		t.Fatalf("terminal inbox states = event:%q delivery:%q error:%q, want acked/acked/grok not logged in", eventStatus, deliveryStatus, lastError)
 	}
 
-	var content, failureReason string
-	var elapsedMS int64
+	var assistantFailureMessages int
 	if err := testPool.QueryRow(ctx, `
-		SELECT content, COALESCE(failure_reason, ''), COALESCE(elapsed_ms, -1)
+		SELECT count(*)
 		FROM chat_message
-		WHERE chat_session_id = $1 AND role = 'assistant'
-		ORDER BY created_at DESC
-		LIMIT 1`, got.ChatSessionID).Scan(&content, &failureReason, &elapsedMS); err != nil {
-		t.Fatalf("load failed inbox chat message: %v", err)
+		WHERE chat_session_id = $1
+		  AND role = 'assistant'
+		  AND task_id = $2`, got.ChatSessionID, got.ID).Scan(&assistantFailureMessages); err != nil {
+		t.Fatalf("count failed inbox chat messages: %v", err)
 	}
-	if !strings.Contains(content, "grok not logged in") || failureReason != "agent_error.provider_auth_or_access" || elapsedMS < 0 {
-		t.Fatalf("failure chat message = content:%q reason:%q elapsed:%d, want visible classified failure", content, failureReason, elapsedMS)
+	if assistantFailureMessages != 0 {
+		t.Fatalf("assistant failure chat messages = %d, want 0 (classified terminal failure belongs in Activity only)", assistantFailureMessages)
+	}
+
+	var visibleAgentMessages int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND author_type = 'agent'
+		  AND author_id = $2`, channelID, agentID).Scan(&visibleAgentMessages); err != nil {
+		t.Fatalf("count visible agent messages: %v", err)
+	}
+	if visibleAgentMessages != 0 {
+		t.Fatalf("visible agent channel messages = %d, want 0 (terminal failure should not reply into the channel)", visibleAgentMessages)
+	}
+	if chatDoneEvents != 0 {
+		t.Fatalf("chat:done events for failed inbox event = %d, want 0 (terminal failure should not synthesize chat completion)", chatDoneEvents)
 	}
 
 	var activityReason, activityFailureReason, activityMessage string

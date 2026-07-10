@@ -118,10 +118,11 @@ func classifyPoisonedError(errMsg string) (string, bool) {
 	return "", false
 }
 
-// classifyResumeUnsafeTimeout reports whether a timeout means the recorded
-// session should not be resumed. Keep this intentionally provider-specific:
-// ordinary daemon/backend timeouts are infrastructure-shaped and should keep
-// the resume pointer so retries can continue the in-flight conversation.
+// classifyResumeUnsafeTimeout reports whether a timeout/no-progress failure
+// means the recorded session should not be resumed. Keep this intentionally
+// provider-specific: ordinary daemon/backend timeouts are infrastructure-shaped
+// and should keep the resume pointer so retries can continue the in-flight
+// conversation.
 func classifyResumeUnsafeTimeout(provider, errMsg string) (string, bool) {
 	if errMsg == "" {
 		return "", false
@@ -135,7 +136,8 @@ func classifyResumeUnsafeTimeout(provider, errMsg string) (string, bool) {
 			return FailureReasonCodexSemanticInactivity, true
 		}
 	case "grok":
-		if strings.Contains(lowered, strings.ToLower(agent.GrokFirstStreamEventTimeoutMarker)) {
+		if strings.Contains(lowered, strings.ToLower(agent.GrokFirstStreamEventTimeoutMarker)) ||
+			strings.Contains(lowered, strings.ToLower(agent.GrokNoStreamingJSONEventsMarker)) {
 			return FailureReasonGrokFirstTurnNoProgress, true
 		}
 	}

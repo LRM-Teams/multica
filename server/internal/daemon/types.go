@@ -119,11 +119,11 @@ type Task struct {
 	// the bridge. Nil for non-trained tasks (the vast majority); omitempty so
 	// old servers that never send it are handled transparently.
 	ArealProxy *ArealProxy `json:"areal_proxy,omitempty"`
-	// AuthToken is the task-scoped credential the server mints at claim time.
-	// The daemon injects it into the spawned agent as MULTICA_TOKEN so the
-	// agent never sees the daemon's own (often workspace-owner) credential.
-	// Empty when the server-side runtime has no owning user — the daemon
-	// then falls back to its own token. See MUL-2600.
+	// AuthToken is the per-run bearer token the server mints at claim/drain
+	// time. Legacy queue runs bind it to a task; inbox runs bind it to the
+	// active inbox delivery. The daemon injects it into the spawned agent as
+	// MULTICA_TOKEN so the agent never sees the daemon's own long-lived
+	// credential. Empty when the server-side runtime has no owning user.
 	AuthToken string `json:"auth_token,omitempty"`
 
 	// InboxEvent is present when this work item came from the raft-like

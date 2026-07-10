@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
@@ -929,6 +930,99 @@ func TestChannelAgentInboxTransportCanSendStickerAndSuppressesFinalOutput(t *tes
 		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
 	}
 	assertNoChannelMessageContent(t, channelID, finalText)
+}
+
+func TestChannelAgentInboxTransportBearerTokenThroughMiddleware(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentName := "Inbox Bearer Agent " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	runtimeID := handlerTestRuntimeID(t)
+	if _, err := testPool.Exec(ctx, `UPDATE agent_runtime SET owner_id = $1 WHERE id = $2`, testUserID, runtimeID); err != nil {
+		t.Fatalf("seed runtime owner: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET owner_id = NULL WHERE id = $1`, runtimeID)
+	})
+	channelID := seedChannelForTest(t, "agent-inbox-bearer-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") send through bearer token", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-bearer"), 0)
+	if err != nil {
+		t.Fatalf("insert mention trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-bearer-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode drain response: %v", err)
+	}
+	if len(drainResp.Events) != 1 || drainResp.Events[0].Task == nil || drainResp.Events[0].Task.AuthToken == "" {
+		t.Fatalf("drain response missing inbox task auth token: %s", drainRec.Body.String())
+	}
+	got := drainResp.Events[0]
+
+	router := chi.NewRouter()
+	router.Group(func(r chi.Router) {
+		r.Use(middleware.Auth(testHandler.Queries, nil, nil))
+		r.Use(middleware.RequireWorkspaceMember(testHandler.Queries))
+		r.Post("/api/agent/messages/send", testHandler.AgentTransportSendMessage)
+	})
+
+	clientID := "inbox-bearer-" + uuid.NewString()
+	body := map[string]any{
+		"parts": []protocol.MessagePart{{
+			Type:      protocol.MessagePartTypeSticker,
+			StickerID: "huaji",
+		}},
+		"client_message_id": clientID,
+	}
+	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", body)
+	sendReq.Header.Set("Authorization", "Bearer "+got.Task.AuthToken)
+	sendReq.Header.Set("X-Workspace-ID", testWorkspaceID)
+	sendRec := httptest.NewRecorder()
+	router.ServeHTTP(sendRec, sendReq)
+	if sendRec.Code != http.StatusCreated {
+		t.Fatalf("inbox bearer transport send: status=%d body=%s", sendRec.Code, sendRec.Body.String())
+	}
+	var sendBody AgentTransportSendResponse
+	if err := json.Unmarshal(sendRec.Body.Bytes(), &sendBody); err != nil {
+		t.Fatalf("decode inbox bearer transport send: %v", err)
+	}
+	if len(sendBody.Message.Parts) != 1 || sendBody.Message.Parts[0].Type != protocol.MessagePartTypeSticker || sendBody.Message.Parts[0].StickerID != "huaji" {
+		t.Fatalf("sticker message parts = %+v, want huaji sticker", sendBody.Message.Parts)
+	}
+
+	var taskAuditRows, inboxAuditRows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (WHERE task_id IS NOT NULL),
+			count(*) FILTER (WHERE inbox_event_id = $1)
+		FROM agent_task_transport_audit
+		WHERE agent_id = $2 AND action = 'message_send' AND client_message_id = $3`,
+		got.ID, agentID, clientID).Scan(&taskAuditRows, &inboxAuditRows); err != nil {
+		t.Fatalf("count transport audit rows: %v", err)
+	}
+	if taskAuditRows != 0 || inboxAuditRows != 1 {
+		t.Fatalf("transport audit task rows=%d inbox rows=%d, want 0/1", taskAuditRows, inboxAuditRows)
+	}
 }
 
 func TestChannelAgentInboxDrainReclaimsExpiredDelivery(t *testing.T) {

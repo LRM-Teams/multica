@@ -59,6 +59,20 @@ func GenerateAgentTaskToken() (string, error) {
 	return "mat_" + hex.EncodeToString(b), nil
 }
 
+// GenerateAgentInboxDeliveryToken creates a temporary bearer token for one
+// agent inbox delivery. It intentionally keeps the existing "mat_" wire prefix
+// so the daemon/CLI transport can reuse the same bearer-token path, but the
+// server stores and authorizes it through agent_inbox_token rather than the
+// legacy task_token table. This is the P0 stop-bleed path; the long-term Raft
+// shape is an agent credential plus server-side delivery validation.
+func GenerateAgentInboxDeliveryToken() (string, error) {
+	b := make([]byte, 20)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate agent inbox delivery token: %w", err)
+	}
+	return "mat_" + hex.EncodeToString(b), nil
+}
+
 // GenerateSandboxNodeKey creates a stable user-visible key for one sandboxd node.
 func GenerateSandboxNodeKey() (string, error) {
 	b := make([]byte, 16)

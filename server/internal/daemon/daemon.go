@@ -3111,9 +3111,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	reused := gateResumeToReusedWorkdir(&task, &taskCtx, env.WorkDir, taskLog)
 
-	// Prepare the task-scoped Multica CLI wrapper before injecting the runtime
+	// Prepare the per-run Multica CLI wrapper before injecting the runtime
 	// brief. The brief must only advertise chat CLI transport when the command
-	// will actually exist in this run's PATH with a valid task token.
+	// will actually exist in this run's PATH with a valid bearer token.
 	agentToken := task.AuthToken
 	cliWrapperDir := ""
 	cliTokenFile := ""
@@ -3129,7 +3129,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			cliTokenFile = tokenFile
 			taskLog.Info("agent cli transport prepared", "wrapper_dir", wrapperDir, "token_file", tokenFile)
 		} else {
-			taskLog.Warn("agent cli transport: no task token available; CLI API calls will require external auth")
+			taskLog.Warn("agent cli transport: no run bearer token available; CLI API calls will require external auth")
 		}
 	} else {
 		taskLog.Warn("agent cli transport: unable to resolve multica executable", "error", err)
@@ -3183,11 +3183,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// daemon-level resources such as GPUs.
 	// The API credential itself is written below into a per-agent/per-run token
 	// file and exposed through a CLI wrapper, not as a raw environment value.
-	// Use only the task-scoped token the server minted at claim time. That
-	// token is bound to (agent, task) and the auth middleware rejects it on
-	// owner-only endpoints (e.g. `/api/agents/{id}/env`), so the agent cannot
-	// use it to read another agent's secrets. Do not fall back to the daemon's
-	// own long-lived credential for agent transport.
+	// Use only the per-run bearer token the server minted at claim/drain time.
+	// Legacy queue runs bind it to (agent, task); inbox runs bind it to
+	// (agent, inbox event, delivery). Auth middleware rejects it on owner-only
+	// endpoints (e.g. `/api/agents/{id}/env`), so the agent cannot use it to
+	// read another agent's secrets. Do not fall back to the daemon's own
+	// long-lived credential for agent transport.
 	agentEnv := map[string]string{
 		"MULTICA_SERVER_URL":      d.cfg.ServerBaseURL,
 		"MULTICA_DAEMON_PORT":     fmt.Sprintf("%d", d.cfg.HealthPort),

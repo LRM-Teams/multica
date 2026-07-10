@@ -616,7 +616,7 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 	// comment delegates to this child. Close the parent's segment and link the
 	// child to its parent so the delegation edge is recorded at the child's
 	// close. No-op when there is no trained parent (plain user mention).
-	if parent, ok := s.discoverDelegationParent(ctx, issue.ID, triggerCommentID); ok {
+	if parent, ok := s.discoverDelegationParent(ctx, issue.ID, triggerCommentID, task.ID); ok {
 		projectID := util.UUIDToString(issue.ProjectID)
 		if isSquadContextHandoff(parent, isLeader) {
 			s.closeSegmentForSquadContextDelegation(ctx, parent, projectID, s.leanEnvSnapshot(ctx, issue.ProjectID))

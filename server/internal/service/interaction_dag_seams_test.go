@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -109,6 +110,59 @@ func TestSquadContextHandoffSignal(t *testing.T) {
 	assert.False(t, isSquadContextHandoff(db.AgentTaskQueue{}, false), "plain mention is normal delegation")
 	assert.True(t, isSquadContextHandoff(db.AgentTaskQueue{}, true), "new squad-leader task is squad context")
 	assert.True(t, isSquadContextHandoff(db.AgentTaskQueue{IsLeaderTask: true}, false), "squad leader delegating onward remains squad context")
+}
+
+func TestDiscoverDelegationParent_ExcludesNewChildTask(t *testing.T) {
+	pool := interactionDAGTestPool(t)
+	defer pool.Close()
+
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx)
+	q := db.New(tx)
+
+	ws, err := q.CreateWorkspace(ctx, db.CreateWorkspaceParams{Name: "seam-ws", Slug: "seam-ws", IssuePrefix: "SM"})
+	require.NoError(t, err)
+	var rtID pgtype.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+		ws.ID, "daemon-seam", "seam-runtime", "cloud", "daytona", "online", "", []byte("{}"), "private",
+	).Scan(&rtID)
+	require.NoError(t, err)
+	agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
+		WorkspaceID: ws.ID, Name: "seam-agent", DisplayName: "Seam Agent", Description: "test",
+		RuntimeMode: "cloud", RuntimeConfig: []byte("{}"), RuntimeID: rtID, Visibility: "workspace",
+		MaxConcurrentTasks: 1, Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
+	})
+	require.NoError(t, err)
+	proj, err := q.CreateProject(ctx, db.CreateProjectParams{WorkspaceID: ws.ID, Title: "seam-proj", Status: "in_progress", Priority: "none"})
+	require.NoError(t, err)
+	issue, err := q.CreateIssue(ctx, db.CreateIssueParams{
+		WorkspaceID: ws.ID, Title: "seam-issue", Status: "in_progress", Priority: "medium",
+		CreatorType: "member", CreatorID: util.MustParseUUID("cccccccc-0000-0000-0000-000000000002"), Number: 1, ProjectID: proj.ID,
+	})
+	require.NoError(t, err)
+	comment, err := q.CreateComment(ctx, db.CreateCommentParams{
+		IssueID: issue.ID, WorkspaceID: ws.ID, AuthorType: "agent", AuthorID: agent.ID, Content: "@squad please handle", Type: "comment",
+	})
+	require.NoError(t, err)
+
+	parent, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{AgentID: agent.ID, RuntimeID: rtID, IssueID: issue.ID, Priority: 0})
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET status='running', context=$1 WHERE id=$2`, arealProxyContext("sess-parent", "key-parent"), parent.ID)
+	require.NoError(t, err)
+	parent, err = q.GetAgentTask(ctx, parent.ID)
+	require.NoError(t, err)
+
+	child, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{AgentID: agent.ID, RuntimeID: rtID, IssueID: issue.ID, Priority: 0})
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET context=$1 WHERE id=$2`, arealProxyContext("sess-child", "key-child"), child.ID)
+	require.NoError(t, err)
+
+	svc := &TaskService{Queries: q}
+	got, ok := svc.discoverDelegationParent(ctx, issue.ID, comment.ID, child.ID)
+	require.True(t, ok)
+	assert.Equal(t, parent.ID, got.ID, "must not select the just-created receiver task as its own producer")
 }
 
 func TestSquadContextDelegation_ClosesProducerWithSquadBriefingAndDelegationEdge(t *testing.T) {

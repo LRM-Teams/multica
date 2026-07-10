@@ -147,7 +147,7 @@ func (s *TaskService) leanEnvSnapshot(ctx context.Context, projectID pgtype.UUID
 // is no such parent (e.g. a user-authored mention, or the parent is not a
 // trained run) so the caller skips the delegation seam. Best-effort: any lookup
 // miss yields ok=false.
-func (s *TaskService) discoverDelegationParent(ctx context.Context, issueID, triggerCommentID pgtype.UUID) (db.AgentTaskQueue, bool) {
+func (s *TaskService) discoverDelegationParent(ctx context.Context, issueID, triggerCommentID, excludeTaskID pgtype.UUID) (db.AgentTaskQueue, bool) {
 	if !triggerCommentID.Valid {
 		return db.AgentTaskQueue{}, false
 	}
@@ -163,6 +163,9 @@ func (s *TaskService) discoverDelegationParent(ctx context.Context, issueID, tri
 		return db.AgentTaskQueue{}, false
 	}
 	for _, t := range tasks {
+		if excludeTaskID.Valid && t.ID == excludeTaskID {
+			continue
+		}
 		if t.AgentID == comment.AuthorID && hasArealProxyContext(t.Context) {
 			return t, true
 		}

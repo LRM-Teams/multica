@@ -102,7 +102,7 @@ describe("task transcript timeline", () => {
     expect(items[0]?.created_at).toBe("2026-06-09T09:00:00.000Z");
   });
 
-  it("preserves safe action read-model fields for UI narrative rows", () => {
+  it("leaves transcript narrative projection to the UI helpers", () => {
     const items = buildTimeline([
       {
         task_id: "task-1",
@@ -111,8 +111,6 @@ describe("task transcript timeline", () => {
         type: "tool_use",
         tool: "exec_command",
         input: { cmd: "/bin/zsh -lc secret" },
-        action_label: "Ran a command",
-        summary: "Ran a command.",
       },
     ]);
 
@@ -121,8 +119,7 @@ describe("task transcript timeline", () => {
         seq: 1,
         type: "tool_use",
         tool: "exec_command",
-        action_label: "Ran a command",
-        summary: "Ran a command.",
+        input: { cmd: "/bin/zsh -lc secret" },
       }),
     ]);
   });

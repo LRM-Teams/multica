@@ -105,22 +105,18 @@ type AgentActivityEventSummary struct {
 }
 
 type AgentActivityTimelineEvent struct {
-	ID          string                   `json:"id"`
-	AgentID     string                   `json:"agent_id"`
-	RuntimeID   *string                  `json:"runtime_id,omitempty"`
-	TaskID      *string                  `json:"task_id,omitempty"`
-	Kind        string                   `json:"kind"`
-	EventType   string                   `json:"event_type"`
-	OccurredAt  string                   `json:"occurred_at"`
-	Visibility  string                   `json:"visibility"`
-	Label       string                   `json:"label"`
-	Subtext     *string                  `json:"subtext,omitempty"`
-	Text        *string                  `json:"text,omitempty"`
-	Tone        string                   `json:"tone"`
-	ReasonCode  string                   `json:"reason_code,omitempty"`
-	ReasonLabel string                   `json:"reason_label,omitempty"`
-	TargetRef   AgentActivityTargetRef   `json:"target_ref"`
-	SourceRefs  []AgentActivitySourceRef `json:"source_refs,omitempty"`
+	ID         string                   `json:"id"`
+	AgentID    string                   `json:"agent_id"`
+	RuntimeID  *string                  `json:"runtime_id,omitempty"`
+	TaskID     *string                  `json:"task_id,omitempty"`
+	Kind       string                   `json:"kind"`
+	EventType  string                   `json:"event_type"`
+	OccurredAt string                   `json:"occurred_at"`
+	Visibility string                   `json:"visibility"`
+	Text       *string                  `json:"text,omitempty"`
+	ReasonCode string                   `json:"reason_code,omitempty"`
+	TargetRef  AgentActivityTargetRef   `json:"target_ref"`
+	SourceRefs []AgentActivitySourceRef `json:"source_refs,omitempty"`
 }
 
 type AgentActivitySourceRef struct {
@@ -221,13 +217,9 @@ type agentActivityRawRow struct {
 	TargetID          pgtype.UUID
 	TargetSlug        pgtype.Text
 	ReasonCode        pgtype.Text
-	ReasonLabel       pgtype.Text
 	Message           pgtype.Text
 	Details           []byte
 	Visibility        pgtype.Text
-	ActionLabel       pgtype.Text
-	Summary           pgtype.Text
-	Tone              pgtype.Text
 	Status            pgtype.Text
 	TriggerSummary    pgtype.Text
 	Result            []byte
@@ -630,13 +622,9 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 			aae.target_id,
 			aae.target_slug,
 			aae.reason_code,
-			aae.reason_label,
 			aae.message,
 			aae.details,
 			aae.visibility,
-			aae.action_label,
-			aae.summary,
-			aae.tone,
 			NULL::text AS status,
 			NULL::text AS trigger_summary,
 			NULL::jsonb AS result,
@@ -674,7 +662,6 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 			NULL::uuid AS target_id,
 			NULL::text AS target_slug,
 			''::text AS reason_code,
-			''::text AS reason_label,
 			CASE
 				WHEN tm.type IN ('thinking', 'text', 'error') THEN COALESCE(NULLIF(tm.content, ''), NULLIF(tm.output, ''), '')
 				ELSE ''
@@ -686,9 +673,6 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 				'tool', tm.tool
 			)) AS details,
 			tm.visibility,
-			tm.action_label,
-			tm.summary,
-			tm.tone,
 			NULL::text AS status,
 			NULL::text AS trigger_summary,
 			NULL::jsonb AS result,
@@ -747,13 +731,9 @@ func (h *Handler) hydrateAgentActivityTimelineEvent(ctx context.Context, workspa
 			aae.target_id,
 			aae.target_slug,
 			aae.reason_code,
-			aae.reason_label,
 			aae.message,
 			aae.details,
 			aae.visibility,
-			aae.action_label,
-			aae.summary,
-			aae.tone,
 			NULL::text AS status,
 			NULL::text AS trigger_summary,
 			NULL::jsonb AS result,
@@ -821,13 +801,9 @@ const agentActivityListSQL = `
 			NULL::uuid AS target_id,
 			NULL::text AS target_slug,
 			NULL::text AS reason_code,
-			NULL::text AS reason_label,
 			NULL::text AS message,
 			'{}'::jsonb AS details,
 			'user_facing'::text AS visibility,
-			''::text AS action_label,
-			''::text AS summary,
-			'action'::text AS tone,
 			atq.status,
 			atq.trigger_summary,
 			atq.result,
@@ -883,13 +859,9 @@ const agentActivityListSQL = `
 			aae.target_id,
 			aae.target_slug,
 			aae.reason_code,
-			aae.reason_label,
 			aae.message,
 			aae.details,
 			aae.visibility,
-			aae.action_label,
-			aae.summary,
-			aae.tone,
 			NULL::text AS status,
 			NULL::text AS trigger_summary,
 			NULL::jsonb AS result,
@@ -924,13 +896,9 @@ const agentActivityUnionSQL = `
 			NULL::uuid AS target_id,
 			NULL::text AS target_slug,
 			NULL::text AS reason_code,
-			NULL::text AS reason_label,
 			NULL::text AS message,
 			'{}'::jsonb AS details,
 			'user_facing'::text AS visibility,
-			''::text AS action_label,
-			''::text AS summary,
-			'action'::text AS tone,
 			atq.status,
 			atq.trigger_summary,
 			atq.result,
@@ -988,13 +956,9 @@ const agentActivityUnionSQL = `
 			aae.target_id,
 			aae.target_slug,
 			aae.reason_code,
-			aae.reason_label,
 			aae.message,
 			aae.details,
 			aae.visibility,
-			aae.action_label,
-			aae.summary,
-			aae.tone,
 			NULL::text AS status,
 			NULL::text AS trigger_summary,
 			NULL::jsonb AS result,
@@ -1031,13 +995,9 @@ func scanAgentActivityRow(row scanner) (agentActivityRawRow, error) {
 		&out.TargetID,
 		&out.TargetSlug,
 		&out.ReasonCode,
-		&out.ReasonLabel,
 		&out.Message,
 		&out.Details,
 		&out.Visibility,
-		&out.ActionLabel,
-		&out.Summary,
-		&out.Tone,
 		&out.Status,
 		&out.TriggerSummary,
 		&out.Result,
@@ -1565,13 +1525,9 @@ func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspac
 		EventType:     pgtype.Text{String: message.Type, Valid: strings.TrimSpace(message.Type) != ""},
 		Severity:      pgtype.Text{String: "info", Valid: true},
 		ReasonCode:    pgtype.Text{String: "", Valid: true},
-		ReasonLabel:   pgtype.Text{String: "", Valid: true},
 		Message:       taskMessageActivityText(message),
 		Details:       detailsJSON,
 		Visibility:    pgtype.Text{String: message.Visibility, Valid: strings.TrimSpace(message.Visibility) != ""},
-		ActionLabel:   pgtype.Text{String: message.ActionLabel, Valid: strings.TrimSpace(message.ActionLabel) != ""},
-		Summary:       pgtype.Text{String: message.Summary, Valid: strings.TrimSpace(message.Summary) != ""},
-		Tone:          pgtype.Text{String: message.Tone, Valid: strings.TrimSpace(message.Tone) != ""},
 		CreatedAt:     message.CreatedAt,
 		UsageJSON:     []byte("[]"),
 	}
@@ -1613,22 +1569,18 @@ func taskMessageActivityText(message db.TaskMessage) pgtype.Text {
 
 func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivityTargetRef) AgentActivityTimelineEvent {
 	return AgentActivityTimelineEvent{
-		ID:          uuidToString(row.ID),
-		AgentID:     uuidToString(row.AgentID),
-		RuntimeID:   uuidToPtr(row.RuntimeID),
-		TaskID:      agentActivityTimelineTaskID(row),
-		Kind:        row.Kind,
-		EventType:   textOrDefault(row.EventType, row.Kind),
-		OccurredAt:  timestampToString(row.CreatedAt),
-		Visibility:  textOrDefault(row.Visibility, "user_facing"),
-		Label:       textOrDefault(row.ActionLabel, humanizeActivityToken(textOrDefault(row.EventType, row.Kind))),
-		Subtext:     textToPtr(row.Summary),
-		Text:        textToPtr(row.Message),
-		Tone:        textOrDefault(row.Tone, "action"),
-		ReasonCode:  textOrDefault(row.ReasonCode, ""),
-		ReasonLabel: textOrDefault(row.ReasonLabel, ""),
-		TargetRef:   targetRef,
-		SourceRefs:  agentActivitySourceRefs(row),
+		ID:         uuidToString(row.ID),
+		AgentID:    uuidToString(row.AgentID),
+		RuntimeID:  uuidToPtr(row.RuntimeID),
+		TaskID:     agentActivityTimelineTaskID(row),
+		Kind:       row.Kind,
+		EventType:  textOrDefault(row.EventType, row.Kind),
+		OccurredAt: timestampToString(row.CreatedAt),
+		Visibility: textOrDefault(row.Visibility, "user_facing"),
+		Text:       textToPtr(row.Message),
+		ReasonCode: textOrDefault(row.ReasonCode, ""),
+		TargetRef:  targetRef,
+		SourceRefs: agentActivitySourceRefs(row),
 	}
 }
 

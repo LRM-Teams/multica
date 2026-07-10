@@ -1131,7 +1131,7 @@ func TestListTaskMessagesByUser_InvalidTaskIDReturnsBadRequest(t *testing.T) {
 	}
 }
 
-func TestTaskMessageToPayload_AddsSafeActionReadModel(t *testing.T) {
+func TestTaskMessageToPayload_LeavesNarrativeProjectionToActivityUI(t *testing.T) {
 	payload := taskMessageToPayload(db.TaskMessage{
 		Seq:  1,
 		Type: "tool_use",
@@ -1142,47 +1142,27 @@ func TestTaskMessageToPayload_AddsSafeActionReadModel(t *testing.T) {
 		}`),
 	}, "task-1", "issue-1")
 
-	if payload.ActionLabel != "Working" || payload.Summary != "Started a work step." {
-		t.Fatalf("unexpected action read model: label=%q summary=%q", payload.ActionLabel, payload.Summary)
-	}
-
-	for _, leaked := range []string{"exec_command", "/bin/zsh", "id_rsa", "sk_agent_secret", "mcp__dangerous"} {
-		if strings.Contains(payload.ActionLabel, leaked) || strings.Contains(payload.Summary, leaked) {
-			t.Fatalf("action read model leaked raw diagnostic detail %q: label=%q summary=%q", leaked, payload.ActionLabel, payload.Summary)
-		}
+	if payload.Visibility != "user_facing" {
+		t.Fatalf("default visibility = %q, want user_facing", payload.Visibility)
 	}
 	if payload.Input["cmd"] == "" {
 		t.Fatalf("raw diagnostic input should remain available to transcript")
 	}
 }
 
-func TestTaskMessageToPayload_ToolUseNarrativeDoesNotExposeToolName(t *testing.T) {
+func TestTaskMessageVisibility_ToolResultIsDiagnostic(t *testing.T) {
 	payload := taskMessageToPayload(db.TaskMessage{
-		Seq:  2,
-		Type: "tool_use",
-		Tool: pgtype.Text{String: "mcp__future_vendor__do_secret_thing", Valid: true},
+		Seq:        2,
+		Type:       "tool_result",
+		Tool:       pgtype.Text{String: "mcp__future_vendor__do_secret_thing", Valid: true},
+		Visibility: "diagnostic_only",
 	}, "task-1", "issue-1")
 
-	if payload.ActionLabel != "Working" || payload.Summary != "Started a work step." {
-		t.Fatalf("tool_use narrative = label %q summary %q", payload.ActionLabel, payload.Summary)
+	if payload.Visibility != "diagnostic_only" {
+		t.Fatalf("persisted visibility = %q, want diagnostic_only", payload.Visibility)
 	}
-	if strings.Contains(payload.ActionLabel, "mcp__") || strings.Contains(payload.Summary, "mcp__") || strings.Contains(payload.ActionLabel, "future_vendor") || strings.Contains(payload.Summary, "future_vendor") {
-		t.Fatalf("unknown action fallback must not expose raw tool name: label=%q summary=%q", payload.ActionLabel, payload.Summary)
-	}
-}
-
-func TestTaskMessageToPayload_UnknownTypeUsesNeutralNarrative(t *testing.T) {
-	payload := taskMessageToPayload(db.TaskMessage{
-		Seq:  3,
-		Type: "future_type",
-		Tool: pgtype.Text{String: "mcp__future_vendor__do_secret_thing", Valid: true},
-	}, "task-1", "issue-1")
-
-	if payload.ActionLabel != "Took a step" || payload.Summary != "Took a step." {
-		t.Fatalf("unknown type narrative = label %q summary %q", payload.ActionLabel, payload.Summary)
-	}
-	if strings.Contains(payload.ActionLabel, "mcp__") || strings.Contains(payload.Summary, "mcp__") || strings.Contains(payload.ActionLabel, "future_vendor") || strings.Contains(payload.Summary, "future_vendor") {
-		t.Fatalf("unknown type fallback must not expose raw tool name: label=%q summary=%q", payload.ActionLabel, payload.Summary)
+	if got := taskMessageVisibility("tool_result"); got != "diagnostic_only" {
+		t.Fatalf("tool_result visibility = %q, want diagnostic_only", got)
 	}
 }
 

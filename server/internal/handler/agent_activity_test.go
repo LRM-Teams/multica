@@ -260,15 +260,15 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 	ctx := context.Background()
 	var thinkingID, toolID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO task_message (task_id, seq, type, content, visibility, action_label, summary, tone)
-		VALUES ($1, 1, 'thinking', 'thinking aggregate text', 'user_facing', 'Thinking', 'Thinking through the next step.', 'progress')
+		INSERT INTO task_message (task_id, seq, type, content, visibility)
+		VALUES ($1, 1, 'thinking', 'thinking aggregate text', 'user_facing')
 		RETURNING id
 	`, taskID).Scan(&thinkingID); err != nil {
 		t.Fatalf("insert thinking task message: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO task_message (task_id, seq, type, tool, content, visibility, action_label, summary, tone)
-		VALUES ($1, 2, 'tool_use', 'exec_command', 'tool input is not the public narrative', 'user_facing', 'Working', 'Started a work step.', 'progress')
+		INSERT INTO task_message (task_id, seq, type, tool, content, visibility)
+		VALUES ($1, 2, 'tool_use', 'exec_command', 'tool input is not the public narrative', 'user_facing')
 		RETURNING id
 	`, taskID).Scan(&toolID); err != nil {
 		t.Fatalf("insert tool task message: %v", err)
@@ -280,6 +280,11 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 	ownerEvents := listAgentActivityEventsForUser(t, testUserID, agentID, "")
 	if strings.Contains(ownerEvents.raw, `"run_id"`) {
 		t.Fatalf("activity events must not expose run_id: %s", ownerEvents.raw)
+	}
+	for _, removedField := range []string{`"label"`, `"subtext"`, `"tone"`, `"reason_label"`} {
+		if strings.Contains(ownerEvents.raw, removedField) {
+			t.Fatalf("activity events must not expose presentation field %s: %s", removedField, ownerEvents.raw)
+		}
 	}
 	thinking := requireActivityTimelineEvent(t, ownerEvents, thinkingID)
 	if thinking.Kind != activityKindThinking || thinking.EventType != "thinking" {

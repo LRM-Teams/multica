@@ -74,7 +74,6 @@ func insertAgentActivityEvent(
 		slog.Warn("agent activity event: marshal details failed", "error", err, "event_type", eventType)
 		return pgtype.UUID{}, false
 	}
-	narrative := agentActivityEventNarrative(eventKind, eventType, severity, reasonCode, message)
 	var id pgtype.UUID
 	err = exec.QueryRow(ctx, `
 		INSERT INTO agent_activity_event (
@@ -82,16 +81,16 @@ func insertAgentActivityEvent(
 			event_kind, event_type, severity,
 			target_kind, target_id, target_slug,
 			reason_code, message, details,
-			visibility, action_label, summary, reason_label, tone
+			visibility
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17, $18)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14)
 		RETURNING id
 	`,
 		workspaceID, agentID, runtimeID, taskID,
 		eventKind, eventType, severity,
 		targetKind, targetID, targetSlug,
 		reasonCode, message, string(payload),
-		narrative.Visibility, narrative.Label, narrative.Summary, narrative.ReasonLabel, narrative.Tone,
+		activityVisibilityFor(eventKind, severity, reasonCode),
 	).Scan(&id)
 	if err != nil {
 		slog.Warn("agent activity event: insert failed",
@@ -132,76 +131,19 @@ func (h *Handler) recordAgentActivityEvent(
 	h.publishAgentActivityRealtimeEvent(ctx, workspaceIDString, uuidToString(agentID), uuidToString(id), event, targetRef)
 }
 
-type activityNarrative struct {
-	Visibility  string
-	Label       string
-	Summary     string
-	ReasonLabel string
-	Tone        string
-}
-
-func agentActivityEventNarrative(eventKind, eventType, severity, reasonCode, message string) activityNarrative {
+func activityVisibilityFor(eventKind, severity, reasonCode string) string {
 	visibility := "user_facing"
-	tone := "action"
-	label := humanizeActivityToken(eventType)
-	summary := strings.TrimSpace(message)
-	if summary == "" {
-		summary = label + "."
-	}
-	reasonLabel := humanizeActivityToken(reasonCode)
-	if strings.TrimSpace(reasonCode) == "" {
-		reasonLabel = ""
-	}
-
 	switch eventKind {
-	case activityKindWakeAttempt:
-		label, tone = "Wake attempt", "wake"
-		if summary == "" || summary == label+"." {
-			summary = "Agent was woken for new work."
-		}
-	case activityKindTurnEnd:
-		label, summary, tone = "Run completed", "Finished the run.", "success"
-	case activityKindError:
-		label, tone = "Run failed", "failure"
-	case activityKindBlocked:
-		label, tone = "Blocked", "muted"
-	case activityKindText:
-		label, tone = "Sent a message", "success"
-	case activityKindTransport:
-		switch eventType {
-		case "server_ping_received":
-			label, summary, tone = "Runtime online", "Runtime heartbeat received.", "success"
-		case "daemon_liveness_probe_sent":
-			label, summary, tone = "Checking runtime", "Checking runtime liveness.", "progress"
-		case "probe_timeout_reconnect":
-			label, summary, tone = "Runtime reconnecting", "Runtime missed a liveness check.", "failure"
-		case "transport_reconnected":
-			label, summary, tone = "Runtime recovered", "Runtime transport reconnected.", "success"
-		default:
-			label, tone = "Runtime transport", "progress"
-		}
-	case activityKindCustom:
+	case activityKindToolOutput,
+		activityKindTelemetry,
+		activityKindCompactionStarted,
+		activityKindCompactionFinished,
+		activityKindTransport,
+		activityKindCustom:
 		visibility = "diagnostic_only"
-		tone = "muted"
-	}
-
-	if severity == "error" {
-		tone = "failure"
 	}
 	if strings.Contains(reasonCode, "freshness") {
 		visibility = "diagnostic_only"
-		tone = "muted"
 	}
-	if summary == "" {
-		summary = label + "."
-	}
-	return activityNarrative{Visibility: visibility, Label: label, Summary: summary, ReasonLabel: reasonLabel, Tone: tone}
-}
-
-func humanizeActivityToken(token string) string {
-	token = strings.TrimSpace(strings.ReplaceAll(token, "_", " "))
-	if token == "" {
-		return "Activity recorded"
-	}
-	return strings.ToUpper(token[:1]) + token[1:]
+	return visibility
 }

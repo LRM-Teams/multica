@@ -14,24 +14,21 @@ import (
 const createTaskMessage = `-- name: CreateTaskMessage :one
 INSERT INTO task_message (
     task_id, seq, type, tool, content, input, output,
-    visibility, action_label, summary, tone
+    visibility
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, task_id, seq, type, tool, content, input, output, created_at, visibility, action_label, summary, tone
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, task_id, seq, type, tool, content, input, output, created_at, visibility
 `
 
 type CreateTaskMessageParams struct {
-	TaskID      pgtype.UUID `json:"task_id"`
-	Seq         int32       `json:"seq"`
-	Type        string      `json:"type"`
-	Tool        pgtype.Text `json:"tool"`
-	Content     pgtype.Text `json:"content"`
-	Input       []byte      `json:"input"`
-	Output      pgtype.Text `json:"output"`
-	Visibility  string      `json:"visibility"`
-	ActionLabel string      `json:"action_label"`
-	Summary     string      `json:"summary"`
-	Tone        string      `json:"tone"`
+	TaskID     pgtype.UUID `json:"task_id"`
+	Seq        int32       `json:"seq"`
+	Type       string      `json:"type"`
+	Tool       pgtype.Text `json:"tool"`
+	Content    pgtype.Text `json:"content"`
+	Input      []byte      `json:"input"`
+	Output     pgtype.Text `json:"output"`
+	Visibility string      `json:"visibility"`
 }
 
 func (q *Queries) CreateTaskMessage(ctx context.Context, arg CreateTaskMessageParams) (TaskMessage, error) {
@@ -44,9 +41,6 @@ func (q *Queries) CreateTaskMessage(ctx context.Context, arg CreateTaskMessagePa
 		arg.Input,
 		arg.Output,
 		arg.Visibility,
-		arg.ActionLabel,
-		arg.Summary,
-		arg.Tone,
 	)
 	var i TaskMessage
 	err := row.Scan(
@@ -60,9 +54,6 @@ func (q *Queries) CreateTaskMessage(ctx context.Context, arg CreateTaskMessagePa
 		&i.Output,
 		&i.CreatedAt,
 		&i.Visibility,
-		&i.ActionLabel,
-		&i.Summary,
-		&i.Tone,
 	)
 	return i, err
 }
@@ -95,7 +86,7 @@ func (q *Queries) GetMaxTaskMessageSeq(ctx context.Context, dollar_1 string) (in
 }
 
 const listTaskMessages = `-- name: ListTaskMessages :many
-SELECT id, task_id, seq, type, tool, content, input, output, created_at, visibility, action_label, summary, tone FROM task_message
+SELECT id, task_id, seq, type, tool, content, input, output, created_at, visibility FROM task_message
 WHERE task_id = $1
 ORDER BY seq ASC
 `
@@ -120,9 +111,6 @@ func (q *Queries) ListTaskMessages(ctx context.Context, taskID pgtype.UUID) ([]T
 			&i.Output,
 			&i.CreatedAt,
 			&i.Visibility,
-			&i.ActionLabel,
-			&i.Summary,
-			&i.Tone,
 		); err != nil {
 			return nil, err
 		}
@@ -135,7 +123,7 @@ func (q *Queries) ListTaskMessages(ctx context.Context, taskID pgtype.UUID) ([]T
 }
 
 const listTaskMessagesSince = `-- name: ListTaskMessagesSince :many
-SELECT id, task_id, seq, type, tool, content, input, output, created_at, visibility, action_label, summary, tone FROM task_message
+SELECT id, task_id, seq, type, tool, content, input, output, created_at, visibility FROM task_message
 WHERE task_id = $1 AND seq > $2
 ORDER BY seq ASC
 `
@@ -165,9 +153,6 @@ func (q *Queries) ListTaskMessagesSince(ctx context.Context, arg ListTaskMessage
 			&i.Output,
 			&i.CreatedAt,
 			&i.Visibility,
-			&i.ActionLabel,
-			&i.Summary,
-			&i.Tone,
 		); err != nil {
 			return nil, err
 		}

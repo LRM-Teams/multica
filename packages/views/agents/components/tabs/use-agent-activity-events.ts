@@ -11,11 +11,9 @@ import { projectLatestActivity, upsertActivityEvents } from "./activity-event-re
 
 /**
  * The single shared read-model for an agent's Activity event stream (#302 FE
- * consumer). Per the #267 contract the BE aggregates server-side and hands each
- * event already tagged (`label`/`subtext`/`tone`/`visibility`) with a stable id
- * — the FE never derives those from raw text (the P1-8 heuristic trap), it only
- * reads REST first-paint, **upserts live WS events by id**, and projects
- * latest-state.
+ * consumer). Per the #267 contract the BE aggregates source-backed event facts
+ * with a stable id; the FE reads REST first-paint, **upserts live WS events by
+ * id**, and projects latest-state.
  *
  * Both consumers eat this ONE hook's output — no per-surface reducer drift:
  *  - `events` → the #421 Activity timeline (full stream; it derives the directed

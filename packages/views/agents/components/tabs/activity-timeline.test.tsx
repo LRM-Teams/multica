@@ -30,12 +30,10 @@ const USER: ActivityEvent = {
   id: "u1",
   agent_id: "agent-1",
   occurred_at: "2026-07-06T09:36:05Z",
-  kind: "tool_call",
-  event_type: "tool_call",
+  kind: "thinking",
+  event_type: "thinking",
   visibility: "user_facing",
-  label: "Ran a command",
-  subtext: "Built the project.",
-  tone: "action",
+  text: "Built the project.",
   target_ref: { kind: "agent", id: "agent-1" },
 };
 const DIAG: ActivityEvent = {
@@ -45,19 +43,18 @@ const DIAG: ActivityEvent = {
   kind: "blocked",
   event_type: "blocked",
   visibility: "diagnostic_only",
-  label: "Send held by freshness check",
-  tone: "muted",
+  reason_code: "freshness_check",
   target_ref: { kind: "agent", id: "agent-1" },
 };
 
 describe("ActivityTimeline", () => {
   beforeEach(() => cleanup());
 
-  it("renders user_facing events (label + subtext) and hides diagnostic_only by default", () => {
+  it("renders user_facing events (projected label + subtext) and hides diagnostic_only by default", () => {
     render(<ActivityTimeline events={[USER, DIAG]} />);
-    expect(screen.getByText("Ran a command")).toBeInTheDocument();
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.getByText("Built the project.")).toBeInTheDocument();
-    expect(screen.queryByText("Send held by freshness check")).toBeNull();
+    expect(screen.queryByText("Waiting · freshness check")).toBeNull();
     expect(screen.getByText("View diagnostic details")).toBeInTheDocument();
   });
 
@@ -65,14 +62,14 @@ describe("ActivityTimeline", () => {
     const user = userEvent.setup();
     render(<ActivityTimeline events={[USER, DIAG]} />);
     await user.click(screen.getByText("View diagnostic details"));
-    expect(screen.getByText("Send held by freshness check")).toBeInTheDocument();
+    expect(screen.getByText("Waiting · freshness check")).toBeInTheDocument();
     expect(screen.getByText("Hide diagnostic details")).toBeInTheDocument();
   });
 
   it("compact mode: user_facing only, no diagnostics toggle", () => {
     render(<ActivityTimeline events={[USER, DIAG]} compact />);
-    expect(screen.getByText("Ran a command")).toBeInTheDocument();
-    expect(screen.queryByText("Send held by freshness check")).toBeNull();
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    expect(screen.queryByText("Waiting · freshness check")).toBeNull();
     expect(screen.queryByText("View diagnostic details")).toBeNull();
   });
 

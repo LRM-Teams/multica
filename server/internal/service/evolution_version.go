@@ -279,9 +279,15 @@ func (s *EvolutionVersionService) ApplySkillVersionRollback(ctx context.Context,
 	if err != nil {
 		return EvolutionSkillVersionRollbackResult{}, err
 	}
-	_, description := skill.ParseSkillFrontmatter(mainContent)
+	name, description := skill.ParseSkillFrontmatter(mainContent)
+	if strings.TrimSpace(name) == "" {
+		name = strings.TrimSpace(version.Version.Title)
+	}
+	if name == "" {
+		return EvolutionSkillVersionRollbackResult{}, ErrEvolutionSkillVersionIncomplete
+	}
 
-	materializedMatches, err := s.materializedSkillMatchesVersion(ctx, skillRow, description, mainContent, supporting)
+	materializedMatches, err := s.materializedSkillMatchesVersion(ctx, skillRow, name, description, mainContent, supporting)
 	if err != nil {
 		return EvolutionSkillVersionRollbackResult{}, err
 	}
@@ -295,7 +301,7 @@ func (s *EvolutionVersionService) ApplySkillVersionRollback(ctx context.Context,
 	if err != nil {
 		return EvolutionSkillVersionRollbackResult{}, err
 	}
-	if err := s.replaceMaterializedSkill(ctx, skillRow.ID, workspaceID, description, mainContent, supporting); err != nil {
+	if err := s.replaceMaterializedSkill(ctx, skillRow.ID, workspaceID, name, description, mainContent, supporting); err != nil {
 		return EvolutionSkillVersionRollbackResult{}, err
 	}
 	if err := NewEvolutionService(s.queries).RefreshWorkspaceAgentSkillSuggestions(ctx, workspaceID); err != nil {
@@ -322,6 +328,7 @@ func (s *EvolutionVersionService) ApplySkillVersionRollback(ctx context.Context,
 		return EvolutionSkillVersionRollbackResult{}, err
 	}
 
+	skillRow.Name = name
 	skillRow.Description = description
 	skillRow.Content = mainContent
 	return EvolutionSkillVersionRollbackResult{Unit: unit, Version: version.Version, Skill: skillRow, Changed: true}, nil
@@ -432,8 +439,8 @@ func stringSlicesEqual(left, right []string) bool {
 	return true
 }
 
-func (s *EvolutionVersionService) materializedSkillMatchesVersion(ctx context.Context, skillRow db.Skill, description, mainContent string, files []db.SharedEvolutionUnitFile) (bool, error) {
-	if skillRow.Description != description || skillRow.Content != mainContent {
+func (s *EvolutionVersionService) materializedSkillMatchesVersion(ctx context.Context, skillRow db.Skill, name, description, mainContent string, files []db.SharedEvolutionUnitFile) (bool, error) {
+	if skillRow.Name != name || skillRow.Description != description || skillRow.Content != mainContent {
 		return false, nil
 	}
 	rows, err := s.db.Query(ctx, `SELECT path, content FROM skill_file WHERE skill_id = $1 ORDER BY path`, skillRow.ID)
@@ -469,11 +476,11 @@ func (s *EvolutionVersionService) materializedSkillMatchesVersion(ctx context.Co
 	return true, nil
 }
 
-func (s *EvolutionVersionService) replaceMaterializedSkill(ctx context.Context, skillID, workspaceID pgtype.UUID, description, mainContent string, files []db.SharedEvolutionUnitFile) error {
+func (s *EvolutionVersionService) replaceMaterializedSkill(ctx context.Context, skillID, workspaceID pgtype.UUID, name, description, mainContent string, files []db.SharedEvolutionUnitFile) error {
 	if _, err := s.db.Exec(ctx, `
-		UPDATE skill SET description = $3, content = $4, updated_at = now()
+		UPDATE skill SET name = $3, description = $4, content = $5, updated_at = now()
 		 WHERE id = $1 AND workspace_id = $2
-	`, skillID, workspaceID, description, mainContent); err != nil {
+	`, skillID, workspaceID, name, description, mainContent); err != nil {
 		return err
 	}
 	if _, err := s.db.Exec(ctx, `DELETE FROM skill_file WHERE skill_id = $1`, skillID); err != nil {

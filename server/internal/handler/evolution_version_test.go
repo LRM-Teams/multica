@@ -31,6 +31,8 @@ type evolutionVersionFixture struct {
 	currentID    string
 	rollbackID   string
 	skillID      string
+	currentName  string
+	rollbackName string
 	currentMain  string
 	rollbackMain string
 }
@@ -39,9 +41,11 @@ func seedEvolutionVersionFixture(t *testing.T) evolutionVersionFixture {
 	t.Helper()
 	ctx := context.Background()
 	fixture := evolutionVersionFixture{
-		currentMain:  "---\nname: Versioned Skill\ndescription: current description\n---\n# Current\n",
-		rollbackMain: "---\nname: Versioned Skill\ndescription: rollback description\n---\n# Rollback\n",
+		currentName:  "Versioned Skill Current " + randomID(),
+		rollbackName: "Versioned Skill Rollback " + randomID(),
 	}
+	fixture.currentMain = "---\nname: " + fixture.currentName + "\ndescription: current description\n---\n# Current\n"
+	fixture.rollbackMain = "---\nname: " + fixture.rollbackName + "\ndescription: rollback description\n---\n# Rollback\n"
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO shared_evolution_unit (
 			workspace_id, unit_type, title, canonical_summary, content, metadata, applies, failure_cases, status,
@@ -84,7 +88,7 @@ func seedEvolutionVersionFixture(t *testing.T) evolutionVersionFixture {
 		INSERT INTO skill (workspace_id, name, description, content, config, created_by, source_evolution_unit_id)
 		VALUES ($1, $2, 'current description', $3, '{}'::jsonb, $4, $5)
 		RETURNING id
-	`, testWorkspaceID, "Versioned Skill "+randomID(), fixture.currentMain, testUserID, fixture.unitID).Scan(&fixture.skillID); err != nil {
+	`, testWorkspaceID, fixture.currentName, fixture.currentMain, testUserID, fixture.unitID).Scan(&fixture.skillID); err != nil {
 		t.Fatalf("seed materialized skill: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `INSERT INTO skill_file (skill_id, path, content) VALUES ($1, 'references/guide.md', 'current guide')`, fixture.skillID); err != nil {
@@ -237,23 +241,23 @@ func TestEvolutionSkillVersionRollbackIsTransactionalAndIdempotent(t *testing.T)
 	if !response.Changed || response.CurrentVersionID != fixture.rollbackID {
 		t.Fatalf("rollback response = %#v", response)
 	}
-	var currentID, unitContent, skillContent, description, guide, summary string
+	var currentID, unitContent, skillName, skillContent, description, guide, summary string
 	var tags, tools, taskTypes, projectTypes, languages, frameworks []string
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT u.current_version_id::text, u.content, s.content, s.description, sf.content,
+		SELECT u.current_version_id::text, u.content, s.name, s.content, s.description, sf.content,
 		       u.canonical_summary, u.tags, u.tools, u.task_types, u.project_types, u.languages, u.frameworks
 		FROM shared_evolution_unit u
 		JOIN skill s ON s.source_evolution_unit_id=u.id AND s.workspace_id=u.workspace_id
 		JOIN skill_file sf ON sf.skill_id=s.id AND sf.path='references/guide.md'
 		WHERE u.id=$1
-	`, fixture.unitID).Scan(&currentID, &unitContent, &skillContent, &description, &guide, &summary, &tags, &tools, &taskTypes, &projectTypes, &languages, &frameworks); err != nil {
+	`, fixture.unitID).Scan(&currentID, &unitContent, &skillName, &skillContent, &description, &guide, &summary, &tags, &tools, &taskTypes, &projectTypes, &languages, &frameworks); err != nil {
 		t.Fatalf("load rollback state: %v", err)
 	}
-	if currentID != fixture.rollbackID || unitContent != "rollback unit content" || skillContent != fixture.rollbackMain || description != "rollback description" || !strings.Contains(guide, fixture.rollbackID) ||
+	if currentID != fixture.rollbackID || unitContent != "rollback unit content" || skillName != fixture.rollbackName || skillContent != fixture.rollbackMain || description != "rollback description" || !strings.Contains(guide, fixture.rollbackID) ||
 		summary != "rollback summary" || !stringSlicesEqualForTest(tags, []string{"rollback-tag"}) || !stringSlicesEqualForTest(tools, []string{"rollback-tool"}) ||
 		!stringSlicesEqualForTest(taskTypes, []string{"rollback-task"}) || !stringSlicesEqualForTest(projectTypes, []string{"rollback-project"}) ||
 		!stringSlicesEqualForTest(languages, []string{"rust"}) || !stringSlicesEqualForTest(frameworks, []string{"axum"}) {
-		t.Fatalf("rollback state current=%q unit=%q skill=%q description=%q guide=%q summary=%q tags=%v tools=%v task=%v project=%v languages=%v frameworks=%v", currentID, unitContent, skillContent, description, guide, summary, tags, tools, taskTypes, projectTypes, languages, frameworks)
+		t.Fatalf("rollback state current=%q unit=%q skill_name=%q skill=%q description=%q guide=%q summary=%q tags=%v tools=%v task=%v project=%v languages=%v frameworks=%v", currentID, unitContent, skillName, skillContent, description, guide, summary, tags, tools, taskTypes, projectTypes, languages, frameworks)
 	}
 	var audits int
 	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM activity_log WHERE action='evolution_skill_version_rolled_back' AND details->>'unit_id'=$1`, fixture.unitID).Scan(&audits); err != nil || audits != 1 {

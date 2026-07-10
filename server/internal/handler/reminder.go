@@ -204,9 +204,9 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusInternalServerError, "failed to schedule reminder")
 		return
 	}
-	recordAgentActivityEvent(r.Context(), h.DB,
+	h.recordAgentActivityEvent(r.Context(), h.DB,
 		origin.workspaceID, task.AgentID, task.RuntimeID, task.ID,
-		"lifecycle", "reminder_scheduled", "info",
+		activityKindCustom, "reminder_scheduled", "info",
 		reminderTargetKind(threadRootID), origin.channelID, title,
 		"", "Agent scheduled a future self-wake",
 		map[string]any{"reminder_id": uuidToString(created.ID), "fire_at": fireAt.Format(time.RFC3339)},
@@ -463,9 +463,9 @@ func (h *Handler) resolveReminderID(w http.ResponseWriter, ctx context.Context, 
 }
 
 func (h *Handler) recordReminderActivity(ctx context.Context, task db.AgentTaskQueue, reminder agentReminder, eventType, message string) {
-	recordAgentActivityEvent(ctx, h.DB,
+	h.recordAgentActivityEvent(ctx, h.DB,
 		reminder.WorkspaceID, reminder.AgentID, task.RuntimeID, task.ID,
-		"lifecycle", eventType, "info",
+		activityKindCustom, eventType, "info",
 		reminderTargetKind(reminder.AnchorThreadRootMessageID), reminder.AnchorChannelID, reminder.Title,
 		"", message,
 		map[string]any{"reminder_id": uuidToString(reminder.ID), "fire_at": timestampToString(reminder.FireAt)},
@@ -564,9 +564,9 @@ func (h *Handler) fireReminder(ctx context.Context, reminder agentReminder) erro
 		// The task is already durably queued, so never re-arm the reminder and risk a duplicate wake.
 		slog.Warn("reminder prompt task tag failed", "reminder_id", uuidToString(reminder.ID), "task_id", uuidToString(task.ID), "error", err)
 	}
-	recordAgentActivityEvent(ctx, h.DB,
+	h.recordAgentActivityEvent(ctx, h.DB,
 		reminder.WorkspaceID, reminder.AgentID, agent.RuntimeID, task.ID,
-		"lifecycle", "reminder_fired", "info",
+		activityKindCustom, "reminder_fired", "info",
 		reminderTargetKind(reminder.AnchorThreadRootMessageID), reminder.AnchorChannelID, reminder.Title,
 		"", "Reminder fired and woke the agent",
 		map[string]any{"reminder_id": uuidToString(reminder.ID)},

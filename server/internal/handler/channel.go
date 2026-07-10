@@ -3217,9 +3217,9 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 
 	// Record a wake-trigger activity event so the agent's Activity timeline
 	// shows why this session needs to drain.
-	recordAgentActivityEvent(ctx, h.DB,
+	h.recordAgentActivityEvent(ctx, h.DB,
 		parseUUID(ch.WorkspaceID), agent.ID, agent.RuntimeID, pgtype.UUID{},
-		"lifecycle", "task_dispatched", "info",
+		activityKindWakeAttempt, "task_dispatched", "info",
 		"channel", parseUUID(ch.ID), ch.Name,
 		reason, "Agent woken by "+reason,
 		map[string]any{
@@ -3227,6 +3227,7 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 			"trigger_author":     trigger.AuthorName,
 			"trigger_content":    truncateForActivity(trigger.Content, 100),
 			"thread_root":        trigger.ThreadRootMessageID,
+			"message_seq":        trigger.Seq,
 			"agent_session_id":   uuidToString(agentSession.ID),
 			"inbox_event_id":     uuidToString(event.ID),
 		},

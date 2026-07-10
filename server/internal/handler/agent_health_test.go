@@ -383,7 +383,7 @@ func createAgentHealthEvent(t *testing.T, agentID, runtimeID, eventType, state, 
 			workspace_id, agent_id, runtime_id, event_kind, event_type, severity,
 			target_kind, target_id, reason_code, message, details
 		)
-		VALUES ($1, $2, $3, 'lifecycle', $4, 'info', 'agent', $2, $5, 'health event', $6::jsonb)
+		VALUES ($1, $2, $3, 'transport', $4, 'info', 'agent', $2, $5, 'health event', $6::jsonb)
 		RETURNING id
 	`, testWorkspaceID, agentID, runtimeID, eventType, reasonCode, string(raw)).Scan(&eventID); err != nil {
 		t.Fatalf("create health event: %v", err)

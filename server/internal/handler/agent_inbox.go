@@ -404,9 +404,9 @@ func (h *Handler) recordAgentInboxFailureActivity(ctx context.Context, event db.
 		targetID = event.ChatSessionID
 	}
 	h.TaskService.RecordEvolutionSkillOutcome(ctx, event.ID, "failure", "failure")
-	recordAgentActivityEvent(ctx, h.DB,
+	h.recordAgentActivityEvent(ctx, h.DB,
 		event.WorkspaceID, event.AgentID, delivery.RuntimeID, pgtype.UUID{},
-		"lifecycle", "agent_inbox_failed", "error",
+		activityKindError, "agent_inbox_failed", "error",
 		targetKind, targetID, "",
 		reasonCode, "Agent inbox delivery failed: "+truncateForActivity(errText, 200),
 		map[string]any{

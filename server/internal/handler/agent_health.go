@@ -96,7 +96,7 @@ func RecordRuntimeHealthEventForRuntimeAgents(ctx context.Context, exec RuntimeH
 			target_kind, target_id, reason_code, message, details
 		)
 		SELECT
-			a.workspace_id, a.id, a.runtime_id, 'lifecycle', $3, 'info',
+			a.workspace_id, a.id, a.runtime_id, 'transport', $3, 'info',
 			'agent', a.id, $4, $5, $6::jsonb
 		FROM agent a
 		WHERE a.workspace_id = $1

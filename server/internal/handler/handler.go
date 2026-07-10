@@ -206,9 +206,9 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		// Resolve workspace_id from the agent (task row doesn't carry it).
 		var wsID pgtype.UUID
 		_ = executor.QueryRow(ctx, `SELECT workspace_id FROM agent WHERE id = $1`, parent.AgentID).Scan(&wsID)
-		recordAgentActivityEvent(ctx, executor,
+		insertAgentActivityEvent(ctx, executor,
 			wsID, parent.AgentID, parent.RuntimeID, child.ID,
-			"lifecycle", "subagent_started", "info",
+			activityKindCustom, "subagent_started", "info",
 			"agent", parent.AgentID, "",
 			"auto_retry", "Subagent spawned for retry",
 			map[string]any{

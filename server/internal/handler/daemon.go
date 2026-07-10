@@ -2220,10 +2220,16 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		completedMessage = "Task completed (output suppressed: " + req.OutputSuppressedReason + ")"
 		completedSeverity = "warning"
 	}
-	recordAgentActivityEvent(r.Context(), h.DB,
+	completedTargetKind := "agent"
+	completedTargetID := task.AgentID
+	if task.IssueID.Valid {
+		completedTargetKind = "issue"
+		completedTargetID = task.IssueID
+	}
+	h.recordAgentActivityEvent(r.Context(), h.DB,
 		parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
-		"lifecycle", "task_completed", completedSeverity,
-		"agent", task.AgentID, "",
+		activityKindTurnEnd, "task_completed", completedSeverity,
+		completedTargetKind, completedTargetID, "",
 		req.OutputSuppressedReason, completedMessage, completedDetails,
 	)
 
@@ -2745,10 +2751,16 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)
 
 	// Record a task-failed activity event.
-	recordAgentActivityEvent(r.Context(), h.DB,
+	failedTargetKind := "agent"
+	failedTargetID := task.AgentID
+	if task.IssueID.Valid {
+		failedTargetKind = "issue"
+		failedTargetID = task.IssueID
+	}
+	h.recordAgentActivityEvent(r.Context(), h.DB,
 		parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
-		"lifecycle", "task_failed", "error",
-		"agent", task.AgentID, "",
+		activityKindError, "task_failed", "error",
+		failedTargetKind, failedTargetID, "",
 		req.FailureReason, "Task failed: "+truncateForActivity(req.Error, 200),
 		map[string]any{
 			"failure_reason": req.FailureReason,
@@ -2817,14 +2829,19 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		if msg.Input != nil {
 			inputJSON, _ = json.Marshal(msg.Input)
 		}
+		narrative := taskMessageNarrative(msg.Type)
 		created, createErr := h.Queries.CreateTaskMessage(r.Context(), db.CreateTaskMessageParams{
-			TaskID:  parseUUID(taskID),
-			Seq:     int32(msg.Seq),
-			Type:    msg.Type,
-			Tool:    pgtype.Text{String: msg.Tool, Valid: msg.Tool != ""},
-			Content: pgtype.Text{String: msg.Content, Valid: msg.Content != ""},
-			Input:   inputJSON,
-			Output:  pgtype.Text{String: msg.Output, Valid: msg.Output != ""},
+			TaskID:      parseUUID(taskID),
+			Seq:         int32(msg.Seq),
+			Type:        msg.Type,
+			Tool:        pgtype.Text{String: msg.Tool, Valid: msg.Tool != ""},
+			Content:     pgtype.Text{String: msg.Content, Valid: msg.Content != ""},
+			Input:       inputJSON,
+			Output:      pgtype.Text{String: msg.Output, Valid: msg.Output != ""},
+			Visibility:  narrative.Visibility,
+			ActionLabel: narrative.Label,
+			Summary:     narrative.Summary,
+			Tone:        narrative.Tone,
 		})
 		if createErr != nil {
 			slog.Error("failed to create task message", "task_id", taskID, "seq", msg.Seq, "error", createErr)
@@ -2835,6 +2852,10 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		if workspaceID != "" {
 			h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID,
 				taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
+			h.publish(protocol.EventAgentActivityEvent, workspaceID, "system", "", AgentActivityEventRealtimePayload{
+				AgentID: uuidToString(task.AgentID),
+				EventID: uuidToString(created.ID),
+			})
 		}
 	}
 
@@ -2851,6 +2872,22 @@ func taskMessageToPayload(m db.TaskMessage, taskID, issueID string) protocol.Tas
 		createdAt = m.CreatedAt.Time.UTC().Format(time.RFC3339Nano)
 	}
 	narrative := taskMessageNarrative(m.Type)
+	visibility := strings.TrimSpace(m.Visibility)
+	if visibility == "" {
+		visibility = narrative.Visibility
+	}
+	actionLabel := strings.TrimSpace(m.ActionLabel)
+	if actionLabel == "" {
+		actionLabel = narrative.Label
+	}
+	summary := strings.TrimSpace(m.Summary)
+	if summary == "" {
+		summary = narrative.Summary
+	}
+	tone := strings.TrimSpace(m.Tone)
+	if tone == "" {
+		tone = narrative.Tone
+	}
 	return protocol.TaskMessagePayload{
 		TaskID:      taskID,
 		IssueID:     issueID,
@@ -2860,46 +2897,60 @@ func taskMessageToPayload(m db.TaskMessage, taskID, issueID string) protocol.Tas
 		Content:     m.Content.String,
 		Input:       input,
 		Output:      m.Output.String,
-		ActionLabel: narrative.Label,
-		Summary:     narrative.Summary,
+		Visibility:  visibility,
+		ActionLabel: actionLabel,
+		Summary:     summary,
+		Tone:        tone,
 		CreatedAt:   createdAt,
 	}
 }
 
 type taskMessageNarrativeSummary struct {
-	Label   string
-	Summary string
+	Visibility string
+	Label      string
+	Summary    string
+	Tone       string
 }
 
 func taskMessageNarrative(msgType string) taskMessageNarrativeSummary {
 	switch msgType {
 	case "text":
 		return taskMessageNarrativeSummary{
-			Label:   "Message received",
-			Summary: "Received a message.",
+			Visibility: "user_facing",
+			Label:      "Message received",
+			Summary:    "Received a message.",
+			Tone:       "action",
 		}
 	case "thinking":
 		return taskMessageNarrativeSummary{
-			Label:   "Thinking",
-			Summary: "Reviewed the next step.",
+			Visibility: "user_facing",
+			Label:      "Thinking",
+			Summary:    "Thinking through the next step.",
+			Tone:       "progress",
 		}
 	case "tool_use":
 		return taskMessageNarrativeSummary{
-			Label:   "Working",
-			Summary: "Started a work step.",
+			Visibility: "user_facing",
+			Label:      "Working",
+			Summary:    "Started a work step.",
+			Tone:       "progress",
 		}
 	case "tool_result":
 		return taskMessageNarrativeSummary{
-			Label:   "Step finished",
-			Summary: "Finished a work step.",
+			Visibility: "user_facing",
+			Label:      "Step finished",
+			Summary:    "Finished a work step.",
+			Tone:       "progress",
 		}
 	case "error":
 		return taskMessageNarrativeSummary{
-			Label:   "Ran into an error",
-			Summary: "Ran into an error.",
+			Visibility: "user_facing",
+			Label:      "Ran into an error",
+			Summary:    "Ran into an error.",
+			Tone:       "failure",
 		}
 	default:
-		return taskMessageNarrativeSummary{Label: "Took a step", Summary: "Took a step."}
+		return taskMessageNarrativeSummary{Visibility: "user_facing", Label: "Took a step", Summary: "Took a step.", Tone: "action"}
 	}
 }
 
@@ -2996,9 +3047,9 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	slog.Info("task cancelled by user", "task_id", taskID, "issue_id", uuidToString(task.IssueID))
 
 	// Record a task-cancelled activity event.
-	recordAgentActivityEvent(r.Context(), h.DB,
+	h.recordAgentActivityEvent(r.Context(), h.DB,
 		issue.WorkspaceID, task.AgentID, task.RuntimeID, task.ID,
-		"lifecycle", "task_cancelled", "info",
+		activityKindBlocked, "task_cancelled", "info",
 		"issue", task.IssueID, "",
 		"", "Task cancelled by user",
 		nil,

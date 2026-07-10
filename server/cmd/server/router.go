@@ -944,6 +944,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/cancel-tasks", h.CancelAgentTasks)
 					r.Get("/health", h.GetAgentHealth)
 					r.Get("/activity", h.ListAgentActivity)
+					r.Get("/activity/events", h.ListAgentActivityEvents)
 					r.Get("/activity/{activityId}", h.GetAgentActivity)
 					r.Get("/activity/{activityId}/steps", h.ListAgentActivitySteps)
 					r.Get("/activity/{activityId}/diagnostic", h.GetAgentActivityDiagnostic)

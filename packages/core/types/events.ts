@@ -31,6 +31,7 @@ export type WSEventType =
   | "task:completed"
   | "task:failed"
   | "task:message"
+  | "agent_activity:event"
   | "task:cancelled"
   | "inbox:new"
   | "inbox:read"
@@ -238,9 +239,65 @@ export interface TaskMessagePayload {
   content?: string;
   input?: Record<string, unknown>;
   output?: string;
+  visibility?: "user_facing" | "diagnostic_only";
   action_label?: string;
   summary?: string;
+  tone?: "wake" | "action" | "progress" | "success" | "failure" | "muted";
   created_at?: string;
+}
+
+export type AgentActivityKind =
+  | "thinking"
+  | "tool_call"
+  | "tool_output"
+  | "turn_end"
+  | "session_init"
+  | "compaction_started"
+  | "compaction_finished"
+  | "wake_attempt"
+  | "error"
+  | "text"
+  | "system"
+  | "transport"
+  | "telemetry"
+  | "blocked"
+  | "custom";
+
+export interface AgentActivitySourceRef {
+  kind: string;
+  id?: string;
+  seq?: number;
+}
+
+export interface AgentActivityTargetRef {
+  kind: string;
+  id?: string;
+  slug?: string;
+}
+
+export interface AgentActivityTimelineEvent {
+  id: string;
+  agent_id: string;
+  runtime_id?: string;
+  task_id?: string;
+  kind: AgentActivityKind;
+  event_type: string;
+  occurred_at: string;
+  visibility: "user_facing" | "diagnostic_only";
+  label: string;
+  subtext?: string;
+  text?: string;
+  tone: "wake" | "action" | "progress" | "success" | "failure" | "muted";
+  reason_code?: string;
+  reason_label?: string;
+  target_ref: AgentActivityTargetRef;
+  source_refs?: AgentActivitySourceRef[];
+}
+
+export interface AgentActivityEventRealtimePayload {
+  agent_id: string;
+  event_id: string;
+  event?: AgentActivityTimelineEvent;
 }
 
 export interface TaskQueuedPayload {
@@ -438,6 +495,7 @@ export interface WSEventPayloadMap {
   "task:completed": TaskCompletedPayload;
   "task:failed": TaskFailedPayload;
   "task:message": TaskMessagePayload;
+  "agent_activity:event": AgentActivityEventRealtimePayload;
   "task:cancelled": TaskCancelledPayload;
   "task:progress": unknown;
   "inbox:new": InboxNewPayload;

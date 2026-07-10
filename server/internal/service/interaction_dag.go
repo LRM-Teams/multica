@@ -39,6 +39,13 @@ type InteractionDAGStore interface {
 	InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg db.InsertInteractionDAGSegmentWithSnapshotParams) error
 	InsertInteractionDAGEdge(ctx context.Context, arg db.InsertInteractionDAGEdgeParams) error
 	GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID string) (db.InteractionDAGSegment, error)
+
+	// Read-only assembly queries (U8 AssembleAssembledDag). Each filters by
+	// project_id; env_snapshot joins through segment (no project_id column).
+	ListInteractionDAGSegmentsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGSegment, error)
+	ListInteractionDAGEdgesForProject(ctx context.Context, projectID string) ([]db.InteractionDAGEdge, error)
+	ListInteractionDAGSessionRunsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGSessionRun, error)
+	ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGEnvSnapshot, error)
 }
 
 // Compile-time guarantee that *db.Queries satisfies InteractionDAGStore, so a
@@ -222,6 +229,174 @@ func (s *InteractionDAGService) AddEdge(ctx context.Context, projectID, srcSegme
 		DstSegmentID: dstSegmentID,
 		Type:         edgeType,
 	})
+}
+
+// AssembledDag is the read-only assembled DAG consumed by AReaL. Its JSON shape
+// mirrors areal's AssembledDag.from_dict (SegmentSpec/EdgeSpec dataclasses) so
+// AReaL can parse it with SegmentSpec(**s) / EdgeSpec(**e). The segment/edge
+// structs carry EXACTLY the keys those dataclasses accept - extra keys would
+// TypeError at parse time on the areal side, so do not add fields without
+// updating the areal contract.
+type AssembledDag struct {
+	Segments          []AssembledSegment `json:"segments"`
+	Edges             []AssembledEdge    `json:"edges"`
+	SessionToAgentRun map[string]string  `json:"session_to_agent_run"`
+}
+
+// AssembledSegment mirrors areal's SegmentSpec: structure only - no judge
+// scores, no turn indices, no message text. tensor_ref is the field->shard jsonb
+// decoded at record time (Task 1) and passed through verbatim as
+// json.RawMessage. closing_event is str|None (nil -> JSON null). env_snapshot
+// is reconstructed from the three interaction_dag_env_snapshot columns. issue_id
+// is a non-optional str on the areal side; a NULL DB issue_id is emitted as "".
+type AssembledSegment struct {
+	SegmentID    string               `json:"segment_id"`
+	AgentRunID   string               `json:"agent_run_id"`
+	IssueID      string               `json:"issue_id"`
+	TrajectoryID int64                `json:"trajectory_id"`
+	TensorRef    json.RawMessage      `json:"tensor_ref"`
+	ClosingEvent *string              `json:"closing_event"`
+	EnvSnapshot  AssembledEnvSnapshot `json:"env_snapshot"`
+}
+
+// AssembledEnvSnapshot is the inverse of encodeEnvSnapshot: the three
+// interaction_dag_env_snapshot columns reassembled into the dict AReaL expects.
+// sandbox_ids and env_state are jsonb passed through verbatim (json.RawMessage);
+// issue_snapshot_id is nullable (nil -> JSON null).
+type AssembledEnvSnapshot struct {
+	SandboxIDs      json.RawMessage `json:"sandbox_ids"`
+	IssueSnapshotID *string         `json:"issue_snapshot_id"`
+	EnvState        json.RawMessage `json:"env_state"`
+}
+
+// AssembledEdge mirrors areal's EdgeSpec. type is one of
+// delegation/mention/completion (the interaction_dag_edge.type CHECK values).
+// branch_from_segment_id / branch_from_checkpoint_id are branch provenance for
+// change 2 (MCTS); emitted nil for now but the fields are present so the JSON
+// contract is stable when MCTS lands.
+type AssembledEdge struct {
+	SrcSegmentID           string  `json:"src_segment_id"`
+	DstSegmentID           string  `json:"dst_segment_id"`
+	Type                   string  `json:"type"`
+	BranchFromSegmentID    *string `json:"branch_from_segment_id"`
+	BranchFromCheckpointID *string `json:"branch_from_checkpoint_id"`
+}
+
+// AssembleAssembledDag is the read-only assembly consumed by AReaL (U8). It
+// reads recorded interaction_dag_segment/_edge/_env_snapshot/_session_run rows
+// for a project and returns AssembledDag{Segments, Edges, SessionToAgentRun}.
+//
+// NO judge scores, NO turn indices, NO message text cross this boundary: the
+// returned structs carry exactly the SegmentSpec/EdgeSpec fields AReaL's
+// AssembledDag.from_dict parses. tensor_ref is the field->shard jsonb decoded
+// at record time (Task 1) and passed through verbatim (not re-decoded);
+// env_snapshot is reconstructed from the three env_snapshot columns. agent_run_id
+// is the multica task.ID (the run), NOT the agent UUID.
+//
+// A disabled service (or nil store) returns an empty AssembledDag, nil -
+// consistent with the other service methods. Branch provenance
+// (branch_from_segment_id/branch_from_checkpoint_id) is change 2 (MCTS) and
+// emitted nil for now; the fields are present so the contract is stable.
+func (s *InteractionDAGService) AssembleAssembledDag(ctx context.Context, projectID string) (AssembledDag, error) {
+	if !s.enabled || s.store == nil {
+		return AssembledDag{}, nil
+	}
+	if projectID == "" {
+		return AssembledDag{}, errors.New("interaction_dag: AssembleAssembledDag requires project_id")
+	}
+
+	segs, err := s.store.ListInteractionDAGSegmentsForProject(ctx, projectID)
+	if err != nil {
+		return AssembledDag{}, fmt.Errorf("interaction_dag: list segments for %s: %w", projectID, err)
+	}
+	edges, err := s.store.ListInteractionDAGEdgesForProject(ctx, projectID)
+	if err != nil {
+		return AssembledDag{}, fmt.Errorf("interaction_dag: list edges for %s: %w", projectID, err)
+	}
+	runs, err := s.store.ListInteractionDAGSessionRunsForProject(ctx, projectID)
+	if err != nil {
+		return AssembledDag{}, fmt.Errorf("interaction_dag: list session_runs for %s: %w", projectID, err)
+	}
+	snaps, err := s.store.ListInteractionDAGEnvSnapshotsForProject(ctx, projectID)
+	if err != nil {
+		return AssembledDag{}, fmt.Errorf("interaction_dag: list env_snapshots for %s: %w", projectID, err)
+	}
+
+	// Index env_snapshots by segment_id for an O(1) 1:1 join (the atomic CTE
+	// in CloseSegmentForEvent guarantees every segment has exactly one snapshot;
+	// the map makes assembly defensive if that invariant ever drifts).
+	snapBySeg := make(map[string]db.InteractionDAGEnvSnapshot, len(snaps))
+	for _, sn := range snaps {
+		snapBySeg[sn.SegmentID] = sn
+	}
+
+	out := AssembledDag{
+		Segments:          make([]AssembledSegment, 0, len(segs)),
+		Edges:             make([]AssembledEdge, 0, len(edges)),
+		SessionToAgentRun: make(map[string]string, len(runs)),
+	}
+	for _, sg := range segs {
+		// issue_id is a non-optional str in SegmentSpec; NULL -> "".
+		issueID := ""
+		if sg.IssueID.Valid {
+			issueID = sg.IssueID.String
+		}
+		// closing_event is str|None; NULL -> nil (JSON null).
+		var closingEvent *string
+		if sg.ClosingEvent.Valid {
+			ce := sg.ClosingEvent.String
+			closingEvent = &ce
+		}
+		seg := AssembledSegment{
+			SegmentID:    sg.SegmentID,
+			AgentRunID:   sg.AgentRunID,
+			IssueID:      issueID,
+			TrajectoryID: sg.TrajectoryID,
+			TensorRef:    json.RawMessage(sg.TensorRef),
+			ClosingEvent: closingEvent,
+		}
+		if sn, ok := snapBySeg[sg.SegmentID]; ok {
+			seg.EnvSnapshot = assembleEnvSnapshot(sn)
+		} else {
+			// Absence stays distinguishable: a segment without a snapshot row
+			// (unreachable given the atomic insert, but assembly is defensive)
+			// gets an empty env_snapshot, not a fabricated meaningful one.
+			seg.EnvSnapshot = AssembledEnvSnapshot{
+				SandboxIDs: json.RawMessage("[]"),
+				EnvState:   json.RawMessage("{}"),
+			}
+		}
+		out.Segments = append(out.Segments, seg)
+	}
+	for _, e := range edges {
+		out.Edges = append(out.Edges, AssembledEdge{
+			SrcSegmentID: e.SrcSegmentID,
+			DstSegmentID: e.DstSegmentID,
+			Type:         e.Type,
+			// Branch provenance is change 2 (MCTS); emit nil for now.
+		})
+	}
+	for _, r := range runs {
+		out.SessionToAgentRun[r.SessionID] = r.AgentRunID
+	}
+	return out, nil
+}
+
+// assembleEnvSnapshot reconstructs the env_snapshot dict from the three
+// interaction_dag_env_snapshot columns (sandbox_ids, issue_snapshot_id,
+// env_state). It is the inverse of encodeEnvSnapshot: the jsonb columns are
+// passed through verbatim as json.RawMessage (no re-decode/re-encode), and the
+// nullable issue_snapshot_id becomes *string (nil -> JSON null).
+func assembleEnvSnapshot(sn db.InteractionDAGEnvSnapshot) AssembledEnvSnapshot {
+	out := AssembledEnvSnapshot{
+		SandboxIDs: json.RawMessage(sn.SandboxIDs),
+		EnvState:   json.RawMessage(sn.EnvState),
+	}
+	if sn.IssueSnapshotID.Valid {
+		s := sn.IssueSnapshotID.String
+		out.IssueSnapshotID = &s
+	}
+	return out
 }
 
 // decodeTensorRef extracts a field->shard map from the areal /export_trajectories

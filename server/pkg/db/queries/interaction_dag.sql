@@ -52,3 +52,38 @@ LIMIT 1;
 -- endpoints are known (best-effort, validated at assembly).
 INSERT INTO interaction_dag_edge (project_id, src_segment_id, dst_segment_id, type)
 VALUES ($1, $2, $3, $4);
+
+-- name: ListInteractionDAGSegmentsForProject :many
+-- Read-only assembly query (U8 AssembleAssembledDag): all segments for a
+-- project, ordered by created_at for deterministic assembly. SELECTs the full
+-- row to scan into InteractionDAGSegment cleanly (mirrors
+-- GetInteractionDAGSegmentByAgentRun). No scores/turn-idx/text columns exist
+-- on this table; assembly never reads them.
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at
+FROM interaction_dag_segment
+WHERE project_id = $1
+ORDER BY created_at;
+
+-- name: ListInteractionDAGEdgesForProject :many
+-- Read-only assembly query (U8): all typed edges for a project, ordered by id
+-- (insertion order) for deterministic assembly.
+SELECT id, project_id, src_segment_id, dst_segment_id, type, created_at
+FROM interaction_dag_edge
+WHERE project_id = $1
+ORDER BY id;
+
+-- name: ListInteractionDAGSessionRunsForProject :many
+-- Read-only assembly query (U8): all session_id -> agent_run_id mappings for a
+-- project; feeds AssembledDag.session_to_agent_run.
+SELECT session_id, project_id, agent_run_id, issue_id, created_at
+FROM interaction_dag_session_run
+WHERE project_id = $1;
+
+-- name: ListInteractionDAGEnvSnapshotsForProject :many
+-- Read-only assembly query (U8): all env_snapshots for a project's segments.
+-- interaction_dag_env_snapshot has no project_id column, so join through
+-- interaction_dag_segment on segment_id. Joined by segment_id in Go (1:1).
+SELECT e.segment_id, e.sandbox_ids, e.issue_snapshot_id, e.env_state
+FROM interaction_dag_env_snapshot e
+JOIN interaction_dag_segment s ON s.segment_id = e.segment_id
+WHERE s.project_id = $1;

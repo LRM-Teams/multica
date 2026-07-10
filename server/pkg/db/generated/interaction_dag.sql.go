@@ -194,3 +194,153 @@ func (q *Queries) InsertInteractionDAGEdge(ctx context.Context, arg InsertIntera
 	)
 	return err
 }
+
+const listInteractionDAGSegmentsForProject = `-- name: ListInteractionDAGSegmentsForProject :many
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at FROM interaction_dag_segment
+WHERE project_id = $1
+ORDER BY created_at
+`
+
+// ListInteractionDAGSegmentsForProject returns all recorded segments for a
+// project, ordered by created_at (deterministic assembly). Read-only; used by
+// InteractionDAGService.AssembleAssembledDag (U8). Hand-written (sqlc generate
+// is broken in this repo) mirroring the :one GetInteractionDAGSegmentByAgentRun
+// scan order.
+func (q *Queries) ListInteractionDAGSegmentsForProject(ctx context.Context, projectID string) ([]InteractionDAGSegment, error) {
+	rows, err := q.db.Query(ctx, listInteractionDAGSegmentsForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDAGSegment{}
+	for rows.Next() {
+		var i InteractionDAGSegment
+		if err := rows.Scan(
+			&i.SegmentID,
+			&i.ProjectID,
+			&i.AgentRunID,
+			&i.IssueID,
+			&i.TaskID,
+			&i.TrajectoryID,
+			&i.TensorRef,
+			&i.ClosingEvent,
+			&i.ClosingEventTargetSegment,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInteractionDAGEdgesForProject = `-- name: ListInteractionDAGEdgesForProject :many
+SELECT id, project_id, src_segment_id, dst_segment_id, type, created_at FROM interaction_dag_edge
+WHERE project_id = $1
+ORDER BY id
+`
+
+// ListInteractionDAGEdgesForProject returns all typed edges for a project,
+// ordered by id (insertion order). Read-only; used by
+// InteractionDAGService.AssembleAssembledDag (U8). Hand-written (sqlc generate
+// is broken in this repo).
+func (q *Queries) ListInteractionDAGEdgesForProject(ctx context.Context, projectID string) ([]InteractionDAGEdge, error) {
+	rows, err := q.db.Query(ctx, listInteractionDAGEdgesForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDAGEdge{}
+	for rows.Next() {
+		var i InteractionDAGEdge
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.SrcSegmentID,
+			&i.DstSegmentID,
+			&i.Type,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInteractionDAGSessionRunsForProject = `-- name: ListInteractionDAGSessionRunsForProject :many
+SELECT session_id, project_id, agent_run_id, issue_id, created_at FROM interaction_dag_session_run
+WHERE project_id = $1
+`
+
+// ListInteractionDAGSessionRunsForProject returns all session_id ->
+// agent_run_id mappings for a project. Read-only; used by
+// InteractionDAGService.AssembleAssembledDag (U8) to build session_to_agent_run.
+// Hand-written (sqlc generate is broken in this repo).
+func (q *Queries) ListInteractionDAGSessionRunsForProject(ctx context.Context, projectID string) ([]InteractionDAGSessionRun, error) {
+	rows, err := q.db.Query(ctx, listInteractionDAGSessionRunsForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDAGSessionRun{}
+	for rows.Next() {
+		var i InteractionDAGSessionRun
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.ProjectID,
+			&i.AgentRunID,
+			&i.IssueID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInteractionDAGEnvSnapshotsForProject = `-- name: ListInteractionDAGEnvSnapshotsForProject :many
+SELECT e.segment_id, e.sandbox_ids, e.issue_snapshot_id, e.env_state FROM interaction_dag_env_snapshot e
+JOIN interaction_dag_segment s ON s.segment_id = e.segment_id
+WHERE s.project_id = $1
+`
+
+// ListInteractionDAGEnvSnapshotsForProject returns all env_snapshots for a
+// project's segments. interaction_dag_env_snapshot has no project_id column, so
+// the query joins through interaction_dag_segment on segment_id. The caller
+// (AssembleAssembledDag, U8) joins the returned rows by segment_id in Go.
+// Read-only. Hand-written (sqlc generate is broken in this repo).
+func (q *Queries) ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, projectID string) ([]InteractionDAGEnvSnapshot, error) {
+	rows, err := q.db.Query(ctx, listInteractionDAGEnvSnapshotsForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDAGEnvSnapshot{}
+	for rows.Next() {
+		var i InteractionDAGEnvSnapshot
+		if err := rows.Scan(
+			&i.SegmentID,
+			&i.SandboxIDs,
+			&i.IssueSnapshotID,
+			&i.EnvState,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

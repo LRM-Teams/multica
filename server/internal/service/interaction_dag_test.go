@@ -110,6 +110,93 @@ func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByAgentRun(_ context.C
 	return db.InteractionDAGSegment{}, pgx.ErrNoRows
 }
 
+// ListInteractionDAGSegmentsForProject satisfies InteractionDAGStore (U8
+// assembly). Returns segments recorded for projectID, ordered by insertion
+// order (the fake appends; the real query orders by created_at). Converts the
+// stored insert params to InteractionDAGSegment row structs.
+func (f *fakeInteractionDAGStore) ListInteractionDAGSegmentsForProject(_ context.Context, projectID string) ([]db.InteractionDAGSegment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []db.InteractionDAGSegment{}
+	for _, s := range f.segmentSnapshots {
+		if s.ProjectID != projectID {
+			continue
+		}
+		out = append(out, db.InteractionDAGSegment{
+			SegmentID:                 s.SegmentID,
+			ProjectID:                 s.ProjectID,
+			AgentRunID:                s.AgentRunID,
+			IssueID:                   s.IssueID,
+			TaskID:                    s.TaskID,
+			TrajectoryID:              s.TrajectoryID,
+			TensorRef:                 s.TensorRef,
+			ClosingEvent:              s.ClosingEvent,
+			ClosingEventTargetSegment: s.ClosingEventTargetSegment,
+		})
+	}
+	return out, nil
+}
+
+// ListInteractionDAGEdgesForProject satisfies InteractionDAGStore (U8 assembly).
+// Returns edges recorded for projectID in insertion order (real query orders by
+// id). Converts insert params to InteractionDAGEdge row structs.
+func (f *fakeInteractionDAGStore) ListInteractionDAGEdgesForProject(_ context.Context, projectID string) ([]db.InteractionDAGEdge, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []db.InteractionDAGEdge{}
+	for i, e := range f.edges {
+		if e.ProjectID != projectID {
+			continue
+		}
+		out = append(out, db.InteractionDAGEdge{
+			ID:           int64(i + 1), // stable synthetic id mirroring bigserial ordering
+			ProjectID:    e.ProjectID,
+			SrcSegmentID: e.SrcSegmentID,
+			DstSegmentID: e.DstSegmentID,
+			Type:         e.Type,
+		})
+	}
+	return out, nil
+}
+
+// ListInteractionDAGSessionRunsForProject satisfies InteractionDAGStore (U8
+// assembly). Returns session_run rows for projectID.
+func (f *fakeInteractionDAGStore) ListInteractionDAGSessionRunsForProject(_ context.Context, projectID string) ([]db.InteractionDAGSessionRun, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []db.InteractionDAGSessionRun{}
+	for _, r := range f.sessionRuns {
+		if r.ProjectID != projectID {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// ListInteractionDAGEnvSnapshotsForProject satisfies InteractionDAGStore (U8
+// assembly). Reconstructs env_snapshot rows from the stored segment+snapshot
+// insert params (the fake stores them together via
+// InsertInteractionDAGSegmentWithSnapshot), filtered by projectID. Mirrors the
+// real query's join through interaction_dag_segment on segment_id.
+func (f *fakeInteractionDAGStore) ListInteractionDAGEnvSnapshotsForProject(_ context.Context, projectID string) ([]db.InteractionDAGEnvSnapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []db.InteractionDAGEnvSnapshot{}
+	for _, s := range f.segmentSnapshots {
+		if s.ProjectID != projectID {
+			continue
+		}
+		out = append(out, db.InteractionDAGEnvSnapshot{
+			SegmentID:       s.SegmentID,
+			SandboxIDs:      s.SandboxIDs,
+			IssueSnapshotID: s.IssueSnapshotID,
+			EnvState:        s.EnvState,
+		})
+	}
+	return out, nil
+}
+
 var _ InteractionDAGStore = (*fakeInteractionDAGStore)(nil)
 
 // fakeArealSegmentClient is an in-memory ArealSegmentClient for unit tests.
@@ -615,4 +702,234 @@ func TestInteractionDAGQueries_Integration(t *testing.T) {
 		ProjectID: "int-proj", SrcSegmentID: segID, DstSegmentID: "int-other", Type: "handoff",
 	})
 	require.Error(t, err, "bad edge type must violate the CHECK constraint")
+}
+
+// --- AssembleAssembledDag (U8) integration tests against real Postgres ---
+
+// assembleDAGTestService wires an InteractionDAGService backed by a real
+// *db.Queries on the given tx (assembly is read-only and never touches the
+// arealrl bridge, so a nil client is safe). Mirrors the
+// TestInteractionDAGQueries_Integration pattern.
+func assembleDAGTestService(t *testing.T) (*InteractionDAGService, *db.Queries, context.Context, pgx.Tx) {
+	t.Helper()
+	pool := interactionDAGTestPool(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	// t.Cleanup is LIFO: register pool.Close() first so tx.Rollback runs first
+	// (releasing the tx's connection) and pool.Close() does not block on a
+	// connection still held by an open tx. Mirrors the defer order in
+	// TestInteractionDAGQueries_Integration.
+	t.Cleanup(func() { pool.Close() })
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	q := db.New(tx)
+	return NewInteractionDAGService(q, nil, true), q, ctx, tx
+}
+
+// TestAssembleAssembledDag_ProjectsRecordedRows verifies the read-only assembly
+// reads back recorded segment/edge/env_snapshot/session_run rows for a project
+// and projects them into AssembledDag with EXACTLY the SegmentSpec fields
+// (segment_id, agent_run_id, issue_id, trajectory_id, tensor_ref,
+// closing_event, env_snapshot) - no judge scores, no turn indices, no message
+// text cross this boundary. Real Postgres, tx-rollback (hermetic).
+func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
+	svc, q, ctx, _ := assembleDAGTestService(t)
+
+	const proj = "asm-proj-1"
+	// Seed a session_run + a segment with its 1:1 env_snapshot.
+	require.NoError(t, q.UpsertInteractionDAGSessionRun(ctx, db.UpsertInteractionDAGSessionRunParams{
+		SessionID: "asm-sess-1", ProjectID: proj, AgentRunID: "asm-run-1", IssueID: ptrText("asm-issue-1"),
+	}))
+	require.NoError(t, q.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
+		SegmentID: "asm-sess-1-10", ProjectID: proj, AgentRunID: "asm-run-1",
+		IssueID: ptrText("asm-issue-1"), TrajectoryID: 10,
+		TensorRef:    []byte(`{"input_ids":{"shard_id":"sh-1","node_addr":"10.0.0.1:8000"}}`),
+		ClosingEvent: ptrText("delegation"),
+		SandboxIDs:   []byte(`["sbx-1"]`), IssueSnapshotID: ptrText("snap-1"),
+		EnvState: []byte(`{"k":"v"}`),
+	}))
+
+	dag, err := svc.AssembleAssembledDag(ctx, proj)
+	require.NoError(t, err)
+
+	// session_to_agent_run mapping is assembled from session_run rows.
+	assert.Equal(t, map[string]string{"asm-sess-1": "asm-run-1"}, dag.SessionToAgentRun)
+
+	// Exactly one segment, carrying the SegmentSpec fields.
+	require.Len(t, dag.Segments, 1)
+	seg := dag.Segments[0]
+	assert.Equal(t, "asm-sess-1-10", seg.SegmentID)
+	assert.Equal(t, "asm-run-1", seg.AgentRunID)
+	assert.Equal(t, "asm-issue-1", seg.IssueID)
+	assert.EqualValues(t, 10, seg.TrajectoryID)
+	assert.JSONEq(t, `{"input_ids":{"shard_id":"sh-1","node_addr":"10.0.0.1:8000"}}`, string(seg.TensorRef))
+	require.NotNil(t, seg.ClosingEvent, "closing_event must be present (non-NULL)")
+	assert.Equal(t, "delegation", *seg.ClosingEvent)
+
+	// env_snapshot reconstructed from the three env_snapshot columns.
+	assert.JSONEq(t, `["sbx-1"]`, string(seg.EnvSnapshot.SandboxIDs))
+	require.NotNil(t, seg.EnvSnapshot.IssueSnapshotID)
+	assert.Equal(t, "snap-1", *seg.EnvSnapshot.IssueSnapshotID)
+	assert.JSONEq(t, `{"k":"v"}`, string(seg.EnvSnapshot.EnvState))
+
+	// NO judge scores, NO turn indices, NO message text: marshal the segment and
+	// confirm none of the banned SegmentSpec keys leak through (the struct must
+	// carry EXACTLY the 7 keys AReaL's SegmentSpec(**s) accepts - extras would
+	// TypeError at parse time on the areal side).
+	raw, err := json.Marshal(seg)
+	require.NoError(t, err)
+	var segKeys map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &segKeys))
+	expectedSegKeys := map[string]bool{
+		"segment_id": true, "agent_run_id": true, "issue_id": true,
+		"trajectory_id": true, "tensor_ref": true, "closing_event": true,
+		"env_snapshot": true,
+	}
+	assert.Equal(t, expectedSegKeys, keysOf(segKeys), "segment JSON keys must match SegmentSpec exactly")
+	for _, banned := range []string{"judge_scores", "start_turn_idx", "end_turn_idx", "text", "messages"} {
+		_, ok := segKeys[banned]
+		assert.False(t, ok, "segment must not carry banned key %q", banned)
+	}
+
+	// Edge JSON keys must match EdgeSpec exactly (src_segment_id, dst_segment_id,
+	// type, branch_from_segment_id, branch_from_checkpoint_id).
+	if len(dag.Edges) == 0 {
+		// No edges seeded in this test; verify the struct shape directly via a
+		// zero-value edge marshal so the contract is still asserted here.
+		raw, err := json.Marshal(AssembledEdge{})
+		require.NoError(t, err)
+		var edgeKeys map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &edgeKeys))
+		expectedEdgeKeys := map[string]bool{
+			"src_segment_id": true, "dst_segment_id": true, "type": true,
+			"branch_from_segment_id": true, "branch_from_checkpoint_id": true,
+		}
+		assert.Equal(t, expectedEdgeKeys, keysOf(edgeKeys), "edge JSON keys must match EdgeSpec exactly")
+	}
+}
+
+// TestAssembleAssembledDag_EdgesTypedAndAcyclic verifies assembled edges carry
+// types in {delegation, mention, completion} and the recorded segment graph is
+// acyclic (a DAG). Real Postgres, tx-rollback (hermetic).
+func TestAssembleAssembledDag_EdgesTypedAndAcyclic(t *testing.T) {
+	svc, q, ctx, _ := assembleDAGTestService(t)
+
+	const proj = "asm-proj-2"
+	// Seed three segments for the project: seg-a -> seg-b -> seg-c (acyclic).
+	for _, s := range []struct {
+		segID, runID string
+		trajID       int64
+		closing      string
+	}{
+		{"asm-seg-a", "asm-run-a", 1, "delegation"},
+		{"asm-seg-b", "asm-run-b", 2, "mention"},
+		{"asm-seg-c", "asm-run-c", 3, ""}, // leaf: closing_event NULL
+	} {
+		require.NoError(t, q.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
+			SegmentID: s.segID, ProjectID: proj, AgentRunID: s.runID,
+			IssueID: ptrText("iss"), TrajectoryID: s.trajID,
+			TensorRef: []byte(`{"input_ids":{"shard_id":"sh","node_addr":"h:1"}}`),
+			ClosingEvent: func() pgtype.Text {
+				if s.closing == "" {
+					return pgtype.Text{}
+				}
+				return ptrText(s.closing)
+			}(),
+			SandboxIDs: []byte(`[]`), EnvState: []byte(`{}`),
+		}))
+	}
+	// Typed edges forming an acyclic graph: a->b (delegation), b->c (mention),
+	// a->c (completion).
+	seedEdges := []db.InsertInteractionDAGEdgeParams{
+		{ProjectID: proj, SrcSegmentID: "asm-seg-a", DstSegmentID: "asm-seg-b", Type: EdgeTypeDelegation},
+		{ProjectID: proj, SrcSegmentID: "asm-seg-b", DstSegmentID: "asm-seg-c", Type: EdgeTypeMention},
+		{ProjectID: proj, SrcSegmentID: "asm-seg-a", DstSegmentID: "asm-seg-c", Type: EdgeTypeCompletion},
+	}
+	for _, e := range seedEdges {
+		require.NoError(t, q.InsertInteractionDAGEdge(ctx, e))
+	}
+
+	dag, err := svc.AssembleAssembledDag(ctx, proj)
+	require.NoError(t, err)
+
+	// All three edge types present and each is one of the allowed values.
+	require.Len(t, dag.Edges, 3)
+	seenTypes := map[string]bool{}
+	for _, e := range dag.Edges {
+		assert.Contains(t, []string{EdgeTypeDelegation, EdgeTypeMention, EdgeTypeCompletion}, e.Type,
+			"edge type must be one of delegation/mention/completion")
+		seenTypes[e.Type] = true
+		// Branch provenance is change 2 (MCTS); nil for now but fields present.
+		assert.Nil(t, e.BranchFromSegmentID, "branch_from_segment_id must be nil pre-MCTS")
+		assert.Nil(t, e.BranchFromCheckpointID, "branch_from_checkpoint_id must be nil pre-MCTS")
+	}
+	assert.Len(t, seenTypes, 3, "all three edge types must appear")
+
+	// The assembled segment graph must be acyclic (Kahn's topological sort).
+	assert.True(t, dagIsAcyclic(dag), "assembled graph must be acyclic")
+
+	// Sanity: a self-loop or back-edge would make the graph cyclic. Seed a
+	// back-edge c->a and re-assemble; the graph must now be cyclic.
+	require.NoError(t, q.InsertInteractionDAGEdge(ctx, db.InsertInteractionDAGEdgeParams{
+		ProjectID: proj, SrcSegmentID: "asm-seg-c", DstSegmentID: "asm-seg-a", Type: EdgeTypeCompletion,
+	}))
+	dag2, err := svc.AssembleAssembledDag(ctx, proj)
+	require.NoError(t, err)
+	assert.False(t, dagIsAcyclic(dag2), "graph with a back-edge must be cyclic")
+}
+
+// dagIsAcyclic reports whether the assembled DAG's segment graph is acyclic,
+// via Kahn's topological sort: count in-degrees, repeatedly remove zero-in-degree
+// nodes, and check all nodes are drained. A cycle leaves nodes with in-degree > 0.
+func dagIsAcyclic(dag AssembledDag) bool {
+	nodes := make(map[string]int, len(dag.Segments))
+	for _, s := range dag.Segments {
+		nodes[s.SegmentID] = 0
+	}
+	for _, e := range dag.Edges {
+		// Only count edges between known segment nodes; edges to unrecorded
+		// endpoints are best-effort (validated elsewhere) and ignored here.
+		if _, ok := nodes[e.SrcSegmentID]; !ok {
+			continue
+		}
+		if _, ok := nodes[e.DstSegmentID]; !ok {
+			continue
+		}
+		nodes[e.DstSegmentID]++
+	}
+	// Seed the queue with zero-in-degree nodes.
+	queue := make([]string, 0, len(nodes))
+	for n, deg := range nodes {
+		if deg == 0 {
+			queue = append(queue, n)
+		}
+	}
+	drained := 0
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		drained++
+		for _, e := range dag.Edges {
+			if e.SrcSegmentID != n {
+				continue
+			}
+			if _, ok := nodes[e.DstSegmentID]; !ok {
+				continue
+			}
+			nodes[e.DstSegmentID]--
+			if nodes[e.DstSegmentID] == 0 {
+				queue = append(queue, e.DstSegmentID)
+			}
+		}
+	}
+	return drained == len(nodes)
+}
+
+// keysOf returns the set of keys in a JSON object (for exact-key assertions).
+func keysOf(m map[string]json.RawMessage) map[string]bool {
+	out := make(map[string]bool, len(m))
+	for k := range m {
+		out[k] = true
+	}
+	return out
 }

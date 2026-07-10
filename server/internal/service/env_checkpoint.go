@@ -18,18 +18,58 @@ const (
 	EnvCheckpointSaveTimedOut EnvCheckpointStatus = "timed_out"
 )
 
+// ResumeTrigger names the in-flight agent task/runtime to re-engage on resume.
+// Captured at checkpoint-create time (server-side resolved from the project's
+// in-flight task) and executed by ResumeFromCheckpoint after the sandbox
+// containers resume, so a resumed rollout continues its task from the
+// checkpointed state instead of stalling on a sandbox with no agent runtime.
+type ResumeTrigger struct {
+	TaskID        string `json:"task_id"`
+	RuntimeID     string `json:"runtime_id"`
+	AgentID       string `json:"agent_id"`
+	IssueID       string `json:"issue_id,omitempty"`
+	ChatSessionID string `json:"chat_session_id,omitempty"`
+	ProjectID     string `json:"project_id"`
+	Kind          string `json:"kind"` // "issue" | "chat"
+}
+
+// TriggerStatus reports whether ResumeFromCheckpoint re-engaged the agent runtime.
+type TriggerStatus string
+
+const (
+	TriggerExecuted      TriggerStatus = "executed"
+	TriggerSkippedLegacy TriggerStatus = "skipped_legacy"
+	TriggerFailed        TriggerStatus = "failed"
+)
+
+// InFlightTaskResolver resolves a project's in-flight (running/dispatched)
+// agent tasks at checkpoint-create time so the resume-trigger descriptor can be
+// populated server-side (the caller does not know multica-internal task ids).
+type InFlightTaskResolver interface {
+	ListInFlightTasksForProject(ctx context.Context, workspaceID, projectID string) ([]ResumeTrigger, error)
+}
+
+// ResumeAgentRunner re-activates an existing in-flight task against its resumed
+// agent_runtime. Mirrors SandboxInstanceResumer injection. A nil runner is a
+// loud error for non-empty triggers (resume without a runner would silently
+// no-op and return a handle AReaL cannot actually use).
+type ResumeAgentRunner interface {
+	ResumeAgentRun(ctx context.Context, trigger ResumeTrigger) error
+}
+
 // EnvCheckpointCreateInput is the service-layer input for creating a checkpoint.
 type EnvCheckpointCreateInput struct {
-	WorkspaceID  string
-	ProjectID    string
-	EventRef     string
-	Kind         string
-	EnvIDMap     map[string]string
-	SandboxRefs  []SandboxInstanceRef
-	DBSnapshot   json.RawMessage
-	EntropyScore *float64
-	ActorUserID  string
-	SaveTimeout  time.Duration
+	WorkspaceID   string
+	ProjectID     string
+	EventRef      string
+	Kind          string
+	EnvIDMap      map[string]string
+	SandboxRefs   []SandboxInstanceRef
+	DBSnapshot    json.RawMessage
+	ResumeTrigger json.RawMessage
+	EntropyScore  *float64
+	ActorUserID   string
+	SaveTimeout   time.Duration
 }
 
 // EnvCheckpoint is a snapshot of an env_checkpoint row.
@@ -42,6 +82,7 @@ type EnvCheckpoint struct {
 	EnvIDMap      map[string]string
 	SandboxRefs   []SandboxInstanceRef
 	DBSnapshot    json.RawMessage
+	ResumeTrigger json.RawMessage
 	EntropyScore  *float64
 	SaveTimeoutMs int
 	SaveStatus    EnvCheckpointStatus
@@ -80,31 +121,37 @@ type ProjectSnapshotReader interface {
 }
 
 // ResumeFromCheckpointResult is the continuation handle returned by
-// ResumeFromCheckpoint. AReaL uses RolloutHandle to re-enter the rollout.
+// ResumeFromCheckpoint. AReaL uses RolloutHandle to re-enter the rollout;
+// TriggerStatus reports whether the agent runtime was re-engaged.
 type ResumeFromCheckpointResult struct {
 	CheckpointID  string
 	ProjectID     string
 	EnvIDMap      map[string]string
 	SandboxRefs   []SandboxInstanceRef
 	RolloutHandle string
+	TriggerStatus TriggerStatus
 }
 
 // EnvCheckpointService orchestrates checkpoint creation, save, and retrieval.
 type EnvCheckpointService struct {
-	repo     EnvCheckpointRepository
-	saver    SandboxInstanceSaver
-	resumer  SandboxInstanceResumer
-	snapshot ProjectSnapshotReader
+	repo        EnvCheckpointRepository
+	saver       SandboxInstanceSaver
+	resumer     SandboxInstanceResumer
+	snapshot    ProjectSnapshotReader
+	inFlight    InFlightTaskResolver
+	resumeAgent ResumeAgentRunner
 }
 
-func NewEnvCheckpointService(repo EnvCheckpointRepository, saver SandboxInstanceSaver, resumer SandboxInstanceResumer, snapshot ProjectSnapshotReader) *EnvCheckpointService {
-	return &EnvCheckpointService{repo: repo, saver: saver, resumer: resumer, snapshot: snapshot}
+func NewEnvCheckpointService(repo EnvCheckpointRepository, saver SandboxInstanceSaver, resumer SandboxInstanceResumer, snapshot ProjectSnapshotReader, inFlight InFlightTaskResolver, resumeAgent ResumeAgentRunner) *EnvCheckpointService {
+	return &EnvCheckpointService{repo: repo, saver: saver, resumer: resumer, snapshot: snapshot, inFlight: inFlight, resumeAgent: resumeAgent}
 }
 
 // Create records a checkpoint candidate, saves each sandbox instance with the
 // configured timeout, then persists the terminal save status. A save that
 // exceeds the timeout records timed_out; a save error records failed; all
-// saves completing records complete.
+// saves completing records complete. The resume-trigger descriptor is resolved
+// server-side from the project's in-flight task (D5) so the caller does not
+// need to know multica-internal task ids.
 func (s *EnvCheckpointService) Create(ctx context.Context, in EnvCheckpointCreateInput) (EnvCheckpoint, error) {
 	if in.WorkspaceID == "" || in.ProjectID == "" {
 		return EnvCheckpoint{}, fmt.Errorf("validation_failed: workspace_id and project_id are required")
@@ -123,6 +170,24 @@ func (s *EnvCheckpointService) Create(ctx context.Context, in EnvCheckpointCreat
 		return EnvCheckpoint{}, fmt.Errorf("capture project snapshot: %w", err)
 	}
 	in.DBSnapshot = snapshot
+
+	// Resolve the resume-trigger descriptor server-side from the project's
+	// in-flight (running/dispatched) task. v1 captures a single descriptor
+	// (group_size=1); a project with no in-flight task yields an empty trigger,
+	// which degrades to sandbox-only resume (legacy) on ResumeFromCheckpoint.
+	if s.inFlight != nil {
+		triggers, err := s.inFlight.ListInFlightTasksForProject(ctx, in.WorkspaceID, in.ProjectID)
+		if err != nil {
+			return EnvCheckpoint{}, fmt.Errorf("resolve in-flight tasks: %w", err)
+		}
+		if len(triggers) > 0 {
+			raw, err := json.Marshal(triggers[0])
+			if err != nil {
+				return EnvCheckpoint{}, fmt.Errorf("marshal resume_trigger: %w", err)
+			}
+			in.ResumeTrigger = raw
+		}
+	}
 
 	cp, err := s.repo.CreateCheckpoint(ctx, in, EnvCheckpointSavePending, "")
 	if err != nil {
@@ -166,7 +231,7 @@ func (s *EnvCheckpointService) List(ctx context.Context, workspaceID, projectID 
 // ResumeFromCheckpoint loads a checkpoint, requires save_status == complete,
 // resumes each sandbox instance, and returns a continuation handle. Incomplete
 // (pending/timed_out/failed) checkpoints are rejected without enqueueing any
-// resume jobs. A missing resumer is a loud error — resume without a resumer
+// resume jobs. A missing resumer is a loud error - resume without a resumer
 // would silently no-op and return a handle AReaL cannot actually use.
 func (s *EnvCheckpointService) ResumeFromCheckpoint(ctx context.Context, workspaceID, checkpointID, actorUserID string) (ResumeFromCheckpointResult, error) {
 	if s.resumer == nil {

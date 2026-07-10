@@ -24,4 +24,11 @@ describe("agentColor", () => {
     expect(() => agentColor("")).not.toThrow();
     expect(agentColor("")).toEqual(agentColor(""));
   });
+
+  it("treats null/undefined like an empty id (no throw mid-render)", () => {
+    expect(() => agentColor(null)).not.toThrow();
+    expect(() => agentColor(undefined)).not.toThrow();
+    expect(agentColor(null)).toEqual(agentColor(""));
+    expect(agentColor(undefined)).toEqual(agentColor(""));
+  });
 });

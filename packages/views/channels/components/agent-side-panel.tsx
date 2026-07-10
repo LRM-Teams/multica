@@ -10,6 +10,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
 import { AgentPresenceStatusLine } from "../../agents/components/agent-presence-status-line";
+import { agentColor } from "../../common/agent-color";
 import { initialsOf } from "../../common/initials";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
@@ -48,7 +49,7 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
 
   return (
     <aside className="flex h-full min-h-0 flex-col border-l bg-background">
-      <div className="flex items-start justify-between gap-3 border-b p-4">
+      <div className="flex items-center justify-between gap-3 border-b p-4">
         <div className="flex min-w-0 items-center gap-2.5">
           <ActorAvatarBase
             name={displayName}
@@ -56,13 +57,13 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
             avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
             isAgent
             size={32}
-            className="rounded-md"
+            tint={agentColor(agent.id)}
           />
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">{displayName}</p>
-            {/* #371: live presence at the top of the panel, so the state is
-                visible before opening the Activity tab. */}
-            <AgentPresenceStatusLine agentId={agent.id} className="mt-0.5" />
+          {/* #371: name + live presence tight together (matches DM header /
+              profile hover card). Visible before opening the Activity tab. */}
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="min-w-0 truncate text-sm font-semibold">{displayName}</p>
+            <AgentPresenceStatusLine agentId={agent.id} className="max-w-[9rem]" />
           </div>
         </div>
         <Button

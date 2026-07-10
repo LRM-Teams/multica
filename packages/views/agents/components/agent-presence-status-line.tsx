@@ -1,22 +1,22 @@
 "use client";
 
-import { Skeleton } from "@multica/ui/components/ui/skeleton";
-import { cn } from "@multica/ui/lib/utils";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { useAgentPresenceDetail } from "@multica/core/agents";
-import { useT } from "../../i18n";
-import { formatPresenceStatus, presenceStatusVisual } from "../presence";
+import { useAgentLiveStatus } from "../use-agent-live-status";
+import { AgentLiveStatusMark } from "./agent-live-status-mark";
 
 /**
- * A compact live-presence line (status icon + localized word) for an agent —
- * the SAME token rule + word table + visual as the hover card / live-peek
- * "RECENT ACTIVITY" header (see presence.ts), so a DM/panel header can never
- * drift from the avatar dot or the popover. #371 fast layer: shows presence
- * (Starting up / Online / Idle / …); the realtime activity word
- * (Thinking / Writing…) lands with #302's event stream on the same source.
+ * Live name-row status for an agent, wired for header call sites
+ * (DM header, side panel, live peek).
  *
- * Renders a subtle skeleton while presence is loading/unknown rather than
- * collapsing, so the header height stays stable.
+ * Data: `useAgentLiveStatus` — stage word when a task is active
+ * (Thinking / Running a command / Queued…), coarse presence when idle
+ * (Idle / Offline / …). Same source as the profile hover card.
+ *
+ * Visual: `AgentLiveStatusMark` — coloured dot + word (never a Lucide
+ * icon), so headers cannot drift from the hover card.
+ *
+ * Shows a skeleton while status is still resolving so header height stays
+ * stable.
  */
 export function AgentPresenceStatusLine({
   agentId,
@@ -25,20 +25,9 @@ export function AgentPresenceStatusLine({
   agentId: string;
   className?: string;
 }) {
-  const { t } = useT("agents");
   const wsId = useWorkspaceId();
-  const presence = useAgentPresenceDetail(wsId, agentId);
-  const label = formatPresenceStatus(presence, t);
-  const visual = presenceStatusVisual(presence);
-
-  if (!label || !visual) {
-    return <Skeleton className={cn("h-3 w-14", className)} />;
-  }
-
+  const status = useAgentLiveStatus(wsId, agentId);
   return (
-    <span className={cn("inline-flex min-w-0 items-center gap-1.5", className)}>
-      <visual.icon className={cn("h-3 w-3 shrink-0", visual.textClass)} />
-      <span className={cn("truncate text-xs", visual.textClass)}>{label}</span>
-    </span>
+    <AgentLiveStatusMark status={status} className={className} showSkeleton />
   );
 }

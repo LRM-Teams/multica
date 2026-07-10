@@ -27,7 +27,9 @@ import {
   resolveActorIdentityPresentation,
   shouldShowActorHandleLabel,
 } from "@multica/core/identity";
+import { AgentLiveStatusMark } from "../agents/components/agent-live-status-mark";
 import { useAgentLiveStatus } from "../agents/use-agent-live-status";
+import { agentColor } from "./agent-color";
 import { useT } from "../i18n/use-t";
 
 type ChannelsT = ReturnType<typeof useT<"channels">>["t"];
@@ -211,7 +213,13 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
           avatarUrl={resolvePublicFileUrl(profile.avatar_url)}
           isAgent={profile.member_type === "agent"}
           size={48}
-          className={profile.member_type === "agent" ? "rounded-md" : "rounded-full"}
+          // Same circle + identity tint as message rows / DM header — do not
+          // square agents here or they drift from every other surface.
+          tint={
+            profile.member_type === "agent"
+              ? agentColor(profile.member_id)
+              : undefined
+          }
         />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
@@ -220,21 +228,7 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
             <span className="min-w-0 truncate text-sm font-semibold text-foreground">
               {displayName}
             </span>
-            {liveStatus ? (
-              <span
-                className={cn(
-                  "inline-flex shrink-0 items-center gap-1 text-xs",
-                  liveStatus.textClass,
-                )}
-                data-testid="agent-live-status"
-              >
-                <span
-                  className={cn("size-1.5 rounded-full", liveStatus.dotClass)}
-                  aria-hidden
-                />
-                {liveStatus.label}
-              </span>
-            ) : null}
+            <AgentLiveStatusMark status={liveStatus} className="shrink-0" />
             {memberRole ? (
               <span className="shrink-0 text-xs text-muted-foreground">
                 {memberRole}

@@ -9,6 +9,7 @@ import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { deriveAgentAvailability } from "@multica/core/agents";
 import type { AgentTask } from "@multica/core/types";
+import { agentColor } from "../../common/agent-color";
 import { workloadConfig } from "../presence";
 import { useT } from "../../i18n";
 
@@ -101,6 +102,7 @@ export function AgentActivityHoverContent({
                 avatarUrl={getActorAvatarUrl("agent", task.agent_id)}
                 isAgent
                 size={18}
+                tint={agentColor(task.agent_id)}
               />
               <span className="flex-1 truncate font-medium">
                 {getActorName("agent", task.agent_id)}

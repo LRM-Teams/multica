@@ -579,6 +579,50 @@ func TestChannelAmbientDispatchNotSkippedForAtMention(t *testing.T) {
 	}
 }
 
+func TestChannelAmbientUnreadPromptKeepsLatestTriggerWhenCursorIsStale(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Ambient Latest Trigger "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "ambient-latest-trigger-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	agent, err := testHandler.Queries.GetAgent(ctx, parseUUID(agentID))
+	if err != nil {
+		t.Fatalf("load agent: %v", err)
+	}
+
+	for i := 0; i < channelContextMessageLimit+3; i++ {
+		if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", fmt.Sprintf("old ambient backlog %02d", i), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+			t.Fatalf("insert old ambient message %d: %v", i, err)
+		}
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "大家一起 @Frank An 打个招呼吧！", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert collective trigger: %v", err)
+	}
+
+	prompt := testHandler.buildChannelAmbientUnreadPromptWithDB(ctx, testHandler.DB, ch, agent, trigger, 0, trigger.Seq)
+	if !strings.Contains(prompt, "大家一起 @Frank An 打个招呼吧！") {
+		t.Fatalf("ambient prompt omitted latest trigger:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "old ambient backlog 00") {
+		t.Fatalf("ambient prompt kept oldest backlog instead of latest window:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "unless the user explicitly asks everyone/all agents to greet or respond to a mentioned person") {
+		t.Fatalf("ambient prompt did not include explicit requested-mention exception:\n%s", prompt)
+	}
+}
+
 func TestChannelAmbientGateSerializesConcurrentSameAgentAmbient(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

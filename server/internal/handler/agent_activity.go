@@ -481,12 +481,7 @@ func (h *Handler) queryAgentActivityRows(ctx context.Context, reqCtx agentActivi
 	if queryLimit > agentActivityMaxLimit*3+1 {
 		queryLimit = agentActivityMaxLimit*3 + 1
 	}
-	rows, err := h.DB.Query(ctx, agentActivityUnionSQL+`
-		SELECT *
-		FROM activity
-		WHERE ($3::timestamptz IS NULL OR (created_at, kind, id) < ($3::timestamptz, $4::text, $5::uuid))
-		ORDER BY created_at DESC, kind DESC, id DESC
-		LIMIT $6`, parseUUID(reqCtx.workspaceID), reqCtx.agent.ID, nullableTimeArg(beforeAt), nullableTextArg(beforeKind), nullableUUIDArg(beforeID), queryLimit)
+	rows, err := h.DB.Query(ctx, agentActivityListSQL, parseUUID(reqCtx.workspaceID), reqCtx.agent.ID, nullableTimeArg(beforeAt), nullableTextArg(beforeKind), nullableUUIDArg(beforeID), queryLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -511,6 +506,114 @@ func (h *Handler) queryAgentActivityRow(ctx context.Context, reqCtx agentActivit
 		LIMIT 1`, parseUUID(reqCtx.workspaceID), reqCtx.agent.ID, activityID)
 	return scanAgentActivityRow(row)
 }
+
+const agentActivityListSQL = `
+	WITH run_candidates AS (
+		SELECT atq.*
+		FROM agent_task_queue atq
+		WHERE atq.agent_id = $2
+		  AND ($3::timestamptz IS NULL OR (atq.created_at, 'run'::text, atq.id) < ($3::timestamptz, $4::text, $5::uuid))
+		ORDER BY atq.created_at DESC, 'run'::text DESC, atq.id DESC
+		LIMIT $6
+	),
+	event_candidates AS (
+		SELECT aae.*
+		FROM agent_activity_event aae
+		WHERE aae.workspace_id = $1
+		  AND aae.agent_id = $2
+		  AND ($3::timestamptz IS NULL OR (aae.created_at, aae.event_kind, aae.id) < ($3::timestamptz, $4::text, $5::uuid))
+		ORDER BY aae.created_at DESC, aae.event_kind DESC, aae.id DESC
+		LIMIT $6
+	),
+	activity AS (
+		SELECT
+			'run'::text AS kind,
+			atq.id,
+			atq.agent_id,
+			atq.runtime_id,
+			atq.issue_id,
+			atq.chat_session_id,
+			NULL::text AS event_type,
+			NULL::text AS severity,
+			NULL::text AS target_kind,
+			NULL::uuid AS target_id,
+			NULL::text AS target_slug,
+			NULL::text AS reason_code,
+			NULL::text AS message,
+			'{}'::jsonb AS details,
+			atq.status,
+			atq.trigger_summary,
+			atq.result,
+			atq.failure_reason,
+			atq.created_at,
+			atq.started_at,
+			atq.completed_at,
+			COALESCE(steps.step_count, 0)::bigint AS step_count,
+			COALESCE(usage.usage_json, '[]'::jsonb) AS usage_json,
+			result_message.id AS result_message_id,
+			result_message.kind AS result_message_kind
+		FROM run_candidates atq
+		LEFT JOIN LATERAL (
+			SELECT count(*)::bigint AS step_count
+			FROM task_message tm
+			WHERE tm.task_id = atq.id
+		) steps ON true
+		LEFT JOIN LATERAL (
+			SELECT jsonb_agg(jsonb_build_object(
+				       'provider', provider,
+				       'model', model,
+				       'input_tokens', input_tokens,
+				       'output_tokens', output_tokens,
+				       'cache_read_tokens', cache_read_tokens,
+				       'cache_write_tokens', cache_write_tokens
+			       ) ORDER BY provider, model) AS usage_json
+			FROM task_usage tu
+			WHERE tu.task_id = atq.id
+		) usage ON true
+		LEFT JOIN LATERAL (
+			SELECT cm.id, 'chat_message'::text AS kind
+			FROM chat_message cm
+			WHERE cm.task_id = atq.id
+			  AND cm.role = 'assistant'
+			  AND cm.content <> ''
+			ORDER BY cm.created_at DESC
+			LIMIT 1
+		) result_message ON true
+
+		UNION ALL
+
+		SELECT
+			aae.event_kind AS kind,
+			aae.id,
+			aae.agent_id,
+			aae.runtime_id,
+			NULL::uuid AS issue_id,
+			NULL::uuid AS chat_session_id,
+			aae.event_type,
+			aae.severity,
+			aae.target_kind,
+			aae.target_id,
+			aae.target_slug,
+			aae.reason_code,
+			aae.message,
+			aae.details,
+			NULL::text AS status,
+			NULL::text AS trigger_summary,
+			NULL::jsonb AS result,
+			NULL::text AS failure_reason,
+			aae.created_at,
+			NULL::timestamptz AS started_at,
+			NULL::timestamptz AS completed_at,
+			0::bigint AS step_count,
+			'[]'::jsonb AS usage_json,
+			NULL::uuid AS result_message_id,
+			NULL::text AS result_message_kind
+		FROM event_candidates aae
+	)
+	SELECT *
+	FROM activity
+	ORDER BY created_at DESC, kind DESC, id DESC
+	LIMIT $6`
 
 const agentActivityUnionSQL = `
 	WITH activity AS (

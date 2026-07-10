@@ -45,6 +45,24 @@ func TestBuildEvolutionVersionEvalSummaryHandlesNoOutcomes(t *testing.T) {
 	}
 }
 
+func TestEvolutionMatcherSnapshotRoundTripAndValidation(t *testing.T) {
+	want := EvolutionMatcherSnapshot{
+		CanonicalSummary: "summary", Tags: []string{"tag"}, Tools: []string{}, TaskTypes: []string{"task"},
+		ProjectTypes: []string{}, Languages: []string{"go"}, Frameworks: []string{"chi"},
+	}
+	metadata := metadataWithEvolutionMatcherSnapshot([]byte(`{"source":"test"}`), want)
+	got, err := evolutionMatcherSnapshotFromMetadata(metadata)
+	if err != nil || got.CanonicalSummary != want.CanonicalSummary || !stringSlicesEqual(got.Tags, want.Tags) || !stringSlicesEqual(got.Tools, want.Tools) {
+		t.Fatalf("snapshot=%#v err=%v", got, err)
+	}
+	if _, err := evolutionMatcherSnapshotFromMetadata([]byte(`{"source":"legacy"}`)); !errors.Is(err, ErrEvolutionSkillVersionSnapshot) {
+		t.Fatalf("legacy error=%v, want ErrEvolutionSkillVersionSnapshot", err)
+	}
+	if _, err := evolutionMatcherSnapshotFromMetadata([]byte(`{"matcher_snapshot":{"canonical_summary":"partial"}}`)); !errors.Is(err, ErrEvolutionSkillVersionSnapshot) {
+		t.Fatalf("partial error=%v, want ErrEvolutionSkillVersionSnapshot", err)
+	}
+}
+
 func TestMaterializedEvolutionVersionFiles(t *testing.T) {
 	files := []db.SharedEvolutionUnitFile{
 		{Path: "references/runbook.md", Content: "runbook"},

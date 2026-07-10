@@ -260,6 +260,10 @@ func handleEvolutionSkillVersionError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "evolution skill is not materialized")
 	case errors.Is(err, service.ErrEvolutionSkillVersionIncomplete):
 		writeError(w, http.StatusConflict, "evolution skill version has no SKILL.md")
+	case errors.Is(err, service.ErrEvolutionSkillVersionSnapshot):
+		writeError(w, http.StatusConflict, "evolution skill version has no complete matcher snapshot")
+	case errors.Is(err, service.ErrEvolutionSkillMaterializedDrift):
+		writeError(w, http.StatusConflict, "evolution skill materialized state conflicts with current version")
 	default:
 		writeError(w, http.StatusInternalServerError, "failed to manage evolution skill version")
 	}

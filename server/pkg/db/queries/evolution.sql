@@ -215,3 +215,29 @@ RETURNING *;
 SELECT * FROM shared_evolution_unit_file
 WHERE workspace_id = @workspace_id AND unit_id = @unit_id AND version_id = @version_id
 ORDER BY path ASC;
+
+-- name: GetSharedEvolutionUnitCurrentVersionID :one
+SELECT current_version_id
+FROM shared_evolution_unit
+WHERE workspace_id = @workspace_id AND id = @unit_id AND unit_type = 'skill' AND status = 'active';
+
+-- name: RecordEvolutionSkillInjection :exec
+INSERT INTO evolution_unit_feedback_event (
+  workspace_id, agent_id, task_id, unit_type, unit_id, event, outcome, source, metadata
+) VALUES (
+  @workspace_id, @agent_id, @task_id, 'skill', @unit_id, 'injected', '', 'runtime',
+  jsonb_build_object('version_id', @version_id::uuid)
+);
+
+-- name: RecordTaskEvolutionSkillOutcome :exec
+INSERT INTO evolution_unit_feedback_event (
+  workspace_id, agent_id, task_id, unit_type, unit_id, event, outcome, source, metadata
+)
+SELECT DISTINCT workspace_id, agent_id, task_id, unit_type, unit_id,
+       @event::text, @outcome::text, 'runtime',
+       jsonb_build_object('version_id', metadata->>'version_id')
+FROM evolution_unit_feedback_event
+WHERE task_id = @task_id
+  AND unit_type = 'skill'
+  AND event = 'injected'
+  AND COALESCE(metadata->>'version_id', '') <> '';

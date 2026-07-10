@@ -377,12 +377,13 @@ The rollback request must include the version observed by the administrator:
 Rollback behavior:
 
 - Both the unit and target version must belong to the requested workspace, the target version must belong to that unit, and the unit must have `unit_type='skill'`.
-- The unit row is locked with `SELECT ... FOR UPDATE`; a different current version produces `409 Conflict`. Retrying a completed rollback to the same target is a no-op and does not add another audit record.
+- The unit row is locked with `SELECT ... FOR UPDATE`; a different current version produces `409 Conflict`. Retrying a completed rollback to the same target is a no-op only when the unit, linked skill content, and supporting files all still match that version. Drift is transactionally repaired and audited.
+- New promotion versions store a controlled `metadata.matcher_snapshot` containing `canonical_summary`, `tags`, `tools`, `task_types`, `project_types`, `languages`, and `frameworks`. Rollback restores all of these fields; legacy or malformed versions without a complete snapshot fail closed with `409 Conflict` before any state changes.
 - The target must already contain a versioned `SKILL.md`. The transaction updates `shared_evolution_unit.current_version_id` and versioned unit fields, replaces the linked `skill.content` / `skill.description` and `skill_file` rows, refreshes pending agent-skill suggestions, and writes `activity_log.action='evolution_skill_version_rolled_back'`.
 - Existing `agent_skill` assignments are not auto-approved, auto-removed, or auto-enabled by rollback. Only pending suggestions are recalculated.
 - Any failure in materialization, suggestion refresh, or audit logging rolls back the entire database transaction.
 
-Eval summaries use existing `evolution_unit_feedback_event` rows only. Events with `metadata.version_id` equal to the requested version form the preferred basis. If none are explicitly attributed, the response labels the result `unit_lifetime_fallback`, reports the unit-lifetime counts, and explains how many events cannot be assigned to a version. Success rate is `success / (success + failure)` and usage rate is `used / injected`; no external model is called.
+Production task claim records an `injected` feedback event for each evolution-backed skill with the exact current `shared_evolution_unit_version.id`; terminal completion/failure events copy that same version attribution. Eval summaries use existing `evolution_unit_feedback_event` rows only. Events with `metadata.version_id` equal to the requested version form the preferred basis. If none are explicitly attributed, the response labels the result `unit_lifetime_fallback`, reports the unit-lifetime counts, and explains how many events cannot be assigned to a version. Success rate is `success / (success + failure)` and usage rate is `used / injected`; no external model is called.
 
 The implementation uses the existing version, file, feedback, skill, suggestion, assignment, and activity tables. It adds no schema migration.
 

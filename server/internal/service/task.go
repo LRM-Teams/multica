@@ -1487,6 +1487,7 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	}
 
 	slog.Info("task completed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
+	s.recordEvolutionSkillOutcome(ctx, task.ID, "success", "success")
 	s.captureTaskCompleted(ctx, task)
 	// Completion/leaf event seam (D11): close this task's segment before
 	// RouteTerminalTrainingTask ends the RL session (CloseSegmentForEvent exports
@@ -1734,6 +1735,7 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 	}
 
 	slog.Warn("task failed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID), "error", errMsg, "failure_reason", failureReason)
+	s.recordEvolutionSkillOutcome(ctx, task.ID, "failure", "failure")
 	s.captureTaskFailed(ctx, task)
 	s.RouteTerminalTrainingTask(ctx, task)
 
@@ -2291,6 +2293,12 @@ func (s *TaskService) publishAgentStatus(agent db.Agent) {
 
 // LoadAgentSkills loads an agent's skills with their files for task execution.
 func (s *TaskService) LoadAgentSkills(ctx context.Context, agentID pgtype.UUID) []AgentSkillData {
+	return s.LoadAgentSkillsForTask(ctx, agentID, pgtype.UUID{})
+}
+
+// LoadAgentSkillsForTask records the exact evolution version injected into a
+// production task. Recording is best-effort so feedback telemetry cannot block a claim.
+func (s *TaskService) LoadAgentSkillsForTask(ctx context.Context, agentID, taskID pgtype.UUID) []AgentSkillData {
 	skills, err := s.Queries.ListAgentSkills(ctx, agentID)
 	if err != nil || len(skills) == 0 {
 		return nil
@@ -2309,8 +2317,34 @@ func (s *TaskService) LoadAgentSkills(ctx context.Context, agentID pgtype.UUID) 
 			data.Files = append(data.Files, AgentSkillFileData{Path: f.Path, Content: f.Content})
 		}
 		result = append(result, data)
+		if sk.SourceEvolutionUnitID.Valid {
+			versionID, err := s.Queries.GetSharedEvolutionUnitCurrentVersionID(ctx, db.GetSharedEvolutionUnitCurrentVersionIDParams{
+				WorkspaceID: sk.WorkspaceID,
+				UnitID:      sk.SourceEvolutionUnitID,
+			})
+			if err != nil || !versionID.Valid {
+				continue
+			}
+			if err := s.Queries.RecordEvolutionSkillInjection(ctx, db.RecordEvolutionSkillInjectionParams{
+				WorkspaceID: sk.WorkspaceID,
+				AgentID:     agentID,
+				TaskID:      taskID,
+				UnitID:      sk.SourceEvolutionUnitID,
+				VersionID:   versionID,
+			}); err != nil {
+				slog.Warn("record evolution skill injection failed", "task_id", util.UUIDToString(taskID), "unit_id", util.UUIDToString(sk.SourceEvolutionUnitID), "error", err)
+			}
+		}
 	}
 	return result
+}
+
+func (s *TaskService) recordEvolutionSkillOutcome(ctx context.Context, taskID pgtype.UUID, event, outcome string) {
+	if err := s.Queries.RecordTaskEvolutionSkillOutcome(ctx, db.RecordTaskEvolutionSkillOutcomeParams{
+		Event: event, Outcome: outcome, TaskID: taskID,
+	}); err != nil {
+		slog.Warn("record evolution skill outcome failed", "task_id", util.UUIDToString(taskID), "event", event, "error", err)
+	}
 }
 
 // AgentSkillData represents a skill for task execution responses.

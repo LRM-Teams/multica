@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -19,6 +20,8 @@ var (
 	ErrEvolutionSkillVersionConflict   = errors.New("evolution skill current version changed")
 	ErrEvolutionSkillNotMaterialized   = errors.New("evolution skill is not materialized")
 	ErrEvolutionSkillVersionIncomplete = errors.New("evolution skill version has no SKILL.md")
+	ErrEvolutionSkillVersionSnapshot   = errors.New("evolution skill version matcher snapshot is missing or invalid")
+	ErrEvolutionSkillMaterializedDrift = errors.New("evolution skill materialized state conflicts with current version")
 )
 
 type EvolutionSkillUnitVersion struct {
@@ -46,6 +49,18 @@ type EvolutionVersionEvalSummary struct {
 	SuccessRate            *float64                       `json:"success_rate,omitempty"`
 	UsageRate              *float64                       `json:"usage_rate,omitempty"`
 	Explanations           []string                       `json:"explanations"`
+}
+
+const evolutionMatcherSnapshotMetadataKey = "matcher_snapshot"
+
+type EvolutionMatcherSnapshot struct {
+	CanonicalSummary string   `json:"canonical_summary"`
+	Tags             []string `json:"tags"`
+	Tools            []string `json:"tools"`
+	TaskTypes        []string `json:"task_types"`
+	ProjectTypes     []string `json:"project_types"`
+	Languages        []string `json:"languages"`
+	Frameworks       []string `json:"frameworks"`
 }
 
 type EvolutionSkillVersionRollbackResult struct {
@@ -244,17 +259,14 @@ func (s *EvolutionVersionService) ApplySkillVersionRollback(ctx context.Context,
 	if err != nil {
 		return EvolutionSkillVersionRollbackResult{}, err
 	}
-	if unit.CurrentVersionID == versionID {
-		skillRow, err := s.getMaterializedSkillForUpdate(ctx, workspaceID, unitID)
-		if err != nil {
-			return EvolutionSkillVersionRollbackResult{}, err
-		}
-		return EvolutionSkillVersionRollbackResult{Unit: unit, Version: version.Version, Skill: skillRow, Changed: false}, nil
-	}
-	if !expectedCurrentVersionID.Valid || unit.CurrentVersionID != expectedCurrentVersionID {
+	if unit.CurrentVersionID != versionID && (!expectedCurrentVersionID.Valid || unit.CurrentVersionID != expectedCurrentVersionID) {
 		return EvolutionSkillVersionRollbackResult{}, ErrEvolutionSkillVersionConflict
 	}
 
+	snapshot, err := evolutionMatcherSnapshotFromMetadata(version.Version.Metadata)
+	if err != nil {
+		return EvolutionSkillVersionRollbackResult{}, err
+	}
 	files, err := s.ListSkillVersionFiles(ctx, workspaceID, unitID, versionID)
 	if err != nil {
 		return EvolutionSkillVersionRollbackResult{}, err
@@ -269,8 +281,17 @@ func (s *EvolutionVersionService) ApplySkillVersionRollback(ctx context.Context,
 	}
 	_, description := skill.ParseSkillFrontmatter(mainContent)
 
+	materializedMatches, err := s.materializedSkillMatchesVersion(ctx, skillRow, description, mainContent, supporting)
+	if err != nil {
+		return EvolutionSkillVersionRollbackResult{}, err
+	}
+	unitMatches := evolutionUnitMatchesVersion(unit, version.Version, snapshot)
+	if unit.CurrentVersionID == versionID && unitMatches && materializedMatches {
+		return EvolutionSkillVersionRollbackResult{Unit: unit, Version: version.Version, Skill: skillRow, Changed: false}, nil
+	}
+
 	fromVersionID := unit.CurrentVersionID
-	unit, err = s.updateSkillUnitVersion(ctx, workspaceID, unitID, version.Version)
+	unit, err = s.updateSkillUnitVersion(ctx, workspaceID, unitID, version.Version, snapshot)
 	if err != nil {
 		return EvolutionSkillVersionRollbackResult{}, err
 	}
@@ -288,6 +309,7 @@ func (s *EvolutionVersionService) ApplySkillVersionRollback(ctx context.Context,
 		"to_version_id":           uuidString(versionID),
 		"to_version":              version.Version.Version,
 		"materialized_file_count": len(supporting) + 1,
+		"repaired_drift":          fromVersionID == versionID,
 	})
 	if _, err := s.queries.CreateActivity(ctx, db.CreateActivityParams{
 		WorkspaceID: workspaceID,
@@ -339,7 +361,7 @@ func (s *EvolutionVersionService) getMaterializedSkillForUpdate(ctx context.Cont
 	return result, err
 }
 
-func (s *EvolutionVersionService) updateSkillUnitVersion(ctx context.Context, workspaceID, unitID pgtype.UUID, version db.SharedEvolutionUnitVersion) (db.SharedEvolutionUnit, error) {
+func (s *EvolutionVersionService) updateSkillUnitVersion(ctx context.Context, workspaceID, unitID pgtype.UUID, version db.SharedEvolutionUnitVersion, snapshot EvolutionMatcherSnapshot) (db.SharedEvolutionUnit, error) {
 	row := s.db.QueryRow(ctx, `
 		UPDATE shared_evolution_unit
 		   SET current_version_id = $3,
@@ -348,6 +370,13 @@ func (s *EvolutionVersionService) updateSkillUnitVersion(ctx context.Context, wo
 		       metadata = $6,
 		       applies = $7,
 		       failure_cases = $8,
+		       canonical_summary = $9,
+		       tags = $10,
+		       tools = $11,
+		       task_types = $12,
+		       project_types = $13,
+		       languages = $14,
+		       frameworks = $15,
 		       updated_at = now()
 		 WHERE id = $1 AND workspace_id = $2 AND unit_type = 'skill'
 		 RETURNING id, workspace_id, unit_type, title, canonical_summary, content, metadata, applies,
@@ -355,8 +384,89 @@ func (s *EvolutionVersionService) updateSkillUnitVersion(ctx context.Context, wo
 		           applicable_agent_types, applicable_projects, priority, score, success_count,
 		           failure_count, ignored_count, conflict_count, last_used_at, status,
 		           current_version_id, created_at, updated_at
-	`, unitID, workspaceID, version.ID, version.Title, version.Content, version.Metadata, version.Applies, version.FailureCases)
+	`, unitID, workspaceID, version.ID, version.Title, version.Content, version.Metadata, version.Applies, version.FailureCases,
+		snapshot.CanonicalSummary, snapshot.Tags, snapshot.Tools, snapshot.TaskTypes, snapshot.ProjectTypes, snapshot.Languages, snapshot.Frameworks)
 	return scanSharedEvolutionUnit(row)
+}
+
+func evolutionMatcherSnapshotFromMetadata(metadata []byte) (EvolutionMatcherSnapshot, error) {
+	var envelope map[string]json.RawMessage
+	if len(metadata) == 0 || json.Unmarshal(metadata, &envelope) != nil {
+		return EvolutionMatcherSnapshot{}, ErrEvolutionSkillVersionSnapshot
+	}
+	raw, ok := envelope[evolutionMatcherSnapshotMetadataKey]
+	if !ok {
+		return EvolutionMatcherSnapshot{}, ErrEvolutionSkillVersionSnapshot
+	}
+	var snapshot EvolutionMatcherSnapshot
+	if json.Unmarshal(raw, &snapshot) != nil || snapshot.Tags == nil || snapshot.Tools == nil || snapshot.TaskTypes == nil ||
+		snapshot.ProjectTypes == nil || snapshot.Languages == nil || snapshot.Frameworks == nil {
+		return EvolutionMatcherSnapshot{}, ErrEvolutionSkillVersionSnapshot
+	}
+	return snapshot, nil
+}
+
+func evolutionUnitMatchesVersion(unit db.SharedEvolutionUnit, version db.SharedEvolutionUnitVersion, snapshot EvolutionMatcherSnapshot) bool {
+	return unit.Title == version.Title && unit.Content == version.Content && jsonBytesEqual(unit.Metadata, version.Metadata) &&
+		jsonBytesEqual(unit.Applies, version.Applies) && jsonBytesEqual(unit.FailureCases, version.FailureCases) &&
+		unit.CanonicalSummary == snapshot.CanonicalSummary && stringSlicesEqual(unit.Tags, snapshot.Tags) &&
+		stringSlicesEqual(unit.Tools, snapshot.Tools) && stringSlicesEqual(unit.TaskTypes, snapshot.TaskTypes) &&
+		stringSlicesEqual(unit.ProjectTypes, snapshot.ProjectTypes) && stringSlicesEqual(unit.Languages, snapshot.Languages) &&
+		stringSlicesEqual(unit.Frameworks, snapshot.Frameworks)
+}
+
+func jsonBytesEqual(left, right []byte) bool {
+	var leftValue, rightValue any
+	return json.Unmarshal(left, &leftValue) == nil && json.Unmarshal(right, &rightValue) == nil && reflect.DeepEqual(leftValue, rightValue)
+}
+
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *EvolutionVersionService) materializedSkillMatchesVersion(ctx context.Context, skillRow db.Skill, description, mainContent string, files []db.SharedEvolutionUnitFile) (bool, error) {
+	if skillRow.Description != description || skillRow.Content != mainContent {
+		return false, nil
+	}
+	rows, err := s.db.Query(ctx, `SELECT path, content FROM skill_file WHERE skill_id = $1 ORDER BY path`, skillRow.ID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	actual := map[string]string{}
+	for rows.Next() {
+		var path, content string
+		if err := rows.Scan(&path, &content); err != nil {
+			return false, err
+		}
+		actual[path] = content
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	expected := map[string]string{}
+	for _, file := range files {
+		if !skill.IsReservedContentPath(file.Path) {
+			expected[file.Path] = file.Content
+		}
+	}
+	if len(actual) != len(expected) {
+		return false, nil
+	}
+	for path, content := range expected {
+		if actual[path] != content {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (s *EvolutionVersionService) replaceMaterializedSkill(ctx context.Context, skillID, workspaceID pgtype.UUID, description, mainContent string, files []db.SharedEvolutionUnitFile) error {

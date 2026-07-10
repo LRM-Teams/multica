@@ -13,6 +13,18 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
+func evolutionVersionMetadata(version, summary string, tags, tools, taskTypes, projectTypes, languages, frameworks []string) string {
+	encoded, _ := json.Marshal(map[string]any{
+		"version": version,
+		"matcher_snapshot": map[string]any{
+			"canonical_summary": summary,
+			"tags":              tags, "tools": tools, "task_types": taskTypes,
+			"project_types": projectTypes, "languages": languages, "frameworks": frameworks,
+		},
+	})
+	return string(encoded)
+}
+
 type evolutionVersionFixture struct {
 	unitID       string
 	currentID    string
@@ -31,26 +43,28 @@ func seedEvolutionVersionFixture(t *testing.T) evolutionVersionFixture {
 	}
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO shared_evolution_unit (
-			workspace_id, unit_type, title, canonical_summary, content, metadata, applies, failure_cases, status
-		) VALUES ($1, 'skill', 'Versioned Skill', 'summary', 'current unit content', '{}'::jsonb, '{}'::jsonb, '[]'::jsonb, 'active')
+			workspace_id, unit_type, title, canonical_summary, content, metadata, applies, failure_cases, status,
+			tags, tools, task_types, project_types, languages, frameworks
+		) VALUES ($1, 'skill', 'Versioned Skill v2', 'current summary', 'current unit content', $2::jsonb, '{}'::jsonb, '[]'::jsonb, 'active',
+			ARRAY['current-tag'], ARRAY['current-tool'], ARRAY['current-task'], ARRAY['current-project'], ARRAY['go'], ARRAY['chi'])
 		RETURNING id
-	`, testWorkspaceID).Scan(&fixture.unitID); err != nil {
+	`, testWorkspaceID, evolutionVersionMetadata("two", "current summary", []string{"current-tag"}, []string{"current-tool"}, []string{"current-task"}, []string{"current-project"}, []string{"go"}, []string{"chi"})).Scan(&fixture.unitID); err != nil {
 		t.Fatalf("seed unit: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO shared_evolution_unit_version (
 			workspace_id, unit_id, version, title, content, metadata, applies, failure_cases, change_reason, created_by
-		) VALUES ($1, $2, 1, 'Versioned Skill v1', 'rollback unit content', '{"version":"one"}'::jsonb, '{}'::jsonb, '[]'::jsonb, 'initial', 'test')
+		) VALUES ($1, $2, 1, 'Versioned Skill v1', 'rollback unit content', $3::jsonb, '{}'::jsonb, '[]'::jsonb, 'initial', 'test')
 		RETURNING id
-	`, testWorkspaceID, fixture.unitID).Scan(&fixture.rollbackID); err != nil {
+	`, testWorkspaceID, fixture.unitID, evolutionVersionMetadata("one", "rollback summary", []string{"rollback-tag"}, []string{"rollback-tool"}, []string{"rollback-task"}, []string{"rollback-project"}, []string{"rust"}, []string{"axum"})).Scan(&fixture.rollbackID); err != nil {
 		t.Fatalf("seed rollback version: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO shared_evolution_unit_version (
 			workspace_id, unit_id, version, title, content, metadata, applies, failure_cases, change_reason, created_by
-		) VALUES ($1, $2, 2, 'Versioned Skill v2', 'current unit content', '{"version":"two"}'::jsonb, '{}'::jsonb, '[]'::jsonb, 'update', 'test')
+		) VALUES ($1, $2, 2, 'Versioned Skill v2', 'current unit content', $3::jsonb, '{}'::jsonb, '[]'::jsonb, 'update', 'test')
 		RETURNING id
-	`, testWorkspaceID, fixture.unitID).Scan(&fixture.currentID); err != nil {
+	`, testWorkspaceID, fixture.unitID, evolutionVersionMetadata("two", "current summary", []string{"current-tag"}, []string{"current-tool"}, []string{"current-task"}, []string{"current-project"}, []string{"go"}, []string{"chi"})).Scan(&fixture.currentID); err != nil {
 		t.Fatalf("seed current version: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `UPDATE shared_evolution_unit SET current_version_id=$2 WHERE id=$1`, fixture.unitID, fixture.currentID); err != nil {
@@ -97,6 +111,18 @@ func evolutionVersionRequest(method, path string, body any, unitID, versionID st
 	return withRouteParams(req, "unitId", unitID, "versionId", versionID)
 }
 
+func stringSlicesEqualForTest(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func dbMemberForEvolutionVersionTest() db.Member {
 	return db.Member{Role: "owner", WorkspaceID: parseUUID(testWorkspaceID), UserID: parseUUID(testUserID)}
 }
@@ -131,8 +157,18 @@ func TestEvolutionSkillVersionAPIListGetAndEval(t *testing.T) {
 	if err := json.Unmarshal(getRec.Body.Bytes(), &detail); err != nil {
 		t.Fatalf("decode detail: %v", err)
 	}
-	if detail.ID != fixture.rollbackID || len(detail.Files) != 2 || detail.Eval.Basis != "version_attributed" || detail.Eval.Counts.Success != 1 {
-		t.Fatalf("detail = %#v", detail)
+	if detail.ID != fixture.rollbackID || len(detail.Files) != 2 || detail.Eval.Basis != "version_attributed" || detail.Eval.Counts.Success != 1 || detail.Eval.Counts.Failure != 0 {
+		t.Fatalf("rollback detail = %#v", detail)
+	}
+
+	currentReq := evolutionVersionRequest(http.MethodGet, "/api/evolution/units/"+fixture.unitID+"/versions/"+fixture.currentID, nil, fixture.unitID, fixture.currentID)
+	currentRec := httptest.NewRecorder()
+	testHandler.GetEvolutionSkillVersion(currentRec, currentReq)
+	if currentRec.Code != http.StatusOK {
+		t.Fatalf("current get status=%d body=%s", currentRec.Code, currentRec.Body.String())
+	}
+	if err := json.Unmarshal(currentRec.Body.Bytes(), &detail); err != nil || detail.Eval.Basis != "unit_lifetime_fallback" || detail.Eval.VersionAttributed.Total != 0 || detail.Eval.UnitUnattributedEvents != 1 {
+		t.Fatalf("cross-version current detail=%#v err=%v", detail, err)
 	}
 }
 
@@ -155,18 +191,23 @@ func TestEvolutionSkillVersionRollbackIsTransactionalAndIdempotent(t *testing.T)
 	if !response.Changed || response.CurrentVersionID != fixture.rollbackID {
 		t.Fatalf("rollback response = %#v", response)
 	}
-	var currentID, unitContent, skillContent, description, guide string
+	var currentID, unitContent, skillContent, description, guide, summary string
+	var tags, tools, taskTypes, projectTypes, languages, frameworks []string
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT u.current_version_id::text, u.content, s.content, s.description, sf.content
+		SELECT u.current_version_id::text, u.content, s.content, s.description, sf.content,
+		       u.canonical_summary, u.tags, u.tools, u.task_types, u.project_types, u.languages, u.frameworks
 		FROM shared_evolution_unit u
 		JOIN skill s ON s.source_evolution_unit_id=u.id AND s.workspace_id=u.workspace_id
 		JOIN skill_file sf ON sf.skill_id=s.id AND sf.path='references/guide.md'
 		WHERE u.id=$1
-	`, fixture.unitID).Scan(&currentID, &unitContent, &skillContent, &description, &guide); err != nil {
+	`, fixture.unitID).Scan(&currentID, &unitContent, &skillContent, &description, &guide, &summary, &tags, &tools, &taskTypes, &projectTypes, &languages, &frameworks); err != nil {
 		t.Fatalf("load rollback state: %v", err)
 	}
-	if currentID != fixture.rollbackID || unitContent != "rollback unit content" || skillContent != fixture.rollbackMain || description != "rollback description" || !strings.Contains(guide, fixture.rollbackID) {
-		t.Fatalf("rollback state current=%q unit=%q skill=%q description=%q guide=%q", currentID, unitContent, skillContent, description, guide)
+	if currentID != fixture.rollbackID || unitContent != "rollback unit content" || skillContent != fixture.rollbackMain || description != "rollback description" || !strings.Contains(guide, fixture.rollbackID) ||
+		summary != "rollback summary" || !stringSlicesEqualForTest(tags, []string{"rollback-tag"}) || !stringSlicesEqualForTest(tools, []string{"rollback-tool"}) ||
+		!stringSlicesEqualForTest(taskTypes, []string{"rollback-task"}) || !stringSlicesEqualForTest(projectTypes, []string{"rollback-project"}) ||
+		!stringSlicesEqualForTest(languages, []string{"rust"}) || !stringSlicesEqualForTest(frameworks, []string{"axum"}) {
+		t.Fatalf("rollback state current=%q unit=%q skill=%q description=%q guide=%q summary=%q tags=%v tools=%v task=%v project=%v languages=%v frameworks=%v", currentID, unitContent, skillContent, description, guide, summary, tags, tools, taskTypes, projectTypes, languages, frameworks)
 	}
 	var audits int
 	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM activity_log WHERE action='evolution_skill_version_rolled_back' AND details->>'unit_id'=$1`, fixture.unitID).Scan(&audits); err != nil || audits != 1 {
@@ -184,6 +225,60 @@ func TestEvolutionSkillVersionRollbackIsTransactionalAndIdempotent(t *testing.T)
 	}
 	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM activity_log WHERE action='evolution_skill_version_rolled_back' AND details->>'unit_id'=$1`, fixture.unitID).Scan(&audits); err != nil || audits != 1 {
 		t.Fatalf("idempotent audit count=%d err=%v", audits, err)
+	}
+}
+
+func TestEvolutionSkillVersionAlreadyCurrentRepairsDriftAndAudits(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := seedEvolutionVersionFixture(t)
+	if _, err := testPool.Exec(context.Background(), `UPDATE skill SET content='drifted', description='drifted' WHERE id=$1`, fixture.skillID); err != nil {
+		t.Fatalf("seed skill drift: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `DELETE FROM skill_file WHERE skill_id=$1`, fixture.skillID); err != nil {
+		t.Fatalf("seed file drift: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE shared_evolution_unit SET canonical_summary='drifted', tags=ARRAY['drifted'] WHERE id=$1`, fixture.unitID); err != nil {
+		t.Fatalf("seed unit drift: %v", err)
+	}
+	req := evolutionVersionRequest(http.MethodPost, "/api/evolution/units/"+fixture.unitID+"/versions/"+fixture.currentID+"/rollback", map[string]string{"expected_current_version_id": fixture.currentID}, fixture.unitID, fixture.currentID)
+	rec := httptest.NewRecorder()
+	testHandler.RollbackEvolutionSkillVersion(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("repair status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response evolutionSkillVersionRollbackResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || !response.Changed {
+		t.Fatalf("repair response=%#v err=%v", response, err)
+	}
+	var content, summary string
+	var audits int
+	if err := testPool.QueryRow(context.Background(), `SELECT s.content, u.canonical_summary FROM skill s JOIN shared_evolution_unit u ON u.id=s.source_evolution_unit_id WHERE s.id=$1`, fixture.skillID).Scan(&content, &summary); err != nil || content != fixture.currentMain || summary != "current summary" {
+		t.Fatalf("repaired content=%q summary=%q err=%v", content, summary, err)
+	}
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM activity_log WHERE action='evolution_skill_version_rolled_back' AND details->>'unit_id'=$1 AND details->>'repaired_drift'='true'`, fixture.unitID).Scan(&audits); err != nil || audits != 1 {
+		t.Fatalf("repair audit count=%d err=%v", audits, err)
+	}
+}
+
+func TestEvolutionSkillVersionRollbackLegacySnapshotFailsClosed(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := seedEvolutionVersionFixture(t)
+	if _, err := testPool.Exec(context.Background(), `UPDATE shared_evolution_unit_version SET metadata='{}'::jsonb WHERE id=$1`, fixture.rollbackID); err != nil {
+		t.Fatalf("remove snapshot: %v", err)
+	}
+	req := evolutionVersionRequest(http.MethodPost, "/api/evolution/units/"+fixture.unitID+"/versions/"+fixture.rollbackID+"/rollback", map[string]string{"expected_current_version_id": fixture.currentID}, fixture.unitID, fixture.rollbackID)
+	rec := httptest.NewRecorder()
+	testHandler.RollbackEvolutionSkillVersion(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("legacy snapshot status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var currentID string
+	if err := testPool.QueryRow(context.Background(), `SELECT current_version_id::text FROM shared_evolution_unit WHERE id=$1`, fixture.unitID).Scan(&currentID); err != nil || currentID != fixture.currentID {
+		t.Fatalf("legacy rollback changed current=%q err=%v", currentID, err)
 	}
 }
 

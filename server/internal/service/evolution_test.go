@@ -211,6 +211,8 @@ func (m *evolutionMockDB) Query(_ context.Context, sql string, _ ...interface{})
 			rows = append(rows, evolutionFileValues(file))
 		}
 		return &evolutionMockRows{rows: rows}, nil
+	case strings.Contains(sql, "FROM shared_evolution_unit_file"):
+		return &evolutionMockRows{}, nil
 	case strings.Contains(sql, "FROM shared_evolution_unit"):
 		rows := make([][]any, 0, len(m.activeUnits))
 		for _, unit := range m.activeUnits {

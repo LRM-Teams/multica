@@ -1189,7 +1189,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		// Workspace-bound skills first, then platform built-in skills. Built-in
 		// names carry a "multica-" prefix so their on-disk slugs never collide
 		// with a user-authored workspace skill (see writeSkillFiles).
-		skills := h.TaskService.LoadAgentSkills(r.Context(), task.AgentID)
+		skills := h.TaskService.LoadAgentSkillsForTask(r.Context(), task.AgentID, task.ID)
 		skills = append(skills, h.TaskService.BuiltinSkills()...)
 		var customEnv map[string]string
 		if agent.CustomEnv != nil {

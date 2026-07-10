@@ -78,7 +78,9 @@ DELETE FROM skill_file WHERE skill_id = $1;
 -- Agent-Skill junction
 
 -- name: ListAgentSkills :many
-SELECT s.* FROM skill s
+SELECT s.id, s.workspace_id, s.name, s.description, s.content, s.config,
+       s.created_by, s.created_at, s.updated_at, s.source_evolution_unit_id
+FROM skill s
 JOIN agent_skill ask ON ask.skill_id = s.id
 WHERE ask.agent_id = $1
 ORDER BY s.name ASC;

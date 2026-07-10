@@ -192,6 +192,27 @@ describe("ActivityTimeline", () => {
     expect(screen.queryByRole("button", { name: "Message received" })).toBeNull();
     expect(screen.getByText("Message received")).toBeInTheDocument();
   });
+
+  it("compact mode: shows only the most recent N narrative rows, never a click-to-expand", () => {
+    // Profile Recent (#383): same projection, layout-only delta — last N rows,
+    // single-line truncated subtext, no expand.
+    const many: ActivityEvent[] = Array.from({ length: 7 }, (_, i) => ({
+      id: `m${i}`,
+      agent_id: "agent-1",
+      occurred_at: `2026-07-06T09:3${i}:00Z`,
+      kind: "text",
+      event_type: "text",
+      visibility: "user_facing",
+      text: `Reply ${i}`,
+      target_ref: { kind: "agent", id: "agent-1" },
+    }));
+    render(<ActivityTimeline events={many} compact />);
+    expect(screen.getAllByTestId("activity-row")).toHaveLength(5);
+    expect(screen.queryByRole("button")).toBeNull();
+    // most recent rows kept (m6 present, oldest m0/m1 trimmed)
+    expect(screen.getByText("Reply 6")).toBeInTheDocument();
+    expect(screen.queryByText("Reply 0")).toBeNull();
+  });
 });
 
 describe("formatActivityTime", () => {

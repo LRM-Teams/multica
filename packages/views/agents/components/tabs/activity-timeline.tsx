@@ -19,7 +19,15 @@ const TONE_DOT: Record<ActivityTone, string> = {
   failure: "bg-destructive",
 };
 
-function ActivityRow({ event, time }: { event: ActivityEvent; time: string }) {
+function ActivityRow({
+  event,
+  time,
+  compact = false,
+}: {
+  event: ActivityEvent;
+  time: string;
+  compact?: boolean;
+}) {
   const { t } = useT("agents");
   const [expanded, setExpanded] = useState(false);
   const presentation = activityPresentation(event);
@@ -34,12 +42,17 @@ function ActivityRow({ event, time }: { event: ActivityEvent; time: string }) {
     : presentation.subtext;
   // Thinking and reply Output carry the model's full text (§2.1: collapse to the
   // first line, click to expand the full content block). Fixed / short subtexts
-  // (tool target, reasons, "Message received") stay inline.
+  // (tool target, reasons, "Message received") stay inline. The compact profile
+  // surface never expands — it single-line truncates instead (§2.1: full expand
+  // is the Activity tab's job).
   const expandable =
-    !!subtext && !presentation.subtextKey && (event.kind === "thinking" || event.kind === "text");
+    !compact &&
+    !!subtext &&
+    !presentation.subtextKey &&
+    (event.kind === "thinking" || event.kind === "text");
   return (
     <div
-      className="flex items-baseline gap-3 py-1"
+      className={cn("flex items-baseline gap-3", compact ? "py-0.5" : "py-1")}
       data-testid="activity-row"
       data-visibility={event.visibility}
     >
@@ -50,56 +63,68 @@ function ActivityRow({ event, time }: { event: ActivityEvent; time: string }) {
         className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", TONE_DOT[presentation.tone])}
         aria-hidden
       />
-      <div className="min-w-0">
-        <span className="text-sm text-foreground">{label}</span>
-        {subtext && !expandable && (
-          <span className="ml-2 text-xs text-muted-foreground">{subtext}</span>
-        )}
-        {subtext && expandable && (
-          <button
-            type="button"
-            onClick={() => setExpanded((prev) => !prev)}
-            aria-expanded={expanded}
-            className={cn(
-              "mt-0.5 block w-full whitespace-pre-wrap text-left text-xs text-muted-foreground transition-colors hover:text-foreground",
-              !expanded && "line-clamp-1",
-            )}
-          >
-            {subtext}
-          </button>
-        )}
-      </div>
+      {compact ? (
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span className="shrink-0 text-sm text-foreground">{label}</span>
+          {subtext && (
+            <span className="truncate text-xs text-muted-foreground">{subtext}</span>
+          )}
+        </div>
+      ) : (
+        <div className="min-w-0">
+          <span className="text-sm text-foreground">{label}</span>
+          {subtext && !expandable && (
+            <span className="ml-2 text-xs text-muted-foreground">{subtext}</span>
+          )}
+          {subtext && expandable && (
+            <button
+              type="button"
+              onClick={() => setExpanded((prev) => !prev)}
+              aria-expanded={expanded}
+              className={cn(
+                "mt-0.5 block w-full whitespace-pre-wrap text-left text-xs text-muted-foreground transition-colors hover:text-foreground",
+                !expanded && "line-clamp-1",
+              )}
+            >
+              {subtext}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
+// The compact profile "Recent activity" surface shows only the most recent
+// handful of narrative rows (§2.1 / #383). Layout-only delta — same projection.
+const COMPACT_RECENT_LIMIT = 5;
+
 /**
  * Read-only agent-activity narrative timeline (#267). One time-ordered stream —
- * each row = `time · source dot · human label · optional subtext`. Default shows
- * only BE `user_facing` narrative events; `diagnostic_only` and internal
- * boundary events stay out of the ordinary surface. Never renders raw
- * command/output for tool rows. Rendered by the Activity tab (agent overview
- * page and channel side panel). NOTE: the profile "Recent activity" surface is a
- * separate server task-summary projection today; converging it onto this
- * `activityPresentation` timeline is a tracked #382 follow-up.
+ * each row = `time · source dot · human label · optional subtext`. Shows only BE
+ * `user_facing` narrative events; `diagnostic_only` and internal boundary events
+ * stay out. Never renders raw command/output for tool rows.
+ *
+ * Rendered by the Activity tab (agent overview page + channel side panel) and,
+ * in `compact` mode, the profile "Recent activity" hover surface (#383) — the
+ * SAME `activityPresentation` (labels/tone/folding/active-…), the only delta is
+ * layout: last N rows, dense, single-line truncated subtext, no click-to-expand.
  */
 export function ActivityTimeline({
   events,
+  compact = false,
 }: {
   events: ActivityEvent[];
-  /**
-   * Reserved for the compact profile "Recent activity" surface — the #382
-   * follow-up that converges it onto this timeline. Not yet wired to a consumer.
-   */
+  /** Profile "Recent activity" compact mode: last N narrative rows, no expand. */
   compact?: boolean;
 }) {
   const { t } = useT("agents");
   const tz = useViewingTimezone();
 
-  const shown = useMemo(
-    () => events.filter(isNarrativeActivityEvent),
-    [events],
-  );
+  const shown = useMemo(() => {
+    const narrative = events.filter(isNarrativeActivityEvent);
+    return compact ? narrative.slice(-COMPACT_RECENT_LIMIT) : narrative;
+  }, [events, compact]);
 
   if (shown.length === 0) {
     return (
@@ -116,6 +141,7 @@ export function ActivityTimeline({
           key={event.id}
           event={event}
           time={formatActivityTime(event.occurred_at, tz)}
+          compact={compact}
         />
       ))}
     </div>

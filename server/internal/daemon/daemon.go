@@ -3606,30 +3606,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// would either be left stale or overwritten with NULL on the
 		// server, causing the next chat turn to lose context.
 		//
-		// Classify upstream API 400 invalid_request_error failures with a
-		// dedicated failure_reason so GetLastTaskSession excludes the
-		// task from the (agent_id, issue_id) resume lookup. Without this
-		// classifier a corrupt image or oversized payload baked into the
-		// conversation permanently blocks the issue: every follow-up
-		// task resumes the same poisoned session and hits the same 400.
-		failureReason, _ := classifyPoisonedError(errMsg)
-		if failureReason != "" {
-			taskLog.Warn("agent failed with poisoned API error, classifying as blocked",
-				"failure_reason", failureReason,
-			)
-		} else {
-			// MUL-2946: classifyPoisonedError only matches the
-			// session-poisoning Anthropic 400 shape. Everything else
-			// falls through to taskfailure.Classify, which maps the
-			// raw error string to one of the 14 agent_error.*
-			// sub-reasons (provider auth, capacity, context overflow,
-			// runner crash, …) or to ReasonAgentUnknown. This keeps
-			// the failure_reason column in the canonical refined
-			// taxonomy at write time instead of waiting on the
-			// MUL-1949 offline backfill to re-classify after the
-			// fact.
-			failureReason = taskfailure.Classify(errMsg).String()
-		}
+		// Classify resume-unsafe no-progress failures and upstream API
+		// 400 invalid_request_error failures with a dedicated
+		// failure_reason so GetLastTaskSession excludes the task from the
+		// (agent_id, issue_id) resume lookup. Without this classifier a
+		// corrupt image, oversized payload, or provider session that never
+		// reaches first-turn progress can permanently block the issue:
+		// every follow-up task resumes the same bad state and hits the
+		// same failure.
+		failureReason := classifyAgentRunFailureReason(provider, errMsg, taskLog)
 		return TaskResult{
 			Status:        "blocked",
 			Comment:       errMsg,
@@ -3640,6 +3625,29 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			FailureReason: failureReason,
 		}, nil
 	}
+}
+
+func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger) string {
+	if failureReason, ok := classifyResumeUnsafeTimeout(provider, errMsg); ok {
+		taskLog.Warn("agent failed with resume-unsafe no-progress error, classifying as blocked",
+			"failure_reason", failureReason,
+		)
+		return failureReason
+	}
+	if failureReason, ok := classifyPoisonedError(errMsg); ok {
+		taskLog.Warn("agent failed with poisoned API error, classifying as blocked",
+			"failure_reason", failureReason,
+		)
+		return failureReason
+	}
+	// MUL-2946: classifyPoisonedError only matches the session-poisoning
+	// Anthropic 400 shape. Everything else falls through to
+	// taskfailure.Classify, which maps the raw error string to one of the
+	// agent_error.* sub-reasons (provider auth, capacity, context overflow,
+	// runner crash, …) or to ReasonAgentUnknown. This keeps failure_reason in
+	// the canonical refined taxonomy at write time instead of waiting on the
+	// MUL-1949 offline backfill to re-classify after the fact.
+	return taskfailure.Classify(errMsg).String()
 }
 
 // executeAndDrain runs a backend, drains its message stream (forwarding to the

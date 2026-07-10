@@ -452,7 +452,6 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	var chatDonePayload *protocol.ChatDonePayload
 	if event.ChatSessionID.Valid {
 		if chatFailureResumeUnsafe(failureReason) {
 			if _, err := tx.Exec(r.Context(), `
@@ -480,19 +479,10 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 				return
 			}
 		}
-		payload, err := h.failedAgentInboxChatPayload(r.Context(), qtx, event, errText, failureReason)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to save inbox chat failure")
-			return
-		}
-		chatDonePayload = payload
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox failure")
 		return
-	}
-	if chatDonePayload != nil {
-		h.publishAgentInboxChatDone(event, *chatDonePayload)
 	}
 	h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID, errText, failureReason, reasonCode)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
@@ -852,55 +842,6 @@ func (h *Handler) completedAgentInboxChatPayload(ctx context.Context, q *db.Quer
 		}
 	}
 	return &payload, nil
-}
-
-func (h *Handler) failedAgentInboxChatPayload(ctx context.Context, q *db.Queries, event db.AgentInboxEvent, errText, failureReason string) (*protocol.ChatDonePayload, error) {
-	if !event.ChatSessionID.Valid {
-		return nil, nil
-	}
-	elapsedMs := agentInboxElapsedMs(event)
-	row, err := q.CreateChatMessage(ctx, db.CreateChatMessageParams{
-		ChatSessionID: event.ChatSessionID,
-		Role:          "assistant",
-		Content:       redact.Text(errText),
-		Parts:         messageparts.MustJSON(nil),
-		TaskID:        event.ID,
-		FailureReason: pgtype.Text{String: failureReason, Valid: failureReason != ""},
-		ElapsedMs:     elapsedMs,
-	})
-	if err != nil {
-		slog.Error("agent inbox fail: failed to save assistant chat failure", "inbox_event_id", uuidToString(event.ID), "error", err)
-		return nil, err
-	}
-	if err := q.SetUnreadSinceIfNull(ctx, event.ChatSessionID); err != nil {
-		slog.Warn("agent inbox fail: failed to set unread_since", "chat_session_id", uuidToString(event.ChatSessionID), "error", err)
-	}
-	payload := protocol.ChatDonePayload{
-		ChatSessionID: uuidToString(event.ChatSessionID),
-		TaskID:        uuidToString(event.ID),
-		Type:          protocol.ChatOutputKindMessage,
-		MessageID:     uuidToString(row.ID),
-		Content:       row.Content,
-		Parts:         messageparts.Decode(row.Parts),
-	}
-	if row.ElapsedMs.Valid {
-		payload.ElapsedMs = row.ElapsedMs.Int64
-	}
-	if row.CreatedAt.Valid {
-		payload.CreatedAt = row.CreatedAt.Time.UTC().Format(time.RFC3339Nano)
-	}
-	return &payload, nil
-}
-
-func agentInboxElapsedMs(event db.AgentInboxEvent) pgtype.Int8 {
-	if !event.CreatedAt.Valid {
-		return pgtype.Int8{}
-	}
-	ms := time.Since(event.CreatedAt.Time).Milliseconds()
-	if ms < 0 {
-		ms = 0
-	}
-	return pgtype.Int8{Int64: ms, Valid: true}
 }
 
 func (h *Handler) publishAgentInboxChatDone(event db.AgentInboxEvent, payload protocol.ChatDonePayload) {

@@ -124,6 +124,36 @@ WHERE s.runtime_id = $1
   AND s.status = 'active'
   AND e.status IN ('pending', 'failed');
 
+-- name: ReclaimExpiredAgentInboxDeliveriesForRuntime :exec
+WITH expired_delivery AS (
+  UPDATE agent_event_delivery d
+  SET status = 'expired',
+      last_error = 'delivery lease expired',
+      updated_at = now()
+  FROM agent_session s, agent_inbox_event e
+  WHERE d.agent_session_id = s.id
+    AND d.inbox_event_id = e.id
+    AND s.runtime_id = $1
+    AND s.status = 'active'
+    AND e.status = 'draining'
+    AND d.status IN ('leased', 'processing')
+    AND d.lease_expires_at <= now()
+  RETURNING d.inbox_event_id
+)
+UPDATE agent_inbox_event e
+SET status = 'pending',
+    last_error = 'delivery lease expired',
+    updated_at = now()
+WHERE e.id IN (SELECT inbox_event_id FROM expired_delivery)
+  AND e.status = 'draining'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM agent_event_delivery d
+    WHERE d.inbox_event_id = e.id
+      AND d.status IN ('leased', 'processing')
+      AND d.lease_expires_at > now()
+  );
+
 -- name: LeaseAgentInboxEventForRuntime :one
 WITH next_event AS (
   SELECT e.id
@@ -162,6 +192,30 @@ SELECT
 FROM leased_event e
 RETURNING *;
 
+-- name: RenewAgentInboxDelivery :one
+UPDATE agent_event_delivery d
+SET lease_expires_at = now() + interval '2 minutes',
+    updated_at = now()
+WHERE d.id = $1
+  AND d.inbox_event_id = $2
+  AND d.lease_token = $3
+  AND d.status IN ('leased', 'processing')
+  AND EXISTS (
+    SELECT 1
+    FROM agent_inbox_event e
+    WHERE e.id = d.inbox_event_id
+      AND e.agent_session_id = d.agent_session_id
+      AND e.status = 'draining'
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM agent_event_delivery newer
+    WHERE newer.inbox_event_id = d.inbox_event_id
+      AND newer.id <> d.id
+      AND newer.created_at >= d.created_at
+  )
+RETURNING *;
+
 -- name: AckAgentInboxDelivery :one
 WITH active_delivery AS (
   UPDATE agent_event_delivery d
@@ -172,7 +226,16 @@ WITH active_delivery AS (
     AND d.inbox_event_id = $2
     AND d.lease_token = $3
     AND d.status IN ('leased', 'processing')
-    AND d.lease_expires_at > now()
+    AND (
+      d.lease_expires_at > now()
+      OR NOT EXISTS (
+        SELECT 1
+        FROM agent_event_delivery newer
+        WHERE newer.inbox_event_id = d.inbox_event_id
+          AND newer.id <> d.id
+          AND newer.created_at >= d.created_at
+      )
+    )
     AND EXISTS (
       SELECT 1
       FROM agent_inbox_event e
@@ -216,7 +279,16 @@ WITH active_delivery AS (
     AND d.inbox_event_id = $2
     AND d.lease_token = $4
     AND d.status IN ('leased', 'processing')
-    AND d.lease_expires_at > now()
+    AND (
+      d.lease_expires_at > now()
+      OR NOT EXISTS (
+        SELECT 1
+        FROM agent_event_delivery newer
+        WHERE newer.inbox_event_id = d.inbox_event_id
+          AND newer.id <> d.id
+          AND newer.created_at >= d.created_at
+      )
+    )
     AND EXISTS (
       SELECT 1
       FROM agent_inbox_event e

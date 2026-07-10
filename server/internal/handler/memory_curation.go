@@ -44,6 +44,39 @@ type memoryCurationRunResponse struct {
 	FinishedAt  *string         `json:"finished_at,omitempty"`
 }
 
+type memoryCurationRunStatsResponse struct {
+	AgentsScanned          int `json:"agents_scanned"`
+	AgentsChanged          int `json:"agents_changed"`
+	DailyFilesWritten      int `json:"daily_files_written"`
+	ReviewCandidatesAdded  int `json:"review_candidates_added"`
+	EntriesPromoted        int `json:"entries_promoted"`
+	SharedCandidatesAdded  int `json:"shared_candidates_added"`
+	SharedCandidatesSynced int `json:"shared_candidates_synced"`
+	EntriesArchived        int `json:"entries_archived"`
+	DuplicatesMerged       int `json:"duplicates_merged"`
+	ConflictsFound         int `json:"conflicts_found"`
+	EvidenceCollected      int `json:"evidence_collected"`
+	ErrorCount             int `json:"error_count"`
+}
+
+type memoryCurationStageStatusResponse struct {
+	ID          string                         `json:"id"`
+	Stage       string                         `json:"stage"`
+	TriggerKind string                         `json:"trigger_kind"`
+	Status      string                         `json:"status"`
+	Stats       memoryCurationRunStatsResponse `json:"stats"`
+	CreatedAt   string                         `json:"created_at"`
+	StartedAt   *string                        `json:"started_at,omitempty"`
+	FinishedAt  *string                        `json:"finished_at,omitempty"`
+}
+
+type workspaceMemoryCurationStatusResponse struct {
+	WorkspaceID   string                              `json:"workspace_id"`
+	PendingRuns   int                                 `json:"pending_runs"`
+	FailedRuns24h int                                 `json:"failed_runs_24h"`
+	Stages        []memoryCurationStageStatusResponse `json:"stages"`
+}
+
 func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request) {
 	workspaceID := workspaceIDFromURL(r, "id")
 	if workspaceID == "" {
@@ -185,6 +218,90 @@ func (h *Handler) GetMemoryCurationRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, row)
+}
+
+func (h *Handler) GetWorkspaceMemoryCurationStatus(w http.ResponseWriter, r *http.Request) {
+	workspaceID := workspaceIDFromURL(r, "id")
+	if workspaceID == "" {
+		writeError(w, http.StatusBadRequest, "workspace id is required")
+		return
+	}
+
+	response := workspaceMemoryCurationStatusResponse{
+		WorkspaceID: workspaceID,
+		Stages:      []memoryCurationStageStatusResponse{},
+	}
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT count(*) FILTER (WHERE status IN ('queued', 'running')),
+		       count(*) FILTER (WHERE status = 'failed' AND created_at >= now() - interval '24 hours')
+		  FROM memory_curation_run
+		 WHERE workspace_id = $1
+	`, workspaceID).Scan(&response.PendingRuns, &response.FailedRuns24h); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load memory curation status")
+		return
+	}
+
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT DISTINCT ON (stage)
+		       id::text, stage, trigger_kind, status, stats, created_at, started_at, finished_at
+		  FROM memory_curation_run
+		 WHERE workspace_id = $1
+		   AND stage IN ('l1_daily', 'l2_review', 'l3_promote', 'l4_curator', 'all')
+		 ORDER BY stage, created_at DESC
+	`, workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load memory curation stages")
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var stage memoryCurationStageStatusResponse
+		var stats []byte
+		var createdAt time.Time
+		var startedAt, finishedAt *time.Time
+		if err := rows.Scan(&stage.ID, &stage.Stage, &stage.TriggerKind, &stage.Status, &stats, &createdAt, &startedAt, &finishedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read memory curation stage")
+			return
+		}
+		stage.Stats = publicMemoryCurationStats(stats)
+		stage.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+		if startedAt != nil {
+			value := startedAt.UTC().Format(time.RFC3339)
+			stage.StartedAt = &value
+		}
+		if finishedAt != nil {
+			value := finishedAt.UTC().Format(time.RFC3339)
+			stage.FinishedAt = &value
+		}
+		response.Stages = append(response.Stages, stage)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load memory curation stages")
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func publicMemoryCurationStats(raw []byte) memoryCurationRunStatsResponse {
+	var result memorycuration.Result
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return memoryCurationRunStatsResponse{}
+	}
+	return memoryCurationRunStatsResponse{
+		AgentsScanned:          result.AgentsScanned,
+		AgentsChanged:          result.AgentsChanged,
+		DailyFilesWritten:      result.DailyFilesWritten,
+		ReviewCandidatesAdded:  result.ReviewCandidatesAdded,
+		EntriesPromoted:        result.EntriesPromoted,
+		SharedCandidatesAdded:  result.SharedCandidatesAdded,
+		SharedCandidatesSynced: result.SharedCandidatesSynced,
+		EntriesArchived:        result.EntriesArchived,
+		DuplicatesMerged:       result.DuplicatesMerged,
+		ConflictsFound:         result.ConflictsFound,
+		EvidenceCollected:      result.EvidenceCollected,
+		ErrorCount:             len(result.Errors),
+	}
 }
 
 func (h *Handler) GetAgentMemoryCurationStatus(w http.ResponseWriter, r *http.Request) {

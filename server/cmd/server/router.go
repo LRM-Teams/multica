@@ -540,6 +540,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/tasks/{taskId}/messages", h.ReportTaskMessages)
 		r.Get("/tasks/{taskId}/messages", h.ListTaskMessages)
 		r.Post("/agent-inbox/events/{eventId}/ack", h.AckAgentInboxEvent)
+		r.Post("/agent-inbox/events/{eventId}/renew", h.RenewAgentInboxEvent)
+		r.Post("/agent-inbox/events/{eventId}/complete", h.CompleteAgentInboxEvent)
 		r.Post("/agent-inbox/events/{eventId}/fail", h.FailAgentInboxEvent)
 
 		r.Post("/projects/{projectId}/managed-workdir", h.RegisterManagedWorkdir)
@@ -613,6 +615,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Use(middleware.RequireWorkspaceMemberFromURL(queries, "id"))
 					r.Get("/", h.GetWorkspace)
 					r.Get("/members", h.ListMembersWithUser)
+					r.Get("/memory-curation/status", h.GetWorkspaceMemoryCurationStatus)
 					r.Post("/leave", h.LeaveWorkspace)
 					r.Get("/invitations", h.ListWorkspaceInvitations)
 					// Listing GitHub installations is member-visible so the
@@ -1095,6 +1098,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/agent/messages/react", h.AgentTransportReactMessage)
 			r.Post("/api/agent/messages/read", h.AgentTransportReadMessages)
 			r.Post("/api/agent/messages/search", h.AgentTransportSearchMessages)
+			r.Post("/api/agent/reminders/schedule", h.AgentTransportScheduleReminder)
+			r.Post("/api/agent/reminders/list", h.AgentTransportListReminders)
+			r.Post("/api/agent/reminders/snooze", h.AgentTransportSnoozeReminder)
+			r.Post("/api/agent/reminders/update", h.AgentTransportUpdateReminder)
+			r.Post("/api/agent/reminders/cancel", h.AgentTransportCancelReminder)
 
 			// Unified 1-on-1 DM list (kind='dm' channels ∪ legacy unbound chat
 			// sessions) plus idempotent create-or-find. Sole data source for the

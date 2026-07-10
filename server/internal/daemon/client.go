@@ -86,6 +86,17 @@ func isRuntimeNotFoundError(err error) bool {
 	return strings.Contains(strings.ToLower(reqErr.Body), "runtime not found")
 }
 
+func isAgentInboxDrainUnsupportedError(err error) bool {
+	var reqErr *requestError
+	if !errors.As(err, &reqErr) {
+		return false
+	}
+	if reqErr.StatusCode != http.StatusNotFound {
+		return false
+	}
+	return strings.Contains(reqErr.Path, "/agent-inbox/drain") && !isRuntimeNotFoundError(err)
+}
+
 // Client handles HTTP communication with the Multica server daemon API.
 type Client struct {
 	baseURL string
@@ -161,6 +172,29 @@ func (c *Client) ClaimTask(ctx context.Context, runtimeID string) (*Task, error)
 		return nil, err
 	}
 	return resp.Task, nil
+}
+
+type AgentInboxEvent struct {
+	ID             string `json:"id"`
+	DeliveryID     string `json:"delivery_id"`
+	LeaseToken     string `json:"lease_token"`
+	LeaseExpiresAt string `json:"lease_expires_at"`
+	SeqTo          int64  `json:"seq_to"`
+	RequiresWake   bool   `json:"requires_wake"`
+	Task           *Task  `json:"task,omitempty"`
+}
+
+func (c *Client) DrainAgentInbox(ctx context.Context, runtimeID string) (*AgentInboxEvent, error) {
+	var resp struct {
+		Events []AgentInboxEvent `json:"events"`
+	}
+	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-inbox/drain", runtimeID), map[string]any{}, &resp); err != nil {
+		return nil, err
+	}
+	if len(resp.Events) == 0 {
+		return nil, nil
+	}
+	return &resp.Events[0], nil
 }
 
 func (c *Client) StartTask(ctx context.Context, taskID string) error {
@@ -248,6 +282,39 @@ func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, a
 	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/tasks/%s/complete", taskID), body, nil, defaultTerminalRetrySchedule)
 }
 
+func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLease, result TaskResult) error {
+	body := map[string]any{
+		"delivery_id": lease.DeliveryID,
+		"lease_token": lease.LeaseToken,
+		"output":      result.Comment,
+	}
+	if result.Action != "" {
+		body["action"] = result.Action
+	}
+	if result.Target != "" {
+		body["target"] = result.Target
+	}
+	if result.Options != nil {
+		body["options"] = result.Options
+	}
+	if result.Type != "" {
+		body["type"] = result.Type
+	}
+	if len(result.Parts) > 0 {
+		body["parts"] = result.Parts
+	}
+	if result.Reaction != nil {
+		body["reaction"] = result.Reaction
+	}
+	if result.SessionID != "" {
+		body["session_id"] = result.SessionID
+	}
+	if result.WorkDir != "" {
+		body["work_dir"] = result.WorkDir
+	}
+	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/complete", lease.ID), body, nil, defaultTerminalRetrySchedule)
+}
+
 func (c *Client) ReportTaskUsage(ctx context.Context, taskID string, usage []TaskUsageEntry) error {
 	if len(usage) == 0 {
 		return nil
@@ -269,6 +336,32 @@ func (c *Client) FailTask(ctx context.Context, taskID, errMsg, sessionID, workDi
 		body["failure_reason"] = failureReason
 	}
 	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/tasks/%s/fail", taskID), body, nil, defaultTerminalRetrySchedule)
+}
+
+func (c *Client) FailAgentInboxEvent(ctx context.Context, lease AgentInboxLease, errMsg string) error {
+	body := map[string]any{
+		"delivery_id": lease.DeliveryID,
+		"lease_token": lease.LeaseToken,
+		"error":       errMsg,
+	}
+	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/fail", lease.ID), body, nil, defaultTerminalRetrySchedule)
+}
+
+func (c *Client) RenewAgentInboxEvent(ctx context.Context, lease AgentInboxLease) error {
+	body := map[string]any{
+		"delivery_id": lease.DeliveryID,
+		"lease_token": lease.LeaseToken,
+	}
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/renew", lease.ID), body, nil)
+}
+
+func (c *Client) AckAgentInboxEvent(ctx context.Context, lease AgentInboxLease) error {
+	body := map[string]any{
+		"delivery_id":    lease.DeliveryID,
+		"lease_token":    lease.LeaseToken,
+		"seen_up_to_seq": lease.SeqTo,
+	}
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/ack", lease.ID), body, nil)
 }
 
 // PinTaskSession persists the agent's session_id and work_dir on the task

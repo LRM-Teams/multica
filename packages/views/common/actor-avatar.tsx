@@ -14,6 +14,7 @@ import {
   useAgentPresenceDetail,
 } from "@multica/core/agents";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
+import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { resolveHealthDotClass } from "../agents/health";
 import { AgentProfileCard } from "../agents/components/agent-profile-card";
 import { AgentLivePeekCard } from "../agents/components/agent-live-peek-card";
@@ -21,6 +22,7 @@ import { MemberProfileCard } from "../members/member-profile-card";
 import { SquadProfileCard } from "../squads/components/squad-profile-card";
 import { availabilityConfig } from "../agents/presence";
 import { useNavigation } from "../navigation";
+import { useOpenAgentPanel } from "./agent-panel-context";
 
 /**
  * Selects which agent hover-card payload to render when `enableHoverCard` is
@@ -121,20 +123,28 @@ export function ActorAvatar({
   const shouldLinkToProfile =
     profileLink ??
     (actorType === "member" || actorType === "agent" || actorType === "squad");
-  const profileHref = shouldLinkToProfile
-    ? actorType === "member"
-      ? paths.memberDetail(actorId)
-      : actorType === "agent"
-        ? paths.agentDetail(actorId)
-        : actorType === "squad"
-          ? paths.squadDetail(actorId)
-          : null
-    : null;
-  const content = profileHref ? (
-    <ActorAvatarProfileLink href={profileHref}>{dotted}</ActorAvatarProfileLink>
-  ) : (
-    dotted
-  );
+  // Agents open the #349 side panel (inline in channels/DM via
+  // AgentPanelProvider, a global overlay everywhere else via the fallback
+  // store — see agent-panel-context.tsx / panel-store.ts) instead of routing
+  // to the full agent detail page. Members/squads still route — no side
+  // panel exists for those actor types yet.
+  const content = !shouldLinkToProfile
+    ? dotted
+    : actorType === "agent"
+      ? <ActorAvatarPanelTrigger agentId={actorId}>{dotted}</ActorAvatarPanelTrigger>
+      : (() => {
+          const href =
+            actorType === "member"
+              ? paths.memberDetail(actorId)
+              : actorType === "squad"
+                ? paths.squadDetail(actorId)
+                : null;
+          return href ? (
+            <ActorAvatarProfileLink href={href}>{dotted}</ActorAvatarProfileLink>
+          ) : (
+            dotted
+          );
+        })();
 
   if (!enableHoverCard) {
     return content;
@@ -192,6 +202,77 @@ function ActorAvatarProfileLink({
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           navigate(event);
+        }
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+/**
+ * Opens the #349 agent side panel on click. Prefers the local
+ * `AgentPanelProvider` (channels/DM — panel renders inline, replacing the
+ * thread-panel slot, per Frank's direction) and falls back to the global
+ * `useAgentPanelStore` (every other surface — panel renders as an overlay at
+ * the dashboard-layout level) when no local provider is in scope. The two
+ * mechanisms never both fire for the same click since the global store is
+ * only reachable when the local context is absent.
+ *
+ * Same nested-clickable guard as `ActorAvatarProfileLink`: a picker row or
+ * menu item that owns its own click keeps that behavior instead of opening
+ * the panel underneath it.
+ */
+function ActorAvatarPanelTrigger({
+  agentId,
+  children,
+}: {
+  agentId: string;
+  children: React.ReactNode;
+}) {
+  const paths = useWorkspacePaths();
+  const { openInNewTab } = useNavigation();
+  const openFromContext = useOpenAgentPanel();
+  const openFromStore = useAgentPanelStore((s) => s.open);
+  const open = openFromContext ?? openFromStore;
+
+  const handleOpen = (event: React.MouseEvent | React.KeyboardEvent) => {
+    const controlAncestor = event.currentTarget.parentElement?.closest(
+      PROFILE_LINK_CONTROL_SELECTOR,
+    );
+    if (controlAncestor) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    // ⌘/ctrl/shift-click keeps the power-user path to the full detail page
+    // (new tab) instead of the peek panel — same escape hatch
+    // ActorAvatarProfileLink already gave every other actor type.
+    if (
+      "metaKey" in event &&
+      (event.metaKey || event.ctrlKey || event.shiftKey) &&
+      openInNewTab
+    ) {
+      openInNewTab(paths.agentDetail(agentId));
+      return;
+    }
+    open(agentId);
+  };
+
+  return (
+    // Deliberately a span-with-role, not a real <button>: an avatar frequently
+    // renders inside a row/card that is itself a link or button, and a real
+    // <button> here would be invalid interactive nesting. Same pattern the
+    // sibling `ActorAvatarProfileLink` uses (`role="link"` on a span). The
+    // control-ancestor guard above defers to the outer interactive when present.
+    // react-doctor-disable-next-line react-doctor/prefer-tag-over-role -- span+role avoids invalid nested-interactive DOM (see comment)
+    <span
+      role="button"
+      tabIndex={-1}
+      className="inline-flex cursor-pointer rounded-full"
+      onClick={handleOpen}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          handleOpen(event);
         }
       }}
     >

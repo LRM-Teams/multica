@@ -85,6 +85,39 @@ export interface EvolutionMetricsResponse {
   unit_metrics: EvolutionUnitMetric[];
 }
 
+export interface MemoryCurationRunStats {
+  agents_scanned: number;
+  agents_changed: number;
+  daily_files_written: number;
+  review_candidates_added: number;
+  entries_promoted: number;
+  shared_candidates_added: number;
+  shared_candidates_synced: number;
+  entries_archived: number;
+  duplicates_merged: number;
+  conflicts_found: number;
+  evidence_collected: number;
+  error_count: number;
+}
+
+export interface MemoryCurationStageStatus {
+  id: string;
+  stage: string;
+  trigger_kind: string;
+  status: string;
+  stats: MemoryCurationRunStats;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface WorkspaceMemoryCurationStatus {
+  workspace_id: string;
+  pending_runs: number;
+  failed_runs_24h: number;
+  stages: MemoryCurationStageStatus[];
+}
+
 export interface EvolutionReviewDecisionRequest {
   reason?: string;
   apply_review_suggestions?: boolean;

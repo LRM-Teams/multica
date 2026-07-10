@@ -21,7 +21,16 @@ WITH active_delivery AS (
     AND d.inbox_event_id = $2
     AND d.lease_token = $3
     AND d.status IN ('leased', 'processing')
-    AND d.lease_expires_at > now()
+    AND (
+      d.lease_expires_at > now()
+      OR NOT EXISTS (
+        SELECT 1
+        FROM agent_event_delivery newer
+        WHERE newer.inbox_event_id = d.inbox_event_id
+          AND newer.id <> d.id
+          AND newer.created_at >= d.created_at
+      )
+    )
     AND EXISTS (
       SELECT 1
       FROM agent_inbox_event e
@@ -229,7 +238,16 @@ WITH active_delivery AS (
     AND d.inbox_event_id = $2
     AND d.lease_token = $4
     AND d.status IN ('leased', 'processing')
-    AND d.lease_expires_at > now()
+    AND (
+      d.lease_expires_at > now()
+      OR NOT EXISTS (
+        SELECT 1
+        FROM agent_event_delivery newer
+        WHERE newer.inbox_event_id = d.inbox_event_id
+          AND newer.id <> d.id
+          AND newer.created_at >= d.created_at
+      )
+    )
     AND EXISTS (
       SELECT 1
       FROM agent_inbox_event e
@@ -444,6 +462,94 @@ RETURNING id, workspace_id, agent_session_id, inbox_event_id, runtime_id, status
 
 func (q *Queries) LeaseAgentInboxEventForRuntime(ctx context.Context, runtimeID pgtype.UUID) (AgentEventDelivery, error) {
 	row := q.db.QueryRow(ctx, leaseAgentInboxEventForRuntime, runtimeID)
+	var i AgentEventDelivery
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentSessionID,
+		&i.InboxEventID,
+		&i.RuntimeID,
+		&i.Status,
+		&i.LeaseToken,
+		&i.LeasedAt,
+		&i.LeaseExpiresAt,
+		&i.AckedAt,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const reclaimExpiredAgentInboxDeliveriesForRuntime = `-- name: ReclaimExpiredAgentInboxDeliveriesForRuntime :exec
+WITH expired_delivery AS (
+  UPDATE agent_event_delivery d
+  SET status = 'expired',
+      last_error = 'delivery lease expired',
+      updated_at = now()
+  FROM agent_session s, agent_inbox_event e
+  WHERE d.agent_session_id = s.id
+    AND d.inbox_event_id = e.id
+    AND s.runtime_id = $1
+    AND s.status = 'active'
+    AND e.status = 'draining'
+    AND d.status IN ('leased', 'processing')
+    AND d.lease_expires_at <= now()
+  RETURNING d.inbox_event_id
+)
+UPDATE agent_inbox_event e
+SET status = 'pending',
+    last_error = 'delivery lease expired',
+    updated_at = now()
+WHERE e.id IN (SELECT inbox_event_id FROM expired_delivery)
+  AND e.status = 'draining'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM agent_event_delivery d
+    WHERE d.inbox_event_id = e.id
+      AND d.status IN ('leased', 'processing')
+      AND d.lease_expires_at > now()
+  )
+`
+
+func (q *Queries) ReclaimExpiredAgentInboxDeliveriesForRuntime(ctx context.Context, runtimeID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, reclaimExpiredAgentInboxDeliveriesForRuntime, runtimeID)
+	return err
+}
+
+const renewAgentInboxDelivery = `-- name: RenewAgentInboxDelivery :one
+UPDATE agent_event_delivery d
+SET lease_expires_at = now() + interval '2 minutes',
+    updated_at = now()
+WHERE d.id = $1
+  AND d.inbox_event_id = $2
+  AND d.lease_token = $3
+  AND d.status IN ('leased', 'processing')
+  AND EXISTS (
+    SELECT 1
+    FROM agent_inbox_event e
+    WHERE e.id = d.inbox_event_id
+      AND e.agent_session_id = d.agent_session_id
+      AND e.status = 'draining'
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM agent_event_delivery newer
+    WHERE newer.inbox_event_id = d.inbox_event_id
+      AND newer.id <> d.id
+      AND newer.created_at >= d.created_at
+  )
+RETURNING id, workspace_id, agent_session_id, inbox_event_id, runtime_id, status, lease_token, leased_at, lease_expires_at, acked_at, last_error, created_at, updated_at
+`
+
+type RenewAgentInboxDeliveryParams struct {
+	ID           pgtype.UUID `json:"id"`
+	InboxEventID pgtype.UUID `json:"inbox_event_id"`
+	LeaseToken   pgtype.UUID `json:"lease_token"`
+}
+
+func (q *Queries) RenewAgentInboxDelivery(ctx context.Context, arg RenewAgentInboxDeliveryParams) (AgentEventDelivery, error) {
+	row := q.db.QueryRow(ctx, renewAgentInboxDelivery, arg.ID, arg.InboxEventID, arg.LeaseToken)
 	var i AgentEventDelivery
 	err := row.Scan(
 		&i.ID,

@@ -606,7 +606,7 @@ func TestCurateSubmissionReviewDisabledLowConfidenceNeedsReview(t *testing.T) {
 	}
 }
 
-func TestCurateSubmissionMemoryLowConfidenceAutoPromotes(t *testing.T) {
+func TestCurateSubmissionMemoryLowConfidenceNeedsReview(t *testing.T) {
 	submission := validMemorySubmission()
 	submission.Confidence = "low"
 	mock := newEvolutionMockDB(submission)
@@ -616,12 +616,12 @@ func TestCurateSubmissionMemoryLowConfidenceAutoPromotes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("curateSubmission error = %v", err)
 	}
-	if status != evolutionCurationPromoted || mock.submission.Status != "promoted" {
-		t.Fatalf("status/submission = %q/%q, want promoted/promoted", status, mock.submission.Status)
+	if status != evolutionCurationNeedsReview || mock.submission.Status != "needs_review" {
+		t.Fatalf("status/submission = %q/%q, want needs_review/needs_review", status, mock.submission.Status)
 	}
 }
 
-func TestCurateSubmissionMemorySkipsReviewerWhenEnabled(t *testing.T) {
+func TestCurateSubmissionMemoryUsesReviewerWhenEnabled(t *testing.T) {
 	submission := validMemorySubmission()
 	reviewer := &fakeEvolutionReviewer{result: EvolutionReviewResult{Decision: EvolutionReviewReject, Confidence: 0.9, RiskLevel: EvolutionReviewRiskHigh, Rationale: "unsafe"}}
 	mock := newEvolutionMockDB(submission)
@@ -631,11 +631,11 @@ func TestCurateSubmissionMemorySkipsReviewerWhenEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("curateSubmission error = %v", err)
 	}
-	if status != evolutionCurationPromoted || mock.submission.Status != "promoted" {
-		t.Fatalf("status/submission = %q/%q, want promoted/promoted", status, mock.submission.Status)
+	if status != evolutionCurationRejected || mock.submission.Status != "rejected" {
+		t.Fatalf("status/submission = %q/%q, want rejected/rejected", status, mock.submission.Status)
 	}
-	if reviewer.called != 0 {
-		t.Fatalf("reviewer called %d times, want 0 for memory auto-assign", reviewer.called)
+	if reviewer.called != 1 {
+		t.Fatalf("reviewer called %d times, want 1", reviewer.called)
 	}
 }
 

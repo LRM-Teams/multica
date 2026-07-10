@@ -2285,6 +2285,16 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	if err != nil {
 		return fmt.Errorf("invalid message parts: %w", err)
 	}
+	if channelTask && task.Priority >= 2 && !explicitAction {
+		if sanitized, ok := sanitizeRuntimeDiagnosticFinalText(output, parts); ok {
+			slog.Warn("complete task: sanitizing runtime diagnostic final text",
+				"task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
+			output = sanitized
+			parts = nil
+			req.Output = output
+			req.Parts = nil
+		}
+	}
 	if channelTask && !explicitAction && isLegacyChannelProtocolOutput(output, parts) {
 		slog.Warn("complete task: suppressing protocol-shaped final text output", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
 		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
@@ -2508,6 +2518,53 @@ func normalizeNoReplyRationaleCandidate(output string) string {
 		normalized = strings.TrimSpace(strings.TrimSuffix(normalized, "."))
 	}
 	return normalized
+}
+
+func sanitizeRuntimeDiagnosticFinalText(output string, parts []protocol.MessagePart) (string, bool) {
+	if len(parts) > 0 {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	markers := []string{
+		"background search finished after the reply was already sent",
+		"nothing else needed for this turn",
+		"先修好 multica send 的鉴权",
+		"改用任务态 token",
+		"任务态 token 的 multica",
+	}
+	cutAt := -1
+	for _, marker := range markers {
+		if idx := strings.Index(lower, marker); idx >= 0 && (cutAt == -1 || idx < cutAt) {
+			cutAt = idx
+		}
+	}
+	if cutAt == -1 {
+		return "", false
+	}
+	sanitized := strings.TrimSpace(trimmed[:cutAt])
+	for {
+		before := sanitized
+		sanitized = strings.TrimSpace(strings.TrimSuffix(sanitized, "在"))
+		sanitized = strings.TrimSpace(strings.TrimSuffix(sanitized, "The"))
+		sanitized = strings.TrimSpace(strings.TrimSuffix(sanitized, "the"))
+		if sanitized == before {
+			break
+		}
+	}
+	if sanitized == "" {
+		return "在的。", true
+	}
+	sanitizedLower := strings.ToLower(sanitized)
+	for _, marker := range markers {
+		if strings.Contains(sanitizedLower, marker) {
+			return "在的。", true
+		}
+	}
+	return sanitized, true
 }
 
 func (h *Handler) suppressTaskCompleteOutput(req *TaskCompleteRequest, reason string) {

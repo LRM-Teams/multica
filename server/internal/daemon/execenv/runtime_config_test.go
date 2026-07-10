@@ -385,6 +385,11 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 	if !strings.Contains(out, "multica message send") {
 		t.Errorf("directed brief should contain CLI send instruction")
 	}
+	for _, want := range []string{"multica reminder schedule", "future self-wake", "reminder list|snooze|update|cancel"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("directed brief missing reminder capability %q", want)
+		}
+	}
 }
 
 func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
@@ -423,8 +428,10 @@ func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
 		ChatSessionID:                    "chat-1",
+		Directed:                         true,
 		ChatCLITransportUnavailable:      true,
 		Repos:                            []RepoContextForEnv{{URL: "https://github.com/acme/app.git"}},
+		AgentSkills:                      []SkillContextForEnv{{Name: "multica-stickers", Description: "Use for short social chat beats."}},
 		RequestingUserName:               "Frank",
 		RequestingUserProfileDescription: "Product owner",
 	}
@@ -434,6 +441,8 @@ func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
 		"## Chat Mode",
 		"compatibility chat output",
 		"write the visible reply as your final assistant output",
+		"When a sticker or reaction would normally fit, use a short text reply instead",
+		"Producing empty final output is **not** an option",
 		"Do not try to find, install, or discuss chat send/react commands",
 		"never mention compatibility mode, missing tools, tokens, CLI transport, or runtime setup",
 		"Issues/comments: `multica issue list|get|search|comment ...`",
@@ -447,10 +456,16 @@ func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
 
 	for _, banned := range []string{
 		"task-scoped Multica CLI transport for visible chat output",
+		"multica message send",
+		"multica message react",
 		"multica message send --message",
 		"multica message react --message-id",
 		"multica message read",
 		"multica message search",
+		"--sticker",
+		"multica reminder schedule",
+		"multica-stickers",
+		"Use for short social chat beats",
 		"For visible chat replies, run `multica message send`",
 		"After the command succeeds",
 	} {

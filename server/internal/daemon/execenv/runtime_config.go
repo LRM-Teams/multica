@@ -787,7 +787,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 		b.WriteString("This run was triggered by a message directed at you: a DM, an @mention, or a direct question/reply addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible response before finishing. Agent-to-agent channel @mentions are weak notifications: stay silent unless they ask for your immediate deliverable, review, decision, or direct answer. Acceptable visible responses, when required, in order of preference:\n")
 		if ctx.ChatCLITransportUnavailable {
 			b.WriteString("1. Write the visible reply as your final assistant output (answer, result, or a brief acknowledgment).\n")
-			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica message react` or a sticker via `multica message send --sticker`.\n")
+			b.WriteString("2. When a sticker or reaction would normally fit, use a short text reply instead; the chat CLI transport is unavailable for this run.\n")
 			b.WriteString("Producing empty final output is **not** an option for this run.\n")
 		} else {
 			b.WriteString("1. A reply via `multica message send` (answer, result, or a brief acknowledgment).\n")
@@ -821,6 +821,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	if !ctx.ChatCLITransportUnavailable {
 		b.WriteString("- Chat output: use `multica message send`; prefer `--message-stdin` with a single-quote heredoc or `--message-file` for agent-authored text, `--sticker` for sticker replies, and omit `--target` for the current surface. After a successful send, do not duplicate the reply in final output.\n")
 		b.WriteString("- Chat reactions/history: `multica message react`, `multica message read`, and `multica message search` are available when a reaction or more bounded chat context is needed.\n")
+		b.WriteString("- Reminders: schedule a durable future self-wake with `multica reminder schedule --title \"...\" --delay-seconds N [--message-id <id>]` when follow-up depends on future state. Use `reminder list|snooze|update|cancel` to manage reminders; prefer this over sleep or runtime cron.\n")
 	}
 	b.WriteString("- Issues/comments: `multica issue list|get|search|comment ...`; use `issue list --mine --output json` for assigned issues. Existing-issue writes require claim/ownership, must remain visible through message/system events, and must not self-approve `in_review -> done`.\n")
 	b.WriteString("- Issue metadata: `multica issue metadata list|set|delete ...` only when explicitly working on an issue and a durable high-signal fact is worth pinning; load subcommand help for exact flags.\n")
@@ -831,7 +832,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 
 	renderRepositoryContext(b, ctx)
 	renderProjectContext(b, ctx)
-	renderSkillIndex(b, provider, ctx.AgentSkills)
+	renderSkillIndex(b, provider, chatRuntimeSkills(ctx))
 
 	b.WriteString("## Mention Safety\n\n")
 	b.WriteString("Mention links are side-effecting actions, not just formatting: `mention://member/...` notifies a human and `mention://agent/...` enqueues a new agent run. Use plain names in prose. Only include a mention link when you are intentionally notifying, escalating, or delegating.\n\n")
@@ -854,6 +855,20 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 		b.WriteString(compactCloseoutStatusInstruction)
 		b.WriteString("\n")
 	}
+}
+
+func chatRuntimeSkills(ctx TaskContextForEnv) []SkillContextForEnv {
+	if !ctx.ChatCLITransportUnavailable {
+		return ctx.AgentSkills
+	}
+	filtered := make([]SkillContextForEnv, 0, len(ctx.AgentSkills))
+	for _, skill := range ctx.AgentSkills {
+		if strings.EqualFold(sanitizeSkillName(skill.Name), "multica-stickers") {
+			continue
+		}
+		filtered = append(filtered, skill)
+	}
+	return filtered
 }
 
 func renderRepositoryContext(b *strings.Builder, ctx TaskContextForEnv) {

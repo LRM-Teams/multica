@@ -36,11 +36,13 @@ import { useNavigation } from "../navigation";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
 import { ActorProfileTrigger } from "../common/actor-profile-popover";
+import { useOpenAgentPanel } from "../common/agent-panel-context";
 import {
   mentionTokenClassName,
   resolveMentionTokenKind,
 } from "../common/mention-token";
 import { useAuthStore } from "@multica/core/auth";
+import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { useLinkHover, LinkHoverCard } from "./link-hover-card";
 import { openLink, isMentionHref } from "./utils/link-handler";
 import { isAllowedFileCardHref } from "@multica/ui/markdown";
@@ -174,6 +176,12 @@ function ReadonlyLink({
 }) {
   const slug = useWorkspaceSlug();
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
+  // #349/#447 parity: a rendered @agent mention opens the side panel on click,
+  // same as markdown.tsx's ActorMention and the editor MentionView. Context
+  // (channels/DM) preferred, global store fallback everywhere else.
+  const openAgentPanelFromContext = useOpenAgentPanel();
+  const openAgentPanelFromStore = useAgentPanelStore((s) => s.open);
+  const openAgentPanel = openAgentPanelFromContext ?? openAgentPanelFromStore;
 
   if (href?.startsWith("slash://skill/")) {
     return <span className="slash-command">{children}</span>;
@@ -221,6 +229,9 @@ function ReadonlyLink({
             memberType={type === "agent" ? "agent" : "user"}
             memberId={id}
             triggerElement="span"
+            onClickCapture={
+              type === "agent" && openAgentPanel ? () => openAgentPanel(id) : undefined
+            }
           >
             {chip}
           </ActorProfileTrigger>

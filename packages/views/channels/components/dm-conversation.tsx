@@ -27,6 +27,7 @@ import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
 import { useFileUpload, type UploadResult } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { useWSEvent } from "@multica/core/realtime";
 import type { ChannelActiveTask, ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -46,6 +47,7 @@ import { toast } from "sonner";
 import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
+import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
 import { useT } from "../../i18n/use-t";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
@@ -53,6 +55,7 @@ import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
+import { AgentSidePanel } from "./agent-side-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
 import { ThreadRootPreview } from "./thread-root-preview";
 import { ComposerQuotePreview } from "./message-quote";
@@ -252,8 +255,10 @@ function DmHeader({
 }) {
   const { t } = useT("channels");
   const isMobile = useIsMobile();
+  const openAgentPanel = useOpenAgentPanel();
   const actorType = dm.peer.type === "agent" ? "agent" : "member";
   const memberType = dm.peer.type === "agent" ? "agent" : "user";
+  const isAgentPeer = dm.peer.type === "agent";
   const meta = dm.peer.type === "agent" ? t(($) => $.dm.agent_meta) : t(($) => $.dm.human_meta);
   const peerAvatar = (
     <ActorAvatar
@@ -266,6 +271,24 @@ function DmHeader({
       profileLink={false}
     />
   );
+  // #349: for an agent peer, clicking the header avatar/name opens the side
+  // panel (same as clicking the avatar in a channel), so the DM header is a
+  // panel entry point too — not just the hover-card popover. Human peers keep
+  // the popover (no agent side panel exists for them).
+  const wrapPeerTrigger = (child: React.ReactNode) =>
+    isAgentPeer && openAgentPanel ? (
+      <button
+        type="button"
+        className="inline-flex min-w-0 items-center rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={() => openAgentPanel(dm.peer.id)}
+      >
+        {child}
+      </button>
+    ) : (
+      <ActorProfileTrigger memberType={memberType} memberId={dm.peer.id}>
+        {child}
+      </ActorProfileTrigger>
+    );
 
   return (
     <ConversationHeader
@@ -283,16 +306,10 @@ function DmHeader({
               <ArrowLeft className="size-5" />
             </Button>
           )}
-          <ActorProfileTrigger memberType={memberType} memberId={dm.peer.id}>
-            {peerAvatar}
-          </ActorProfileTrigger>
+          {wrapPeerTrigger(peerAvatar)}
         </>
       }
-      title={
-        <ActorProfileTrigger memberType={memberType} memberId={dm.peer.id}>
-          <span className="truncate">{dm.peer.name}</span>
-        </ActorProfileTrigger>
-      }
+      title={wrapPeerTrigger(<span className="truncate">{dm.peer.name}</span>)}
       meta={meta}
       badges={
         isConversationMuted(dm) ? (
@@ -358,6 +375,25 @@ function DmChannelConversation({
     typingActors,
   }, dispatch] = useReducer(dmChannelReducer, initialDmChannelState);
   const [stoppingTaskId, setStoppingTaskId] = useState<string | null>(null);
+  // #349 agent side panel — same slot as the thread panel (mutually
+  // exclusive), matching channels-page.tsx's inline-panel pattern per
+  // Frank's direction (replace the slot, don't route away).
+  const [selectedAgentPanelId, setSelectedAgentPanelId] = useState<string | null>(null);
+  const handleOpenAgentPanel = useCallback((agentId: string) => {
+    dispatch({ type: "closeThread" });
+    setSelectedAgentPanelId(agentId);
+  }, []);
+  const { data: dmAgents = [] } = useQuery({
+    ...agentListOptions(wsId),
+    enabled: !!selectedAgentPanelId,
+  });
+  const { data: dmMembers = [] } = useQuery({
+    ...memberListOptions(wsId),
+    enabled: !!selectedAgentPanelId,
+  });
+  const selectedAgentPanel = selectedAgentPanelId
+    ? dmAgents.find((a) => a.id === selectedAgentPanelId) ?? null
+    : null;
   const setQuoteTarget = useCallback((message: QuoteTarget | null) => {
     dispatch({ type: "setQuote", message });
   }, []);
@@ -765,6 +801,7 @@ function DmChannelConversation({
 
   const handleOpenThread = (message: ChannelMessage) => {
     focusThreadComposerOnOpenRef.current = true;
+    setSelectedAgentPanelId(null);
     dispatch({ type: "openThread", message });
   };
 
@@ -1002,6 +1039,7 @@ function DmChannelConversation({
         onRetry={() => refetchMessages()}
         emptyLabel={t(($) => $.dm.thread_empty)}
         onOpenThread={handleOpenThread}
+        onOpenAgent={handleOpenAgentPanel}
         onReact={handleReactToMessage}
         onQuoteMessage={setQuoteTarget}
         onEditMessage={handleEditMessage}
@@ -1079,13 +1117,30 @@ function DmChannelConversation({
     </main>
   );
 
+  // #349: the agent side panel shares the thread-panel slot (opening one
+  // closes the other — see handleOpenThread / handleOpenAgentPanel).
+  const agentPanel =
+    selectedAgentPanel ? (
+      <AgentSidePanel
+        agent={selectedAgentPanel}
+        currentUserId={currentUserId}
+        members={dmMembers}
+        onClose={() => setSelectedAgentPanelId(null)}
+      />
+    ) : null;
+  const detailPanel = threadPanel ?? agentPanel;
+
+  const withProvider = (node: React.ReactNode) => (
+    <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>{node}</AgentPanelProvider>
+  );
+
   if (!isMobile) {
-    return (
+    return withProvider(
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         <ResizablePanel id="dm-conversation" minSize="50%" className="flex min-h-0 flex-col">
           {conversationPane}
         </ResizablePanel>
-        {threadPanel ? (
+        {detailPanel ? (
           <>
             <ResizableHandle />
             <ResizablePanel
@@ -1096,13 +1151,13 @@ function DmChannelConversation({
               groupResizeBehavior="preserve-pixel-size"
               className="border-l border-border/30 bg-background"
             >
-              {threadPanel}
+              {detailPanel}
             </ResizablePanel>
           </>
         ) : null}
-      </ResizablePanelGroup>
+      </ResizablePanelGroup>,
     );
   }
 
-  return threadPanel ?? conversationPane;
+  return withProvider(detailPanel ?? conversationPane);
 }

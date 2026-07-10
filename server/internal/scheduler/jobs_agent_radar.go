@@ -75,6 +75,10 @@ func makeAgentRadarScheduleHandler(pool *pgxpool.Pool) Handler {
 				skippedBudget++
 				continue
 			}
+			radarCtx, err := radar.NewContextBuilder(pool, memorycuration.DefaultWorkspacesRoot()).Build(ctx, uuidString(candidate.WorkspaceID), uuidString(candidate.AgentID))
+			if err != nil {
+				return HandlerResult{}, err
+			}
 			run, err := q.CreateAgentRadarRun(ctx, db.CreateAgentRadarRunParams{
 				WorkspaceID:    candidate.WorkspaceID,
 				AgentID:        candidate.AgentID,
@@ -86,10 +90,6 @@ func makeAgentRadarScheduleHandler(pool *pgxpool.Pool) Handler {
 				Status:         "planned",
 				ScheduledFor:   pgtype.Timestamptz{Time: in.PlanTime, Valid: true},
 			})
-			if err != nil {
-				return HandlerResult{}, err
-			}
-			radarCtx, err := radar.NewContextBuilder(pool, memorycuration.DefaultWorkspacesRoot()).Build(ctx, uuidString(candidate.WorkspaceID), uuidString(candidate.AgentID))
 			if err != nil {
 				return HandlerResult{}, err
 			}

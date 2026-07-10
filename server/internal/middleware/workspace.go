@@ -73,7 +73,7 @@ func ResolveWorkspaceIDFromRequest(r *http.Request, queries *db.Queries) string 
 	// workspace identifier on the request (slug header/query, ID
 	// query, URL param) is the agent trying to widen its blast
 	// radius — ignore it.
-	if r.Header.Get("X-Actor-Source") == "task_token" {
+	if isWorkspaceBoundActorSource(r.Header.Get("X-Actor-Source")) {
 		return r.Header.Get("X-Workspace-ID")
 	}
 	if id := WorkspaceIDFromContext(r.Context()); id != "" {
@@ -117,7 +117,7 @@ func resolveWorkspaceUUID(queries *db.Queries) workspaceResolver {
 		// token's bound workspace. The auth middleware wrote that ID
 		// into X-Workspace-ID; nothing the agent can put on the wire
 		// (slug header/query, id query, URL param) can override it.
-		if r.Header.Get("X-Actor-Source") == "task_token" {
+		if isWorkspaceBoundActorSource(r.Header.Get("X-Actor-Source")) {
 			id := r.Header.Get("X-Workspace-ID")
 			if id == "" {
 				return "", errWorkspaceNotFound
@@ -212,7 +212,7 @@ func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []str
 			// allowed to operate on a workspace other than the one
 			// stamped into its task token. This is the catch-all
 			// behind resolveWorkspaceUUID's earlier check. MUL-2600.
-			if r.Header.Get("X-Actor-Source") == "task_token" {
+			if isWorkspaceBoundActorSource(r.Header.Get("X-Actor-Source")) {
 				bound := r.Header.Get("X-Workspace-ID")
 				if bound == "" || workspaceID != bound {
 					writeError(w, http.StatusForbidden, "task token is bound to a different workspace")
@@ -275,4 +275,8 @@ func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []str
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func isWorkspaceBoundActorSource(source string) bool {
+	return source == "task_token" || source == "agent_inbox_token"
 }

@@ -104,7 +104,7 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 	}
 
 	for _, trigger := range triggers {
-		p := h.buildChannelMentionPrompt(context.Background(), ch, trigger)
+		p := h.buildChannelMentionPrompt(context.Background(), ch, trigger, channelFacilitatorState{})
 		for _, want := range []string{
 			"Multica group chat #产品讨论",
 			"directly addressed to you",
@@ -145,6 +145,72 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 	}
 }
 
+func TestBuildChannelMentionPromptIncludesFacilitatorState(t *testing.T) {
+	h := &Handler{DB: channelPromptNoopDB{}}
+	ch := ChannelResponse{
+		ID:          "22222222-2222-2222-2222-222222222222",
+		WorkspaceID: "11111111-1111-1111-1111-111111111111",
+		Name:        "产品讨论",
+	}
+	trigger := ChannelMessageResponse{AuthorName: "Frank", Type: "user", Content: "请主持并收敛这个讨论"}
+
+	ownerPrompt := h.buildChannelMentionPrompt(context.Background(), ch, trigger, channelFacilitatorState{
+		Active:                    true,
+		FacilitatorName:           "Atlas",
+		CurrentAgentIsFacilitator: true,
+	})
+	for _, want := range []string{
+		"Facilitator mode is active for you",
+		"2-4 short purposeful follow-ups",
+		"conclusion, a clear owner",
+	} {
+		if !strings.Contains(ownerPrompt, want) {
+			t.Errorf("facilitator owner prompt missing %q:\n%s", want, ownerPrompt)
+		}
+	}
+
+	participantPrompt := h.buildChannelMentionPrompt(context.Background(), ch, ChannelMessageResponse{
+		AuthorName: "Atlas",
+		Type:       "agent",
+		Content:    "请从前端体验角度比较 A 和 B，你推荐哪个？",
+	}, channelFacilitatorState{
+		Active:                         true,
+		FacilitatorName:                "Atlas",
+		CurrentTriggerFromFacilitator:  true,
+		CurrentTriggerIsDirectAgentAsk: true,
+	})
+	for _, want := range []string{
+		"Facilitator request: Atlas",
+		"direct request, not a weak agent-to-agent notification",
+		"Answer once",
+	} {
+		if !strings.Contains(participantPrompt, want) {
+			t.Errorf("facilitator participant prompt missing %q:\n%s", want, participantPrompt)
+		}
+	}
+}
+
+func TestDetectFacilitatorIntentAndConcreteRequest(t *testing.T) {
+	for _, content := range []string{
+		"你来主持这次讨论并收敛方案",
+		"带大家讨论 20 分钟",
+		"Please facilitate this discussion",
+	} {
+		if !detectFacilitatorIntent(content) {
+			t.Errorf("detectFacilitatorIntent(%q) = false", content)
+		}
+	}
+	if detectFacilitatorIntent("帮我修一下登录 bug") {
+		t.Error("ordinary task should not enter facilitator mode")
+	}
+	if !looksLikeConcreteFacilitatorRequest("请从域名可用性筛 3 个，你推荐哪个？") {
+		t.Error("concrete facilitator request was not detected")
+	}
+	if looksLikeConcreteFacilitatorRequest("大家辛苦了") {
+		t.Error("acknowledgement should not become a direct facilitator request")
+	}
+}
+
 func TestBuildChannelMentionPromptIncludesCurrentReplyAndQuoteTargets(t *testing.T) {
 	h := &Handler{DB: channelPromptNoopDB{}}
 	ch := ChannelResponse{
@@ -180,7 +246,7 @@ func TestBuildChannelMentionPromptIncludesCurrentReplyAndQuoteTargets(t *testing
 		},
 	}
 
-	p := h.buildChannelMentionPrompt(context.Background(), ch, trigger)
+	p := h.buildChannelMentionPrompt(context.Background(), ch, trigger, channelFacilitatorState{})
 	for _, want := range []string{
 		"Direct reply target for the current message:",
 		"Direct quote target for the current message:",

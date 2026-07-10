@@ -506,7 +506,7 @@ func TestSendChannelMessageDM_BypassesAmbientGateWithActiveAmbient(t *testing.T)
 		t.Fatalf("insert ambient trigger: %v", err)
 	}
 	testHandler.dispatchChannelMessageToAgents(ctx, ch, ambient, parseUUID(testUserID))
-	assertChannelAgentTaskPriorityCounts(t, ambientChannelID, agentID, 1, 0)
+	assertChannelAgentInboxEventCounts(t, ambientChannelID, agentID, 1, 0)
 
 	dmChannelID := seedAgentDMChannel(t, agentID)
 	req := newRequest("POST", "/api/channels/"+dmChannelID+"/messages", map[string]string{"content": "hey, still direct"})
@@ -517,7 +517,7 @@ func TestSendChannelMessageDM_BypassesAmbientGateWithActiveAmbient(t *testing.T)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("send dm: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	assertChannelAgentTaskPriorityCounts(t, dmChannelID, agentID, 0, 1)
+	assertChannelAgentInboxEventCounts(t, dmChannelID, agentID, 0, 1)
 }
 
 func TestPrivateAgentDMChannelRejectsUnauthorizedMember(t *testing.T) {

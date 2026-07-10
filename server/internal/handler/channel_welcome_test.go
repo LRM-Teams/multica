@@ -26,9 +26,7 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 		"do not print no_reply",
 		"directly addresses your agent name",
 		"全体",
-		"Do not stay silent",
 		"runtime brief",
-		"visible message",
 		"reaction",
 		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
 		"short acknowledgement",
@@ -44,6 +42,11 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 	for _, banned := range []string{"multica send", "multica react", "multica message send", "multica message react", "multica message read", "multica message search"} {
 		if strings.Contains(p, banned) {
 			t.Errorf("ambient prompt should not hardcode chat CLI command %q:\n%s", banned, p)
+		}
+	}
+	for _, banned := range []string{"everyone/all agents", "Do not stay silent"} {
+		if strings.Contains(p, banned) {
+			t.Errorf("ambient prompt should not contain old all-agents force-reply rule %q:\n%s", banned, p)
 		}
 	}
 	if strings.Contains(p, "Recent channel messages") {
@@ -66,7 +69,6 @@ func TestBuildChannelAmbientUnreadPromptUsesRuntimeOutputContract(t *testing.T) 
 
 	for _, want := range []string{
 		"runtime brief",
-		"visible message",
 		"reaction",
 		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
 		"Ambient cursor range: seq > 1 and seq <= 2",
@@ -79,6 +81,11 @@ func TestBuildChannelAmbientUnreadPromptUsesRuntimeOutputContract(t *testing.T) 
 	for _, banned := range []string{"multica send", "multica react", "multica message send", "multica message react", "multica message read", "multica message search"} {
 		if strings.Contains(p, banned) {
 			t.Errorf("ambient unread prompt should not hardcode chat CLI command %q:\n%s", banned, p)
+		}
+	}
+	for _, banned := range []string{"everyone/all agents", "Do not stay silent"} {
+		if strings.Contains(p, banned) {
+			t.Errorf("ambient unread prompt should not contain old all-agents force-reply rule %q:\n%s", banned, p)
 		}
 	}
 }

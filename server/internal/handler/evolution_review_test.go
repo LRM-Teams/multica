@@ -30,11 +30,12 @@ func seedEvolutionReviewSubmissionWithMetadata(t *testing.T, status string, meta
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO evolution_unit_submission (
 			workspace_id, source_agent_id, unit_type, local_unit_id, title, summary,
-			content, content_hash, sensitivity, confidence, status, review_decision,
+			content, content_hash, sensitivity, confidence, evidence, applies, status, review_decision,
 			review_risk_level, review_reason, review_metadata, reviewed_at
 		) VALUES (
 			$1, $2, 'memory', $3, 'Targeted Go tests', 'Run narrow tests before broader checks.',
-			$4, $5, 'none', 'high', $6, 'needs_review', 'medium', 'seeded for review', $7::jsonb, now()
+			$4, $5, 'none', 'high', '{"source":"memory_curation_l3","source_date":"2026-07-10","source_agent_id":"secret-agent","evidence_refs":["dm_message:secret-dm","channel_message:secret-channel","issue:issue-1"]}'::jsonb, '{"scope":"workspace","source_agent_id":"secret-agent","languages":["go"]}'::jsonb,
+			$6, 'needs_review', 'medium', 'seeded for review', $7::jsonb, now()
 		)
 		RETURNING id`, testWorkspaceID, agentID, localID, content, hashEvolutionContent(content), status, string(reviewMetadata)).Scan(&submissionID); err != nil {
 		t.Fatalf("seed evolution submission: %v", err)
@@ -89,8 +90,28 @@ func TestEvolutionReviewAPIListAndGet(t *testing.T) {
 	if err := json.Unmarshal(getRec.Body.Bytes(), &detail); err != nil {
 		t.Fatalf("decode detail: %v", err)
 	}
-	if detail.ID != submissionID || len(detail.Files) != 1 || detail.Files[0].Path != "README.md" {
+	if detail.ID != submissionID || len(detail.Files) != 1 || detail.Files[0].Path != "README.md" || detail.Evidence.Source != "memory_curation_l3" || strings.Join(detail.Evidence.EvidenceRefs, ",") != "channel_message,issue" || detail.Applies.Scope != "workspace" {
 		t.Fatalf("detail = %#v", detail)
+	}
+	if strings.Contains(getRec.Body.String(), "secret-dm") || strings.Contains(getRec.Body.String(), "secret-agent") || strings.Contains(getRec.Body.String(), "secret-channel") {
+		t.Fatalf("detail leaked raw evidence identifiers: %s", getRec.Body.String())
+	}
+}
+
+func TestSafeEvolutionEvidenceRejectsUnknownAndDMSource(t *testing.T) {
+	for _, source := range []string{"dm_message:secret", "channel_message:secret", "arbitrary_source"} {
+		raw, err := json.Marshal(map[string]any{"source": source, "evidence_refs": []string{"issue:issue-1"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := safeEvolutionReviewEvidence(raw)
+		if got.Source != "" || strings.Join(got.EvidenceRefs, ",") != "issue" {
+			t.Fatalf("source=%q got=%#v", source, got)
+		}
+	}
+	raw, _ := json.Marshal(map[string]any{"source": "memory_curation_l3"})
+	if got := safeEvolutionReviewEvidence(raw).Source; got != "memory_curation_l3" {
+		t.Fatalf("allowed source=%q", got)
 	}
 }
 
@@ -139,6 +160,102 @@ func TestEvolutionReviewAPIPromote(t *testing.T) {
 	}
 }
 
+func TestEvolutionReviewAPIDoublePromoteUsesCAS(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	submissionID := seedEvolutionReviewSubmission(t, "needs_review")
+	call := func() int {
+		req := withURLParam(newRequest(http.MethodPost, "/api/evolution/submissions/"+submissionID+"/promote?workspace_id="+testWorkspaceID, map[string]string{"reason": "concurrent"}), "submissionId", submissionID)
+		rec := httptest.NewRecorder()
+		testHandler.PromoteEvolutionReviewSubmission(rec, req)
+		return rec.Code
+	}
+	results := make(chan int, 2)
+	start := make(chan struct{})
+	for range 2 {
+		go func() { <-start; results <- call() }()
+	}
+	close(start)
+	a, b := <-results, <-results
+	if !((a == http.StatusOK && b == http.StatusConflict) || (b == http.StatusOK && a == http.StatusConflict)) {
+		t.Fatalf("statuses=%d,%d", a, b)
+	}
+}
+
+func TestEvolutionReviewAPIApproveVsRejectUsesCAS(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	submissionID := seedEvolutionReviewSubmission(t, "needs_review")
+	results := make(chan int, 2)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		req := withURLParam(newRequest(http.MethodPost, "/promote?workspace_id="+testWorkspaceID, map[string]string{}), "submissionId", submissionID)
+		rec := httptest.NewRecorder()
+		testHandler.PromoteEvolutionReviewSubmission(rec, req)
+		results <- rec.Code
+	}()
+	go func() {
+		<-start
+		req := withURLParam(newRequest(http.MethodPost, "/reject?workspace_id="+testWorkspaceID, map[string]string{}), "submissionId", submissionID)
+		rec := httptest.NewRecorder()
+		testHandler.RejectEvolutionReviewSubmission(rec, req)
+		results <- rec.Code
+	}()
+	close(start)
+	a, b := <-results, <-results
+	if !((a == http.StatusOK && b == http.StatusConflict) || (b == http.StatusOK && a == http.StatusConflict)) {
+		t.Fatalf("statuses=%d,%d", a, b)
+	}
+	var status string
+	if err := testPool.QueryRow(context.Background(), `SELECT status FROM evolution_unit_submission WHERE id=$1`, submissionID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "promoted" && status != "rejected" {
+		t.Fatalf("status=%q", status)
+	}
+}
+
+func TestEvolutionReviewAPISameHashPromotionsShareUnit(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	first := seedEvolutionReviewSubmission(t, "needs_review")
+	second := seedEvolutionReviewSubmission(t, "needs_review")
+	var content, hash string
+	if err := testPool.QueryRow(context.Background(), `SELECT content, content_hash FROM evolution_unit_submission WHERE id=$1`, first).Scan(&content, &hash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE evolution_unit_submission SET content=$2, content_hash=$3 WHERE id=$1`, second, content, hash); err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan int, 2)
+	start := make(chan struct{})
+	for _, id := range []string{first, second} {
+		go func(id string) {
+			<-start
+			req := withURLParam(newRequest(http.MethodPost, "/promote?workspace_id="+testWorkspaceID, map[string]string{}), "submissionId", id)
+			rec := httptest.NewRecorder()
+			testHandler.PromoteEvolutionReviewSubmission(rec, req)
+			results <- rec.Code
+		}(id)
+	}
+	close(start)
+	a, b := <-results, <-results
+	if a != http.StatusOK || b != http.StatusOK {
+		t.Fatalf("statuses=%d,%d", a, b)
+	}
+	var units int
+	if err := testPool.QueryRow(context.Background(), `SELECT count(DISTINCT promoted_unit_id) FROM evolution_unit_submission WHERE id=ANY($1::uuid[])`, []string{first, second}).Scan(&units); err != nil {
+		t.Fatal(err)
+	}
+	if units != 1 {
+		t.Fatalf("distinct promoted units=%d", units)
+	}
+}
+
 func TestEvolutionReviewAPIPromoteCanApplyReviewSuggestions(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -173,6 +290,81 @@ func TestEvolutionReviewAPIPromoteCanApplyReviewSuggestions(t *testing.T) {
 	nested, ok := metadata["metadata"].(map[string]any)
 	if !ok || nested["applied_review_suggestions"] != true {
 		t.Fatalf("metadata missing applied_review_suggestions: %#v", metadata)
+	}
+}
+
+func TestEvolutionSourceSkillAssignmentIsTargetedAndPreservesSource(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	submissionID := seedEvolutionReviewSubmission(t, "needs_review")
+	if _, err := testPool.Exec(context.Background(), `UPDATE evolution_unit_submission SET unit_type='skill' WHERE id=$1`, submissionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(context.Background(), `DELETE FROM evolution_unit_submission_file WHERE submission_id=$1`, submissionID); err != nil {
+		t.Fatal(err)
+	}
+	skillBody := "---\nname: targeted-evolution-skill\ndescription: Safe test skill\n---\n\nRun focused tests."
+	if _, err := testPool.Exec(context.Background(), `INSERT INTO evolution_unit_submission_file(workspace_id,submission_id,path,content,content_hash,mime_type,size_bytes) VALUES($1,$2,'SKILL.md',$3,$4,'text/markdown',$5)`, testWorkspaceID, submissionID, skillBody, hashEvolutionContent(skillBody), len(skillBody)); err != nil {
+		t.Fatal(err)
+	}
+	promoteReq := withURLParam(newRequest(http.MethodPost, "/promote?workspace_id="+testWorkspaceID, map[string]string{}), "submissionId", submissionID)
+	promoteRec := httptest.NewRecorder()
+	testHandler.PromoteEvolutionReviewSubmission(promoteRec, promoteReq)
+	if promoteRec.Code != http.StatusOK {
+		t.Fatalf("promote=%d %s", promoteRec.Code, promoteRec.Body.String())
+	}
+	var agentID, materializedID, otherID string
+	if err := testPool.QueryRow(context.Background(), `SELECT source_agent_id::text FROM evolution_unit_submission WHERE id=$1`, submissionID).Scan(&agentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(context.Background(), `SELECT id::text FROM skill WHERE workspace_id=$1 AND name='targeted-evolution-skill'`, testWorkspaceID).Scan(&materializedID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(context.Background(), `INSERT INTO skill(workspace_id,name,description,content,config) VALUES($1,$2,'other','other','{}') RETURNING id::text`, testWorkspaceID, "other-"+randomID()).Scan(&otherID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM skill WHERE id=$1`, otherID) })
+	if _, err := testPool.Exec(context.Background(), `INSERT INTO agent_skill(agent_id,skill_id,source) VALUES($1,$2,'manual')`, agentID, otherID); err != nil {
+		t.Fatal(err)
+	}
+	call := func(enabled bool) {
+		req := withURLParam(newRequest(http.MethodPut, "/source-skill?workspace_id="+testWorkspaceID, map[string]bool{"enabled": enabled}), "submissionId", submissionID)
+		rec := httptest.NewRecorder()
+		testHandler.SetEvolutionSourceSkillAssignment(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("enabled=%v status=%d body=%s", enabled, rec.Code, rec.Body.String())
+		}
+	}
+	call(false)
+	var otherCount, materializedCount int
+	_ = testPool.QueryRow(context.Background(), `SELECT count(*) FROM agent_skill WHERE agent_id=$1 AND skill_id=$2`, agentID, otherID).Scan(&otherCount)
+	_ = testPool.QueryRow(context.Background(), `SELECT count(*) FROM agent_skill WHERE agent_id=$1 AND skill_id=$2`, agentID, materializedID).Scan(&materializedCount)
+	if otherCount != 1 || materializedCount != 0 {
+		t.Fatalf("after disable other=%d materialized=%d", otherCount, materializedCount)
+	}
+	call(true)
+	var source string
+	if err := testPool.QueryRow(context.Background(), `SELECT source FROM agent_skill WHERE agent_id=$1 AND skill_id=$2`, agentID, materializedID).Scan(&source); err != nil {
+		t.Fatal(err)
+	}
+	if source != "evolution" {
+		t.Fatalf("source=%q", source)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_skill SET source='manual' WHERE agent_id=$1 AND skill_id=$2`, agentID, materializedID); err != nil {
+		t.Fatal(err)
+	}
+	req := withURLParam(newRequest(http.MethodPut, "/source-skill?workspace_id="+testWorkspaceID, map[string]bool{"enabled": false}), "submissionId", submissionID)
+	rec := httptest.NewRecorder()
+	testHandler.SetEvolutionSourceSkillAssignment(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"result":"preserved_non_evolution"`) || !strings.Contains(rec.Body.String(), `"enabled":true`) {
+		t.Fatalf("manual disable status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := testPool.QueryRow(context.Background(), `SELECT source FROM agent_skill WHERE agent_id=$1 AND skill_id=$2`, agentID, materializedID).Scan(&source); err != nil {
+		t.Fatal(err)
+	}
+	if source != "manual" {
+		t.Fatalf("manual source was changed: %q", source)
 	}
 }
 

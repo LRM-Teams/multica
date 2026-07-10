@@ -296,6 +296,21 @@ func (q *Queries) ListCandidateEvolutionSubmissions(ctx context.Context, arg Lis
 	return items, rows.Err()
 }
 
+const getEvolutionSubmissionForReview = `-- name: GetEvolutionSubmissionForReview :one
+SELECT id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at FROM evolution_unit_submission
+WHERE id = $1 AND workspace_id = $2 AND status = 'needs_review'
+FOR UPDATE
+`
+
+type GetEvolutionSubmissionForReviewParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetEvolutionSubmissionForReview(ctx context.Context, arg GetEvolutionSubmissionForReviewParams) (EvolutionUnitSubmission, error) {
+	return scanEvolutionUnitSubmission(q.db.QueryRow(ctx, getEvolutionSubmissionForReview, arg.ID, arg.WorkspaceID))
+}
+
 const listEvolutionSubmissionFiles = `-- name: ListEvolutionSubmissionFiles :many
 SELECT id, workspace_id, submission_id, path, content, content_hash, mime_type, size_bytes, created_at FROM evolution_unit_submission_file
 WHERE workspace_id = $1 AND submission_id = $2
@@ -661,7 +676,6 @@ func (q *Queries) UpsertSharedEvolutionUnitFile(ctx context.Context, arg UpsertS
 	err := row.Scan(&item.ID, &item.WorkspaceID, &item.UnitID, &item.VersionID, &item.Path, &item.Content, &item.ContentHash, &item.MimeType, &item.SizeBytes, &item.CreatedAt)
 	return item, err
 }
-
 
 func scanEvolutionUnitSubmission(row pgx.Row) (EvolutionUnitSubmission, error) {
 	var i EvolutionUnitSubmission

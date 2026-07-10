@@ -16,40 +16,65 @@ import (
 )
 
 type EvolutionReviewSubmissionResponse struct {
-	ID               string                        `json:"id"`
-	WorkspaceID      string                        `json:"workspace_id"`
-	SourceAgentID    string                        `json:"source_agent_id"`
-	SourceMemberID   string                        `json:"source_member_id,omitempty"`
-	UnitType         string                        `json:"unit_type"`
-	LocalUnitID      string                        `json:"local_unit_id"`
-	Title            string                        `json:"title"`
-	Summary          string                        `json:"summary"`
-	Content          string                        `json:"content,omitempty"`
-	ContentHash      string                        `json:"content_hash"`
-	BundleHash       string                        `json:"bundle_hash"`
-	BundleRef        string                        `json:"bundle_ref"`
-	Sensitivity      string                        `json:"sensitivity"`
-	Confidence       string                        `json:"confidence"`
-	SuggestedScope   string                        `json:"suggested_scope"`
-	Tags             []string                      `json:"tags"`
-	Tools            []string                      `json:"tools"`
-	TaskTypes        []string                      `json:"task_types"`
-	ProjectTypes     []string                      `json:"project_types"`
-	Languages        []string                      `json:"languages"`
-	Frameworks       []string                      `json:"frameworks"`
-	Status           string                        `json:"status"`
-	RejectReason     string                        `json:"reject_reason"`
-	ReviewDecision   string                        `json:"review_decision"`
-	ReviewConfidence *float64                      `json:"review_confidence,omitempty"`
-	ReviewRiskLevel  string                        `json:"review_risk_level"`
-	ReviewReason     string                        `json:"review_reason"`
-	ReviewMetadata   map[string]any                `json:"review_metadata"`
-	ReviewedAt       *string                       `json:"reviewed_at,omitempty"`
-	PromotedUnitID   *string                       `json:"promoted_unit_id,omitempty"`
-	SourceCreatedAt  *string                       `json:"source_created_at,omitempty"`
-	CreatedAt        *string                       `json:"created_at,omitempty"`
-	UpdatedAt        *string                       `json:"updated_at,omitempty"`
-	Files            []EvolutionReviewFileResponse `json:"files,omitempty"`
+	ID                string                              `json:"id"`
+	WorkspaceID       string                              `json:"workspace_id"`
+	SourceAgentID     string                              `json:"source_agent_id"`
+	SourceMemberID    string                              `json:"source_member_id,omitempty"`
+	UnitType          string                              `json:"unit_type"`
+	LocalUnitID       string                              `json:"local_unit_id"`
+	Title             string                              `json:"title"`
+	Summary           string                              `json:"summary"`
+	Content           string                              `json:"content,omitempty"`
+	ContentHash       string                              `json:"content_hash"`
+	BundleHash        string                              `json:"bundle_hash"`
+	BundleRef         string                              `json:"bundle_ref"`
+	Sensitivity       string                              `json:"sensitivity"`
+	Confidence        string                              `json:"confidence"`
+	SuggestedScope    string                              `json:"suggested_scope"`
+	Evidence          EvolutionReviewEvidenceResponse     `json:"evidence"`
+	Applies           EvolutionReviewAppliesResponse      `json:"applies"`
+	Tags              []string                            `json:"tags"`
+	Tools             []string                            `json:"tools"`
+	TaskTypes         []string                            `json:"task_types"`
+	ProjectTypes      []string                            `json:"project_types"`
+	Languages         []string                            `json:"languages"`
+	Frameworks        []string                            `json:"frameworks"`
+	Status            string                              `json:"status"`
+	RejectReason      string                              `json:"reject_reason"`
+	ReviewDecision    string                              `json:"review_decision"`
+	ReviewConfidence  *float64                            `json:"review_confidence,omitempty"`
+	ReviewRiskLevel   string                              `json:"review_risk_level"`
+	ReviewReason      string                              `json:"review_reason"`
+	ReviewMetadata    map[string]any                      `json:"review_metadata"`
+	ReviewedAt        *string                             `json:"reviewed_at,omitempty"`
+	PromotedUnitID    *string                             `json:"promoted_unit_id,omitempty"`
+	MaterializedSkill *EvolutionMaterializedSkillResponse `json:"materialized_skill,omitempty"`
+	SourceCreatedAt   *string                             `json:"source_created_at,omitempty"`
+	CreatedAt         *string                             `json:"created_at,omitempty"`
+	UpdatedAt         *string                             `json:"updated_at,omitempty"`
+	Files             []EvolutionReviewFileResponse       `json:"files,omitempty"`
+}
+
+type EvolutionReviewEvidenceResponse struct {
+	Source       string   `json:"source,omitempty"`
+	SourceDate   string   `json:"source_date,omitempty"`
+	EvidenceRefs []string `json:"evidence_refs"`
+}
+
+type EvolutionReviewAppliesResponse struct {
+	Scope        string   `json:"scope,omitempty"`
+	Tags         []string `json:"tags"`
+	Tools        []string `json:"tools"`
+	TaskTypes    []string `json:"task_types"`
+	ProjectTypes []string `json:"project_types"`
+	Languages    []string `json:"languages"`
+	Frameworks   []string `json:"frameworks"`
+}
+
+type EvolutionMaterializedSkillResponse struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 type EvolutionReviewFileResponse struct {
@@ -65,6 +90,10 @@ type EvolutionReviewFileResponse struct {
 type evolutionReviewDecisionRequest struct {
 	Reason                 string `json:"reason"`
 	ApplyReviewSuggestions bool   `json:"apply_review_suggestions"`
+}
+
+type evolutionSourceSkillRequest struct {
+	Enabled bool `json:"enabled"`
 }
 
 func (h *Handler) ListEvolutionReviewSubmissions(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +148,25 @@ func (h *Handler) GetEvolutionReviewSubmission(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, "failed to list evolution submission files")
 		return
 	}
-	writeJSON(w, http.StatusOK, evolutionReviewSubmissionResponse(submission, files))
+	resp := evolutionReviewSubmissionResponse(submission, files)
+	if submission.PromotedUnitID.Valid && submission.UnitType == "skill" {
+		skill, err := h.Queries.GetSkillBySourceEvolutionUnit(r.Context(), db.GetSkillBySourceEvolutionUnitParams{
+			WorkspaceID:           wsUUID,
+			SourceEvolutionUnitID: submission.PromotedUnitID,
+		})
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "failed to load materialized skill")
+			return
+		}
+		if err == nil {
+			resp.MaterializedSkill = &EvolutionMaterializedSkillResponse{
+				ID:          uuidToString(skill.ID),
+				Name:        skill.Name,
+				Description: skill.Description,
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) PromoteEvolutionReviewSubmission(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +182,7 @@ func (h *Handler) PromoteEvolutionReviewSubmission(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
-	unit, err := service.NewEvolutionService(h.Queries).PromoteSubmissionFromReview(r.Context(), wsUUID, submissionID, service.PromoteSubmissionReviewOptions{
+	unit, err := service.NewTransactionalEvolutionService(h.Queries, h.TxStarter).PromoteSubmissionFromReview(r.Context(), wsUUID, submissionID, service.PromoteSubmissionReviewOptions{
 		Reason:                 req.Reason,
 		ApplyReviewSuggestions: req.ApplyReviewSuggestions,
 	})
@@ -159,12 +206,87 @@ func (h *Handler) RejectEvolutionReviewSubmission(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
-	submission, err := service.NewEvolutionService(h.Queries).RejectSubmissionFromReview(r.Context(), wsUUID, submissionID, req.Reason)
+	submission, err := service.NewTransactionalEvolutionService(h.Queries, h.TxStarter).RejectSubmissionFromReview(r.Context(), wsUUID, submissionID, req.Reason)
 	if err != nil {
 		handleEvolutionReviewDecisionError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, evolutionReviewSubmissionResponse(submission, nil))
+}
+
+func (h *Handler) SetEvolutionSourceSkillAssignment(w http.ResponseWriter, r *http.Request) {
+	_, workspaceID, ok := evolutionReviewWorkspace(w, r)
+	if !ok {
+		return
+	}
+	submission, _, ok := h.loadEvolutionReviewSubmission(w, r, workspaceID)
+	if !ok {
+		return
+	}
+	if submission.Status != "promoted" || submission.UnitType != "skill" || !submission.SourceAgentID.Valid || !submission.PromotedUnitID.Valid {
+		writeError(w, http.StatusConflict, "evolution skill is not materialized")
+		return
+	}
+	var req evolutionSourceSkillRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	skill, err := h.Queries.GetSkillBySourceEvolutionUnit(r.Context(), db.GetSkillBySourceEvolutionUnitParams{
+		WorkspaceID:           workspaceID,
+		SourceEvolutionUnitID: submission.PromotedUnitID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "materialized skill not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load materialized skill")
+		return
+	}
+	result := "unchanged"
+	if req.Enabled {
+		tag, execErr := h.DB.Exec(r.Context(), `
+			INSERT INTO agent_skill (agent_id, skill_id, source)
+			VALUES ($1, $2, 'evolution')
+			ON CONFLICT (agent_id, skill_id) DO NOTHING
+		`, submission.SourceAgentID, skill.ID)
+		err = execErr
+		if err == nil && tag.RowsAffected() == 1 {
+			result = "enabled"
+		} else if err == nil {
+			result = "already_assigned"
+		}
+	} else {
+		var source string
+		var deleted bool
+		err = h.DB.QueryRow(r.Context(), `
+			WITH deleted AS (
+				DELETE FROM agent_skill
+				WHERE agent_id = $1 AND skill_id = $2 AND source = 'evolution'
+				RETURNING source
+			), existing AS (
+				SELECT source FROM agent_skill WHERE agent_id = $1 AND skill_id = $2
+			)
+			SELECT COALESCE((SELECT source FROM deleted), (SELECT source FROM existing), ''),
+			       EXISTS(SELECT 1 FROM deleted)
+		`, submission.SourceAgentID, skill.ID).Scan(&source, &deleted)
+		switch {
+		case err != nil:
+		case deleted:
+			result = "disabled"
+		case source != "":
+			result = "preserved_non_evolution"
+		default:
+			result = "already_unassigned"
+		}
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update evolution skill assignment")
+		return
+	}
+	actualEnabled := result != "disabled" && result != "already_unassigned"
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": actualEnabled, "result": result})
 }
 
 func evolutionReviewWorkspace(w http.ResponseWriter, r *http.Request) (string, pgtype.UUID, bool) {
@@ -217,10 +339,9 @@ func handleEvolutionReviewDecisionError(w http.ResponseWriter, err error) {
 }
 
 func evolutionReviewSubmissionResponse(submission db.EvolutionUnitSubmission, files []db.EvolutionUnitSubmissionFile) EvolutionReviewSubmissionResponse {
-	metadata := map[string]any{}
-	if len(submission.ReviewMetadata) > 0 {
-		_ = json.Unmarshal(submission.ReviewMetadata, &metadata)
-	}
+	metadata := jsonMap(submission.ReviewMetadata)
+	evidence := safeEvolutionReviewEvidence(submission.Evidence)
+	applies := safeEvolutionReviewApplies(submission)
 	resp := EvolutionReviewSubmissionResponse{
 		ID:              uuidToString(submission.ID),
 		WorkspaceID:     uuidToString(submission.WorkspaceID),
@@ -237,6 +358,8 @@ func evolutionReviewSubmissionResponse(submission db.EvolutionUnitSubmission, fi
 		Sensitivity:     submission.Sensitivity,
 		Confidence:      submission.Confidence,
 		SuggestedScope:  submission.SuggestedScope,
+		Evidence:        evidence,
+		Applies:         applies,
 		Tags:            safeStringSlice(submission.Tags),
 		Tools:           safeStringSlice(submission.Tools),
 		TaskTypes:       safeStringSlice(submission.TaskTypes),
@@ -273,6 +396,90 @@ func evolutionReviewSubmissionResponse(submission db.EvolutionUnitSubmission, fi
 		}
 	}
 	return resp
+}
+
+func safeEvolutionReviewEvidence(raw []byte) EvolutionReviewEvidenceResponse {
+	value := jsonMap(raw)
+	return EvolutionReviewEvidenceResponse{
+		Source:       safeEvidenceSource(value["source"]),
+		SourceDate:   safeJSONScalar(value["source_date"], 40),
+		EvidenceRefs: safeEvidenceRefs(value["evidence_refs"]),
+	}
+}
+
+func safeEvolutionReviewApplies(submission db.EvolutionUnitSubmission) EvolutionReviewAppliesResponse {
+	value := jsonMap(submission.Applies)
+	return EvolutionReviewAppliesResponse{
+		Scope:        safeJSONScalar(value["scope"], 80),
+		Tags:         safeStringSlice(submission.Tags),
+		Tools:        safeStringSlice(submission.Tools),
+		TaskTypes:    safeStringSlice(submission.TaskTypes),
+		ProjectTypes: safeStringSlice(submission.ProjectTypes),
+		Languages:    safeStringSlice(submission.Languages),
+		Frameworks:   safeStringSlice(submission.Frameworks),
+	}
+}
+
+func safeEvidenceSource(value any) string {
+	source := safeJSONScalar(value, 80)
+	switch source {
+	case "memory_curation_l3", "memory_curation_l2", "runtime", "curator", "manual", "system":
+		return source
+	default:
+		return ""
+	}
+}
+
+func safeEvidenceRefs(value any) []string {
+	items, ok := value.([]any)
+	if !ok {
+		return []string{}
+	}
+	refs := make([]string, 0, len(items))
+	for _, item := range items {
+		ref, ok := item.(string)
+		if !ok {
+			continue
+		}
+		parts := strings.SplitN(strings.TrimSpace(ref), ":", 2)
+		if len(parts) != 2 || parts[1] == "" {
+			continue
+		}
+		switch parts[0] {
+		case "dm_message":
+			// DM identifiers could be used to cross participant boundaries.
+			continue
+		case "channel_message", "issue", "comment", "task", "activity", "evolution_feedback":
+			refs = append(refs, parts[0])
+		}
+		if len(refs) == 20 {
+			break
+		}
+	}
+	return refs
+}
+
+func safeJSONScalar(value any, limit int) string {
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return truncateReviewValue(strings.TrimSpace(text), limit)
+}
+
+func truncateReviewValue(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit]
+}
+
+func jsonMap(raw []byte) map[string]any {
+	value := map[string]any{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &value)
+	}
+	return value
 }
 
 func safeStringSlice(values []string) []string {

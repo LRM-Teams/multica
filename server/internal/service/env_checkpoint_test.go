@@ -158,6 +158,16 @@ func (f *fakeInFlightResolver) ListInFlightTasksForProject(_ context.Context, _,
 	return f.triggers, f.err
 }
 
+type fakeResumeAgentRunner struct {
+	calledWith *ResumeTrigger
+	err        error
+}
+
+func (f *fakeResumeAgentRunner) ResumeAgentRun(_ context.Context, t ResumeTrigger) error {
+	f.calledWith = &t
+	return f.err
+}
+
 // --- tests ---
 
 func TestEnvCheckpointCreateWaitsForSynchronousSaveComplete(t *testing.T) {
@@ -483,5 +493,82 @@ func TestEnvCheckpointCreateEmptyResumeTriggerWhenNoInFlightTask(t *testing.T) {
 	}
 	if len(cp.ResumeTrigger) != 0 {
 		t.Fatalf("expected empty resume_trigger, got %s", cp.ResumeTrigger)
+	}
+}
+
+func TestResumeFromCheckpointExecutesTriggerAfterSandboxResume(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	repo.checkpoints["cp-1"] = EnvCheckpoint{
+		ID: "cp-1", WorkspaceID: "ws", SaveStatus: EnvCheckpointSaveComplete,
+		SandboxRefs:   []SandboxInstanceRef{{InstanceID: "s-1", WorkspaceID: "ws"}},
+		ResumeTrigger: json.RawMessage(`{"task_id":"t-1","runtime_id":"r-1","agent_id":"a-1","project_id":"p-1","kind":"issue"}`),
+	}
+	runner := &fakeResumeAgentRunner{}
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, runner)
+
+	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if runner.calledWith == nil || runner.calledWith.TaskID != "t-1" {
+		t.Fatal("trigger not executed")
+	}
+	if res.TriggerStatus != TriggerExecuted {
+		t.Fatalf("status=%v want executed", res.TriggerStatus)
+	}
+}
+
+func TestResumeFromCheckpointSkipsLegacyEmptyTrigger(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	repo.checkpoints["cp-1"] = EnvCheckpoint{
+		ID: "cp-1", WorkspaceID: "ws", SaveStatus: EnvCheckpointSaveComplete,
+		SandboxRefs:   []SandboxInstanceRef{{InstanceID: "s-1", WorkspaceID: "ws"}},
+		ResumeTrigger: nil,
+	}
+	runner := &fakeResumeAgentRunner{}
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, runner)
+
+	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if runner.calledWith != nil {
+		t.Fatal("legacy trigger should not execute")
+	}
+	if res.TriggerStatus != TriggerSkippedLegacy {
+		t.Fatalf("status=%v want skipped_legacy", res.TriggerStatus)
+	}
+}
+
+func TestResumeFromCheckpointTriggerFailureIsPartialResume(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	repo.checkpoints["cp-1"] = EnvCheckpoint{
+		ID: "cp-1", WorkspaceID: "ws", SaveStatus: EnvCheckpointSaveComplete,
+		SandboxRefs:   []SandboxInstanceRef{{InstanceID: "s-1", WorkspaceID: "ws"}},
+		ResumeTrigger: json.RawMessage(`{"task_id":"t-1","runtime_id":"r-1","kind":"issue"}`),
+	}
+	runner := &fakeResumeAgentRunner{err: ErrTriggerTaskNotResumable}
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, runner)
+
+	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	if err == nil {
+		t.Fatal("expected partial-resume error")
+	}
+	if res.TriggerStatus != TriggerFailed {
+		t.Fatalf("status=%v want failed", res.TriggerStatus)
+	}
+}
+
+func TestResumeFromCheckpointRejectsTriggerWithoutRunner(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	repo.checkpoints["cp-1"] = EnvCheckpoint{
+		ID: "cp-1", WorkspaceID: "ws", SaveStatus: EnvCheckpointSaveComplete,
+		SandboxRefs:   []SandboxInstanceRef{{InstanceID: "s-1", WorkspaceID: "ws"}},
+		ResumeTrigger: json.RawMessage(`{"task_id":"t-1","kind":"issue"}`),
+	}
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, nil)
+
+	if _, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u"); err == nil {
+		t.Fatal("expected error for non-empty trigger with nil runner")
 	}
 }

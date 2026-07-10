@@ -233,6 +233,13 @@ func (s *EnvCheckpointService) List(ctx context.Context, workspaceID, projectID 
 // (pending/timed_out/failed) checkpoints are rejected without enqueueing any
 // resume jobs. A missing resumer is a loud error - resume without a resumer
 // would silently no-op and return a handle AReaL cannot actually use.
+//
+// After the sandbox containers resume, the checkpoint's resume_trigger (if any)
+// is executed via the ResumeAgentRunner seam to re-engage the agent runtime so
+// the resumed rollout continues its in-flight task. An empty resume_trigger
+// (pre-change / no in-flight task) degrades to sandbox-only resume and reports
+// TriggerSkippedLegacy; a trigger failure reports TriggerFailed (partial
+// resume: sandboxes resumed, agent runtime not re-engaged).
 func (s *EnvCheckpointService) ResumeFromCheckpoint(ctx context.Context, workspaceID, checkpointID, actorUserID string) (ResumeFromCheckpointResult, error) {
 	if s.resumer == nil {
 		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: resume is not configured (no sandbox resumer)")
@@ -249,11 +256,33 @@ func (s *EnvCheckpointService) ResumeFromCheckpoint(ctx context.Context, workspa
 			return ResumeFromCheckpointResult{}, fmt.Errorf("resume sandbox %s: %w", ref.InstanceID, err)
 		}
 	}
-	return ResumeFromCheckpointResult{
+	result := ResumeFromCheckpointResult{
 		CheckpointID:  cp.ID,
 		ProjectID:     cp.ProjectID,
 		EnvIDMap:      cp.EnvIDMap,
 		SandboxRefs:   cp.SandboxRefs,
 		RolloutHandle: fmt.Sprintf("resume:%s", cp.ID),
-	}, nil
+	}
+	// Legacy / no in-flight task: sandbox-only resume, no agent re-engagement.
+	if len(cp.ResumeTrigger) == 0 {
+		result.TriggerStatus = TriggerSkippedLegacy
+		return result, nil
+	}
+	// Non-empty trigger requires a runner; nil is a loud error (would no-op and
+	// return a handle AReaL cannot use). Sandboxes are already resumed above, so
+	// this is a partial-resume error.
+	if s.resumeAgent == nil {
+		return ResumeFromCheckpointResult{}, fmt.Errorf("validation_failed: non-empty resume_trigger but no resume agent runner configured")
+	}
+	var trigger ResumeTrigger
+	if err := json.Unmarshal(cp.ResumeTrigger, &trigger); err != nil {
+		result.TriggerStatus = TriggerFailed
+		return result, fmt.Errorf("unmarshal resume_trigger: %w", err)
+	}
+	if err := s.resumeAgent.ResumeAgentRun(ctx, trigger); err != nil {
+		result.TriggerStatus = TriggerFailed
+		return result, fmt.Errorf("resume agent run: %w", err)
+	}
+	result.TriggerStatus = TriggerExecuted
+	return result, nil
 }

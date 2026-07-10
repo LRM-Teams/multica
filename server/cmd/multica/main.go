@@ -58,6 +58,7 @@ func init() {
 	messageCmd.GroupID = groupCore
 	channelCmd.GroupID = groupCore
 	threadCmd.GroupID = groupCore
+	reminderCmd.GroupID = groupCore
 
 	// Runtime commands
 	daemonCmd.GroupID = groupRuntime
@@ -99,6 +100,7 @@ func init() {
 	rootCmd.AddCommand(dmCmd)
 	rootCmd.AddCommand(channelCmd)
 	rootCmd.AddCommand(threadCmd)
+	rootCmd.AddCommand(reminderCmd)
 	rootCmd.AddCommand(stickerCmd)
 	rootCmd.AddCommand(sandboxdCmd)
 

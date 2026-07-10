@@ -3063,6 +3063,9 @@ func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch Channel
 	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content)
 	if len(mentionedAgents) > 0 {
 		for _, agent := range mentionedAgents {
+			if len(mentionedAgents) == 1 {
+				h.markTriggerFacilitatorIfNeeded(ctx, ch, agent, trigger)
+			}
 			h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
 		}
 		return
@@ -3079,6 +3082,9 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content)
 	if len(mentionedAgents) > 0 {
 		for _, agent := range mentionedAgents {
+			if len(mentionedAgents) == 1 {
+				h.markTriggerFacilitatorIfNeeded(ctx, ch, agent, trigger)
+			}
 			h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
 		}
 		return
@@ -3105,6 +3111,8 @@ func (h *Handler) dispatchChannelAgentReply(ctx context.Context, ch ChannelRespo
 	if trigger.Type == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == uuidToString(agent.ID) {
 		return
 	}
+	rootID := h.channelThreadRootForTrigger(ch, trigger)
+	facilitatorState := h.loadChannelFacilitatorState(ctx, rootID, agent.ID, trigger)
 	if trigger.ThreadRootMessageID != nil {
 		h.followChannelThreadAgent(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
 	}
@@ -3112,7 +3120,7 @@ func (h *Handler) dispatchChannelAgentReply(ctx context.Context, ch ChannelRespo
 	if ch.Kind == "dm" {
 		reason = "dm"
 	}
-	h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger), "channel agent reply", true, reason, 10)
+	h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger, facilitatorState), "channel agent reply", true, reason, 10)
 }
 
 func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, logScope string, showTyping bool, reason string, priority int32) {
@@ -3485,6 +3493,22 @@ func (h *Handler) channelThreadTargetAgents(ctx context.Context, workspaceID, ch
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
 		       a.instructions, a.archived_at, a.display_name
+		FROM thread_participant tp
+		JOIN agent a ON tp.member_type = 'agent' AND a.id = tp.member_id
+		JOIN channel_member cm ON cm.channel_id = $1 AND cm.workspace_id = $2 AND cm.member_type = 'agent' AND cm.member_id = a.id
+		WHERE tp.root_message_id = $3
+		  AND tp.role = 'facilitator'
+		  AND tp.wake_state = 'active'
+		  AND a.archived_at IS NULL
+		ORDER BY tp.updated_at DESC
+		LIMIT 1`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID))
+	if len(agents) > 0 {
+		return agents
+	}
+	agents = h.channelThreadAgentsFromQuery(ctx, `
+		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
+		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
+		       a.instructions, a.archived_at, a.display_name
 		FROM channel_message m
 		JOIN agent a ON m.author_type = 'agent' AND a.id = m.author_id
 		JOIN channel_member cm ON cm.channel_id = m.channel_id AND cm.workspace_id = m.workspace_id AND cm.member_type = 'agent' AND cm.member_id = a.id
@@ -3566,6 +3590,150 @@ func contentMentionsAgent(content, name string) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(content), needle)
+}
+
+type channelFacilitatorState struct {
+	Active                         bool
+	FacilitatorAgentID             string
+	FacilitatorName                string
+	CurrentAgentIsFacilitator      bool
+	CurrentTriggerFromFacilitator  bool
+	CurrentTriggerIsDirectAgentAsk bool
+}
+
+func detectFacilitatorIntent(content string) bool {
+	lower := strings.ToLower(strings.TrimSpace(content))
+	if lower == "" {
+		return false
+	}
+	for _, needle := range []string{
+		"主持", "协调", "收敛", "推进", "带大家讨论", "带大家聊", "主持一下", "帮大家收敛",
+		"facilitat", "moderat", "coordinate", "drive this discussion", "drive to a decision",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeConcreteFacilitatorRequest(content string) bool {
+	lower := strings.ToLower(strings.TrimSpace(content))
+	if lower == "" {
+		return false
+	}
+	if strings.Contains(lower, "?") || strings.Contains(lower, "？") {
+		return true
+	}
+	for _, needle := range []string{
+		"请", "帮", "给我", "列", "评估", "判断", "比较", "选择", "推荐", "总结", "回复",
+		"please", "can you", "could you", "review", "compare", "pick", "summarize", "reply",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Handler) channelThreadRootForTrigger(ch ChannelResponse, trigger ChannelMessageResponse) pgtype.UUID {
+	if trigger.ThreadRootMessageID != nil && strings.TrimSpace(*trigger.ThreadRootMessageID) != "" {
+		return parseUUID(*trigger.ThreadRootMessageID)
+	}
+	if ch.Kind == "group" && strings.TrimSpace(trigger.ID) != "" {
+		return parseUUID(trigger.ID)
+	}
+	return pgtype.UUID{}
+}
+
+func (h *Handler) setChannelThreadAgentRole(ctx context.Context, channelID, rootID, agentID pgtype.UUID, role string) {
+	if !rootID.Valid || !agentID.Valid || strings.TrimSpace(role) == "" {
+		return
+	}
+	if _, err := h.DB.Exec(ctx, `
+		WITH root AS (
+		  SELECT conversation_id
+		  FROM channel_message
+		  WHERE id = $2 AND channel_id = $1
+		)
+		INSERT INTO thread_participant (conversation_id, root_message_id, member_type, member_id, role, followed_at, updated_at)
+		SELECT root.conversation_id, $2, 'agent', $3, $4, now(), now()
+		FROM root
+		ON CONFLICT (root_message_id, member_type, member_id) DO UPDATE
+		SET role = EXCLUDED.role,
+		    followed_at = COALESCE(thread_participant.followed_at, EXCLUDED.followed_at),
+		    wake_state = 'active',
+		    updated_at = now()`,
+		channelID, rootID, agentID, role); err != nil {
+		slog.Warn("channel thread agent role update failed", "root", uuidToString(rootID), "agent", uuidToString(agentID), "role", role, "error", err)
+	}
+}
+
+func (h *Handler) markTriggerFacilitatorIfNeeded(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse) {
+	if trigger.Type != "user" || !detectFacilitatorIntent(trigger.Content) {
+		return
+	}
+	rootID := h.channelThreadRootForTrigger(ch, trigger)
+	if !rootID.Valid {
+		return
+	}
+	if _, err := h.DB.Exec(ctx, `
+		UPDATE thread_participant
+		SET role = 'participant', updated_at = now()
+		WHERE root_message_id = $1 AND member_type = 'agent' AND role = 'facilitator' AND member_id <> $2`,
+		rootID, agent.ID); err != nil {
+		slog.Warn("channel facilitator reset failed", "root", uuidToString(rootID), "agent", uuidToString(agent.ID), "error", err)
+	}
+	h.setChannelThreadAgentRole(ctx, parseUUID(ch.ID), rootID, agent.ID, "facilitator")
+}
+
+func (h *Handler) loadChannelFacilitatorState(ctx context.Context, rootID, targetAgentID pgtype.UUID, trigger ChannelMessageResponse) channelFacilitatorState {
+	if !rootID.Valid || !targetAgentID.Valid {
+		return channelFacilitatorState{}
+	}
+	var facilitatorID pgtype.UUID
+	var facilitatorName string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT tp.member_id, COALESCE(NULLIF(a.display_name, ''), a.name, '')
+		FROM thread_participant tp
+		JOIN agent a ON a.id = tp.member_id
+		WHERE tp.root_message_id = $1
+		  AND tp.member_type = 'agent'
+		  AND tp.role = 'facilitator'
+		ORDER BY tp.updated_at DESC
+		LIMIT 1`, rootID).Scan(&facilitatorID, &facilitatorName); err != nil {
+		return channelFacilitatorState{}
+	}
+	state := channelFacilitatorState{
+		Active:                    facilitatorID.Valid,
+		FacilitatorAgentID:        uuidToString(facilitatorID),
+		FacilitatorName:           firstNonEmpty(strings.TrimSpace(facilitatorName), uuidToString(facilitatorID)),
+		CurrentAgentIsFacilitator: facilitatorID == targetAgentID,
+	}
+	if trigger.Type == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == state.FacilitatorAgentID {
+		state.CurrentTriggerFromFacilitator = true
+		state.CurrentTriggerIsDirectAgentAsk = state.FacilitatorAgentID != uuidToString(targetAgentID) && looksLikeConcreteFacilitatorRequest(trigger.Content)
+	}
+	return state
+}
+
+func appendChannelFacilitatorPromptSection(b *strings.Builder, state channelFacilitatorState) {
+	if !state.Active {
+		return
+	}
+	if state.CurrentAgentIsFacilitator {
+		b.WriteString("Facilitator mode is active for you in this thread.\n")
+		b.WriteString("- You are the current facilitator/owner for this discussion thread.\n")
+		b.WriteString("- While the discussion is still open, you may send 2-4 short purposeful follow-ups to collect input, narrow options, and conclude.\n")
+		b.WriteString("- Each follow-up must move the thread forward: ask a concrete person a concrete question, summarize missing input, converge the shortlist, or post the conclusion.\n")
+		b.WriteString("- End facilitator mode once you have a conclusion, a clear owner, or you hit the automatic-turn limit.\n\n")
+		return
+	}
+	if state.CurrentTriggerIsDirectAgentAsk {
+		fmt.Fprintf(b, "Facilitator request: %s is the active facilitator for this thread and is directly asking you for concrete input.\n", state.FacilitatorName)
+		b.WriteString("- Treat this as a direct request, not a weak agent-to-agent notification.\n")
+		b.WriteString("- Answer once with the requested input, then return to normal thread behavior.\n\n")
+	}
 }
 
 func (h *Handler) dispatchChannelAmbientObservation(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
@@ -3689,7 +3857,7 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	return b.String()
 }
 
-func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse) string {
+func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, facilitatorState channelFacilitatorState) string {
 	members := h.channelMemberSummaries(ctx, ch.WorkspaceID, ch.ID)
 	messages := h.recentChannelMessages(ctx, ch.WorkspaceID, ch.ID, channelContextMessageLimit)
 	if trigger.ThreadRootMessageID != nil {
@@ -3708,6 +3876,7 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	b.WriteString("\n")
 	b.WriteString(channelContinuationInstruction)
 	b.WriteString("\n")
+	appendChannelFacilitatorPromptSection(&b, facilitatorState)
 	fmt.Fprintf(&b, "To prevent runaway loops, this channel run is limited to %d automatic agent turns; current trigger depth is %d. As you near the limit, steer the discussion toward a concrete conclusion.\n\n", channelRunTriggerLimit, trigger.TriggerDepth)
 	if len(members) > 0 {
 		// Give the exact mention link per member (humans included), not just a
@@ -3760,6 +3929,9 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	}
 	if trigger.ReplyToMessageID != nil || trigger.QuoteMessageID != nil {
 		b.WriteString("When answering, treat the current message text as the user's question/request and the direct reply/quote target as the referenced message content. Do not confuse the two.\n\n")
+	}
+	if strings.TrimSpace(trigger.ID) != "" {
+		fmt.Fprintf(&b, "Current message id: %s\n", trigger.ID)
 	}
 	b.WriteString("Current message to respond to:\n")
 	fmt.Fprintf(&b, "%s (%s): %s", trigger.AuthorName, trigger.Type, trigger.Content)

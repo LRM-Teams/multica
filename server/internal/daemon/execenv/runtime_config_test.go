@@ -385,6 +385,11 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 	if !strings.Contains(out, "multica message send") {
 		t.Errorf("directed brief should contain CLI send instruction")
 	}
+	for _, want := range []string{"multica reminder schedule", "future self-wake", "reminder list|snooze|update|cancel"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("directed brief missing reminder capability %q", want)
+		}
+	}
 }
 
 func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
@@ -451,6 +456,7 @@ func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
 		"multica message react --message-id",
 		"multica message read",
 		"multica message search",
+		"multica reminder schedule",
 		"For visible chat replies, run `multica message send`",
 		"After the command succeeds",
 	} {

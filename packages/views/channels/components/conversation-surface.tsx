@@ -24,8 +24,12 @@ export function ConversationHeader({
   title: ReactNode;
   meta?: ReactNode;
   badges?: ReactNode;
-  /** Optional live status (e.g. agent presence) rendered on the right,
-   *  before action icons — same row as the name, never under it. */
+  /**
+   * Optional live status (e.g. agent presence). Renders on the same row as
+   * the name, tight after title/badges — Slack/IM style, matching the profile
+   * hover card. Never under the name, never pushed to the far-right action
+   * cluster.
+   */
   status?: ReactNode;
   actions?: ReactNode;
 }) {
@@ -48,9 +52,14 @@ export function ConversationHeader({
       >
         {leading}
         <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-1.5 text-sm font-semibold leading-5">
-            <span className="truncate">{title}</span>
-            {badges}
+          {/* Name + badges share the semibold cluster; status sits outside so
+              it keeps its own weight/color and can shrink on narrow widths. */}
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 items-center gap-1.5 text-sm font-semibold leading-5">
+              <span className="truncate">{title}</span>
+              {badges}
+            </div>
+            {status}
           </div>
           {meta && (
             <p className="truncate text-[11px] leading-4 text-muted-foreground/75">
@@ -59,14 +68,9 @@ export function ConversationHeader({
           )}
         </div>
       </div>
-      {(status || actions) && (
-        <div className="flex shrink-0 items-center gap-2">
-          {status}
-          {actions && (
-            <div className="flex shrink-0 items-center gap-1 text-muted-foreground">
-              {actions}
-            </div>
-          )}
+      {actions && (
+        <div className="flex shrink-0 items-center gap-1 text-muted-foreground">
+          {actions}
         </div>
       )}
     </header>

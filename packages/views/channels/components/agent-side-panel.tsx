@@ -58,22 +58,22 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
             size={32}
             className="rounded-md"
           />
-          <p className="truncate text-sm font-semibold">{displayName}</p>
+          {/* #371: name + live presence tight together (matches DM header /
+              profile hover card). Visible before opening the Activity tab. */}
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="min-w-0 truncate text-sm font-semibold">{displayName}</p>
+            <AgentPresenceStatusLine agentId={agent.id} className="max-w-[9rem]" />
+          </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {/* #371: live presence on the right of the header (same row as the
-              name), so the state is visible before opening the Activity tab. */}
-          <AgentPresenceStatusLine agentId={agent.id} />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={onClose}
-            aria-label={t(($) => $.side_panel.close_aria)}
-          >
-            <X className="size-4" />
-          </Button>
-        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={onClose}
+          aria-label={t(($) => $.side_panel.close_aria)}
+        >
+          <X className="size-4" />
+        </Button>
       </div>
 
       {isOwner ? (

@@ -67,73 +67,55 @@ function statusTone(event: ActivityEvent): ActivityTone {
   return isActiveStatus(event.status) ? "active" : "neutral";
 }
 
-function isCommandTool(tool: string): boolean {
-  return (
-    tool.includes("exec") ||
-    tool.includes("command") ||
-    tool.includes("shell") ||
-    tool.includes("terminal") ||
-    tool.includes("bash")
-  );
-}
+// Multica providers pass their own tool slugs — Codex `exec_command`/`patch_apply`,
+// OpenCode `bash`/`read`/`write`/`glob`, Grok `read_file`, Claude capitalized
+// `Read`, etc. — so `event.tool` is NOT a stable Raft key set (confirmed with BE,
+// #382). Normalize the provider slug to a Raft semantic action, then use the
+// source-backed gerund label (raft `TOOL_DISPLAY_METADATA`). An unknown slug
+// falls back to a neutral working row rather than echoing the raw tool name.
+const TOOL_SEMANTIC: Record<string, string> = {
+  bash: "command",
+  exec_command: "command",
+  exec: "command",
+  shell: "command",
+  terminal: "command",
+  command: "command",
+  write: "write",
+  write_file: "write",
+  patch_apply: "edit",
+  edit: "edit",
+  edit_file: "edit",
+  file_edit: "edit",
+  multi_edit: "edit",
+  read: "read",
+  read_file: "read",
+  open: "read",
+  cat: "read",
+  glob: "glob",
+  grep: "grep",
+  rg: "grep",
+  search: "grep",
+  web_search: "web_search",
+  websearch: "web_search",
+  send_message: "send_message",
+};
 
-function isFileEditTool(tool: string): boolean {
-  return (
-    tool.includes("edit") ||
-    tool.includes("write") ||
-    tool.includes("patch") ||
-    tool.includes("apply")
-  );
-}
-
-function isFileReadTool(tool: string): boolean {
-  return (
-    tool.includes("read") ||
-    tool.includes("open") ||
-    tool.includes("file") ||
-    tool.includes("list") ||
-    tool.includes("cat")
-  );
-}
-
-function isSearchTool(tool: string): boolean {
-  return (
-    tool.includes("search") ||
-    tool.includes("query") ||
-    tool.includes("grep") ||
-    tool.includes("rg") ||
-    tool.includes("find")
-  );
-}
+const TOOL_ACTION_LABEL: Record<string, string> = {
+  command: "Running command…",
+  write: "Writing file…",
+  edit: "Editing file…",
+  read: "Reading file…",
+  glob: "Searching files…",
+  grep: "Searching code…",
+  web_search: "Searching web…",
+  send_message: "Sending message…",
+};
 
 function toolPresentation(event: ActivityEvent): ActivityPresentation {
-  const tool = normalizedTool(event);
   const subtext = toolTarget(event);
-  if (tool === "send_message") {
-    return { label: activeLabel("Sending message…", event), subtext, tone: statusTone(event) };
-  }
-  if (isCommandTool(tool)) {
-    return { label: activeLabel("Running command…", event), subtext, tone: statusTone(event) };
-  }
-  if (tool.includes("write")) {
-    return { label: activeLabel("Writing file…", event), subtext, tone: statusTone(event) };
-  }
-  if (isFileEditTool(tool)) {
-    return { label: activeLabel("Editing file…", event), subtext, tone: statusTone(event) };
-  }
-  if (isFileReadTool(tool)) {
-    return { label: activeLabel("Reading file…", event), subtext, tone: statusTone(event) };
-  }
-  if (tool.includes("glob")) {
-    return { label: activeLabel("Searching files…", event), subtext, tone: statusTone(event) };
-  }
-  if (tool.includes("web_search") || tool.includes("websearch")) {
-    return { label: activeLabel("Searching web…", event), subtext, tone: statusTone(event) };
-  }
-  if (isSearchTool(tool)) {
-    return { label: activeLabel("Searching code…", event), subtext, tone: statusTone(event) };
-  }
-  return { label: "Working", subtext, tone: "active" };
+  const semantic = TOOL_SEMANTIC[normalizedTool(event)];
+  const label = (semantic && TOOL_ACTION_LABEL[semantic]) || "Working…";
+  return { label: activeLabel(label, event), subtext, tone: statusTone(event) };
 }
 
 export function activityPresentation(event: ActivityEvent): ActivityPresentation {

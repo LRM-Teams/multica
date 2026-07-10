@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -67,6 +70,17 @@ type evolutionReviewDecisionRequest struct {
 	ApplyReviewSuggestions bool   `json:"apply_review_suggestions"`
 }
 
+type EvolutionCandidateRerunResponse struct {
+	SubmissionID   string  `json:"submission_id"`
+	Status         string  `json:"status"`
+	UnitID         *string `json:"unit_id,omitempty"`
+	Matched        bool    `json:"matched"`
+	Idempotent     bool    `json:"idempotent"`
+	IdempotencyKey string  `json:"idempotency_key"`
+}
+
+const evolutionCandidateRerunActivity = "evolution_candidate_rerun"
+
 func (h *Handler) ListEvolutionReviewSubmissions(w http.ResponseWriter, r *http.Request) {
 	workspaceID, wsUUID, ok := evolutionReviewWorkspace(w, r)
 	if !ok {
@@ -120,6 +134,133 @@ func (h *Handler) GetEvolutionReviewSubmission(w http.ResponseWriter, r *http.Re
 		return
 	}
 	writeJSON(w, http.StatusOK, evolutionReviewSubmissionResponse(submission, files))
+}
+
+// RerunEvolutionCandidate re-evaluates one candidate under a per-submission
+// transaction lock. A successful audit row is the idempotency record, so the
+// state transition and its retriable response commit together.
+func (h *Handler) RerunEvolutionCandidate(w http.ResponseWriter, r *http.Request) {
+	workspaceID, wsUUID, ok := evolutionReviewWorkspace(w, r)
+	if !ok {
+		return
+	}
+	member, ok := middleware.MemberFromContext(r.Context())
+	if !ok || !roleAllowed(member.Role, "owner", "admin") {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+	actorType, _ := h.resolveActor(r, requestUserID(r), workspaceID)
+	if actorType == "agent" {
+		writeError(w, http.StatusForbidden, "agents may not rerun evolution candidates")
+		return
+	}
+	submissionID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "submissionId"), "submission id")
+	if !ok {
+		return
+	}
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		writeError(w, http.StatusBadRequest, "Idempotency-Key is required")
+		return
+	}
+	if len(idempotencyKey) > 128 {
+		writeError(w, http.StatusBadRequest, "Idempotency-Key is too long")
+		return
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to rerun evolution candidate")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if _, err := tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, workspaceID, uuidToString(submissionID)); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to rerun evolution candidate")
+		return
+	}
+	var lockedSubmissionID pgtype.UUID
+	if err := tx.QueryRow(r.Context(), `
+		SELECT id FROM evolution_unit_submission
+		WHERE id = $1 AND workspace_id = $2
+		FOR UPDATE
+	`, submissionID, wsUUID).Scan(&lockedSubmissionID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "evolution submission not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to lock evolution candidate")
+		return
+	}
+
+	var replayDetails []byte
+	err = tx.QueryRow(r.Context(), `
+		SELECT details
+		FROM activity_log
+		WHERE workspace_id = $1
+		  AND action = $2
+		  AND details->>'submission_id' = $3
+		  AND details->>'idempotency_key' = $4
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, wsUUID, evolutionCandidateRerunActivity, uuidToString(submissionID), idempotencyKey).Scan(&replayDetails)
+	if err == nil {
+		var response EvolutionCandidateRerunResponse
+		if json.Unmarshal(replayDetails, &response) != nil {
+			writeError(w, http.StatusInternalServerError, "failed to replay evolution candidate rerun")
+			return
+		}
+		response.Idempotent = true
+		if err := tx.Commit(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to replay evolution candidate rerun")
+			return
+		}
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "failed to check evolution candidate rerun")
+		return
+	}
+
+	qtx := h.Queries.WithTx(tx)
+	result, err := service.NewEvolutionServiceWithReviewer(qtx, h.cfg.EvolutionReviewer, h.cfg.EvolutionReviewEnabled).RerunCandidate(r.Context(), wsUUID, submissionID)
+	if err != nil {
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			writeError(w, http.StatusNotFound, "evolution submission not found")
+		case errors.Is(err, service.ErrEvolutionSubmissionNotCandidate):
+			writeError(w, http.StatusConflict, "evolution submission is not a candidate")
+		default:
+			slog.Error("evolution candidate rerun failed", append(logger.RequestAttrs(r), "error", err, "submission_id", uuidToString(submissionID))...)
+			writeError(w, http.StatusInternalServerError, "failed to rerun evolution candidate")
+		}
+		return
+	}
+	response := EvolutionCandidateRerunResponse{
+		SubmissionID:   uuidToString(submissionID),
+		Status:         result.Status,
+		UnitID:         uuidToPtr(result.UnitID),
+		Matched:        result.Matched,
+		IdempotencyKey: idempotencyKey,
+	}
+	details, _ := json.Marshal(response)
+	if _, err := qtx.CreateActivity(r.Context(), db.CreateActivityParams{
+		WorkspaceID: wsUUID,
+		IssueID:     pgtype.UUID{},
+		ActorType:   pgtype.Text{String: "member", Valid: true},
+		ActorID:     member.UserID,
+		Action:      evolutionCandidateRerunActivity,
+		Details:     details,
+	}); err != nil {
+		slog.Error("evolution candidate rerun audit failed; rolling back", append(logger.RequestAttrs(r), "error", err, "submission_id", uuidToString(submissionID))...)
+		writeError(w, http.StatusInternalServerError, "audit log write failed; evolution candidate rerun rolled back")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to rerun evolution candidate")
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *Handler) PromoteEvolutionReviewSubmission(w http.ResponseWriter, r *http.Request) {

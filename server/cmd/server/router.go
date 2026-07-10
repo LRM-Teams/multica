@@ -812,6 +812,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
 				r.Get("/", h.ListEvolutionReviewSubmissions)
 				r.Get("/{submissionId}", h.GetEvolutionReviewSubmission)
+				r.Post("/{submissionId}/rerun", h.RerunEvolutionCandidate)
 				r.Post("/{submissionId}/promote", h.PromoteEvolutionReviewSubmission)
 				r.Post("/{submissionId}/reject", h.RejectEvolutionReviewSubmission)
 			})

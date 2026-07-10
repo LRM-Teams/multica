@@ -327,7 +327,7 @@ func (q *Queries) ListEvolutionSubmissionFiles(ctx context.Context, arg ListEvol
 const rejectEvolutionSubmission = `-- name: RejectEvolutionSubmission :one
 UPDATE evolution_unit_submission
 SET status = 'rejected', reject_reason = $3, updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = $1 AND workspace_id = $2 AND status = 'candidate'
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
@@ -353,7 +353,7 @@ SET status = 'rejected',
     review_metadata = $8,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = $1 AND workspace_id = $2 AND status IN ('candidate', 'needs_review')
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
@@ -383,7 +383,7 @@ SET status = 'needs_review',
     review_metadata = $7,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = $1 AND workspace_id = $2 AND status = 'candidate'
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
@@ -584,7 +584,7 @@ func (q *Queries) SyncSharedEvolutionUnitMatchMetadata(ctx context.Context, arg 
 const markEvolutionSubmissionPromoted = `-- name: MarkEvolutionSubmissionPromoted :one
 UPDATE evolution_unit_submission
 SET status = 'promoted', promoted_unit_id = $3, updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = $1 AND workspace_id = $2 AND status = 'candidate'
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 
@@ -610,7 +610,7 @@ SET status = 'promoted',
     review_metadata = $8,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = $1 AND workspace_id = $2 AND status IN ('candidate', 'needs_review')
 RETURNING id, workspace_id, source_agent_id, source_member_id, unit_type, local_unit_id, title, summary, content, payload, sanitized_payload, content_hash, bundle_hash, bundle_ref, sensitivity, confidence, suggested_scope, evidence, applies, tags, tools, task_types, project_types, languages, frameworks, status, reject_reason, review_decision, review_confidence, review_risk_level, review_reason, review_metadata, reviewed_at, promoted_unit_id, source_created_at, created_at, updated_at
 `
 

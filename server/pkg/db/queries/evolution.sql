@@ -94,7 +94,7 @@ ORDER BY path ASC;
 -- name: RejectEvolutionSubmission :one
 UPDATE evolution_unit_submission
 SET status = 'rejected', reject_reason = @reject_reason, updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+WHERE id = @id AND workspace_id = @workspace_id AND status = 'candidate'
 RETURNING *;
 
 -- name: RejectEvolutionSubmissionWithReview :one
@@ -108,7 +108,7 @@ SET status = 'rejected',
     review_metadata = @review_metadata,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+WHERE id = @id AND workspace_id = @workspace_id AND status IN ('candidate', 'needs_review')
 RETURNING *;
 
 -- name: MarkEvolutionSubmissionNeedsReview :one
@@ -121,7 +121,7 @@ SET status = 'needs_review',
     review_metadata = @review_metadata,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+WHERE id = @id AND workspace_id = @workspace_id AND status = 'candidate'
 RETURNING *;
 
 -- name: ListEvolutionSubmissionsForReview :many
@@ -181,7 +181,7 @@ RETURNING *;
 -- name: MarkEvolutionSubmissionPromoted :one
 UPDATE evolution_unit_submission
 SET status = 'promoted', promoted_unit_id = @promoted_unit_id, updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+WHERE id = @id AND workspace_id = @workspace_id AND status = 'candidate'
 RETURNING *;
 
 -- name: MarkEvolutionSubmissionPromotedWithReview :one
@@ -195,7 +195,7 @@ SET status = 'promoted',
     review_metadata = @review_metadata,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+WHERE id = @id AND workspace_id = @workspace_id AND status IN ('candidate', 'needs_review')
 RETURNING *;
 
 -- name: UpsertSharedEvolutionUnitFile :one

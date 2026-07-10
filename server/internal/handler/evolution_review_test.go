@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func seedEvolutionReviewSubmission(t *testing.T, status string) string {
@@ -91,6 +92,117 @@ func TestEvolutionReviewAPIListAndGet(t *testing.T) {
 	}
 	if detail.ID != submissionID || len(detail.Files) != 1 || detail.Files[0].Path != "README.md" {
 		t.Fatalf("detail = %#v", detail)
+	}
+}
+
+func TestEvolutionCandidateRerunIsWorkspaceScopedAndIdempotent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	submissionID := seedEvolutionReviewSubmission(t, "candidate")
+
+	member := db.Member{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		UserID:      parseUUID(testUserID),
+		Role:        "owner",
+	}
+	request := func(workspaceID, idempotencyKey string) *httptest.ResponseRecorder {
+		req := withURLParam(newRequest(http.MethodPost, "/api/evolution/submissions/"+submissionID+"/rerun?workspace_id="+workspaceID, nil), "submissionId", submissionID)
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+		req = req.WithContext(middleware.SetMemberContext(req.Context(), workspaceID, member))
+		rec := httptest.NewRecorder()
+		testHandler.RerunEvolutionCandidate(rec, req)
+		return rec
+	}
+
+	foreignWorkspaceID := createOtherTestWorkspace(t)
+	foreignRec := request(foreignWorkspaceID, "rerun-foreign")
+	if foreignRec.Code != http.StatusNotFound {
+		t.Fatalf("foreign workspace status=%d body=%s", foreignRec.Code, foreignRec.Body.String())
+	}
+
+	first := request(testWorkspaceID, "rerun-"+randomID())
+	if first.Code != http.StatusOK {
+		t.Fatalf("first rerun status=%d body=%s", first.Code, first.Body.String())
+	}
+	var firstResponse EvolutionCandidateRerunResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstResponse); err != nil {
+		t.Fatalf("decode first rerun: %v", err)
+	}
+	if firstResponse.Status != "promoted" || firstResponse.Idempotent || firstResponse.UnitID == nil {
+		t.Fatalf("first rerun response=%#v", firstResponse)
+	}
+
+	second := request(testWorkspaceID, firstResponse.IdempotencyKey)
+	if second.Code != http.StatusOK {
+		t.Fatalf("idempotent rerun status=%d body=%s", second.Code, second.Body.String())
+	}
+	var secondResponse EvolutionCandidateRerunResponse
+	if err := json.Unmarshal(second.Body.Bytes(), &secondResponse); err != nil {
+		t.Fatalf("decode idempotent rerun: %v", err)
+	}
+	if !secondResponse.Idempotent || secondResponse.UnitID == nil || *secondResponse.UnitID != *firstResponse.UnitID {
+		t.Fatalf("idempotent rerun response=%#v first=%#v", secondResponse, firstResponse)
+	}
+
+	var auditCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM activity_log
+		WHERE workspace_id=$1 AND action=$2 AND details->>'submission_id'=$3
+	`, testWorkspaceID, evolutionCandidateRerunActivity, submissionID).Scan(&auditCount); err != nil {
+		t.Fatalf("count rerun audit rows: %v", err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("rerun audit count=%d, want 1", auditCount)
+	}
+}
+
+func TestEvolutionCandidateRerunRequiresAdminContext(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	submissionID := seedEvolutionReviewSubmission(t, "candidate")
+	member := db.Member{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		UserID:      parseUUID(testUserID),
+		Role:        "member",
+	}
+	req := withURLParam(newRequest(http.MethodPost, "/api/evolution/submissions/"+submissionID+"/rerun?workspace_id="+testWorkspaceID, nil), "submissionId", submissionID)
+	req.Header.Set("Idempotency-Key", "rerun-member")
+	req = req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, member))
+	rec := httptest.NewRecorder()
+	testHandler.RerunEvolutionCandidate(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("member rerun status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEvolutionCandidateRerunValidatesStateAndKey(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	submissionID := seedEvolutionReviewSubmission(t, "needs_review")
+	member := db.Member{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		UserID:      parseUUID(testUserID),
+		Role:        "owner",
+	}
+
+	req := withURLParam(newRequest(http.MethodPost, "/api/evolution/submissions/"+submissionID+"/rerun?workspace_id="+testWorkspaceID, nil), "submissionId", submissionID)
+	req = req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, member))
+	rec := httptest.NewRecorder()
+	testHandler.RerunEvolutionCandidate(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing key status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withURLParam(newRequest(http.MethodPost, "/api/evolution/submissions/"+submissionID+"/rerun?workspace_id="+testWorkspaceID, nil), "submissionId", submissionID)
+	req.Header.Set("Idempotency-Key", "rerun-state-check")
+	req = req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, member))
+	rec = httptest.NewRecorder()
+	testHandler.RerunEvolutionCandidate(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "not a candidate") {
+		t.Fatalf("invalid state status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

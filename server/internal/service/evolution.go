@@ -47,7 +47,10 @@ type EvolutionCurateResult struct {
 	Matched     int `json:"matched"`
 }
 
-var ErrEvolutionSubmissionNotReviewable = errors.New("evolution submission is not awaiting review")
+var (
+	ErrEvolutionSubmissionNotReviewable = errors.New("evolution submission is not awaiting review")
+	ErrEvolutionSubmissionNotCandidate  = errors.New("evolution submission is not a candidate")
+)
 
 func NewEvolutionService(queries *db.Queries) *EvolutionService {
 	return NewEvolutionServiceWithReviewer(queries, NoopEvolutionReviewer{}, false)
@@ -62,12 +65,51 @@ func NewEvolutionServiceWithReviewer(queries *db.Queries, reviewer EvolutionRevi
 
 type evolutionCurationStatus string
 
+// EvolutionCandidateRerunResult describes the terminal transition produced by
+// re-evaluating one candidate submission.
+type EvolutionCandidateRerunResult struct {
+	Status  string
+	UnitID  pgtype.UUID
+	Matched bool
+}
+
 const (
 	evolutionCurationPromoted    evolutionCurationStatus = "promoted"
 	evolutionCurationRejected    evolutionCurationStatus = "rejected"
 	evolutionCurationNeedsReview evolutionCurationStatus = "needs_review"
 	evolutionCurationSkipped     evolutionCurationStatus = "skipped"
 )
+
+// RerunCandidate applies the normal curation path to exactly one candidate.
+// Callers are responsible for serializing concurrent attempts and wrapping
+// this method in a transaction when the transition and audit must be atomic.
+func (s *EvolutionService) RerunCandidate(ctx context.Context, workspaceID, submissionID pgtype.UUID) (EvolutionCandidateRerunResult, error) {
+	submission, err := s.Queries.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{
+		ID:          submissionID,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return EvolutionCandidateRerunResult{}, err
+	}
+	if submission.Status != "candidate" {
+		return EvolutionCandidateRerunResult{}, ErrEvolutionSubmissionNotCandidate
+	}
+
+	unit, status, err := s.curateSubmission(ctx, submission)
+	if err != nil {
+		return EvolutionCandidateRerunResult{}, err
+	}
+	result := EvolutionCandidateRerunResult{Status: string(status)}
+	if status != evolutionCurationPromoted {
+		return result, nil
+	}
+	result.UnitID = unit.ID
+	result.Matched, err = s.finalizePromotedSubmission(ctx, submission, unit)
+	if err != nil {
+		return EvolutionCandidateRerunResult{}, err
+	}
+	return result, nil
+}
 
 func (s *EvolutionService) CurateAndMatchWorkspace(ctx context.Context, workspaceID pgtype.UUID, limit int32) (EvolutionCurateResult, error) {
 	if limit <= 0 {

@@ -1,6 +1,6 @@
 ---
 name: multica-stickers
-description: "Send a sticker (表情包) instead of typing a short reply. When your whole reply would be a short social beat — hi/你好, ok/好的/没问题, 收到/明白, 谢谢, 赞/厉害/牛逼, 完美, 欢迎, 哈哈, 安排/这就办 — run `multica message send --sticker <id>`. When you also need substantive text, run `multica message send --sticker <id> --message \"...\"` so the sticker comes first and the explanation follows in one message. Sticker ids you can use right now with zero lookup: hi, ok, got-it, nod-yes, thumbs-up, impressive, perfect, thanks, applause, on-it, huaji. For anything else run `multica sticker search <mood>` ONCE. After a successful send, leave final assistant output empty. Don't put stickers on substantive-only messages."
+description: "Use for short social chat beats that should be a sticker instead of text: greetings, ok/收到, thanks, praise, welcome, laughter, or 'on it'. Covers stable sticker ids, `multica message send --sticker`, combining one sticker with substantive text, and when not to use stickers. Do not use for substantive-only answers or issue comments."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---

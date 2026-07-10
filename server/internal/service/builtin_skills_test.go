@@ -24,8 +24,10 @@ const (
 	// files, not the always-loaded body.
 	maxSkillBodyLines = 500
 	// maxDescriptionChars is the frontmatter description cap — it is the only
-	// thing an agent sees when deciding whether to load the skill.
-	maxDescriptionChars = 1024
+	// thing an agent sees when deciding whether to load the skill. Keep this
+	// high enough to preserve trigger semantics, but low enough to prevent
+	// runtime prompt bloat from command manuals in descriptions.
+	maxDescriptionChars = 700
 )
 
 // TestBuiltinSkillsConformToTemplate enforces the standard-template invariants

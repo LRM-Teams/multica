@@ -464,12 +464,16 @@ func TestIssueRuntimeBriefKeepsIssueWorkflowContract(t *testing.T) {
 	t.Parallel()
 	out := buildMetaSkillContent("claude", TaskContextForEnv{IssueID: "11111111-2222-3333-4444-555555555555"})
 	for _, want := range []string{
+		"## Pinned Rules",
+		"Pinned rules are high-frequency or safety-critical",
 		"## Available Commands",
 		"multica issue comment add",
 		"## Comment Formatting",
 		"## Issue Metadata",
 		"## Sub-issue Creation",
 		"## Mentions",
+		"## Lazy References",
+		"CLI details: inspect `multica ... --help`",
 		"Final results MUST be delivered via `multica issue comment add`",
 		"You are responsible for managing the issue status throughout your work",
 		compactCloseoutStatusInstruction,
@@ -648,6 +652,39 @@ func TestWorkspaceContextRenderedAcrossTaskKinds(t *testing.T) {
 				t.Errorf("[%s] `## Workspace Context` must appear above `## Available Commands` (ctx=%d, cmds=%d)", tc.name, ctxIdx, cmdsIdx)
 			}
 		})
+	}
+}
+
+func TestPinnedRulesAndLazyReferencesRenderForChat(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("pi", TaskContextForEnv{
+		ChatSessionID: "chat-1",
+		ProjectID:     "project-1",
+		ProjectTitle:  "Demo Project",
+		ProjectResources: []ProjectResourceForEnv{{
+			ResourceType: "github_repo",
+			ResourceRef:  []byte(`{"url":"https://github.com/LRM-Teams/multica","default_branch_hint":"dev"}`),
+			Label:        "main app",
+		}},
+		AgentSkills: []SkillContextForEnv{{Name: "multica-stickers", Description: "Use for short social chat beats."}},
+	})
+
+	for _, want := range []string{
+		"## Pinned Rules",
+		"Pinned rules are high-frequency or safety-critical",
+		"Treat injected conversation context as scoped to the current DM/channel/thread",
+		"## Project Context",
+		"Pinned project resources (full structured payload is in `.multica/project/resources.json`)",
+		"default branch: `dev`",
+		"## Skills",
+		"## Lazy References",
+		"Chat history: use `multica message read` or `multica message search`",
+		"Project resources: read `.multica/project/resources.json`",
+		"Skills: open the relevant `SKILL.md` only after its name/description matches the task",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("chat brief missing pinned/lazy guidance %q\n---\n%s", want, out)
+		}
 	}
 }
 

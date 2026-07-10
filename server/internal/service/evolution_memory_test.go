@@ -22,6 +22,9 @@ func TestCurateMemorySubmissionAssigns(t *testing.T) {
 	if len(mock.memories) != 1 {
 		t.Fatalf("memories = %d, want 1", len(mock.memories))
 	}
+	if !mock.submission.PromotedUnitID.Valid {
+		t.Fatal("promoted unit id is invalid, want shared memory unit")
+	}
 	if mock.memories[0].Content != submission.Content {
 		t.Fatalf("memory content mismatch")
 	}

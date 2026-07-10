@@ -113,6 +113,10 @@ const COPY = {
   autoDrafts: "Disabled drafts only",
   privateScope: "Agent-private by default",
   curated: "Curated",
+  sharedMemory: "Shared memory",
+  sharedCandidates: "Shared candidates",
+  localPromotion: "Local promotion",
+  sharedPromotion: "Shared proposal",
   ingestion: "Ingestion",
   review: "Review",
   approve: "Approve",
@@ -126,6 +130,7 @@ const COPY = {
   insight1: "High-signal candidates become proposals, not silent memories.",
   insight2: "Skill drafts stay disabled until explicitly enabled for an agent.",
   insight3: "Shared knowledge is queued with provenance, scope, and safety metadata.",
+  insight4: "L3 now writes local memory and opens workspace shared-memory proposals for review.",
   lastRun: "Curator manager",
   loopBackend: "6h loop fallback",
   rootsProcessed: "20 roots processed",
@@ -152,7 +157,7 @@ const EMPTY_UNIT_METRICS: EvolutionUnitMetric[] = [];
 const MEMORY_CURATION_STAGES = [
   ["L1", "01:00", "Daily recorder", COPY.dbEvidence],
   ["L2", "02:00", "Review extractor", COPY.semanticDedupe],
-  ["L3", "03:00", "Promotion writer", COPY.promotion],
+  ["L3", "03:00", "Promotion writer", COPY.sharedPromotion],
   ["L4", "04:00", "Curator", COPY.curated],
 ] as const;
 
@@ -423,7 +428,7 @@ export function EvolutionCenterPage() {
             </TabsContent>
 
             <TabsContent value="memory" className="grid gap-4 xl:grid-cols-[.8fr_1.2fr]">
-              <MemoryCurationCard />
+              <MemoryCurationCard submissions={submissions} />
               <UnitMetricsCard metrics={unitMetrics} />
             </TabsContent>
 
@@ -664,7 +669,10 @@ function SubmissionCard({ submission }: { submission: EvolutionReviewSubmission 
   );
 }
 
-function MemoryCurationCard() {
+function MemoryCurationCard({ submissions }: { submissions: EvolutionReviewSubmission[] }) {
+  const memorySubmissions = submissions.filter((item) => normalizeUnitType(item.unit_type) === "memory" || normalizeUnitType(item.unit_type) === "preference");
+  const sharedCandidates = memorySubmissions.filter((item) => item.status === "candidate" || item.status === "needs_review").length;
+  const promoted = memorySubmissions.filter((item) => item.status === "promoted").length;
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
@@ -672,6 +680,14 @@ function MemoryCurationCard() {
         <p className="text-sm text-muted-foreground">{COPY.memoryOpsHint}</p>
       </CardHeader>
       <CardContent className="space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          <MiniStat label={COPY.localPromotion} value={String(promoted)} />
+          <MiniStat label={COPY.sharedCandidates} value={String(sharedCandidates)} />
+          <MiniStat label={COPY.sharedMemory} value={String(memorySubmissions.length)} />
+        </div>
+        <div className="rounded-2xl border bg-muted/30 p-3 text-sm text-muted-foreground">
+          {COPY.insight4}
+        </div>
         {MEMORY_CURATION_STAGES.map(([stage, time, title, detail]) => (
           <div key={stage} className="flex items-center gap-3 rounded-2xl border bg-muted/20 p-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-foreground text-xs font-semibold text-background">{stage}</div>

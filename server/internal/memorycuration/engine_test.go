@@ -58,6 +58,11 @@ func TestRunAllPromotesAndCleansReview(t *testing.T) {
 	if res.EntriesPromoted != 3 {
 		t.Fatalf("EntriesPromoted = %d, want 3", res.EntriesPromoted)
 	}
+	if res.SharedCandidatesAdded != 1 {
+		t.Fatalf("SharedCandidatesAdded = %d, want 1", res.SharedCandidatesAdded)
+	}
+	assertContains(t, filepath.Join(agentRoot, "sync_queue", "memory-candidates.jsonl"), "shared_mem_20260708")
+	assertContains(t, filepath.Join(agentRoot, "sync_queue", "memory-candidates.jsonl"), "\"suggested_scope\":\"workspace\"")
 	assertContains(t, filepath.Join(agentRoot, "memory", "USER.md"), "jianghp3 likes playing basketball")
 	assertContains(t, filepath.Join(agentRoot, "memory", "MEMORY.md"), "Memory curation should run in four stages")
 	assertContains(t, filepath.Join(agentRoot, "memory", "STATE.md"), "Follow up on 2026-07-10")

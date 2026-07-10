@@ -65,22 +65,23 @@ func sharedMemoryCandidateForEntry(root agentRoot, entry reviewEntry, now time.T
 }
 
 func entryEligibleForSharedMemory(entry reviewEntry) bool {
-	if entry.Status != "candidate" || entry.Confidence != "high" || strings.TrimSpace(entry.Body) == "" {
+	if strings.ToLower(strings.TrimSpace(entry.Status)) != "candidate" || strings.ToLower(strings.TrimSpace(entry.Confidence)) != "high" || strings.TrimSpace(entry.Body) == "" {
 		return false
 	}
 	sensitivity := strings.ToLower(strings.TrimSpace(entry.Sensitivity))
-	if sensitivity == "secret" || sensitivity == "personal" {
+	if sensitivity != "" && sensitivity != "none" {
 		return false
 	}
+	scope := strings.ToLower(strings.TrimSpace(entry.Scope))
 	switch strings.ToLower(strings.TrimSpace(entry.Type)) {
 	case "temporary", "quota":
 		return false
 	case "preference":
-		return entry.Scope == "workspace" || entry.Scope == "shared" || looksWorkspaceWidePreference(entry.Body)
+		return scope == "workspace" || scope == "shared" || looksWorkspaceWidePreference(entry.Body)
 	case "stable_fact", "memory", "workflow", "tool_pattern":
 		return true
 	default:
-		return entry.Scope == "workspace" || entry.Scope == "shared"
+		return scope == "workspace" || scope == "shared"
 	}
 }
 

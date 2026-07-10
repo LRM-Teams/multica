@@ -107,16 +107,30 @@ func TestL4ExpiresStateAndClosedReviewEntries(t *testing.T) {
 
 func TestMergeAgentRunResultIncludesEvidence(t *testing.T) {
 	dst := AgentRunResult{WorkspaceID: "ws-1", AgentID: "agent-1"}
-	mergeAgentRunResult(&dst, AgentRunResult{Changed: true, EvidenceCollected: 2, DailyFilesWritten: 1})
-	mergeAgentRunResult(&dst, AgentRunResult{EvidenceCollected: 3, ReviewCandidatesAdded: 4})
+	mergeAgentRunResult(&dst, AgentRunResult{Changed: true, EvidenceCollected: 2, DailyFilesWritten: 1, SharedCandidatesAdded: 1})
+	mergeAgentRunResult(&dst, AgentRunResult{EvidenceCollected: 3, ReviewCandidatesAdded: 4, SharedCandidatesSynced: 2})
 	if !dst.Changed {
 		t.Fatal("Changed = false, want true")
 	}
 	if dst.EvidenceCollected != 5 {
 		t.Fatalf("EvidenceCollected = %d, want 5", dst.EvidenceCollected)
 	}
+	if dst.SharedCandidatesAdded != 1 || dst.SharedCandidatesSynced != 2 {
+		t.Fatalf("shared counters = %#v", dst)
+	}
 	if dst.DailyFilesWritten != 1 || dst.ReviewCandidatesAdded != 4 {
 		t.Fatalf("merged counters = %#v", dst)
+	}
+}
+
+func TestSharedMemoryEligibilityUsesNormalizedSafetyFields(t *testing.T) {
+	entry := reviewEntry{Status: " candidate ", Confidence: " HIGH ", Sensitivity: " UNKNOWN ", Scope: " WORKSPACE ", Type: "stable_fact", Body: "Workspace agents should run go test before PRs."}
+	if entryEligibleForSharedMemory(entry) {
+		t.Fatal("unknown sensitivity should not be shared")
+	}
+	entry.Sensitivity = " none "
+	if !entryEligibleForSharedMemory(entry) {
+		t.Fatal("normalized safe workspace entry should be shared")
 	}
 }
 

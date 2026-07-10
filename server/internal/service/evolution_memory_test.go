@@ -74,4 +74,7 @@ func TestCurateAndMatchWorkspaceMemoryAssigns(t *testing.T) {
 	if len(mock.memories) != 1 {
 		t.Fatalf("memories = %d, want 1", len(mock.memories))
 	}
+	if !mock.submission.PromotedUnitID.Valid {
+		t.Fatal("promoted unit id is invalid, want shared memory unit")
+	}
 }

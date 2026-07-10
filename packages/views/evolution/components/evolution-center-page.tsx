@@ -11,6 +11,7 @@ import {
   GitBranch,
   Lightbulb,
   LineChart,
+  Radio,
   RefreshCw,
   ShieldCheck,
   Sparkles,
@@ -19,6 +20,7 @@ import {
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import {
   dashboardAgentRunTimeOptions,
@@ -27,6 +29,7 @@ import {
 import {
   evolutionMetricsOptions,
   evolutionReviewSubmissionListOptions,
+  workspaceMemoryCurationStatusOptions,
 } from "@multica/core/evolution";
 import type {
   Agent,
@@ -35,9 +38,11 @@ import type {
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
   EvolutionUnitMetric,
+  MemoryCurationStageStatus,
+  WorkspaceMemoryCurationStatus,
 } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
-import { Button } from "@multica/ui/components/ui/button";
+import { buttonVariants } from "@multica/ui/components/ui/button";
 import {
   Card,
   CardContent,
@@ -50,6 +55,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { PageHeader } from "../../layout/page-header";
+import { AppLink } from "../../navigation";
 import {
   aggregateAgentTokens,
   formatDuration,
@@ -63,7 +69,7 @@ const COPY = {
   heroBody:
     "A command room for agent performance, memory review, skill growth, cost efficiency, and curator health across the workspace.",
   runReview: "Open review queue",
-  tunePolicy: "Tune policies",
+  openAgents: "Open agents",
   liveSystem: "Live system",
   thirtyDays: "Last 30 days",
   agentTable: "Agents",
@@ -113,9 +119,9 @@ const COPY = {
   autoDrafts: "Disabled drafts only",
   privateScope: "Agent-private by default",
   curated: "Curated",
-  sharedMemory: "Shared memory",
-  sharedCandidates: "Shared candidates",
-  localPromotion: "Local promotion",
+  sharedMemory: "Promoted shared memory",
+  sharedCandidates: "Awaiting shared review",
+  localPromotion: "Latest L3 local promotion",
   sharedPromotion: "Shared proposal",
   ingestion: "Ingestion",
   review: "Review",
@@ -131,13 +137,21 @@ const COPY = {
   insight2: "Skill drafts stay disabled until explicitly enabled for an agent.",
   insight3: "Shared knowledge is queued with provenance, scope, and safety metadata.",
   insight4: "L3 now writes local memory and opens workspace shared-memory proposals for review.",
-  lastRun: "Curator manager",
-  loopBackend: "6h loop fallback",
-  rootsProcessed: "20 roots processed",
-  failuresZero: "0 failures",
-  projected: "Projected",
-  openSkills: "Review in Skills",
-  openAgents: "Open agents",
+  lastRun: "Latest curation run",
+  projected: "Applied feedback",
+  running: "Running",
+  succeeded: "Succeeded",
+  failed: "Failed",
+  notRun: "Not run yet",
+  unavailable: "Status unavailable",
+  agentsProcessed: "agents scanned",
+  agentsChanged: "changed",
+  workspaceUnit: "Workspace unit",
+  notBroadcast: "Shared units stay in the workspace registry and are not copied into every agent automatically.",
+  evidenceCollected: "evidence",
+  candidatesAdded: "candidates",
+  archived: "archived",
+  merged: "merged",
 };
 
 const STATUSES = [
@@ -149,16 +163,22 @@ const STATUSES = [
 
 const DAYS = 30;
 const VIEW_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+const RUN_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
 const EMPTY_AGENTS: Agent[] = [];
 const EMPTY_RUNTIME: DashboardAgentRunTime[] = [];
 const EMPTY_USAGE_BY_AGENT: DashboardUsageByAgent[] = [];
 const EMPTY_SUBMISSIONS: EvolutionReviewSubmission[] = [];
 const EMPTY_UNIT_METRICS: EvolutionUnitMetric[] = [];
 const MEMORY_CURATION_STAGES = [
-  ["L1", "01:00", "Daily recorder", COPY.dbEvidence],
-  ["L2", "02:00", "Review extractor", COPY.semanticDedupe],
-  ["L3", "03:00", "Promotion writer", COPY.sharedPromotion],
-  ["L4", "04:00", "Curator", COPY.curated],
+  ["l1_daily", "L1", "01:00", "Evidence intake", COPY.dbEvidence],
+  ["l2_review", "L2", "02:00", "Candidate extraction", COPY.semanticDedupe],
+  ["l3_promote", "L3", "03:00", "Local + shared promotion", COPY.sharedPromotion],
+  ["l4_curator", "L4", "04:00", "Curator maintenance", COPY.curated],
 ] as const;
 
 type AgentEvolutionRow = {
@@ -223,6 +243,34 @@ function statusLabel(value: string): string {
   return COPY.pending;
 }
 
+function curationStatusLabel(value: string | undefined): string {
+  if (value === "running" || value === "queued") return COPY.running;
+  if (value === "succeeded") return COPY.succeeded;
+  if (value === "failed") return COPY.failed;
+  return COPY.notRun;
+}
+
+function curationStageLabel(value: string): string {
+  if (value === "all") return "ALL";
+  return MEMORY_CURATION_STAGES.find(([stage]) => stage === value)?.[1] ?? value;
+}
+
+function formatRunTime(value: string | null | undefined): string {
+  if (!value) return COPY.notRun;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return COPY.notRun;
+  return RUN_TIME_FORMATTER.format(date);
+}
+
+function formatRunDuration(run: MemoryCurationStageStatus | undefined): string | null {
+  if (!run?.started_at || !run.finished_at) return null;
+  const duration = new Date(run.finished_at).getTime() - new Date(run.started_at).getTime();
+  if (!Number.isFinite(duration) || duration < 0) return null;
+  if (duration < 1000) return "<1s";
+  if (duration < 60_000) return `${Math.round(duration / 1000)}s`;
+  return `${Math.round(duration / 60_000)}m`;
+}
+
 function scoreAgent(input: {
   successRate: number;
   taskCount: number;
@@ -284,6 +332,7 @@ function buildAgentRows(
 
 export function EvolutionCenterPage() {
   const wsId = useWorkspaceId();
+  const paths = useWorkspacePaths();
   const [learningFilter, setLearningFilter] = useState<"all" | "memory" | "skill">("all");
 
   const agentsQuery = useQuery(agentListOptions(wsId));
@@ -294,6 +343,11 @@ export function EvolutionCenterPage() {
   const promotedQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "promoted"));
   const rejectedQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "rejected"));
   const { data: metricsData } = useQuery(evolutionMetricsOptions(wsId));
+  const {
+    data: curationStatus,
+    isLoading: curationStatusLoading,
+    isError: curationStatusUnavailable,
+  } = useQuery(workspaceMemoryCurationStatusOptions(wsId));
 
   const agents = agentsQuery.data ?? EMPTY_AGENTS;
   const usageRows = usageQuery.data ?? EMPTY_USAGE_BY_AGENT;
@@ -356,6 +410,26 @@ export function EvolutionCenterPage() {
     .filter((row) => row.taskCount > 0 || row.failedCount > 0)
     .toSorted((a, b) => (b.failedCount - a.failedCount) || (a.successRate - b.successRate) || (b.cost - a.cost))
     .slice(0, 4);
+  const stageByName = useMemo(
+    () => new Map((curationStatus?.stages ?? []).map((stage) => [stage.stage, stage] as const)),
+    [curationStatus?.stages],
+  );
+  const latestStage = (curationStatus?.stages ?? [])
+    .toSorted((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+  const memorySubmissions = submissions.filter((item) => isMemoryLikeUnitType(item.unit_type));
+  const sharedMemoryCandidates = memorySubmissions.filter(
+    (item) => item.status === "candidate" || item.status === "needs_review",
+  ).length;
+  const promotedSharedMemory = memorySubmissions.filter((item) => item.status === "promoted").length;
+  const curationHealth = curationStatusUnavailable
+    ? COPY.unavailable
+    : (curationStatus?.pending_runs ?? 0) > 0
+      ? COPY.running
+      : (curationStatus?.failed_runs_24h ?? 0) > 0
+        ? COPY.attention
+        : latestStage
+          ? COPY.healthy
+          : COPY.notRun;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[radial-gradient(circle_at_top_left,hsl(var(--brand)/0.18),transparent_28rem),linear-gradient(135deg,hsl(var(--background)),hsl(var(--muted)/0.35))]">
@@ -366,8 +440,12 @@ export function EvolutionCenterPage() {
           <Badge variant="secondary" className="hidden md:inline-flex">{COPY.liveSystem}</Badge>
         </div>
         <div className="hidden items-center gap-2 sm:flex">
-          <Button variant="outline" size="sm">{COPY.tunePolicy}</Button>
-          <Button size="sm" className="gap-1.5">{COPY.runReview}<ArrowUpRight className="h-3.5 w-3.5" /></Button>
+          <AppLink href={paths.agents()} className={buttonVariants({ variant: "outline", size: "sm" })}>
+            {COPY.openAgents}
+          </AppLink>
+          <AppLink href={paths.skills()} className={buttonVariants({ size: "sm", className: "gap-1.5" })}>
+            {COPY.runReview}<ArrowUpRight className="h-3.5 w-3.5" />
+          </AppLink>
         </div>
       </PageHeader>
 
@@ -433,15 +511,37 @@ export function EvolutionCenterPage() {
             </TabsContent>
 
             <TabsContent value="memory" className="grid gap-4 xl:grid-cols-[.8fr_1.2fr]">
-              <MemoryCurationCard submissions={submissions} />
+              <MemoryCurationCard
+                submissions={submissions}
+                status={curationStatus}
+                loading={curationStatusLoading}
+                unavailable={curationStatusUnavailable}
+              />
               <UnitMetricsCard metrics={unitMetrics} />
             </TabsContent>
 
             <TabsContent value="ops" className="grid gap-4 lg:grid-cols-3">
-              <OpsCard icon={RefreshCw} title={COPY.lastRun} value={COPY.loopBackend} detail={COPY.rootsProcessed} status={COPY.healthy} />
-              <OpsCard icon={ShieldCheck} title={COPY.review} value={COPY.protected} detail={COPY.failuresZero} status={COPY.healthy} />
-              <OpsCard icon={LineChart} title={COPY.projected} value={`${totals.memoryUsed}/${totals.skillUsed}`} detail={COPY.successSignals} status={COPY.attention} />
-              <ProcessCard />
+              <OpsCard
+                icon={RefreshCw}
+                title={COPY.lastRun}
+                value={latestStage ? `${curationStageLabel(latestStage.stage)} · ${formatRunTime(latestStage.finished_at ?? latestStage.created_at)}` : COPY.notRun}
+                detail={latestStage ? `${latestStage.stats.agents_scanned} ${COPY.agentsProcessed} · ${latestStage.stats.agents_changed} ${COPY.agentsChanged}` : COPY.memoryOpsHint}
+                status={curationHealth}
+              />
+              <OpsCard
+                icon={ShieldCheck}
+                title={COPY.review}
+                value={COPY.protected}
+                detail={`${sharedMemoryCandidates} ${COPY.sharedCandidates.toLowerCase()} · ${curationStatus?.failed_runs_24h ?? 0} ${COPY.failures.toLowerCase()}`}
+                status={(curationStatus?.failed_runs_24h ?? 0) > 0 ? COPY.attention : COPY.healthy}
+              />
+              <OpsCard icon={LineChart} title={COPY.projected} value={`${totals.memoryUsed}/${totals.skillUsed}`} detail={COPY.successSignals} status={totals.memoryUsed + totals.skillUsed > 0 ? COPY.healthy : COPY.attention} />
+              <ProcessCard
+                stageByName={stageByName}
+                sharedCandidates={sharedMemoryCandidates}
+                promotedSharedMemory={promotedSharedMemory}
+                feedbackCount={totals.memoryUsed + totals.skillUsed}
+              />
             </TabsContent>
           </Tabs>
         </div>
@@ -674,35 +774,69 @@ function SubmissionCard({ submission }: { submission: EvolutionReviewSubmission 
   );
 }
 
-function MemoryCurationCard({ submissions }: { submissions: EvolutionReviewSubmission[] }) {
+function MemoryCurationCard({
+  submissions,
+  status,
+  loading,
+  unavailable,
+}: {
+  submissions: EvolutionReviewSubmission[];
+  status: WorkspaceMemoryCurationStatus | undefined;
+  loading: boolean;
+  unavailable: boolean;
+}) {
   const memorySubmissions = submissions.filter((item) => isMemoryLikeUnitType(item.unit_type));
   const sharedCandidates = memorySubmissions.filter((item) => item.status === "candidate" || item.status === "needs_review").length;
-  const promoted = memorySubmissions.filter((item) => item.status === "promoted").length;
+  const promotedSharedMemory = memorySubmissions.filter((item) => item.status === "promoted").length;
+  const runs = new Map((status?.stages ?? []).map((run) => [run.stage, run] as const));
+  const promotionRun = [runs.get("l3_promote"), runs.get("all")]
+    .filter((run): run is MemoryCurationStageStatus => run !== undefined)
+    .toSorted((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+  const localPromotions = promotionRun?.stats.entries_promoted ?? 0;
+
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><RefreshCw className="h-4 w-4 text-brand" />{COPY.memoryOps}</CardTitle>
+        <CardTitle className="flex items-center gap-2"><RefreshCw className={cn("h-4 w-4 text-brand", (status?.pending_runs ?? 0) > 0 && "animate-spin")} />{COPY.memoryOps}</CardTitle>
         <p className="text-sm text-muted-foreground">{COPY.memoryOpsHint}</p>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid grid-cols-3 gap-2">
-          <MiniStat label={COPY.localPromotion} value={String(promoted)} />
+          <MiniStat label={COPY.localPromotion} value={loading ? "…" : String(localPromotions)} />
           <MiniStat label={COPY.sharedCandidates} value={String(sharedCandidates)} />
-          <MiniStat label={COPY.sharedMemory} value={String(memorySubmissions.length)} />
+          <MiniStat label={COPY.sharedMemory} value={String(promotedSharedMemory)} />
         </div>
         <div className="rounded-2xl border bg-muted/30 p-3 text-sm text-muted-foreground">
-          {COPY.insight4}
+          <div>{COPY.insight4}</div>
+          <div className="mt-2 flex items-start gap-2 text-xs"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand" />{COPY.notBroadcast}</div>
         </div>
-        {MEMORY_CURATION_STAGES.map(([stage, time, title, detail]) => (
-          <div key={stage} className="flex items-center gap-3 rounded-2xl border bg-muted/20 p-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-foreground text-xs font-semibold text-background">{stage}</div>
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium">{title}</div>
-              <div className="text-xs text-muted-foreground">{time} {COPY.beijingTime} {"·"} {detail}</div>
+        {MEMORY_CURATION_STAGES.map(([stageName, stageLabel, time, title, detail]) => {
+          const run = runs.get(stageName);
+          const duration = formatRunDuration(run);
+          const stageMetric = stageName === "l1_daily"
+            ? `${run?.stats.evidence_collected ?? 0} ${COPY.evidenceCollected}`
+            : stageName === "l2_review"
+              ? `${run?.stats.review_candidates_added ?? 0} ${COPY.candidatesAdded}`
+              : stageName === "l3_promote"
+                ? `${run?.stats.entries_promoted ?? 0} ${COPY.localPromotion.toLowerCase()} · ${run?.stats.shared_candidates_synced ?? 0} synced`
+                : `${run?.stats.entries_archived ?? 0} ${COPY.archived} · ${run?.stats.duplicates_merged ?? 0} ${COPY.merged}`;
+          const isRunning = run?.status === "running" || run?.status === "queued";
+          return (
+            <div key={stageName} className={cn("relative flex items-center gap-3 overflow-hidden rounded-2xl border bg-muted/20 p-3", isRunning && "border-brand/40 bg-brand/5")}>
+              {isRunning && <div className="absolute inset-y-0 left-0 w-1 animate-pulse bg-brand" />}
+              <div className={cn("flex h-10 w-10 items-center justify-center rounded-full text-xs font-semibold", run ? "bg-foreground text-background" : "bg-muted text-muted-foreground", isRunning && "ring-4 ring-brand/15")}>{stageLabel}</div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="text-sm font-medium">{title}</span>
+                  <span className="text-[11px] text-muted-foreground">{stageMetric}</span>
+                </div>
+                <div className="mt-0.5 text-xs text-muted-foreground">{time} {COPY.beijingTime} {"·"} {detail}</div>
+                <div className="mt-1 text-[11px] text-muted-foreground">{run ? formatRunTime(run.finished_at ?? run.created_at) : unavailable ? COPY.unavailable : COPY.notRun}{duration ? ` · ${duration}` : ""}</div>
+              </div>
+              <Badge variant={run?.status === "failed" ? "destructive" : isRunning ? "default" : run ? "secondary" : "outline"} className={cn(isRunning && "animate-pulse")}>{unavailable && !run ? COPY.unavailable : curationStatusLabel(run?.status)}</Badge>
             </div>
-            <Badge variant="secondary">{COPY.healthy}</Badge>
-          </div>
-        ))}
+          );
+        })}
       </CardContent>
     </Card>
   );
@@ -745,12 +879,19 @@ function UnitMetricsCard({ metrics }: { metrics: EvolutionUnitMetric[] }) {
 }
 
 function OpsCard({ icon: Icon, title, value, detail, status }: { icon: typeof RefreshCw; title: string; value: string; detail: string; status: string }) {
+  const badgeVariant: "secondary" | "default" | "destructive" | "outline" = status === COPY.healthy || status === COPY.succeeded
+    ? "secondary"
+    : status === COPY.running
+      ? "default"
+      : status === COPY.attention || status === COPY.failed
+        ? "destructive"
+        : "outline";
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardContent className="space-y-4 pt-1">
         <div className="flex items-start justify-between gap-3">
-          <div className="rounded-2xl bg-brand/10 p-3 text-brand"><Icon className="h-5 w-5" /></div>
-          <Badge variant={status === COPY.healthy ? "secondary" : "outline"}>{status}</Badge>
+          <div className="rounded-2xl bg-brand/10 p-3 text-brand"><Icon className={cn("h-5 w-5", status === COPY.running && "animate-pulse")} /></div>
+          <Badge variant={badgeVariant} className={cn(status === COPY.running && "animate-pulse")}>{status}</Badge>
         </div>
         <div>
           <div className="text-sm text-muted-foreground">{title}</div>
@@ -762,23 +903,53 @@ function OpsCard({ icon: Icon, title, value, detail, status }: { icon: typeof Re
   );
 }
 
-function ProcessCard() {
-  const steps = [COPY.ingestion, COPY.review, COPY.approve, COPY.enable, COPY.feedback];
+function ProcessCard({
+  stageByName,
+  sharedCandidates,
+  promotedSharedMemory,
+  feedbackCount,
+}: {
+  stageByName: Map<string, MemoryCurationStageStatus>;
+  sharedCandidates: number;
+  promotedSharedMemory: number;
+  feedbackCount: number;
+}) {
+  const l1 = stageByName.get("l1_daily");
+  const l2 = stageByName.get("l2_review");
+  const l3 = [stageByName.get("l3_promote"), stageByName.get("all")]
+    .filter((run): run is MemoryCurationStageStatus => run !== undefined)
+    .toSorted((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+  const steps = [
+    { label: COPY.ingestion, detail: "Evidence collected", value: l1?.stats.evidence_collected ?? 0, run: l1 },
+    { label: COPY.candidates, detail: "Review candidates", value: l2?.stats.review_candidates_added ?? 0, run: l2 },
+    { label: COPY.localPromotion, detail: "Agent-private memory", value: l3?.stats.entries_promoted ?? 0, run: l3 },
+    { label: COPY.sharedPromotion, detail: "Awaiting human review", value: sharedCandidates, run: l3 },
+    { label: COPY.workspaceUnit, detail: "Promoted shared units", value: promotedSharedMemory },
+    { label: COPY.feedback, detail: "Observed uses", value: feedbackCount },
+  ];
   return (
-    <Card className="bg-background/85 backdrop-blur lg:col-span-3">
+    <Card className="overflow-hidden bg-background/85 backdrop-blur lg:col-span-3">
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" />{COPY.curatorOps}</CardTitle>
         <p className="text-sm text-muted-foreground">{COPY.curatorOpsHint}</p>
       </CardHeader>
       <CardContent>
-        <div className="grid gap-3 md:grid-cols-5">
-          {steps.map((step, index) => (
-            <div key={step} className="relative rounded-2xl border bg-muted/25 p-4">
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-foreground text-xs font-semibold text-background">{index + 1}</div>
-              <div className="mt-4 font-medium">{step}</div>
-              <div className="mt-1 text-xs text-muted-foreground">{index < 2 ? COPY.insight1 : index < 4 ? COPY.insight2 : COPY.insight3}</div>
-            </div>
-          ))}
+        <div className="relative grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <div className="pointer-events-none absolute left-[8%] right-[8%] top-6 hidden h-px bg-gradient-to-r from-transparent via-brand/40 to-transparent xl:block" />
+          {steps.map((step, index) => {
+            const running = step.run?.status === "running" || step.run?.status === "queued";
+            const active = step.value > 0 || running;
+            return (
+              <div key={step.label} className={cn("relative rounded-2xl border bg-muted/25 p-4 transition-colors", active && "border-brand/30 bg-brand/5")}>
+                <div className={cn("relative z-10 flex h-9 w-9 items-center justify-center rounded-full border bg-background text-xs font-semibold", active && "border-brand/40 text-brand", running && "ring-4 ring-brand/15")}>
+                  {running ? <Radio className="h-4 w-4 animate-pulse" /> : index + 1}
+                </div>
+                <div className="mt-5 text-2xl font-semibold tabular-nums">{step.value}</div>
+                <div className="mt-1 text-sm font-medium">{step.label}</div>
+                <div className="mt-1 text-xs text-muted-foreground">{step.detail}</div>
+              </div>
+            );
+          })}
         </div>
       </CardContent>
     </Card>

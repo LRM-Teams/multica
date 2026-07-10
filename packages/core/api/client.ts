@@ -26,6 +26,7 @@ import type {
   EvolutionReviewDecisionRequest,
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
+  WorkspaceMemoryCurationStatus,
   PromoteEvolutionReviewSubmissionResponse,
   UpdateAgentRequest,
   AgentEnvResponse,
@@ -252,10 +253,12 @@ import {
   EMPTY_EVOLUTION_METRICS,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
   EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE,
+  EMPTY_WORKSPACE_MEMORY_CURATION_STATUS,
   EvolutionMetricsSchema,
   EvolutionReviewSubmissionListSchema,
   EvolutionReviewSubmissionSchema,
   UpdateAgentFileContentResponseSchema,
+  WorkspaceMemoryCurationStatusSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1846,6 +1849,18 @@ export class ApiClient {
     return parseWithFallback(raw, EvolutionMetricsSchema, EMPTY_EVOLUTION_METRICS, {
       endpoint: "GET /api/evolution/metrics",
     });
+  }
+
+  async getWorkspaceMemoryCurationStatus(workspaceId: string): Promise<WorkspaceMemoryCurationStatus> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory-curation/status`,
+    );
+    return parseWithFallback(
+      raw,
+      WorkspaceMemoryCurationStatusSchema,
+      EMPTY_WORKSPACE_MEMORY_CURATION_STATUS,
+      { endpoint: "GET /api/workspaces/{id}/memory-curation/status" },
+    );
   }
 
   async getEvolutionReviewSubmission(id: string): Promise<EvolutionReviewSubmission | null> {

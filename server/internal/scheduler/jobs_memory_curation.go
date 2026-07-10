@@ -147,6 +147,8 @@ func makeMemoryCurationHandler(pool *pgxpool.Pool, stage memorycuration.Stage, b
 				stats.DailyFilesWritten += agent.DailyFilesWritten
 				stats.ReviewCandidatesAdded += agent.ReviewCandidatesAdded
 				stats.EntriesPromoted += agent.EntriesPromoted
+				stats.SharedCandidatesAdded += agent.SharedCandidatesAdded
+				stats.SharedCandidatesSynced += agent.SharedCandidatesSynced
 				stats.EntriesArchived += agent.EntriesArchived
 				stats.DuplicatesMerged += agent.DuplicatesMerged
 				stats.ConflictsFound += agent.ConflictsFound

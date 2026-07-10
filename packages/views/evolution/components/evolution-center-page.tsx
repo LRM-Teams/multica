@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import {
   Activity,
   ArrowUpRight,
-  Award,
   Bot,
   BrainCircuit,
   CheckCircle2,
@@ -69,7 +68,6 @@ const COPY = {
   liveSystem: "Live system",
   thirtyDays: "Last 30 days",
   agentBoard: "Agent leaderboard",
-  agentBoardHint: "Score blends throughput, success rate, learning output, and cost discipline.",
   learningQueue: "Learning queue",
   learningQueueHint: "Review-first memory and skill candidates waiting for a human decision.",
   memoryOps: "Memory curation",
@@ -407,12 +405,9 @@ export function EvolutionCenterPage() {
               <TabsTrigger value="ops" className="px-3">{COPY.tabOps}</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="overview" className="grid gap-4 xl:grid-cols-[1.35fr_.65fr]">
-              <AgentLeaderboardCard rows={topAgents} loading={loading} />
-              <div className="grid gap-4">
-                <LearningPulseCard submissions={submissions} />
-                <CoachingCard rows={coachingRows} />
-              </div>
+            <TabsContent value="overview" className="grid gap-4 md:grid-cols-2">
+              <LearningPulseCard submissions={submissions} />
+              <CoachingCard rows={coachingRows} />
             </TabsContent>
 
             <TabsContent value="agents" className="grid gap-4">
@@ -486,51 +481,6 @@ function MetricCard({ icon: Icon, label, value, detail, tone }: { icon: typeof B
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-function AgentLeaderboardCard({ rows, loading }: { rows: AgentEvolutionRow[]; loading: boolean }) {
-  return (
-    <Card className="bg-background/85 backdrop-blur">
-      <CardHeader>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <CardTitle className="flex items-center gap-2"><Award className="h-4 w-4 text-amber-500" />{COPY.agentBoard}</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">{COPY.agentBoardHint}</p>
-          </div>
-          <Badge variant="secondary">{COPY.thirtyDays}</Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {loading ? <LeaderboardSkeleton /> : rows.length === 0 ? <EmptyState text={COPY.noAgents} /> : rows.map((row, index) => <AgentScoreRow key={row.agent.id} row={row} index={index} />)}
-      </CardContent>
-    </Card>
-  );
-}
-
-function AgentScoreRow({ row, index }: { row: AgentEvolutionRow; index: number }) {
-  const medal = index === 0 ? "bg-amber-500 text-white" : index === 1 ? "bg-slate-400 text-white" : index === 2 ? "bg-orange-500 text-white" : "bg-muted text-muted-foreground";
-  return (
-    <div className="group rounded-2xl border bg-card/70 p-3 transition-all hover:-translate-y-0.5 hover:border-brand/30 hover:shadow-md">
-      <div className="flex items-center gap-3">
-        <div className={cn("flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold", medal)}>{index + 1}</div>
-        <ActorAvatar actorType="agent" actorId={row.agent.id} size={34} showStatusDot enableHoverCard />
-        <div className="min-w-0 flex-1">
-          <div className="truncate font-medium">{row.agent.display_name || row.agent.name}</div>
-          <div className="text-xs text-muted-foreground">{row.taskCount} {COPY.tasks.toLowerCase()} {"·"} {pct(row.successRate)} {COPY.successRate.toLowerCase()}</div>
-        </div>
-        <div className="text-right">
-          <div className="text-lg font-semibold tabular-nums">{row.score}</div>
-          <div className="text-[11px] text-muted-foreground">{COPY.score}</div>
-        </div>
-      </div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-4">
-        <MiniStat label={COPY.cost} value={money(row.cost)} />
-        <MiniStat label={COPY.learned} value={String(row.learnedCount)} />
-        <MiniStat label={COPY.runtime} value={formatDuration(row.seconds, "<1m")} />
-        <MiniStat label={COPY.costPerSuccess} value={money(row.costPerSuccess)} />
-      </div>
-    </div>
   );
 }
 

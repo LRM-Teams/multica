@@ -347,6 +347,14 @@ func (c *Client) FailAgentInboxEvent(ctx context.Context, lease AgentInboxLease,
 	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/fail", lease.ID), body, nil, defaultTerminalRetrySchedule)
 }
 
+func (c *Client) RenewAgentInboxEvent(ctx context.Context, lease AgentInboxLease) error {
+	body := map[string]any{
+		"delivery_id": lease.DeliveryID,
+		"lease_token": lease.LeaseToken,
+	}
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/renew", lease.ID), body, nil)
+}
+
 func (c *Client) AckAgentInboxEvent(ctx context.Context, lease AgentInboxLease) error {
 	body := map[string]any{
 		"delivery_id":    lease.DeliveryID,

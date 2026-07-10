@@ -63,6 +63,11 @@ type AckAgentInboxEventRequest struct {
 	SeenUpToSeq int64  `json:"seen_up_to_seq"`
 }
 
+type RenewAgentInboxEventRequest struct {
+	DeliveryID string `json:"delivery_id"`
+	LeaseToken string `json:"lease_token"`
+}
+
 type FailAgentInboxEventRequest struct {
 	DeliveryID string `json:"delivery_id"`
 	LeaseToken string `json:"lease_token"`
@@ -79,6 +84,11 @@ func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Reques
 	runtimeID := chi.URLParam(r, "runtimeId")
 	runtime, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
 	if !ok {
+		return
+	}
+	if err := h.Queries.ReclaimExpiredAgentInboxDeliveriesForRuntime(r.Context(), runtime.ID); err != nil {
+		slog.Warn("agent inbox drain: failed to reclaim expired deliveries", "runtime_id", runtimeID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to reclaim expired inbox deliveries")
 		return
 	}
 	delivery, err := h.Queries.LeaseAgentInboxEventForRuntime(r.Context(), runtime.ID)
@@ -152,6 +162,51 @@ func (h *Handler) AckAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
+}
+
+func (h *Handler) RenewAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
+	eventID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "eventId"), "event_id")
+	if !ok {
+		return
+	}
+	event, ok := h.requireDaemonInboxEventAccess(w, r, eventID)
+	if !ok {
+		return
+	}
+	var req RenewAgentInboxEventRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	deliveryID, ok := parseUUIDOrBadRequest(w, req.DeliveryID, "delivery_id")
+	if !ok {
+		return
+	}
+	leaseToken, ok := parseUUIDOrBadRequest(w, req.LeaseToken, "lease_token")
+	if !ok {
+		return
+	}
+	delivery, err := h.Queries.RenewAgentInboxDelivery(r.Context(), db.RenewAgentInboxDeliveryParams{
+		ID:           deliveryID,
+		InboxEventID: event.ID,
+		LeaseToken:   leaseToken,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusConflict, "delivery lease is no longer active")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to renew inbox delivery")
+		return
+	}
+	writeJSON(w, http.StatusOK, AgentInboxLeaseResponse{
+		ID:             uuidToString(event.ID),
+		DeliveryID:     uuidToString(delivery.ID),
+		LeaseToken:     uuidToString(delivery.LeaseToken),
+		LeaseExpiresAt: timestampToString(delivery.LeaseExpiresAt),
+		SeqTo:          event.SeqTo,
+		RequiresWake:   event.RequiresWake,
+	})
 }
 
 func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request) {

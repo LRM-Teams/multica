@@ -355,6 +355,37 @@ Important behavior:
 
 After materialization, the service binds the skill to the submitting source agent (`agent_skill`, `source='evolution'`), then runs `RefreshWorkspaceAgentSkillSuggestions` for all non-archived agents in the workspace.
 
+## Skill Version Inspection, Eval, and Rollback
+
+Workspace owners and admins can inspect and roll back existing versions of an evolution-promoted skill:
+
+```http
+GET  /api/evolution/units/{unitId}/versions?workspace_id={workspaceId}
+GET  /api/evolution/units/{unitId}/versions/{versionId}?workspace_id={workspaceId}
+GET  /api/evolution/units/{unitId}/versions/{versionId}/eval?workspace_id={workspaceId}
+POST /api/evolution/units/{unitId}/versions/{versionId}/rollback?workspace_id={workspaceId}
+```
+
+The rollback request must include the version observed by the administrator:
+
+```json
+{
+  "expected_current_version_id": "current-version-uuid"
+}
+```
+
+Rollback behavior:
+
+- Both the unit and target version must belong to the requested workspace, the target version must belong to that unit, and the unit must have `unit_type='skill'`.
+- The unit row is locked with `SELECT ... FOR UPDATE`; a different current version produces `409 Conflict`. Retrying a completed rollback to the same target is a no-op and does not add another audit record.
+- The target must already contain a versioned `SKILL.md`. The transaction updates `shared_evolution_unit.current_version_id` and versioned unit fields, replaces the linked `skill.content` / `skill.description` and `skill_file` rows, refreshes pending agent-skill suggestions, and writes `activity_log.action='evolution_skill_version_rolled_back'`.
+- Existing `agent_skill` assignments are not auto-approved, auto-removed, or auto-enabled by rollback. Only pending suggestions are recalculated.
+- Any failure in materialization, suggestion refresh, or audit logging rolls back the entire database transaction.
+
+Eval summaries use existing `evolution_unit_feedback_event` rows only. Events with `metadata.version_id` equal to the requested version form the preferred basis. If none are explicitly attributed, the response labels the result `unit_lifetime_fallback`, reports the unit-lifetime counts, and explains how many events cannot be assigned to a version. Success rate is `success / (success + failure)` and usage rate is `used / injected`; no external model is called.
+
+The implementation uses the existing version, file, feedback, skill, suggestion, assignment, and activity tables. It adds no schema migration.
+
 ## Agent Skill Suggestions
 
 Promotion **auto-binds the source agent** that uploaded the candidate. The matcher creates `agent_skill_suggestion` rows for **other** agents only.

@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentPresenceOverlay, AgentStatusDot } from "./actor-avatar";
+import { ActorAvatar, AgentPresenceOverlay, AgentStatusDot } from "./actor-avatar";
 
 // AgentStatusDot reads presence via useAgentPresenceDetail and the current
 // workspace via useCurrentWorkspace. Default to "online + idle" so the dot
@@ -48,6 +48,35 @@ vi.mock("@multica/core/paths", () => ({
     memberDetail: (id: string) => `/members/${id}`,
     squadDetail: (id: string) => `/squads/${id}`,
   }),
+}));
+
+// Panel-click behavior (#349 app-wide): agent single-click opens the side
+// panel; ⌘/ctrl/shift-click routes to the full detail page; a control-ancestor
+// (row link/button) defers to that outer interactive.
+const openFromStoreMock = vi.fn<(id: string) => void>();
+const openFromContextMock = vi.fn<(id: string) => void>();
+const openInNewTabMock = vi.fn();
+let contextAvailable = false;
+
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({
+    getActorName: () => "Agent One",
+    getActorInitials: () => "A1",
+    getActorAvatarUrl: () => undefined,
+  }),
+}));
+
+vi.mock("@multica/core/agents/stores", () => ({
+  useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
+    selector({ open: openFromStoreMock }),
+}));
+
+vi.mock("./agent-panel-context", () => ({
+  useOpenAgentPanel: () => (contextAvailable ? openFromContextMock : null),
+}));
+
+vi.mock("../navigation", () => ({
+  useNavigation: () => ({ openInNewTab: openInNewTabMock }),
 }));
 
 describe("AgentPresenceOverlay", () => {
@@ -269,5 +298,54 @@ describe("AgentStatusDot", () => {
     dot = screen.getByLabelText(/^Status:/);
     expect(dot).toHaveClass("bg-muted-foreground/40");
     expect(dot).not.toHaveClass("border-2");
+  });
+});
+
+describe("ActorAvatar agent panel click (#349 app-wide)", () => {
+  beforeEach(() => {
+    openFromStoreMock.mockClear();
+    openFromContextMock.mockClear();
+    openInNewTabMock.mockClear();
+    contextAvailable = false;
+  });
+
+  it("plain-clicking an agent avatar opens the panel via the global store when no context is present", () => {
+    render(<ActorAvatar actorType="agent" actorId="agent-1" />);
+    fireEvent.click(screen.getByRole("button"));
+    expect(openFromStoreMock).toHaveBeenCalledWith("agent-1");
+    expect(openInNewTabMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers the local context over the global store when a provider is in scope", () => {
+    contextAvailable = true;
+    render(<ActorAvatar actorType="agent" actorId="agent-1" />);
+    fireEvent.click(screen.getByRole("button"));
+    expect(openFromContextMock).toHaveBeenCalledWith("agent-1");
+    expect(openFromStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("⌘/ctrl-clicking an agent avatar routes to the full detail page instead of the panel", () => {
+    render(<ActorAvatar actorType="agent" actorId="agent-1" />);
+    fireEvent.click(screen.getByRole("button"), { metaKey: true });
+    expect(openInNewTabMock).toHaveBeenCalledWith("/agents/agent-1");
+    expect(openFromStoreMock).not.toHaveBeenCalled();
+    expect(openFromContextMock).not.toHaveBeenCalled();
+  });
+
+  it("defers to a control ancestor (menu item / row button) instead of opening the panel", () => {
+    render(
+      <button type="button" data-testid="row-button">
+        <ActorAvatar actorType="agent" actorId="agent-1" />
+      </button>,
+    );
+    // The avatar's own panel-trigger is the inner control; the outer row
+    // button is the control ancestor it must defer to.
+    const triggers = screen.getAllByRole("button");
+    const avatarTrigger = triggers.find(
+      (el) => el.getAttribute("data-testid") !== "row-button",
+    )!;
+    fireEvent.click(avatarTrigger);
+    expect(openFromStoreMock).not.toHaveBeenCalled();
+    expect(openFromContextMock).not.toHaveBeenCalled();
   });
 });

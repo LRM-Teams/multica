@@ -207,6 +207,42 @@ func TestAgentActivity_EventRowsUseTargetVisibility(t *testing.T) {
 	}
 }
 
+func TestAgentActivity_ListKeepsRecentEventsVisibleWithLegacyRunHistory(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createWorkspaceVisibleActivityAgent(t, "activity-feed-history-agent")
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, status, priority, trigger_summary,
+			created_at, started_at, completed_at
+		)
+		SELECT
+			$1, $2, 'completed', 0, 'legacy run ' || g,
+			now() - interval '2 hours' - (g || ' seconds')::interval,
+			now() - interval '2 hours' - (g || ' seconds')::interval,
+			now() - interval '2 hours' - (g || ' seconds')::interval
+		FROM generate_series(1, 120) AS g
+	`, agentID, handlerTestRuntimeID(t)); err != nil {
+		t.Fatalf("seed legacy activity runs: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE agent_id = $1`, agentID) })
+
+	eventID := createActivityEvent(t, agentID, "agent", agentID, "agent_inbox_failed")
+	list := listAgentActivityForUser(t, testUserID, agentID, "?limit=1")
+	if len(list.resp.Activities) != 1 {
+		t.Fatalf("activity page size = %d, want 1: %+v", len(list.resp.Activities), list.resp.Activities)
+	}
+	if list.resp.Activities[0].ID != eventID {
+		t.Fatalf("first activity = %s, want recent event %s", list.resp.Activities[0].ID, eventID)
+	}
+	if list.resp.Activities[0].Event == nil || list.resp.Activities[0].Event.EventType != "agent_inbox_failed" {
+		t.Fatalf("first activity event summary wrong: %+v", list.resp.Activities[0])
+	}
+}
+
 type agentActivityListResult struct {
 	resp AgentActivityPageResponse
 	raw  string

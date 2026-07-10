@@ -314,7 +314,8 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 	if err != nil {
 		return db.SharedEvolutionUnit{}, evolutionCurationSkipped, err
 	}
-	if reason := rejectEvolutionSubmissionReason(submission, files); reason != "" || evolutionDedupeHash(submission) == "" || !s.ReviewEnabled {
+	// Source-governed skill candidates must reach human review without invoking the reviewer.
+	if reason := rejectEvolutionSubmissionReason(submission, files); reason != "" || evolutionDedupeHash(submission) == "" || evolutionSubmissionRequiresHumanReview(submission) || !s.ReviewEnabled {
 		return s.curateClaimedSubmission(ctx, submission, files, nil)
 	}
 	review, err := s.Reviewer.Review(ctx, evolutionReviewInput(submission, files))

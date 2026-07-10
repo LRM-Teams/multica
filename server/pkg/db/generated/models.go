@@ -100,6 +100,47 @@ type AgentMemory struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AgentRadarAction struct {
+	ID          pgtype.UUID        `json:"id"`
+	RadarRunID  pgtype.UUID        `json:"radar_run_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	ActionType  string             `json:"action_type"`
+	Status      string             `json:"status"`
+	RiskLevel   string             `json:"risk_level"`
+	Confidence  string             `json:"confidence"`
+	DedupeKey   string             `json:"dedupe_key"`
+	TargetKind  string             `json:"target_kind"`
+	TargetID    pgtype.UUID        `json:"target_id"`
+	Reason      string             `json:"reason"`
+	Evidence    []byte             `json:"evidence"`
+	Payload     []byte             `json:"payload"`
+	Result      []byte             `json:"result"`
+	Error       string             `json:"error"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentRadarRun struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	AgentID        pgtype.UUID        `json:"agent_id"`
+	RuntimeID      pgtype.UUID        `json:"runtime_id"`
+	TaskID         pgtype.UUID        `json:"task_id"`
+	TriggerKind    string             `json:"trigger_kind"`
+	TriggerRef     string             `json:"trigger_ref"`
+	Status         string             `json:"status"`
+	CooldownKey    string             `json:"cooldown_key"`
+	ContextSummary string             `json:"context_summary"`
+	ActionPlan     []byte             `json:"action_plan"`
+	Error          string             `json:"error"`
+	ScheduledFor   pgtype.Timestamptz `json:"scheduled_for"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AgentRuntime struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

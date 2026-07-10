@@ -193,6 +193,7 @@
     "sticker_failed": "스티커를 불러오지 못했습니다",
     "sticker_unavailable": "스티커를 사용할 수 없습니다",
     "agent_badge": "Agent",
+    "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",
     "edit_action": "편집",
     "delete_action": "삭제",

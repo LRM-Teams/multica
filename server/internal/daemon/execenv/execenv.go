@@ -96,7 +96,8 @@ type TaskContextForEnv struct {
 	AutopilotTriggerPayload     string
 	QuickCreatePrompt           string // non-empty for quick-create tasks
 	QuickCreateSource           *protocol.QuickCreateSourceContext
-	IsSquadLeader               bool // true when the agent is acting as a squad leader (may exit silently on no_action)
+	AgentRadarPrompt            string // non-empty for proactive radar tasks
+	IsSquadLeader               bool   // true when the agent is acting as a squad leader (may exit silently on no_action)
 	// WorkspaceContext is the workspace-level system prompt (workspace.context
 	// in the DB). Rendered into the brief as `## Workspace Context` when
 	// non-empty so every agent in the workspace sees the same shared context,

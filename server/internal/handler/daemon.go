@@ -22,6 +22,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/radar"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -1763,6 +1764,14 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+		} else {
+			var radarCtx service.AgentRadarContext
+			if json.Unmarshal(task.Context, &radarCtx) == nil && radarCtx.Type == service.AgentRadarContextType {
+				resp.AgentRadarPrompt = radarCtx.Prompt
+				resp.ThreadName = "agent radar"
+				resp.Kind = "agent_radar"
+				resp.WorkspaceID = runtimeWorkspaceID
+			}
 		}
 	}
 
@@ -2218,7 +2227,54 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		req.OutputSuppressedReason, completedMessage, completedDetails,
 	)
 
+	h.handleCompletedAgentRadarTask(r.Context(), *task, req.Output)
+
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
+}
+
+func (h *Handler) handleCompletedAgentRadarTask(ctx context.Context, task db.AgentTaskQueue, output string) {
+	if len(task.Context) == 0 {
+		return
+	}
+	var radarCtx service.AgentRadarContext
+	if json.Unmarshal(task.Context, &radarCtx) != nil || radarCtx.Type != service.AgentRadarContextType {
+		return
+	}
+	runID, ok := parseUUIDMaybe(radarCtx.RadarRunID)
+	if !ok {
+		return
+	}
+	run, err := h.Queries.GetAgentRadarRun(ctx, runID)
+	if err != nil {
+		return
+	}
+	agent, err := h.Queries.GetAgent(ctx, task.AgentID)
+	if err != nil {
+		return
+	}
+	plan, err := radar.ParseActionPlan(output)
+	if err != nil {
+		_, _ = h.Queries.UpdateAgentRadarRunStatus(ctx, db.UpdateAgentRadarRunStatusParams{
+			ID:     run.ID,
+			Status: "failed",
+			Error:  pgtype.Text{String: "parse action plan: " + err.Error(), Valid: true},
+		})
+		return
+	}
+	if err := h.ExecuteAgentRadarPlan(ctx, run, agent, plan); err != nil {
+		slog.Warn("agent radar action execution failed", "run_id", radarCtx.RadarRunID, "error", err)
+	}
+}
+
+func parseUUIDMaybe(raw string) (pgtype.UUID, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return pgtype.UUID{}, false
+	}
+	id, err := util.ParseUUID(raw)
+	if err != nil {
+		return pgtype.UUID{}, false
+	}
+	return id, true
 }
 
 func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.AgentTaskQueue, req *TaskCompleteRequest) error {

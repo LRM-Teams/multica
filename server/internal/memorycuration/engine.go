@@ -368,7 +368,7 @@ func candidatesFromDaily(content string, sourceDate time.Time) []reviewEntry {
 			Type:                kind,
 			Status:              "candidate",
 			Confidence:          "high",
-			Sensitivity:         "none",
+			Sensitivity:         "unknown",
 			Scope:               "agent",
 			SourceDate:          formatDate(sourceDate),
 			Evidence:            []string{"daily:" + formatDate(sourceDate)},

@@ -2413,6 +2413,15 @@ SELECT atq.id, atq.agent_id, atq.issue_id, atq.status, atq.priority, atq.dispatc
 JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
   AND atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+  AND (
+    atq.issue_id IS NOT NULL
+    OR atq.chat_session_id IS NOT NULL
+    OR atq.autopilot_run_id IS NOT NULL
+    OR (
+      atq.context->>'type' = 'quick_create'
+      AND atq.context->>'workspace_id' = $1::text
+    )
+  )
 
 UNION ALL
 
@@ -2422,6 +2431,15 @@ SELECT t.id, t.agent_id, t.issue_id, t.status, t.priority, t.dispatched_at, t.st
   JOIN agent a ON a.id = atq.agent_id
   WHERE a.workspace_id = $1
     AND atq.status IN ('completed', 'failed')
+    AND (
+      atq.issue_id IS NOT NULL
+      OR atq.chat_session_id IS NOT NULL
+      OR atq.autopilot_run_id IS NOT NULL
+      OR (
+        atq.context->>'type' = 'quick_create'
+        AND atq.context->>'workspace_id' = $1::text
+      )
+    )
   ORDER BY atq.agent_id, atq.completed_at DESC NULLS LAST
 ) t
 `

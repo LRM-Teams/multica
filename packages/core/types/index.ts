@@ -93,6 +93,9 @@ export type {
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
   EvolutionUnitMetric,
+  MemoryCurationRunStats,
+  MemoryCurationStageStatus,
+  WorkspaceMemoryCurationStatus,
   PromoteEvolutionReviewSubmissionResponse,
 } from "./evolution";
 export type {

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -82,5 +83,39 @@ func TestGetAgentMemoryCurationStatusRejectsInvalidAgentID(t *testing.T) {
 	testHandler.GetAgentMemoryCurationStatus(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestPublicMemoryCurationStatsProjectsSharedPromotionCounts(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{
+		"agents_scanned":           3,
+		"entries_promoted":         4,
+		"shared_candidates_added":  2,
+		"shared_candidates_synced": 1,
+		"errors": []map[string]any{{
+			"workspace_id": "workspace-1",
+			"agent_id":     "agent-1",
+			"stage":        "l3",
+			"error":        "failed",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats := publicMemoryCurationStats(raw)
+	if stats.AgentsScanned != 3 || stats.EntriesPromoted != 4 {
+		t.Fatalf("stats = %+v, want scanned=3 promoted=4", stats)
+	}
+	if stats.SharedCandidatesAdded != 2 || stats.SharedCandidatesSynced != 1 {
+		t.Fatalf("stats = %+v, want shared added=2 synced=1", stats)
+	}
+	if stats.ErrorCount != 1 {
+		t.Fatalf("error_count = %d, want 1", stats.ErrorCount)
+	}
+}
+
+func TestPublicMemoryCurationStatsHandlesMalformedPayload(t *testing.T) {
+	if got := publicMemoryCurationStats([]byte("not-json")); got != (memoryCurationRunStatsResponse{}) {
+		t.Fatalf("stats = %+v, want zero value", got)
 	}
 }

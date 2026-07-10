@@ -93,6 +93,8 @@ func (e *Engine) Run(opts Options) (Result, error) {
 		res.DailyFilesWritten += ar.DailyFilesWritten
 		res.ReviewCandidatesAdded += ar.ReviewCandidatesAdded
 		res.EntriesPromoted += ar.EntriesPromoted
+		res.SharedCandidatesAdded += ar.SharedCandidatesAdded
+		res.SharedCandidatesSynced += ar.SharedCandidatesSynced
 		res.EntriesArchived += ar.EntriesArchived
 		res.DuplicatesMerged += ar.DuplicatesMerged
 		res.ConflictsFound += ar.ConflictsFound
@@ -107,6 +109,8 @@ func mergeAgentRunResult(dst *AgentRunResult, src AgentRunResult) {
 	dst.DailyFilesWritten += src.DailyFilesWritten
 	dst.ReviewCandidatesAdded += src.ReviewCandidatesAdded
 	dst.EntriesPromoted += src.EntriesPromoted
+	dst.SharedCandidatesAdded += src.SharedCandidatesAdded
+	dst.SharedCandidatesSynced += src.SharedCandidatesSynced
 	dst.EntriesArchived += src.EntriesArchived
 	dst.DuplicatesMerged += src.DuplicatesMerged
 	dst.ConflictsFound += src.ConflictsFound
@@ -388,7 +392,30 @@ func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
 			ar.Changed = true
 			ar.EntriesPromoted++
 		}
-		if err := appendAudit(root.Root, "l3", opts.Until, map[string]any{"entry_id": entry.ID, "destination": filepath.Base(destPath), "duplicate": duplicate, "promoted": promoted}, opts.DryRun); err != nil {
+		sharedCandidate, shouldShare := sharedMemoryCandidateForEntry(root, entry, opts.Now)
+		sharedAdded := false
+		sharedSynced := false
+		if shouldShare {
+			var err error
+			sharedAdded, err = recordSharedMemoryCandidate(root.Root, sharedCandidate, opts.DryRun)
+			if err != nil {
+				return ar, err
+			}
+			if sharedAdded {
+				ar.Changed = true
+				ar.SharedCandidatesAdded++
+			}
+			if !opts.DryRun {
+				sharedSynced, err = syncSharedMemoryCandidate(opts.Context, opts.DB, root, sharedCandidate)
+				if err != nil {
+					return ar, err
+				}
+				if sharedSynced {
+					ar.SharedCandidatesSynced++
+				}
+			}
+		}
+		if err := appendAudit(root.Root, "l3", opts.Until, map[string]any{"entry_id": entry.ID, "destination": filepath.Base(destPath), "duplicate": duplicate, "promoted": promoted, "shared_candidate": shouldShare, "shared_candidate_added": sharedAdded, "shared_candidate_synced": sharedSynced}, opts.DryRun); err != nil {
 			return ar, err
 		}
 	}

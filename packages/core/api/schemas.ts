@@ -17,6 +17,7 @@ import type {
   CreateAgentFromTemplateResponse,
   EvolutionMetricsResponse,
   EvolutionReviewSubmission,
+  WorkspaceMemoryCurationStatus,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
   GroupedIssuesResponse,
@@ -293,6 +294,61 @@ export const EvolutionMetricsSchema = z.object({
 }).loose();
 
 export const EMPTY_EVOLUTION_METRICS: EvolutionMetricsResponse = { unit_metrics: [] };
+
+const EMPTY_MEMORY_CURATION_RUN_STATS = {
+  agents_scanned: 0,
+  agents_changed: 0,
+  daily_files_written: 0,
+  review_candidates_added: 0,
+  entries_promoted: 0,
+  shared_candidates_added: 0,
+  shared_candidates_synced: 0,
+  entries_archived: 0,
+  duplicates_merged: 0,
+  conflicts_found: 0,
+  evidence_collected: 0,
+  error_count: 0,
+};
+
+const MemoryCurationRunStatsSchema = z.object({
+  agents_scanned: z.number().default(0),
+  agents_changed: z.number().default(0),
+  daily_files_written: z.number().default(0),
+  review_candidates_added: z.number().default(0),
+  entries_promoted: z.number().default(0),
+  shared_candidates_added: z.number().default(0),
+  shared_candidates_synced: z.number().default(0),
+  entries_archived: z.number().default(0),
+  duplicates_merged: z.number().default(0),
+  conflicts_found: z.number().default(0),
+  evidence_collected: z.number().default(0),
+  error_count: z.number().default(0),
+}).loose();
+
+const MemoryCurationStageStatusSchema = z.object({
+  id: z.string(),
+  stage: z.string().default(""),
+  trigger_kind: z.string().default(""),
+  status: z.string().default(""),
+  stats: MemoryCurationRunStatsSchema.default(EMPTY_MEMORY_CURATION_RUN_STATS),
+  created_at: z.string().default(""),
+  started_at: z.string().nullable().optional(),
+  finished_at: z.string().nullable().optional(),
+}).loose();
+
+export const WorkspaceMemoryCurationStatusSchema = z.object({
+  workspace_id: z.string().default(""),
+  pending_runs: z.number().default(0),
+  failed_runs_24h: z.number().default(0),
+  stages: z.array(MemoryCurationStageStatusSchema).default([]),
+}).loose();
+
+export const EMPTY_WORKSPACE_MEMORY_CURATION_STATUS: WorkspaceMemoryCurationStatus = {
+  workspace_id: "",
+  pending_runs: 0,
+  failed_runs_24h: 0,
+  stages: [],
+};
 
 const ChannelMessageSearchResultSchema = z.object({
   message_id: z.string().default(""),

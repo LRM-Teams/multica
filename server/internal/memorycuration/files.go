@@ -54,6 +54,7 @@ func ensureMemoryRoot(root string) error {
 		filepath.Join(root, "memory", "daily"),
 		filepath.Join(root, "memory", "audit"),
 		filepath.Join(root, "notes"),
+		filepath.Join(root, "shared-cache", "memory", "proposals"),
 		filepath.Join(root, "sync_queue"),
 	}
 	for _, dir := range dirs {

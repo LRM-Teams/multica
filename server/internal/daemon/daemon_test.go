@@ -997,6 +997,102 @@ func TestIsRuntimeNotFoundError(t *testing.T) {
 	}
 }
 
+func TestDrainInboxTaskAttachesLease(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemon/runtimes/rt-1/agent-inbox/drain" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"events": [{
+				"id": "event-123",
+				"delivery_id": "delivery-123",
+				"lease_token": "lease-123",
+				"lease_expires_at": "2026-07-10T00:00:00Z",
+				"seq_to": 42,
+				"requires_wake": true,
+				"task": {
+					"id": "event-123",
+					"agent_id": "agent-123",
+					"runtime_id": "rt-1",
+					"workspace_id": "ws-1",
+					"chat_session_id": "chat-123"
+				}
+			}]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{
+		client: NewClient(srv.URL),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	task, err := d.drainInboxTask(context.Background(), "rt-1")
+	if err != nil {
+		t.Fatalf("drainInboxTask: %v", err)
+	}
+	if task == nil || task.InboxEvent == nil {
+		t.Fatalf("drainInboxTask returned %#v, want inbox-backed task", task)
+	}
+	if task.ID != "event-123" || task.InboxEvent.DeliveryID != "delivery-123" || task.InboxEvent.SeqTo != 42 {
+		t.Fatalf("task = %#v, want attached inbox lease", task)
+	}
+}
+
+func TestHandleTask_InboxCompleteUsesInboxEndpoint(t *testing.T) {
+	t.Parallel()
+
+	var completeSeen atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/api/daemon/tasks/") {
+			t.Fatalf("inbox run called legacy task endpoint: %s", r.URL.Path)
+		}
+		if r.URL.Path != "/api/daemon/agent-inbox/events/event-123/complete" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode complete body: %v", err)
+		}
+		if body["delivery_id"] != "delivery-123" || body["lease_token"] != "lease-123" || body["output"] != "inbox reply" {
+			t.Fatalf("complete body = %#v, want lease + output", body)
+		}
+		completeSeen.Store(true)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{
+		client:             NewClient(srv.URL),
+		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:         make(map[string]*workspaceState),
+		runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
+		cancelPollInterval: time.Hour,
+	}
+	d.runner = taskRunnerFunc(func(_ context.Context, _ Task, _ string, _ int, _ *slog.Logger) (TaskResult, error) {
+		return TaskResult{Status: "completed", Comment: "inbox reply"}, nil
+	})
+	d.handleTask(context.Background(), Task{
+		ID:            "event-123",
+		RuntimeID:     "rt-1",
+		WorkspaceID:   "ws-1",
+		ChatSessionID: "chat-123",
+		Agent:         &AgentData{Name: "inbox-agent"},
+		InboxEvent: &AgentInboxLease{
+			ID:         "event-123",
+			DeliveryID: "delivery-123",
+			LeaseToken: "lease-123",
+			SeqTo:      42,
+		},
+	}, 0)
+	if !completeSeen.Load() {
+		t.Fatal("inbox complete endpoint was not called")
+	}
+}
+
 func TestShouldInterruptAgent(t *testing.T) {
 	t.Parallel()
 

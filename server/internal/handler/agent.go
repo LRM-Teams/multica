@@ -279,6 +279,11 @@ type AgentTaskResponse struct {
 	// (cloud / system runtimes that pre-date per-task tokens); in that case
 	// the daemon falls back to its own credential. See MUL-2600.
 	AuthToken string `json:"auth_token,omitempty"`
+
+	// InboxEvent is present for raft-like agent inbox deliveries. The daemon
+	// executes the payload like a normal chat task, but reports terminal state
+	// through the inbox lease endpoints instead of legacy agent_task_queue.
+	InboxEvent *AgentInboxLeaseResponse `json:"inbox_event,omitempty"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata embedded in

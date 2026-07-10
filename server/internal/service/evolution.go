@@ -95,15 +95,11 @@ func (s *EvolutionService) CurateAndMatchWorkspace(ctx context.Context, workspac
 			continue
 		case evolutionCurationPromoted:
 			result.Promoted++
-			if submission.UnitType == "skill" {
-				created, err := s.finalizeSkillPromotion(ctx, submission, unit)
-				if err != nil {
-					return result, err
-				}
-				if created {
-					result.Matched++
-				}
-			} else if isEvolutionAutoAssignMemoryUnit(submission.UnitType) {
+			matched, err := s.finalizePromotedSubmission(ctx, submission, unit)
+			if err != nil {
+				return result, err
+			}
+			if matched {
 				result.Matched++
 			}
 		default:
@@ -114,10 +110,18 @@ func (s *EvolutionService) CurateAndMatchWorkspace(ctx context.Context, workspac
 	return result, nil
 }
 
-func (s *EvolutionService) finalizeSkillPromotion(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) (bool, error) {
-	if submission.UnitType != "skill" {
+func (s *EvolutionService) finalizePromotedSubmission(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) (bool, error) {
+	switch {
+	case submission.UnitType == "skill":
+		return s.finalizeSkillPromotion(ctx, submission, unit)
+	case isEvolutionAutoAssignMemoryUnit(submission.UnitType):
+		return true, s.assignEvolutionMemory(ctx, submission)
+	default:
 		return false, nil
 	}
+}
+
+func (s *EvolutionService) finalizeSkillPromotion(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) (bool, error) {
 	files, err := s.Queries.ListEvolutionSubmissionFiles(ctx, db.ListEvolutionSubmissionFilesParams{
 		WorkspaceID:  submission.WorkspaceID,
 		SubmissionID: submission.ID,
@@ -150,11 +154,6 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 	if evolutionDedupeHash(submission) == "" {
 		_, err := s.rejectSubmissionWithReview(ctx, submission, "missing content hash", "medium")
 		return db.SharedEvolutionUnit{}, evolutionCurationRejected, err
-	}
-
-	if isEvolutionAutoAssignMemoryUnit(submission.UnitType) {
-		status, err := s.curateMemorySubmission(ctx, submission)
-		return db.SharedEvolutionUnit{}, status, err
 	}
 
 	if !s.ReviewEnabled {
@@ -224,7 +223,7 @@ func (s *EvolutionService) PromoteSubmissionFromReview(ctx context.Context, work
 	if err != nil {
 		return db.SharedEvolutionUnit{}, err
 	}
-	if _, err := s.finalizeSkillPromotion(ctx, submission, unit); err != nil {
+	if _, err := s.finalizePromotedSubmission(ctx, submission, unit); err != nil {
 		return db.SharedEvolutionUnit{}, err
 	}
 	return unit, nil
@@ -1332,17 +1331,13 @@ func isEvolutionAutoAssignMemoryUnit(unitType string) bool {
 }
 
 func (s *EvolutionService) curateMemorySubmission(ctx context.Context, submission db.EvolutionUnitSubmission) (evolutionCurationStatus, error) {
-	if err := s.assignEvolutionMemory(ctx, submission); err != nil {
+	unit, status, err := s.promoteSubmission(ctx, submission, nil, nil)
+	if err != nil || status != evolutionCurationPromoted {
+		return status, err
+	}
+	if _, err := s.finalizePromotedSubmission(ctx, submission, unit); err != nil {
 		_, rejErr := s.rejectSubmissionWithReview(ctx, submission, err.Error(), "high")
 		return evolutionCurationRejected, rejErr
-	}
-	_, err := s.Queries.MarkEvolutionSubmissionPromoted(ctx, db.MarkEvolutionSubmissionPromotedParams{
-		ID:             submission.ID,
-		WorkspaceID:    submission.WorkspaceID,
-		PromotedUnitID: pgtype.UUID{},
-	})
-	if err != nil {
-		return evolutionCurationSkipped, err
 	}
 	return evolutionCurationPromoted, nil
 }

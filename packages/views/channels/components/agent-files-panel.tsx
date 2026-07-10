@@ -23,7 +23,6 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
-import { useT } from "../../i18n/use-t";
 import { FileTree } from "./file-tree";
 import { buildFileTree, fileLanguage } from "./file-tree-utils";
 
@@ -42,6 +41,11 @@ const OWNER_ONLY_FILES_MESSAGE =
 const FILES_LABEL = "Files";
 const NO_FILES_FOUND = "No files found.";
 const FILE_LIST_TRUNCATED = "File list truncated.";
+const RECENT_RADAR_LABEL = "Recent Radar";
+
+function radarActionCountLabel(count: number): string {
+  return `${count} action${count === 1 ? "" : "s"}`;
+}
 
 function ownerName(agent: Agent, members: readonly MemberWithUser[]): string {
   if (!agent.owner_id) return "Unknown";
@@ -261,7 +265,6 @@ export function AgentFilesPanel({
    */
   hideHeader?: boolean;
 }) {
-  const { t } = useT("channels");
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
   const [includeHidden, setIncludeHidden] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -346,7 +349,9 @@ export function AgentFilesPanel({
           </div>
           {radarData?.runs?.length ? (
             <div className="border-t p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t(($) => $.radar.recent_title)}</p>
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {RECENT_RADAR_LABEL}
+              </p>
               <div className="space-y-2">
                 {radarData.runs.slice(0, 3).map((run) => (
                   <div key={run.id} className="rounded-md border bg-muted/30 p-2 text-xs">
@@ -358,7 +363,7 @@ export function AgentFilesPanel({
                       <p className="mt-1 line-clamp-2 text-muted-foreground">{run.context_summary}</p>
                     )}
                     {run.actions.length > 0 && (
-                      <p className="mt-1 text-muted-foreground">{t(($) => $.radar.action_count, { count: run.actions.length })}</p>
+                      <p className="mt-1 text-muted-foreground">{radarActionCountLabel(run.actions.length)}</p>
                     )}
                   </div>
                 ))}

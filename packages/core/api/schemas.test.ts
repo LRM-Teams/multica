@@ -6,6 +6,7 @@ import {
   ChannelCreateErrorBodySchema,
   DuplicateIssueErrorBodySchema,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
+  EMPTY_WORKSPACE_MEMORY_CURATION_STATUS,
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelMessageSearchResponseSchema,
@@ -15,6 +16,7 @@ import {
   EMPTY_AGENT_FILES_RESPONSE,
   EMPTY_USER,
   EvolutionReviewSubmissionListSchema,
+  WorkspaceMemoryCurationStatusSchema,
   ListIssuesResponseSchema,
   RuntimeHourlyActivityListSchema,
   RuntimeUsageByAgentListSchema,
@@ -274,6 +276,28 @@ describe("EvolutionReviewSubmissionListSchema drift", () => {
       { endpoint: "GET /api/evolution/submissions" },
     );
     expect(parsed).toBe(EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST);
+  });
+});
+
+describe("WorkspaceMemoryCurationStatusSchema drift", () => {
+  it("defaults missing counters in stage stats", () => {
+    const parsed = WorkspaceMemoryCurationStatusSchema.parse({
+      workspace_id: "ws-1",
+      stages: [{ id: "run-1", stage: "l3_promote", stats: { entries_promoted: 2 } }],
+    });
+    expect(parsed.pending_runs).toBe(0);
+    expect(parsed.stages[0]?.stats.entries_promoted).toBe(2);
+    expect(parsed.stages[0]?.stats.shared_candidates_synced).toBe(0);
+  });
+
+  it("falls back when the stage collection has the wrong type", () => {
+    const parsed = parseWithFallback(
+      { workspace_id: "ws-1", stages: null },
+      WorkspaceMemoryCurationStatusSchema,
+      EMPTY_WORKSPACE_MEMORY_CURATION_STATUS,
+      { endpoint: "GET /api/workspaces/{id}/memory-curation/status" },
+    );
+    expect(parsed).toBe(EMPTY_WORKSPACE_MEMORY_CURATION_STATUS);
   });
 });
 

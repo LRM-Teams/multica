@@ -33,25 +33,27 @@ type Options struct {
 }
 
 type Result struct {
-	Stage                 Stage            `json:"stage"`
-	WorkspacesRoot        string           `json:"workspaces_root"`
-	WorkspaceID           string           `json:"workspace_id,omitempty"`
-	DateFrom              string           `json:"date_from,omitempty"`
-	DateTo                string           `json:"date_to,omitempty"`
-	DryRun                bool             `json:"dry_run"`
-	Force                 bool             `json:"force"`
-	AgentsScanned         int              `json:"agents_scanned"`
-	AgentsChanged         int              `json:"agents_changed"`
-	DailyFilesWritten     int              `json:"daily_files_written"`
-	ReviewCandidatesAdded int              `json:"review_candidates_added"`
-	EntriesPromoted       int              `json:"entries_promoted"`
-	EntriesArchived       int              `json:"entries_archived"`
-	DuplicatesMerged      int              `json:"duplicates_merged"`
-	ConflictsFound        int              `json:"conflicts_found"`
-	EvidenceCollected     int              `json:"evidence_collected"`
-	Timezone              string           `json:"timezone,omitempty"`
-	Errors                []AgentError     `json:"errors,omitempty"`
-	AgentResults          []AgentRunResult `json:"agent_results,omitempty"`
+	Stage                  Stage            `json:"stage"`
+	WorkspacesRoot         string           `json:"workspaces_root"`
+	WorkspaceID            string           `json:"workspace_id,omitempty"`
+	DateFrom               string           `json:"date_from,omitempty"`
+	DateTo                 string           `json:"date_to,omitempty"`
+	DryRun                 bool             `json:"dry_run"`
+	Force                  bool             `json:"force"`
+	AgentsScanned          int              `json:"agents_scanned"`
+	AgentsChanged          int              `json:"agents_changed"`
+	DailyFilesWritten      int              `json:"daily_files_written"`
+	ReviewCandidatesAdded  int              `json:"review_candidates_added"`
+	EntriesPromoted        int              `json:"entries_promoted"`
+	SharedCandidatesAdded  int              `json:"shared_candidates_added"`
+	SharedCandidatesSynced int              `json:"shared_candidates_synced"`
+	EntriesArchived        int              `json:"entries_archived"`
+	DuplicatesMerged       int              `json:"duplicates_merged"`
+	ConflictsFound         int              `json:"conflicts_found"`
+	EvidenceCollected      int              `json:"evidence_collected"`
+	Timezone               string           `json:"timezone,omitempty"`
+	Errors                 []AgentError     `json:"errors,omitempty"`
+	AgentResults           []AgentRunResult `json:"agent_results,omitempty"`
 }
 
 type AgentError struct {
@@ -62,15 +64,17 @@ type AgentError struct {
 }
 
 type AgentRunResult struct {
-	WorkspaceID           string `json:"workspace_id"`
-	AgentID               string `json:"agent_id"`
-	Root                  string `json:"root"`
-	Changed               bool   `json:"changed"`
-	DailyFilesWritten     int    `json:"daily_files_written"`
-	ReviewCandidatesAdded int    `json:"review_candidates_added"`
-	EntriesPromoted       int    `json:"entries_promoted"`
-	EntriesArchived       int    `json:"entries_archived"`
-	DuplicatesMerged      int    `json:"duplicates_merged"`
-	ConflictsFound        int    `json:"conflicts_found"`
-	EvidenceCollected     int    `json:"evidence_collected"`
+	WorkspaceID            string `json:"workspace_id"`
+	AgentID                string `json:"agent_id"`
+	Root                   string `json:"root"`
+	Changed                bool   `json:"changed"`
+	DailyFilesWritten      int    `json:"daily_files_written"`
+	ReviewCandidatesAdded  int    `json:"review_candidates_added"`
+	EntriesPromoted        int    `json:"entries_promoted"`
+	SharedCandidatesAdded  int    `json:"shared_candidates_added"`
+	SharedCandidatesSynced int    `json:"shared_candidates_synced"`
+	EntriesArchived        int    `json:"entries_archived"`
+	DuplicatesMerged       int    `json:"duplicates_merged"`
+	ConflictsFound         int    `json:"conflicts_found"`
+	EvidenceCollected      int    `json:"evidence_collected"`
 }

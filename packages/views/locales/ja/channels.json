@@ -117,10 +117,6 @@
     "preview_empty": "（空のファイル）",
     "preview_too_large": "ファイルが大きすぎてプレビューできません"
   },
-  "radar": {
-    "recent_title": "Recent Radar",
-    "action_count": "{{count}} action(s)"
-  },
   "stats": {
     "title": "アクティビティ",
     "messages": "メッセージ",

@@ -48,7 +48,7 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
 
   return (
     <aside className="flex h-full min-h-0 flex-col border-l bg-background">
-      <div className="flex items-start justify-between gap-3 border-b p-4">
+      <div className="flex items-center justify-between gap-3 border-b p-4">
         <div className="flex min-w-0 items-center gap-2.5">
           <ActorAvatarBase
             name={displayName}
@@ -58,22 +58,22 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
             size={32}
             className="rounded-md"
           />
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">{displayName}</p>
-            {/* #371: live presence at the top of the panel, so the state is
-                visible before opening the Activity tab. */}
-            <AgentPresenceStatusLine agentId={agent.id} className="mt-0.5" />
-          </div>
+          <p className="truncate text-sm font-semibold">{displayName}</p>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={onClose}
-          aria-label={t(($) => $.side_panel.close_aria)}
-        >
-          <X className="size-4" />
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* #371: live presence on the right of the header (same row as the
+              name), so the state is visible before opening the Activity tab. */}
+          <AgentPresenceStatusLine agentId={agent.id} />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            aria-label={t(($) => $.side_panel.close_aria)}
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
       </div>
 
       {isOwner ? (

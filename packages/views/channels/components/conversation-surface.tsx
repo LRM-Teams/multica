@@ -16,6 +16,7 @@ export function ConversationHeader({
   title,
   meta,
   badges,
+  status,
   actions,
 }: {
   isMobile: boolean;
@@ -23,6 +24,9 @@ export function ConversationHeader({
   title: ReactNode;
   meta?: ReactNode;
   badges?: ReactNode;
+  /** Optional live status (e.g. agent presence) rendered on the right,
+   *  before action icons — same row as the name, never under it. */
+  status?: ReactNode;
   actions?: ReactNode;
 }) {
   return (
@@ -55,9 +59,14 @@ export function ConversationHeader({
           )}
         </div>
       </div>
-      {actions && (
-        <div className="flex shrink-0 items-center gap-1 text-muted-foreground">
-          {actions}
+      {(status || actions) && (
+        <div className="flex shrink-0 items-center gap-2">
+          {status}
+          {actions && (
+            <div className="flex shrink-0 items-center gap-1 text-muted-foreground">
+              {actions}
+            </div>
+          )}
         </div>
       )}
     </header>

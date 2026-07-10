@@ -86,6 +86,18 @@ type AgentInboxEvent struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AgentInboxToken struct {
+	ID           pgtype.UUID        `json:"id"`
+	TokenHash    string             `json:"token_hash"`
+	InboxEventID pgtype.UUID        `json:"inbox_event_id"`
+	DeliveryID   pgtype.UUID        `json:"delivery_id"`
+	AgentID      pgtype.UUID        `json:"agent_id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type AgentMemory struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`

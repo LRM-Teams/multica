@@ -443,7 +443,7 @@ func requestUserID(r *http.Request) string {
 //
 // Returns ("agent", agentID) on success, ("member", userID) otherwise.
 func (h *Handler) resolveActor(r *http.Request, userID, workspaceID string) (actorType, actorID string) {
-	if r.Header.Get("X-Actor-Source") == "task_token" {
+	if source := r.Header.Get("X-Actor-Source"); source == "task_token" || source == "agent_inbox_token" {
 		// Server-set header — auth middleware also forced X-Agent-ID
 		// from the token row. Trust it directly without re-querying.
 		return "agent", r.Header.Get("X-Agent-ID")

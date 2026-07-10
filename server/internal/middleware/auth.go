@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -77,21 +78,38 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				}
 				hash := auth.HashToken(tokenString)
 				tt, err := queries.GetTaskTokenByHash(r.Context(), hash)
+				if err == nil {
+					r.Header.Set("X-User-ID", uuidToString(tt.UserID))
+					r.Header.Set("X-Agent-ID", uuidToString(tt.AgentID))
+					r.Header.Set("X-Task-ID", uuidToString(tt.TaskID))
+					r.Header.Set("X-Workspace-ID", uuidToString(tt.WorkspaceID))
+					// X-Actor-Source flags the auth path so resolveActor and
+					// any owner-only handler can deny without re-querying the
+					// token table. The value "task_token" is the only signal
+					// this header is allowed to carry — strip anything else a
+					// client tried to send.
+					r.Header.Set("X-Actor-Source", "task_token")
+					next.ServeHTTP(w, r)
+					return
+				}
+				if !errors.Is(err, pgx.ErrNoRows) {
+					slog.Warn("auth: invalid task token", "path", r.URL.Path, "error", err)
+					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
+					return
+				}
+				it, err := queries.GetAgentInboxTokenByHash(r.Context(), hash)
 				if err != nil {
 					slog.Warn("auth: invalid task token", "path", r.URL.Path, "error", err)
 					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 					return
 				}
-				r.Header.Set("X-User-ID", uuidToString(tt.UserID))
-				r.Header.Set("X-Agent-ID", uuidToString(tt.AgentID))
-				r.Header.Set("X-Task-ID", uuidToString(tt.TaskID))
-				r.Header.Set("X-Workspace-ID", uuidToString(tt.WorkspaceID))
-				// X-Actor-Source flags the auth path so resolveActor and
-				// any owner-only handler can deny without re-querying the
-				// token table. The value "task_token" is the only signal
-				// this header is allowed to carry — strip anything else a
-				// client tried to send.
-				r.Header.Set("X-Actor-Source", "task_token")
+				r.Header.Set("X-User-ID", uuidToString(it.UserID))
+				r.Header.Set("X-Agent-ID", uuidToString(it.AgentID))
+				r.Header.Set("X-Task-ID", uuidToString(it.InboxEventID))
+				r.Header.Set("X-Agent-Inbox-Event-ID", uuidToString(it.InboxEventID))
+				r.Header.Set("X-Agent-Inbox-Delivery-ID", uuidToString(it.DeliveryID))
+				r.Header.Set("X-Workspace-ID", uuidToString(it.WorkspaceID))
+				r.Header.Set("X-Actor-Source", "agent_inbox_token")
 				next.ServeHTTP(w, r)
 				return
 			}

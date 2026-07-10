@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -418,6 +419,31 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			resp.RequestingUserName = userDisplayName(owner)
 			resp.RequestingUserProfileDescription = owner.ProfileDescription
 		}
+		tokenStr, err := auth.GenerateAgentTaskToken()
+		if err != nil {
+			slog.Error("agent inbox claim: failed to generate inbox token",
+				"inbox_event_id", uuidToString(event.ID),
+				"error", err,
+			)
+			return nil
+		}
+		if _, err := h.Queries.CreateAgentInboxToken(ctx, db.CreateAgentInboxTokenParams{
+			TokenHash:    auth.HashToken(tokenStr),
+			InboxEventID: event.ID,
+			DeliveryID:   delivery.ID,
+			AgentID:      event.AgentID,
+			WorkspaceID:  event.WorkspaceID,
+			UserID:       runtime.OwnerID,
+			ExpiresAt:    pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour), Valid: true},
+		}); err != nil {
+			slog.Error("agent inbox claim: failed to persist inbox token",
+				"inbox_event_id", uuidToString(event.ID),
+				"delivery_id", uuidToString(delivery.ID),
+				"error", err,
+			)
+			return nil
+		}
+		resp.AuthToken = tokenStr
 	}
 	h.populateAgentInboxChatContext(ctx, event, &resp)
 	if ws, err := h.Queries.GetWorkspace(ctx, event.WorkspaceID); err == nil && ws.Context.Valid {
@@ -614,6 +640,12 @@ func (h *Handler) completedAgentInboxChatPayload(ctx context.Context, q *db.Quer
 		if err == nil {
 			outputType = normalized
 		}
+	}
+	if (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && h.inboxEventHasAgentTransportVisibleOutput(ctx, event.ID) {
+		outputType = protocol.ChatOutputKindNoReply
+		body = ""
+		parts = nil
+		req.OutputSuppressedReason = protocol.ChannelOutputSuppressedReasonToolTransportOutput
 	}
 	visibleContent := ""
 	var visibleParts []protocol.MessagePart

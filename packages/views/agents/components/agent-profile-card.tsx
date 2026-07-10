@@ -2,7 +2,6 @@
 
 import { useQuery } from "@tanstack/react-query";
 import type { Agent, AgentRuntime } from "@multica/core/types";
-import { useAgentPresenceDetail } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
   deriveRuntimeHealth,
@@ -24,8 +23,8 @@ import {
   HealthIcon,
   useRuntimeHealthStateLabel,
 } from "../../runtimes/components/shared";
-import { availabilityConfig } from "../presence";
 import { VisibilityBadge } from "./visibility-badge";
+import { AgentPresenceStatusLine } from "./agent-presence-status-line";
 import { useT } from "../../i18n/use-t";
 
 interface AgentProfileCardProps {
@@ -102,9 +101,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
               </span>
             )}
           </div>
-          {!isArchived && (
-            <AgentAvailabilityLine wsId={wsId} agentId={agent.id} />
-          )}
+          {!isArchived && <AgentAvailabilityLine agentId={agent.id} />}
 
         </div>
         {!isArchived && (
@@ -149,27 +146,13 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   );
 }
 
-// Compact availability line under the agent name — single 3-state signal
-// (online / unstable / offline). Last-task state is intentionally NOT
-// shown here; it belongs in the agents list and the detail page where
-// there's room for icon + label + reason without crowding the popover.
-function AgentAvailabilityLine({
-  wsId,
-  agentId,
-}: {
-  wsId: string | undefined;
-  agentId: string;
-}) {
-  const { t } = useT("agents");
-  const detail = useAgentPresenceDetail(wsId, agentId);
-  if (detail === "loading") {
-    return <Skeleton className="mt-0.5 h-3 w-16" />;
-  }
-  const av = availabilityConfig[detail.availability];
+// Live name-row status under the agent name — same mark as the profile
+// hover card / DM header (dot + word via useAgentLiveStatus). Coarse when
+// idle; stage-detail when a task is active.
+function AgentAvailabilityLine({ agentId }: { agentId: string }) {
   return (
-    <div className="mt-0.5 inline-flex items-center gap-1.5">
-      <span className={`h-1.5 w-1.5 rounded-full ${av.dotClass}`} />
-      <span className={`text-xs ${av.textClass}`}>{t(($) => $.availability[detail.availability])}</span>
+    <div className="mt-0.5">
+      <AgentPresenceStatusLine agentId={agentId} className="max-w-[12rem]" />
     </div>
   );
 }

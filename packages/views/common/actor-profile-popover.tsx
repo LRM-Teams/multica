@@ -27,6 +27,7 @@ import {
   resolveActorIdentityPresentation,
   shouldShowActorHandleLabel,
 } from "@multica/core/identity";
+import { AgentLiveStatusMark } from "../agents/components/agent-live-status-mark";
 import { useAgentLiveStatus } from "../agents/use-agent-live-status";
 import { useT } from "../i18n/use-t";
 
@@ -220,21 +221,7 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
             <span className="min-w-0 truncate text-sm font-semibold text-foreground">
               {displayName}
             </span>
-            {liveStatus ? (
-              <span
-                className={cn(
-                  "inline-flex shrink-0 items-center gap-1 text-xs",
-                  liveStatus.textClass,
-                )}
-                data-testid="agent-live-status"
-              >
-                <span
-                  className={cn("size-1.5 rounded-full", liveStatus.dotClass)}
-                  aria-hidden
-                />
-                {liveStatus.label}
-              </span>
-            ) : null}
+            <AgentLiveStatusMark status={liveStatus} className="shrink-0" />
             {memberRole ? (
               <span className="shrink-0 text-xs text-muted-foreground">
                 {memberRole}

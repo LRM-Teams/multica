@@ -9,16 +9,13 @@ import { agentListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
-import {
-  agentTaskSnapshotOptions,
-  useAgentPresenceDetail,
-} from "@multica/core/agents";
+import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { issueDetailOptions } from "@multica/core/issues";
 import type { AgentTask } from "@multica/core/types";
 import { AlertTriangle } from "lucide-react";
 import { AppLink } from "../../navigation";
 import { useT, useTimeAgo } from "../../i18n";
-import { formatPresenceStatus, presenceStatusVisual } from "../presence";
+import { AgentPresenceStatusLine } from "./agent-presence-status-line";
 
 interface AgentLivePeekCardProps {
   agentId: string;
@@ -37,7 +34,6 @@ export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
     agentListOptions(wsId),
   );
   const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
-  const presence = useAgentPresenceDetail(wsId, agentId);
 
   const agent = agents.find((a) => a.id === agentId);
 
@@ -76,17 +72,10 @@ export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
     .toUpperCase()
     .slice(0, 2);
 
-  // Shared #288 status word + visual (token rule lives in presence.ts).
-  const statusLabel = formatPresenceStatus(presence, t);
-  const statusVisual = presenceStatusVisual(presence);
-  const status =
-    statusLabel && statusVisual
-      ? { label: statusLabel, visual: statusVisual }
-      : null;
-
   return (
     <div className="flex flex-col gap-3 text-left">
-      {/* Header — avatar + name. */}
+      {/* Header — avatar + name + live status (dot + word, same mark as
+          the profile hover card / DM header). */}
       <div className="flex items-start gap-3">
         <ActorAvatarBase
           name={displayName}
@@ -97,20 +86,13 @@ export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
           className="rounded-md"
         />
         <div className="min-w-0 flex-1">
-          <ActorIdentityRow identity={agent} primaryClassName="truncate text-sm font-semibold" />
-          <div className="mt-0.5 inline-flex items-center gap-1.5">
-            {status ? (
-              <>
-                <status.visual.icon
-                  className={`h-3 w-3 shrink-0 ${status.visual.textClass}`}
-                />
-                <span className={`text-xs ${status.visual.textClass}`}>
-                  {status.label}
-                </span>
-              </>
-            ) : (
-              <Skeleton className="h-3 w-12" />
-            )}
+          <div className="flex min-w-0 items-center gap-1.5">
+            <ActorIdentityRow
+              identity={agent}
+              primaryClassName="truncate text-sm font-semibold"
+              className="min-w-0 shrink"
+            />
+            <AgentPresenceStatusLine agentId={agentId} className="max-w-[9rem] shrink-0" />
           </div>
         </div>
       </div>

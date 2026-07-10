@@ -111,9 +111,10 @@ export function EvolutionReviewSection() {
       if (!canManageReview) throw new Error(t(($) => $.evolution_review.insufficient_permissions));
       const agent = agents.find((item) => item.id === agentId);
       if (!agent) throw new Error(t(($) => $.evolution_review.source_agent_missing));
+      const assignedIds = agent.skills.map((skill) => skill.id);
       const nextIds = enabled
-        ? Array.from(new Set([...agent.skills.map((skill) => skill.id), skillId]))
-        : agent.skills.filter((skill) => skill.id !== skillId).map((skill) => skill.id);
+        ? Array.from(new Set([...assignedIds, skillId]))
+        : assignedIds.filter((assignedId) => assignedId !== skillId);
       await api.setAgentSkills(agentId, { skill_ids: nextIds });
     },
     onSuccess: async () => {

@@ -25,6 +25,7 @@ type fakeInteractionDAGStore struct {
 	sessionRuns      map[string]db.InteractionDAGSessionRun
 	segmentSnapshots []db.InsertInteractionDAGSegmentWithSnapshotParams
 	edges            []db.InsertInteractionDAGEdgeParams
+	taskMessages     map[string][]int32 // taskID -> list of seq numbers
 
 	upsertErr                error
 	getSessionRunErr         error
@@ -33,7 +34,10 @@ type fakeInteractionDAGStore struct {
 }
 
 func newFakeInteractionDAGStore() *fakeInteractionDAGStore {
-	return &fakeInteractionDAGStore{sessionRuns: map[string]db.InteractionDAGSessionRun{}}
+	return &fakeInteractionDAGStore{
+		sessionRuns:  map[string]db.InteractionDAGSessionRun{},
+		taskMessages: map[string][]int32{},
+	}
 }
 
 func (f *fakeInteractionDAGStore) UpsertInteractionDAGSessionRun(_ context.Context, arg db.UpsertInteractionDAGSessionRunParams) error {
@@ -74,6 +78,41 @@ func (f *fakeInteractionDAGStore) InsertInteractionDAGSegmentWithSnapshot(_ cont
 	return nil
 }
 
+// GetLastEndSeqForAgentRun implements InteractionDAGStore.
+func (f *fakeInteractionDAGStore) GetLastEndSeqForAgentRun(_ context.Context, agentRunID string) (int32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var lastEndSeq int32 = 0
+	for _, seg := range f.segmentSnapshots {
+		if seg.AgentRunID == agentRunID && seg.EndSeq > lastEndSeq {
+			lastEndSeq = seg.EndSeq
+		}
+	}
+	return lastEndSeq, nil
+}
+
+// GetMaxTaskMessageSeq implements InteractionDAGStore.
+func (f *fakeInteractionDAGStore) GetMaxTaskMessageSeq(_ context.Context, taskIDText string) (int32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var maxSeq int32 = 0
+	if seqs, ok := f.taskMessages[taskIDText]; ok {
+		for _, seq := range seqs {
+			if seq > maxSeq {
+				maxSeq = seq
+			}
+		}
+	}
+	return maxSeq, nil
+}
+
+// addTestTaskMessage adds a task message seq for testing.
+func (f *fakeInteractionDAGStore) addTestTaskMessage(taskIDText string, seq int32) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.taskMessages[taskIDText] = append(f.taskMessages[taskIDText], seq)
+}
+
 func (f *fakeInteractionDAGStore) InsertInteractionDAGEdge(_ context.Context, arg db.InsertInteractionDAGEdgeParams) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -104,6 +143,8 @@ func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByAgentRun(_ context.C
 				TensorRef:                 s.TensorRef,
 				ClosingEvent:              s.ClosingEvent,
 				ClosingEventTargetSegment: s.ClosingEventTargetSegment,
+				StartSeq:                  s.StartSeq,
+				EndSeq:                    s.EndSeq,
 			}, nil
 		}
 	}
@@ -132,6 +173,8 @@ func (f *fakeInteractionDAGStore) ListInteractionDAGSegmentsForProject(_ context
 			TensorRef:                 s.TensorRef,
 			ClosingEvent:              s.ClosingEvent,
 			ClosingEventTargetSegment: s.ClosingEventTargetSegment,
+			StartSeq:                  s.StartSeq,
+			EndSeq:                    s.EndSeq,
 		})
 	}
 	return out, nil
@@ -338,14 +381,55 @@ func TestInteractionDAG_CloseSegmentForEvent_LeafSegmentClosingEventEmpty(t *tes
 	svc := NewInteractionDAGService(store, client, true)
 	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-2", "run-2", ""))
 
+	// Add test task messages.
+	store.addTestTaskMessage("run-2", 1)
+	store.addTestTaskMessage("run-2", 2)
+	store.addTestTaskMessage("run-2", 3)
+
 	_, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-2", "pk", "",
 		map[string]any{"sandbox_ids": []string{"sbx-1"}})
 	require.NoError(t, err)
 
 	require.Len(t, store.segmentSnapshots, 1)
 	assert.False(t, store.segmentSnapshots[0].ClosingEvent.Valid, "leaf segment closing_event must be NULL")
+	// Check that the turn range is correct.
+	assert.Equal(t, int32(1), store.segmentSnapshots[0].StartSeq)
+	assert.Equal(t, int32(3), store.segmentSnapshots[0].EndSeq)
 	// tensor_ref decoded from a payload that has a bare shard ref per field.
 	assert.JSONEq(t, `{"input_ids":{"shard_id":"shard-leaf","node_addr":"10.0.0.2:8000"}}`, string(store.segmentSnapshots[0].TensorRef))
+}
+
+// TestCloseSegmentForEvent_TurnRanges verifies that multiple segments get correct
+// start_seq and end_seq values, with start_seq = previous end_seq + 1.
+func TestInteractionDAG_CloseSegmentForEvent_TurnRanges(t *testing.T) {
+	store := newFakeInteractionDAGStore()
+	client := &fakeArealSegmentClient{
+		closeSegmentID: 1,
+		exportPayload:  json.RawMessage(`{"input_ids":{"shard_id":"shard-1","node_addr":"10.0.0.1:8000"}}`),
+	}
+	svc := NewInteractionDAGService(store, client, true)
+	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", ""))
+
+	// First segment: task messages 1-2.
+	store.addTestTaskMessage("run-1", 1)
+	store.addTestTaskMessage("run-1", 2)
+	_, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
+	require.NoError(t, err)
+	require.Len(t, store.segmentSnapshots, 1)
+	assert.Equal(t, int32(1), store.segmentSnapshots[0].StartSeq)
+	assert.Equal(t, int32(2), store.segmentSnapshots[0].EndSeq)
+
+	// Second segment: task messages 3-5.
+	client.closeSegmentID = 2
+	store.addTestTaskMessage("run-1", 3)
+	store.addTestTaskMessage("run-1", 4)
+	store.addTestTaskMessage("run-1", 5)
+	_, err = svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "completion", nil)
+	require.NoError(t, err)
+	require.Len(t, store.segmentSnapshots, 2)
+	// Check second segment.
+	assert.Equal(t, int32(3), store.segmentSnapshots[1].StartSeq) // previous end was 2
+	assert.Equal(t, int32(5), store.segmentSnapshots[1].EndSeq)
 }
 
 func TestDecodeTensorRef_MultiShardEnvelope(t *testing.T) {

@@ -25,14 +25,16 @@ WHERE session_id = $1;
 -- segment (paired operations stay together). PostgreSQL executes the seg CTE
 -- even though its result is not read by the outer INSERT, and the FK check sees
 -- the seg row within the same statement. tensor_ref is the opaque tensor-ref
--- object decoded from the areal export (stored verbatim as jsonb); sandbox_ids
--- and env_state are opaque jsonb (NOT NULL); issue_snapshot_id is nullable.
+-- object decoded from the areal export (stored verbatim as jsonb); start_seq/
+-- end_seq are the task_message.seq turn range captured at close (Task 2);
+-- sandbox_ids and env_state are opaque jsonb (NOT NULL); issue_snapshot_id is
+-- nullable.
 WITH seg AS (
-  INSERT INTO interaction_dag_segment (segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+  INSERT INTO interaction_dag_segment (segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 )
 INSERT INTO interaction_dag_env_snapshot (segment_id, sandbox_ids, issue_snapshot_id, env_state)
-VALUES ($1, $10, $11, $12);
+VALUES ($1, $12, $13, $14);
 
 -- name: GetInteractionDAGSegmentByAgentRun :one
 -- Resolves a task's segment by agent_run_id (= task.ID, D8). For change 1 each
@@ -40,11 +42,20 @@ VALUES ($1, $10, $11, $12);
 -- this stable if a future multi-segment model adds more. Used by the
 -- DELEGATION-edge recorder (D11) to find the parent's segment at the child's
 -- close. Returns no rows when the parent's segment has not been recorded yet.
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, created_at
 FROM interaction_dag_segment
 WHERE agent_run_id = $1
 ORDER BY created_at DESC
 LIMIT 1;
+
+-- name: GetLastEndSeqForAgentRun :one
+-- Returns the highest end_seq recorded for an agent_run, or 0 when no segment
+-- exists yet. Used by CloseSegmentForEvent to compute the next segment's
+-- start_seq (lastEnd + 1). MAX over end_seq (not "last row") so an empty [0,0]
+-- segment never regresses the running start point.
+SELECT COALESCE(MAX(end_seq), 0)::integer AS last_end_seq
+FROM interaction_dag_segment
+WHERE agent_run_id = $1;
 
 -- name: InsertInteractionDAGEdge :exec
 -- Typed DAG edge. type is CHECK-constrained to delegation/mention/completion;
@@ -57,9 +68,10 @@ VALUES ($1, $2, $3, $4);
 -- Read-only assembly query (U8 AssembleAssembledDag): all segments for a
 -- project, ordered by created_at for deterministic assembly. SELECTs the full
 -- row to scan into InteractionDAGSegment cleanly (mirrors
--- GetInteractionDAGSegmentByAgentRun). No scores/turn-idx/text columns exist
--- on this table; assembly never reads them.
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, created_at
+-- GetInteractionDAGSegmentByAgentRun), including the start_seq/end_seq turn
+-- range (Task 2). No scores or message-text columns live on this table; step
+-- rewards live in interaction_dag_step_reward (Task 5).
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, created_at
 FROM interaction_dag_segment
 WHERE project_id = $1
 ORDER BY created_at;

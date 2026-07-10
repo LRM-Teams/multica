@@ -39,6 +39,8 @@ type InteractionDAGStore interface {
 	InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg db.InsertInteractionDAGSegmentWithSnapshotParams) error
 	InsertInteractionDAGEdge(ctx context.Context, arg db.InsertInteractionDAGEdgeParams) error
 	GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID string) (db.InteractionDAGSegment, error)
+	GetLastEndSeqForAgentRun(ctx context.Context, agentRunID string) (int32, error)
+	GetMaxTaskMessageSeq(ctx context.Context, taskIDText string) (int32, error)
 
 	// Read-only assembly queries (U8 AssembleAssembledDag). Each filters by
 	// project_id; env_snapshot joins through segment (no project_id column).
@@ -190,17 +192,31 @@ func (s *InteractionDAGService) CloseSegmentForEvent(
 	// ahead of time (<sessionID>-<trajectoryID>) and is reused as the snapshot FK.
 	segmentID := fmt.Sprintf("%s-%d", sessionID, trajectoryID)
 	sandboxIDs, issueSnapshotID, envState := encodeEnvSnapshot(envSnapshot)
+
+	// Calculate the turn range for this segment.
+	lastEndSeq, err := s.store.GetLastEndSeqForAgentRun(ctx, run.AgentRunID)
+	if err != nil {
+		return "", fmt.Errorf("interaction_dag: get last end_seq for %s: %w", run.AgentRunID, err)
+	}
+	startSeq := lastEndSeq + 1
+	endSeq, err := s.store.GetMaxTaskMessageSeq(ctx, run.AgentRunID)
+	if err != nil {
+		return "", fmt.Errorf("interaction_dag: get max task_message seq for %s: %w", run.AgentRunID, err)
+	}
+
 	if err := s.store.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
-		SegmentID:       segmentID,
-		ProjectID:       projectID,
-		AgentRunID:      run.AgentRunID,
-		IssueID:         run.IssueID, // carry the looked-up issue_id (do not re-derive)
-		TrajectoryID:    int64(trajectoryID),
-		TensorRef:       tensorRef,
-		ClosingEvent:    pgText(closingEvent),
-		SandboxIDs:      sandboxIDs,
-		IssueSnapshotID: issueSnapshotID,
-		EnvState:        envState,
+		SegmentID:                 segmentID,
+		ProjectID:                 projectID,
+		AgentRunID:                run.AgentRunID,
+		IssueID:                   run.IssueID, // carry the looked-up issue_id (do not re-derive)
+		TrajectoryID:              int64(trajectoryID),
+		TensorRef:                 tensorRef,
+		ClosingEvent:              pgText(closingEvent),
+		StartSeq:                  startSeq,
+		EndSeq:                    endSeq,
+		SandboxIDs:                sandboxIDs,
+		IssueSnapshotID:           issueSnapshotID,
+		EnvState:                  envState,
 	}); err != nil {
 		return "", fmt.Errorf("interaction_dag: insert segment+env_snapshot %s: %w", segmentID, err)
 	}

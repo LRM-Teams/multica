@@ -23,6 +23,7 @@ import { SquadProfileCard } from "../squads/components/squad-profile-card";
 import { availabilityConfig } from "../agents/presence";
 import { useNavigation } from "../navigation";
 import { useOpenAgentPanel } from "./agent-panel-context";
+import { agentColor } from "./agent-color";
 
 /**
  * Selects which agent hover-card payload to render when `enableHoverCard` is
@@ -69,9 +70,13 @@ interface ActorAvatarProps {
    */
   profileLink?: boolean;
   /**
-   * Per-actor identity color forwarded to the base avatar's fallback
-   * (monogram / bot icon). No effect when an avatar image renders. See
-   * `agentColor`. Used by multi-agent surfaces (mention picker, group chat).
+   * Per-actor identity color for the monogram / bot fallback (no effect when
+   * an avatar image renders). See `agentColor`.
+   *
+   * For agents: omit to auto-apply the stable hash color so every surface
+   * (DM header, list rows, detail) matches the tinted message-row avatar.
+   * Pass an explicit value to override; pass `{ fg, bg }` from a parent that
+   * already computed it (e.g. group chat) to avoid a second hash.
    */
   tint?: { fg: string; bg: string };
 }
@@ -94,6 +99,11 @@ export function ActorAvatar({
 }: ActorAvatarProps) {
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
   const paths = useWorkspacePaths();
+  // Agents always get a stable identity tint (message bubbles already do this
+  // via agentColor). Auto-apply here so DM header / list / detail can't fall
+  // back to muted gray while the same agent is green/teal in the transcript.
+  const resolvedTint =
+    tint ?? (actorType === "agent" ? agentColor(actorId) : undefined);
   const avatar = (
     <ActorAvatarBase
       name={getActorName(actorType, actorId)}
@@ -104,7 +114,7 @@ export function ActorAvatar({
       isSquad={actorType === "squad"}
       size={size}
       className={className}
-      tint={tint}
+      tint={resolvedTint}
     />
   );
 

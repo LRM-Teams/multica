@@ -1,6 +1,7 @@
 "use client";
 
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
+import { agentColor } from "../../common/agent-color";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { cn } from "@multica/ui/lib/utils";
 
@@ -70,6 +71,7 @@ export function AgentAvatarStack({
             avatarUrl={getActorAvatarUrl("agent", id)}
             isAgent
             size={size}
+            tint={agentColor(id)}
           />
         </span>
       ))}

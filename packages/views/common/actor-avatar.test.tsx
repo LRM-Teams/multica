@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ActorAvatar, AgentPresenceOverlay, AgentStatusDot } from "./actor-avatar";
+import { agentColor } from "./agent-color";
 
 // AgentStatusDot reads presence via useAgentPresenceDetail and the current
 // workspace via useCurrentWorkspace. Default to "online + idle" so the dot
@@ -298,6 +299,31 @@ describe("AgentStatusDot", () => {
     dot = screen.getByLabelText(/^Status:/);
     expect(dot).toHaveClass("bg-muted-foreground/40");
     expect(dot).not.toHaveClass("border-2");
+  });
+});
+
+describe("ActorAvatar agent identity tint", () => {
+  it("auto-applies agentColor when no tint is passed (matches message-row avatars)", () => {
+    const { container } = render(
+      <ActorAvatar actorType="agent" actorId="agent-1" profileLink={false} />,
+    );
+    const expected = agentColor("agent-1");
+    const node = container.querySelector('[data-slot="avatar"]') as HTMLElement | null;
+    expect(node).not.toBeNull();
+    // jsdom serializes inline colors as rgb()/rgba(); just assert the palette
+    // hue is present so header/list can't silently fall back to muted gray.
+    expect(node!.style.color).toMatch(/80,\s*0,\s*155/);
+    expect(node!.style.backgroundColor).toMatch(/80,\s*0,\s*155/);
+    expect(expected.fg.toLowerCase()).toBe("#50009b");
+  });
+
+  it("does not tint member avatars", () => {
+    const { container } = render(
+      <ActorAvatar actorType="member" actorId="user-1" profileLink={false} />,
+    );
+    const node = container.querySelector('[data-slot="avatar"]') as HTMLElement | null;
+    expect(node).not.toBeNull();
+    expect(node!.style.backgroundColor).toBe("");
   });
 });
 

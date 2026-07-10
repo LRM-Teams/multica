@@ -29,6 +29,7 @@ import {
 } from "@multica/core/identity";
 import { AgentLiveStatusMark } from "../agents/components/agent-live-status-mark";
 import { useAgentLiveStatus } from "../agents/use-agent-live-status";
+import { agentColor } from "./agent-color";
 import { useT } from "../i18n/use-t";
 
 type ChannelsT = ReturnType<typeof useT<"channels">>["t"];
@@ -212,7 +213,13 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
           avatarUrl={resolvePublicFileUrl(profile.avatar_url)}
           isAgent={profile.member_type === "agent"}
           size={48}
-          className={profile.member_type === "agent" ? "rounded-md" : "rounded-full"}
+          // Same circle + identity tint as message rows / DM header — do not
+          // square agents here or they drift from every other surface.
+          tint={
+            profile.member_type === "agent"
+              ? agentColor(profile.member_id)
+              : undefined
+          }
         />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">

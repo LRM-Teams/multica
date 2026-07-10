@@ -36,7 +36,7 @@ const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
 const channelOutputContractInstruction = "Channel output contract: use the runtime brief as the source of truth for visible output. Never print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, missing-tool diagnostics, or described commands as the final answer."
-const channelDirectedReplyInstruction = "This run is directly addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible result. Agent-to-agent channel @mentions are weak notifications unless they ask for an immediate deliverable, review, decision, or direct answer; weak notifications should finish without visible output. Pure greetings (hi/你好/在吗) get a greeting sticker only. Substantive requests get a helpful answer, optionally with one acknowledgement sticker. Never return no_reply, stay_silent, JSON, or other protocol text."
+const channelDirectedReplyInstruction = "This run is directly addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible result. Agent-to-agent channel @mentions are weak notifications unless they ask for an immediate deliverable, review, decision, or direct answer; weak notifications should finish without visible output. Pure greetings (hi/你好/在吗) get a greeting sticker only; when they are top-level group messages, keep them on the main channel instead of starting a thread. Reserve threads for substantive questions, tasks, investigations, or decisions that benefit from focused follow-up. Substantive requests get a helpful answer, optionally with one acknowledgement sticker. Never return no_reply, stay_silent, JSON, or other protocol text."
 const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not use the visible-output path, and do not print no_reply, stay_silent, JSON, or CLI/protocol text."
 const channelAmbientGreetingReactionInstruction = "If the current channel message or unread bundle is only a casual greeting or small talk (for example hi, hello, hey, 你好, 在吗) with no @-mention, no question, and no task request, respond with a 👋 reaction to the reaction target only and do not create a text reply. This also applies when you are the only agent in the channel: treat the greeting as directed to you, but keep the action reaction-only unless the user includes a question or request. If reactions are unavailable, finish without visible output rather than explaining that no reply is needed."
 const channelStickerReplyInstruction = "Sticker replies: for directed short social beats (hi/你好, ok/好的, 收到/明白, 谢谢, 赞), use a sticker; for substantive answers, send at most one acknowledgement sticker plus text. For ambient/unaddressed runs, use stickers only when explicitly requested or genuinely welcoming someone; otherwise react or stay silent. Follow the runtime output path and never print protocol text."
@@ -4073,8 +4073,7 @@ func (h *Handler) createChannelAgentPromptMessageWithDB(ctx context.Context, exe
 	var threadRootMessageID any
 	if trigger.ThreadRootMessageID != nil {
 		threadRootMessageID = parseUUID(*trigger.ThreadRootMessageID)
-	} else if channelKind == "group" && strings.TrimSpace(trigger.ID) != "" {
-		// Top-level group-channel prompts should default agent output into a thread under the trigger.
+	} else if shouldDefaultChannelAgentReplyToThread(channelKind, trigger) {
 		threadRootMessageID = parseUUID(trigger.ID)
 	}
 	row := exec.QueryRow(ctx, `
@@ -4085,6 +4084,68 @@ func (h *Handler) createChannelAgentPromptMessageWithDB(ctx context.Context, exe
 	var msg db.ChatMessage
 	err := row.Scan(&msg.ID, &msg.ChatSessionID, &msg.Role, &msg.Content, &msg.TaskID, &msg.CreatedAt, &msg.FailureReason, &msg.ElapsedMs, &msg.ThreadID, &msg.TriggerDepth, &msg.Parts)
 	return msg, err
+}
+
+func shouldDefaultChannelAgentReplyToThread(channelKind string, trigger ChannelMessageResponse) bool {
+	if channelKind != "group" || strings.TrimSpace(trigger.ID) == "" {
+		return false
+	}
+	if len(trigger.Attachments) > 0 || trigger.ReplyToMessageID != nil || trigger.QuoteMessageID != nil {
+		return true
+	}
+	text := channelMessageWithoutLeadingMentions(trigger.Content)
+	return !isChannelSocialBeat(text) && isChannelThreadWorthy(text)
+}
+
+func channelMessageWithoutLeadingMentions(content string) string {
+	text := strings.ToLower(util.MentionRe.ReplaceAllString(content, " "))
+	fields := strings.Fields(text)
+	for len(fields) > 0 && strings.HasPrefix(fields[0], "@") {
+		fields = fields[1:]
+	}
+	// Keep question marks for thread-worthiness detection; trim only separators.
+	return strings.Trim(strings.Join(fields, " "), " \t\r\n.,;:，。；：~～")
+}
+
+func isChannelSocialBeat(text string) bool {
+	if text == "" || isChannelThreadWorthy(text) {
+		return false
+	}
+	for _, socialPrefix := range []string{
+		"hi", "hello", "hey", "你好", "嗨", "哈喽", "在吗", "在么",
+		"ok", "okay", "好的", "收到", "明白", "谢谢", "多谢", "赞", "辛苦了",
+	} {
+		if text == socialPrefix || (len([]rune(text)) <= 20 && strings.HasPrefix(text, socialPrefix+" ")) {
+			return true
+		}
+	}
+	return false
+}
+
+func isChannelThreadWorthy(text string) bool {
+	if text == "" {
+		return false
+	}
+	if strings.ContainsAny(text, "?？") {
+		return true
+	}
+	for _, marker := range []string{
+		"在线程", "开个线程", "thread",
+		"怎么", "咋", "如何", "为什么", "为何", "哪个", "哪种", "是否", "能否", "可以吗", "是什么", "是啥",
+		"帮我", "修复", "排查", "调查", "查一下", "查下", "看一下", "看下", "检查", "评审", "分析", "处理", "实现", "解决", "收敛",
+		"bug", "error", "crash", "failed", "failure", "broken", "blocker", "故障", "异常", "报错", "失败", "崩溃", "挂了", "阻塞",
+		"can you", "could you", "would you", "please fix", "please check", "please review", "please investigate", "please implement", "please resolve", "please analyze",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	for _, imperative := range []string{"fix ", "debug ", "check ", "review ", "investigate ", "implement ", "resolve ", "analyze "} {
+		if strings.HasPrefix(text, imperative) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) ensureChannelAgentSession(ctx context.Context, ch ChannelResponse, agentID pgtype.UUID, creatorID pgtype.UUID) (db.ChatSession, error) {

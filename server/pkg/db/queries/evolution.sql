@@ -86,6 +86,11 @@ WHERE workspace_id = @workspace_id AND status = 'candidate'
 ORDER BY created_at ASC
 LIMIT @limit_count;
 
+-- name: GetEvolutionSubmissionForReview :one
+SELECT * FROM evolution_unit_submission
+WHERE id = @id AND workspace_id = @workspace_id AND status = 'needs_review'
+FOR UPDATE;
+
 -- name: ListEvolutionSubmissionFiles :many
 SELECT * FROM evolution_unit_submission_file
 WHERE workspace_id = @workspace_id AND submission_id = @submission_id

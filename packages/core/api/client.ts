@@ -1890,6 +1890,13 @@ export class ApiClient {
     });
   }
 
+  async setEvolutionSourceSkillAssignment(id: string, enabled: boolean): Promise<void> {
+    await this.fetch(`/api/evolution/submissions/${id}/source-skill`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    });
+  }
+
   async rejectEvolutionReviewSubmission(
     id: string,
     data: EvolutionReviewDecisionRequest = {},

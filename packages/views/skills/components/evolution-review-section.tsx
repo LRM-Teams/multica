@@ -107,15 +107,9 @@ export function EvolutionReviewSection() {
   });
 
   const toggleSkill = useMutation({
-    mutationFn: async ({ agentId, skillId, enabled }: { agentId: string; skillId: string; enabled: boolean }) => {
+    mutationFn: async ({ submissionId, enabled }: { submissionId: string; enabled: boolean }) => {
       if (!canManageReview) throw new Error(t(($) => $.evolution_review.insufficient_permissions));
-      const agent = agents.find((item) => item.id === agentId);
-      if (!agent) throw new Error(t(($) => $.evolution_review.source_agent_missing));
-      const assignedIds = agent.skills.map((skill) => skill.id);
-      const nextIds = enabled
-        ? Array.from(new Set([...assignedIds, skillId]))
-        : assignedIds.filter((assignedId) => assignedId !== skillId);
-      await api.setAgentSkills(agentId, { skill_ids: nextIds });
+      await api.setEvolutionSourceSkillAssignment(submissionId, enabled);
     },
     onSuccess: async () => {
       toast.success(t(($) => $.evolution_review.skill_assignment_updated));
@@ -234,7 +228,7 @@ export function EvolutionReviewSection() {
                   assignmentPending={toggleSkill.isPending || !canManageReview}
                   onToggleSkill={(enabled) => {
                     if (sourceAgent && selected.materialized_skill) {
-                      toggleSkill.mutate({ agentId: sourceAgent.id, skillId: selected.materialized_skill.id, enabled });
+                      toggleSkill.mutate({ submissionId: selected.id, enabled });
                     }
                   }}
                 />
@@ -437,7 +431,7 @@ function CandidateEvidence({ submission }: { submission: EvolutionReviewSubmissi
         <dl className="space-y-2 text-xs">
           {evidenceEntries.map(([key, value]) => (
             <div key={key} className="grid gap-1 sm:grid-cols-[8rem_minmax(0,1fr)]">
-              <dt className="text-muted-foreground">{key}</dt>
+              <dt className="text-muted-foreground">{evidenceLabel(t, key)}</dt>
               <dd className="break-words font-medium">{formatEvidenceValue(value)}</dd>
             </div>
           ))}
@@ -730,6 +724,19 @@ function reviewStringList(value: unknown): string | null {
     (item): item is string => typeof item === "string" && item.trim().length > 0,
   );
   return items.length > 0 ? items.join(", ") : null;
+}
+
+function evidenceLabel(t: SkillsT, key: string): string {
+  switch (key) {
+    case "source":
+      return t(($) => $.evolution_review.evidence_source);
+    case "source_date":
+      return t(($) => $.evolution_review.evidence_source_date);
+    case "evidence_refs":
+      return t(($) => $.evolution_review.evidence_refs);
+    default:
+      return t(($) => $.evolution_review.unknown);
+  }
 }
 
 function formatEvidenceValue(value: unknown): string {

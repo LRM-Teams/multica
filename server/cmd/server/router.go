@@ -814,6 +814,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/{submissionId}", h.GetEvolutionReviewSubmission)
 				r.Post("/{submissionId}/promote", h.PromoteEvolutionReviewSubmission)
 				r.Post("/{submissionId}/reject", h.RejectEvolutionReviewSubmission)
+				r.Put("/{submissionId}/source-skill", h.SetEvolutionSourceSkillAssignment)
 			})
 
 			// Labels

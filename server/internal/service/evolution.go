@@ -19,8 +19,13 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
+type EvolutionTxStarter interface {
+	Begin(context.Context) (pgx.Tx, error)
+}
+
 type EvolutionService struct {
 	Queries       *db.Queries
+	TxStarter     EvolutionTxStarter
 	Reviewer      EvolutionReviewer
 	ReviewEnabled bool
 }
@@ -51,6 +56,12 @@ var ErrEvolutionSubmissionNotReviewable = errors.New("evolution submission is no
 
 func NewEvolutionService(queries *db.Queries) *EvolutionService {
 	return NewEvolutionServiceWithReviewer(queries, NoopEvolutionReviewer{}, false)
+}
+
+func NewTransactionalEvolutionService(queries *db.Queries, txStarter EvolutionTxStarter) *EvolutionService {
+	service := NewEvolutionService(queries)
+	service.TxStarter = txStarter
+	return service
 }
 
 func NewEvolutionServiceWithReviewer(queries *db.Queries, reviewer EvolutionReviewer, enabled bool) *EvolutionService {
@@ -200,14 +211,32 @@ type PromoteSubmissionReviewOptions struct {
 }
 
 func (s *EvolutionService) PromoteSubmissionFromReview(ctx context.Context, workspaceID, submissionID pgtype.UUID, opts PromoteSubmissionReviewOptions) (db.SharedEvolutionUnit, error) {
-	submission, err := s.Queries.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID})
+	if s.TxStarter == nil {
+		return db.SharedEvolutionUnit{}, errors.New("evolution review transaction starter is required")
+	}
+	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
 		return db.SharedEvolutionUnit{}, err
 	}
-	if submission.Status != "needs_review" {
+	defer tx.Rollback(ctx)
+	qtx := s.Queries.WithTx(tx)
+	txService := *s
+	txService.Queries = qtx
+	txService.TxStarter = nil
+
+	submission, err := qtx.GetEvolutionSubmissionForReview(ctx, db.GetEvolutionSubmissionForReviewParams{ID: submissionID, WorkspaceID: workspaceID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, lookupErr := qtx.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID}); errors.Is(lookupErr, pgx.ErrNoRows) {
+			return db.SharedEvolutionUnit{}, pgx.ErrNoRows
+		} else if lookupErr != nil {
+			return db.SharedEvolutionUnit{}, lookupErr
+		}
 		return db.SharedEvolutionUnit{}, ErrEvolutionSubmissionNotReviewable
 	}
-	files, err := s.Queries.ListEvolutionSubmissionFiles(ctx, db.ListEvolutionSubmissionFilesParams{WorkspaceID: workspaceID, SubmissionID: submissionID})
+	if err != nil {
+		return db.SharedEvolutionUnit{}, err
+	}
+	files, err := qtx.ListEvolutionSubmissionFiles(ctx, db.ListEvolutionSubmissionFilesParams{WorkspaceID: workspaceID, SubmissionID: submissionID})
 	if err != nil {
 		return db.SharedEvolutionUnit{}, err
 	}
@@ -219,26 +248,53 @@ func (s *EvolutionService) PromoteSubmissionFromReview(ctx context.Context, work
 			review.Metadata["applied_review_suggestions"] = true
 		}
 	}
-	unit, _, err := s.promoteSubmission(ctx, submission, files, &review)
+	unit, _, err := txService.promoteSubmission(ctx, submission, files, &review)
 	if err != nil {
 		return db.SharedEvolutionUnit{}, err
 	}
-	if _, err := s.finalizePromotedSubmission(ctx, submission, unit); err != nil {
+	if _, err := txService.finalizePromotedSubmission(ctx, submission, unit); err != nil {
+		return db.SharedEvolutionUnit{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return db.SharedEvolutionUnit{}, err
 	}
 	return unit, nil
 }
 
 func (s *EvolutionService) RejectSubmissionFromReview(ctx context.Context, workspaceID, submissionID pgtype.UUID, reason string) (db.EvolutionUnitSubmission, error) {
-	submission, err := s.Queries.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID})
+	if s.TxStarter == nil {
+		return db.EvolutionUnitSubmission{}, errors.New("evolution review transaction starter is required")
+	}
+	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
 		return db.EvolutionUnitSubmission{}, err
 	}
-	if submission.Status != "needs_review" {
+	defer tx.Rollback(ctx)
+	qtx := s.Queries.WithTx(tx)
+	submission, err := qtx.GetEvolutionSubmissionForReview(ctx, db.GetEvolutionSubmissionForReviewParams{ID: submissionID, WorkspaceID: workspaceID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, lookupErr := qtx.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID}); errors.Is(lookupErr, pgx.ErrNoRows) {
+			return db.EvolutionUnitSubmission{}, pgx.ErrNoRows
+		} else if lookupErr != nil {
+			return db.EvolutionUnitSubmission{}, lookupErr
+		}
 		return db.EvolutionUnitSubmission{}, ErrEvolutionSubmissionNotReviewable
 	}
+	if err != nil {
+		return db.EvolutionUnitSubmission{}, err
+	}
 	review := humanEvolutionReviewResult(EvolutionReviewReject, reason)
-	return s.rejectSubmissionWithReviewResult(ctx, submission, review)
+	updated, err := (&EvolutionService{Queries: qtx}).rejectSubmissionWithReviewResult(ctx, submission, review)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.EvolutionUnitSubmission{}, ErrEvolutionSubmissionNotReviewable
+	}
+	if err != nil {
+		return db.EvolutionUnitSubmission{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.EvolutionUnitSubmission{}, err
+	}
+	return updated, nil
 }
 
 func (s *EvolutionService) promoteSubmission(ctx context.Context, submission db.EvolutionUnitSubmission, files []db.EvolutionUnitSubmissionFile, review *EvolutionReviewResult) (db.SharedEvolutionUnit, evolutionCurationStatus, error) {

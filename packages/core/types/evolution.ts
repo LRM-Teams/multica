@@ -35,6 +35,22 @@ export interface EvolutionMaterializedSkill {
   description: string;
 }
 
+export interface EvolutionReviewEvidence {
+  source: string;
+  source_date: string;
+  evidence_refs: string[];
+}
+
+export interface EvolutionReviewApplies {
+  scope: string;
+  tags: string[];
+  tools: string[];
+  task_types: string[];
+  project_types: string[];
+  languages: string[];
+  frameworks: string[];
+}
+
 export interface EvolutionReviewSubmission {
   id: string;
   workspace_id: string;
@@ -51,8 +67,8 @@ export interface EvolutionReviewSubmission {
   sensitivity: string;
   confidence: string;
   suggested_scope: string;
-  evidence: Record<string, unknown>;
-  applies: Record<string, unknown>;
+  evidence: EvolutionReviewEvidence;
+  applies: EvolutionReviewApplies;
   tags: string[];
   tools: string[];
   task_types: string[];

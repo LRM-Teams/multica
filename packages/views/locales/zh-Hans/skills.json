@@ -427,6 +427,9 @@
     "reuse_failure": "失败",
     "reuse_ignored": "忽略",
     "reuse_conflicts": "冲突",
-    "insufficient_permissions": "此操作需要工作区管理员权限。"
+    "insufficient_permissions": "此操作需要工作区管理员权限。",
+    "evidence_source": "证据来源",
+    "evidence_source_date": "来源日期",
+    "evidence_refs": "引用类型"
   }
 }

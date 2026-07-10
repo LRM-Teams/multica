@@ -257,8 +257,8 @@ describe("EvolutionReviewSubmissionListSchema drift", () => {
     const parsed = EvolutionReviewSubmissionListSchema.parse([base]);
     expect(parsed[0]?.tags).toEqual([]);
     expect(parsed[0]?.review_metadata).toEqual({});
-    expect(parsed[0]?.evidence).toEqual({});
-    expect(parsed[0]?.applies).toEqual({});
+    expect(parsed[0]?.evidence).toEqual({ source: "", source_date: "", evidence_refs: [] });
+    expect(parsed[0]?.applies).toEqual({ scope: "", tags: [], tools: [], task_types: [], project_types: [], languages: [], frameworks: [] });
     expect(parsed[0]?.materialized_skill).toBeUndefined();
     expect(parsed[0]?.files).toBeUndefined();
   });
@@ -267,14 +267,32 @@ describe("EvolutionReviewSubmissionListSchema drift", () => {
     const parsed = EvolutionReviewSubmissionListSchema.parse([
       {
         ...base,
-        evidence: { task_ids: ["task-1"], rationale: "Repeated success" },
-        applies: { languages: ["go"] },
+        evidence: { source: "memory_curation_l3", source_date: "2026-07-10", evidence_refs: ["issue"] },
+        applies: { scope: "workspace", languages: ["go"] },
         materialized_skill: { id: "skill-1", name: "targeted-tests" },
       },
     ]);
-    expect(parsed[0]?.evidence).toEqual({ task_ids: ["task-1"], rationale: "Repeated success" });
-    expect(parsed[0]?.applies).toEqual({ languages: ["go"] });
+    expect(parsed[0]?.evidence).toEqual({ source: "memory_curation_l3", source_date: "2026-07-10", evidence_refs: ["issue"] });
+    expect(parsed[0]?.applies.languages).toEqual(["go"]);
     expect(parsed[0]?.materialized_skill).toEqual({ id: "skill-1", name: "targeted-tests", description: "" });
+  });
+
+  it("defaults null and wrong-type nested fields without dropping the submission", () => {
+    const parsed = EvolutionReviewSubmissionListSchema.parse([{
+      ...base,
+      evidence: null,
+      applies: "future-shape",
+      tags: null,
+      review_metadata: [],
+      files: "future-shape",
+      materialized_skill: null,
+    }]);
+    expect(parsed[0]?.evidence.evidence_refs).toEqual([]);
+    expect(parsed[0]?.applies.languages).toEqual([]);
+    expect(parsed[0]?.tags).toEqual([]);
+    expect(parsed[0]?.review_metadata).toEqual({});
+    expect(parsed[0]?.files).toBeUndefined();
+    expect(parsed[0]?.materialized_skill).toBeUndefined();
   });
 
   it("keeps unknown enum values as strings instead of failing the whole queue", () => {

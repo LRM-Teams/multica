@@ -424,6 +424,9 @@
     "reuse_failure": "失敗",
     "reuse_ignored": "無視",
     "reuse_conflicts": "競合",
-    "insufficient_permissions": "この操作にはワークスペース管理者権限が必要です。"
+    "insufficient_permissions": "この操作にはワークスペース管理者権限が必要です。",
+    "evidence_source": "根拠のソース",
+    "evidence_source_date": "ソース日付",
+    "evidence_refs": "参照タイプ"
   }
 }

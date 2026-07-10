@@ -223,21 +223,50 @@ export const CommentTriggerPreviewSchema = z.object({
   agents: z.array(CommentTriggerPreviewAgentSchema).default([]),
 }).loose();
 
-const EvolutionReviewFileSchema = z.object({
-  id: z.string().default(""),
-  path: z.string().default(""),
-  content: z.string().optional(),
-  content_hash: z.string().default(""),
-  mime_type: z.string().default(""),
-  size_bytes: z.number().default(0),
-  created_at: z.string().nullable().optional(),
-}).loose();
+const evolutionString = (fallback = "") => z.preprocess(
+  (value) => typeof value === "string" ? value : fallback,
+  z.string(),
+);
+const evolutionStringArray = z.preprocess(
+  (value) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [],
+  z.array(z.string()),
+);
+const evolutionObject = <T extends z.ZodRawShape>(shape: T) => z.preprocess(
+  (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {},
+  z.object(shape).loose(),
+);
 
-const EvolutionMaterializedSkillSchema = z.object({
+const EvolutionReviewFileSchema = evolutionObject({
+  id: evolutionString(),
+  path: evolutionString(),
+  content: evolutionString().optional(),
+  content_hash: evolutionString(),
+  mime_type: evolutionString(),
+  size_bytes: z.preprocess((value) => typeof value === "number" ? value : 0, z.number()),
+  created_at: z.string().nullable().optional(),
+});
+
+const EvolutionMaterializedSkillSchema = evolutionObject({
   id: z.string(),
-  name: z.string().default(""),
-  description: z.string().default(""),
-}).loose();
+  name: evolutionString(),
+  description: evolutionString(),
+});
+
+const EvolutionReviewEvidenceSchema = evolutionObject({
+  source: evolutionString(),
+  source_date: evolutionString(),
+  evidence_refs: evolutionStringArray,
+});
+
+const EvolutionReviewAppliesSchema = evolutionObject({
+  scope: evolutionString(),
+  tags: evolutionStringArray,
+  tools: evolutionStringArray,
+  task_types: evolutionStringArray,
+  project_types: evolutionStringArray,
+  languages: evolutionStringArray,
+  frameworks: evolutionStringArray,
+});
 
 export const EvolutionReviewSubmissionSchema = z.object({
   id: z.string(),
@@ -255,28 +284,37 @@ export const EvolutionReviewSubmissionSchema = z.object({
   sensitivity: z.string().default(""),
   confidence: z.string().default(""),
   suggested_scope: z.string().default(""),
-  evidence: z.record(z.string(), z.unknown()).default({}),
-  applies: z.record(z.string(), z.unknown()).default({}),
-  tags: z.array(z.string()).default([]),
-  tools: z.array(z.string()).default([]),
-  task_types: z.array(z.string()).default([]),
-  project_types: z.array(z.string()).default([]),
-  languages: z.array(z.string()).default([]),
-  frameworks: z.array(z.string()).default([]),
+  evidence: EvolutionReviewEvidenceSchema.default({ source: "", source_date: "", evidence_refs: [] }),
+  applies: EvolutionReviewAppliesSchema.default({ scope: "", tags: [], tools: [], task_types: [], project_types: [], languages: [], frameworks: [] }),
+  tags: evolutionStringArray,
+  tools: evolutionStringArray,
+  task_types: evolutionStringArray,
+  project_types: evolutionStringArray,
+  languages: evolutionStringArray,
+  frameworks: evolutionStringArray,
   status: z.string().default("needs_review"),
   reject_reason: z.string().default(""),
   review_decision: z.string().default(""),
   review_confidence: z.number().nullable().optional(),
   review_risk_level: z.string().default(""),
   review_reason: z.string().default(""),
-  review_metadata: z.record(z.string(), z.unknown()).default({}),
+  review_metadata: z.preprocess(
+    (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {},
+    z.record(z.string(), z.unknown()),
+  ),
   reviewed_at: z.string().nullable().optional(),
   promoted_unit_id: z.string().nullable().optional(),
-  materialized_skill: EvolutionMaterializedSkillSchema.optional(),
+  materialized_skill: z.preprocess(
+    (value) => value && typeof value === "object" && !Array.isArray(value) ? value : undefined,
+    EvolutionMaterializedSkillSchema.optional(),
+  ),
   source_created_at: z.string().nullable().optional(),
   created_at: z.string().nullable().optional(),
   updated_at: z.string().nullable().optional(),
-  files: z.array(EvolutionReviewFileSchema).optional(),
+  files: z.preprocess(
+    (value) => value == null ? undefined : Array.isArray(value) ? value : undefined,
+    z.array(EvolutionReviewFileSchema).optional(),
+  ),
 }).loose();
 
 export const EvolutionReviewSubmissionListSchema = z.array(EvolutionReviewSubmissionSchema);

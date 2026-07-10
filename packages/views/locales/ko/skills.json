@@ -427,6 +427,9 @@
     "reuse_failure": "실패",
     "reuse_ignored": "무시",
     "reuse_conflicts": "충돌",
-    "insufficient_permissions": "이 작업에는 워크스페이스 관리자 권한이 필요합니다."
+    "insufficient_permissions": "이 작업에는 워크스페이스 관리자 권한이 필요합니다.",
+    "evidence_source": "근거 출처",
+    "evidence_source_date": "출처 날짜",
+    "evidence_refs": "참조 유형"
   }
 }

@@ -427,6 +427,9 @@
     "reuse_failure": "Failure",
     "reuse_ignored": "Ignored",
     "reuse_conflicts": "Conflicts",
-    "insufficient_permissions": "You need workspace admin permission for this action."
+    "insufficient_permissions": "You need workspace admin permission for this action.",
+    "evidence_source": "Evidence source",
+    "evidence_source_date": "Source date",
+    "evidence_refs": "Reference types"
   }
 }

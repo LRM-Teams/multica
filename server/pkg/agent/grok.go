@@ -53,6 +53,9 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	if _, err := exec.LookPath(execPath); err != nil {
 		return nil, fmt.Errorf("grok executable not found at %q: %w", execPath, err)
 	}
+	if err := b.PreflightAuth(ctx); err != nil {
+		return nil, err
+	}
 
 	// Session id is known up-front so we can pin resume early and locate the
 	// tool-event sidecar while the process is still running (Pi parity).
@@ -284,6 +287,19 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	return &Session{Messages: msgCh, Result: resCh}, nil
 }
 
+func (b *grokBackend) PreflightAuth(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	grokHome, err := ensureGrokRuntimeHome(b.cfg.Env, b.cfg.Logger)
+	if err != nil {
+		return fmt.Errorf("grok runtime home: %w", err)
+	}
+	return validateGrokAuth(grokHome, b.cfg.Env)
+}
+
 func grokFirstStreamEventTimeout(semanticInactivityTimeout time.Duration) time.Duration {
 	if semanticInactivityTimeout <= 0 || semanticInactivityTimeout > defaultGrokFirstStreamEventTimeout {
 		return defaultGrokFirstStreamEventTimeout
@@ -366,6 +382,21 @@ project_picker_disabled = true
 	}
 
 	return runtimeHome, nil
+}
+
+func validateGrokAuth(grokHome string, cfgEnv map[string]string) error {
+	if strings.TrimSpace(cfgEnv["XAI_API_KEY"]) != "" || strings.TrimSpace(os.Getenv("XAI_API_KEY")) != "" {
+		return nil
+	}
+	authPath := filepath.Join(grokHome, "auth.json")
+	st, err := os.Stat(authPath)
+	if err != nil {
+		return fmt.Errorf("%s: grok not logged in: auth.json is missing and XAI_API_KEY is not set; configure Grok auth before retrying", ProviderAuthRequiredMarker)
+	}
+	if st.IsDir() || st.Size() == 0 {
+		return fmt.Errorf("%s: grok not logged in: auth.json is empty or invalid and XAI_API_KEY is not set; configure Grok auth before retrying", ProviderAuthRequiredMarker)
+	}
+	return nil
 }
 
 func userGrokHome() string {

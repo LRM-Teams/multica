@@ -66,6 +66,25 @@ export interface EvolutionReviewSubmission {
   files?: EvolutionReviewFile[];
 }
 
+export interface EvolutionUnitMetric {
+  unit_id?: string | null;
+  local_unit_id: string;
+  unit_type: "memory" | "skill" | "workflow" | "tool_pattern" | "preference" | (string & {});
+  title: string;
+  injected_count: number;
+  used_count: number;
+  success_count: number;
+  failure_count: number;
+  ignored_count: number;
+  conflict_count: number;
+  success_rate: number;
+  last_used_at?: string | null;
+}
+
+export interface EvolutionMetricsResponse {
+  unit_metrics: EvolutionUnitMetric[];
+}
+
 export interface EvolutionReviewDecisionRequest {
   reason?: string;
   apply_review_suggestions?: boolean;

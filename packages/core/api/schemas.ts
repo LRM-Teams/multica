@@ -14,6 +14,7 @@ import type {
   BillingTransactionsPage,
   CancelTaskResponse,
   CreateAgentFromTemplateResponse,
+  EvolutionMetricsResponse,
   EvolutionReviewSubmission,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
@@ -270,6 +271,27 @@ export const EvolutionReviewSubmissionSchema = z.object({
 export const EvolutionReviewSubmissionListSchema = z.array(EvolutionReviewSubmissionSchema);
 
 export const EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST: EvolutionReviewSubmission[] = [];
+
+const EvolutionUnitMetricSchema = z.object({
+  unit_id: z.string().nullable().optional(),
+  local_unit_id: z.string().default(""),
+  unit_type: z.string().default(""),
+  title: z.string().default(""),
+  injected_count: z.number().default(0),
+  used_count: z.number().default(0),
+  success_count: z.number().default(0),
+  failure_count: z.number().default(0),
+  ignored_count: z.number().default(0),
+  conflict_count: z.number().default(0),
+  success_rate: z.number().default(0),
+  last_used_at: z.string().nullable().optional(),
+}).loose();
+
+export const EvolutionMetricsSchema = z.object({
+  unit_metrics: z.array(EvolutionUnitMetricSchema).default([]),
+}).loose();
+
+export const EMPTY_EVOLUTION_METRICS: EvolutionMetricsResponse = { unit_metrics: [] };
 
 const ChannelMessageSearchResultSchema = z.object({
   message_id: z.string().default(""),

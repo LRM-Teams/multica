@@ -325,6 +325,10 @@ visibility: private | workspace | channel
 
 V1 can continue syncing candidate JSONL through the existing daemon/server evolution path.
 
+## Related Designs
+
+- [Agent Memory Curation Pipeline](./2026-07-09-agent-memory-curation-plan.md) describes the follow-up platform scheduler that turns chat/issue/task history into `daily/`, `REVIEW.md`, `USER.md`, `MEMORY.md`, and `STATE.md`, with automatic daily stages plus manual backfill.
+
 ## Implementation Plan
 
 1. Add provider-neutral `.multica/agents/<agent_id>` root helpers in the daemon.
@@ -335,6 +339,16 @@ V1 can continue syncing candidate JSONL through the existing daemon/server evolu
 6. Add runtime prompt/brief text for managed isolated mode and authority order.
 7. Add platform notes sync for channels, agents, and project maps.
 8. Extend server memory item typing/scope when the product UI needs structured editing.
+
+## V2 Curation Hooks
+
+The first platform-owned curation implementation adds:
+
+- `multica memory curate` for manual local-agent backlog processing.
+- Scheduler jobs `memory_l1_daily_record`, `memory_l2_review_extract`, `memory_l3_promote`, and `memory_l4_curator`.
+- `memory_curation_run` and `memory_curation_watermark` tables for audit/status tracking.
+- Workspace admin APIs under `/api/workspaces/{id}/memory-curation/runs` and agent status under `/api/agents/{id}/memory-curation/status`.
+- Deterministic file stages that keep `REVIEW.md` as a short-lived queue and promote only high-confidence candidates to `USER.md`, `MEMORY.md`, or lifecycle-tagged `STATE.md` entries.
 
 ## V1 Acceptance Criteria
 

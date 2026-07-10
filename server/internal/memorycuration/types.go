@@ -44,7 +44,14 @@ type Result struct {
 	AgentsChanged          int              `json:"agents_changed"`
 	DailyFilesWritten      int              `json:"daily_files_written"`
 	ReviewCandidatesAdded  int              `json:"review_candidates_added"`
+	EntriesReviewed        int              `json:"entries_reviewed"`
+	MemoryRoutes           int              `json:"memory_routes"`
+	SkillRoutes            int              `json:"skill_routes"`
+	SplitRoutes            int              `json:"split_routes"`
+	DiscardRoutes          int              `json:"discard_routes"`
+	ReviewDeferred         int              `json:"review_deferred"`
 	EntriesPromoted        int              `json:"entries_promoted"`
+	SkillCandidatesAdded   int              `json:"skill_candidates_added"`
 	SharedCandidatesAdded  int              `json:"shared_candidates_added"`
 	SharedCandidatesSynced int              `json:"shared_candidates_synced"`
 	EntriesArchived        int              `json:"entries_archived"`
@@ -53,6 +60,7 @@ type Result struct {
 	EvidenceCollected      int              `json:"evidence_collected"`
 	Timezone               string           `json:"timezone,omitempty"`
 	Errors                 []AgentError     `json:"errors,omitempty"`
+	ReviewTraces           []L3ReviewTrace  `json:"review_traces,omitempty"`
 	AgentResults           []AgentRunResult `json:"agent_results,omitempty"`
 }
 
@@ -64,17 +72,38 @@ type AgentError struct {
 }
 
 type AgentRunResult struct {
-	WorkspaceID            string `json:"workspace_id"`
-	AgentID                string `json:"agent_id"`
-	Root                   string `json:"root"`
-	Changed                bool   `json:"changed"`
-	DailyFilesWritten      int    `json:"daily_files_written"`
-	ReviewCandidatesAdded  int    `json:"review_candidates_added"`
-	EntriesPromoted        int    `json:"entries_promoted"`
-	SharedCandidatesAdded  int    `json:"shared_candidates_added"`
-	SharedCandidatesSynced int    `json:"shared_candidates_synced"`
-	EntriesArchived        int    `json:"entries_archived"`
-	DuplicatesMerged       int    `json:"duplicates_merged"`
-	ConflictsFound         int    `json:"conflicts_found"`
-	EvidenceCollected      int    `json:"evidence_collected"`
+	WorkspaceID            string          `json:"workspace_id"`
+	AgentID                string          `json:"agent_id"`
+	Root                   string          `json:"root"`
+	Changed                bool            `json:"changed"`
+	DailyFilesWritten      int             `json:"daily_files_written"`
+	ReviewCandidatesAdded  int             `json:"review_candidates_added"`
+	EntriesReviewed        int             `json:"entries_reviewed"`
+	MemoryRoutes           int             `json:"memory_routes"`
+	SkillRoutes            int             `json:"skill_routes"`
+	SplitRoutes            int             `json:"split_routes"`
+	DiscardRoutes          int             `json:"discard_routes"`
+	ReviewDeferred         int             `json:"review_deferred"`
+	EntriesPromoted        int             `json:"entries_promoted"`
+	SkillCandidatesAdded   int             `json:"skill_candidates_added"`
+	ReviewTraces           []L3ReviewTrace `json:"review_traces,omitempty"`
+	SharedCandidatesAdded  int             `json:"shared_candidates_added"`
+	SharedCandidatesSynced int             `json:"shared_candidates_synced"`
+	EntriesArchived        int             `json:"entries_archived"`
+	DuplicatesMerged       int             `json:"duplicates_merged"`
+	ConflictsFound         int             `json:"conflicts_found"`
+	EvidenceCollected      int             `json:"evidence_collected"`
+}
+
+type L3ReviewTrace struct {
+	EntryID       string  `json:"entry_id"`
+	EntryHash     string  `json:"entry_hash"`
+	Route         L3Route `json:"route,omitempty"`
+	Outcome       string  `json:"outcome"`
+	Confidence    float64 `json:"confidence,omitempty"`
+	Provider      string  `json:"provider,omitempty"`
+	Model         string  `json:"model,omitempty"`
+	PromptVersion string  `json:"prompt_version"`
+	DurationMS    int64   `json:"duration_ms,omitempty"`
+	ReasonCode    string  `json:"reason_code,omitempty"`
 }

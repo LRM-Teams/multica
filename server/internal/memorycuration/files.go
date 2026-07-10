@@ -213,6 +213,57 @@ func writeIfChanged(path, content string, dryRun bool) (bool, error) {
 	return true, os.WriteFile(path, []byte(content), 0o644)
 }
 
+type fileMutation struct {
+	path    string
+	content string
+}
+
+type fileSnapshot struct {
+	path    string
+	content []byte
+	existed bool
+}
+
+func commitFileMutations(mutations []fileMutation, dryRun bool) (bool, error) {
+	changed := false
+	snapshots := make([]fileSnapshot, 0, len(mutations))
+	for _, mutation := range mutations {
+		old, err := os.ReadFile(mutation.path)
+		if err != nil && !os.IsNotExist(err) {
+			rollbackFileMutations(snapshots)
+			return false, err
+		}
+		if err == nil && string(old) == mutation.content {
+			continue
+		}
+		changed = true
+		if dryRun {
+			continue
+		}
+		snapshots = append(snapshots, fileSnapshot{path: mutation.path, content: old, existed: err == nil})
+		if err := os.MkdirAll(filepath.Dir(mutation.path), 0o755); err != nil {
+			rollbackFileMutations(snapshots)
+			return false, err
+		}
+		if err := os.WriteFile(mutation.path, []byte(mutation.content), 0o644); err != nil {
+			rollbackFileMutations(snapshots)
+			return false, err
+		}
+	}
+	return changed, nil
+}
+
+func rollbackFileMutations(snapshots []fileSnapshot) {
+	for i := len(snapshots) - 1; i >= 0; i-- {
+		snapshot := snapshots[i]
+		if snapshot.existed {
+			_ = os.WriteFile(snapshot.path, snapshot.content, 0o644)
+		} else {
+			_ = os.Remove(snapshot.path)
+		}
+	}
+}
+
 func hashShort(parts ...string) string {
 	h := sha256.New()
 	for _, p := range parts {

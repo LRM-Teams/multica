@@ -78,7 +78,7 @@ func runMemoryCurate(cmd *cobra.Command, _ []string) error {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	force, _ := cmd.Flags().GetBool("force")
 	includeHistory, _ := cmd.Flags().GetBool("include-history")
-	res, err := memorycuration.NewEngine().Run(memorycuration.Options{
+	res, err := memorycuration.NewEngine(memorycuration.NewL3ReviewerFromEnv()).Run(memorycuration.Options{
 		WorkspacesRoot: workspacesRoot,
 		WorkspaceID:    workspaceID,
 		AgentIDs:       agents,
@@ -104,12 +104,14 @@ func runMemoryCurate(cmd *cobra.Command, _ []string) error {
 		strconv.Itoa(res.AgentsChanged),
 		strconv.Itoa(res.DailyFilesWritten),
 		strconv.Itoa(res.ReviewCandidatesAdded),
+		strconv.Itoa(res.EntriesReviewed),
+		strconv.Itoa(res.SkillCandidatesAdded),
 		strconv.Itoa(res.EntriesPromoted),
 		strconv.Itoa(res.EntriesArchived),
 		strconv.Itoa(res.DuplicatesMerged),
 		strconv.Itoa(len(res.Errors)),
 	}}
-	cli.PrintTable(os.Stdout, []string{"CHANGED_AGENTS", "DAILY", "REVIEW", "PROMOTED", "ARCHIVED", "DEDUPED", "ERRORS"}, rows)
+	cli.PrintTable(os.Stdout, []string{"CHANGED_AGENTS", "DAILY", "REVIEW", "REVIEWED", "SKILL_DRAFTS", "PROMOTED", "ARCHIVED", "DEDUPED", "ERRORS"}, rows)
 	return nil
 }
 

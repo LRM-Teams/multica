@@ -49,7 +49,14 @@ type memoryCurationRunStatsResponse struct {
 	AgentsChanged          int `json:"agents_changed"`
 	DailyFilesWritten      int `json:"daily_files_written"`
 	ReviewCandidatesAdded  int `json:"review_candidates_added"`
+	EntriesReviewed        int `json:"entries_reviewed"`
+	MemoryRoutes           int `json:"memory_routes"`
+	SkillRoutes            int `json:"skill_routes"`
+	SplitRoutes            int `json:"split_routes"`
+	DiscardRoutes          int `json:"discard_routes"`
+	ReviewDeferred         int `json:"review_deferred"`
 	EntriesPromoted        int `json:"entries_promoted"`
+	SkillCandidatesAdded   int `json:"skill_candidates_added"`
 	SharedCandidatesAdded  int `json:"shared_candidates_added"`
 	SharedCandidatesSynced int `json:"shared_candidates_synced"`
 	EntriesArchived        int `json:"entries_archived"`
@@ -160,7 +167,7 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("create curation run: %v", err))
 		return
 	}
-	res, runErr := memorycuration.NewEngine().Run(memorycuration.Options{
+	res, runErr := memorycuration.NewEngine(memorycuration.NewL3ReviewerFromEnv()).Run(memorycuration.Options{
 		Context:        r.Context(),
 		DB:             h.DB,
 		WorkspacesRoot: root,
@@ -187,7 +194,9 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 			errText = "one or more agents failed"
 		}
 	}
-	if _, err := h.DB.Exec(r.Context(), `
+	finishCtx, cancelFinish := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+	defer cancelFinish()
+	if _, err := h.DB.Exec(finishCtx, `
 		UPDATE memory_curation_run
 		   SET status = $2, stats = $3::jsonb, error = $4, finished_at = now()
 		 WHERE id = $1
@@ -293,7 +302,14 @@ func publicMemoryCurationStats(raw []byte) memoryCurationRunStatsResponse {
 		AgentsChanged:          result.AgentsChanged,
 		DailyFilesWritten:      result.DailyFilesWritten,
 		ReviewCandidatesAdded:  result.ReviewCandidatesAdded,
+		EntriesReviewed:        result.EntriesReviewed,
+		MemoryRoutes:           result.MemoryRoutes,
+		SkillRoutes:            result.SkillRoutes,
+		SplitRoutes:            result.SplitRoutes,
+		DiscardRoutes:          result.DiscardRoutes,
+		ReviewDeferred:         result.ReviewDeferred,
 		EntriesPromoted:        result.EntriesPromoted,
+		SkillCandidatesAdded:   result.SkillCandidatesAdded,
 		SharedCandidatesAdded:  result.SharedCandidatesAdded,
 		SharedCandidatesSynced: result.SharedCandidatesSynced,
 		EntriesArchived:        result.EntriesArchived,

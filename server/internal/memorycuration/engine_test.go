@@ -1,6 +1,7 @@
 package memorycuration
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,7 +41,7 @@ func TestRunAllPromotesAndCleansReview(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(agentRoot, "memory", "daily", "2026-07-08.md"), []byte(daily), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res, err := NewEngine().Run(Options{
+	res, err := NewEngine(routeAllToMemoryReviewer{}).Run(Options{
 		WorkspacesRoot: root,
 		WorkspaceID:    "ws-1",
 		AgentIDs:       []string{"agent-1"},
@@ -132,6 +133,22 @@ func TestSharedMemoryEligibilityUsesNormalizedSafetyFields(t *testing.T) {
 	if !entryEligibleForSharedMemory(entry) {
 		t.Fatal("normalized safe workspace entry should be shared")
 	}
+}
+
+type routeAllToMemoryReviewer struct{}
+
+func (routeAllToMemoryReviewer) Review(_ context.Context, input L3ReviewInput) (L3ReviewOutput, error) {
+	out := L3ReviewOutput{Provider: "test", Model: "deterministic"}
+	for _, entry := range input.Entries {
+		out.Decisions = append(out.Decisions, L3ReviewDecision{
+			EntryID:    entry.ID,
+			Route:      L3RouteMemory,
+			Confidence: 1,
+			Rationale:  "test memory route",
+			Memory:     L3MemoryDraft{Title: entry.Title, Body: entry.Body},
+		})
+	}
+	return out, nil
 }
 
 func mustDate(s string) time.Time {

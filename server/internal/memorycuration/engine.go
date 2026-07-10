@@ -11,9 +11,17 @@ import (
 	"time"
 )
 
-type Engine struct{}
+type Engine struct {
+	l3Reviewer L3Reviewer
+}
 
-func NewEngine() *Engine { return &Engine{} }
+func NewEngine(reviewers ...L3Reviewer) *Engine {
+	var reviewer L3Reviewer
+	if len(reviewers) > 0 {
+		reviewer = reviewers[0]
+	}
+	return &Engine{l3Reviewer: reviewer}
+}
 
 func (e *Engine) Run(opts Options) (Result, error) {
 	stage := opts.Stage
@@ -92,23 +100,50 @@ func (e *Engine) Run(opts Options) (Result, error) {
 		}
 		res.DailyFilesWritten += ar.DailyFilesWritten
 		res.ReviewCandidatesAdded += ar.ReviewCandidatesAdded
+		res.EntriesReviewed += ar.EntriesReviewed
+		res.MemoryRoutes += ar.MemoryRoutes
+		res.SkillRoutes += ar.SkillRoutes
+		res.SplitRoutes += ar.SplitRoutes
+		res.DiscardRoutes += ar.DiscardRoutes
+		res.ReviewDeferred += ar.ReviewDeferred
 		res.EntriesPromoted += ar.EntriesPromoted
+		res.SkillCandidatesAdded += ar.SkillCandidatesAdded
 		res.SharedCandidatesAdded += ar.SharedCandidatesAdded
 		res.SharedCandidatesSynced += ar.SharedCandidatesSynced
 		res.EntriesArchived += ar.EntriesArchived
 		res.DuplicatesMerged += ar.DuplicatesMerged
 		res.ConflictsFound += ar.ConflictsFound
 		res.EvidenceCollected += ar.EvidenceCollected
+		res.ReviewTraces = appendBoundedReviewTraces(res.ReviewTraces, ar.ReviewTraces, defaultL3ReviewMaxEntries)
 		res.AgentResults = append(res.AgentResults, ar)
 	}
 	return res, nil
+}
+
+func appendBoundedReviewTraces(dst, src []L3ReviewTrace, limit int) []L3ReviewTrace {
+	if limit <= 0 || len(dst) >= limit {
+		return dst
+	}
+	remaining := limit - len(dst)
+	if len(src) > remaining {
+		src = src[:remaining]
+	}
+	return append(dst, src...)
 }
 
 func mergeAgentRunResult(dst *AgentRunResult, src AgentRunResult) {
 	dst.Changed = dst.Changed || src.Changed
 	dst.DailyFilesWritten += src.DailyFilesWritten
 	dst.ReviewCandidatesAdded += src.ReviewCandidatesAdded
+	dst.EntriesReviewed += src.EntriesReviewed
+	dst.MemoryRoutes += src.MemoryRoutes
+	dst.SkillRoutes += src.SkillRoutes
+	dst.SplitRoutes += src.SplitRoutes
+	dst.DiscardRoutes += src.DiscardRoutes
+	dst.ReviewDeferred += src.ReviewDeferred
 	dst.EntriesPromoted += src.EntriesPromoted
+	dst.SkillCandidatesAdded += src.SkillCandidatesAdded
+	dst.ReviewTraces = append(dst.ReviewTraces, src.ReviewTraces...)
 	dst.SharedCandidatesAdded += src.SharedCandidatesAdded
 	dst.SharedCandidatesSynced += src.SharedCandidatesSynced
 	dst.EntriesArchived += src.EntriesArchived
@@ -370,80 +405,309 @@ func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
 	if err != nil {
 		return ar, err
 	}
-	var remaining []reviewEntry
+
+	reviewable := make([]reviewEntry, 0, len(entries))
+	remaining := make([]reviewEntry, 0, len(entries))
+	reviewLimitDeferred := 0
 	for _, entry := range entries {
-		if entry.Status != "candidate" || entry.Confidence != "high" || entry.Sensitivity == "secret" || entry.ProposedDestination == "" {
-			remaining = append(remaining, entry)
-			continue
-		}
 		if entry.Expired(opts.Now) {
 			ar.EntriesArchived++
 			continue
 		}
-		destPath := filepath.Join(root.Root, "memory", filepath.Base(entry.ProposedDestination))
-		promoted, duplicate, err := promoteEntry(destPath, entry, opts.DryRun)
-		if err != nil {
-			return ar, err
+		if !entryEligibleForL3Review(entry) {
+			remaining = append(remaining, entry)
+			continue
 		}
-		if duplicate {
-			ar.DuplicatesMerged++
+		if len(reviewable) >= defaultL3ReviewMaxEntries {
+			ar.ReviewDeferred++
+			reviewLimitDeferred++
+			remaining = append(remaining, entry)
+			continue
 		}
-		if promoted {
-			ar.Changed = true
-			ar.EntriesPromoted++
-		}
-		sharedCandidate, shouldShare := sharedMemoryCandidateForEntry(root, entry, opts.Now)
-		sharedAdded := false
-		sharedSynced := false
-		if shouldShare {
-			var err error
-			sharedAdded, err = recordSharedMemoryCandidate(root.Root, sharedCandidate, opts.DryRun)
-			if err != nil {
-				return ar, err
-			}
-			if sharedAdded {
-				ar.Changed = true
-				ar.SharedCandidatesAdded++
-			}
-			if !opts.DryRun {
-				sharedSynced, err = syncSharedMemoryCandidate(opts.Context, opts.DB, root, sharedCandidate)
-				if err != nil {
-					return ar, err
-				}
-				if sharedSynced {
-					ar.SharedCandidatesSynced++
-				}
-			}
-		}
-		if err := appendAudit(root.Root, "l3", opts.Until, map[string]any{"entry_id": entry.ID, "destination": filepath.Base(destPath), "duplicate": duplicate, "promoted": promoted, "shared_candidate": shouldShare, "shared_candidate_added": sharedAdded, "shared_candidate_synced": sharedSynced}, opts.DryRun); err != nil {
+		reviewable = append(reviewable, entry)
+	}
+	if reviewLimitDeferred > 0 {
+		if err := appendAudit(root.Root, "l3", opts.Until, map[string]any{
+			"outcome": "deferred", "reason_code": "review_limit", "deferred_count": reviewLimitDeferred,
+		}, opts.DryRun); err != nil {
 			return ar, err
 		}
 	}
+	if len(reviewable) == 0 {
+		return e.finishL3(root, opts, reviewPath, remaining, ar)
+	}
+	if e.l3Reviewer == nil {
+		for _, entry := range reviewable {
+			ar.ReviewDeferred++
+			trace := deferredL3Trace(entry, "reviewer_unavailable")
+			ar.ReviewTraces = appendBoundedReviewTraces(ar.ReviewTraces, []L3ReviewTrace{trace}, defaultL3ReviewMaxEntries)
+			if err := appendL3TraceAudit(root.Root, opts.Until, trace, opts.DryRun); err != nil {
+				return ar, err
+			}
+			remaining = append(remaining, entry)
+		}
+		return e.finishL3(root, opts, reviewPath, remaining, ar)
+	}
+
+	inputs := make([]L3ReviewEntry, 0, len(reviewable))
+	for _, entry := range reviewable {
+		inputs = append(inputs, l3InputFromEntry(entry))
+	}
+	output, reviewErr := e.l3Reviewer.Review(opts.Context, L3ReviewInput{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Entries: inputs})
+	if reviewErr != nil {
+		for _, entry := range reviewable {
+			ar.ReviewDeferred++
+			trace := deferredL3Trace(entry, "reviewer_error")
+			ar.ReviewTraces = appendBoundedReviewTraces(ar.ReviewTraces, []L3ReviewTrace{trace}, defaultL3ReviewMaxEntries)
+			if err := appendL3TraceAudit(root.Root, opts.Until, trace, opts.DryRun); err != nil {
+				return ar, err
+			}
+			remaining = append(remaining, entry)
+		}
+		return e.finishL3(root, opts, reviewPath, remaining, ar)
+	}
+	decisions := make(map[string]L3ReviewDecision, len(output.Decisions))
+	for _, decision := range output.Decisions {
+		decisions[decision.EntryID] = decision
+	}
+	for _, entry := range reviewable {
+		decision, ok := decisions[entry.ID]
+		if !ok {
+			ar.ReviewDeferred++
+			trace := deferredL3TraceWithOutput(entry, output, "reviewer_omitted")
+			ar.ReviewTraces = appendBoundedReviewTraces(ar.ReviewTraces, []L3ReviewTrace{trace}, defaultL3ReviewMaxEntries)
+			if err := appendL3TraceAudit(root.Root, opts.Until, trace, opts.DryRun); err != nil {
+				return ar, err
+			}
+			remaining = append(remaining, entry)
+			continue
+		}
+		trace := L3ReviewTrace{EntryID: entry.ID, EntryHash: entry.HashKey(), Route: decision.Route, Confidence: decision.Confidence, Provider: output.Provider, Model: output.Model, PromptVersion: L3ReviewPromptVersion, DurationMS: output.Duration.Milliseconds()}
+		if decision.Error != "" || decision.Confidence < minL3ActionConfidence || (decision.Route == L3RouteDiscard && decision.Confidence < minL3DiscardConfidence) {
+			trace.Outcome = "deferred"
+			if decision.Error != "" {
+				trace.ReasonCode = "invalid_decision"
+			} else {
+				trace.ReasonCode = "low_confidence"
+			}
+			ar.ReviewDeferred++
+			ar.ReviewTraces = appendBoundedReviewTraces(ar.ReviewTraces, []L3ReviewTrace{trace}, defaultL3ReviewMaxEntries)
+			if err := appendL3TraceAudit(root.Root, opts.Until, trace, opts.DryRun); err != nil {
+				return ar, err
+			}
+			remaining = append(remaining, entry)
+			continue
+		}
+
+		processed, syncPending, err := e.applyL3Decision(root, opts, entry, decision, &ar)
+		if err != nil {
+			trace.Outcome = "deferred"
+			trace.ReasonCode = "application_error"
+			ar.ReviewDeferred++
+			ar.ReviewTraces = appendBoundedReviewTraces(ar.ReviewTraces, []L3ReviewTrace{trace}, defaultL3ReviewMaxEntries)
+			if auditErr := appendL3TraceAudit(root.Root, opts.Until, trace, opts.DryRun); auditErr != nil {
+				return ar, auditErr
+			}
+			remaining = append(remaining, entry)
+			continue
+		}
+		if !processed {
+			trace.Outcome = "deferred"
+			ar.ReviewDeferred++
+			remaining = append(remaining, entry)
+		} else {
+			trace.Outcome = "applied"
+			if syncPending {
+				trace.Outcome = "applied_sync_pending"
+				trace.ReasonCode = "shared_sync_pending"
+			}
+			ar.EntriesReviewed++
+			switch decision.Route {
+			case L3RouteMemory:
+				ar.MemoryRoutes++
+			case L3RouteSkill:
+				ar.SkillRoutes++
+			case L3RouteSplit:
+				ar.SplitRoutes++
+			case L3RouteDiscard:
+				ar.DiscardRoutes++
+			}
+		}
+		ar.ReviewTraces = appendBoundedReviewTraces(ar.ReviewTraces, []L3ReviewTrace{trace}, defaultL3ReviewMaxEntries)
+		if err := appendL3TraceAudit(root.Root, opts.Until, trace, opts.DryRun); err != nil {
+			return ar, err
+		}
+	}
+	return e.finishL3(root, opts, reviewPath, remaining, ar)
+}
+
+func entryEligibleForL3Review(entry reviewEntry) bool {
+	return strings.EqualFold(strings.TrimSpace(entry.Status), "candidate") && strings.EqualFold(strings.TrimSpace(entry.Confidence), "high") && strings.EqualFold(strings.TrimSpace(entry.Sensitivity), "none") && strings.TrimSpace(entry.Body) != ""
+}
+
+func l3InputFromEntry(entry reviewEntry) L3ReviewEntry {
+	return L3ReviewEntry{ID: entry.ID, Type: entry.Type, Title: entry.Title, Body: entry.Body, Confidence: entry.Confidence, Sensitivity: entry.Sensitivity, Scope: entry.Scope, Evidence: entry.Evidence}
+}
+
+func deferredL3Trace(entry reviewEntry, reasonCode string) L3ReviewTrace {
+	return L3ReviewTrace{EntryID: entry.ID, EntryHash: entry.HashKey(), Outcome: "deferred", PromptVersion: L3ReviewPromptVersion, ReasonCode: reasonCode}
+}
+
+func deferredL3TraceWithOutput(entry reviewEntry, output L3ReviewOutput, reasonCode string) L3ReviewTrace {
+	trace := deferredL3Trace(entry, reasonCode)
+	trace.Provider = output.Provider
+	trace.Model = output.Model
+	trace.DurationMS = output.Duration.Milliseconds()
+	return trace
+}
+
+func appendL3TraceAudit(root string, planDate time.Time, trace L3ReviewTrace, dryRun bool) error {
+	return appendAudit(root, "l3", planDate, map[string]any{
+		"entry_id": trace.EntryID, "entry_hash": trace.EntryHash, "route": trace.Route,
+		"outcome": trace.Outcome, "confidence": trace.Confidence, "provider": trace.Provider,
+		"model": trace.Model, "prompt_version": trace.PromptVersion, "duration_ms": trace.DurationMS,
+		"reason_code": trace.ReasonCode,
+	}, dryRun)
+}
+
+func (e *Engine) applyL3Decision(root agentRoot, opts Options, original reviewEntry, decision L3ReviewDecision, ar *AgentRunResult) (bool, bool, error) {
+	var mutations []fileMutation
+	var memoryPromoted, memoryDuplicate bool
+	var sharedCandidate sharedMemoryCandidate
+	var shouldShare, sharedChanged bool
+	var skillPrepared, skillChanged bool
+
+	memoryEntry := original
+	if decision.Memory.Title != "" {
+		memoryEntry.Title = decision.Memory.Title
+	}
+	if decision.Memory.Body != "" {
+		memoryEntry.Body = decision.Memory.Body
+	}
+	if memoryEntry.ProposedDestination == "" {
+		memoryEntry.ProposedDestination = defaultMemoryDestination(memoryEntry.Type)
+	}
+	if decision.Route == L3RouteMemory || decision.Route == L3RouteSplit {
+		if memoryEntry.ProposedDestination == "" {
+			return false, false, fmt.Errorf("reviewed memory has no destination")
+		}
+		destPath := filepath.Join(root.Root, "memory", filepath.Base(memoryEntry.ProposedDestination))
+		mutation, promoted, duplicate, err := preparePromoteEntry(destPath, memoryEntry)
+		if err != nil {
+			return false, false, err
+		}
+		memoryPromoted, memoryDuplicate = promoted, duplicate
+		if mutation != nil {
+			mutations = append(mutations, *mutation)
+		}
+		sharedCandidate, shouldShare = sharedMemoryCandidateForEntry(root, memoryEntry, opts.Now)
+		if shouldShare {
+			sharedMutations, err := prepareSharedMemoryCandidateMutations(root.Root, sharedCandidate)
+			if err != nil {
+				return false, false, err
+			}
+			sharedChanged, err = commitFileMutations(sharedMutations, true)
+			if err != nil {
+				return false, false, err
+			}
+			mutations = append(mutations, sharedMutations...)
+		}
+	}
+	if decision.Route == L3RouteSkill || decision.Route == L3RouteSplit {
+		decision.Skill = sanitizeL3SkillDraft(decision.Skill)
+		if decision.Skill.Name == "" || decision.Skill.Description == "" || decision.Skill.Instructions == "" {
+			return false, false, fmt.Errorf("reviewed skill draft is incomplete")
+		}
+		candidate := skillCandidateForDecision(root, original, decision, opts.Now)
+		skillMutations, err := prepareSkillCandidateMutations(root.Root, candidate, renderSkillDraft(decision.Skill))
+		if err != nil {
+			return false, false, err
+		}
+		skillChanged, err = commitFileMutations(skillMutations, true)
+		if err != nil {
+			return false, false, err
+		}
+		mutations = append(mutations, skillMutations...)
+		skillPrepared = true
+	}
+	changed, err := commitFileMutations(mutations, opts.DryRun)
+	if err != nil {
+		return false, false, err
+	}
+	ar.Changed = ar.Changed || changed
+	if memoryDuplicate {
+		ar.DuplicatesMerged++
+	}
+	if memoryPromoted {
+		ar.EntriesPromoted++
+	}
+	if shouldShare && sharedChanged {
+		ar.SharedCandidatesAdded++
+	}
+	if skillPrepared && skillChanged {
+		ar.SkillCandidatesAdded++
+	}
+
+	syncPending := false
+	if shouldShare && !opts.DryRun {
+		synced, syncErr := syncSharedMemoryCandidate(opts.Context, opts.DB, root, sharedCandidate)
+		if syncErr != nil {
+			syncPending = true
+		} else if synced {
+			ar.SharedCandidatesSynced++
+		}
+	}
+	return true, syncPending, nil
+}
+
+func defaultMemoryDestination(entryType string) string {
+	switch strings.ToLower(strings.TrimSpace(entryType)) {
+	case "preference":
+		return "USER.md"
+	case "temporary", "quota":
+		return "STATE.md"
+	default:
+		return "MEMORY.md"
+	}
+}
+
+func (e *Engine) finishL3(root agentRoot, opts Options, reviewPath string, remaining []reviewEntry, ar AgentRunResult) (AgentRunResult, error) {
 	changed, err := writeIfChanged(reviewPath, renderReview(remaining), opts.DryRun)
 	if err != nil {
 		return ar, err
 	}
 	ar.Changed = ar.Changed || changed
-	for _, d := range dateRange(opts.Since, opts.Until) {
-		path := filepath.Join(root.Root, "memory", "daily", formatDate(d)+".md")
-		b, err := os.ReadFile(path)
-		if err != nil {
-			continue
+	if ar.EntriesReviewed > 0 {
+		for _, d := range dateRange(opts.Since, opts.Until) {
+			path := filepath.Join(root.Root, "memory", "daily", formatDate(d)+".md")
+			b, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			_, _ = writeIfChanged(path, setStatusTime(string(b), "l3_promoted_at", opts.Now), opts.DryRun)
 		}
-		_, _ = writeIfChanged(path, setStatusTime(string(b), "l3_promoted_at", opts.Now), opts.DryRun)
 	}
 	return ar, nil
 }
 
 func promoteEntry(destPath string, entry reviewEntry, dryRun bool) (promoted bool, duplicate bool, err error) {
+	mutation, promoted, duplicate, err := preparePromoteEntry(destPath, entry)
+	if err != nil || mutation == nil {
+		return promoted, duplicate, err
+	}
+	_, err = commitFileMutations([]fileMutation{*mutation}, dryRun)
+	return promoted, duplicate, err
+}
+
+func preparePromoteEntry(destPath string, entry reviewEntry) (*fileMutation, bool, bool, error) {
 	b, err := os.ReadFile(destPath)
 	if err != nil && !os.IsNotExist(err) {
-		return false, false, err
+		return nil, false, false, err
 	}
 	content := string(b)
 	body := strings.TrimSpace(entry.Body)
 	if strings.Contains(normalizeForDedupe(content), normalizeForDedupe(body)) || existingSemanticDuplicate(content, body) {
-		return false, true, nil
+		return nil, false, true, nil
 	}
 	block := fmt.Sprintf("\n§\n[type:%s]\n[source:%s]\n[evidence:%s]\n- %s\n", entry.Type, entry.SourceDate, strings.Join(entry.Evidence, ","), body)
 	if entry.Type == "temporary" || entry.Type == "quota" {
@@ -452,8 +716,7 @@ func promoteEntry(destPath string, entry reviewEntry, dryRun bool) (promoted boo
 		}
 	}
 	newContent := strings.TrimRight(content, "\n") + "\n" + block
-	_, err = writeIfChanged(destPath, newContent, dryRun)
-	return true, false, err
+	return &fileMutation{path: destPath, content: newContent}, true, false, nil
 }
 
 var dateRE = regexp.MustCompile(`\b(20\d{2}-\d{2}-\d{2})\b`)

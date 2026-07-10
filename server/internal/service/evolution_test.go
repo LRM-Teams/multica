@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -603,6 +604,32 @@ func TestCurateSubmissionReviewDisabledLowConfidenceNeedsReview(t *testing.T) {
 	}
 	if reviewer.called != 0 {
 		t.Fatalf("reviewer called %d times, want 0", reviewer.called)
+	}
+}
+
+func TestCurateSubmissionSourceHumanReviewGateSkipsReviewer(t *testing.T) {
+	for _, reviewEnabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("review_enabled_%t", reviewEnabled), func(t *testing.T) {
+			submission := validSkillSubmission()
+			submission.Evidence = []byte(`{"source":"memory_curation_l3_reviewer","requires_human_review":true}`)
+			reviewer := &fakeEvolutionReviewer{result: promoteLowRiskReview()}
+			mock := newEvolutionMockDB(submission)
+			mock.files = []db.EvolutionUnitSubmissionFile{
+				{Path: "SKILL.md", Content: validSkillMainFile(), MimeType: "text/markdown", SizeBytes: int64(len(validSkillMainFile()))},
+			}
+			service := NewEvolutionServiceWithReviewer(db.New(mock), reviewer, reviewEnabled)
+
+			_, status, err := service.curateSubmission(context.Background(), submission)
+			if err != nil {
+				t.Fatalf("curateSubmission error = %v", err)
+			}
+			if status != evolutionCurationNeedsReview || mock.submission.Status != "needs_review" || mock.submission.ReviewReason != "source requires human review" {
+				t.Fatalf("status/review = %q/%q/%q", status, mock.submission.Status, mock.submission.ReviewReason)
+			}
+			if reviewer.called != 0 {
+				t.Fatalf("reviewer called %d times, want 0", reviewer.called)
+			}
+		})
 	}
 }
 

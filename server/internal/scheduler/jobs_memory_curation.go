@@ -98,7 +98,7 @@ func makeMemoryCurationHandler(pool *pgxpool.Pool, stage memorycuration.Stage, b
 				return HandlerResult{}, err
 			}
 		}
-		res, err := memorycuration.NewEngine().Run(memorycuration.Options{
+		res, err := memorycuration.NewEngine(memorycuration.NewL3ReviewerFromEnv()).Run(memorycuration.Options{
 			Context:        ctx,
 			DB:             evidenceDB,
 			WorkspacesRoot: root,
@@ -146,13 +146,24 @@ func makeMemoryCurationHandler(pool *pgxpool.Pool, stage memorycuration.Stage, b
 				}
 				stats.DailyFilesWritten += agent.DailyFilesWritten
 				stats.ReviewCandidatesAdded += agent.ReviewCandidatesAdded
+				stats.EntriesReviewed += agent.EntriesReviewed
+				stats.MemoryRoutes += agent.MemoryRoutes
+				stats.SkillRoutes += agent.SkillRoutes
+				stats.SplitRoutes += agent.SplitRoutes
+				stats.DiscardRoutes += agent.DiscardRoutes
+				stats.ReviewDeferred += agent.ReviewDeferred
 				stats.EntriesPromoted += agent.EntriesPromoted
+				stats.SkillCandidatesAdded += agent.SkillCandidatesAdded
 				stats.SharedCandidatesAdded += agent.SharedCandidatesAdded
 				stats.SharedCandidatesSynced += agent.SharedCandidatesSynced
 				stats.EntriesArchived += agent.EntriesArchived
 				stats.DuplicatesMerged += agent.DuplicatesMerged
 				stats.ConflictsFound += agent.ConflictsFound
 				stats.EvidenceCollected += agent.EvidenceCollected
+				stats.ReviewTraces = append(stats.ReviewTraces, agent.ReviewTraces...)
+				if len(stats.ReviewTraces) > 20 {
+					stats.ReviewTraces = stats.ReviewTraces[:20]
+				}
 				statsByWorkspace[agent.WorkspaceID] = stats
 			}
 			for _, agentErr := range res.Errors {
@@ -189,7 +200,14 @@ func makeMemoryCurationHandler(pool *pgxpool.Pool, stage memorycuration.Stage, b
 			"agents_changed":          res.AgentsChanged,
 			"daily_files_written":     res.DailyFilesWritten,
 			"review_candidates_added": res.ReviewCandidatesAdded,
+			"entries_reviewed":        res.EntriesReviewed,
+			"memory_routes":           res.MemoryRoutes,
+			"skill_routes":            res.SkillRoutes,
+			"split_routes":            res.SplitRoutes,
+			"discard_routes":          res.DiscardRoutes,
+			"review_deferred":         res.ReviewDeferred,
 			"entries_promoted":        res.EntriesPromoted,
+			"skill_candidates_added":  res.SkillCandidatesAdded,
 			"entries_archived":        res.EntriesArchived,
 			"duplicates_merged":       res.DuplicatesMerged,
 			"evidence_collected":      res.EvidenceCollected,

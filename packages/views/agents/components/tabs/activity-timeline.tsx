@@ -76,14 +76,19 @@ function ActivityRow({ event, time }: { event: ActivityEvent; time: string }) {
  * each row = `time · source dot · human label · optional subtext`. Default shows
  * only BE `user_facing` narrative events; `diagnostic_only` and internal
  * boundary events stay out of the ordinary surface. Never renders raw
- * command/output for tool rows. Shared by the Activity tab (full) and the
- * profile/hover card (compact subset).
+ * command/output for tool rows. Rendered by the Activity tab (agent overview
+ * page and channel side panel). NOTE: the profile "Recent activity" surface is a
+ * separate server task-summary projection today; converging it onto this
+ * `activityPresentation` timeline is a tracked #382 follow-up.
  */
 export function ActivityTimeline({
   events,
 }: {
   events: ActivityEvent[];
-  /** Profile-card mode: user-facing rows only, no diagnostics toggle. */
+  /**
+   * Reserved for the compact profile "Recent activity" surface — the #382
+   * follow-up that converges it onto this timeline. Not yet wired to a consumer.
+   */
   compact?: boolean;
 }) {
   const { t } = useT("agents");

@@ -4188,7 +4188,7 @@ func TestAddChannelMemberEmitsSystemEventOnce(t *testing.T) {
 	}
 
 	event := latestChannelSystemEventForTest(t, channelID)
-	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, targetID)
+	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, "user", targetID, "user")
 
 	req = newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/members", AddChannelMemberRequest{MemberType: "user", MemberID: targetID})
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
@@ -4227,7 +4227,28 @@ func TestAddChannelMembersBatchEmitsOnlyInsertedSystemEvents(t *testing.T) {
 		t.Fatalf("batch system message count = %d, want only inserted member event", got)
 	}
 	event := latestChannelSystemEventForTest(t, channelID)
-	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, newID)
+	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, "user", newID, "user")
+}
+
+func TestAddChannelMemberSystemEventIncludesAgentTargetRef(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "channel_event_agent_"+strings.ReplaceAll(uuid.NewString(), "-", ""), nil)
+	channelID := seedChannelForTest(t, "member-add-agent-event-"+uuid.NewString(), testUserID)
+
+	req := newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/members", AddChannelMemberRequest{MemberType: "agent", MemberID: agentID})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.AddChannelMember(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("add agent member: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	event := latestChannelSystemEventForTest(t, channelID)
+	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, "user", agentID, "agent")
 }
 
 func TestRemoveChannelMemberEmitsRemovedSystemEventForRemainingMembers(t *testing.T) {
@@ -4248,7 +4269,7 @@ func TestRemoveChannelMemberEmitsRemovedSystemEventForRemainingMembers(t *testin
 	}
 
 	event := latestChannelSystemEventForTest(t, channelID)
-	assertChannelMemberSystemEvent(t, event, channelMemberRemovedEvent, testUserID, targetID)
+	assertChannelMemberSystemEvent(t, event, channelMemberRemovedEvent, testUserID, "user", targetID, "user")
 
 	listReq := newRequestAs(targetID, http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
 	listReq = withChannelTestWorkspaceCtx(t, listReq, targetID)
@@ -4278,7 +4299,7 @@ func TestRemoveChannelMemberEmitsLeftSystemEventForSelfRemove(t *testing.T) {
 	}
 
 	event := latestChannelSystemEventForTest(t, channelID)
-	assertChannelMemberSystemEvent(t, event, channelMemberLeftEvent, memberID, memberID)
+	assertChannelMemberSystemEvent(t, event, channelMemberLeftEvent, memberID, "user", memberID, "user")
 }
 
 func TestChannelMemberSystemMessageDoesNotCountAsUnread(t *testing.T) {
@@ -4608,7 +4629,7 @@ func latestChannelSystemEventForTest(t *testing.T, channelID string) channelMemb
 	return event
 }
 
-func assertChannelMemberSystemEvent(t *testing.T, event channelMemberSystemEventPart, wantEvent, actorID, targetID string) {
+func assertChannelMemberSystemEvent(t *testing.T, event channelMemberSystemEventPart, wantEvent, actorID, actorType, targetID, targetType string) {
 	t.Helper()
 	if event.Event != wantEvent {
 		t.Fatalf("event = %q, want %q; full=%+v", event.Event, wantEvent, event)
@@ -4616,8 +4637,26 @@ func assertChannelMemberSystemEvent(t *testing.T, event channelMemberSystemEvent
 	if event.Params.ActorID != actorID {
 		t.Fatalf("actor_id = %q, want %q; full=%+v", event.Params.ActorID, actorID, event)
 	}
+	if event.Params.ActorType != actorType {
+		t.Fatalf("actor_type = %q, want %q; full=%+v", event.Params.ActorType, actorType, event)
+	}
 	if event.Params.TargetID != targetID {
 		t.Fatalf("target_id = %q, want %q; full=%+v", event.Params.TargetID, targetID, event)
+	}
+	if event.Params.TargetType != targetType {
+		t.Fatalf("target_type = %q, want %q; full=%+v", event.Params.TargetType, targetType, event)
+	}
+	if strings.TrimSpace(event.Params.ActorHandle) == "" {
+		t.Fatalf("actor_handle is empty; full=%+v", event)
+	}
+	if strings.TrimSpace(event.Params.TargetHandle) == "" {
+		t.Fatalf("target_handle is empty; full=%+v", event)
+	}
+	if strings.TrimSpace(event.Params.ActorDisplayName) == "" {
+		t.Fatalf("actor_display_name is empty; full=%+v", event)
+	}
+	if strings.TrimSpace(event.Params.TargetDisplayName) == "" {
+		t.Fatalf("target_display_name is empty; full=%+v", event)
 	}
 	if strings.TrimSpace(event.Params.ActorName) == "" {
 		t.Fatalf("actor_name is empty; full=%+v", event)

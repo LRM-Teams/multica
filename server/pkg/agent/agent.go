@@ -20,6 +20,19 @@ type Backend interface {
 	Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error)
 }
 
+// ProviderAuthRequiredMarker prefixes fail-closed auth preflight errors from
+// provider CLIs. Daemon code may classify this as a terminal, user-visible
+// provider-auth failure rather than retrying or launching an interactive login.
+const ProviderAuthRequiredMarker = "provider auth required"
+
+// AuthPreflight is an optional contract for backends that can detect missing
+// non-interactive credentials before spawning their provider CLI. Implementers
+// must fail closed: return an error instead of entering the provider's
+// interactive login flow.
+type AuthPreflight interface {
+	PreflightAuth(ctx context.Context) error
+}
+
 // ExecOptions configures a single execution.
 type ExecOptions struct {
 	Cwd   string

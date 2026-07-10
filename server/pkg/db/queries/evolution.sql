@@ -238,3 +238,43 @@ RETURNING *;
 SELECT * FROM shared_evolution_unit_file
 WHERE workspace_id = @workspace_id AND unit_id = @unit_id AND version_id = @version_id
 ORDER BY path ASC;
+
+-- name: GetSharedEvolutionUnitCurrentVersionID :one
+SELECT current_version_id
+FROM shared_evolution_unit
+WHERE workspace_id = @workspace_id AND id = @unit_id AND unit_type = 'skill' AND status = 'active';
+
+-- name: RecordEvolutionSkillInjection :exec
+INSERT INTO evolution_unit_feedback_event (
+  workspace_id, agent_id, task_id, unit_type, unit_id, event, outcome, source, metadata
+)
+SELECT @workspace_id, @agent_id, @task_id, 'skill', @unit_id, 'injected', '', 'runtime',
+       jsonb_build_object('version_id', @version_id::uuid, 'execution_id', @execution_id::uuid)
+WHERE NOT EXISTS (
+  SELECT 1 FROM evolution_unit_feedback_event
+  WHERE unit_type = 'skill' AND unit_id = @unit_id AND event = 'injected'
+    AND metadata->>'execution_id' = @execution_id::text
+    AND metadata->>'version_id' = @version_id::text
+);
+
+-- name: RecordEvolutionSkillOutcome :exec
+INSERT INTO evolution_unit_feedback_event (
+  workspace_id, agent_id, task_id, unit_type, unit_id, event, outcome, source, metadata
+)
+SELECT DISTINCT workspace_id, agent_id, task_id, unit_type, unit_id,
+       @event::text, @outcome::text, 'runtime',
+       jsonb_build_object('version_id', metadata->>'version_id', 'execution_id', @execution_id::uuid)
+FROM evolution_unit_feedback_event
+WHERE unit_type = 'skill'
+  AND event = 'injected'
+  AND metadata->>'execution_id' = @execution_id::text
+  AND COALESCE(metadata->>'version_id', '') <> ''
+  AND NOT EXISTS (
+    SELECT 1 FROM evolution_unit_feedback_event recorded
+    WHERE recorded.unit_type = evolution_unit_feedback_event.unit_type
+      AND recorded.unit_id = evolution_unit_feedback_event.unit_id
+      AND recorded.event = @event::text
+      AND recorded.outcome = @outcome::text
+      AND recorded.metadata->>'execution_id' = @execution_id::text
+      AND recorded.metadata->>'version_id' = evolution_unit_feedback_event.metadata->>'version_id'
+  );

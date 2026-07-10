@@ -512,6 +512,15 @@ func (s *EvolutionService) promoteSubmission(ctx context.Context, submission db.
 	}
 
 	metadata := promotionMetadata(submission, dedupeHash, review)
+	versionMetadata := metadataWithEvolutionMatcherSnapshot(metadata, EvolutionMatcherSnapshot{
+		CanonicalSummary: submission.Summary,
+		Tags:             submission.Tags,
+		Tools:            submission.Tools,
+		TaskTypes:        submission.TaskTypes,
+		ProjectTypes:     submission.ProjectTypes,
+		Languages:        submission.Languages,
+		Frameworks:       submission.Frameworks,
+	})
 	unit, err := s.Queries.CreateSharedEvolutionUnit(ctx, db.CreateSharedEvolutionUnitParams{
 		WorkspaceID:      submission.WorkspaceID,
 		UnitType:         submission.UnitType,
@@ -539,7 +548,7 @@ func (s *EvolutionService) promoteSubmission(ctx context.Context, submission db.
 		Version:      1,
 		Title:        submission.Title,
 		Content:      submission.Content,
-		Metadata:     metadata,
+		Metadata:     versionMetadata,
 		Applies:      submission.Applies,
 		SubmissionID: submission.ID,
 		ChangeReason: "initial promotion",
@@ -575,19 +584,52 @@ func (s *EvolutionService) findSemanticDuplicate(ctx context.Context, submission
 		return db.SharedEvolutionUnit{}, false, err
 	}
 	metadata := promotionMetadata(submission, dedupeHash, review)
+	versionMetadata := mergeSemanticDuplicateMetadata(metadataWithEvolutionMatcherSnapshot(metadata, EvolutionMatcherSnapshot{
+		CanonicalSummary: best.CanonicalSummary,
+		Tags:             best.Tags,
+		Tools:            best.Tools,
+		TaskTypes:        best.TaskTypes,
+		ProjectTypes:     best.ProjectTypes,
+		Languages:        best.Languages,
+		Frameworks:       best.Frameworks,
+	}), best, score)
 	version, err := s.Queries.CreateSharedEvolutionUnitVersion(ctx, db.CreateSharedEvolutionUnitVersionParams{
 		WorkspaceID:  submission.WorkspaceID,
 		UnitID:       best.ID,
 		Version:      maxVersion + 1,
 		Title:        best.Title,
 		Content:      best.Content,
-		Metadata:     mergeSemanticDuplicateMetadata(metadata, best, score),
+		Metadata:     versionMetadata,
 		Applies:      best.Applies,
 		SubmissionID: submission.ID,
 		ChangeReason: "semantic duplicate candidate",
 	})
 	if err != nil {
 		return db.SharedEvolutionUnit{}, false, err
+	}
+	if best.CurrentVersionID.Valid {
+		currentFiles, err := s.Queries.ListSharedEvolutionUnitFiles(ctx, db.ListSharedEvolutionUnitFilesParams{
+			WorkspaceID: submission.WorkspaceID,
+			UnitID:      best.ID,
+			VersionID:   best.CurrentVersionID,
+		})
+		if err != nil {
+			return db.SharedEvolutionUnit{}, false, err
+		}
+		for _, file := range currentFiles {
+			if _, err := s.Queries.UpsertSharedEvolutionUnitFile(ctx, db.UpsertSharedEvolutionUnitFileParams{
+				WorkspaceID: submission.WorkspaceID,
+				UnitID:      best.ID,
+				VersionID:   version.ID,
+				Path:        file.Path,
+				Content:     file.Content,
+				ContentHash: file.ContentHash,
+				MimeType:    file.MimeType,
+				SizeBytes:   file.SizeBytes,
+			}); err != nil {
+				return db.SharedEvolutionUnit{}, false, err
+			}
+		}
 	}
 	unit, err := s.Queries.SetSharedEvolutionUnitCurrentVersion(ctx, db.SetSharedEvolutionUnitCurrentVersionParams{ID: best.ID, WorkspaceID: submission.WorkspaceID, CurrentVersionID: version.ID})
 	if err != nil {
@@ -1241,6 +1283,36 @@ func termSet(values []string) map[string]bool {
 		}
 	}
 	return out
+}
+
+func metadataWithEvolutionMatcherSnapshot(metadata []byte, snapshot EvolutionMatcherSnapshot) []byte {
+	envelope := map[string]any{}
+	if len(metadata) > 0 {
+		_ = json.Unmarshal(metadata, &envelope)
+	}
+	// Encode empty collections explicitly so rollback can distinguish a valid
+	// empty matcher from a legacy version that has no complete snapshot.
+	if snapshot.Tags == nil {
+		snapshot.Tags = []string{}
+	}
+	if snapshot.Tools == nil {
+		snapshot.Tools = []string{}
+	}
+	if snapshot.TaskTypes == nil {
+		snapshot.TaskTypes = []string{}
+	}
+	if snapshot.ProjectTypes == nil {
+		snapshot.ProjectTypes = []string{}
+	}
+	if snapshot.Languages == nil {
+		snapshot.Languages = []string{}
+	}
+	if snapshot.Frameworks == nil {
+		snapshot.Frameworks = []string{}
+	}
+	envelope[evolutionMatcherSnapshotMetadataKey] = snapshot
+	encoded, _ := json.Marshal(envelope)
+	return encoded
 }
 
 func mergeSemanticDuplicateMetadata(metadata []byte, existing db.SharedEvolutionUnit, score float64) []byte {

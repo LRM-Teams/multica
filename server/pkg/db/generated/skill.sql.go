@@ -583,22 +583,40 @@ func (q *Queries) ListAgentSkillSummaries(ctx context.Context, agentID pgtype.UU
 
 const listAgentSkills = `-- name: ListAgentSkills :many
 
-SELECT s.id, s.workspace_id, s.name, s.description, s.content, s.config, s.created_by, s.created_at, s.updated_at FROM skill s
+SELECT s.id, s.workspace_id, s.name, s.description, s.content, s.config, s.created_by, s.created_at, s.updated_at, s.source_evolution_unit_id,
+       u.current_version_id AS source_evolution_unit_version_id
+FROM skill s
 JOIN agent_skill ask ON ask.skill_id = s.id
+LEFT JOIN shared_evolution_unit u
+  ON u.id = s.source_evolution_unit_id AND u.workspace_id = s.workspace_id AND u.unit_type = 'skill'
 WHERE ask.agent_id = $1
 ORDER BY s.name ASC
 `
 
+type ListAgentSkillsRow struct {
+	ID                           pgtype.UUID        `json:"id"`
+	WorkspaceID                  pgtype.UUID        `json:"workspace_id"`
+	Name                         string             `json:"name"`
+	Description                  string             `json:"description"`
+	Content                      string             `json:"content"`
+	Config                       []byte             `json:"config"`
+	CreatedBy                    pgtype.UUID        `json:"created_by"`
+	CreatedAt                    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                    pgtype.Timestamptz `json:"updated_at"`
+	SourceEvolutionUnitID        pgtype.UUID        `json:"source_evolution_unit_id"`
+	SourceEvolutionUnitVersionID pgtype.UUID        `json:"source_evolution_unit_version_id"`
+}
+
 // Agent-Skill junction
-func (q *Queries) ListAgentSkills(ctx context.Context, agentID pgtype.UUID) ([]Skill, error) {
+func (q *Queries) ListAgentSkills(ctx context.Context, agentID pgtype.UUID) ([]ListAgentSkillsRow, error) {
 	rows, err := q.db.Query(ctx, listAgentSkills, agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Skill{}
+	items := []ListAgentSkillsRow{}
 	for rows.Next() {
-		var i Skill
+		var i ListAgentSkillsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.WorkspaceID,
@@ -609,6 +627,8 @@ func (q *Queries) ListAgentSkills(ctx context.Context, agentID pgtype.UUID) ([]S
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SourceEvolutionUnitID,
+			&i.SourceEvolutionUnitVersionID,
 		); err != nil {
 			return nil, err
 		}

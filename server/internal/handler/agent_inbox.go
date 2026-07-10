@@ -419,7 +419,7 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			resp.RequestingUserName = userDisplayName(owner)
 			resp.RequestingUserProfileDescription = owner.ProfileDescription
 		}
-		tokenStr, err := auth.GenerateAgentTaskToken()
+		tokenStr, err := auth.GenerateAgentInboxDeliveryToken()
 		if err != nil {
 			slog.Error("agent inbox claim: failed to generate inbox token",
 				"inbox_event_id", uuidToString(event.ID),

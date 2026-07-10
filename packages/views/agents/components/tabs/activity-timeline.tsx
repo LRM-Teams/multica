@@ -20,7 +20,15 @@ const TONE_DOT: Record<ActivityTone, string> = {
 };
 
 function ActivityRow({ event, time }: { event: ActivityEvent; time: string }) {
+  const { t } = useT("agents");
   const presentation = activityPresentation(event);
+  const rawLabel = t(($) => $.tab_body.activity.labels[presentation.labelKey]);
+  // The trailing "…" is raft's in-progress signal: keep it only while the row is
+  // active, drop it once the action has settled (a static historical row).
+  const label = presentation.tone === "active" ? rawLabel : rawLabel.replace(/…$/, "");
+  const subtext = presentation.subtextKey
+    ? t(($) => $.tab_body.activity.subtexts[presentation.subtextKey!])
+    : presentation.subtext;
   return (
     <div
       className="flex items-baseline gap-3 py-1"
@@ -35,9 +43,9 @@ function ActivityRow({ event, time }: { event: ActivityEvent; time: string }) {
         aria-hidden
       />
       <div className="min-w-0">
-        <span className="text-sm text-foreground">{presentation.label}</span>
-        {presentation.subtext && (
-          <span className="ml-2 text-xs text-muted-foreground">{presentation.subtext}</span>
+        <span className="text-sm text-foreground">{label}</span>
+        {subtext && (
+          <span className="ml-2 text-xs text-muted-foreground">{subtext}</span>
         )}
       </div>
     </div>

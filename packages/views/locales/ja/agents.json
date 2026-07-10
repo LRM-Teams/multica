@@ -352,6 +352,27 @@
     },
     "activity": {
       "timeline_empty": "アクティビティはまだありません",
+      "labels": {
+        "thinking": "Thinking",
+        "output": "Output",
+        "working": "Working",
+        "failed": "Failed",
+        "waiting": "Waiting",
+        "running_command": "Running command…",
+        "writing_file": "Writing file…",
+        "editing_file": "Editing file…",
+        "reading_file": "Reading file…",
+        "searching_files": "Searching files…",
+        "searching_code": "Searching code…",
+        "searching_web": "Searching web…",
+        "sending_message": "Sending message…"
+      },
+      "subtexts": {
+        "message_received": "Message received",
+        "compacting_context": "Compacting context",
+        "compaction_finished": "Compaction finished",
+        "subagent_activity": "Subagent activity"
+      },
       "view_diagnostics": "診断の詳細を表示",
       "hide_diagnostics": "診断の詳細を非表示",
       "section_now": "現在",

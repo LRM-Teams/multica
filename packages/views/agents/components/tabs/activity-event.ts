@@ -16,8 +16,36 @@ export type ActivityTone = "neutral" | "active" | "waiting" | "failure";
 // FE) one raw shape; presentation stays in the component layer.
 export type ActivityEvent = AgentActivityTimelineEvent;
 
+// Labels are i18n KEYS resolved in the component — the raft-exact source strings
+// live in `agents.json` (`tab_body.activity.labels`). A fixed subtext (e.g.
+// "Message received") is also a key (`…subtexts`); a dynamic subtext (tool target
+// path, reply text, block reason) is passed through verbatim and NEVER translated.
+export type ActivityLabelKey =
+  | "thinking"
+  | "output"
+  | "working"
+  | "failed"
+  | "waiting"
+  | "running_command"
+  | "writing_file"
+  | "editing_file"
+  | "reading_file"
+  | "searching_files"
+  | "searching_code"
+  | "searching_web"
+  | "sending_message";
+
+export type ActivitySubtextKey =
+  | "message_received"
+  | "compacting_context"
+  | "compaction_finished"
+  | "subagent_activity";
+
 export interface ActivityPresentation {
-  label: string;
+  labelKey: ActivityLabelKey;
+  /** Fixed subtext, resolved via i18n (Message received, Compacting context…). */
+  subtextKey?: ActivitySubtextKey;
+  /** Dynamic subtext (tool target, reply text, reason) — rendered verbatim. */
   subtext?: string;
   tone: ActivityTone;
 }
@@ -63,10 +91,6 @@ function isActiveStatus(status: string | undefined): boolean {
   );
 }
 
-function activeLabel(label: string, event: ActivityEvent): string {
-  return isActiveStatus(event.status) ? label : label.replace(/…$/, "");
-}
-
 function statusTone(event: ActivityEvent): ActivityTone {
   return isActiveStatus(event.status) ? "active" : "neutral";
 }
@@ -104,61 +128,56 @@ const TOOL_SEMANTIC: Record<string, string> = {
   send_message: "send_message",
 };
 
-const TOOL_ACTION_LABEL: Record<string, string> = {
-  command: "Running command…",
-  write: "Writing file…",
-  edit: "Editing file…",
-  read: "Reading file…",
-  glob: "Searching files…",
-  grep: "Searching code…",
-  web_search: "Searching web…",
-  send_message: "Sending message…",
+const TOOL_ACTION_KEY: Record<string, ActivityLabelKey> = {
+  command: "running_command",
+  write: "writing_file",
+  edit: "editing_file",
+  read: "reading_file",
+  glob: "searching_files",
+  grep: "searching_code",
+  web_search: "searching_web",
+  send_message: "sending_message",
 };
 
 function toolPresentation(event: ActivityEvent): ActivityPresentation {
   const subtext = toolTarget(event);
   const semantic = TOOL_SEMANTIC[normalizedTool(event)];
-  const label = (semantic && TOOL_ACTION_LABEL[semantic]) || "Working…";
-  return { label: activeLabel(label, event), subtext, tone: statusTone(event) };
+  const labelKey = (semantic && TOOL_ACTION_KEY[semantic]) || "working";
+  return { labelKey, subtext, tone: statusTone(event) };
 }
 
 export function activityPresentation(event: ActivityEvent): ActivityPresentation {
   switch (event.kind) {
     case "thinking":
-      return { label: "Thinking", subtext: event.text, tone: "neutral" };
+      return { labelKey: "thinking", subtext: event.text, tone: "neutral" };
     case "text":
-      return { label: "Output", subtext: event.text, tone: "neutral" };
+      return { labelKey: "output", subtext: event.text, tone: "neutral" };
     case "tool_call":
       return toolPresentation(event);
     case "turn_end":
-      return { label: "Working", tone: "active" };
     case "session_init":
-      return { label: "Working", tone: "active" };
+      return { labelKey: "working", tone: "active" };
     case "compaction_started":
-      return { label: "Working", subtext: "Compacting context", tone: "active" };
+      return { labelKey: "working", subtextKey: "compacting_context", tone: "active" };
     case "compaction_finished":
-      return { label: "Working", subtext: "Compaction finished", tone: "active" };
+      return { labelKey: "working", subtextKey: "compaction_finished", tone: "active" };
     case "wake_attempt":
-      return { label: "Working", subtext: "Message received", tone: "active" };
-    case "error": {
-      const reason = reasonText(event);
-      return {
-        label: "Failed",
-        subtext: event.text ?? reason,
-        tone: "failure",
-      };
-    }
-    case "blocked": {
-      const reason = reasonText(event);
-      return { label: "Waiting", subtext: reason || event.text, tone: "waiting" };
-    }
+      return { labelKey: "working", subtextKey: "message_received", tone: "active" };
+    case "error":
+      return { labelKey: "failed", subtext: event.text ?? reasonText(event), tone: "failure" };
+    case "blocked":
+      return { labelKey: "waiting", subtext: reasonText(event) || event.text, tone: "waiting" };
     case "custom":
       if (event.event_type.includes("subagent")) {
-        return { label: "Working", subtext: event.text ?? "Subagent activity", tone: "active" };
+        // Prefer the daemon's own subagent detail text; fall back to a fixed label.
+        return event.text
+          ? { labelKey: "working", subtext: event.text, tone: "active" }
+          : { labelKey: "working", subtextKey: "subagent_activity", tone: "active" };
       }
-      return { label: "Working", subtext: event.text, tone: "active" };
+      return { labelKey: "working", subtext: event.text, tone: "active" };
     default:
-      return { label: event.event_type || event.kind, subtext: event.text, tone: "neutral" };
+      // Unmapped narrative kind — a neutral working row, never the raw kind string.
+      return { labelKey: "working", subtext: event.text, tone: "neutral" };
   }
 }
 

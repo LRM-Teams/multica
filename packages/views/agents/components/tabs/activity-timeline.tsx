@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { cn } from "@multica/ui/lib/utils";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import { useT } from "../../../i18n";
@@ -21,6 +21,7 @@ const TONE_DOT: Record<ActivityTone, string> = {
 
 function ActivityRow({ event, time }: { event: ActivityEvent; time: string }) {
   const { t } = useT("agents");
+  const [expanded, setExpanded] = useState(false);
   const presentation = activityPresentation(event);
   const rawLabel = t(($) => $.tab_body.activity.labels[presentation.labelKey]);
   // The trailing "…" is raft's in-progress signal: keep it only while the row is
@@ -29,6 +30,11 @@ function ActivityRow({ event, time }: { event: ActivityEvent; time: string }) {
   const subtext = presentation.subtextKey
     ? t(($) => $.tab_body.activity.subtexts[presentation.subtextKey!])
     : presentation.subtext;
+  // Thinking and reply Output carry the model's full text (§2.1: collapse to the
+  // first line, click to expand the full content block). Fixed / short subtexts
+  // (tool target, reasons, "Message received") stay inline.
+  const expandable =
+    !!subtext && !presentation.subtextKey && (event.kind === "thinking" || event.kind === "text");
   return (
     <div
       className="flex items-baseline gap-3 py-1"
@@ -44,8 +50,21 @@ function ActivityRow({ event, time }: { event: ActivityEvent; time: string }) {
       />
       <div className="min-w-0">
         <span className="text-sm text-foreground">{label}</span>
-        {subtext && (
+        {subtext && !expandable && (
           <span className="ml-2 text-xs text-muted-foreground">{subtext}</span>
+        )}
+        {subtext && expandable && (
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            aria-expanded={expanded}
+            className={cn(
+              "mt-0.5 block w-full whitespace-pre-wrap text-left text-xs text-muted-foreground transition-colors hover:text-foreground",
+              !expanded && "line-clamp-1",
+            )}
+          >
+            {subtext}
+          </button>
         )}
       </div>
     </div>

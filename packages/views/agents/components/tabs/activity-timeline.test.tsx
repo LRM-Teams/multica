@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { ActivityTimeline } from "./activity-timeline";
 import { formatActivityTime, type ActivityEvent } from "./activity-event";
 
@@ -175,6 +175,22 @@ describe("ActivityTimeline", () => {
     render(<ActivityTimeline events={[COMPACTION, TURN_END]} />);
     expect(screen.getByText("Compacting context")).toBeInTheDocument();
     expect(screen.queryByText("Done")).toBeNull();
+  });
+
+  it("renders Output/thinking full text as a collapsed click-to-expand block", () => {
+    render(<ActivityTimeline events={[TEXT]} />);
+    // The reply text is a collapsed, expandable control (§2.1: first line, click
+    // for the full block) — not a fixed inline subtext.
+    const block = screen.getByRole("button", { name: "Done." });
+    expect(block).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(block);
+    expect(block).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("keeps a fixed subtext (Message received) inline, not an expandable block", () => {
+    render(<ActivityTimeline events={[WAKE]} />);
+    expect(screen.queryByRole("button", { name: "Message received" })).toBeNull();
+    expect(screen.getByText("Message received")).toBeInTheDocument();
   });
 });
 

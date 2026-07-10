@@ -224,6 +224,44 @@ type fileSnapshot struct {
 	existed bool
 }
 
+type fileMutationTransaction struct {
+	dryRun    bool
+	snapshots []fileSnapshot
+	seen      map[string]struct{}
+}
+
+func newFileMutationTransaction(dryRun bool) *fileMutationTransaction {
+	return &fileMutationTransaction{dryRun: dryRun, seen: map[string]struct{}{}}
+}
+
+func (tx *fileMutationTransaction) commit(mutations []fileMutation) (bool, error) {
+	if tx == nil {
+		return commitFileMutations(mutations, false)
+	}
+	if tx.dryRun {
+		return commitFileMutations(mutations, true)
+	}
+	for _, mutation := range mutations {
+		if _, ok := tx.seen[mutation.path]; ok {
+			continue
+		}
+		old, err := os.ReadFile(mutation.path)
+		if err != nil && !os.IsNotExist(err) {
+			return false, err
+		}
+		tx.snapshots = append(tx.snapshots, fileSnapshot{path: mutation.path, content: old, existed: err == nil})
+		tx.seen[mutation.path] = struct{}{}
+	}
+	return commitFileMutations(mutations, false)
+}
+
+func (tx *fileMutationTransaction) rollback() {
+	if tx == nil || tx.dryRun {
+		return
+	}
+	rollbackFileMutations(tx.snapshots)
+}
+
 func commitFileMutations(mutations []fileMutation, dryRun bool) (bool, error) {
 	changed := false
 	snapshots := make([]fileSnapshot, 0, len(mutations))

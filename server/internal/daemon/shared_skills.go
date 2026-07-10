@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
 
 func (d *Daemon) sharedSkillsSyncLoop(ctx context.Context) {
@@ -37,11 +39,107 @@ func (d *Daemon) syncSharedSkillsOnce(ctx context.Context) {
 	if !d.ready.Load() {
 		return
 	}
+	for _, rt := range d.localMemoryCurationRuntimes() {
+		if err := d.runLocalMemoryCuration(ctx, rt); err != nil && ctx.Err() == nil {
+			d.logger.Warn("local memory curation failed", "runtime_id", rt.ID, "provider", rt.Provider, "error", err)
+		}
+	}
 	for _, rt := range d.sharedSkillSyncRuntimes() {
 		if err := d.syncSharedSkillsForRuntime(ctx, rt); err != nil && ctx.Err() == nil {
 			d.logger.Warn("shared skills sync failed", "runtime_id", rt.ID, "provider", rt.Provider, "error", err)
 		}
 	}
+}
+
+func (d *Daemon) runLocalMemoryCuration(ctx context.Context, rt Runtime) error {
+	if rt.Provider != "pi" || strings.TrimSpace(rt.WorkspaceID) == "" {
+		return nil
+	}
+	piEntry, ok := d.cfg.Agents["pi"]
+	if !ok || strings.TrimSpace(piEntry.Path) == "" {
+		return nil
+	}
+	loc, err := time.LoadLocation(memorycuration.DefaultTimezone)
+	if err != nil {
+		loc = time.FixedZone("CST", 8*60*60)
+	}
+	now := time.Now().UTC()
+	localNow := now.In(loc)
+	stageHours := []struct {
+		stage memorycuration.Stage
+		hour  int
+	}{
+		{memorycuration.StageL1, 1},
+		{memorycuration.StageL2, 2},
+		{memorycuration.StageL3, 3},
+		{memorycuration.StageL4, 4},
+	}
+	for _, scheduled := range stageHours {
+		if localNow.Hour() != scheduled.hour || !d.claimLocalMemoryCurationRun(rt.WorkspaceID, scheduled.stage, localNow) {
+			continue
+		}
+		reviewer := memorycuration.NewConfiguredL3Reviewer(d.cfg.MemoryCurationL3ReviewEnabled, memorycuration.AgentL3ReviewerConfig{
+			Provider: "pi", Path: piEntry.Path, Model: piEntry.Model, Timeout: d.cfg.MemoryCurationL3ReviewTimeout,
+		})
+		res, runErr := memorycuration.NewEngine(reviewer).Run(memorycuration.Options{
+			Context: ctx, WorkspacesRoot: d.cfg.WorkspacesRoot, WorkspaceID: rt.WorkspaceID,
+			AllAgents: true, Stage: scheduled.stage, Since: now.AddDate(0, 0, -1), Until: now.AddDate(0, 0, -1),
+			Now: now, Timezone: memorycuration.DefaultTimezone,
+		})
+		if runErr != nil {
+			d.releaseLocalMemoryCurationRun(rt.WorkspaceID, scheduled.stage)
+			return runErr
+		}
+		if len(res.Errors) > 0 {
+			d.releaseLocalMemoryCurationRun(rt.WorkspaceID, scheduled.stage)
+			return fmt.Errorf("%d agent memory curation runs failed", len(res.Errors))
+		}
+	}
+	return nil
+}
+
+func (d *Daemon) claimLocalMemoryCurationRun(workspaceID string, stage memorycuration.Stage, localNow time.Time) bool {
+	key := workspaceID + "\x00" + string(stage)
+	planDate := localNow.Format("2006-01-02")
+	d.memoryCurationMu.Lock()
+	defer d.memoryCurationMu.Unlock()
+	if d.memoryCurationRuns[key] == planDate {
+		return false
+	}
+	d.memoryCurationRuns[key] = planDate
+	return true
+}
+
+func (d *Daemon) releaseLocalMemoryCurationRun(workspaceID string, stage memorycuration.Stage) {
+	d.memoryCurationMu.Lock()
+	delete(d.memoryCurationRuns, workspaceID+"\x00"+string(stage))
+	d.memoryCurationMu.Unlock()
+}
+
+func (d *Daemon) localMemoryCurationRuntimes() []Runtime {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	workspaceIDs := make([]string, 0, len(d.workspaces))
+	for id := range d.workspaces {
+		workspaceIDs = append(workspaceIDs, id)
+	}
+	sort.Strings(workspaceIDs)
+
+	runtimes := make([]Runtime, 0, len(workspaceIDs))
+	for _, wsID := range workspaceIDs {
+		ws := d.workspaces[wsID]
+		runtimeIDs := append([]string(nil), ws.runtimeIDs...)
+		sort.Strings(runtimeIDs)
+		for _, id := range runtimeIDs {
+			rt, ok := d.runtimeIndex[id]
+			if ok && rt.Status == "online" && rt.Provider == "pi" {
+				runtimes = append(runtimes, rt)
+				break
+			}
+		}
+	}
+	return runtimes
 }
 
 // sharedSkillSyncRuntimes returns one stable online runtime per workspace so

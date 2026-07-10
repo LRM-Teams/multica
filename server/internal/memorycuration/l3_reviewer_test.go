@@ -38,8 +38,17 @@ func TestNewAgentL3ReviewerRejectsProvidersWithoutNoToolsIsolation(t *testing.T)
 	}
 }
 
-func TestNewL3ReviewerFromEnvDefaultsDisabled(t *testing.T) {
+func TestNewL3ReviewerFromEnvDefaultsEnabled(t *testing.T) {
 	t.Setenv("MEMORY_CURATION_L3_REVIEW_ENABLED", "")
+	t.Setenv("MEMORY_CURATION_L3_REVIEW_AGENT_PATH", "/missing/pi")
+	reviewer := NewL3ReviewerFromEnv()
+	if _, ok := reviewer.(*AgentL3Reviewer); !ok {
+		t.Fatalf("reviewer = %T, want *AgentL3Reviewer", reviewer)
+	}
+}
+
+func TestNewL3ReviewerFromEnvCanBeDisabled(t *testing.T) {
+	t.Setenv("MEMORY_CURATION_L3_REVIEW_ENABLED", "false")
 	reviewer := NewL3ReviewerFromEnv()
 	if _, ok := reviewer.(unavailableL3Reviewer); !ok {
 		t.Fatalf("reviewer = %T, want unavailableL3Reviewer", reviewer)
@@ -227,6 +236,35 @@ func TestCommitFileMutationsRollsBackEarlierWrites(t *testing.T) {
 	if readErr != nil || string(content) != "before" {
 		t.Fatalf("first mutation was not rolled back: %q, err=%v", content, readErr)
 	}
+}
+
+func TestL3AppliedTraceAndReviewQueueCommitTogether(t *testing.T) {
+	root, agentRoot := prepareL3ReviewRoot(t, []reviewEntry{{ID: "mem_atomic", Type: "workflow", Status: "candidate", Confidence: "high", Sensitivity: "none", Scope: "agent", SourceDate: "2026-07-09", Title: "Atomic skill", Body: "Use a repeatable atomic workflow."}})
+	reviewer := fixedL3Reviewer{output: L3ReviewOutput{Provider: "pi", Model: "test", Decisions: []L3ReviewDecision{{EntryID: "mem_atomic", Route: L3RouteSkill, Confidence: 0.95, Rationale: "workflow", Skill: L3SkillDraft{Name: "Atomic Workflow", Description: "Run an atomic workflow.", Instructions: "## Steps\n1. Run it."}}}}}
+	res, err := NewEngine(reviewer).Run(l3Options(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.EntriesReviewed != 1 || len(res.ReviewTraces) != 1 || res.ReviewTraces[0].Outcome != "applied" {
+		t.Fatalf("result = %#v", res)
+	}
+	assertNotContains(t, filepath.Join(agentRoot, "memory", "REVIEW.md"), "Atomic skill")
+	auditPath := filepath.Join(agentRoot, "memory", "audit", "l3-2026-07-09.jsonl")
+	assertContains(t, auditPath, `"entry_id":"mem_atomic"`)
+	assertContains(t, auditPath, `"outcome":"applied"`)
+}
+
+func TestL3ReviewerErrorCountsDeferredAndAuditsReason(t *testing.T) {
+	root, agentRoot := prepareL3ReviewRoot(t, []reviewEntry{{ID: "mem_error", Type: "stable_fact", Status: "candidate", Confidence: "high", Sensitivity: "none", Scope: "agent", Title: "Retry me", Body: "Potential fact."}})
+	res, err := NewEngine(fixedL3Reviewer{err: errors.New("reviewer unavailable")}).Run(l3Options(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ReviewDeferred != 1 || res.EntriesReviewed != 0 || len(res.ReviewTraces) != 1 || res.ReviewTraces[0].ReasonCode != "reviewer_error" {
+		t.Fatalf("result = %#v", res)
+	}
+	assertContains(t, filepath.Join(agentRoot, "memory", "REVIEW.md"), "Retry me")
+	assertContains(t, filepath.Join(agentRoot, "memory", "audit", "l3-2026-07-09.jsonl"), `"reason_code":"reviewer_error"`)
 }
 
 func TestL3FailureAndLowConfidenceKeepCandidate(t *testing.T) {

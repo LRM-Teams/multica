@@ -2,17 +2,28 @@ package memorycuration
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Engine struct {
 	l3Reviewer L3Reviewer
+}
+
+var l3AgentLocks sync.Map
+
+func lockL3Agent(root string) func() {
+	value, _ := l3AgentLocks.LoadOrStore(root, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 func NewEngine(reviewers ...L3Reviewer) *Engine {
@@ -392,6 +403,8 @@ func sentenceTitle(s string) string {
 }
 
 func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
+	unlock := lockL3Agent(root.Root)
+	defer unlock()
 	ar := AgentRunResult{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Root: root.Root}
 	reviewPath := filepath.Join(root.Root, "memory", "REVIEW.md")
 	reviewBytes, err := os.ReadFile(reviewPath)
@@ -470,7 +483,7 @@ func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
 	for _, decision := range output.Decisions {
 		decisions[decision.EntryID] = decision
 	}
-	for _, entry := range reviewable {
+	for entryIndex, entry := range reviewable {
 		decision, ok := decisions[entry.ID]
 		if !ok {
 			ar.ReviewDeferred++
@@ -499,8 +512,10 @@ func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
 			continue
 		}
 
-		processed, syncPending, err := e.applyL3Decision(root, opts, entry, decision, &ar)
+		tx := newFileMutationTransaction(opts.DryRun)
+		processed, syncPending, err := e.applyL3Decision(root, opts, entry, decision, &ar, tx)
 		if err != nil {
+			tx.rollback()
 			trace.Outcome = "deferred"
 			trace.ReasonCode = "application_error"
 			ar.ReviewDeferred++
@@ -534,7 +549,29 @@ func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
 			}
 		}
 		ar.ReviewTraces = appendBoundedReviewTraces(ar.ReviewTraces, []L3ReviewTrace{trace}, defaultL3ReviewMaxEntries)
-		if err := appendL3TraceAudit(root.Root, opts.Until, trace, opts.DryRun); err != nil {
+		if processed {
+			nextReview := make([]reviewEntry, 0, len(remaining)+len(reviewable)-entryIndex-1)
+			nextReview = append(nextReview, remaining...)
+			nextReview = append(nextReview, reviewable[entryIndex+1:]...)
+			auditMutation, err := prepareL3TraceAuditMutation(root.Root, opts.Until, trace)
+			if err != nil {
+				tx.rollback()
+				return ar, err
+			}
+			finalMutations := []fileMutation{{path: reviewPath, content: renderReview(nextReview)}}
+			if auditMutation != nil {
+				finalMutations = append(finalMutations, *auditMutation)
+			}
+			if _, err := tx.commit(finalMutations); err != nil {
+				tx.rollback()
+				failureTrace := trace
+				failureTrace.Outcome = "rolled_back"
+				failureTrace.ReasonCode = "review_queue_commit_error"
+				_ = appendL3TraceAudit(root.Root, opts.Until, failureTrace, opts.DryRun)
+				return ar, err
+			}
+		} else if err := appendL3TraceAudit(root.Root, opts.Until, trace, opts.DryRun); err != nil {
+			tx.rollback()
 			return ar, err
 		}
 	}
@@ -561,16 +598,37 @@ func deferredL3TraceWithOutput(entry reviewEntry, output L3ReviewOutput, reasonC
 	return trace
 }
 
-func appendL3TraceAudit(root string, planDate time.Time, trace L3ReviewTrace, dryRun bool) error {
-	return appendAudit(root, "l3", planDate, map[string]any{
+func l3TraceAuditPayload(trace L3ReviewTrace) map[string]any {
+	return map[string]any{
 		"entry_id": trace.EntryID, "entry_hash": trace.EntryHash, "route": trace.Route,
 		"outcome": trace.Outcome, "confidence": trace.Confidence, "provider": trace.Provider,
 		"model": trace.Model, "prompt_version": trace.PromptVersion, "duration_ms": trace.DurationMS,
 		"reason_code": trace.ReasonCode,
-	}, dryRun)
+	}
 }
 
-func (e *Engine) applyL3Decision(root agentRoot, opts Options, original reviewEntry, decision L3ReviewDecision, ar *AgentRunResult) (bool, bool, error) {
+func appendL3TraceAudit(root string, planDate time.Time, trace L3ReviewTrace, dryRun bool) error {
+	return appendAudit(root, "l3", planDate, l3TraceAuditPayload(trace), dryRun)
+}
+
+func prepareL3TraceAuditMutation(root string, planDate time.Time, trace L3ReviewTrace) (*fileMutation, error) {
+	payload := l3TraceAuditPayload(trace)
+	payload["stage"] = "l3"
+	payload["plan_date"] = formatDate(planDate)
+	payload["recorded_at"] = time.Now().UTC().Format(time.RFC3339)
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(root, "memory", "audit", fmt.Sprintf("l3-%s.jsonl", formatDate(planDate)))
+	old, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	return &fileMutation{path: path, content: string(old) + string(b) + "\n"}, nil
+}
+
+func (e *Engine) applyL3Decision(root agentRoot, opts Options, original reviewEntry, decision L3ReviewDecision, ar *AgentRunResult, tx *fileMutationTransaction) (bool, bool, error) {
 	var mutations []fileMutation
 	var memoryPromoted, memoryDuplicate bool
 	var sharedCandidate sharedMemoryCandidate
@@ -630,7 +688,7 @@ func (e *Engine) applyL3Decision(root agentRoot, opts Options, original reviewEn
 		mutations = append(mutations, skillMutations...)
 		skillPrepared = true
 	}
-	changed, err := commitFileMutations(mutations, opts.DryRun)
+	changed, err := tx.commit(mutations)
 	if err != nil {
 		return false, false, err
 	}

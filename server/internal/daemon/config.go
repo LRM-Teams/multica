@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -96,6 +97,8 @@ type Config struct {
 	AutoUpdateCheckInterval        time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
 	SharedSkillsDir                string                // optional global override; when empty each provider uses its own shared root
 	SharedSkillsSyncInterval       time.Duration         // how often to scan and sync SharedSkillsDir
+	MemoryCurationL3ReviewEnabled  bool                  // run the local Pi L3 reviewer during daemon-side curation
+	MemoryCurationL3ReviewTimeout  time.Duration         // per-agent L3 reviewer timeout
 	PollInterval                   time.Duration
 	HeartbeatInterval              time.Duration
 	AgentTimeout                   time.Duration
@@ -483,6 +486,21 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	memoryCurationL3ReviewEnabled := true
+	if v := strings.TrimSpace(os.Getenv("MEMORY_CURATION_L3_REVIEW_ENABLED")); v != "" {
+		switch strings.ToLower(v) {
+		case "false", "0", "no", "off":
+			memoryCurationL3ReviewEnabled = false
+		}
+	}
+	memoryCurationL3ReviewTimeout := 30 * time.Second
+	if v := strings.TrimSpace(os.Getenv("MEMORY_CURATION_L3_REVIEW_TIMEOUT_SECONDS")); v != "" {
+		seconds, parseErr := strconv.Atoi(v)
+		if parseErr != nil || seconds <= 0 {
+			return Config{}, fmt.Errorf("MEMORY_CURATION_L3_REVIEW_TIMEOUT_SECONDS: invalid positive seconds %q", v)
+		}
+		memoryCurationL3ReviewTimeout = time.Duration(seconds) * time.Second
+	}
 
 	return Config{
 		ServerBaseURL:                  serverBaseURL,
@@ -504,6 +522,8 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		AutoUpdateCheckInterval:        autoUpdateInterval,
 		SharedSkillsDir:                sharedSkillsDir,
 		SharedSkillsSyncInterval:       sharedSkillsInterval,
+		MemoryCurationL3ReviewEnabled:  memoryCurationL3ReviewEnabled,
+		MemoryCurationL3ReviewTimeout:  memoryCurationL3ReviewTimeout,
 		HealthPort:                     healthPort,
 		MaxConcurrentTasks:             maxConcurrentTasks,
 		PollInterval:                   pollInterval,

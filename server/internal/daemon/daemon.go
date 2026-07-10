@@ -170,6 +170,8 @@ type Daemon struct {
 
 	sharedSkillScanMu    sync.Mutex
 	sharedSkillScanCache map[string]string // scanRoot\x00skillKey -> fingerprint
+	memoryCurationMu     sync.Mutex
+	memoryCurationRuns   map[string]string // workspace\x00stage -> Beijing plan date
 }
 
 // New creates a new Daemon instance.
@@ -196,6 +198,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		reregisterLastCompletedAt: make(map[string]time.Time),
 		cancelPollInterval:        5 * time.Second,
 		sharedSkillScanCache:      make(map[string]string),
+		memoryCurationRuns:        make(map[string]string),
 	}
 	d.runner = taskRunnerFunc(d.runTask)
 	d.runUpdateFn = d.runUpdate

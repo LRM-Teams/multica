@@ -633,6 +633,21 @@ func TestCurateSubmissionSourceHumanReviewGateSkipsReviewer(t *testing.T) {
 	}
 }
 
+func TestCurateSubmissionHumanReviewFlagOnlyGatesSkills(t *testing.T) {
+	submission := validMemorySubmission()
+	submission.Evidence = []byte(`{"source":"memory_curation_l3_reviewer","requires_human_review":true}`)
+	mock := newEvolutionMockDB(submission)
+	service := NewEvolutionService(db.New(mock))
+
+	_, status, err := service.curateSubmission(context.Background(), submission)
+	if err != nil {
+		t.Fatalf("curateSubmission error = %v", err)
+	}
+	if status != evolutionCurationPromoted || mock.submission.Status != "promoted" {
+		t.Fatalf("status/submission = %q/%q, want promoted/promoted", status, mock.submission.Status)
+	}
+}
+
 func TestCurateSubmissionMemoryLowConfidenceNeedsReview(t *testing.T) {
 	submission := validMemorySubmission()
 	submission.Confidence = "low"

@@ -6,7 +6,43 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
+
+func TestLocalMemoryCurationRuntimesPreferOnlinePi(t *testing.T) {
+	d := &Daemon{
+		workspaces: map[string]*workspaceState{
+			"ws-1": {runtimeIDs: []string{"rt-codex", "rt-pi"}},
+			"ws-2": {runtimeIDs: []string{"rt-offline"}},
+		},
+		runtimeIndex: map[string]Runtime{
+			"rt-codex":   {ID: "rt-codex", WorkspaceID: "ws-1", Provider: "codex", Status: "online"},
+			"rt-pi":      {ID: "rt-pi", WorkspaceID: "ws-1", Provider: "pi", Status: "online"},
+			"rt-offline": {ID: "rt-offline", WorkspaceID: "ws-2", Provider: "pi", Status: "offline"},
+		},
+	}
+
+	runtimes := d.localMemoryCurationRuntimes()
+	if len(runtimes) != 1 || runtimes[0].ID != "rt-pi" {
+		t.Fatalf("runtimes = %#v, want only online Pi runtime", runtimes)
+	}
+}
+
+func TestClaimLocalMemoryCurationRunOncePerBeijingDate(t *testing.T) {
+	d := &Daemon{memoryCurationRuns: map[string]string{}}
+	now := time.Date(2026, 7, 10, 3, 0, 0, 0, time.FixedZone("CST", 8*60*60))
+	if !d.claimLocalMemoryCurationRun("ws-1", memorycuration.StageL3, now) {
+		t.Fatal("first run was not claimed")
+	}
+	if d.claimLocalMemoryCurationRun("ws-1", memorycuration.StageL3, now.Add(30*time.Minute)) {
+		t.Fatal("same date was claimed twice")
+	}
+	d.releaseLocalMemoryCurationRun("ws-1", memorycuration.StageL3)
+	if !d.claimLocalMemoryCurationRun("ws-1", memorycuration.StageL3, now.Add(30*time.Minute)) {
+		t.Fatal("released failed run was not retryable")
+	}
+}
 
 func TestSharedSkillScanRootUsesProviderDefault(t *testing.T) {
 	home := t.TempDir()

@@ -120,19 +120,24 @@ Return strict JSON only, with no markdown, in this shape:
 {"reviews":[{"entry_id":"string","route":"memory|skill|split|discard","confidence":0.0,"rationale":"string","memory":{"title":"string","body":"string"},"skill":{"name":"kebab-case-name","description":"string","instructions":"markdown body","tags":[],"tools":[],"task_types":[]}}]}`
 
 func NewL3ReviewerFromEnv() L3Reviewer {
-	if !envBoolDefault("MEMORY_CURATION_L3_REVIEW_ENABLED", false) {
-		return unavailableL3Reviewer{reason: "L3 reviewer is disabled"}
-	}
+	enabled := envBoolDefault("MEMORY_CURATION_L3_REVIEW_ENABLED", true)
 	provider := strings.ToLower(strings.TrimSpace(os.Getenv("MEMORY_CURATION_L3_REVIEW_PROVIDER")))
 	if provider == "" {
 		provider = "pi"
 	}
-	reviewer, err := NewAgentL3Reviewer(AgentL3ReviewerConfig{
+	return NewConfiguredL3Reviewer(enabled, AgentL3ReviewerConfig{
 		Provider: provider,
 		Path:     strings.TrimSpace(os.Getenv("MEMORY_CURATION_L3_REVIEW_AGENT_PATH")),
 		Model:    strings.TrimSpace(os.Getenv("MEMORY_CURATION_L3_REVIEW_MODEL")),
 		Timeout:  envDurationSeconds("MEMORY_CURATION_L3_REVIEW_TIMEOUT_SECONDS", defaultL3ReviewTimeout),
 	})
+}
+
+func NewConfiguredL3Reviewer(enabled bool, cfg AgentL3ReviewerConfig) L3Reviewer {
+	if !enabled {
+		return unavailableL3Reviewer{reason: "L3 reviewer is disabled"}
+	}
+	reviewer, err := NewAgentL3Reviewer(cfg)
 	if err != nil {
 		return unavailableL3Reviewer{reason: err.Error()}
 	}

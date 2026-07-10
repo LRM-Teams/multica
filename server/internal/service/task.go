@@ -435,7 +435,7 @@ func taskErrorType(reason string) string {
 	switch reason {
 	case "runtime_offline", "runtime_recovery":
 		return "runtime"
-	case "timeout", "codex_semantic_inactivity":
+	case "timeout", "codex_semantic_inactivity", "grok_first_turn_no_progress":
 		return "timeout"
 	case taskfailure.ReasonAgentContextOverflow.String():
 		return "agent_error"
@@ -1782,7 +1782,7 @@ func resumeUnsafeFailureReason(reason string) bool {
 	switch reason {
 	// Keep in sync with GetLastTaskSession / GetLastChatTaskSession and
 	// CreateRetryTask's fresh-session CASE WHEN.
-	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", taskfailure.ReasonAgentContextOverflow.String():
+	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", "grok_first_turn_no_progress", taskfailure.ReasonAgentContextOverflow.String():
 		return true
 	default:
 		return false

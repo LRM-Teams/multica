@@ -2852,7 +2852,7 @@ func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessi
 		if strings.Contains(errMsg, agent.ProviderAuthRequiredMarker) {
 			reasonCode = agent.ProviderAuthRequiredMarker
 		}
-		if err := d.client.FailAgentInboxEvent(ctx, *task.InboxEvent, errMsg, failureReason, reasonCode); err != nil {
+		if err := d.client.FailAgentInboxEvent(ctx, *task.InboxEvent, errMsg, sessionID, workDir, failureReason, reasonCode); err != nil {
 			taskLog.Error("report failed inbox event failed", "error", err)
 		}
 		return

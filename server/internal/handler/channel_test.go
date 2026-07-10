@@ -1310,8 +1310,22 @@ func TestChannelAgentInboxFailDirectedMention(t *testing.T) {
 		WHERE e.id = $1 AND d.id = $2`, got.ID, got.DeliveryID).Scan(&eventStatus, &deliveryStatus, &lastError); err != nil {
 		t.Fatalf("load failed inbox event: %v", err)
 	}
-	if eventStatus != "failed" || deliveryStatus != "failed" || !strings.Contains(lastError, "grok not logged in") {
-		t.Fatalf("failed inbox states = event:%q delivery:%q error:%q, want failed/failed/grok not logged in", eventStatus, deliveryStatus, lastError)
+	if eventStatus != "acked" || deliveryStatus != "acked" || !strings.Contains(lastError, "grok not logged in") {
+		t.Fatalf("terminal inbox states = event:%q delivery:%q error:%q, want acked/acked/grok not logged in", eventStatus, deliveryStatus, lastError)
+	}
+
+	var content, failureReason string
+	var elapsedMS int64
+	if err := testPool.QueryRow(ctx, `
+		SELECT content, COALESCE(failure_reason, ''), COALESCE(elapsed_ms, -1)
+		FROM chat_message
+		WHERE chat_session_id = $1 AND role = 'assistant'
+		ORDER BY created_at DESC
+		LIMIT 1`, got.ChatSessionID).Scan(&content, &failureReason, &elapsedMS); err != nil {
+		t.Fatalf("load failed inbox chat message: %v", err)
+	}
+	if !strings.Contains(content, "grok not logged in") || failureReason != "agent_error.provider_auth_or_access" || elapsedMS < 0 {
+		t.Fatalf("failure chat message = content:%q reason:%q elapsed:%d, want visible classified failure", content, failureReason, elapsedMS)
 	}
 
 	var activityReason, activityFailureReason, activityMessage string
@@ -1328,6 +1342,20 @@ func TestChannelAgentInboxFailDirectedMention(t *testing.T) {
 	}
 	if activityReason != "provider_auth_required" || activityFailureReason != "agent_error.provider_auth_or_access" || !strings.Contains(activityMessage, "grok not logged in") {
 		t.Fatalf("activity event = reason:%q failure:%q message:%q, want provider_auth_required/provider_auth/grok not logged in", activityReason, activityFailureReason, activityMessage)
+	}
+
+	drainReq = newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-fail-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec = httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("second drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode second drain response: %v", err)
+	}
+	if len(drainResp.Events) != 0 {
+		t.Fatalf("terminal failure drained %d events, want none: %+v", len(drainResp.Events), drainResp.Events)
 	}
 }
 

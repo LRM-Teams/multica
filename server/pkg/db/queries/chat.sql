@@ -127,7 +127,7 @@ WHERE chat_session_id = $1
     OR (status = 'cancelled' AND COALESCE(failure_reason, '') = 'followup_interrupt')
     OR (
       status = 'failed'
-      AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity', 'agent_error.context_overflow')
+      AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow')
       AND NOT (COALESCE(error, '') ILIKE '%400%' AND COALESCE(error, '') ILIKE '%invalid_request_error%')
       AND NOT (COALESCE(error, '') ILIKE '%context window%' OR COALESCE(error, '') ILIKE '%context length%' OR COALESCE(error, '') ILIKE '%context_length_exceeded%' OR COALESCE(error, '') ILIKE '%maximum context%' OR COALESCE(error, '') ILIKE '%prompt is too long%' OR (COALESCE(error, '') ILIKE '%token%' AND COALESCE(error, '') ILIKE '%limit%'))
     )

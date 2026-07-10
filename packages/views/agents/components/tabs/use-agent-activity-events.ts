@@ -1,27 +1,66 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  agentActivityEventsKeys,
+  agentActivityEventsOptions,
+} from "@multica/core/agents";
+import { useWSEvent } from "@multica/core/realtime";
+import type { AgentActivityEventRealtimePayload } from "@multica/core/types";
 import type { ActivityEvent } from "./activity-event";
+import { projectLatestActivity, upsertActivityEvents } from "./activity-event-reducer";
 
 /**
- * Read-model source for an agent's Activity event stream (#351, Option A).
+ * The single shared read-model for an agent's Activity event stream (#302 FE
+ * consumer). Per the #267 contract the BE aggregates server-side and hands each
+ * event already tagged (`label`/`subtext`/`tone`/`visibility`) with a stable id
+ * — the FE never derives those from raw text (the P1-8 heuristic trap), it only
+ * reads REST first-paint, **upserts live WS events by id**, and projects
+ * latest-state.
  *
- * Per the #267 `ActivityEvent` contract, the BE (#302 / `agent_activity_event`)
- * supplies each event already tagged with `label` / `subtext` / `tone` /
- * `visibility` — the FE never derives these from raw tool/command/output text
- * (the P1-8 heuristic trap). So this hook's only job is to read that BE stream
- * for one agent and hand `ActivityEvent[]` to `ActivityTimeline`.
- *
- * The BE query (`api.listAgentActivityEvents(agentId)` or equivalent — signature
- * pending #302, Barry/Ronan) is not wired yet, so this returns an empty stream
- * for now: the tab renders `ActivityTimeline`'s empty state and lights up the
- * moment #302 lands. Swap the body for the real query when the endpoint exists;
- * `ActivityTimeline` + the whole tab wiring stay unchanged.
+ * Both consumers eat this ONE hook's output — no per-surface reducer drift:
+ *  - `events` → the #421 Activity timeline (full stream; it derives the directed
+ *    3-state block itself from raw kind/inbox/wake facts).
+ *  - `latest` → the DM/panel header activity word + hover card (latest-state).
  */
-export function useAgentActivityEvents(_agentId: string): {
+export function useAgentActivityEvents(agentId: string): {
   events: ActivityEvent[];
+  latest: ActivityEvent | null;
   isLoading: boolean;
 } {
-  // TODO(#302): replace with `useQuery(agentActivityEventsOptions(agentId))`
-  // once the BE emits run- + agent-level events as tagged ActivityEvents.
-  const events = useMemo<ActivityEvent[]>(() => [], []);
-  return { events, isLoading: false };
+  const queryClient = useQueryClient();
+  const { data = [], isLoading } = useQuery({
+    ...agentActivityEventsOptions(agentId),
+    enabled: !!agentId,
+  });
+
+  // Live updates: the BE pushes the full hydrated event under a stable id
+  // (`agent_activity:event`), so upsert it straight into the query cache by id —
+  // no refetch round-trip; a WS push for a known id simply replaces its row
+  // (e.g. a `thinking` aggregate that grew). Only the degraded, `event`-less
+  // push (id only) invalidates for a reload.
+  const onActivityEvent = useCallback(
+    (payload: unknown) => {
+      const p = payload as AgentActivityEventRealtimePayload;
+      if (!agentId || p.agent_id !== agentId) return;
+      if (p.event) {
+        const event = p.event;
+        queryClient.setQueryData<ActivityEvent[]>(
+          agentActivityEventsKeys.all(agentId),
+          (prev = []) => upsertActivityEvents(prev, event),
+        );
+      } else {
+        queryClient.invalidateQueries({
+          queryKey: agentActivityEventsKeys.all(agentId),
+        });
+      }
+    },
+    [agentId, queryClient],
+  );
+  useWSEvent("agent_activity:event", onActivityEvent);
+
+  // Normalize order defensively (REST is already ordered; this also dedupes if a
+  // WS event raced the first paint).
+  const events = useMemo(() => upsertActivityEvents([], data), [data]);
+  const latest = useMemo(() => projectLatestActivity(events), [events]);
+  return { events, latest, isLoading };
 }

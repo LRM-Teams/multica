@@ -1,4 +1,6 @@
-// FE read-model for the agent-activity narrative timeline (#267). The BE (#302)
+import type { AgentActivityTimelineEvent } from "@multica/core/types";
+
+// FE read-model for the agent-activity narrative timeline (#267 / #302). The BE
 // tags each event's `visibility` and supplies safe human `label`/`subtext` — the
 // FE never derives these from raw tool/command/output text (that would be the
 // P1-8 heuristic trap). Raw payload stays in the diagnostic/transcript layer.
@@ -16,18 +18,14 @@ export type ActivityTone =
   | "failure" // failed
   | "muted"; // offline / no-reply / suppressed / neutral
 
-export interface ActivityEvent {
-  id: string;
-  /** ISO-8601 timestamp. */
-  occurred_at: string;
-  /** BE-tagged. Default rows are `user_facing`; `diagnostic_only` sits behind the toggle. */
-  visibility: ActivityVisibility;
-  /** Human narrative label (BE `action_label`) — never a raw command. */
-  label: string;
-  /** Optional one-line human detail (BE `summary`). */
-  subtext?: string;
-  tone: ActivityTone;
-}
+// The FE Activity read-model IS the BE #302 timeline event
+// (`AgentActivityTimelineEvent`, packages/core/types/events.ts): id /
+// occurred_at / visibility / label / subtext / tone drive the rendered row,
+// while raw `kind` + `target_ref`/`source_refs` + `reason_*` let the timeline
+// derive the directed 3-state block and deep-links itself. Aliasing to the BE
+// type keeps the four layers (daemon → server → API → FE) one shape with zero
+// translation.
+export type ActivityEvent = AgentActivityTimelineEvent;
 
 // Building an Intl formatter is slow, so cache one per timezone rather than
 // rebuilding on every row render.

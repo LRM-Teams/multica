@@ -35,6 +35,7 @@ import type {
   UpdateAgentFileContentRequest,
   UpdateAgentFileContentResponse,
   AgentTask,
+  AgentActivityTimelineEvent,
   AgentHealthResponse,
   AgentActivityBucket,
   AgentRunCount,
@@ -854,6 +855,14 @@ export class ApiClient {
 
   async getAgent(id: string): Promise<Agent> {
     return this.fetch(`/api/agents/${id}`);
+  }
+
+  // #302 Activity: REST first-paint for one agent's tagged event timeline. The
+  // BE aggregates + tags each row (kind/label/tone/visibility/refs); live
+  // updates arrive over the `agent_activity:event` WS as full events the FE
+  // upserts by id.
+  async getAgentActivityEvents(agentId: string): Promise<AgentActivityTimelineEvent[]> {
+    return this.fetch(`/api/agents/${agentId}/activity/events`);
   }
 
   async createAgent(data: CreateAgentRequest): Promise<Agent> {

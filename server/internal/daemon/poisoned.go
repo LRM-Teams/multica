@@ -21,10 +21,10 @@ import (
 //     invalid_request_error (oversized payload, malformed image, etc.).
 //     The bad message is already baked into the conversation history, so
 //     every resume hits the same 400. Detected via classifyPoisonedError.
-//   - Timeout-side: Codex reported semantic inactivity after the session got
-//     stuck without agent progress. Resuming that Codex session can replay the
-//     same stuck state, while a fresh manual rerun may succeed. Detected via
-//     classifyResumeUnsafeTimeout.
+//   - Timeout-side: provider adapters report semantic/no-progress inactivity
+//     after the session got stuck without agent progress. Resuming that session
+//     can replay the same stuck state, while a fresh manual rerun may succeed.
+//     Detected via classifyResumeUnsafeTimeout.
 //
 // MUL-2946: ReasonIterationLimit and ReasonAPIInvalidRequest are aliased
 // to the canonical taskfailure values so the daemon and the in-flight
@@ -38,6 +38,7 @@ const (
 	FailureReasonAgentFallbackMsg        = "agent_fallback_message"
 	FailureReasonAPIInvalidRequest       = string(taskfailure.ReasonAPIInvalidRequest)
 	FailureReasonCodexSemanticInactivity = "codex_semantic_inactivity"
+	FailureReasonGrokFirstTurnNoProgress = "grok_first_turn_no_progress"
 )
 
 // poisonedOutputMaxLen caps how long an output can be and still be
@@ -122,13 +123,21 @@ func classifyPoisonedError(errMsg string) (string, bool) {
 // ordinary daemon/backend timeouts are infrastructure-shaped and should keep
 // the resume pointer so retries can continue the in-flight conversation.
 func classifyResumeUnsafeTimeout(provider, errMsg string) (string, bool) {
-	if strings.ToLower(strings.TrimSpace(provider)) != "codex" || errMsg == "" {
+	if errMsg == "" {
 		return "", false
 	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
 	lowered := strings.ToLower(errMsg)
-	if strings.Contains(lowered, strings.ToLower(agent.CodexSemanticInactivityMarker)) ||
-		strings.Contains(lowered, strings.ToLower(agent.CodexFirstTurnNoProgressMarker)) {
-		return FailureReasonCodexSemanticInactivity, true
+	switch provider {
+	case "codex":
+		if strings.Contains(lowered, strings.ToLower(agent.CodexSemanticInactivityMarker)) ||
+			strings.Contains(lowered, strings.ToLower(agent.CodexFirstTurnNoProgressMarker)) {
+			return FailureReasonCodexSemanticInactivity, true
+		}
+	case "grok":
+		if strings.Contains(lowered, strings.ToLower(agent.GrokFirstStreamEventTimeoutMarker)) {
+			return FailureReasonGrokFirstTurnNoProgress, true
+		}
 	}
 	return "", false
 }

@@ -13,10 +13,19 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+const defaultGrokFirstStreamEventTimeout = 30 * time.Second
+
+// GrokFirstStreamEventTimeoutMarker identifies the failure mode where the
+// Grok CLI process starts but never accepts the prompt far enough to emit its
+// first streaming-json event. This is distinct from a normal long-running turn:
+// no turn has started yet, so the daemon must not leave the run silently alive.
+const GrokFirstStreamEventTimeoutMarker = "grok first stream event timeout"
 
 // grokBackend implements Backend by spawning the Grok CLI (https://grok.com)
 // in headless mode with --output-format streaming-json.
@@ -112,6 +121,35 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 		// before the end event arrives.
 		trySend(msgCh, Message{Type: MessageStatus, Status: "running", SessionID: sessionID})
 
+		firstStreamEventTimeout := grokFirstStreamEventTimeout(opts.SemanticInactivityTimeout)
+		var firstStreamEventObserved atomic.Bool
+		var firstStreamEventTimeoutFired atomic.Bool
+		firstStreamEventTimer := time.NewTimer(firstStreamEventTimeout)
+		defer stopTimer(firstStreamEventTimer)
+		firstStreamEventSessionID := sessionID
+		go func() {
+			select {
+			case <-firstStreamEventTimer.C:
+				if firstStreamEventObserved.CompareAndSwap(false, true) {
+					firstStreamEventTimeoutFired.Store(true)
+					b.cfg.Logger.Warn(GrokFirstStreamEventTimeoutMarker,
+						"pid", cmd.Process.Pid,
+						"session_id", firstStreamEventSessionID,
+						"timeout", firstStreamEventTimeout.String(),
+						"cwd", opts.Cwd,
+						"model", opts.Model,
+					)
+					cancel()
+				}
+			case <-runCtx.Done():
+			}
+		}()
+		markFirstStreamEvent := func() {
+			if firstStreamEventObserved.CompareAndSwap(false, true) {
+				stopTimer(firstStreamEventTimer)
+			}
+		}
+
 		var toolWG sync.WaitGroup
 		toolWG.Add(1)
 		go func() {
@@ -131,6 +169,9 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 			var evt grokStreamEvent
 			if err := json.Unmarshal([]byte(line), &evt); err != nil {
 				continue
+			}
+			if evt.Type != "" {
+				markFirstStreamEvent()
 			}
 
 			switch evt.Type {
@@ -204,12 +245,23 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 
 		duration := time.Since(startTime)
 
-		if deadlineExceeded {
+		if firstStreamEventTimeoutFired.Load() {
+			finalStatus = "timeout"
+			finalError = fmt.Sprintf("%s after %s: process started but emitted no streaming-json event before first turn progress (session_id=%s model=%q)",
+				GrokFirstStreamEventTimeoutMarker,
+				firstStreamEventTimeout,
+				sessionID,
+				opts.Model,
+			)
+		} else if deadlineExceeded {
 			finalStatus = "timeout"
 			finalError = fmt.Sprintf("grok timed out after %s", timeout)
 		} else if parentCancelled && finalStatus == "completed" {
 			finalStatus = "aborted"
 			finalError = "execution cancelled"
+		} else if !firstStreamEventObserved.Load() {
+			finalStatus = "failed"
+			finalError = "grok exited without emitting any streaming-json events"
 		} else if waitErr != nil && finalStatus == "completed" {
 			finalStatus = "failed"
 			finalError = withAgentStderr(fmt.Sprintf("grok exited with error: %v", waitErr), "grok", stderrBuf.Tail())
@@ -230,6 +282,17 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	}()
 
 	return &Session{Messages: msgCh, Result: resCh}, nil
+}
+
+func grokFirstStreamEventTimeout(semanticInactivityTimeout time.Duration) time.Duration {
+	if semanticInactivityTimeout <= 0 || semanticInactivityTimeout > defaultGrokFirstStreamEventTimeout {
+		return defaultGrokFirstStreamEventTimeout
+	}
+	scaled := semanticInactivityTimeout * 4 / 5
+	if scaled <= 0 {
+		return semanticInactivityTimeout
+	}
+	return scaled
 }
 
 // grokStreamEvent is one NDJSON line from `grok --output-format streaming-json`.

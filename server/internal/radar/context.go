@@ -86,7 +86,7 @@ func (b *ContextBuilder) appendDBSections(ctx context.Context, out *strings.Buil
 		FROM agent_task_queue
 		WHERE agent_id = $1::uuid
 		  AND status = 'failed'
-		ORDER BY updated_at DESC
+		ORDER BY created_at DESC
 		LIMIT 10
 	`, agentID); err != nil {
 		return err
@@ -106,7 +106,7 @@ func (b *ContextBuilder) appendDBSections(ctx context.Context, out *strings.Buil
 		return err
 	}
 	return appendRows(ctx, out, b.db, "GitHub Repositories", `
-		SELECT p.title || ': ' || pr.resource_ref->>'url'
+		SELECT p.title || ': ' || (pr.resource_ref->>'url')
 		FROM project_resource pr
 		JOIN project p ON p.id = pr.project_id
 		WHERE p.workspace_id = $1::uuid

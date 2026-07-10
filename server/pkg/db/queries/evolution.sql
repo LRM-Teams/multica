@@ -91,6 +91,23 @@ SELECT * FROM evolution_unit_submission
 WHERE id = @id AND workspace_id = @workspace_id AND status = 'needs_review'
 FOR UPDATE;
 
+-- name: ClaimEvolutionCandidate :one
+UPDATE evolution_unit_submission
+SET status = 'clustered',
+    review_metadata = jsonb_set(review_metadata, '{candidate_claim}', jsonb_build_object('token', @claim_token::text), true),
+    updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id
+  AND (status = 'candidate' OR (status = 'clustered' AND updated_at < now() - interval '5 minutes'))
+RETURNING *;
+
+-- name: ReleaseEvolutionCandidate :exec
+UPDATE evolution_unit_submission
+SET status = 'candidate',
+    review_metadata = review_metadata - 'candidate_claim',
+    updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id AND status = 'clustered'
+  AND review_metadata->'candidate_claim'->>'token' = @claim_token;
+
 -- name: ListEvolutionSubmissionFiles :many
 SELECT * FROM evolution_unit_submission_file
 WHERE workspace_id = @workspace_id AND submission_id = @submission_id
@@ -99,7 +116,7 @@ ORDER BY path ASC;
 -- name: RejectEvolutionSubmission :one
 UPDATE evolution_unit_submission
 SET status = 'rejected', reject_reason = @reject_reason, updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+WHERE id = @id AND workspace_id = @workspace_id AND status = 'clustered'
 RETURNING *;
 
 -- name: RejectEvolutionSubmissionWithReview :one
@@ -113,7 +130,7 @@ SET status = 'rejected',
     review_metadata = @review_metadata,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+WHERE id = @id AND workspace_id = @workspace_id AND status IN ('clustered', 'needs_review')
 RETURNING *;
 
 -- name: MarkEvolutionSubmissionNeedsReview :one
@@ -126,7 +143,7 @@ SET status = 'needs_review',
     review_metadata = @review_metadata,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+WHERE id = @id AND workspace_id = @workspace_id AND status = 'clustered'
 RETURNING *;
 
 -- name: ListEvolutionSubmissionsForReview :many
@@ -185,8 +202,9 @@ RETURNING *;
 
 -- name: MarkEvolutionSubmissionPromoted :one
 UPDATE evolution_unit_submission
-SET status = 'promoted', promoted_unit_id = @promoted_unit_id, updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+SET status = 'promoted', promoted_unit_id = @promoted_unit_id,
+    review_metadata = review_metadata - 'candidate_claim', updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id AND status = 'clustered'
 RETURNING *;
 
 -- name: MarkEvolutionSubmissionPromotedWithReview :one
@@ -200,7 +218,7 @@ SET status = 'promoted',
     review_metadata = @review_metadata,
     reviewed_at = now(),
     updated_at = now()
-WHERE id = @id AND workspace_id = @workspace_id
+WHERE id = @id AND workspace_id = @workspace_id AND status IN ('clustered', 'needs_review')
 RETURNING *;
 
 -- name: UpsertSharedEvolutionUnitFile :one

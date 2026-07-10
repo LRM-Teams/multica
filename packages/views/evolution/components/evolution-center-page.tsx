@@ -14,7 +14,6 @@ import {
   RefreshCw,
   ShieldCheck,
   Sparkles,
-  Star,
   TrendingUp,
   WandSparkles,
 } from "lucide-react";
@@ -67,7 +66,8 @@ const COPY = {
   tunePolicy: "Tune policies",
   liveSystem: "Live system",
   thirtyDays: "Last 30 days",
-  agentBoard: "Agent leaderboard",
+  agentTable: "Agents",
+  agentColumn: "Agent",
   learningQueue: "Learning queue",
   learningQueueHint: "Review-first memory and skill candidates waiting for a human decision.",
   memoryOps: "Memory curation",
@@ -80,7 +80,6 @@ const COPY = {
   skillDrafts: "Skill drafts",
   costEfficiency: "Cost efficiency",
   successRate: "Success rate",
-  score: "Score",
   tasks: "Tasks",
   cost: "Cost",
   costPerSuccess: "Cost / success",
@@ -550,15 +549,14 @@ function AgentTable({ rows, loading }: { rows: AgentEvolutionRow[]; loading: boo
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><Star className="h-4 w-4 text-amber-500" />{COPY.agentBoard}</CardTitle>
+        <CardTitle>{COPY.agentTable}</CardTitle>
       </CardHeader>
       <CardContent className="overflow-x-auto">
         {loading ? <LeaderboardSkeleton /> : (
           <table className="w-full min-w-[920px] text-sm">
             <thead className="text-left text-xs uppercase tracking-wider text-muted-foreground">
               <tr className="border-b">
-                <th className="pb-3 font-medium">{COPY.starAgents}</th>
-                <th className="pb-3 font-medium">{COPY.score}</th>
+                <th className="pb-3 font-medium">{COPY.agentColumn}</th>
                 <th className="pb-3 font-medium">{COPY.tasks}</th>
                 <th className="pb-3 font-medium">{COPY.successRate}</th>
                 <th className="pb-3 font-medium">{COPY.cost}</th>
@@ -579,7 +577,6 @@ function AgentTable({ rows, loading }: { rows: AgentEvolutionRow[]; loading: boo
                       </div>
                     </div>
                   </td>
-                  <td className="py-3 text-lg font-semibold tabular-nums">{row.score}</td>
                   <td className="py-3 tabular-nums">{row.taskCount}</td>
                   <td className="py-3"><Badge variant={row.successRate >= 0.8 ? "secondary" : "outline"}>{pct(row.successRate)}</Badge></td>
                   <td className="py-3 tabular-nums">{money(row.cost)}</td>

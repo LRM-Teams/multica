@@ -53,7 +53,12 @@ export const agentActivityEventsKeys = {
 export function agentActivityEventsOptions(agentId: string) {
   return queryOptions({
     queryKey: agentActivityEventsKeys.all(agentId),
-    queryFn: () => api.getAgentActivityEvents(agentId),
+    // The REST route returns a pagination envelope (`{ events, has_more, … }`);
+    // the timeline consumes the event list, so unwrap `.events` into the cache.
+    // The full page stays reachable via `api.getAgentActivityEvents` for a
+    // cursor-pagination follow-up. Caching the array keeps the WS `by-id upsert`
+    // (`setQueryData`) operating on the same shape the timeline reads.
+    queryFn: () => api.getAgentActivityEvents(agentId).then((page) => page.events),
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
   });

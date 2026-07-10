@@ -2772,16 +2772,15 @@ func TestCompleteTask_GroupChannelThreadTargetShowInChannelProjectsSameMessage(t
 	if mainTimeline[1].ThreadRoot == nil || mainTimeline[1].ThreadRoot.ID != rootID {
 		t.Fatalf("projected thread root summary = %+v, want root %s", mainTimeline[1].ThreadRoot, rootID)
 	}
-	var targetTasks int
+	var targetWakeEvents int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
-		FROM agent_task_queue q
-		JOIN channel_agent_session cas ON cas.chat_session_id = q.chat_session_id
-		WHERE cas.channel_id = $1 AND cas.agent_id = $2`, channelID, targetAgentID).Scan(&targetTasks); err != nil {
-		t.Fatalf("count target agent tasks: %v", err)
+		FROM agent_inbox_event
+		WHERE channel_id = $1 AND agent_id = $2 AND requires_wake`, channelID, targetAgentID).Scan(&targetWakeEvents); err != nil {
+		t.Fatalf("count target agent inbox events: %v", err)
 	}
-	if targetTasks != 1 {
-		t.Fatalf("target agent task count = %d, want 1", targetTasks)
+	if targetWakeEvents != 1 {
+		t.Fatalf("target agent inbox event count = %d, want 1", targetWakeEvents)
 	}
 }
 

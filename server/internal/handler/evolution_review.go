@@ -245,11 +245,11 @@ func (h *Handler) SetEvolutionSourceSkillAssignment(w http.ResponseWriter, r *ht
 		return
 	}
 	if req.Enabled {
-		err = h.Queries.AddAgentSkillWithSource(r.Context(), db.AddAgentSkillWithSourceParams{
-			AgentID: submission.SourceAgentID,
-			SkillID: skill.ID,
-			Source:  "evolution",
-		})
+		_, err = h.DB.Exec(r.Context(), `
+			INSERT INTO agent_skill (agent_id, skill_id, source)
+			VALUES ($1, $2, 'evolution')
+			ON CONFLICT (agent_id, skill_id) DO NOTHING
+		`, submission.SourceAgentID, skill.ID)
 	} else {
 		err = h.Queries.RemoveAgentSkill(r.Context(), db.RemoveAgentSkillParams{
 			AgentID: submission.SourceAgentID,

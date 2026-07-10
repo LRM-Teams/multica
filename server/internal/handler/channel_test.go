@@ -742,6 +742,85 @@ func TestChannelAgentInboxDrainAckDirectedMention(t *testing.T) {
 	}
 }
 
+func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentName := "Inbox Complete Agent " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	runtimeID := handlerTestRuntimeID(t)
+	channelID := seedChannelForTest(t, "agent-inbox-complete-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") please answer from inbox complete", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-complete"), 0)
+	if err != nil {
+		t.Fatalf("insert mention trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-complete-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode drain response: %v", err)
+	}
+	if len(drainResp.Events) != 1 {
+		t.Fatalf("drain returned %d events, want 1: %s", len(drainResp.Events), drainRec.Body.String())
+	}
+	got := drainResp.Events[0]
+	if got.Task == nil {
+		t.Fatalf("drained directed event missing executable task: %+v", got)
+	}
+	if got.Task.ID != got.ID || got.Task.ChatSessionID == "" || got.Task.InboxEvent == nil {
+		t.Fatalf("drained task = %+v, want inbox-backed chat task for event %s", got.Task, got.ID)
+	}
+
+	testHandler.Bus.Subscribe(protocol.EventChatDone, func(e events.Event) {
+		payload, ok := e.Payload.(protocol.ChatDonePayload)
+		if ok && payload.TaskID == got.ID {
+			testHandler.handleChannelChatDone(e)
+		}
+	})
+
+	const reply = "Plain final reply from inbox complete"
+	completeReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/complete", CompleteAgentInboxEventRequest{
+		DeliveryID: got.DeliveryID,
+		LeaseToken: got.LeaseToken,
+		TaskCompleteRequest: TaskCompleteRequest{
+			Output: reply,
+		},
+	}, testWorkspaceID, "agent-inbox-complete-daemon")
+	completeReq = withURLParam(completeReq, "eventId", got.ID)
+	completeRec := httptest.NewRecorder()
+	testHandler.CompleteAgentInboxEvent(completeRec, completeReq)
+	if completeRec.Code != http.StatusOK {
+		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
+	}
+	assertChannelMessageContentCount(t, channelID, reply, 1)
+
+	var status string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_inbox_event WHERE id = $1`, got.ID).Scan(&status); err != nil {
+		t.Fatalf("load inbox event status: %v", err)
+	}
+	if status != "acked" {
+		t.Fatalf("inbox event status = %q, want acked", status)
+	}
+}
+
 func TestChannelAgentInboxDrainAckAmbientAdvancesSessionCursor(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -992,6 +1071,39 @@ func TestChannelAgentInboxRejectsStaleDeliveryAck(t *testing.T) {
 	}
 	if eventStatus != "draining" || oldDeliveryStatus != "failed" || newDeliveryStatus != "leased" || lastDrainedSeq != 0 {
 		t.Fatalf("stale ack states = event:%q old:%q new:%q last_drained:%d, want draining/failed/leased/0", eventStatus, oldDeliveryStatus, newDeliveryStatus, lastDrainedSeq)
+	}
+
+	testHandler.Bus.Subscribe(protocol.EventChatDone, func(e events.Event) {
+		payload, ok := e.Payload.(protocol.ChatDonePayload)
+		if ok && payload.TaskID == firstDelivery.ID {
+			testHandler.handleChannelChatDone(e)
+		}
+	})
+	const staleReply = "stale complete must not write visible output"
+	staleCompleteReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+firstDelivery.ID+"/complete", CompleteAgentInboxEventRequest{
+		DeliveryID: firstDelivery.DeliveryID,
+		LeaseToken: firstDelivery.LeaseToken,
+		TaskCompleteRequest: TaskCompleteRequest{
+			Output: staleReply,
+		},
+	}, testWorkspaceID, "agent-inbox-stale-daemon")
+	staleCompleteReq = withURLParam(staleCompleteReq, "eventId", firstDelivery.ID)
+	staleCompleteRec := httptest.NewRecorder()
+	testHandler.CompleteAgentInboxEvent(staleCompleteRec, staleCompleteReq)
+	if staleCompleteRec.Code != http.StatusConflict {
+		t.Fatalf("stale complete status=%d body=%s, want 409", staleCompleteRec.Code, staleCompleteRec.Body.String())
+	}
+	assertChannelMessageContentCount(t, channelID, staleReply, 0)
+	var staleChatMessages int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM chat_message
+		WHERE chat_session_id = $1 AND role = 'assistant' AND content = $2
+	`, secondDelivery.Task.ChatSessionID, staleReply).Scan(&staleChatMessages); err != nil {
+		t.Fatalf("count stale complete chat messages: %v", err)
+	}
+	if staleChatMessages != 0 {
+		t.Fatalf("stale complete chat messages = %d, want 0", staleChatMessages)
 	}
 
 	ackReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+secondDelivery.ID+"/ack", AckAgentInboxEventRequest{

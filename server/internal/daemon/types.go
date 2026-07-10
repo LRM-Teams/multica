@@ -125,6 +125,20 @@ type Task struct {
 	// Empty when the server-side runtime has no owning user — the daemon
 	// then falls back to its own token. See MUL-2600.
 	AuthToken string `json:"auth_token,omitempty"`
+
+	// InboxEvent is present when this work item came from the raft-like
+	// agent inbox instead of legacy agent_task_queue. Terminal callbacks must
+	// use the inbox lease endpoints and must not call task start/complete/fail.
+	InboxEvent *AgentInboxLease `json:"inbox_event,omitempty"`
+}
+
+type AgentInboxLease struct {
+	ID             string `json:"id"`
+	DeliveryID     string `json:"delivery_id"`
+	LeaseToken     string `json:"lease_token"`
+	LeaseExpiresAt string `json:"lease_expires_at"`
+	SeqTo          int64  `json:"seq_to"`
+	RequiresWake   bool   `json:"requires_wake"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata the daemon

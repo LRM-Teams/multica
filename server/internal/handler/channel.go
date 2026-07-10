@@ -3143,7 +3143,8 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 		slog.Warn(logScope+": ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
 	}
-	if _, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, ch.Kind, trigger); err != nil {
+	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, ch.Kind, trigger)
+	if err != nil {
 		slog.Warn(logScope+": create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
 	}
@@ -3181,6 +3182,10 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 	})
 	if err != nil {
 		slog.Warn(logScope+": create inbox event failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	if _, err := tx.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, event.ID, promptMsg.ID); err != nil {
+		slog.Warn(logScope+": tag prompt with inbox event failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "inbox_event", uuidToString(event.ID), "error", err)
 		return
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -295,6 +295,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox completion")
 		return
 	}
+	h.TaskService.RecordEvolutionSkillOutcome(r.Context(), event.ID, "success", "success")
 	if chatDonePayload != nil {
 		h.publishAgentInboxChatDone(event, *chatDonePayload)
 	}
@@ -402,6 +403,7 @@ func (h *Handler) recordAgentInboxFailureActivity(ctx context.Context, event db.
 		targetKind = "dm"
 		targetID = event.ChatSessionID
 	}
+	h.TaskService.RecordEvolutionSkillOutcome(ctx, event.ID, "failure", "failure")
 	recordAgentActivityEvent(ctx, h.DB,
 		event.WorkspaceID, event.AgentID, delivery.RuntimeID, pgtype.UUID{},
 		"lifecycle", "agent_inbox_failed", "error",
@@ -544,7 +546,7 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 		RequiresWake:   event.RequiresWake,
 	}
 	if agent, err := h.Queries.GetAgent(ctx, event.AgentID); err == nil {
-		skills := h.TaskService.LoadAgentSkills(ctx, event.AgentID)
+		skills := h.TaskService.LoadAgentSkillsForInbox(ctx, event.AgentID, event.ID)
 		skills = append(skills, h.TaskService.BuiltinSkills()...)
 		var customEnv map[string]string
 		if agent.CustomEnv != nil {

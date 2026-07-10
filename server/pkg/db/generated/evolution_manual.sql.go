@@ -713,9 +713,14 @@ func (q *Queries) GetSharedEvolutionUnitCurrentVersionID(ctx context.Context, ar
 const recordEvolutionSkillInjection = `-- name: RecordEvolutionSkillInjection :exec
 INSERT INTO evolution_unit_feedback_event (
   workspace_id, agent_id, task_id, unit_type, unit_id, event, outcome, source, metadata
-) VALUES (
-  $1, $2, $3, 'skill', $4, 'injected', '', 'runtime',
-  jsonb_build_object('version_id', $5::uuid)
+)
+SELECT $1, $2, $3, 'skill', $4, 'injected', '', 'runtime',
+       jsonb_build_object('version_id', $5::uuid, 'execution_id', $6::uuid)
+WHERE NOT EXISTS (
+  SELECT 1 FROM evolution_unit_feedback_event
+  WHERE unit_type = 'skill' AND unit_id = $4 AND event = 'injected'
+    AND metadata->>'execution_id' = $6::text
+    AND metadata->>'version_id' = $5::text
 )
 `
 
@@ -725,35 +730,45 @@ type RecordEvolutionSkillInjectionParams struct {
 	TaskID      pgtype.UUID `json:"task_id"`
 	UnitID      pgtype.UUID `json:"unit_id"`
 	VersionID   pgtype.UUID `json:"version_id"`
+	ExecutionID pgtype.UUID `json:"execution_id"`
 }
 
 func (q *Queries) RecordEvolutionSkillInjection(ctx context.Context, arg RecordEvolutionSkillInjectionParams) error {
-	_, err := q.db.Exec(ctx, recordEvolutionSkillInjection, arg.WorkspaceID, arg.AgentID, arg.TaskID, arg.UnitID, arg.VersionID)
+	_, err := q.db.Exec(ctx, recordEvolutionSkillInjection, arg.WorkspaceID, arg.AgentID, arg.TaskID, arg.UnitID, arg.VersionID, arg.ExecutionID)
 	return err
 }
 
-const recordTaskEvolutionSkillOutcome = `-- name: RecordTaskEvolutionSkillOutcome :exec
+const recordEvolutionSkillOutcome = `-- name: RecordEvolutionSkillOutcome :exec
 INSERT INTO evolution_unit_feedback_event (
   workspace_id, agent_id, task_id, unit_type, unit_id, event, outcome, source, metadata
 )
 SELECT DISTINCT workspace_id, agent_id, task_id, unit_type, unit_id,
        $1::text, $2::text, 'runtime',
-       jsonb_build_object('version_id', metadata->>'version_id')
+       jsonb_build_object('version_id', metadata->>'version_id', 'execution_id', $3::uuid)
 FROM evolution_unit_feedback_event
-WHERE task_id = $3
-  AND unit_type = 'skill'
+WHERE unit_type = 'skill'
   AND event = 'injected'
+  AND metadata->>'execution_id' = $3::text
   AND COALESCE(metadata->>'version_id', '') <> ''
+  AND NOT EXISTS (
+    SELECT 1 FROM evolution_unit_feedback_event recorded
+    WHERE recorded.unit_type = evolution_unit_feedback_event.unit_type
+      AND recorded.unit_id = evolution_unit_feedback_event.unit_id
+      AND recorded.event = $1::text
+      AND recorded.outcome = $2::text
+      AND recorded.metadata->>'execution_id' = $3::text
+      AND recorded.metadata->>'version_id' = evolution_unit_feedback_event.metadata->>'version_id'
+  )
 `
 
-type RecordTaskEvolutionSkillOutcomeParams struct {
-	Event   string      `json:"event"`
-	Outcome string      `json:"outcome"`
-	TaskID  pgtype.UUID `json:"task_id"`
+type RecordEvolutionSkillOutcomeParams struct {
+	Event       string      `json:"event"`
+	Outcome     string      `json:"outcome"`
+	ExecutionID pgtype.UUID `json:"execution_id"`
 }
 
-func (q *Queries) RecordTaskEvolutionSkillOutcome(ctx context.Context, arg RecordTaskEvolutionSkillOutcomeParams) error {
-	_, err := q.db.Exec(ctx, recordTaskEvolutionSkillOutcome, arg.Event, arg.Outcome, arg.TaskID)
+func (q *Queries) RecordEvolutionSkillOutcome(ctx context.Context, arg RecordEvolutionSkillOutcomeParams) error {
+	_, err := q.db.Exec(ctx, recordEvolutionSkillOutcome, arg.Event, arg.Outcome, arg.ExecutionID)
 	return err
 }
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -125,6 +126,51 @@ func stringSlicesEqualForTest(left, right []string) bool {
 
 func dbMemberForEvolutionVersionTest() db.Member {
 	return db.Member{Role: "owner", WorkspaceID: parseUUID(testWorkspaceID), UserID: parseUUID(testUserID)}
+}
+
+func TestEvolutionSkillRuntimeFeedbackUsesExecutionVersion(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := seedEvolutionVersionFixture(t)
+	agentID := createHandlerTestAgent(t, "version-feedback-"+randomID(), nil)
+	if _, err := testPool.Exec(context.Background(), `INSERT INTO agent_skill (agent_id, skill_id) VALUES ($1, $2)`, agentID, fixture.skillID); err != nil {
+		t.Fatalf("assign skill: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM evolution_unit_feedback_event WHERE agent_id=$1`, agentID)
+	})
+
+	inboxExecutionID := parseUUID(uuid.NewString())
+	skills := testHandler.TaskService.LoadAgentSkillsForInbox(context.Background(), parseUUID(agentID), inboxExecutionID)
+	if len(skills) != 1 {
+		t.Fatalf("loaded skills=%d, want 1", len(skills))
+	}
+	testHandler.TaskService.LoadAgentSkillsForInbox(context.Background(), parseUUID(agentID), inboxExecutionID)
+	testHandler.TaskService.RecordEvolutionSkillOutcome(context.Background(), inboxExecutionID, "success", "success")
+	testHandler.TaskService.RecordEvolutionSkillOutcome(context.Background(), inboxExecutionID, "success", "success")
+
+	var injected, succeeded int
+	var taskIDs int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FILTER (WHERE event='injected'),
+		       count(*) FILTER (WHERE event='success'),
+		       count(task_id)
+		FROM evolution_unit_feedback_event
+		WHERE agent_id=$1 AND unit_id=$2
+		  AND metadata->>'execution_id'=$3
+		  AND metadata->>'version_id'=$4
+	`, agentID, fixture.unitID, uuidToString(inboxExecutionID), fixture.currentID).Scan(&injected, &succeeded, &taskIDs); err != nil {
+		t.Fatalf("load attributed feedback: %v", err)
+	}
+	if injected != 1 || succeeded != 1 || taskIDs != 0 {
+		t.Fatalf("feedback injected=%d success=%d task_ids=%d, want 1/1/0", injected, succeeded, taskIDs)
+	}
+
+	var rollbackAttributed int
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM evolution_unit_feedback_event WHERE agent_id=$1 AND metadata->>'version_id'=$2`, agentID, fixture.rollbackID).Scan(&rollbackAttributed); err != nil || rollbackAttributed != 0 {
+		t.Fatalf("rollback-attributed events=%d err=%v, want 0", rollbackAttributed, err)
+	}
 }
 
 func TestEvolutionSkillVersionAPIListGetAndEval(t *testing.T) {

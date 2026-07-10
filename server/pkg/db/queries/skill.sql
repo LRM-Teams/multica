@@ -79,9 +79,12 @@ DELETE FROM skill_file WHERE skill_id = $1;
 
 -- name: ListAgentSkills :many
 SELECT s.id, s.workspace_id, s.name, s.description, s.content, s.config,
-       s.created_by, s.created_at, s.updated_at, s.source_evolution_unit_id
+       s.created_by, s.created_at, s.updated_at, s.source_evolution_unit_id,
+       u.current_version_id AS source_evolution_unit_version_id
 FROM skill s
 JOIN agent_skill ask ON ask.skill_id = s.id
+LEFT JOIN shared_evolution_unit u
+  ON u.id = s.source_evolution_unit_id AND u.workspace_id = s.workspace_id AND u.unit_type = 'skill'
 WHERE ask.agent_id = $1
 ORDER BY s.name ASC;
 

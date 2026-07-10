@@ -2291,14 +2291,24 @@ func (s *TaskService) publishAgentStatus(agent db.Agent) {
 	})
 }
 
-// LoadAgentSkills loads an agent's skills with their files for task execution.
+// LoadAgentSkills loads an agent's skills with their files for non-execution views.
 func (s *TaskService) LoadAgentSkills(ctx context.Context, agentID pgtype.UUID) []AgentSkillData {
-	return s.LoadAgentSkillsForTask(ctx, agentID, pgtype.UUID{})
+	return s.loadAgentSkills(ctx, agentID, pgtype.UUID{}, pgtype.UUID{})
 }
 
 // LoadAgentSkillsForTask records the exact evolution version injected into a
 // production task. Recording is best-effort so feedback telemetry cannot block a claim.
 func (s *TaskService) LoadAgentSkillsForTask(ctx context.Context, agentID, taskID pgtype.UUID) []AgentSkillData {
+	return s.loadAgentSkills(ctx, agentID, taskID, taskID)
+}
+
+// LoadAgentSkillsForInbox records inbox feedback under the event as a stable
+// execution identifier without violating feedback.task_id's task-queue foreign key.
+func (s *TaskService) LoadAgentSkillsForInbox(ctx context.Context, agentID, inboxEventID pgtype.UUID) []AgentSkillData {
+	return s.loadAgentSkills(ctx, agentID, pgtype.UUID{}, inboxEventID)
+}
+
+func (s *TaskService) loadAgentSkills(ctx context.Context, agentID, taskID, executionID pgtype.UUID) []AgentSkillData {
 	skills, err := s.Queries.ListAgentSkills(ctx, agentID)
 	if err != nil || len(skills) == 0 {
 		return nil
@@ -2317,20 +2327,14 @@ func (s *TaskService) LoadAgentSkillsForTask(ctx context.Context, agentID, taskI
 			data.Files = append(data.Files, AgentSkillFileData{Path: f.Path, Content: f.Content})
 		}
 		result = append(result, data)
-		if sk.SourceEvolutionUnitID.Valid {
-			versionID, err := s.Queries.GetSharedEvolutionUnitCurrentVersionID(ctx, db.GetSharedEvolutionUnitCurrentVersionIDParams{
-				WorkspaceID: sk.WorkspaceID,
-				UnitID:      sk.SourceEvolutionUnitID,
-			})
-			if err != nil || !versionID.Valid {
-				continue
-			}
+		if sk.SourceEvolutionUnitID.Valid && sk.SourceEvolutionUnitVersionID.Valid && executionID.Valid {
 			if err := s.Queries.RecordEvolutionSkillInjection(ctx, db.RecordEvolutionSkillInjectionParams{
 				WorkspaceID: sk.WorkspaceID,
 				AgentID:     agentID,
 				TaskID:      taskID,
 				UnitID:      sk.SourceEvolutionUnitID,
-				VersionID:   versionID,
+				VersionID:   sk.SourceEvolutionUnitVersionID,
+				ExecutionID: executionID,
 			}); err != nil {
 				slog.Warn("record evolution skill injection failed", "task_id", util.UUIDToString(taskID), "unit_id", util.UUIDToString(sk.SourceEvolutionUnitID), "error", err)
 			}
@@ -2340,10 +2344,19 @@ func (s *TaskService) LoadAgentSkillsForTask(ctx context.Context, agentID, taskI
 }
 
 func (s *TaskService) recordEvolutionSkillOutcome(ctx context.Context, taskID pgtype.UUID, event, outcome string) {
-	if err := s.Queries.RecordTaskEvolutionSkillOutcome(ctx, db.RecordTaskEvolutionSkillOutcomeParams{
-		Event: event, Outcome: outcome, TaskID: taskID,
+	s.RecordEvolutionSkillOutcome(ctx, taskID, event, outcome)
+}
+
+// RecordEvolutionSkillOutcome attributes an execution result to every
+// evolution-backed skill version captured when that execution was dispatched.
+func (s *TaskService) RecordEvolutionSkillOutcome(ctx context.Context, executionID pgtype.UUID, event, outcome string) {
+	if !executionID.Valid {
+		return
+	}
+	if err := s.Queries.RecordEvolutionSkillOutcome(ctx, db.RecordEvolutionSkillOutcomeParams{
+		Event: event, Outcome: outcome, ExecutionID: executionID,
 	}); err != nil {
-		slog.Warn("record evolution skill outcome failed", "task_id", util.UUIDToString(taskID), "event", event, "error", err)
+		slog.Warn("record evolution skill outcome failed", "execution_id", util.UUIDToString(executionID), "event", event, "error", err)
 	}
 }
 

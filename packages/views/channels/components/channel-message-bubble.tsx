@@ -38,10 +38,8 @@ import {
 import { MessageBody } from "./message-body";
 import { MessageQuoteCard } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
-import {
-  parseMemberSystemEvent,
-  MemberSystemEventContent,
-} from "./channel-system-event";
+import { parseMemberSystemEvent } from "./channel-system-event";
+import { MemberSystemEventContent } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import { SELF_MENTION_ROW_CLASS } from "../../common/mention-token";
 

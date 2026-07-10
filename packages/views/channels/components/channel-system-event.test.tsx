@@ -2,7 +2,8 @@ import type { ReactNode } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
-import { parseMemberSystemEvent, MemberSystemEventContent } from "./channel-system-event";
+import { parseMemberSystemEvent } from "./channel-system-event";
+import { MemberSystemEventContent } from "./channel-system-event-content";
 
 const mockAgents = [{ id: "agent-9", handle: "nova" }];
 const mockMembers = [

@@ -85,7 +85,7 @@ type channelMemberSystemEventActorRef struct {
 }
 
 func (h *Handler) channelMemberSystemEventActorRef(ctx context.Context, workspaceID, memberType string, memberID pgtype.UUID) channelMemberSystemEventActorRef {
-	ref := channelMemberSystemEventActorRef{Type: memberType}
+	ref := channelMemberSystemEventActorRef{Type: channelMemberSystemEventPublicType(memberType)}
 	var err error
 	switch memberType {
 	case "agent":
@@ -95,7 +95,6 @@ func (h *Handler) channelMemberSystemEventActorRef(ctx context.Context, workspac
 			FROM agent
 			WHERE workspace_id = $1 AND id = $2`, parseUUID(workspaceID), memberID).Scan(&ref.Handle, &ref.DisplayName)
 	default:
-		ref.Type = "user"
 		err = h.DB.QueryRow(ctx, `
 			SELECT COALESCE(NULLIF(u.name, ''), NULLIF(u.email, ''), 'user'),
 			       COALESCE(NULLIF(u.display_name, ''), NULLIF(u.name, ''), NULLIF(u.email, ''), 'User')
@@ -113,6 +112,13 @@ func (h *Handler) channelMemberSystemEventActorRef(ctx context.Context, workspac
 		ref.DisplayName = "User"
 	}
 	return ref
+}
+
+func channelMemberSystemEventPublicType(memberType string) string {
+	if memberType == "agent" {
+		return "agent"
+	}
+	return "human"
 }
 
 func channelMemberSystemEventCanonicalContent(event, actorName, targetName string) string {

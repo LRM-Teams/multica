@@ -4188,7 +4188,7 @@ func TestAddChannelMemberEmitsSystemEventOnce(t *testing.T) {
 	}
 
 	event := latestChannelSystemEventForTest(t, channelID)
-	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, "user", targetID, "user")
+	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, "human", targetID, "human")
 
 	req = newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/members", AddChannelMemberRequest{MemberType: "user", MemberID: targetID})
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
@@ -4227,7 +4227,7 @@ func TestAddChannelMembersBatchEmitsOnlyInsertedSystemEvents(t *testing.T) {
 		t.Fatalf("batch system message count = %d, want only inserted member event", got)
 	}
 	event := latestChannelSystemEventForTest(t, channelID)
-	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, "user", newID, "user")
+	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, "human", newID, "human")
 }
 
 func TestAddChannelMemberSystemEventIncludesAgentTargetRef(t *testing.T) {
@@ -4248,7 +4248,7 @@ func TestAddChannelMemberSystemEventIncludesAgentTargetRef(t *testing.T) {
 	}
 
 	event := latestChannelSystemEventForTest(t, channelID)
-	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, "user", agentID, "agent")
+	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, "human", agentID, "agent")
 }
 
 func TestRemoveChannelMemberEmitsRemovedSystemEventForRemainingMembers(t *testing.T) {
@@ -4269,7 +4269,7 @@ func TestRemoveChannelMemberEmitsRemovedSystemEventForRemainingMembers(t *testin
 	}
 
 	event := latestChannelSystemEventForTest(t, channelID)
-	assertChannelMemberSystemEvent(t, event, channelMemberRemovedEvent, testUserID, "user", targetID, "user")
+	assertChannelMemberSystemEvent(t, event, channelMemberRemovedEvent, testUserID, "human", targetID, "human")
 
 	listReq := newRequestAs(targetID, http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
 	listReq = withChannelTestWorkspaceCtx(t, listReq, targetID)
@@ -4299,7 +4299,7 @@ func TestRemoveChannelMemberEmitsLeftSystemEventForSelfRemove(t *testing.T) {
 	}
 
 	event := latestChannelSystemEventForTest(t, channelID)
-	assertChannelMemberSystemEvent(t, event, channelMemberLeftEvent, memberID, "user", memberID, "user")
+	assertChannelMemberSystemEvent(t, event, channelMemberLeftEvent, memberID, "human", memberID, "human")
 }
 
 func TestChannelMemberSystemMessageDoesNotCountAsUnread(t *testing.T) {

@@ -28,18 +28,26 @@ vi.mock("../../../i18n", () => ({
 
 const USER: ActivityEvent = {
   id: "u1",
+  agent_id: "agent-1",
   occurred_at: "2026-07-06T09:36:05Z",
+  kind: "tool_call",
+  event_type: "tool_call",
   visibility: "user_facing",
   label: "Ran a command",
   subtext: "Built the project.",
   tone: "action",
+  target_ref: { kind: "agent", id: "agent-1" },
 };
 const DIAG: ActivityEvent = {
   id: "d1",
+  agent_id: "agent-1",
   occurred_at: "2026-07-06T09:36:10Z",
+  kind: "blocked",
+  event_type: "blocked",
   visibility: "diagnostic_only",
   label: "Send held by freshness check",
   tone: "muted",
+  target_ref: { kind: "agent", id: "agent-1" },
 };
 
 describe("ActivityTimeline", () => {

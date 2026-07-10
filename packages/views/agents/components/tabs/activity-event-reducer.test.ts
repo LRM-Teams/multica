@@ -3,7 +3,17 @@ import type { ActivityEvent } from "./activity-event";
 import { projectLatestActivity, upsertActivityEvents } from "./activity-event-reducer";
 
 function evt(id: string, occurred_at: string, label = id): ActivityEvent {
-  return { id, occurred_at, visibility: "user_facing", label, tone: "action" };
+  return {
+    id,
+    occurred_at,
+    label,
+    agent_id: "agent-1",
+    kind: "text",
+    event_type: "text",
+    visibility: "user_facing",
+    tone: "action",
+    target_ref: { kind: "agent", id: "agent-1" },
+  };
 }
 
 describe("upsertActivityEvents", () => {

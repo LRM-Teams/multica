@@ -1,4 +1,11 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  agentActivityEventsKeys,
+  agentActivityEventsOptions,
+} from "@multica/core/agents";
+import { useWSEvent } from "@multica/core/realtime";
+import type { AgentActivityEventRealtimePayload } from "@multica/core/types";
 import type { ActivityEvent } from "./activity-event";
 import { projectLatestActivity, upsertActivityEvents } from "./activity-event-reducer";
 
@@ -7,30 +14,53 @@ import { projectLatestActivity, upsertActivityEvents } from "./activity-event-re
  * consumer). Per the #267 contract the BE aggregates server-side and hands each
  * event already tagged (`label`/`subtext`/`tone`/`visibility`) with a stable id
  * — the FE never derives those from raw text (the P1-8 heuristic trap), it only
- * **upserts by id** and reads latest-state.
+ * reads REST first-paint, **upserts live WS events by id**, and projects
+ * latest-state.
  *
  * Both consumers eat this ONE hook's output — no per-surface reducer drift:
  *  - `events` → the #421 Activity timeline (full stream; it derives the directed
  *    3-state block itself from raw kind/inbox/wake facts).
  *  - `latest` → the DM/panel header activity word + hover card (latest-state).
- *
- * The BE query + WS subscription (signature pending Barry's #302 schema) aren't
- * wired yet, so `raw` is empty for now: the tab renders the timeline's empty
- * state and lights up the moment #302 lands. When it does, `raw` becomes the
- * REST first-paint aggregate and live WS pushes feed `upsertActivityEvents`
- * (by-id upsert) — the reducer/projection below and every consumer stay
- * unchanged.
  */
-export function useAgentActivityEvents(_agentId: string): {
+export function useAgentActivityEvents(agentId: string): {
   events: ActivityEvent[];
   latest: ActivityEvent | null;
   isLoading: boolean;
 } {
-  // TODO(#302): replace `raw` with useQuery(agentActivityEventsOptions(agentId))
-  // for REST first-paint + a WS subscription that calls upsertActivityEvents on
-  // each pushed event, once Barry's #302 endpoint lands.
-  const raw = useMemo<ActivityEvent[]>(() => [], []);
-  const events = useMemo(() => upsertActivityEvents([], raw), [raw]);
+  const queryClient = useQueryClient();
+  const { data = [], isLoading } = useQuery({
+    ...agentActivityEventsOptions(agentId),
+    enabled: !!agentId,
+  });
+
+  // Live updates: the BE pushes the full hydrated event under a stable id
+  // (`agent_activity:event`), so upsert it straight into the query cache by id —
+  // no refetch round-trip; a WS push for a known id simply replaces its row
+  // (e.g. a `thinking` aggregate that grew). Only the degraded, `event`-less
+  // push (id only) invalidates for a reload.
+  const onActivityEvent = useCallback(
+    (payload: unknown) => {
+      const p = payload as AgentActivityEventRealtimePayload;
+      if (!agentId || p.agent_id !== agentId) return;
+      if (p.event) {
+        const event = p.event;
+        queryClient.setQueryData<ActivityEvent[]>(
+          agentActivityEventsKeys.all(agentId),
+          (prev = []) => upsertActivityEvents(prev, event),
+        );
+      } else {
+        queryClient.invalidateQueries({
+          queryKey: agentActivityEventsKeys.all(agentId),
+        });
+      }
+    },
+    [agentId, queryClient],
+  );
+  useWSEvent("agent_activity:event", onActivityEvent);
+
+  // Normalize order defensively (REST is already ordered; this also dedupes if a
+  // WS event raced the first paint).
+  const events = useMemo(() => upsertActivityEvents([], data), [data]);
   const latest = useMemo(() => projectLatestActivity(events), [events]);
-  return { events, latest, isLoading: false };
+  return { events, latest, isLoading };
 }

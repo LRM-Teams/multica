@@ -30,11 +30,12 @@ func seedEvolutionReviewSubmissionWithMetadata(t *testing.T, status string, meta
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO evolution_unit_submission (
 			workspace_id, source_agent_id, unit_type, local_unit_id, title, summary,
-			content, content_hash, sensitivity, confidence, status, review_decision,
+			content, content_hash, sensitivity, confidence, evidence, applies, status, review_decision,
 			review_risk_level, review_reason, review_metadata, reviewed_at
 		) VALUES (
 			$1, $2, 'memory', $3, 'Targeted Go tests', 'Run narrow tests before broader checks.',
-			$4, $5, 'none', 'high', $6, 'needs_review', 'medium', 'seeded for review', $7::jsonb, now()
+			$4, $5, 'none', 'high', '{"task_ids":["task-1"]}'::jsonb, '{"languages":["go"]}'::jsonb,
+			$6, 'needs_review', 'medium', 'seeded for review', $7::jsonb, now()
 		)
 		RETURNING id`, testWorkspaceID, agentID, localID, content, hashEvolutionContent(content), status, string(reviewMetadata)).Scan(&submissionID); err != nil {
 		t.Fatalf("seed evolution submission: %v", err)
@@ -89,7 +90,7 @@ func TestEvolutionReviewAPIListAndGet(t *testing.T) {
 	if err := json.Unmarshal(getRec.Body.Bytes(), &detail); err != nil {
 		t.Fatalf("decode detail: %v", err)
 	}
-	if detail.ID != submissionID || len(detail.Files) != 1 || detail.Files[0].Path != "README.md" {
+	if detail.ID != submissionID || len(detail.Files) != 1 || detail.Files[0].Path != "README.md" || detail.Evidence["task_ids"] == nil || detail.Applies["languages"] == nil {
 		t.Fatalf("detail = %#v", detail)
 	}
 }

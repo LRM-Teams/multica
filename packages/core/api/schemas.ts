@@ -233,6 +233,12 @@ const EvolutionReviewFileSchema = z.object({
   created_at: z.string().nullable().optional(),
 }).loose();
 
+const EvolutionMaterializedSkillSchema = z.object({
+  id: z.string(),
+  name: z.string().default(""),
+  description: z.string().default(""),
+}).loose();
+
 export const EvolutionReviewSubmissionSchema = z.object({
   id: z.string(),
   workspace_id: z.string().default(""),
@@ -249,6 +255,8 @@ export const EvolutionReviewSubmissionSchema = z.object({
   sensitivity: z.string().default(""),
   confidence: z.string().default(""),
   suggested_scope: z.string().default(""),
+  evidence: z.record(z.string(), z.unknown()).default({}),
+  applies: z.record(z.string(), z.unknown()).default({}),
   tags: z.array(z.string()).default([]),
   tools: z.array(z.string()).default([]),
   task_types: z.array(z.string()).default([]),
@@ -264,6 +272,7 @@ export const EvolutionReviewSubmissionSchema = z.object({
   review_metadata: z.record(z.string(), z.unknown()).default({}),
   reviewed_at: z.string().nullable().optional(),
   promoted_unit_id: z.string().nullable().optional(),
+  materialized_skill: EvolutionMaterializedSkillSchema.optional(),
   source_created_at: z.string().nullable().optional(),
   created_at: z.string().nullable().optional(),
   updated_at: z.string().nullable().optional(),

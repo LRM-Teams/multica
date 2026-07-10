@@ -10,6 +10,7 @@ import {
   FileText,
   PackageCheck,
   RefreshCw,
+  RotateCcw,
   ShieldAlert,
   XCircle,
 } from "lucide-react";
@@ -27,11 +28,13 @@ import {
 } from "@multica/ui/components/ui/select";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { api } from "@multica/core/api";
+import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { paths, useCurrentWorkspace } from "@multica/core/paths";
-import { agentListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions, memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import {
   evolutionKeys,
+  evolutionMetricsOptions,
   evolutionReviewSubmissionDetailOptions,
   evolutionReviewSubmissionListOptions,
 } from "@multica/core/evolution";
@@ -67,6 +70,8 @@ export function EvolutionReviewSection() {
 
   const query = useQuery(evolutionReviewSubmissionListOptions(wsId, status));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: metrics } = useQuery(evolutionMetricsOptions(wsId));
   const submissions = useMemo(() => query.data ?? [], [query.data]);
   const selectedSummary = useMemo(
     () => submissions.find((item) => item.id === selectedId) ?? submissions[0] ?? null,
@@ -101,6 +106,23 @@ export function EvolutionReviewSection() {
     onError: (e) => toast.error(e instanceof Error ? e.message : t(($) => $.evolution_review.toast_failed)),
   });
 
+  const toggleSkill = useMutation({
+    mutationFn: async ({ agentId, skillId, enabled }: { agentId: string; skillId: string; enabled: boolean }) => {
+      if (!canManageReview) throw new Error(t(($) => $.evolution_review.insufficient_permissions));
+      const agent = agents.find((item) => item.id === agentId);
+      if (!agent) throw new Error(t(($) => $.evolution_review.source_agent_missing));
+      const nextIds = enabled
+        ? Array.from(new Set([...agent.skills.map((skill) => skill.id), skillId]))
+        : agent.skills.filter((skill) => skill.id !== skillId).map((skill) => skill.id);
+      await api.setAgentSkills(agentId, { skill_ids: nextIds });
+    },
+    onSuccess: async () => {
+      toast.success(t(($) => $.evolution_review.skill_assignment_updated));
+      await qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : t(($) => $.evolution_review.toast_failed)),
+  });
+
   const reject = useMutation({
     mutationFn: (submissionId: string) =>
       api.rejectEvolutionReviewSubmission(submissionId, { reason }),
@@ -112,7 +134,10 @@ export function EvolutionReviewSection() {
     onError: (e) => toast.error(e instanceof Error ? e.message : t(($) => $.evolution_review.toast_failed)),
   });
 
-  const canDecide = selected?.status === "needs_review";
+  const currentUserId = useAuthStore((state) => state.user?.id ?? null);
+  const currentRole = members.find((member) => member.user_id === currentUserId)?.role;
+  const canManageReview = currentRole === "owner" || currentRole === "admin";
+  const canDecide = canManageReview && selected?.status === "needs_review";
   const deciding = promote.isPending || reject.isPending;
 
   return (
@@ -192,7 +217,26 @@ export function EvolutionReviewSection() {
 
                 <ReviewAuditSummary submission={selected} />
 
-                <DeliveryPreview submission={selected} sourceAgentName={sourceAgent?.name} workspaceSlug={workspaceSlug} />
+                <CandidateEvidence submission={selected} />
+
+                <ReuseFeedback
+                  metric={metrics?.unit_metrics.find((item) =>
+                    item.unit_id === selected.promoted_unit_id ||
+                    (item.local_unit_id === selected.local_unit_id && item.unit_type === selected.unit_type),
+                  )}
+                />
+
+                <DeliveryPreview
+                  submission={selected}
+                  sourceAgent={sourceAgent}
+                  workspaceSlug={workspaceSlug}
+                  assignmentPending={toggleSkill.isPending || !canManageReview}
+                  onToggleSkill={(enabled) => {
+                    if (sourceAgent && selected.materialized_skill) {
+                      toggleSkill.mutate({ agentId: sourceAgent.id, skillId: selected.materialized_skill.id, enabled });
+                    }
+                  }}
+                />
 
                 <section className="space-y-2">
                   <h4 className="text-sm font-medium">{t(($) => $.evolution_review.review_reason)}</h4>
@@ -354,6 +398,10 @@ function ReviewAuditSummary({ submission }: { submission: EvolutionReviewSubmiss
       t(($) => $.evolution_review.metadata_session),
       nestedReviewString(metadata, ["metadata", "session_id"]) ?? reviewString(metadata, "session_id"),
     ],
+    [
+      t(($) => $.evolution_review.metadata_prompt_version),
+      nestedReviewString(metadata, ["metadata", "prompt_version"]) ?? reviewString(metadata, "prompt_version"),
+    ],
     [t(($) => $.evolution_review.metadata_rationale), reviewString(metadata, "rationale")],
     [t(($) => $.evolution_review.metadata_risks), reviewStringList(metadata["risks"])],
   ];
@@ -375,14 +423,71 @@ function ReviewAuditSummary({ submission }: { submission: EvolutionReviewSubmiss
   );
 }
 
+function CandidateEvidence({ submission }: { submission: EvolutionReviewSubmission }) {
+  const { t } = useT("skills");
+  const evidenceEntries = Object.entries(submission.evidence ?? {});
+  const draft = submission.unit_type === "skill" ? submission.files?.find((file) => file.path === "SKILL.md") : null;
+  if (evidenceEntries.length === 0 && !draft) return null;
+
+  return (
+    <section className="space-y-3 rounded-lg border bg-muted/20 p-3">
+      <h4 className="text-sm font-medium">{t(($) => $.evolution_review.candidate_evidence)}</h4>
+      {evidenceEntries.length > 0 && (
+        <dl className="space-y-2 text-xs">
+          {evidenceEntries.map(([key, value]) => (
+            <div key={key} className="grid gap-1 sm:grid-cols-[8rem_minmax(0,1fr)]">
+              <dt className="text-muted-foreground">{key}</dt>
+              <dd className="break-words font-medium">{formatEvidenceValue(value)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {draft && (
+        <details>
+          <summary className="cursor-pointer text-sm font-medium">{t(($) => $.evolution_review.skill_draft)}</summary>
+          <pre className="mt-3 max-h-64 overflow-auto rounded-md bg-background p-3 text-xs whitespace-pre-wrap">
+            {draft.content || t(($) => $.evolution_review.no_content)}
+          </pre>
+        </details>
+      )}
+    </section>
+  );
+}
+
+function ReuseFeedback({
+  metric,
+}: {
+  metric: { used_count: number; success_count: number; failure_count: number; ignored_count: number; conflict_count: number; success_rate: number } | undefined;
+}) {
+  const { t } = useT("skills");
+  if (!metric) return null;
+  return (
+    <section className="space-y-2 rounded-lg border bg-muted/20 p-3">
+      <h4 className="text-sm font-medium">{t(($) => $.evolution_review.reuse_feedback)}</h4>
+      <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
+        <ReviewFact label={t(($) => $.evolution_review.reuse_used)} value={String(metric.used_count)} />
+        <ReviewFact label={t(($) => $.evolution_review.reuse_success_rate)} value={formatConfidence(metric.success_rate)} />
+        <ReviewFact label={t(($) => $.evolution_review.reuse_success)} value={String(metric.success_count)} />
+        <ReviewFact label={t(($) => $.evolution_review.reuse_failure)} value={String(metric.failure_count)} />
+        <ReviewFact label={t(($) => $.evolution_review.reuse_ignored)} value={String(metric.ignored_count)} />
+        <ReviewFact label={t(($) => $.evolution_review.reuse_conflicts)} value={String(metric.conflict_count)} />
+      </dl>
+    </section>
+  );
+}
+
 function DeliveryPreview({
   submission,
-  sourceAgentName,
+  sourceAgent,
   workspaceSlug,
+  assignmentPending,
+  onToggleSkill,
 }: {
   submission: EvolutionReviewSubmission;
-  sourceAgentName?: string;
+  sourceAgent: { id: string; name: string; skills: Array<{ id: string }> } | null;
   workspaceSlug: string;
+  assignmentPending: boolean;
+  onToggleSkill: (enabled: boolean) => void;
 }) {
   const { t } = useT("skills");
   const outcomeType =
@@ -392,7 +497,9 @@ function DeliveryPreview({
         ? t(($) => $.evolution_review.promotion_outcomes.memory)
         : t(($) => $.evolution_review.unknown);
   const promoted = Boolean(submission.promoted_unit_id);
-  const agentLabel = sourceAgentName ?? shortId(submission.source_agent_id) ?? t(($) => $.evolution_review.unknown);
+  const agentLabel = sourceAgent?.name ?? shortId(submission.source_agent_id) ?? t(($) => $.evolution_review.unknown);
+  const materializedSkill = submission.materialized_skill;
+  const skillEnabled = Boolean(materializedSkill && sourceAgent?.skills.some((skill) => skill.id === materializedSkill.id));
   const agentHref = workspaceSlug && submission.source_agent_id
     ? `${paths.workspace(workspaceSlug).agentDetail(submission.source_agent_id)}?tab=${submission.unit_type === "skill" ? "skills" : "memory"}`
     : "";
@@ -419,6 +526,23 @@ function DeliveryPreview({
           <span className="font-medium text-foreground">{agentLabel}</span>
         )}
       </div>
+      {materializedSkill && (
+        <div className="flex flex-col gap-2 rounded-lg border bg-background p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium">{materializedSkill.name}</p>
+            <p className="truncate text-xs text-muted-foreground">{materializedSkill.description}</p>
+          </div>
+          <Button
+            variant={skillEnabled ? "outline" : "default"}
+            size="sm"
+            disabled={!sourceAgent || assignmentPending}
+            onClick={() => onToggleSkill(!skillEnabled)}
+          >
+            {skillEnabled ? <RotateCcw className="h-4 w-4" /> : <PackageCheck className="h-4 w-4" />}
+            {skillEnabled ? t(($) => $.evolution_review.disable_for_source) : t(($) => $.evolution_review.enable_for_source)}
+          </Button>
+        </div>
+      )}
       {promoted && (
         <p className="inline-flex items-center gap-2 text-xs text-muted-foreground">
           <PackageCheck className="h-3.5 w-3.5" />
@@ -605,6 +729,16 @@ function reviewStringList(value: unknown): string | null {
     (item): item is string => typeof item === "string" && item.trim().length > 0,
   );
   return items.length > 0 ? items.join(", ") : null;
+}
+
+function formatEvidenceValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function formatMetadata(metadata: Record<string, unknown>): string {

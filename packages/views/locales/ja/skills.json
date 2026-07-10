@@ -409,6 +409,21 @@
     "review_metadata": "生のレビューメタデータ",
     "apply_suggestions": "レビュー提案を適用",
     "apply_suggestions_hint": "昇格時にレビューアー提案のタイトル、サマリー、タグ、タスクタイプ、スコープを使います。",
-    "no_suggestions_hint": "このレビューには正規化提案がありません。"
+    "no_suggestions_hint": "このレビューには正規化提案がありません。",
+    "metadata_prompt_version": "プロンプトバージョン",
+    "candidate_evidence": "候補の根拠",
+    "skill_draft": "生成された Skill ドラフト",
+    "source_agent_missing": "ソースエージェントを利用できません",
+    "skill_assignment_updated": "Skill の割り当てを更新しました",
+    "disable_for_source": "ソースエージェントで無効化",
+    "enable_for_source": "ソースエージェントで有効化",
+    "reuse_feedback": "再利用フィードバック",
+    "reuse_used": "使用回数",
+    "reuse_success_rate": "成功率",
+    "reuse_success": "成功",
+    "reuse_failure": "失敗",
+    "reuse_ignored": "無視",
+    "reuse_conflicts": "競合",
+    "insufficient_permissions": "この操作にはワークスペース管理者権限が必要です。"
   }
 }

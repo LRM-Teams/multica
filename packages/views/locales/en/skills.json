@@ -412,6 +412,21 @@
     "review_metadata": "Raw review metadata",
     "apply_suggestions": "Apply reviewer suggestions",
     "apply_suggestions_hint": "Use reviewer title, summary, tags, task types, and scope when promoting.",
-    "no_suggestions_hint": "This review did not include normalization suggestions."
+    "no_suggestions_hint": "This review did not include normalization suggestions.",
+    "metadata_prompt_version": "Prompt version",
+    "candidate_evidence": "Candidate evidence",
+    "skill_draft": "Generated skill draft",
+    "source_agent_missing": "Source agent is unavailable",
+    "skill_assignment_updated": "Skill assignment updated",
+    "disable_for_source": "Disable for source agent",
+    "enable_for_source": "Enable for source agent",
+    "reuse_feedback": "Reuse feedback",
+    "reuse_used": "Uses",
+    "reuse_success_rate": "Success rate",
+    "reuse_success": "Success",
+    "reuse_failure": "Failure",
+    "reuse_ignored": "Ignored",
+    "reuse_conflicts": "Conflicts",
+    "insufficient_permissions": "You need workspace admin permission for this action."
   }
 }

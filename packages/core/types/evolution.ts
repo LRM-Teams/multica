@@ -29,6 +29,12 @@ export interface EvolutionReviewFile {
   created_at?: string | null;
 }
 
+export interface EvolutionMaterializedSkill {
+  id: string;
+  name: string;
+  description: string;
+}
+
 export interface EvolutionReviewSubmission {
   id: string;
   workspace_id: string;
@@ -45,6 +51,8 @@ export interface EvolutionReviewSubmission {
   sensitivity: string;
   confidence: string;
   suggested_scope: string;
+  evidence: Record<string, unknown>;
+  applies: Record<string, unknown>;
   tags: string[];
   tools: string[];
   task_types: string[];
@@ -60,6 +68,7 @@ export interface EvolutionReviewSubmission {
   review_metadata: Record<string, unknown>;
   reviewed_at?: string | null;
   promoted_unit_id?: string | null;
+  materialized_skill?: EvolutionMaterializedSkill;
   source_created_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;

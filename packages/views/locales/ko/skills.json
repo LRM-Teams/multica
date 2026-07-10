@@ -412,6 +412,21 @@
     "review_metadata": "원본 리뷰 metadata",
     "apply_suggestions": "리뷰어 제안 적용",
     "apply_suggestions_hint": "승격할 때 리뷰어가 제안한 제목, 요약, 태그, task 유형, 범위를 사용합니다.",
-    "no_suggestions_hint": "이 리뷰에는 정규화 제안이 없습니다."
+    "no_suggestions_hint": "이 리뷰에는 정규화 제안이 없습니다.",
+    "metadata_prompt_version": "프롬프트 버전",
+    "candidate_evidence": "후보 근거",
+    "skill_draft": "생성된 Skill 초안",
+    "source_agent_missing": "소스 에이전트를 사용할 수 없습니다",
+    "skill_assignment_updated": "Skill 할당이 업데이트되었습니다",
+    "disable_for_source": "소스 에이전트에서 비활성화",
+    "enable_for_source": "소스 에이전트에서 활성화",
+    "reuse_feedback": "재사용 피드백",
+    "reuse_used": "사용 횟수",
+    "reuse_success_rate": "성공률",
+    "reuse_success": "성공",
+    "reuse_failure": "실패",
+    "reuse_ignored": "무시",
+    "reuse_conflicts": "충돌",
+    "insufficient_permissions": "이 작업에는 워크스페이스 관리자 권한이 필요합니다."
   }
 }

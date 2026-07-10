@@ -412,6 +412,21 @@
     "review_metadata": "原始审核 metadata",
     "apply_suggestions": "应用审核建议",
     "apply_suggestions_hint": "晋升时使用审核建议的标题、摘要、标签、task 类型和范围。",
-    "no_suggestions_hint": "这次审核没有归一化建议。"
+    "no_suggestions_hint": "这次审核没有归一化建议。",
+    "metadata_prompt_version": "Prompt 版本",
+    "candidate_evidence": "候选证据",
+    "skill_draft": "生成的 Skill 草案",
+    "source_agent_missing": "来源智能体不可用",
+    "skill_assignment_updated": "Skill 启停状态已更新",
+    "disable_for_source": "对来源智能体停用",
+    "enable_for_source": "对来源智能体启用",
+    "reuse_feedback": "复用反馈",
+    "reuse_used": "使用次数",
+    "reuse_success_rate": "成功率",
+    "reuse_success": "成功",
+    "reuse_failure": "失败",
+    "reuse_ignored": "忽略",
+    "reuse_conflicts": "冲突",
+    "insufficient_permissions": "此操作需要工作区管理员权限。"
   }
 }

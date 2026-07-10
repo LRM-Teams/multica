@@ -16,40 +16,49 @@ import (
 )
 
 type EvolutionReviewSubmissionResponse struct {
-	ID               string                        `json:"id"`
-	WorkspaceID      string                        `json:"workspace_id"`
-	SourceAgentID    string                        `json:"source_agent_id"`
-	SourceMemberID   string                        `json:"source_member_id,omitempty"`
-	UnitType         string                        `json:"unit_type"`
-	LocalUnitID      string                        `json:"local_unit_id"`
-	Title            string                        `json:"title"`
-	Summary          string                        `json:"summary"`
-	Content          string                        `json:"content,omitempty"`
-	ContentHash      string                        `json:"content_hash"`
-	BundleHash       string                        `json:"bundle_hash"`
-	BundleRef        string                        `json:"bundle_ref"`
-	Sensitivity      string                        `json:"sensitivity"`
-	Confidence       string                        `json:"confidence"`
-	SuggestedScope   string                        `json:"suggested_scope"`
-	Tags             []string                      `json:"tags"`
-	Tools            []string                      `json:"tools"`
-	TaskTypes        []string                      `json:"task_types"`
-	ProjectTypes     []string                      `json:"project_types"`
-	Languages        []string                      `json:"languages"`
-	Frameworks       []string                      `json:"frameworks"`
-	Status           string                        `json:"status"`
-	RejectReason     string                        `json:"reject_reason"`
-	ReviewDecision   string                        `json:"review_decision"`
-	ReviewConfidence *float64                      `json:"review_confidence,omitempty"`
-	ReviewRiskLevel  string                        `json:"review_risk_level"`
-	ReviewReason     string                        `json:"review_reason"`
-	ReviewMetadata   map[string]any                `json:"review_metadata"`
-	ReviewedAt       *string                       `json:"reviewed_at,omitempty"`
-	PromotedUnitID   *string                       `json:"promoted_unit_id,omitempty"`
-	SourceCreatedAt  *string                       `json:"source_created_at,omitempty"`
-	CreatedAt        *string                       `json:"created_at,omitempty"`
-	UpdatedAt        *string                       `json:"updated_at,omitempty"`
-	Files            []EvolutionReviewFileResponse `json:"files,omitempty"`
+	ID                string                              `json:"id"`
+	WorkspaceID       string                              `json:"workspace_id"`
+	SourceAgentID     string                              `json:"source_agent_id"`
+	SourceMemberID    string                              `json:"source_member_id,omitempty"`
+	UnitType          string                              `json:"unit_type"`
+	LocalUnitID       string                              `json:"local_unit_id"`
+	Title             string                              `json:"title"`
+	Summary           string                              `json:"summary"`
+	Content           string                              `json:"content,omitempty"`
+	ContentHash       string                              `json:"content_hash"`
+	BundleHash        string                              `json:"bundle_hash"`
+	BundleRef         string                              `json:"bundle_ref"`
+	Sensitivity       string                              `json:"sensitivity"`
+	Confidence        string                              `json:"confidence"`
+	SuggestedScope    string                              `json:"suggested_scope"`
+	Evidence          map[string]any                      `json:"evidence"`
+	Applies           map[string]any                      `json:"applies"`
+	Tags              []string                            `json:"tags"`
+	Tools             []string                            `json:"tools"`
+	TaskTypes         []string                            `json:"task_types"`
+	ProjectTypes      []string                            `json:"project_types"`
+	Languages         []string                            `json:"languages"`
+	Frameworks        []string                            `json:"frameworks"`
+	Status            string                              `json:"status"`
+	RejectReason      string                              `json:"reject_reason"`
+	ReviewDecision    string                              `json:"review_decision"`
+	ReviewConfidence  *float64                            `json:"review_confidence,omitempty"`
+	ReviewRiskLevel   string                              `json:"review_risk_level"`
+	ReviewReason      string                              `json:"review_reason"`
+	ReviewMetadata    map[string]any                      `json:"review_metadata"`
+	ReviewedAt        *string                             `json:"reviewed_at,omitempty"`
+	PromotedUnitID    *string                             `json:"promoted_unit_id,omitempty"`
+	MaterializedSkill *EvolutionMaterializedSkillResponse `json:"materialized_skill,omitempty"`
+	SourceCreatedAt   *string                             `json:"source_created_at,omitempty"`
+	CreatedAt         *string                             `json:"created_at,omitempty"`
+	UpdatedAt         *string                             `json:"updated_at,omitempty"`
+	Files             []EvolutionReviewFileResponse       `json:"files,omitempty"`
+}
+
+type EvolutionMaterializedSkillResponse struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 type EvolutionReviewFileResponse struct {
@@ -119,7 +128,25 @@ func (h *Handler) GetEvolutionReviewSubmission(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, "failed to list evolution submission files")
 		return
 	}
-	writeJSON(w, http.StatusOK, evolutionReviewSubmissionResponse(submission, files))
+	resp := evolutionReviewSubmissionResponse(submission, files)
+	if submission.PromotedUnitID.Valid && submission.UnitType == "skill" {
+		skill, err := h.Queries.GetSkillBySourceEvolutionUnit(r.Context(), db.GetSkillBySourceEvolutionUnitParams{
+			WorkspaceID:           wsUUID,
+			SourceEvolutionUnitID: submission.PromotedUnitID,
+		})
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "failed to load materialized skill")
+			return
+		}
+		if err == nil {
+			resp.MaterializedSkill = &EvolutionMaterializedSkillResponse{
+				ID:          uuidToString(skill.ID),
+				Name:        skill.Name,
+				Description: skill.Description,
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) PromoteEvolutionReviewSubmission(w http.ResponseWriter, r *http.Request) {
@@ -217,10 +244,9 @@ func handleEvolutionReviewDecisionError(w http.ResponseWriter, err error) {
 }
 
 func evolutionReviewSubmissionResponse(submission db.EvolutionUnitSubmission, files []db.EvolutionUnitSubmissionFile) EvolutionReviewSubmissionResponse {
-	metadata := map[string]any{}
-	if len(submission.ReviewMetadata) > 0 {
-		_ = json.Unmarshal(submission.ReviewMetadata, &metadata)
-	}
+	metadata := jsonMap(submission.ReviewMetadata)
+	evidence := jsonMap(submission.Evidence)
+	applies := jsonMap(submission.Applies)
 	resp := EvolutionReviewSubmissionResponse{
 		ID:              uuidToString(submission.ID),
 		WorkspaceID:     uuidToString(submission.WorkspaceID),
@@ -237,6 +263,8 @@ func evolutionReviewSubmissionResponse(submission db.EvolutionUnitSubmission, fi
 		Sensitivity:     submission.Sensitivity,
 		Confidence:      submission.Confidence,
 		SuggestedScope:  submission.SuggestedScope,
+		Evidence:        evidence,
+		Applies:         applies,
 		Tags:            safeStringSlice(submission.Tags),
 		Tools:           safeStringSlice(submission.Tools),
 		TaskTypes:       safeStringSlice(submission.TaskTypes),
@@ -273,6 +301,14 @@ func evolutionReviewSubmissionResponse(submission db.EvolutionUnitSubmission, fi
 		}
 	}
 	return resp
+}
+
+func jsonMap(raw []byte) map[string]any {
+	value := map[string]any{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &value)
+	}
+	return value
 }
 
 func safeStringSlice(values []string) []string {

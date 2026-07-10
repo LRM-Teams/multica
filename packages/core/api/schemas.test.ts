@@ -257,7 +257,24 @@ describe("EvolutionReviewSubmissionListSchema drift", () => {
     const parsed = EvolutionReviewSubmissionListSchema.parse([base]);
     expect(parsed[0]?.tags).toEqual([]);
     expect(parsed[0]?.review_metadata).toEqual({});
+    expect(parsed[0]?.evidence).toEqual({});
+    expect(parsed[0]?.applies).toEqual({});
+    expect(parsed[0]?.materialized_skill).toBeUndefined();
     expect(parsed[0]?.files).toBeUndefined();
+  });
+
+  it("parses evidence and materialized skill details for the review UI", () => {
+    const parsed = EvolutionReviewSubmissionListSchema.parse([
+      {
+        ...base,
+        evidence: { task_ids: ["task-1"], rationale: "Repeated success" },
+        applies: { languages: ["go"] },
+        materialized_skill: { id: "skill-1", name: "targeted-tests" },
+      },
+    ]);
+    expect(parsed[0]?.evidence).toEqual({ task_ids: ["task-1"], rationale: "Repeated success" });
+    expect(parsed[0]?.applies).toEqual({ languages: ["go"] });
+    expect(parsed[0]?.materialized_skill).toEqual({ id: "skill-1", name: "targeted-tests", description: "" });
   });
 
   it("keeps unknown enum values as strings instead of failing the whole queue", () => {

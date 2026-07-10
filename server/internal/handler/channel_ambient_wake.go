@@ -163,7 +163,7 @@ func (h *Handler) buildChannelAmbientUnreadPromptWithDB(ctx context.Context, exe
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\n")
 	b.WriteString(channelContinuationInstruction)
-	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
+	b.WriteString("\nDo not @-mention anyone from this ambient observation unless the user explicitly asks everyone/all agents to greet or respond to a mentioned person; in that case, include the requested mention.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
 	fmt.Fprintf(&b, "Ambient cursor range: seq > %d and seq <= %d\n", cursorSeq, pendingToSeq)
 	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))
@@ -188,15 +188,19 @@ func (h *Handler) channelAmbientUnreadMessages(ctx context.Context, exec db.DBTX
 	}
 	rows, err := exec.Query(ctx, `
 		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
-		FROM channel_message
-		WHERE channel_id = $1
-		  AND workspace_id = $2
-		  AND thread_root_message_id IS NULL
-		  AND author_type <> 'system'
-		  AND seq > $3
-		  AND seq <= $4
-		ORDER BY seq ASC
-		LIMIT $5`, parseUUID(channelID), parseUUID(workspaceID), cursorSeq, pendingToSeq, limit)
+		FROM (
+		  SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+		  FROM channel_message
+		  WHERE channel_id = $1
+		    AND workspace_id = $2
+		    AND thread_root_message_id IS NULL
+		    AND author_type <> 'system'
+		    AND seq > $3
+		    AND seq <= $4
+		  ORDER BY seq DESC
+		  LIMIT $5
+		) recent
+		ORDER BY seq ASC`, parseUUID(channelID), parseUUID(workspaceID), cursorSeq, pendingToSeq, limit)
 	if err != nil {
 		return nil
 	}

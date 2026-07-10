@@ -3570,7 +3570,7 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\n")
 	b.WriteString(channelContinuationInstruction)
-	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
+	b.WriteString("\nDo not @-mention anyone from this ambient observation unless the user explicitly asks everyone/all agents to greet or respond to a mentioned person; in that case, include the requested mention.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
 	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))
 	if strings.TrimSpace(agent.Description) != "" {

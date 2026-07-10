@@ -162,6 +162,7 @@ func TestChannelAgentReplyThreadDefaultPolicy(t *testing.T) {
 		{name: "greeting with name", kind: group, content: "@Atlas hi Atlas", want: false},
 		{name: "light factual answer", kind: group, content: "@Atlas 现在是 3 点", want: false},
 		{name: "question", kind: group, content: "@Atlas 登录为什么失败？", want: true},
+		{name: "question after greeting prefix", kind: group, content: "@Atlas hi status ok?", want: true},
 		{name: "task", kind: group, content: "@Atlas 请修复登录问题", want: true},
 		{name: "explicit thread request", kind: group, content: "@Atlas 在线程里给个方案", want: true},
 		{name: "greeting plus task", kind: group, content: "@Atlas hi 请修复登录问题", want: true},
@@ -171,6 +172,28 @@ func TestChannelAgentReplyThreadDefaultPolicy(t *testing.T) {
 			trigger := ChannelMessageResponse{ID: messageID, Content: tc.content}
 			if got := shouldDefaultChannelAgentReplyToThread(tc.kind, trigger); got != tc.want {
 				t.Fatalf("shouldDefaultChannelAgentReplyToThread(%q, %q) = %v, want %v", tc.kind, tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestChannelAgentReplyThreadDefaultPolicyUsesStructuredContext(t *testing.T) {
+	group := "group"
+	messageID := "11111111-1111-1111-1111-111111111111"
+	relatedID := "22222222-2222-2222-2222-222222222222"
+	for _, tc := range []struct {
+		name    string
+		trigger ChannelMessageResponse
+	}{
+		{name: "attachment", trigger: ChannelMessageResponse{Attachments: []AttachmentResponse{{ID: relatedID}}}},
+		{name: "reply", trigger: ChannelMessageResponse{ReplyToMessageID: &relatedID}},
+		{name: "quote", trigger: ChannelMessageResponse{QuoteMessageID: &relatedID}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.trigger.ID = messageID
+			tc.trigger.Content = "@Atlas hi"
+			if !shouldDefaultChannelAgentReplyToThread(group, tc.trigger) {
+				t.Fatalf("structured %s context should default to a thread", tc.name)
 			}
 		})
 	}

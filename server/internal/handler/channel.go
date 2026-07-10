@@ -4090,6 +4090,9 @@ func shouldDefaultChannelAgentReplyToThread(channelKind string, trigger ChannelM
 	if channelKind != "group" || strings.TrimSpace(trigger.ID) == "" {
 		return false
 	}
+	if len(trigger.Attachments) > 0 || trigger.ReplyToMessageID != nil || trigger.QuoteMessageID != nil {
+		return true
+	}
 	text := channelMessageWithoutLeadingMentions(trigger.Content)
 	return !isChannelSocialBeat(text) && isChannelThreadWorthy(text)
 }
@@ -4100,7 +4103,8 @@ func channelMessageWithoutLeadingMentions(content string) string {
 	for len(fields) > 0 && strings.HasPrefix(fields[0], "@") {
 		fields = fields[1:]
 	}
-	return strings.Trim(strings.Join(fields, " "), " \t\r\n.,!?;:，。！？；：~～")
+	// Keep question marks for thread-worthiness detection; trim only separators.
+	return strings.Trim(strings.Join(fields, " "), " \t\r\n.,;:，。；：~～")
 }
 
 func isChannelSocialBeat(text string) bool {

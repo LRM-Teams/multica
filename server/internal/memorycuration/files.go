@@ -196,7 +196,7 @@ func fileContentWithoutTemplate(path string) (string, error) {
 	return strings.TrimSpace(strings.Join(out, "\n")), nil
 }
 
-func acquireAgentRootFileLock(root string, dryRun bool, now time.Time) (func(), error) {
+func AcquireAgentRootFileLock(root string, dryRun bool, now time.Time) (func(), error) {
 	if dryRun {
 		return func() {}, nil
 	}

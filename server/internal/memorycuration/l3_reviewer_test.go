@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
 )
@@ -207,6 +208,18 @@ func TestL3AuditUsesReasonCodeWithoutReviewerText(t *testing.T) {
 	auditPath := filepath.Join(agentRoot, "memory", "audit", "l3-2026-07-09.jsonl")
 	assertContains(t, auditPath, `"reason_code":"low_confidence"`)
 	assertNotContains(t, auditPath, "TOKEN_SHOULD_NOT_LEAK")
+}
+
+func TestAgentRootFileLockSerializesProcesses(t *testing.T) {
+	root := t.TempDir()
+	release, err := AcquireAgentRootFileLock(root, false, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, err := AcquireAgentRootFileLock(root, false, time.Now()); err == nil {
+		t.Fatal("second curator acquired the same agent root")
+	}
 }
 
 func TestCommitFileMutationsRollsBackEarlierWrites(t *testing.T) {

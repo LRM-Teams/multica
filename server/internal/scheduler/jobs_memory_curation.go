@@ -70,7 +70,7 @@ func makeMemoryCurationHandler(pool *pgxpool.Pool, stage memorycuration.Stage, b
 			}
 			return HandlerResult{}, err
 		}
-		planDate := planLocal.AddDate(0, 0, -1)
+		planDate := time.Date(planLocal.Year(), planLocal.Month(), planLocal.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
 		var evidenceDB memorycuration.EvidenceDB
 		if pool != nil {
 			evidenceDB = pool

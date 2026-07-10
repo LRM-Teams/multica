@@ -114,12 +114,22 @@ func (d *Daemon) runLocalMemoryCuration(ctx context.Context, rt Runtime) error {
 			d.releaseLocalMemoryCurationRun(rt.WorkspaceID, scheduled.stage)
 			return runErr
 		}
-		if len(res.Errors) > 0 || (scheduled.stage == memorycuration.StageL3 && res.ReviewDeferred > 0 && res.EntriesReviewed == 0) {
+		if len(res.Errors) > 0 || (scheduled.stage == memorycuration.StageL3 && shouldRetryLocalL3(res)) {
 			d.releaseLocalMemoryCurationRun(rt.WorkspaceID, scheduled.stage)
 			return fmt.Errorf("local memory curation deferred or failed: errors=%d deferred=%d", len(res.Errors), res.ReviewDeferred)
 		}
 	}
 	return nil
+}
+
+func shouldRetryLocalL3(res memorycuration.Result) bool {
+	nonRetryable := 0
+	for _, trace := range res.ReviewTraces {
+		if trace.ReasonCode == "low_confidence" || trace.ReasonCode == "invalid_decision" {
+			nonRetryable++
+		}
+	}
+	return res.ReviewDeferred > nonRetryable
 }
 
 func (d *Daemon) claimLocalMemoryCurationRun(workspaceID string, stage memorycuration.Stage, localNow time.Time) bool {
@@ -468,16 +478,23 @@ func (d *Daemon) scanEvolutionSubmissionsRoot(rt Runtime, base string) ([]Evolut
 		}
 		agentID := entry.Name()
 		agentRoot := filepath.Join(base, agentID)
+		releaseLock, lockErr := memorycuration.AcquireAgentRootFileLock(agentRoot, false, time.Now().UTC())
+		if lockErr != nil {
+			continue
+		}
 		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
+			releaseLock()
 			d.logger.Warn("agent root creation failed", "runtime_id", rt.ID, "agent_id", agentID, "path", agentRoot, "error", err)
 			continue
 		}
 		memorySubmissions, err := d.loadMemoryCandidateSubmissions(rt, agentID, agentRoot)
 		if err != nil {
+			releaseLock()
 			d.logger.Warn("memory candidate scan failed", "runtime_id", rt.ID, "agent_id", agentID, "error", err)
 			continue
 		}
 		skillSubmissions, err := d.loadSkillCandidateSubmissions(rt, agentID, agentRoot)
+		releaseLock()
 		if err != nil {
 			d.logger.Warn("skill candidate scan failed", "runtime_id", rt.ID, "agent_id", agentID, "error", err)
 			continue

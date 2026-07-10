@@ -82,7 +82,7 @@ func (e *Engine) Run(opts Options) (Result, error) {
 			}
 		}
 		unlock := lockAgentRoot(root.Root)
-		releaseFileLock, lockErr := acquireAgentRootFileLock(root.Root, opts.DryRun, opts.Now)
+		releaseFileLock, lockErr := AcquireAgentRootFileLock(root.Root, opts.DryRun, opts.Now)
 		if lockErr != nil {
 			unlock()
 			res.Errors = append(res.Errors, AgentError{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Stage: stage, Error: lockErr.Error()})
@@ -520,10 +520,13 @@ func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
 			continue
 		}
 
+		beforeApply := ar
+		beforeApply.ReviewTraces = append([]L3ReviewTrace(nil), ar.ReviewTraces...)
 		tx := newFileMutationTransaction(opts.DryRun)
 		processed, syncPending, err := e.applyL3Decision(root, opts, entry, decision, &ar, tx)
 		if err != nil {
 			tx.rollback()
+			ar = beforeApply
 			trace.Outcome = "deferred"
 			trace.ReasonCode = "application_error"
 			ar.ReviewDeferred++
@@ -572,6 +575,7 @@ func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
 			}
 			if _, err := tx.commit(finalMutations); err != nil {
 				tx.rollback()
+				ar = beforeApply
 				failureTrace := trace
 				failureTrace.Outcome = "rolled_back"
 				failureTrace.ReasonCode = "review_queue_commit_error"

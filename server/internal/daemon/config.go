@@ -491,6 +491,10 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		switch strings.ToLower(v) {
 		case "false", "0", "no", "off":
 			memoryCurationL3ReviewEnabled = false
+		case "true", "1", "yes", "on":
+			memoryCurationL3ReviewEnabled = true
+		default:
+			return Config{}, fmt.Errorf("MULTICA_DAEMON_MEMORY_CURATION_L3_REVIEW_ENABLED: invalid boolean %q", v)
 		}
 	}
 	memoryCurationL3ReviewTimeout := 30 * time.Second

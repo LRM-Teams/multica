@@ -155,6 +155,10 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 		_, err := s.rejectSubmissionWithReview(ctx, submission, "missing content hash", "medium")
 		return db.SharedEvolutionUnit{}, evolutionCurationRejected, err
 	}
+	if evolutionSubmissionRequiresHumanReview(submission) {
+		_, err := s.markSubmissionNeedsReview(ctx, submission, "source requires human review")
+		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, err
+	}
 
 	if !s.ReviewEnabled {
 		if submission.Confidence != "high" || (submission.Sensitivity != "none" && submission.Sensitivity != "local_path") {
@@ -476,6 +480,16 @@ func promotionMetadata(submission db.EvolutionUnitSubmission, dedupeHash string,
 	}
 	encoded, _ := json.Marshal(metadata)
 	return encoded
+}
+
+func evolutionSubmissionRequiresHumanReview(submission db.EvolutionUnitSubmission) bool {
+	if submission.UnitType != "skill" {
+		return false
+	}
+	var evidence struct {
+		RequiresHumanReview bool `json:"requires_human_review"`
+	}
+	return json.Unmarshal(submission.Evidence, &evidence) == nil && evidence.RequiresHumanReview
 }
 
 func needsReviewReason(submission db.EvolutionUnitSubmission) string {

@@ -196,6 +196,36 @@ func fileContentWithoutTemplate(path string) (string, error) {
 	return strings.TrimSpace(strings.Join(out, "\n")), nil
 }
 
+func AcquireAgentRootFileLock(root string, dryRun bool, now time.Time) (func(), error) {
+	if dryRun {
+		return func() {}, nil
+	}
+	lockPath := filepath.Join(root, "memory", ".curation.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		return nil, err
+	}
+	acquire := func() (*os.File, error) {
+		return os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	}
+	f, err := acquire()
+	if os.IsExist(err) {
+		info, statErr := os.Stat(lockPath)
+		if statErr == nil && now.Sub(info.ModTime()) > 2*time.Hour {
+			_ = os.Remove(lockPath)
+			f, err = acquire()
+		}
+	}
+	if err != nil {
+		if os.IsExist(err) {
+			return nil, fmt.Errorf("memory curation already running for agent root")
+		}
+		return nil, err
+	}
+	_, _ = fmt.Fprintf(f, "pid=%d\nstarted_at=%s\n", os.Getpid(), now.UTC().Format(time.RFC3339))
+	_ = f.Close()
+	return func() { _ = os.Remove(lockPath) }, nil
+}
+
 func writeIfChanged(path, content string, dryRun bool) (bool, error) {
 	old, err := os.ReadFile(path)
 	if err == nil && string(old) == content {
@@ -211,6 +241,95 @@ func writeIfChanged(path, content string, dryRun bool) (bool, error) {
 		return false, err
 	}
 	return true, os.WriteFile(path, []byte(content), 0o644)
+}
+
+type fileMutation struct {
+	path    string
+	content string
+}
+
+type fileSnapshot struct {
+	path    string
+	content []byte
+	existed bool
+}
+
+type fileMutationTransaction struct {
+	dryRun    bool
+	snapshots []fileSnapshot
+	seen      map[string]struct{}
+}
+
+func newFileMutationTransaction(dryRun bool) *fileMutationTransaction {
+	return &fileMutationTransaction{dryRun: dryRun, seen: map[string]struct{}{}}
+}
+
+func (tx *fileMutationTransaction) commit(mutations []fileMutation) (bool, error) {
+	if tx == nil {
+		return commitFileMutations(mutations, false)
+	}
+	if tx.dryRun {
+		return commitFileMutations(mutations, true)
+	}
+	for _, mutation := range mutations {
+		if _, ok := tx.seen[mutation.path]; ok {
+			continue
+		}
+		old, err := os.ReadFile(mutation.path)
+		if err != nil && !os.IsNotExist(err) {
+			return false, err
+		}
+		tx.snapshots = append(tx.snapshots, fileSnapshot{path: mutation.path, content: old, existed: err == nil})
+		tx.seen[mutation.path] = struct{}{}
+	}
+	return commitFileMutations(mutations, false)
+}
+
+func (tx *fileMutationTransaction) rollback() {
+	if tx == nil || tx.dryRun {
+		return
+	}
+	rollbackFileMutations(tx.snapshots)
+}
+
+func commitFileMutations(mutations []fileMutation, dryRun bool) (bool, error) {
+	changed := false
+	snapshots := make([]fileSnapshot, 0, len(mutations))
+	for _, mutation := range mutations {
+		old, err := os.ReadFile(mutation.path)
+		if err != nil && !os.IsNotExist(err) {
+			rollbackFileMutations(snapshots)
+			return false, err
+		}
+		if err == nil && string(old) == mutation.content {
+			continue
+		}
+		changed = true
+		if dryRun {
+			continue
+		}
+		snapshots = append(snapshots, fileSnapshot{path: mutation.path, content: old, existed: err == nil})
+		if err := os.MkdirAll(filepath.Dir(mutation.path), 0o755); err != nil {
+			rollbackFileMutations(snapshots)
+			return false, err
+		}
+		if err := os.WriteFile(mutation.path, []byte(mutation.content), 0o644); err != nil {
+			rollbackFileMutations(snapshots)
+			return false, err
+		}
+	}
+	return changed, nil
+}
+
+func rollbackFileMutations(snapshots []fileSnapshot) {
+	for i := len(snapshots) - 1; i >= 0; i-- {
+		snapshot := snapshots[i]
+		if snapshot.existed {
+			_ = os.WriteFile(snapshot.path, snapshot.content, 0o644)
+		} else {
+			_ = os.Remove(snapshot.path)
+		}
+	}
 }
 
 func hashShort(parts ...string) string {

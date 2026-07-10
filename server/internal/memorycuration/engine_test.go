@@ -1,6 +1,7 @@
 package memorycuration
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,7 +9,7 @@ import (
 	"time"
 )
 
-func TestRunAllPromotesAndCleansReview(t *testing.T) {
+func TestRunAllKeepsDeterministicCandidatesUntilSensitivityIsExplicit(t *testing.T) {
 	root := t.TempDir()
 	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
 	if err := ensureMemoryRoot(agentRoot); err != nil {
@@ -40,7 +41,7 @@ func TestRunAllPromotesAndCleansReview(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(agentRoot, "memory", "daily", "2026-07-08.md"), []byte(daily), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res, err := NewEngine().Run(Options{
+	res, err := NewEngine(routeAllToMemoryReviewer{}).Run(Options{
 		WorkspacesRoot: root,
 		WorkspaceID:    "ws-1",
 		AgentIDs:       []string{"agent-1"},
@@ -55,18 +56,14 @@ func TestRunAllPromotesAndCleansReview(t *testing.T) {
 	if res.ReviewCandidatesAdded != 3 {
 		t.Fatalf("ReviewCandidatesAdded = %d, want 3", res.ReviewCandidatesAdded)
 	}
-	if res.EntriesPromoted != 3 {
-		t.Fatalf("EntriesPromoted = %d, want 3", res.EntriesPromoted)
+	if res.EntriesPromoted != 0 || res.SharedCandidatesAdded != 0 || res.EntriesReviewed != 0 {
+		t.Fatalf("unsafe candidates were promoted: %#v", res)
 	}
-	if res.SharedCandidatesAdded != 1 {
-		t.Fatalf("SharedCandidatesAdded = %d, want 1", res.SharedCandidatesAdded)
-	}
-	assertContains(t, filepath.Join(agentRoot, "sync_queue", "memory-candidates.jsonl"), "shared_mem_20260708")
-	assertContains(t, filepath.Join(agentRoot, "sync_queue", "memory-candidates.jsonl"), "\"suggested_scope\":\"workspace\"")
-	assertContains(t, filepath.Join(agentRoot, "memory", "USER.md"), "jianghp3 likes playing basketball")
-	assertContains(t, filepath.Join(agentRoot, "memory", "MEMORY.md"), "Memory curation should run in four stages")
-	assertContains(t, filepath.Join(agentRoot, "memory", "STATE.md"), "Follow up on 2026-07-10")
-	assertNotContains(t, filepath.Join(agentRoot, "memory", "REVIEW.md"), "jianghp3 likes playing basketball")
+	assertContains(t, filepath.Join(agentRoot, "memory", "REVIEW.md"), "jianghp3 likes playing basketball")
+	assertContains(t, filepath.Join(agentRoot, "memory", "REVIEW.md"), "sensitivity: unknown")
+	assertNotContains(t, filepath.Join(agentRoot, "memory", "USER.md"), "jianghp3 likes playing basketball")
+	assertNotContains(t, filepath.Join(agentRoot, "memory", "MEMORY.md"), "Memory curation should run in four stages")
+	assertNotContains(t, filepath.Join(agentRoot, "memory", "STATE.md"), "Follow up on 2026-07-10")
 }
 
 func TestL4ExpiresStateAndClosedReviewEntries(t *testing.T) {
@@ -132,6 +129,22 @@ func TestSharedMemoryEligibilityUsesNormalizedSafetyFields(t *testing.T) {
 	if !entryEligibleForSharedMemory(entry) {
 		t.Fatal("normalized safe workspace entry should be shared")
 	}
+}
+
+type routeAllToMemoryReviewer struct{}
+
+func (routeAllToMemoryReviewer) Review(_ context.Context, input L3ReviewInput) (L3ReviewOutput, error) {
+	out := L3ReviewOutput{Provider: "test", Model: "deterministic"}
+	for _, entry := range input.Entries {
+		out.Decisions = append(out.Decisions, L3ReviewDecision{
+			EntryID:    entry.ID,
+			Route:      L3RouteMemory,
+			Confidence: 1,
+			Rationale:  "test memory route",
+			Memory:     L3MemoryDraft{Title: entry.Title, Body: entry.Body},
+		})
+	}
+	return out, nil
 }
 
 func mustDate(s string) time.Time {

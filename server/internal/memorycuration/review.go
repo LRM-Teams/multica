@@ -54,7 +54,7 @@ func parseReview(content string) ([]reviewEntry, error) {
 			Type:                meta["type"],
 			Status:              defaultString(meta["status"], "candidate"),
 			Confidence:          defaultString(meta["confidence"], "medium"),
-			Sensitivity:         defaultString(meta["sensitivity"], "none"),
+			Sensitivity:         defaultString(meta["sensitivity"], "unknown"),
 			Scope:               defaultString(meta["scope"], "agent"),
 			SourceDate:          meta["source_date"],
 			ReviewExpiresAt:     meta["review_expires_at"],
@@ -111,7 +111,7 @@ func renderReview(entries []reviewEntry) string {
 			entry.Confidence = "medium"
 		}
 		if entry.Sensitivity == "" {
-			entry.Sensitivity = "none"
+			entry.Sensitivity = "unknown"
 		}
 		if entry.Scope == "" {
 			entry.Scope = "agent"

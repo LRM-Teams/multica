@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -43,7 +42,7 @@ func sharedMemoryCandidateForEntry(root agentRoot, entry reviewEntry, now time.T
 		Summary:        truncateSharedSummary(content, 280),
 		Content:        content,
 		ContentHash:    hashSharedContent(content),
-		Sensitivity:    defaultString(entry.Sensitivity, "none"),
+		Sensitivity:    strings.ToLower(strings.TrimSpace(entry.Sensitivity)),
 		Confidence:     defaultString(entry.Confidence, "medium"),
 		SuggestedScope: "workspace",
 		Evidence: map[string]any{
@@ -69,7 +68,7 @@ func entryEligibleForSharedMemory(entry reviewEntry) bool {
 		return false
 	}
 	sensitivity := strings.ToLower(strings.TrimSpace(entry.Sensitivity))
-	if sensitivity != "" && sensitivity != "none" {
+	if sensitivity != "none" {
 		return false
 	}
 	scope := strings.ToLower(strings.TrimSpace(entry.Scope))
@@ -163,61 +162,31 @@ func sharedMemoryTaskTypes(content string) []string {
 }
 
 func recordSharedMemoryCandidate(root string, candidate sharedMemoryCandidate, dryRun bool) (bool, error) {
+	mutations, err := prepareSharedMemoryCandidateMutations(root, candidate)
+	if err != nil {
+		return false, err
+	}
+	return commitFileMutations(mutations, dryRun)
+}
+
+func prepareSharedMemoryCandidateMutations(root string, candidate sharedMemoryCandidate) ([]fileMutation, error) {
 	encoded, err := json.Marshal(candidate)
 	if err != nil {
-		return false, err
-	}
-	jsonPath := filepath.Join(root, "shared-cache", "memory", "proposals", candidate.LocalUnitID+".json")
-	jsonChanged, err := writeIfChanged(jsonPath, string(encoded)+"\n", dryRun)
-	if err != nil {
-		return false, err
+		return nil, err
 	}
 	jsonlPath := filepath.Join(root, "sync_queue", "memory-candidates.jsonl")
-	jsonlChanged, err := upsertSharedCandidateJSONL(jsonlPath, candidate.LocalUnitID, string(encoded), dryRun)
+	jsonlContent, err := candidateJSONLContent(jsonlPath, candidate.LocalUnitID, string(encoded))
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	return jsonChanged || jsonlChanged, nil
+	return []fileMutation{
+		{path: filepath.Join(root, "shared-cache", "memory", "proposals", candidate.LocalUnitID+".json"), content: string(encoded) + "\n"},
+		{path: jsonlPath, content: jsonlContent},
+	}, nil
 }
 
 func upsertSharedCandidateJSONL(path, localUnitID, encoded string, dryRun bool) (bool, error) {
-	var lines []string
-	old, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return false, err
-	}
-	found := false
-	unchanged := false
-	for _, line := range strings.Split(string(old), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		var item map[string]json.RawMessage
-		if json.Unmarshal([]byte(trimmed), &item) != nil {
-			lines = append(lines, trimmed)
-			continue
-		}
-		var existingID string
-		_ = json.Unmarshal(item["local_unit_id"], &existingID)
-		if existingID == localUnitID {
-			found = true
-			unchanged = trimmed == encoded
-			if !unchanged {
-				lines = append(lines, encoded)
-			}
-			continue
-		}
-		lines = append(lines, trimmed)
-	}
-	if !found {
-		lines = append(lines, encoded)
-	}
-	if found && unchanged {
-		return false, nil
-	}
-	content := strings.Join(lines, "\n") + "\n"
-	return writeIfChanged(path, content, dryRun)
+	return upsertCandidateJSONL(path, localUnitID, encoded, dryRun)
 }
 
 func syncSharedMemoryCandidate(ctx context.Context, db EvidenceDB, root agentRoot, candidate sharedMemoryCandidate) (bool, error) {

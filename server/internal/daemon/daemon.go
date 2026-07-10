@@ -170,6 +170,8 @@ type Daemon struct {
 
 	sharedSkillScanMu    sync.Mutex
 	sharedSkillScanCache map[string]string // scanRoot\x00skillKey -> fingerprint
+	memoryCurationMu     sync.Mutex
+	memoryCurationRuns   map[string]string // workspace\x00stage -> Beijing plan date
 }
 
 // New creates a new Daemon instance.
@@ -196,6 +198,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		reregisterLastCompletedAt: make(map[string]time.Time),
 		cancelPollInterval:        5 * time.Second,
 		sharedSkillScanCache:      make(map[string]string),
+		memoryCurationRuns:        make(map[string]string),
 	}
 	d.runner = taskRunnerFunc(d.runTask)
 	d.runUpdateFn = d.runUpdate
@@ -673,6 +676,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.autoUpdateLoop(ctx)
 	go d.tokenRenewalLoop(ctx)
 	go d.sharedSkillsSyncLoop(ctx)
+	go d.localMemoryCurationLoop(ctx)
 
 	// Preflight succeeded and the background loops are up: the daemon has
 	// registered its runtimes and can now claim and run tasks. Flip /health

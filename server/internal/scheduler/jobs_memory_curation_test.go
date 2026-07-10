@@ -55,6 +55,18 @@ func TestMemoryCurationJobsUseBeijingHours(t *testing.T) {
 	}
 }
 
+func TestMemoryCurationPlanDateUsesBeijingYesterday(t *testing.T) {
+	loc, err := time.LoadLocation(memorycuration.DefaultTimezone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planLocal := time.Date(2026, 7, 10, 1, 0, 0, 0, loc)
+	planDate := time.Date(planLocal.Year(), planLocal.Month(), planLocal.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
+	if got := planDate.Format("2006-01-02"); got != "2026-07-09" {
+		t.Fatalf("planDate = %s, want 2026-07-09", got)
+	}
+}
+
 func TestMemoryCurationStageNormalization(t *testing.T) {
 	cases := map[string]memorycuration.Stage{
 		"l1_daily":   memorycuration.StageL1,

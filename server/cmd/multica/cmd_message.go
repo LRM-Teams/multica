@@ -59,10 +59,9 @@ func newMessageReactCmd() *cobra.Command {
 var messageSendCmd = newMessageSendCmd()
 var messageReactCmd = newMessageReactCmd()
 
-// Top-level `multica send` / `multica react` are compatibility aliases kept
-// while injected prompts and built-in skills still teach the ungrouped names.
-// New surfaces should reference the grouped forms.
-var sendCmd = newCompatMessageAlias(newMessageSendCmd(), "message send")
+// Top-level `multica react` remains as a compatibility alias while older
+// runtimes still learn the ungrouped reaction command. Sending has no
+// top-level alias: agents must use `multica message send`.
 var reactCmd = newCompatMessageAlias(newMessageReactCmd(), "message react")
 
 func newCompatMessageAlias(cmd *cobra.Command, canonical string) *cobra.Command {

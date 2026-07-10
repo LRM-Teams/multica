@@ -68,7 +68,7 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 **Agent 只有"手"（工具），没有"协议话"。合同三行：**
 1. **`send(target, parts, options?)`** 和 **`react(message_id, emoji)`** —— 仅此两个动作。
 2. **不想回 = 什么都不做**。没有 no_reply 动词/工具/JSON——run 正常跑完没出手即自然结束，游标照常推进（"no_reply"只作为**平台观察到的 run 完结状态**存在：结算游标、判 #196 must-reply、喂"为什么没回"注解，见 §6/§6.2——它不是 agent 会"说"的东西）。
-3. **运输层 = CLI（Raft 同款，Frank 拍"MCP 太占上下文"）**：daemon 向 agent 工作环境注入 `multica` CLI（PATH + task 凭证），agent 执行 `multica send --target "#频道" …` / `multica react …` 直打 server API——**agent 的最终文本永不被解析成协议**（#255 砍掉文本 JSON 信封解析；unwrap 守卫只作历史数据防御）。幂等：send 带 `client_message_id`（复用 §4.2 契约，runtime 生成）。
+3. **运输层 = CLI（Raft 同款，Frank 拍"MCP 太占上下文"）**：daemon 向 agent 工作环境注入 `multica` CLI（PATH + task 凭证），agent 执行 `multica message send --target "#频道" …` / `multica message react …` 直打 server API——**agent 的最终文本永不被解析成协议**（#255 砍掉文本 JSON 信封解析；unwrap 守卫只作历史数据防御）。幂等：send 带 `client_message_id`（复用 §4.2 契约，runtime 生成）。
    **凭证隔离（7-6 raft 对标补，#259 merge 前 gate）**：task 凭证必须 **per-agent、per-run 文件级隔离**——每次 run 生成独立 token 文件（对标 raft `cli-transport/<agent>/<run>/agent-token` 形状：wrapper PATH 前置 + 清除 raw credential env），**禁止共享环境变量、禁止长期 token**；run 结束凭证即出作用域。我们与 raft 独立收敛到同一 CLI carrier 架构，此形状为参考实现。
 
 **target 语法（与 Raft 一字位对齐）**：`#channel`（频道）｜`dm:@name`（Human DM：自动 find-or-create、禁 self-DM、仅同 workspace、错误 non-leaky；`@name` 用 handle #42，UUID 不进模型可见层）｜`#channel:<msgid>`（thread 回复，扁平；options 可带 **`show_in_channel=false`**——见下）。server 单一 target parser，解析后分三支。direct/must-reply 语义仍走 durable queue/可见回复路径。agent↔agent DM 仍 P3。落地=task #247（CLI 载体）+ #255（存量迁移）。

@@ -240,9 +240,6 @@ export interface TaskMessagePayload {
   input?: Record<string, unknown>;
   output?: string;
   visibility?: "user_facing" | "diagnostic_only";
-  action_label?: string;
-  summary?: string;
-  tone?: "wake" | "action" | "progress" | "success" | "failure" | "muted";
   created_at?: string;
 }
 
@@ -284,12 +281,8 @@ export interface AgentActivityTimelineEvent {
   event_type: string;
   occurred_at: string;
   visibility: "user_facing" | "diagnostic_only";
-  label: string;
-  subtext?: string;
   text?: string;
-  tone: "wake" | "action" | "progress" | "success" | "failure" | "muted";
   reason_code?: string;
-  reason_label?: string;
   target_ref: AgentActivityTargetRef;
   source_refs?: AgentActivitySourceRef[];
 }

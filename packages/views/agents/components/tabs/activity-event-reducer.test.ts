@@ -2,16 +2,15 @@ import { describe, expect, it } from "vitest";
 import type { ActivityEvent } from "./activity-event";
 import { projectLatestActivity, upsertActivityEvents } from "./activity-event-reducer";
 
-function evt(id: string, occurred_at: string, label = id): ActivityEvent {
+function evt(id: string, occurred_at: string, text = id): ActivityEvent {
   return {
     id,
     occurred_at,
-    label,
+    text,
     agent_id: "agent-1",
     kind: "text",
     event_type: "text",
     visibility: "user_facing",
-    tone: "action",
     target_ref: { kind: "agent", id: "agent-1" },
   };
 }
@@ -29,7 +28,7 @@ describe("upsertActivityEvents", () => {
     const first = upsertActivityEvents([], evt("t1", "2026-07-10T10:00:00Z", "Thinking…"));
     const grown = upsertActivityEvents(first, evt("t1", "2026-07-10T10:00:00Z", "Thinking about the fix…"));
     expect(grown).toHaveLength(1);
-    expect(grown[0]?.label).toBe("Thinking about the fix…");
+    expect(grown[0]?.text).toBe("Thinking about the fix…");
   });
 
   it("is idempotent — re-applying the same event yields an equal list", () => {
@@ -45,7 +44,7 @@ describe("upsertActivityEvents", () => {
       [evt("t1", "2026-07-10T10:00:00Z", "delta"), evt("t1", "2026-07-10T10:00:00Z", "coalesced")],
     );
     expect(result).toHaveLength(1);
-    expect(result[0]?.label).toBe("coalesced");
+    expect(result[0]?.text).toBe("coalesced");
   });
 
   it("does not mutate the input array", () => {

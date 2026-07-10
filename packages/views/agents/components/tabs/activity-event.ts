@@ -1,31 +1,61 @@
 import type { AgentActivityTimelineEvent } from "@multica/core/types";
 
 // FE read-model for the agent-activity narrative timeline (#267 / #302). The BE
-// tags each event's `visibility` and supplies safe human `label`/`subtext` — the
-// FE never derives these from raw tool/command/output text (that would be the
-// P1-8 heuristic trap). Raw payload stays in the diagnostic/transcript layer.
+// supplies source-backed facts (`kind`, `text`, `reason_code`, refs, and
+// `visibility`); display labels and dot tone are FE projection, not API fields.
 export type ActivityVisibility = "user_facing" | "diagnostic_only";
 
-// Coarse semantic tone driving the row's status dot colour. Derived BE-side from
-// the event's source/result; kept small + closed so the dot reads as a
-// glanceable "shape of the timeline" (one red in a column of green = the failing
-// step), not a per-tool icon.
-export type ActivityTone =
-  | "wake" // woke up / claimed / assigned
-  | "action" // ran / read / edited / searched / replied
-  | "progress" // working / waiting
-  | "success" // completed / online / recovered
-  | "failure" // failed
-  | "muted"; // offline / no-reply / suppressed / neutral
+// Keep the palette intentionally quiet: only failures and waiting states get
+// color; the normal narrative stream stays neutral.
+export type ActivityTone = "neutral" | "waiting" | "failure";
 
 // The FE Activity read-model IS the BE #302 timeline event
 // (`AgentActivityTimelineEvent`, packages/core/types/events.ts): id /
-// occurred_at / visibility / label / subtext / tone drive the rendered row,
-// while raw `kind` + `target_ref`/`source_refs` + `reason_*` let the timeline
-// derive the directed 3-state block and deep-links itself. Aliasing to the BE
-// type keeps the four layers (daemon → server → API → FE) one shape with zero
-// translation.
+// occurred_at / visibility / kind/text/reason/source refs drive the rendered
+// row. Aliasing to the BE type keeps the four layers (daemon -> server -> API ->
+// FE) one raw shape; presentation stays in the component layer.
 export type ActivityEvent = AgentActivityTimelineEvent;
+
+export interface ActivityPresentation {
+  label: string;
+  subtext?: string;
+  tone: ActivityTone;
+}
+
+function reasonText(event: ActivityEvent): string {
+  return event.reason_code?.trim().replaceAll("_", " ") ?? "";
+}
+
+export function activityPresentation(event: ActivityEvent): ActivityPresentation {
+  switch (event.kind) {
+    case "thinking":
+      return { label: "Thinking", subtext: event.text, tone: "neutral" };
+    case "text":
+      return { label: "Sent a message", subtext: event.text, tone: "neutral" };
+    case "tool_call":
+      return { label: "Ran a command", tone: "neutral" };
+    case "turn_end":
+      return { label: "Done", tone: "neutral" };
+    case "session_init":
+      return { label: "Run started", tone: "neutral" };
+    case "wake_attempt":
+      return { label: "Woken", tone: "neutral" };
+    case "error": {
+      const reason = reasonText(event);
+      return {
+        label: reason ? `Failed · ${reason}` : "Failed",
+        subtext: event.text,
+        tone: "failure",
+      };
+    }
+    case "blocked": {
+      const reason = reasonText(event);
+      return { label: reason ? `Waiting · ${reason}` : "Waiting", tone: "waiting" };
+    }
+    default:
+      return { label: event.event_type || event.kind, subtext: event.text, tone: "neutral" };
+  }
+}
 
 // Building an Intl formatter is slow, so cache one per timezone rather than
 // rebuilding on every row render.

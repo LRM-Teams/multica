@@ -2829,19 +2829,15 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		if msg.Input != nil {
 			inputJSON, _ = json.Marshal(msg.Input)
 		}
-		narrative := taskMessageNarrative(msg.Type)
 		created, createErr := h.Queries.CreateTaskMessage(r.Context(), db.CreateTaskMessageParams{
-			TaskID:      parseUUID(taskID),
-			Seq:         int32(msg.Seq),
-			Type:        msg.Type,
-			Tool:        pgtype.Text{String: msg.Tool, Valid: msg.Tool != ""},
-			Content:     pgtype.Text{String: msg.Content, Valid: msg.Content != ""},
-			Input:       inputJSON,
-			Output:      pgtype.Text{String: msg.Output, Valid: msg.Output != ""},
-			Visibility:  narrative.Visibility,
-			ActionLabel: narrative.Label,
-			Summary:     narrative.Summary,
-			Tone:        narrative.Tone,
+			TaskID:     parseUUID(taskID),
+			Seq:        int32(msg.Seq),
+			Type:       msg.Type,
+			Tool:       pgtype.Text{String: msg.Tool, Valid: msg.Tool != ""},
+			Content:    pgtype.Text{String: msg.Content, Valid: msg.Content != ""},
+			Input:      inputJSON,
+			Output:     pgtype.Text{String: msg.Output, Valid: msg.Output != ""},
+			Visibility: taskMessageVisibility(msg.Type),
 		})
 		if createErr != nil {
 			slog.Error("failed to create task message", "task_id", taskID, "seq", msg.Seq, "error", createErr)
@@ -2869,87 +2865,29 @@ func taskMessageToPayload(m db.TaskMessage, taskID, issueID string) protocol.Tas
 	if m.CreatedAt.Valid {
 		createdAt = m.CreatedAt.Time.UTC().Format(time.RFC3339Nano)
 	}
-	narrative := taskMessageNarrative(m.Type)
 	visibility := strings.TrimSpace(m.Visibility)
 	if visibility == "" {
-		visibility = narrative.Visibility
-	}
-	actionLabel := strings.TrimSpace(m.ActionLabel)
-	if actionLabel == "" {
-		actionLabel = narrative.Label
-	}
-	summary := strings.TrimSpace(m.Summary)
-	if summary == "" {
-		summary = narrative.Summary
-	}
-	tone := strings.TrimSpace(m.Tone)
-	if tone == "" {
-		tone = narrative.Tone
+		visibility = "user_facing"
 	}
 	return protocol.TaskMessagePayload{
-		TaskID:      taskID,
-		IssueID:     issueID,
-		Seq:         int(m.Seq),
-		Type:        m.Type,
-		Tool:        m.Tool.String,
-		Content:     m.Content.String,
-		Input:       input,
-		Output:      m.Output.String,
-		Visibility:  visibility,
-		ActionLabel: actionLabel,
-		Summary:     summary,
-		Tone:        tone,
-		CreatedAt:   createdAt,
+		TaskID:     taskID,
+		IssueID:    issueID,
+		Seq:        int(m.Seq),
+		Type:       m.Type,
+		Tool:       m.Tool.String,
+		Content:    m.Content.String,
+		Input:      input,
+		Output:     m.Output.String,
+		Visibility: visibility,
+		CreatedAt:  createdAt,
 	}
 }
 
-type taskMessageNarrativeSummary struct {
-	Visibility string
-	Label      string
-	Summary    string
-	Tone       string
-}
-
-func taskMessageNarrative(msgType string) taskMessageNarrativeSummary {
-	switch msgType {
-	case "text":
-		return taskMessageNarrativeSummary{
-			Visibility: "user_facing",
-			Label:      "Message received",
-			Summary:    "Received a message.",
-			Tone:       "action",
-		}
-	case "thinking":
-		return taskMessageNarrativeSummary{
-			Visibility: "user_facing",
-			Label:      "Thinking",
-			Summary:    "Thinking through the next step.",
-			Tone:       "progress",
-		}
-	case "tool_use":
-		return taskMessageNarrativeSummary{
-			Visibility: "user_facing",
-			Label:      "Working",
-			Summary:    "Started a work step.",
-			Tone:       "progress",
-		}
-	case "tool_result":
-		return taskMessageNarrativeSummary{
-			Visibility: "user_facing",
-			Label:      "Step finished",
-			Summary:    "Finished a work step.",
-			Tone:       "progress",
-		}
-	case "error":
-		return taskMessageNarrativeSummary{
-			Visibility: "user_facing",
-			Label:      "Ran into an error",
-			Summary:    "Ran into an error.",
-			Tone:       "failure",
-		}
-	default:
-		return taskMessageNarrativeSummary{Visibility: "user_facing", Label: "Took a step", Summary: "Took a step.", Tone: "action"}
+func taskMessageVisibility(msgType string) string {
+	if msgType == "tool_result" {
+		return "diagnostic_only"
 	}
+	return "user_facing"
 }
 
 // ListTaskMessages returns the persisted messages for a task (for catch-up after reconnect).

@@ -4,11 +4,11 @@ import type { ActivityEvent } from "./activity-event";
  * Pure read-model reducer for the agent Activity stream (#302 FE consumer).
  *
  * The BE (#302 / `agent_activity_event`) aggregates server-side and hands the FE
- * an already-tagged, stable-`id` ActivityEvent per row; the FE just
- * **upserts by id** (Ronan's contract: REST first-paint aggregate, then WS pushes
- * the current aggregate/coalesced event under the SAME id). The FE never rebuilds
- * durable state from transient chunks — a later WS push for an id simply replaces
- * the earlier row (e.g. a `thinking` event whose aggregate text grew).
+ * a stable-`id` ActivityEvent per row; the FE just **upserts by id** (Ronan's
+ * contract: REST first-paint aggregate, then WS pushes the current
+ * aggregate/coalesced event under the SAME id). The FE never rebuilds durable
+ * state from transient chunks — a later WS push for an id simply replaces the
+ * earlier row (e.g. a `thinking` event whose aggregate text grew).
  *
  * Kept pure + framework-free so the single shared hook (`useAgentActivityEvents`)
  * and its WS subscription share one reducer — no per-consumer (timeline vs

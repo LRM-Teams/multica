@@ -7,19 +7,18 @@ import { useT } from "../../../i18n";
 import {
   type ActivityEvent,
   type ActivityTone,
+  activityPresentation,
   formatActivityTime,
 } from "./activity-event";
 
 const TONE_DOT: Record<ActivityTone, string> = {
-  wake: "bg-brand",
-  action: "bg-brand",
-  progress: "bg-warning",
-  success: "bg-success",
+  neutral: "bg-muted-foreground/40",
+  waiting: "bg-warning",
   failure: "bg-destructive",
-  muted: "bg-muted-foreground/40",
 };
 
 function ActivityRow({ event, time }: { event: ActivityEvent; time: string }) {
+  const presentation = activityPresentation(event);
   return (
     <div
       className="flex items-baseline gap-3 py-1"
@@ -30,13 +29,13 @@ function ActivityRow({ event, time }: { event: ActivityEvent; time: string }) {
         {time}
       </span>
       <span
-        className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", TONE_DOT[event.tone])}
+        className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", TONE_DOT[presentation.tone])}
         aria-hidden
       />
       <div className="min-w-0">
-        <span className="text-sm text-foreground">{event.label}</span>
-        {event.subtext && (
-          <span className="ml-2 text-xs text-muted-foreground">{event.subtext}</span>
+        <span className="text-sm text-foreground">{presentation.label}</span>
+        {presentation.subtext && (
+          <span className="ml-2 text-xs text-muted-foreground">{presentation.subtext}</span>
         )}
       </div>
     </div>
@@ -46,11 +45,11 @@ function ActivityRow({ event, time }: { event: ActivityEvent; time: string }) {
 /**
  * Read-only agent-activity narrative timeline (#267). One time-ordered stream —
  * each row = `time · source dot · human label · optional subtext`. Default shows
- * only BE-tagged `user_facing` events; `diagnostic_only` events (raw
+ * only BE `user_facing` events; `diagnostic_only` events (raw
  * command/error/freshness plumbing) stay behind an explicit "view diagnostics"
- * toggle in the same coherent surface. Never renders raw command/output — the
- * label/subtext come from the BE read model. Shared by the Activity tab (full)
- * and the profile/hover card (compact subset, no diagnostics toggle).
+ * toggle in the same coherent surface. Never renders raw command/output for
+ * tool rows. Shared by the Activity tab (full) and the profile/hover card
+ * (compact subset, no diagnostics toggle).
  */
 export function ActivityTimeline({
   events,

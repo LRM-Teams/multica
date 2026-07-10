@@ -1094,6 +1094,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/agent/messages/react", h.AgentTransportReactMessage)
 			r.Post("/api/agent/messages/read", h.AgentTransportReadMessages)
 			r.Post("/api/agent/messages/search", h.AgentTransportSearchMessages)
+			r.Post("/api/agent/reminders/schedule", h.AgentTransportScheduleReminder)
+			r.Post("/api/agent/reminders/list", h.AgentTransportListReminders)
+			r.Post("/api/agent/reminders/snooze", h.AgentTransportSnoozeReminder)
+			r.Post("/api/agent/reminders/update", h.AgentTransportUpdateReminder)
+			r.Post("/api/agent/reminders/cancel", h.AgentTransportCancelReminder)
 
 			// Unified 1-on-1 DM list (kind='dm' channels ∪ legacy unbound chat
 			// sessions) plus idempotent create-or-find. Sole data source for the

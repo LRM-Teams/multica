@@ -821,6 +821,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	if !ctx.ChatCLITransportUnavailable {
 		b.WriteString("- Chat output: use `multica message send`; prefer `--message-stdin` with a single-quote heredoc or `--message-file` for agent-authored text, `--sticker` for sticker replies, and omit `--target` for the current surface. After a successful send, do not duplicate the reply in final output.\n")
 		b.WriteString("- Chat reactions/history: `multica message react`, `multica message read`, and `multica message search` are available when a reaction or more bounded chat context is needed.\n")
+		b.WriteString("- Reminders: schedule a durable future self-wake with `multica reminder schedule --title \"...\" --delay-seconds N [--message-id <id>]` when follow-up depends on future state. Use `reminder list|snooze|update|cancel` to manage reminders; prefer this over sleep or runtime cron.\n")
 	}
 	b.WriteString("- Issues/comments: `multica issue list|get|search|comment ...`; use `issue list --mine --output json` for assigned issues. Existing-issue writes require claim/ownership, must remain visible through message/system events, and must not self-approve `in_review -> done`.\n")
 	b.WriteString("- Issue metadata: `multica issue metadata list|set|delete ...` only when explicitly working on an issue and a durable high-signal fact is worth pinning; load subcommand help for exact flags.\n")

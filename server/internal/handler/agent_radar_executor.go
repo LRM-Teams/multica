@@ -159,8 +159,11 @@ func (h *Handler) executeRadarChannelPost(ctx context.Context, run db.AgentRadar
 		}
 	}
 	content := "主动发现：" + strings.TrimSpace(payload.Content)
-	threadID := payload.ThreadID
-	msg, err := h.insertChannelMessage(ctx, channelID, run.WorkspaceID, "agent", agent.ID, agentDisplayName(agent), content, "multica", nil, pgtype.UUID{}, threadRoot, &threadID, 0)
+	var threadID *string
+	if strings.TrimSpace(payload.ThreadID) != "" {
+		threadID = &payload.ThreadID
+	}
+	msg, err := h.insertChannelMessage(ctx, channelID, run.WorkspaceID, "agent", agent.ID, agentDisplayName(agent), content, "multica", nil, pgtype.UUID{}, threadRoot, threadID, 0)
 	if err != nil {
 		return nil, err
 	}

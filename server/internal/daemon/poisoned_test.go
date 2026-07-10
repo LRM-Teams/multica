@@ -201,6 +201,19 @@ func TestClassifyResumeUnsafeTimeout(t *testing.T) {
 			wantOK:   false,
 		},
 		{
+			name:       "grok first stream no progress",
+			provider:   "grok",
+			errMsg:     agent.GrokFirstStreamEventTimeoutMarker + ` after 30s: process started but emitted no streaming-json event before first turn progress`,
+			wantOK:     true,
+			wantReason: FailureReasonGrokFirstTurnNoProgress,
+		},
+		{
+			name:     "grok ordinary timeout remains resumable",
+			provider: "grok",
+			errMsg:   "grok timed out after 30m0s",
+			wantOK:   false,
+		},
+		{
 			name:     "other provider same text is not classified",
 			provider: "claude",
 			errMsg:   agent.CodexSemanticInactivityMarker + " after 10m0s without agent progress",

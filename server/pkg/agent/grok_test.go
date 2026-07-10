@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -374,6 +375,59 @@ func TestGrokExecuteErrorEvent(t *testing.T) {
 			t.Fatalf("expected model error in result, got %q", result.Error)
 		}
 	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for result")
+	}
+}
+
+func TestGrokExecuteTimesOutWhenNoStreamingEventArrives(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	fakePath := filepath.Join(t.TempDir(), "grok")
+	script := "#!/bin/sh\n" +
+		"while :; do :; done\n"
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	backend, err := New("grok", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("new grok backend: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	session, err := backend.Execute(ctx, "hi", ExecOptions{
+		Timeout:                   5 * time.Second,
+		SemanticInactivityTimeout: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	for range session.Messages {
+	}
+
+	select {
+	case result, ok := <-session.Result:
+		if !ok {
+			t.Fatal("result channel closed without a value")
+		}
+		if result.Status != "timeout" {
+			t.Fatalf("expected timeout, got %q error=%q", result.Status, result.Error)
+		}
+		for _, want := range []string{
+			GrokFirstStreamEventTimeoutMarker,
+			"streaming-json event",
+			"session_id=",
+		} {
+			if !strings.Contains(result.Error, want) {
+				t.Fatalf("expected error to contain %q, got %q", want, result.Error)
+			}
+		}
+		if result.SessionID == "" {
+			t.Fatal("expected session id to be preserved")
+		}
+	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for result")
 	}
 }

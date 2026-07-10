@@ -74,6 +74,8 @@ type FailAgentInboxEventRequest struct {
 	DeliveryID    string `json:"delivery_id"`
 	LeaseToken    string `json:"lease_token"`
 	Error         string `json:"error"`
+	SessionID     string `json:"session_id,omitempty"`
+	WorkDir       string `json:"work_dir,omitempty"`
 	FailureReason string `json:"failure_reason,omitempty"`
 	ReasonCode    string `json:"reason_code,omitempty"`
 }
@@ -325,6 +327,12 @@ func (h *Handler) FailAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 	if errText == "" {
 		errText = "agent inbox delivery failed"
 	}
+	failureReason := strings.TrimSpace(req.FailureReason)
+	reasonCode := agentInboxFailureReasonCode(errText, failureReason, req.ReasonCode)
+	if failureReason != "" {
+		h.completeFailedAgentInboxEvent(w, r, event, deliveryID, leaseToken, errText, failureReason, reasonCode, req.SessionID, req.WorkDir)
+		return
+	}
 	failed, err := h.Queries.FailAgentInboxDelivery(r.Context(), db.FailAgentInboxDeliveryParams{
 		ID:           deliveryID,
 		InboxEventID: event.ID,
@@ -340,41 +348,154 @@ func (h *Handler) FailAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	failureReason := strings.TrimSpace(req.FailureReason)
-	reasonCode := strings.TrimSpace(req.ReasonCode)
+	h.recordAgentInboxFailureActivity(r.Context(), failedAgentInboxEvent(failed), deliveryID, errText, failureReason, reasonCode)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func agentInboxFailureReasonCode(errText, failureReason, reasonCode string) string {
+	reasonCode = strings.TrimSpace(reasonCode)
 	if reasonCode == "" {
-		reasonCode = failureReason
+		reasonCode = strings.TrimSpace(failureReason)
 	}
 	if strings.Contains(errText, agent.ProviderAuthRequiredMarker) {
 		reasonCode = agent.ProviderAuthRequiredMarker
 	}
-	delivery, err := h.Queries.GetAgentEventDelivery(r.Context(), deliveryID)
+	return reasonCode
+}
+
+func failedAgentInboxEvent(row db.FailAgentInboxDeliveryRow) db.AgentInboxEvent {
+	return db.AgentInboxEvent{
+		ID:              row.ID,
+		WorkspaceID:     row.WorkspaceID,
+		AgentSessionID:  row.AgentSessionID,
+		ConversationID:  row.ConversationID,
+		ChannelID:       row.ChannelID,
+		ChatSessionID:   row.ChatSessionID,
+		AgentID:         row.AgentID,
+		SourceMessageID: row.SourceMessageID,
+		Reason:          row.Reason,
+		RequiresWake:    row.RequiresWake,
+		Status:          row.Status,
+		Priority:        row.Priority,
+		SeqFrom:         row.SeqFrom,
+		SeqTo:           row.SeqTo,
+		Attempt:         row.Attempt,
+		LastError:       row.LastError,
+		ClaimedAt:       row.ClaimedAt,
+		AckedAt:         row.AckedAt,
+		CreatedAt:       row.CreatedAt,
+		UpdatedAt:       row.UpdatedAt,
+	}
+}
+
+func (h *Handler) recordAgentInboxFailureActivity(ctx context.Context, event db.AgentInboxEvent, deliveryID pgtype.UUID, errText, failureReason, reasonCode string) {
+	delivery, err := h.Queries.GetAgentEventDelivery(ctx, deliveryID)
 	if err != nil {
 		slog.Warn("agent inbox fail: failed to reload delivery for activity event", "delivery_id", uuidToString(deliveryID), "error", err)
 	}
 	targetKind := "agent"
-	targetID := failed.AgentID
-	if failed.ChannelID.Valid {
+	targetID := event.AgentID
+	if event.ChannelID.Valid {
 		targetKind = "channel"
-		targetID = failed.ChannelID
-	} else if failed.ChatSessionID.Valid {
+		targetID = event.ChannelID
+	} else if event.ChatSessionID.Valid {
 		targetKind = "dm"
-		targetID = failed.ChatSessionID
+		targetID = event.ChatSessionID
 	}
-	recordAgentActivityEvent(r.Context(), h.DB,
-		failed.WorkspaceID, failed.AgentID, delivery.RuntimeID, pgtype.UUID{},
+	recordAgentActivityEvent(ctx, h.DB,
+		event.WorkspaceID, event.AgentID, delivery.RuntimeID, pgtype.UUID{},
 		"lifecycle", "agent_inbox_failed", "error",
 		targetKind, targetID, "",
 		reasonCode, "Agent inbox delivery failed: "+truncateForActivity(errText, 200),
 		map[string]any{
 			"failure_reason":    failureReason,
 			"reason_code":       reasonCode,
-			"inbox_event_id":    uuidToString(failed.ID),
+			"inbox_event_id":    uuidToString(event.ID),
 			"delivery_id":       uuidToString(deliveryID),
-			"source_message_id": uuidToString(failed.SourceMessageID),
+			"source_message_id": uuidToString(event.SourceMessageID),
 		},
 	)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.Request, event db.AgentInboxEvent, deliveryID, leaseToken pgtype.UUID, errText, failureReason, reasonCode, sessionID, workDir string) {
+	if h.TxStarter == nil {
+		writeError(w, http.StatusInternalServerError, "transaction starter unavailable")
+		return
+	}
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to begin inbox failure transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
+	acked, err := qtx.AckAgentInboxDelivery(r.Context(), db.AckAgentInboxDeliveryParams{
+		ID:           deliveryID,
+		InboxEventID: event.ID,
+		LeaseToken:   leaseToken,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusConflict, "delivery lease is no longer active")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to ack failed inbox delivery")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE agent_inbox_event
+		SET last_error = $2,
+		    updated_at = now()
+		WHERE id = $1`, event.ID, errText); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record inbox failure")
+		return
+	}
+
+	var chatDonePayload *protocol.ChatDonePayload
+	if event.ChatSessionID.Valid {
+		if chatFailureResumeUnsafe(failureReason) {
+			if _, err := tx.Exec(r.Context(), `
+				UPDATE chat_session
+				SET session_id = NULL,
+				    work_dir = NULL,
+				    runtime_id = NULL,
+				    updated_at = now()
+				WHERE id = $1`, event.ChatSessionID); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to clear unsafe chat session")
+				return
+			}
+		} else if sessionID != "" || workDir != "" {
+			var sessionRuntimeID pgtype.UUID
+			if sessionID != "" {
+				sessionRuntimeID = h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID)
+			}
+			if err := qtx.UpdateChatSessionSession(r.Context(), db.UpdateChatSessionSessionParams{
+				ID:        event.ChatSessionID,
+				SessionID: pgtype.Text{String: sessionID, Valid: sessionID != ""},
+				WorkDir:   pgtype.Text{String: workDir, Valid: workDir != ""},
+				RuntimeID: sessionRuntimeID,
+			}); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to update chat session")
+				return
+			}
+		}
+		payload, err := h.failedAgentInboxChatPayload(r.Context(), qtx, event, errText, failureReason)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to save inbox chat failure")
+			return
+		}
+		chatDonePayload = payload
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit inbox failure")
+		return
+	}
+	if chatDonePayload != nil {
+		h.publishAgentInboxChatDone(event, *chatDonePayload)
+	}
+	h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID, errText, failureReason, reasonCode)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }
 
 func (h *Handler) agentInboxEventResponse(ctx context.Context, runtime db.AgentRuntime, event db.AgentInboxEvent, delivery db.AgentEventDelivery) AgentInboxEventResponse {
@@ -731,6 +852,55 @@ func (h *Handler) completedAgentInboxChatPayload(ctx context.Context, q *db.Quer
 		}
 	}
 	return &payload, nil
+}
+
+func (h *Handler) failedAgentInboxChatPayload(ctx context.Context, q *db.Queries, event db.AgentInboxEvent, errText, failureReason string) (*protocol.ChatDonePayload, error) {
+	if !event.ChatSessionID.Valid {
+		return nil, nil
+	}
+	elapsedMs := agentInboxElapsedMs(event)
+	row, err := q.CreateChatMessage(ctx, db.CreateChatMessageParams{
+		ChatSessionID: event.ChatSessionID,
+		Role:          "assistant",
+		Content:       redact.Text(errText),
+		Parts:         messageparts.MustJSON(nil),
+		TaskID:        event.ID,
+		FailureReason: pgtype.Text{String: failureReason, Valid: failureReason != ""},
+		ElapsedMs:     elapsedMs,
+	})
+	if err != nil {
+		slog.Error("agent inbox fail: failed to save assistant chat failure", "inbox_event_id", uuidToString(event.ID), "error", err)
+		return nil, err
+	}
+	if err := q.SetUnreadSinceIfNull(ctx, event.ChatSessionID); err != nil {
+		slog.Warn("agent inbox fail: failed to set unread_since", "chat_session_id", uuidToString(event.ChatSessionID), "error", err)
+	}
+	payload := protocol.ChatDonePayload{
+		ChatSessionID: uuidToString(event.ChatSessionID),
+		TaskID:        uuidToString(event.ID),
+		Type:          protocol.ChatOutputKindMessage,
+		MessageID:     uuidToString(row.ID),
+		Content:       row.Content,
+		Parts:         messageparts.Decode(row.Parts),
+	}
+	if row.ElapsedMs.Valid {
+		payload.ElapsedMs = row.ElapsedMs.Int64
+	}
+	if row.CreatedAt.Valid {
+		payload.CreatedAt = row.CreatedAt.Time.UTC().Format(time.RFC3339Nano)
+	}
+	return &payload, nil
+}
+
+func agentInboxElapsedMs(event db.AgentInboxEvent) pgtype.Int8 {
+	if !event.CreatedAt.Valid {
+		return pgtype.Int8{}
+	}
+	ms := time.Since(event.CreatedAt.Time).Milliseconds()
+	if ms < 0 {
+		ms = 0
+	}
+	return pgtype.Int8{Int64: ms, Valid: true}
 }
 
 func (h *Handler) publishAgentInboxChatDone(event db.AgentInboxEvent, payload protocol.ChatDonePayload) {

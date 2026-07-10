@@ -1110,6 +1110,91 @@ func TestHandleTask_InboxCompleteUsesInboxEndpoint(t *testing.T) {
 	}
 }
 
+func TestHandleTask_InboxFailureUsesInboxEndpointWithClassifier(t *testing.T) {
+	t.Parallel()
+
+	var failSeen atomic.Bool
+	var renewSeen atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/api/daemon/tasks/") {
+			t.Fatalf("inbox run called legacy task endpoint: %s", r.URL.Path)
+		}
+		if r.URL.Path == "/api/daemon/agent-inbox/events/event-123/renew" {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode renew body: %v", err)
+			}
+			if body["delivery_id"] != "delivery-123" || body["lease_token"] != "lease-123" {
+				t.Fatalf("renew body = %#v, want lease", body)
+			}
+			renewSeen.Store(true)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		if r.URL.Path != "/api/daemon/agent-inbox/events/event-123/fail" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode fail body: %v", err)
+		}
+		want := map[string]any{
+			"delivery_id":    "delivery-123",
+			"lease_token":    "lease-123",
+			"error":          "grok first stream event timeout",
+			"session_id":     "sess-1",
+			"work_dir":       "/tmp/work",
+			"failure_reason": "grok_first_turn_no_progress",
+		}
+		for k, v := range want {
+			if body[k] != v {
+				t.Fatalf("fail body[%s] = %#v, want %#v (body=%#v)", k, body[k], v, body)
+			}
+		}
+		failSeen.Store(true)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{
+		client:             NewClient(srv.URL),
+		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:         make(map[string]*workspaceState),
+		runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "grok"}},
+		cancelPollInterval: 10 * time.Millisecond,
+	}
+	d.runner = taskRunnerFunc(func(_ context.Context, _ Task, _ string, _ int, _ *slog.Logger) (TaskResult, error) {
+		return TaskResult{
+			Status:        "blocked",
+			Comment:       "grok first stream event timeout",
+			SessionID:     "sess-1",
+			WorkDir:       "/tmp/work",
+			FailureReason: "grok_first_turn_no_progress",
+		}, nil
+	})
+	d.handleTask(context.Background(), Task{
+		ID:            "event-123",
+		RuntimeID:     "rt-1",
+		WorkspaceID:   "ws-1",
+		ChatSessionID: "chat-123",
+		Agent:         &AgentData{Name: "inbox-agent"},
+		InboxEvent: &AgentInboxLease{
+			ID:         "event-123",
+			DeliveryID: "delivery-123",
+			LeaseToken: "lease-123",
+			SeqTo:      42,
+		},
+	}, 0)
+	if !failSeen.Load() {
+		t.Fatal("inbox fail endpoint was not called")
+	}
+	if !renewSeen.Load() {
+		t.Fatal("inbox renew endpoint was not called")
+	}
+}
+
 func TestShouldInterruptAgent(t *testing.T) {
 	t.Parallel()
 

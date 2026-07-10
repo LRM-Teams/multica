@@ -1976,7 +1976,7 @@ func isAssistantFollowupPrompt(m db.ChatMessage) bool {
 
 func chatFailureResumeUnsafe(reason string) bool {
 	switch reason {
-	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", "agent_error.context_overflow":
+	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", "grok_first_turn_no_progress", "agent_error.context_overflow":
 		return true
 	default:
 		return false

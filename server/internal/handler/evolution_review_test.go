@@ -98,6 +98,23 @@ func TestEvolutionReviewAPIListAndGet(t *testing.T) {
 	}
 }
 
+func TestSafeEvolutionEvidenceRejectsUnknownAndDMSource(t *testing.T) {
+	for _, source := range []string{"dm_message:secret", "channel_message:secret", "arbitrary_source"} {
+		raw, err := json.Marshal(map[string]any{"source": source, "evidence_refs": []string{"issue:issue-1"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := safeEvolutionReviewEvidence(raw)
+		if got.Source != "" || strings.Join(got.EvidenceRefs, ",") != "issue" {
+			t.Fatalf("source=%q got=%#v", source, got)
+		}
+	}
+	raw, _ := json.Marshal(map[string]any{"source": "memory_curation_l3"})
+	if got := safeEvolutionReviewEvidence(raw).Source; got != "memory_curation_l3" {
+		t.Fatalf("allowed source=%q", got)
+	}
+}
+
 func TestEvolutionReviewAPIReject(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -201,6 +218,44 @@ func TestEvolutionReviewAPIApproveVsRejectUsesCAS(t *testing.T) {
 	}
 }
 
+func TestEvolutionReviewAPISameHashPromotionsShareUnit(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	first := seedEvolutionReviewSubmission(t, "needs_review")
+	second := seedEvolutionReviewSubmission(t, "needs_review")
+	var content, hash string
+	if err := testPool.QueryRow(context.Background(), `SELECT content, content_hash FROM evolution_unit_submission WHERE id=$1`, first).Scan(&content, &hash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE evolution_unit_submission SET content=$2, content_hash=$3 WHERE id=$1`, second, content, hash); err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan int, 2)
+	start := make(chan struct{})
+	for _, id := range []string{first, second} {
+		go func(id string) {
+			<-start
+			req := withURLParam(newRequest(http.MethodPost, "/promote?workspace_id="+testWorkspaceID, map[string]string{}), "submissionId", id)
+			rec := httptest.NewRecorder()
+			testHandler.PromoteEvolutionReviewSubmission(rec, req)
+			results <- rec.Code
+		}(id)
+	}
+	close(start)
+	a, b := <-results, <-results
+	if a != http.StatusOK || b != http.StatusOK {
+		t.Fatalf("statuses=%d,%d", a, b)
+	}
+	var units int
+	if err := testPool.QueryRow(context.Background(), `SELECT count(DISTINCT promoted_unit_id) FROM evolution_unit_submission WHERE id=ANY($1::uuid[])`, []string{first, second}).Scan(&units); err != nil {
+		t.Fatal(err)
+	}
+	if units != 1 {
+		t.Fatalf("distinct promoted units=%d", units)
+	}
+}
+
 func TestEvolutionReviewAPIPromoteCanApplyReviewSuggestions(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -295,6 +350,21 @@ func TestEvolutionSourceSkillAssignmentIsTargetedAndPreservesSource(t *testing.T
 	}
 	if source != "evolution" {
 		t.Fatalf("source=%q", source)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_skill SET source='manual' WHERE agent_id=$1 AND skill_id=$2`, agentID, materializedID); err != nil {
+		t.Fatal(err)
+	}
+	req := withURLParam(newRequest(http.MethodPut, "/source-skill?workspace_id="+testWorkspaceID, map[string]bool{"enabled": false}), "submissionId", submissionID)
+	rec := httptest.NewRecorder()
+	testHandler.SetEvolutionSourceSkillAssignment(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"result":"preserved_non_evolution"`) || !strings.Contains(rec.Body.String(), `"enabled":true`) {
+		t.Fatalf("manual disable status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := testPool.QueryRow(context.Background(), `SELECT source FROM agent_skill WHERE agent_id=$1 AND skill_id=$2`, agentID, materializedID).Scan(&source); err != nil {
+		t.Fatal(err)
+	}
+	if source != "manual" {
+		t.Fatalf("manual source was changed: %q", source)
 	}
 }
 

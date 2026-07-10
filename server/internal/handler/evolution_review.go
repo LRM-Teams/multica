@@ -244,23 +244,49 @@ func (h *Handler) SetEvolutionSourceSkillAssignment(w http.ResponseWriter, r *ht
 		writeError(w, http.StatusInternalServerError, "failed to load materialized skill")
 		return
 	}
+	result := "unchanged"
 	if req.Enabled {
-		_, err = h.DB.Exec(r.Context(), `
+		tag, execErr := h.DB.Exec(r.Context(), `
 			INSERT INTO agent_skill (agent_id, skill_id, source)
 			VALUES ($1, $2, 'evolution')
 			ON CONFLICT (agent_id, skill_id) DO NOTHING
 		`, submission.SourceAgentID, skill.ID)
+		err = execErr
+		if err == nil && tag.RowsAffected() == 1 {
+			result = "enabled"
+		} else if err == nil {
+			result = "already_assigned"
+		}
 	} else {
-		err = h.Queries.RemoveAgentSkill(r.Context(), db.RemoveAgentSkillParams{
-			AgentID: submission.SourceAgentID,
-			SkillID: skill.ID,
-		})
+		var source string
+		var deleted bool
+		err = h.DB.QueryRow(r.Context(), `
+			WITH deleted AS (
+				DELETE FROM agent_skill
+				WHERE agent_id = $1 AND skill_id = $2 AND source = 'evolution'
+				RETURNING source
+			), existing AS (
+				SELECT source FROM agent_skill WHERE agent_id = $1 AND skill_id = $2
+			)
+			SELECT COALESCE((SELECT source FROM deleted), (SELECT source FROM existing), ''),
+			       EXISTS(SELECT 1 FROM deleted)
+		`, submission.SourceAgentID, skill.ID).Scan(&source, &deleted)
+		switch {
+		case err != nil:
+		case deleted:
+			result = "disabled"
+		case source != "":
+			result = "preserved_non_evolution"
+		default:
+			result = "already_unassigned"
+		}
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update evolution skill assignment")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
+	actualEnabled := result != "disabled" && result != "already_unassigned"
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": actualEnabled, "result": result})
 }
 
 func evolutionReviewWorkspace(w http.ResponseWriter, r *http.Request) (string, pgtype.UUID, bool) {
@@ -375,7 +401,7 @@ func evolutionReviewSubmissionResponse(submission db.EvolutionUnitSubmission, fi
 func safeEvolutionReviewEvidence(raw []byte) EvolutionReviewEvidenceResponse {
 	value := jsonMap(raw)
 	return EvolutionReviewEvidenceResponse{
-		Source:       safeJSONScalar(value["source"], 80),
+		Source:       safeEvidenceSource(value["source"]),
 		SourceDate:   safeJSONScalar(value["source_date"], 40),
 		EvidenceRefs: safeEvidenceRefs(value["evidence_refs"]),
 	}
@@ -391,6 +417,16 @@ func safeEvolutionReviewApplies(submission db.EvolutionUnitSubmission) Evolution
 		ProjectTypes: safeStringSlice(submission.ProjectTypes),
 		Languages:    safeStringSlice(submission.Languages),
 		Frameworks:   safeStringSlice(submission.Frameworks),
+	}
+}
+
+func safeEvidenceSource(value any) string {
+	source := safeJSONScalar(value, 80)
+	switch source {
+	case "memory_curation_l3", "memory_curation_l2", "runtime", "curator", "manual", "system":
+		return source
+	default:
+		return ""
 	}
 }
 

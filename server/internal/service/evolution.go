@@ -248,6 +248,9 @@ func (s *EvolutionService) PromoteSubmissionFromReview(ctx context.Context, work
 			review.Metadata["applied_review_suggestions"] = true
 		}
 	}
+	if err := acquireEvolutionPromotionLock(ctx, tx, submission); err != nil {
+		return db.SharedEvolutionUnit{}, err
+	}
 	unit, _, err := txService.promoteSubmission(ctx, submission, files, &review)
 	if err != nil {
 		return db.SharedEvolutionUnit{}, err
@@ -259,6 +262,14 @@ func (s *EvolutionService) PromoteSubmissionFromReview(ctx context.Context, work
 		return db.SharedEvolutionUnit{}, err
 	}
 	return unit, nil
+}
+
+func acquireEvolutionPromotionLock(ctx context.Context, tx pgx.Tx, submission db.EvolutionUnitSubmission) error {
+	key := uuidString(submission.WorkspaceID) + ":" + submission.UnitType + ":" + evolutionDedupeHash(submission)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
+		return fmt.Errorf("acquire evolution promotion lock: %w", err)
+	}
+	return nil
 }
 
 func (s *EvolutionService) RejectSubmissionFromReview(ctx context.Context, workspaceID, submissionID pgtype.UUID, reason string) (db.EvolutionUnitSubmission, error) {

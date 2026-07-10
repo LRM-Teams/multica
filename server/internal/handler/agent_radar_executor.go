@@ -103,9 +103,9 @@ func (h *Handler) executeAgentRadarAction(ctx context.Context, run db.AgentRadar
 		Result: resultJSON,
 		Error:  errText,
 	})
-	recordAgentActivityEvent(ctx, h.DB,
+	h.recordAgentActivityEvent(ctx, h.DB,
 		run.WorkspaceID, agent.ID, agent.RuntimeID, run.TaskID,
-		"platform_decision", "radar_action_"+status, severityForRadarAction(status),
+		activityKindCustom, "radar_action_"+status, severityForRadarAction(status),
 		radarActivityTargetKind(action.TargetKind), targetID, "",
 		action.Type, radarActivityMessage(action, status),
 		map[string]any{

@@ -407,10 +407,14 @@ func (s *TaskService) recordQuickCreateTaskActivity(ctx context.Context, taskID 
 		return
 	}
 	if _, err := s.Queries.CreateTaskMessage(ctx, db.CreateTaskMessageParams{
-		TaskID:  taskID,
-		Seq:     nextSeq,
-		Type:    "text",
-		Content: pgtype.Text{String: content, Valid: true},
+		TaskID:      taskID,
+		Seq:         nextSeq,
+		Type:        "text",
+		Content:     pgtype.Text{String: content, Valid: true},
+		Visibility:  "user_facing",
+		ActionLabel: "Message received",
+		Summary:     "Received a message.",
+		Tone:        "action",
 	}); err != nil {
 		slog.Warn("quick-create completion: record task activity failed", "task_id", util.UUIDToString(taskID), "error", err)
 	}

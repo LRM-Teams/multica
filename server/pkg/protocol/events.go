@@ -39,6 +39,7 @@ const (
 	EventTaskFailed                = "task:failed"    // running → failed
 	EventTaskMessage               = "task:message"
 	EventAgentActivityStep         = "agent_activity:step"
+	EventAgentActivityEvent        = "agent_activity:event"
 	EventTaskCancelled             = "task:cancelled" // * → cancelled
 
 	// Inbox events

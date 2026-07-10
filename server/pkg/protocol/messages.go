@@ -307,8 +307,10 @@ type TaskMessagePayload struct {
 	Content     string         `json:"content,omitempty"` // text content
 	Input       map[string]any `json:"input,omitempty"`   // tool input (tool_use only)
 	Output      string         `json:"output,omitempty"`  // tool output (tool_result only)
+	Visibility  string         `json:"visibility"`        // "user_facing" or "diagnostic_only"
 	ActionLabel string         `json:"action_label"`      // safe human label for the default UI narrative
 	Summary     string         `json:"summary"`           // safe one-sentence summary; raw details stay diagnostic
+	Tone        string         `json:"tone"`              // coarse semantic status for timeline dots
 	CreatedAt   string         `json:"created_at,omitempty"`
 }
 

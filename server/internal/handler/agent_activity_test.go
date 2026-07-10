@@ -8,6 +8,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestAgentActivity_RoleGatesStepAndDiagnosticPayloads(t *testing.T) {
@@ -243,8 +247,184 @@ func TestAgentActivity_ListKeepsRecentEventsVisibleWithLegacyRunHistory(t *testi
 	}
 }
 
+func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	outsiderID := createWorkspaceMemberUser(t, "Activity Events Outsider", "activity-events-outsider-"+randomID()+"@multica.test")
+	agentID := createWorkspaceVisibleActivityAgent(t, "activity-events-agent")
+	dmSessionID := createActivityChatSession(t, agentID, testUserID, "activity events dm")
+	taskID := createActivityRunTask(t, agentID, dmSessionID, "running", "dm work")
+
+	ctx := context.Background()
+	var thinkingID, toolID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO task_message (task_id, seq, type, content, visibility, action_label, summary, tone)
+		VALUES ($1, 1, 'thinking', 'thinking aggregate text', 'user_facing', 'Thinking', 'Thinking through the next step.', 'progress')
+		RETURNING id
+	`, taskID).Scan(&thinkingID); err != nil {
+		t.Fatalf("insert thinking task message: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO task_message (task_id, seq, type, tool, content, visibility, action_label, summary, tone)
+		VALUES ($1, 2, 'tool_use', 'exec_command', 'tool input is not the public narrative', 'user_facing', 'Working', 'Started a work step.', 'progress')
+		RETURNING id
+	`, taskID).Scan(&toolID); err != nil {
+		t.Fatalf("insert tool task message: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM task_message WHERE id IN ($1, $2)`, thinkingID, toolID)
+	})
+
+	ownerEvents := listAgentActivityEventsForUser(t, testUserID, agentID, "")
+	if strings.Contains(ownerEvents.raw, `"run_id"`) {
+		t.Fatalf("activity events must not expose run_id: %s", ownerEvents.raw)
+	}
+	thinking := requireActivityTimelineEvent(t, ownerEvents, thinkingID)
+	if thinking.Kind != activityKindThinking || thinking.EventType != "thinking" {
+		t.Fatalf("thinking event kind/type = %q/%q", thinking.Kind, thinking.EventType)
+	}
+	if thinking.Text == nil || *thinking.Text != "thinking aggregate text" {
+		t.Fatalf("thinking text not surfaced as ordered aggregate text: %+v", thinking)
+	}
+	if thinking.TaskID != nil {
+		t.Fatalf("chat task must not expose issue task_id deep link: %+v", thinking.TaskID)
+	}
+	if !hasSourceSeq(thinking.SourceRefs, "seq", 1) || !hasSourceID(thinking.SourceRefs, "task_message", thinkingID) {
+		t.Fatalf("thinking source refs missing task message/seq: %+v", thinking.SourceRefs)
+	}
+	tool := requireActivityTimelineEvent(t, ownerEvents, toolID)
+	if tool.Kind != activityKindToolCall || tool.EventType != "tool_use" {
+		t.Fatalf("tool event kind/type = %q/%q", tool.Kind, tool.EventType)
+	}
+
+	outsiderEvents := listAgentActivityEventsForUser(t, outsiderID, agentID, "")
+	if got := findActivityTimelineEvent(outsiderEvents, thinkingID); got != nil {
+		t.Fatalf("non-creator must not see owner DM task-message event: %+v", *got)
+	}
+}
+
+func TestReportTaskMessagesPublishesHydratedScopedActivityEvent(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	memberID := createWorkspaceMemberUser(t, "Activity Realtime Member", "activity-realtime-"+randomID()+"@multica.test")
+	agentID := createWorkspaceVisibleActivityAgent(t, "activity-realtime-agent")
+	channelID, channelSessionID := createActivityChannelSession(t, agentID, memberID)
+	taskID := createActivityRunTask(t, agentID, channelSessionID, "running", "channel realtime work")
+
+	var captured *events.Event
+	testHandler.Bus.Subscribe(protocol.EventAgentActivityEvent, func(e events.Event) {
+		payload, ok := e.Payload.(AgentActivityEventRealtimePayload)
+		if !ok || payload.AgentID != agentID || payload.Event == nil || payload.Event.EventType != "thinking" {
+			return
+		}
+		copy := e
+		captured = &copy
+	})
+
+	req := newRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/messages", map[string]any{
+		"messages": []map[string]any{{
+			"seq":     7,
+			"type":    "thinking",
+			"content": "Realtime aggregate thinking",
+		}},
+	})
+	req = withChatTestWorkspaceCtx(t, req)
+	req = withURLParam(req, "taskId", taskID)
+	w := httptest.NewRecorder()
+	testHandler.ReportTaskMessages(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ReportTaskMessages: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if captured == nil {
+		t.Fatal("agent_activity:event was not published with a hydrated thinking event")
+	}
+	payload := captured.Payload.(AgentActivityEventRealtimePayload)
+	if payload.EventID == "" || payload.Event.ID != payload.EventID {
+		t.Fatalf("payload event id mismatch: %+v", payload)
+	}
+	if payload.Event.Kind != activityKindThinking || payload.Event.Text == nil || *payload.Event.Text != "Realtime aggregate thinking" {
+		t.Fatalf("hydrated event missing thinking payload: %+v", payload.Event)
+	}
+	if payload.Event.TargetRef.Kind != "channel" || payload.Event.TargetRef.ID == nil || *payload.Event.TargetRef.ID != channelID {
+		t.Fatalf("hydrated event target ref = %+v, want channel %s", payload.Event.TargetRef, channelID)
+	}
+	if len(captured.RecipientUserIDs) != 1 || captured.RecipientUserIDs[0] != memberID {
+		t.Fatalf("channel activity realtime must be recipient-scoped to channel users, got %+v want [%s]", captured.RecipientUserIDs, memberID)
+	}
+	if payload.Event.TaskID != nil {
+		t.Fatalf("chat/channel task-message event must not expose issue task_id deep link: %+v", payload.Event.TaskID)
+	}
+	if !hasSourceSeq(payload.Event.SourceRefs, "seq", 7) || !hasSourceID(payload.Event.SourceRefs, "task_message", payload.EventID) {
+		t.Fatalf("hydrated event source refs missing task_message/seq: %+v", payload.Event.SourceRefs)
+	}
+}
+
+func TestRecordAgentActivityEventPublishesHydratedRealtimeEvent(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createWorkspaceVisibleActivityAgent(t, "activity-realtime-record-agent")
+	var captured *events.Event
+	testHandler.Bus.Subscribe(protocol.EventAgentActivityEvent, func(e events.Event) {
+		payload, ok := e.Payload.(AgentActivityEventRealtimePayload)
+		if !ok || payload.AgentID != agentID || payload.Event == nil || payload.Event.EventType != "agent_inbox_failed" {
+			return
+		}
+		copy := e
+		captured = &copy
+	})
+
+	testHandler.recordAgentActivityEvent(
+		context.Background(),
+		testHandler.DB,
+		parseUUID(testWorkspaceID),
+		parseUUID(agentID),
+		pgtype.UUID{},
+		pgtype.UUID{},
+		activityKindError,
+		"agent_inbox_failed",
+		"error",
+		"agent",
+		parseUUID(agentID),
+		"",
+		"grok_first_turn_no_progress",
+		"Runtime stopped before first output.",
+		map[string]any{"agent_session_id": "session-1"},
+	)
+
+	if captured == nil {
+		t.Fatal("agent_activity:event was not published with a hydrated agent_activity_event row")
+	}
+	payload := captured.Payload.(AgentActivityEventRealtimePayload)
+	if payload.EventID == "" || payload.Event.ID != payload.EventID {
+		t.Fatalf("payload event id mismatch: %+v", payload)
+	}
+	if payload.Event.Kind != activityKindError || payload.Event.ReasonCode != "grok_first_turn_no_progress" {
+		t.Fatalf("hydrated event reason contract wrong: %+v", payload.Event)
+	}
+	if payload.Event.TargetRef.Kind != "agent" || payload.Event.TargetRef.ID == nil || *payload.Event.TargetRef.ID != agentID {
+		t.Fatalf("hydrated event target ref = %+v, want agent %s", payload.Event.TargetRef, agentID)
+	}
+	if !hasSourceID(payload.Event.SourceRefs, "agent_session", "session-1") {
+		t.Fatalf("hydrated event source refs missing agent_session: %+v", payload.Event.SourceRefs)
+	}
+	if captured.RecipientUserIDs != nil {
+		t.Fatalf("agent-scope activity event should keep workspace fanout, got recipients %+v", captured.RecipientUserIDs)
+	}
+}
+
 type agentActivityListResult struct {
 	resp AgentActivityPageResponse
+	raw  string
+}
+
+type agentActivityEventsResult struct {
+	resp AgentActivityEventsPageResponse
 	raw  string
 }
 
@@ -264,6 +444,22 @@ func listAgentActivityForUser(t *testing.T, userID, agentID, query string) agent
 	return agentActivityListResult{resp: resp, raw: w.Body.String()}
 }
 
+func listAgentActivityEventsForUser(t *testing.T, userID, agentID, query string) agentActivityEventsResult {
+	t.Helper()
+	w := httptest.NewRecorder()
+	path := "/api/agents/" + agentID + "/activity/events" + query
+	req := withURLParam(newRequestAs(userID, http.MethodGet, path, nil), "id", agentID)
+	testHandler.ListAgentActivityEvents(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListAgentActivityEvents(%s): expected 200, got %d: %s", userID, w.Code, w.Body.String())
+	}
+	var resp AgentActivityEventsPageResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode activity events response: %v", err)
+	}
+	return agentActivityEventsResult{resp: resp, raw: w.Body.String()}
+}
+
 func requireActivityItem(t *testing.T, list agentActivityListResult, id string) AgentActivityItem {
 	t.Helper()
 	item := findActivityItem(list, id)
@@ -280,6 +476,42 @@ func findActivityItem(list agentActivityListResult, id string) *AgentActivityIte
 		}
 	}
 	return nil
+}
+
+func requireActivityTimelineEvent(t *testing.T, list agentActivityEventsResult, id string) AgentActivityTimelineEvent {
+	t.Helper()
+	item := findActivityTimelineEvent(list, id)
+	if item == nil {
+		t.Fatalf("activity event %s not found in %+v", id, list.resp.Events)
+	}
+	return *item
+}
+
+func findActivityTimelineEvent(list agentActivityEventsResult, id string) *AgentActivityTimelineEvent {
+	for i := range list.resp.Events {
+		if list.resp.Events[i].ID == id {
+			return &list.resp.Events[i]
+		}
+	}
+	return nil
+}
+
+func hasSourceID(refs []AgentActivitySourceRef, kind, id string) bool {
+	for _, ref := range refs {
+		if ref.Kind == kind && ref.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSourceSeq(refs []AgentActivitySourceRef, kind string, seq int64) bool {
+	for _, ref := range refs {
+		if ref.Kind == kind && ref.Seq != nil && *ref.Seq == seq {
+			return true
+		}
+	}
+	return false
 }
 
 func agentActivityRequest(userID, agentID, activityID, suffix string) *http.Request {
@@ -394,7 +626,7 @@ func createActivityEventWithDetails(t *testing.T, agentID, targetKind, targetID,
 			workspace_id, agent_id, event_kind, event_type, severity,
 			target_kind, target_id, reason_code, message, details
 		)
-		VALUES ($1, $2, 'platform_decision', $3, 'info', $4, $5, 'test_reason', 'safe event', $6::jsonb)
+		VALUES ($1, $2, 'custom', $3, 'info', $4, $5, 'test_reason', 'safe event', $6::jsonb)
 		RETURNING id
 	`, testWorkspaceID, agentID, eventType, targetKind, targetID, details).Scan(&eventID); err != nil {
 		t.Fatalf("create activity event: %v", err)

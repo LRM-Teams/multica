@@ -378,8 +378,8 @@
       "subtexts": {
         "message_received": "收到消息",
         "compacting_context": "压缩上下文",
-        "compaction_finished": "上下文压缩完成",
-        "subagent_activity": "子智能体"
+        "compaction_finished": "压缩完成",
+        "subagent_activity": "子智能体活动"
       },
       "view_diagnostics": "查看诊断详情",
       "hide_diagnostics": "收起诊断详情",

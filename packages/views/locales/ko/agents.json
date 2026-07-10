@@ -386,8 +386,8 @@
       "subtexts": {
         "message_received": "메시지 수신",
         "compacting_context": "컨텍스트 압축",
-        "compaction_finished": "컨텍스트 압축 완료",
-        "subagent_activity": "서브에이전트"
+        "compaction_finished": "압축 완료",
+        "subagent_activity": "서브에이전트 활동"
       },
       "view_diagnostics": "진단 세부정보 보기",
       "hide_diagnostics": "진단 세부정보 숨기기",

@@ -370,8 +370,8 @@
       "subtexts": {
         "message_received": "メッセージを受信",
         "compacting_context": "コンテキスト圧縮",
-        "compaction_finished": "コンテキスト圧縮完了",
-        "subagent_activity": "サブエージェント"
+        "compaction_finished": "圧縮完了",
+        "subagent_activity": "サブエージェント活動"
       },
       "view_diagnostics": "診断の詳細を表示",
       "hide_diagnostics": "診断の詳細を非表示",

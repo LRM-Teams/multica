@@ -4066,6 +4066,153 @@ func TestAddChannelMembersRejectsPrivateAgentForPlainMember(t *testing.T) {
 	}
 }
 
+func TestAddChannelMemberEmitsSystemEventOnce(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	targetID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "member-add-event-"+uuid.NewString(), testUserID)
+
+	req := newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/members", AddChannelMemberRequest{MemberType: "user", MemberID: targetID})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.AddChannelMember(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("add member: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	event := latestChannelSystemEventForTest(t, channelID)
+	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, targetID)
+
+	req = newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/members", AddChannelMemberRequest{MemberType: "user", MemberID: targetID})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.AddChannelMember(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("duplicate add member: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := countChannelSystemMessagesForTest(t, channelID); got != 1 {
+		t.Fatalf("system message count after duplicate add = %d, want 1", got)
+	}
+}
+
+func TestAddChannelMembersBatchEmitsOnlyInsertedSystemEvents(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	existingID := createChannelPlainMember(t)
+	newID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "member-batch-event-"+uuid.NewString(), testUserID, existingID)
+
+	req := newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/members/batch", AddChannelMembersRequest{Members: []AddChannelMemberRequest{
+		{MemberType: "user", MemberID: existingID},
+		{MemberType: "user", MemberID: newID},
+	}})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.AddChannelMembers(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("batch add members: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := countChannelSystemMessagesForTest(t, channelID); got != 1 {
+		t.Fatalf("batch system message count = %d, want only inserted member event", got)
+	}
+	event := latestChannelSystemEventForTest(t, channelID)
+	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, newID)
+}
+
+func TestRemoveChannelMemberEmitsRemovedSystemEventForRemainingMembers(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	targetID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "member-remove-event-"+uuid.NewString(), testUserID, targetID)
+
+	req := newRequestAs(testUserID, http.MethodDelete, "/api/channels/"+channelID+"/members/user/"+targetID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withRouteParams(req, "channelId", channelID, "memberType", "user", "memberId", targetID)
+	rec := httptest.NewRecorder()
+	testHandler.RemoveChannelMember(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("remove member: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	event := latestChannelSystemEventForTest(t, channelID)
+	assertChannelMemberSystemEvent(t, event, channelMemberRemovedEvent, testUserID, targetID)
+
+	listReq := newRequestAs(targetID, http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
+	listReq = withChannelTestWorkspaceCtx(t, listReq, targetID)
+	listReq = withURLParam(listReq, "channelId", channelID)
+	listRec := httptest.NewRecorder()
+	testHandler.ListChannelMessages(listRec, listReq)
+	if listRec.Code != http.StatusForbidden {
+		t.Fatalf("removed member list messages: status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+}
+
+func TestRemoveChannelMemberEmitsLeftSystemEventForSelfRemove(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	memberID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "member-left-event-"+uuid.NewString(), testUserID, memberID)
+
+	req := newRequestAs(memberID, http.MethodDelete, "/api/channels/"+channelID+"/members/user/"+memberID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withRouteParams(req, "channelId", channelID, "memberType", "user", "memberId", memberID)
+	rec := httptest.NewRecorder()
+	testHandler.RemoveChannelMember(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("self remove member: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	event := latestChannelSystemEventForTest(t, channelID)
+	assertChannelMemberSystemEvent(t, event, channelMemberLeftEvent, memberID, memberID)
+}
+
+func TestChannelMemberSystemMessageDoesNotCountAsUnread(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	readerID := createChannelPlainMember(t)
+	targetID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "member-event-unread-"+uuid.NewString(), testUserID, readerID)
+
+	req := newRequestAs(readerID, http.MethodPost, "/api/channels/"+channelID+"/read", nil)
+	req = withChannelTestWorkspaceCtx(t, req, readerID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.MarkChannelRead(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mark read: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	addReq := newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/members", AddChannelMemberRequest{MemberType: "user", MemberID: targetID})
+	addReq = withChannelTestWorkspaceCtx(t, addReq, testUserID)
+	addReq = withURLParam(addReq, "channelId", channelID)
+	addRec := httptest.NewRecorder()
+	testHandler.AddChannelMember(addRec, addReq)
+	if addRec.Code != http.StatusCreated {
+		t.Fatalf("add member: status=%d body=%s", addRec.Code, addRec.Body.String())
+	}
+
+	ch := listedChannelForUser(t, channelID, readerID)
+	if ch == nil {
+		t.Fatal("channel missing from reader list")
+	}
+	if ch.RealUnreadCount != 0 || ch.UnreadCount != 0 {
+		t.Fatalf("system member event counted as unread: real=%d total=%d", ch.RealUnreadCount, ch.UnreadCount)
+	}
+}
+
 func TestAddChannelMemberRejectsDMChannel(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -4330,6 +4477,62 @@ func assertChannelMessageContentCount(t *testing.T, channelID, content string, w
 	if count != want {
 		t.Fatalf("channel message content %q count = %d, want %d", content, count, want)
 	}
+}
+
+func latestChannelSystemEventForTest(t *testing.T, channelID string) channelMemberSystemEventPart {
+	t.Helper()
+	var rawParts []byte
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT parts
+		FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'system'
+		ORDER BY seq DESC
+		LIMIT 1`, channelID).Scan(&rawParts); err != nil {
+		t.Fatalf("load latest system message: %v", err)
+	}
+	var parts []protocol.MessagePart
+	if err := json.Unmarshal(rawParts, &parts); err != nil {
+		t.Fatalf("decode system message parts: %v", err)
+	}
+	if len(parts) != 1 || strings.TrimSpace(parts[0].Text) == "" {
+		t.Fatalf("system message parts = %+v, want one structured text part", parts)
+	}
+	var event channelMemberSystemEventPart
+	if err := json.Unmarshal([]byte(parts[0].Text), &event); err != nil {
+		t.Fatalf("decode system event part %q: %v", parts[0].Text, err)
+	}
+	return event
+}
+
+func assertChannelMemberSystemEvent(t *testing.T, event channelMemberSystemEventPart, wantEvent, actorID, targetID string) {
+	t.Helper()
+	if event.Event != wantEvent {
+		t.Fatalf("event = %q, want %q; full=%+v", event.Event, wantEvent, event)
+	}
+	if event.Params.ActorID != actorID {
+		t.Fatalf("actor_id = %q, want %q; full=%+v", event.Params.ActorID, actorID, event)
+	}
+	if event.Params.TargetID != targetID {
+		t.Fatalf("target_id = %q, want %q; full=%+v", event.Params.TargetID, targetID, event)
+	}
+	if strings.TrimSpace(event.Params.ActorName) == "" {
+		t.Fatalf("actor_name is empty; full=%+v", event)
+	}
+	if strings.TrimSpace(event.Params.TargetName) == "" {
+		t.Fatalf("target_name is empty; full=%+v", event)
+	}
+}
+
+func countChannelSystemMessagesForTest(t *testing.T, channelID string) int {
+	t.Helper()
+	var count int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'system'`, channelID).Scan(&count); err != nil {
+		t.Fatalf("count system messages: %v", err)
+	}
+	return count
 }
 
 func assertNoThreadRepliesForRoot(t *testing.T, channelID, rootID string) {

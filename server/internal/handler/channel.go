@@ -322,6 +322,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			SELECT count(*) AS cnt FROM channel_message m
 			WHERE m.channel_id = ch.id
 			  AND m.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
+			  AND m.author_type <> 'system'
 			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
 			  AND (m.thread_root_message_id IS NULL OR m.main_timeline_visible)
 			  AND m.deleted_at IS NULL
@@ -901,6 +902,9 @@ func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
+	if tag.RowsAffected() > 0 {
+		h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, channelMemberAddedEvent, parseUUID(userID), req.MemberType, memberID)
+	}
 	// When a NEW human joins, every agent member greets them briefly.
 	// Guarded on RowsAffected so a duplicate re-add never re-welcomes, and on
 	// member_type so adding an agent member (or the creator at channel creation,
@@ -944,7 +948,7 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	_, err := h.DB.Exec(r.Context(), `
+	tag, err := h.DB.Exec(r.Context(), `
 		DELETE FROM channel_member
 		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = $3 AND member_id = $4`,
 		channelID, parseUUID(workspaceID), memberType, memberID)
@@ -953,6 +957,13 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
+	if tag.RowsAffected() > 0 {
+		event := channelMemberRemovedEvent
+		if memberType == "user" && uuidToString(memberID) == userID {
+			event = channelMemberLeftEvent
+		}
+		h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, event, parseUUID(userID), memberType, memberID)
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1180,6 +1191,7 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 		SELECT COUNT(*) FROM channel_message m
 		WHERE m.channel_id = $1 AND m.workspace_id = $2
 		  AND m.seq > $3::bigint
+		  AND m.author_type <> 'system'
 		  AND (m.thread_root_message_id IS NULL OR m.main_timeline_visible)
 		  AND m.deleted_at IS NULL
 		  AND NOT (m.author_type = 'user' AND m.author_id = $4::uuid)`, channelID, workspaceID, pgtype.Int8{Int64: aroundSeq, Valid: true}, parseUUID(userIDStr)).Scan(&unreadTotal); err != nil {
@@ -1709,6 +1721,7 @@ func (h *Handler) attachChannelMessageThreadMetadata(ctx context.Context, worksp
 	       CASE
 	         WHEN tp.followed_at IS NOT NULL THEN count(replies.id) FILTER (
 	           WHERE replies.seq > COALESCE(tp.last_read_seq, 0)
+	             AND replies.author_type <> 'system'
 	             AND NOT (replies.author_type = 'user' AND replies.author_id = $3)
 	             AND NOT replies.main_timeline_visible
 	         )::int

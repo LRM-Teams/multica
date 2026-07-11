@@ -19,6 +19,31 @@ const TONE_DOT: Record<ActivityTone, string> = {
   failure: "bg-destructive",
 };
 
+// A file tool's `tool_target` is now a source-backed path (absolute when the
+// runtime provides it, #484) which can be ~90 chars — long enough to blow out
+// the row. Keep the basename fully visible, middle-ellipsis the leading
+// directories (never right-truncate, which would eat the basename), and expose
+// the full path on hover (`title`). Display-only: the value is the BE
+// source-backed target verbatim; we never reconstruct or leak raw input.
+// (Click-to-copy is the tracked #385-FE follow-up — deferred to keep the
+// overflow hotfix non-interactive.) Used by both the Activity tab and the
+// compact Profile Recent surface (the same shared row).
+function ToolTargetPath({ value }: { value: string }) {
+  const idx = value.lastIndexOf("/");
+  // Keep the leading "/" on the tail so the ellipsis reads "…/basename".
+  const head = idx > 0 ? value.slice(0, idx) : "";
+  const tail = idx > 0 ? value.slice(idx) : value;
+  return (
+    <span
+      title={value}
+      className="flex min-w-0 items-baseline text-xs text-muted-foreground"
+    >
+      {head ? <span className="min-w-0 truncate">{head}</span> : null}
+      <span className="shrink-0">{tail}</span>
+    </span>
+  );
+}
+
 function ActivityRow({
   event,
   time,
@@ -50,6 +75,18 @@ function ActivityRow({
     !!subtext &&
     !presentation.subtextKey &&
     (event.kind === "thinking" || event.kind === "text");
+  // A tool row's subtext is a `tool_target`; for file tools that is a path
+  // (#484/#385) which needs the basename-preserving path treatment. Non-path
+  // subtexts stay a plain single-line truncate. Shared by the inline (Activity
+  // tab) and compact (Profile Recent) layouts below.
+  const subtextIsPath = event.kind === "tool_call" && !!subtext && subtext.includes("/");
+  const subtextNode = subtext ? (
+    subtextIsPath ? (
+      <ToolTargetPath value={subtext} />
+    ) : (
+      <span className="truncate text-xs text-muted-foreground">{subtext}</span>
+    )
+  ) : null;
   return (
     <div
       className={cn("flex items-baseline gap-3", compact ? "py-0.5" : "py-1")}
@@ -63,20 +100,10 @@ function ActivityRow({
         className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", TONE_DOT[presentation.tone])}
         aria-hidden
       />
-      {compact ? (
-        <div className="flex min-w-0 items-baseline gap-2">
-          <span className="shrink-0 text-sm text-foreground">{label}</span>
-          {subtext && (
-            <span className="truncate text-xs text-muted-foreground">{subtext}</span>
-          )}
-        </div>
-      ) : (
+      {expandable ? (
         <div className="min-w-0">
           <span className="text-sm text-foreground">{label}</span>
-          {subtext && !expandable && (
-            <span className="ml-2 text-xs text-muted-foreground">{subtext}</span>
-          )}
-          {subtext && expandable && (
+          {subtext && (
             <button
               type="button"
               onClick={() => setExpanded((prev) => !prev)}
@@ -89,6 +116,11 @@ function ActivityRow({
               {subtext}
             </button>
           )}
+        </div>
+      ) : (
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span className="shrink-0 text-sm text-foreground">{label}</span>
+          {subtextNode}
         </div>
       )}
     </div>

@@ -49,6 +49,44 @@ func TestGetAgentHealth_MapsRuntimeAndHealthEvents(t *testing.T) {
 	}
 }
 
+func TestRecordRuntimeHealthEventForRuntimeAgents_DiagnosticVisibility(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID, runtimeID := createAgentHealthFixture(t, "online", time.Now().Add(-20*time.Second), time.Now().Add(-15*time.Second))
+	if err := RecordRuntimeHealthEventForRuntimeAgents(ctx,
+		testHandler.DB,
+		parseUUID(testWorkspaceID),
+		parseUUID(runtimeID),
+		agentHealthEventTransportRecover,
+		agentHealthStateRecovered,
+		"transport_reconnected",
+		"runtime transport reconnected",
+		nil,
+	); err != nil {
+		t.Fatalf("record runtime health event: %v", err)
+	}
+
+	var visibility, eventKind string
+	if err := testPool.QueryRow(ctx, `
+		SELECT visibility, event_kind
+		FROM agent_activity_event
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND runtime_id = $3
+		  AND event_type = $4
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, testWorkspaceID, agentID, runtimeID, agentHealthEventTransportRecover).Scan(&visibility, &eventKind); err != nil {
+		t.Fatalf("load health activity event: %v", err)
+	}
+	if eventKind != activityKindTransport || visibility != "diagnostic_only" {
+		t.Fatalf("health activity = kind %q visibility %q, want transport diagnostic_only", eventKind, visibility)
+	}
+}
+
 func TestGetAgentHealth_OfflineAgesIntoReconnecting(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

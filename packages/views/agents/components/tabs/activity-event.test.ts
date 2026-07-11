@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ActivityEvent } from "./activity-event";
-import { activityPresentation, type ActivityLabelKey } from "./activity-event";
+import {
+  activityPresentation,
+  isNarrativeActivityEvent,
+  type ActivityLabelKey,
+} from "./activity-event";
 
 function toolEvent(tool: string, status = "running"): ActivityEvent {
   return {
@@ -42,7 +46,10 @@ describe("activityPresentation — tool normalization", () => {
     expect(activityPresentation(toolEvent(tool)).labelKey).toBe(labelKey);
   });
 
-  it("falls back to the neutral working labelKey for an unknown provider tool (never a raw slug)", () => {
+  it("never leaks a raw slug for an unknown provider tool (projection stays label-safe)", () => {
+    // An un-mapped tool never reaches the user-facing timeline (see
+    // isNarrativeActivityEvent filter below); if the projection is ever invoked
+    // it still yields the neutral union labelKey, never the raw slug.
     const p = activityPresentation(toolEvent("some_mystery_tool"));
     expect(p.labelKey).toBe("working");
     // labelKey is a fixed union; the raw slug must not leak via subtext either.
@@ -66,5 +73,31 @@ describe("activityPresentation — tool normalization", () => {
   it("tones a running tool active and a settled tool neutral", () => {
     expect(activityPresentation(toolEvent("bash", "running")).tone).toBe("active");
     expect(activityPresentation(toolEvent("bash", "completed")).tone).toBe("neutral");
+  });
+});
+
+describe("isNarrativeActivityEvent — un-mapped tool filter (#384)", () => {
+  // A tool_call only enters the user-facing timeline when its slug maps to a
+  // canonical Raft action. An un-mapped tool (BE didn't canonicalize it, or a
+  // parse artifact like a status leaking into `tool`) is dropped — no fake
+  // "Working" row, no raw slug. The source-side fix is a BE `unmapped_tool_name`
+  // gap event; the FE just refuses to render the un-mapped row.
+  it("keeps a mapped tool_call in the narrative", () => {
+    expect(isNarrativeActivityEvent(toolEvent("bash"))).toBe(true);
+    expect(isNarrativeActivityEvent(toolEvent("read_file"))).toBe(true);
+    expect(isNarrativeActivityEvent(toolEvent("Read"))).toBe(true); // case-insensitive
+  });
+
+  it("drops an un-mapped tool_call from the narrative", () => {
+    expect(isNarrativeActivityEvent(toolEvent("some_mystery_tool"))).toBe(false);
+    // A status string leaking into `tool` (parse artifact) is also un-mapped.
+    expect(isNarrativeActivityEvent(toolEvent("running"))).toBe(false);
+    expect(isNarrativeActivityEvent(toolEvent(""))).toBe(false);
+  });
+
+  it("still drops any tool_call that is not user_facing", () => {
+    expect(
+      isNarrativeActivityEvent({ ...toolEvent("bash"), visibility: "diagnostic_only" }),
+    ).toBe(false);
   });
 });

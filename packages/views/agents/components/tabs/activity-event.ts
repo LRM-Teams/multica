@@ -63,6 +63,13 @@ export function isNarrativeActivityEvent(event: ActivityEvent): boolean {
     case "turn_end":
     case "session_init":
       return false;
+    case "tool_call":
+      // Only surface a tool row we can label with a canonical Raft action. An
+      // un-mapped tool (BE didn't canonicalize it, or a parse artifact like a
+      // status leaking into `tool`) drops out of the user-facing timeline
+      // entirely — never faked as "Working" (#384). BE emits an
+      // `unmapped_tool_name` gap event so the miss is fixed at the source.
+      return isMappedTool(event);
     case "custom":
       return event.event_type.includes("subagent");
     default:
@@ -99,8 +106,10 @@ function statusTone(event: ActivityEvent): ActivityTone {
 // OpenCode `bash`/`read`/`write`/`glob`, Grok `read_file`, Claude capitalized
 // `Read`, etc. — so `event.tool` is NOT a stable Raft key set (confirmed with BE,
 // #382). Normalize the provider slug to a Raft semantic action, then use the
-// source-backed gerund label (raft `TOOL_DISPLAY_METADATA`). An unknown slug
-// falls back to a neutral working row rather than echoing the raw tool name.
+// source-backed gerund label (raft `TOOL_DISPLAY_METADATA`). An un-mapped slug
+// (BE didn't canonicalize it, or a parse artifact) is dropped from the
+// user-facing timeline by `isMappedTool`/`isNarrativeActivityEvent` — never
+// faked as "Working" and never echoing the raw name (#384).
 const TOOL_SEMANTIC: Record<string, string> = {
   bash: "command",
   exec_command: "command",
@@ -139,9 +148,21 @@ const TOOL_ACTION_KEY: Record<string, ActivityLabelKey> = {
   send_message: "sending_message",
 };
 
+// A tool row only reaches the user-facing timeline when its slug maps to a
+// canonical Raft action (see `isNarrativeActivityEvent`). An un-mapped tool is a
+// canonicalization gap — the BE didn't canonicalize the name, or a parse
+// artifact leaked a non-tool string into `tool`. We keep it diagnostic-only
+// rather than papering over it with a fake "Working" row (#384); the source-side
+// fix is BE emitting an `unmapped_tool_name` gap event.
+function isMappedTool(event: ActivityEvent): boolean {
+  return !!TOOL_SEMANTIC[normalizedTool(event)];
+}
+
 function toolPresentation(event: ActivityEvent): ActivityPresentation {
   const subtext = toolTarget(event);
   const semantic = TOOL_SEMANTIC[normalizedTool(event)];
+  // Rendered tool rows are always mapped (see `isNarrativeActivityEvent`); the
+  // "working" branch is an unreachable type guard, never a real fallback label.
   const labelKey = (semantic && TOOL_ACTION_KEY[semantic]) || "working";
   return { labelKey, subtext, tone: statusTone(event) };
 }

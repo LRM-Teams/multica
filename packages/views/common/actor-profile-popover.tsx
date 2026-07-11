@@ -15,10 +15,7 @@ import {
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { memberProfileOptions } from "@multica/core/agents";
-import type {
-  MemberProfile,
-  MemberProfileActivityItem,
-} from "@multica/core/types";
+import type { MemberProfile } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import {
@@ -29,6 +26,8 @@ import {
 } from "@multica/core/identity";
 import { AgentLiveStatusMark } from "../agents/components/agent-live-status-mark";
 import { useAgentLiveStatus } from "../agents/use-agent-live-status";
+import { ActivityTimeline } from "../agents/components/tabs/activity-timeline";
+import { useAgentActivityEvents } from "../agents/components/tabs/use-agent-activity-events";
 import { agentColor } from "./agent-color";
 import { useT } from "../i18n/use-t";
 
@@ -254,17 +253,7 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
       ) : null}
       {profile.member_type === "agent" ? (
         <ProfileSection title={t(($) => $.profile_popover.recent_activity)}>
-          {(profile.recent_activity ?? []).length > 0 ? (
-            <div className="flex flex-col">
-              {(profile.recent_activity ?? []).map((activity) => (
-                <ActivityRow key={activity.id} activity={activity} />
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-md bg-muted/45 px-2.5 py-1.5 text-xs text-muted-foreground">
-              {t(($) => $.profile_popover.no_recent_activity)}
-            </div>
-          )}
+          <AgentRecentActivity agentId={profile.member_id} />
         </ProfileSection>
       ) : null}
     </div>
@@ -288,29 +277,25 @@ function ProfileSection({
   );
 }
 
-function ActivityRow({ activity }: { activity: MemberProfileActivityItem }) {
+// Agent "Recent activity" is the SAME shared ActivityTimeline the Activity tab
+// renders, in compact mode (#383): last N narrative rows, dense, single-line
+// subtext, no expand. It consumes the live #302 ActivityEvent stream (one shared
+// read-model) instead of the legacy server-projected `recent_activity` labels,
+// so this hover surface stays in lockstep with the tab/header and there is a
+// single Activity renderer — no second local presentation to drift.
+function AgentRecentActivity({ agentId }: { agentId: string }) {
   const { t } = useT("channels");
-  const label = activity.label?.trim() || activityFallbackLabel(activity.kind, t);
-  const clock = formatActivityClock(activity.occurred_at);
-
-  return (
-    <div className="flex min-w-0 items-center gap-2 py-1 text-xs first:pt-0 last:pb-0">
-      <span
-        className="w-[4.75rem] shrink-0 tabular-nums text-muted-foreground"
-        title={formatAbsoluteTime(activity.occurred_at)}
-      >
-        {clock}
-      </span>
-      <span
-        className={cn(
-          "size-1.5 shrink-0 rounded-full",
-          activityStatusDotClass(activity.status),
-        )}
-        aria-hidden
-      />
-      <span className="min-w-0 truncate text-foreground">{label}</span>
-    </div>
-  );
+  const { events, isLoading } = useAgentActivityEvents(agentId);
+  // Guard only the first paint so the section doesn't flash the empty state
+  // before the REST first-paint lands; ActivityTimeline owns empty + populated.
+  if (isLoading && events.length === 0) {
+    return (
+      <div className="rounded-md bg-muted/45 px-2.5 py-1.5 text-xs text-muted-foreground">
+        {t(($) => $.profile_popover.loading)}
+      </div>
+    );
+  }
+  return <ActivityTimeline events={events} compact />;
 }
 
 function UnavailableProfile({ message }: { message: string }) {
@@ -326,69 +311,4 @@ function roleLabel(
   if (role === "member") return t(($) => $.profile_popover.role.member);
   if (role === "agent") return t(($) => $.profile_popover.role.agent);
   return null;
-}
-
-function activityFallbackLabel(
-  kind: MemberProfileActivityItem["kind"],
-  t: ChannelsT,
-): string {
-  switch (kind) {
-    case "queued":
-      return t(($) => $.profile_popover.activity.queued);
-    case "failed":
-      return t(($) => $.profile_popover.activity.failed);
-    case "cancelled":
-      return t(($) => $.profile_popover.activity.cancelled);
-    case "task":
-      return t(($) => $.profile_popover.activity.task);
-    case "working":
-    default:
-      return t(($) => $.profile_popover.activity.working);
-  }
-}
-
-// Compact status dot for the timeline row — mirrors the IM-style activity log
-// (time · colored dot · label) rather than icon-in-circle + relative "just now".
-function activityStatusDotClass(
-  status: MemberProfileActivityItem["status"],
-): string {
-  switch (status) {
-    case "running":
-    case "dispatched":
-      return "bg-success";
-    case "queued":
-    case "waiting_local_directory":
-      return "bg-warning";
-    case "failed":
-      return "bg-destructive";
-    case "completed":
-    case "cancelled":
-    default:
-      return "bg-muted-foreground/40";
-  }
-}
-
-// Clock for the activity column: "16:05:14" (local, 24h, fixed width).
-function formatActivityClock(value: string): string {
-  try {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    const hh = String(date.getHours()).padStart(2, "0");
-    const mm = String(date.getMinutes()).padStart(2, "0");
-    const ss = String(date.getSeconds()).padStart(2, "0");
-    return `${hh}:${mm}:${ss}`;
-  } catch {
-    return value;
-  }
-}
-
-function formatAbsoluteTime(value: string): string {
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    }).format(new Date(value));
-  } catch {
-    return value;
-  }
 }

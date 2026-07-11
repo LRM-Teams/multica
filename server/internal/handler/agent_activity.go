@@ -1531,8 +1531,13 @@ func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspac
 	}
 	if message.Tool.Valid && strings.TrimSpace(message.Tool.String) != "" {
 		rawTool := strings.TrimSpace(message.Tool.String)
-		details["tool"] = agentActivityCanonicalToolName(rawTool)
-		if details["tool"] != rawTool {
+		canonicalTool, known := taskMessageCanonicalToolName(rawTool, jsonObject(message.Input))
+		if known {
+			details["tool"] = canonicalTool
+		} else {
+			details["unmapped_tool_name"] = rawTool
+		}
+		if canonicalTool != rawTool {
 			details["raw_tool"] = rawTool
 		}
 	}
@@ -1661,6 +1666,11 @@ func agentActivitySafeToolTarget(input map[string]any) (string, string) {
 }
 
 func agentActivityCanonicalToolName(raw string) string {
+	canonical, _ := agentActivityCanonicalToolNameKnown(raw)
+	return canonical
+}
+
+func agentActivityCanonicalToolNameKnown(raw string) (string, bool) {
 	tool := strings.ToLower(strings.TrimSpace(raw))
 	tool = strings.TrimPrefix(tool, "mcp_chat_")
 	if strings.HasPrefix(tool, "mcp__") {
@@ -1671,9 +1681,46 @@ func agentActivityCanonicalToolName(raw string) string {
 	}
 	tool = strings.TrimSpace(strings.TrimPrefix(tool, "tool:"))
 	if canonical, ok := agentActivityToolAliases[tool]; ok {
-		return canonical
+		return canonical, true
 	}
-	return tool
+	return tool, false
+}
+
+func taskMessageCanonicalToolName(raw string, input map[string]any) (string, bool) {
+	canonical, known := agentActivityCanonicalToolNameKnown(raw)
+	if known {
+		return canonical, true
+	}
+	if isStatusLikeToolName(canonical) && hasShellCommandInput(input) {
+		return "bash", true
+	}
+	return canonical, false
+}
+
+func isStatusLikeToolName(tool string) bool {
+	switch strings.ToLower(strings.TrimSpace(tool)) {
+	case "running", "in_progress", "pending":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasShellCommandInput(input map[string]any) bool {
+	for _, key := range []string{"cmd", "command", "shell_command"} {
+		if value := clippedStringFromMap(input, key, 1024); value != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func taskMessageToolIsMapped(messageType, tool string, input map[string]any) bool {
+	if messageType != "tool_use" || strings.TrimSpace(tool) == "" {
+		return true
+	}
+	_, known := taskMessageCanonicalToolName(tool, input)
+	return known
 }
 
 var agentActivityToolAliases = map[string]string{
@@ -1696,16 +1743,17 @@ var agentActivityToolAliases = map[string]string{
 	"upload_file":        "upload_file",
 	"view_file":          "view_file",
 
-	"bash":              "bash",
-	"shell":             "bash",
-	"sh":                "bash",
-	"zsh":               "bash",
-	"exec":              "bash",
-	"exec_command":      "bash",
-	"command":           "bash",
-	"command_execution": "bash",
-	"run_shell_command": "bash",
-	"terminal":          "bash",
+	"bash":                 "bash",
+	"shell":                "bash",
+	"sh":                   "bash",
+	"zsh":                  "bash",
+	"exec":                 "bash",
+	"exec_command":         "bash",
+	"command":              "bash",
+	"command_execution":    "bash",
+	"run_terminal_command": "bash",
+	"run_shell_command":    "bash",
+	"terminal":             "bash",
 
 	"read":      "read_file",
 	"readfile":  "read_file",

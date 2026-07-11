@@ -161,11 +161,14 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 	})
 
 	// Record a message-sent activity event (agent replied via multica send).
+	if !created {
+		return
+	}
 	h.recordAgentActivityEvent(r.Context(), h.DB,
 		source.origin.workspaceID, source.task.AgentID, source.task.RuntimeID, nullableTaskIDForTransportSource(source),
 		activityKindText, "message_sent", "info",
 		"channel", parseUUID(target.channel.ID), target.raw,
-		"", "Agent sent a visible message",
+		"", agentVisibleOutputActivityText(content, parts, msg.Attachments),
 		map[string]any{
 			"message_id": msg.ID,
 			"created":    created,

@@ -1169,6 +1169,26 @@ func TestTaskMessageVisibility_ToolResultIsDiagnostic(t *testing.T) {
 	}
 }
 
+func TestTaskMessageRequestVisibility_UnmappedToolIsDiagnostic(t *testing.T) {
+	unknown := TaskMessageRequest{
+		Type:  "tool_use",
+		Tool:  "some_future_tool",
+		Input: map[string]any{"path": "hello_world.txt"},
+	}
+	if got := taskMessageRequestVisibility(unknown); got != "diagnostic_only" {
+		t.Fatalf("unknown tool visibility = %q, want diagnostic_only", got)
+	}
+
+	statusLikeShell := TaskMessageRequest{
+		Type:  "tool_use",
+		Tool:  "running",
+		Input: map[string]any{"command": "multica message send --message-file hello_world.txt"},
+	}
+	if got := taskMessageRequestVisibility(statusLikeShell); got != "user_facing" {
+		t.Fatalf("status-like shell visibility = %q, want user_facing", got)
+	}
+}
+
 // setupForeignWorkspaceFixture creates an isolated workspace (not reachable
 // from testUserID) with its own agent, runtime, issue, and queued task.
 // Returns (issueID, taskID). All rows are cleaned up when the test ends.

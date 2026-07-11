@@ -1003,6 +1003,48 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	}
 }
 
+func TestOutputClaimsFileDeliveryDetectsCreatedArtifacts(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{
+			name:    "antigravity created file wording",
+			content: "I have created hello_antigravity.txt",
+			want:    true,
+		},
+		{
+			name:    "generated artifact wording",
+			content: "Generated report.csv for you.",
+			want:    true,
+		},
+		{
+			name:    "chinese created file wording",
+			content: "已创建 hello_world.txt",
+			want:    true,
+		},
+		{
+			name:    "filename without delivery marker",
+			content: "hello_world.txt",
+			want:    false,
+		},
+		{
+			name:    "marker without filename",
+			content: "I have created the file",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := outputClaimsFileDelivery(tt.content); got != tt.want {
+				t.Fatalf("outputClaimsFileDelivery(%q) = %v, want %v", tt.content, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestChannelAgentInboxFileClaimWithoutAttachmentRecordsBoundary(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

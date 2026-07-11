@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -830,7 +831,7 @@ func (h *Handler) recordAgentInboxVisibleOutputActivity(ctx context.Context, eve
 		event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
 		activityKindText, "message_sent", "info",
 		targetKind, targetID, "",
-		"", agentVisibleOutputActivityText(payload.Content, payload.Parts),
+		"", agentVisibleOutputActivityText(payload.Content, payload.Parts, nil),
 		details,
 	)
 }
@@ -865,7 +866,7 @@ func (h *Handler) recordTaskVisibleOutputActivity(ctx context.Context, workspace
 		workspaceID, task.AgentID, task.RuntimeID, task.ID,
 		activityKindText, "message_sent", "info",
 		targetKind, targetID, targetSlug,
-		"", agentVisibleOutputActivityText(req.Output, req.Parts),
+		"", agentVisibleOutputActivityText(req.Output, req.Parts, nil),
 		details,
 	)
 }
@@ -909,12 +910,24 @@ func outputClaimsFileDelivery(content string) bool {
 	for _, marker := range []string{
 		"attached",
 		"attachment",
+		"created",
+		"generated",
+		"saved",
 		"sent",
 		"sending",
+		"written",
+		"wrote",
 		"here is",
 		"here's",
 		"给你",
 		"发给你",
+		"创建了",
+		"已创建",
+		"生成了",
+		"已生成",
+		"保存了",
+		"已保存",
+		"写好了",
 		"已发送",
 		"附件",
 	} {
@@ -925,15 +938,27 @@ func outputClaimsFileDelivery(content string) bool {
 	return false
 }
 
-func agentVisibleOutputActivityText(content string, parts []protocol.MessagePart) string {
+func agentVisibleOutputActivityText(content string, parts []protocol.MessagePart, attachments []AttachmentResponse) string {
 	text := strings.TrimSpace(redact.Text(content))
 	if text != "" {
 		return truncateForActivity(text, 500)
 	}
-	if len(parts) > 0 {
-		return "Agent sent a visible message"
+	text = strings.TrimSpace(redact.Text(messageparts.FallbackContent(parts)))
+	if text != "" {
+		return truncateForActivity(text, 500)
 	}
-	return "Agent sent a visible message"
+	switch len(attachments) {
+	case 0:
+	case 1:
+		filename := strings.TrimSpace(attachments[0].Filename)
+		if filename != "" {
+			return truncateForActivity("Sent attachment: "+filename, 500)
+		}
+		return "Sent an attachment"
+	default:
+		return fmt.Sprintf("Sent %d attachments", len(attachments))
+	}
+	return "Sent a message"
 }
 
 func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.AgentInboxEvent, resp *AgentTaskResponse) {

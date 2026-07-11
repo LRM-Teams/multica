@@ -2820,6 +2820,7 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		msg.Content = redact.Text(msg.Content)
 		msg.Output = redact.Text(msg.Output)
 		msg.Input = redact.InputMap(msg.Input)
+		visibility := taskMessageRequestVisibility(msg)
 
 		var inputJSON []byte
 		if msg.Input != nil {
@@ -2833,7 +2834,7 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 			Content:    pgtype.Text{String: msg.Content, Valid: msg.Content != ""},
 			Input:      inputJSON,
 			Output:     pgtype.Text{String: msg.Output, Valid: msg.Output != ""},
-			Visibility: taskMessageVisibility(msg.Type),
+			Visibility: visibility,
 		})
 		if createErr != nil {
 			slog.Error("failed to create task message", "task_id", taskID, "seq", msg.Seq, "error", createErr)
@@ -2846,6 +2847,21 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 				taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
 			event := h.taskMessageActivityTimelineEvent(r.Context(), workspaceID, task, created)
 			h.publishAgentActivityRealtimeEvent(r.Context(), workspaceID, uuidToString(task.AgentID), uuidToString(created.ID), event, AgentActivityTargetRef{Kind: "none"})
+			if msg.Type == "tool_use" && strings.TrimSpace(msg.Tool) != "" && !taskMessageToolIsMapped(msg.Type, msg.Tool, msg.Input) {
+				targetKind, targetID, targetSlug := h.taskActivityTarget(r.Context(), task)
+				h.recordAgentActivityEvent(r.Context(), h.DB,
+					parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
+					activityKindCustom, "unmapped_tool_name", "warning",
+					targetKind, targetID, targetSlug,
+					"unmapped_tool_name", "Unmapped runtime tool name",
+					map[string]any{
+						"raw_tool":        strings.TrimSpace(msg.Tool),
+						"task_message_id": uuidToString(created.ID),
+						"task_id":         taskID,
+						"seq":             msg.Seq,
+					},
+				)
+			}
 		}
 	}
 
@@ -2880,7 +2896,18 @@ func taskMessageToPayload(m db.TaskMessage, taskID, issueID string) protocol.Tas
 }
 
 func taskMessageVisibility(msgType string) string {
+	return taskMessageVisibilityForMessage(msgType, "", nil)
+}
+
+func taskMessageRequestVisibility(msg TaskMessageRequest) string {
+	return taskMessageVisibilityForMessage(msg.Type, msg.Tool, msg.Input)
+}
+
+func taskMessageVisibilityForMessage(msgType, tool string, input map[string]any) string {
 	if msgType == "tool_result" || msgType == "log" {
+		return "diagnostic_only"
+	}
+	if !taskMessageToolIsMapped(msgType, tool, input) {
 		return "diagnostic_only"
 	}
 	return "user_facing"

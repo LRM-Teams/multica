@@ -342,6 +342,7 @@ func TestAgentActivityCanonicalToolName_UsesRaftAliases(t *testing.T) {
 	tests := map[string]string{
 		"Bash":                      "bash",
 		"command_execution":         "bash",
+		"run_terminal_command":      "bash",
 		"run_shell_command":         "bash",
 		"ReadFile":                  "read_file",
 		"file_read":                 "read_file",
@@ -360,6 +361,30 @@ func TestAgentActivityCanonicalToolName_UsesRaftAliases(t *testing.T) {
 		if got := agentActivityCanonicalToolName(raw); got != want {
 			t.Fatalf("agentActivityCanonicalToolName(%q) = %q, want %q", raw, got, want)
 		}
+	}
+}
+
+func TestTaskMessageCanonicalToolName_StatusLikeCommandIsBash(t *testing.T) {
+	canonical, known := taskMessageCanonicalToolName("running", map[string]any{
+		"command": "multica message send --message-file hello_world.txt",
+	})
+	if !known {
+		t.Fatalf("running command tool should be classified as a known shell command")
+	}
+	if canonical != "bash" {
+		t.Fatalf("canonical tool = %q, want bash", canonical)
+	}
+}
+
+func TestTaskMessageCanonicalToolName_UnknownToolStaysUnmapped(t *testing.T) {
+	canonical, known := taskMessageCanonicalToolName("some_future_tool", map[string]any{
+		"path": "hello_world.txt",
+	})
+	if known {
+		t.Fatalf("unknown tool should remain unmapped, got %q", canonical)
+	}
+	if canonical != "some_future_tool" {
+		t.Fatalf("canonical unknown tool = %q, want normalized raw slug", canonical)
 	}
 }
 
@@ -418,6 +443,71 @@ func TestReportTaskMessagesPublishesHydratedScopedActivityEvent(t *testing.T) {
 	}
 	if !hasSourceSeq(payload.Event.SourceRefs, "seq", 7) || !hasSourceID(payload.Event.SourceRefs, "task_message", payload.EventID) {
 		t.Fatalf("hydrated event source refs missing task_message/seq: %+v", payload.Event.SourceRefs)
+	}
+}
+
+func TestReportTaskMessagesUnmappedToolIsDiagnosticAndEmitsGap(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	memberID := createWorkspaceMemberUser(t, "Activity Unmapped Member", "activity-unmapped-"+randomID()+"@multica.test")
+	agentID := createWorkspaceVisibleActivityAgent(t, "activity-unmapped-agent")
+	_, channelSessionID := createActivityChannelSession(t, agentID, memberID)
+	taskID := createActivityRunTask(t, agentID, channelSessionID, "running", "channel unmapped tool work")
+
+	var captured *events.Event
+	testHandler.Bus.Subscribe(protocol.EventAgentActivityEvent, func(e events.Event) {
+		payload, ok := e.Payload.(AgentActivityEventRealtimePayload)
+		if !ok || payload.AgentID != agentID || payload.Event == nil || payload.Event.EventType != "unmapped_tool_name" {
+			return
+		}
+		copy := e
+		captured = &copy
+	})
+
+	req := newRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/messages", map[string]any{
+		"messages": []map[string]any{{
+			"seq":  9,
+			"type": "tool_use",
+			"tool": "some_future_tool",
+			"input": map[string]any{
+				"path": "hello_world.txt",
+			},
+		}},
+	})
+	req = withChatTestWorkspaceCtx(t, req)
+	req = withURLParam(req, "taskId", taskID)
+	w := httptest.NewRecorder()
+	testHandler.ReportTaskMessages(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ReportTaskMessages: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var visibility string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT visibility
+		FROM task_message
+		WHERE task_id = $1 AND seq = 9
+	`, parseUUID(taskID)).Scan(&visibility); err != nil {
+		t.Fatalf("lookup task message visibility: %v", err)
+	}
+	if visibility != "diagnostic_only" {
+		t.Fatalf("unmapped tool task message visibility = %q, want diagnostic_only", visibility)
+	}
+
+	if captured == nil {
+		t.Fatal("unmapped_tool_name gap event was not published")
+	}
+	payload := captured.Payload.(AgentActivityEventRealtimePayload)
+	if payload.Event.Kind != activityKindCustom || payload.Event.Visibility != "diagnostic_only" || payload.Event.ReasonCode != "unmapped_tool_name" {
+		t.Fatalf("unmapped gap event contract wrong: %+v", payload.Event)
+	}
+	if payload.Event.Tool != nil {
+		t.Fatalf("unmapped gap event must not expose a user-facing tool label: %+v", payload.Event.Tool)
+	}
+	if !hasSourceSeq(payload.Event.SourceRefs, "seq", 9) {
+		t.Fatalf("unmapped gap source refs missing seq: %+v", payload.Event.SourceRefs)
 	}
 }
 

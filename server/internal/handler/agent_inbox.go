@@ -268,9 +268,28 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 			"source_message_id": uuidToString(event.SourceMessageID),
 			"seq":               msg.Seq,
 		}
-		if rawTool := strings.TrimSpace(msg.Tool); rawTool != "" {
-			details["tool"] = agentActivityCanonicalToolName(rawTool)
-			if details["tool"] != rawTool {
+		if msg.Type == "tool_use" {
+			rawTool := strings.TrimSpace(msg.Tool)
+			canonicalTool, known := taskMessageCanonicalToolName(rawTool, msg.Input)
+			if !known {
+				if rawTool != "" {
+					details["unmapped_tool_name"] = rawTool
+				}
+				if target, summaryKind := agentInboxActivityToolTarget(msg); target != "" {
+					details["tool_target"] = target
+					details["summary_kind"] = summaryKind
+				}
+				h.recordAgentActivityEvent(r.Context(), h.DB,
+					event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
+					activityKindCustom, "unmapped_tool_name", "warning",
+					targetKind, targetID, "",
+					"unmapped_tool_name", "Unmapped runtime tool name",
+					details,
+				)
+				continue
+			}
+			details["tool"] = canonicalTool
+			if canonicalTool != rawTool {
 				details["raw_tool"] = rawTool
 			}
 		}

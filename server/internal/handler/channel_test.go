@@ -933,6 +933,7 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 			{Seq: 3, Type: "tool_result", Tool: "terminal", Output: "raw stdout should be diagnostic"},
 			{Seq: 4, Type: "log", Content: "[Slock Wrapper] Starting Antigravity CLI..."},
 			{Seq: 5, Type: "text", Content: "runtime stdout fallback should be diagnostic"},
+			{Seq: 6, Type: "tool_use", Tool: "running", Input: map[string]any{"path": "/tmp/status_only.txt"}},
 		},
 	}, testWorkspaceID, "agent-inbox-activity-daemon")
 	messagesReq = withURLParam(messagesReq, "eventId", got.ID)
@@ -943,7 +944,7 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	}
 
 	rows, err := testPool.Query(ctx, `
-		SELECT event_kind, event_type, visibility, COALESCE(message, ''), details
+		SELECT event_kind, event_type, visibility, COALESCE(reason_code, ''), COALESCE(message, ''), details
 		FROM agent_activity_event
 		WHERE workspace_id = $1
 		  AND agent_id = $2
@@ -959,6 +960,7 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 		kind       string
 		eventType  string
 		visibility string
+		reasonCode string
 		message    string
 		details    map[string]any
 	}
@@ -966,7 +968,7 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	for rows.Next() {
 		var row activityRow
 		var raw []byte
-		if err := rows.Scan(&row.kind, &row.eventType, &row.visibility, &row.message, &raw); err != nil {
+		if err := rows.Scan(&row.kind, &row.eventType, &row.visibility, &row.reasonCode, &row.message, &raw); err != nil {
 			t.Fatalf("scan activity row: %v", err)
 		}
 		if err := json.Unmarshal(raw, &row.details); err != nil {
@@ -977,8 +979,8 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("activity rows error: %v", err)
 	}
-	if len(activity) != 5 {
-		t.Fatalf("activity rows = %+v, want 5", activity)
+	if len(activity) != 6 {
+		t.Fatalf("activity rows = %+v, want 6", activity)
 	}
 	if activity[0].kind != activityKindThinking || activity[0].visibility != "user_facing" {
 		t.Fatalf("thinking row = %+v, want user-facing thinking", activity[0])
@@ -1000,6 +1002,15 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	}
 	if activity[4].kind != activityKindCustom || activity[4].eventType != "runtime_text" || activity[4].visibility != "diagnostic_only" {
 		t.Fatalf("runtime text row = %+v, want diagnostic runtime_text", activity[4])
+	}
+	if activity[5].kind != activityKindCustom || activity[5].eventType != "unmapped_tool_name" || activity[5].visibility != "diagnostic_only" || activity[5].reasonCode != "unmapped_tool_name" {
+		t.Fatalf("status-like missing command row = %+v, want diagnostic unmapped gap", activity[5])
+	}
+	if activity[5].details["unmapped_tool_name"] != "running" || activity[5].details["tool"] != nil || activity[5].details["tool_target"] != "status_only.txt" {
+		t.Fatalf("status-like missing command details = %+v, want unmapped running without user-facing tool", activity[5].details)
+	}
+	if activity[5].details["inbox_event_id"] != got.ID || activity[5].details["delivery_id"] != got.DeliveryID || activity[5].details["source_message_id"] != trigger.ID || activity[5].details["seq"] == nil {
+		t.Fatalf("status-like missing command source details = %+v, want inbox/delivery/source/seq refs", activity[5].details)
 	}
 }
 

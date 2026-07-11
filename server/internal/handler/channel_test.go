@@ -934,6 +934,7 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 			{Seq: 4, Type: "log", Content: "[Slock Wrapper] Starting Antigravity CLI..."},
 			{Seq: 5, Type: "text", Content: "runtime stdout fallback should be diagnostic"},
 			{Seq: 6, Type: "tool_use", Tool: "running", Input: map[string]any{"path": "/tmp/status_only.txt"}},
+			{Seq: 7, Type: "tool_use", Tool: "write_file", Input: map[string]any{"path": "/Users/frank/Code/multica/server/internal/handler/channel_test.go"}},
 		},
 	}, testWorkspaceID, "agent-inbox-activity-daemon")
 	messagesReq = withURLParam(messagesReq, "eventId", got.ID)
@@ -979,8 +980,8 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("activity rows error: %v", err)
 	}
-	if len(activity) != 6 {
-		t.Fatalf("activity rows = %+v, want 6", activity)
+	if len(activity) != 7 {
+		t.Fatalf("activity rows = %+v, want 7", activity)
 	}
 	if activity[0].kind != activityKindThinking || activity[0].visibility != "user_facing" {
 		t.Fatalf("thinking row = %+v, want user-facing thinking", activity[0])
@@ -1011,6 +1012,12 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	}
 	if activity[5].details["inbox_event_id"] != got.ID || activity[5].details["delivery_id"] != got.DeliveryID || activity[5].details["source_message_id"] != trigger.ID || activity[5].details["seq"] == nil {
 		t.Fatalf("status-like missing command source details = %+v, want inbox/delivery/source/seq refs", activity[5].details)
+	}
+	if activity[6].kind != activityKindToolCall || activity[6].eventType != "tool_use" || activity[6].visibility != "user_facing" {
+		t.Fatalf("write file row = %+v, want user-facing tool_use", activity[6])
+	}
+	if activity[6].details["tool"] != "write_file" || activity[6].details["tool_target"] != "/Users/frank/Code/multica/server/internal/handler/channel_test.go" || activity[6].details["summary_kind"] != "file_path" {
+		t.Fatalf("write file details = %+v, want full source-backed file path", activity[6].details)
 	}
 }
 

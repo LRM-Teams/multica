@@ -810,7 +810,11 @@ func agentInboxActivityToolTarget(msg TaskMessageRequest) (string, string) {
 	if msg.Type != "tool_use" {
 		return "", ""
 	}
-	return agentActivitySafeToolTarget(msg.Input)
+	canonicalTool, known := taskMessageCanonicalToolName(msg.Tool, msg.Input)
+	if !known {
+		canonicalTool = ""
+	}
+	return agentActivitySafeToolTargetForTool(canonicalTool, msg.Input)
 }
 
 func (h *Handler) recordAgentInboxVisibleOutputActivity(ctx context.Context, event db.AgentInboxEvent, runtimeID pgtype.UUID, payload protocol.ChatDonePayload) {

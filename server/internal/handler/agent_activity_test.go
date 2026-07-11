@@ -388,6 +388,70 @@ func TestTaskMessageCanonicalToolName_UnknownToolStaysUnmapped(t *testing.T) {
 	}
 }
 
+func TestAgentActivitySafeToolTargetForTool_FileToolsUseSourceBackedPath(t *testing.T) {
+	tests := []struct {
+		name string
+		tool string
+		key  string
+		path string
+		want string
+	}{
+		{
+			name: "write file absolute path",
+			tool: "write_file",
+			key:  "path",
+			path: "/Users/frank/Code/multica/server/internal/handler/activity.go",
+			want: "/Users/frank/Code/multica/server/internal/handler/activity.go",
+		},
+		{
+			name: "edit file relative path",
+			tool: "edit_file",
+			key:  "path",
+			path: "server/internal/handler/activity.go",
+			want: "server/internal/handler/activity.go",
+		},
+		{
+			name: "read file path from alternate key",
+			tool: "read_file",
+			key:  "file_path",
+			path: "/tmp/activity-event.ts",
+			want: "/tmp/activity-event.ts",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, kind := agentActivitySafeToolTargetForTool(tt.tool, map[string]any{tt.key: tt.path})
+			if got != tt.want || kind != "file_path" {
+				t.Fatalf("target=(%q,%q), want (%q,file_path)", got, kind, tt.want)
+			}
+		})
+	}
+}
+
+func TestAgentActivitySafeToolTargetForTool_NonFileToolsKeepSafeSummary(t *testing.T) {
+	shellTarget, shellKind := agentActivitySafeToolTargetForTool("bash", map[string]any{
+		"command": "cat /tmp/secret.txt",
+		"path":    "/Users/frank/Code/multica/private/secret.txt",
+	})
+	if shellTarget != "secret.txt" || shellKind != "file_path" {
+		t.Fatalf("shell target=(%q,%q), want existing safe basename summary", shellTarget, shellKind)
+	}
+	if strings.Contains(shellTarget, "/Users/frank/Code") || strings.Contains(shellTarget, "cat /tmp") {
+		t.Fatalf("shell target leaked raw path/command: %q", shellTarget)
+	}
+
+	unknownTarget, unknownKind := agentActivitySafeToolTargetForTool("", map[string]any{
+		"path": "/Users/frank/Code/multica/private/future.txt",
+	})
+	if unknownTarget != "future.txt" || unknownKind != "file_path" {
+		t.Fatalf("unknown target=(%q,%q), want conservative basename summary", unknownTarget, unknownKind)
+	}
+	if strings.Contains(unknownTarget, "/Users/frank/Code") {
+		t.Fatalf("unknown target leaked raw path: %q", unknownTarget)
+	}
+}
+
 func TestReportTaskMessagesPublishesHydratedScopedActivityEvent(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

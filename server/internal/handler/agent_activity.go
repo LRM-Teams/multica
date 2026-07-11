@@ -1640,7 +1640,15 @@ func taskMessageActivityToolTarget(message db.TaskMessage) (string, string) {
 		return "", ""
 	}
 	input := jsonObject(message.Input)
-	return agentActivitySafeToolTarget(input)
+	rawTool := ""
+	if message.Tool.Valid {
+		rawTool = message.Tool.String
+	}
+	canonicalTool, known := taskMessageCanonicalToolName(rawTool, input)
+	if !known {
+		canonicalTool = ""
+	}
+	return agentActivitySafeToolTargetForTool(canonicalTool, input)
 }
 
 func agentActivitySafeToolTarget(input map[string]any) (string, string) {
@@ -1663,6 +1671,26 @@ func agentActivitySafeToolTarget(input map[string]any) (string, string) {
 		return value, "url"
 	}
 	return "", ""
+}
+
+func agentActivitySafeToolTargetForTool(canonicalTool string, input map[string]any) (string, string) {
+	if isFileActivityTool(canonicalTool) {
+		for _, key := range []string{"path", "file_path", "filepath"} {
+			if value := sourcePathFromMap(input, key); value != "" {
+				return value, "file_path"
+			}
+		}
+	}
+	return agentActivitySafeToolTarget(input)
+}
+
+func isFileActivityTool(tool string) bool {
+	switch strings.ToLower(strings.TrimSpace(tool)) {
+	case "write_file", "edit_file", "read_file":
+		return true
+	default:
+		return false
+	}
 }
 
 func agentActivityCanonicalToolName(raw string) string {
@@ -1937,6 +1965,10 @@ func basenameFromMap(m map[string]any, key string) string {
 		return value
 	}
 	return parts[len(parts)-1]
+}
+
+func sourcePathFromMap(m map[string]any, key string) string {
+	return stringFromMap(m, key)
 }
 
 func commandNameFromMap(m map[string]any, key string) string {

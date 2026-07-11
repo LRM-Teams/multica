@@ -1164,6 +1164,9 @@ func TestTaskMessageVisibility_ToolResultIsDiagnostic(t *testing.T) {
 	if got := taskMessageVisibility("tool_result"); got != "diagnostic_only" {
 		t.Fatalf("tool_result visibility = %q, want diagnostic_only", got)
 	}
+	if got := taskMessageVisibility("log"); got != "diagnostic_only" {
+		t.Fatalf("log visibility = %q, want diagnostic_only", got)
+	}
 }
 
 // setupForeignWorkspaceFixture creates an isolated workspace (not reachable

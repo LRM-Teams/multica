@@ -883,6 +883,210 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	}
 }
 
+func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentName := "Inbox Activity Agent " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	runtimeID := handlerTestRuntimeID(t)
+	channelID := seedChannelForTest(t, "agent-inbox-activity-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") write hello_world.txt", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-activity"), 0)
+	if err != nil {
+		t.Fatalf("insert mention trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-activity-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode drain response: %v", err)
+	}
+	if len(drainResp.Events) != 1 {
+		t.Fatalf("drain returned %d events, want 1: %s", len(drainResp.Events), drainRec.Body.String())
+	}
+	got := drainResp.Events[0]
+
+	messagesReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/messages", ReportAgentInboxMessagesRequest{
+		DeliveryID: got.DeliveryID,
+		LeaseToken: got.LeaseToken,
+		Messages: []TaskMessageRequest{
+			{Seq: 1, Type: "thinking", Content: "I should create the requested file."},
+			{Seq: 2, Type: "tool_use", Tool: "terminal", Input: map[string]any{"command": "cat secret", "path": "/tmp/hello_world.txt"}},
+			{Seq: 3, Type: "tool_result", Tool: "terminal", Output: "raw stdout should be diagnostic"},
+			{Seq: 4, Type: "log", Content: "[Slock Wrapper] Starting Antigravity CLI..."},
+			{Seq: 5, Type: "text", Content: "runtime stdout fallback should be diagnostic"},
+		},
+	}, testWorkspaceID, "agent-inbox-activity-daemon")
+	messagesReq = withURLParam(messagesReq, "eventId", got.ID)
+	messagesRec := httptest.NewRecorder()
+	testHandler.ReportAgentInboxMessages(messagesRec, messagesReq)
+	if messagesRec.Code != http.StatusOK {
+		t.Fatalf("report inbox messages: status=%d body=%s", messagesRec.Code, messagesRec.Body.String())
+	}
+
+	rows, err := testPool.Query(ctx, `
+		SELECT event_kind, event_type, visibility, COALESCE(message, ''), details
+		FROM agent_activity_event
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND details->>'inbox_event_id' = $3
+		  AND details ? 'seq'
+		ORDER BY (details->>'seq')::int ASC`, testWorkspaceID, agentID, got.ID)
+	if err != nil {
+		t.Fatalf("query activity rows: %v", err)
+	}
+	defer rows.Close()
+
+	type activityRow struct {
+		kind       string
+		eventType  string
+		visibility string
+		message    string
+		details    map[string]any
+	}
+	var activity []activityRow
+	for rows.Next() {
+		var row activityRow
+		var raw []byte
+		if err := rows.Scan(&row.kind, &row.eventType, &row.visibility, &row.message, &raw); err != nil {
+			t.Fatalf("scan activity row: %v", err)
+		}
+		if err := json.Unmarshal(raw, &row.details); err != nil {
+			t.Fatalf("decode activity details: %v", err)
+		}
+		activity = append(activity, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("activity rows error: %v", err)
+	}
+	if len(activity) != 5 {
+		t.Fatalf("activity rows = %+v, want 5", activity)
+	}
+	if activity[0].kind != activityKindThinking || activity[0].visibility != "user_facing" {
+		t.Fatalf("thinking row = %+v, want user-facing thinking", activity[0])
+	}
+	if activity[1].kind != activityKindToolCall || activity[1].eventType != "tool_use" || activity[1].visibility != "user_facing" {
+		t.Fatalf("tool row = %+v, want user-facing tool_use", activity[1])
+	}
+	if activity[1].details["tool"] != "bash" || activity[1].details["raw_tool"] != "terminal" || activity[1].details["tool_target"] != "hello_world.txt" || activity[1].details["summary_kind"] != "file_path" {
+		t.Fatalf("tool details = %+v, want canonical bash/raw terminal/safe target hello_world.txt", activity[1].details)
+	}
+	if strings.Contains(fmt.Sprint(activity[1].details), "cat secret") {
+		t.Fatalf("tool details leaked raw command: %+v", activity[1].details)
+	}
+	if activity[2].kind != activityKindToolOutput || activity[2].visibility != "diagnostic_only" {
+		t.Fatalf("tool result row = %+v, want diagnostic tool_output", activity[2])
+	}
+	if activity[3].kind != activityKindCustom || activity[3].eventType != "runtime_text" || activity[3].visibility != "diagnostic_only" {
+		t.Fatalf("runtime log row = %+v, want diagnostic runtime_text", activity[3])
+	}
+	if activity[4].kind != activityKindCustom || activity[4].eventType != "runtime_text" || activity[4].visibility != "diagnostic_only" {
+		t.Fatalf("runtime text row = %+v, want diagnostic runtime_text", activity[4])
+	}
+}
+
+func TestChannelAgentInboxFileClaimWithoutAttachmentRecordsBoundary(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentName := "Inbox Artifact Agent " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	runtimeID := handlerTestRuntimeID(t)
+	channelID := seedChannelForTest(t, "agent-inbox-artifact-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") send hello_world.txt", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-artifact"), 0)
+	if err != nil {
+		t.Fatalf("insert mention trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-artifact-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode drain response: %v", err)
+	}
+	if len(drainResp.Events) != 1 {
+		t.Fatalf("drain returned %d events, want 1: %s", len(drainResp.Events), drainRec.Body.String())
+	}
+	got := drainResp.Events[0]
+
+	completeReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/complete", CompleteAgentInboxEventRequest{
+		DeliveryID: got.DeliveryID,
+		LeaseToken: got.LeaseToken,
+		TaskCompleteRequest: TaskCompleteRequest{
+			Output: "给你，hello_world.txt",
+		},
+	}, testWorkspaceID, "agent-inbox-artifact-daemon")
+	completeReq = withURLParam(completeReq, "eventId", got.ID)
+	completeRec := httptest.NewRecorder()
+	testHandler.CompleteAgentInboxEvent(completeRec, completeReq)
+	if completeRec.Code != http.StatusOK {
+		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
+	}
+
+	var kind, eventType, reason, message string
+	if err := testPool.QueryRow(ctx, `
+		SELECT event_kind, event_type, reason_code, message
+		FROM agent_activity_event
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND event_type = 'artifact_missing'
+		  AND details->>'inbox_event_id' = $3`, testWorkspaceID, agentID, got.ID).Scan(&kind, &eventType, &reason, &message); err != nil {
+		t.Fatalf("load artifact boundary activity: %v", err)
+	}
+	if kind != activityKindError || eventType != "artifact_missing" || reason != "missing_file_attachment" {
+		t.Fatalf("artifact boundary = kind=%q event_type=%q reason=%q message=%q", kind, eventType, reason, message)
+	}
+
+	var outputRows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_activity_event
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND event_type = 'message_sent'
+		  AND details->>'inbox_event_id' = $3`, testWorkspaceID, agentID, got.ID).Scan(&outputRows); err != nil {
+		t.Fatalf("count output rows: %v", err)
+	}
+	if outputRows != 0 {
+		t.Fatalf("message_sent rows = %d, want 0 for missing attachment boundary", outputRows)
+	}
+}
+
 func TestChannelAgentInboxTransportCanSendStickerAndSuppressesFinalOutput(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

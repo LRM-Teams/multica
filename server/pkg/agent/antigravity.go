@@ -16,10 +16,12 @@ import (
 // antigravityBackend implements Backend by spawning Google's Antigravity CLI
 // (`agy -p <prompt>`) in non-interactive print mode. Unlike Claude / Codex /
 // Cursor / Gemini, the Antigravity CLI does not expose a structured event
-// stream — stdout is plain assistant text (intermediate "I will run X" lines
-// and the final reply, all interleaved). The backend therefore streams stdout
-// line-by-line as `MessageText` events and accumulates the same text as the
-// final `Result.Output`.
+// stream — stdout can contain assistant text (intermediate "I will run X" lines
+// and the final reply) mixed with wrapper plumbing. The backend streams model
+// lines as `MessageThinking` trajectory events and accumulates only those lines
+// as the final `Result.Output`, which the server records as the visible
+// user-facing Output on completion. Wrapper plumbing is emitted as MessageLog so
+// Activity can keep it diagnostic-only.
 //
 // Session resumption uses `--conversation <id>`. The conversation id is not
 // emitted on stdout; we capture it by routing `--log-file` to a temp file and
@@ -120,13 +122,19 @@ func (b *antigravityBackend) Execute(ctx context.Context, prompt string, opts Ex
 
 		for scanner.Scan() {
 			line := scanner.Text()
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			if isAntigravityWrapperLine(trimmed) {
+				trySend(msgCh, Message{Type: MessageLog, Content: line, Level: "debug"})
+				continue
+			}
 			if output.Len() > 0 {
 				output.WriteByte('\n')
 			}
 			output.WriteString(line)
-			if strings.TrimSpace(line) != "" {
-				trySend(msgCh, Message{Type: MessageText, Content: line})
-			}
+			trySend(msgCh, Message{Type: MessageThinking, Content: line})
 		}
 		if err := scanner.Err(); err != nil {
 			b.cfg.Logger.Warn("agy stdout scanner error", "err", err)
@@ -167,6 +175,14 @@ func (b *antigravityBackend) Execute(ctx context.Context, prompt string, opts Ex
 	}()
 
 	return &Session{Messages: msgCh, Result: resCh}, nil
+}
+
+func isAntigravityWrapperLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "[Slock Wrapper]") || strings.HasPrefix(trimmed, "[Multica Wrapper]") {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(trimmed), "slock wrapper:")
 }
 
 // antigravityConversationIDRe matches the glog line printmode.go writes when

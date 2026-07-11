@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,6 +24,8 @@ import (
 )
 
 const agentInboxDrainMessageLimit = 50
+
+var claimedFileDeliveryRe = regexp.MustCompile(`(?i)\b[\w.-]+\.(txt|md|pdf|csv|xlsx|xls|docx|png|jpe?g|gif|zip|json|ya?ml|go|ts|tsx|js|py|html|css)\b`)
 
 type DrainAgentInboxResponse struct {
 	Events      []AgentInboxEventResponse `json:"events"`
@@ -68,6 +71,12 @@ type AckAgentInboxEventRequest struct {
 type RenewAgentInboxEventRequest struct {
 	DeliveryID string `json:"delivery_id"`
 	LeaseToken string `json:"lease_token"`
+}
+
+type ReportAgentInboxMessagesRequest struct {
+	DeliveryID string               `json:"delivery_id"`
+	LeaseToken string               `json:"lease_token"`
+	Messages   []TaskMessageRequest `json:"messages"`
 }
 
 type FailAgentInboxEventRequest struct {
@@ -215,6 +224,70 @@ func (h *Handler) RenewAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Request) {
+	eventID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "eventId"), "event_id")
+	if !ok {
+		return
+	}
+	event, ok := h.requireDaemonInboxEventAccess(w, r, eventID)
+	if !ok {
+		return
+	}
+	var req ReportAgentInboxMessagesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.Messages) == 0 {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	deliveryID, ok := parseUUIDOrBadRequest(w, req.DeliveryID, "delivery_id")
+	if !ok {
+		return
+	}
+	leaseToken, ok := parseUUIDOrBadRequest(w, req.LeaseToken, "lease_token")
+	if !ok {
+		return
+	}
+	runtimeID, ok := h.requireActiveAgentInboxDelivery(w, r, event, deliveryID, leaseToken)
+	if !ok {
+		return
+	}
+	targetKind, targetID := agentInboxActivityTarget(event)
+	for _, msg := range req.Messages {
+		msg.Content = redact.Text(msg.Content)
+		msg.Output = redact.Text(msg.Output)
+		msg.Input = redact.InputMap(msg.Input)
+		kind, eventType, severity := agentInboxActivityMessageKind(msg.Type)
+		message := agentInboxActivityMessageText(msg)
+		details := map[string]any{
+			"inbox_event_id":    uuidToString(event.ID),
+			"delivery_id":       uuidToString(deliveryID),
+			"source_message_id": uuidToString(event.SourceMessageID),
+			"seq":               msg.Seq,
+		}
+		if rawTool := strings.TrimSpace(msg.Tool); rawTool != "" {
+			details["tool"] = agentActivityCanonicalToolName(rawTool)
+			if details["tool"] != rawTool {
+				details["raw_tool"] = rawTool
+			}
+		}
+		if target, summaryKind := agentInboxActivityToolTarget(msg); target != "" {
+			details["tool_target"] = target
+			details["summary_kind"] = summaryKind
+		}
+		h.recordAgentActivityEvent(r.Context(), h.DB,
+			event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
+			kind, eventType, severity,
+			targetKind, targetID, "",
+			"", message,
+			details,
+		)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 	eventID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "eventId"), "event_id")
 	if !ok {
@@ -298,6 +371,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	h.TaskService.RecordEvolutionSkillOutcome(r.Context(), event.ID, "success", "success")
 	if chatDonePayload != nil {
 		h.publishAgentInboxChatDone(event, *chatDonePayload)
+		h.recordAgentInboxVisibleOutputActivity(r.Context(), event, task.RuntimeID, *chatDonePayload)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }
@@ -627,6 +701,34 @@ func agentInboxSyntheticTask(event db.AgentInboxEvent, runtimeID pgtype.UUID) db
 	}
 }
 
+func (h *Handler) requireActiveAgentInboxDelivery(w http.ResponseWriter, r *http.Request, event db.AgentInboxEvent, deliveryID, leaseToken pgtype.UUID) (pgtype.UUID, bool) {
+	var runtimeID pgtype.UUID
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT d.runtime_id
+		FROM agent_event_delivery d
+		WHERE d.id = $1
+		  AND d.inbox_event_id = $2
+		  AND d.lease_token = $3
+		  AND d.status IN ('leased', 'processing')
+		  AND d.lease_expires_at > now()
+		  AND EXISTS (
+		    SELECT 1
+		    FROM agent_inbox_event e
+		    WHERE e.id = d.inbox_event_id
+		      AND e.agent_session_id = d.agent_session_id
+		      AND e.status = 'draining'
+		  )`, deliveryID, event.ID, leaseToken).Scan(&runtimeID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusConflict, "delivery lease is no longer active")
+			return pgtype.UUID{}, false
+		}
+		writeError(w, http.StatusInternalServerError, "failed to verify inbox delivery")
+		return pgtype.UUID{}, false
+	}
+	return runtimeID, true
+}
+
 func (h *Handler) runtimeIDForAgentInboxDelivery(ctx context.Context, deliveryID pgtype.UUID) pgtype.UUID {
 	var runtimeID pgtype.UUID
 	_ = h.DB.QueryRow(ctx, `
@@ -634,6 +736,204 @@ func (h *Handler) runtimeIDForAgentInboxDelivery(ctx context.Context, deliveryID
 		FROM agent_event_delivery
 		WHERE id = $1`, deliveryID).Scan(&runtimeID)
 	return runtimeID
+}
+
+func agentInboxActivityTarget(event db.AgentInboxEvent) (string, pgtype.UUID) {
+	if event.ChannelID.Valid {
+		return "channel", event.ChannelID
+	}
+	if event.ChatSessionID.Valid {
+		return "dm", event.ChatSessionID
+	}
+	return "agent", event.AgentID
+}
+
+func agentInboxActivityMessageKind(messageType string) (kind, eventType, severity string) {
+	switch messageType {
+	case "thinking":
+		return activityKindThinking, "thinking", "info"
+	case "tool_use":
+		return activityKindToolCall, "tool_use", "info"
+	case "tool_result":
+		return activityKindToolOutput, "tool_result", "info"
+	case "error":
+		return activityKindError, "error", "error"
+	case "log":
+		return activityKindCustom, "runtime_text", "info"
+	case "text":
+		// For inbox/direct runs, streaming text is not necessarily a user-visible
+		// reply: several runtimes emit wrapper logs or plan narration on this
+		// channel. Visible replies get their own message_sent event on completion
+		// or transport send, so keep raw runtime text diagnostic-only.
+		return activityKindCustom, "runtime_text", "info"
+	default:
+		return activityKindCustom, "runtime_message", "info"
+	}
+}
+
+func agentInboxActivityMessageText(msg TaskMessageRequest) string {
+	switch msg.Type {
+	case "thinking", "text", "error", "log":
+		text := strings.TrimSpace(msg.Content)
+		if text == "" {
+			text = strings.TrimSpace(msg.Output)
+		}
+		return truncateForActivity(text, 500)
+	case "tool_result":
+		return ""
+	default:
+		return ""
+	}
+}
+
+func agentInboxActivityToolTarget(msg TaskMessageRequest) (string, string) {
+	if msg.Type != "tool_use" {
+		return "", ""
+	}
+	return agentActivitySafeToolTarget(msg.Input)
+}
+
+func (h *Handler) recordAgentInboxVisibleOutputActivity(ctx context.Context, event db.AgentInboxEvent, runtimeID pgtype.UUID, payload protocol.ChatDonePayload) {
+	if payload.Type != protocol.ChatOutputKindMessage {
+		return
+	}
+	if strings.TrimSpace(payload.OutputSuppressedReason) != "" {
+		return
+	}
+	if strings.TrimSpace(payload.Content) == "" && len(payload.Parts) == 0 && strings.TrimSpace(payload.MessageID) == "" {
+		return
+	}
+	targetKind, targetID := agentInboxActivityTarget(event)
+	if len(payload.Parts) == 0 && outputClaimsFileDelivery(payload.Content) {
+		h.recordMissingArtifactActivity(ctx, event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{}, targetKind, targetID, "", map[string]any{
+			"inbox_event_id":    uuidToString(event.ID),
+			"source_message_id": uuidToString(event.SourceMessageID),
+			"message_id":        strings.TrimSpace(payload.MessageID),
+		})
+		return
+	}
+	details := map[string]any{
+		"inbox_event_id":    uuidToString(event.ID),
+		"source_message_id": uuidToString(event.SourceMessageID),
+		"created":           true,
+	}
+	if strings.TrimSpace(payload.MessageID) != "" {
+		details["message_id"] = strings.TrimSpace(payload.MessageID)
+	}
+	if strings.TrimSpace(payload.Target) != "" {
+		details["target"] = strings.TrimSpace(payload.Target)
+	}
+	if len(payload.Parts) > 0 {
+		details["parts_count"] = len(payload.Parts)
+	}
+	h.recordAgentActivityEvent(ctx, h.DB,
+		event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
+		activityKindText, "message_sent", "info",
+		targetKind, targetID, "",
+		"", agentVisibleOutputActivityText(payload.Content, payload.Parts),
+		details,
+	)
+}
+
+func (h *Handler) recordTaskVisibleOutputActivity(ctx context.Context, workspaceID pgtype.UUID, task db.AgentTaskQueue, req TaskCompleteRequest) {
+	if req.Type != protocol.ChatOutputKindMessage {
+		return
+	}
+	if strings.TrimSpace(req.OutputSuppressedReason) != "" {
+		return
+	}
+	if strings.TrimSpace(req.Output) == "" && len(req.Parts) == 0 {
+		return
+	}
+	targetKind, targetID, targetSlug := h.taskActivityTarget(ctx, task)
+	if len(req.Parts) == 0 && outputClaimsFileDelivery(req.Output) {
+		h.recordMissingArtifactActivity(ctx, workspaceID, task.AgentID, task.RuntimeID, task.ID, targetKind, targetID, targetSlug, map[string]any{
+			"target": strings.TrimSpace(req.Target),
+		})
+		return
+	}
+	details := map[string]any{
+		"created": true,
+	}
+	if strings.TrimSpace(req.Target) != "" {
+		details["target"] = strings.TrimSpace(req.Target)
+	}
+	if len(req.Parts) > 0 {
+		details["parts_count"] = len(req.Parts)
+	}
+	h.recordAgentActivityEvent(ctx, h.DB,
+		workspaceID, task.AgentID, task.RuntimeID, task.ID,
+		activityKindText, "message_sent", "info",
+		targetKind, targetID, targetSlug,
+		"", agentVisibleOutputActivityText(req.Output, req.Parts),
+		details,
+	)
+}
+
+func (h *Handler) recordMissingArtifactActivity(ctx context.Context, workspaceID, agentID, runtimeID, taskID pgtype.UUID, targetKind string, targetID pgtype.UUID, targetSlug string, details map[string]any) {
+	if details == nil {
+		details = map[string]any{}
+	}
+	details["artifact_consistency"] = "missing_attachment"
+	h.recordAgentActivityEvent(ctx, h.DB,
+		workspaceID, agentID, runtimeID, taskID,
+		activityKindError, "artifact_missing", "error",
+		targetKind, targetID, targetSlug,
+		"missing_file_attachment", "Agent claimed to send a file, but no attachment was produced",
+		details,
+	)
+}
+
+func (h *Handler) taskActivityTarget(ctx context.Context, task db.AgentTaskQueue) (string, pgtype.UUID, string) {
+	if task.IssueID.Valid {
+		return "issue", task.IssueID, ""
+	}
+	if task.ChatSessionID.Valid {
+		if channelID := h.channelIDForChatSession(ctx, task.ChatSessionID); channelID != "" {
+			if root := h.threadRootIDForChatSession(ctx, task.ChatSessionID); root != nil {
+				return "thread", parseUUID(*root), channelID
+			}
+			return "channel", parseUUID(channelID), ""
+		}
+		return "dm", task.ChatSessionID, ""
+	}
+	return "agent", task.AgentID, ""
+}
+
+func outputClaimsFileDelivery(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || !claimedFileDeliveryRe.MatchString(trimmed) {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	for _, marker := range []string{
+		"attached",
+		"attachment",
+		"sent",
+		"sending",
+		"here is",
+		"here's",
+		"给你",
+		"发给你",
+		"已发送",
+		"附件",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func agentVisibleOutputActivityText(content string, parts []protocol.MessagePart) string {
+	text := strings.TrimSpace(redact.Text(content))
+	if text != "" {
+		return truncateForActivity(text, 500)
+	}
+	if len(parts) > 0 {
+		return "Agent sent a visible message"
+	}
+	return "Agent sent a visible message"
 }
 
 func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.AgentInboxEvent, resp *AgentTaskResponse) {

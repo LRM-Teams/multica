@@ -99,6 +99,21 @@ const EDIT: ActivityEvent = {
   status: "completed",
   target_ref: { kind: "agent", id: "agent-1" },
 };
+// #484 makes a file tool's tool_target a source-backed path (absolute when the
+// runtime provides it) — long enough to blow out the row without the #385-FE
+// basename-preserving path treatment.
+const WRITE_LONGPATH: ActivityEvent = {
+  id: "wlp1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:10Z",
+  kind: "tool_call",
+  event_type: "tool_use",
+  visibility: "user_facing",
+  tool: "write_file",
+  tool_target: "/Users/frank/multica_workspaces/7373de75/workdir/pathcheck.txt",
+  status: "completed",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
 const TEXT: ActivityEvent = {
   id: "txt1",
   agent_id: "agent-1",
@@ -160,6 +175,35 @@ describe("ActivityTimeline", () => {
     expect(screen.getByText("profile.go")).toBeInTheDocument();
     expect(screen.queryByText(/\/bin\/|--target|raft message/)).toBeNull();
     expect(screen.queryByText("Ran a command")).toBeNull();
+  });
+
+  it("shows a long file path with the basename always visible + full path on hover (#385)", () => {
+    // A ~60-char source-backed path must not blow out the row: the basename
+    // stays fully visible, the leading directories middle-ellipsis (a truncating
+    // head span — never right-truncate the basename), and the full path is
+    // exposed on hover via `title`.
+    render(<ActivityTimeline events={[WRITE_LONGPATH]} />);
+    const full = "/Users/frank/multica_workspaces/7373de75/workdir/pathcheck.txt";
+    // Basename (with leading "/") is a discrete, non-truncating node.
+    expect(screen.getByText("/pathcheck.txt")).toBeInTheDocument();
+    // Leading directories live in a truncating head span (middle-ellipsis).
+    const head = screen.getByText("/Users/frank/multica_workspaces/7373de75/workdir");
+    expect(head).toHaveClass("truncate");
+    // Full path is recoverable on hover.
+    expect(screen.getByTitle(full)).toBeInTheDocument();
+  });
+
+  it("compact mode also gives a long file path the basename-preserving treatment (#385/#383)", () => {
+    // Profile Recent (compact) shares the row, so a long path there must not
+    // right-truncate the basename either — same head-truncate + tail-visible.
+    render(<ActivityTimeline events={[WRITE_LONGPATH]} compact />);
+    expect(screen.getByText("/pathcheck.txt")).toBeInTheDocument();
+    expect(
+      screen.getByText("/Users/frank/multica_workspaces/7373de75/workdir"),
+    ).toHaveClass("truncate");
+    expect(
+      screen.getByTitle("/Users/frank/multica_workspaces/7373de75/workdir/pathcheck.txt"),
+    ).toBeInTheDocument();
   });
 
   it("projects Raft-style wake and reply labels without leaking old presentation copy", () => {

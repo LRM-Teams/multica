@@ -250,6 +250,17 @@ func (c *Client) ReportTaskMessages(ctx context.Context, taskID string, messages
 	}, nil)
 }
 
+func (c *Client) ReportAgentInboxMessages(ctx context.Context, lease AgentInboxLease, messages []TaskMessageData) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/messages", lease.ID), map[string]any{
+		"delivery_id": lease.DeliveryID,
+		"lease_token": lease.LeaseToken,
+		"messages":    messages,
+	}, nil)
+}
+
 func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, action, target string, options *protocol.ChatOutputOptions, outputType, sessionID, workDir string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload) error {
 	body := map[string]any{"output": output}
 	if branchName != "" {

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -178,6 +179,97 @@ func TestAntigravityFormatTimeoutClampsSubSecond(t *testing.T) {
 	}
 	if got := antigravityFormatTimeout(20 * time.Minute); got != "20m0s" {
 		t.Errorf("antigravityFormatTimeout(20m) = %q, want 20m0s", got)
+	}
+}
+
+func TestIsAntigravityWrapperLine(t *testing.T) {
+	t.Parallel()
+
+	for _, line := range []string{
+		"[Slock Wrapper] Starting Antigravity CLI...",
+		"[Multica Wrapper] Preparing workspace",
+		"Slock Wrapper: booting",
+	} {
+		if !isAntigravityWrapperLine(line) {
+			t.Fatalf("isAntigravityWrapperLine(%q) = false, want true", line)
+		}
+	}
+
+	for _, line := range []string{
+		"I will check the available permissions...",
+		"Here is the file content.",
+	} {
+		if isAntigravityWrapperLine(line) {
+			t.Fatalf("isAntigravityWrapperLine(%q) = true, want false", line)
+		}
+	}
+}
+
+func TestAntigravityExecuteSplitsWrapperAndProse(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	agyPath := filepath.Join(dir, "agy")
+	script := `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "--log-file" ]; then
+		shift
+		log_file="$1"
+	fi
+	shift
+done
+printf '%s\n' '[Slock Wrapper] Starting Antigravity CLI...'
+printf '%s\n' 'I will write the requested file.'
+printf '%s\n' '[Multica Wrapper] Done'
+printf '%s\n' 'Created hello.txt.'
+if [ -n "$log_file" ]; then
+	printf '%s\n' 'I0528 13:36:23.318877 73304 printmode.go:130] Print mode: conversation=b8b263a4-4b2f-4339-acc9-78b248e2b606, sending message' > "$log_file"
+fi
+`
+	if err := os.WriteFile(agyPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	backend := &antigravityBackend{cfg: Config{
+		ExecutablePath: agyPath,
+		Logger:         quietAntigravityLogger(),
+	}}
+	session, err := backend.Execute(context.Background(), "write a file", ExecOptions{})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	var events []Message
+	for msg := range session.Messages {
+		if msg.Type != MessageStatus {
+			events = append(events, msg)
+		}
+	}
+	result, ok := <-session.Result
+	if !ok {
+		t.Fatal("result channel closed without a result")
+	}
+
+	wantTypes := []MessageType{MessageLog, MessageThinking, MessageLog, MessageThinking}
+	if len(events) != len(wantTypes) {
+		t.Fatalf("events = %+v, want %d non-status events", events, len(wantTypes))
+	}
+	for i, want := range wantTypes {
+		if events[i].Type != want {
+			t.Fatalf("event[%d].Type = %q, want %q; events=%+v", i, events[i].Type, want, events)
+		}
+	}
+	if events[0].Level != "debug" || events[2].Level != "debug" {
+		t.Fatalf("wrapper events = %+v / %+v, want debug log events", events[0], events[2])
+	}
+	if strings.Contains(result.Output, "Wrapper") {
+		t.Fatalf("Result.Output leaked wrapper plumbing: %q", result.Output)
+	}
+	if want := "I will write the requested file.\nCreated hello.txt."; result.Output != want {
+		t.Fatalf("Result.Output = %q, want %q", result.Output, want)
+	}
+	if result.SessionID != "b8b263a4-4b2f-4339-acc9-78b248e2b606" {
+		t.Fatalf("SessionID = %q, want conversation id from log", result.SessionID)
 	}
 }
 

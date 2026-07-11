@@ -305,10 +305,10 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 	if tool.Kind != activityKindToolCall || tool.EventType != "tool_use" {
 		t.Fatalf("tool event kind/type = %q/%q", tool.Kind, tool.EventType)
 	}
-	if tool.Tool == nil || *tool.Tool != "exec_command" {
-		t.Fatalf("tool event raw tool = %+v, want exec_command", tool.Tool)
+	if tool.Tool == nil || *tool.Tool != "bash" {
+		t.Fatalf("tool event canonical tool = %+v, want bash", tool.Tool)
 	}
-	if tool.ToolTarget == nil || *tool.ToolTarget != "exec_command" {
+	if tool.ToolTarget == nil || *tool.ToolTarget != "pnpm" {
 		t.Fatalf("tool event tool_target = %+v, want safe command name", tool.ToolTarget)
 	}
 	if tool.Status == nil || *tool.Status != "running" {
@@ -335,6 +335,31 @@ func TestActivityVisibilityFor_SourceBackedLifecycle(t *testing.T) {
 	}
 	if got := activityVisibilityFor(activityKindTransport, "runtime_progress", "info", ""); got != "diagnostic_only" {
 		t.Fatalf("transport visibility = %q, want diagnostic_only", got)
+	}
+}
+
+func TestAgentActivityCanonicalToolName_UsesRaftAliases(t *testing.T) {
+	tests := map[string]string{
+		"Bash":                      "bash",
+		"command_execution":         "bash",
+		"run_shell_command":         "bash",
+		"ReadFile":                  "read_file",
+		"file_read":                 "read_file",
+		"Write":                     "write_file",
+		"StrReplaceFile":            "edit_file",
+		"mcp__chat__send_message":   "send_message",
+		"mcp_chat_search_messages":  "search_messages",
+		"mcp__filesystem__ReadFile": "read_file",
+		"SearchWeb":                 "web_search",
+		"FetchURL":                  "web_fetch",
+		"SetTodoList":               "todo_write",
+		"unknown_provider_tool":     "unknown_provider_tool",
+	}
+
+	for raw, want := range tests {
+		if got := agentActivityCanonicalToolName(raw); got != want {
+			t.Fatalf("agentActivityCanonicalToolName(%q) = %q, want %q", raw, got, want)
+		}
 	}
 }
 

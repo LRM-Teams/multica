@@ -3426,8 +3426,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		"timeout", execOpts.Timeout,
 	)
 
-	persistTaskMessages := !task.isInboxTask()
-	result, tools, err := d.executeAndDrainWithPersistence(ctx, backend, prompt, execOpts, taskLog, task.ID, persistTaskMessages)
+	result, tools, err := d.executeAndDrainForTask(ctx, backend, prompt, execOpts, taskLog, task)
 	if err != nil {
 		return TaskResult{}, err
 	}
@@ -3439,7 +3438,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		firstUsage := result.Usage
 		taskLog.Warn("session resume failed, retrying with fresh session", "error", result.Error)
 		execOpts.ResumeSessionID = ""
-		retryResult, retryTools, retryErr := d.executeAndDrainWithPersistence(ctx, backend, prompt, execOpts, taskLog, task.ID, persistTaskMessages)
+		retryResult, retryTools, retryErr := d.executeAndDrainForTask(ctx, backend, prompt, execOpts, taskLog, task)
 		if retryErr != nil {
 			taskLog.Error("fresh session also failed to start", "error", retryErr)
 		} else {
@@ -3657,10 +3656,11 @@ func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger
 // executeAndDrain runs a backend, drains its message stream (forwarding to the
 // server), and waits for the final result.
 func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, taskID string) (agent.Result, int32, error) {
-	return d.executeAndDrainWithPersistence(ctx, backend, prompt, opts, taskLog, taskID, true)
+	return d.executeAndDrainForTask(ctx, backend, prompt, opts, taskLog, Task{ID: taskID})
 }
 
-func (d *Daemon) executeAndDrainWithPersistence(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, taskID string, persistTaskMessages bool) (agent.Result, int32, error) {
+func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, task Task) (agent.Result, int32, error) {
+	taskID := task.ID
 	// Wrap the caller's ctx so the idle watchdog (below) can interrupt both
 	// the agent subprocess (via the ctx passed to backend.Execute) AND the
 	// drain loop with a single cancel. Without this layer the backend would
@@ -3751,12 +3751,18 @@ func (d *Daemon) executeAndDrainWithPersistence(ctx context.Context, backend age
 			batch = nil
 			mu.Unlock()
 
-			if len(toSend) > 0 && persistTaskMessages {
+			if len(toSend) > 0 {
 				sendCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				if err := d.client.ReportTaskMessages(sendCtx, taskID, toSend); err != nil {
-					taskLog.Debug("failed to report task messages", "error", err)
+				var err error
+				if task.isInboxTask() {
+					err = d.client.ReportAgentInboxMessages(sendCtx, *task.InboxEvent, toSend)
 				} else {
-					taskLog.Debug("reported task messages", "count", len(toSend), "last_seq", toSend[len(toSend)-1].Seq)
+					err = d.client.ReportTaskMessages(sendCtx, taskID, toSend)
+				}
+				if err != nil {
+					taskLog.Debug("failed to report task messages", "inbox_task", task.isInboxTask(), "error", err)
+				} else {
+					taskLog.Debug("reported task messages", "inbox_task", task.isInboxTask(), "count", len(toSend), "last_seq", toSend[len(toSend)-1].Seq)
 				}
 				cancel()
 			}
@@ -3796,7 +3802,7 @@ func (d *Daemon) executeAndDrainWithPersistence(ctx context.Context, backend age
 					// reveals them. Without this, a daemon crash mid-run
 					// loses the resume pointer and the auto-retry fires
 					// without context.
-					if msg.SessionID != "" && persistTaskMessages && !sessionPinned.Swap(true) {
+					if msg.SessionID != "" && !task.isInboxTask() && !sessionPinned.Swap(true) {
 						sid := msg.SessionID
 						wd := opts.Cwd
 						go func() {
@@ -3883,6 +3889,18 @@ func (d *Daemon) executeAndDrainWithPersistence(ctx context.Context, backend age
 						Content: msg.Content,
 					})
 					mu.Unlock()
+				case agent.MessageLog:
+					if msg.Content != "" {
+						taskLog.Debug("agent log", "level", msg.Level, "content", truncateLog(msg.Content, 200))
+						s := seq.Add(1)
+						mu.Lock()
+						batch = append(batch, TaskMessageData{
+							Seq:     int(s),
+							Type:    "log",
+							Content: msg.Content,
+						})
+						mu.Unlock()
+					}
 				}
 			case <-drainCtx.Done():
 				goto drainDone

@@ -2220,18 +2220,14 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		completedMessage = "Task completed (output suppressed: " + req.OutputSuppressedReason + ")"
 		completedSeverity = "warning"
 	}
-	completedTargetKind := "agent"
-	completedTargetID := task.AgentID
-	if task.IssueID.Valid {
-		completedTargetKind = "issue"
-		completedTargetID = task.IssueID
-	}
+	completedTargetKind, completedTargetID, completedTargetSlug := h.taskActivityTarget(r.Context(), *task)
 	h.recordAgentActivityEvent(r.Context(), h.DB,
 		parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
 		activityKindTurnEnd, "task_completed", completedSeverity,
-		completedTargetKind, completedTargetID, "",
+		completedTargetKind, completedTargetID, completedTargetSlug,
 		req.OutputSuppressedReason, completedMessage, completedDetails,
 	)
+	h.recordTaskVisibleOutputActivity(r.Context(), parseUUID(workspaceID), *task, req)
 
 	h.handleCompletedAgentRadarTask(r.Context(), *task, req.Output)
 
@@ -2884,7 +2880,7 @@ func taskMessageToPayload(m db.TaskMessage, taskID, issueID string) protocol.Tas
 }
 
 func taskMessageVisibility(msgType string) string {
-	if msgType == "tool_result" {
+	if msgType == "tool_result" || msgType == "log" {
 		return "diagnostic_only"
 	}
 	return "user_facing"

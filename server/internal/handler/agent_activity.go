@@ -16,6 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
+	"github.com/multica-ai/multica/server/pkg/redact"
 )
 
 const (
@@ -651,6 +652,7 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 				WHEN tm.type = 'tool_use' THEN 'tool_call'
 				WHEN tm.type = 'tool_result' THEN 'tool_output'
 				WHEN tm.type = 'error' THEN 'error'
+				WHEN tm.type = 'log' THEN 'custom'
 				ELSE 'text'
 			END AS kind,
 			tm.id,
@@ -659,14 +661,14 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 			atq.id AS task_id,
 			atq.issue_id,
 			atq.chat_session_id,
-			tm.type AS event_type,
+			CASE WHEN tm.type = 'log' THEN 'runtime_text' ELSE tm.type END AS event_type,
 			CASE WHEN tm.type = 'error' THEN 'error' ELSE 'info' END AS severity,
 			NULL::text AS target_kind,
 			NULL::uuid AS target_id,
 			NULL::text AS target_slug,
 			''::text AS reason_code,
 			CASE
-				WHEN tm.type IN ('thinking', 'text', 'error') THEN COALESCE(NULLIF(tm.content, ''), NULLIF(tm.output, ''), '')
+				WHEN tm.type IN ('thinking', 'text', 'error', 'log') THEN COALESCE(NULLIF(tm.content, ''), NULLIF(tm.output, ''), '')
 				ELSE ''
 			END AS message,
 			jsonb_strip_nulls(jsonb_build_object(
@@ -680,9 +682,12 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 						WHEN tm.input ? 'path' THEN regexp_replace(tm.input->>'path', '^.*/', '')
 						WHEN tm.input ? 'file_path' THEN regexp_replace(tm.input->>'file_path', '^.*/', '')
 						WHEN tm.input ? 'filepath' THEN regexp_replace(tm.input->>'filepath', '^.*/', '')
+						WHEN tm.input ? 'cmd' THEN regexp_replace(trim(both '"' from split_part(btrim(tm.input->>'cmd'), ' ', 1)), '^.*/', '')
+						WHEN tm.input ? 'command' THEN regexp_replace(trim(both '"' from split_part(btrim(tm.input->>'command'), ' ', 1)), '^.*/', '')
+						WHEN tm.input ? 'shell_command' THEN regexp_replace(trim(both '"' from split_part(btrim(tm.input->>'shell_command'), ' ', 1)), '^.*/', '')
 						WHEN tm.input ? 'query' THEN left(tm.input->>'query', 80)
 						WHEN tm.input ? 'pattern' THEN left(tm.input->>'pattern', 80)
-						WHEN NULLIF(tm.tool, '') IS NOT NULL THEN tm.tool
+						WHEN tm.input ? 'url' THEN left(tm.input->>'url', 80)
 						ELSE NULL
 					END
 			)) AS details,
@@ -1525,10 +1530,15 @@ func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspac
 		"seq":             message.Seq,
 	}
 	if message.Tool.Valid && strings.TrimSpace(message.Tool.String) != "" {
-		details["tool"] = strings.TrimSpace(message.Tool.String)
+		rawTool := strings.TrimSpace(message.Tool.String)
+		details["tool"] = agentActivityCanonicalToolName(rawTool)
+		if details["tool"] != rawTool {
+			details["raw_tool"] = rawTool
+		}
 	}
-	if target := taskMessageActivityToolTarget(message); target != "" {
+	if target, summaryKind := taskMessageActivityToolTarget(message); target != "" {
 		details["tool_target"] = target
+		details["summary_kind"] = summaryKind
 	}
 	detailsJSON, _ := json.Marshal(details)
 	row := agentActivityRawRow{
@@ -1539,7 +1549,7 @@ func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspac
 		EventTaskID:   task.ID,
 		IssueID:       task.IssueID,
 		ChatSessionID: task.ChatSessionID,
-		EventType:     pgtype.Text{String: message.Type, Valid: strings.TrimSpace(message.Type) != ""},
+		EventType:     pgtype.Text{String: taskMessageActivityEventType(message.Type), Valid: strings.TrimSpace(message.Type) != ""},
 		Severity:      pgtype.Text{String: "info", Valid: true},
 		ReasonCode:    pgtype.Text{String: "", Valid: true},
 		Message:       taskMessageActivityText(message),
@@ -1567,14 +1577,23 @@ func taskMessageActivityKind(messageType string) string {
 		return activityKindToolOutput
 	case "error":
 		return activityKindError
+	case "log":
+		return activityKindCustom
 	default:
 		return activityKindText
 	}
 }
 
+func taskMessageActivityEventType(messageType string) string {
+	if messageType == "log" {
+		return "runtime_text"
+	}
+	return messageType
+}
+
 func taskMessageActivityText(message db.TaskMessage) pgtype.Text {
 	switch message.Type {
-	case "thinking", "text", "error":
+	case "thinking", "text", "error", "log":
 		if message.Content.Valid && strings.TrimSpace(message.Content.String) != "" {
 			return message.Content
 		}
@@ -1587,6 +1606,11 @@ func taskMessageActivityText(message db.TaskMessage) pgtype.Text {
 
 func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivityTargetRef) AgentActivityTimelineEvent {
 	details := jsonObject(row.Details)
+	tool := stringPtrFromMap(details, "tool")
+	if tool != nil {
+		canonical := agentActivityCanonicalToolName(*tool)
+		tool = &canonical
+	}
 	return AgentActivityTimelineEvent{
 		ID:         uuidToString(row.ID),
 		AgentID:    uuidToString(row.AgentID),
@@ -1597,7 +1621,7 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		OccurredAt: timestampToString(row.CreatedAt),
 		Visibility: textOrDefault(row.Visibility, "user_facing"),
 		Text:       textToPtr(row.Message),
-		Tool:       stringPtrFromMap(details, "tool"),
+		Tool:       tool,
 		ToolTarget: stringPtrFromMap(details, "tool_target"),
 		Status:     textToPtr(row.Status),
 		ReasonCode: textOrDefault(row.ReasonCode, ""),
@@ -1606,23 +1630,130 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 	}
 }
 
-func taskMessageActivityToolTarget(message db.TaskMessage) string {
+func taskMessageActivityToolTarget(message db.TaskMessage) (string, string) {
 	if message.Type != "tool_use" {
-		return ""
+		return "", ""
 	}
-	tool := strings.TrimSpace(message.Tool.String)
 	input := jsonObject(message.Input)
+	return agentActivitySafeToolTarget(input)
+}
+
+func agentActivitySafeToolTarget(input map[string]any) (string, string) {
 	for _, key := range []string{"path", "file_path", "filepath"} {
 		if value := basenameFromMap(input, key); value != "" {
-			return value
+			return value, "file_path"
+		}
+	}
+	for _, key := range []string{"cmd", "command", "shell_command"} {
+		if value := commandNameFromMap(input, key); value != "" {
+			return value, "command"
 		}
 	}
 	for _, key := range []string{"query", "pattern"} {
 		if value := clippedStringFromMap(input, key, 80); value != "" {
-			return value
+			return value, key
 		}
 	}
+	if value := clippedStringFromMap(input, "url", 80); value != "" {
+		return value, "url"
+	}
+	return "", ""
+}
+
+func agentActivityCanonicalToolName(raw string) string {
+	tool := strings.ToLower(strings.TrimSpace(raw))
+	tool = strings.TrimPrefix(tool, "mcp_chat_")
+	if strings.HasPrefix(tool, "mcp__") {
+		parts := strings.Split(tool, "__")
+		if len(parts) > 0 {
+			tool = parts[len(parts)-1]
+		}
+	}
+	tool = strings.TrimSpace(strings.TrimPrefix(tool, "tool:"))
+	if canonical, ok := agentActivityToolAliases[tool]; ok {
+		return canonical
+	}
 	return tool
+}
+
+var agentActivityToolAliases = map[string]string{
+	"send_message": "send_message",
+	"message_send": "send_message",
+
+	"check_messages":     "check_messages",
+	"wait_for_message":   "wait_for_message",
+	"receive_message":    "receive_message",
+	"read_history":       "read_history",
+	"search_messages":    "search_messages",
+	"list_server":        "list_server",
+	"list_tasks":         "list_tasks",
+	"create_tasks":       "create_tasks",
+	"claim_tasks":        "claim_tasks",
+	"unclaim_task":       "unclaim_task",
+	"update_task_status": "update_task_status",
+	"join_channel":       "join_channel",
+	"leave_channel":      "leave_channel",
+	"upload_file":        "upload_file",
+	"view_file":          "view_file",
+
+	"bash":              "bash",
+	"shell":             "bash",
+	"sh":                "bash",
+	"zsh":               "bash",
+	"exec":              "bash",
+	"exec_command":      "bash",
+	"command":           "bash",
+	"command_execution": "bash",
+	"run_shell_command": "bash",
+	"terminal":          "bash",
+
+	"read":      "read_file",
+	"readfile":  "read_file",
+	"read_file": "read_file",
+	"file_read": "read_file",
+	"open":      "read_file",
+	"cat":       "read_file",
+
+	"write":      "write_file",
+	"writefile":  "write_file",
+	"write_file": "write_file",
+	"file_write": "write_file",
+
+	"edit":           "edit_file",
+	"editfile":       "edit_file",
+	"edit_file":      "edit_file",
+	"file_edit":      "edit_file",
+	"file_change":    "edit_file",
+	"strreplacefile": "edit_file",
+	"str_replace":    "edit_file",
+	"multi_edit":     "edit_file",
+	"patch_apply":    "edit_file",
+
+	"glob":         "glob",
+	"search_files": "glob",
+
+	"grep":        "grep",
+	"rg":          "grep",
+	"search":      "grep",
+	"search_code": "grep",
+
+	"web_fetch":  "web_fetch",
+	"webfetch":   "web_fetch",
+	"fetchurl":   "web_fetch",
+	"fetch_url":  "web_fetch",
+	"web_search": "web_search",
+	"websearch":  "web_search",
+	"searchweb":  "web_search",
+	"search_web": "web_search",
+
+	"todowrite":         "todo_write",
+	"todo_write":        "todo_write",
+	"set_todo_list":     "todo_write",
+	"settodolist":       "todo_write",
+	"schedule_reminder": "schedule_reminder",
+	"list_reminders":    "list_reminders",
+	"cancel_reminder":   "cancel_reminder",
+	"collab_tool_call":  "collab_tool_call",
 }
 
 func agentActivityTimelineTaskID(row agentActivityRawRow) *string {
@@ -1758,6 +1889,29 @@ func basenameFromMap(m map[string]any, key string) string {
 		return value
 	}
 	return parts[len(parts)-1]
+}
+
+func commandNameFromMap(m map[string]any, key string) string {
+	value := stringFromMap(m, key)
+	if value == "" {
+		return ""
+	}
+	value = redact.Text(value)
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return ""
+	}
+	cmd := strings.Trim(fields[0], `"'`)
+	if cmd == "" {
+		return ""
+	}
+	parts := strings.FieldsFunc(cmd, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	if len(parts) == 0 {
+		return truncateForActivity(cmd, 40)
+	}
+	return truncateForActivity(parts[len(parts)-1], 40)
 }
 
 func clippedStringFromMap(m map[string]any, key string, limit int) string {

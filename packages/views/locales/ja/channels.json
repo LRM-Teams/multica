@@ -170,7 +170,7 @@
     "processing_pair": "{{a}} と {{b}} が返信を準備しています...",
     "processing_overflow": "{{a}}、{{b}} ほか {{count}} 人が返信を準備しています...",
     "no_reply": "確認済み · 返信不要",
-    "failed": "返信できませんでした",
+    "failed": "返信に失敗",
     "retry": "再試行",
     "retry_named": "{{name}} を再試行",
     "retry_aria": "{{name}} の返信を再試行",

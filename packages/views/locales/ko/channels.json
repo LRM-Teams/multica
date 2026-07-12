@@ -170,7 +170,7 @@
     "processing_pair": "{{a}}와(과) {{b}}이(가) 답장을 준비 중...",
     "processing_overflow": "{{a}}, {{b}} 외 {{count}}명이 답장을 준비 중...",
     "no_reply": "확인함 · 답장 불필요",
-    "failed": "답장하지 못함",
+    "failed": "답장 실패",
     "retry": "다시 시도",
     "retry_named": "{{name}} 다시 시도",
     "retry_aria": "{{name}}의 답장 다시 시도",

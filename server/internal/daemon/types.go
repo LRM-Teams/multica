@@ -140,6 +140,7 @@ type AgentInboxLease struct {
 	LeaseExpiresAt string `json:"lease_expires_at"`
 	SeqTo          int64  `json:"seq_to"`
 	RequiresWake   bool   `json:"requires_wake"`
+	RuntimeID      string `json:"-"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata the daemon

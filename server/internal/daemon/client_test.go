@@ -85,6 +85,99 @@ func TestClient_VersionOmittedWhenUnset(t *testing.T) {
 	}
 }
 
+func TestClient_RuntimeScopedCallsUseRuntimeDaemonToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/api/daemon/runtimes/rt-1/agents/agent-1/credential" {
+			t.Fatalf("path = %q, want ensure credential path", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer mdt-runtime" {
+			t.Fatalf("Authorization = %q, want runtime daemon token", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"cred-1","agent_id":"agent-1","token_prefix":"mac_abc","token":"mac_secret"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	c.SetToken("mul-profile")
+	c.SetRuntimeDaemonToken("rt-1", "mdt-runtime", time.Now().Add(time.Hour))
+
+	if _, err := c.EnsureAgentCredential(context.Background(), "rt-1", "agent-1"); err != nil {
+		t.Fatalf("EnsureAgentCredential: %v", err)
+	}
+}
+
+func TestClient_RuntimeScopedCallsSkipExpiredRuntimeDaemonToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/api/daemon/runtimes/rt-1/agents/agent-1/credential" {
+			t.Fatalf("path = %q, want ensure credential path", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer mul-profile" {
+			t.Fatalf("Authorization = %q, want bootstrap profile token", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"cred-1","agent_id":"agent-1","token_prefix":"mac_abc","token":"mac_secret"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	c.SetToken("mul-profile")
+	c.SetRuntimeDaemonToken("rt-1", "mdt-runtime", time.Now().Add(-time.Hour))
+
+	if _, err := c.EnsureAgentCredential(context.Background(), "rt-1", "agent-1"); err != nil {
+		t.Fatalf("EnsureAgentCredential: %v", err)
+	}
+}
+
+func TestClient_RegisterForWorkspaceUsesBootstrapThenWorkspaceDaemonToken(t *testing.T) {
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		wantAuth := "Bearer mul-profile"
+		if call == 2 {
+			wantAuth = "Bearer mdt-workspace"
+		}
+		if got := r.Header.Get("Authorization"); got != wantAuth {
+			t.Fatalf("call %d Authorization = %q, want %q", call, got, wantAuth)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"runtimes":[{"id":"rt-1","workspace_id":"ws-1","provider":"pi"}]}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	c.SetToken("mul-profile")
+	if _, err := c.RegisterForWorkspace(context.Background(), "ws-1", map[string]any{}); err != nil {
+		t.Fatalf("first RegisterForWorkspace: %v", err)
+	}
+	c.SetWorkspaceDaemonToken("ws-1", "mdt-workspace", time.Now().Add(time.Hour))
+	if _, err := c.RegisterForWorkspace(context.Background(), "ws-1", map[string]any{}); err != nil {
+		t.Fatalf("second RegisterForWorkspace: %v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("calls = %d, want 2", got)
+	}
+}
+
+func TestClient_RegisterForWorkspaceSkipsExpiredWorkspaceDaemonToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer mul-profile" {
+			t.Fatalf("Authorization = %q, want bootstrap profile token", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"runtimes":[{"id":"rt-1","workspace_id":"ws-1","provider":"pi"}]}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	c.SetToken("mul-profile")
+	c.SetWorkspaceDaemonToken("ws-1", "mdt-workspace", time.Now().Add(-time.Hour))
+
+	if _, err := c.RegisterForWorkspace(context.Background(), "ws-1", map[string]any{}); err != nil {
+		t.Fatalf("RegisterForWorkspace: %v", err)
+	}
+}
+
 // noSleepRetry replaces retrySleep with an immediate no-op so tests don't
 // actually wait the 4s/8s/16s/... backoffs. Returns a restore func.
 func noSleepRetry(t *testing.T) func() {

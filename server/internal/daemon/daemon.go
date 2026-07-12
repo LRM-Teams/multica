@@ -416,6 +416,7 @@ func (d *Daemon) removeStaleRuntime(runtimeID string) (string, bool) {
 		return "", false
 	}
 	delete(d.runtimeIndex, runtimeID)
+	d.client.ClearRuntimeDaemonToken(runtimeID)
 	d.mu.Unlock()
 
 	d.wsHBMu.Lock()
@@ -476,6 +477,7 @@ func (d *Daemon) reregisterWorkspaceAfterRuntimeGone(ctx context.Context, worksp
 	for _, oldID := range ws.runtimeIDs {
 		if _, kept := newIDSet[oldID]; !kept {
 			delete(d.runtimeIndex, oldID)
+			d.client.ClearRuntimeDaemonToken(oldID)
 		}
 	}
 	for _, rt := range resp.Runtimes {
@@ -756,6 +758,45 @@ func (d *Daemon) findRuntime(id string) *Runtime {
 	return nil
 }
 
+func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
+	capabilities := []string{
+		protocol.DaemonCapabilityChannelOutputActions,
+		protocol.DaemonCapabilityAgentCLITransport,
+	}
+	if includeCredentialTransport {
+		capabilities = append(capabilities, protocol.DaemonCapabilityAgentCredentialTransport)
+	}
+	return capabilities
+}
+
+func (d *Daemon) applyRegisterDaemonToken(workspaceID string, resp *RegisterResponse) bool {
+	if resp == nil || resp.DaemonToken == "" || resp.DaemonTokenExpiresAt == "" {
+		return false
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, resp.DaemonTokenExpiresAt)
+	if err != nil {
+		d.logger.Warn("register response carried invalid daemon token expiry", "workspace_id", workspaceID, "error", err)
+		return false
+	}
+	d.client.SetWorkspaceDaemonToken(workspaceID, resp.DaemonToken, expiresAt)
+	for _, rt := range resp.Runtimes {
+		d.client.SetRuntimeDaemonToken(rt.ID, resp.DaemonToken, expiresAt)
+	}
+	d.logger.Debug("daemon token cached for workspace", "workspace_id", workspaceID, "runtimes", len(resp.Runtimes), "expires_at", expiresAt)
+	return true
+}
+
+func (d *Daemon) clearDaemonTokensForWorkspace(workspaceID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.client.ClearWorkspaceDaemonToken(workspaceID)
+	if ws, ok := d.workspaces[workspaceID]; ok {
+		for _, rid := range ws.runtimeIDs {
+			d.client.ClearRuntimeDaemonToken(rid)
+		}
+	}
+}
+
 func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string) (*RegisterResponse, error) {
 	d.logger.Debug("registering runtimes for workspace", "workspace_id", workspaceID, "agent_count", len(d.cfg.Agents))
 	var runtimes []map[string]string
@@ -786,6 +827,7 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		return nil, fmt.Errorf("no agent runtimes could be registered")
 	}
 
+	includeCredentialTransport := d.client.WorkspaceDaemonTokenAvailable(workspaceID, time.Now())
 	req := map[string]any{
 		"workspace_id":      workspaceID,
 		"daemon_id":         d.cfg.DaemonID,
@@ -793,17 +835,37 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"device_name":       d.cfg.DeviceName,
 		"cli_version":       d.cfg.CLIVersion,
 		"launched_by":       d.cfg.LaunchedBy,
-		"capabilities": []string{
-			protocol.DaemonCapabilityChannelOutputActions,
-			protocol.DaemonCapabilityAgentCLITransport,
-			protocol.DaemonCapabilityAgentCredentialTransport,
-		},
-		"runtimes": runtimes,
+		"capabilities":      daemonRegistrationCapabilities(includeCredentialTransport),
+		"runtimes":          runtimes,
 	}
 
-	resp, err := d.client.Register(ctx, req)
+	resp, err := d.client.RegisterForWorkspace(ctx, workspaceID, req)
 	if err != nil {
-		return nil, fmt.Errorf("register runtimes: %w", err)
+		if includeCredentialTransport && isInvalidDaemonTokenError(err) {
+			d.clearDaemonTokensForWorkspace(workspaceID)
+			includeCredentialTransport = false
+			req["capabilities"] = daemonRegistrationCapabilities(false)
+			d.logger.Warn("workspace daemon token rejected during register; retrying with bootstrap token", "workspace_id", workspaceID, "error", err)
+			resp, err = d.client.RegisterForWorkspace(ctx, workspaceID, req)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("register runtimes: %w", err)
+		}
+	}
+	if d.applyRegisterDaemonToken(workspaceID, resp) && !includeCredentialTransport {
+		legacyResp := resp
+		req["capabilities"] = daemonRegistrationCapabilities(true)
+		resp, err = d.client.RegisterForWorkspace(ctx, workspaceID, req)
+		if err != nil {
+			d.client.ClearWorkspaceDaemonToken(workspaceID)
+			for _, rt := range legacyResp.Runtimes {
+				d.client.ClearRuntimeDaemonToken(rt.ID)
+			}
+			d.logger.Warn("daemon-token re-register failed; continuing without credential transport capability", "workspace_id", workspaceID, "error", err)
+			resp = legacyResp
+		} else {
+			d.applyRegisterDaemonToken(workspaceID, resp)
+		}
 	}
 	if len(resp.Runtimes) == 0 {
 		return nil, fmt.Errorf("register runtimes: empty response")
@@ -1214,6 +1276,15 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 			if _, err := d.refreshWorkspaceRepos(ctx, id); err != nil {
 				d.logger.Debug("workspace sync: refresh settings failed", "workspace_id", id, "error", err)
 			}
+			if d.client.WorkspaceDaemonTokenNeedsRefresh(id, time.Now()) {
+				d.logger.Info("workspace daemon token needs refresh; re-registering", "workspace_id", id, "name", name)
+				if err := d.reregisterWorkspaceAfterRuntimeGone(ctx, id); err != nil {
+					d.logger.Warn("daemon token refresh register failed", "workspace_id", id, "error", err)
+					continue
+				}
+				registered++
+				continue
+			}
 			// Only intervene further if the workspace lost all of its
 			// runtimes (most commonly because handleRuntimeGone pruned them
 			// and its inline re-register failed). The pointer is not replaced
@@ -1272,9 +1343,11 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 			if ws, exists := d.workspaces[id]; exists {
 				for _, rid := range ws.runtimeIDs {
 					delete(d.runtimeIndex, rid)
+					d.client.ClearRuntimeDaemonToken(rid)
 				}
 			}
 			delete(d.workspaces, id)
+			d.client.ClearWorkspaceDaemonToken(id)
 			d.mu.Unlock()
 			d.logger.Info("stopped watching workspace", "workspace_id", id)
 			removed++
@@ -2292,6 +2365,7 @@ func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, e
 				LeaseExpiresAt: event.LeaseExpiresAt,
 				SeqTo:          event.SeqTo,
 				RequiresWake:   event.RequiresWake,
+				RuntimeID:      runtimeID,
 			}
 			if err := d.client.AckAgentInboxEvent(ctx, lease); err != nil {
 				return nil, err
@@ -2306,6 +2380,7 @@ func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, e
 			LeaseExpiresAt: event.LeaseExpiresAt,
 			SeqTo:          event.SeqTo,
 			RequiresWake:   event.RequiresWake,
+			RuntimeID:      runtimeID,
 		}
 		return event.Task, nil
 	}

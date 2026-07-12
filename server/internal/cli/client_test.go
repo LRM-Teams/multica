@@ -97,6 +97,15 @@ func TestPostJSON(t *testing.T) {
 			if task := r.Header.Get("X-Task-ID"); task != "task-456" {
 				t.Errorf("expected X-Task-ID task-456, got %s", task)
 			}
+			if event := r.Header.Get("X-Agent-Inbox-Event-ID"); event != "event-123" {
+				t.Errorf("expected X-Agent-Inbox-Event-ID event-123, got %s", event)
+			}
+			if delivery := r.Header.Get("X-Agent-Inbox-Delivery-ID"); delivery != "delivery-123" {
+				t.Errorf("expected X-Agent-Inbox-Delivery-ID delivery-123, got %s", delivery)
+			}
+			if lease := r.Header.Get("X-Agent-Inbox-Lease-Token"); lease != "lease-123" {
+				t.Errorf("expected X-Agent-Inbox-Lease-Token lease-123, got %s", lease)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(respBody{ID: "456"})
 		}))
@@ -105,6 +114,9 @@ func TestPostJSON(t *testing.T) {
 		client := NewAPIClient(srv.URL, "ws-abc", "test-token")
 		client.AgentID = "agent-123"
 		client.TaskID = "task-456"
+		client.AgentInboxEventID = "event-123"
+		client.AgentInboxDeliveryID = "delivery-123"
+		client.AgentInboxLeaseToken = "lease-123"
 		var out respBody
 		err := client.PostJSON(context.Background(), "/test", reqBody{}, &out)
 		if err != nil {

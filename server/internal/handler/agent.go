@@ -270,13 +270,14 @@ type AgentTaskResponse struct {
 	InitiatorName  string `json:"initiator_name,omitempty"`  // display name of the initiator
 	InitiatorEmail string `json:"initiator_email,omitempty"` // member email; empty for agent initiators
 	Kind           string `json:"kind"`                      // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
-	// AuthToken is the per-run `mat_` bearer token the daemon must inject as
-	// MULTICA_TOKEN in the agent process environment. Legacy task-queue runs
-	// bind it to (agent_id, task_id); inbox runs bind it to an active
-	// (agent_id, inbox_event_id, delivery_id). In both cases, auth middleware
-	// treats requests authenticated with it as actor=agent and owner-only
-	// endpoints reject it. Empty when the runtime has no owning user; in that
-	// case the daemon falls back to its own credential for non-chat operations.
+	// AuthToken is the `mat_` bearer the daemon writes into the per-run
+	// MULTICA_TOKEN_FILE wrapper. Legacy task-queue runs bind it to
+	// (agent_id, task_id); current inbox runs still receive the temporary
+	// delivery-bound bearer until durable agent credential provisioning
+	// replaces that mint path. In both cases, auth middleware treats requests
+	// authenticated with it as actor=agent and owner-only endpoints reject it.
+	// Empty when the runtime has no owning user; in that case the daemon falls
+	// back to its own credential for non-chat operations.
 	AuthToken string `json:"auth_token,omitempty"`
 
 	// InboxEvent is present for raft-like agent inbox deliveries. The daemon

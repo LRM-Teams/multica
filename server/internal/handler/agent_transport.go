@@ -359,6 +359,12 @@ func (h *Handler) requireAgentTransportSource(w http.ResponseWriter, r *http.Req
 			return agentTransportSource{}, false
 		}
 		return agentTransportSource{task: task, origin: origin, inboxEventID: inboxEventID}, true
+	case "agent_credential":
+		task, origin, inboxEventID, ok := h.requireAgentCredentialTransportInboxEvent(w, r)
+		if !ok {
+			return agentTransportSource{}, false
+		}
+		return agentTransportSource{task: task, origin: origin, inboxEventID: inboxEventID}, true
 	default:
 		writeError(w, http.StatusForbidden, "agent transport requires a task token")
 		return agentTransportSource{}, false
@@ -437,6 +443,76 @@ func (h *Handler) requireAgentTransportInboxEvent(w http.ResponseWriter, r *http
 		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	task := agentInboxSyntheticTask(event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID))
+	origin, ok := h.chatOutputOriginForTask(r.Context(), task)
+	if !ok || origin.workspaceID != wsUUID || origin.agentID != agentID {
+		writeError(w, http.StatusForbidden, "agent inbox event is not a channel task")
+		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+	}
+	return task, origin, event.ID, true
+}
+
+func (h *Handler) requireAgentCredentialTransportInboxEvent(w http.ResponseWriter, r *http.Request) (db.AgentTaskQueue, chatOutputOrigin, pgtype.UUID, bool) {
+	if strings.TrimSpace(r.Header.Get("X-Agent-Inbox-Event-ID")) == "" ||
+		strings.TrimSpace(r.Header.Get("X-Agent-Inbox-Delivery-ID")) == "" ||
+		strings.TrimSpace(r.Header.Get("X-Agent-Inbox-Lease-Token")) == "" {
+		writeError(w, http.StatusForbidden, "agent credential transport requires active inbox delivery")
+		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+	}
+
+	workspaceID := ctxWorkspaceID(r.Context())
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if !ok {
+		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+	}
+	agentID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-ID"), "agent id")
+	if !ok {
+		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+	}
+	eventID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-Inbox-Event-ID"), "inbox event id")
+	if !ok {
+		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+	}
+	deliveryID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-Inbox-Delivery-ID"), "delivery id")
+	if !ok {
+		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+	}
+	leaseToken, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-Inbox-Lease-Token"), "lease token")
+	if !ok {
+		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+	}
+
+	event, err := h.Queries.GetAgentInboxEvent(r.Context(), eventID)
+	if err != nil || event.AgentID != agentID || event.WorkspaceID != wsUUID || !event.ChatSessionID.Valid {
+		writeError(w, http.StatusForbidden, "agent credential does not match this agent event")
+		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+	}
+	var runtimeID pgtype.UUID
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT d.runtime_id
+		FROM agent_event_delivery d
+		WHERE d.id = $1
+		  AND d.inbox_event_id = $2
+		  AND d.lease_token = $3
+		  AND d.status IN ('leased', 'processing')
+		  AND d.lease_expires_at > now()
+		  AND EXISTS (
+		    SELECT 1
+		    FROM agent_inbox_event e
+		    WHERE e.id = d.inbox_event_id
+		      AND e.agent_session_id = d.agent_session_id
+		      AND e.status = 'draining'
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM agent_event_delivery newer
+		    WHERE newer.inbox_event_id = d.inbox_event_id
+		      AND newer.id <> d.id
+		      AND newer.created_at >= d.created_at
+		  )`, deliveryID, event.ID, leaseToken).Scan(&runtimeID); err != nil {
+		writeError(w, http.StatusConflict, "agent inbox delivery is not active")
+		return db.AgentTaskQueue{}, chatOutputOrigin{}, pgtype.UUID{}, false
+	}
+	task := agentInboxSyntheticTask(event, runtimeID)
 	origin, ok := h.chatOutputOriginForTask(r.Context(), task)
 	if !ok || origin.workspaceID != wsUUID || origin.agentID != agentID {
 		writeError(w, http.StatusForbidden, "agent inbox event is not a channel task")

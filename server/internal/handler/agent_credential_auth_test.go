@@ -8,10 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestCreateAgentCredential_DerivesBindingFromAgentAndRuntimeOwner(t *testing.T) {
@@ -142,7 +145,7 @@ func seedHandlerTestRuntimeOwner(t *testing.T, ownerID string) {
 	})
 }
 
-func TestAgentCredentialTransportStillForbidden(t *testing.T) {
+func TestAgentCredentialTransportRequiresInboxLease(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -152,10 +155,216 @@ func TestAgentCredentialTransportStillForbidden(t *testing.T) {
 	req.Header.Set("X-Agent-ID", "00000000-0000-0000-0000-000000000001")
 	w := httptest.NewRecorder()
 	if _, ok := testHandler.requireAgentTransportSource(w, req); ok {
-		t.Fatal("agent_credential must not be accepted by generic transport before freshness/delivery validation lands")
+		t.Fatal("agent_credential must not be accepted without inbox freshness headers")
 	}
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAgentCredentialTransportAllowsActiveInboxDeliveryThroughMiddleware(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	fixture := seedAgentCredentialTransportFixture(t)
+	router := chi.NewRouter()
+	router.Group(func(r chi.Router) {
+		r.Use(middleware.Auth(testHandler.Queries, nil, nil))
+		r.Use(middleware.RequireWorkspaceMember(testHandler.Queries))
+		r.Post("/api/agent/messages/send", testHandler.AgentTransportSendMessage)
+	})
+
+	clientID := "agent-credential-transport-" + uuid.NewString()
+	body := map[string]any{
+		"parts": []protocol.MessagePart{{
+			Type:      protocol.MessagePartTypeSticker,
+			StickerID: "huaji",
+		}},
+		"client_message_id": clientID,
+	}
+	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", body)
+	sendReq.Header.Set("Authorization", "Bearer "+fixture.credentialToken)
+	sendReq.Header.Set("X-Workspace-ID", testWorkspaceID)
+	sendReq.Header.Set("X-Agent-Inbox-Event-ID", fixture.event.ID)
+	sendReq.Header.Set("X-Agent-Inbox-Delivery-ID", fixture.event.DeliveryID)
+	sendReq.Header.Set("X-Agent-Inbox-Lease-Token", fixture.event.LeaseToken)
+	sendRec := httptest.NewRecorder()
+	router.ServeHTTP(sendRec, sendReq)
+	if sendRec.Code != http.StatusCreated {
+		t.Fatalf("agent credential transport send: status=%d body=%s", sendRec.Code, sendRec.Body.String())
+	}
+
+	var taskAuditRows, inboxAuditRows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (WHERE task_id IS NOT NULL),
+			count(*) FILTER (WHERE inbox_event_id = $1)
+		FROM agent_task_transport_audit
+		WHERE agent_id = $2 AND action = 'message_send' AND client_message_id = $3`,
+		fixture.event.ID, fixture.agentID, clientID).Scan(&taskAuditRows, &inboxAuditRows); err != nil {
+		t.Fatalf("count transport audit rows: %v", err)
+	}
+	if taskAuditRows != 0 || inboxAuditRows != 1 {
+		t.Fatalf("transport audit task rows=%d inbox rows=%d, want 0/1", taskAuditRows, inboxAuditRows)
+	}
+}
+
+func TestAgentCredentialTransportRejectsInvalidFreshness(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	for _, tc := range []struct {
+		name       string
+		mutate     func(t *testing.T, fixture agentCredentialTransportFixture) (eventID, deliveryID, leaseToken string)
+		wantStatus int
+	}{
+		{
+			name: "wrong event",
+			mutate: func(t *testing.T, fixture agentCredentialTransportFixture) (string, string, string) {
+				t.Helper()
+				return uuid.NewString(), fixture.event.DeliveryID, fixture.event.LeaseToken
+			},
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name: "wrong delivery",
+			mutate: func(t *testing.T, fixture agentCredentialTransportFixture) (string, string, string) {
+				t.Helper()
+				return fixture.event.ID, uuid.NewString(), fixture.event.LeaseToken
+			},
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name: "wrong lease token",
+			mutate: func(t *testing.T, fixture agentCredentialTransportFixture) (string, string, string) {
+				t.Helper()
+				return fixture.event.ID, fixture.event.DeliveryID, uuid.NewString()
+			},
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name: "expired lease",
+			mutate: func(t *testing.T, fixture agentCredentialTransportFixture) (string, string, string) {
+				t.Helper()
+				if _, err := testPool.Exec(context.Background(), `
+					UPDATE agent_event_delivery
+					SET lease_expires_at = now() - interval '1 second'
+					WHERE id = $1`, fixture.event.DeliveryID); err != nil {
+					t.Fatalf("expire delivery: %v", err)
+				}
+				return fixture.event.ID, fixture.event.DeliveryID, fixture.event.LeaseToken
+			},
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name: "stale delivery with newer lease",
+			mutate: func(t *testing.T, fixture agentCredentialTransportFixture) (string, string, string) {
+				t.Helper()
+				if _, err := testPool.Exec(context.Background(), `
+					INSERT INTO agent_event_delivery (workspace_id, agent_session_id, inbox_event_id, runtime_id, status)
+					SELECT workspace_id, agent_session_id, id, $2, 'leased'
+					FROM agent_inbox_event
+					WHERE id = $1`, fixture.event.ID, handlerTestRuntimeID(t)); err != nil {
+					t.Fatalf("insert newer delivery: %v", err)
+				}
+				return fixture.event.ID, fixture.event.DeliveryID, fixture.event.LeaseToken
+			},
+			wantStatus: http.StatusConflict,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := seedAgentCredentialTransportFixture(t)
+			eventID, deliveryID, leaseToken := tc.mutate(t, fixture)
+			req := newRequest(http.MethodPost, "/api/agent/messages/send", nil)
+			req = withChatTestWorkspaceCtx(t, req)
+			req.Header.Set("X-Actor-Source", "agent_credential")
+			req.Header.Set("X-Agent-ID", fixture.agentID)
+			req.Header.Set("X-Agent-Inbox-Event-ID", eventID)
+			req.Header.Set("X-Agent-Inbox-Delivery-ID", deliveryID)
+			req.Header.Set("X-Agent-Inbox-Lease-Token", leaseToken)
+			w := httptest.NewRecorder()
+			if _, ok := testHandler.requireAgentTransportSource(w, req); ok {
+				t.Fatal("agent_credential transport source unexpectedly accepted invalid freshness")
+			}
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", w.Code, tc.wantStatus, w.Body.String())
+			}
+		})
+	}
+}
+
+type agentCredentialTransportFixture struct {
+	agentID         string
+	channelID       string
+	event           AgentInboxEventResponse
+	credentialToken string
+}
+
+func seedAgentCredentialTransportFixture(t *testing.T) agentCredentialTransportFixture {
+	t.Helper()
+
+	ctx := context.Background()
+	agentName := "Agent Credential Transport " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	runtimeID := handlerTestRuntimeID(t)
+	seedHandlerTestRuntimeOwner(t, testUserID)
+	channelID := seedChannelForTest(t, "agent-credential-transport-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent channel member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") credential transport", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("agent-credential-transport"), 0)
+	if err != nil {
+		t.Fatalf("insert mention trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-credential-transport-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode drain response: %v", err)
+	}
+	if len(drainResp.Events) != 1 {
+		t.Fatalf("drain response events=%d, want 1: %s", len(drainResp.Events), drainRec.Body.String())
+	}
+	event := drainResp.Events[0]
+	if event.Task == nil {
+		t.Fatalf("drain response missing task: %s", drainRec.Body.String())
+	}
+
+	rawToken, err := auth.GenerateAgentCredentialToken()
+	if err != nil {
+		t.Fatalf("generate agent credential token: %v", err)
+	}
+	if _, err := testHandler.Queries.CreateAgentCredential(ctx, db.CreateAgentCredentialParams{
+		TokenHash:   auth.HashToken(rawToken),
+		TokenPrefix: tokenPrefixForTest(rawToken),
+		AgentID:     parseUUID(agentID),
+		WorkspaceID: parseUUID(testWorkspaceID),
+		UserID:      parseUUID(testUserID),
+		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+	}); err != nil {
+		t.Fatalf("create agent credential: %v", err)
+	}
+	return agentCredentialTransportFixture{
+		agentID:         agentID,
+		channelID:       channelID,
+		event:           event,
+		credentialToken: rawToken,
 	}
 }
 

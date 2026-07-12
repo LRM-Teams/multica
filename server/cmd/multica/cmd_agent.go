@@ -274,6 +274,15 @@ func newAPIClient(cmd *cobra.Command) (*cli.APIClient, error) {
 	if taskID := os.Getenv("MULTICA_TASK_ID"); taskID != "" {
 		client.TaskID = taskID
 	}
+	if inboxEventID := os.Getenv("MULTICA_AGENT_INBOX_EVENT_ID"); inboxEventID != "" {
+		client.AgentInboxEventID = inboxEventID
+	}
+	if deliveryID := os.Getenv("MULTICA_AGENT_INBOX_DELIVERY_ID"); deliveryID != "" {
+		client.AgentInboxDeliveryID = deliveryID
+	}
+	if leaseToken := os.Getenv("MULTICA_AGENT_INBOX_LEASE_TOKEN"); leaseToken != "" {
+		client.AgentInboxLeaseToken = leaseToken
+	}
 	return client, nil
 }
 

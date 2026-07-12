@@ -58,6 +58,7 @@ func (r *fakeCheckpointRepo) CreateCheckpoint(_ context.Context, in EnvCheckpoin
 		EnvIDMap:      in.EnvIDMap,
 		SandboxRefs:   in.SandboxRefs,
 		DBSnapshot:    in.DBSnapshot,
+		ResumeTrigger: in.ResumeTrigger,
 		EntropyScore:  in.EntropyScore,
 		SaveTimeoutMs: int(in.SaveTimeout / time.Millisecond),
 		SaveStatus:    status,
@@ -148,13 +149,32 @@ func (f *fakeProjectSnapshotReader) CaptureProjectSnapshot(_ context.Context, _,
 	return f.snapshot, f.err
 }
 
+type fakeInFlightResolver struct {
+	triggers []ResumeTrigger
+	err      error
+}
+
+func (f *fakeInFlightResolver) ListInFlightTasksForProject(_ context.Context, _, _ string) ([]ResumeTrigger, error) {
+	return f.triggers, f.err
+}
+
+type fakeResumeAgentRunner struct {
+	calledWith *ResumeTrigger
+	err        error
+}
+
+func (f *fakeResumeAgentRunner) ResumeAgentRun(_ context.Context, t ResumeTrigger) error {
+	f.calledWith = &t
+	return f.err
+}
+
 // --- tests ---
 
 func TestEnvCheckpointCreateWaitsForSynchronousSaveComplete(t *testing.T) {
 	repo := newFakeCheckpointRepo()
 	saver := &fakeCheckpointSaver{}
 	snapshot := &fakeProjectSnapshotReader{snapshot: json.RawMessage(`{"issues":[]}`)}
-	svc := NewEnvCheckpointService(repo, saver, &fakeCheckpointResumer{}, snapshot)
+	svc := NewEnvCheckpointService(repo, saver, &fakeCheckpointResumer{}, snapshot, &fakeInFlightResolver{}, nil)
 
 	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
 		WorkspaceID: "ws",
@@ -188,7 +208,7 @@ func TestEnvCheckpointCreateRecordsTimeoutStatus(t *testing.T) {
 	repo := newFakeCheckpointRepo()
 	saver := &fakeCheckpointSaver{blockUntilCancel: true}
 	snapshot := &fakeProjectSnapshotReader{snapshot: json.RawMessage(`{}`)}
-	svc := NewEnvCheckpointService(repo, saver, &fakeCheckpointResumer{}, snapshot)
+	svc := NewEnvCheckpointService(repo, saver, &fakeCheckpointResumer{}, snapshot, &fakeInFlightResolver{}, nil)
 
 	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
 		WorkspaceID: "ws",
@@ -209,7 +229,7 @@ func TestEnvCheckpointCreateRecordsSaveFailureStatus(t *testing.T) {
 	repo := newFakeCheckpointRepo()
 	saver := &fakeCheckpointSaver{err: fmt.Errorf("sandbox crash")}
 	snapshot := &fakeProjectSnapshotReader{snapshot: json.RawMessage(`{}`)}
-	svc := NewEnvCheckpointService(repo, saver, &fakeCheckpointResumer{}, snapshot)
+	svc := NewEnvCheckpointService(repo, saver, &fakeCheckpointResumer{}, snapshot, &fakeInFlightResolver{}, nil)
 
 	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
 		WorkspaceID: "ws",
@@ -236,7 +256,7 @@ func TestEnvCheckpointListNewestFirstAndWorkspaceScoped(t *testing.T) {
 	repo.checkpoints["cp-2"] = EnvCheckpoint{ID: "cp-2", WorkspaceID: "ws", ProjectID: "proj", CreatedAt: base}
 	repo.checkpoints["cp-3"] = EnvCheckpoint{ID: "cp-3", WorkspaceID: "other-ws", ProjectID: "proj", CreatedAt: base}
 
-	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{})
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, nil)
 
 	list, err := svc.List(context.Background(), "ws", "proj")
 	if err != nil {
@@ -252,7 +272,7 @@ func TestEnvCheckpointListNewestFirstAndWorkspaceScoped(t *testing.T) {
 
 func TestEnvCheckpointCreateRejectsFleetOnlyEnv(t *testing.T) {
 	repo := newFakeCheckpointRepo()
-	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{})
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, nil)
 
 	_, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
 		WorkspaceID: "ws",
@@ -279,7 +299,7 @@ func TestEnvCheckpointStoresInlineDBSnapshot(t *testing.T) {
 	repo := newFakeCheckpointRepo()
 	snapshotJSON := json.RawMessage(`{"issues":[{"id":"i1"}],"sessions":[]}`)
 	snapshot := &fakeProjectSnapshotReader{snapshot: snapshotJSON}
-	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, snapshot)
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, snapshot, &fakeInFlightResolver{}, nil)
 
 	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
 		WorkspaceID: "ws",
@@ -315,7 +335,7 @@ func TestResumeFromCheckpointResumesCompletedSandboxRefs(t *testing.T) {
 		},
 	}
 	resumer := &fakeCheckpointResumer{}
-	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{})
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, nil)
 
 	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
 	if err != nil {
@@ -339,7 +359,7 @@ func TestResumeFromCheckpointRejectsTimedOutCheckpoint(t *testing.T) {
 		SaveStatus: EnvCheckpointSaveTimedOut,
 	}
 	resumer := &fakeCheckpointResumer{}
-	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{})
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, nil)
 
 	_, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
 	if err == nil {
@@ -360,7 +380,7 @@ func TestResumeFromCheckpointRejectsFailedCheckpoint(t *testing.T) {
 		SaveStatus: EnvCheckpointSaveFailed,
 	}
 	resumer := &fakeCheckpointResumer{}
-	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{})
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, nil)
 
 	_, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
 	if err == nil {
@@ -377,7 +397,7 @@ func TestResumeFromCheckpointRejectsFailedCheckpoint(t *testing.T) {
 func TestResumeFromCheckpointNotFound(t *testing.T) {
 	repo := newFakeCheckpointRepo()
 	resumer := &fakeCheckpointResumer{}
-	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{})
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, nil)
 
 	_, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "missing", "u")
 	if err == nil {
@@ -404,7 +424,7 @@ func TestResumeFromCheckpointPreservesPerAgentSandboxRefs(t *testing.T) {
 		EnvIDMap:    map[string]string{"a1": "env-1", "a2": "env-2"},
 	}
 	resumer := &fakeCheckpointResumer{}
-	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{})
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, resumer, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, nil)
 
 	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
 	if err != nil {
@@ -418,5 +438,137 @@ func TestResumeFromCheckpointPreservesPerAgentSandboxRefs(t *testing.T) {
 	}
 	if res.EnvIDMap["a1"] != "env-1" || res.EnvIDMap["a2"] != "env-2" {
 		t.Fatalf("env id map not preserved: %+v", res.EnvIDMap)
+	}
+}
+
+func TestEnvCheckpointCreateResolvesResumeTriggerFromInFlightTask(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	saver := &fakeCheckpointSaver{}
+	resumer := &fakeCheckpointResumer{}
+	snapshot := &fakeProjectSnapshotReader{snapshot: json.RawMessage(`{}`)}
+	trigger := ResumeTrigger{TaskID: "t-1", RuntimeID: "r-1", AgentID: "a-1", IssueID: "i-1", ProjectID: "p-1", Kind: "issue"}
+	svc := NewEnvCheckpointService(repo, saver, resumer, snapshot, &fakeInFlightResolver{triggers: []ResumeTrigger{trigger}}, nil)
+
+	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
+		WorkspaceID: "ws",
+		ProjectID:   "p-1",
+		EventRef:    "e",
+		Kind:        "always",
+		SandboxRefs: []SandboxInstanceRef{{InstanceID: "s-1", WorkspaceID: "ws"}},
+		ActorUserID: "u",
+		SaveTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(cp.ResumeTrigger) == 0 {
+		t.Fatalf("resume_trigger not resolved: %s", cp.ResumeTrigger)
+	}
+	var rt ResumeTrigger
+	if err := json.Unmarshal(cp.ResumeTrigger, &rt); err != nil {
+		t.Fatalf("unmarshal resume_trigger: %v", err)
+	}
+	if rt.TaskID != "t-1" {
+		t.Fatalf("resume_trigger task_id = %q, want t-1", rt.TaskID)
+	}
+	if len(repo.createCalls) != 1 || len(repo.createCalls[0].in.ResumeTrigger) == 0 {
+		t.Fatal("repo did not receive resume_trigger")
+	}
+}
+
+func TestEnvCheckpointCreateEmptyResumeTriggerWhenNoInFlightTask(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{snapshot: json.RawMessage(`{}`)}, &fakeInFlightResolver{triggers: nil}, nil)
+	cp, err := svc.Create(context.Background(), EnvCheckpointCreateInput{
+		WorkspaceID: "ws",
+		ProjectID:   "p-1",
+		EventRef:    "e",
+		Kind:        "always",
+		SandboxRefs: []SandboxInstanceRef{{InstanceID: "s-1", WorkspaceID: "ws"}},
+		ActorUserID: "u",
+		SaveTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(cp.ResumeTrigger) != 0 {
+		t.Fatalf("expected empty resume_trigger, got %s", cp.ResumeTrigger)
+	}
+}
+
+func TestResumeFromCheckpointExecutesTriggerAfterSandboxResume(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	repo.checkpoints["cp-1"] = EnvCheckpoint{
+		ID: "cp-1", WorkspaceID: "ws", SaveStatus: EnvCheckpointSaveComplete,
+		SandboxRefs:   []SandboxInstanceRef{{InstanceID: "s-1", WorkspaceID: "ws"}},
+		ResumeTrigger: json.RawMessage(`{"task_id":"t-1","runtime_id":"r-1","agent_id":"a-1","project_id":"p-1","kind":"issue"}`),
+	}
+	runner := &fakeResumeAgentRunner{}
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, runner)
+
+	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if runner.calledWith == nil || runner.calledWith.TaskID != "t-1" {
+		t.Fatal("trigger not executed")
+	}
+	if res.TriggerStatus != TriggerExecuted {
+		t.Fatalf("status=%v want executed", res.TriggerStatus)
+	}
+}
+
+func TestResumeFromCheckpointSkipsLegacyEmptyTrigger(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	repo.checkpoints["cp-1"] = EnvCheckpoint{
+		ID: "cp-1", WorkspaceID: "ws", SaveStatus: EnvCheckpointSaveComplete,
+		SandboxRefs:   []SandboxInstanceRef{{InstanceID: "s-1", WorkspaceID: "ws"}},
+		ResumeTrigger: nil,
+	}
+	runner := &fakeResumeAgentRunner{}
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, runner)
+
+	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if runner.calledWith != nil {
+		t.Fatal("legacy trigger should not execute")
+	}
+	if res.TriggerStatus != TriggerSkippedLegacy {
+		t.Fatalf("status=%v want skipped_legacy", res.TriggerStatus)
+	}
+}
+
+func TestResumeFromCheckpointTriggerFailureIsPartialResume(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	repo.checkpoints["cp-1"] = EnvCheckpoint{
+		ID: "cp-1", WorkspaceID: "ws", SaveStatus: EnvCheckpointSaveComplete,
+		SandboxRefs:   []SandboxInstanceRef{{InstanceID: "s-1", WorkspaceID: "ws"}},
+		ResumeTrigger: json.RawMessage(`{"task_id":"t-1","runtime_id":"r-1","kind":"issue"}`),
+	}
+	runner := &fakeResumeAgentRunner{err: ErrTriggerTaskNotResumable}
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, runner)
+
+	res, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u")
+	if err == nil {
+		t.Fatal("expected partial-resume error")
+	}
+	if res.TriggerStatus != TriggerFailed {
+		t.Fatalf("status=%v want failed", res.TriggerStatus)
+	}
+}
+
+func TestResumeFromCheckpointRejectsTriggerWithoutRunner(t *testing.T) {
+	repo := newFakeCheckpointRepo()
+	repo.checkpoints["cp-1"] = EnvCheckpoint{
+		ID: "cp-1", WorkspaceID: "ws", SaveStatus: EnvCheckpointSaveComplete,
+		SandboxRefs:   []SandboxInstanceRef{{InstanceID: "s-1", WorkspaceID: "ws"}},
+		ResumeTrigger: json.RawMessage(`{"task_id":"t-1","kind":"issue"}`),
+	}
+	svc := NewEnvCheckpointService(repo, &fakeCheckpointSaver{}, &fakeCheckpointResumer{}, &fakeProjectSnapshotReader{}, &fakeInFlightResolver{}, nil)
+
+	if _, err := svc.ResumeFromCheckpoint(context.Background(), "ws", "cp-1", "u"); err == nil {
+		t.Fatal("expected error for non-empty trigger with nil runner")
 	}
 }

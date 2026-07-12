@@ -1,7 +1,8 @@
 import { render, screen, cleanup } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { MemberProfile, MemberProfileActivityItem } from "@multica/core/types";
+import type { MemberProfile } from "@multica/core/types";
 import type { AgentLiveStatusView } from "../agents/resolve-agent-live-status";
+import type { ActivityEvent } from "../agents/components/tabs/activity-event";
 import { ActorProfileContentLoaded } from "./actor-profile-popover";
 
 // Live status is resolved by useAgentLiveStatus (snapshot + task-messages +
@@ -9,6 +10,18 @@ import { ActorProfileContentLoaded } from "./actor-profile-popover";
 const mockLiveStatus = vi.hoisted(
   () => ({ current: null as AgentLiveStatusView | null }),
 );
+
+// Recent activity now consumes the shared #302 ActivityEvent read-model
+// (#383). Stub the hook so the popover test drives the wiring without a
+// QueryClient/WS, and stub the shared ActivityTimeline — it has its own test;
+// here we only assert the popover feeds it the live stream in compact mode.
+const mockActivity = vi.hoisted(() => ({
+  current: {
+    events: [] as ActivityEvent[],
+    latest: null as ActivityEvent | null,
+    isLoading: false,
+  },
+}));
 
 vi.mock("@multica/ui/components/common/actor-avatar", () => ({
   ActorAvatar: () => <span data-testid="actor-avatar" />,
@@ -26,24 +39,36 @@ vi.mock("../agents/use-agent-live-status", () => ({
   useAgentLiveStatus: () => mockLiveStatus.current,
 }));
 
+vi.mock("../agents/components/tabs/use-agent-activity-events", () => ({
+  useAgentActivityEvents: () => mockActivity.current,
+}));
+
+vi.mock("../agents/components/tabs/activity-timeline", () => ({
+  ActivityTimeline: ({
+    events,
+    compact,
+  }: {
+    events: ActivityEvent[];
+    compact?: boolean;
+  }) => (
+    <div data-testid="activity-timeline" data-compact={compact ? "true" : "false"}>
+      {events.length} events
+    </div>
+  ),
+}));
+
 // Namespace-aware i18n stub: only the channels profile_popover copy is needed
 // for layout/description tests (live status labels come from the hook stub).
 vi.mock("../i18n/use-t", () => {
   const CHANNELS_RES = {
     profile_popover: {
       unknown: "Unknown",
+      loading: "Loading",
       no_description: "No description",
       description: "Description",
       recent_activity: "Recent activity",
       no_recent_activity: "No recent activity",
       role: { agent: "Agent", owner: "Owner", admin: "Admin", member: "Member" },
-      activity: {
-        queued: "Queued",
-        failed: "Failed",
-        cancelled: "Cancelled",
-        task: "Task",
-        working: "Working",
-      },
     },
   };
   return {
@@ -54,18 +79,20 @@ vi.mock("../i18n/use-t", () => {
   };
 });
 
-function makeActivity(index: number): MemberProfileActivityItem {
+function makeEvent(index: number): ActivityEvent {
   return {
-    id: `activity-${index}`,
-    kind: "task",
-    label: `Activity ${index}`,
-    // Fixed UTC times so clock formatting is stable across locales.
+    id: `event-${index}`,
+    agent_id: "agent-1",
+    kind: "text",
+    event_type: "text",
     occurred_at: `2026-06-30T12:0${index}:0${index}Z`,
-    status: "completed",
+    visibility: "user_facing",
+    text: `Activity ${index}`,
+    target_ref: { kind: "agent", id: "agent-1" },
   };
 }
 
-function makeProfile(activityCount: number): MemberProfile {
+function makeProfile(): MemberProfile {
   return {
     member_type: "agent",
     member_id: "agent-1",
@@ -75,9 +102,10 @@ function makeProfile(activityCount: number): MemberProfile {
     description: "Builds and reviews changes.",
     role: "agent",
     status: "working",
-    recent_activity: Array.from({ length: activityCount }, (_, index) =>
-      makeActivity(index + 1),
-    ),
+    // No longer consumed by the popover (converged onto the live ActivityEvent
+    // stream, #383); kept only to satisfy the MemberProfile type until the BE
+    // retires the server projection.
+    recent_activity: [],
   };
 }
 
@@ -96,25 +124,39 @@ function live(
 beforeEach(() => {
   cleanup();
   mockLiveStatus.current = live("Idle");
+  mockActivity.current = { events: [], latest: null, isLoading: false };
 });
 
 describe("ActorProfileContentLoaded", () => {
-  it("renders all five recent activity rows as time · dot · label", () => {
-    render(<ActorProfileContentLoaded profile={makeProfile(5)} />);
+  it("renders the shared compact ActivityTimeline for agents, wired to the live event stream", () => {
+    mockActivity.current = {
+      events: [makeEvent(1), makeEvent(2), makeEvent(3)],
+      latest: null,
+      isLoading: false,
+    };
 
-    for (let index = 1; index <= 5; index += 1) {
-      expect(screen.getByText(`Activity ${index}`)).toBeInTheDocument();
-    }
-    // Clock column uses HH:mm:ss — one entry per activity row.
-    expect(document.querySelectorAll(".tabular-nums")).toHaveLength(5);
-    // Relative "just now" is gone; no icon pills either.
-    expect(screen.queryByText(/just now/i)).toBeNull();
+    render(<ActorProfileContentLoaded profile={makeProfile()} />);
+
+    const timeline = screen.getByTestId("activity-timeline");
+    // The profile Recent Activity surface reuses the ONE Activity renderer in
+    // compact mode — no second local presentation.
+    expect(timeline).toHaveAttribute("data-compact", "true");
+    expect(timeline).toHaveTextContent("3 events");
+  });
+
+  it("shows a loading hint before the first activity paint (no timeline flash)", () => {
+    mockActivity.current = { events: [], latest: null, isLoading: true };
+
+    render(<ActorProfileContentLoaded profile={makeProfile()} />);
+
+    expect(screen.getByText("Loading")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-timeline")).toBeNull();
   });
 
   it("name-row status shows Offline when the live hook reports Offline", () => {
     mockLiveStatus.current = live("Offline");
 
-    render(<ActorProfileContentLoaded profile={makeProfile(0)} />);
+    render(<ActorProfileContentLoaded profile={makeProfile()} />);
 
     expect(screen.getByText("Offline")).toBeInTheDocument();
     expect(screen.queryByText(/Idle/)).toBeNull();
@@ -122,15 +164,15 @@ describe("ActorProfileContentLoaded", () => {
   });
 
   it("name-row status shows detailed stage labels from the live hook", () => {
-    mockLiveStatus.current = live("Running a command", {
+    mockLiveStatus.current = live("Running command…", {
       textClass: "text-brand",
       dotClass: "bg-brand",
     });
 
-    render(<ActorProfileContentLoaded profile={makeProfile(0)} />);
+    render(<ActorProfileContentLoaded profile={makeProfile()} />);
 
     expect(screen.getByTestId("agent-live-status")).toHaveTextContent(
-      "Running a command",
+      "Running command…",
     );
   });
 
@@ -140,7 +182,7 @@ describe("ActorProfileContentLoaded", () => {
       dotClass: "bg-brand",
     });
 
-    render(<ActorProfileContentLoaded profile={makeProfile(0)} />);
+    render(<ActorProfileContentLoaded profile={makeProfile()} />);
 
     const name = screen.getByText("Aegis");
     const status = screen.getByTestId("agent-live-status");
@@ -152,7 +194,7 @@ describe("ActorProfileContentLoaded", () => {
   });
 
   it("omits the description section when the profile has no description", () => {
-    const profile = makeProfile(0);
+    const profile = makeProfile();
     profile.description = "";
 
     render(<ActorProfileContentLoaded profile={profile} />);
@@ -162,7 +204,7 @@ describe("ActorProfileContentLoaded", () => {
   });
 
   it("renders a real description when present", () => {
-    render(<ActorProfileContentLoaded profile={makeProfile(0)} />);
+    render(<ActorProfileContentLoaded profile={makeProfile()} />);
 
     expect(screen.getByText("Builds and reviews changes.")).toBeInTheDocument();
   });

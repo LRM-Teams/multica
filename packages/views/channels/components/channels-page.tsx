@@ -167,7 +167,6 @@ import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
-import { mapThreadWakeAnnotations } from "./thread-read-model";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import {
@@ -388,17 +387,25 @@ export function ConversationActivityStrip({
     }),
     [typingActors],
   );
+  const stoppableTasks = useMemo(() => {
+    const next: ChannelActiveTask[] = [];
+    for (const task of tasks) {
+      if (isTerminalChannelActiveTask(task)) continue;
+      next.push(task);
+    }
+    return next;
+  }, [tasks]);
   const agentNames = useMemo(() => {
     const seen = new Set<string>();
     const unique: string[] = [];
-    for (const task of tasks) {
+    for (const task of stoppableTasks) {
       const name = task.agent_name.trim();
       if (!name || seen.has(name)) continue;
       seen.add(name);
       unique.push(name);
     }
     return unique;
-  }, [tasks]);
+  }, [stoppableTasks]);
   const typingLabel =
     typingNames.length === 0
       ? null
@@ -448,9 +455,9 @@ export function ConversationActivityStrip({
           </span>
         ) : null}
       </div>
-      {onStopTask && tasks.length > 0 ? (
+      {onStopTask && stoppableTasks.length > 0 ? (
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto">
-          {tasks.map((task) => (
+          {stoppableTasks.map((task) => (
             <Button
               key={task.task_id}
               type="button"
@@ -469,6 +476,10 @@ export function ConversationActivityStrip({
       ) : null}
     </div>
   );
+}
+
+function isTerminalChannelActiveTask(task: ChannelActiveTask) {
+  return typeof (task as { outcome?: unknown }).outcome === "string";
 }
 
 function TypingDots() {
@@ -748,12 +759,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       return threadRoot ? messages.filter((msg) => msg.id !== threadRoot.id) : messages;
     },
     [threadPage?.messages, threadRoot],
-  );
-  // "Why no reply" wake strip (#196), agent-only + neutral, from the root's
-  // read-model annotations (#251).
-  const threadWakeAnnotations = useMemo(
-    () => (threadRoot ? mapThreadWakeAnnotations(threadRoot) : []),
-    [threadRoot],
   );
   const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
@@ -2117,7 +2122,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         replies={threadReplies}
         currentUserId={currentUserId}
         currentUserName={currentUserName ?? undefined}
-        wakeAnnotations={threadWakeAnnotations}
         isMobile={isMobile}
         onBack={() => setOpenThreadRoot(null)}
         onViewParent={() => {

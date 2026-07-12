@@ -521,6 +521,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Get("/workspaces/{workspaceId}/repos", h.GetDaemonWorkspaceRepos)
 
 		r.Post("/runtimes/{runtimeId}/tasks/claim", h.ClaimTaskByRuntime)
+		r.Post("/runtimes/{runtimeId}/agent-inbox/drain", h.DrainAgentInboxByRuntime)
+		r.Post("/runtimes/{runtimeId}/agents/{agentId}/credential", h.EnsureDaemonAgentCredential)
 		r.Get("/runtimes/{runtimeId}/tasks/pending", h.ListPendingTasksByRuntime)
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
@@ -538,6 +540,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/tasks/{taskId}/usage", h.ReportTaskUsage)
 		r.Post("/tasks/{taskId}/messages", h.ReportTaskMessages)
 		r.Get("/tasks/{taskId}/messages", h.ListTaskMessages)
+		r.Post("/agent-inbox/events/{eventId}/ack", h.AckAgentInboxEvent)
+		r.Post("/agent-inbox/events/{eventId}/renew", h.RenewAgentInboxEvent)
+		r.Post("/agent-inbox/events/{eventId}/messages", h.ReportAgentInboxMessages)
+		r.Post("/agent-inbox/events/{eventId}/complete", h.CompleteAgentInboxEvent)
+		r.Post("/agent-inbox/events/{eventId}/fail", h.FailAgentInboxEvent)
 
 		r.Post("/projects/{projectId}/managed-workdir", h.RegisterManagedWorkdir)
 
@@ -610,6 +617,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Use(middleware.RequireWorkspaceMemberFromURL(queries, "id"))
 					r.Get("/", h.GetWorkspace)
 					r.Get("/members", h.ListMembersWithUser)
+					r.Get("/memory-curation/status", h.GetWorkspaceMemoryCurationStatus)
 					r.Post("/leave", h.LeaveWorkspace)
 					r.Get("/invitations", h.ListWorkspaceInvitations)
 					// Listing GitHub installations is member-visible so the
@@ -624,6 +632,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
 					r.Put("/", h.UpdateWorkspace)
 					r.Patch("/", h.UpdateWorkspace)
+					r.Post("/memory-curation/runs", h.StartMemoryCurationRun)
+					r.Get("/memory-curation/runs/{runId}", h.GetMemoryCurationRun)
 					r.Post("/members", h.CreateInvitation)
 					r.Route("/members/{memberId}", func(r chi.Router) {
 						r.Patch("/", h.UpdateMember)
@@ -798,12 +808,24 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Task messages (user-facing, not daemon auth)
 			r.Get("/api/tasks/{taskId}/messages", h.ListTaskMessagesByUser)
 
+			r.Get("/api/evolution/metrics", h.GetEvolutionMetrics)
+
+			r.Route("/api/evolution/units/{unitId}/versions", func(r chi.Router) {
+				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
+				r.Get("/", h.ListEvolutionSkillVersions)
+				r.Get("/{versionId}", h.GetEvolutionSkillVersion)
+				r.Get("/{versionId}/eval", h.GetEvolutionSkillVersionEval)
+				r.Post("/{versionId}/rollback", h.RollbackEvolutionSkillVersion)
+			})
+
 			r.Route("/api/evolution/submissions", func(r chi.Router) {
 				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
 				r.Get("/", h.ListEvolutionReviewSubmissions)
 				r.Get("/{submissionId}", h.GetEvolutionReviewSubmission)
+				r.Post("/{submissionId}/rerun", h.RerunEvolutionCandidate)
 				r.Post("/{submissionId}/promote", h.PromoteEvolutionReviewSubmission)
 				r.Post("/{submissionId}/reject", h.RejectEvolutionReviewSubmission)
+				r.Put("/{submissionId}/source-skill", h.SetEvolutionSourceSkillAssignment)
 			})
 
 			// Labels
@@ -924,6 +946,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/cancel-tasks", h.CancelAgentTasks)
 					r.Get("/health", h.GetAgentHealth)
 					r.Get("/activity", h.ListAgentActivity)
+					r.Get("/activity/events", h.ListAgentActivityEvents)
 					r.Get("/activity/{activityId}", h.GetAgentActivity)
 					r.Get("/activity/{activityId}/steps", h.ListAgentActivitySteps)
 					r.Get("/activity/{activityId}/diagnostic", h.GetAgentActivityDiagnostic)
@@ -933,6 +956,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/skill-suggestions", h.ListAgentSkillSuggestions)
 					r.Post("/skill-suggestions/{suggestionId}/decision", h.DecideAgentSkillSuggestion)
 					r.Get("/memories", h.ListAgentMemories)
+					r.Get("/memory-curation/status", h.GetAgentMemoryCurationStatus)
+					r.Get("/radar-runs", h.ListAgentRadarRuns)
 					r.Get("/files", h.ListAgentFiles)
 					r.Get("/files/content", h.GetAgentFileContent)
 					r.Put("/files/content", h.UpdateAgentFileContent)
@@ -943,6 +968,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// internal/handler/agent_env.go.
 					r.Get("/env", h.GetAgentEnv)
 					r.Put("/env", h.UpdateAgentEnv)
+					r.Post("/credentials", h.CreateAgentCredential)
 				})
 			})
 
@@ -1034,6 +1060,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Delete("/api/v1/env/{envID}", h.DeleteEnv)
 			r.Post("/api/v1/env-dispatch", h.EnvDispatch)
 			r.Delete("/api/v1/env-dispatch/{projectID}", h.DeleteEnvDispatchProject)
+			r.Get("/api/v1/env-dispatch/{projectID}/dag", h.GetDag)
 
 			// Env-checkpoint APIs. Gated by ENV_CHECKPOINTS_ENABLED; handlers
 			// return 404 when disabled so AReaL clients can detect the gate.
@@ -1085,6 +1112,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/agent/messages/react", h.AgentTransportReactMessage)
 			r.Post("/api/agent/messages/read", h.AgentTransportReadMessages)
 			r.Post("/api/agent/messages/search", h.AgentTransportSearchMessages)
+			r.Post("/api/agent/reminders/schedule", h.AgentTransportScheduleReminder)
+			r.Post("/api/agent/reminders/list", h.AgentTransportListReminders)
+			r.Post("/api/agent/reminders/snooze", h.AgentTransportSnoozeReminder)
+			r.Post("/api/agent/reminders/update", h.AgentTransportUpdateReminder)
+			r.Post("/api/agent/reminders/cancel", h.AgentTransportCancelReminder)
 
 			// Unified 1-on-1 DM list (kind='dm' channels ∪ legacy unbound chat
 			// sessions) plus idempotent create-or-find. Sole data source for the
@@ -1132,6 +1164,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/messages", h.ListChannelMessages)
 					r.Get("/messages/search", h.SearchChannelMessages)
 					r.Post("/messages", h.SendChannelMessage)
+					r.Post("/agent-inbox/events/{eventId}/retry", h.RetryChannelAgentInboxEvent)
 					r.Patch("/messages/{messageId}", h.UpdateChannelMessage)
 					r.Delete("/messages/{messageId}", h.DeleteChannelMessage)
 					r.Get("/messages/{messageId}/thread", h.ListChannelMessageThread)

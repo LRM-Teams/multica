@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { Markdown } from "./markdown";
 
@@ -74,19 +74,31 @@ vi.mock("./actor-profile-popover", () => ({
     memberType,
     memberId,
     children,
+    onClickCapture,
   }: {
     memberType: string;
     memberId: string;
     children: ReactNode;
+    onClickCapture?: React.MouseEventHandler;
   }) => (
     <span
       data-testid="actor-profile-trigger"
       data-member-type={memberType}
       data-member-id={memberId}
+      onClickCapture={onClickCapture}
     >
       {children}
     </span>
   ),
+}));
+
+const openAgentPanelMock = vi.fn<(id: string) => void>();
+vi.mock("@multica/core/agents/stores", () => ({
+  useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
+    selector({ open: openAgentPanelMock }),
+}));
+vi.mock("./agent-panel-context", () => ({
+  useOpenAgentPanel: () => null,
 }));
 
 const ligatureClasses = [
@@ -216,6 +228,23 @@ describe("Markdown", () => {
     const trigger = screen.getByTestId("actor-profile-trigger");
     expect(trigger).toHaveAttribute("data-member-type", "agent");
     expect(trigger).toHaveAttribute("data-member-id", "agent-9");
+  });
+
+  // #349/#447 gap fix: a rendered (read-only message) @agent mention must open
+  // the side panel on click, not only in the editor. Regression guard for the
+  // "editor mention wired but rendered mention wasn't" miss.
+  it("opens the agent panel when a rendered agent mention is clicked", () => {
+    openAgentPanelMock.mockClear();
+    render(<Markdown>{"Ping [@Bot](mention://agent/agent-9)"}</Markdown>);
+    fireEvent.click(screen.getByTestId("actor-profile-trigger"));
+    expect(openAgentPanelMock).toHaveBeenCalledWith("agent-9");
+  });
+
+  it("does not open the panel for a rendered human member mention (v1: agents only)", () => {
+    openAgentPanelMock.mockClear();
+    render(<Markdown>{"Ping [@Alice](mention://member/user-1)"}</Markdown>);
+    fireEvent.click(screen.getByTestId("actor-profile-trigger"));
+    expect(openAgentPanelMock).not.toHaveBeenCalled();
   });
 
   it("renders @all as a styled pill without a profile hover card", () => {

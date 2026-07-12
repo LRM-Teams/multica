@@ -51,12 +51,13 @@ func init() {
 	workspaceCmd.GroupID = groupCore
 	repoCmd.GroupID = groupCore
 	skillCmd.GroupID = groupCore
+	memoryCmd.GroupID = groupCore
 	squadCmd.GroupID = groupCore
-	sendCmd.GroupID = groupCore
 	reactCmd.GroupID = groupCore
 	messageCmd.GroupID = groupCore
 	channelCmd.GroupID = groupCore
 	threadCmd.GroupID = groupCore
+	reminderCmd.GroupID = groupCore
 
 	// Runtime commands
 	daemonCmd.GroupID = groupRuntime
@@ -80,8 +81,8 @@ func init() {
 	rootCmd.AddCommand(workspaceCmd)
 	rootCmd.AddCommand(repoCmd)
 	rootCmd.AddCommand(skillCmd)
+	rootCmd.AddCommand(memoryCmd)
 	rootCmd.AddCommand(squadCmd)
-	rootCmd.AddCommand(sendCmd)
 	rootCmd.AddCommand(reactCmd)
 	rootCmd.AddCommand(messageCmd)
 	rootCmd.AddCommand(daemonCmd)
@@ -97,6 +98,7 @@ func init() {
 	rootCmd.AddCommand(dmCmd)
 	rootCmd.AddCommand(channelCmd)
 	rootCmd.AddCommand(threadCmd)
+	rootCmd.AddCommand(reminderCmd)
 	rootCmd.AddCommand(stickerCmd)
 	rootCmd.AddCommand(sandboxdCmd)
 

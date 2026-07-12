@@ -32,9 +32,9 @@ func TestLegacyCompatibilityCommandsRemainAvailable(t *testing.T) {
 		}
 	})
 
-	t.Run("top-level send and react remain available as aliases", func(t *testing.T) {
-		if _, _, err := rootCmd.Find([]string{"send"}); err != nil {
-			t.Fatalf("expected top-level send command to exist: %v", err)
+	t.Run("top-level send alias is removed while react alias remains", func(t *testing.T) {
+		if cmd, _, err := rootCmd.Find([]string{"send"}); err == nil && cmd != nil && cmd.Name() == "send" {
+			t.Fatalf("top-level send alias should not exist")
 		}
 		if _, _, err := rootCmd.Find([]string{"react"}); err != nil {
 			t.Fatalf("expected top-level react command to exist: %v", err)
@@ -52,13 +52,20 @@ func TestMessageGroupedSendReactCommands(t *testing.T) {
 		}
 	})
 
-	t.Run("top-level aliases expose the same flags as the grouped forms", func(t *testing.T) {
+	t.Run("message send exposes sticker and attachment flags", func(t *testing.T) {
+		for _, name := range []string{"message", "message-stdin", "message-file", "sticker", "attachment-id", "target", "client-message-id"} {
+			if messageSendCmd.Flags().Lookup(name) == nil {
+				t.Fatalf("message send missing --%s", name)
+			}
+		}
+	})
+
+	t.Run("top-level react alias exposes the same flags as the grouped form", func(t *testing.T) {
 		pairs := []struct {
 			name      string
 			canonical *cobra.Command
 			alias     *cobra.Command
 		}{
-			{"send", messageSendCmd, sendCmd},
 			{"react", messageReactCmd, reactCmd},
 		}
 		for _, p := range pairs {
@@ -82,10 +89,7 @@ func TestMessageGroupedSendReactCommands(t *testing.T) {
 		}
 	})
 
-	t.Run("alias help points at the grouped form", func(t *testing.T) {
-		if !strings.Contains(sendCmd.Short, "multica message send") {
-			t.Errorf("send alias Short should reference `multica message send`, got %q", sendCmd.Short)
-		}
+	t.Run("react alias help points at the grouped form", func(t *testing.T) {
 		if !strings.Contains(reactCmd.Short, "multica message react") {
 			t.Errorf("react alias Short should reference `multica message react`, got %q", reactCmd.Short)
 		}

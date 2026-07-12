@@ -2,11 +2,11 @@
 INSERT INTO env_checkpoint (
     workspace_id, project_id, event_ref, checkpoint_kind,
     env_id_map, sandbox_refs, db_snapshot, entropy_score,
-    save_timeout_ms, save_status, save_error
+    save_timeout_ms, save_status, save_error, resume_trigger
 ) VALUES (
     @workspace_id, @project_id, @event_ref, @checkpoint_kind,
     @env_id_map, @sandbox_refs, @db_snapshot, @entropy_score,
-    @save_timeout_ms, @save_status, @save_error
+    @save_timeout_ms, @save_status, @save_error, sqlc.narg(resume_trigger)
 )
 RETURNING *;
 

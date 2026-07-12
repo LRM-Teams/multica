@@ -22,6 +22,7 @@ import { useAuthStore } from "@multica/core/auth";
 import { useNavigation } from "../../navigation";
 import { IssueChip } from "../../issues/components/issue-chip";
 import { ProjectChip } from "../../projects/components/project-chip";
+import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useOpenAgentPanel } from "../../common/agent-panel-context";
 import {
@@ -31,7 +32,12 @@ import {
 
 export function MentionView({ node }: NodeViewProps) {
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
-  const openAgentPanel = useOpenAgentPanel();
+  // Same context-or-global-store fallback as ActorAvatarPanelTrigger, so an
+  // @mention opens the panel whether it renders inside channels/DM (context)
+  // or anywhere else an editor can render one (issue comments, etc.).
+  const openAgentPanelFromContext = useOpenAgentPanel();
+  const openAgentPanelFromStore = useAgentPanelStore((s) => s.open);
+  const openAgentPanel = openAgentPanelFromContext ?? openAgentPanelFromStore;
   const { type, id, label } = node.attrs;
 
   if (type === "issue") {

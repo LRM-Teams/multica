@@ -720,6 +720,70 @@ func TestDaemonRegister_WithDaemonToken(t *testing.T) {
 	testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
 }
 
+func TestDaemonRegister_ProfileTokenReturnsDaemonToken(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/daemon/register", map[string]any{
+		"workspace_id": testWorkspaceID,
+		"daemon_id":    "test-daemon-bootstrap-token",
+		"device_name":  "test-device",
+		"cli_version":  "v0.3.0",
+		"capabilities": []string{
+			protocol.DaemonCapabilityChannelOutputActions,
+			protocol.DaemonCapabilityAgentCLITransport,
+		},
+		"runtimes": []map[string]any{
+			{"name": "test-runtime-bootstrap-token", "type": "claude", "version": "1.0.0", "status": "online"},
+		},
+	})
+
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister with profile token: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Runtimes             []map[string]any `json:"runtimes"`
+		DaemonToken          string           `json:"daemon_token"`
+		DaemonTokenExpiresAt string           `json:"daemon_token_expires_at"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode register response: %v", err)
+	}
+	if !strings.HasPrefix(resp.DaemonToken, "mdt_") {
+		t.Fatalf("daemon_token prefix = %q, want mdt_", resp.DaemonToken)
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, resp.DaemonTokenExpiresAt)
+	if err != nil {
+		t.Fatalf("daemon_token_expires_at parse failed: %v", err)
+	}
+	if !expiresAt.After(time.Now()) {
+		t.Fatalf("daemon_token_expires_at = %s, want future expiry", resp.DaemonTokenExpiresAt)
+	}
+
+	hash := auth.HashToken(resp.DaemonToken)
+	defer testPool.Exec(context.Background(), `DELETE FROM daemon_token WHERE token_hash = $1`, hash)
+	if len(resp.Runtimes) > 0 {
+		if runtimeID, _ := resp.Runtimes[0]["id"].(string); runtimeID != "" {
+			defer testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		}
+	}
+	var storedWorkspaceID, storedDaemonID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT workspace_id::text, daemon_id
+		FROM daemon_token
+		WHERE token_hash = $1
+	`, hash).Scan(&storedWorkspaceID, &storedDaemonID); err != nil {
+		t.Fatalf("query daemon_token row: %v", err)
+	}
+	if storedWorkspaceID != testWorkspaceID || storedDaemonID != "test-daemon-bootstrap-token" {
+		t.Fatalf("daemon_token binding = (%s, %s), want (%s, test-daemon-bootstrap-token)", storedWorkspaceID, storedDaemonID, testWorkspaceID)
+	}
+}
+
 func capabilitiesContainExactly(got []any, want ...string) bool {
 	if len(got) != len(want) {
 		return false
@@ -1131,7 +1195,7 @@ func TestListTaskMessagesByUser_InvalidTaskIDReturnsBadRequest(t *testing.T) {
 	}
 }
 
-func TestTaskMessageToPayload_AddsSafeActionReadModel(t *testing.T) {
+func TestTaskMessageToPayload_LeavesNarrativeProjectionToActivityUI(t *testing.T) {
 	payload := taskMessageToPayload(db.TaskMessage{
 		Seq:  1,
 		Type: "tool_use",
@@ -1142,47 +1206,50 @@ func TestTaskMessageToPayload_AddsSafeActionReadModel(t *testing.T) {
 		}`),
 	}, "task-1", "issue-1")
 
-	if payload.ActionLabel != "Working" || payload.Summary != "Started a work step." {
-		t.Fatalf("unexpected action read model: label=%q summary=%q", payload.ActionLabel, payload.Summary)
-	}
-
-	for _, leaked := range []string{"exec_command", "/bin/zsh", "id_rsa", "sk_agent_secret", "mcp__dangerous"} {
-		if strings.Contains(payload.ActionLabel, leaked) || strings.Contains(payload.Summary, leaked) {
-			t.Fatalf("action read model leaked raw diagnostic detail %q: label=%q summary=%q", leaked, payload.ActionLabel, payload.Summary)
-		}
+	if payload.Visibility != "user_facing" {
+		t.Fatalf("default visibility = %q, want user_facing", payload.Visibility)
 	}
 	if payload.Input["cmd"] == "" {
 		t.Fatalf("raw diagnostic input should remain available to transcript")
 	}
 }
 
-func TestTaskMessageToPayload_ToolUseNarrativeDoesNotExposeToolName(t *testing.T) {
+func TestTaskMessageVisibility_ToolResultIsDiagnostic(t *testing.T) {
 	payload := taskMessageToPayload(db.TaskMessage{
-		Seq:  2,
-		Type: "tool_use",
-		Tool: pgtype.Text{String: "mcp__future_vendor__do_secret_thing", Valid: true},
+		Seq:        2,
+		Type:       "tool_result",
+		Tool:       pgtype.Text{String: "mcp__future_vendor__do_secret_thing", Valid: true},
+		Visibility: "diagnostic_only",
 	}, "task-1", "issue-1")
 
-	if payload.ActionLabel != "Working" || payload.Summary != "Started a work step." {
-		t.Fatalf("tool_use narrative = label %q summary %q", payload.ActionLabel, payload.Summary)
+	if payload.Visibility != "diagnostic_only" {
+		t.Fatalf("persisted visibility = %q, want diagnostic_only", payload.Visibility)
 	}
-	if strings.Contains(payload.ActionLabel, "mcp__") || strings.Contains(payload.Summary, "mcp__") || strings.Contains(payload.ActionLabel, "future_vendor") || strings.Contains(payload.Summary, "future_vendor") {
-		t.Fatalf("unknown action fallback must not expose raw tool name: label=%q summary=%q", payload.ActionLabel, payload.Summary)
+	if got := taskMessageVisibility("tool_result"); got != "diagnostic_only" {
+		t.Fatalf("tool_result visibility = %q, want diagnostic_only", got)
+	}
+	if got := taskMessageVisibility("log"); got != "diagnostic_only" {
+		t.Fatalf("log visibility = %q, want diagnostic_only", got)
 	}
 }
 
-func TestTaskMessageToPayload_UnknownTypeUsesNeutralNarrative(t *testing.T) {
-	payload := taskMessageToPayload(db.TaskMessage{
-		Seq:  3,
-		Type: "future_type",
-		Tool: pgtype.Text{String: "mcp__future_vendor__do_secret_thing", Valid: true},
-	}, "task-1", "issue-1")
-
-	if payload.ActionLabel != "Took a step" || payload.Summary != "Took a step." {
-		t.Fatalf("unknown type narrative = label %q summary %q", payload.ActionLabel, payload.Summary)
+func TestTaskMessageRequestVisibility_UnmappedToolIsDiagnostic(t *testing.T) {
+	unknown := TaskMessageRequest{
+		Type:  "tool_use",
+		Tool:  "some_future_tool",
+		Input: map[string]any{"path": "hello_world.txt"},
 	}
-	if strings.Contains(payload.ActionLabel, "mcp__") || strings.Contains(payload.Summary, "mcp__") || strings.Contains(payload.ActionLabel, "future_vendor") || strings.Contains(payload.Summary, "future_vendor") {
-		t.Fatalf("unknown type fallback must not expose raw tool name: label=%q summary=%q", payload.ActionLabel, payload.Summary)
+	if got := taskMessageRequestVisibility(unknown); got != "diagnostic_only" {
+		t.Fatalf("unknown tool visibility = %q, want diagnostic_only", got)
+	}
+
+	statusLikeShell := TaskMessageRequest{
+		Type:  "tool_use",
+		Tool:  "running",
+		Input: map[string]any{"command": "multica message send --message-file hello_world.txt"},
+	}
+	if got := taskMessageRequestVisibility(statusLikeShell); got != "user_facing" {
+		t.Fatalf("status-like shell visibility = %q, want user_facing", got)
 	}
 }
 
@@ -2772,16 +2839,15 @@ func TestCompleteTask_GroupChannelThreadTargetShowInChannelProjectsSameMessage(t
 	if mainTimeline[1].ThreadRoot == nil || mainTimeline[1].ThreadRoot.ID != rootID {
 		t.Fatalf("projected thread root summary = %+v, want root %s", mainTimeline[1].ThreadRoot, rootID)
 	}
-	var targetTasks int
+	var targetWakeEvents int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
-		FROM agent_task_queue q
-		JOIN channel_agent_session cas ON cas.chat_session_id = q.chat_session_id
-		WHERE cas.channel_id = $1 AND cas.agent_id = $2`, channelID, targetAgentID).Scan(&targetTasks); err != nil {
-		t.Fatalf("count target agent tasks: %v", err)
+		FROM agent_inbox_event
+		WHERE channel_id = $1 AND agent_id = $2 AND requires_wake`, channelID, targetAgentID).Scan(&targetWakeEvents); err != nil {
+		t.Fatalf("count target agent inbox events: %v", err)
 	}
-	if targetTasks != 1 {
-		t.Fatalf("target agent task count = %d, want 1", targetTasks)
+	if targetWakeEvents != 1 {
+		t.Fatalf("target agent inbox event count = %d, want 1", targetWakeEvents)
 	}
 }
 
@@ -2877,6 +2943,35 @@ func TestCompleteTask_GroupChannelNoReplyRationaleOutputIsSuppressedWithCLITrans
 
 	assertNoChannelMessageContent(t, channelID, rawOutput)
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
+}
+
+func TestCompleteTask_DirectedRuntimeDiagnosticOutputIsSanitized(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTask(t, "dm")
+	rawOutput := `“？” 是在确认我是否在线。先修好 multica send 的鉴权，再发一条可见回复。改用任务态 token 的 multica 包装器发送回复。在The background search finished after the reply was already sent; nothing else needed for this turn.`
+	sanitized := `“？” 是在确认我是否在线。`
+
+	w := completeTaskForTest(t, taskID, map[string]any{"output": rawOutput})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertNoChannelMessageContent(t, channelID, rawOutput)
+	assertChannelMessageContentCount(t, channelID, sanitized, 1)
+	assertTaskOutputSuppressedReason(t, taskID, "")
+}
+
+func TestSanitizeRuntimeDiagnosticFinalTextFallsBackWhenOnlyLogRemains(t *testing.T) {
+	got, ok := sanitizeRuntimeDiagnosticFinalText("在The background search finished after the reply was already sent; nothing else needed for this turn.", nil)
+	if !ok {
+		t.Fatal("sanitizeRuntimeDiagnosticFinalText ok=false, want true")
+	}
+	if got != "在的。" {
+		t.Fatalf("sanitizeRuntimeDiagnosticFinalText = %q, want fallback", got)
+	}
 }
 
 func TestCompleteTask_GroupChannelNoReplyPhraseInsideNormalTextIsNotSuppressed(t *testing.T) {

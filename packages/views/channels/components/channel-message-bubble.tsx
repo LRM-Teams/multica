@@ -38,6 +38,8 @@ import {
 import { MessageBody } from "./message-body";
 import { MessageQuoteCard } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
+import { parseMemberSystemEvent } from "./channel-system-event";
+import { MemberSystemEventContent } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import { SELF_MENTION_ROW_CLASS } from "../../common/mention-token";
 
@@ -88,22 +90,34 @@ function ChannelSystemMessageRow({
   systemText: string;
 }) {
   const messageTime = useMessageTime();
+  // Member-change events (#450) carry a structured part the FE composes into a
+  // Raft/Slack-style row with clickable @username tokens; everything else falls
+  // back to the plain canonical text.
+  const memberEvent = parseMemberSystemEvent(message);
   return (
     <div
       id={`message-${message.id}`}
       data-testid="system-message-row"
       data-message-kind="system"
+      // Time is intentionally NOT rendered inline (#369, Iris): Frank disliked a
+      // trailing timestamp pinned to the right, so the centered service row keeps
+      // no persistent stamp — the exact time stays available on hover via the
+      // native title. The final hover-reveal treatment (WeChat/Telegram-style) is
+      // pending Frank's sign-off; this interim keeps the time accessible without a
+      // visible tail.
+      title={messageTime.full(message.created_at)}
       className={cn(
-        "mx-auto flex max-w-[min(720px,100%)] flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-md px-2 py-1.5 text-center text-xs text-muted-foreground outline-none transition-colors duration-1000",
-        highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0",
+        // Lightweight CENTERED service notice (#369, Iris §8): a top-left row
+        // reads like "a message that lost its avatar" against Multica's heavy
+        // avatar column + loose body — centering separates it as a system event.
+        // Quiet by design: small muted text, tight vertical rhythm so consecutive
+        // add/remove rows read as one cluster, NO capsule / avatar / bubble.
+        "mx-auto flex max-w-[min(640px,100%)] flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5 px-2 py-0.5 text-center text-xs text-muted-foreground outline-none transition-colors duration-1000",
+        highlighted && "rounded-md bg-primary/10 ring-1 ring-primary/25 duration-0",
       )}
     >
-      <span className="min-w-0 break-words">{systemText}</span>
-      <span
-        className="shrink-0 text-[11px] text-muted-foreground/70"
-        title={messageTime.full(message.created_at)}
-      >
-        {messageTime.format(message.created_at)}
+      <span className="min-w-0 break-words">
+        {memberEvent ? <MemberSystemEventContent event={memberEvent} /> : systemText}
       </span>
     </div>
   );
@@ -314,6 +328,7 @@ export function ChannelMessageBubble({
     ownName,
     getActorName,
   });
+  const isRadarMessage = isAgent && message.content.trimStart().startsWith("主动发现：");
   const profileActorType =
     message.type === "agent"
       ? "agent"
@@ -552,6 +567,11 @@ export function ChannelMessageBubble({
           {isAgent && (
             <span className="shrink-0 rounded-full border border-primary/20 bg-primary/[0.08] px-2 py-0.5 text-[11px] font-normal leading-none text-primary">
               {t(($) => $.message.agent_badge)}
+            </span>
+          )}
+          {isRadarMessage && (
+            <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-normal leading-none text-amber-700 dark:text-amber-300">
+              {t(($) => $.message.radar_badge)}
             </span>
           )}
           {isExternal && (

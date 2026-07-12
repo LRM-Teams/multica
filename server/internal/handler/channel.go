@@ -35,12 +35,12 @@ const channelMessagesMaxLimit = 100
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
-const channelOutputContractInstruction = "Channel output contract: follow the runtime brief's Output section for visible chat output in this run. Do not print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, missing-tool diagnostics, or described commands as the final answer."
-const channelDirectedReplyInstruction = "This run is directly addressed to you. A visible result is required for human DMs, human @mentions, direct questions, assigned tasks, or DM-style continuations. Exception: an agent-to-agent channel @mention is a weak notification unless it asks you for an immediate deliverable, review, decision, or direct answer. For a weak notification, finish without a visible reply; do not acknowledge, do not say no_reply, and do not explain that you are staying silent. If the mention is only a casual greeting (hi/你好/在吗) with no question or task, reply with a greeting sticker only — do not add a text introduction, role pitch, or follow-up question. For substantive requests that need your action, answer helpfully; when an acknowledgement sticker fits, send sticker plus your explanation in one message (sticker first). Do not return no_reply, stay_silent, JSON, or any other silent/protocol outcome."
+const channelOutputContractInstruction = "Channel output contract: use the runtime brief as the source of truth for visible output. Never print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, missing-tool diagnostics, or described commands as the final answer."
+const channelDirectedReplyInstruction = "This run is directly addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible result. Agent-to-agent channel @mentions are weak notifications unless they ask for an immediate deliverable, review, decision, or direct answer; weak notifications should finish without visible output. Pure greetings (hi/你好/在吗) get a greeting sticker only; when they are top-level group messages, keep them on the main channel instead of starting a thread. Reserve threads for substantive questions, tasks, investigations, or decisions that benefit from focused follow-up. Substantive requests get a helpful answer, optionally with one acknowledgement sticker. Never return no_reply, stay_silent, JSON, or other protocol text."
 const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not use the visible-output path, and do not print no_reply, stay_silent, JSON, or CLI/protocol text."
 const channelAmbientGreetingReactionInstruction = "If the current channel message or unread bundle is only a casual greeting or small talk (for example hi, hello, hey, 你好, 在吗) with no @-mention, no question, and no task request, respond with a 👋 reaction to the reaction target only and do not create a text reply. This also applies when you are the only agent in the channel: treat the greeting as directed to you, but keep the action reaction-only unless the user includes a question or request. If reactions are unavailable, finish without visible output rather than explaining that no reply is needed."
-const channelStickerReplyInstruction = "Sticker replies: when this run is directly addressed to you (@-mention or clear direct request), chat like a person — use stickers for short social beats (hi/你好, ok/好的, 收到/明白, 谢谢, 赞). When no extra explanation is needed, send only a sticker. When you also need to explain or answer substantively, send one message with an acknowledgement sticker plus your text (sticker first, then the explanation). For ambient/unaddressed runs, send a sticker only when the user explicitly asks for a sticker/表情包 or for a genuine welcome of a new member; do not send stickers for ordinary greetings, acknowledgements, thanks, or closings that are not directed at you — use a 👋 reaction or no visible output instead. Use the runtime brief's chat output path for stickers; do not print JSON envelopes, action objects, or protocol text as final output."
-const channelContinuationInstruction = "Collaborative discussion rule: do not keep a thread alive just because you were mentioned. Reply only when your response moves the topic toward a decision, owner, or completed action. End with @-mentions only when you are assigning a concrete immediate action, asking a specific unresolved question, or escalating to a human decision-maker. Never @ someone for thanks, acknowledgements, status-only updates, future handoffs, or to invite generic opinions. If the topic already has an owner and you have no immediate contribution, finish without visible output."
+const channelStickerReplyInstruction = "Sticker replies: for directed short social beats (hi/你好, ok/好的, 收到/明白, 谢谢, 赞), use a sticker; for substantive answers, send at most one acknowledgement sticker plus text. For ambient/unaddressed runs, use stickers only when explicitly requested or genuinely welcoming someone; otherwise react or stay silent. Follow the runtime output path and never print protocol text."
+const channelContinuationInstruction = "Collaborative discussion rule: reply only when you move the topic toward a decision, owner, or completed action. For a requested completion/blocker summary in a group chat, you may @-mention the responsible human once. Use @-mentions only for concrete actions, unresolved questions, human escalation, or requested completion/blocker delivery; never for thanks, generic status, future handoffs, or generic opinion invites. If the topic already has an owner and you add nothing immediate, finish without visible output."
 const channelNameTakenCode = "channel_name_taken"
 const channelNameUniqueConstraint = "channel_workspace_id_name_key"
 
@@ -141,12 +141,23 @@ type ChannelThreadParticipant struct {
 }
 
 type ChannelThreadWakeAnnotation struct {
-	Key         string  `json:"key"`
-	MemberType  string  `json:"member_type"`
-	MemberID    string  `json:"member_id"`
-	DisplayName string  `json:"display_name"`
-	State       string  `json:"state"`
-	Reason      *string `json:"reason,omitempty"`
+	Key                 string  `json:"key"`
+	MemberType          string  `json:"member_type"`
+	MemberID            string  `json:"member_id"`
+	DisplayName         string  `json:"display_name"`
+	State               string  `json:"state"`
+	Reason              *string `json:"reason,omitempty"`
+	Outcome             *string `json:"outcome,omitempty"`
+	Retryable           *bool   `json:"retryable,omitempty"`
+	InboxEventID        *string `json:"inbox_event_id,omitempty"`
+	DeliveryID          *string `json:"delivery_id,omitempty"`
+	AgentID             *string `json:"agent_id,omitempty"`
+	ConversationID      *string `json:"conversation_id,omitempty"`
+	ChannelID           *string `json:"channel_id,omitempty"`
+	ChatSessionID       *string `json:"chat_session_id,omitempty"`
+	ThreadRootMessageID *string `json:"thread_root_message_id,omitempty"`
+	SourceMessageID     *string `json:"source_message_id,omitempty"`
+	TerminalAt          *string `json:"terminal_at,omitempty"`
 }
 
 type ChannelMessagesCursorResponse struct {
@@ -322,6 +333,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			SELECT count(*) AS cnt FROM channel_message m
 			WHERE m.channel_id = ch.id
 			  AND m.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
+			  AND m.author_type <> 'system'
 			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
 			  AND (m.thread_root_message_id IS NULL OR m.main_timeline_visible)
 			  AND m.deleted_at IS NULL
@@ -901,6 +913,9 @@ func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
+	if tag.RowsAffected() > 0 {
+		h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, channelMemberAddedEvent, parseUUID(userID), req.MemberType, memberID)
+	}
 	// When a NEW human joins, every agent member greets them briefly.
 	// Guarded on RowsAffected so a duplicate re-add never re-welcomes, and on
 	// member_type so adding an agent member (or the creator at channel creation,
@@ -944,7 +959,7 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	_, err := h.DB.Exec(r.Context(), `
+	tag, err := h.DB.Exec(r.Context(), `
 		DELETE FROM channel_member
 		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = $3 AND member_id = $4`,
 		channelID, parseUUID(workspaceID), memberType, memberID)
@@ -953,6 +968,13 @@ func (h *Handler) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
+	if tag.RowsAffected() > 0 {
+		event := channelMemberRemovedEvent
+		if memberType == "user" && uuidToString(memberID) == userID {
+			event = channelMemberLeftEvent
+		}
+		h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, event, parseUUID(userID), memberType, memberID)
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1180,6 +1202,7 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 		SELECT COUNT(*) FROM channel_message m
 		WHERE m.channel_id = $1 AND m.workspace_id = $2
 		  AND m.seq > $3::bigint
+		  AND m.author_type <> 'system'
 		  AND (m.thread_root_message_id IS NULL OR m.main_timeline_visible)
 		  AND m.deleted_at IS NULL
 		  AND NOT (m.author_type = 'user' AND m.author_id = $4::uuid)`, channelID, workspaceID, pgtype.Int8{Int64: aroundSeq, Valid: true}, parseUUID(userIDStr)).Scan(&unreadTotal); err != nil {
@@ -1709,6 +1732,7 @@ func (h *Handler) attachChannelMessageThreadMetadata(ctx context.Context, worksp
 	       CASE
 	         WHEN tp.followed_at IS NOT NULL THEN count(replies.id) FILTER (
 	           WHERE replies.seq > COALESCE(tp.last_read_seq, 0)
+	             AND replies.author_type <> 'system'
 	             AND NOT (replies.author_type = 'user' AND replies.author_id = $3)
 	             AND NOT replies.main_timeline_visible
 	         )::int
@@ -1776,51 +1800,67 @@ func (h *Handler) attachChannelMessageThreadReadModel(ctx context.Context, works
 		return
 	}
 	rows, err := h.DB.Query(ctx, `
-		WITH latest_task AS (
-		  SELECT DISTINCT ON (cm.channel_thread_root_message_id, atq.agent_id)
-		         cm.channel_thread_root_message_id AS root_message_id,
-		         atq.agent_id,
-		         atq.status,
-		         COALESCE(atq.result::text, '{}') AS result,
-		         cm.created_at AS prompt_created_at
-		  FROM chat_message cm
-		  JOIN agent_task_queue atq ON atq.id = cm.task_id
-		  WHERE cm.channel_thread_root_message_id = ANY($1::uuid[])
-		    AND cm.role = 'user'
-		    AND cm.task_id IS NOT NULL
-		  ORDER BY cm.channel_thread_root_message_id, atq.agent_id, atq.created_at DESC, atq.id DESC
-		),
-		latest_agent_reply AS (
-		  SELECT DISTINCT ON (thread_root_message_id, author_id)
-		         thread_root_message_id AS root_message_id,
-		         author_id AS agent_id
-		  FROM channel_message reply
-		  LEFT JOIN latest_task lt
-		    ON lt.root_message_id = reply.thread_root_message_id
-		   AND lt.agent_id = reply.author_id
-		  WHERE reply.workspace_id = $2
-		    AND reply.thread_root_message_id = ANY($1::uuid[])
-		    AND reply.author_type = 'agent'
-		    AND reply.deleted_at IS NULL
-		    AND (lt.prompt_created_at IS NULL OR reply.created_at > lt.prompt_created_at)
-		  ORDER BY reply.thread_root_message_id, reply.author_id, reply.seq DESC
-		)
+			WITH latest_wake AS (
+			  SELECT DISTINCT ON (COALESCE(trigger.thread_root_message_id, trigger.id), e.agent_id)
+			         COALESCE(trigger.thread_root_message_id, trigger.id) AS root_message_id,
+			         e.agent_id,
+			         e.status,
+			         COALESCE(e.terminal_outcome, '') AS terminal_outcome,
+			         e.retryable,
+			         e.id AS inbox_event_id,
+			         e.terminal_delivery_id AS delivery_id,
+			         e.conversation_id,
+			         e.channel_id,
+			         e.chat_session_id,
+			         e.source_message_id,
+			         e.terminal_at,
+			         trigger.created_at AS prompt_created_at,
+			         e.created_at AS wake_created_at
+			  FROM agent_inbox_event e
+			  JOIN channel_message trigger ON trigger.id = e.source_message_id
+			  WHERE COALESCE(trigger.thread_root_message_id, trigger.id) = ANY($1::uuid[])
+			    AND e.requires_wake
+			  ORDER BY COALESCE(trigger.thread_root_message_id, trigger.id), e.agent_id, e.created_at DESC, e.id DESC
+			),
+			latest_agent_reply AS (
+			  SELECT DISTINCT ON (thread_root_message_id, author_id)
+			         thread_root_message_id AS root_message_id,
+			         author_id AS agent_id
+			  FROM channel_message reply
+			  LEFT JOIN latest_wake lw
+			    ON lw.root_message_id = reply.thread_root_message_id
+			   AND lw.agent_id = reply.author_id
+			  WHERE reply.workspace_id = $2
+			    AND reply.thread_root_message_id = ANY($1::uuid[])
+			    AND reply.author_type = 'agent'
+			    AND reply.deleted_at IS NULL
+			    AND (lw.prompt_created_at IS NULL OR reply.created_at > lw.prompt_created_at)
+			  ORDER BY reply.thread_root_message_id, reply.author_id, reply.seq DESC
+			)
 		SELECT tp.root_message_id,
 		       tp.member_type,
 		       tp.member_id,
 		       COALESCE(u.name, a.name, '') AS name,
 		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '') AS display_name,
 		       COALESCE(tp.followed_at IS NOT NULL, false) AS followed,
-		       COALESCE(lt.status, '') AS task_status,
-		       COALESCE(lt.result, '{}') AS task_result,
-		       (lar.agent_id IS NOT NULL) AS has_agent_reply
+			       COALESCE(lw.status, '') AS task_status,
+			       COALESCE(lw.terminal_outcome, '') AS terminal_outcome,
+			       COALESCE(lw.retryable, false) AS retryable,
+			       lw.inbox_event_id,
+			       lw.delivery_id,
+			       lw.conversation_id,
+			       lw.channel_id,
+			       lw.chat_session_id,
+			       lw.source_message_id,
+			       lw.terminal_at,
+			       (lar.agent_id IS NOT NULL) AS has_agent_reply
 		FROM thread_participant tp
 		LEFT JOIN "user" u ON tp.member_type = 'user' AND u.id = tp.member_id
 		LEFT JOIN agent a ON tp.member_type = 'agent' AND a.id = tp.member_id
-		LEFT JOIN latest_task lt
-		  ON tp.member_type = 'agent'
-		 AND lt.root_message_id = tp.root_message_id
-		 AND lt.agent_id = tp.member_id
+			LEFT JOIN latest_wake lw
+			  ON tp.member_type = 'agent'
+			 AND lw.root_message_id = tp.root_message_id
+			 AND lw.agent_id = tp.member_id
 		LEFT JOIN latest_agent_reply lar
 		  ON tp.member_type = 'agent'
 		 AND lar.root_message_id = tp.root_message_id
@@ -1841,9 +1881,12 @@ func (h *Handler) attachChannelMessageThreadReadModel(ctx context.Context, works
 		var rootID, memberID pgtype.UUID
 		var memberType, name, displayName string
 		var followed bool
-		var taskStatus, taskResult string
+		var taskStatus, terminalOutcome string
+		var retryable bool
+		var inboxEventID, deliveryID, conversationID, channelID, chatSessionID, sourceMessageID pgtype.UUID
+		var terminalAt pgtype.Timestamptz
 		var hasAgentReply bool
-		if err := rows.Scan(&rootID, &memberType, &memberID, &name, &displayName, &followed, &taskStatus, &taskResult, &hasAgentReply); err != nil {
+		if err := rows.Scan(&rootID, &memberType, &memberID, &name, &displayName, &followed, &taskStatus, &terminalOutcome, &retryable, &inboxEventID, &deliveryID, &conversationID, &channelID, &chatSessionID, &sourceMessageID, &terminalAt, &hasAgentReply); err != nil {
 			continue
 		}
 		memberIDText := uuidToString(memberID)
@@ -1858,15 +1901,29 @@ func (h *Handler) attachChannelMessageThreadReadModel(ctx context.Context, works
 			DisplayName: displayName,
 			Followed:    followed,
 		})
-		if state, reason, ok := channelThreadWakeAnnotationState(memberType, taskStatus, taskResult, hasAgentReply); ok {
-			wakeByRoot[rootKey] = append(wakeByRoot[rootKey], ChannelThreadWakeAnnotation{
+		if state, reason, ok := channelThreadWakeAnnotationState(memberType, taskStatus, terminalOutcome, hasAgentReply); ok {
+			annotation := ChannelThreadWakeAnnotation{
 				Key:         key,
 				MemberType:  memberType,
 				MemberID:    memberIDText,
 				DisplayName: displayName,
 				State:       state,
 				Reason:      reason,
-			})
+			}
+			if terminalOutcome != "" {
+				annotation.Outcome = stringPtr(terminalOutcome)
+				annotation.Retryable = boolPtr(retryable)
+				annotation.InboxEventID = uuidStringPtr(inboxEventID)
+				annotation.DeliveryID = uuidStringPtr(deliveryID)
+				annotation.AgentID = stringPtr(memberIDText)
+				annotation.ConversationID = uuidStringPtr(conversationID)
+				annotation.ChannelID = uuidStringPtr(channelID)
+				annotation.ChatSessionID = uuidStringPtr(chatSessionID)
+				annotation.ThreadRootMessageID = uuidStringPtr(rootID)
+				annotation.SourceMessageID = uuidStringPtr(sourceMessageID)
+				annotation.TerminalAt = timestampToPtr(terminalAt)
+			}
+			wakeByRoot[rootKey] = append(wakeByRoot[rootKey], annotation)
 		}
 	}
 	for i := range messages {
@@ -1886,35 +1943,41 @@ func channelThreadParticipantKey(memberType, memberID string) string {
 	return memberType + ":" + memberID
 }
 
-func channelThreadWakeAnnotationState(memberType, taskStatus, taskResult string, hasAgentReply bool) (string, *string, bool) {
+func channelThreadWakeAnnotationState(memberType, taskStatus, terminalOutcome string, hasAgentReply bool) (string, *string, bool) {
 	if memberType != "agent" {
 		return "", nil, false
 	}
+	if hasAgentReply || terminalOutcome == "replied" {
+		return "replied", nil, true
+	}
+	switch terminalOutcome {
+	case "no_reply":
+		return "no_reply", nil, true
+	case "failed":
+		return "failed", nil, true
+	}
 	switch taskStatus {
-	case "queued":
+	case "queued", "pending":
 		return "pending", nil, true
-	case "dispatched", "running", "waiting_local_directory":
+	case "dispatched", "running", "waiting_local_directory", "draining":
 		return "delivered", nil, true
-	case "completed":
-		action, outputType, reason := channelTaskResultAction(taskResult)
-		switch {
-		case action == protocol.ChatOutputActionNoReply || outputType == protocol.ChatOutputKindNoReply:
-			return "no_reply", reason, true
-		case hasAgentReply:
-			return "replied", nil, true
-		case action == protocol.ChatOutputActionMessageReact || outputType == protocol.ChatOutputKindReaction:
-			return "acked", nil, true
-		case action == protocol.ChatOutputActionMessageSend || outputType == protocol.ChatOutputKindMessage:
-			return "acked", nil, true
-		default:
-			return "", nil, false
-		}
+	case "acked":
+		return "acked", nil, true
 	default:
-		if hasAgentReply {
-			return "replied", nil, true
-		}
 		return "", nil, false
 	}
+}
+
+func uuidStringPtr(id pgtype.UUID) *string {
+	if !id.Valid {
+		return nil
+	}
+	value := uuidToString(id)
+	return &value
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func channelTaskResultAction(raw string) (string, string, *string) {
@@ -3038,19 +3101,14 @@ func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch Channel
 	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content)
 	if len(mentionedAgents) > 0 {
 		for _, agent := range mentionedAgents {
+			if len(mentionedAgents) == 1 {
+				h.markTriggerFacilitatorIfNeeded(ctx, ch, agent, trigger)
+			}
 			h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
 		}
 		return
 	}
-	// #328: do NOT skip ambient fan-out just because the message contains an "@".
-	// A message can @ a human (or any non-agent) while still being a collective
-	// instruction to the agents — e.g. "一起 @newperson 打个招呼" @s the newcomer, not
-	// the agents, yet every agent should still greet. The server's job is delivery,
-	// not judging semantics: fan out to the channel's agents and let each model
-	// decide whether it's addressed to them (the ambient prompt's collective-response
-	// clause + silence rules do the judging). Cost stays bounded by the #214 ambient
-	// volume gate ("by volume, not by meaning"), never by a "contains @" heuristic.
-	h.dispatchChannelAmbientObservation(ctx, ch, trigger, initiatorUserID)
+	h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
 }
 
 func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
@@ -3062,31 +3120,21 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content)
 	if len(mentionedAgents) > 0 {
 		for _, agent := range mentionedAgents {
+			if len(mentionedAgents) == 1 {
+				h.markTriggerFacilitatorIfNeeded(ctx, ch, agent, trigger)
+			}
 			h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
 		}
 		return
 	}
-	// #328: don't skip thread ambient fan-out on a bare "@" (see
-	// dispatchChannelMessageToAgents). Only skip when there's no thread root to fan
-	// out to — a collective instruction in a thread can @ a human and still be for
-	// the thread's agents; the model judges relevance, not a "contains @" check.
-	if trigger.ThreadRootMessageID == nil {
-		return
-	}
-	for _, agent := range h.channelThreadTargetAgents(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID) {
-		// Skip agents who have muted this channel (#313 gate).
-		// @-mentions always pierce mute, so this only affects thread ambient.
-		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
-			continue
-		}
-		h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
-	}
+	h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
 }
 
 // dispatchChannelAgentReply runs one agent's reply to a triggering message:
-// ensure the channel<->agent chat session, persist the user-role prompt, enqueue
-// the agent task, and tag the prompt with the task. Shared by @-mention dispatch
-// (group channels) and DM auto-dispatch (1-on-1 channel whose peer is an agent).
+// ensure the channel<->agent chat session, persist the user-role prompt, create
+// an agent session, and write a wake-required inbox event. Shared by @-mention
+// dispatch (group channels) and DM auto-dispatch (1-on-1 channel whose peer is
+// an agent).
 //
 // Two guards keep the agent-reply loop bounded and prevent self-conversation and
 // MUST be preserved for both callers:
@@ -3101,13 +3149,19 @@ func (h *Handler) dispatchChannelAgentReply(ctx context.Context, ch ChannelRespo
 	if trigger.Type == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == uuidToString(agent.ID) {
 		return
 	}
+	rootID := h.channelThreadRootForTrigger(ch, trigger)
+	facilitatorState := h.loadChannelFacilitatorState(ctx, rootID, agent.ID, trigger)
 	if trigger.ThreadRootMessageID != nil {
 		h.followChannelThreadAgent(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
 	}
-	h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger), "channel agent reply", true, true, true, false)
+	reason := "mention"
+	if ch.Kind == "dm" {
+		reason = "dm"
+	}
+	h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger, facilitatorState), "channel agent reply", true, reason, 10)
 }
 
-func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, logScope string, showTyping, forceFresh, interruptActive, lowPriority bool) {
+func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, logScope string, showTyping bool, reason string, priority int32) {
 	typingActive := false
 	if showTyping {
 		h.publishChannelAgentTyping(ctx, ch, agent, true)
@@ -3118,62 +3172,89 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 			h.publishChannelAgentTyping(ctx, ch, agent, false)
 		}
 	}()
-	session, err := h.ensureChannelAgentSession(ctx, ch, agent.ID, initiatorUserID)
+	if h.TxStarter == nil {
+		slog.Warn(logScope+": transaction starter missing", "channel", ch.ID, "agent", uuidToString(agent.ID))
+		return
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		slog.Warn(logScope+": begin transaction failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.Queries.WithTx(tx)
+
+	session, err := h.ensureChannelAgentSessionWithDB(ctx, qtx, tx, ch, agent.ID, initiatorUserID)
 	if err != nil {
 		slog.Warn(logScope+": ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
 	}
-	// #311: the system no longer cancels an in-flight directed chat run when a
-	// newer mention arrives for the same channel agent. A directed request must
-	// never be silently dropped — different requesters' asks are independent
-	// must-answer work, and a same-requester follow-up should merge/queue, not
-	// kill the earlier run (the Frank+海鹏 double-joke case). New mentions queue
-	// instead: ClaimAgentChatTask serializes per chat_session and runs queued
-	// tasks FIFO, so each request is answered in turn. interruptActive is left on
-	// the signature but no longer triggers a cancel.
-	interruptingActiveTask := false
-	promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, trigger)
+	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, ch.Kind, trigger)
 	if err != nil {
 		slog.Warn(logScope+": create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
 	}
-	var task db.AgentTaskQueue
-	if lowPriority && !interruptingActiveTask {
-		task, err = h.TaskService.EnqueueAmbientChatTask(ctx, session, initiatorUserID)
-	} else if interruptingActiveTask || forceFresh {
-		task, err = h.TaskService.EnqueueFreshChatTask(ctx, session, initiatorUserID)
-	} else {
-		task, err = h.TaskService.EnqueueChatTask(ctx, session, initiatorUserID)
-	}
+	conversationID, err := h.channelConversationIDWithDB(ctx, tx, parseUUID(ch.ID))
 	if err != nil {
-		slog.Warn(logScope+": enqueue chat task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		slog.Warn(logScope+": load conversation failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	agentSession, err := qtx.UpsertAgentSession(ctx, db.UpsertAgentSessionParams{
+		WorkspaceID:    parseUUID(ch.WorkspaceID),
+		AgentID:        agent.ID,
+		ConversationID: conversationID,
+		Scope:          channelAgentSessionScope(ch.Kind),
+		ChannelID:      parseUUID(ch.ID),
+		ChatSessionID:  session.ID,
+	})
+	if err != nil {
+		slog.Warn(logScope+": upsert agent session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	seq := trigger.Seq
+	event, err := qtx.CreateAgentInboxEvent(ctx, db.CreateAgentInboxEventParams{
+		WorkspaceID:     parseUUID(ch.WorkspaceID),
+		AgentSessionID:  agentSession.ID,
+		ConversationID:  conversationID,
+		AgentID:         agent.ID,
+		Reason:          reason,
+		RequiresWake:    true,
+		Priority:        priority,
+		SeqFrom:         seq,
+		SeqTo:           seq,
+		ChannelID:       parseUUID(ch.ID),
+		ChatSessionID:   session.ID,
+		SourceMessageID: channelAmbientTriggerID(trigger),
+	})
+	if err != nil {
+		slog.Warn(logScope+": create inbox event failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	if _, err := tx.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, event.ID, promptMsg.ID); err != nil {
+		slog.Warn(logScope+": tag prompt with inbox event failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "inbox_event", uuidToString(event.ID), "error", err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Warn(logScope+": commit failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "inbox_event", uuidToString(event.ID), "error", err)
 		return
 	}
 	typingActive = false
-	if _, err := h.DB.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
-		slog.Warn(logScope+": tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
-	}
 
 	// Record a wake-trigger activity event so the agent's Activity timeline
-	// shows why this run started (mention / ambient / DM / thread reply).
-	wakeReason := "mention"
-	if lowPriority {
-		wakeReason = "ambient"
-	} else if ch.Kind == "dm" {
-		wakeReason = "dm"
-	} else if trigger.ThreadRootMessageID != nil {
-		wakeReason = "thread_reply"
-	}
-	recordAgentActivityEvent(ctx, h.DB,
-		parseUUID(ch.WorkspaceID), agent.ID, agent.RuntimeID, task.ID,
-		"lifecycle", "task_dispatched", "info",
+	// shows why this session needs to drain.
+	h.recordAgentActivityEvent(ctx, h.DB,
+		parseUUID(ch.WorkspaceID), agent.ID, agent.RuntimeID, pgtype.UUID{},
+		activityKindWakeAttempt, "task_dispatched", "info",
 		"channel", parseUUID(ch.ID), ch.Name,
-		wakeReason, "Agent woken by "+wakeReason,
+		reason, "Agent woken by "+reason,
 		map[string]any{
 			"trigger_message_id": trigger.ID,
 			"trigger_author":     trigger.AuthorName,
 			"trigger_content":    truncateForActivity(trigger.Content, 100),
 			"thread_root":        trigger.ThreadRootMessageID,
+			"message_seq":        trigger.Seq,
+			"agent_session_id":   uuidToString(agentSession.ID),
+			"inbox_event_id":     uuidToString(event.ID),
 		},
 	)
 }
@@ -3210,7 +3291,7 @@ func (h *Handler) dispatchChannelMemberWelcome(ctx context.Context, workspaceID 
 			slog.Warn("channel welcome: ensure session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 			continue
 		}
-		promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, synthetic)
+		promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, ch.Kind, synthetic)
 		if err != nil {
 			h.publishChannelAgentTyping(ctx, ch, agent, false)
 			slog.Warn("channel welcome: create prompt failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
@@ -3415,7 +3496,6 @@ func (h *Handler) publishChannelAgentTyping(ctx context.Context, ch ChannelRespo
 
 func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, channelID, content string) []db.Agent {
 	mentions := util.ParseMentions(content)
-	mentionAll := util.HasMentionAll(mentions) || contentMentionsAll(content)
 	mentionedAgents := map[string]struct{}{}
 	for _, mention := range mentions {
 		if mention.Type == "agent" {
@@ -3440,7 +3520,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 			continue
 		}
 		_, mentionedByID := mentionedAgents[uuidToString(a.ID)]
-		if mentionAll || mentionedByID || contentMentionsAgent(content, a.Name) || contentMentionsAgent(content, a.DisplayName) {
+		if mentionedByID || contentMentionsAgent(content, a.Name) || contentMentionsAgent(content, a.DisplayName) {
 			out = append(out, a)
 		}
 	}
@@ -3449,6 +3529,22 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 
 func (h *Handler) channelThreadTargetAgents(ctx context.Context, workspaceID, channelID, rootMessageID string) []db.Agent {
 	agents := h.channelThreadAgentsFromQuery(ctx, `
+		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
+		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
+		       a.instructions, a.archived_at, a.display_name
+		FROM thread_participant tp
+		JOIN agent a ON tp.member_type = 'agent' AND a.id = tp.member_id
+		JOIN channel_member cm ON cm.channel_id = $1 AND cm.workspace_id = $2 AND cm.member_type = 'agent' AND cm.member_id = a.id
+		WHERE tp.root_message_id = $3
+		  AND tp.role = 'facilitator'
+		  AND tp.wake_state = 'active'
+		  AND a.archived_at IS NULL
+		ORDER BY tp.updated_at DESC
+		LIMIT 1`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID))
+	if len(agents) > 0 {
+		return agents
+	}
+	agents = h.channelThreadAgentsFromQuery(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
 		       a.instructions, a.archived_at, a.display_name
@@ -3527,16 +3623,156 @@ func (h *Handler) channelThreadAgentsFromQuery(ctx context.Context, query string
 	return out
 }
 
-func contentMentionsAll(content string) bool {
-	return strings.Contains(strings.ToLower(content), "@all")
-}
-
 func contentMentionsAgent(content, name string) bool {
 	needle := "@" + strings.ToLower(strings.TrimSpace(name))
 	if needle == "@" {
 		return false
 	}
 	return strings.Contains(strings.ToLower(content), needle)
+}
+
+type channelFacilitatorState struct {
+	Active                         bool
+	FacilitatorAgentID             string
+	FacilitatorName                string
+	CurrentAgentIsFacilitator      bool
+	CurrentTriggerFromFacilitator  bool
+	CurrentTriggerIsDirectAgentAsk bool
+}
+
+func detectFacilitatorIntent(content string) bool {
+	lower := strings.ToLower(strings.TrimSpace(content))
+	if lower == "" {
+		return false
+	}
+	for _, needle := range []string{
+		"主持", "协调", "收敛", "推进", "带大家讨论", "带大家聊", "主持一下", "帮大家收敛",
+		"facilitat", "moderat", "coordinate", "drive this discussion", "drive to a decision",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeConcreteFacilitatorRequest(content string) bool {
+	lower := strings.ToLower(strings.TrimSpace(content))
+	if lower == "" {
+		return false
+	}
+	if strings.Contains(lower, "?") || strings.Contains(lower, "？") {
+		return true
+	}
+	for _, needle := range []string{
+		"请", "帮", "给我", "列", "评估", "判断", "比较", "选择", "推荐", "总结", "回复",
+		"please", "can you", "could you", "review", "compare", "pick", "summarize", "reply",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Handler) channelThreadRootForTrigger(ch ChannelResponse, trigger ChannelMessageResponse) pgtype.UUID {
+	if trigger.ThreadRootMessageID != nil && strings.TrimSpace(*trigger.ThreadRootMessageID) != "" {
+		return parseUUID(*trigger.ThreadRootMessageID)
+	}
+	if ch.Kind == "group" && strings.TrimSpace(trigger.ID) != "" {
+		return parseUUID(trigger.ID)
+	}
+	return pgtype.UUID{}
+}
+
+func (h *Handler) setChannelThreadAgentRole(ctx context.Context, channelID, rootID, agentID pgtype.UUID, role string) {
+	if !rootID.Valid || !agentID.Valid || strings.TrimSpace(role) == "" {
+		return
+	}
+	if _, err := h.DB.Exec(ctx, `
+		WITH root AS (
+		  SELECT conversation_id
+		  FROM channel_message
+		  WHERE id = $2 AND channel_id = $1
+		)
+		INSERT INTO thread_participant (conversation_id, root_message_id, member_type, member_id, role, followed_at, updated_at)
+		SELECT root.conversation_id, $2, 'agent', $3, $4, now(), now()
+		FROM root
+		ON CONFLICT (root_message_id, member_type, member_id) DO UPDATE
+		SET role = EXCLUDED.role,
+		    followed_at = COALESCE(thread_participant.followed_at, EXCLUDED.followed_at),
+		    wake_state = 'active',
+		    updated_at = now()`,
+		channelID, rootID, agentID, role); err != nil {
+		slog.Warn("channel thread agent role update failed", "root", uuidToString(rootID), "agent", uuidToString(agentID), "role", role, "error", err)
+	}
+}
+
+func (h *Handler) markTriggerFacilitatorIfNeeded(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse) {
+	if trigger.Type != "user" || !detectFacilitatorIntent(trigger.Content) {
+		return
+	}
+	rootID := h.channelThreadRootForTrigger(ch, trigger)
+	if !rootID.Valid {
+		return
+	}
+	if _, err := h.DB.Exec(ctx, `
+		UPDATE thread_participant
+		SET role = 'participant', updated_at = now()
+		WHERE root_message_id = $1 AND member_type = 'agent' AND role = 'facilitator' AND member_id <> $2`,
+		rootID, agent.ID); err != nil {
+		slog.Warn("channel facilitator reset failed", "root", uuidToString(rootID), "agent", uuidToString(agent.ID), "error", err)
+	}
+	h.setChannelThreadAgentRole(ctx, parseUUID(ch.ID), rootID, agent.ID, "facilitator")
+}
+
+func (h *Handler) loadChannelFacilitatorState(ctx context.Context, rootID, targetAgentID pgtype.UUID, trigger ChannelMessageResponse) channelFacilitatorState {
+	if !rootID.Valid || !targetAgentID.Valid {
+		return channelFacilitatorState{}
+	}
+	var facilitatorID pgtype.UUID
+	var facilitatorName string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT tp.member_id, COALESCE(NULLIF(a.display_name, ''), a.name, '')
+		FROM thread_participant tp
+		JOIN agent a ON a.id = tp.member_id
+		WHERE tp.root_message_id = $1
+		  AND tp.member_type = 'agent'
+		  AND tp.role = 'facilitator'
+		ORDER BY tp.updated_at DESC
+		LIMIT 1`, rootID).Scan(&facilitatorID, &facilitatorName); err != nil {
+		return channelFacilitatorState{}
+	}
+	state := channelFacilitatorState{
+		Active:                    facilitatorID.Valid,
+		FacilitatorAgentID:        uuidToString(facilitatorID),
+		FacilitatorName:           firstNonEmpty(strings.TrimSpace(facilitatorName), uuidToString(facilitatorID)),
+		CurrentAgentIsFacilitator: facilitatorID == targetAgentID,
+	}
+	if trigger.Type == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == state.FacilitatorAgentID {
+		state.CurrentTriggerFromFacilitator = true
+		state.CurrentTriggerIsDirectAgentAsk = state.FacilitatorAgentID != uuidToString(targetAgentID) && looksLikeConcreteFacilitatorRequest(trigger.Content)
+	}
+	return state
+}
+
+func appendChannelFacilitatorPromptSection(b *strings.Builder, state channelFacilitatorState) {
+	if !state.Active {
+		return
+	}
+	if state.CurrentAgentIsFacilitator {
+		b.WriteString("Facilitator mode is active for you in this thread.\n")
+		b.WriteString("- You are the current facilitator/owner for this discussion thread.\n")
+		b.WriteString("- While the discussion is still open, you may send 2-4 short purposeful follow-ups to collect input, narrow options, and conclude.\n")
+		b.WriteString("- Each follow-up must move the thread forward: ask a concrete person a concrete question, summarize missing input, converge the shortlist, or post the conclusion.\n")
+		b.WriteString("- End facilitator mode once you have a conclusion, a clear owner, or you hit the automatic-turn limit.\n\n")
+		return
+	}
+	if state.CurrentTriggerIsDirectAgentAsk {
+		fmt.Fprintf(b, "Facilitator request: %s is the active facilitator for this thread and is directly asking you for concrete input.\n", state.FacilitatorName)
+		b.WriteString("- Treat this as a direct request, not a weak agent-to-agent notification.\n")
+		b.WriteString("- Answer once with the requested input, then return to normal thread behavior.\n\n")
+	}
 }
 
 func (h *Handler) dispatchChannelAmbientObservation(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
@@ -3552,6 +3788,83 @@ func (h *Handler) dispatchChannelAmbientObservation(ctx context.Context, ch Chan
 	}
 }
 
+func (h *Handler) dispatchChannelAmbientDelivery(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse) {
+	if trigger.Type == "agent" {
+		return
+	}
+	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
+		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
+			continue
+		}
+		h.recordChannelAmbientInboxEvent(ctx, ch, trigger, agent)
+	}
+}
+
+func (h *Handler) recordChannelAmbientInboxEvent(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, agent db.Agent) {
+	if h.TxStarter == nil {
+		slog.Warn("channel ambient delivery: transaction starter missing", "channel", ch.ID, "agent", uuidToString(agent.ID))
+		return
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		slog.Warn("channel ambient delivery: begin failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	conversationID, workspaceID, cursorSeq, pendingToSeq, ok := h.channelAmbientWakeCursorTx(ctx, tx, ch, agent, trigger)
+	if !ok {
+		return
+	}
+	if pendingToSeq <= cursorSeq {
+		if err := tx.Commit(ctx); err != nil {
+			slog.Warn("channel ambient delivery: commit empty cursor failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		}
+		return
+	}
+	qtx := h.Queries.WithTx(tx)
+	agentSession, err := qtx.UpsertAgentSession(ctx, db.UpsertAgentSessionParams{
+		WorkspaceID:    workspaceID,
+		AgentID:        agent.ID,
+		ConversationID: conversationID,
+		Scope:          channelAgentSessionScope(ch.Kind),
+		ChannelID:      parseUUID(ch.ID),
+	})
+	if err != nil {
+		slog.Warn("channel ambient delivery: upsert agent session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	if _, err := qtx.UpsertAmbientAgentInboxEvent(ctx, db.UpsertAmbientAgentInboxEventParams{
+		WorkspaceID:     workspaceID,
+		AgentSessionID:  agentSession.ID,
+		ConversationID:  conversationID,
+		ChannelID:       parseUUID(ch.ID),
+		AgentID:         agent.ID,
+		SeqFrom:         cursorSeq + 1,
+		SeqTo:           pendingToSeq,
+		SourceMessageID: channelAmbientTriggerID(trigger),
+	}); err != nil {
+		slog.Warn("channel ambient delivery: upsert inbox failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Warn("channel ambient delivery: commit failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+	}
+}
+
+func channelAgentSessionScope(channelKind string) string {
+	if channelKind == "dm" {
+		return "dm"
+	}
+	return "channel"
+}
+
+func (h *Handler) channelConversationIDWithDB(ctx context.Context, exec db.DBTX, channelID pgtype.UUID) (pgtype.UUID, error) {
+	var conversationID pgtype.UUID
+	err := exec.QueryRow(ctx, `SELECT id FROM conversation WHERE channel_id = $1`, channelID).Scan(&conversationID)
+	return conversationID, err
+}
+
 func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are a member of the Multica group chat #%s. A user sent a message without @-mentioning anyone.\n", ch.Name)
@@ -3564,7 +3877,6 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString("\n")
 	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, finish without visible output; do not print no_reply or protocol text.\n")
 	b.WriteString("If the message directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: write a visible plain-text reply or acknowledgement, and do not return no_reply.\n")
-	b.WriteString("If the message explicitly addresses everyone/all members/all agents (for example 全体, 大家, everyone, all agents) and asks for a welcome, greeting, reaction, or response, treat it as relevant to you and produce one short visible message. Do not stay silent or print no_reply for that case.\n")
 	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
 	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, use a reaction when the runtime brief supports reactions and a reaction is sufficient; otherwise send a short acknowledgement.\n")
 	b.WriteString(channelStickerReplyInstruction)
@@ -3584,7 +3896,7 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	return b.String()
 }
 
-func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse) string {
+func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, facilitatorState channelFacilitatorState) string {
 	members := h.channelMemberSummaries(ctx, ch.WorkspaceID, ch.ID)
 	messages := h.recentChannelMessages(ctx, ch.WorkspaceID, ch.ID, channelContextMessageLimit)
 	if trigger.ThreadRootMessageID != nil {
@@ -3593,9 +3905,8 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	messages = channelContextMessagesExcludingTrigger(messages, trigger.ID)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are participating in the Multica group chat #%s.\n", ch.Name)
-	b.WriteString("Only respond as yourself. Do not impersonate other agents or users.\n")
-	b.WriteString("Use the bounded channel context below, but answer the current mention directly. If key context seems missing, fetch or search more channel/thread history before guessing.\n")
+	fmt.Fprintf(&b, "You are participating in the Multica group chat #%s. Respond only as yourself.\n", ch.Name)
+	b.WriteString("Use the bounded context below; fetch/search more only if needed to answer the current mention.\n")
 	b.WriteString(channelOutputContractInstruction)
 	b.WriteString("\n")
 	b.WriteString(channelDirectedReplyInstruction)
@@ -3604,6 +3915,7 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	b.WriteString("\n")
 	b.WriteString(channelContinuationInstruction)
 	b.WriteString("\n")
+	appendChannelFacilitatorPromptSection(&b, facilitatorState)
 	fmt.Fprintf(&b, "To prevent runaway loops, this channel run is limited to %d automatic agent turns; current trigger depth is %d. As you near the limit, steer the discussion toward a concrete conclusion.\n\n", channelRunTriggerLimit, trigger.TriggerDepth)
 	if len(members) > 0 {
 		// Give the exact mention link per member (humans included), not just a
@@ -3634,10 +3946,31 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 		b.WriteString("\n")
 	}
 	if trigger.ReplyToMessageID != nil {
-		if parent, ok := h.channelMessageByID(ctx, ch.WorkspaceID, ch.ID, *trigger.ReplyToMessageID); ok {
+		if trigger.ReplyTo != nil {
+			b.WriteString("Direct reply target for the current message:\n")
+			fmt.Fprintf(&b, "%s\n\n", formatChannelMessageReplyLine(*trigger.ReplyTo))
+		} else if parent, ok := h.channelMessageByID(ctx, ch.WorkspaceID, ch.ID, *trigger.ReplyToMessageID); ok {
 			b.WriteString("Direct reply target for the current message:\n")
 			fmt.Fprintf(&b, "%s\n\n", formatChannelMessageLine(parent))
 		}
+	}
+	if trigger.QuoteMessageID != nil {
+		b.WriteString("Direct quote target for the current message:\n")
+		if trigger.Quote != nil && trigger.Quote.Status == "active" && trigger.Quote.Snapshot != nil {
+			fmt.Fprintf(&b, "%s\n\n", formatChannelMessageQuoteSnapshotLine(*trigger.Quote.Snapshot))
+		} else if quoted, ok := h.channelMessageByID(ctx, ch.WorkspaceID, ch.ID, *trigger.QuoteMessageID); ok {
+			fmt.Fprintf(&b, "%s\n\n", formatChannelMessageLine(quoted))
+		} else if trigger.Quote != nil && strings.TrimSpace(trigger.Quote.Status) != "" {
+			fmt.Fprintf(&b, "[%s] unavailable (%s)\n\n", *trigger.QuoteMessageID, trigger.Quote.Status)
+		} else {
+			fmt.Fprintf(&b, "[%s] unavailable\n\n", *trigger.QuoteMessageID)
+		}
+	}
+	if trigger.ReplyToMessageID != nil || trigger.QuoteMessageID != nil {
+		b.WriteString("When answering, treat the current message text as the user's question/request and the direct reply/quote target as the referenced message content. Do not confuse the two.\n\n")
+	}
+	if strings.TrimSpace(trigger.ID) != "" {
+		fmt.Fprintf(&b, "Current message id: %s\n", trigger.ID)
 	}
 	b.WriteString("Current message to respond to:\n")
 	fmt.Fprintf(&b, "%s (%s): %s", trigger.AuthorName, trigger.Type, trigger.Content)
@@ -3753,11 +4086,11 @@ func (h *Handler) channelThreadContextMessages(ctx context.Context, workspaceID,
 	return out
 }
 
-func (h *Handler) createChannelAgentPromptMessage(ctx context.Context, chatSessionID pgtype.UUID, prompt string, trigger ChannelMessageResponse) (db.ChatMessage, error) {
-	return h.createChannelAgentPromptMessageWithDB(ctx, h.DB, chatSessionID, prompt, trigger)
+func (h *Handler) createChannelAgentPromptMessage(ctx context.Context, chatSessionID pgtype.UUID, prompt, channelKind string, trigger ChannelMessageResponse) (db.ChatMessage, error) {
+	return h.createChannelAgentPromptMessageWithDB(ctx, h.DB, chatSessionID, prompt, channelKind, trigger)
 }
 
-func (h *Handler) createChannelAgentPromptMessageWithDB(ctx context.Context, exec db.DBTX, chatSessionID pgtype.UUID, prompt string, trigger ChannelMessageResponse) (db.ChatMessage, error) {
+func (h *Handler) createChannelAgentPromptMessageWithDB(ctx context.Context, exec db.DBTX, chatSessionID pgtype.UUID, prompt, channelKind string, trigger ChannelMessageResponse) (db.ChatMessage, error) {
 	threadID := trigger.ThreadID
 	if threadID == nil || strings.TrimSpace(*threadID) == "" {
 		fresh := uuid.NewString()
@@ -3766,6 +4099,8 @@ func (h *Handler) createChannelAgentPromptMessageWithDB(ctx context.Context, exe
 	var threadRootMessageID any
 	if trigger.ThreadRootMessageID != nil {
 		threadRootMessageID = parseUUID(*trigger.ThreadRootMessageID)
+	} else if shouldDefaultChannelAgentReplyToThread(channelKind, trigger) {
+		threadRootMessageID = parseUUID(trigger.ID)
 	}
 	row := exec.QueryRow(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, thread_id, channel_thread_root_message_id, trigger_depth)
@@ -3775,6 +4110,68 @@ func (h *Handler) createChannelAgentPromptMessageWithDB(ctx context.Context, exe
 	var msg db.ChatMessage
 	err := row.Scan(&msg.ID, &msg.ChatSessionID, &msg.Role, &msg.Content, &msg.TaskID, &msg.CreatedAt, &msg.FailureReason, &msg.ElapsedMs, &msg.ThreadID, &msg.TriggerDepth, &msg.Parts)
 	return msg, err
+}
+
+func shouldDefaultChannelAgentReplyToThread(channelKind string, trigger ChannelMessageResponse) bool {
+	if channelKind != "group" || strings.TrimSpace(trigger.ID) == "" {
+		return false
+	}
+	if len(trigger.Attachments) > 0 || trigger.ReplyToMessageID != nil || trigger.QuoteMessageID != nil {
+		return true
+	}
+	text := channelMessageWithoutLeadingMentions(trigger.Content)
+	return !isChannelSocialBeat(text) && isChannelThreadWorthy(text)
+}
+
+func channelMessageWithoutLeadingMentions(content string) string {
+	text := strings.ToLower(util.MentionRe.ReplaceAllString(content, " "))
+	fields := strings.Fields(text)
+	for len(fields) > 0 && strings.HasPrefix(fields[0], "@") {
+		fields = fields[1:]
+	}
+	// Keep question marks for thread-worthiness detection; trim only separators.
+	return strings.Trim(strings.Join(fields, " "), " \t\r\n.,;:，。；：~～")
+}
+
+func isChannelSocialBeat(text string) bool {
+	if text == "" || isChannelThreadWorthy(text) {
+		return false
+	}
+	for _, socialPrefix := range []string{
+		"hi", "hello", "hey", "你好", "嗨", "哈喽", "在吗", "在么",
+		"ok", "okay", "好的", "收到", "明白", "谢谢", "多谢", "赞", "辛苦了",
+	} {
+		if text == socialPrefix || (len([]rune(text)) <= 20 && strings.HasPrefix(text, socialPrefix+" ")) {
+			return true
+		}
+	}
+	return false
+}
+
+func isChannelThreadWorthy(text string) bool {
+	if text == "" {
+		return false
+	}
+	if strings.ContainsAny(text, "?？") {
+		return true
+	}
+	for _, marker := range []string{
+		"在线程", "开个线程", "thread",
+		"怎么", "咋", "如何", "为什么", "为何", "哪个", "哪种", "是否", "能否", "可以吗", "是什么", "是啥",
+		"帮我", "修复", "排查", "调查", "查一下", "查下", "看一下", "看下", "检查", "评审", "分析", "处理", "实现", "解决", "收敛",
+		"bug", "error", "crash", "failed", "failure", "broken", "blocker", "故障", "异常", "报错", "失败", "崩溃", "挂了", "阻塞",
+		"can you", "could you", "would you", "please fix", "please check", "please review", "please investigate", "please implement", "please resolve", "please analyze",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	for _, imperative := range []string{"fix ", "debug ", "check ", "review ", "investigate ", "implement ", "resolve ", "analyze "} {
+		if strings.HasPrefix(text, imperative) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) ensureChannelAgentSession(ctx context.Context, ch ChannelResponse, agentID pgtype.UUID, creatorID pgtype.UUID) (db.ChatSession, error) {

@@ -19,9 +19,11 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/daemonws"
+	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/radar"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -30,6 +32,7 @@ import (
 )
 
 const chatResumeRecentMessageLimit = 10
+const daemonRegisterTokenTTL = 24 * time.Hour
 
 // ---------------------------------------------------------------------------
 // Daemon workspace ownership helpers
@@ -185,6 +188,28 @@ type DaemonRegisterRequest struct {
 		Version string `json:"version"` // agent CLI version (claude/codex)
 		Status  string `json:"status"`
 	} `json:"runtimes"`
+}
+
+func (h *Handler) issueDaemonRegisterToken(ctx context.Context, workspaceID pgtype.UUID, daemonID string) (string, time.Time, error) {
+	rawToken, err := auth.GenerateDaemonToken()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	expiresAt := time.Now().Add(daemonRegisterTokenTTL)
+	hash := auth.HashToken(rawToken)
+	if _, err := h.Queries.CreateDaemonToken(ctx, db.CreateDaemonTokenParams{
+		TokenHash:   hash,
+		WorkspaceID: workspaceID,
+		DaemonID:    daemonID,
+		ExpiresAt:   pgtype.Timestamptz{Time: expiresAt, Valid: true},
+	}); err != nil {
+		return "", time.Time{}, err
+	}
+	h.DaemonTokenCache.Set(ctx, hash, auth.DaemonTokenIdentity{
+		WorkspaceID: uuidToString(workspaceID),
+		DaemonID:    daemonID,
+	}, auth.TTLForExpiry(time.Now(), expiresAt))
+	return rawToken, expiresAt, nil
 }
 
 type daemonWorkspaceReposResponse struct {
@@ -422,12 +447,21 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	})
 
 	repoResp := workspaceReposResponse(req.WorkspaceID, ws.Repos, ws.Settings)
+	daemonToken, daemonTokenExpiresAt, err := h.issueDaemonRegisterToken(r.Context(), wsUUID, req.DaemonID)
+	if err != nil {
+		slog.Error("daemon register: issue daemon token failed",
+			append(logger.RequestAttrs(r), "error", err, "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID)...)
+		writeError(w, http.StatusInternalServerError, "failed to issue daemon token")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"runtimes":      resp,
-		"repos":         repoResp.Repos,
-		"repos_version": repoResp.ReposVersion,
-		"settings":      repoResp.Settings,
+		"runtimes":                resp,
+		"repos":                   repoResp.Repos,
+		"repos_version":           repoResp.ReposVersion,
+		"settings":                repoResp.Settings,
+		"daemon_token":            daemonToken,
+		"daemon_token_expires_at": daemonTokenExpiresAt.UTC().Format(time.RFC3339Nano),
 	})
 }
 
@@ -1188,7 +1222,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		// Workspace-bound skills first, then platform built-in skills. Built-in
 		// names carry a "multica-" prefix so their on-disk slugs never collide
 		// with a user-authored workspace skill (see writeSkillFiles).
-		skills := h.TaskService.LoadAgentSkills(r.Context(), task.AgentID)
+		skills := h.TaskService.LoadAgentSkillsForTask(r.Context(), task.AgentID, task.ID)
 		skills = append(skills, h.TaskService.BuiltinSkills()...)
 		var customEnv map[string]string
 		if agent.CustomEnv != nil {
@@ -1763,6 +1797,14 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+		} else {
+			var radarCtx service.AgentRadarContext
+			if json.Unmarshal(task.Context, &radarCtx) == nil && radarCtx.Type == service.AgentRadarContextType {
+				resp.AgentRadarPrompt = radarCtx.Prompt
+				resp.ThreadName = "agent radar"
+				resp.Kind = "agent_radar"
+				resp.WorkspaceID = runtimeWorkspaceID
+			}
 		}
 	}
 
@@ -1967,7 +2009,7 @@ func isAssistantFollowupPrompt(m db.ChatMessage) bool {
 
 func chatFailureResumeUnsafe(reason string) bool {
 	switch reason {
-	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", "agent_error.context_overflow":
+	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", "grok_first_turn_no_progress", "agent_error.context_overflow":
 		return true
 	default:
 		return false
@@ -2211,14 +2253,63 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		completedMessage = "Task completed (output suppressed: " + req.OutputSuppressedReason + ")"
 		completedSeverity = "warning"
 	}
-	recordAgentActivityEvent(r.Context(), h.DB,
+	completedTargetKind, completedTargetID, completedTargetSlug := h.taskActivityTarget(r.Context(), *task)
+	h.recordAgentActivityEvent(r.Context(), h.DB,
 		parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
-		"lifecycle", "task_completed", completedSeverity,
-		"agent", task.AgentID, "",
+		activityKindTurnEnd, "task_completed", completedSeverity,
+		completedTargetKind, completedTargetID, completedTargetSlug,
 		req.OutputSuppressedReason, completedMessage, completedDetails,
 	)
+	h.recordTaskVisibleOutputActivity(r.Context(), parseUUID(workspaceID), *task, req)
+
+	h.handleCompletedAgentRadarTask(r.Context(), *task, req.Output)
 
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
+}
+
+func (h *Handler) handleCompletedAgentRadarTask(ctx context.Context, task db.AgentTaskQueue, output string) {
+	if len(task.Context) == 0 {
+		return
+	}
+	var radarCtx service.AgentRadarContext
+	if json.Unmarshal(task.Context, &radarCtx) != nil || radarCtx.Type != service.AgentRadarContextType {
+		return
+	}
+	runID, ok := parseUUIDMaybe(radarCtx.RadarRunID)
+	if !ok {
+		return
+	}
+	run, err := h.Queries.GetAgentRadarRun(ctx, runID)
+	if err != nil {
+		return
+	}
+	agent, err := h.Queries.GetAgent(ctx, task.AgentID)
+	if err != nil {
+		return
+	}
+	plan, err := radar.ParseActionPlan(output)
+	if err != nil {
+		_, _ = h.Queries.UpdateAgentRadarRunStatus(ctx, db.UpdateAgentRadarRunStatusParams{
+			ID:     run.ID,
+			Status: "failed",
+			Error:  pgtype.Text{String: "parse action plan: " + err.Error(), Valid: true},
+		})
+		return
+	}
+	if err := h.ExecuteAgentRadarPlan(ctx, run, agent, plan); err != nil {
+		slog.Warn("agent radar action execution failed", "run_id", radarCtx.RadarRunID, "error", err)
+	}
+}
+
+func parseUUIDMaybe(raw string) (pgtype.UUID, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return pgtype.UUID{}, false
+	}
+	id, err := util.ParseUUID(raw)
+	if err != nil {
+		return pgtype.UUID{}, false
+	}
+	return id, true
 }
 
 func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.AgentTaskQueue, req *TaskCompleteRequest) error {
@@ -2228,6 +2319,16 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	output, parts, err := messageparts.Normalize(req.Output, req.Parts)
 	if err != nil {
 		return fmt.Errorf("invalid message parts: %w", err)
+	}
+	if channelTask && task.Priority >= 2 && !explicitAction {
+		if sanitized, ok := sanitizeRuntimeDiagnosticFinalText(output, parts); ok {
+			slog.Warn("complete task: sanitizing runtime diagnostic final text",
+				"task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
+			output = sanitized
+			parts = nil
+			req.Output = output
+			req.Parts = nil
+		}
 	}
 	if channelTask && !explicitAction && isLegacyChannelProtocolOutput(output, parts) {
 		slog.Warn("complete task: suppressing protocol-shaped final text output", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
@@ -2361,6 +2462,10 @@ func (h *Handler) taskRuntimeHasCapability(ctx context.Context, task db.AgentTas
 		slog.Warn("complete task: failed to load task runtime capabilities", "task_id", uuidToString(task.ID), "runtime_id", uuidToString(task.RuntimeID), "error", err)
 		return false
 	}
+	return agentRuntimeHasCapability(rt, capability)
+}
+
+func agentRuntimeHasCapability(rt db.AgentRuntime, capability string) bool {
 	for _, candidate := range runtimeCapabilities(runtimeMetadata(rt)) {
 		if candidate == capability {
 			return true
@@ -2452,6 +2557,53 @@ func normalizeNoReplyRationaleCandidate(output string) string {
 		normalized = strings.TrimSpace(strings.TrimSuffix(normalized, "."))
 	}
 	return normalized
+}
+
+func sanitizeRuntimeDiagnosticFinalText(output string, parts []protocol.MessagePart) (string, bool) {
+	if len(parts) > 0 {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	markers := []string{
+		"background search finished after the reply was already sent",
+		"nothing else needed for this turn",
+		"先修好 multica send 的鉴权",
+		"改用任务态 token",
+		"任务态 token 的 multica",
+	}
+	cutAt := -1
+	for _, marker := range markers {
+		if idx := strings.Index(lower, marker); idx >= 0 && (cutAt == -1 || idx < cutAt) {
+			cutAt = idx
+		}
+	}
+	if cutAt == -1 {
+		return "", false
+	}
+	sanitized := strings.TrimSpace(trimmed[:cutAt])
+	for {
+		before := sanitized
+		sanitized = strings.TrimSpace(strings.TrimSuffix(sanitized, "在"))
+		sanitized = strings.TrimSpace(strings.TrimSuffix(sanitized, "The"))
+		sanitized = strings.TrimSpace(strings.TrimSuffix(sanitized, "the"))
+		if sanitized == before {
+			break
+		}
+	}
+	if sanitized == "" {
+		return "在的。", true
+	}
+	sanitizedLower := strings.ToLower(sanitized)
+	for _, marker := range markers {
+		if strings.Contains(sanitizedLower, marker) {
+			return "在的。", true
+		}
+	}
+	return sanitized, true
 }
 
 func (h *Handler) suppressTaskCompleteOutput(req *TaskCompleteRequest, reason string) {
@@ -2632,10 +2784,16 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)
 
 	// Record a task-failed activity event.
-	recordAgentActivityEvent(r.Context(), h.DB,
+	failedTargetKind := "agent"
+	failedTargetID := task.AgentID
+	if task.IssueID.Valid {
+		failedTargetKind = "issue"
+		failedTargetID = task.IssueID
+	}
+	h.recordAgentActivityEvent(r.Context(), h.DB,
 		parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
-		"lifecycle", "task_failed", "error",
-		"agent", task.AgentID, "",
+		activityKindError, "task_failed", "error",
+		failedTargetKind, failedTargetID, "",
 		req.FailureReason, "Task failed: "+truncateForActivity(req.Error, 200),
 		map[string]any{
 			"failure_reason": req.FailureReason,
@@ -2699,19 +2857,21 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		msg.Content = redact.Text(msg.Content)
 		msg.Output = redact.Text(msg.Output)
 		msg.Input = redact.InputMap(msg.Input)
+		visibility := taskMessageRequestVisibility(msg)
 
 		var inputJSON []byte
 		if msg.Input != nil {
 			inputJSON, _ = json.Marshal(msg.Input)
 		}
 		created, createErr := h.Queries.CreateTaskMessage(r.Context(), db.CreateTaskMessageParams{
-			TaskID:  parseUUID(taskID),
-			Seq:     int32(msg.Seq),
-			Type:    msg.Type,
-			Tool:    pgtype.Text{String: msg.Tool, Valid: msg.Tool != ""},
-			Content: pgtype.Text{String: msg.Content, Valid: msg.Content != ""},
-			Input:   inputJSON,
-			Output:  pgtype.Text{String: msg.Output, Valid: msg.Output != ""},
+			TaskID:     parseUUID(taskID),
+			Seq:        int32(msg.Seq),
+			Type:       msg.Type,
+			Tool:       pgtype.Text{String: msg.Tool, Valid: msg.Tool != ""},
+			Content:    pgtype.Text{String: msg.Content, Valid: msg.Content != ""},
+			Input:      inputJSON,
+			Output:     pgtype.Text{String: msg.Output, Valid: msg.Output != ""},
+			Visibility: visibility,
 		})
 		if createErr != nil {
 			slog.Error("failed to create task message", "task_id", taskID, "seq", msg.Seq, "error", createErr)
@@ -2722,6 +2882,23 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		if workspaceID != "" {
 			h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID,
 				taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
+			event := h.taskMessageActivityTimelineEvent(r.Context(), workspaceID, task, created)
+			h.publishAgentActivityRealtimeEvent(r.Context(), workspaceID, uuidToString(task.AgentID), uuidToString(created.ID), event, AgentActivityTargetRef{Kind: "none"})
+			if msg.Type == "tool_use" && strings.TrimSpace(msg.Tool) != "" && !taskMessageToolIsMapped(msg.Type, msg.Tool, msg.Input) {
+				targetKind, targetID, targetSlug := h.taskActivityTarget(r.Context(), task)
+				h.recordAgentActivityEvent(r.Context(), h.DB,
+					parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
+					activityKindCustom, "unmapped_tool_name", "warning",
+					targetKind, targetID, targetSlug,
+					"unmapped_tool_name", "Unmapped runtime tool name",
+					map[string]any{
+						"raw_tool":        strings.TrimSpace(msg.Tool),
+						"task_message_id": uuidToString(created.ID),
+						"task_id":         taskID,
+						"seq":             msg.Seq,
+					},
+				)
+			}
 		}
 	}
 
@@ -2737,57 +2914,40 @@ func taskMessageToPayload(m db.TaskMessage, taskID, issueID string) protocol.Tas
 	if m.CreatedAt.Valid {
 		createdAt = m.CreatedAt.Time.UTC().Format(time.RFC3339Nano)
 	}
-	narrative := taskMessageNarrative(m.Type)
+	visibility := strings.TrimSpace(m.Visibility)
+	if visibility == "" {
+		visibility = "user_facing"
+	}
 	return protocol.TaskMessagePayload{
-		TaskID:      taskID,
-		IssueID:     issueID,
-		Seq:         int(m.Seq),
-		Type:        m.Type,
-		Tool:        m.Tool.String,
-		Content:     m.Content.String,
-		Input:       input,
-		Output:      m.Output.String,
-		ActionLabel: narrative.Label,
-		Summary:     narrative.Summary,
-		CreatedAt:   createdAt,
+		TaskID:     taskID,
+		IssueID:    issueID,
+		Seq:        int(m.Seq),
+		Type:       m.Type,
+		Tool:       m.Tool.String,
+		Content:    m.Content.String,
+		Input:      input,
+		Output:     m.Output.String,
+		Visibility: visibility,
+		CreatedAt:  createdAt,
 	}
 }
 
-type taskMessageNarrativeSummary struct {
-	Label   string
-	Summary string
+func taskMessageVisibility(msgType string) string {
+	return taskMessageVisibilityForMessage(msgType, "", nil)
 }
 
-func taskMessageNarrative(msgType string) taskMessageNarrativeSummary {
-	switch msgType {
-	case "text":
-		return taskMessageNarrativeSummary{
-			Label:   "Message received",
-			Summary: "Received a message.",
-		}
-	case "thinking":
-		return taskMessageNarrativeSummary{
-			Label:   "Thinking",
-			Summary: "Reviewed the next step.",
-		}
-	case "tool_use":
-		return taskMessageNarrativeSummary{
-			Label:   "Working",
-			Summary: "Started a work step.",
-		}
-	case "tool_result":
-		return taskMessageNarrativeSummary{
-			Label:   "Step finished",
-			Summary: "Finished a work step.",
-		}
-	case "error":
-		return taskMessageNarrativeSummary{
-			Label:   "Ran into an error",
-			Summary: "Ran into an error.",
-		}
-	default:
-		return taskMessageNarrativeSummary{Label: "Took a step", Summary: "Took a step."}
+func taskMessageRequestVisibility(msg TaskMessageRequest) string {
+	return taskMessageVisibilityForMessage(msg.Type, msg.Tool, msg.Input)
+}
+
+func taskMessageVisibilityForMessage(msgType, tool string, input map[string]any) string {
+	if msgType == "tool_result" || msgType == "log" {
+		return "diagnostic_only"
 	}
+	if !taskMessageToolIsMapped(msgType, tool, input) {
+		return "diagnostic_only"
+	}
+	return "user_facing"
 }
 
 // ListTaskMessages returns the persisted messages for a task (for catch-up after reconnect).
@@ -2883,9 +3043,9 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	slog.Info("task cancelled by user", "task_id", taskID, "issue_id", uuidToString(task.IssueID))
 
 	// Record a task-cancelled activity event.
-	recordAgentActivityEvent(r.Context(), h.DB,
+	h.recordAgentActivityEvent(r.Context(), h.DB,
 		issue.WorkspaceID, task.AgentID, task.RuntimeID, task.ID,
-		"lifecycle", "task_cancelled", "info",
+		activityKindBlocked, "task_cancelled", "info",
 		"issue", task.IssueID, "",
 		"", "Task cancelled by user",
 		nil,

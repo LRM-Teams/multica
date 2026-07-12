@@ -52,7 +52,13 @@ type APIClient struct {
 	Token       string
 	AgentID     string // When set, requests are attributed to this agent instead of the user.
 	TaskID      string // When set, sent as X-Task-ID for agent-task validation.
-	HTTPClient  *http.Client
+	// Agent inbox delivery context is sent by daemon-managed chat runs when the
+	// bearer token is a durable agent credential. The server uses it as
+	// per-request freshness proof before allowing chat transport actions.
+	AgentInboxEventID    string
+	AgentInboxDeliveryID string
+	AgentInboxLeaseToken string
+	HTTPClient           *http.Client
 
 	// Identity overrides. Empty values fall back to the package-level
 	// ClientPlatform / ClientVersion / ClientOS.
@@ -173,6 +179,15 @@ func (c *APIClient) setHeaders(req *http.Request) {
 	}
 	if c.TaskID != "" {
 		req.Header.Set("X-Task-ID", c.TaskID)
+	}
+	if c.AgentInboxEventID != "" {
+		req.Header.Set("X-Agent-Inbox-Event-ID", c.AgentInboxEventID)
+	}
+	if c.AgentInboxDeliveryID != "" {
+		req.Header.Set("X-Agent-Inbox-Delivery-ID", c.AgentInboxDeliveryID)
+	}
+	if c.AgentInboxLeaseToken != "" {
+		req.Header.Set("X-Agent-Inbox-Lease-Token", c.AgentInboxLeaseToken)
 	}
 
 	platform := c.Platform

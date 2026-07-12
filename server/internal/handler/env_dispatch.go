@@ -22,18 +22,18 @@ import (
 
 // EnvDispatchRequest is the body of POST /api/v1/env-dispatch (spec §6.3).
 type EnvDispatchRequest struct {
-	Mode           string                 `json:"mode"`
-	EnvID          string                 `json:"env_id"`
-	Domain         string                 `json:"domain,omitempty"`
-	DispatchType   string                 `json:"dispatch_type"`
-	GroupSize      int                    `json:"group_size"`
-	AgentID        string                 `json:"agent_id"`
-	SquadID        string                 `json:"squad_id,omitempty"`
-	TrainAgentID   string                 `json:"train_agent_id,omitempty"`
-	CriticAgentID  string                 `json:"critic_agent_id,omitempty"`
-	IdempotencyKey string                 `json:"idempotency_key,omitempty"`
-	Issue          *IssueDispatchInput    `json:"issue,omitempty"`
-	Message        *MessageDispatchInput  `json:"message,omitempty"`
+	Mode           string                        `json:"mode"`
+	EnvID          string                        `json:"env_id"`
+	Domain         string                        `json:"domain,omitempty"`
+	DispatchType   string                        `json:"dispatch_type"`
+	GroupSize      int                           `json:"group_size"`
+	AgentID        string                        `json:"agent_id"`
+	SquadID        string                        `json:"squad_id,omitempty"`
+	TrainAgentID   string                        `json:"train_agent_id,omitempty"`
+	CriticAgentID  string                        `json:"critic_agent_id,omitempty"`
+	IdempotencyKey string                        `json:"idempotency_key,omitempty"`
+	Issue          *IssueDispatchInput           `json:"issue,omitempty"`
+	Message        *MessageDispatchInput         `json:"message,omitempty"`
 	PerAgentEnv    map[string]PerAgentEnvRequest `json:"per_agent_env,omitempty"`
 }
 
@@ -58,17 +58,18 @@ type MessageDispatchInput struct {
 
 // EnvDispatchResponse is the 201 response (spec §6.3).
 type EnvDispatchResponse struct {
-	Rollouts []EnvRolloutResponse `json:"rollouts"`
+	ProjectID string               `json:"project_id"`
+	Rollouts  []EnvRolloutResponse `json:"rollouts"`
 }
 
 type EnvRolloutResponse struct {
-	EnvID         string                          `json:"env_id"`
-	ProjectID     string                          `json:"project_id"`
-	IssueID       string                          `json:"issue_id,omitempty"`
-	ChatSessionID string                          `json:"chat_session_id,omitempty"`
-	AgentRunID    string                          `json:"agent_run_id,omitempty"`
-	Error         string                          `json:"error,omitempty"`
-	SandboxRefs   []service.SandboxInstanceRef    `json:"sandbox_refs,omitempty"`
+	EnvID            string                                `json:"env_id"`
+	ProjectID        string                                `json:"project_id"`
+	IssueID          string                                `json:"issue_id,omitempty"`
+	ChatSessionID    string                                `json:"chat_session_id,omitempty"`
+	AgentRunID       string                                `json:"agent_run_id,omitempty"`
+	Error            string                                `json:"error,omitempty"`
+	SandboxRefs      []service.SandboxInstanceRef          `json:"sandbox_refs,omitempty"`
 	AgentSandboxRefs map[string]service.SandboxInstanceRef `json:"agent_sandbox_refs,omitempty"`
 }
 
@@ -149,7 +150,7 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		writeEnvDispatchError(w, err, res)
 		return
 	}
-	writeJSON(w, http.StatusCreated, EnvDispatchResponse{Rollouts: mapRollouts(res.Rollouts)})
+	writeJSON(w, http.StatusCreated, EnvDispatchResponse{ProjectID: res.ProjectID, Rollouts: mapRollouts(res.Rollouts)})
 }
 
 // DeleteEnvDispatchProject handles DELETE /api/v1/env-dispatch/{projectID}.
@@ -174,11 +175,147 @@ func (h *Handler) DeleteEnvDispatchProject(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// rootTrainingTaskTerminal statuses: agent_task_queue.status is CHECK-constrained
+// to ('queued','dispatched','running','waiting_local_directory','completed',
+// 'failed','cancelled') (migrations 001 + 109). The terminal set (the rollout is
+// done) is completed/failed/cancelled - these are the transitions that fire
+// RouteTerminalTrainingTask (training.go:433), the terminal hook. The rest are
+// in-progress. A lookup miss (no training_dispatch / no root task enqueued yet)
+// is also treated as in-progress: the rollout has not produced a terminal root
+// task, so AReaL should keep polling rather than receive a partial DAG.
+var rootTrainingTaskTerminalStatuses = map[string]bool{
+	"completed": true,
+	"failed":    true,
+	"cancelled": true,
+}
+
+// GetDag handles GET /api/v1/env-dispatch/{projectID}/dag, the read-only
+// assembled segment-DAG endpoint AReaL polls (Task 9, U8). Contract:
+//   - 404 when the project does not exist at all.
+//   - 403 when the project exists but in another workspace (cross-workspace).
+//   - 202 + {"status":"in_progress"} when the rollout's root training task is
+//     not yet terminal (or has not been enqueued yet).
+//   - 200 + {"status":"failed"} when the root task is terminal but the recorded
+//     segments do NOT densely cover every session - D14: never serve a partial
+//     DAG, and never serve a failed rollout's partial data as if it were whole.
+//   - 200 + the AssembledDag JSON when the root task is terminal and the
+//     recorded segments densely cover every session.
+//
+// The service is constructed per-request (mirroring DeleteEnvDispatchProject):
+// h.Queries satisfies InteractionDAGStore; a nil arealrl client is safe because
+// assembly is read-only and never touches the bridge; enabled=true so
+// AssembleAssembledDag does not short-circuit. No Handler field is added (the
+// handler layer reaches the DAG service ad-hoc, keeping Task 10 wiring untouched).
+func (h *Handler) GetDag(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireUserID(w, r); !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	if workspaceID == "" {
+		writeError(w, http.StatusBadRequest, "workspace ID required")
+		return
+	}
+	projectID := chi.URLParam(r, "projectID")
+	projectUUID, ok := parseUUIDOrBadRequest(w, projectID, "projectID")
+	if !ok {
+		return
+	}
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspaceID")
+	if !ok {
+		return
+	}
+
+	// Workspace gate -> 403 + unknown -> 404 (decision 2). There is no shared
+	// canAccessProject helper; the 2-query distinguish mirrors the env-dispatch
+	// pattern: a scoped lookup confirms in-workspace, an unscoped lookup tells
+	// cross-workspace (403) from truly-unknown (404). DeleteEnvDispatchProject
+	// treats ErrNoRows as idempotent success (204), so there is no existing 403
+	// to mirror - the cross-workspace distinguish is implemented here.
+	if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+		ID:          projectUUID,
+		WorkspaceID: wsUUID,
+	}); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusServiceUnavailable, "lookup project: "+err.Error())
+			return
+		}
+		// Not in this workspace: distinguish cross-workspace (403) from unknown (404).
+		if _, err2 := h.Queries.GetProject(r.Context(), projectUUID); err2 != nil {
+			if errors.Is(err2, pgx.ErrNoRows) {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+				return
+			}
+			writeError(w, http.StatusServiceUnavailable, "lookup project: "+err2.Error())
+			return
+		}
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
+		return
+	}
+
+	// Status decision (decision 3): the root training task is the
+	// agent_task_queue row whose issue belongs to this project and whose
+	// agent_id equals training_dispatch.train_agent_id (the dispatch's
+	// EnqueueAgentRun creates it). ErrNoRows = no training_dispatch / no root
+	// task yet -> in_progress (keep polling). A non-terminal status -> in_progress.
+	status, err := h.Queries.GetRootTrainingTaskStatusForProject(r.Context(), projectUUID)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusServiceUnavailable, "lookup root training task: "+err.Error())
+			return
+		}
+		// No training rollout / root task not enqueued yet: rollout not done.
+		writeJSON(w, http.StatusAccepted, map[string]any{"status": "in_progress"})
+		return
+	}
+	if !rootTrainingTaskTerminalStatuses[status] {
+		writeJSON(w, http.StatusAccepted, map[string]any{"status": "in_progress"})
+		return
+	}
+
+	// Rollout is complete: assemble the DAG. A read-only assembly never touches
+	// the arealrl bridge, so a nil client is safe; enabled=true avoids the
+	// short-circuit. Per-request construction mirrors DeleteEnvDispatchProject.
+	dagSvc := service.NewInteractionDAGService(h.Queries, nil, true)
+	dag, derr := dagSvc.AssembleAssembledDag(r.Context(), projectID)
+	if derr != nil || !denseCover(dag) {
+		// D14: never serve a partial DAG. A failed/incomplete rollout surfaces as
+		// a failed status so AReaL does not consume a gap-ridden trajectory.
+		writeJSON(w, http.StatusOK, map[string]any{"status": "failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, dag)
+}
+
+// denseCover reports whether every session in dag.SessionToAgentRun has at
+// least one recorded segment covering its agent_run. A session whose agent_run
+// has no segment is a coverage gap (the run's trajectory was not recorded), so
+// the assembled DAG would be partial - the caller returns a failed status
+// instead of serving it (D14). The empty case (no sessions recorded) is
+// vacuously dense: there is nothing to cover, and the decision to serve an
+// empty DAG vs failed is left to the caller's derr check (a nil derr with no
+// sessions means the rollout recorded nothing, which the caller may still
+// choose to reject - here it is served as an empty, well-formed DAG).
+func denseCover(dag service.AssembledDag) bool {
+	if len(dag.SessionToAgentRun) == 0 {
+		return true
+	}
+	hasSegment := make(map[string]bool, len(dag.Segments))
+	for _, seg := range dag.Segments {
+		hasSegment[seg.AgentRunID] = true
+	}
+	for _, agentRunID := range dag.SessionToAgentRun {
+		if !hasSegment[agentRunID] {
+			return false
+		}
+	}
+	return true
+}
+
 func writeEnvDispatchError(w http.ResponseWriter, err error, res service.EnvDispatchResult) {
 	msg := err.Error()
 	switch {
 	case errors.Is(err, service.ErrAllDispatchFailed):
-		writeJSON(w, http.StatusInternalServerError, EnvDispatchResponse{Rollouts: mapRollouts(res.Rollouts)})
+		writeJSON(w, http.StatusInternalServerError, EnvDispatchResponse{ProjectID: res.ProjectID, Rollouts: mapRollouts(res.Rollouts)})
 	case strings.Contains(msg, "validation_failed"):
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "validation_failed", "message": msg})
 	case strings.Contains(msg, "not_implemented"):

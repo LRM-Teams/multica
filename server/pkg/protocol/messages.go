@@ -197,8 +197,9 @@ const (
 )
 
 const (
-	DaemonCapabilityChannelOutputActions = "channel_output_actions"
-	DaemonCapabilityAgentCLITransport    = "agent_cli_transport"
+	DaemonCapabilityChannelOutputActions     = "channel_output_actions"
+	DaemonCapabilityAgentCLITransport        = "agent_cli_transport"
+	DaemonCapabilityAgentCredentialTransport = "agent_credential_transport_v1"
 )
 
 const (
@@ -299,17 +300,16 @@ func ErrInvalidChatOutputType(outputType string) error {
 
 // TaskMessagePayload represents a single agent execution message (tool call, text, etc.)
 type TaskMessagePayload struct {
-	TaskID      string         `json:"task_id"`
-	IssueID     string         `json:"issue_id,omitempty"`
-	Seq         int            `json:"seq"`
-	Type        string         `json:"type"`              // "text", "tool_use", "tool_result", "error"
-	Tool        string         `json:"tool,omitempty"`    // tool name for tool_use/tool_result
-	Content     string         `json:"content,omitempty"` // text content
-	Input       map[string]any `json:"input,omitempty"`   // tool input (tool_use only)
-	Output      string         `json:"output,omitempty"`  // tool output (tool_result only)
-	ActionLabel string         `json:"action_label"`      // safe human label for the default UI narrative
-	Summary     string         `json:"summary"`           // safe one-sentence summary; raw details stay diagnostic
-	CreatedAt   string         `json:"created_at,omitempty"`
+	TaskID     string         `json:"task_id"`
+	IssueID    string         `json:"issue_id,omitempty"`
+	Seq        int            `json:"seq"`
+	Type       string         `json:"type"`              // "text", "tool_use", "tool_result", "error"
+	Tool       string         `json:"tool,omitempty"`    // tool name for tool_use/tool_result
+	Content    string         `json:"content,omitempty"` // text content
+	Input      map[string]any `json:"input,omitempty"`   // tool input (tool_use only)
+	Output     string         `json:"output,omitempty"`  // tool output (tool_result only)
+	Visibility string         `json:"visibility"`        // "user_facing" or "diagnostic_only"
+	CreatedAt  string         `json:"created_at,omitempty"`
 }
 
 // DaemonRegisterPayload is sent from daemon to server on connection.

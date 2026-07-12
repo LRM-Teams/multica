@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { ActivityTimeline } from "./activity-timeline";
 import { formatActivityTime, type ActivityEvent } from "./activity-event";
 
@@ -20,6 +19,27 @@ vi.mock("../../../i18n", () => ({
             timeline_empty: "No activity yet",
             view_diagnostics: "View diagnostic details",
             hide_diagnostics: "Hide diagnostic details",
+            labels: {
+              thinking: "Thinking",
+              output: "Output",
+              working: "Working",
+              failed: "Failed",
+              waiting: "Waiting",
+              running_command: "Running command",
+              writing_file: "Writing file",
+              editing_file: "Editing file",
+              reading_file: "Reading file",
+              searching_files: "Searching files",
+              searching_code: "Searching code",
+              searching_web: "Searching web",
+              sending_message: "Sending message",
+            },
+            subtexts: {
+              message_received: "Message received",
+              compacting_context: "Compacting context",
+              compaction_finished: "Compaction finished",
+              subagent_activity: "Subagent activity",
+            },
           },
         },
       }),
@@ -28,43 +48,116 @@ vi.mock("../../../i18n", () => ({
 
 const USER: ActivityEvent = {
   id: "u1",
+  agent_id: "agent-1",
   occurred_at: "2026-07-06T09:36:05Z",
+  kind: "thinking",
+  event_type: "thinking",
   visibility: "user_facing",
-  label: "Ran a command",
-  subtext: "Built the project.",
-  tone: "action",
+  text: "Built the project.",
+  target_ref: { kind: "agent", id: "agent-1" },
 };
 const DIAG: ActivityEvent = {
   id: "d1",
+  agent_id: "agent-1",
   occurred_at: "2026-07-06T09:36:10Z",
+  kind: "blocked",
+  event_type: "blocked",
   visibility: "diagnostic_only",
-  label: "Send held by freshness check",
-  tone: "muted",
+  reason_code: "freshness_check",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
+const WAKE: ActivityEvent = {
+  id: "w1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:08Z",
+  kind: "wake_attempt",
+  event_type: "wake_attempt",
+  visibility: "user_facing",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
+const TOOL: ActivityEvent = {
+  id: "tc1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:09Z",
+  kind: "tool_call",
+  event_type: "tool_use",
+  visibility: "user_facing",
+  tool: "bash",
+  tool_target: "bash",
+  status: "running",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
+const EDIT: ActivityEvent = {
+  id: "edit1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:10Z",
+  kind: "tool_call",
+  event_type: "tool_use",
+  visibility: "user_facing",
+  tool: "edit_file",
+  tool_target: "profile.go",
+  status: "completed",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
+// #484 makes a file tool's tool_target a source-backed path (absolute when the
+// runtime provides it) — long enough to blow out the row without the #385-FE
+// basename-preserving path treatment.
+const WRITE_LONGPATH: ActivityEvent = {
+  id: "wlp1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:10Z",
+  kind: "tool_call",
+  event_type: "tool_use",
+  visibility: "user_facing",
+  tool: "write_file",
+  tool_target: "/Users/frank/multica_workspaces/7373de75/workdir/pathcheck.txt",
+  status: "completed",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
+const TEXT: ActivityEvent = {
+  id: "txt1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:11Z",
+  kind: "text",
+  event_type: "text",
+  visibility: "user_facing",
+  text: "Done.",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
+const COMPACTION: ActivityEvent = {
+  id: "cmp1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:12Z",
+  kind: "compaction_started",
+  event_type: "compaction_started",
+  visibility: "user_facing",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
+const TURN_END: ActivityEvent = {
+  id: "done1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:13Z",
+  kind: "turn_end",
+  event_type: "task_completed",
+  visibility: "user_facing",
+  target_ref: { kind: "agent", id: "agent-1" },
 };
 
 describe("ActivityTimeline", () => {
   beforeEach(() => cleanup());
 
-  it("renders user_facing events (label + subtext) and hides diagnostic_only by default", () => {
+  it("renders user_facing events (projected label + subtext) and hides diagnostic_only by default", () => {
     render(<ActivityTimeline events={[USER, DIAG]} />);
-    expect(screen.getByText("Ran a command")).toBeInTheDocument();
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.getByText("Built the project.")).toBeInTheDocument();
-    expect(screen.queryByText("Send held by freshness check")).toBeNull();
-    expect(screen.getByText("View diagnostic details")).toBeInTheDocument();
-  });
-
-  it("reveals diagnostic_only events when the toggle is clicked", async () => {
-    const user = userEvent.setup();
-    render(<ActivityTimeline events={[USER, DIAG]} />);
-    await user.click(screen.getByText("View diagnostic details"));
-    expect(screen.getByText("Send held by freshness check")).toBeInTheDocument();
-    expect(screen.getByText("Hide diagnostic details")).toBeInTheDocument();
+    expect(screen.queryByText("Waiting")).toBeNull();
+    expect(screen.queryByText("View diagnostic details")).toBeNull();
   });
 
   it("compact mode: user_facing only, no diagnostics toggle", () => {
     render(<ActivityTimeline events={[USER, DIAG]} compact />);
-    expect(screen.getByText("Ran a command")).toBeInTheDocument();
-    expect(screen.queryByText("Send held by freshness check")).toBeNull();
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    expect(screen.queryByText("Waiting · freshness check")).toBeNull();
     expect(screen.queryByText("View diagnostic details")).toBeNull();
   });
 
@@ -76,8 +169,93 @@ describe("ActivityTimeline", () => {
   it("never renders raw command text — labels come from the read model", () => {
     // A diagnostic row's raw content is not exposed unless explicitly toggled;
     // and even then it's the BE-provided label, never a raw command string.
-    render(<ActivityTimeline events={[USER]} />);
+    render(<ActivityTimeline events={[TOOL, EDIT]} />);
+    expect(screen.getByText("Running command…")).toBeInTheDocument();
+    expect(screen.getByText("Editing file")).toBeInTheDocument();
+    expect(screen.getByText("profile.go")).toBeInTheDocument();
     expect(screen.queryByText(/\/bin\/|--target|raft message/)).toBeNull();
+    expect(screen.queryByText("Ran a command")).toBeNull();
+  });
+
+  it("shows a long file path with the basename always visible + full path on hover (#385)", () => {
+    // A ~60-char source-backed path must not blow out the row: the basename
+    // stays fully visible, the leading directories middle-ellipsis (a truncating
+    // head span — never right-truncate the basename), and the full path is
+    // exposed on hover via `title`.
+    render(<ActivityTimeline events={[WRITE_LONGPATH]} />);
+    const full = "/Users/frank/multica_workspaces/7373de75/workdir/pathcheck.txt";
+    // Basename (with leading "/") is a discrete, non-truncating node.
+    expect(screen.getByText("/pathcheck.txt")).toBeInTheDocument();
+    // Leading directories live in a truncating head span (middle-ellipsis).
+    const head = screen.getByText("/Users/frank/multica_workspaces/7373de75/workdir");
+    expect(head).toHaveClass("truncate");
+    // Full path is recoverable on hover.
+    expect(screen.getByTitle(full)).toBeInTheDocument();
+  });
+
+  it("compact mode also gives a long file path the basename-preserving treatment (#385/#383)", () => {
+    // Profile Recent (compact) shares the row, so a long path there must not
+    // right-truncate the basename either — same head-truncate + tail-visible.
+    render(<ActivityTimeline events={[WRITE_LONGPATH]} compact />);
+    expect(screen.getByText("/pathcheck.txt")).toBeInTheDocument();
+    expect(
+      screen.getByText("/Users/frank/multica_workspaces/7373de75/workdir"),
+    ).toHaveClass("truncate");
+    expect(
+      screen.getByTitle("/Users/frank/multica_workspaces/7373de75/workdir/pathcheck.txt"),
+    ).toBeInTheDocument();
+  });
+
+  it("projects Raft-style wake and reply labels without leaking old presentation copy", () => {
+    render(<ActivityTimeline events={[WAKE, TEXT]} />);
+    expect(screen.getByText("Working")).toBeInTheDocument();
+    expect(screen.getByText("Message received")).toBeInTheDocument();
+    expect(screen.getByText("Output")).toBeInTheDocument();
+    expect(screen.queryByText("Woken")).toBeNull();
+    expect(screen.queryByText("Sent a message")).toBeNull();
+  });
+
+  it("shows source-confirmed visible lifecycle and hides internal turn_end rows", () => {
+    render(<ActivityTimeline events={[COMPACTION, TURN_END]} />);
+    expect(screen.getByText("Compacting context")).toBeInTheDocument();
+    expect(screen.queryByText("Done")).toBeNull();
+  });
+
+  it("renders Output/thinking full text as a collapsed click-to-expand block", () => {
+    render(<ActivityTimeline events={[TEXT]} />);
+    // The reply text is a collapsed, expandable control (§2.1: first line, click
+    // for the full block) — not a fixed inline subtext.
+    const block = screen.getByRole("button", { name: "Done." });
+    expect(block).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(block);
+    expect(block).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("keeps a fixed subtext (Message received) inline, not an expandable block", () => {
+    render(<ActivityTimeline events={[WAKE]} />);
+    expect(screen.queryByRole("button", { name: "Message received" })).toBeNull();
+    expect(screen.getByText("Message received")).toBeInTheDocument();
+  });
+
+  it("compact mode: shows only the most recent N narrative rows, never a click-to-expand", () => {
+    // Profile Recent (#383): same projection, layout-only delta — last N rows,
+    // single-line truncated subtext, no expand.
+    const many: ActivityEvent[] = Array.from({ length: 7 }, (_, i) => ({
+      id: `m${i}`,
+      agent_id: "agent-1",
+      occurred_at: `2026-07-06T09:3${i}:00Z`,
+      kind: "text",
+      event_type: "text",
+      visibility: "user_facing",
+      text: `Reply ${i}`,
+      target_ref: { kind: "agent", id: "agent-1" },
+    }));
+    render(<ActivityTimeline events={many} compact />);
+    expect(screen.getAllByTestId("activity-row")).toHaveLength(5);
+    expect(screen.queryByRole("button")).toBeNull();
+    // most recent rows kept (m6 present, oldest m0/m1 trimmed)
+    expect(screen.getByText("Reply 6")).toBeInTheDocument();
+    expect(screen.queryByText("Reply 0")).toBeNull();
   });
 });
 

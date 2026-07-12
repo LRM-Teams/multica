@@ -42,6 +42,28 @@ export function agentTaskSnapshotOptions(wsId: string) {
   });
 }
 
+// #302 Activity: per-agent tagged event timeline. Keyed by agent (not
+// workspace) — one agent's stream. WS `agent_activity:event` upserts full
+// events straight into this cache by id; the 30s staleTime is a reconnect
+// safety net.
+export const agentActivityEventsKeys = {
+  all: (agentId: string) => ["agent-activity-events", agentId] as const,
+};
+
+export function agentActivityEventsOptions(agentId: string) {
+  return queryOptions({
+    queryKey: agentActivityEventsKeys.all(agentId),
+    // The REST route returns a pagination envelope (`{ events, has_more, … }`);
+    // the timeline consumes the event list, so unwrap `.events` into the cache.
+    // The full page stays reachable via `api.getAgentActivityEvents` for a
+    // cursor-pagination follow-up. Caching the array keeps the WS `by-id upsert`
+    // (`setQueryData`) operating on the same shape the timeline reads.
+    queryFn: () => api.getAgentActivityEvents(agentId).then((page) => page.events),
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+  });
+}
+
 export const agentTaskFeedKeys = {
   all: (wsId: string) => ["workspaces", wsId, "agent-task-feed"] as const,
   list: (wsId: string) => [...agentTaskFeedKeys.all(wsId), "list"] as const,

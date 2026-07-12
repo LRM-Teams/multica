@@ -5,8 +5,11 @@ import { render, screen, cleanup } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enAgents from "../../locales/en/agents.json";
+import enChat from "../../locales/en/chat.json";
 
-const TEST_RESOURCES = { en: { common: enCommon, agents: enAgents } };
+const TEST_RESOURCES = {
+  en: { common: enCommon, agents: enAgents, chat: enChat },
+};
 
 // useWorkspaceId is a Context-backed hook in core; stub it to a static id so
 // the card runs outside a WorkspaceIdProvider in tests.
@@ -171,7 +174,7 @@ beforeEach(() => {
 });
 
 describe("AgentLivePeekCard", () => {
-  it("renders Working state with the linked current issue", () => {
+  it("renders live stage + the linked current issue while a task is running", () => {
     mockSnapshot.current = [
       makeTask({
         id: "task-running",
@@ -195,7 +198,9 @@ describe("AgentLivePeekCard", () => {
 
     renderCard();
 
-    expect(screen.getByText("Working")).toBeInTheDocument();
+    // Active task with no streamed messages → chat stage "Thinking" (same
+    // resolveAgentLiveStatus path as the profile hover card).
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
     // identifier + title both render under the same link.
     const link = screen.getByRole("link", { name: /MUL-42/ });
     expect(link).toHaveAttribute("href", "/test/issues/issue-42");

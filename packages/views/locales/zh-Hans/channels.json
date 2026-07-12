@@ -149,12 +149,7 @@
     "composer_placeholder": "在线程中回复...",
     "back_to_conversation": "返回对话",
     "show_in_channel_label": "同时在频道显示",
-    "from_thread_badge": "来自话题",
-    "wake_pending": "等待回复",
-    "wake_replied": "已回复",
-    "wake_acked": "已确认",
-    "wake_delivered": "已送达",
-    "wake_no_reply": "未回复"
+    "from_thread_badge": "来自话题"
   },
   "typing": {
     "single": "{{name}} 正在输入",
@@ -198,6 +193,7 @@
     "sticker_failed": "表情包加载失败",
     "sticker_unavailable": "表情包暂不可用",
     "agent_badge": "Agent",
+    "radar_badge": "主动发现",
     "feishu_badge": "飞书",
     "edit_action": "编辑",
     "delete_action": "删除",
@@ -206,7 +202,12 @@
     "save_edit": "保存",
     "cancel_edit": "取消",
     "edit_failed_toast": "无法编辑消息",
-    "delete_failed_toast": "无法删除消息"
+    "delete_failed_toast": "无法删除消息",
+    "system_event": {
+      "member_added": "{actor} 邀请 {target} 加入了频道",
+      "member_removed": "{actor} 将 {target} 移出了频道",
+      "member_left": "{target} 退出了频道"
+    }
   },
   "dm": {
     "heading": "私信",

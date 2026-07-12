@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -21,6 +22,9 @@ func TestCurateMemorySubmissionAssigns(t *testing.T) {
 	}
 	if len(mock.memories) != 1 {
 		t.Fatalf("memories = %d, want 1", len(mock.memories))
+	}
+	if !mock.submission.PromotedUnitID.Valid {
+		t.Fatal("promoted unit id is invalid, want shared memory unit")
 	}
 	if mock.memories[0].Content != submission.Content {
 		t.Fatalf("memory content mismatch")
@@ -54,21 +58,15 @@ func TestCurateMemorySubmissionUpdatesExistingSyncKey(t *testing.T) {
 	}
 }
 
-func TestCurateAndMatchWorkspaceMemoryAssigns(t *testing.T) {
+func TestCurateAndMatchWorkspaceRequiresTransactions(t *testing.T) {
 	submission := validMemorySubmission()
 	submission.Status = "candidate"
 	mock := newEvolutionMockDB(submission)
 	mock.submissions = []db.EvolutionUnitSubmission{submission}
 	service := NewEvolutionService(db.New(mock))
 
-	result, err := service.CurateAndMatchWorkspace(context.Background(), submission.WorkspaceID, 10)
-	if err != nil {
-		t.Fatalf("CurateAndMatchWorkspace error = %v", err)
-	}
-	if result.Promoted != 1 || result.Matched != 1 {
-		t.Fatalf("result = %+v, want promoted=1 matched=1", result)
-	}
-	if len(mock.memories) != 1 {
-		t.Fatalf("memories = %d, want 1", len(mock.memories))
+	_, err := service.CurateAndMatchWorkspace(context.Background(), submission.WorkspaceID, 10)
+	if err == nil || !strings.Contains(err.Error(), "requires transaction support") {
+		t.Fatalf("CurateAndMatchWorkspace error = %v, want transaction support error", err)
 	}
 }

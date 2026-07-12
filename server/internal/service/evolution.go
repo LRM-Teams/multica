@@ -11,16 +11,23 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/skill"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
+type EvolutionTxStarter interface {
+	Begin(context.Context) (pgx.Tx, error)
+}
+
 type EvolutionService struct {
 	Queries       *db.Queries
+	TxStarter     TxStarter
 	Reviewer      EvolutionReviewer
 	ReviewEnabled bool
 }
@@ -47,20 +54,53 @@ type EvolutionCurateResult struct {
 	Matched     int `json:"matched"`
 }
 
-var ErrEvolutionSubmissionNotReviewable = errors.New("evolution submission is not awaiting review")
+var (
+	ErrEvolutionSubmissionNotReviewable = errors.New("evolution submission is not awaiting review")
+	ErrEvolutionSubmissionNotCandidate  = errors.New("evolution submission is not a candidate")
+	ErrEvolutionCandidateClaimed        = errors.New("evolution candidate is already being processed")
+	ErrEvolutionCandidateChanged        = errors.New("evolution candidate changed while being reviewed")
+)
 
 func NewEvolutionService(queries *db.Queries) *EvolutionService {
-	return NewEvolutionServiceWithReviewer(queries, NoopEvolutionReviewer{}, false)
+	return NewEvolutionServiceWithReviewerAndTx(queries, nil, NoopEvolutionReviewer{}, false)
+}
+
+func NewEvolutionServiceWithTx(queries *db.Queries, txStarter TxStarter) *EvolutionService {
+	return NewEvolutionServiceWithReviewerAndTx(queries, txStarter, NoopEvolutionReviewer{}, false)
+}
+
+func NewTransactionalEvolutionService(queries *db.Queries, txStarter EvolutionTxStarter) *EvolutionService {
+	service := NewEvolutionService(queries)
+	service.TxStarter = txStarter
+	return service
 }
 
 func NewEvolutionServiceWithReviewer(queries *db.Queries, reviewer EvolutionReviewer, enabled bool) *EvolutionService {
+	return NewEvolutionServiceWithReviewerAndTx(queries, nil, reviewer, enabled)
+}
+
+func NewEvolutionServiceWithReviewerAndTx(queries *db.Queries, txStarter TxStarter, reviewer EvolutionReviewer, enabled bool) *EvolutionService {
 	if reviewer == nil {
 		reviewer = NoopEvolutionReviewer{}
 	}
-	return &EvolutionService{Queries: queries, Reviewer: reviewer, ReviewEnabled: enabled}
+	return &EvolutionService{Queries: queries, TxStarter: txStarter, Reviewer: reviewer, ReviewEnabled: enabled}
 }
 
 type evolutionCurationStatus string
+
+// EvolutionCandidateRerunResult describes the terminal transition produced by
+// re-evaluating one candidate submission.
+type EvolutionCandidateRerunResult struct {
+	Status  string
+	UnitID  pgtype.UUID
+	Matched bool
+}
+
+type claimedEvolutionCandidate struct {
+	Submission db.EvolutionUnitSubmission
+	Files      []db.EvolutionUnitSubmissionFile
+	Token      pgtype.UUID
+}
 
 const (
 	evolutionCurationPromoted    evolutionCurationStatus = "promoted"
@@ -68,6 +108,15 @@ const (
 	evolutionCurationNeedsReview evolutionCurationStatus = "needs_review"
 	evolutionCurationSkipped     evolutionCurationStatus = "skipped"
 )
+
+type EvolutionCandidateCommitHook func(context.Context, pgx.Tx, EvolutionCandidateRerunResult) error
+
+// RerunCandidate applies the normal curation path to exactly one candidate.
+// The candidate is claimed with CAS before reviewer computation, then re-read
+// and committed in a short transaction with any caller-supplied audit hook.
+func (s *EvolutionService) RerunCandidate(ctx context.Context, workspaceID, submissionID pgtype.UUID, hook EvolutionCandidateCommitHook) (EvolutionCandidateRerunResult, error) {
+	return s.processCandidate(ctx, workspaceID, submissionID, hook)
+}
 
 func (s *EvolutionService) CurateAndMatchWorkspace(ctx context.Context, workspaceID pgtype.UUID, limit int32) (EvolutionCurateResult, error) {
 	if limit <= 0 {
@@ -79,11 +128,15 @@ func (s *EvolutionService) CurateAndMatchWorkspace(ctx context.Context, workspac
 	}
 	result := EvolutionCurateResult{}
 	for _, submission := range submissions {
-		unit, status, err := s.curateSubmission(ctx, submission)
+		processed, err := s.processCandidate(ctx, workspaceID, submission.ID, nil)
+		if errors.Is(err, ErrEvolutionCandidateClaimed) || errors.Is(err, ErrEvolutionCandidateChanged) || errors.Is(err, ErrEvolutionSubmissionNotCandidate) {
+			result.Skipped++
+			continue
+		}
 		if err != nil {
 			return result, err
 		}
-		switch status {
+		switch evolutionCurationStatus(processed.Status) {
 		case evolutionCurationRejected:
 			result.Rejected++
 			continue
@@ -95,15 +148,7 @@ func (s *EvolutionService) CurateAndMatchWorkspace(ctx context.Context, workspac
 			continue
 		case evolutionCurationPromoted:
 			result.Promoted++
-			if submission.UnitType == "skill" {
-				created, err := s.finalizeSkillPromotion(ctx, submission, unit)
-				if err != nil {
-					return result, err
-				}
-				if created {
-					result.Matched++
-				}
-			} else if isEvolutionAutoAssignMemoryUnit(submission.UnitType) {
+			if processed.Matched {
 				result.Matched++
 			}
 		default:
@@ -114,10 +159,136 @@ func (s *EvolutionService) CurateAndMatchWorkspace(ctx context.Context, workspac
 	return result, nil
 }
 
-func (s *EvolutionService) finalizeSkillPromotion(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) (bool, error) {
-	if submission.UnitType != "skill" {
+func (s *EvolutionService) processCandidate(ctx context.Context, workspaceID, submissionID pgtype.UUID, hook EvolutionCandidateCommitHook) (EvolutionCandidateRerunResult, error) {
+	if s.TxStarter == nil {
+		return EvolutionCandidateRerunResult{}, errors.New("evolution candidate processing requires transaction support")
+	}
+	claim, err := s.claimCandidate(ctx, workspaceID, submissionID)
+	if err != nil {
+		return EvolutionCandidateRerunResult{}, err
+	}
+	completed := false
+	defer func() {
+		if !completed {
+			_ = s.releaseCandidate(context.WithoutCancel(ctx), workspaceID, submissionID, claim.Token)
+		}
+	}()
+	input, files := claim.Submission, claim.Files
+
+	var review *EvolutionReviewResult
+	if s.ReviewEnabled && rejectEvolutionSubmissionReason(input, files) == "" && evolutionDedupeHash(input) != "" {
+		computed, reviewErr := s.Reviewer.Review(ctx, evolutionReviewInput(input, files))
+		if reviewErr != nil {
+			computed = EvolutionReviewResult{
+				Decision:   EvolutionReviewNeedsReview,
+				Confidence: 0,
+				RiskLevel:  EvolutionReviewRiskMedium,
+				Rationale:  "reviewer error",
+				Metadata:   map[string]any{"failure_kind": "reviewer_error", "failure_reason": reviewErr.Error()},
+			}
+		}
+		review = &computed
+	}
+
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return EvolutionCandidateRerunResult{}, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := s.Queries.WithTx(tx)
+	current, err := qtx.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID})
+	if err != nil {
+		return EvolutionCandidateRerunResult{}, err
+	}
+	if current.Status != "clustered" || candidateClaimToken(current) != uuidString(claim.Token) || evolutionCandidateInputVersion(current) != evolutionCandidateInputVersion(input) {
+		return EvolutionCandidateRerunResult{}, ErrEvolutionCandidateChanged
+	}
+	unit, status, err := (&EvolutionService{Queries: qtx, Reviewer: s.Reviewer, ReviewEnabled: s.ReviewEnabled}).curateClaimedSubmission(ctx, current, files, review)
+	if err != nil {
+		return EvolutionCandidateRerunResult{}, err
+	}
+	result := EvolutionCandidateRerunResult{Status: string(status)}
+	if status == evolutionCurationPromoted {
+		result.UnitID = unit.ID
+		result.Matched, err = (&EvolutionService{Queries: qtx}).finalizePromotedSubmission(ctx, current, unit)
+		if err != nil {
+			return EvolutionCandidateRerunResult{}, err
+		}
+	}
+	if hook != nil {
+		if err := hook(ctx, tx, result); err != nil {
+			return EvolutionCandidateRerunResult{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return EvolutionCandidateRerunResult{}, err
+	}
+	completed = true
+	return result, nil
+}
+
+func (s *EvolutionService) claimCandidate(ctx context.Context, workspaceID, submissionID pgtype.UUID) (claimedEvolutionCandidate, error) {
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return claimedEvolutionCandidate{}, err
+	}
+	defer tx.Rollback(ctx)
+	qtx := s.Queries.WithTx(tx)
+	claimToken := pgtype.UUID{Bytes: uuid.New(), Valid: true}
+	submission, err := qtx.ClaimEvolutionCandidate(ctx, db.ClaimEvolutionCandidateParams{ID: submissionID, WorkspaceID: workspaceID, ClaimToken: claimToken})
+	if errors.Is(err, pgx.ErrNoRows) {
+		current, loadErr := qtx.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID})
+		if loadErr != nil {
+			return claimedEvolutionCandidate{}, loadErr
+		}
+		if current.Status == "clustered" {
+			return claimedEvolutionCandidate{}, ErrEvolutionCandidateClaimed
+		}
+		return claimedEvolutionCandidate{}, ErrEvolutionSubmissionNotCandidate
+	}
+	if err != nil {
+		return claimedEvolutionCandidate{}, err
+	}
+	files, err := qtx.ListEvolutionSubmissionFiles(ctx, db.ListEvolutionSubmissionFilesParams{WorkspaceID: workspaceID, SubmissionID: submissionID})
+	if err != nil {
+		return claimedEvolutionCandidate{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return claimedEvolutionCandidate{}, err
+	}
+	return claimedEvolutionCandidate{Submission: submission, Files: files, Token: claimToken}, nil
+}
+
+func (s *EvolutionService) releaseCandidate(ctx context.Context, workspaceID, submissionID, claimToken pgtype.UUID) error {
+	return s.Queries.ReleaseEvolutionCandidate(ctx, db.ReleaseEvolutionCandidateParams{ID: submissionID, WorkspaceID: workspaceID, ClaimToken: uuidString(claimToken)})
+}
+
+func candidateClaimToken(submission db.EvolutionUnitSubmission) string {
+	var metadata struct {
+		CandidateClaim struct {
+			Token string `json:"token"`
+		} `json:"candidate_claim"`
+	}
+	_ = json.Unmarshal(submission.ReviewMetadata, &metadata)
+	return metadata.CandidateClaim.Token
+}
+
+func evolutionCandidateInputVersion(submission db.EvolutionUnitSubmission) string {
+	return strings.Join([]string{submission.ContentHash, submission.BundleHash, submission.UnitType, submission.Sensitivity, submission.Confidence, submission.UpdatedAt.Time.UTC().Format(time.RFC3339Nano)}, "\x00")
+}
+
+func (s *EvolutionService) finalizePromotedSubmission(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) (bool, error) {
+	switch {
+	case submission.UnitType == "skill":
+		return s.finalizeSkillPromotion(ctx, submission, unit)
+	case isEvolutionAutoAssignMemoryUnit(submission.UnitType):
+		return true, s.assignEvolutionMemory(ctx, submission)
+	default:
 		return false, nil
 	}
+}
+
+func (s *EvolutionService) finalizeSkillPromotion(ctx context.Context, submission db.EvolutionUnitSubmission, unit db.SharedEvolutionUnit) (bool, error) {
 	files, err := s.Queries.ListEvolutionSubmissionFiles(ctx, db.ListEvolutionSubmissionFilesParams{
 		WorkspaceID:  submission.WorkspaceID,
 		SubmissionID: submission.ID,
@@ -143,6 +314,19 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 	if err != nil {
 		return db.SharedEvolutionUnit{}, evolutionCurationSkipped, err
 	}
+	// Source-governed skill candidates must reach human review without invoking the reviewer.
+	if reason := rejectEvolutionSubmissionReason(submission, files); reason != "" || evolutionDedupeHash(submission) == "" || evolutionSubmissionRequiresHumanReview(submission) || !s.ReviewEnabled {
+		return s.curateClaimedSubmission(ctx, submission, files, nil)
+	}
+	review, err := s.Reviewer.Review(ctx, evolutionReviewInput(submission, files))
+	if err != nil {
+		_, markErr := s.markSubmissionNeedsReviewForReviewerError(ctx, submission, err)
+		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, markErr
+	}
+	return s.curateClaimedSubmission(ctx, submission, files, &review)
+}
+
+func (s *EvolutionService) curateClaimedSubmission(ctx context.Context, submission db.EvolutionUnitSubmission, files []db.EvolutionUnitSubmissionFile, review *EvolutionReviewResult) (db.SharedEvolutionUnit, evolutionCurationStatus, error) {
 	if reason := rejectEvolutionSubmissionReason(submission, files); reason != "" {
 		_, err := s.rejectSubmissionWithReview(ctx, submission, reason, "high")
 		return db.SharedEvolutionUnit{}, evolutionCurationRejected, err
@@ -151,10 +335,9 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 		_, err := s.rejectSubmissionWithReview(ctx, submission, "missing content hash", "medium")
 		return db.SharedEvolutionUnit{}, evolutionCurationRejected, err
 	}
-
-	if isEvolutionAutoAssignMemoryUnit(submission.UnitType) {
-		status, err := s.curateMemorySubmission(ctx, submission)
-		return db.SharedEvolutionUnit{}, status, err
+	if evolutionSubmissionRequiresHumanReview(submission) {
+		_, err := s.markSubmissionNeedsReview(ctx, submission, "source requires human review")
+		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, err
 	}
 
 	if !s.ReviewEnabled {
@@ -166,31 +349,29 @@ func (s *EvolutionService) curateSubmission(ctx context.Context, submission db.E
 		return s.promoteSubmission(ctx, submission, files, nil)
 	}
 
-	review, err := s.Reviewer.Review(ctx, evolutionReviewInput(submission, files))
-	if err != nil {
-		_, markErr := s.markSubmissionNeedsReviewForReviewerError(ctx, submission, err)
-		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, markErr
+	if review == nil {
+		return db.SharedEvolutionUnit{}, evolutionCurationSkipped, errors.New("evolution review result is required")
 	}
-	if reason := invalidEvolutionReviewResultReason(review); reason != "" {
-		_, markErr := s.markSubmissionNeedsReviewForInvalidReview(ctx, submission, review, reason)
+	if reason := invalidEvolutionReviewResultReason(*review); reason != "" {
+		_, markErr := s.markSubmissionNeedsReviewForInvalidReview(ctx, submission, *review, reason)
 		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, markErr
 	}
 
 	switch review.Decision {
 	case EvolutionReviewReject:
-		_, err := s.rejectSubmissionWithReviewResult(ctx, submission, review)
+		_, err := s.rejectSubmissionWithReviewResult(ctx, submission, *review)
 		return db.SharedEvolutionUnit{}, evolutionCurationRejected, err
 	case EvolutionReviewNeedsReview:
-		_, err := s.markSubmissionNeedsReviewWithResult(ctx, submission, review, reviewReason(review, "reviewer requested manual review"))
+		_, err := s.markSubmissionNeedsReviewWithResult(ctx, submission, *review, reviewReason(*review, "reviewer requested manual review"))
 		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, err
 	case EvolutionReviewPromote:
 		if review.RiskLevel != EvolutionReviewRiskLow {
-			_, err := s.markSubmissionNeedsReviewWithResult(ctx, submission, review, reviewReason(review, "reviewer promotion requires manual review due to risk level"))
+			_, err := s.markSubmissionNeedsReviewWithResult(ctx, submission, *review, reviewReason(*review, "reviewer promotion requires manual review due to risk level"))
 			return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, err
 		}
-		return s.promoteSubmission(ctx, submission, files, &review)
+		return s.promoteSubmission(ctx, submission, files, review)
 	default:
-		_, err := s.markSubmissionNeedsReviewForInvalidReview(ctx, submission, review, "unknown review decision")
+		_, err := s.markSubmissionNeedsReviewForInvalidReview(ctx, submission, *review, "unknown review decision")
 		return db.SharedEvolutionUnit{}, evolutionCurationNeedsReview, err
 	}
 }
@@ -201,14 +382,32 @@ type PromoteSubmissionReviewOptions struct {
 }
 
 func (s *EvolutionService) PromoteSubmissionFromReview(ctx context.Context, workspaceID, submissionID pgtype.UUID, opts PromoteSubmissionReviewOptions) (db.SharedEvolutionUnit, error) {
-	submission, err := s.Queries.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID})
+	if s.TxStarter == nil {
+		return db.SharedEvolutionUnit{}, errors.New("evolution review transaction starter is required")
+	}
+	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
 		return db.SharedEvolutionUnit{}, err
 	}
-	if submission.Status != "needs_review" {
+	defer tx.Rollback(ctx)
+	qtx := s.Queries.WithTx(tx)
+	txService := *s
+	txService.Queries = qtx
+	txService.TxStarter = nil
+
+	submission, err := qtx.GetEvolutionSubmissionForReview(ctx, db.GetEvolutionSubmissionForReviewParams{ID: submissionID, WorkspaceID: workspaceID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, lookupErr := qtx.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID}); errors.Is(lookupErr, pgx.ErrNoRows) {
+			return db.SharedEvolutionUnit{}, pgx.ErrNoRows
+		} else if lookupErr != nil {
+			return db.SharedEvolutionUnit{}, lookupErr
+		}
 		return db.SharedEvolutionUnit{}, ErrEvolutionSubmissionNotReviewable
 	}
-	files, err := s.Queries.ListEvolutionSubmissionFiles(ctx, db.ListEvolutionSubmissionFilesParams{WorkspaceID: workspaceID, SubmissionID: submissionID})
+	if err != nil {
+		return db.SharedEvolutionUnit{}, err
+	}
+	files, err := qtx.ListEvolutionSubmissionFiles(ctx, db.ListEvolutionSubmissionFilesParams{WorkspaceID: workspaceID, SubmissionID: submissionID})
 	if err != nil {
 		return db.SharedEvolutionUnit{}, err
 	}
@@ -220,26 +419,64 @@ func (s *EvolutionService) PromoteSubmissionFromReview(ctx context.Context, work
 			review.Metadata["applied_review_suggestions"] = true
 		}
 	}
-	unit, _, err := s.promoteSubmission(ctx, submission, files, &review)
+	if err := acquireEvolutionPromotionLock(ctx, tx, submission); err != nil {
+		return db.SharedEvolutionUnit{}, err
+	}
+	unit, _, err := txService.promoteSubmission(ctx, submission, files, &review)
 	if err != nil {
 		return db.SharedEvolutionUnit{}, err
 	}
-	if _, err := s.finalizeSkillPromotion(ctx, submission, unit); err != nil {
+	if _, err := txService.finalizePromotedSubmission(ctx, submission, unit); err != nil {
+		return db.SharedEvolutionUnit{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return db.SharedEvolutionUnit{}, err
 	}
 	return unit, nil
 }
 
+func acquireEvolutionPromotionLock(ctx context.Context, tx pgx.Tx, submission db.EvolutionUnitSubmission) error {
+	key := uuidString(submission.WorkspaceID) + ":" + submission.UnitType + ":" + evolutionDedupeHash(submission)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
+		return fmt.Errorf("acquire evolution promotion lock: %w", err)
+	}
+	return nil
+}
+
 func (s *EvolutionService) RejectSubmissionFromReview(ctx context.Context, workspaceID, submissionID pgtype.UUID, reason string) (db.EvolutionUnitSubmission, error) {
-	submission, err := s.Queries.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID})
+	if s.TxStarter == nil {
+		return db.EvolutionUnitSubmission{}, errors.New("evolution review transaction starter is required")
+	}
+	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
 		return db.EvolutionUnitSubmission{}, err
 	}
-	if submission.Status != "needs_review" {
+	defer tx.Rollback(ctx)
+	qtx := s.Queries.WithTx(tx)
+	submission, err := qtx.GetEvolutionSubmissionForReview(ctx, db.GetEvolutionSubmissionForReviewParams{ID: submissionID, WorkspaceID: workspaceID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, lookupErr := qtx.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID}); errors.Is(lookupErr, pgx.ErrNoRows) {
+			return db.EvolutionUnitSubmission{}, pgx.ErrNoRows
+		} else if lookupErr != nil {
+			return db.EvolutionUnitSubmission{}, lookupErr
+		}
 		return db.EvolutionUnitSubmission{}, ErrEvolutionSubmissionNotReviewable
 	}
+	if err != nil {
+		return db.EvolutionUnitSubmission{}, err
+	}
 	review := humanEvolutionReviewResult(EvolutionReviewReject, reason)
-	return s.rejectSubmissionWithReviewResult(ctx, submission, review)
+	updated, err := (&EvolutionService{Queries: qtx}).rejectSubmissionWithReviewResult(ctx, submission, review)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.EvolutionUnitSubmission{}, ErrEvolutionSubmissionNotReviewable
+	}
+	if err != nil {
+		return db.EvolutionUnitSubmission{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.EvolutionUnitSubmission{}, err
+	}
+	return updated, nil
 }
 
 func (s *EvolutionService) promoteSubmission(ctx context.Context, submission db.EvolutionUnitSubmission, files []db.EvolutionUnitSubmissionFile, review *EvolutionReviewResult) (db.SharedEvolutionUnit, evolutionCurationStatus, error) {
@@ -276,6 +513,15 @@ func (s *EvolutionService) promoteSubmission(ctx context.Context, submission db.
 	}
 
 	metadata := promotionMetadata(submission, dedupeHash, review)
+	versionMetadata := metadataWithEvolutionMatcherSnapshot(metadata, EvolutionMatcherSnapshot{
+		CanonicalSummary: submission.Summary,
+		Tags:             submission.Tags,
+		Tools:            submission.Tools,
+		TaskTypes:        submission.TaskTypes,
+		ProjectTypes:     submission.ProjectTypes,
+		Languages:        submission.Languages,
+		Frameworks:       submission.Frameworks,
+	})
 	unit, err := s.Queries.CreateSharedEvolutionUnit(ctx, db.CreateSharedEvolutionUnitParams{
 		WorkspaceID:      submission.WorkspaceID,
 		UnitType:         submission.UnitType,
@@ -303,7 +549,7 @@ func (s *EvolutionService) promoteSubmission(ctx context.Context, submission db.
 		Version:      1,
 		Title:        submission.Title,
 		Content:      submission.Content,
-		Metadata:     metadata,
+		Metadata:     versionMetadata,
 		Applies:      submission.Applies,
 		SubmissionID: submission.ID,
 		ChangeReason: "initial promotion",
@@ -339,19 +585,52 @@ func (s *EvolutionService) findSemanticDuplicate(ctx context.Context, submission
 		return db.SharedEvolutionUnit{}, false, err
 	}
 	metadata := promotionMetadata(submission, dedupeHash, review)
+	versionMetadata := mergeSemanticDuplicateMetadata(metadataWithEvolutionMatcherSnapshot(metadata, EvolutionMatcherSnapshot{
+		CanonicalSummary: best.CanonicalSummary,
+		Tags:             best.Tags,
+		Tools:            best.Tools,
+		TaskTypes:        best.TaskTypes,
+		ProjectTypes:     best.ProjectTypes,
+		Languages:        best.Languages,
+		Frameworks:       best.Frameworks,
+	}), best, score)
 	version, err := s.Queries.CreateSharedEvolutionUnitVersion(ctx, db.CreateSharedEvolutionUnitVersionParams{
 		WorkspaceID:  submission.WorkspaceID,
 		UnitID:       best.ID,
 		Version:      maxVersion + 1,
 		Title:        best.Title,
 		Content:      best.Content,
-		Metadata:     mergeSemanticDuplicateMetadata(metadata, best, score),
+		Metadata:     versionMetadata,
 		Applies:      best.Applies,
 		SubmissionID: submission.ID,
 		ChangeReason: "semantic duplicate candidate",
 	})
 	if err != nil {
 		return db.SharedEvolutionUnit{}, false, err
+	}
+	if best.CurrentVersionID.Valid {
+		currentFiles, err := s.Queries.ListSharedEvolutionUnitFiles(ctx, db.ListSharedEvolutionUnitFilesParams{
+			WorkspaceID: submission.WorkspaceID,
+			UnitID:      best.ID,
+			VersionID:   best.CurrentVersionID,
+		})
+		if err != nil {
+			return db.SharedEvolutionUnit{}, false, err
+		}
+		for _, file := range currentFiles {
+			if _, err := s.Queries.UpsertSharedEvolutionUnitFile(ctx, db.UpsertSharedEvolutionUnitFileParams{
+				WorkspaceID: submission.WorkspaceID,
+				UnitID:      best.ID,
+				VersionID:   version.ID,
+				Path:        file.Path,
+				Content:     file.Content,
+				ContentHash: file.ContentHash,
+				MimeType:    file.MimeType,
+				SizeBytes:   file.SizeBytes,
+			}); err != nil {
+				return db.SharedEvolutionUnit{}, false, err
+			}
+		}
 	}
 	unit, err := s.Queries.SetSharedEvolutionUnitCurrentVersion(ctx, db.SetSharedEvolutionUnitCurrentVersionParams{ID: best.ID, WorkspaceID: submission.WorkspaceID, CurrentVersionID: version.ID})
 	if err != nil {
@@ -477,6 +756,16 @@ func promotionMetadata(submission db.EvolutionUnitSubmission, dedupeHash string,
 	}
 	encoded, _ := json.Marshal(metadata)
 	return encoded
+}
+
+func evolutionSubmissionRequiresHumanReview(submission db.EvolutionUnitSubmission) bool {
+	if submission.UnitType != "skill" {
+		return false
+	}
+	var evidence struct {
+		RequiresHumanReview bool `json:"requires_human_review"`
+	}
+	return json.Unmarshal(submission.Evidence, &evidence) == nil && evidence.RequiresHumanReview
 }
 
 func needsReviewReason(submission db.EvolutionUnitSubmission) string {
@@ -997,6 +1286,36 @@ func termSet(values []string) map[string]bool {
 	return out
 }
 
+func metadataWithEvolutionMatcherSnapshot(metadata []byte, snapshot EvolutionMatcherSnapshot) []byte {
+	envelope := map[string]any{}
+	if len(metadata) > 0 {
+		_ = json.Unmarshal(metadata, &envelope)
+	}
+	// Encode empty collections explicitly so rollback can distinguish a valid
+	// empty matcher from a legacy version that has no complete snapshot.
+	if snapshot.Tags == nil {
+		snapshot.Tags = []string{}
+	}
+	if snapshot.Tools == nil {
+		snapshot.Tools = []string{}
+	}
+	if snapshot.TaskTypes == nil {
+		snapshot.TaskTypes = []string{}
+	}
+	if snapshot.ProjectTypes == nil {
+		snapshot.ProjectTypes = []string{}
+	}
+	if snapshot.Languages == nil {
+		snapshot.Languages = []string{}
+	}
+	if snapshot.Frameworks == nil {
+		snapshot.Frameworks = []string{}
+	}
+	envelope[evolutionMatcherSnapshotMetadataKey] = snapshot
+	encoded, _ := json.Marshal(envelope)
+	return encoded
+}
+
 func mergeSemanticDuplicateMetadata(metadata []byte, existing db.SharedEvolutionUnit, score float64) []byte {
 	merged := map[string]any{}
 	if len(metadata) > 0 {
@@ -1332,17 +1651,13 @@ func isEvolutionAutoAssignMemoryUnit(unitType string) bool {
 }
 
 func (s *EvolutionService) curateMemorySubmission(ctx context.Context, submission db.EvolutionUnitSubmission) (evolutionCurationStatus, error) {
-	if err := s.assignEvolutionMemory(ctx, submission); err != nil {
+	unit, status, err := s.promoteSubmission(ctx, submission, nil, nil)
+	if err != nil || status != evolutionCurationPromoted {
+		return status, err
+	}
+	if _, err := s.finalizePromotedSubmission(ctx, submission, unit); err != nil {
 		_, rejErr := s.rejectSubmissionWithReview(ctx, submission, err.Error(), "high")
 		return evolutionCurationRejected, rejErr
-	}
-	_, err := s.Queries.MarkEvolutionSubmissionPromoted(ctx, db.MarkEvolutionSubmissionPromotedParams{
-		ID:             submission.ID,
-		WorkspaceID:    submission.WorkspaceID,
-		PromotedUnitID: pgtype.UUID{},
-	})
-	if err != nil {
-		return evolutionCurationSkipped, err
 	}
 	return evolutionCurationPromoted, nil
 }

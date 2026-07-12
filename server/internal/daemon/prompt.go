@@ -33,6 +33,9 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 	if task.QuickCreatePrompt != "" {
 		return buildQuickCreatePrompt(task)
 	}
+	if task.AgentRadarPrompt != "" {
+		return task.AgentRadarPrompt
+	}
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", task.IssueID)

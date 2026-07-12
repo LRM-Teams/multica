@@ -315,26 +315,27 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 		"## Chat Mode",
 		"task-scoped Multica CLI transport",
 		"Context boundaries:",
-		"Use `multica --help`",
-		"multica message send --message",
-		"multica message send --sticker",
-		"multica message react --message-id",
+		"progressively load exact flags",
+		"Common capability index",
+		"Chat output: use `multica message send`",
+		"--message-stdin",
+		"--sticker",
+		"multica message react",
 		"multica message read",
 		"multica message search",
-		"Issues: list/get/search issues",
-		"multica issue list --mine --output json",
-		"Raft claim-first model",
-		"do not self-approve `in_review -> done`",
-		"add comments with `multica issue comment add`",
-		"Issue metadata: inspect or update issue-specific persistent facts",
+		"Issues/comments: `multica issue list|get|search|comment ...`",
+		"issue list --mine --output json",
+		"must not self-approve `in_review -> done`",
+		"Issue metadata: `multica issue metadata list|set|delete ...`",
 		"multica repo checkout <url>",
-		"multica attachment view --id <id> --output <path>",
+		"multica attachment view <id> --output <path>",
 		"## Repositories",
 		"## Project Context",
 		"## Skills",
 		"$CODEX_HOME/skills/issue-triage/SKILL.md",
 		"## Mention Safety",
 		"After the command succeeds",
+		compactCloseoutStatusInstruction,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("chat brief missing %q\n---\n%s", want, out)
@@ -384,6 +385,11 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 	if !strings.Contains(out, "multica message send") {
 		t.Errorf("directed brief should contain CLI send instruction")
 	}
+	for _, want := range []string{"multica reminder schedule", "future self-wake", "reminder list|snooze|update|cancel"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("directed brief missing reminder capability %q", want)
+		}
+	}
 }
 
 func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
@@ -422,8 +428,10 @@ func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
 		ChatSessionID:                    "chat-1",
+		Directed:                         true,
 		ChatCLITransportUnavailable:      true,
 		Repos:                            []RepoContextForEnv{{URL: "https://github.com/acme/app.git"}},
+		AgentSkills:                      []SkillContextForEnv{{Name: "multica-stickers", Description: "Use for short social chat beats."}},
 		RequestingUserName:               "Frank",
 		RequestingUserProfileDescription: "Product owner",
 	}
@@ -433,10 +441,12 @@ func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
 		"## Chat Mode",
 		"compatibility chat output",
 		"write the visible reply as your final assistant output",
+		"When a sticker or reaction would normally fit, use a short text reply instead",
+		"Producing empty final output is **not** an option",
 		"Do not try to find, install, or discuss chat send/react commands",
 		"never mention compatibility mode, missing tools, tokens, CLI transport, or runtime setup",
-		"Issues: list/get/search issues",
-		"multica issue list --mine --output json",
+		"Issues/comments: `multica issue list|get|search|comment ...`",
+		"issue list --mine --output json",
 		"## Repositories",
 	} {
 		if !strings.Contains(out, want) {
@@ -446,10 +456,16 @@ func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
 
 	for _, banned := range []string{
 		"task-scoped Multica CLI transport for visible chat output",
+		"multica message send",
+		"multica message react",
 		"multica message send --message",
 		"multica message react --message-id",
 		"multica message read",
 		"multica message search",
+		"--sticker",
+		"multica reminder schedule",
+		"multica-stickers",
+		"Use for short social chat beats",
 		"For visible chat replies, run `multica message send`",
 		"After the command succeeds",
 	} {
@@ -463,18 +479,48 @@ func TestIssueRuntimeBriefKeepsIssueWorkflowContract(t *testing.T) {
 	t.Parallel()
 	out := buildMetaSkillContent("claude", TaskContextForEnv{IssueID: "11111111-2222-3333-4444-555555555555"})
 	for _, want := range []string{
+		"## Pinned Rules",
+		"Pinned rules are high-frequency or safety-critical",
 		"## Available Commands",
 		"multica issue comment add",
 		"## Comment Formatting",
 		"## Issue Metadata",
 		"## Sub-issue Creation",
 		"## Mentions",
+		"## Lazy References",
+		"CLI details: inspect `multica ... --help`",
 		"Final results MUST be delivered via `multica issue comment add`",
 		"You are responsible for managing the issue status throughout your work",
+		compactCloseoutStatusInstruction,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("issue brief missing %q", want)
 		}
+	}
+}
+
+func TestCloseoutStatusInstructionStaysCompact(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		ctx  TaskContextForEnv
+	}{
+		{name: "issue", ctx: TaskContextForEnv{IssueID: "11111111-2222-3333-4444-555555555555"}},
+		{name: "chat", ctx: TaskContextForEnv{ChatSessionID: "chat-1"}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := buildMetaSkillContent("codex", tc.ctx)
+			count := strings.Count(out, compactCloseoutStatusInstruction)
+			if count != 1 {
+				t.Fatalf("closeout status instruction count = %d, want 1\n---\n%s", count, out)
+			}
+			if strings.Contains(out, "## Closeout") || strings.Contains(out, "## Handoff") {
+				t.Fatalf("closeout guidance must stay as one compact line, not a new prompt section\n---\n%s", out)
+			}
+		})
 	}
 }
 
@@ -624,6 +670,39 @@ func TestWorkspaceContextRenderedAcrossTaskKinds(t *testing.T) {
 	}
 }
 
+func TestPinnedRulesAndLazyReferencesRenderForChat(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("pi", TaskContextForEnv{
+		ChatSessionID: "chat-1",
+		ProjectID:     "project-1",
+		ProjectTitle:  "Demo Project",
+		ProjectResources: []ProjectResourceForEnv{{
+			ResourceType: "github_repo",
+			ResourceRef:  []byte(`{"url":"https://github.com/LRM-Teams/multica","default_branch_hint":"dev"}`),
+			Label:        "main app",
+		}},
+		AgentSkills: []SkillContextForEnv{{Name: "multica-stickers", Description: "Use for short social chat beats."}},
+	})
+
+	for _, want := range []string{
+		"## Pinned Rules",
+		"Pinned rules are high-frequency or safety-critical",
+		"Treat injected conversation context as scoped to the current DM/channel/thread",
+		"## Project Context",
+		"Pinned project resources (full structured payload is in `.multica/project/resources.json`)",
+		"default branch: `dev`",
+		"## Skills",
+		"## Lazy References",
+		"Chat history: use `multica message read` or `multica message search`",
+		"Project resources: read `.multica/project/resources.json`",
+		"Skills: open the relevant `SKILL.md` only after its name/description matches the task",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("chat brief missing pinned/lazy guidance %q\n---\n%s", want, out)
+		}
+	}
+}
+
 func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
@@ -719,10 +798,11 @@ func TestMetaSkillDocumentsAgentDMToExplicitHumanMember(t *testing.T) {
 	for _, want := range []string{
 		"### Direct messages",
 		"multica dm --to <member-id|user-id|name|display-name|email>",
-		"--message-stdin << 'MULTICAMSG'",
-		"Omit `--to` only when you intentionally want the current task initiator",
-		"task-scoped `MULTICA_TOKEN`",
-		"Agent-to-agent DMs are not supported",
+		"--message-stdin",
+		"omit `--to` only when intentionally DMing the current task initiator",
+		"Human DMs are allowed",
+		"agent-to-agent DMs are not",
+		"multica dm --help",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("runtime brief missing DM guidance %q", want)

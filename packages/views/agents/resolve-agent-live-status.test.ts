@@ -61,16 +61,16 @@ const CHAT = {
       reconnecting: "Reconnecting",
       queued: "Queued",
       waiting_local_directory: "Waiting for local directory",
-      starting_up: "Starting up",
+      starting_up: "Working",
       thinking: "Thinking",
-      typing: "Typing",
+      typing: "Output",
     },
     tools: {
-      running_command: "Running a command",
-      reading_files: "Reading files",
-      searching_code: "Searching the code",
-      making_edits: "Making edits",
-      searching_web: "Searching the web",
+      running_command: "Running command…",
+      reading_files: "Reading file…",
+      searching_code: "Searching code…",
+      making_edits: "Editing file…",
+      searching_web: "Searching web…",
       fallback: "Working",
     },
   },
@@ -151,7 +151,7 @@ describe("resolveAgentLiveStatus", () => {
     expect(view?.textClass).toBe("text-brand");
   });
 
-  it("shows Running a command from the latest tool_use stream event", () => {
+  it("shows Running command from the latest tool_use stream event", () => {
     const view = resolveAgentLiveStatus({
       presence: presence({ availability: "online", workload: "working", runningCount: 1 }),
       activeTask: task({ id: "task-1", status: "running" }),
@@ -162,10 +162,10 @@ describe("resolveAgentLiveStatus", () => {
       tAgents,
       tChat,
     });
-    expect(view?.label).toBe("Running a command");
+    expect(view?.label).toBe("Running command…");
   });
 
-  it("shows Reading files for read tool", () => {
+  it("shows Reading file for read tool", () => {
     const view = resolveAgentLiveStatus({
       presence: presence({ availability: "online", workload: "working", runningCount: 1 }),
       activeTask: task({ id: "task-1", status: "running" }),
@@ -173,10 +173,10 @@ describe("resolveAgentLiveStatus", () => {
       tAgents,
       tChat,
     });
-    expect(view?.label).toBe("Reading files");
+    expect(view?.label).toBe("Reading file…");
   });
 
-  it("shows Typing when the latest stream is text", () => {
+  it("shows Output when the latest stream is text", () => {
     const view = resolveAgentLiveStatus({
       presence: presence({ availability: "online", workload: "working", runningCount: 1 }),
       activeTask: task({ id: "task-1", status: "running" }),
@@ -184,7 +184,7 @@ describe("resolveAgentLiveStatus", () => {
       tAgents,
       tChat,
     });
-    expect(view?.label).toBe("Typing");
+    expect(view?.label).toBe("Output");
   });
 
   it("shows Queued for a queued task while online", () => {
@@ -207,6 +207,6 @@ describe("resolveAgentLiveStatus", () => {
       tChat,
     });
     expect(view?.label).not.toBe("Working");
-    expect(view?.label).toBe("Running a command");
+    expect(view?.label).toBe("Running command…");
   });
 });

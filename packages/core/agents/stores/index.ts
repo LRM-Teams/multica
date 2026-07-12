@@ -7,3 +7,4 @@ export {
   useTranscriptViewStore,
   type TranscriptSortDirection,
 } from "./transcript-view-store";
+export { useAgentPanelStore } from "./panel-store";

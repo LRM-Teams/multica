@@ -41,6 +41,7 @@ func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.
 	if firstBody.Message.Content != content || firstBody.Message.ClientMessageID == nil || *firstBody.Message.ClientMessageID != clientID {
 		t.Fatalf("first message payload mismatch: %+v", firstBody.Message)
 	}
+	assertAgentMessageSentActivityText(t, firstBody.Message.ID, content)
 
 	second := agentTransportSendForTest(t, taskID, agentID, map[string]any{
 		"content":           content,
@@ -59,6 +60,7 @@ func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.
 	if secondBody.Message.ID != firstBody.Message.ID {
 		t.Fatalf("idempotent replay message id=%s, want %s", secondBody.Message.ID, firstBody.Message.ID)
 	}
+	assertAgentMessageSentActivityCount(t, firstBody.Message.ID, 1)
 
 	var messageRows int
 	if err := testPool.QueryRow(ctx, `
@@ -108,6 +110,10 @@ func TestAgentTransportSendMessageStickerOnlyAndWithText(t *testing.T) {
 	if len(stickerOnlyBody.Message.Parts) != 1 || stickerOnlyBody.Message.Parts[0].Type != protocol.MessagePartTypeSticker || stickerOnlyBody.Message.Parts[0].StickerID != "hi" {
 		t.Fatalf("sticker-only parts = %+v, want hi sticker", stickerOnlyBody.Message.Parts)
 	}
+	if stickerOnlyBody.Message.Parts[0].Alt == "" {
+		t.Fatalf("sticker-only alt is empty: %+v", stickerOnlyBody.Message.Parts[0])
+	}
+	assertAgentMessageSentActivityText(t, stickerOnlyBody.Message.ID, stickerOnlyBody.Message.Parts[0].Alt)
 
 	explanation := "这个问题是因为 transport sticker test " + uuid.NewString()
 	combinedID := "transport-combined-" + uuid.NewString()
@@ -192,6 +198,32 @@ func TestAgentTransportSendMessageLinksOwnedAttachmentsOnly(t *testing.T) {
 	if foreignChannelID.Valid || foreignMessageID.Valid {
 		t.Fatalf("foreign attachment got linked: channel_id=%+v message_id=%+v, want both NULL", foreignChannelID, foreignMessageID)
 	}
+}
+
+func TestAgentTransportSendMessageAttachmentOnlyActivityText(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, _ := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	attachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "activity-report.pdf")
+
+	resp := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"attachment_ids":    []string{attachmentID},
+		"client_message_id": "transport-attachment-only-" + uuid.NewString(),
+	})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("attachment-only transport send: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var body AgentTransportSendResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode attachment-only send: %v", err)
+	}
+	if body.Message.Content != "" || len(body.Message.Attachments) != 1 || body.Message.Attachments[0].Filename != "activity-report.pdf" {
+		t.Fatalf("attachment-only message = %+v, want one linked activity-report.pdf attachment and empty content", body.Message)
+	}
+	assertAgentMessageSentActivityText(t, body.Message.ID, "Sent attachment: activity-report.pdf")
 }
 
 func TestAgentTransportSendThreadReplyIDFlattensToRoot(t *testing.T) {
@@ -415,6 +447,53 @@ func TestAgentTransportAutoRetryReassignsPendingWake(t *testing.T) {
 	}
 }
 
+// TestAgentTransportAutoRetryStripsArealProxyFromChildContext verifies D9: a
+// retry child does NOT inherit the parent's areal_proxy RL-session config.
+// CreateRetryTask copies the parent's context verbatim, so the retry path strips
+// areal_proxy (keeping other keys + the chat session_id/work_dir resume pointers)
+// so the child opens a fresh areal session at its own session-open chokepoint.
+func TestAgentTransportAutoRetryStripsArealProxyFromChildContext(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	taskID, _ := createChannelCompletionTask(t, "group")
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_task_queue
+		SET status = 'failed', failure_reason = 'runtime_offline', attempt = 1, max_attempts = 3,
+		    context = '{"areal_proxy":{"session_id":"sess-parent","api_key":"key-parent"},"squad_id":"squad-9"}'::jsonb
+		WHERE id = $1`, taskID); err != nil {
+		t.Fatalf("seed failed parent with areal_proxy context: %v", err)
+	}
+	parent, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(taskID))
+	if err != nil {
+		t.Fatalf("load failed parent task: %v", err)
+	}
+	child, err := testHandler.TaskService.MaybeRetryFailedTask(ctx, parent)
+	if err != nil {
+		t.Fatalf("MaybeRetryFailedTask: %v", err)
+	}
+	if child == nil {
+		t.Fatal("MaybeRetryFailedTask returned nil child")
+	}
+	// Re-fetch: MaybeRetryFailedTask returns the pre-strip in-memory row; the
+	// strip is a DB UPDATE inside createRetryTaskWithPendingWakeTransfer's tx.
+	reloaded, err := testHandler.Queries.GetAgentTask(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("load retry child: %v", err)
+	}
+	var ctxMap map[string]json.RawMessage
+	if err := json.Unmarshal(reloaded.Context, &ctxMap); err != nil {
+		t.Fatalf("unmarshal child context: %v", err)
+	}
+	if _, ok := ctxMap["areal_proxy"]; ok {
+		t.Errorf("retry child inherited areal_proxy (D9 violation); context=%s", string(reloaded.Context))
+	}
+	if _, ok := ctxMap["squad_id"]; !ok {
+		t.Errorf("retry child lost squad_id; want it preserved, context=%s", string(reloaded.Context))
+	}
+}
+
 func TestAgentTransportAutoRetryFailsClosedForSettledPendingWake(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -579,6 +658,41 @@ func assertAgentTransportAuditCount(t *testing.T, taskID, action string, want in
 	}
 	if got != want {
 		t.Fatalf("transport audit %s count=%d, want %d", action, got, want)
+	}
+}
+
+func assertAgentMessageSentActivityText(t *testing.T, messageID, want string) {
+	t.Helper()
+	var got string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT message
+		FROM agent_activity_event
+		WHERE event_type = 'message_sent'
+		  AND details->>'message_id' = $1
+		ORDER BY created_at DESC
+		LIMIT 1`, messageID).Scan(&got); err != nil {
+		t.Fatalf("load message_sent activity for message %s: %v", messageID, err)
+	}
+	if got != want {
+		t.Fatalf("message_sent activity text = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "Agent sent a visible message") {
+		t.Fatalf("message_sent activity leaked legacy machine phrase: %q", got)
+	}
+}
+
+func assertAgentMessageSentActivityCount(t *testing.T, messageID string, want int) {
+	t.Helper()
+	var got int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM agent_activity_event
+		WHERE event_type = 'message_sent'
+		  AND details->>'message_id' = $1`, messageID).Scan(&got); err != nil {
+		t.Fatalf("count message_sent activity for message %s: %v", messageID, err)
+	}
+	if got != want {
+		t.Fatalf("message_sent activity count for message %s = %d, want %d", messageID, got, want)
 	}
 }
 

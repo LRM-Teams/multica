@@ -184,10 +184,10 @@ INSERT INTO agent_task_queue (
 SELECT
     p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
     'queued', p.priority, p.trigger_comment_id, p.trigger_summary, p.context,
-    CASE WHEN p.failure_reason IN ('codex_semantic_inactivity', 'agent_error.context_overflow') THEN NULL ELSE p.session_id END,
-    CASE WHEN p.failure_reason IN ('codex_semantic_inactivity', 'agent_error.context_overflow') THEN NULL ELSE p.work_dir END,
+    CASE WHEN p.failure_reason IN ('codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow') THEN NULL ELSE p.session_id END,
+    CASE WHEN p.failure_reason IN ('codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow') THEN NULL ELSE p.work_dir END,
     p.attempt + 1, p.max_attempts, p.id,
-    COALESCE(p.failure_reason IN ('codex_semantic_inactivity', 'agent_error.context_overflow'), false),
+    COALESCE(p.failure_reason IN ('codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow'), false),
     p.is_leader_task
 FROM agent_task_queue p
 WHERE p.id = $1
@@ -433,7 +433,7 @@ WHERE agent_id = $1 AND issue_id = $2
     OR (status = 'cancelled' AND COALESCE(failure_reason, '') = 'followup_interrupt')
     OR (
       status = 'failed'
-      AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity', 'agent_error.context_overflow')
+      AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow')
       AND NOT (COALESCE(error, '') ILIKE '%400%' AND COALESCE(error, '') ILIKE '%invalid_request_error%')
       AND NOT (COALESCE(error, '') ILIKE '%context window%' OR COALESCE(error, '') ILIKE '%context length%' OR COALESCE(error, '') ILIKE '%context_length_exceeded%' OR COALESCE(error, '') ILIKE '%maximum context%' OR COALESCE(error, '') ILIKE '%prompt is too long%' OR (COALESCE(error, '') ILIKE '%token%' AND COALESCE(error, '') ILIKE '%limit%'))
     )
@@ -484,6 +484,15 @@ SET session_id = COALESCE(sqlc.narg('session_id'), session_id),
     work_dir  = COALESCE(sqlc.narg('work_dir'), work_dir)
 WHERE id = $1 AND status IN ('dispatched', 'running');
 
+-- name: SetTaskParentTaskID :exec
+-- Links a mention-delegated child task to its trained parent (D11 delegation
+-- edge). CreateAgentTask has no parent_task_id parameter, so this post-insert
+-- UPDATE sets it. Used so the delegation edge parent->child can be recorded at
+-- the child's close via SegmentIDForAgentRun(parent_task_id).
+UPDATE agent_task_queue
+SET parent_task_id = $2
+WHERE id = $1;
+
 -- name: MergeTaskArealProxyContext :exec
 -- Merges the training RL proxy config into the task's context JSONB via a
 -- single read-modify-write. COALESCE handles a NULL/empty context; the `||`
@@ -493,6 +502,19 @@ WHERE id = $1 AND status IN ('dispatched', 'running');
 -- runtime/chat session pointer, not the RL session.
 UPDATE agent_task_queue
 SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object('areal_proxy', $2::jsonb)
+WHERE id = $1;
+
+-- name: StripArealProxyFromTaskContext :exec
+-- Removes the areal_proxy sub-object from the task's context JSONB. Used by the
+-- retry path (D9): CreateRetryTask copies the parent's context verbatim, so the
+-- child would inherit the parent's (now-closed) RL session; stripping forces the
+-- child to open a fresh session at its own session-open chokepoint. The `-`
+-- operator drops only areal_proxy, preserving every other top-level key (e.g.
+-- squad_id) and the chat session_id/work_dir resume pointers (separate columns).
+-- No-op when the key is absent. Propagates errors (the strip is load-bearing for
+-- D9, not best-effort).
+UPDATE agent_task_queue
+SET context = COALESCE(context, '{}'::jsonb) - 'areal_proxy'
 WHERE id = $1;
 
 -- name: RecoverOrphanedTasksForRuntime :many
@@ -710,6 +732,15 @@ SELECT atq.* FROM agent_task_queue atq
 JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
   AND atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+  AND (
+    atq.issue_id IS NOT NULL
+    OR atq.chat_session_id IS NOT NULL
+    OR atq.autopilot_run_id IS NOT NULL
+    OR (
+      atq.context->>'type' = 'quick_create'
+      AND atq.context->>'workspace_id' = $1::text
+    )
+  )
 
 UNION ALL
 
@@ -719,6 +750,15 @@ SELECT t.* FROM (
   JOIN agent a ON a.id = atq.agent_id
   WHERE a.workspace_id = $1
     AND atq.status IN ('completed', 'failed')
+    AND (
+      atq.issue_id IS NOT NULL
+      OR atq.chat_session_id IS NOT NULL
+      OR atq.autopilot_run_id IS NOT NULL
+      OR (
+        atq.context->>'type' = 'quick_create'
+        AND atq.context->>'workspace_id' = $1::text
+      )
+    )
   ORDER BY atq.agent_id, atq.completed_at DESC NULLS LAST
 ) t;
 
@@ -741,3 +781,28 @@ SET status = CASE WHEN EXISTS (
     updated_at = now()
 WHERE a.id = $1
 RETURNING *;
+
+-- name: ResetInFlightTaskForResume :one
+-- Re-activates a specific in-flight task for resume-from-checkpoint by
+-- returning it to `queued` so the resumed runtime's claim loop re-claims it.
+-- Only non-terminal (running/dispatched) tasks bound to the given runtime are
+-- eligible; a terminal task or a runtime mismatch returns no rows (caller
+-- treats that as a stale/unresumable trigger). Preserves context/runtime_id/
+-- issue_id/chat_session_id - this is the SAME task row, not a new one.
+UPDATE agent_task_queue
+SET status = 'queued', started_at = NULL, dispatched_at = NULL, updated_at = now()
+WHERE id = @task_id
+  AND runtime_id = @runtime_id
+  AND status IN ('running', 'dispatched')
+RETURNING *;
+
+-- name: ListInFlightTasksForProject :many
+-- Resolves a project's in-flight (running/dispatched) agent tasks for
+-- resume-trigger capture at checkpoint-create time. Joins via issue or
+-- chat_session to the project; project_id is workspace-scoped by nature.
+SELECT atq.* FROM agent_task_queue atq
+LEFT JOIN issue i ON atq.issue_id = i.id
+LEFT JOIN chat_session cs ON atq.chat_session_id = cs.id
+WHERE (i.project_id = @project_id OR cs.project_id = @project_id)
+  AND atq.status IN ('running', 'dispatched')
+ORDER BY atq.created_at ASC;

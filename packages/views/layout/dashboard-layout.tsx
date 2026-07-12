@@ -8,6 +8,7 @@ import { AppSidebar } from "./app-sidebar";
 import { DashboardGuard } from "./dashboard-guard";
 import { NavigationProgress } from "./navigation-progress";
 import { WorkspacePresencePrefetch } from "./workspace-presence-prefetch";
+import { GlobalAgentPanel } from "./global-agent-panel";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -41,6 +42,7 @@ export function DashboardLayout({
           {children}
           <ModalRegistry />
           <SourceBackfillModal />
+          <GlobalAgentPanel />
           {extra}
         </SidebarInset>
       </SidebarProvider>

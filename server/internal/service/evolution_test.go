@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -211,6 +212,8 @@ func (m *evolutionMockDB) Query(_ context.Context, sql string, _ ...interface{})
 			rows = append(rows, evolutionFileValues(file))
 		}
 		return &evolutionMockRows{rows: rows}, nil
+	case strings.Contains(sql, "FROM shared_evolution_unit_file"):
+		return &evolutionMockRows{}, nil
 	case strings.Contains(sql, "FROM shared_evolution_unit"):
 		rows := make([][]any, 0, len(m.activeUnits))
 		for _, unit := range m.activeUnits {
@@ -606,9 +609,35 @@ func TestCurateSubmissionReviewDisabledLowConfidenceNeedsReview(t *testing.T) {
 	}
 }
 
-func TestCurateSubmissionMemoryLowConfidenceAutoPromotes(t *testing.T) {
+func TestCurateSubmissionSourceHumanReviewGateSkipsReviewer(t *testing.T) {
+	for _, reviewEnabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("review_enabled_%t", reviewEnabled), func(t *testing.T) {
+			submission := validSkillSubmission()
+			submission.Evidence = []byte(`{"source":"memory_curation_l3_reviewer","requires_human_review":true}`)
+			reviewer := &fakeEvolutionReviewer{result: promoteLowRiskReview()}
+			mock := newEvolutionMockDB(submission)
+			mock.files = []db.EvolutionUnitSubmissionFile{
+				{Path: "SKILL.md", Content: validSkillMainFile(), MimeType: "text/markdown", SizeBytes: int64(len(validSkillMainFile()))},
+			}
+			service := NewEvolutionServiceWithReviewer(db.New(mock), reviewer, reviewEnabled)
+
+			_, status, err := service.curateSubmission(context.Background(), submission)
+			if err != nil {
+				t.Fatalf("curateSubmission error = %v", err)
+			}
+			if status != evolutionCurationNeedsReview || mock.submission.Status != "needs_review" || mock.submission.ReviewReason != "source requires human review" {
+				t.Fatalf("status/review = %q/%q/%q", status, mock.submission.Status, mock.submission.ReviewReason)
+			}
+			if reviewer.called != 0 {
+				t.Fatalf("reviewer called %d times, want 0", reviewer.called)
+			}
+		})
+	}
+}
+
+func TestCurateSubmissionHumanReviewFlagOnlyGatesSkills(t *testing.T) {
 	submission := validMemorySubmission()
-	submission.Confidence = "low"
+	submission.Evidence = []byte(`{"source":"memory_curation_l3_reviewer","requires_human_review":true}`)
 	mock := newEvolutionMockDB(submission)
 	service := NewEvolutionService(db.New(mock))
 
@@ -621,7 +650,22 @@ func TestCurateSubmissionMemoryLowConfidenceAutoPromotes(t *testing.T) {
 	}
 }
 
-func TestCurateSubmissionMemorySkipsReviewerWhenEnabled(t *testing.T) {
+func TestCurateSubmissionMemoryLowConfidenceNeedsReview(t *testing.T) {
+	submission := validMemorySubmission()
+	submission.Confidence = "low"
+	mock := newEvolutionMockDB(submission)
+	service := NewEvolutionService(db.New(mock))
+
+	_, status, err := service.curateSubmission(context.Background(), submission)
+	if err != nil {
+		t.Fatalf("curateSubmission error = %v", err)
+	}
+	if status != evolutionCurationNeedsReview || mock.submission.Status != "needs_review" {
+		t.Fatalf("status/submission = %q/%q, want needs_review/needs_review", status, mock.submission.Status)
+	}
+}
+
+func TestCurateSubmissionMemoryUsesReviewerWhenEnabled(t *testing.T) {
 	submission := validMemorySubmission()
 	reviewer := &fakeEvolutionReviewer{result: EvolutionReviewResult{Decision: EvolutionReviewReject, Confidence: 0.9, RiskLevel: EvolutionReviewRiskHigh, Rationale: "unsafe"}}
 	mock := newEvolutionMockDB(submission)
@@ -631,11 +675,11 @@ func TestCurateSubmissionMemorySkipsReviewerWhenEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("curateSubmission error = %v", err)
 	}
-	if status != evolutionCurationPromoted || mock.submission.Status != "promoted" {
-		t.Fatalf("status/submission = %q/%q, want promoted/promoted", status, mock.submission.Status)
+	if status != evolutionCurationRejected || mock.submission.Status != "rejected" {
+		t.Fatalf("status/submission = %q/%q, want rejected/rejected", status, mock.submission.Status)
 	}
-	if reviewer.called != 0 {
-		t.Fatalf("reviewer called %d times, want 0 for memory auto-assign", reviewer.called)
+	if reviewer.called != 1 {
+		t.Fatalf("reviewer called %d times, want 1", reviewer.called)
 	}
 }
 

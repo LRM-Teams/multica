@@ -6,6 +6,7 @@ import {
   ChannelCreateErrorBodySchema,
   DuplicateIssueErrorBodySchema,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
+  EMPTY_WORKSPACE_MEMORY_CURATION_STATUS,
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelMessageSearchResponseSchema,
@@ -15,6 +16,7 @@ import {
   EMPTY_AGENT_FILES_RESPONSE,
   EMPTY_USER,
   EvolutionReviewSubmissionListSchema,
+  WorkspaceMemoryCurationStatusSchema,
   ListIssuesResponseSchema,
   RuntimeHourlyActivityListSchema,
   RuntimeUsageByAgentListSchema,
@@ -255,7 +257,42 @@ describe("EvolutionReviewSubmissionListSchema drift", () => {
     const parsed = EvolutionReviewSubmissionListSchema.parse([base]);
     expect(parsed[0]?.tags).toEqual([]);
     expect(parsed[0]?.review_metadata).toEqual({});
+    expect(parsed[0]?.evidence).toEqual({ source: "", source_date: "", evidence_refs: [] });
+    expect(parsed[0]?.applies).toEqual({ scope: "", tags: [], tools: [], task_types: [], project_types: [], languages: [], frameworks: [] });
+    expect(parsed[0]?.materialized_skill).toBeUndefined();
     expect(parsed[0]?.files).toBeUndefined();
+  });
+
+  it("parses evidence and materialized skill details for the review UI", () => {
+    const parsed = EvolutionReviewSubmissionListSchema.parse([
+      {
+        ...base,
+        evidence: { source: "memory_curation_l3", source_date: "2026-07-10", evidence_refs: ["issue"] },
+        applies: { scope: "workspace", languages: ["go"] },
+        materialized_skill: { id: "skill-1", name: "targeted-tests" },
+      },
+    ]);
+    expect(parsed[0]?.evidence).toEqual({ source: "memory_curation_l3", source_date: "2026-07-10", evidence_refs: ["issue"] });
+    expect(parsed[0]?.applies.languages).toEqual(["go"]);
+    expect(parsed[0]?.materialized_skill).toEqual({ id: "skill-1", name: "targeted-tests", description: "" });
+  });
+
+  it("defaults null and wrong-type nested fields without dropping the submission", () => {
+    const parsed = EvolutionReviewSubmissionListSchema.parse([{
+      ...base,
+      evidence: null,
+      applies: "future-shape",
+      tags: null,
+      review_metadata: [],
+      files: "future-shape",
+      materialized_skill: null,
+    }]);
+    expect(parsed[0]?.evidence.evidence_refs).toEqual([]);
+    expect(parsed[0]?.applies.languages).toEqual([]);
+    expect(parsed[0]?.tags).toEqual([]);
+    expect(parsed[0]?.review_metadata).toEqual({});
+    expect(parsed[0]?.files).toBeUndefined();
+    expect(parsed[0]?.materialized_skill).toBeUndefined();
   });
 
   it("keeps unknown enum values as strings instead of failing the whole queue", () => {
@@ -274,6 +311,28 @@ describe("EvolutionReviewSubmissionListSchema drift", () => {
       { endpoint: "GET /api/evolution/submissions" },
     );
     expect(parsed).toBe(EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST);
+  });
+});
+
+describe("WorkspaceMemoryCurationStatusSchema drift", () => {
+  it("defaults missing counters in stage stats", () => {
+    const parsed = WorkspaceMemoryCurationStatusSchema.parse({
+      workspace_id: "ws-1",
+      stages: [{ id: "run-1", stage: "l3_promote", stats: { entries_promoted: 2 } }],
+    });
+    expect(parsed.pending_runs).toBe(0);
+    expect(parsed.stages[0]?.stats.entries_promoted).toBe(2);
+    expect(parsed.stages[0]?.stats.shared_candidates_synced).toBe(0);
+  });
+
+  it("falls back when the stage collection has the wrong type", () => {
+    const parsed = parseWithFallback(
+      { workspace_id: "ws-1", stages: null },
+      WorkspaceMemoryCurationStatusSchema,
+      EMPTY_WORKSPACE_MEMORY_CURATION_STATUS,
+      { endpoint: "GET /api/workspaces/{id}/memory-curation/status" },
+    );
+    expect(parsed).toBe(EMPTY_WORKSPACE_MEMORY_CURATION_STATUS);
   });
 });
 

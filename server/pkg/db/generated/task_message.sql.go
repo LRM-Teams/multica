@@ -12,19 +12,23 @@ import (
 )
 
 const createTaskMessage = `-- name: CreateTaskMessage :one
-INSERT INTO task_message (task_id, seq, type, tool, content, input, output)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, task_id, seq, type, tool, content, input, output, created_at
+INSERT INTO task_message (
+    task_id, seq, type, tool, content, input, output,
+    visibility
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, task_id, seq, type, tool, content, input, output, created_at, visibility
 `
 
 type CreateTaskMessageParams struct {
-	TaskID  pgtype.UUID `json:"task_id"`
-	Seq     int32       `json:"seq"`
-	Type    string      `json:"type"`
-	Tool    pgtype.Text `json:"tool"`
-	Content pgtype.Text `json:"content"`
-	Input   []byte      `json:"input"`
-	Output  pgtype.Text `json:"output"`
+	TaskID     pgtype.UUID `json:"task_id"`
+	Seq        int32       `json:"seq"`
+	Type       string      `json:"type"`
+	Tool       pgtype.Text `json:"tool"`
+	Content    pgtype.Text `json:"content"`
+	Input      []byte      `json:"input"`
+	Output     pgtype.Text `json:"output"`
+	Visibility string      `json:"visibility"`
 }
 
 func (q *Queries) CreateTaskMessage(ctx context.Context, arg CreateTaskMessageParams) (TaskMessage, error) {
@@ -36,6 +40,7 @@ func (q *Queries) CreateTaskMessage(ctx context.Context, arg CreateTaskMessagePa
 		arg.Content,
 		arg.Input,
 		arg.Output,
+		arg.Visibility,
 	)
 	var i TaskMessage
 	err := row.Scan(
@@ -48,6 +53,7 @@ func (q *Queries) CreateTaskMessage(ctx context.Context, arg CreateTaskMessagePa
 		&i.Input,
 		&i.Output,
 		&i.CreatedAt,
+		&i.Visibility,
 	)
 	return i, err
 }
@@ -62,8 +68,25 @@ func (q *Queries) DeleteTaskMessages(ctx context.Context, taskID pgtype.UUID) er
 	return err
 }
 
+const getMaxTaskMessageSeq = `-- name: GetMaxTaskMessageSeq :one
+SELECT COALESCE(MAX(seq), 0)::integer AS max_seq
+FROM task_message
+WHERE task_id::text = $1::text
+`
+
+// Returns the highest task_message.seq for a task, or 0 when none exist. Used by
+// CloseSegmentForEvent to compute the closing segment's end_seq. Both sides are
+// text so the caller passes the text agent_run_id (= task.ID) without UUID
+// parsing; the underlying task_id column is UUID (index not used on this path).
+func (q *Queries) GetMaxTaskMessageSeq(ctx context.Context, dollar_1 string) (int32, error) {
+	row := q.db.QueryRow(ctx, getMaxTaskMessageSeq, dollar_1)
+	var max_seq int32
+	err := row.Scan(&max_seq)
+	return max_seq, err
+}
+
 const listTaskMessages = `-- name: ListTaskMessages :many
-SELECT id, task_id, seq, type, tool, content, input, output, created_at FROM task_message
+SELECT id, task_id, seq, type, tool, content, input, output, created_at, visibility FROM task_message
 WHERE task_id = $1
 ORDER BY seq ASC
 `
@@ -87,6 +110,7 @@ func (q *Queries) ListTaskMessages(ctx context.Context, taskID pgtype.UUID) ([]T
 			&i.Input,
 			&i.Output,
 			&i.CreatedAt,
+			&i.Visibility,
 		); err != nil {
 			return nil, err
 		}
@@ -99,7 +123,7 @@ func (q *Queries) ListTaskMessages(ctx context.Context, taskID pgtype.UUID) ([]T
 }
 
 const listTaskMessagesSince = `-- name: ListTaskMessagesSince :many
-SELECT id, task_id, seq, type, tool, content, input, output, created_at FROM task_message
+SELECT id, task_id, seq, type, tool, content, input, output, created_at, visibility FROM task_message
 WHERE task_id = $1 AND seq > $2
 ORDER BY seq ASC
 `
@@ -128,6 +152,7 @@ func (q *Queries) ListTaskMessagesSince(ctx context.Context, arg ListTaskMessage
 			&i.Input,
 			&i.Output,
 			&i.CreatedAt,
+			&i.Visibility,
 		); err != nil {
 			return nil, err
 		}

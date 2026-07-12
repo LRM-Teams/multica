@@ -20,6 +20,7 @@ import (
 )
 
 const (
+	evolutionReviewPromptVersion         = "evolution-review-v1"
 	defaultEvolutionReviewBaseURL        = "https://api.openai.com/v1"
 	defaultEvolutionReviewTimeoutSeconds = 60
 	maxEvolutionReviewFileBytes          = 8 * 1024
@@ -205,8 +206,9 @@ func (r staticNeedsReviewEvolutionReviewer) Review(context.Context, EvolutionRev
 func (r *AgentEvolutionReviewer) Review(ctx context.Context, input EvolutionReviewInput) (EvolutionReviewResult, error) {
 	payloadBytes, payloadMeta := evolutionReviewPayload(input)
 	metadata := map[string]any{
-		"source":   "agent_reviewer",
-		"provider": r.provider,
+		"source":         "agent_reviewer",
+		"provider":       r.provider,
+		"prompt_version": evolutionReviewPromptVersion,
 	}
 	if r.model != "" {
 		metadata["model"] = r.model
@@ -312,9 +314,10 @@ func (r *OpenAICompatibleEvolutionReviewer) chatCompletionsURL() string {
 
 func (r *OpenAICompatibleEvolutionReviewer) metadata(extra ...map[string]any) map[string]any {
 	metadata := map[string]any{
-		"source":   "llm_reviewer",
-		"provider": r.provider,
-		"model":    r.model,
+		"source":         "llm_reviewer",
+		"provider":       r.provider,
+		"model":          r.model,
+		"prompt_version": evolutionReviewPromptVersion,
 	}
 	for _, item := range extra {
 		for key, value := range item {

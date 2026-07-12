@@ -435,7 +435,7 @@ func taskErrorType(reason string) string {
 	switch reason {
 	case "runtime_offline", "runtime_recovery":
 		return "runtime"
-	case "timeout", "codex_semantic_inactivity":
+	case "timeout", "codex_semantic_inactivity", "grok_first_turn_no_progress":
 		return "timeout"
 	case taskfailure.ReasonAgentContextOverflow.String():
 		return "agent_error"
@@ -612,6 +612,23 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 	// Training session-open chokepoint (spec §4.3): leader @mention delegation
 	// of a teammate — the trained member's task is typically created here.
 	s.tryOpenTrainingSession(ctx, task, issue.ProjectID, "")
+	// Delegation event seam (D11): the trained parent that posted the trigger
+	// comment delegates to this child. Close the parent's segment and link the
+	// child to its parent so the delegation edge is recorded at the child's
+	// close. No-op when there is no trained parent (plain user mention).
+	if parent, ok := s.discoverDelegationParent(ctx, issue.ID, triggerCommentID, task.ID); ok {
+		projectID := util.UUIDToString(issue.ProjectID)
+		if isSquadContextHandoff(parent, isLeader) {
+			s.closeSegmentForSquadContextDelegation(ctx, parent, projectID, s.leanEnvSnapshot(ctx, issue.ProjectID))
+		} else {
+			s.closeSegmentForDelegation(ctx, parent, projectID, s.leanEnvSnapshot(ctx, issue.ProjectID))
+		}
+		if err := s.Queries.SetTaskParentTaskID(ctx, db.SetTaskParentTaskIDParams{ID: task.ID, ParentTaskID: parent.ID}); err != nil {
+			slog.Warn("interaction_dag: set child parent_task_id failed", "child", util.UUIDToString(task.ID), "err", err)
+		} else {
+			task.ParentTaskID = parent.ID
+		}
+	}
 	// See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
 	s.interruptInFlightIssueTasksForFollowup(ctx, task)
@@ -660,6 +677,17 @@ type QuickCreateContext struct {
 
 // QuickCreateContextType marks a task as a quick-create job.
 const QuickCreateContextType = "quick_create"
+
+// AgentRadarContextType marks a task as an agent radar job.
+const AgentRadarContextType = "agent_radar"
+
+// AgentRadarContext is the JSON payload stored on radar tasks. The daemon
+// treats Prompt as the full turn prompt and returns a structured action plan.
+type AgentRadarContext struct {
+	Type       string `json:"type"`
+	RadarRunID string `json:"radar_run_id"`
+	Prompt     string `json:"prompt"`
+}
 
 // EnqueueQuickCreateTask creates a queued task that has no issue / chat /
 // autopilot link — the user's natural-language prompt is stored in the
@@ -753,6 +781,44 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	// cycle. Without this the user perceives "quick create never
 	// triggered" because the modal closes immediately and the task
 	// sits in 'queued' until the next sleepWithContextOrWakeup tick.
+	s.NotifyTaskEnqueued(ctx, task)
+	return task, nil
+}
+
+func (s *TaskService) EnqueueAgentRadarTask(ctx context.Context, agentID pgtype.UUID, radarRunID string, prompt string) (db.AgentTaskQueue, error) {
+	agent, err := s.Queries.GetAgent(ctx, agentID)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
+	}
+	if agent.ArchivedAt.Valid {
+		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
+	}
+	if !agent.RuntimeID.Valid {
+		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
+	}
+	payload := AgentRadarContext{
+		Type:       AgentRadarContextType,
+		RadarRunID: radarRunID,
+		Prompt:     prompt,
+	}
+	contextJSON, err := json.Marshal(payload)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("marshal radar context: %w", err)
+	}
+	task, err := s.Queries.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
+		AgentID:   agentID,
+		RuntimeID: agent.RuntimeID,
+		Priority:  priorityToInt("low"),
+		Context:   contextJSON,
+	})
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("create radar task: %w", err)
+	}
+	slog.Info("agent radar task enqueued",
+		"task_id", util.UUIDToString(task.ID),
+		"agent_id", util.UUIDToString(agentID),
+		"radar_run_id", radarRunID,
+	)
 	s.NotifyTaskEnqueued(ctx, task)
 	return task, nil
 }
@@ -1421,7 +1487,17 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	}
 
 	slog.Info("task completed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
+	s.recordEvolutionSkillOutcome(ctx, task.ID, "success", "success")
 	s.captureTaskCompleted(ctx, task)
+	// Completion/leaf event seam (D11): close this task's segment before
+	// RouteTerminalTrainingTask ends the RL session (CloseSegmentForEvent exports
+	// the just-closed trajectory over the live session). One-segment-per-task;
+	// the delegation edge to the parent is recorded here at the child's close.
+	if task.IssueID.Valid {
+		if issue, err := s.Queries.GetIssue(ctx, task.IssueID); err == nil {
+			s.closeSegmentForTerminal(ctx, task, util.UUIDToString(issue.ProjectID), s.leanEnvSnapshot(ctx, issue.ProjectID))
+		}
+	}
 	s.RouteTerminalTrainingTask(ctx, task)
 
 	// Invariant: every completed issue task must have at least one agent
@@ -1659,6 +1735,7 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 	}
 
 	slog.Warn("task failed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID), "error", errMsg, "failure_reason", failureReason)
+	s.recordEvolutionSkillOutcome(ctx, task.ID, "failure", "failure")
 	s.captureTaskFailed(ctx, task)
 	s.RouteTerminalTrainingTask(ctx, task)
 
@@ -1733,7 +1810,7 @@ func resumeUnsafeFailureReason(reason string) bool {
 	switch reason {
 	// Keep in sync with GetLastTaskSession / GetLastChatTaskSession and
 	// CreateRetryTask's fresh-session CASE WHEN.
-	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", taskfailure.ReasonAgentContextOverflow.String():
+	case "iteration_limit", "agent_fallback_message", "api_invalid_request", "codex_semantic_inactivity", "grok_first_turn_no_progress", taskfailure.ReasonAgentContextOverflow.String():
 		return true
 	default:
 		return false
@@ -1796,6 +1873,11 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 	// Retry creates a fresh queued row, same status transition (∅ → queued)
 	// as EnqueueTaskFor*. Broadcast queued first, then notify the daemon —
 	// see EnqueueTaskForIssue for ordering rationale.
+	// D9: open a FRESH areal RL session for the retry child before announcing it
+	// (mirrors enqueueMentionTask's open->broadcast->notify order). The child's
+	// context was stripped of areal_proxy (Task 6), so maybeOpenTrainingSession's
+	// idempotency guard passes and a new session is opened + mapped (D10).
+	s.openFreshSessionForRetryChild(ctx, child)
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, child)
 	s.NotifyTaskEnqueued(ctx, child)
 
@@ -1808,9 +1890,63 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 	return &child, nil
 }
 
+// openFreshSessionForRetryChild opens a FRESH areal RL session for a retry child
+// before the child is broadcast/announced to the daemon, mirroring
+// enqueueMentionTask's open->broadcast->notify order (D9). Task 6 stripped
+// areal_proxy from the child's context (createRetryTaskWithPendingWakeTransfer),
+// so maybeOpenTrainingSession's idempotency guard passes and a new session is
+// opened + mapped (D10 RecordSessionAgentRun fires for the child's task.ID).
+// The parent's session was already closed by RouteTerminalTrainingTask.
+//
+// Resolution mirrors the other Enqueue* chokepoints (enqueueMentionTask):
+// child.IssueID -> GetIssue -> issue.ProjectID -> GetProject -> proj.EnvID, then
+// tryOpenTrainingSession. tryOpenTrainingSession already gates on s.Training ==
+// nil and logs errors loudly without failing the enqueue, so this helper is
+// best-effort: a resolution miss or session-open error is logged and skipped,
+// never failing the retry.
+func (s *TaskService) openFreshSessionForRetryChild(ctx context.Context, child db.AgentTaskQueue) {
+	if !child.IssueID.Valid {
+		return
+	}
+	issue, err := s.Queries.GetIssue(ctx, child.IssueID)
+	if err != nil {
+		slog.Warn("interaction_dag: retry child session open skipped: issue lookup failed",
+			"child_task_id", util.UUIDToString(child.ID),
+			"issue_id", util.UUIDToString(child.IssueID),
+			"error", err,
+		)
+		return
+	}
+	if !issue.ProjectID.Valid {
+		return
+	}
+	envID := ""
+	if proj, err := s.Queries.GetProject(ctx, issue.ProjectID); err == nil {
+		envID = util.UUIDToString(proj.EnvID)
+	} else {
+		slog.Warn("interaction_dag: retry child session open: project lookup failed",
+			"child_task_id", util.UUIDToString(child.ID),
+			"project_id", util.UUIDToString(issue.ProjectID),
+			"error", err,
+		)
+	}
+	s.tryOpenTrainingSession(ctx, child, issue.ProjectID, envID)
+}
+
 func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context, parentID pgtype.UUID) (db.AgentTaskQueue, error) {
 	if s.TxStarter == nil {
-		return s.Queries.CreateRetryTask(ctx, parentID)
+		child, err := s.Queries.CreateRetryTask(ctx, parentID)
+		if err != nil {
+			return db.AgentTaskQueue{}, fmt.Errorf("create retry task: %w", err)
+		}
+		// D9: CreateRetryTask copies the parent's context verbatim, so the child
+		// would inherit the parent's (now-closed) RL session. Strip areal_proxy so
+		// the child opens a fresh session at its own session-open chokepoint. maybe
+		// OpenTrainingSession re-loads the task from DB, so no in-memory fixup needed.
+		if err := s.Queries.StripArealProxyFromTaskContext(ctx, child.ID); err != nil {
+			return db.AgentTaskQueue{}, fmt.Errorf("strip areal_proxy from retry child: %w", err)
+		}
+		return child, nil
 	}
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
@@ -1822,6 +1958,9 @@ func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context
 	child, err := qtx.CreateRetryTask(ctx, parentID)
 	if err != nil {
 		return db.AgentTaskQueue{}, fmt.Errorf("create retry task: %w", err)
+	}
+	if err := qtx.StripArealProxyFromTaskContext(ctx, child.ID); err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("strip areal_proxy from retry child: %w", err)
 	}
 	if err := transferQueuedPendingWakeTask(ctx, tx, parentID, child.ID); err != nil {
 		return db.AgentTaskQueue{}, err
@@ -2152,8 +2291,24 @@ func (s *TaskService) publishAgentStatus(agent db.Agent) {
 	})
 }
 
-// LoadAgentSkills loads an agent's skills with their files for task execution.
+// LoadAgentSkills loads an agent's skills with their files for non-execution views.
 func (s *TaskService) LoadAgentSkills(ctx context.Context, agentID pgtype.UUID) []AgentSkillData {
+	return s.loadAgentSkills(ctx, agentID, pgtype.UUID{}, pgtype.UUID{})
+}
+
+// LoadAgentSkillsForTask records the exact evolution version injected into a
+// production task. Recording is best-effort so feedback telemetry cannot block a claim.
+func (s *TaskService) LoadAgentSkillsForTask(ctx context.Context, agentID, taskID pgtype.UUID) []AgentSkillData {
+	return s.loadAgentSkills(ctx, agentID, taskID, taskID)
+}
+
+// LoadAgentSkillsForInbox records inbox feedback under the event as a stable
+// execution identifier without violating feedback.task_id's task-queue foreign key.
+func (s *TaskService) LoadAgentSkillsForInbox(ctx context.Context, agentID, inboxEventID pgtype.UUID) []AgentSkillData {
+	return s.loadAgentSkills(ctx, agentID, pgtype.UUID{}, inboxEventID)
+}
+
+func (s *TaskService) loadAgentSkills(ctx context.Context, agentID, taskID, executionID pgtype.UUID) []AgentSkillData {
 	skills, err := s.Queries.ListAgentSkills(ctx, agentID)
 	if err != nil || len(skills) == 0 {
 		return nil
@@ -2172,8 +2327,37 @@ func (s *TaskService) LoadAgentSkills(ctx context.Context, agentID pgtype.UUID) 
 			data.Files = append(data.Files, AgentSkillFileData{Path: f.Path, Content: f.Content})
 		}
 		result = append(result, data)
+		if sk.SourceEvolutionUnitID.Valid && sk.SourceEvolutionUnitVersionID.Valid && executionID.Valid {
+			if err := s.Queries.RecordEvolutionSkillInjection(ctx, db.RecordEvolutionSkillInjectionParams{
+				WorkspaceID: sk.WorkspaceID,
+				AgentID:     agentID,
+				TaskID:      taskID,
+				UnitID:      sk.SourceEvolutionUnitID,
+				VersionID:   sk.SourceEvolutionUnitVersionID,
+				ExecutionID: executionID,
+			}); err != nil {
+				slog.Warn("record evolution skill injection failed", "task_id", util.UUIDToString(taskID), "unit_id", util.UUIDToString(sk.SourceEvolutionUnitID), "error", err)
+			}
+		}
 	}
 	return result
+}
+
+func (s *TaskService) recordEvolutionSkillOutcome(ctx context.Context, taskID pgtype.UUID, event, outcome string) {
+	s.RecordEvolutionSkillOutcome(ctx, taskID, event, outcome)
+}
+
+// RecordEvolutionSkillOutcome attributes an execution result to every
+// evolution-backed skill version captured when that execution was dispatched.
+func (s *TaskService) RecordEvolutionSkillOutcome(ctx context.Context, executionID pgtype.UUID, event, outcome string) {
+	if !executionID.Valid {
+		return
+	}
+	if err := s.Queries.RecordEvolutionSkillOutcome(ctx, db.RecordEvolutionSkillOutcomeParams{
+		Event: event, Outcome: outcome, ExecutionID: executionID,
+	}); err != nil {
+		slog.Warn("record evolution skill outcome failed", "execution_id", util.UUIDToString(executionID), "event", event, "error", err)
+	}
 }
 
 // AgentSkillData represents a skill for task execution responses.

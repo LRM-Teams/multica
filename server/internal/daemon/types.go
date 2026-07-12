@@ -40,9 +40,9 @@ type ProjectResourceData struct {
 // Agent data (name, skills) is populated by the claim endpoint.
 type Task struct {
 	ID          string `json:"id"`
-	AgentID       string `json:"agent_id"`
-	RuntimeID     string `json:"runtime_id"`
-	Priority      int    `json:"priority,omitempty"`
+	AgentID     string `json:"agent_id"`
+	RuntimeID   string `json:"runtime_id"`
+	Priority    int    `json:"priority,omitempty"`
 	IssueID     string `json:"issue_id"`
 	WorkspaceID string `json:"workspace_id"`
 	// WorkspaceContext mirrors workspace.context (the per-workspace system
@@ -84,6 +84,7 @@ type Task struct {
 	QuickCreatePrompt        string                             `json:"quick_create_prompt,omitempty"`         // user's natural-language input for quick-create tasks
 	QuickCreateAttachmentIDs []string                           `json:"quick_create_attachment_ids,omitempty"` // attachments uploaded in the quick-create prompt and bound by issue create
 	QuickCreateSource        *protocol.QuickCreateSourceContext `json:"quick_create_source,omitempty"`         // bounded chat/thread source context for quick-create tasks
+	AgentRadarPrompt         string                             `json:"agent_radar_prompt,omitempty"`          // full prompt for proactive radar tasks
 	SquadID                  string                             `json:"squad_id,omitempty"`                    // when the picker was a squad, the squad's UUID; Agent is still the resolved leader
 	SquadName                string                             `json:"squad_name,omitempty"`                  // display name for the picker squad, used in prompt text
 	ParentIssueID            string                             `json:"parent_issue_id,omitempty"`             // for quick-create tasks opened from "Add sub issue" — UUID of the parent issue the new issue should be filed under
@@ -118,12 +119,28 @@ type Task struct {
 	// the bridge. Nil for non-trained tasks (the vast majority); omitempty so
 	// old servers that never send it are handled transparently.
 	ArealProxy *ArealProxy `json:"areal_proxy,omitempty"`
-	// AuthToken is the task-scoped credential the server mints at claim time.
-	// The daemon injects it into the spawned agent as MULTICA_TOKEN so the
-	// agent never sees the daemon's own (often workspace-owner) credential.
-	// Empty when the server-side runtime has no owning user — the daemon
-	// then falls back to its own token. See MUL-2600.
+	// AuthToken is the bearer token the daemon writes into the spawned agent's
+	// MULTICA_TOKEN_FILE wrapper. Legacy queue runs bind it to a task; legacy
+	// inbox runs bind it to a single delivery. Credential-transport-capable
+	// inbox runs leave this empty so the daemon provisions/reuses a durable
+	// agent credential locally and exposes only a per-run token file copy.
+	// Empty when the server-side runtime has no owning user.
 	AuthToken string `json:"auth_token,omitempty"`
+
+	// InboxEvent is present when this work item came from the raft-like
+	// agent inbox instead of legacy agent_task_queue. Terminal callbacks must
+	// use the inbox lease endpoints and must not call task start/complete/fail.
+	InboxEvent *AgentInboxLease `json:"inbox_event,omitempty"`
+}
+
+type AgentInboxLease struct {
+	ID             string `json:"id"`
+	DeliveryID     string `json:"delivery_id"`
+	LeaseToken     string `json:"lease_token"`
+	LeaseExpiresAt string `json:"lease_expires_at"`
+	SeqTo          int64  `json:"seq_to"`
+	RequiresWake   bool   `json:"requires_wake"`
+	RuntimeID      string `json:"-"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata the daemon

@@ -26,15 +26,13 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 		"do not print no_reply",
 		"directly addresses your agent name",
 		"全体",
-		"Do not stay silent",
 		"runtime brief",
-		"visible message",
 		"reaction",
 		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
 		"short acknowledgement",
 		"respond with a 👋 reaction",
-		"explicitly asks for a sticker",
-		"Do not print JSON envelopes",
+		"use stickers only when explicitly requested",
+		"Never print JSON envelopes",
 		"全体总监以上欢迎一下新同事",
 	} {
 		if !strings.Contains(p, want) {
@@ -44,6 +42,11 @@ func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 	for _, banned := range []string{"multica send", "multica react", "multica message send", "multica message react", "multica message read", "multica message search"} {
 		if strings.Contains(p, banned) {
 			t.Errorf("ambient prompt should not hardcode chat CLI command %q:\n%s", banned, p)
+		}
+	}
+	for _, banned := range []string{"everyone/all agents", "Do not stay silent"} {
+		if strings.Contains(p, banned) {
+			t.Errorf("ambient prompt should not contain old all-agents force-reply rule %q:\n%s", banned, p)
 		}
 	}
 	if strings.Contains(p, "Recent channel messages") {
@@ -66,7 +69,6 @@ func TestBuildChannelAmbientUnreadPromptUsesRuntimeOutputContract(t *testing.T) 
 
 	for _, want := range []string{
 		"runtime brief",
-		"visible message",
 		"reaction",
 		"Reaction target message id: 11111111-1111-1111-1111-111111111111",
 		"Ambient cursor range: seq > 1 and seq <= 2",
@@ -79,6 +81,11 @@ func TestBuildChannelAmbientUnreadPromptUsesRuntimeOutputContract(t *testing.T) 
 	for _, banned := range []string{"multica send", "multica react", "multica message send", "multica message react", "multica message read", "multica message search"} {
 		if strings.Contains(p, banned) {
 			t.Errorf("ambient unread prompt should not hardcode chat CLI command %q:\n%s", banned, p)
+		}
+	}
+	for _, banned := range []string{"everyone/all agents", "Do not stay silent"} {
+		if strings.Contains(p, banned) {
+			t.Errorf("ambient unread prompt should not contain old all-agents force-reply rule %q:\n%s", banned, p)
 		}
 	}
 }
@@ -97,19 +104,22 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 	}
 
 	for _, trigger := range triggers {
-		p := h.buildChannelMentionPrompt(context.Background(), ch, trigger)
+		p := h.buildChannelMentionPrompt(context.Background(), ch, trigger, channelFacilitatorState{})
 		for _, want := range []string{
 			"Multica group chat #产品讨论",
 			"directly addressed to you",
-			"visible result is required for human DMs",
-			"agent-to-agent channel @mention is a weak notification",
-			"finish without a visible reply",
-			"Do not return no_reply",
+			"Human DMs, human @mentions, direct questions",
+			"Agent-to-agent channel @mentions are weak notifications",
+			"finish without visible output",
+			"Never return no_reply",
 			"greeting sticker only",
-			"directly addressed to you (@-mention",
+			"keep them on the main channel instead of starting a thread",
+			"Reserve threads for substantive questions, tasks, investigations, or decisions",
+			"Substantive requests get a helpful answer",
 			"Collaborative discussion rule",
-			"Never @ someone for thanks",
-			"Do not print JSON envelopes",
+			"never for thanks",
+			"requested completion/blocker delivery",
+			"Never print JSON envelopes",
 			"Current message to respond to",
 			trigger.Content,
 		} {
@@ -133,6 +143,175 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 		}
 		if strings.Contains(p, "\"action\"") || strings.Contains(p, "\"parts\"") {
 			t.Errorf("direct mention prompt must not teach JSON action envelopes during transition:\n%s", p)
+		}
+	}
+}
+
+func TestChannelAgentReplyThreadDefaultPolicy(t *testing.T) {
+	group := "group"
+	messageID := "11111111-1111-1111-1111-111111111111"
+	for _, tc := range []struct {
+		name    string
+		kind    string
+		content string
+		want    bool
+	}{
+		{name: "greeting", kind: group, content: "[@Atlas](mention://agent/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa) hi", want: false},
+		{name: "availability check", kind: group, content: "@Atlas 在么", want: false},
+		{name: "acknowledgement", kind: group, content: "@Atlas 收到，谢谢", want: false},
+		{name: "greeting with name", kind: group, content: "@Atlas hi Atlas", want: false},
+		{name: "light factual answer", kind: group, content: "@Atlas 现在是 3 点", want: false},
+		{name: "question", kind: group, content: "@Atlas 登录为什么失败？", want: true},
+		{name: "question after greeting prefix", kind: group, content: "@Atlas hi status ok?", want: true},
+		{name: "task", kind: group, content: "@Atlas 请修复登录问题", want: true},
+		{name: "explicit thread request", kind: group, content: "@Atlas 在线程里给个方案", want: true},
+		{name: "greeting plus task", kind: group, content: "@Atlas hi 请修复登录问题", want: true},
+		{name: "dm", kind: "dm", content: "请修复登录问题", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			trigger := ChannelMessageResponse{ID: messageID, Content: tc.content}
+			if got := shouldDefaultChannelAgentReplyToThread(tc.kind, trigger); got != tc.want {
+				t.Fatalf("shouldDefaultChannelAgentReplyToThread(%q, %q) = %v, want %v", tc.kind, tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestChannelAgentReplyThreadDefaultPolicyUsesStructuredContext(t *testing.T) {
+	group := "group"
+	messageID := "11111111-1111-1111-1111-111111111111"
+	relatedID := "22222222-2222-2222-2222-222222222222"
+	for _, tc := range []struct {
+		name    string
+		trigger ChannelMessageResponse
+	}{
+		{name: "attachment", trigger: ChannelMessageResponse{Attachments: []AttachmentResponse{{ID: relatedID}}}},
+		{name: "reply", trigger: ChannelMessageResponse{ReplyToMessageID: &relatedID}},
+		{name: "quote", trigger: ChannelMessageResponse{QuoteMessageID: &relatedID}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.trigger.ID = messageID
+			tc.trigger.Content = "@Atlas hi"
+			if !shouldDefaultChannelAgentReplyToThread(group, tc.trigger) {
+				t.Fatalf("structured %s context should default to a thread", tc.name)
+			}
+		})
+	}
+}
+
+func TestBuildChannelMentionPromptIncludesFacilitatorState(t *testing.T) {
+	h := &Handler{DB: channelPromptNoopDB{}}
+	ch := ChannelResponse{
+		ID:          "22222222-2222-2222-2222-222222222222",
+		WorkspaceID: "11111111-1111-1111-1111-111111111111",
+		Name:        "产品讨论",
+	}
+	trigger := ChannelMessageResponse{AuthorName: "Frank", Type: "user", Content: "请主持并收敛这个讨论"}
+
+	ownerPrompt := h.buildChannelMentionPrompt(context.Background(), ch, trigger, channelFacilitatorState{
+		Active:                    true,
+		FacilitatorName:           "Atlas",
+		CurrentAgentIsFacilitator: true,
+	})
+	for _, want := range []string{
+		"Facilitator mode is active for you",
+		"2-4 short purposeful follow-ups",
+		"conclusion, a clear owner",
+	} {
+		if !strings.Contains(ownerPrompt, want) {
+			t.Errorf("facilitator owner prompt missing %q:\n%s", want, ownerPrompt)
+		}
+	}
+
+	participantPrompt := h.buildChannelMentionPrompt(context.Background(), ch, ChannelMessageResponse{
+		AuthorName: "Atlas",
+		Type:       "agent",
+		Content:    "请从前端体验角度比较 A 和 B，你推荐哪个？",
+	}, channelFacilitatorState{
+		Active:                         true,
+		FacilitatorName:                "Atlas",
+		CurrentTriggerFromFacilitator:  true,
+		CurrentTriggerIsDirectAgentAsk: true,
+	})
+	for _, want := range []string{
+		"Facilitator request: Atlas",
+		"direct request, not a weak agent-to-agent notification",
+		"Answer once",
+	} {
+		if !strings.Contains(participantPrompt, want) {
+			t.Errorf("facilitator participant prompt missing %q:\n%s", want, participantPrompt)
+		}
+	}
+}
+
+func TestDetectFacilitatorIntentAndConcreteRequest(t *testing.T) {
+	for _, content := range []string{
+		"你来主持这次讨论并收敛方案",
+		"带大家讨论 20 分钟",
+		"Please facilitate this discussion",
+	} {
+		if !detectFacilitatorIntent(content) {
+			t.Errorf("detectFacilitatorIntent(%q) = false", content)
+		}
+	}
+	if detectFacilitatorIntent("帮我修一下登录 bug") {
+		t.Error("ordinary task should not enter facilitator mode")
+	}
+	if !looksLikeConcreteFacilitatorRequest("请从域名可用性筛 3 个，你推荐哪个？") {
+		t.Error("concrete facilitator request was not detected")
+	}
+	if looksLikeConcreteFacilitatorRequest("大家辛苦了") {
+		t.Error("acknowledgement should not become a direct facilitator request")
+	}
+}
+
+func TestBuildChannelMentionPromptIncludesCurrentReplyAndQuoteTargets(t *testing.T) {
+	h := &Handler{DB: channelPromptNoopDB{}}
+	ch := ChannelResponse{
+		ID:          "22222222-2222-2222-2222-222222222222",
+		WorkspaceID: "11111111-1111-1111-1111-111111111111",
+		Name:        "multica-dev",
+	}
+	replyID := "33333333-3333-3333-3333-333333333333"
+	quoteID := "44444444-4444-4444-4444-444444444444"
+	trigger := ChannelMessageResponse{
+		ID:               "55555555-5555-5555-5555-555555555555",
+		AuthorName:       "用户",
+		Type:             "user",
+		Content:          "这条我说了什么",
+		ReplyToMessageID: &replyID,
+		ReplyTo: &ChannelMessageReply{
+			ID:         replyID,
+			Type:       "user",
+			AuthorName: "用户",
+			Content:    "继续",
+			CreatedAt:  "2026-07-09T10:00:00Z",
+		},
+		QuoteMessageID: &quoteID,
+		Quote: &ChannelMessageQuote{
+			MessageID: quoteID,
+			Status:    "active",
+			Snapshot: &ChannelMessageQuoteSnapshot{
+				Type:       "user",
+				AuthorName: "用户",
+				Content:    "继续",
+				CreatedAt:  "2026-07-09T10:00:00Z",
+			},
+		},
+	}
+
+	p := h.buildChannelMentionPrompt(context.Background(), ch, trigger, channelFacilitatorState{})
+	for _, want := range []string{
+		"Direct reply target for the current message:",
+		"Direct quote target for the current message:",
+		"[2026-07-09T10:00:00Z] 用户 (user): 继续",
+		"treat the current message text as the user's question/request",
+		"direct reply/quote target as the referenced message content",
+		"Current message to respond to:",
+		"用户 (user): 这条我说了什么",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("mention prompt missing %q:\n%s", want, p)
 		}
 	}
 }

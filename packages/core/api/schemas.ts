@@ -3,6 +3,7 @@ import type {
   Agent,
   AgentFileContentResponse,
   AgentFilesResponse,
+  ListAgentRadarRunsResponse,
   AgentTemplate,
   AgentTemplateSummary,
   Attachment,
@@ -14,7 +15,9 @@ import type {
   BillingTransactionsPage,
   CancelTaskResponse,
   CreateAgentFromTemplateResponse,
+  EvolutionMetricsResponse,
   EvolutionReviewSubmission,
+  WorkspaceMemoryCurationStatus,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
   GroupedIssuesResponse,
@@ -220,15 +223,50 @@ export const CommentTriggerPreviewSchema = z.object({
   agents: z.array(CommentTriggerPreviewAgentSchema).default([]),
 }).loose();
 
-const EvolutionReviewFileSchema = z.object({
-  id: z.string().default(""),
-  path: z.string().default(""),
-  content: z.string().optional(),
-  content_hash: z.string().default(""),
-  mime_type: z.string().default(""),
-  size_bytes: z.number().default(0),
+const evolutionString = (fallback = "") => z.preprocess(
+  (value) => typeof value === "string" ? value : fallback,
+  z.string(),
+);
+const evolutionStringArray = z.preprocess(
+  (value) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [],
+  z.array(z.string()),
+);
+const evolutionObject = <T extends z.ZodRawShape>(shape: T) => z.preprocess(
+  (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {},
+  z.object(shape).loose(),
+);
+
+const EvolutionReviewFileSchema = evolutionObject({
+  id: evolutionString(),
+  path: evolutionString(),
+  content: evolutionString().optional(),
+  content_hash: evolutionString(),
+  mime_type: evolutionString(),
+  size_bytes: z.preprocess((value) => typeof value === "number" ? value : 0, z.number()),
   created_at: z.string().nullable().optional(),
-}).loose();
+});
+
+const EvolutionMaterializedSkillSchema = evolutionObject({
+  id: z.string(),
+  name: evolutionString(),
+  description: evolutionString(),
+});
+
+const EvolutionReviewEvidenceSchema = evolutionObject({
+  source: evolutionString(),
+  source_date: evolutionString(),
+  evidence_refs: evolutionStringArray,
+});
+
+const EvolutionReviewAppliesSchema = evolutionObject({
+  scope: evolutionString(),
+  tags: evolutionStringArray,
+  tools: evolutionStringArray,
+  task_types: evolutionStringArray,
+  project_types: evolutionStringArray,
+  languages: evolutionStringArray,
+  frameworks: evolutionStringArray,
+});
 
 export const EvolutionReviewSubmissionSchema = z.object({
   id: z.string(),
@@ -246,30 +284,118 @@ export const EvolutionReviewSubmissionSchema = z.object({
   sensitivity: z.string().default(""),
   confidence: z.string().default(""),
   suggested_scope: z.string().default(""),
-  tags: z.array(z.string()).default([]),
-  tools: z.array(z.string()).default([]),
-  task_types: z.array(z.string()).default([]),
-  project_types: z.array(z.string()).default([]),
-  languages: z.array(z.string()).default([]),
-  frameworks: z.array(z.string()).default([]),
+  evidence: EvolutionReviewEvidenceSchema.default({ source: "", source_date: "", evidence_refs: [] }),
+  applies: EvolutionReviewAppliesSchema.default({ scope: "", tags: [], tools: [], task_types: [], project_types: [], languages: [], frameworks: [] }),
+  tags: evolutionStringArray,
+  tools: evolutionStringArray,
+  task_types: evolutionStringArray,
+  project_types: evolutionStringArray,
+  languages: evolutionStringArray,
+  frameworks: evolutionStringArray,
   status: z.string().default("needs_review"),
   reject_reason: z.string().default(""),
   review_decision: z.string().default(""),
   review_confidence: z.number().nullable().optional(),
   review_risk_level: z.string().default(""),
   review_reason: z.string().default(""),
-  review_metadata: z.record(z.string(), z.unknown()).default({}),
+  review_metadata: z.preprocess(
+    (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {},
+    z.record(z.string(), z.unknown()),
+  ),
   reviewed_at: z.string().nullable().optional(),
   promoted_unit_id: z.string().nullable().optional(),
+  materialized_skill: z.preprocess(
+    (value) => value && typeof value === "object" && !Array.isArray(value) ? value : undefined,
+    EvolutionMaterializedSkillSchema.optional(),
+  ),
   source_created_at: z.string().nullable().optional(),
   created_at: z.string().nullable().optional(),
   updated_at: z.string().nullable().optional(),
-  files: z.array(EvolutionReviewFileSchema).optional(),
+  files: z.preprocess(
+    (value) => value == null ? undefined : Array.isArray(value) ? value : undefined,
+    z.array(EvolutionReviewFileSchema).optional(),
+  ),
 }).loose();
 
 export const EvolutionReviewSubmissionListSchema = z.array(EvolutionReviewSubmissionSchema);
 
 export const EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST: EvolutionReviewSubmission[] = [];
+
+const EvolutionUnitMetricSchema = z.object({
+  unit_id: z.string().nullable().optional(),
+  local_unit_id: z.string().default(""),
+  unit_type: z.string().default(""),
+  title: z.string().default(""),
+  injected_count: z.number().default(0),
+  used_count: z.number().default(0),
+  success_count: z.number().default(0),
+  failure_count: z.number().default(0),
+  ignored_count: z.number().default(0),
+  conflict_count: z.number().default(0),
+  success_rate: z.number().default(0),
+  last_used_at: z.string().nullable().optional(),
+}).loose();
+
+export const EvolutionMetricsSchema = z.object({
+  unit_metrics: z.array(EvolutionUnitMetricSchema).default([]),
+}).loose();
+
+export const EMPTY_EVOLUTION_METRICS: EvolutionMetricsResponse = { unit_metrics: [] };
+
+const EMPTY_MEMORY_CURATION_RUN_STATS = {
+  agents_scanned: 0,
+  agents_changed: 0,
+  daily_files_written: 0,
+  review_candidates_added: 0,
+  entries_promoted: 0,
+  shared_candidates_added: 0,
+  shared_candidates_synced: 0,
+  entries_archived: 0,
+  duplicates_merged: 0,
+  conflicts_found: 0,
+  evidence_collected: 0,
+  error_count: 0,
+};
+
+const MemoryCurationRunStatsSchema = z.object({
+  agents_scanned: z.number().default(0),
+  agents_changed: z.number().default(0),
+  daily_files_written: z.number().default(0),
+  review_candidates_added: z.number().default(0),
+  entries_promoted: z.number().default(0),
+  shared_candidates_added: z.number().default(0),
+  shared_candidates_synced: z.number().default(0),
+  entries_archived: z.number().default(0),
+  duplicates_merged: z.number().default(0),
+  conflicts_found: z.number().default(0),
+  evidence_collected: z.number().default(0),
+  error_count: z.number().default(0),
+}).loose();
+
+const MemoryCurationStageStatusSchema = z.object({
+  id: z.string(),
+  stage: z.string().default(""),
+  trigger_kind: z.string().default(""),
+  status: z.string().default(""),
+  stats: MemoryCurationRunStatsSchema.default(EMPTY_MEMORY_CURATION_RUN_STATS),
+  created_at: z.string().default(""),
+  started_at: z.string().nullable().optional(),
+  finished_at: z.string().nullable().optional(),
+}).loose();
+
+export const WorkspaceMemoryCurationStatusSchema = z.object({
+  workspace_id: z.string().default(""),
+  pending_runs: z.number().default(0),
+  failed_runs_24h: z.number().default(0),
+  stages: z.array(MemoryCurationStageStatusSchema).default([]),
+}).loose();
+
+export const EMPTY_WORKSPACE_MEMORY_CURATION_STATUS: WorkspaceMemoryCurationStatus = {
+  workspace_id: "",
+  pending_runs: 0,
+  failed_runs_24h: 0,
+  stages: [],
+};
 
 const ChannelMessageSearchResultSchema = z.object({
   message_id: z.string().default(""),
@@ -738,6 +864,41 @@ export const UpdateAgentFileContentResponseSchema = z.object({
 export const EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE: UpdateAgentFileContentResponse = {
   content_hash: "",
   conflict: false,
+};
+
+const AgentRadarActionSchema = z.object({
+  id: z.string().default(""),
+  type: z.string().default(""),
+  status: z.string().default(""),
+  risk_level: z.string().default("low"),
+  confidence: z.string().default("medium"),
+  dedupe_key: z.string().default(""),
+  reason: z.string().default(""),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+const AgentRadarRunSchema = z.object({
+  id: z.string().default(""),
+  agent_id: z.string().default(""),
+  status: z.string().default(""),
+  trigger_kind: z.string().default(""),
+  trigger_ref: z.string().default(""),
+  context_summary: z.string().default(""),
+  error: z.string().default(""),
+  scheduled_for: z.string().default(""),
+  started_at: z.string().nullable().default(null),
+  finished_at: z.string().nullable().default(null),
+  created_at: z.string().default(""),
+  actions: z.array(AgentRadarActionSchema).default([]),
+}).loose();
+
+export const AgentRadarRunsResponseSchema = z.object({
+  runs: z.array(AgentRadarRunSchema).default([]),
+}).loose();
+
+export const EMPTY_AGENT_RADAR_RUNS_RESPONSE: ListAgentRadarRunsResponse = {
+  runs: [],
 };
 
 const RuntimeHourlyActivitySchema = z.object({

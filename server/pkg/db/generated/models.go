@@ -47,6 +47,76 @@ type Agent struct {
 	DisplayName        string             `json:"display_name"`
 }
 
+type AgentEventDelivery struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	AgentSessionID pgtype.UUID        `json:"agent_session_id"`
+	InboxEventID   pgtype.UUID        `json:"inbox_event_id"`
+	RuntimeID      pgtype.UUID        `json:"runtime_id"`
+	Status         string             `json:"status"`
+	LeaseToken     pgtype.UUID        `json:"lease_token"`
+	LeasedAt       pgtype.Timestamptz `json:"leased_at"`
+	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
+	AckedAt        pgtype.Timestamptz `json:"acked_at"`
+	LastError      pgtype.Text        `json:"last_error"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentInboxEvent struct {
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	AgentSessionID     pgtype.UUID        `json:"agent_session_id"`
+	ConversationID     pgtype.UUID        `json:"conversation_id"`
+	ChannelID          pgtype.UUID        `json:"channel_id"`
+	ChatSessionID      pgtype.UUID        `json:"chat_session_id"`
+	AgentID            pgtype.UUID        `json:"agent_id"`
+	SourceMessageID    pgtype.UUID        `json:"source_message_id"`
+	Reason             string             `json:"reason"`
+	RequiresWake       bool               `json:"requires_wake"`
+	Status             string             `json:"status"`
+	Priority           int32              `json:"priority"`
+	SeqFrom            int64              `json:"seq_from"`
+	SeqTo              int64              `json:"seq_to"`
+	Attempt            int32              `json:"attempt"`
+	LastError          pgtype.Text        `json:"last_error"`
+	ClaimedAt          pgtype.Timestamptz `json:"claimed_at"`
+	AckedAt            pgtype.Timestamptz `json:"acked_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	TerminalOutcome    pgtype.Text        `json:"terminal_outcome"`
+	TerminalDeliveryID pgtype.UUID        `json:"terminal_delivery_id"`
+	Retryable          bool               `json:"retryable"`
+	TerminalAt         pgtype.Timestamptz `json:"terminal_at"`
+}
+
+type AgentInboxToken struct {
+	ID           pgtype.UUID        `json:"id"`
+	TokenHash    string             `json:"token_hash"`
+	InboxEventID pgtype.UUID        `json:"inbox_event_id"`
+	DeliveryID   pgtype.UUID        `json:"delivery_id"`
+	AgentID      pgtype.UUID        `json:"agent_id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type AgentCredential struct {
+	ID          pgtype.UUID        `json:"id"`
+	TokenHash   string             `json:"token_hash"`
+	TokenPrefix string             `json:"token_prefix"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
+	DisabledAt  pgtype.Timestamptz `json:"disabled_at"`
+	LastUsedAt  pgtype.Timestamptz `json:"last_used_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AgentMemory struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
@@ -59,6 +129,47 @@ type AgentMemory struct {
 	CreatedBy   pgtype.UUID        `json:"created_by"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentRadarAction struct {
+	ID          pgtype.UUID        `json:"id"`
+	RadarRunID  pgtype.UUID        `json:"radar_run_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	ActionType  string             `json:"action_type"`
+	Status      string             `json:"status"`
+	RiskLevel   string             `json:"risk_level"`
+	Confidence  string             `json:"confidence"`
+	DedupeKey   string             `json:"dedupe_key"`
+	TargetKind  string             `json:"target_kind"`
+	TargetID    pgtype.UUID        `json:"target_id"`
+	Reason      string             `json:"reason"`
+	Evidence    []byte             `json:"evidence"`
+	Payload     []byte             `json:"payload"`
+	Result      []byte             `json:"result"`
+	Error       string             `json:"error"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentRadarRun struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	AgentID        pgtype.UUID        `json:"agent_id"`
+	RuntimeID      pgtype.UUID        `json:"runtime_id"`
+	TaskID         pgtype.UUID        `json:"task_id"`
+	TriggerKind    string             `json:"trigger_kind"`
+	TriggerRef     string             `json:"trigger_ref"`
+	Status         string             `json:"status"`
+	CooldownKey    string             `json:"cooldown_key"`
+	ContextSummary string             `json:"context_summary"`
+	ActionPlan     []byte             `json:"action_plan"`
+	Error          string             `json:"error"`
+	ScheduledFor   pgtype.Timestamptz `json:"scheduled_for"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type AgentRuntime struct {
@@ -77,6 +188,24 @@ type AgentRuntime struct {
 	OwnerID        pgtype.UUID        `json:"owner_id"`
 	LegacyDaemonID pgtype.Text        `json:"legacy_daemon_id"`
 	Visibility     string             `json:"visibility"`
+}
+
+type AgentSession struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	RuntimeID        pgtype.UUID        `json:"runtime_id"`
+	ConversationID   pgtype.UUID        `json:"conversation_id"`
+	ChannelID        pgtype.UUID        `json:"channel_id"`
+	ChatSessionID    pgtype.UUID        `json:"chat_session_id"`
+	Scope            string             `json:"scope"`
+	Status           string             `json:"status"`
+	LastDrainedSeq   int64              `json:"last_drained_seq"`
+	LastAckedEventID pgtype.UUID        `json:"last_acked_event_id"`
+	LeaseToken       pgtype.UUID        `json:"lease_token"`
+	LeaseExpiresAt   pgtype.Timestamptz `json:"lease_expires_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
 type AgentSharedSkill struct {
@@ -370,6 +499,7 @@ type EnvCheckpoint struct {
 	SaveError      pgtype.Text        `json:"save_error"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	ResumeTrigger  []byte             `json:"resume_trigger"`
 }
 
 type EnvDispatchRequest struct {
@@ -874,15 +1004,16 @@ type SysCronExecution struct {
 }
 
 type TaskMessage struct {
-	ID        pgtype.UUID        `json:"id"`
-	TaskID    pgtype.UUID        `json:"task_id"`
-	Seq       int32              `json:"seq"`
-	Type      string             `json:"type"`
-	Tool      pgtype.Text        `json:"tool"`
-	Content   pgtype.Text        `json:"content"`
-	Input     []byte             `json:"input"`
-	Output    pgtype.Text        `json:"output"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID         pgtype.UUID        `json:"id"`
+	TaskID     pgtype.UUID        `json:"task_id"`
+	Seq        int32              `json:"seq"`
+	Type       string             `json:"type"`
+	Tool       pgtype.Text        `json:"tool"`
+	Content    pgtype.Text        `json:"content"`
+	Input      []byte             `json:"input"`
+	Output     pgtype.Text        `json:"output"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	Visibility string             `json:"visibility"`
 }
 
 type TaskToken struct {

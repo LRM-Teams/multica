@@ -170,6 +170,8 @@ type Daemon struct {
 
 	sharedSkillScanMu    sync.Mutex
 	sharedSkillScanCache map[string]string // scanRoot\x00skillKey -> fingerprint
+	memoryCurationMu     sync.Mutex
+	memoryCurationRuns   map[string]string // workspace\x00stage -> Beijing plan date
 }
 
 // New creates a new Daemon instance.
@@ -196,6 +198,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		reregisterLastCompletedAt: make(map[string]time.Time),
 		cancelPollInterval:        5 * time.Second,
 		sharedSkillScanCache:      make(map[string]string),
+		memoryCurationRuns:        make(map[string]string),
 	}
 	d.runner = taskRunnerFunc(d.runTask)
 	d.runUpdateFn = d.runUpdate
@@ -413,6 +416,7 @@ func (d *Daemon) removeStaleRuntime(runtimeID string) (string, bool) {
 		return "", false
 	}
 	delete(d.runtimeIndex, runtimeID)
+	d.client.ClearRuntimeDaemonToken(runtimeID)
 	d.mu.Unlock()
 
 	d.wsHBMu.Lock()
@@ -473,6 +477,7 @@ func (d *Daemon) reregisterWorkspaceAfterRuntimeGone(ctx context.Context, worksp
 	for _, oldID := range ws.runtimeIDs {
 		if _, kept := newIDSet[oldID]; !kept {
 			delete(d.runtimeIndex, oldID)
+			d.client.ClearRuntimeDaemonToken(oldID)
 		}
 	}
 	for _, rt := range resp.Runtimes {
@@ -673,6 +678,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.autoUpdateLoop(ctx)
 	go d.tokenRenewalLoop(ctx)
 	go d.sharedSkillsSyncLoop(ctx)
+	go d.localMemoryCurationLoop(ctx)
 
 	// Preflight succeeded and the background loops are up: the daemon has
 	// registered its runtimes and can now claim and run tasks. Flip /health
@@ -752,6 +758,45 @@ func (d *Daemon) findRuntime(id string) *Runtime {
 	return nil
 }
 
+func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
+	capabilities := []string{
+		protocol.DaemonCapabilityChannelOutputActions,
+		protocol.DaemonCapabilityAgentCLITransport,
+	}
+	if includeCredentialTransport {
+		capabilities = append(capabilities, protocol.DaemonCapabilityAgentCredentialTransport)
+	}
+	return capabilities
+}
+
+func (d *Daemon) applyRegisterDaemonToken(workspaceID string, resp *RegisterResponse) bool {
+	if resp == nil || resp.DaemonToken == "" || resp.DaemonTokenExpiresAt == "" {
+		return false
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, resp.DaemonTokenExpiresAt)
+	if err != nil {
+		d.logger.Warn("register response carried invalid daemon token expiry", "workspace_id", workspaceID, "error", err)
+		return false
+	}
+	d.client.SetWorkspaceDaemonToken(workspaceID, resp.DaemonToken, expiresAt)
+	for _, rt := range resp.Runtimes {
+		d.client.SetRuntimeDaemonToken(rt.ID, resp.DaemonToken, expiresAt)
+	}
+	d.logger.Debug("daemon token cached for workspace", "workspace_id", workspaceID, "runtimes", len(resp.Runtimes), "expires_at", expiresAt)
+	return true
+}
+
+func (d *Daemon) clearDaemonTokensForWorkspace(workspaceID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.client.ClearWorkspaceDaemonToken(workspaceID)
+	if ws, ok := d.workspaces[workspaceID]; ok {
+		for _, rid := range ws.runtimeIDs {
+			d.client.ClearRuntimeDaemonToken(rid)
+		}
+	}
+}
+
 func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string) (*RegisterResponse, error) {
 	d.logger.Debug("registering runtimes for workspace", "workspace_id", workspaceID, "agent_count", len(d.cfg.Agents))
 	var runtimes []map[string]string
@@ -782,6 +827,7 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		return nil, fmt.Errorf("no agent runtimes could be registered")
 	}
 
+	includeCredentialTransport := d.client.WorkspaceDaemonTokenAvailable(workspaceID, time.Now())
 	req := map[string]any{
 		"workspace_id":      workspaceID,
 		"daemon_id":         d.cfg.DaemonID,
@@ -789,16 +835,37 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"device_name":       d.cfg.DeviceName,
 		"cli_version":       d.cfg.CLIVersion,
 		"launched_by":       d.cfg.LaunchedBy,
-		"capabilities": []string{
-			protocol.DaemonCapabilityChannelOutputActions,
-			protocol.DaemonCapabilityAgentCLITransport,
-		},
-		"runtimes": runtimes,
+		"capabilities":      daemonRegistrationCapabilities(includeCredentialTransport),
+		"runtimes":          runtimes,
 	}
 
-	resp, err := d.client.Register(ctx, req)
+	resp, err := d.client.RegisterForWorkspace(ctx, workspaceID, req)
 	if err != nil {
-		return nil, fmt.Errorf("register runtimes: %w", err)
+		if includeCredentialTransport && isInvalidDaemonTokenError(err) {
+			d.clearDaemonTokensForWorkspace(workspaceID)
+			includeCredentialTransport = false
+			req["capabilities"] = daemonRegistrationCapabilities(false)
+			d.logger.Warn("workspace daemon token rejected during register; retrying with bootstrap token", "workspace_id", workspaceID, "error", err)
+			resp, err = d.client.RegisterForWorkspace(ctx, workspaceID, req)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("register runtimes: %w", err)
+		}
+	}
+	if d.applyRegisterDaemonToken(workspaceID, resp) && !includeCredentialTransport {
+		legacyResp := resp
+		req["capabilities"] = daemonRegistrationCapabilities(true)
+		resp, err = d.client.RegisterForWorkspace(ctx, workspaceID, req)
+		if err != nil {
+			d.client.ClearWorkspaceDaemonToken(workspaceID)
+			for _, rt := range legacyResp.Runtimes {
+				d.client.ClearRuntimeDaemonToken(rt.ID)
+			}
+			d.logger.Warn("daemon-token re-register failed; continuing without credential transport capability", "workspace_id", workspaceID, "error", err)
+			resp = legacyResp
+		} else {
+			d.applyRegisterDaemonToken(workspaceID, resp)
+		}
 	}
 	if len(resp.Runtimes) == 0 {
 		return nil, fmt.Errorf("register runtimes: empty response")
@@ -1209,6 +1276,15 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 			if _, err := d.refreshWorkspaceRepos(ctx, id); err != nil {
 				d.logger.Debug("workspace sync: refresh settings failed", "workspace_id", id, "error", err)
 			}
+			if d.client.WorkspaceDaemonTokenNeedsRefresh(id, time.Now()) {
+				d.logger.Info("workspace daemon token needs refresh; re-registering", "workspace_id", id, "name", name)
+				if err := d.reregisterWorkspaceAfterRuntimeGone(ctx, id); err != nil {
+					d.logger.Warn("daemon token refresh register failed", "workspace_id", id, "error", err)
+					continue
+				}
+				registered++
+				continue
+			}
 			// Only intervene further if the workspace lost all of its
 			// runtimes (most commonly because handleRuntimeGone pruned them
 			// and its inline re-register failed). The pointer is not replaced
@@ -1267,9 +1343,11 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 			if ws, exists := d.workspaces[id]; exists {
 				for _, rid := range ws.runtimeIDs {
 					delete(d.runtimeIndex, rid)
+					d.client.ClearRuntimeDaemonToken(rid)
 				}
 			}
 			delete(d.workspaces, id)
+			d.client.ClearWorkspaceDaemonToken(id)
 			d.mu.Unlock()
 			d.logger.Info("stopped watching workspace", "workspace_id", id)
 			removed++
@@ -2196,7 +2274,7 @@ func (d *Daemon) runRuntimePoller(
 			continue
 		}
 
-		task, err := d.client.ClaimTask(pollerCtx, rid)
+		task, err := d.drainInboxTask(pollerCtx, rid)
 		if err != nil {
 			d.exitClaim()
 			sem <- slot
@@ -2209,12 +2287,34 @@ func (d *Daemon) runRuntimePoller(
 					go d.handleRuntimeGone(rid)
 					return
 				}
-				d.logger.Warn("claim task failed", "runtime_id", rid, "error", err)
+				d.logger.Warn("drain inbox failed", "runtime_id", rid, "error", err)
 			}
 			if err := sleepAfterIdleClaim(); err != nil {
 				return
 			}
 			continue
+		}
+		if task == nil {
+			task, err = d.client.ClaimTask(pollerCtx, rid)
+			if err != nil {
+				d.exitClaim()
+				sem <- slot
+				if pollerCtx.Err() == nil {
+					if isRuntimeNotFoundError(err) {
+						// Server says this runtime is gone — recover and exit
+						// the poller; the runtime-set watcher will tear this
+						// goroutine down via pollerCtx once the workspace is
+						// re-registered with a new runtime ID.
+						go d.handleRuntimeGone(rid)
+						return
+					}
+					d.logger.Warn("claim task failed", "runtime_id", rid, "error", err)
+				}
+				if err := sleepAfterIdleClaim(); err != nil {
+					return
+				}
+				continue
+			}
 		}
 
 		if task == nil {
@@ -2241,6 +2341,48 @@ func (d *Daemon) runRuntimePoller(
 			d.handleTask(parentCtx, t, slot)
 		}(*task, slot)
 		// Loop immediately: more tasks may already be queued for this runtime.
+	}
+}
+
+func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, error) {
+	for {
+		event, err := d.client.DrainAgentInbox(ctx, runtimeID)
+		if err != nil {
+			if isAgentInboxDrainUnsupportedError(err) {
+				d.logger.Debug("agent inbox drain unsupported; falling back to legacy claim", "runtime_id", runtimeID)
+				return nil, nil
+			}
+			return nil, err
+		}
+		if event == nil {
+			return nil, nil
+		}
+		if event.Task == nil {
+			lease := AgentInboxLease{
+				ID:             event.ID,
+				DeliveryID:     event.DeliveryID,
+				LeaseToken:     event.LeaseToken,
+				LeaseExpiresAt: event.LeaseExpiresAt,
+				SeqTo:          event.SeqTo,
+				RequiresWake:   event.RequiresWake,
+				RuntimeID:      runtimeID,
+			}
+			if err := d.client.AckAgentInboxEvent(ctx, lease); err != nil {
+				return nil, err
+			}
+			d.logger.Debug("acked non-runnable inbox event", "runtime_id", runtimeID, "event", shortID(event.ID))
+			continue
+		}
+		event.Task.InboxEvent = &AgentInboxLease{
+			ID:             event.ID,
+			DeliveryID:     event.DeliveryID,
+			LeaseToken:     event.LeaseToken,
+			LeaseExpiresAt: event.LeaseExpiresAt,
+			SeqTo:          event.SeqTo,
+			RequiresWake:   event.RequiresWake,
+			RuntimeID:      runtimeID,
+		}
+		return event.Task, nil
 	}
 }
 
@@ -2400,9 +2542,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		managedPath := filepath.Join(d.cfg.WorkspacesRoot, filepath.FromSlash(task.ManagedWorkdirRelPath))
 		if err := os.MkdirAll(managedPath, 0o755); err != nil {
 			taskLog.Error("provision managed workdir failed", "path", managedPath, "error", err)
-			if failErr := d.client.FailTask(ctx, task.ID, fmt.Sprintf("provision managed workdir: %v", err), "", "", "managed_workdir_error"); failErr != nil {
-				taskLog.Error("fail task after managed workdir error", "error", failErr)
-			}
+			d.reportTaskFailure(ctx, task, fmt.Sprintf("provision managed workdir: %v", err), "", "", "managed_workdir_error", taskLog)
 			return
 		}
 		ref, _ := json.Marshal(map[string]any{
@@ -2473,14 +2613,19 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	if pollInterval == 0 {
 		pollInterval = 5 * time.Second
 	}
-	cancelledByPoll := d.watchTaskCancellation(runCtx, task.ID, pollInterval, taskLog)
-	go func() {
-		select {
-		case <-cancelledByPoll:
-			runCancel()
-		case <-runCtx.Done():
-		}
-	}()
+	var cancelledByPoll <-chan struct{}
+	if !task.isInboxTask() {
+		cancelledByPoll = d.watchTaskCancellation(runCtx, task.ID, pollInterval, taskLog)
+		go func() {
+			select {
+			case <-cancelledByPoll:
+				runCancel()
+			case <-runCtx.Done():
+			}
+		}()
+	} else {
+		d.renewInboxLeaseUntil(runCtx, *task.InboxEvent, pollInterval, taskLog)
+	}
 
 	result, err := d.runner.run(runCtx, task, provider, slot, taskLog)
 
@@ -2489,18 +2634,20 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	// goroutine. Both claude.go and codex.go populate result.Usage even when
 	// runCtx is cancelled, so dropping this on the cancelled path silently
 	// under-reports billing.
-	if len(result.Usage) > 0 {
+	if len(result.Usage) > 0 && !task.isInboxTask() {
 		if usageErr := d.client.ReportTaskUsage(ctx, task.ID, result.Usage); usageErr != nil {
 			taskLog.Warn("report task usage failed", "error", usageErr)
 		}
 	}
 
 	// Check if we were cancelled by the polling goroutine.
-	select {
-	case <-cancelledByPoll:
-		taskLog.Info("task cancelled during execution, discarding result")
-		return
-	default:
+	if cancelledByPoll != nil {
+		select {
+		case <-cancelledByPoll:
+			taskLog.Info("task cancelled during execution, discarding result")
+			return
+		default:
+		}
 	}
 
 	if err != nil {
@@ -2511,25 +2658,27 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		// classifier so the failure_reason column reflects the actual
 		// shape of the failure (provider 5xx, network, process crash,
 		// …) rather than the coarse legacy "agent_error" bucket.
-		if failErr := d.client.FailTask(ctx, task.ID, err.Error(), "", "", taskfailure.Classify(err.Error()).String()); failErr != nil {
-			taskLog.Error("fail task callback failed", "error", failErr)
-		}
+		d.reportTaskFailure(ctx, task, err.Error(), "", "", taskfailure.Classify(err.Error()).String(), taskLog)
 		return
 	}
 
-	_ = d.client.ReportProgress(ctx, task.ID, "Finishing task", 2, 2)
+	if !task.isInboxTask() {
+		_ = d.client.ReportProgress(ctx, task.ID, "Finishing task", 2, 2)
+	}
 
 	// Final pre-completion check: if the server already moved the task to a
 	// terminal state (completed/failed/cancelled) or deleted the row
 	// outright, skip reporting — the complete/fail callbacks would fail
 	// anyway. Reuse shouldInterruptAgent so this guard honors the same
 	// signals as the in-flight watcher.
-	if status, err := d.client.GetTaskStatus(ctx, task.ID); shouldInterruptAgent(status, err) {
-		taskLog.Info("task cancelled during execution, discarding result", "status", status, "error", err)
-		return
+	if !task.isInboxTask() {
+		if status, err := d.client.GetTaskStatus(ctx, task.ID); shouldInterruptAgent(status, err) {
+			taskLog.Info("task cancelled during execution, discarding result", "status", status, "error", err)
+			return
+		}
 	}
 
-	d.reportTaskResult(ctx, task.ID, result, taskLog)
+	d.reportTaskResultForTask(ctx, task, result, taskLog)
 
 	// Write GC metadata after the task finishes so the periodic GC loop
 	// can look up the parent record (issue / chat session / autopilot run /
@@ -2669,6 +2818,26 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 	return release, false
 }
 
+func (d *Daemon) ensureTaskAgentCredential(ctx context.Context, task Task, taskLog *slog.Logger) (string, error) {
+	if strings.TrimSpace(task.WorkspaceID) == "" || strings.TrimSpace(task.RuntimeID) == "" || strings.TrimSpace(task.AgentID) == "" {
+		return "", fmt.Errorf("workspace_id, runtime_id, and agent_id are required")
+	}
+	if cached, ok := readCachedAgentCredential(d.cfg, task.WorkspaceID, task.RuntimeID, task.AgentID, time.Now()); ok {
+		taskLog.Info("agent credential cache hit", "credential_id", shortID(cached.CredentialID), "token_prefix", cached.Prefix)
+		return cached.Token, nil
+	}
+	resp, err := d.client.EnsureAgentCredential(ctx, task.RuntimeID, task.AgentID)
+	if err != nil {
+		return "", fmt.Errorf("ensure daemon agent credential: %w", err)
+	}
+	cached, err := writeCachedAgentCredential(d.cfg, task.WorkspaceID, task.RuntimeID, task.AgentID, *resp, time.Now())
+	if err != nil {
+		return "", err
+	}
+	taskLog.Info("agent credential ensured", "credential_id", shortID(cached.CredentialID), "token_prefix", cached.Prefix)
+	return cached.Token, nil
+}
+
 // reportTaskResult writes the final task disposition back to the server.
 //
 // Fail closed: only an explicit "completed" status is reported as success.
@@ -2680,10 +2849,20 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 // the next chat turn to resume there rather than start over and "forget"
 // the conversation.
 func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result TaskResult, taskLog *slog.Logger) {
+	d.reportTaskResultForTask(ctx, Task{ID: taskID}, result, taskLog)
+}
+
+func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result TaskResult, taskLog *slog.Logger) {
+	taskID := task.ID
 	switch result.Status {
 	case "completed":
 		taskLog.Info("task completed", "status", result.Status)
-		err := d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Target, result.Options, result.Type, result.SessionID, result.WorkDir, result.Parts, result.Reaction)
+		var err error
+		if task.isInboxTask() {
+			err = d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
+		} else {
+			err = d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Target, result.Options, result.Type, result.SessionID, result.WorkDir, result.Parts, result.Reaction)
+		}
 		if err == nil {
 			return
 		}
@@ -2712,9 +2891,7 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 		// which is the canonical replacement for the legacy
 		// "agent_error" coarse bucket.
 		fallbackErrMsg := fmt.Sprintf("complete task failed: %s", err.Error())
-		if failErr := d.client.FailTask(ctx, taskID, fallbackErrMsg, result.SessionID, result.WorkDir, taskfailure.Classify(fallbackErrMsg).String()); failErr != nil {
-			taskLog.Error("fail task fallback also failed", "error", failErr)
-		}
+		d.reportTaskFailure(ctx, task, fallbackErrMsg, result.SessionID, result.WorkDir, taskfailure.Classify(fallbackErrMsg).String(), taskLog)
 	default:
 		failureReason := result.FailureReason
 		if failureReason == "" {
@@ -2735,10 +2912,58 @@ func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result Tas
 			}
 		}
 		taskLog.Info("task did not complete, reporting failure", "status", result.Status, "failure_reason", failureReason)
-		if err := d.client.FailTask(ctx, taskID, result.Comment, result.SessionID, result.WorkDir, failureReason); err != nil {
-			taskLog.Error("report failed task failed", "error", err)
-		}
+		d.reportTaskFailure(ctx, task, result.Comment, result.SessionID, result.WorkDir, failureReason, taskLog)
 	}
+}
+
+func (d *Daemon) renewInboxLeaseUntil(ctx context.Context, lease AgentInboxLease, interval time.Duration, taskLog *slog.Logger) {
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	renew := func() {
+		if err := d.client.RenewAgentInboxEvent(ctx, lease); err != nil {
+			if isTransientError(err) {
+				taskLog.Debug("agent inbox lease renew transient failure", "event", shortID(lease.ID), "error", err)
+			} else {
+				taskLog.Warn("agent inbox lease renew rejected; terminal callback will decide stale vs recoverable", "event", shortID(lease.ID), "error", err)
+			}
+			return
+		}
+		taskLog.Debug("agent inbox lease renewed", "event", shortID(lease.ID))
+	}
+	renew()
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				renew()
+			}
+		}
+	}()
+}
+
+func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessionID, workDir, failureReason string, taskLog *slog.Logger) {
+	if task.isInboxTask() {
+		reasonCode := failureReason
+		if strings.Contains(errMsg, agent.ProviderAuthRequiredMarker) {
+			reasonCode = agent.ProviderAuthRequiredMarker
+		}
+		if err := d.client.FailAgentInboxEvent(ctx, *task.InboxEvent, errMsg, sessionID, workDir, failureReason, reasonCode); err != nil {
+			taskLog.Error("report failed inbox event failed", "error", err)
+		}
+		return
+	}
+	if err := d.client.FailTask(ctx, task.ID, errMsg, sessionID, workDir, failureReason); err != nil {
+		taskLog.Error("report failed task failed", "error", err)
+	}
+}
+
+func (t Task) isInboxTask() bool {
+	return t.InboxEvent != nil && t.InboxEvent.ID != ""
 }
 
 // gcMetaForTask classifies a finished task and produces a GCMeta of the right
@@ -2887,6 +3112,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AutopilotTriggerPayload:          strings.TrimSpace(string(task.AutopilotTriggerPayload)),
 		QuickCreatePrompt:                task.QuickCreatePrompt,
 		QuickCreateSource:                task.QuickCreateSource,
+		AgentRadarPrompt:                 task.AgentRadarPrompt,
 		IsSquadLeader:                    strings.Contains(instructions, "## Squad Operating Protocol"),
 		RequestingUserName:               task.RequestingUserName,
 		RequestingUserProfileDescription: task.RequestingUserProfileDescription,
@@ -2980,17 +3206,32 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// taskfailure.Classify path records the failure with the same
 	// "start task failed: <…>" string and the same failure_reason
 	// taxonomy as before — see MUL-2946 for the classifier contract.
-	if err := d.client.StartTask(ctx, task.ID); err != nil {
-		return TaskResult{}, fmt.Errorf("start task failed: %w", err)
+	if !task.isInboxTask() {
+		if err := d.client.StartTask(ctx, task.ID); err != nil {
+			return TaskResult{}, fmt.Errorf("start task failed: %w", err)
+		}
+		_ = d.client.ReportProgress(ctx, task.ID, fmt.Sprintf("Launching %s", provider), 1, 2)
 	}
-	_ = d.client.ReportProgress(ctx, task.ID, fmt.Sprintf("Launching %s", provider), 1, 2)
 
 	reused := gateResumeToReusedWorkdir(&task, &taskCtx, env.WorkDir, taskLog)
 
-	// Prepare the task-scoped Multica CLI wrapper before injecting the runtime
+	// Prepare the per-run Multica CLI wrapper before injecting the runtime
 	// brief. The brief must only advertise chat CLI transport when the command
-	// will actually exist in this run's PATH with a valid task token.
+	// will actually exist in this run's PATH with a valid bearer token.
 	agentToken := task.AuthToken
+	durableAgentToken := false
+	if task.isInboxTask() && agentToken == "" {
+		token, err := d.ensureTaskAgentCredential(ctx, task, taskLog)
+		if err != nil {
+			return TaskResult{
+				Status:        "failed",
+				Comment:       fmt.Sprintf("credential_unavailable: %s", err.Error()),
+				FailureReason: "credential_unavailable",
+			}, nil
+		}
+		agentToken = token
+		durableAgentToken = true
+	}
 	cliWrapperDir := ""
 	cliTokenFile := ""
 	cliBinDir := ""
@@ -3004,8 +3245,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			cliWrapperDir = wrapperDir
 			cliTokenFile = tokenFile
 			taskLog.Info("agent cli transport prepared", "wrapper_dir", wrapperDir, "token_file", tokenFile)
+			if durableAgentToken {
+				defer func() {
+					if err := os.RemoveAll(wrapperDir); err != nil {
+						taskLog.Warn("agent cli transport cleanup failed", "wrapper_dir", wrapperDir, "error", err)
+					}
+				}()
+			}
 		} else {
-			taskLog.Warn("agent cli transport: no task token available; CLI API calls will require external auth")
+			taskLog.Warn("agent cli transport: no run bearer token available; CLI API calls will require external auth")
 		}
 	} else {
 		taskLog.Warn("agent cli transport: unable to resolve multica executable", "error", err)
@@ -3059,11 +3307,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// daemon-level resources such as GPUs.
 	// The API credential itself is written below into a per-agent/per-run token
 	// file and exposed through a CLI wrapper, not as a raw environment value.
-	// Use only the task-scoped token the server minted at claim time. That
-	// token is bound to (agent, task) and the auth middleware rejects it on
-	// owner-only endpoints (e.g. `/api/agents/{id}/env`), so the agent cannot
-	// use it to read another agent's secrets. Do not fall back to the daemon's
-	// own long-lived credential for agent transport.
+	// Use only the per-run bearer token the server minted at claim/drain time.
+	// Legacy queue runs bind it to (agent, task); inbox runs bind it to
+	// (agent, inbox event, delivery). Auth middleware rejects it on owner-only
+	// endpoints (e.g. `/api/agents/{id}/env`), so the agent cannot use it to
+	// read another agent's secrets. Do not fall back to the daemon's own
+	// long-lived credential for agent transport.
 	agentEnv := map[string]string{
 		"MULTICA_SERVER_URL":      d.cfg.ServerBaseURL,
 		"MULTICA_DAEMON_PORT":     fmt.Sprintf("%d", d.cfg.HealthPort),
@@ -3074,6 +3323,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		"MULTICA_RUN_ID":          task.ID,
 		"MULTICA_WORKSPACES_ROOT": d.cfg.WorkspacesRoot,
 		"MULTICA_TASK_SLOT":       strconv.Itoa(slot),
+	}
+	if task.InboxEvent != nil {
+		agentEnv["MULTICA_AGENT_INBOX_EVENT_ID"] = task.InboxEvent.ID
+		agentEnv["MULTICA_AGENT_INBOX_DELIVERY_ID"] = task.InboxEvent.DeliveryID
+		agentEnv["MULTICA_AGENT_INBOX_LEASE_TOKEN"] = task.InboxEvent.LeaseToken
 	}
 	if task.InitiatorType == "member" {
 		agentEnv["MULTICA_MEMBER_ID"] = task.InitiatorID
@@ -3293,7 +3547,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		"timeout", execOpts.Timeout,
 	)
 
-	result, tools, err := d.executeAndDrain(ctx, backend, prompt, execOpts, taskLog, task.ID)
+	result, tools, err := d.executeAndDrainForTask(ctx, backend, prompt, execOpts, taskLog, task)
 	if err != nil {
 		return TaskResult{}, err
 	}
@@ -3305,7 +3559,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		firstUsage := result.Usage
 		taskLog.Warn("session resume failed, retrying with fresh session", "error", result.Error)
 		execOpts.ResumeSessionID = ""
-		retryResult, retryTools, retryErr := d.executeAndDrain(ctx, backend, prompt, execOpts, taskLog, task.ID)
+		retryResult, retryTools, retryErr := d.executeAndDrainForTask(ctx, backend, prompt, execOpts, taskLog, task)
 		if retryErr != nil {
 			taskLog.Error("fresh session also failed to start", "error", retryErr)
 		} else {
@@ -3476,30 +3730,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// would either be left stale or overwritten with NULL on the
 		// server, causing the next chat turn to lose context.
 		//
-		// Classify upstream API 400 invalid_request_error failures with a
-		// dedicated failure_reason so GetLastTaskSession excludes the
-		// task from the (agent_id, issue_id) resume lookup. Without this
-		// classifier a corrupt image or oversized payload baked into the
-		// conversation permanently blocks the issue: every follow-up
-		// task resumes the same poisoned session and hits the same 400.
-		failureReason, _ := classifyPoisonedError(errMsg)
-		if failureReason != "" {
-			taskLog.Warn("agent failed with poisoned API error, classifying as blocked",
-				"failure_reason", failureReason,
-			)
-		} else {
-			// MUL-2946: classifyPoisonedError only matches the
-			// session-poisoning Anthropic 400 shape. Everything else
-			// falls through to taskfailure.Classify, which maps the
-			// raw error string to one of the 14 agent_error.*
-			// sub-reasons (provider auth, capacity, context overflow,
-			// runner crash, …) or to ReasonAgentUnknown. This keeps
-			// the failure_reason column in the canonical refined
-			// taxonomy at write time instead of waiting on the
-			// MUL-1949 offline backfill to re-classify after the
-			// fact.
-			failureReason = taskfailure.Classify(errMsg).String()
-		}
+		// Classify resume-unsafe no-progress failures and upstream API
+		// 400 invalid_request_error failures with a dedicated
+		// failure_reason so GetLastTaskSession excludes the task from the
+		// (agent_id, issue_id) resume lookup. Without this classifier a
+		// corrupt image, oversized payload, or provider session that never
+		// reaches first-turn progress can permanently block the issue:
+		// every follow-up task resumes the same bad state and hits the
+		// same failure.
+		failureReason := classifyAgentRunFailureReason(provider, errMsg, taskLog)
 		return TaskResult{
 			Status:        "blocked",
 			Comment:       errMsg,
@@ -3512,9 +3751,37 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 }
 
+func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger) string {
+	if failureReason, ok := classifyResumeUnsafeTimeout(provider, errMsg); ok {
+		taskLog.Warn("agent failed with resume-unsafe no-progress error, classifying as blocked",
+			"failure_reason", failureReason,
+		)
+		return failureReason
+	}
+	if failureReason, ok := classifyPoisonedError(errMsg); ok {
+		taskLog.Warn("agent failed with poisoned API error, classifying as blocked",
+			"failure_reason", failureReason,
+		)
+		return failureReason
+	}
+	// MUL-2946: classifyPoisonedError only matches the session-poisoning
+	// Anthropic 400 shape. Everything else falls through to
+	// taskfailure.Classify, which maps the raw error string to one of the
+	// agent_error.* sub-reasons (provider auth, capacity, context overflow,
+	// runner crash, …) or to ReasonAgentUnknown. This keeps failure_reason in
+	// the canonical refined taxonomy at write time instead of waiting on the
+	// MUL-1949 offline backfill to re-classify after the fact.
+	return taskfailure.Classify(errMsg).String()
+}
+
 // executeAndDrain runs a backend, drains its message stream (forwarding to the
 // server), and waits for the final result.
 func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, taskID string) (agent.Result, int32, error) {
+	return d.executeAndDrainForTask(ctx, backend, prompt, opts, taskLog, Task{ID: taskID})
+}
+
+func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, task Task) (agent.Result, int32, error) {
+	taskID := task.ID
 	// Wrap the caller's ctx so the idle watchdog (below) can interrupt both
 	// the agent subprocess (via the ctx passed to backend.Execute) AND the
 	// drain loop with a single cancel. Without this layer the backend would
@@ -3607,10 +3874,16 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 
 			if len(toSend) > 0 {
 				sendCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				if err := d.client.ReportTaskMessages(sendCtx, taskID, toSend); err != nil {
-					taskLog.Debug("failed to report task messages", "error", err)
+				var err error
+				if task.isInboxTask() {
+					err = d.client.ReportAgentInboxMessages(sendCtx, *task.InboxEvent, toSend)
 				} else {
-					taskLog.Debug("reported task messages", "count", len(toSend), "last_seq", toSend[len(toSend)-1].Seq)
+					err = d.client.ReportTaskMessages(sendCtx, taskID, toSend)
+				}
+				if err != nil {
+					taskLog.Debug("failed to report task messages", "inbox_task", task.isInboxTask(), "error", err)
+				} else {
+					taskLog.Debug("reported task messages", "inbox_task", task.isInboxTask(), "count", len(toSend), "last_seq", toSend[len(toSend)-1].Seq)
 				}
 				cancel()
 			}
@@ -3650,7 +3923,7 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 					// reveals them. Without this, a daemon crash mid-run
 					// loses the resume pointer and the auto-retry fires
 					// without context.
-					if msg.SessionID != "" && !sessionPinned.Swap(true) {
+					if msg.SessionID != "" && !task.isInboxTask() && !sessionPinned.Swap(true) {
 						sid := msg.SessionID
 						wd := opts.Cwd
 						go func() {
@@ -3737,6 +4010,18 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 						Content: msg.Content,
 					})
 					mu.Unlock()
+				case agent.MessageLog:
+					if msg.Content != "" {
+						taskLog.Debug("agent log", "level", msg.Level, "content", truncateLog(msg.Content, 200))
+						s := seq.Add(1)
+						mu.Lock()
+						batch = append(batch, TaskMessageData{
+							Seq:     int(s),
+							Type:    "log",
+							Content: msg.Content,
+						})
+						mu.Unlock()
+					}
 				}
 			case <-drainCtx.Done():
 				goto drainDone

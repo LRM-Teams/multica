@@ -239,6 +239,7 @@ type AgentTaskResponse struct {
 	QuickCreatePrompt        string                             `json:"quick_create_prompt,omitempty"`         // user's natural-language input for quick-create tasks
 	QuickCreateAttachmentIDs []string                           `json:"quick_create_attachment_ids,omitempty"` // attachment ids uploaded in the quick-create prompt and bound on issue create
 	QuickCreateSource        *protocol.QuickCreateSourceContext `json:"quick_create_source,omitempty"`         // bounded chat/thread source context for quick-create tasks
+	AgentRadarPrompt         string                             `json:"agent_radar_prompt,omitempty"`          // full prompt for platform-scheduled proactive radar tasks
 	SquadID                  string                             `json:"squad_id,omitempty"`                    // for quick-create tasks where the picker was a squad; Agent is still the resolved leader
 	SquadName                string                             `json:"squad_name,omitempty"`                  // display name for the picker squad
 	ParentIssueID            string                             `json:"parent_issue_id,omitempty"`             // for quick-create tasks opened from "Add sub issue" — UUID of the parent issue the new issue should be filed under
@@ -269,15 +270,20 @@ type AgentTaskResponse struct {
 	InitiatorName  string `json:"initiator_name,omitempty"`  // display name of the initiator
 	InitiatorEmail string `json:"initiator_email,omitempty"` // member email; empty for agent initiators
 	Kind           string `json:"kind"`                      // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
-	// AuthToken is the task-scoped `mat_` token the daemon must inject as
-	// MULTICA_TOKEN in the agent process environment. The server binds it to
-	// this (agent_id, task_id) pair at claim time and treats any request
-	// authenticated with it as actor=agent, regardless of headers — so the
-	// agent process cannot use it to read another agent's secrets via the
-	// env-management endpoint. Empty when the runtime has no owning user
-	// (cloud / system runtimes that pre-date per-task tokens); in that case
-	// the daemon falls back to its own credential. See MUL-2600.
+	// AuthToken is the `mat_` bearer the daemon writes into the per-run
+	// MULTICA_TOKEN_FILE wrapper. Legacy task-queue runs bind it to
+	// (agent_id, task_id); legacy inbox runs bind it to a single delivery.
+	// Credential-transport-capable inbox runs leave this empty so the daemon
+	// provisions/reuses a durable agent credential locally. In all cases,
+	// auth middleware treats requests authenticated with an agent bearer as
+	// actor=agent and owner-only endpoints reject it.
+	// Empty when the runtime has no owning user.
 	AuthToken string `json:"auth_token,omitempty"`
+
+	// InboxEvent is present for raft-like agent inbox deliveries. The daemon
+	// executes the payload like a normal chat task, but reports terminal state
+	// through the inbox lease endpoints instead of legacy agent_task_queue.
+	InboxEvent *AgentInboxLeaseResponse `json:"inbox_event,omitempty"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata embedded in

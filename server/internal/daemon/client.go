@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -66,6 +67,17 @@ func isUnauthorizedError(err error) bool {
 	return reqErr.StatusCode == http.StatusUnauthorized
 }
 
+func isInvalidDaemonTokenError(err error) bool {
+	var reqErr *requestError
+	if !errors.As(err, &reqErr) {
+		return false
+	}
+	if reqErr.StatusCode != http.StatusUnauthorized {
+		return false
+	}
+	return strings.Contains(strings.ToLower(reqErr.Body), "invalid daemon token")
+}
+
 // isRuntimeNotFoundError returns true if the error is a 404 with "runtime not
 // found" body. The daemon uses this to detect that the runtime row was deleted
 // server-side (UI Delete, 7-day offline GC) while the daemon was still
@@ -86,11 +98,26 @@ func isRuntimeNotFoundError(err error) bool {
 	return strings.Contains(strings.ToLower(reqErr.Body), "runtime not found")
 }
 
+func isAgentInboxDrainUnsupportedError(err error) bool {
+	var reqErr *requestError
+	if !errors.As(err, &reqErr) {
+		return false
+	}
+	if reqErr.StatusCode != http.StatusNotFound {
+		return false
+	}
+	return strings.Contains(reqErr.Path, "/agent-inbox/drain") && !isRuntimeNotFoundError(err)
+}
+
 // Client handles HTTP communication with the Multica server daemon API.
 type Client struct {
 	baseURL string
-	token   string
 	client  *http.Client
+
+	tokenMu         sync.RWMutex
+	token           string
+	workspaceTokens map[string]daemonAuthToken
+	runtimeTokens   map[string]daemonAuthToken
 
 	// Identity headers sent on every request as X-Client-*. Populated by
 	// SetIdentity(); empty values are simply omitted.
@@ -102,10 +129,12 @@ type Client struct {
 // NewClient creates a new daemon API client.
 func NewClient(baseURL string) *Client {
 	return &Client{
-		baseURL:  baseURL,
-		client:   &http.Client{Timeout: 30 * time.Second},
-		platform: "daemon",
-		os:       normalizeGOOS(runtime.GOOS),
+		baseURL:         baseURL,
+		client:          &http.Client{Timeout: 30 * time.Second},
+		workspaceTokens: make(map[string]daemonAuthToken),
+		runtimeTokens:   make(map[string]daemonAuthToken),
+		platform:        "daemon",
+		os:              normalizeGOOS(runtime.GOOS),
 	}
 }
 
@@ -145,11 +174,109 @@ func (c *Client) setIdentityHeaders(req *http.Request) {
 
 // SetToken sets the auth token for authenticated requests.
 func (c *Client) SetToken(token string) {
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
 	c.token = token
 }
 
 // Token returns the current auth token.
 func (c *Client) Token() string {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	return c.token
+}
+
+type daemonAuthToken struct {
+	token     string
+	expiresAt time.Time
+}
+
+const daemonAuthTokenRefreshWindow = time.Hour
+
+func (tok daemonAuthToken) available(now time.Time) bool {
+	return tok.token != "" && !tok.expiresAt.IsZero() && now.Before(tok.expiresAt)
+}
+
+func (c *Client) SetWorkspaceDaemonToken(workspaceID, token string, expiresAt time.Time) {
+	if workspaceID == "" || token == "" {
+		return
+	}
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	c.workspaceTokens[workspaceID] = daemonAuthToken{token: token, expiresAt: expiresAt}
+}
+
+func (c *Client) SetRuntimeDaemonToken(runtimeID, token string, expiresAt time.Time) {
+	if runtimeID == "" || token == "" {
+		return
+	}
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	c.runtimeTokens[runtimeID] = daemonAuthToken{token: token, expiresAt: expiresAt}
+}
+
+func (c *Client) ClearWorkspaceDaemonToken(workspaceID string) {
+	if workspaceID == "" {
+		return
+	}
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	delete(c.workspaceTokens, workspaceID)
+}
+
+func (c *Client) ClearRuntimeDaemonToken(runtimeID string) {
+	if runtimeID == "" {
+		return
+	}
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	delete(c.runtimeTokens, runtimeID)
+}
+
+func (c *Client) WorkspaceDaemonTokenNeedsRefresh(workspaceID string, now time.Time) bool {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	tok, ok := c.workspaceTokens[workspaceID]
+	if !ok || tok.token == "" {
+		return false
+	}
+	if tok.expiresAt.IsZero() {
+		return true
+	}
+	return !now.Add(daemonAuthTokenRefreshWindow).Before(tok.expiresAt)
+}
+
+func (c *Client) WorkspaceDaemonTokenAvailable(workspaceID string, now time.Time) bool {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	tok, ok := c.workspaceTokens[workspaceID]
+	if !ok {
+		return false
+	}
+	return tok.available(now)
+}
+
+func (c *Client) tokenSnapshot() string {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	return c.token
+}
+
+func (c *Client) tokenForWorkspace(workspaceID string) string {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	if tok, ok := c.workspaceTokens[workspaceID]; ok && tok.available(time.Now()) {
+		return tok.token
+	}
+	return c.token
+}
+
+func (c *Client) tokenForRuntime(runtimeID string) string {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	if tok, ok := c.runtimeTokens[runtimeID]; ok && tok.available(time.Now()) {
+		return tok.token
+	}
 	return c.token
 }
 
@@ -157,10 +284,51 @@ func (c *Client) ClaimTask(ctx context.Context, runtimeID string) (*Task, error)
 	var resp struct {
 		Task *Task `json:"task"`
 	}
-	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/tasks/claim", runtimeID), map[string]any{}, &resp); err != nil {
+	if err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/tasks/claim", runtimeID), map[string]any{}, &resp, c.tokenForRuntime(runtimeID)); err != nil {
 		return nil, err
 	}
 	return resp.Task, nil
+}
+
+type AgentInboxEvent struct {
+	ID             string `json:"id"`
+	DeliveryID     string `json:"delivery_id"`
+	LeaseToken     string `json:"lease_token"`
+	LeaseExpiresAt string `json:"lease_expires_at"`
+	SeqTo          int64  `json:"seq_to"`
+	RequiresWake   bool   `json:"requires_wake"`
+	Task           *Task  `json:"task,omitempty"`
+	RuntimeID      string `json:"-"`
+}
+
+func (c *Client) DrainAgentInbox(ctx context.Context, runtimeID string) (*AgentInboxEvent, error) {
+	var resp struct {
+		Events []AgentInboxEvent `json:"events"`
+	}
+	if err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-inbox/drain", runtimeID), map[string]any{}, &resp, c.tokenForRuntime(runtimeID)); err != nil {
+		return nil, err
+	}
+	if len(resp.Events) == 0 {
+		return nil, nil
+	}
+	resp.Events[0].RuntimeID = runtimeID
+	return &resp.Events[0], nil
+}
+
+type AgentCredentialResponse struct {
+	ID        string  `json:"id"`
+	AgentID   string  `json:"agent_id"`
+	Prefix    string  `json:"token_prefix"`
+	ExpiresAt *string `json:"expires_at"`
+	Token     string  `json:"token"`
+}
+
+func (c *Client) EnsureAgentCredential(ctx context.Context, runtimeID, agentID string) (*AgentCredentialResponse, error) {
+	var resp AgentCredentialResponse
+	if err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agents/%s/credential", runtimeID, agentID), map[string]any{}, &resp, c.tokenForRuntime(runtimeID)); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 func (c *Client) StartTask(ctx context.Context, taskID string) error {
@@ -216,6 +384,17 @@ func (c *Client) ReportTaskMessages(ctx context.Context, taskID string, messages
 	}, nil)
 }
 
+func (c *Client) ReportAgentInboxMessages(ctx context.Context, lease AgentInboxLease, messages []TaskMessageData) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/messages", lease.ID), map[string]any{
+		"delivery_id": lease.DeliveryID,
+		"lease_token": lease.LeaseToken,
+		"messages":    messages,
+	}, nil, c.tokenForRuntime(lease.RuntimeID))
+}
+
 func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, action, target string, options *protocol.ChatOutputOptions, outputType, sessionID, workDir string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload) error {
 	body := map[string]any{"output": output}
 	if branchName != "" {
@@ -248,6 +427,39 @@ func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, a
 	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/tasks/%s/complete", taskID), body, nil, defaultTerminalRetrySchedule)
 }
 
+func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLease, result TaskResult) error {
+	body := map[string]any{
+		"delivery_id": lease.DeliveryID,
+		"lease_token": lease.LeaseToken,
+		"output":      result.Comment,
+	}
+	if result.Action != "" {
+		body["action"] = result.Action
+	}
+	if result.Target != "" {
+		body["target"] = result.Target
+	}
+	if result.Options != nil {
+		body["options"] = result.Options
+	}
+	if result.Type != "" {
+		body["type"] = result.Type
+	}
+	if len(result.Parts) > 0 {
+		body["parts"] = result.Parts
+	}
+	if result.Reaction != nil {
+		body["reaction"] = result.Reaction
+	}
+	if result.SessionID != "" {
+		body["session_id"] = result.SessionID
+	}
+	if result.WorkDir != "" {
+		body["work_dir"] = result.WorkDir
+	}
+	return c.postJSONWithRetryToken(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/complete", lease.ID), body, nil, defaultTerminalRetrySchedule, c.tokenForRuntime(lease.RuntimeID))
+}
+
 func (c *Client) ReportTaskUsage(ctx context.Context, taskID string, usage []TaskUsageEntry) error {
 	if len(usage) == 0 {
 		return nil
@@ -271,6 +483,44 @@ func (c *Client) FailTask(ctx context.Context, taskID, errMsg, sessionID, workDi
 	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/tasks/%s/fail", taskID), body, nil, defaultTerminalRetrySchedule)
 }
 
+func (c *Client) FailAgentInboxEvent(ctx context.Context, lease AgentInboxLease, errMsg, sessionID, workDir, failureReason, reasonCode string) error {
+	body := map[string]any{
+		"delivery_id": lease.DeliveryID,
+		"lease_token": lease.LeaseToken,
+		"error":       errMsg,
+	}
+	if sessionID != "" {
+		body["session_id"] = sessionID
+	}
+	if workDir != "" {
+		body["work_dir"] = workDir
+	}
+	if failureReason != "" {
+		body["failure_reason"] = failureReason
+	}
+	if reasonCode != "" {
+		body["reason_code"] = reasonCode
+	}
+	return c.postJSONWithRetryToken(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/fail", lease.ID), body, nil, defaultTerminalRetrySchedule, c.tokenForRuntime(lease.RuntimeID))
+}
+
+func (c *Client) RenewAgentInboxEvent(ctx context.Context, lease AgentInboxLease) error {
+	body := map[string]any{
+		"delivery_id": lease.DeliveryID,
+		"lease_token": lease.LeaseToken,
+	}
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/renew", lease.ID), body, nil, c.tokenForRuntime(lease.RuntimeID))
+}
+
+func (c *Client) AckAgentInboxEvent(ctx context.Context, lease AgentInboxLease) error {
+	body := map[string]any{
+		"delivery_id":    lease.DeliveryID,
+		"lease_token":    lease.LeaseToken,
+		"seen_up_to_seq": lease.SeqTo,
+	}
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/ack", lease.ID), body, nil, c.tokenForRuntime(lease.RuntimeID))
+}
+
 // PinTaskSession persists the agent's session_id and work_dir on the task
 // row mid-flight so a daemon crash doesn't lose the resume pointer.
 func (c *Client) PinTaskSession(ctx context.Context, taskID, sessionID, workDir string) error {
@@ -291,7 +541,7 @@ func (c *Client) PinTaskSession(ctx context.Context, taskID, sessionID, workDir 
 // previous daemon process for this runtime left behind. The server will
 // auto-retry eligible tasks.
 func (c *Client) RecoverOrphans(ctx context.Context, runtimeID string) error {
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/recover-orphans", runtimeID), map[string]any{}, nil)
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/recover-orphans", runtimeID), map[string]any{}, nil, c.tokenForRuntime(runtimeID))
 }
 
 // GetTaskStatus returns the current status of a task. Used by the daemon to
@@ -320,10 +570,10 @@ type (
 
 func (c *Client) SendHeartbeat(ctx context.Context, runtimeID string) (*HeartbeatResponse, error) {
 	var resp HeartbeatResponse
-	if err := c.postJSON(ctx, "/api/daemon/heartbeat", map[string]any{
+	if err := c.postJSONWithToken(ctx, "/api/daemon/heartbeat", map[string]any{
 		"runtime_id":            runtimeID,
 		"supports_batch_import": true,
-	}, &resp); err != nil {
+	}, &resp, c.tokenForRuntime(runtimeID)); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -331,27 +581,27 @@ func (c *Client) SendHeartbeat(ctx context.Context, runtimeID string) (*Heartbea
 
 // ReportUpdateResult sends the CLI update result back to the server.
 func (c *Client) ReportUpdateResult(ctx context.Context, runtimeID, updateID string, result map[string]any) error {
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/update/%s/result", runtimeID, updateID), result, nil)
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/update/%s/result", runtimeID, updateID), result, nil, c.tokenForRuntime(runtimeID))
 }
 
 // ReportModelListResult sends the model-discovery result back to the server.
 func (c *Client) ReportModelListResult(ctx context.Context, runtimeID, requestID string, result map[string]any) error {
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/models/%s/result", runtimeID, requestID), result, nil)
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/models/%s/result", runtimeID, requestID), result, nil, c.tokenForRuntime(runtimeID))
 }
 
 // ReportLocalSkillListResult sends the runtime-local-skill inventory back to the server.
 func (c *Client) ReportLocalSkillListResult(ctx context.Context, runtimeID, requestID string, result map[string]any) error {
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/local-skills/%s/result", runtimeID, requestID), result, nil)
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/local-skills/%s/result", runtimeID, requestID), result, nil, c.tokenForRuntime(runtimeID))
 }
 
 // ReportLocalSkillImportResult sends a runtime-local-skill bundle back to the server.
 func (c *Client) ReportLocalSkillImportResult(ctx context.Context, runtimeID, requestID string, result map[string]any) error {
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/local-skills/import/%s/result", runtimeID, requestID), result, nil)
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/local-skills/import/%s/result", runtimeID, requestID), result, nil, c.tokenForRuntime(runtimeID))
 }
 
 func (c *Client) SyncSharedSkills(ctx context.Context, runtimeID string, payload SharedSkillSyncPayload) (*SharedSkillSyncResult, error) {
 	var result SharedSkillSyncResult
-	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/shared-skills/sync", runtimeID), payload, &result); err != nil {
+	if err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/shared-skills/sync", runtimeID), payload, &result, c.tokenForRuntime(runtimeID)); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -359,7 +609,7 @@ func (c *Client) SyncSharedSkills(ctx context.Context, runtimeID string, payload
 
 func (c *Client) SyncEvolutionSubmissions(ctx context.Context, runtimeID string, payload EvolutionSubmissionSyncPayload) (*SharedSkillSyncResult, error) {
 	var result SharedSkillSyncResult
-	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/evolution/submissions", runtimeID), payload, &result); err != nil {
+	if err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/evolution/submissions", runtimeID), payload, &result, c.tokenForRuntime(runtimeID)); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -477,15 +727,21 @@ func (c *Client) Deregister(ctx context.Context, runtimeIDs []string) error {
 
 // RegisterResponse holds the server's response to a daemon registration.
 type RegisterResponse struct {
-	Runtimes     []Runtime       `json:"runtimes"`
-	Repos        []RepoData      `json:"repos"`
-	ReposVersion string          `json:"repos_version"`
-	Settings     json.RawMessage `json:"settings,omitempty"`
+	Runtimes             []Runtime       `json:"runtimes"`
+	Repos                []RepoData      `json:"repos"`
+	ReposVersion         string          `json:"repos_version"`
+	Settings             json.RawMessage `json:"settings,omitempty"`
+	DaemonToken          string          `json:"daemon_token,omitempty"`
+	DaemonTokenExpiresAt string          `json:"daemon_token_expires_at,omitempty"`
 }
 
 func (c *Client) Register(ctx context.Context, req map[string]any) (*RegisterResponse, error) {
+	return c.RegisterForWorkspace(ctx, "", req)
+}
+
+func (c *Client) RegisterForWorkspace(ctx context.Context, workspaceID string, req map[string]any) (*RegisterResponse, error) {
 	var resp RegisterResponse
-	if err := c.postJSON(ctx, "/api/daemon/register", req, &resp); err != nil {
+	if err := c.postJSONWithToken(ctx, "/api/daemon/register", req, &resp, c.tokenForWorkspace(workspaceID)); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -500,7 +756,7 @@ type WorkspaceReposResponse struct {
 
 func (c *Client) GetWorkspaceRepos(ctx context.Context, workspaceID string) (*WorkspaceReposResponse, error) {
 	var resp WorkspaceReposResponse
-	if err := c.getJSON(ctx, fmt.Sprintf("/api/daemon/workspaces/%s/repos", workspaceID), &resp); err != nil {
+	if err := c.getJSONWithToken(ctx, fmt.Sprintf("/api/daemon/workspaces/%s/repos", workspaceID), &resp, c.tokenForWorkspace(workspaceID)); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -578,6 +834,10 @@ func isTransientError(err error) bool {
 // idempotent success (see service/task.go), so a duplicate replay from a
 // retry is safe even if the server's prior response was lost in transit.
 func (c *Client) postJSONWithRetry(ctx context.Context, path string, reqBody any, respBody any, schedule []time.Duration) error {
+	return c.postJSONWithRetryToken(ctx, path, reqBody, respBody, schedule, c.tokenSnapshot())
+}
+
+func (c *Client) postJSONWithRetryToken(ctx context.Context, path string, reqBody any, respBody any, schedule []time.Duration, token string) error {
 	var lastErr error
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -586,7 +846,7 @@ func (c *Client) postJSONWithRetry(ctx context.Context, path string, reqBody any
 			}
 			return err
 		}
-		err := c.postJSON(ctx, path, reqBody, respBody)
+		err := c.postJSONWithToken(ctx, path, reqBody, respBody, token)
 		if err == nil {
 			return nil
 		}
@@ -604,6 +864,10 @@ func (c *Client) postJSONWithRetry(ctx context.Context, path string, reqBody any
 }
 
 func (c *Client) postJSON(ctx context.Context, path string, reqBody any, respBody any) error {
+	return c.postJSONWithToken(ctx, path, reqBody, respBody, c.tokenSnapshot())
+}
+
+func (c *Client) postJSONWithToken(ctx context.Context, path string, reqBody any, respBody any, token string) error {
 	var body io.Reader
 	if reqBody != nil {
 		data, err := json.Marshal(reqBody)
@@ -618,8 +882,8 @@ func (c *Client) postJSON(ctx context.Context, path string, reqBody any, respBod
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	c.setIdentityHeaders(req)
 
@@ -641,12 +905,16 @@ func (c *Client) postJSON(ctx context.Context, path string, reqBody any, respBod
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, respBody any) error {
+	return c.getJSONWithToken(ctx, path, respBody, c.tokenSnapshot())
+}
+
+func (c *Client) getJSONWithToken(ctx context.Context, path string, respBody any, token string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return err
 	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	c.setIdentityHeaders(req)
 

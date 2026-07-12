@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -172,6 +174,17 @@ func TestClassifyPoisonedError(t *testing.T) {
 	}
 }
 
+func TestClassifyAgentRunFailureReasonPrioritizesResumeUnsafe(t *testing.T) {
+	got := classifyAgentRunFailureReason(
+		"grok",
+		agent.GrokNoStreamingJSONEventsMarker,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if got != FailureReasonGrokFirstTurnNoProgress {
+		t.Fatalf("failure reason = %q, want %q", got, FailureReasonGrokFirstTurnNoProgress)
+	}
+}
+
 func TestClassifyResumeUnsafeTimeout(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -198,6 +211,26 @@ func TestClassifyResumeUnsafeTimeout(t *testing.T) {
 			name:     "codex ordinary timeout remains resumable",
 			provider: "codex",
 			errMsg:   "codex timed out after 30m0s",
+			wantOK:   false,
+		},
+		{
+			name:       "grok first stream no progress",
+			provider:   "grok",
+			errMsg:     agent.GrokFirstStreamEventTimeoutMarker + ` after 30s: process started but emitted no streaming-json event before first turn progress`,
+			wantOK:     true,
+			wantReason: FailureReasonGrokFirstTurnNoProgress,
+		},
+		{
+			name:       "grok exits before streaming json",
+			provider:   "grok",
+			errMsg:     agent.GrokNoStreamingJSONEventsMarker,
+			wantOK:     true,
+			wantReason: FailureReasonGrokFirstTurnNoProgress,
+		},
+		{
+			name:     "grok ordinary timeout remains resumable",
+			provider: "grok",
+			errMsg:   "grok timed out after 30m0s",
 			wantOK:   false,
 		},
 		{

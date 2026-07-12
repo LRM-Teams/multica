@@ -48,6 +48,9 @@ func TestChatResumeSafetyHelpers(t *testing.T) {
 	if !chatFailureResumeUnsafe("agent_error.context_overflow") {
 		t.Fatal("context overflow must not resume the native session")
 	}
+	if !chatFailureResumeUnsafe("grok_first_turn_no_progress") {
+		t.Fatal("Grok first-turn no-progress must not resume the native session")
+	}
 	if !shouldIncludeChatContextSummary([]db.ChatMessage{msg("assistant", "确认继续吗？"), msg("user", "行")}) {
 		t.Fatal("short confirmations after an assistant question should include recent context")
 	}

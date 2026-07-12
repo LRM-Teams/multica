@@ -14,6 +14,7 @@ import type {
   Agent,
   AgentFileContentResponse,
   AgentFilesResponse,
+  ListAgentRadarRunsResponse,
   CreateAgentRequest,
   CreateAgentDraftRequest,
   AgentCreationDraft,
@@ -22,9 +23,11 @@ import type {
   AgentTemplateSummary,
   CreateAgentFromTemplateRequest,
   CreateAgentFromTemplateResponse,
+  EvolutionMetricsResponse,
   EvolutionReviewDecisionRequest,
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
+  WorkspaceMemoryCurationStatus,
   PromoteEvolutionReviewSubmissionResponse,
   UpdateAgentRequest,
   AgentEnvResponse,
@@ -32,6 +35,7 @@ import type {
   UpdateAgentFileContentRequest,
   UpdateAgentFileContentResponse,
   AgentTask,
+  AgentActivityEventsPage,
   AgentHealthResponse,
   AgentActivityBucket,
   AgentRunCount,
@@ -189,6 +193,7 @@ import {
   EMPTY_AGENT_TEMPLATE_DETAIL,
   EMPTY_AGENT_FILE_CONTENT_RESPONSE,
   EMPTY_AGENT_FILES_RESPONSE,
+  EMPTY_AGENT_RADAR_RUNS_RESPONSE,
   EMPTY_AGENT_HEALTH_RESPONSE,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
@@ -210,6 +215,7 @@ import {
   AppConfigSchema,
   AgentFileContentResponseSchema,
   AgentFilesResponseSchema,
+  AgentRadarRunsResponseSchema,
   AgentHealthResponseSchema,
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
@@ -249,11 +255,15 @@ import {
   EMPTY_BILLING_CHECKOUT_SESSION_STATUS,
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
   EMPTY_CANCEL_TASK_RESPONSE,
+  EMPTY_EVOLUTION_METRICS,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
   EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE,
+  EMPTY_WORKSPACE_MEMORY_CURATION_STATUS,
+  EvolutionMetricsSchema,
   EvolutionReviewSubmissionListSchema,
   EvolutionReviewSubmissionSchema,
   UpdateAgentFileContentResponseSchema,
+  WorkspaceMemoryCurationStatusSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -848,6 +858,23 @@ export class ApiClient {
     return this.fetch(`/api/agents/${id}`);
   }
 
+  // #302 Activity: REST first-paint for one agent's raw fact timeline. The BE
+  // supplies source facts (kind/text/reason/visibility/refs); live updates
+  // arrive over the `agent_activity:event` WS as full events the FE upserts by
+  // id. This route scopes the workspace via an explicit `workspace_slug` query
+  // param (not the X-Workspace-Slug header the other agent endpoints rely on)
+  // — without it the BE 400s and the timeline reads as empty. Mirror the same
+  // slug the header uses. The response is a pagination envelope
+  // (`{ events, limit, has_more, next_cursor }`), not a bare array — callers
+  // read `.events` (see `agentActivityEventsOptions`).
+  async getAgentActivityEvents(agentId: string): Promise<AgentActivityEventsPage> {
+    const search = new URLSearchParams();
+    const slug = getCurrentSlug();
+    if (slug) search.set("workspace_slug", slug);
+    const suffix = search.toString() ? `?${search}` : "";
+    return this.fetch(`/api/agents/${agentId}/activity/events${suffix}`);
+  }
+
   async createAgent(data: CreateAgentRequest): Promise<Agent> {
     return this.fetch("/api/agents", {
       method: "POST",
@@ -968,6 +995,13 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/agents/${id}/files${suffix}`);
     return parseWithFallback(raw, AgentFilesResponseSchema, EMPTY_AGENT_FILES_RESPONSE, {
       endpoint: "GET /api/agents/:id/files",
+    });
+  }
+
+  async listAgentRadarRuns(id: string): Promise<ListAgentRadarRunsResponse> {
+    const raw = await this.fetch<unknown>(`/api/agents/${id}/radar-runs`);
+    return parseWithFallback(raw, AgentRadarRunsResponseSchema, EMPTY_AGENT_RADAR_RUNS_RESPONSE, {
+      endpoint: "GET /api/agents/:id/radar-runs",
     });
   }
 
@@ -1836,6 +1870,28 @@ export class ApiClient {
     );
   }
 
+  async getEvolutionMetrics(params?: { unit_type?: string }): Promise<EvolutionMetricsResponse> {
+    const search = new URLSearchParams();
+    if (params?.unit_type) search.set("unit_type", params.unit_type);
+    const suffix = search.toString();
+    const raw = await this.fetch<unknown>(`/api/evolution/metrics${suffix ? `?${suffix}` : ""}`);
+    return parseWithFallback(raw, EvolutionMetricsSchema, EMPTY_EVOLUTION_METRICS, {
+      endpoint: "GET /api/evolution/metrics",
+    });
+  }
+
+  async getWorkspaceMemoryCurationStatus(workspaceId: string): Promise<WorkspaceMemoryCurationStatus> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory-curation/status`,
+    );
+    return parseWithFallback(
+      raw,
+      WorkspaceMemoryCurationStatusSchema,
+      EMPTY_WORKSPACE_MEMORY_CURATION_STATUS,
+      { endpoint: "GET /api/workspaces/{id}/memory-curation/status" },
+    );
+  }
+
   async getEvolutionReviewSubmission(id: string): Promise<EvolutionReviewSubmission | null> {
     const raw = await this.fetch<unknown>(`/api/evolution/submissions/${id}`);
     return parseWithFallback(raw, EvolutionReviewSubmissionSchema, null, {
@@ -1850,6 +1906,13 @@ export class ApiClient {
     return this.fetch(`/api/evolution/submissions/${id}/promote`, {
       method: "POST",
       body: JSON.stringify(data),
+    });
+  }
+
+  async setEvolutionSourceSkillAssignment(id: string, enabled: boolean): Promise<void> {
+    await this.fetch(`/api/evolution/submissions/${id}/source-skill`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
     });
   }
 

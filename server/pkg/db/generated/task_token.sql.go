@@ -11,6 +11,47 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createAgentInboxToken = `-- name: CreateAgentInboxToken :one
+INSERT INTO agent_inbox_token (token_hash, inbox_event_id, delivery_id, agent_id, workspace_id, user_id, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, token_hash, inbox_event_id, delivery_id, agent_id, workspace_id, user_id, expires_at, created_at
+`
+
+type CreateAgentInboxTokenParams struct {
+	TokenHash    string             `json:"token_hash"`
+	InboxEventID pgtype.UUID        `json:"inbox_event_id"`
+	DeliveryID   pgtype.UUID        `json:"delivery_id"`
+	AgentID      pgtype.UUID        `json:"agent_id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) CreateAgentInboxToken(ctx context.Context, arg CreateAgentInboxTokenParams) (AgentInboxToken, error) {
+	row := q.db.QueryRow(ctx, createAgentInboxToken,
+		arg.TokenHash,
+		arg.InboxEventID,
+		arg.DeliveryID,
+		arg.AgentID,
+		arg.WorkspaceID,
+		arg.UserID,
+		arg.ExpiresAt,
+	)
+	var i AgentInboxToken
+	err := row.Scan(
+		&i.ID,
+		&i.TokenHash,
+		&i.InboxEventID,
+		&i.DeliveryID,
+		&i.AgentID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createTaskToken = `-- name: CreateTaskToken :one
 INSERT INTO task_token (token_hash, task_id, agent_id, workspace_id, user_id, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -49,6 +90,24 @@ func (q *Queries) CreateTaskToken(ctx context.Context, arg CreateTaskTokenParams
 	return i, err
 }
 
+const deleteAgentInboxTokensByEvent = `-- name: DeleteAgentInboxTokensByEvent :exec
+DELETE FROM agent_inbox_token WHERE inbox_event_id = $1
+`
+
+func (q *Queries) DeleteAgentInboxTokensByEvent(ctx context.Context, inboxEventID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteAgentInboxTokensByEvent, inboxEventID)
+	return err
+}
+
+const deleteExpiredAgentInboxTokens = `-- name: DeleteExpiredAgentInboxTokens :exec
+DELETE FROM agent_inbox_token WHERE expires_at <= now()
+`
+
+func (q *Queries) DeleteExpiredAgentInboxTokens(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteExpiredAgentInboxTokens)
+	return err
+}
+
 const deleteExpiredTaskTokens = `-- name: DeleteExpiredTaskTokens :exec
 DELETE FROM task_token WHERE expires_at <= now()
 `
@@ -65,6 +124,28 @@ DELETE FROM task_token WHERE task_id = $1
 func (q *Queries) DeleteTaskTokensByTask(ctx context.Context, taskID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteTaskTokensByTask, taskID)
 	return err
+}
+
+const getAgentInboxTokenByHash = `-- name: GetAgentInboxTokenByHash :one
+SELECT id, token_hash, inbox_event_id, delivery_id, agent_id, workspace_id, user_id, expires_at, created_at FROM agent_inbox_token
+WHERE token_hash = $1 AND expires_at > now()
+`
+
+func (q *Queries) GetAgentInboxTokenByHash(ctx context.Context, tokenHash string) (AgentInboxToken, error) {
+	row := q.db.QueryRow(ctx, getAgentInboxTokenByHash, tokenHash)
+	var i AgentInboxToken
+	err := row.Scan(
+		&i.ID,
+		&i.TokenHash,
+		&i.InboxEventID,
+		&i.DeliveryID,
+		&i.AgentID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const getTaskTokenByHash = `-- name: GetTaskTokenByHash :one

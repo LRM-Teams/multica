@@ -40,8 +40,13 @@ function hashId(id: string): number {
   return hash;
 }
 
-export function agentColor(id: string): AgentColor {
+/**
+ * Stable identity color for an agent id. Accepts null/undefined so callers
+ * that hold optional ids (activity stacks, unfinished fixtures) never throw
+ * mid-render — they land on the same slot as an empty string.
+ */
+export function agentColor(id: string | null | undefined): AgentColor {
   // The modulo always lands in range; the assertion satisfies
   // noUncheckedIndexedAccess without a meaningless runtime fallback.
-  return AGENT_COLOR_PALETTE[hashId(id) % AGENT_COLOR_PALETTE.length]!;
+  return AGENT_COLOR_PALETTE[hashId(id ?? "") % AGENT_COLOR_PALETTE.length]!;
 }

@@ -149,12 +149,7 @@
     "composer_placeholder": "Reply in thread...",
     "back_to_conversation": "Back to conversation",
     "show_in_channel_label": "Also show in channel",
-    "from_thread_badge": "From thread",
-    "wake_pending": "Awaiting reply",
-    "wake_replied": "Replied",
-    "wake_acked": "Acknowledged",
-    "wake_delivered": "Delivered",
-    "wake_no_reply": "No reply"
+    "from_thread_badge": "From thread"
   },
   "typing": {
     "single": "{{name}} is typing",
@@ -198,6 +193,7 @@
     "sticker_failed": "Sticker failed to load",
     "sticker_unavailable": "Sticker unavailable",
     "agent_badge": "Agent",
+    "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",
     "edit_action": "Edit",
     "delete_action": "Delete",
@@ -206,7 +202,12 @@
     "save_edit": "Save",
     "cancel_edit": "Cancel",
     "edit_failed_toast": "Couldn't edit message",
-    "delete_failed_toast": "Couldn't delete message"
+    "delete_failed_toast": "Couldn't delete message",
+    "system_event": {
+      "member_added": "{target} was added to this channel by {actor}",
+      "member_removed": "{target} was removed from this channel by {actor}",
+      "member_left": "{target} left this channel"
+    }
   },
   "dm": {
     "heading": "Direct messages",

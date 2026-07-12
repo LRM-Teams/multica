@@ -110,7 +110,8 @@ type EnvRollout struct {
 
 // EnvDispatchResult wraps the rollouts slice.
 type EnvDispatchResult struct {
-	Rollouts []EnvRollout
+	ProjectID string // single project for the dispatch (group_size=1: the rollout's project)
+	Rollouts  []EnvRollout
 }
 
 // EnvDispatchDeps is the seam between the service and the DB + cloud runtime.
@@ -384,7 +385,15 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	}
 	dispatchWG.Wait()
 
-	result := EnvDispatchResult{Rollouts: rollouts}
+	// Top-level project_id for the response: the single project the dispatch
+	// produces (group_size=1 today). AReaL consumes one project_id via
+	// GET /api/v1/env-dispatch/{projectID}/dag, so surface it directly rather
+	// than forcing the client to dig it out of rollouts[0].
+	projectID := ""
+	if len(rollouts) > 0 {
+		projectID = rollouts[0].ProjectID
+	}
+	result := EnvDispatchResult{ProjectID: projectID, Rollouts: rollouts}
 
 	// Persist the idempotency response so a retry replays it (spec §7.7). Best-effort.
 	if in.IdempotencyKey != "" {

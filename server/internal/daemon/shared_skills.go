@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
 
 func (d *Daemon) sharedSkillsSyncLoop(ctx context.Context) {
@@ -33,6 +35,34 @@ func (d *Daemon) sharedSkillsSyncLoop(ctx context.Context) {
 	}
 }
 
+func (d *Daemon) localMemoryCurationLoop(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	d.runLocalMemoryCurationOnce(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			d.runLocalMemoryCurationOnce(ctx)
+		}
+	}
+}
+
+func (d *Daemon) runLocalMemoryCurationOnce(ctx context.Context) {
+	if !d.ready.Load() {
+		return
+	}
+	for _, rt := range d.localMemoryCurationRuntimes() {
+		runtime := rt
+		go func() {
+			if err := d.runLocalMemoryCuration(ctx, runtime); err != nil && ctx.Err() == nil {
+				d.logger.Warn("local memory curation failed", "runtime_id", runtime.ID, "provider", runtime.Provider, "error", err)
+			}
+		}()
+	}
+}
+
 func (d *Daemon) syncSharedSkillsOnce(ctx context.Context) {
 	if !d.ready.Load() {
 		return
@@ -42,6 +72,108 @@ func (d *Daemon) syncSharedSkillsOnce(ctx context.Context) {
 			d.logger.Warn("shared skills sync failed", "runtime_id", rt.ID, "provider", rt.Provider, "error", err)
 		}
 	}
+}
+
+func (d *Daemon) runLocalMemoryCuration(ctx context.Context, rt Runtime) error {
+	if rt.Provider != "pi" || strings.TrimSpace(rt.WorkspaceID) == "" {
+		return nil
+	}
+	piEntry, ok := d.cfg.Agents["pi"]
+	if !ok || strings.TrimSpace(piEntry.Path) == "" {
+		return nil
+	}
+	loc, err := time.LoadLocation(memorycuration.DefaultTimezone)
+	if err != nil {
+		loc = time.FixedZone("CST", 8*60*60)
+	}
+	now := time.Now().UTC()
+	localNow := now.In(loc)
+	stageHours := []struct {
+		stage memorycuration.Stage
+		hour  int
+	}{
+		{memorycuration.StageL1, 1},
+		{memorycuration.StageL2, 2},
+		{memorycuration.StageL3, 3},
+		{memorycuration.StageL4, 4},
+	}
+	planDate := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
+	for _, scheduled := range stageHours {
+		if localNow.Hour() < scheduled.hour || !d.claimLocalMemoryCurationRun(rt.WorkspaceID, scheduled.stage, localNow) {
+			continue
+		}
+		reviewer := memorycuration.NewConfiguredL3Reviewer(d.cfg.MemoryCurationL3ReviewEnabled, memorycuration.AgentL3ReviewerConfig{
+			Provider: "pi", Path: piEntry.Path, Model: piEntry.Model, Timeout: d.cfg.MemoryCurationL3ReviewTimeout,
+		})
+		res, runErr := memorycuration.NewEngine(reviewer).Run(memorycuration.Options{
+			Context: ctx, WorkspacesRoot: d.cfg.WorkspacesRoot, WorkspaceID: rt.WorkspaceID,
+			AllAgents: true, Stage: scheduled.stage, Since: planDate, Until: planDate,
+			Now: now, Timezone: memorycuration.DefaultTimezone,
+		})
+		if runErr != nil {
+			d.releaseLocalMemoryCurationRun(rt.WorkspaceID, scheduled.stage)
+			return runErr
+		}
+		if len(res.Errors) > 0 || (scheduled.stage == memorycuration.StageL3 && shouldRetryLocalL3(res)) {
+			d.releaseLocalMemoryCurationRun(rt.WorkspaceID, scheduled.stage)
+			return fmt.Errorf("local memory curation deferred or failed: errors=%d deferred=%d", len(res.Errors), res.ReviewDeferred)
+		}
+	}
+	return nil
+}
+
+func shouldRetryLocalL3(res memorycuration.Result) bool {
+	nonRetryable := 0
+	for _, trace := range res.ReviewTraces {
+		if trace.ReasonCode == "low_confidence" || trace.ReasonCode == "invalid_decision" {
+			nonRetryable++
+		}
+	}
+	return res.ReviewDeferred > nonRetryable
+}
+
+func (d *Daemon) claimLocalMemoryCurationRun(workspaceID string, stage memorycuration.Stage, localNow time.Time) bool {
+	key := workspaceID + "\x00" + string(stage)
+	planDate := localNow.Format("2006-01-02")
+	d.memoryCurationMu.Lock()
+	defer d.memoryCurationMu.Unlock()
+	if d.memoryCurationRuns[key] == planDate {
+		return false
+	}
+	d.memoryCurationRuns[key] = planDate
+	return true
+}
+
+func (d *Daemon) releaseLocalMemoryCurationRun(workspaceID string, stage memorycuration.Stage) {
+	d.memoryCurationMu.Lock()
+	delete(d.memoryCurationRuns, workspaceID+"\x00"+string(stage))
+	d.memoryCurationMu.Unlock()
+}
+
+func (d *Daemon) localMemoryCurationRuntimes() []Runtime {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	workspaceIDs := make([]string, 0, len(d.workspaces))
+	for id := range d.workspaces {
+		workspaceIDs = append(workspaceIDs, id)
+	}
+	sort.Strings(workspaceIDs)
+
+	runtimes := make([]Runtime, 0, len(workspaceIDs))
+	for _, wsID := range workspaceIDs {
+		ws := d.workspaces[wsID]
+		runtimeIDs := append([]string(nil), ws.runtimeIDs...)
+		sort.Strings(runtimeIDs)
+		for _, id := range runtimeIDs {
+			rt, ok := d.runtimeIndex[id]
+			if ok && rt.Status == "online" && rt.Provider == "pi" {
+				runtimes = append(runtimes, rt)
+				break
+			}
+		}
+	}
+	return runtimes
 }
 
 // sharedSkillSyncRuntimes returns one stable online runtime per workspace so
@@ -150,6 +282,7 @@ func ensureMulticaAgentRoot(root string) error {
 		filepath.Join(root, "memory", "STATE.md"):           "# Agent State\n\nCurrent dated state, temporary facts, and active initiatives.\n",
 		filepath.Join(root, "memory", "REVIEW.md"):          "# Memory Review\n\nPending memory candidates, conflicts, and curator review notes.\n",
 		filepath.Join(root, "memory", "SCRATCHPAD.md"):      "# Scratchpad\n\nTransient notes that should not be treated as durable memory.\n",
+		filepath.Join(root, "notes", "agent-plan.md"):       defaultAgentPlanTemplate(),
 		filepath.Join(root, "notes", "agents.md"):           "# Agents\n\nKnown teammates, roles, and collaboration boundaries.\n",
 		filepath.Join(root, "notes", "channels.md"):         "# Channels\n\nChannel and DM purpose, participants, language, and routing context.\n",
 		filepath.Join(root, "notes", "project-map.md"):      "# Project Map\n\nWorkspace/project orientation, repos, commands, risks, and conventions.\n",
@@ -164,6 +297,45 @@ func ensureMulticaAgentRoot(root string) error {
 		}
 	}
 	return nil
+}
+
+func defaultAgentPlanTemplate() string {
+	return `# Agent Plan
+
+Source of truth: Multica agent settings and live user instructions. This file is the agent's long-lived operating plan for proactive work; it supplements memory and must not override instructions.
+
+## Mission
+- What this agent is responsible for over time.
+- What successful work looks like.
+
+## Ownership
+- Projects, modules, directories, channels, issue types, or domains this agent should watch.
+
+## Current Project State
+- Current understanding of project progress, risks, and recent changes.
+
+## Active Work
+- Work this agent is currently driving or should keep following.
+
+## Watchlist
+- Code, issues, PRs, CI signals, user feedback, or technical debt to inspect periodically.
+
+## Completed Work
+- Important completed work, decisions, outcomes, and remaining follow-ups.
+
+## Future Bets
+- Ideas or hypotheses worth revisiting when there is new evidence.
+
+## Collaboration Map
+- Humans and agents this agent should coordinate with, including ownership boundaries.
+
+## Initiative Rules
+- Speak up when there is new evidence tied to this plan, a meaningful blocker, a risk, or a concrete next step.
+- Stay silent when there is no new evidence, the issue is already being handled, or the action would only add noise.
+
+## Last Checks
+- Record recent radar checks, actions taken, and no-action reasons to avoid repeated noise.
+`
 }
 
 func ensureFile(path, content string) error {
@@ -306,16 +478,23 @@ func (d *Daemon) scanEvolutionSubmissionsRoot(rt Runtime, base string) ([]Evolut
 		}
 		agentID := entry.Name()
 		agentRoot := filepath.Join(base, agentID)
+		releaseLock, lockErr := memorycuration.AcquireAgentRootFileLock(agentRoot, false, time.Now().UTC())
+		if lockErr != nil {
+			continue
+		}
 		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
+			releaseLock()
 			d.logger.Warn("agent root creation failed", "runtime_id", rt.ID, "agent_id", agentID, "path", agentRoot, "error", err)
 			continue
 		}
 		memorySubmissions, err := d.loadMemoryCandidateSubmissions(rt, agentID, agentRoot)
 		if err != nil {
+			releaseLock()
 			d.logger.Warn("memory candidate scan failed", "runtime_id", rt.ID, "agent_id", agentID, "error", err)
 			continue
 		}
 		skillSubmissions, err := d.loadSkillCandidateSubmissions(rt, agentID, agentRoot)
+		releaseLock()
 		if err != nil {
 			d.logger.Warn("skill candidate scan failed", "runtime_id", rt.ID, "agent_id", agentID, "error", err)
 			continue

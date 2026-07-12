@@ -1,6 +1,5 @@
 import type { ChannelMessage } from "@multica/core/types";
 import type { ThreadMemberType, ThreadParticipant } from "./thread-participants";
-import type { ThreadWakeAnnotation } from "./thread-panel";
 
 // The read-model (#251) speaks a broader `member_type` string than the panel's
 // two-value union; anything that isn't an agent is a user for presentation.
@@ -31,32 +30,6 @@ export function mapThreadParticipants(root: ChannelMessage): ThreadParticipant[]
         name: participant.name || displayName,
         displayName,
         sources: [],
-      },
-    ];
-  });
-}
-
-/**
- * Map the thread root's BE-provided wake records (#251
- * `thread_wake_annotations`, the #196 "why no reply" read-model) to the panel's
- * {@link ThreadWakeAnnotation} strip. Iris UX: only agent participants are ever
- * woken, so a human record is dropped here rather than shown. The `state` (and
- * its unknown/future escape hatch) plus the neutral `no_reply` presentation are
- * owned by the strip; this just filters + reshapes.
- */
-export function mapThreadWakeAnnotations(root: ChannelMessage): ThreadWakeAnnotation[] {
-  const list = root.thread_wake_annotations ?? [];
-  return list.flatMap((annotation) => {
-    if (normalizeMemberType(annotation.member_type) !== "agent") return [];
-    return [
-      {
-        key: annotation.key || `agent:${annotation.member_id}`,
-        displayName: annotation.display_name || annotation.member_id,
-        memberType: "agent" as const,
-        state: annotation.state,
-        // Don't fabricate a reason — surface the summary only when the BE sent
-        // one (null coalesces to undefined so the strip renders state-only).
-        reason: annotation.reason ?? undefined,
       },
     ];
   });

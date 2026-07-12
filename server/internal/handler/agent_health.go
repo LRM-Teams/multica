@@ -93,16 +93,16 @@ func RecordRuntimeHealthEventForRuntimeAgents(ctx context.Context, exec RuntimeH
 	_, err = exec.Exec(ctx, `
 		INSERT INTO agent_activity_event (
 			workspace_id, agent_id, runtime_id, event_kind, event_type, severity,
-			target_kind, target_id, reason_code, message, details
+			target_kind, target_id, reason_code, message, details, visibility
 		)
 		SELECT
-			a.workspace_id, a.id, a.runtime_id, 'lifecycle', $3, 'info',
-			'agent', a.id, $4, $5, $6::jsonb
+			a.workspace_id, a.id, a.runtime_id, 'transport', $3, 'info',
+			'agent', a.id, $4, $5, $6::jsonb, $7
 		FROM agent a
 		WHERE a.workspace_id = $1
 		  AND a.runtime_id = $2
 		  AND a.archived_at IS NULL
-	`, workspaceID, runtimeID, eventType, reasonCode, message, string(payload))
+	`, workspaceID, runtimeID, eventType, reasonCode, message, string(payload), activityVisibilityFor(activityKindTransport, eventType, "info", reasonCode))
 	if err != nil {
 		return fmt.Errorf("insert runtime health event: %w", err)
 	}

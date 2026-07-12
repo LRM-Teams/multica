@@ -13,7 +13,9 @@ import type { Attachment as AttachmentRecord } from "@multica/core/types";
 import { useWorkspacePaths, useCurrentWorkspace } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useAuthStore } from "@multica/core/auth";
+import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { ActorProfileTrigger } from "./actor-profile-popover";
+import { useOpenAgentPanel } from "./agent-panel-context";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
 import { AppLink } from "../navigation/app-link";
@@ -77,6 +79,12 @@ function ActorMention({
   const actorNames = useActorName();
   const { getActorName } = actorNames;
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
+  // #349/#447 parity for RENDERED messages: a rendered @agent mention opens the
+  // side panel on click, same as the editor's MentionView and agent avatars.
+  // Context (channels/DM) preferred, global store fallback everywhere else.
+  const openAgentPanelFromContext = useOpenAgentPanel();
+  const openAgentPanelFromStore = useAgentPanelStore((s) => s.open);
+  const openAgentPanel = openAgentPanelFromContext ?? openAgentPanelFromStore;
   // The link text is usually "@Name"; strip the leading @ so we don't double
   // it, and use it as the fallback when the id isn't in the workspace cache.
   const fallback = label ? label.replace(/^@+/, "").trim() || undefined : undefined;
@@ -98,6 +106,9 @@ function ActorMention({
         memberType={type === "agent" ? "agent" : "user"}
         memberId={id}
         triggerElement="span"
+        onClickCapture={
+          type === "agent" && openAgentPanel ? () => openAgentPanel(id) : undefined
+        }
       >
         {chip}
       </ActorProfileTrigger>

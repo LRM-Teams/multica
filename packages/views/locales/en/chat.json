@@ -117,16 +117,16 @@
       "reconnecting": "Reconnecting",
       "queued": "Queued",
       "waiting_local_directory": "Waiting for local directory",
-      "starting_up": "Starting up",
+      "starting_up": "Working",
       "thinking": "Thinking",
-      "typing": "Typing"
+      "typing": "Output"
     },
     "tools": {
-      "running_command": "Running a command",
-      "reading_files": "Reading files",
-      "searching_code": "Searching the code",
-      "making_edits": "Making edits",
-      "searching_web": "Searching the web",
+      "running_command": "Running command…",
+      "reading_files": "Reading file…",
+      "searching_code": "Searching code…",
+      "making_edits": "Editing file…",
+      "searching_web": "Searching web…",
       "fallback": "Working"
     }
   }

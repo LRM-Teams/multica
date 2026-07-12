@@ -56,6 +56,10 @@ type trainingTaskStore interface {
 	MergeTaskArealProxyContext(ctx context.Context, arg db.MergeTaskArealProxyContextParams) error
 }
 
+// Compile-time guarantee that *db.Queries satisfies trainingTaskStore, so a
+// generated-method signature drift fails at compile time now, not at U10 wiring.
+var _ trainingTaskStore = (*db.Queries)(nil)
+
 // arealSessionStarter opens an RL session for a task via the bridge. The real
 // implementation is *arealrl.Client; tests inject a fake. The helper never
 // constructs a real client — it is injected via TrainingSessionDeps.
@@ -99,6 +103,14 @@ type TrainingSessionDeps struct {
 	ProxyURL          string
 	DefaultReward     float64 // Fallback reward if training dispatch not available
 	CheckpointTrigger CheckpointTrigger
+	// DAG, when non-nil, records interaction-DAG segments + edges for trained
+	// rollouts (U7.2). The service no-ops when its enabled flag is false
+	// (INTERACTION_DAG_ENABLED), so a nil-vs-non-nil DAG is the first gate and
+	// the enabled flag is the second. Recording is best-effort: a DAG recording
+	// error is logged and never fails the session open/close. Production
+	// construction (NewInteractionDAGService with the real arealrl client) is
+	// wired in U10; U7.2 adds the field + the calls + tests construct it.
+	DAG *InteractionDAGService
 }
 
 // trainingDefaultReward is the fallback reward when deps.DefaultReward is
@@ -222,6 +234,23 @@ func maybeOpenTrainingSession(ctx context.Context, deps *TrainingSessionDeps, ta
 		ArealProxy: payload,
 	}); err != nil {
 		return fmt.Errorf("training: persist areal_proxy for task %s: %w", taskID, err)
+	}
+
+	// D10: record the {session_id -> agent_run_id (= task.ID), issue_id} mapping
+	// for U8's DAG assembly. Fires only here - after the idempotency guard, so a
+	// retry that finds an already-open session does NOT re-record. Best-effort:
+	// the session is already open + persisted, so a recording failure degrades
+	// assembly but must not fail the open (the run proceeds un-proxied of DAG
+	// only, not of the RL session).
+	if deps.DAG != nil {
+		if err := deps.DAG.RecordSessionAgentRun(ctx, projectID, creds.SessionID, taskID, util.UUIDToString(task.IssueID)); err != nil {
+			slog.Warn("training: record session->agent_run mapping failed",
+				"task_id", taskID,
+				"session_id", creds.SessionID,
+				"issue_id", util.UUIDToString(task.IssueID),
+				"error", err,
+			)
+		}
 	}
 
 	slog.Info("training session opened",

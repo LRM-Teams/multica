@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +22,8 @@ func TestNewReturnsGrokBackend(t *testing.T) {
 		t.Fatalf("expected *grokBackend, got %T", b)
 	}
 }
+
+var _ AuthPreflight = (*grokBackend)(nil)
 
 func TestBuildGrokArgsBaseline(t *testing.T) {
 	t.Parallel()
@@ -232,6 +236,7 @@ func TestGrokExecuteStreamingJSONWithTools(t *testing.T) {
 	// Isolate session home via cfg.Env (not t.Setenv) so the test stays
 	// parallel-safe and does not pollute ~/.grok.
 	home := t.TempDir()
+	writeTestGrokAuth(t, home)
 
 	cwd := t.TempDir()
 	// The fake CLI writes tools into GROK_HOME/sessions/<enc-cwd>/<session-id>/
@@ -342,13 +347,16 @@ exit 0
 func TestGrokExecuteErrorEvent(t *testing.T) {
 	t.Parallel()
 
+	home := t.TempDir()
+	writeTestGrokAuth(t, home)
+
 	fakePath := filepath.Join(t.TempDir(), "grok")
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' '{\"type\":\"error\",\"message\":\"unknown model id\"}'\n" +
 		"exit 1\n"
 	writeTestExecutable(t, fakePath, []byte(script))
 
-	backend, err := New("grok", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	backend, err := New("grok", Config{ExecutablePath: fakePath, Logger: slog.Default(), Env: map[string]string{"GROK_HOME": home}})
 	if err != nil {
 		t.Fatalf("new grok backend: %v", err)
 	}
@@ -374,6 +382,61 @@ func TestGrokExecuteErrorEvent(t *testing.T) {
 			t.Fatalf("expected model error in result, got %q", result.Error)
 		}
 	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for result")
+	}
+}
+
+func TestGrokExecuteTimesOutWhenNoStreamingEventArrives(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	fakePath := filepath.Join(t.TempDir(), "grok")
+	home := t.TempDir()
+	writeTestGrokAuth(t, home)
+	script := "#!/bin/sh\n" +
+		"while :; do :; done\n"
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	backend, err := New("grok", Config{ExecutablePath: fakePath, Logger: slog.Default(), Env: map[string]string{"GROK_HOME": home}})
+	if err != nil {
+		t.Fatalf("new grok backend: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	session, err := backend.Execute(ctx, "hi", ExecOptions{
+		Timeout:                   5 * time.Second,
+		SemanticInactivityTimeout: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	for range session.Messages {
+	}
+
+	select {
+	case result, ok := <-session.Result:
+		if !ok {
+			t.Fatal("result channel closed without a value")
+		}
+		if result.Status != "timeout" {
+			t.Fatalf("expected timeout, got %q error=%q", result.Status, result.Error)
+		}
+		for _, want := range []string{
+			GrokFirstStreamEventTimeoutMarker,
+			"streaming-json event",
+			"session_id=",
+		} {
+			if !strings.Contains(result.Error, want) {
+				t.Fatalf("expected error to contain %q, got %q", want, result.Error)
+			}
+		}
+		if result.SessionID == "" {
+			t.Fatal("expected session id to be preserved")
+		}
+	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for result")
 	}
 }
@@ -410,6 +473,38 @@ func TestEnsureGrokRuntimeHomeRespectsEnvOverride(t *testing.T) {
 	}
 	if got != home {
 		t.Fatalf("expected override home %q, got %q", home, got)
+	}
+}
+
+func TestValidateGrokAuthRejectsMissingOrEmptyAuth(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	if err := validateGrokAuth(home, nil); err == nil || !strings.Contains(err.Error(), "not logged in") {
+		t.Fatalf("missing auth error = %v, want not logged in", err)
+	}
+	if err := validateGrokAuth(home, map[string]string{"XAI_API_KEY": "test-key"}); err != nil {
+		t.Fatalf("XAI_API_KEY should allow missing auth.json: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), nil, 0o600); err != nil {
+		t.Fatalf("write empty auth: %v", err)
+	}
+	if err := validateGrokAuth(home, nil); err == nil || !strings.Contains(err.Error(), "not logged in") {
+		t.Fatalf("empty auth error = %v, want not logged in", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"token":"redacted"}`), 0o600); err != nil {
+		t.Fatalf("write auth: %v", err)
+	}
+	if err := validateGrokAuth(home, nil); err != nil {
+		t.Fatalf("valid auth error = %v", err)
+	}
+}
+
+func writeTestGrokAuth(t *testing.T, home string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"token":"redacted"}`), 0o600); err != nil {
+		t.Fatalf("write grok auth: %v", err)
 	}
 }
 

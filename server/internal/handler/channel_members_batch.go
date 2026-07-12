@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -68,19 +69,42 @@ func (h *Handler) AddChannelMembers(w http.ResponseWriter, r *http.Request) {
 
 	// Insert every valid target in one statement. The EXISTS guards keep us from
 	// adding ids that aren't a workspace member / workspace agent.
-	if _, err := h.DB.Exec(r.Context(), `
+	rows, err := h.DB.Query(r.Context(), `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		SELECT $1, $2, t.mt, t.mid::uuid
 		FROM unnest($3::text[], $4::text[]) AS t(mt, mid)
 		WHERE (t.mt = 'user'  AND EXISTS (SELECT 1 FROM member m WHERE m.workspace_id = $2 AND m.user_id = t.mid::uuid))
 		   OR (t.mt = 'agent' AND EXISTS (SELECT 1 FROM agent  a WHERE a.workspace_id = $2 AND a.id      = t.mid::uuid))
-		ON CONFLICT DO NOTHING`,
+		ON CONFLICT DO NOTHING
+		RETURNING member_type, member_id`,
 		channelID, parseUUID(workspaceID), types, ids,
-	); err != nil {
+	)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to add channel members")
+		return
+	}
+	defer rows.Close()
+	type insertedMember struct {
+		memberType string
+		memberID   pgtype.UUID
+	}
+	inserted := []insertedMember{}
+	for rows.Next() {
+		var member insertedMember
+		if err := rows.Scan(&member.memberType, &member.memberID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read added channel members")
+			return
+		}
+		inserted = append(inserted, member)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read added channel members")
 		return
 	}
 
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
+	for _, member := range inserted {
+		h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, channelMemberAddedEvent, parseUUID(userID), member.memberType, member.memberID)
+	}
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }

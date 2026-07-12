@@ -98,18 +98,36 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 					return
 				}
 				it, err := queries.GetAgentInboxTokenByHash(r.Context(), hash)
-				if err != nil {
-					slog.Warn("auth: invalid task token", "path", r.URL.Path, "error", err)
+				if err == nil {
+					r.Header.Set("X-User-ID", uuidToString(it.UserID))
+					r.Header.Set("X-Agent-ID", uuidToString(it.AgentID))
+					r.Header.Set("X-Task-ID", uuidToString(it.InboxEventID))
+					r.Header.Set("X-Agent-Inbox-Event-ID", uuidToString(it.InboxEventID))
+					r.Header.Set("X-Agent-Inbox-Delivery-ID", uuidToString(it.DeliveryID))
+					r.Header.Set("X-Workspace-ID", uuidToString(it.WorkspaceID))
+					r.Header.Set("X-Actor-Source", "agent_inbox_token")
+					next.ServeHTTP(w, r)
+					return
+				}
+				if !errors.Is(err, pgx.ErrNoRows) {
+					slog.Warn("auth: invalid agent inbox token", "path", r.URL.Path, "error", err)
 					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 					return
 				}
-				r.Header.Set("X-User-ID", uuidToString(it.UserID))
-				r.Header.Set("X-Agent-ID", uuidToString(it.AgentID))
-				r.Header.Set("X-Task-ID", uuidToString(it.InboxEventID))
-				r.Header.Set("X-Agent-Inbox-Event-ID", uuidToString(it.InboxEventID))
-				r.Header.Set("X-Agent-Inbox-Delivery-ID", uuidToString(it.DeliveryID))
-				r.Header.Set("X-Workspace-ID", uuidToString(it.WorkspaceID))
-				r.Header.Set("X-Actor-Source", "agent_inbox_token")
+				credential, err := queries.GetAgentCredentialByHash(r.Context(), hash)
+				if err != nil {
+					slog.Warn("auth: invalid mat token", "path", r.URL.Path, "error", err)
+					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
+					return
+				}
+				r.Header.Set("X-User-ID", uuidToString(credential.UserID))
+				r.Header.Set("X-Agent-ID", uuidToString(credential.AgentID))
+				r.Header.Set("X-Agent-Credential-ID", uuidToString(credential.ID))
+				r.Header.Set("X-Workspace-ID", uuidToString(credential.WorkspaceID))
+				r.Header.Set("X-Actor-Source", "agent_credential")
+				if err := queries.TouchAgentCredentialLastUsed(r.Context(), credential.ID); err != nil {
+					slog.Warn("auth: failed to touch agent credential last used", "credential_id", uuidToString(credential.ID), "error", err)
+				}
 				next.ServeHTTP(w, r)
 				return
 			}

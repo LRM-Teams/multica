@@ -720,6 +720,70 @@ func TestDaemonRegister_WithDaemonToken(t *testing.T) {
 	testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
 }
 
+func TestDaemonRegister_ProfileTokenReturnsDaemonToken(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/daemon/register", map[string]any{
+		"workspace_id": testWorkspaceID,
+		"daemon_id":    "test-daemon-bootstrap-token",
+		"device_name":  "test-device",
+		"cli_version":  "v0.3.0",
+		"capabilities": []string{
+			protocol.DaemonCapabilityChannelOutputActions,
+			protocol.DaemonCapabilityAgentCLITransport,
+		},
+		"runtimes": []map[string]any{
+			{"name": "test-runtime-bootstrap-token", "type": "claude", "version": "1.0.0", "status": "online"},
+		},
+	})
+
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister with profile token: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Runtimes             []map[string]any `json:"runtimes"`
+		DaemonToken          string           `json:"daemon_token"`
+		DaemonTokenExpiresAt string           `json:"daemon_token_expires_at"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode register response: %v", err)
+	}
+	if !strings.HasPrefix(resp.DaemonToken, "mdt_") {
+		t.Fatalf("daemon_token prefix = %q, want mdt_", resp.DaemonToken)
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, resp.DaemonTokenExpiresAt)
+	if err != nil {
+		t.Fatalf("daemon_token_expires_at parse failed: %v", err)
+	}
+	if !expiresAt.After(time.Now()) {
+		t.Fatalf("daemon_token_expires_at = %s, want future expiry", resp.DaemonTokenExpiresAt)
+	}
+
+	hash := auth.HashToken(resp.DaemonToken)
+	defer testPool.Exec(context.Background(), `DELETE FROM daemon_token WHERE token_hash = $1`, hash)
+	if len(resp.Runtimes) > 0 {
+		if runtimeID, _ := resp.Runtimes[0]["id"].(string); runtimeID != "" {
+			defer testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		}
+	}
+	var storedWorkspaceID, storedDaemonID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT workspace_id::text, daemon_id
+		FROM daemon_token
+		WHERE token_hash = $1
+	`, hash).Scan(&storedWorkspaceID, &storedDaemonID); err != nil {
+		t.Fatalf("query daemon_token row: %v", err)
+	}
+	if storedWorkspaceID != testWorkspaceID || storedDaemonID != "test-daemon-bootstrap-token" {
+		t.Fatalf("daemon_token binding = (%s, %s), want (%s, test-daemon-bootstrap-token)", storedWorkspaceID, storedDaemonID, testWorkspaceID)
+	}
+}
+
 func capabilitiesContainExactly(got []any, want ...string) bool {
 	if len(got) != len(want) {
 		return false

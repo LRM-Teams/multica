@@ -24,6 +24,144 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+func TestDaemonRegistrationCapabilities_GatesCredentialTransport(t *testing.T) {
+	legacy := daemonRegistrationCapabilities(false)
+	if containsString(legacy, protocol.DaemonCapabilityAgentCredentialTransport) {
+		t.Fatalf("legacy capabilities must not include %q: %#v", protocol.DaemonCapabilityAgentCredentialTransport, legacy)
+	}
+	if !containsString(legacy, protocol.DaemonCapabilityChannelOutputActions) || !containsString(legacy, protocol.DaemonCapabilityAgentCLITransport) {
+		t.Fatalf("legacy capabilities missing base entries: %#v", legacy)
+	}
+
+	capable := daemonRegistrationCapabilities(true)
+	if !containsString(capable, protocol.DaemonCapabilityAgentCredentialTransport) {
+		t.Fatalf("capable registration missing %q: %#v", protocol.DaemonCapabilityAgentCredentialTransport, capable)
+	}
+}
+
+func TestDaemonRegister_InvalidWorkspaceDaemonTokenRetriesBootstrap(t *testing.T) {
+	oldDetect := detectAgentVersion
+	oldCheck := checkAgentMinVersion
+	detectAgentVersion = func(context.Context, string) (string, error) { return "9.9.9", nil }
+	checkAgentMinVersion = func(string, string) error { return nil }
+	t.Cleanup(func() {
+		detectAgentVersion = oldDetect
+		checkAgentMinVersion = oldCheck
+	})
+
+	expiresAt := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/api/daemon/register" {
+			t.Fatalf("path = %q, want /api/daemon/register", got)
+		}
+		var req struct {
+			WorkspaceID  string   `json:"workspace_id"`
+			Capabilities []string `json:"capabilities"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode register body: %v", err)
+		}
+		if req.WorkspaceID != "ws-1" {
+			t.Fatalf("workspace_id = %q, want ws-1", req.WorkspaceID)
+		}
+
+		switch call := calls.Add(1); call {
+		case 1:
+			if got := r.Header.Get("Authorization"); got != "Bearer mdt-old" {
+				t.Fatalf("call 1 Authorization = %q, want stale daemon token", got)
+			}
+			if !containsString(req.Capabilities, protocol.DaemonCapabilityAgentCredentialTransport) {
+				t.Fatalf("call 1 should advertise credential transport before token rejection: %#v", req.Capabilities)
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid daemon token"}`))
+		case 2:
+			if got := r.Header.Get("Authorization"); got != "Bearer mul-profile" {
+				t.Fatalf("call 2 Authorization = %q, want bootstrap profile token", got)
+			}
+			if containsString(req.Capabilities, protocol.DaemonCapabilityAgentCredentialTransport) {
+				t.Fatalf("call 2 must clear stale credential capability after token rejection: %#v", req.Capabilities)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"runtimes": []map[string]string{{
+					"id":           "rt-new",
+					"workspace_id": "ws-1",
+					"provider":     "pi",
+				}},
+				"daemon_token":            "mdt-new",
+				"daemon_token_expires_at": expiresAt,
+			})
+		case 3:
+			if got := r.Header.Get("Authorization"); got != "Bearer mdt-new" {
+				t.Fatalf("call 3 Authorization = %q, want refreshed daemon token", got)
+			}
+			if !containsString(req.Capabilities, protocol.DaemonCapabilityAgentCredentialTransport) {
+				t.Fatalf("call 3 should re-advertise credential transport with fresh token: %#v", req.Capabilities)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"runtimes": []map[string]string{{
+					"id":           "rt-new",
+					"workspace_id": "ws-1",
+					"provider":     "pi",
+				}},
+				"daemon_token":            "mdt-newer",
+				"daemon_token_expires_at": expiresAt,
+			})
+		default:
+			t.Fatalf("unexpected register call %d", call)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	c.SetToken("mul-profile")
+	c.SetWorkspaceDaemonToken("ws-1", "mdt-old", time.Now().Add(time.Hour))
+	c.SetRuntimeDaemonToken("old-rt", "mdt-old", time.Now().Add(time.Hour))
+
+	d := &Daemon{
+		cfg: Config{
+			DaemonID: "daemon-1",
+			Agents: map[string]AgentEntry{
+				"pi": {Path: "pi"},
+			},
+		},
+		client:        c,
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		agentVersions: make(map[string]string),
+		workspaces: map[string]*workspaceState{
+			"ws-1": newWorkspaceState("ws-1", []string{"old-rt"}, "", nil, nil),
+		},
+		runtimeIndex: map[string]Runtime{
+			"old-rt": {ID: "old-rt", WorkspaceID: "ws-1", Provider: "pi"},
+		},
+	}
+
+	if _, err := d.registerRuntimesForWorkspace(context.Background(), "ws-1"); err != nil {
+		t.Fatalf("registerRuntimesForWorkspace: %v", err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("register calls = %d, want 3", got)
+	}
+	if got := c.tokenForRuntime("old-rt"); got != "mul-profile" {
+		t.Fatalf("old runtime token = %q, want bootstrap after stale clear", got)
+	}
+	if got := c.tokenForRuntime("rt-new"); got != "mdt-newer" {
+		t.Fatalf("new runtime token = %q, want refreshed daemon token", got)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
 func createDaemonTestRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

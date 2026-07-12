@@ -19,6 +19,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/daemonws"
+	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
@@ -31,6 +32,7 @@ import (
 )
 
 const chatResumeRecentMessageLimit = 10
+const daemonRegisterTokenTTL = 24 * time.Hour
 
 // ---------------------------------------------------------------------------
 // Daemon workspace ownership helpers
@@ -186,6 +188,28 @@ type DaemonRegisterRequest struct {
 		Version string `json:"version"` // agent CLI version (claude/codex)
 		Status  string `json:"status"`
 	} `json:"runtimes"`
+}
+
+func (h *Handler) issueDaemonRegisterToken(ctx context.Context, workspaceID pgtype.UUID, daemonID string) (string, time.Time, error) {
+	rawToken, err := auth.GenerateDaemonToken()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	expiresAt := time.Now().Add(daemonRegisterTokenTTL)
+	hash := auth.HashToken(rawToken)
+	if _, err := h.Queries.CreateDaemonToken(ctx, db.CreateDaemonTokenParams{
+		TokenHash:   hash,
+		WorkspaceID: workspaceID,
+		DaemonID:    daemonID,
+		ExpiresAt:   pgtype.Timestamptz{Time: expiresAt, Valid: true},
+	}); err != nil {
+		return "", time.Time{}, err
+	}
+	h.DaemonTokenCache.Set(ctx, hash, auth.DaemonTokenIdentity{
+		WorkspaceID: uuidToString(workspaceID),
+		DaemonID:    daemonID,
+	}, auth.TTLForExpiry(time.Now(), expiresAt))
+	return rawToken, expiresAt, nil
 }
 
 type daemonWorkspaceReposResponse struct {
@@ -423,12 +447,21 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	})
 
 	repoResp := workspaceReposResponse(req.WorkspaceID, ws.Repos, ws.Settings)
+	daemonToken, daemonTokenExpiresAt, err := h.issueDaemonRegisterToken(r.Context(), wsUUID, req.DaemonID)
+	if err != nil {
+		slog.Error("daemon register: issue daemon token failed",
+			append(logger.RequestAttrs(r), "error", err, "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID)...)
+		writeError(w, http.StatusInternalServerError, "failed to issue daemon token")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"runtimes":      resp,
-		"repos":         repoResp.Repos,
-		"repos_version": repoResp.ReposVersion,
-		"settings":      repoResp.Settings,
+		"runtimes":                resp,
+		"repos":                   repoResp.Repos,
+		"repos_version":           repoResp.ReposVersion,
+		"settings":                repoResp.Settings,
+		"daemon_token":            daemonToken,
+		"daemon_token_expires_at": daemonTokenExpiresAt.UTC().Format(time.RFC3339Nano),
 	})
 }
 

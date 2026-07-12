@@ -168,7 +168,14 @@
     "stop_failed": "停止 Agent 任务失败",
     "processing_single": "{{name}} 正在准备回复...",
     "processing_pair": "{{a}}、{{b}} 正在准备回复...",
-    "processing_overflow": "{{a}}、{{b}} 等 {{count}} 位正在准备回复..."
+    "processing_overflow": "{{a}}、{{b}} 等 {{count}} 位正在准备回复...",
+    "no_reply": "已收到 · 无需回复",
+    "failed": "回复失败",
+    "retry": "重试",
+    "retry_named": "重试 {{name}}",
+    "retry_aria": "重试 {{name}} 的回复",
+    "retry_success": "正在重试 {{name}}",
+    "retry_failed": "重试失败"
   },
   "composer": {
     "placeholder": "描述你需要什么帮助...  @ 智能体名称会触发它回复。",

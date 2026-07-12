@@ -82,8 +82,19 @@ export interface ChannelThreadWakeAnnotation {
   member_type: string;
   member_id: string;
   display_name: string;
-  state: "pending" | "replied" | "acked" | "delivered" | "no_reply" | (string & {});
+  state: "pending" | "replied" | "acked" | "delivered" | "no_reply" | "failed" | (string & {});
   reason?: string | null;
+  outcome?: "replied" | "no_reply" | "failed" | null;
+  retryable?: boolean | null;
+  inbox_event_id?: string | null;
+  delivery_id?: string | null;
+  agent_id?: string | null;
+  conversation_id?: string | null;
+  channel_id?: string | null;
+  chat_session_id?: string | null;
+  thread_root_message_id?: string | null;
+  source_message_id?: string | null;
+  terminal_at?: string | null;
 }
 
 export interface ChannelMessage {
@@ -251,6 +262,16 @@ export interface ChannelActiveTask {
   agent_name: string;
   task_id: string;
   status: string;
+  outcome?: "replied" | "no_reply" | "failed" | string | null;
+  retryable?: boolean | null;
+  inbox_event_id?: string | null;
+  delivery_id?: string | null;
+  conversation_id?: string | null;
+  channel_id?: string | null;
+  chat_session_id?: string | null;
+  thread_root_message_id?: string | null;
+  source_message_id?: string | null;
+  terminal_at?: string | null;
 }
 
 /** One entry in a project workdir listing; `path` is relative to the workdir

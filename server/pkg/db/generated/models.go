@@ -64,26 +64,30 @@ type AgentEventDelivery struct {
 }
 
 type AgentInboxEvent struct {
-	ID              pgtype.UUID        `json:"id"`
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	AgentSessionID  pgtype.UUID        `json:"agent_session_id"`
-	ConversationID  pgtype.UUID        `json:"conversation_id"`
-	ChannelID       pgtype.UUID        `json:"channel_id"`
-	ChatSessionID   pgtype.UUID        `json:"chat_session_id"`
-	AgentID         pgtype.UUID        `json:"agent_id"`
-	SourceMessageID pgtype.UUID        `json:"source_message_id"`
-	Reason          string             `json:"reason"`
-	RequiresWake    bool               `json:"requires_wake"`
-	Status          string             `json:"status"`
-	Priority        int32              `json:"priority"`
-	SeqFrom         int64              `json:"seq_from"`
-	SeqTo           int64              `json:"seq_to"`
-	Attempt         int32              `json:"attempt"`
-	LastError       pgtype.Text        `json:"last_error"`
-	ClaimedAt       pgtype.Timestamptz `json:"claimed_at"`
-	AckedAt         pgtype.Timestamptz `json:"acked_at"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	AgentSessionID     pgtype.UUID        `json:"agent_session_id"`
+	ConversationID     pgtype.UUID        `json:"conversation_id"`
+	ChannelID          pgtype.UUID        `json:"channel_id"`
+	ChatSessionID      pgtype.UUID        `json:"chat_session_id"`
+	AgentID            pgtype.UUID        `json:"agent_id"`
+	SourceMessageID    pgtype.UUID        `json:"source_message_id"`
+	Reason             string             `json:"reason"`
+	RequiresWake       bool               `json:"requires_wake"`
+	Status             string             `json:"status"`
+	Priority           int32              `json:"priority"`
+	SeqFrom            int64              `json:"seq_from"`
+	SeqTo              int64              `json:"seq_to"`
+	Attempt            int32              `json:"attempt"`
+	LastError          pgtype.Text        `json:"last_error"`
+	ClaimedAt          pgtype.Timestamptz `json:"claimed_at"`
+	AckedAt            pgtype.Timestamptz `json:"acked_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	TerminalOutcome    pgtype.Text        `json:"terminal_outcome"`
+	TerminalDeliveryID pgtype.UUID        `json:"terminal_delivery_id"`
+	Retryable          bool               `json:"retryable"`
+	TerminalAt         pgtype.Timestamptz `json:"terminal_at"`
 }
 
 type AgentInboxToken struct {

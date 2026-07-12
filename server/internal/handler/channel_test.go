@@ -874,12 +874,20 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	}
 	assertChannelMessageContentCount(t, channelID, reply, 1)
 
-	var status string
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_inbox_event WHERE id = $1`, got.ID).Scan(&status); err != nil {
+	var status, terminalOutcome, terminalDeliveryID string
+	var retryable bool
+	var terminalAt pgtype.Timestamptz
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, COALESCE(terminal_outcome, ''), COALESCE(terminal_delivery_id::text, ''), retryable, terminal_at
+		FROM agent_inbox_event
+		WHERE id = $1`, got.ID).Scan(&status, &terminalOutcome, &terminalDeliveryID, &retryable, &terminalAt); err != nil {
 		t.Fatalf("load inbox event status: %v", err)
 	}
 	if status != "acked" {
 		t.Fatalf("inbox event status = %q, want acked", status)
+	}
+	if terminalOutcome != "replied" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
+		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want replied/%s/non-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
 	}
 }
 
@@ -1576,16 +1584,27 @@ func TestChannelAgentInboxFailDirectedMention(t *testing.T) {
 		t.Fatalf("fail inbox event: status=%d body=%s", failRec.Code, failRec.Body.String())
 	}
 
-	var eventStatus, deliveryStatus, lastError string
+	var eventStatus, deliveryStatus, lastError, terminalOutcome, terminalDeliveryID string
+	var retryable bool
+	var terminalAt pgtype.Timestamptz
 	if err := testPool.QueryRow(ctx, `
-		SELECT e.status, d.status, COALESCE(e.last_error, '')
+		SELECT e.status,
+		       d.status,
+		       COALESCE(e.last_error, ''),
+		       COALESCE(e.terminal_outcome, ''),
+		       COALESCE(e.terminal_delivery_id::text, ''),
+		       e.retryable,
+		       e.terminal_at
 		FROM agent_inbox_event e
 		JOIN agent_event_delivery d ON d.inbox_event_id = e.id
-		WHERE e.id = $1 AND d.id = $2`, got.ID, got.DeliveryID).Scan(&eventStatus, &deliveryStatus, &lastError); err != nil {
+		WHERE e.id = $1 AND d.id = $2`, got.ID, got.DeliveryID).Scan(&eventStatus, &deliveryStatus, &lastError, &terminalOutcome, &terminalDeliveryID, &retryable, &terminalAt); err != nil {
 		t.Fatalf("load failed inbox event: %v", err)
 	}
 	if eventStatus != "acked" || deliveryStatus != "acked" || !strings.Contains(lastError, "grok not logged in") {
 		t.Fatalf("terminal inbox states = event:%q delivery:%q error:%q, want acked/acked/grok not logged in", eventStatus, deliveryStatus, lastError)
+	}
+	if terminalOutcome != "failed" || terminalDeliveryID != got.DeliveryID || !retryable || !terminalAt.Valid {
+		t.Fatalf("failed terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want failed/%s/retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
 	}
 
 	var assistantFailureMessages int
@@ -3853,6 +3872,206 @@ func TestChannelThreadReadModelSurfacesReplyAndAckStates(t *testing.T) {
 	}
 }
 
+func TestChannelThreadReadModelSurfacesInboxTerminalOutcomesAndRetry(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Thread Terminal Helper", nil)
+	channelID := seedChannelForTest(t, "thread-terminal-model-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+
+	noReplyRoot := dispatchThreadMentionForTest(t, channelID, agentID, "thread-terminal-no-reply-"+uuid.NewString())
+	noReplyEventID := latestChannelAgentInboxEventForRootForTest(t, noReplyRoot.ID, agentID)
+	noReplyDeliveryID := setAgentInboxTerminalOutcomeForTest(t, noReplyEventID, "no_reply", false)
+	noReplyPage, noReplyRaw := listedThreadForUser(t, channelID, noReplyRoot.ID, testUserID)
+	noReplyWake := wakeStateForAgent(t, noReplyPage.Messages[0], agentID)
+	if noReplyWake.State != "no_reply" || noReplyWake.Reason != nil || noReplyWake.Outcome == nil || *noReplyWake.Outcome != "no_reply" {
+		t.Fatalf("no-reply wake = %+v, want terminal no_reply without reason leak", noReplyWake)
+	}
+	if noReplyWake.Retryable == nil || *noReplyWake.Retryable || noReplyWake.InboxEventID == nil || *noReplyWake.InboxEventID != noReplyEventID || noReplyWake.DeliveryID == nil || *noReplyWake.DeliveryID != noReplyDeliveryID || noReplyWake.TerminalAt == nil {
+		t.Fatalf("no-reply terminal metadata = %+v, want non-retryable ids + terminal_at", noReplyWake)
+	}
+	for _, forbidden := range []string{"reason_code", "failure_reason", "agent_task_queue", "run_id"} {
+		if strings.Contains(noReplyRaw, forbidden) {
+			t.Fatalf("no-reply read-model leaked %q: %s", forbidden, noReplyRaw)
+		}
+	}
+
+	failedRoot := dispatchThreadMentionForTest(t, channelID, agentID, "thread-terminal-failed-"+uuid.NewString())
+	failedEventID := latestChannelAgentInboxEventForRootForTest(t, failedRoot.ID, agentID)
+	failedDeliveryID := setAgentInboxTerminalOutcomeForTest(t, failedEventID, "failed", true)
+	failedPage, failedRaw := listedThreadForUser(t, channelID, failedRoot.ID, testUserID)
+	failedWake := wakeStateForAgent(t, failedPage.Messages[0], agentID)
+	if failedWake.State != "failed" || failedWake.Outcome == nil || *failedWake.Outcome != "failed" || failedWake.Retryable == nil || !*failedWake.Retryable || failedWake.DeliveryID == nil || *failedWake.DeliveryID != failedDeliveryID {
+		t.Fatalf("failed wake = %+v, want retryable terminal failure", failedWake)
+	}
+	if strings.Contains(failedRaw, "reason_code") || strings.Contains(failedRaw, "failure_reason") || strings.Contains(failedRaw, "run_id") {
+		t.Fatalf("failed read-model leaked diagnostics: %s", failedRaw)
+	}
+
+	var switchedRuntimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status,
+			device_info, metadata, owner_id, last_seen_at
+		)
+		VALUES ($1, $2, 'Retry Switched Runtime', 'local', 'test-retry', 'online', 'test runtime', '{}'::jsonb, $3, now())
+		RETURNING id
+	`, testWorkspaceID, "retry-runtime-"+uuid.NewString(), testUserID).Scan(&switchedRuntimeID); err != nil {
+		t.Fatalf("create switched runtime: %v", err)
+	}
+	var originalRuntimeID string
+	if err := testPool.QueryRow(ctx, `SELECT runtime_id FROM agent WHERE id = $1`, agentID).Scan(&originalRuntimeID); err != nil {
+		t.Fatalf("load original agent runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `UPDATE agent SET runtime_id = $2 WHERE id = $1`, agentID, originalRuntimeID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, switchedRuntimeID)
+	})
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET runtime_id = $2 WHERE id = $1`, agentID, switchedRuntimeID); err != nil {
+		t.Fatalf("switch agent runtime before retry: %v", err)
+	}
+
+	retryReq := newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/agent-inbox/events/"+failedEventID+"/retry", nil)
+	retryReq = withChannelTestWorkspaceCtx(t, retryReq, testUserID)
+	retryReq = withURLParams(retryReq, "channelId", channelID, "eventId", failedEventID)
+	retryRec := httptest.NewRecorder()
+	testHandler.RetryChannelAgentInboxEvent(retryRec, retryReq)
+	if retryRec.Code != http.StatusCreated {
+		t.Fatalf("retry inbox event: status=%d body=%s", retryRec.Code, retryRec.Body.String())
+	}
+	var retryResp struct {
+		InboxEventID string `json:"inbox_event_id"`
+		Status       string `json:"status"`
+	}
+	if err := json.Unmarshal(retryRec.Body.Bytes(), &retryResp); err != nil {
+		t.Fatalf("decode retry response: %v", err)
+	}
+	if retryResp.InboxEventID == "" || retryResp.InboxEventID == failedEventID || retryResp.Status != "pending" {
+		t.Fatalf("retry response = %+v, want new pending inbox event", retryResp)
+	}
+	var retryRuntimeID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT s.runtime_id
+		FROM agent_inbox_event e
+		JOIN agent_session s ON s.id = e.agent_session_id
+		WHERE e.id = $1`, retryResp.InboxEventID).Scan(&retryRuntimeID); err != nil {
+		t.Fatalf("load retry session runtime: %v", err)
+	}
+	if retryRuntimeID != switchedRuntimeID {
+		t.Fatalf("retry session runtime = %s, want switched runtime %s", retryRuntimeID, switchedRuntimeID)
+	}
+	retryPage, _ := listedThreadForUser(t, channelID, failedRoot.ID, testUserID)
+	retryWake := wakeStateForAgent(t, retryPage.Messages[0], agentID)
+	if retryWake.State != "pending" || retryWake.Outcome != nil || retryWake.InboxEventID != nil {
+		t.Fatalf("post-retry wake = %+v, want fresh pending new-chain event without terminal metadata", retryWake)
+	}
+}
+
+func TestChannelActiveTasksSurfacesInboxTerminalOutcomes(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentName := "Active Terminal Helper " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	channelID := seedChannelForTest(t, "active-terminal-model-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+
+	noReplyRoot := dispatchThreadMentionForTest(t, channelID, agentID, "active-terminal-no-reply-"+uuid.NewString())
+	noReplyEventID := latestChannelAgentInboxEventForRootForTest(t, noReplyRoot.ID, agentID)
+	noReplyDeliveryID := setAgentInboxTerminalOutcomeForTest(t, noReplyEventID, "no_reply", false)
+
+	req := withURLParam(newRequest(http.MethodGet, "/api/channels/"+channelID+"/active-tasks", nil), "channelId", channelID)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	rec := httptest.NewRecorder()
+	testHandler.ListChannelActiveTasks(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list active terminal tasks: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp ChannelActiveTasksResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode active terminal tasks: %v", err)
+	}
+	if len(resp.Tasks) != 1 {
+		t.Fatalf("active terminal tasks = %+v, want one no_reply row", resp.Tasks)
+	}
+	got := resp.Tasks[0]
+	if got.AgentID != agentID || got.AgentName == "" || got.TaskID != noReplyEventID || got.Status != "no_reply" {
+		t.Fatalf("active terminal task identity = %+v, want agent/no_reply/inbox event id", got)
+	}
+	if got.Outcome == nil || *got.Outcome != "no_reply" || got.Retryable == nil || *got.Retryable || got.InboxEventID == nil || *got.InboxEventID != noReplyEventID || got.DeliveryID == nil || *got.DeliveryID != noReplyDeliveryID || got.TerminalAt == nil {
+		t.Fatalf("active terminal metadata = %+v, want no_reply ids + non-retryable + terminal_at", got)
+	}
+
+	if _, err := testPool.Exec(ctx, `UPDATE agent_inbox_event SET terminal_at = now() - interval '3 minutes' WHERE id = $1`, noReplyEventID); err != nil {
+		t.Fatalf("age no_reply terminal row: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelActiveTasks(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list active tasks after no_reply ttl: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	resp = ChannelActiveTasksResponse{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode active tasks after no_reply ttl: %v", err)
+	}
+	if len(resp.Tasks) != 0 {
+		t.Fatalf("active tasks after no_reply ttl = %+v, want no strip rows", resp.Tasks)
+	}
+
+	failedRoot := dispatchThreadMentionForTest(t, channelID, agentID, "active-terminal-failed-"+uuid.NewString())
+	failedEventID := latestChannelAgentInboxEventForRootForTest(t, failedRoot.ID, agentID)
+	failedDeliveryID := setAgentInboxTerminalOutcomeForTest(t, failedEventID, "failed", true)
+	if _, err := testPool.Exec(ctx, `UPDATE agent_inbox_event SET terminal_at = now() - interval '3 minutes' WHERE id = $1`, failedEventID); err != nil {
+		t.Fatalf("age failed terminal row: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelActiveTasks(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list failed terminal tasks: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	resp = ChannelActiveTasksResponse{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode failed terminal tasks: %v", err)
+	}
+	if len(resp.Tasks) != 1 {
+		t.Fatalf("failed terminal tasks = %+v, want one failed row", resp.Tasks)
+	}
+	got = resp.Tasks[0]
+	if got.Status != "failed" || got.Outcome == nil || *got.Outcome != "failed" || got.Retryable == nil || !*got.Retryable || got.InboxEventID == nil || *got.InboxEventID != failedEventID || got.DeliveryID == nil || *got.DeliveryID != failedDeliveryID {
+		t.Fatalf("failed terminal metadata = %+v, want retryable failed ids", got)
+	}
+
+	repliedRoot := dispatchThreadMentionForTest(t, channelID, agentID, "active-terminal-replied-"+uuid.NewString())
+	repliedEventID := latestChannelAgentInboxEventForRootForTest(t, repliedRoot.ID, agentID)
+	setAgentInboxTerminalOutcomeForTest(t, repliedEventID, "replied", false)
+
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelActiveTasks(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list active tasks after replied: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	resp = ChannelActiveTasksResponse{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode active tasks after replied: %v", err)
+	}
+	if len(resp.Tasks) != 0 {
+		t.Fatalf("active tasks after newer replied = %+v, want no strip rows", resp.Tasks)
+	}
+}
+
 func TestChannelThreadReplyWithoutMentionCreatesAmbientInboxOnly(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -5302,6 +5521,45 @@ func latestChannelAgentInboxEventForRootForTest(t *testing.T, rootID, agentID st
 		t.Fatalf("load latest channel agent inbox event for root: %v", err)
 	}
 	return eventID
+}
+
+func setAgentInboxTerminalOutcomeForTest(t *testing.T, eventID, outcome string, retryable bool) string {
+	t.Helper()
+	ctx := context.Background()
+	var deliveryID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_event_delivery (
+			workspace_id,
+			agent_session_id,
+			inbox_event_id,
+			runtime_id,
+			status,
+			acked_at
+		)
+		SELECT workspace_id,
+		       agent_session_id,
+		       id,
+		       $2,
+		       'acked',
+		       now()
+		FROM agent_inbox_event
+		WHERE id = $1
+		RETURNING id`, eventID, handlerTestRuntimeID(t)).Scan(&deliveryID); err != nil {
+		t.Fatalf("insert terminal delivery: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET status = 'acked',
+		    acked_at = now(),
+		    terminal_outcome = $2,
+		    terminal_delivery_id = $3,
+		    retryable = $4,
+		    terminal_at = now(),
+		    updated_at = now()
+		WHERE id = $1`, eventID, outcome, deliveryID, retryable); err != nil {
+		t.Fatalf("set terminal outcome: %v", err)
+	}
+	return deliveryID
 }
 
 func wakeStateForAgent(t *testing.T, root ChannelMessageResponse, agentID string) ChannelThreadWakeAnnotation {

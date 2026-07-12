@@ -796,6 +796,7 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"capabilities": []string{
 			protocol.DaemonCapabilityChannelOutputActions,
 			protocol.DaemonCapabilityAgentCLITransport,
+			protocol.DaemonCapabilityAgentCredentialTransport,
 		},
 		"runtimes": runtimes,
 	}
@@ -2742,6 +2743,26 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 	return release, false
 }
 
+func (d *Daemon) ensureTaskAgentCredential(ctx context.Context, task Task, taskLog *slog.Logger) (string, error) {
+	if strings.TrimSpace(task.WorkspaceID) == "" || strings.TrimSpace(task.RuntimeID) == "" || strings.TrimSpace(task.AgentID) == "" {
+		return "", fmt.Errorf("workspace_id, runtime_id, and agent_id are required")
+	}
+	if cached, ok := readCachedAgentCredential(d.cfg, task.WorkspaceID, task.RuntimeID, task.AgentID, time.Now()); ok {
+		taskLog.Info("agent credential cache hit", "credential_id", shortID(cached.CredentialID), "token_prefix", cached.Prefix)
+		return cached.Token, nil
+	}
+	resp, err := d.client.EnsureAgentCredential(ctx, task.RuntimeID, task.AgentID)
+	if err != nil {
+		return "", fmt.Errorf("ensure daemon agent credential: %w", err)
+	}
+	cached, err := writeCachedAgentCredential(d.cfg, task.WorkspaceID, task.RuntimeID, task.AgentID, *resp, time.Now())
+	if err != nil {
+		return "", err
+	}
+	taskLog.Info("agent credential ensured", "credential_id", shortID(cached.CredentialID), "token_prefix", cached.Prefix)
+	return cached.Token, nil
+}
+
 // reportTaskResult writes the final task disposition back to the server.
 //
 // Fail closed: only an explicit "completed" status is reported as success.
@@ -3123,6 +3144,19 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// brief. The brief must only advertise chat CLI transport when the command
 	// will actually exist in this run's PATH with a valid bearer token.
 	agentToken := task.AuthToken
+	durableAgentToken := false
+	if task.isInboxTask() && agentToken == "" {
+		token, err := d.ensureTaskAgentCredential(ctx, task, taskLog)
+		if err != nil {
+			return TaskResult{
+				Status:        "failed",
+				Comment:       fmt.Sprintf("credential_unavailable: %s", err.Error()),
+				FailureReason: "credential_unavailable",
+			}, nil
+		}
+		agentToken = token
+		durableAgentToken = true
+	}
 	cliWrapperDir := ""
 	cliTokenFile := ""
 	cliBinDir := ""
@@ -3136,6 +3170,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			cliWrapperDir = wrapperDir
 			cliTokenFile = tokenFile
 			taskLog.Info("agent cli transport prepared", "wrapper_dir", wrapperDir, "token_file", tokenFile)
+			if durableAgentToken {
+				defer func() {
+					if err := os.RemoveAll(wrapperDir); err != nil {
+						taskLog.Warn("agent cli transport cleanup failed", "wrapper_dir", wrapperDir, "error", err)
+					}
+				}()
+			}
 		} else {
 			taskLog.Warn("agent cli transport: no run bearer token available; CLI API calls will require external auth")
 		}

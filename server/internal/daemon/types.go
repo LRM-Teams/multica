@@ -120,9 +120,10 @@ type Task struct {
 	// old servers that never send it are handled transparently.
 	ArealProxy *ArealProxy `json:"areal_proxy,omitempty"`
 	// AuthToken is the bearer token the daemon writes into the spawned agent's
-	// MULTICA_TOKEN_FILE wrapper. Legacy queue runs bind it to a task; current
-	// inbox runs still receive the temporary delivery-bound bearer until the
-	// durable agent credential provisioning slice replaces that mint path.
+	// MULTICA_TOKEN_FILE wrapper. Legacy queue runs bind it to a task; legacy
+	// inbox runs bind it to a single delivery. Credential-transport-capable
+	// inbox runs leave this empty so the daemon provisions/reuses a durable
+	// agent credential locally and exposes only a per-run token file copy.
 	// Empty when the server-side runtime has no owning user.
 	AuthToken string `json:"auth_token,omitempty"`
 

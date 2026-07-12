@@ -197,8 +197,9 @@ const (
 )
 
 const (
-	DaemonCapabilityChannelOutputActions = "channel_output_actions"
-	DaemonCapabilityAgentCLITransport    = "agent_cli_transport"
+	DaemonCapabilityChannelOutputActions     = "channel_output_actions"
+	DaemonCapabilityAgentCLITransport        = "agent_cli_transport"
+	DaemonCapabilityAgentCredentialTransport = "agent_credential_transport_v1"
 )
 
 const (

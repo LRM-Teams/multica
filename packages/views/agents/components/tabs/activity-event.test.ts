@@ -76,6 +76,49 @@ describe("activityPresentation — tool normalization", () => {
   });
 });
 
+describe("activityPresentation — mention markdown in narrative subtext (#387)", () => {
+  // Output/thinking/subagent subtext is authored message/model text: it still
+  // carries mention markdown. The row is a plain-text preview, so the projection
+  // normalizes `[@Name](mention://…)` to the display name and never leaks the
+  // raw `mention://` URI (Frank's screenshot: the Output preview showed the raw
+  // link).
+  function narrativeEvent(kind: ActivityEvent["kind"], text: string): ActivityEvent {
+    return {
+      id: "n1",
+      agent_id: "agent-1",
+      kind,
+      event_type: kind,
+      occurred_at: "2026-07-11T00:00:00Z",
+      visibility: "user_facing",
+      text,
+      target_ref: { kind: "agent", id: "agent-1" },
+    } as ActivityEvent;
+  }
+
+  it("strips a member mention from the Output preview to its display name", () => {
+    const event = narrativeEvent(
+      "text",
+      "在的，请问有什么需要我帮您处理的吗？ [@Frank An](mention://member/92f85fa1-dd03-4242-8d3a-c3a80fb35149)",
+    );
+    const subtext = activityPresentation(event).subtext ?? "";
+    expect(subtext).toContain("@Frank An");
+    expect(subtext).not.toContain("mention://");
+    expect(subtext).not.toContain("](");
+  });
+
+  it("strips mentions from thinking prose too", () => {
+    const event = narrativeEvent("thinking", "Replying to [@Frank An](mention://member/abc) now.");
+    expect(activityPresentation(event).subtext).toBe("Replying to @Frank An now.");
+  });
+
+  it("leaves a real markdown link untouched", () => {
+    const event = narrativeEvent("text", "See [docs](https://example.com/x) for details.");
+    expect(activityPresentation(event).subtext).toBe(
+      "See [docs](https://example.com/x) for details.",
+    );
+  });
+});
+
 describe("isNarrativeActivityEvent — un-mapped tool filter (#384)", () => {
   // A tool_call only enters the user-facing timeline when its slug maps to a
   // canonical Raft action. An un-mapped tool (BE didn't canonicalize it, or a

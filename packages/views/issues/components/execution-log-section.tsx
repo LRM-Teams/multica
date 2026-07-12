@@ -205,7 +205,7 @@ const STATUS_TONE: Record<AgentTask["status"], string> = {
 
 // ─── Active row ────────────────────────────────────────────────────────────
 
-import { stripMentionMarkdown } from "../utils/strip-mention-markdown";
+import { stripMentionMarkdown } from "../../common/strip-mention-markdown";
 
 function useTriggerText(task: AgentTask): string {
   const { t } = useT("issues");

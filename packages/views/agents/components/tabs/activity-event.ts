@@ -1,4 +1,5 @@
 import type { AgentActivityTimelineEvent } from "@multica/core/types";
+import { stripMentionMarkdown } from "../../../common/strip-mention-markdown";
 
 // FE read-model for the agent-activity narrative timeline (#267 / #302). The BE
 // supplies source-backed facts (`kind`, `text`, `reason_code`, refs, and
@@ -52,6 +53,19 @@ export interface ActivityPresentation {
 
 function reasonText(event: ActivityEvent): string {
   return event.reason_code?.trim().replaceAll("_", " ") ?? "";
+}
+
+// Free-form model/message text (Output body, thinking prose, subagent detail)
+// is authored markdown — it still carries mention syntax like
+// `[@Frank An](mention://member/id)`. The Activity row shows a plain-text
+// preview, so normalize mentions to their display name (`@Frank An`) before
+// display; real markdown links (`[docs](https://…)`) are left untouched (#387:
+// the raw `mention://` URI was leaking into the Output preview). Tool targets
+// are BE-provided safe summaries (basename / clipped query) and never carry
+// mentions, so they skip this.
+function narrativeText(text: string | null | undefined): string | undefined {
+  const trimmed = text ?? undefined;
+  return trimmed === undefined ? undefined : stripMentionMarkdown(trimmed);
 }
 
 export function isNarrativeActivityEvent(event: ActivityEvent): boolean {
@@ -170,9 +184,9 @@ function toolPresentation(event: ActivityEvent): ActivityPresentation {
 export function activityPresentation(event: ActivityEvent): ActivityPresentation {
   switch (event.kind) {
     case "thinking":
-      return { labelKey: "thinking", subtext: event.text, tone: "neutral" };
+      return { labelKey: "thinking", subtext: narrativeText(event.text), tone: "neutral" };
     case "text":
-      return { labelKey: "output", subtext: event.text, tone: "neutral" };
+      return { labelKey: "output", subtext: narrativeText(event.text), tone: "neutral" };
     case "tool_call":
       return toolPresentation(event);
     case "turn_end":
@@ -185,20 +199,24 @@ export function activityPresentation(event: ActivityEvent): ActivityPresentation
     case "wake_attempt":
       return { labelKey: "working", subtextKey: "message_received", tone: "active" };
     case "error":
-      return { labelKey: "failed", subtext: event.text ?? reasonText(event), tone: "failure" };
+      return {
+        labelKey: "failed",
+        subtext: narrativeText(event.text) ?? reasonText(event),
+        tone: "failure",
+      };
     case "blocked":
-      return { labelKey: "waiting", subtext: reasonText(event) || event.text, tone: "waiting" };
+      return { labelKey: "waiting", subtext: reasonText(event) || narrativeText(event.text), tone: "waiting" };
     case "custom":
       if (event.event_type.includes("subagent")) {
         // Prefer the daemon's own subagent detail text; fall back to a fixed label.
         return event.text
-          ? { labelKey: "working", subtext: event.text, tone: "active" }
+          ? { labelKey: "working", subtext: narrativeText(event.text), tone: "active" }
           : { labelKey: "working", subtextKey: "subagent_activity", tone: "active" };
       }
-      return { labelKey: "working", subtext: event.text, tone: "active" };
+      return { labelKey: "working", subtext: narrativeText(event.text), tone: "active" };
     default:
       // Unmapped narrative kind — a neutral working row, never the raw kind string.
-      return { labelKey: "working", subtext: event.text, tone: "neutral" };
+      return { labelKey: "working", subtext: narrativeText(event.text), tone: "neutral" };
   }
 }
 

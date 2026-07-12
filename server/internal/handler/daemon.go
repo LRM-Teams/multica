@@ -2429,6 +2429,10 @@ func (h *Handler) taskRuntimeHasCapability(ctx context.Context, task db.AgentTas
 		slog.Warn("complete task: failed to load task runtime capabilities", "task_id", uuidToString(task.ID), "runtime_id", uuidToString(task.RuntimeID), "error", err)
 		return false
 	}
+	return agentRuntimeHasCapability(rt, capability)
+}
+
+func agentRuntimeHasCapability(rt db.AgentRuntime, capability string) bool {
 	for _, candidate := range runtimeCapabilities(runtimeMetadata(rt)) {
 		if candidate == capability {
 			return true

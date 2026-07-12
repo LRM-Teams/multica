@@ -11,10 +11,13 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 const agentCredentialActivityCreated = "agent_credential_created"
+const agentCredentialActivityDaemonEnsured = "agent_credential_daemon_ensured"
+const daemonAgentCredentialTTL = 24 * time.Hour
 
 type CreateAgentCredentialRequest struct {
 	ExpiresInDays *int `json:"expires_in_days"`
@@ -176,6 +179,123 @@ func (h *Handler) CreateAgentCredential(w http.ResponseWriter, r *http.Request) 
 	if err := tx.Commit(r.Context()); err != nil {
 		slog.Error("agent credential create: tx commit failed",
 			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID))...)
+		writeError(w, http.StatusInternalServerError, "failed to create agent credential")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, CreateAgentCredentialResponse{
+		AgentCredentialResponse: agentCredentialToResponse(credential),
+		Token:                   rawToken,
+	})
+}
+
+func (h *Handler) EnsureDaemonAgentCredential(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	runtime, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
+		return
+	}
+	if middleware.DaemonAuthPathFromContext(r.Context()) != middleware.DaemonAuthPathDaemonToken {
+		writeError(w, http.StatusForbidden, "daemon credential provisioning requires daemon token")
+		return
+	}
+	daemonID := middleware.DaemonIDFromContext(r.Context())
+	if daemonID == "" {
+		writeError(w, http.StatusForbidden, "daemon credential provisioning requires daemon identity")
+		return
+	}
+	if !runtime.DaemonID.Valid || runtime.DaemonID.String != daemonID {
+		writeError(w, http.StatusForbidden, "daemon token is not bound to this runtime")
+		return
+	}
+	if !runtime.OwnerID.Valid {
+		writeError(w, http.StatusConflict, "agent runtime has no owning user")
+		return
+	}
+
+	agentIDParam := chi.URLParam(r, "agentId")
+	agentUUID, ok := parseUUIDOrBadRequest(w, agentIDParam, "agent_id")
+	if !ok {
+		return
+	}
+	agent, err := h.Queries.GetAgent(r.Context(), agentUUID)
+	if err != nil {
+		if isNotFound(err) {
+			writeError(w, http.StatusNotFound, "agent not found")
+			return
+		}
+		slog.Warn("daemon agent credential ensure: load agent failed",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", agentIDParam, "runtime_id", runtimeID)...)
+		writeError(w, http.StatusInternalServerError, "failed to load agent")
+		return
+	}
+	if agent.ArchivedAt.Valid {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	if uuidToString(agent.WorkspaceID) != uuidToString(runtime.WorkspaceID) || uuidToString(agent.RuntimeID) != uuidToString(runtime.ID) {
+		writeError(w, http.StatusForbidden, "agent is not bound to this runtime")
+		return
+	}
+
+	rawToken, err := auth.GenerateAgentCredentialToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate agent credential")
+		return
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		slog.Error("daemon agent credential ensure: begin tx failed",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID), "runtime_id", runtimeID)...)
+		writeError(w, http.StatusInternalServerError, "failed to create agent credential")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
+	credential, err := qtx.CreateAgentCredential(r.Context(), db.CreateAgentCredentialParams{
+		TokenHash:   auth.HashToken(rawToken),
+		TokenPrefix: tokenPrefix(rawToken),
+		AgentID:     agent.ID,
+		WorkspaceID: agent.WorkspaceID,
+		UserID:      runtime.OwnerID,
+		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(daemonAgentCredentialTTL), Valid: true},
+	})
+	if err != nil {
+		slog.Error("daemon agent credential ensure: insert failed",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID), "runtime_id", runtimeID)...)
+		writeError(w, http.StatusInternalServerError, "failed to create agent credential")
+		return
+	}
+
+	details, _ := json.Marshal(map[string]any{
+		"source":                  "daemon_runtime_ensure",
+		"daemon_id":               daemonID,
+		"runtime_id":              uuidToString(runtime.ID),
+		"agent_id":                uuidToString(agent.ID),
+		"agent_name":              agentDisplayName(agent),
+		"agent_credential_id":     uuidToString(credential.ID),
+		"agent_credential_prefix": credential.TokenPrefix,
+		"expires_at":              timestampToPtr(credential.ExpiresAt),
+	})
+	if _, err := qtx.CreateActivity(r.Context(), db.CreateActivityParams{
+		WorkspaceID: agent.WorkspaceID,
+		IssueID:     pgtype.UUID{},
+		ActorType:   pgtype.Text{String: "system", Valid: true},
+		ActorID:     pgtype.UUID{},
+		Action:      agentCredentialActivityDaemonEnsured,
+		Details:     details,
+	}); err != nil {
+		slog.Error("daemon agent credential ensure: audit write failed; rolling back",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID), "runtime_id", runtimeID)...)
+		writeError(w, http.StatusInternalServerError, "audit log write failed; credential create rolled back")
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		slog.Error("daemon agent credential ensure: tx commit failed",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID), "runtime_id", runtimeID)...)
 		writeError(w, http.StatusInternalServerError, "failed to create agent credential")
 		return
 	}

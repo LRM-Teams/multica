@@ -197,6 +197,22 @@ func (c *Client) DrainAgentInbox(ctx context.Context, runtimeID string) (*AgentI
 	return &resp.Events[0], nil
 }
 
+type AgentCredentialResponse struct {
+	ID        string  `json:"id"`
+	AgentID   string  `json:"agent_id"`
+	Prefix    string  `json:"token_prefix"`
+	ExpiresAt *string `json:"expires_at"`
+	Token     string  `json:"token"`
+}
+
+func (c *Client) EnsureAgentCredential(ctx context.Context, runtimeID, agentID string) (*AgentCredentialResponse, error) {
+	var resp AgentCredentialResponse
+	if err := c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agents/%s/credential", runtimeID, agentID), map[string]any{}, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 func (c *Client) StartTask(ctx context.Context, taskID string) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/start", taskID), map[string]any{}, nil)
 }

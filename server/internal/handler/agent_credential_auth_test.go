@@ -145,6 +145,200 @@ func seedHandlerTestRuntimeOwner(t *testing.T, ownerID string) {
 	})
 }
 
+func seedHandlerTestRuntimeDaemonID(t *testing.T, daemonID string) {
+	t.Helper()
+
+	runtimeID := handlerTestRuntimeID(t)
+	var oldDaemonID pgtype.Text
+	if err := testPool.QueryRow(context.Background(), `SELECT daemon_id FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&oldDaemonID); err != nil {
+		t.Fatalf("load runtime daemon id: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = $1 WHERE id = $2`, daemonID, runtimeID); err != nil {
+		t.Fatalf("seed runtime daemon id: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = $1 WHERE id = $2`, oldDaemonID, runtimeID)
+	})
+}
+
+func seedHandlerTestRuntimeDaemonIDNull(t *testing.T) {
+	t.Helper()
+
+	runtimeID := handlerTestRuntimeID(t)
+	var oldDaemonID pgtype.Text
+	if err := testPool.QueryRow(context.Background(), `SELECT daemon_id FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&oldDaemonID); err != nil {
+		t.Fatalf("load runtime daemon id: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = NULL WHERE id = $1`, runtimeID); err != nil {
+		t.Fatalf("clear runtime daemon id: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = $1 WHERE id = $2`, oldDaemonID, runtimeID)
+	})
+}
+
+func seedHandlerTestRuntimeCapabilities(t *testing.T, capabilities []string) {
+	t.Helper()
+
+	runtimeID := handlerTestRuntimeID(t)
+	var oldMetadata []byte
+	if err := testPool.QueryRow(context.Background(), `SELECT metadata FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&oldMetadata); err != nil {
+		t.Fatalf("load runtime metadata: %v", err)
+	}
+	metadata, err := json.Marshal(map[string]any{"capabilities": capabilities})
+	if err != nil {
+		t.Fatalf("marshal runtime capabilities: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET metadata = $1 WHERE id = $2`, metadata, runtimeID); err != nil {
+		t.Fatalf("seed runtime capabilities: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET metadata = $1 WHERE id = $2`, oldMetadata, runtimeID)
+	})
+}
+
+func TestEnsureDaemonAgentCredential_DerivesOwnerFromRuntime(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	daemonID := "agent-credential-daemon-" + uuid.NewString()
+	runtimeID := handlerTestRuntimeID(t)
+	seedHandlerTestRuntimeOwner(t, testUserID)
+	seedHandlerTestRuntimeDaemonID(t, daemonID)
+	agentID := createHandlerTestAgent(t, "agent-credential-daemon-ensure", nil)
+
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agents/"+agentID+"/credential", nil, testWorkspaceID, daemonID)
+	req = withRouteParams(req, "runtimeId", runtimeID, "agentId", agentID)
+	w := httptest.NewRecorder()
+	testHandler.EnsureDaemonAgentCredential(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("EnsureDaemonAgentCredential: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp CreateAgentCredentialResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Token == "" || resp.AgentID != agentID || resp.ExpiresAt == nil {
+		t.Fatalf("unexpected response: %#v", resp)
+	}
+	credential, err := testHandler.Queries.GetAgentCredentialByHash(context.Background(), auth.HashToken(resp.Token))
+	if err != nil {
+		t.Fatalf("load created credential by hash: %v", err)
+	}
+	if uuidToString(credential.WorkspaceID) != testWorkspaceID || uuidToString(credential.UserID) != testUserID || uuidToString(credential.AgentID) != agentID {
+		t.Fatalf("credential binding workspace/user/agent = %s/%s/%s", uuidToString(credential.WorkspaceID), uuidToString(credential.UserID), uuidToString(credential.AgentID))
+	}
+	remaining := time.Until(credential.ExpiresAt.Time)
+	if !credential.ExpiresAt.Valid || remaining < 23*time.Hour || remaining > 25*time.Hour {
+		t.Fatalf("daemon-issued credential expires_at = %v, want bounded future expiry", credential.ExpiresAt)
+	}
+}
+
+func TestEnsureDaemonAgentCredential_RequiresDaemonTokenAndRuntimeBinding(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	daemonID := "agent-credential-daemon-" + uuid.NewString()
+	runtimeID := handlerTestRuntimeID(t)
+	seedHandlerTestRuntimeOwner(t, testUserID)
+	seedHandlerTestRuntimeDaemonID(t, daemonID)
+	agentID := createHandlerTestAgent(t, "agent-credential-daemon-reject", nil)
+
+	patReq := newRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agents/"+agentID+"/credential", nil)
+	patReq = withRouteParams(patReq, "runtimeId", runtimeID, "agentId", agentID)
+	patRec := httptest.NewRecorder()
+	testHandler.EnsureDaemonAgentCredential(patRec, patReq)
+	if patRec.Code != http.StatusForbidden {
+		t.Fatalf("expected PAT/JWT path 403, got %d: %s", patRec.Code, patRec.Body.String())
+	}
+
+	mismatchReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agents/"+agentID+"/credential", nil, testWorkspaceID, daemonID+"-other")
+	mismatchReq = withRouteParams(mismatchReq, "runtimeId", runtimeID, "agentId", agentID)
+	mismatchRec := httptest.NewRecorder()
+	testHandler.EnsureDaemonAgentCredential(mismatchRec, mismatchReq)
+	if mismatchRec.Code != http.StatusForbidden {
+		t.Fatalf("expected daemon/runtime mismatch 403, got %d: %s", mismatchRec.Code, mismatchRec.Body.String())
+	}
+}
+
+func TestEnsureDaemonAgentCredential_RejectsUnboundRuntime(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	daemonID := "agent-credential-daemon-" + uuid.NewString()
+	runtimeID := handlerTestRuntimeID(t)
+	seedHandlerTestRuntimeOwner(t, testUserID)
+	seedHandlerTestRuntimeDaemonIDNull(t)
+	agentID := createHandlerTestAgent(t, "agent-credential-daemon-null", nil)
+
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agents/"+agentID+"/credential", nil, testWorkspaceID, daemonID)
+	req = withRouteParams(req, "runtimeId", runtimeID, "agentId", agentID)
+	rec := httptest.NewRecorder()
+	testHandler.EnsureDaemonAgentCredential(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected unbound runtime 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDrainAgentInbox_CredentialTransportRuntimeSkipsDeliveryTokenMint(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	daemonID := "agent-credential-no-mint-" + uuid.NewString()
+	runtimeID := handlerTestRuntimeID(t)
+	seedHandlerTestRuntimeOwner(t, testUserID)
+	seedHandlerTestRuntimeDaemonID(t, daemonID)
+	seedHandlerTestRuntimeCapabilities(t, []string{protocol.DaemonCapabilityAgentCredentialTransport})
+	agentName := "Agent Credential No Mint " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	channelID := seedChannelForTest(t, "agent-credential-no-mint-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent channel member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") credential transport", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("agent-credential-no-mint"), 0)
+	if err != nil {
+		t.Fatalf("insert mention trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, daemonID)
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode drain response: %v", err)
+	}
+	if len(drainResp.Events) != 1 || drainResp.Events[0].Task == nil {
+		t.Fatalf("drain response missing event task: %s", drainRec.Body.String())
+	}
+	if drainResp.Events[0].Task.AuthToken != "" {
+		t.Fatalf("credential-transport runtime must not receive #452 auth_token")
+	}
+	var tokenCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_inbox_token WHERE inbox_event_id = $1`, drainResp.Events[0].ID).Scan(&tokenCount); err != nil {
+		t.Fatalf("count inbox token rows: %v", err)
+	}
+	if tokenCount != 0 {
+		t.Fatalf("agent_inbox_token rows = %d, want 0", tokenCount)
+	}
+}
+
 func TestAgentCredentialTransportRequiresInboxLease(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

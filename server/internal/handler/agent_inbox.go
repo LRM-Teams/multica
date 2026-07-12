@@ -660,36 +660,39 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			ThinkingLevel: agent.ThinkingLevel.String,
 		}
 	}
+	usesAgentCredentialTransport := runtime.OwnerID.Valid && agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityAgentCredentialTransport)
 	if runtime.OwnerID.Valid {
 		if owner, err := h.Queries.GetUser(ctx, runtime.OwnerID); err == nil {
 			resp.RequestingUserName = userDisplayName(owner)
 			resp.RequestingUserProfileDescription = owner.ProfileDescription
 		}
-		tokenStr, err := auth.GenerateAgentInboxDeliveryToken()
-		if err != nil {
-			slog.Error("agent inbox claim: failed to generate inbox token",
-				"inbox_event_id", uuidToString(event.ID),
-				"error", err,
-			)
-			return nil
+		if !usesAgentCredentialTransport {
+			tokenStr, err := auth.GenerateAgentInboxDeliveryToken()
+			if err != nil {
+				slog.Error("agent inbox claim: failed to generate inbox token",
+					"inbox_event_id", uuidToString(event.ID),
+					"error", err,
+				)
+				return nil
+			}
+			if _, err := h.Queries.CreateAgentInboxToken(ctx, db.CreateAgentInboxTokenParams{
+				TokenHash:    auth.HashToken(tokenStr),
+				InboxEventID: event.ID,
+				DeliveryID:   delivery.ID,
+				AgentID:      event.AgentID,
+				WorkspaceID:  event.WorkspaceID,
+				UserID:       runtime.OwnerID,
+				ExpiresAt:    pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour), Valid: true},
+			}); err != nil {
+				slog.Error("agent inbox claim: failed to persist inbox token",
+					"inbox_event_id", uuidToString(event.ID),
+					"delivery_id", uuidToString(delivery.ID),
+					"error", err,
+				)
+				return nil
+			}
+			resp.AuthToken = tokenStr
 		}
-		if _, err := h.Queries.CreateAgentInboxToken(ctx, db.CreateAgentInboxTokenParams{
-			TokenHash:    auth.HashToken(tokenStr),
-			InboxEventID: event.ID,
-			DeliveryID:   delivery.ID,
-			AgentID:      event.AgentID,
-			WorkspaceID:  event.WorkspaceID,
-			UserID:       runtime.OwnerID,
-			ExpiresAt:    pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour), Valid: true},
-		}); err != nil {
-			slog.Error("agent inbox claim: failed to persist inbox token",
-				"inbox_event_id", uuidToString(event.ID),
-				"delivery_id", uuidToString(delivery.ID),
-				"error", err,
-			)
-			return nil
-		}
-		resp.AuthToken = tokenStr
 	}
 	h.populateAgentInboxChatContext(ctx, event, &resp)
 	if ws, err := h.Queries.GetWorkspace(ctx, event.WorkspaceID); err == nil && ws.Context.Valid {

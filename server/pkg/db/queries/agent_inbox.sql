@@ -269,6 +269,89 @@ SELECT acked_event.*
 FROM acked_event
 JOIN acked_session ON acked_session.id = acked_event.agent_session_id;
 
+-- name: SetAgentInboxTerminalOutcome :one
+UPDATE agent_inbox_event
+SET terminal_outcome = $3,
+    terminal_delivery_id = $4,
+    retryable = $5,
+    terminal_at = now(),
+    updated_at = now()
+WHERE id = $1
+  AND workspace_id = $2
+RETURNING *;
+
+-- name: RetryAgentInboxEvent :one
+WITH original AS (
+  SELECT e.*
+  FROM agent_inbox_event e
+  WHERE e.id = $1
+    AND e.workspace_id = $2
+    AND e.channel_id = $3
+    AND e.terminal_outcome = 'failed'
+    AND e.retryable = true
+    AND e.status = 'acked'
+  FOR UPDATE
+),
+guarded AS (
+  SELECT original.*
+  FROM original
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM agent_inbox_event newer
+    WHERE newer.workspace_id = original.workspace_id
+      AND newer.channel_id = original.channel_id
+      AND newer.source_message_id = original.source_message_id
+      AND newer.agent_id = original.agent_id
+      AND newer.requires_wake = true
+      AND newer.status IN ('pending', 'draining', 'failed')
+      AND newer.created_at > COALESCE(original.terminal_at, original.updated_at)
+  )
+),
+refreshed_session AS (
+  UPDATE agent_session s
+  SET runtime_id = a.runtime_id,
+      channel_id = COALESCE(guarded.channel_id, s.channel_id),
+      chat_session_id = COALESCE(guarded.chat_session_id, s.chat_session_id),
+      status = 'active',
+      updated_at = now()
+  FROM guarded
+  JOIN agent a ON a.id = guarded.agent_id
+  WHERE s.id = guarded.agent_session_id
+  RETURNING s.id
+)
+INSERT INTO agent_inbox_event (
+  workspace_id,
+  agent_session_id,
+  conversation_id,
+  channel_id,
+  chat_session_id,
+  agent_id,
+  source_message_id,
+  reason,
+  requires_wake,
+  status,
+  priority,
+  seq_from,
+  seq_to
+)
+SELECT
+  guarded.workspace_id,
+  refreshed_session.id,
+  guarded.conversation_id,
+  guarded.channel_id,
+  guarded.chat_session_id,
+  guarded.agent_id,
+  guarded.source_message_id,
+  guarded.reason,
+  true,
+  'pending',
+  guarded.priority,
+  guarded.seq_from,
+  guarded.seq_to
+FROM guarded
+JOIN refreshed_session ON refreshed_session.id = guarded.agent_session_id
+RETURNING *;
+
 -- name: FailAgentInboxDelivery :one
 WITH active_delivery AS (
   UPDATE agent_event_delivery d

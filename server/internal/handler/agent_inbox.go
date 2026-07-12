@@ -384,6 +384,16 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		}
 		chatDonePayload = payload
 	}
+	if _, err := qtx.SetAgentInboxTerminalOutcome(r.Context(), db.SetAgentInboxTerminalOutcomeParams{
+		ID:                 event.ID,
+		WorkspaceID:        event.WorkspaceID,
+		TerminalOutcome:    strToText(agentInboxCompletionTerminalOutcome(r.Context(), h, event, req.TaskCompleteRequest, chatDonePayload)),
+		TerminalDeliveryID: deliveryID,
+		Retryable:          false,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record inbox terminal outcome")
+		return
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox completion")
 		return
@@ -394,6 +404,24 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		h.recordAgentInboxVisibleOutputActivity(r.Context(), event, task.RuntimeID, *chatDonePayload)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
+}
+
+func agentInboxCompletionTerminalOutcome(ctx context.Context, h *Handler, event db.AgentInboxEvent, req TaskCompleteRequest, payload *protocol.ChatDonePayload) string {
+	if h.inboxEventHasAgentTransportVisibleOutput(ctx, event.ID) {
+		return "replied"
+	}
+	if payload != nil {
+		switch payload.Type {
+		case protocol.ChatOutputKindNoReply:
+			return "no_reply"
+		case protocol.ChatOutputKindMessage, protocol.ChatOutputKindReaction:
+			return "replied"
+		}
+	}
+	if req.Action == protocol.ChatOutputActionNoReply || req.Type == protocol.ChatOutputKindNoReply {
+		return "no_reply"
+	}
+	return "replied"
 }
 
 func (h *Handler) FailAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
@@ -460,26 +488,30 @@ func agentInboxFailureReasonCode(errText, failureReason, reasonCode string) stri
 
 func failedAgentInboxEvent(row db.FailAgentInboxDeliveryRow) db.AgentInboxEvent {
 	return db.AgentInboxEvent{
-		ID:              row.ID,
-		WorkspaceID:     row.WorkspaceID,
-		AgentSessionID:  row.AgentSessionID,
-		ConversationID:  row.ConversationID,
-		ChannelID:       row.ChannelID,
-		ChatSessionID:   row.ChatSessionID,
-		AgentID:         row.AgentID,
-		SourceMessageID: row.SourceMessageID,
-		Reason:          row.Reason,
-		RequiresWake:    row.RequiresWake,
-		Status:          row.Status,
-		Priority:        row.Priority,
-		SeqFrom:         row.SeqFrom,
-		SeqTo:           row.SeqTo,
-		Attempt:         row.Attempt,
-		LastError:       row.LastError,
-		ClaimedAt:       row.ClaimedAt,
-		AckedAt:         row.AckedAt,
-		CreatedAt:       row.CreatedAt,
-		UpdatedAt:       row.UpdatedAt,
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		AgentSessionID:     row.AgentSessionID,
+		ConversationID:     row.ConversationID,
+		ChannelID:          row.ChannelID,
+		ChatSessionID:      row.ChatSessionID,
+		AgentID:            row.AgentID,
+		SourceMessageID:    row.SourceMessageID,
+		Reason:             row.Reason,
+		RequiresWake:       row.RequiresWake,
+		Status:             row.Status,
+		Priority:           row.Priority,
+		SeqFrom:            row.SeqFrom,
+		SeqTo:              row.SeqTo,
+		Attempt:            row.Attempt,
+		LastError:          row.LastError,
+		ClaimedAt:          row.ClaimedAt,
+		AckedAt:            row.AckedAt,
+		TerminalOutcome:    row.TerminalOutcome,
+		TerminalDeliveryID: row.TerminalDeliveryID,
+		Retryable:          row.Retryable,
+		TerminalAt:         row.TerminalAt,
+		CreatedAt:          row.CreatedAt,
+		UpdatedAt:          row.UpdatedAt,
 	}
 }
 
@@ -547,6 +579,16 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to record inbox failure")
 		return
 	}
+	if _, err := qtx.SetAgentInboxTerminalOutcome(r.Context(), db.SetAgentInboxTerminalOutcomeParams{
+		ID:                 event.ID,
+		WorkspaceID:        event.WorkspaceID,
+		TerminalOutcome:    strToText("failed"),
+		TerminalDeliveryID: deliveryID,
+		Retryable:          true,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record inbox failure outcome")
+		return
+	}
 
 	if event.ChatSessionID.Valid {
 		if chatFailureResumeUnsafe(failureReason) {
@@ -582,6 +624,48 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 	}
 	h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID, errText, failureReason, reasonCode)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
+}
+
+func (h *Handler) RetryChannelAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	eventID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "eventId"), "inbox event id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+
+	retry, err := h.Queries.RetryAgentInboxEvent(r.Context(), db.RetryAgentInboxEventParams{
+		ID:          eventID,
+		WorkspaceID: parseUUID(workspaceID),
+		ChannelID:   channelID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusConflict, "inbox event is not retryable")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to retry inbox event")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"ok":             true,
+		"inbox_event_id": uuidToString(retry.ID),
+		"agent_id":       uuidToString(retry.AgentID),
+		"status":         retry.Status,
+	})
 }
 
 func (h *Handler) agentInboxEventResponse(ctx context.Context, runtime db.AgentRuntime, event db.AgentInboxEvent, delivery db.AgentEventDelivery) AgentInboxEventResponse {

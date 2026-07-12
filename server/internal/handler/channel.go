@@ -141,12 +141,23 @@ type ChannelThreadParticipant struct {
 }
 
 type ChannelThreadWakeAnnotation struct {
-	Key         string  `json:"key"`
-	MemberType  string  `json:"member_type"`
-	MemberID    string  `json:"member_id"`
-	DisplayName string  `json:"display_name"`
-	State       string  `json:"state"`
-	Reason      *string `json:"reason,omitempty"`
+	Key                 string  `json:"key"`
+	MemberType          string  `json:"member_type"`
+	MemberID            string  `json:"member_id"`
+	DisplayName         string  `json:"display_name"`
+	State               string  `json:"state"`
+	Reason              *string `json:"reason,omitempty"`
+	Outcome             *string `json:"outcome,omitempty"`
+	Retryable           *bool   `json:"retryable,omitempty"`
+	InboxEventID        *string `json:"inbox_event_id,omitempty"`
+	DeliveryID          *string `json:"delivery_id,omitempty"`
+	AgentID             *string `json:"agent_id,omitempty"`
+	ConversationID      *string `json:"conversation_id,omitempty"`
+	ChannelID           *string `json:"channel_id,omitempty"`
+	ChatSessionID       *string `json:"chat_session_id,omitempty"`
+	ThreadRootMessageID *string `json:"thread_root_message_id,omitempty"`
+	SourceMessageID     *string `json:"source_message_id,omitempty"`
+	TerminalAt          *string `json:"terminal_at,omitempty"`
 }
 
 type ChannelMessagesCursorResponse struct {
@@ -1789,44 +1800,27 @@ func (h *Handler) attachChannelMessageThreadReadModel(ctx context.Context, works
 		return
 	}
 	rows, err := h.DB.Query(ctx, `
-			WITH latest_task AS (
-			  SELECT DISTINCT ON (cm.channel_thread_root_message_id, atq.agent_id)
-			         cm.channel_thread_root_message_id AS root_message_id,
-			         atq.agent_id,
-			         atq.status,
-			         COALESCE(atq.result::text, '{}') AS result,
-			         cm.created_at AS prompt_created_at,
-			         atq.created_at AS wake_created_at
-			  FROM chat_message cm
-			  JOIN agent_task_queue atq ON atq.id = cm.task_id
-			  WHERE cm.channel_thread_root_message_id = ANY($1::uuid[])
-			    AND cm.role = 'user'
-			    AND cm.task_id IS NOT NULL
-			  ORDER BY cm.channel_thread_root_message_id, atq.agent_id, atq.created_at DESC, atq.id DESC
-			),
-			latest_inbox_event AS (
-			  SELECT DISTINCT ON (trigger.thread_root_message_id, e.agent_id)
-			         trigger.thread_root_message_id AS root_message_id,
+			WITH latest_wake AS (
+			  SELECT DISTINCT ON (COALESCE(trigger.thread_root_message_id, trigger.id), e.agent_id)
+			         COALESCE(trigger.thread_root_message_id, trigger.id) AS root_message_id,
 			         e.agent_id,
 			         e.status,
-			         '{}' AS result,
+			         COALESCE(e.terminal_outcome, '') AS terminal_outcome,
+			         e.retryable,
+			         e.id AS inbox_event_id,
+			         e.terminal_delivery_id AS delivery_id,
+			         e.conversation_id,
+			         e.channel_id,
+			         e.chat_session_id,
+			         e.source_message_id,
+			         e.terminal_at,
 			         trigger.created_at AS prompt_created_at,
 			         e.created_at AS wake_created_at
 			  FROM agent_inbox_event e
 			  JOIN channel_message trigger ON trigger.id = e.source_message_id
-			  WHERE trigger.thread_root_message_id = ANY($1::uuid[])
+			  WHERE COALESCE(trigger.thread_root_message_id, trigger.id) = ANY($1::uuid[])
 			    AND e.requires_wake
-			  ORDER BY trigger.thread_root_message_id, e.agent_id, e.created_at DESC, e.id DESC
-			),
-			latest_wake AS (
-			  SELECT DISTINCT ON (root_message_id, agent_id)
-			         root_message_id, agent_id, status, result, prompt_created_at
-			  FROM (
-			    SELECT * FROM latest_task
-			    UNION ALL
-			    SELECT * FROM latest_inbox_event
-			  ) wake
-			  ORDER BY root_message_id, agent_id, wake_created_at DESC
+			  ORDER BY COALESCE(trigger.thread_root_message_id, trigger.id), e.agent_id, e.created_at DESC, e.id DESC
 			),
 			latest_agent_reply AS (
 			  SELECT DISTINCT ON (thread_root_message_id, author_id)
@@ -1850,7 +1844,15 @@ func (h *Handler) attachChannelMessageThreadReadModel(ctx context.Context, works
 		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '') AS display_name,
 		       COALESCE(tp.followed_at IS NOT NULL, false) AS followed,
 			       COALESCE(lw.status, '') AS task_status,
-			       COALESCE(lw.result, '{}') AS task_result,
+			       COALESCE(lw.terminal_outcome, '') AS terminal_outcome,
+			       COALESCE(lw.retryable, false) AS retryable,
+			       lw.inbox_event_id,
+			       lw.delivery_id,
+			       lw.conversation_id,
+			       lw.channel_id,
+			       lw.chat_session_id,
+			       lw.source_message_id,
+			       lw.terminal_at,
 			       (lar.agent_id IS NOT NULL) AS has_agent_reply
 		FROM thread_participant tp
 		LEFT JOIN "user" u ON tp.member_type = 'user' AND u.id = tp.member_id
@@ -1879,9 +1881,12 @@ func (h *Handler) attachChannelMessageThreadReadModel(ctx context.Context, works
 		var rootID, memberID pgtype.UUID
 		var memberType, name, displayName string
 		var followed bool
-		var taskStatus, taskResult string
+		var taskStatus, terminalOutcome string
+		var retryable bool
+		var inboxEventID, deliveryID, conversationID, channelID, chatSessionID, sourceMessageID pgtype.UUID
+		var terminalAt pgtype.Timestamptz
 		var hasAgentReply bool
-		if err := rows.Scan(&rootID, &memberType, &memberID, &name, &displayName, &followed, &taskStatus, &taskResult, &hasAgentReply); err != nil {
+		if err := rows.Scan(&rootID, &memberType, &memberID, &name, &displayName, &followed, &taskStatus, &terminalOutcome, &retryable, &inboxEventID, &deliveryID, &conversationID, &channelID, &chatSessionID, &sourceMessageID, &terminalAt, &hasAgentReply); err != nil {
 			continue
 		}
 		memberIDText := uuidToString(memberID)
@@ -1896,15 +1901,29 @@ func (h *Handler) attachChannelMessageThreadReadModel(ctx context.Context, works
 			DisplayName: displayName,
 			Followed:    followed,
 		})
-		if state, reason, ok := channelThreadWakeAnnotationState(memberType, taskStatus, taskResult, hasAgentReply); ok {
-			wakeByRoot[rootKey] = append(wakeByRoot[rootKey], ChannelThreadWakeAnnotation{
+		if state, reason, ok := channelThreadWakeAnnotationState(memberType, taskStatus, terminalOutcome, hasAgentReply); ok {
+			annotation := ChannelThreadWakeAnnotation{
 				Key:         key,
 				MemberType:  memberType,
 				MemberID:    memberIDText,
 				DisplayName: displayName,
 				State:       state,
 				Reason:      reason,
-			})
+			}
+			if terminalOutcome != "" {
+				annotation.Outcome = stringPtr(terminalOutcome)
+				annotation.Retryable = boolPtr(retryable)
+				annotation.InboxEventID = uuidStringPtr(inboxEventID)
+				annotation.DeliveryID = uuidStringPtr(deliveryID)
+				annotation.AgentID = stringPtr(memberIDText)
+				annotation.ConversationID = uuidStringPtr(conversationID)
+				annotation.ChannelID = uuidStringPtr(channelID)
+				annotation.ChatSessionID = uuidStringPtr(chatSessionID)
+				annotation.ThreadRootMessageID = uuidStringPtr(rootID)
+				annotation.SourceMessageID = uuidStringPtr(sourceMessageID)
+				annotation.TerminalAt = timestampToPtr(terminalAt)
+			}
+			wakeByRoot[rootKey] = append(wakeByRoot[rootKey], annotation)
 		}
 	}
 	for i := range messages {
@@ -1924,12 +1943,18 @@ func channelThreadParticipantKey(memberType, memberID string) string {
 	return memberType + ":" + memberID
 }
 
-func channelThreadWakeAnnotationState(memberType, taskStatus, taskResult string, hasAgentReply bool) (string, *string, bool) {
+func channelThreadWakeAnnotationState(memberType, taskStatus, terminalOutcome string, hasAgentReply bool) (string, *string, bool) {
 	if memberType != "agent" {
 		return "", nil, false
 	}
-	if hasAgentReply {
+	if hasAgentReply || terminalOutcome == "replied" {
 		return "replied", nil, true
+	}
+	switch terminalOutcome {
+	case "no_reply":
+		return "no_reply", nil, true
+	case "failed":
+		return "failed", nil, true
 	}
 	switch taskStatus {
 	case "queued", "pending":
@@ -1938,21 +1963,21 @@ func channelThreadWakeAnnotationState(memberType, taskStatus, taskResult string,
 		return "delivered", nil, true
 	case "acked":
 		return "acked", nil, true
-	case "completed":
-		action, outputType, reason := channelTaskResultAction(taskResult)
-		switch {
-		case action == protocol.ChatOutputActionNoReply || outputType == protocol.ChatOutputKindNoReply:
-			return "no_reply", reason, true
-		case action == protocol.ChatOutputActionMessageReact || outputType == protocol.ChatOutputKindReaction:
-			return "acked", nil, true
-		case action == protocol.ChatOutputActionMessageSend || outputType == protocol.ChatOutputKindMessage:
-			return "acked", nil, true
-		default:
-			return "", nil, false
-		}
 	default:
 		return "", nil, false
 	}
+}
+
+func uuidStringPtr(id pgtype.UUID) *string {
+	if !id.Valid {
+		return nil
+	}
+	value := uuidToString(id)
+	return &value
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func channelTaskResultAction(raw string) (string, string, *string) {

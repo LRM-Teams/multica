@@ -1164,6 +1164,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/messages", h.ListChannelMessages)
 					r.Get("/messages/search", h.SearchChannelMessages)
 					r.Post("/messages", h.SendChannelMessage)
+					r.Post("/agent-inbox/events/{eventId}/retry", h.RetryChannelAgentInboxEvent)
 					r.Patch("/messages/{messageId}", h.UpdateChannelMessage)
 					r.Delete("/messages/{messageId}", h.DeleteChannelMessage)
 					r.Get("/messages/{messageId}/thread", h.ListChannelMessageThread)

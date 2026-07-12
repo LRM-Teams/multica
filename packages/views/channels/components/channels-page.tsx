@@ -387,17 +387,25 @@ export function ConversationActivityStrip({
     }),
     [typingActors],
   );
+  const stoppableTasks = useMemo(() => {
+    const next: ChannelActiveTask[] = [];
+    for (const task of tasks) {
+      if (isTerminalChannelActiveTask(task)) continue;
+      next.push(task);
+    }
+    return next;
+  }, [tasks]);
   const agentNames = useMemo(() => {
     const seen = new Set<string>();
     const unique: string[] = [];
-    for (const task of tasks) {
+    for (const task of stoppableTasks) {
       const name = task.agent_name.trim();
       if (!name || seen.has(name)) continue;
       seen.add(name);
       unique.push(name);
     }
     return unique;
-  }, [tasks]);
+  }, [stoppableTasks]);
   const typingLabel =
     typingNames.length === 0
       ? null
@@ -447,9 +455,9 @@ export function ConversationActivityStrip({
           </span>
         ) : null}
       </div>
-      {onStopTask && tasks.length > 0 ? (
+      {onStopTask && stoppableTasks.length > 0 ? (
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto">
-          {tasks.map((task) => (
+          {stoppableTasks.map((task) => (
             <Button
               key={task.task_id}
               type="button"
@@ -468,6 +476,10 @@ export function ConversationActivityStrip({
       ) : null}
     </div>
   );
+}
+
+function isTerminalChannelActiveTask(task: ChannelActiveTask) {
+  return typeof (task as { outcome?: unknown }).outcome === "string";
 }
 
 function TypingDots() {

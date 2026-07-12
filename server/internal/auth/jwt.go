@@ -73,6 +73,18 @@ func GenerateAgentInboxDeliveryToken() (string, error) {
 	return "mat_" + hex.EncodeToString(b), nil
 }
 
+// GenerateAgentCredentialToken creates a durable per-agent transport credential.
+// It intentionally keeps the mat_ wire prefix while the daemon/CLI transport
+// path is still being migrated; the server distinguishes it by looking up the
+// token hash in agent_credential and stamping X-Actor-Source=agent_credential.
+func GenerateAgentCredentialToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate agent credential token: %w", err)
+	}
+	return "mat_" + hex.EncodeToString(b), nil
+}
+
 // GenerateSandboxNodeKey creates a stable user-visible key for one sandboxd node.
 func GenerateSandboxNodeKey() (string, error) {
 	b := make([]byte, 16)

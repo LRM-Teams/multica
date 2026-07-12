@@ -53,6 +53,11 @@ func TestRequireHumanActor_BlocksMachineCredentials(t *testing.T) {
 		// An agent process holding its task-scoped token must not be
 		// able to read its owner's billing data.
 		{name: "task_token", actorSource: "task_token"},
+		// mat_ per-delivery inbox token — stop-bleed transport auth
+		// path while #370 migrates to durable per-agent credentials.
+		{name: "agent_inbox_token", actorSource: "agent_inbox_token"},
+		// mat_ per-agent credential — durable transport auth path.
+		{name: "agent_credential", actorSource: "agent_credential"},
 		// mcn_ cloud-node PAT — set in BOTH middleware/auth.go and
 		// middleware/daemon_auth.go's mcn_ branches. A cloud-runtime
 		// EC2 node operating on the owner's behalf is the same kind
@@ -87,15 +92,14 @@ func TestRequireHumanActor_BlocksMachineCredentials(t *testing.T) {
 }
 
 // TestRequireHumanActor_IgnoresUnknownActorSource pins the gate's
-// scope: it is an explicit denylist against the known-bad
-// "task_token" value, NOT an allowlist against "human only / empty".
+// scope: it is an explicit denylist against known machine-credential
+// values, NOT an allowlist against "human only / empty".
 //
 // Why the denylist shape:
 //
-//   - The Auth middleware today sets X-Actor-Source for exactly one
-//     case: mat_ task tokens. Every other authenticated path (JWT,
-//     mul_ PAT) leaves the header empty. So "non-empty AND not
-//     task_token" is unreachable in current production.
+//   - The Auth middleware sets X-Actor-Source only for reviewed
+//     machine-credential paths. Human paths (JWT, mul_ PAT) leave
+//     the header empty.
 //
 //   - If a future actor kind is added (say a hypothetical
 //     `service_account` token), this gate's silence on the new value
@@ -132,7 +136,6 @@ func TestRequireHumanActor_IgnoresUnknownActorSource(t *testing.T) {
 		t.Fatal("inner handler must run for unknown actor sources")
 	}
 }
-
 
 // TestRequireHumanActor_AppliedViaChiRouterUse pins the wiring side of
 // the contract: when the guard is attached to a chi route group via

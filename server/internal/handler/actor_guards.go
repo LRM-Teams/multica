@@ -5,8 +5,8 @@ import (
 )
 
 // RequireHumanActor is a chi-style middleware that rejects requests
-// authenticated via a machine credential — currently mat_ task tokens
-// and mcn_ cloud-node PATs. It exists for endpoints whose
+// authenticated via a machine credential — currently mat_ task tokens,
+// mat_ agent inbox credentials, and mcn_ cloud-node PATs. It exists for endpoints whose
 // authorization model is "the human owner authorized this", not
 // "anyone holding the owner's credentials authorized this".
 //
@@ -23,6 +23,9 @@ import (
 //     plus X-Agent-ID, X-Task-ID, and the
 //     authoritative server-set header
 //     `X-Actor-Source: task_token`.
+//   - mat_ agent inbox credential → X-User-ID = the owning human's user id,
+//     plus X-Agent-ID and the authoritative server-set header
+//     `X-Actor-Source: agent_credential`.
 //   - mcn_ cloud-node PAT    → X-User-ID = the OWNING human's user id,
 //     plus `X-Actor-Source: cloud_pat`.
 //     The token authenticates a cloud-runtime
@@ -31,7 +34,8 @@ import (
 //     mat_ (machine running owner-scoped
 //     code) for authorization purposes.
 //
-// The mat_ and mcn_ designs (MUL-2600 and the cloud-node PAT story
+// The task-scoped mat_, agent-scoped mat_, and mcn_ designs (MUL-2600,
+// #370, and the cloud-node PAT story
 // respectively) were both deliberately built this way: every request
 // the agent / node makes is treated as the owner's, so they can
 // post comments, claim issues, register runtimes, etc., as if the
@@ -99,7 +103,7 @@ func RequireHumanActor(next http.Handler) http.Handler {
 		// strips any client-supplied value before stamping its own,
 		// so a non-empty value here is authoritative.
 		switch r.Header.Get("X-Actor-Source") {
-		case "task_token", "agent_inbox_token", "cloud_pat":
+		case "task_token", "agent_inbox_token", "agent_credential", "cloud_pat":
 			writeError(w, http.StatusForbidden, "this endpoint is only available to human actors")
 			return
 		}

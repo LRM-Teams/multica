@@ -424,12 +424,13 @@ func requestUserID(r *http.Request) string {
 
 // resolveActor determines whether the request is from an agent or a human member.
 //
-// First-class signal: X-Actor-Source set to "task_token" means the request
-// authenticated via an `mat_` task-scoped token. The auth middleware sets
-// that header (and stripped any client-supplied value first), so it is
-// authoritative — the bound (agent_id, task_id) cannot be forged or
-// stripped by the agent process. This is the path MUL-2600 relies on to
-// reject agent-process traffic on owner-only endpoints.
+// First-class signal: X-Actor-Source set to a server-stamped machine
+// credential ("task_token", "agent_inbox_token", or "agent_credential") means
+// the request authenticated through a row bound to an agent. The auth
+// middleware sets that header (and strips any client-supplied value first), so
+// it is authoritative — the bound agent_id cannot be forged or stripped by the
+// agent process. This is the path MUL-2600 / #370 relies on to reject
+// agent-process traffic on owner-only endpoints.
 //
 // Fallback signal (legacy CLI / member-token paths): the request MUST
 // carry both X-Agent-ID and a valid X-Task-ID, and the task must belong
@@ -443,7 +444,7 @@ func requestUserID(r *http.Request) string {
 //
 // Returns ("agent", agentID) on success, ("member", userID) otherwise.
 func (h *Handler) resolveActor(r *http.Request, userID, workspaceID string) (actorType, actorID string) {
-	if source := r.Header.Get("X-Actor-Source"); source == "task_token" || source == "agent_inbox_token" {
+	if source := r.Header.Get("X-Actor-Source"); source == "task_token" || source == "agent_inbox_token" || source == "agent_credential" {
 		// Server-set header — auth middleware also forced X-Agent-ID
 		// from the token row. Trust it directly without re-querying.
 		return "agent", r.Header.Get("X-Agent-ID")

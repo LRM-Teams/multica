@@ -94,6 +94,15 @@ class Executor:
                 headers["x-admin-api-key"] = self._config.admin_api_key
             if self._config.bridge_user_id:
                 headers["x-bridge-user-id"] = self._config.bridge_user_id
+        elif channel.group == "multica_api":
+            # The bridge re-authenticates to the multica Go server with its own
+            # key: strip caller-supplied credentials so they do not leak upstream,
+            # then inject the configured upstream token.
+            headers = relay.strip_credentials(headers)
+            if self._config.multica_upstream_api_key:
+                headers["authorization"] = (
+                    f"Bearer {self._config.multica_upstream_api_key}"
+                )
         return await self._client.request(
             req.method,
             url,

@@ -9,6 +9,7 @@ always stored and replayed *decoded*, so any ``Content-Encoding`` /
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import Final
 
 # Hop-by-hop headers (RFC 7230 §6.1) plus length/encoding headers that the
 # receiving HTTP client recomputes from the body we hand it.
@@ -54,6 +55,19 @@ def filter_request_headers(headers: Mapping[str, str]) -> dict[str, str]:
     (needed for JSON and for the multipart boundary).
     """
     return {k: v for k, v in _normalize(headers) if k not in _DROP_REQUEST_HEADERS}
+
+
+# Caller-supplied credential headers stripped when the bridge re-authenticates
+# to an upstream with its own injected key (the multica_api group). These survive
+# filter_request_headers -- which keeps Authorization for pass-through groups --
+# and must be removed before the bridge injects its own upstream token so a
+# caller's token can never leak to the multica Go server.
+_CRED_HEADERS: Final = frozenset({"authorization", "x-api-key", "x-admin-api-key"})
+
+
+def strip_credentials(headers: Mapping[str, str]) -> dict[str, str]:
+    """Drop caller-supplied auth headers before the bridge injects its own."""
+    return {k: v for k, v in _normalize(headers) if k not in _CRED_HEADERS}
 
 
 def filter_response_headers(headers: Mapping[str, str]) -> dict[str, str]:

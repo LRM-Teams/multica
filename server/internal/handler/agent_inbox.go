@@ -24,7 +24,12 @@ import (
 	"github.com/multica-ai/multica/server/pkg/redact"
 )
 
-const agentInboxDrainMessageLimit = 50
+const (
+	agentInboxDrainMessageLimit      = 50
+	agentInboxStatusChangedEventType = "agent_status_changed"
+	agentInboxStatusActivityWorking  = "working"
+	agentInboxStatusActivityIdle     = "idle"
+)
 
 var claimedFileDeliveryRe = regexp.MustCompile(`(?i)\b[\w.-]+\.(txt|md|pdf|csv|xlsx|xls|docx|png|jpe?g|gif|zip|json|ya?ml|go|ts|tsx|js|py|html|css)\b`)
 
@@ -147,6 +152,7 @@ func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Reques
 	}
 	pending, _ := h.Queries.CountPendingAgentInboxEventsForRuntime(r.Context(), runtime.ID)
 	respEvent := h.agentInboxEventResponse(r.Context(), runtime, event, delivery)
+	h.recordAgentInboxStatusActivity(r.Context(), event, runtime.ID, delivery.ID, agentInboxStatusActivityWorking)
 	h.publishAgentInboxTaskLifecycle(protocol.EventTaskDispatch, event, runtime.ID, "running")
 	writeJSON(w, http.StatusOK, DrainAgentInboxResponse{
 		Events:      []AgentInboxEventResponse{respEvent},
@@ -198,6 +204,7 @@ func (h *Handler) AckAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to ack inbox delivery")
 		return
 	}
+	h.recordAgentInboxStatusActivity(r.Context(), event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID), deliveryID, agentInboxStatusActivityIdle)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }
 
@@ -339,6 +346,9 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 			"", message,
 			details,
 		)
+		if payload, ok := agentInboxTaskMessagePayload(event, msg, kind, details); ok && h.Bus != nil {
+			h.publishTask(protocol.EventTaskMessage, uuidToString(event.WorkspaceID), "system", "", uuidToString(event.ID), payload)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -438,6 +448,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		h.publishAgentInboxChatDone(event, *chatDonePayload)
 		h.recordAgentInboxVisibleOutputActivity(r.Context(), event, task.RuntimeID, *chatDonePayload)
 	}
+	h.recordAgentInboxStatusActivity(r.Context(), event, task.RuntimeID, deliveryID, agentInboxStatusActivityIdle)
 	h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, task.RuntimeID, "completed")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }
@@ -660,8 +671,10 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox failure")
 		return
 	}
-	h.publishAgentInboxTaskLifecycle(protocol.EventTaskFailed, event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID), "failed")
+	runtimeID := h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID)
+	h.publishAgentInboxTaskLifecycle(protocol.EventTaskFailed, event, runtimeID, "failed")
 	h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID, errText, failureReason, reasonCode)
+	h.recordAgentInboxStatusActivity(r.Context(), event, runtimeID, deliveryID, agentInboxStatusActivityIdle)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }
 
@@ -919,6 +932,98 @@ func agentInboxActivityTarget(event db.AgentInboxEvent) (string, pgtype.UUID) {
 		return "dm", event.ChatSessionID
 	}
 	return "agent", event.AgentID
+}
+
+func (h *Handler) recordAgentInboxStatusActivity(ctx context.Context, event db.AgentInboxEvent, runtimeID, deliveryID pgtype.UUID, status string) {
+	if h == nil || h.DB == nil || !event.RequiresWake {
+		return
+	}
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return
+	}
+	if h.agentInboxLatestStatusActivity(ctx, event.WorkspaceID, event.AgentID) == status {
+		return
+	}
+	targetKind, targetID := agentInboxActivityTarget(event)
+	details := map[string]any{
+		"status":            status,
+		"inbox_event_id":    uuidToString(event.ID),
+		"source_message_id": uuidToString(event.SourceMessageID),
+	}
+	if deliveryID.Valid {
+		details["delivery_id"] = uuidToString(deliveryID)
+	}
+	h.recordAgentActivityEvent(ctx, h.DB,
+		event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
+		activityKindCustom, agentInboxStatusChangedEventType, "info",
+		targetKind, targetID, "",
+		"", agentInboxStatusActivityMessage(status),
+		details,
+	)
+}
+
+func (h *Handler) agentInboxLatestStatusActivity(ctx context.Context, workspaceID, agentID pgtype.UUID) string {
+	if h == nil || h.DB == nil {
+		return ""
+	}
+	var status string
+	err := h.DB.QueryRow(ctx, `
+		SELECT COALESCE(details->>'status', '')
+		FROM agent_activity_event
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND event_kind = $3
+		  AND event_type = $4
+		  AND COALESCE(details->>'status', '') <> ''
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, workspaceID, agentID, activityKindCustom, agentInboxStatusChangedEventType).Scan(&status)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("agent inbox status activity: latest status lookup failed", "agent_id", uuidToString(agentID), "error", err)
+		}
+		return ""
+	}
+	return strings.TrimSpace(status)
+}
+
+func agentInboxStatusActivityMessage(status string) string {
+	switch status {
+	case agentInboxStatusActivityWorking:
+		return "Working"
+	case agentInboxStatusActivityIdle:
+		return "Idle"
+	default:
+		return strings.TrimSpace(status)
+	}
+}
+
+func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageRequest, kind string, details map[string]any) (protocol.TaskMessagePayload, bool) {
+	payload := protocol.TaskMessagePayload{
+		TaskID:     uuidToString(event.ID),
+		Seq:        msg.Seq,
+		Visibility: "user_facing",
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	switch kind {
+	case activityKindThinking:
+		payload.Type = "thinking"
+		payload.Content = agentInboxActivityMessageText(msg)
+	case activityKindToolCall:
+		payload.Type = "tool_use"
+		payload.Tool = stringFromMap(details, "tool")
+		if payload.Tool == "" {
+			return protocol.TaskMessagePayload{}, false
+		}
+		payload.Input = msg.Input
+	case activityKindError:
+		payload.Type = "error"
+		payload.Content = agentInboxActivityMessageText(msg)
+	default:
+		return protocol.TaskMessagePayload{}, false
+	}
+	return payload, true
 }
 
 func agentInboxActivityMessageKind(messageType string) (kind, eventType, severity string) {

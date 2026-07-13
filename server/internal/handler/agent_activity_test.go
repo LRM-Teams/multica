@@ -376,6 +376,14 @@ func TestAgentActivityEvents_DefaultPageSkipsDiagnosticNoise(t *testing.T) {
 	if !ok {
 		t.Fatal("insert failed Radar activity event")
 	}
+	statusID, ok := insertAgentActivityEvent(
+		ctx, testPool, parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
+		activityKindCustom, agentInboxStatusChangedEventType, "info",
+		"agent", parseUUID(agentID), "", "", "Idle", map[string]any{"status": agentInboxStatusActivityIdle},
+	)
+	if !ok {
+		t.Fatal("insert agent status activity event")
+	}
 	noActionID, ok := insertAgentActivityEvent(
 		ctx, testPool, parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
 		activityKindCustom, "radar_action_executed", "info",
@@ -403,6 +411,13 @@ func TestAgentActivityEvents_DefaultPageSkipsDiagnosticNoise(t *testing.T) {
 	requireActivityTimelineEvent(t, events, thinkingID)
 	requireActivityTimelineEvent(t, events, uuidToString(executedID))
 	requireActivityTimelineEvent(t, events, uuidToString(failedID))
+	statusEvent := requireActivityTimelineEvent(t, events, uuidToString(statusID))
+	if statusEvent.Status == nil || *statusEvent.Status != agentInboxStatusActivityIdle {
+		t.Fatalf("status event status = %+v, want %q", statusEvent.Status, agentInboxStatusActivityIdle)
+	}
+	if len(statusEvent.Entries) != 1 || statusEvent.Entries[0].Status == nil || *statusEvent.Entries[0].Status != agentInboxStatusActivityIdle {
+		t.Fatalf("status event entries = %+v, want idle status entry", statusEvent.Entries)
+	}
 	if got := findActivityTimelineEvent(events, uuidToString(noActionID)); got != nil {
 		t.Fatalf("no_action Radar event leaked into user narrative: %+v", *got)
 	}
@@ -459,6 +474,16 @@ func TestActivityVisibilityFor_SourceBackedLifecycle(t *testing.T) {
 	}
 	if got := activityVisibilityFor(activityKindCustom, "subagent_started", "info", "auto_retry"); got != "user_facing" {
 		t.Fatalf("subagent custom visibility = %q, want user_facing", got)
+	}
+	if got := activityVisibilityFor(activityKindCustom, agentInboxStatusChangedEventType, "info", ""); got != "user_facing" {
+		t.Fatalf("agent status visibility = %q, want user_facing", got)
+	}
+	statusRow := agentActivityRawRow{
+		Kind:      activityKindCustom,
+		EventType: pgtype.Text{String: agentInboxStatusChangedEventType, Valid: true},
+	}
+	if !agentActivityTimelineRowIsNarrative(statusRow) {
+		t.Fatalf("agent status changes must be included in the activity narrative")
 	}
 	for _, eventType := range []string{"radar_action_executed", "radar_action_failed"} {
 		if got := activityVisibilityFor(activityKindCustom, eventType, "info", "create_issue"); got != "user_facing" {

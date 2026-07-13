@@ -1938,6 +1938,31 @@ func trailingUserMessages(msgs []db.ChatMessage) []db.ChatMessage {
 	return msgs[start:]
 }
 
+func agentInboxEventUserMessages(msgs []db.ChatMessage, eventID pgtype.UUID) []db.ChatMessage {
+	if !eventID.Valid {
+		return trailingUserMessages(msgs)
+	}
+	out := make([]db.ChatMessage, 0, 1)
+	for _, m := range msgs {
+		if m.Role == "user" && m.TaskID.Valid && m.TaskID == eventID {
+			out = append(out, m)
+		}
+	}
+	if len(out) > 0 {
+		return out
+	}
+	// A manual retry creates a new inbox event but deliberately reuses the
+	// original prompt row, whose task_id still points at the failed event.
+	// The retry guard rejects stale retries once newer work exists, so the
+	// latest user prompt is the safe bounded fallback here.
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return msgs[i : i+1]
+		}
+	}
+	return nil
+}
+
 func hasPriorChatContext(msgs []db.ChatMessage, currentTaskID pgtype.UUID) bool {
 	if len(msgs) == 0 {
 		return false

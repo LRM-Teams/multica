@@ -1132,7 +1132,11 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 		h.populateAgentInboxInitiator(ctx, event.SourceMessageID, resp)
 	}
 	if msgs, err := h.Queries.ListChatMessages(ctx, cs.ID); err == nil && len(msgs) > 0 {
-		unanswered := trailingUserMessages(msgs)
+		// Inbox chat sessions may deliver their visible answer through the
+		// channel transport instead of an assistant chat_message row. Select
+		// prompts linked to this event so old user-role prompt envelopes cannot
+		// accumulate and be replayed on every later inbox delivery.
+		unanswered := agentInboxEventUserMessages(msgs, event.ID)
 		parts := make([]string, 0, len(unanswered))
 		for _, m := range unanswered {
 			if strings.TrimSpace(m.Content) != "" {

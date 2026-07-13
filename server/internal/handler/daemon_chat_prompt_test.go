@@ -109,6 +109,26 @@ func TestShortConfirmationHandoffSummaryIncludesPreviousAgentQuestion(t *testing
 	}
 }
 
+func TestAgentInboxEventUserMessages(t *testing.T) {
+	eventID := parseUUID("00000000-0000-0000-0000-000000000011")
+	otherID := parseUUID("00000000-0000-0000-0000-000000000022")
+	msgs := []db.ChatMessage{
+		{Role: "user", Content: "old prompt envelope", TaskID: otherID},
+		{Role: "user", Content: "current prompt one", TaskID: eventID},
+		{Role: "user", Content: "current prompt two", TaskID: eventID},
+	}
+	got := contents(agentInboxEventUserMessages(msgs, eventID))
+	if !eq(got, []string{"current prompt one", "current prompt two"}) {
+		t.Fatalf("agentInboxEventUserMessages = %v", got)
+	}
+	if got := contents(agentInboxEventUserMessages(msgs, pgtype.UUID{})); !eq(got, contents(msgs)) {
+		t.Fatalf("invalid event id should preserve legacy trailing selection, got %v", got)
+	}
+	if got := contents(agentInboxEventUserMessages(msgs, parseUUID("00000000-0000-0000-0000-000000000033"))); !eq(got, []string{"current prompt two"}) {
+		t.Fatalf("retry event should fall back to the latest prompt only, got %v", got)
+	}
+}
+
 func TestTrailingUserMessages(t *testing.T) {
 	cases := []struct {
 		name string

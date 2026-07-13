@@ -231,10 +231,10 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		cancel()
 		return nil, fmt.Errorf("pi stdout pipe: %w", err)
 	}
-	// Attach an explicit stdin pipe. On Windows we write the prompt through
-	// stdin to avoid CreateProcess command-line limits; elsewhere we still
-	// close the pipe immediately so Pi sees EOF instead of blocking under
-	// systemd waiting for stdin events (#2188).
+	// Attach an explicit stdin pipe and keep the synthesized prompt out of
+	// argv. Besides Windows' command-line limit, Linux caps each exec argument
+	// at roughly 128 KiB. Closing the pipe after the write delivers the EOF Pi
+	// needs and avoids blocking under systemd (#2188).
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -571,15 +571,15 @@ var piBlockedArgs = map[string]blockedArgMode{
 //
 // Flags:
 //
-//	-p                          non-interactive mode (prompt is positional)
+//	-p                          non-interactive mode (prompt is read from stdin)
 //	--mode json                 emit one JSON event per line on stdout
 //	--session <path>            session log file (created upfront, reused on resume)
 //	--provider <name>           provider, when Model is "provider/id"
 //	--model <id>                model identifier
 //	--append-system-prompt <s>  extra system instructions
 //
-// Custom args appended before the positional prompt. The prompt is a
-// positional argument and must be last.
+// buildPiArgs retains optional positional-prompt support for direct unit use,
+// while production execution moves the synthesized prompt to stdin.
 func buildPiArgsForExecution(prompt, sessionPath string, opts ExecOptions, logger *slog.Logger) ([]string, string) {
 	if piPromptViaStdin() {
 		return buildPiArgs("", sessionPath, opts, logger), prompt

@@ -42,13 +42,16 @@ func TestBuildPiArgsBasicFlags(t *testing.T) {
 	}
 }
 
-func TestBuildPiArgsForExecutionNonWindowsKeepsPromptInArgv(t *testing.T) {
-	args, stdinPrompt := buildPiArgsForExecution("hello from argv", "/tmp/s.jsonl", ExecOptions{}, slog.Default())
-	if stdinPrompt != "" {
-		t.Fatalf("non-Windows should not use stdin prompt, got %q", stdinPrompt)
+func TestBuildPiArgsForExecutionMovesLargePromptToStdin(t *testing.T) {
+	prompt := strings.Repeat("群聊上下文\n", 20_000)
+	args, stdinPrompt := buildPiArgsForExecution(prompt, "/tmp/s.jsonl", ExecOptions{}, slog.Default())
+	if stdinPrompt != prompt {
+		t.Fatal("stdin prompt was not preserved")
 	}
-	if args[len(args)-1] != "hello from argv" {
-		t.Fatalf("prompt should be last argv on non-Windows, got %#v", args)
+	for _, arg := range args {
+		if arg == prompt {
+			t.Fatalf("large prompt leaked into argv: %#v", args)
+		}
 	}
 }
 
@@ -70,15 +73,8 @@ func TestBuildPiArgsCustomArgsAppended(t *testing.T) {
 }
 
 // TestPiExecuteAttachesStdinPipe verifies that the Pi backend spawns the
-// child with an explicit stdin pipe (FIFO) instead of leaving cmd.Stdin
-// nil. Without an explicit pipe, Pi has been observed to block under
-// systemd waiting for stdin events (#2188); attaching and immediately
-// closing a pipe delivers a clean EOF on a FIFO and unblocks Pi.
-//
-// The probe is structural rather than behavioral: a shell script in
-// place of `pi` inspects /proc/self/fd/0 and only emits a valid event
-// stream if stdin is a FIFO. If the fix regresses (stdin nil → /dev/null
-// char device), the fake exits non-zero and the test fails.
+// child with an explicit stdin pipe (FIFO), delivers a prompt larger than
+// Linux's per-argument limit through it, and closes the pipe with EOF.
 func TestPiExecuteAttachesStdinPipe(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS != "linux" {
@@ -90,15 +86,11 @@ func TestPiExecuteAttachesStdinPipe(t *testing.T) {
 	fakePath := filepath.Join(t.TempDir(), "pi")
 	script := "#!/bin/sh\n" +
 		"kind=$(stat -c '%F' -L /proc/self/fd/0 2>/dev/null || echo unknown)\n" +
-		"case \"$kind\" in\n" +
-		"  fifo|*pipe*)\n" +
-		"    printf '%s\\n' '{\"type\":\"agent_start\"}'\n" +
-		"    printf '%s\\n' '{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"model\":\"test\",\"usage\":{\"input\":1,\"output\":1,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":2}}}'\n" +
-		"    exit 0\n" +
-		"    ;;\n" +
-		"esac\n" +
-		"printf 'stdin was %s; expected fifo\\n' \"$kind\" >&2\n" +
-		"exit 1\n"
+		"case \"$kind\" in fifo|*pipe*) ;; *) printf 'stdin was %s; expected fifo\\n' \"$kind\" >&2; exit 1 ;; esac\n" +
+		"bytes=$(wc -c)\n" +
+		"[ \"$bytes\" -gt 131072 ] || { printf 'stdin prompt too small: %s bytes\\n' \"$bytes\" >&2; exit 1; }\n" +
+		"printf '%s\\n' '{\"type\":\"agent_start\"}'\n" +
+		"printf '%s\\n' '{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"model\":\"test\",\"usage\":{\"input\":1,\"output\":1,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":2}}}'\n"
 	writeTestExecutable(t, fakePath, []byte(script))
 
 	backend, err := New("pi", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -108,7 +100,7 @@ func TestPiExecuteAttachesStdinPipe(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{Timeout: 5 * time.Second})
+	session, err := backend.Execute(ctx, strings.Repeat("群聊上下文\n", 20_000), ExecOptions{Timeout: 5 * time.Second})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}

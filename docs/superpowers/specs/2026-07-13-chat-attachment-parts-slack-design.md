@@ -322,11 +322,11 @@ Not a task plan — orientation for `writing-plans`:
 
 **Suggested merge-ready order (latest-only; stackable PRs, delete old paths as you go):**
 
-1. BE: part type + bind from parts + file-only send  
-2. FE: tray + external media mode + send parts; **remove** chat URL-scan / inline image insert  
-3. FE: bubble gallery + previews  
-4. Agent CLI/skills  
-5. Sweep remaining dead chat attachment code / e2e updates  
+1. BE: part type + bind from parts + file-only send
+2. FE: tray + external media mode + send parts; **remove** chat URL-scan / inline image insert
+3. FE: bubble gallery + previews
+4. Agent CLI/skills
+5. Sweep remaining dead chat attachment code / e2e updates
 
 ## 6. Acceptance criteria
 

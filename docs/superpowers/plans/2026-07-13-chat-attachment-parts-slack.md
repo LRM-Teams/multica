@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go (Chi handlers, `messageparts`, sqlc attachment link), TypeScript monorepo (`@multica/core` types/API, `@multica/views` channels + editor), Vitest, `go test`, Playwright e2e.
 
-**Spec:** `docs/superpowers/specs/2026-07-13-chat-attachment-parts-slack-design.md`  
+**Spec:** `docs/superpowers/specs/2026-07-13-chat-attachment-parts-slack-design.md`
 **Preview:** `docs/superpowers/specs/2026-07-13-chat-attachment-parts-slack-preview.html`
 
 ## Global Constraints
@@ -379,12 +379,12 @@ git commit -m "feat(channels): Slack-style composer attachment tray"
 - Modify: `packages/views/channels/components/thread-root-preview.tsx`
 
 **Interfaces:**
-- Produces: `MessageAttachmentZone({ parts, attachments })`  
-  - Collect attachment parts in order  
-  - Hydrate via `attachments` by id  
-  - Images → gallery (bounded, click lightbox via existing Attachment)  
-  - Non-images → file tiles  
-  - Missing/denied → PRD-safe placeholder  
+- Produces: `MessageAttachmentZone({ parts, attachments })`
+  - Collect attachment parts in order
+  - Hydrate via `attachments` by id
+  - Images → gallery (bounded, click lightbox via existing Attachment)
+  - Non-images → file tiles
+  - Missing/denied → PRD-safe placeholder
 
 - `MessageBody` / bubble: render text+sticker parts in body; **always** render zone under body for attachment parts (not interleaved in markdown).
 

@@ -131,3 +131,41 @@ def test_env_dispatch_delete_relays_path_param():
     assert resp.status_code == 204
     assert seen["method"] == "DELETE"
     assert seen["path"] == "/api/v1/env-dispatch/proj-123"
+
+
+def test_env_dispatch_dag_get_relays_path_param_and_status():
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        return httpx.Response(
+            200, json={"segments": [], "edges": [], "session_to_agent_run": {}}
+        )
+
+    async def run():
+        async with areal_harness(handler) as (client, _db):
+            return await client.get(
+                "/api/v1/env-dispatch/proj-456/dag",
+                headers={"Authorization": "Bearer caller-key"},
+            )
+
+    resp = asyncio.run(run())
+    # GET with a {projectID} path param relays end to end (200 assembled DAG).
+    assert resp.status_code == 200
+    assert seen["method"] == "GET"
+    assert seen["path"] == "/api/v1/env-dispatch/proj-456/dag"
+
+
+def test_env_dispatch_dag_404_passes_through():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "project not found"})
+
+    async def run():
+        async with areal_harness(handler) as (client, _db):
+            return await client.get("/api/v1/env-dispatch/missing/dag")
+
+    resp = asyncio.run(run())
+    # 404 (unknown project) must survive the relay for the client to map to
+    # DagNotFound, not be turned into a 502.
+    assert resp.status_code == 404

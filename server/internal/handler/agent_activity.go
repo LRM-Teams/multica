@@ -1675,10 +1675,13 @@ func taskMessageActivityText(message db.TaskMessage) pgtype.Text {
 
 func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivityTargetRef) AgentActivityTimelineEvent {
 	details := jsonObject(row.Details)
+	input := mapFromMap(details, "input")
 	tool := stringPtrFromMap(details, "tool")
+	cliResolved := false
 	if tool != nil {
 		canonical := agentActivityCanonicalToolName(*tool)
-		if cli, ok := resolveRaftCLIInvocation(canonical, mapFromMap(details, "input")); ok {
+		if cli, ok := resolveRaftCLIInvocation(canonical, input); ok {
+			cliResolved = true
 			canonical = cli.Tool
 			for key, value := range cli.Details {
 				details[key] = value
@@ -1686,11 +1689,14 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		}
 		tool = &canonical
 	}
-	if command := redactedCommandFromInput(mapFromMap(details, "input")); command != "" && details["command"] == nil {
+	if command := redactedCommandFromInput(input); command != "" && details["command"] == nil {
 		details["command"] = command
 	}
 	if tool != nil {
-		agentActivityApplyToolInputSummary(details, *tool, mapFromMap(details, "input"), true)
+		agentActivityApplyToolInputSummary(details, *tool, agentActivityToolSummaryInput(details, input), true)
+		if isFileActivityTool(*tool) && !cliResolved && !hasShellCommandInput(input) {
+			delete(details, "command")
+		}
 	}
 	detailKind := agentActivityDetailKind(row.EventType)
 	return AgentActivityTimelineEvent{
@@ -1799,6 +1805,25 @@ func agentActivityApplyToolSourceFacts(details map[string]any, rawTool, canonica
 	if scope := activityScopeFactFromInput(input); scope != "" && details["scope"] == nil {
 		details["scope"] = scope
 	}
+}
+
+func agentActivityToolSummaryInput(details, input map[string]any) map[string]any {
+	if len(details) == 0 {
+		return input
+	}
+	merged := make(map[string]any, len(input)+4)
+	for key, value := range input {
+		merged[key] = value
+	}
+	for _, key := range []string{"path", "file_path", "filePath", "filepath", "query", "pattern", "scope", "cwd", "basePath"} {
+		if _, ok := merged[key]; ok {
+			continue
+		}
+		if value, ok := details[key]; ok {
+			merged[key] = value
+		}
+	}
+	return merged
 }
 
 func agentActivityToolInputSummaryForTool(canonicalTool string, input map[string]any) agentActivityToolInputSummary {
@@ -2282,10 +2307,13 @@ var agentActivityToolAliases = map[string]string{
 	"open":      "read_file",
 	"cat":       "read_file",
 
-	"write":      "write_file",
-	"writefile":  "write_file",
-	"write_file": "write_file",
-	"file_write": "write_file",
+	"write":       "write_file",
+	"writefile":   "write_file",
+	"write_file":  "write_file",
+	"file_write":  "write_file",
+	"create":      "write_file",
+	"createfile":  "write_file",
+	"create_file": "write_file",
 
 	"edit":           "edit_file",
 	"editfile":       "edit_file",

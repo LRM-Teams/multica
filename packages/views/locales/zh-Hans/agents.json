@@ -545,6 +545,13 @@
     "running_for": "进行中 · 已用时 {{min}}min",
     "duration_min": "耗时 {{min}}min",
     "task_fallback": "任务运行",
+    "radar_task": {
+      "queued": "主动发现 · 排队中",
+      "running": "主动发现 · 执行中",
+      "completed": "主动发现 · 已完成",
+      "failed": "主动发现 · 失败",
+      "cancelled": "主动发现 · 已取消"
+    },
     "empty_select": "选择左侧的一个智能体查看详情",
     "delete_success": "已删除智能体",
     "delete_failed": "删除智能体失败"

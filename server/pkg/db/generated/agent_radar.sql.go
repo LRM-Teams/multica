@@ -11,13 +11,36 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const cancelAgentRadarRunByTaskID = `-- name: CancelAgentRadarRunByTaskID :execrows
+UPDATE agent_radar_run
+SET
+    status = 'cancelled',
+    error = COALESCE($2, error),
+    finished_at = COALESCE(finished_at, now()),
+    updated_at = now()
+WHERE task_id = $1
+  AND status IN ('planned', 'queued', 'running')
+`
+
+type CancelAgentRadarRunByTaskIDParams struct {
+	TaskID pgtype.UUID `json:"task_id"`
+	Error  pgtype.Text `json:"error"`
+}
+
+func (q *Queries) CancelAgentRadarRunByTaskID(ctx context.Context, arg CancelAgentRadarRunByTaskIDParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelAgentRadarRunByTaskID, arg.TaskID, arg.Error)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countRecentAgentRadarRuns = `-- name: CountRecentAgentRadarRuns :one
 SELECT count(*)::bigint
 FROM agent_radar_run
 WHERE workspace_id = $1
   AND agent_id = $2
   AND created_at >= $3
-  AND status IN ('planned', 'queued', 'running', 'succeeded', 'no_action')
 `
 
 type CountRecentAgentRadarRunsParams struct {
@@ -111,6 +134,9 @@ INSERT INTO agent_radar_run (
     $1, $2, $7, $3, $4,
     COALESCE($8, 'planned'), $5, $6, COALESCE($9, now())
 )
+ON CONFLICT (workspace_id, agent_id)
+WHERE status IN ('planned', 'queued', 'running')
+DO NOTHING
 RETURNING id, workspace_id, agent_id, runtime_id, task_id, trigger_kind, trigger_ref, status, cooldown_key, context_summary, action_plan, error, scheduled_for, started_at, finished_at, created_at, updated_at
 `
 
@@ -159,6 +185,30 @@ func (q *Queries) CreateAgentRadarRun(ctx context.Context, arg CreateAgentRadarR
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const failAgentRadarRunByTaskID = `-- name: FailAgentRadarRunByTaskID :execrows
+UPDATE agent_radar_run
+SET
+    status = 'failed',
+    error = COALESCE($2, error),
+    finished_at = COALESCE(finished_at, now()),
+    updated_at = now()
+WHERE task_id = $1
+  AND status IN ('planned', 'queued', 'running')
+`
+
+type FailAgentRadarRunByTaskIDParams struct {
+	TaskID pgtype.UUID `json:"task_id"`
+	Error  pgtype.Text `json:"error"`
+}
+
+func (q *Queries) FailAgentRadarRunByTaskID(ctx context.Context, arg FailAgentRadarRunByTaskIDParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failAgentRadarRunByTaskID, arg.TaskID, arg.Error)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getAgentRadarRun = `-- name: GetAgentRadarRun :one
@@ -330,6 +380,24 @@ func (q *Queries) ListPlannedAgentRadarRuns(ctx context.Context, limit int32) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const markAgentRadarRunRunningByTaskID = `-- name: MarkAgentRadarRunRunningByTaskID :execrows
+UPDATE agent_radar_run
+SET
+    status = 'running',
+    started_at = COALESCE(started_at, now()),
+    updated_at = now()
+WHERE task_id = $1
+  AND status IN ('planned', 'queued')
+`
+
+func (q *Queries) MarkAgentRadarRunRunningByTaskID(ctx context.Context, taskID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markAgentRadarRunRunningByTaskID, taskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateAgentRadarActionStatus = `-- name: UpdateAgentRadarActionStatus :one

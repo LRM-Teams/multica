@@ -187,6 +187,7 @@ func (s *TaskService) captureTaskCompleted(ctx context.Context, task db.AgentTas
 }
 
 func (s *TaskService) captureTaskFailed(ctx context.Context, task db.AgentTaskQueue) {
+	s.syncAgentRadarRunTerminal(ctx, task, "failed")
 	failureReason := taskFailureReason(task)
 	if s.Metrics != nil {
 		source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
@@ -196,6 +197,7 @@ func (s *TaskService) captureTaskFailed(ctx context.Context, task db.AgentTaskQu
 }
 
 func (s *TaskService) captureTaskCancelled(ctx context.Context, task db.AgentTaskQueue) {
+	s.syncAgentRadarRunTerminal(ctx, task, "cancelled")
 	if s.Metrics != nil {
 		source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
 		s.Metrics.RecordTaskTerminal(util.UUIDToString(task.ID), source, runtimeMode, task.Status, taskRunSeconds(task), taskTotalSeconds(task), task.Attempt)
@@ -209,6 +211,38 @@ func (s *TaskService) captureTaskCancelled(ctx context.Context, task db.AgentTas
 	if err := s.Queries.DeleteTaskTokensByTask(ctx, task.ID); err != nil {
 		slog.Warn("cancel task: failed to revoke task tokens",
 			"task_id", util.UUIDToString(task.ID), "error", err)
+	}
+}
+
+func (s *TaskService) syncAgentRadarRunTerminal(ctx context.Context, task db.AgentTaskQueue, status string) {
+	errText := task.Error
+	if !errText.Valid && task.FailureReason.Valid {
+		errText = pgtype.Text{String: task.FailureReason.String, Valid: true}
+	}
+	var (
+		rows int64
+		err  error
+	)
+	switch status {
+	case "failed":
+		rows, err = s.Queries.FailAgentRadarRunByTaskID(ctx, db.FailAgentRadarRunByTaskIDParams{
+			TaskID: task.ID,
+			Error:  errText,
+		})
+	case "cancelled":
+		rows, err = s.Queries.CancelAgentRadarRunByTaskID(ctx, db.CancelAgentRadarRunByTaskIDParams{
+			TaskID: task.ID,
+			Error:  errText,
+		})
+	default:
+		return
+	}
+	if err != nil {
+		slog.Warn("sync radar terminal state failed", "task_id", util.UUIDToString(task.ID), "status", status, "error", err)
+		return
+	}
+	if rows > 0 {
+		slog.Info("agent radar run finalized from task", "task_id", util.UUIDToString(task.ID), "status", status)
 	}
 }
 
@@ -785,42 +819,100 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	return task, nil
 }
 
-func (s *TaskService) EnqueueAgentRadarTask(ctx context.Context, agentID pgtype.UUID, radarRunID string, prompt string) (db.AgentTaskQueue, error) {
-	agent, err := s.Queries.GetAgent(ctx, agentID)
-	if err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
-	}
-	if agent.ArchivedAt.Valid {
-		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
-	}
-	if !agent.RuntimeID.Valid {
-		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
-	}
-	payload := AgentRadarContext{
-		Type:       AgentRadarContextType,
-		RadarRunID: radarRunID,
-		Prompt:     prompt,
-	}
-	contextJSON, err := json.Marshal(payload)
-	if err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("marshal radar context: %w", err)
-	}
-	task, err := s.Queries.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
-		AgentID:   agentID,
-		RuntimeID: agent.RuntimeID,
-		Priority:  priorityToInt("low"),
-		Context:   contextJSON,
+var (
+	ErrAgentRadarRunActive = errors.New("agent radar run already active")
+	ErrAgentRadarNotReady  = errors.New("agent radar runtime not ready")
+)
+
+type EnqueueAgentRadarRunParams struct {
+	WorkspaceID    pgtype.UUID
+	AgentID        pgtype.UUID
+	TriggerKind    string
+	TriggerRef     string
+	CooldownKey    string
+	ContextSummary string
+	ScheduledFor   time.Time
+	Prompt         string
+}
+
+// EnqueueAgentRadarRun atomically creates a radar run, its queue task, and the
+// run-to-task link. The daemon notification is deliberately emitted only after
+// commit so a wakeup can never race a partially-created run.
+func (s *TaskService) EnqueueAgentRadarRun(ctx context.Context, in EnqueueAgentRadarRunParams) (db.AgentRadarRun, db.AgentTaskQueue, error) {
+	var run db.AgentRadarRun
+	var task db.AgentTaskQueue
+	err := s.runInTx(ctx, func(qtx *db.Queries) error {
+		agent, err := qtx.GetAgent(ctx, in.AgentID)
+		if err != nil {
+			return fmt.Errorf("load agent: %w", err)
+		}
+		if util.UUIDToString(agent.WorkspaceID) != util.UUIDToString(in.WorkspaceID) {
+			return fmt.Errorf("agent workspace mismatch")
+		}
+		ready, reason, err := AgentReadiness(ctx, qtx, agent)
+		if err != nil {
+			return fmt.Errorf("check agent radar readiness: %w", err)
+		}
+		if !ready {
+			return fmt.Errorf("%w: %s", ErrAgentRadarNotReady, reason)
+		}
+
+		run, err = qtx.CreateAgentRadarRun(ctx, db.CreateAgentRadarRunParams{
+			WorkspaceID:    in.WorkspaceID,
+			AgentID:        in.AgentID,
+			RuntimeID:      agent.RuntimeID,
+			TriggerKind:    in.TriggerKind,
+			TriggerRef:     in.TriggerRef,
+			Status:         "planned",
+			CooldownKey:    in.CooldownKey,
+			ContextSummary: in.ContextSummary,
+			ScheduledFor:   pgtype.Timestamptz{Time: in.ScheduledFor, Valid: true},
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrAgentRadarRunActive
+		}
+		if err != nil {
+			return fmt.Errorf("create radar run: %w", err)
+		}
+
+		contextJSON, err := json.Marshal(AgentRadarContext{
+			Type:       AgentRadarContextType,
+			RadarRunID: util.UUIDToString(run.ID),
+			Prompt:     in.Prompt,
+		})
+		if err != nil {
+			return fmt.Errorf("marshal radar context: %w", err)
+		}
+		task, err = qtx.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
+			AgentID:   in.AgentID,
+			RuntimeID: agent.RuntimeID,
+			Priority:  priorityToInt("low"),
+			Context:   contextJSON,
+		})
+		if err != nil {
+			return fmt.Errorf("create radar task: %w", err)
+		}
+		run, err = qtx.UpdateAgentRadarRunStatus(ctx, db.UpdateAgentRadarRunStatusParams{
+			ID:     run.ID,
+			Status: "queued",
+			TaskID: task.ID,
+		})
+		if err != nil {
+			return fmt.Errorf("link radar task: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("create radar task: %w", err)
+		return db.AgentRadarRun{}, db.AgentTaskQueue{}, err
 	}
+
 	slog.Info("agent radar task enqueued",
 		"task_id", util.UUIDToString(task.ID),
-		"agent_id", util.UUIDToString(agentID),
-		"radar_run_id", radarRunID,
+		"agent_id", util.UUIDToString(in.AgentID),
+		"radar_run_id", util.UUIDToString(run.ID),
 	)
 	s.NotifyTaskEnqueued(ctx, task)
-	return task, nil
+	return run, task, nil
 }
 
 // ErrChatTaskAgentArchived signals that EnqueueChatTask refused to
@@ -1370,7 +1462,18 @@ func (s *TaskService) maybeLogClaimSlow(agentID pgtype.UUID, outcome string, sta
 // StartTask transitions a dispatched task to running.
 // Issue status is NOT changed here — the agent manages it via the CLI.
 func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.AgentTaskQueue, error) {
-	task, err := s.Queries.StartAgentTask(ctx, taskID)
+	var task db.AgentTaskQueue
+	err := s.runInTx(ctx, func(qtx *db.Queries) error {
+		started, err := qtx.StartAgentTask(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		task = started
+		if _, err := qtx.MarkAgentRadarRunRunningByTaskID(ctx, taskID); err != nil {
+			return fmt.Errorf("mark radar run running: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("start task: %w", err)
 	}

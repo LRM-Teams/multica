@@ -1750,6 +1750,7 @@ JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at > now() - INTERVAL '30 days'
+  AND COALESCE(atq.context->>'type', '') <> 'agent_radar'
 GROUP BY atq.agent_id, bucket
 ORDER BY atq.agent_id, bucket
 `
@@ -1808,6 +1809,7 @@ FROM agent_task_queue atq
 JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
   AND atq.created_at > now() - INTERVAL '30 days'
+  AND COALESCE(atq.context->>'type', '') <> 'agent_radar'
 GROUP BY atq.agent_id
 `
 
@@ -2088,6 +2090,7 @@ const listAgentTasks = `-- name: ListAgentTasks :many
 SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id FROM agent_task_queue
 WHERE agent_id = $1
 ORDER BY created_at DESC
+LIMIT 50
 `
 
 func (q *Queries) ListAgentTasks(ctx context.Context, agentID pgtype.UUID) ([]AgentTaskQueue, error) {

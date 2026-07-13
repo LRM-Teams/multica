@@ -269,7 +269,7 @@ type AgentTaskResponse struct {
 	InitiatorID    string `json:"initiator_id,omitempty"`    // user UUID (member) or agent UUID
 	InitiatorName  string `json:"initiator_name,omitempty"`  // display name of the initiator
 	InitiatorEmail string `json:"initiator_email,omitempty"` // member email; empty for agent initiators
-	Kind           string `json:"kind"`                      // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
+	Kind           string `json:"kind"`                      // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "agent_radar" | "direct" — used by the activity row to label tasks that have no linked issue
 	// AuthToken is the `mat_` bearer the daemon writes into the per-run
 	// MULTICA_TOKEN_FILE wrapper. Legacy task-queue runs bind it to
 	// (agent_id, task_id); legacy inbox runs bind it to a single delivery.
@@ -502,11 +502,18 @@ func basename(p string) string {
 
 // computeTaskKind picks the source-discriminator string the activity UI uses
 // to choose how to render a task row. Computed from the existing FK shape so
-// no extra DB lookup is needed: chat / autopilot / comment-on-issue (any
-// triggered task with both an issue_id and trigger_comment_id) / quick_create
-// (no linked source — the agent is creating the issue itself) / direct
-// (assignee-driven task on an existing issue).
+// no extra DB lookup is needed: agent_radar (identified by context type) /
+// chat / autopilot / comment-on-issue (any triggered task with both an issue_id
+// and trigger_comment_id) / quick_create (no linked source — the agent is
+// creating the issue itself) / direct (assignee-driven task on an existing
+// issue).
 func computeTaskKind(t db.AgentTaskQueue) string {
+	var source struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(t.Context, &source) == nil && source.Type == "agent_radar" {
+		return "agent_radar"
+	}
 	if uuidToString(t.ChatSessionID) != "" {
 		return "chat"
 	}

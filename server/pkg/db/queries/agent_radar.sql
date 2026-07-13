@@ -6,6 +6,9 @@ INSERT INTO agent_radar_run (
     $1, $2, sqlc.narg('runtime_id'), $3, $4,
     COALESCE(sqlc.narg('status'), 'planned'), $5, $6, COALESCE(sqlc.narg('scheduled_for'), now())
 )
+ON CONFLICT (workspace_id, agent_id)
+WHERE status IN ('planned', 'queued', 'running')
+DO NOTHING
 RETURNING *;
 
 -- name: GetAgentRadarRun :one
@@ -42,8 +45,36 @@ SELECT count(*)::bigint
 FROM agent_radar_run
 WHERE workspace_id = $1
   AND agent_id = $2
-  AND created_at >= $3
-  AND status IN ('planned', 'queued', 'running', 'succeeded', 'no_action');
+  AND created_at >= $3;
+
+-- name: MarkAgentRadarRunRunningByTaskID :execrows
+UPDATE agent_radar_run
+SET
+    status = 'running',
+    started_at = COALESCE(started_at, now()),
+    updated_at = now()
+WHERE task_id = $1
+  AND status IN ('planned', 'queued');
+
+-- name: FailAgentRadarRunByTaskID :execrows
+UPDATE agent_radar_run
+SET
+    status = 'failed',
+    error = COALESCE(sqlc.narg('error'), error),
+    finished_at = COALESCE(finished_at, now()),
+    updated_at = now()
+WHERE task_id = $1
+  AND status IN ('planned', 'queued', 'running');
+
+-- name: CancelAgentRadarRunByTaskID :execrows
+UPDATE agent_radar_run
+SET
+    status = 'cancelled',
+    error = COALESCE(sqlc.narg('error'), error),
+    finished_at = COALESCE(finished_at, now()),
+    updated_at = now()
+WHERE task_id = $1
+  AND status IN ('planned', 'queued', 'running');
 
 -- name: CreateAgentRadarAction :one
 INSERT INTO agent_radar_action (

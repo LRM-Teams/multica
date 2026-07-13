@@ -167,6 +167,14 @@ func (h *Handler) executeRadarChannelPost(ctx context.Context, run db.AgentRadar
 	if err != nil {
 		return nil, err
 	}
+	_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
+	h.clearDMHiddenForChannelMembers(ctx, uuidToString(run.WorkspaceID), channelID)
+	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, uuidToString(run.WorkspaceID), "agent", uuidToString(agent.ID), channelID, msg)
+	if action.Type == radar.ActionMentionAgent {
+		if ch, found := h.getChannel(ctx, uuidToString(run.WorkspaceID), channelID); found {
+			h.dispatchChannelMentions(ctx, ch, msg, pgtype.UUID{})
+		}
+	}
 	return map[string]any{"channel_message_id": msg.ID}, nil
 }
 

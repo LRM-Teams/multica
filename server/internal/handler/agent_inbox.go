@@ -302,6 +302,7 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 			if canonicalTool != rawTool {
 				details["raw_tool"] = rawTool
 			}
+			agentActivityApplyToolSourceFacts(details, rawTool, canonicalTool, msg.Input)
 			agentActivityApplyToolInputSummary(details, canonicalTool, msg.Input, false)
 		}
 		if msg.Type == "tool_use" {

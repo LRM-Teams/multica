@@ -1603,6 +1603,7 @@ func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspac
 		if canonicalTool != rawTool {
 			details["raw_tool"] = rawTool
 		}
+		agentActivityApplyToolSourceFacts(details, rawTool, canonicalTool, input)
 	}
 	if target, summaryKind := taskMessageActivityToolTarget(message); target != "" {
 		details["tool_target"] = target
@@ -1772,6 +1773,31 @@ func agentActivityApplyToolInputSummary(details map[string]any, canonicalTool st
 	if replaceTarget && summary.ClearTarget {
 		delete(details, "tool_target")
 		delete(details, "summary_kind")
+	}
+}
+
+func agentActivityApplyToolSourceFacts(details map[string]any, rawTool, canonicalTool string, input map[string]any) {
+	if details == nil {
+		return
+	}
+	if command := redactedCommandFromInput(input); command != "" && details["command"] == nil {
+		details["command"] = command
+	}
+	tool := agentActivityCanonicalToolName(canonicalTool)
+	if tool != "read_file" && tool != "write_file" && tool != "edit_file" && tool != "glob" && tool != "grep" {
+		return
+	}
+	if path := activityPathFactFromInput(input); path != "" && details["path"] == nil {
+		details["path"] = path
+	}
+	if query := activityQueryFactFromInput(input); query != "" && details["query"] == nil {
+		details["query"] = query
+	}
+	if pattern := activityPatternFactFromInput(input); pattern != "" && details["pattern"] == nil {
+		details["pattern"] = pattern
+	}
+	if scope := activityScopeFactFromInput(input); scope != "" && details["scope"] == nil {
+		details["scope"] = scope
 	}
 }
 
@@ -2457,7 +2483,7 @@ func sourcePathFromMap(m map[string]any, key string) string {
 }
 
 func activityPathFactFromInput(input map[string]any) string {
-	for _, key := range []string{"path", "file_path", "filepath", "file", "filename", "absolute_path", "relative_path"} {
+	for _, key := range []string{"path", "file_path", "filepath", "filePath", "file", "filename", "absolute_path", "absolutePath", "relative_path", "relativePath"} {
 		if value := sourcePathFromMap(input, key); value != "" {
 			return value
 		}
@@ -2484,7 +2510,7 @@ func activityPatternFactFromInput(input map[string]any) string {
 }
 
 func activityScopeFactFromInput(input map[string]any) string {
-	for _, key := range []string{"scope", "cwd", "dir", "directory", "root", "base_path"} {
+	for _, key := range []string{"scope", "cwd", "dir", "directory", "root", "base_path", "basePath"} {
 		if value := sourcePathFromMap(input, key); value != "" {
 			return value
 		}

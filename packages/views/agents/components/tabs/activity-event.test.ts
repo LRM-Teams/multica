@@ -11,7 +11,7 @@ function toolEvent(tool: string, status = "running"): ActivityEvent {
     id: "t1",
     agent_id: "agent-1",
     activity_kind: "tool_call",
-    detail_kind: "tool_call",
+    detail_kind: "tool_use",
     occurred_at: "2026-07-11T00:00:00Z",
     tool,
     status,

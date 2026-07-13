@@ -1,0 +1,131 @@
+"""env-dispatch leagent_api channel tests: POST /api/v1/env-dispatch and
+DELETE /api/v1/env-dispatch/{projectID}.
+
+Stub runs on the AReaL side; executor on the multica side (forwarding to the
+real multica API). Verifies the env-dispatch contract relays end to end:
+status code, rollouts[] JSON body, path params, and the Authorization header.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+
+import httpx
+
+from db_bridge.channels import CHANNELS_BY_NAME
+from db_bridge.config import BridgeConfig
+from db_bridge.db import BridgeDB
+from db_bridge.executor import Executor
+from db_bridge.stub_server import create_stub_app
+
+from _fakes import FakeSupabaseClient
+
+USER_ID = "00000000-0000-0000-0000-00000000000a"
+
+
+def _config(**overrides: str) -> BridgeConfig:
+    env = {
+        "SUPABASE_URL": "https://example.supabase.co",
+        "SUPABASE_SERVICE_ROLE_KEY": "k",
+        "BRIDGE_POLL_INTERVAL": "0.01",
+        "BRIDGE_USER_ID": USER_ID,
+        **overrides,
+    }
+    return BridgeConfig.from_env(env)
+
+
+@contextlib.asynccontextmanager
+async def areal_harness(handler, **cfg_overrides):
+    cfg = _config(**cfg_overrides)
+    db = BridgeDB(cfg, client=FakeSupabaseClient())
+    ex = Executor(
+        db,
+        "leagent",
+        config=cfg,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    run_task = asyncio.create_task(ex.run())
+    stub = create_stub_app(db, "areal", cfg)
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=stub), base_url="http://stub"
+        ) as client:
+            yield client, db
+    finally:
+        ex.stop()
+        await run_task
+
+
+def test_channels_registered_in_leagent_api_group():
+    disp = CHANNELS_BY_NAME["env_dispatch"]
+    dele = CHANNELS_BY_NAME["env_dispatch_delete"]
+    assert disp.group == "leagent_api"
+    assert disp.method == "POST"
+    assert disp.path == "/api/v1/env-dispatch"
+    assert disp.table == "rpc_env_dispatch"
+    assert disp.stub_side == "areal"
+    assert disp.executor_side == "leagent"
+    assert disp.default_timeout_s == 600.0
+    assert dele.method == "DELETE"
+    assert dele.path == "/api/v1/env-dispatch/{projectID}"
+    assert dele.table == "rpc_env_dispatch_delete"
+
+
+def test_env_dispatch_post_relays_rollouts_and_auth():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["auth"] = request.headers.get("authorization")
+        seen["path"] = request.url.path
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            201,
+            json={
+                "rollouts": [
+                    {"env_id": "e1", "project_id": "p1", "issue_id": "i1",
+                     "agent_run_id": "r1"},
+                ]
+            },
+        )
+
+    async def run():
+        async with areal_harness(handler) as (client, _db):
+            return await client.post(
+                "/api/v1/env-dispatch",
+                headers={"Authorization": "Bearer multica-key"},
+                json={
+                    "mode": "scratch", "env_id": "base", "domain": "swe_lego",
+                    "dispatch_type": "issue", "group_size": 1, "agent_id": "ag",
+                    "issue": {"title": "t"},
+                },
+            )
+
+    resp = asyncio.run(run())
+    assert resp.status_code == 201
+    assert resp.json()["rollouts"][0]["agent_run_id"] == "r1"
+    assert seen["auth"] == "Bearer multica-key"
+    assert seen["path"] == "/api/v1/env-dispatch"
+    assert seen["body"]["mode"] == "scratch"
+
+
+def test_env_dispatch_delete_relays_path_param():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["method"] = request.method
+        return httpx.Response(204)
+
+    async def run():
+        async with areal_harness(handler) as (client, _db):
+            return await client.delete(
+                "/api/v1/env-dispatch/proj-123",
+                headers={"Authorization": "Bearer multica-key"},
+            )
+
+    resp = asyncio.run(run())
+    assert resp.status_code == 204
+    assert seen["method"] == "DELETE"
+    assert seen["path"] == "/api/v1/env-dispatch/proj-123"

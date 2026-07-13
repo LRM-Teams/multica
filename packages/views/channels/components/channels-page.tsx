@@ -70,7 +70,7 @@ import { useAuthStore } from "@multica/core/auth";
 import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
 import { api } from "@multica/core/api";
-import { useFileUpload, type UploadResult } from "@multica/core/hooks/use-file-upload";
+import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
@@ -160,6 +160,10 @@ import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
+import {
+  buildChatMessageParts,
+  useComposerPendingAttachments,
+} from "../hooks/use-composer-pending-attachments";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import { isChannelNameTakenError } from "../channel-create-error";
@@ -168,6 +172,7 @@ import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
+import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import {
@@ -865,13 +870,34 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const removeMember = useRemoveChannelMember();
   const createOrFindDm = useCreateOrFindDM();
   const { uploadWithToast } = useFileUpload(api);
-  // Maps the URL the editor wrote into the markdown body → attachment row id,
-  // so on send we bind only attachments still referenced in the content.
-  // Mirrors the chat-input flow. Cleared after every successful send.
-  const uploadMapRef = useRef<Map<string, string>>(new Map());
-  const threadUploadMapRef = useRef<Map<string, string>>(new Map());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const threadFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const uploadForActiveChannel = useCallback(
+    async (file: File) => {
+      if (!active) return null;
+      return uploadWithToast(file, { channelId: active.id });
+    },
+    [active, uploadWithToast],
+  );
+
+  const channelPending = useComposerPendingAttachments({
+    upload: uploadForActiveChannel,
+  });
+  const threadPending = useComposerPendingAttachments({
+    upload: uploadForActiveChannel,
+  });
+
+  // Drop tray state when the conversation (or thread root) changes so files
+  // never leak across channels.
+  useEffect(() => {
+    channelPending.clear();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- clear only on channel switch
+  }, [active?.id]);
+  useEffect(() => {
+    threadPending.clear();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- clear only on thread switch
+  }, [openThreadRoot?.id, active?.id]);
 
   const memberIds = useMemo(
     () => new Set(channelMembers.filter((m) => m.member_type === "user").map((m) => m.member_id)),
@@ -1435,63 +1461,27 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     setThreadDraftEmpty(!value.trim());
   };
 
-  // Upload a file against the active channel and remember its URL → id so the
-  // attachment binds to the message on send. The editor inserts the markdown
-  // link itself; we only track the mapping.
-  const handleUpload = useCallback(
-    async (file: File): Promise<UploadResult | null> => {
-      if (!active) return null;
-      const result = await uploadWithToast(file, { channelId: active.id });
-      if (result) {
-        uploadMapRef.current.set(result.markdownLink || result.link, result.id);
-      }
-      return result;
-    },
-    [active, uploadWithToast],
-  );
-
   const handlePickFiles = (files: FileList | null) => {
-    if (!files) return;
-    for (const file of Array.from(files)) {
-      editorRef.current?.uploadFile(file);
-    }
+    if (!files?.length) return;
+    channelPending.addFiles(Array.from(files));
   };
 
-  const handleThreadUpload = useCallback(
-    async (file: File): Promise<UploadResult | null> => {
-      if (!active) return null;
-      const result = await uploadWithToast(file, { channelId: active.id });
-      if (result) {
-        threadUploadMapRef.current.set(result.markdownLink || result.link, result.id);
-      }
-      return result;
-    },
-    [active, uploadWithToast],
-  );
-
   const handlePickThreadFiles = (files: FileList | null) => {
-    if (!files) return;
-    for (const file of Array.from(files)) {
-      threadEditorRef.current?.uploadFile(file);
-    }
+    if (!files?.length) return;
+    threadPending.addFiles(Array.from(files));
   };
 
   const handleSend = () => {
-    const content = editorRef.current?.getMarkdown()?.trim();
-    // Empty-content early-return runs BEFORE the in-flight guard: after a send
-    // succeeds, onSuccess clears the editor and onSettled releases the guard —
+    // Empty-payload early-return runs BEFORE the in-flight guard: after a send
+    // succeeds, onSuccess clears the editor/tray and onSettled releases the guard —
     // a still-held Enter in that gap grabs empty content and stops here.
-    if (!content || !active) return;
-    // Block while an upload is still in flight — otherwise the attachment id
-    // isn't in uploadMapRef yet and the file would only bind to the channel,
-    // not the message.
-    if (editorRef.current?.hasActiveUploads()) return;
-    // Only bind attachments still referenced in the body — edits that removed
-    // the markdown link also drop the binding.
-    const attachmentIds: string[] = [];
-    for (const [url, id] of uploadMapRef.current) {
-      if (content.includes(url)) attachmentIds.push(id);
-    }
+    if (!active) return;
+    // Block while tray uploads are in flight so we never send without ready ids.
+    if (channelPending.hasUploading) return;
+    const content = editorRef.current?.getMarkdown()?.trim() ?? "";
+    const parts = buildChatMessageParts(content, channelPending.readyAttachmentParts);
+    if (parts.length === 0) return;
+    const attachmentIds = channelPending.readyAttachmentParts.map((p) => p.attachment_id);
     // Send lock (N held/auto-repeat Enter → 1 request) + payload-bound
     // client_message_id + the 3-way outcome, all owned by useComposerSend.
     const dispatched = channelSend.send({
@@ -1499,14 +1489,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       buildVars: (clientMessageId) => ({
         channelId: active.id,
         content,
-        attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        parts,
         quoteMessageId: quoteTarget?.id ?? undefined,
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
       onCommitted: () => {
         editorRef.current?.clearContent();
-        uploadMapRef.current.clear();
+        channelPending.clear();
         setQuoteTarget(null);
         if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
       },
@@ -1522,13 +1512,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   };
 
   const handleThreadSend = () => {
-    const content = threadEditorRef.current?.getMarkdown()?.trim();
-    if (!content || !active || !threadRoot) return;
-    if (threadEditorRef.current?.hasActiveUploads()) return;
-    const attachmentIds: string[] = [];
-    for (const [url, id] of threadUploadMapRef.current) {
-      if (content.includes(url)) attachmentIds.push(id);
-    }
+    if (!active || !threadRoot) return;
+    if (threadPending.hasUploading) return;
+    const content = threadEditorRef.current?.getMarkdown()?.trim() ?? "";
+    const parts = buildChatMessageParts(content, threadPending.readyAttachmentParts);
+    if (parts.length === 0) return;
+    const attachmentIds = threadPending.readyAttachmentParts.map((p) => p.attachment_id);
     threadSend.send({
       payloadKey: composePayloadKey(
         content,
@@ -1539,14 +1528,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         channelId: active.id,
         messageId: threadRoot.id,
         content,
-        attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        parts,
         quoteMessageId: threadQuoteTarget?.id ?? undefined,
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
       onCommitted: () => {
         threadEditorRef.current?.clearContent();
-        threadUploadMapRef.current.clear();
+        threadPending.clear();
         setThreadQuoteTarget(null);
         setThreadDraftEmpty(true);
       },
@@ -2216,15 +2205,26 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             placeholder={t(($) => $.thread.composer_placeholder)}
             onUpdate={handleThreadEditorUpdate}
             onSubmit={handleThreadSend}
-            onUploadFile={handleThreadUpload}
+            mediaMode="external"
+            onExternalFiles={threadPending.addFiles}
             submitOnEnter
             showBubbleMenu={false}
             mentionAllowedActorIds={channelMemberIds}
           />
         }
         onSend={handleThreadSend}
-        sendDisabled={threadDraftEmpty}
+        sendDisabled={
+          (threadDraftEmpty && threadPending.readyAttachmentParts.length === 0) ||
+          threadPending.hasUploading
+        }
         sending={sendThreadMessage.isPending}
+        composerTray={
+          <ComposerAttachmentTray
+            pending={threadPending.pending}
+            onRemove={threadPending.remove}
+            onRetry={threadPending.retry}
+          />
+        }
         composerLeadingActions={
           <>
             <input
@@ -2567,7 +2567,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   <Composer
                     surface="channel"
                     sendLabel={t(($) => $.composer.send)}
-                    sendDisabled={activeDraftEmpty}
+                    sendDisabled={
+                      (activeDraftEmpty && channelPending.readyAttachmentParts.length === 0) ||
+                      channelPending.hasUploading
+                    }
                     sending={sendMessage.isPending}
                     onSend={handleSend}
                     isMobile={isMobile}
@@ -2578,6 +2581,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                         cancelLabel={t(($) => $.quote.cancel)}
                       />
                     ) : undefined}
+                    tray={
+                      <ComposerAttachmentTray
+                        pending={channelPending.pending}
+                        onRemove={channelPending.remove}
+                        onRetry={channelPending.retry}
+                      />
+                    }
                     editor={
                       <ContentEditor
                         key={active.id}
@@ -2587,7 +2597,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                         onUpdate={handleEditorUpdate}
                         debounceMs={0}
                         onSubmit={handleSend}
-                        onUploadFile={handleUpload}
+                        mediaMode="external"
+                        onExternalFiles={channelPending.addFiles}
                         submitOnEnter
                         showBubbleMenu={false}
                         enableIssueReferences

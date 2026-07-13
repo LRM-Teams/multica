@@ -168,7 +168,14 @@
     "stop_failed": "エージェントタスクの停止に失敗しました",
     "processing_single": "{{name}} が返信を準備しています...",
     "processing_pair": "{{a}} と {{b}} が返信を準備しています...",
-    "processing_overflow": "{{a}}、{{b}} ほか {{count}} 人が返信を準備しています..."
+    "processing_overflow": "{{a}}、{{b}} ほか {{count}} 人が返信を準備しています...",
+    "no_reply": "確認済み · 返信不要",
+    "failed": "返信に失敗",
+    "retry": "再試行",
+    "retry_named": "{{name}} を再試行",
+    "retry_aria": "{{name}} の返信を再試行",
+    "retry_success": "{{name}} を再試行中",
+    "retry_failed": "再試行できませんでした"
   },
   "composer": {
     "placeholder": "必要なことを入力してください…  @エージェント名 で返信を促します。",

@@ -2431,6 +2431,22 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/active-tasks`);
   }
 
+  /**
+   * Re-dispatch a failed agent reply via a fresh inbox event (#388). Powers the
+   * #277 strip's "Retry" on a `failed`+`retryable` terminal row. Server copies
+   * the event into a new pending one keyed by `inbox_event_id`; a non-retryable
+   * event returns 409.
+   */
+  async retryChannelInboxEvent(
+    channelId: string,
+    inboxEventId: string,
+  ): Promise<{ ok: boolean; inbox_event_id: string; agent_id: string; status: string }> {
+    return this.fetch(
+      `/api/channels/${channelId}/agent-inbox/events/${inboxEventId}/retry`,
+      { method: "POST" },
+    );
+  }
+
   async markChannelRead(channelId: string): Promise<MarkChannelReadResult> {
     return this.fetch<MarkChannelReadResult>(`/api/channels/${channelId}/read`, {
       method: "POST",

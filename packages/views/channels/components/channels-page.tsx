@@ -22,6 +22,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  RotateCcw,
   Search,
   Share2,
   Smartphone,
@@ -372,12 +373,16 @@ export function ConversationActivityStrip({
   typingActors = EMPTY_TYPING_ACTORS,
   tasks = EMPTY_ACTIVE_TASKS,
   stoppingTaskId = null,
+  retryingTaskId = null,
   onStopTask,
+  onRetryTask,
 }: {
   typingActors?: TypingActor[];
   tasks?: ChannelActiveTask[];
   stoppingTaskId?: string | null;
+  retryingTaskId?: string | null;
   onStopTask?: (task: ChannelActiveTask) => void;
+  onRetryTask?: (task: ChannelActiveTask) => void;
 }) {
   const { t } = useT("channels");
   const typingNames = useMemo(
@@ -387,6 +392,9 @@ export function ConversationActivityStrip({
     }),
     [typingActors],
   );
+  // Split the poll result: active rows drive the "preparing…"/Stop UI; terminal
+  // rows (new-chain outcome, #388) drive the #277 no_reply/failed+Retry states.
+  // `replied` is never returned by the server (the real reply is the evidence).
   const stoppableTasks = useMemo(() => {
     const next: ChannelActiveTask[] = [];
     for (const task of tasks) {
@@ -395,6 +403,14 @@ export function ConversationActivityStrip({
     }
     return next;
   }, [tasks]);
+  const terminalTasks = useMemo(
+    () => tasks.filter((task) => task.outcome === "no_reply" || task.outcome === "failed"),
+    [tasks],
+  );
+  const retryableCount = useMemo(
+    () => terminalTasks.filter((task) => task.outcome === "failed" && task.retryable).length,
+    [terminalTasks],
+  );
   const agentNames = useMemo(() => {
     const seen = new Set<string>();
     const unique: string[] = [];
@@ -428,7 +444,7 @@ export function ConversationActivityStrip({
               count: agentNames.length,
             });
 
-  if (!typingLabel && !agentLabel) return null;
+  if (!typingLabel && !agentLabel && terminalTasks.length === 0) return null;
 
   return (
     <div
@@ -454,6 +470,46 @@ export function ConversationActivityStrip({
             <span className="truncate">{agentLabel}</span>
           </span>
         ) : null}
+        {(typingLabel || agentLabel) && terminalTasks.length > 0 ? (
+          <span className="shrink-0 text-muted-foreground/50" aria-hidden="true">
+            ·
+          </span>
+        ) : null}
+        {terminalTasks.map((task) => {
+          const key = task.inbox_event_id ?? task.task_id;
+          const failed = task.outcome === "failed";
+          const canRetry = failed && task.retryable === true && !!task.inbox_event_id;
+          return (
+            <span key={key} className="flex min-w-0 shrink-0 items-center gap-1.5">
+              <span
+                className={cn(
+                  "size-1.5 shrink-0 rounded-full",
+                  failed ? "bg-amber-500" : "bg-muted-foreground/40",
+                )}
+                aria-hidden="true"
+              />
+              <span className={cn("truncate", failed && "text-amber-600 dark:text-amber-500")}>
+                {failed ? t(($) => $.agent_status.failed) : t(($) => $.agent_status.no_reply)}
+              </span>
+              {canRetry && onRetryTask ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 gap-1 px-2 text-[11px] text-amber-600 hover:text-amber-700 dark:text-amber-500 dark:hover:text-amber-400"
+                  disabled={retryingTaskId === key}
+                  onClick={() => onRetryTask(task)}
+                  aria-label={t(($) => $.agent_status.retry_aria, { name: task.agent_name })}
+                >
+                  <RotateCcw className="size-2.5" />
+                  {retryableCount === 1
+                    ? t(($) => $.agent_status.retry)
+                    : t(($) => $.agent_status.retry_named, { name: task.agent_name })}
+                </Button>
+              ) : null}
+            </span>
+          );
+        })}
       </div>
       {onStopTask && stoppableTasks.length > 0 ? (
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto">
@@ -479,7 +535,7 @@ export function ConversationActivityStrip({
 }
 
 function isTerminalChannelActiveTask(task: ChannelActiveTask) {
-  return typeof (task as { outcome?: unknown }).outcome === "string";
+  return typeof task.outcome === "string";
 }
 
 function TypingDots() {
@@ -764,6 +820,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
   const [stoppingChannelTaskId, setStoppingChannelTaskId] = useState<string | null>(null);
+  const [retryingChannelTaskId, setRetryingChannelTaskId] = useState<string | null>(null);
   const setChannelProject = useSetChannelProject(wsId, active?.id ?? "");
   const createChannel = useCreateChannel();
   const deleteChannel = useDeleteChannel();
@@ -1280,6 +1337,23 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       setStoppingChannelTaskId((current) => (current === task.task_id ? null : current));
     }
   }, [active?.id, qc, t, wsId]);
+
+  const handleRetryChannelTask = useCallback(async (task: ChannelActiveTask) => {
+    // Retry re-dispatches the failed reply via a fresh inbox event (#388/#277).
+    // Keyed by `inbox_event_id` (the new-chain id), not `task_id`.
+    if (!active?.id || !task.inbox_event_id) return;
+    const key = task.inbox_event_id;
+    setRetryingChannelTaskId(key);
+    try {
+      await api.retryChannelInboxEvent(active.id, key);
+      toast.success(t(($) => $.agent_status.retry_success, { name: task.agent_name }));
+      qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
+    } catch {
+      toast.error(t(($) => $.agent_status.retry_failed));
+    } finally {
+      setRetryingChannelTaskId((current) => (current === key ? null : current));
+    }
+  }, [active?.id, qc, t]);
 
   const handleToggleChannelPin = (channel: Channel) => {
     setChannelPin.mutate(
@@ -2185,7 +2259,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           <ConversationActivityStrip
             tasks={activeTasks}
             stoppingTaskId={stoppingChannelTaskId}
+            retryingTaskId={retryingChannelTaskId}
             onStopTask={handleStopChannelTask}
+            onRetryTask={handleRetryChannelTask}
           />
         }
       />
@@ -2484,7 +2560,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     typingActors={activeTypingActors}
                     tasks={activeTasks}
                     stoppingTaskId={stoppingChannelTaskId}
+                    retryingTaskId={retryingChannelTaskId}
                     onStopTask={handleStopChannelTask}
+                    onRetryTask={handleRetryChannelTask}
                   />
                   <Composer
                     surface="channel"

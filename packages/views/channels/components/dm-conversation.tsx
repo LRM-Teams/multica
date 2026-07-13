@@ -394,6 +394,7 @@ function DmChannelConversation({
     typingActors,
   }, dispatch] = useReducer(dmChannelReducer, initialDmChannelState);
   const [stoppingTaskId, setStoppingTaskId] = useState<string | null>(null);
+  const [retryingTaskId, setRetryingTaskId] = useState<string | null>(null);
   // #349 agent side panel — same slot as the thread panel (mutually
   // exclusive), matching channels-page.tsx's inline-panel pattern per
   // Frank's direction (replace the slot, don't route away).
@@ -715,6 +716,23 @@ function DmChannelConversation({
     }
   }, [channelId, qc, t, wsId]);
 
+  const handleRetryTask = useCallback(async (task: ChannelActiveTask) => {
+    // Retry re-dispatches the failed reply via a fresh inbox event (#388/#277),
+    // keyed by `inbox_event_id`.
+    if (!task.inbox_event_id) return;
+    const key = task.inbox_event_id;
+    setRetryingTaskId(key);
+    try {
+      await api.retryChannelInboxEvent(channelId, key);
+      toast.success(t(($) => $.agent_status.retry_success, { name: task.agent_name }));
+      qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelId) });
+    } catch {
+      toast.error(t(($) => $.agent_status.retry_failed));
+    } finally {
+      setRetryingTaskId((current) => (current === key ? null : current));
+    }
+  }, [channelId, qc, t]);
+
   const handleUpload = useCallback(
     async (file: File): Promise<UploadResult | null> => {
       const result = await uploadWithToast(file, { channelId });
@@ -897,7 +915,9 @@ function DmChannelConversation({
         <ConversationActivityStrip
           tasks={activeTasks}
           stoppingTaskId={stoppingTaskId}
+          retryingTaskId={retryingTaskId}
           onStopTask={handleStopTask}
+          onRetryTask={handleRetryTask}
         />
         <Composer
           surface="thread"
@@ -1068,7 +1088,9 @@ function DmChannelConversation({
         typingActors={activeTypingActors}
         tasks={activeTasks}
         stoppingTaskId={stoppingTaskId}
+        retryingTaskId={retryingTaskId}
         onStopTask={handleStopTask}
+        onRetryTask={handleRetryTask}
       />
       <Composer
         surface="dm_channel"

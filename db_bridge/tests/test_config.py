@@ -152,6 +152,28 @@ def test_stub_port_and_upstream_dispatch():
     assert cfg.upstream_for_group("leagent_api") == cfg.leagent_upstream_url
 
 
+def test_multica_upstream_url_default_and_env():
+    cfg = BridgeConfig.from_env(_MINIMAL)
+    # Non-empty loopback default (real multica Go server port confirmed at
+    # deployment time; placeholder until then).
+    assert cfg.multica_upstream_url
+    assert cfg.multica_upstream_api_key is None  # no key injected by default
+    env = {
+        **_MINIMAL,
+        "BRIDGE_MULTICA_UPSTREAM_URL": "http://127.0.0.1:9999",
+        "BRIDGE_MULTICA_UPSTREAM_API_KEY": "secret-key",
+    }
+    cfg2 = BridgeConfig.from_env(env)
+    assert cfg2.multica_upstream_url == "http://127.0.0.1:9999"
+    assert cfg2.multica_upstream_api_key == "secret-key"
+    assert cfg2.upstream_for_group("multica_api") == "http://127.0.0.1:9999"
+    # Trailing slash is stripped, mirroring the other upstreams.
+    cfg3 = BridgeConfig.from_env(
+        {**_MINIMAL, "BRIDGE_MULTICA_UPSTREAM_URL": "http://127.0.0.1:9999/"}
+    )
+    assert cfg3.multica_upstream_url == "http://127.0.0.1:9999"
+
+
 # -- channel registry invariants -------------------------------------------
 
 

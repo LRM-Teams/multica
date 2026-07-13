@@ -1017,6 +1017,7 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 			{Seq: 5, Type: "text", Content: "runtime stdout fallback should be diagnostic"},
 			{Seq: 6, Type: "tool_use", Tool: "running", Input: map[string]any{"path": "/tmp/status_only.txt"}},
 			{Seq: 7, Type: "tool_use", Tool: "write_file", Input: map[string]any{"path": "/Users/frank/Code/multica/server/internal/handler/channel_test.go"}},
+			{Seq: 8, Type: "tool_use", Tool: "read", Input: map[string]any{"filePath": "/tmp/test.go", "basePath": "/repo"}},
 		},
 	}, testWorkspaceID, "agent-inbox-activity-daemon")
 	messagesReq = withURLParam(messagesReq, "eventId", got.ID)
@@ -1062,8 +1063,8 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("activity rows error: %v", err)
 	}
-	if len(activity) != 7 {
-		t.Fatalf("activity rows = %+v, want 7", activity)
+	if len(activity) != 8 {
+		t.Fatalf("activity rows = %+v, want 8", activity)
 	}
 	if activity[0].kind != activityKindThinking || activity[0].visibility != "user_facing" {
 		t.Fatalf("thinking row = %+v, want user-facing thinking", activity[0])
@@ -1101,6 +1102,12 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	writeTarget, _ := activity[6].details["tool_target"].(string)
 	if activity[6].details["tool"] != "write_file" || !strings.HasSuffix(writeTarget, "/Code/multica/server/internal/handler/channel_test.go") || activity[6].details["summary_kind"] != "file_path" {
 		t.Fatalf("write file details = %+v, want redacted source-backed file path", activity[6].details)
+	}
+	if activity[7].kind != activityKindToolCall || activity[7].eventType != "tool_use" || activity[7].visibility != "user_facing" {
+		t.Fatalf("read file row = %+v, want user-facing tool_use", activity[7])
+	}
+	if activity[7].details["tool"] != "read_file" || activity[7].details["raw_tool"] != "read" || activity[7].details["tool_target"] != "/tmp/test.go" || activity[7].details["summary_kind"] != "file_path" || activity[7].details["command"] != nil || activity[7].details["path"] != "/tmp/test.go" || activity[7].details["scope"] != "/repo" {
+		t.Fatalf("read file details = %+v, want read source facts without invented command", activity[7].details)
 	}
 }
 

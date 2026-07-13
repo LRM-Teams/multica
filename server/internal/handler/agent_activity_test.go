@@ -591,6 +591,13 @@ func TestAgentActivitySafeToolTargetForTool_FileToolsUseSourceBackedPath(t *test
 			path: "/tmp/activity-event.ts",
 			want: "/tmp/activity-event.ts",
 		},
+		{
+			name: "read file path from runtime camel case key",
+			tool: "read_file",
+			key:  "filePath",
+			path: "/tmp/activity-event.ts",
+			want: "/tmp/activity-event.ts",
+		},
 	}
 
 	for _, tt := range tests {
@@ -667,6 +674,35 @@ func TestAgentActivityToolInputSummaryForTool_UsesRaftLikeToolInputWithoutInvent
 	})
 	if bashSummary.ToolTarget != "cat /tmp/secret.txt" || bashSummary.SummaryKind != "command" {
 		t.Fatalf("bash summary = %+v, want command target", bashSummary)
+	}
+}
+
+func TestAgentActivityApplyToolSourceFacts_PreservesSourceFactsWithoutInventingCommands(t *testing.T) {
+	readDetails := map[string]any{}
+	agentActivityApplyToolSourceFacts(readDetails, "read", "read_file", map[string]any{
+		"filePath": "/tmp/test.go",
+		"basePath": "/repo",
+	})
+	if readDetails["command"] != nil || readDetails["path"] != "/tmp/test.go" || readDetails["scope"] != "/repo" {
+		t.Fatalf("read source facts = %+v, want path/scope without invented command", readDetails)
+	}
+
+	globDetails := map[string]any{}
+	agentActivityApplyToolSourceFacts(globDetails, "glob", "glob", map[string]any{
+		"pattern": "server/internal/**/*.go",
+		"cwd":     "/Users/frank/Code/multica",
+	})
+	if globDetails["command"] != nil || globDetails["pattern"] != "server/internal/**/*.go" || globDetails["scope"] != "/Users/frank/Code/multica" {
+		t.Fatalf("glob source facts = %+v, want pattern/scope without invented command", globDetails)
+	}
+
+	bashDetails := map[string]any{}
+	agentActivityApplyToolSourceFacts(bashDetails, "terminal", "bash", map[string]any{
+		"command": "cat /tmp/secret.txt",
+		"path":    "/tmp/secret.txt",
+	})
+	if bashDetails["command"] != "cat /tmp/secret.txt" || bashDetails["path"] != nil {
+		t.Fatalf("bash source facts = %+v, want explicit command without path-backed shell target", bashDetails)
 	}
 }
 

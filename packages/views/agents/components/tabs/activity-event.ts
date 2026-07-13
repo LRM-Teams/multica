@@ -196,7 +196,11 @@ const TOOL_ACTION_KEY: Record<string, ActivityLabelKey> = {
   glob: "searching_files",
   grep: "searching_code",
   web_search: "searching_web",
-  send_message: "sending_message",
+  // NOTE: no `send_message` → "sending_message" entry. A `multica message send`
+  // (which the daemon canonicalizes to `send_message`) is a CLI command and is
+  // shown as "Running command · <command>" via the command branch in
+  // `toolPresentation` — Frank's #v0 rule: don't invent a "Sending message"
+  // label, show the real command like any other CLI.
 };
 
 // A tool row only reaches the user-facing timeline when its slug maps to a
@@ -216,18 +220,42 @@ function fullCommand(event: ActivityEvent): string | undefined {
   return event.entries?.find((e) => e.command?.trim())?.command?.trim() || undefined;
 }
 
+// Main-row clip length for a command (raft shows the command sliced ~100 chars;
+// the full redacted command stays on hover/copy).
+const COMMAND_INLINE_MAX = 100;
+
 function toolPresentation(event: ActivityEvent): ActivityPresentation {
+  // Frank's rule (#v0 「不发明新东西」): anything run as a CLI command — bash, and
+  // any multica subcommand the daemon canonicalized to a semantic tool
+  // (`send_message`, …) — is shown FAITHFULLY as "Running command · <command>",
+  // never a product-invented label ("Sending message"). The redacted CLI lives in
+  // `entries[].command`; its presence is the signal that this row is a command.
+  // Main row = the command clipped; full command + copy on hover (the shared
+  // command presentation). Native structured tools (read_file/glob/grep) carry no
+  // command and keep their real label + real object below.
+  const command = fullCommand(event);
+  if (command) {
+    return {
+      labelKey: "running_command",
+      subtext:
+        command.length > COMMAND_INLINE_MAX ? `${command.slice(0, COMMAND_INLINE_MAX)}…` : command,
+      subtextKind: "command",
+      subtextFull: command,
+      tone: statusTone(event),
+    };
+  }
+
   const subtext = toolTarget(event);
   const semantic = TOOL_SEMANTIC[normalizedTool(event)];
   // Rendered tool rows are always mapped (see `isNarrativeActivityEvent`); the
   // "working" branch is an unreachable type guard, never a real fallback label.
   const labelKey = (semantic && TOOL_ACTION_KEY[semantic]) || "working";
   // Classify the subtext so the row renders it correctly (#v0 照实显示). A file
-  // tool's target is a PATH (basename-preserving middle-ellipsis). A shell
-  // tool's target is a COMMAND — render it as a plain single-line clip with the
-  // full redacted command on hover/copy; it must NOT get the path treatment,
-  // which middle-ellipsises on the last `/` and mangles a command that merely
-  // contains a slash (the #v0 "命令看不全/云里雾里" bug). Everything else is plain.
+  // tool's target is a PATH (basename-preserving middle-ellipsis). A command
+  // tool whose clip arrived without an attached full command still renders as a
+  // plain command clip — never the path treatment, which middle-ellipsises on
+  // the last `/` and mangles a command that merely contains a slash (the #v0
+  // "命令看不全/云里雾里" bug). Everything else is plain text.
   const isPathTool = semantic === "read" || semantic === "write" || semantic === "edit";
   const isCommand = semantic === "command";
   const subtextKind: ActivityPresentation["subtextKind"] = isPathTool
@@ -235,13 +263,7 @@ function toolPresentation(event: ActivityEvent): ActivityPresentation {
     : isCommand
       ? "command"
       : "text";
-  return {
-    labelKey,
-    subtext,
-    subtextKind,
-    subtextFull: isCommand ? fullCommand(event) : undefined,
-    tone: statusTone(event),
-  };
+  return { labelKey, subtext, subtextKind, tone: statusTone(event) };
 }
 
 export function activityPresentation(event: ActivityEvent): ActivityPresentation {

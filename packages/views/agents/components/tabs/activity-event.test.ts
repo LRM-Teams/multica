@@ -38,7 +38,6 @@ describe("activityPresentation — tool normalization", () => {
     ["grep", "searching_code"],
     ["rg", "searching_code"],
     ["web_search", "searching_web"],
-    ["send_message", "sending_message"],
   ];
 
   it.each(cases)("normalizes provider slug %s to labelKey %s", (tool, labelKey) => {
@@ -188,6 +187,50 @@ describe("activityPresentation — subtext kind classification (#v0 照实显示
 
   it("leaves subtextFull undefined for a command with no entries command", () => {
     expect(activityPresentation({ ...toolEvent("bash"), tool_target: "ls" }).subtextFull).toBeUndefined();
+  });
+});
+
+describe("activityPresentation — CLI commands show as Running command, no invented label (#v0 ⑤)", () => {
+  // Frank's rule: anything run as a CLI command (bash, and any multica subcommand
+  // the daemon canonicalized to a semantic tool like `send_message`) is shown
+  // FAITHFULLY as "Running command · <command>", never a product-invented label
+  // ("Sending message"). The signal is `entries[].command` (the redacted CLI).
+  it("renders a `send_message` (the `multica message send` CLI) as Running command with the real command", () => {
+    const event: ActivityEvent = {
+      ...toolEvent("send_message"),
+      // #503: raft-CLI parse puts the message target in tool_target; the real
+      // command is in entries[].command.
+      tool_target: "#multica",
+      entries: [
+        { kind: "tool_call", tool: "send_message", command: 'multica message send --target "#multica"' },
+      ],
+    };
+    const p = activityPresentation(event);
+    expect(p.labelKey).toBe("running_command"); // NOT "sending_message"
+    expect(p.subtextKind).toBe("command");
+    expect(p.subtext).toBe('multica message send --target "#multica"'); // real command inline, not "#multica"
+    expect(p.subtextFull).toBe('multica message send --target "#multica"');
+  });
+
+  it("clips a long command inline to ~100 chars while the full command stays for hover/copy", () => {
+    const long = `multica message send --target "#multica" --body ${"x".repeat(200)}`;
+    const p = activityPresentation({
+      ...toolEvent("send_message"),
+      entries: [{ kind: "tool_call", tool: "send_message", command: long }],
+    });
+    expect(p.subtext).toBe(`${long.slice(0, 100)}…`);
+    expect(p.subtextFull).toBe(long);
+  });
+
+  it("a bash command carrying entries.command also renders via the same command path", () => {
+    const p = activityPresentation({
+      ...toolEvent("bash"),
+      tool_target: "cd /w && ls…",
+      entries: [{ kind: "tool_call", tool: "bash", command: "cd /w && ls -la" }],
+    });
+    expect(p.labelKey).toBe("running_command");
+    expect(p.subtext).toBe("cd /w && ls -la");
+    expect(p.subtextKind).toBe("command");
   });
 });
 

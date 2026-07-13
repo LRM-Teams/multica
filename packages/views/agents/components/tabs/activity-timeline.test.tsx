@@ -268,10 +268,10 @@ describe("ActivityTimeline", () => {
     };
     render(<ActivityTimeline events={[CMD]} />);
     expect(screen.getByText("Running command")).toBeInTheDocument();
-    // The command clip is ONE plain node (never split into path head/tail — a
-    // command containing `/` must not get the path middle-ellipsis), with the
-    // full redacted command reachable on hover.
-    expect(screen.getByText("cd /a/b && multica send…")).toBeInTheDocument();
+    // The command renders as ONE plain node (never split into path head/tail — a
+    // command containing `/` must not get the path middle-ellipsis), showing the
+    // real command from `entries[].command`, with the full command on hover.
+    expect(screen.getByText('cd /a/b && multica send --target "#c"')).toBeInTheDocument();
     expect(screen.getByTitle('cd /a/b && multica send --target "#c"')).toBeInTheDocument();
     // Copy affordance present on the full (non-compact) row.
     expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();

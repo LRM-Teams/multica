@@ -120,4 +120,41 @@ describe("ComposerAttachmentTray", () => {
       "uploading",
     );
   });
+
+  it("lays out chips in a horizontal flex row (not a vertical stack)", () => {
+    const pending: PendingAttachment[] = [
+      item({
+        localId: "f1",
+        status: "ready",
+        filename: "cleanup-grok-xy-bridge.sh",
+        contentType: "application/x-sh",
+        attachmentId: "a1",
+        previewUrl: undefined,
+      }),
+      item({
+        localId: "f2",
+        status: "ready",
+        filename: "cleanup-grok-xy-bridge-2.sh",
+        contentType: "text/x-shellscript",
+        attachmentId: "a2",
+        previewUrl: undefined,
+      }),
+    ];
+
+    render(
+      <ComposerAttachmentTray pending={pending} onRemove={vi.fn()} onRetry={vi.fn()} />,
+    );
+
+    const tray = screen.getByTestId("composer-attachment-tray");
+    expect(tray.className).toMatch(/flex-row/);
+    expect(tray.className).not.toMatch(/flex-col(?!-)/);
+
+    const first = screen.getByTestId("composer-tray-item-f1");
+    const second = screen.getByTestId("composer-tray-item-f2");
+    // Content-sized chips sit side-by-side; full-width stretch forced one-per-row wrap.
+    expect(first.className).toMatch(/\bw-fit\b/);
+    expect(second.className).toMatch(/\bw-fit\b/);
+    expect(first.className).not.toMatch(/\bw-full\b/);
+    expect(second.className).not.toMatch(/\bw-full\b/);
+  });
 });

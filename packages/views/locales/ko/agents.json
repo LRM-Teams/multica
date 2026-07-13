@@ -371,6 +371,7 @@
       "labels": {
         "thinking": "생각 중",
         "output": "출력",
+        "completed": "완료",
         "working": "작업 중",
         "failed": "실패",
         "waiting": "대기 중",
@@ -557,6 +558,13 @@
     "running_for": "진행 중 · {{min}}min 경과",
     "duration_min": "{{min}}min",
     "task_fallback": "작업 실행",
+    "radar_task": {
+      "queued": "능동 탐색 · 대기 중",
+      "running": "능동 탐색 · 실행 중",
+      "completed": "능동 탐색 · 완료",
+      "failed": "능동 탐색 · 실패",
+      "cancelled": "능동 탐색 · 취소됨"
+    },
     "empty_select": "왼쪽에서 에이전트를 선택하면 상세 정보가 표시됩니다",
     "delete_success": "에이전트를 삭제했습니다",
     "delete_failed": "에이전트 삭제에 실패했습니다"

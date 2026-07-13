@@ -42,15 +42,15 @@ func TestBuildPiArgsBasicFlags(t *testing.T) {
 	}
 }
 
-func TestBuildPiArgsForExecutionMovesLargePromptToStdin(t *testing.T) {
-	prompt := strings.Repeat("群聊上下文\n", 20_000)
+func TestBuildPiArgsForExecutionMovesPromptToStdinOnEveryPlatform(t *testing.T) {
+	prompt := strings.Repeat("group context\n", 32*1024)
 	args, stdinPrompt := buildPiArgsForExecution(prompt, "/tmp/s.jsonl", ExecOptions{}, slog.Default())
 	if stdinPrompt != prompt {
-		t.Fatal("stdin prompt was not preserved")
+		t.Fatalf("stdin prompt was not preserved")
 	}
 	for _, arg := range args {
-		if arg == prompt {
-			t.Fatalf("large prompt leaked into argv: %#v", args)
+		if strings.Contains(arg, "group context") {
+			t.Fatalf("prompt leaked into argv: %#v", args)
 		}
 	}
 }
@@ -73,8 +73,15 @@ func TestBuildPiArgsCustomArgsAppended(t *testing.T) {
 }
 
 // TestPiExecuteAttachesStdinPipe verifies that the Pi backend spawns the
-// child with an explicit stdin pipe (FIFO), delivers a prompt larger than
-// Linux's per-argument limit through it, and closes the pipe with EOF.
+// child with an explicit stdin pipe (FIFO) instead of leaving cmd.Stdin
+// nil. Without an explicit pipe, Pi has been observed to block under
+// systemd waiting for stdin events (#2188); attaching and immediately
+// closing a pipe delivers a clean EOF on a FIFO and unblocks Pi.
+//
+// The probe is structural rather than behavioral: a shell script in
+// place of `pi` inspects /proc/self/fd/0 and only emits a valid event
+// stream if stdin is a FIFO. If the fix regresses (stdin nil → /dev/null
+// char device), the fake exits non-zero and the test fails.
 func TestPiExecuteAttachesStdinPipe(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS != "linux" {
@@ -86,11 +93,15 @@ func TestPiExecuteAttachesStdinPipe(t *testing.T) {
 	fakePath := filepath.Join(t.TempDir(), "pi")
 	script := "#!/bin/sh\n" +
 		"kind=$(stat -c '%F' -L /proc/self/fd/0 2>/dev/null || echo unknown)\n" +
-		"case \"$kind\" in fifo|*pipe*) ;; *) printf 'stdin was %s; expected fifo\\n' \"$kind\" >&2; exit 1 ;; esac\n" +
-		"bytes=$(wc -c)\n" +
-		"[ \"$bytes\" -gt 131072 ] || { printf 'stdin prompt too small: %s bytes\\n' \"$bytes\" >&2; exit 1; }\n" +
-		"printf '%s\\n' '{\"type\":\"agent_start\"}'\n" +
-		"printf '%s\\n' '{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"model\":\"test\",\"usage\":{\"input\":1,\"output\":1,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":2}}}'\n"
+		"case \"$kind\" in\n" +
+		"  fifo|*pipe*)\n" +
+		"    printf '%s\\n' '{\"type\":\"agent_start\"}'\n" +
+		"    printf '%s\\n' '{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"model\":\"test\",\"usage\":{\"input\":1,\"output\":1,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":2}}}'\n" +
+		"    exit 0\n" +
+		"    ;;\n" +
+		"esac\n" +
+		"printf 'stdin was %s; expected fifo\\n' \"$kind\" >&2\n" +
+		"exit 1\n"
 	writeTestExecutable(t, fakePath, []byte(script))
 
 	backend, err := New("pi", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -100,7 +111,7 @@ func TestPiExecuteAttachesStdinPipe(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	session, err := backend.Execute(ctx, strings.Repeat("群聊上下文\n", 20_000), ExecOptions{Timeout: 5 * time.Second})
+	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{Timeout: 5 * time.Second})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -119,6 +130,112 @@ func TestPiExecuteAttachesStdinPipe(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("timeout waiting for result")
+	}
+}
+
+func TestPiExecuteKeepsLargePromptOffArgvAndWritesItToStdin(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake executable is a POSIX shell script")
+	}
+
+	const promptBytes = 256 * 1024
+	fakePath := filepath.Join(t.TempDir(), "pi")
+	script := "#!/bin/sh\n" +
+		"bytes=$(wc -c | tr -d ' ')\n" +
+		"if [ \"$bytes\" != \"262144\" ]; then\n" +
+		"  printf 'stdin bytes=%s; want 262144\\n' \"$bytes\" >&2\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"printf '%s\\n' '{\"type\":\"agent_start\"}'\n" +
+		"printf '%s\\n' '{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"model\":\"test\",\"usage\":{\"input\":1,\"output\":1,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":2}}}'\n"
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	backend, err := New("pi", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("new pi backend: %v", err)
+	}
+	session, err := backend.Execute(t.Context(), strings.Repeat("x", promptBytes), ExecOptions{Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("execute large prompt: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+	result := <-session.Result
+	if result.Status != "completed" {
+		t.Fatalf("large stdin prompt status=%q error=%q", result.Status, result.Error)
+	}
+}
+
+func TestPiExecuteClearsResumeSessionWhenPiFailsBeforeAgentStart(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake executable is a POSIX shell script")
+	}
+
+	fakePath := filepath.Join(t.TempDir(), "pi")
+	writeTestExecutable(t, fakePath, []byte("#!/bin/sh\nprintf '%s\\n' 'resume session is unreadable' >&2\nexit 1\n"))
+
+	backend, err := New("pi", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("new pi backend: %v", err)
+	}
+	resumePath := filepath.Join(t.TempDir(), "stale-session.jsonl")
+	session, err := backend.Execute(t.Context(), "retry this prompt", ExecOptions{
+		ResumeSessionID: resumePath,
+		Timeout:         5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("execute resumed Pi session: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+	result := <-session.Result
+	if result.Status != "failed" {
+		t.Fatalf("resume failure status=%q error=%q", result.Status, result.Error)
+	}
+	if result.SessionID != "" {
+		t.Fatalf("resume failure before agent_start returned session ID %q; daemon fresh-session retry will not run", result.SessionID)
+	}
+}
+
+func TestPiExecuteFailsWhenChildDoesNotReadLargeStdinPrompt(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake executable is a POSIX shell script")
+	}
+
+	fakePath := filepath.Join(t.TempDir(), "pi")
+	// Emit a superficially successful terminal event without consuming stdin.
+	// A prompt larger than the pipe buffer must not be reported as completed:
+	// Pi never received the request it was supposed to execute.
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' '{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"model\":\"test\",\"stopReason\":\"stop\",\"usage\":{\"input\":0,\"output\":0}}}'\n" +
+		"exit 0\n"
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	backend, err := New("pi", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("new pi backend: %v", err)
+	}
+	session, err := backend.Execute(t.Context(), strings.Repeat("x", 1024*1024), ExecOptions{Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("execute Pi with unread stdin: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+	result := <-session.Result
+	if result.Status != "failed" {
+		t.Fatalf("unread stdin prompt status=%q error=%q, want failed", result.Status, result.Error)
+	}
+	if !strings.Contains(result.Error, "stdin prompt") {
+		t.Fatalf("unread stdin prompt error=%q, want delivery failure", result.Error)
 	}
 }
 
@@ -186,7 +303,11 @@ func TestPiExecuteFailsAssistantStopReasonError(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{Timeout: 5 * time.Second})
+	resumePath := filepath.Join(t.TempDir(), "established-session.jsonl")
+	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{
+		ResumeSessionID: resumePath,
+		Timeout:         5 * time.Second,
+	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -205,6 +326,9 @@ func TestPiExecuteFailsAssistantStopReasonError(t *testing.T) {
 		}
 		if result.Error != "proxy returned malformed JSON" {
 			t.Fatalf("expected propagated error message, got %q", result.Error)
+		}
+		if result.SessionID != resumePath {
+			t.Fatalf("failure after agent_start session=%q, want established resume path %q", result.SessionID, resumePath)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("timeout waiting for result")

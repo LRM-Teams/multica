@@ -93,8 +93,31 @@ function ExecLogRow({ task }: { task: AgentTask }) {
   const timeAgo = useTimeAgo();
   const { Icon, cls } = taskVisual(task.status);
   const isRunning = task.status === "running" || task.status === "dispatched";
+  let radarTitle: string | null = null;
+  if (task.kind === "agent_radar") {
+    switch (task.status) {
+      case "queued":
+      case "waiting_local_directory":
+        radarTitle = t(($) => $.dashboard.radar_task.queued);
+        break;
+      case "dispatched":
+      case "running":
+        radarTitle = t(($) => $.dashboard.radar_task.running);
+        break;
+      case "completed":
+        radarTitle = t(($) => $.dashboard.radar_task.completed);
+        break;
+      case "failed":
+        radarTitle = t(($) => $.dashboard.radar_task.failed);
+        break;
+      case "cancelled":
+        radarTitle = t(($) => $.dashboard.radar_task.cancelled);
+        break;
+    }
+  }
 
   const title =
+    radarTitle ||
     task.trigger_summary?.trim() ||
     (task.issue_id ? `#${task.issue_id.slice(0, 8)}` : t(($) => $.dashboard.task_fallback));
 

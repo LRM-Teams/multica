@@ -1,19 +1,22 @@
 import type { AgentActivityTimelineEvent } from "@multica/core/types";
+import { stripMentionMarkdown } from "../../../common/strip-mention-markdown";
 
-// FE read-model for the agent-activity narrative timeline (#267 / #302). The BE
-// supplies source-backed facts (`kind`, `text`, `reason_code`, refs, and
-// `visibility`); display labels and dot tone are FE projection, not API fields.
-export type ActivityVisibility = "user_facing" | "diagnostic_only";
+// FE read-model for the agent-activity narrative timeline (#267 / #302 / #389).
+// The BE supplies source-backed facts (`activity_kind`/`detail_kind`, `text`,
+// `reason_code`, refs, `entries`); display labels and dot tone are FE projection,
+// not API fields. Mainline vs diagnostic is driven by `activity_kind` semantics
+// (raft-aligned #389), NOT a `visibility` flag (removed in the cutover).
 
 // Keep the palette intentionally quiet: only failures and waiting states get
 // color; the normal narrative stream stays neutral.
-export type ActivityTone = "neutral" | "active" | "waiting" | "failure";
+export type ActivityDotTone = "neutral" | "active" | "waiting" | "failure";
 
 // The FE Activity read-model IS the BE #302 timeline event
 // (`AgentActivityTimelineEvent`, packages/core/types/events.ts): id /
-// occurred_at / visibility / kind/text/reason/source refs drive the rendered
-// row. Aliasing to the BE type keeps the four layers (daemon -> server -> API ->
-// FE) one raw shape; presentation stays in the component layer.
+// occurred_at / activity_kind / detail_kind / text / reason / refs / entries
+// drive the rendered row. Aliasing to the BE type keeps the four layers
+// (daemon -> server -> API -> FE) one raw shape; presentation stays in the
+// component layer.
 export type ActivityEvent = AgentActivityTimelineEvent;
 
 // Labels are i18n KEYS resolved in the component — the raft-exact source strings
@@ -23,6 +26,7 @@ export type ActivityEvent = AgentActivityTimelineEvent;
 export type ActivityLabelKey =
   | "thinking"
   | "output"
+  | "completed"
   | "working"
   | "failed"
   | "waiting"
@@ -47,21 +51,54 @@ export interface ActivityPresentation {
   subtextKey?: ActivitySubtextKey;
   /** Dynamic subtext (tool target, reply text, reason) — rendered verbatim. */
   subtext?: string;
-  tone: ActivityTone;
+  tone: ActivityDotTone;
 }
 
 function reasonText(event: ActivityEvent): string {
   return event.reason_code?.trim().replaceAll("_", " ") ?? "";
 }
 
+// Free-form model/message text (Output body, thinking prose, subagent detail)
+// is authored markdown — it still carries mention syntax like
+// `[@Frank An](mention://member/id)`. The Activity row shows a plain-text
+// preview, so normalize mentions to their display name (`@Frank An`) before
+// display; real markdown links (`[docs](https://…)`) are left untouched (#387:
+// the raw `mention://` URI was leaking into the Output preview). Tool targets
+// are BE-provided safe summaries (basename / clipped query) and never carry
+// mentions, so they skip this.
+function narrativeText(text: string | null | undefined): string | undefined {
+  const trimmed = text ?? undefined;
+  return trimmed === undefined ? undefined : stripMentionMarkdown(trimmed);
+}
+
+// Mainline vs diagnostic is driven by the raft `activity_kind` semantics (#389),
+// NOT a `visibility` flag (that field was removed in the raft-alignment cutover).
+// The BE already prefilters the default page to mainline narrative; this predicate
+// is the FE-side guard that keeps the split identical (shared table, Iris keeper).
+function isRadarActionEvent(event: ActivityEvent): boolean {
+  if (event.reason_code?.trim() === "radar_untrusted_target") {
+    return false;
+  }
+  if (
+    event.detail_kind === "radar_action_executed" &&
+    event.reason_code?.trim() === "no_action"
+  ) {
+    return false;
+  }
+  return (
+    event.detail_kind === "radar_action_executed" || event.detail_kind === "radar_action_failed"
+  );
+}
+
 export function isNarrativeActivityEvent(event: ActivityEvent): boolean {
-  if (event.visibility !== "user_facing") return false;
-  switch (event.kind) {
+  switch (event.activity_kind) {
     case "tool_output":
     case "transport":
     case "telemetry":
     case "turn_end":
     case "session_init":
+    case "internal_progress":
+    case "runtime_diagnostic":
       return false;
     case "tool_call":
       // Only surface a tool row we can label with a canonical Raft action. An
@@ -71,7 +108,7 @@ export function isNarrativeActivityEvent(event: ActivityEvent): boolean {
       // `unmapped_tool_name` gap event so the miss is fixed at the source.
       return isMappedTool(event);
     case "custom":
-      return event.event_type.includes("subagent");
+      return event.detail_kind.includes("subagent") || isRadarActionEvent(event);
     default:
       return true;
   }
@@ -98,7 +135,7 @@ function isActiveStatus(status: string | undefined): boolean {
   );
 }
 
-function statusTone(event: ActivityEvent): ActivityTone {
+function statusTone(event: ActivityEvent): ActivityDotTone {
   return isActiveStatus(event.status) ? "active" : "neutral";
 }
 
@@ -168,11 +205,11 @@ function toolPresentation(event: ActivityEvent): ActivityPresentation {
 }
 
 export function activityPresentation(event: ActivityEvent): ActivityPresentation {
-  switch (event.kind) {
+  switch (event.activity_kind) {
     case "thinking":
-      return { labelKey: "thinking", subtext: event.text, tone: "neutral" };
+      return { labelKey: "thinking", subtext: narrativeText(event.text), tone: "neutral" };
     case "text":
-      return { labelKey: "output", subtext: event.text, tone: "neutral" };
+      return { labelKey: "output", subtext: narrativeText(event.text), tone: "neutral" };
     case "tool_call":
       return toolPresentation(event);
     case "turn_end":
@@ -185,20 +222,34 @@ export function activityPresentation(event: ActivityEvent): ActivityPresentation
     case "wake_attempt":
       return { labelKey: "working", subtextKey: "message_received", tone: "active" };
     case "error":
-      return { labelKey: "failed", subtext: event.text ?? reasonText(event), tone: "failure" };
+      return {
+        labelKey: "failed",
+        subtext: narrativeText(event.text) ?? reasonText(event),
+        tone: "failure",
+      };
     case "blocked":
-      return { labelKey: "waiting", subtext: reasonText(event) || event.text, tone: "waiting" };
+      return { labelKey: "waiting", subtext: reasonText(event) || narrativeText(event.text), tone: "waiting" };
     case "custom":
-      if (event.event_type.includes("subagent")) {
+      if (event.detail_kind === "radar_action_failed") {
+        return {
+          labelKey: "failed",
+          subtext: narrativeText(event.text) ?? reasonText(event),
+          tone: "failure",
+        };
+      }
+      if (event.detail_kind === "radar_action_executed") {
+        return { labelKey: "completed", subtext: narrativeText(event.text), tone: "neutral" };
+      }
+      if (event.detail_kind.includes("subagent")) {
         // Prefer the daemon's own subagent detail text; fall back to a fixed label.
         return event.text
-          ? { labelKey: "working", subtext: event.text, tone: "active" }
+          ? { labelKey: "working", subtext: narrativeText(event.text), tone: "active" }
           : { labelKey: "working", subtextKey: "subagent_activity", tone: "active" };
       }
-      return { labelKey: "working", subtext: event.text, tone: "active" };
+      return { labelKey: "working", subtext: narrativeText(event.text), tone: "active" };
     default:
       // Unmapped narrative kind — a neutral working row, never the raw kind string.
-      return { labelKey: "working", subtext: event.text, tone: "neutral" };
+      return { labelKey: "working", subtext: narrativeText(event.text), tone: "neutral" };
   }
 }
 

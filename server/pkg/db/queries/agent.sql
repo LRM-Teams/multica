@@ -131,7 +131,8 @@ RETURNING *;
 -- name: ListAgentTasks :many
 SELECT * FROM agent_task_queue
 WHERE agent_id = $1
-ORDER BY created_at DESC;
+ORDER BY created_at DESC
+LIMIT 50;
 
 -- name: CreateAgentTask :one
 INSERT INTO agent_task_queue (
@@ -681,6 +682,7 @@ FROM agent_task_queue atq
 JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
   AND atq.created_at > now() - INTERVAL '30 days'
+  AND COALESCE(atq.context->>'type', '') <> 'agent_radar'
 GROUP BY atq.agent_id;
 
 -- name: GetWorkspaceAgentActivity30d :many
@@ -707,6 +709,7 @@ JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at > now() - INTERVAL '30 days'
+  AND COALESCE(atq.context->>'type', '') <> 'agent_radar'
 GROUP BY atq.agent_id, bucket
 ORDER BY atq.agent_id, bucket;
 

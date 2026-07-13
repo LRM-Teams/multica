@@ -1938,29 +1938,23 @@ func trailingUserMessages(msgs []db.ChatMessage) []db.ChatMessage {
 	return msgs[start:]
 }
 
-func agentInboxEventUserMessages(msgs []db.ChatMessage, eventID pgtype.UUID) []db.ChatMessage {
+// inboxPromptMessages returns only the synthetic channel prompt written for
+// the inbox event currently being drained. Each channel prompt already
+// contains a bounded conversation excerpt; using any other unanswered prompt
+// can both repeat a large failed backlog and execute the wrong user request.
+// Retry creation copies the original prompt and binds the copy to the new event
+// ID, so a missing exact task_id link is invalid rather than a reason to guess.
+func inboxPromptMessages(msgs []db.ChatMessage, eventID pgtype.UUID) []db.ChatMessage {
 	if !eventID.Valid {
-		return trailingUserMessages(msgs)
+		return nil
 	}
-	out := make([]db.ChatMessage, 0, 1)
-	for _, m := range msgs {
-		if m.Role == "user" && m.TaskID.Valid && m.TaskID == eventID {
-			out = append(out, m)
+	current := make([]db.ChatMessage, 0, 1)
+	for _, msg := range msgs {
+		if msg.Role == "user" && msg.TaskID.Valid && msg.TaskID == eventID {
+			current = append(current, msg)
 		}
 	}
-	if len(out) > 0 {
-		return out
-	}
-	// A manual retry creates a new inbox event but deliberately reuses the
-	// original prompt row, whose task_id still points at the failed event.
-	// The retry guard rejects stale retries once newer work exists, so the
-	// latest user prompt is the safe bounded fallback here.
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == "user" {
-			return msgs[i : i+1]
-		}
-	}
-	return nil
+	return current
 }
 
 func hasPriorChatContext(msgs []db.ChatMessage, currentTaskID pgtype.UUID) bool {

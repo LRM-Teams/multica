@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // CancelTaskByUser (POST /api/tasks/{taskId}/cancel) used to key cancellation
@@ -138,6 +140,95 @@ func cancelTaskByUserRequest(t *testing.T, userID, taskID string) *http.Request 
 	req := newRequestAs(userID, "POST", "/api/tasks/"+taskID+"/cancel", nil)
 	req = withURLParam(req, "taskId", taskID)
 	return withChatTestWorkspaceCtx(t, req)
+}
+
+func TestCancelTaskByUser_AgentInboxEvent_CancelsNewChainTask(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "CancelInboxEventAgent", []byte("[]"))
+	channelID := seedChannelForTest(t, "cancel-inbox-event-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	root := dispatchThreadMentionForTest(t, channelID, agentID, "cancel-inbox-event-"+uuid.NewString())
+	eventID := latestChannelAgentInboxEventForRootForTest(t, root.ID, agentID)
+
+	var deliveryID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_event_delivery (
+			workspace_id,
+			agent_session_id,
+			inbox_event_id,
+			runtime_id,
+			status
+		)
+		SELECT workspace_id,
+		       agent_session_id,
+		       id,
+		       $2,
+		       'leased'
+		FROM agent_inbox_event
+		WHERE id = $1
+		RETURNING id`, eventID, handlerTestRuntimeID(t)).Scan(&deliveryID); err != nil {
+		t.Fatalf("seed inbox delivery: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	testHandler.CancelTaskByUser(w, cancelTaskByUserRequest(t, testUserID, eventID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp CancelTaskByUserResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode cancel response: %v", err)
+	}
+	if resp.ID != eventID || resp.Status != "cancelled" || resp.Kind != "chat" || resp.CompletedAt == nil {
+		t.Fatalf("cancel inbox response = %+v, want cancelled chat inbox event", resp.AgentTaskResponse)
+	}
+
+	var eventStatus, terminalOutcome, terminalDeliveryID string
+	var retryable bool
+	if err := testPool.QueryRow(ctx, `
+		SELECT status,
+		       COALESCE(terminal_outcome, ''),
+		       COALESCE(terminal_delivery_id::text, ''),
+		       retryable
+		FROM agent_inbox_event
+		WHERE id = $1`, eventID).Scan(&eventStatus, &terminalOutcome, &terminalDeliveryID, &retryable); err != nil {
+		t.Fatalf("load cancelled inbox event: %v", err)
+	}
+	if eventStatus != "suppressed" || terminalOutcome != "no_reply" || terminalDeliveryID != deliveryID || retryable {
+		t.Fatalf("cancelled inbox event status=%q outcome=%q delivery=%q retryable=%v", eventStatus, terminalOutcome, terminalDeliveryID, retryable)
+	}
+	var deliveryStatus string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_event_delivery WHERE id = $1`, deliveryID).Scan(&deliveryStatus); err != nil {
+		t.Fatalf("load cancelled delivery: %v", err)
+	}
+	if deliveryStatus != "failed" {
+		t.Fatalf("delivery status = %q, want failed", deliveryStatus)
+	}
+
+	activeReq := withURLParam(newRequest(http.MethodGet, "/api/channels/"+channelID+"/active-tasks", nil), "channelId", channelID)
+	activeReq = withChannelTestWorkspaceCtx(t, activeReq, testUserID)
+	activeRec := httptest.NewRecorder()
+	testHandler.ListChannelActiveTasks(activeRec, activeReq)
+	if activeRec.Code != http.StatusOK {
+		t.Fatalf("list active tasks after cancel: status=%d body=%s", activeRec.Code, activeRec.Body.String())
+	}
+	var activeResp ChannelActiveTasksResponse
+	if err := json.NewDecoder(activeRec.Body).Decode(&activeResp); err != nil {
+		t.Fatalf("decode active tasks after cancel: %v", err)
+	}
+	for _, task := range activeResp.Tasks {
+		if task.TaskID == eventID {
+			t.Fatalf("cancelled inbox event still appears in active strip: %+v", activeResp.Tasks)
+		}
+	}
 }
 
 // TestCancelTaskByUser_RunOnlyAutopilot_Succeeds is the core MUL-2827 fix: a

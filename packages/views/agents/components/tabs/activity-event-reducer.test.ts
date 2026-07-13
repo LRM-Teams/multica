@@ -8,9 +8,8 @@ function evt(id: string, occurred_at: string, text = id): ActivityEvent {
     occurred_at,
     text,
     agent_id: "agent-1",
-    kind: "text",
-    event_type: "text",
-    visibility: "user_facing",
+    activity_kind: "text",
+    detail_kind: "text",
     target_ref: { kind: "agent", id: "agent-1" },
   };
 }

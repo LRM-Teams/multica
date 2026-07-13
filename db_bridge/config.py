@@ -63,7 +63,10 @@ _DEFAULT_LEAGENT_STUB_PORT: Final = 9101
 _DEFAULT_STUB_HOST: Final = "127.0.0.1"
 _DEFAULT_GATEWAY_UPSTREAM: Final = "http://127.0.0.1:8080"
 _DEFAULT_LEAGENT_UPSTREAM: Final = "http://127.0.0.1:8000"
-_DEFAULT_MULTICA_UPSTREAM: Final = "http://127.0.0.1:8081"
+# The multica Go server's default $PORT is 8080 (server/cmd/server/main.go).
+# Same loopback port as the AReaL gateway default, but on a DIFFERENT host
+# (multica host vs areal host), so there is no collision.
+_DEFAULT_MULTICA_UPSTREAM: Final = "http://127.0.0.1:8080"
 _DEFAULT_STATS_INTERVAL: Final = 0.0
 _DEFAULT_CLEANUP_INTERVAL: Final = 300.0
 _DEFAULT_ROW_RETENTION_SECONDS: Final = 24 * 60 * 60

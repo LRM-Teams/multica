@@ -154,9 +154,8 @@ def test_stub_port_and_upstream_dispatch():
 
 def test_multica_upstream_url_default_and_env():
     cfg = BridgeConfig.from_env(_MINIMAL)
-    # Non-empty loopback default (real multica Go server port confirmed at
-    # deployment time; placeholder until then).
-    assert cfg.multica_upstream_url
+    # Defaults to the multica Go server's loopback $PORT (8080).
+    assert cfg.multica_upstream_url == "http://127.0.0.1:8080"
     assert cfg.multica_upstream_api_key is None  # no key injected by default
     env = {
         **_MINIMAL,

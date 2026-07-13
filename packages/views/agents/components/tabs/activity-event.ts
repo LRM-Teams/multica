@@ -132,12 +132,18 @@ export function isNarrativeActivityEvent(event: ActivityEvent): boolean {
       return isMappedTool(event);
     case "custom":
       return (
-        // Agent status transitions (Working ↔ Idle) are mainline: raft shows
-        // status as presence (a projection of the latest activity kind), and the
-        // BE writes a row only on a REAL change (same-state writes de-duped at the
-        // source, #411/#525) — so every row here is a genuine transition worth
-        // surfacing. The FE adds NO collapse logic (raft doesn't collapse either).
-        event.detail_kind === "agent_status_changed" ||
+        // Agent status → timeline: keep IDLE only, drop WORKING. "Working" the
+        // agent already conveys via the actual work rows (thinking / Running
+        // command / Writing file…) and the wake "Working · Message received" row
+        // that opens the round — a bare "Working" status row right after the wake
+        // row is the same transition written twice (Frank: "为什么突然多了一个
+        // working"). Raft models status as presence (a dot / header projection of
+        // the latest activity kind), not a text row, so a redundant "Working" line
+        // is an invented duplicate. "Idle" IS kept — end-of-round is independent
+        // info not otherwise visible in the timeline. The WORKING event still
+        // exists in the stream for the header/hover latest-state projection; we
+        // just don't give it its own timeline row.
+        (event.detail_kind === "agent_status_changed" && event.status !== "working") ||
         event.detail_kind.includes("subagent") ||
         isRadarActionEvent(event)
       );

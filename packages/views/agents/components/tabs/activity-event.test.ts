@@ -342,11 +342,13 @@ describe("agent status transitions — Working ↔ Idle rows (#411/#525)", () =>
     } as ActivityEvent;
   }
 
-  it("keeps a status transition in the narrative (not dropped like other custom events)", () => {
-    // The `custom` predicate only keeps subagent/radar by default; without the
-    // explicit keep, a status row would vanish from the timeline entirely.
-    expect(isNarrativeActivityEvent(statusEvent("working"))).toBe(true);
+  it("keeps IDLE in the timeline but drops the redundant WORKING status row", () => {
+    // "Idle" (end-of-round) is independent info worth a row; a bare "Working"
+    // duplicates the wake / actual-work rows that already show the agent working
+    // (Frank: "为什么突然多了一个working"). The working EVENT still exists for the
+    // header latest-state — it just gets no timeline row.
     expect(isNarrativeActivityEvent(statusEvent("idle"))).toBe(true);
+    expect(isNarrativeActivityEvent(statusEvent("working"))).toBe(false);
   });
 
   it("labels working as active and idle as a settled neutral row", () => {

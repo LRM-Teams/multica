@@ -4,7 +4,7 @@ import {
   agentActivityEventsKeys,
   agentActivityEventsOptions,
 } from "@multica/core/agents";
-import { useWSEvent } from "@multica/core/realtime";
+import { useWSEvent, useWSReconnect } from "@multica/core/realtime";
 import type { AgentActivityEventRealtimePayload } from "@multica/core/types";
 import type { ActivityEvent } from "./activity-event";
 import { projectLatestActivity, upsertActivityEvents } from "./activity-event-reducer";
@@ -79,6 +79,21 @@ export function useAgentActivityEvents(agentId: string): {
     [agentId, queryClient],
   );
   useWSEvent("agent_activity:event", onActivityEvent);
+
+  // Backfill on WS reconnect: any events emitted while the socket was down are
+  // absent from BOTH the REST snapshot (`data`) and the live buffer, so refetch
+  // the per-agent event query to reconcile the gap. The global reconnect
+  // handler invalidates `agentActivityKeys` (workspace presence), NOT this
+  // per-agent `agentActivityEventsKeys` stream, so — like the issue hooks — this
+  // hook owns its own reconnect refetch.
+  useWSReconnect(
+    useCallback(() => {
+      if (!agentId) return;
+      queryClient.invalidateQueries({
+        queryKey: agentActivityEventsKeys.all(agentId),
+      });
+    }, [agentId, queryClient]),
+  );
 
   // Merge REST first-paint with the live buffer (WS applied last, so a fresher
   // WS aggregate wins for a shared id). Also normalizes order and dedupes.

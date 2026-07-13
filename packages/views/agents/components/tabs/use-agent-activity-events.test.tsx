@@ -7,6 +7,8 @@ import type { ActivityEvent } from "./activity-event";
 // WS event registry — captures the handler the hook registers so tests can
 // simulate a server push by invoking it directly.
 const wsHandlers = vi.hoisted(() => new Map<string, (payload: unknown) => void>());
+// Captures the reconnect callback the hook registers.
+const reconnect = vi.hoisted(() => ({ cb: null as null | (() => void) }));
 // Controllable stand-in for what useQuery returns this render (the REST cache).
 const queryState = vi.hoisted(() => ({ data: [] as unknown, isLoading: false }));
 const clientHandles = vi.hoisted(() => ({ invalidateQueries: vi.fn() }));
@@ -38,7 +40,9 @@ vi.mock("@multica/core/realtime", () => ({
   useWSEvent: (event: string, handler: (payload: unknown) => void) => {
     wsHandlers.set(event, handler);
   },
-  useWSReconnect: vi.fn(),
+  useWSReconnect: (cb: () => void) => {
+    reconnect.cb = cb;
+  },
 }));
 
 import { useAgentActivityEvents } from "./use-agent-activity-events";
@@ -68,6 +72,7 @@ function push(payload: {
 describe("useAgentActivityEvents", () => {
   beforeEach(() => {
     wsHandlers.clear();
+    reconnect.cb = null;
     queryState.data = [];
     queryState.isLoading = false;
     clientHandles.invalidateQueries.mockClear();
@@ -182,6 +187,17 @@ describe("useAgentActivityEvents", () => {
   it("falls back to invalidating the REST query for a degraded (event-less) push", () => {
     renderHook(() => useAgentActivityEvents("agent-1"));
     push({ agent_id: "agent-1", event_id: "z" });
+    expect(clientHandles.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["agent-activity-events", "agent-1"],
+    });
+  });
+
+  it("refetches the per-agent event query on WS reconnect (backfills the gap)", () => {
+    renderHook(() => useAgentActivityEvents("agent-1"));
+    expect(reconnect.cb).toBeTypeOf("function");
+    act(() => {
+      reconnect.cb!();
+    });
     expect(clientHandles.invalidateQueries).toHaveBeenCalledWith({
       queryKey: ["agent-activity-events", "agent-1"],
     });

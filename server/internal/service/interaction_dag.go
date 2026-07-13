@@ -56,11 +56,16 @@ type InteractionDAGStore interface {
 type MessageStore interface {
 	MessagesForTaskInRange(ctx context.Context, taskID string, startSeq, endSeq int32) ([]db.TaskMessage, error)
 	GetProjectInWorkspace(ctx context.Context, arg db.GetProjectInWorkspaceParams) (db.Project, error)
+	GetIssueForTask(ctx context.Context, taskID string) (db.Issue, error)
 }
 
 // Compile-time guarantee that *db.Queries satisfies InteractionDAGStore, so a
 // generated-method signature drift fails at compile time now, not at U7.2 wiring.
 var _ InteractionDAGStore = (*db.Queries)(nil)
+
+// Compile-time guarantee that *db.Queries satisfies MessageStore, so a
+// generated-method signature drift fails at compile time now.
+var _ MessageStore = (*db.Queries)(nil)
 
 // ArealSegmentClient is the areal RL bridge seam for closing+exporting a
 // segment. *arealrl.Client satisfies it; tests inject a fake. The client

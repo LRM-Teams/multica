@@ -11,10 +11,14 @@ import (
 	"github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// Budget constants mirroring evolution_review_provider.go
+// Budget constants mirroring evolution_review_provider.go:
+// - maxDiagnosisMessageBytes mirrors maxEvolutionReviewFileBytes (8KB)
+// - maxDiagnosisSegmentBudgetBytes mirrors maxEvolutionReviewContentBudgetBytes (24KB)
+// - maxDiagnosisSegmentTurns mirrors maxEvolutionReviewListItems (20)
 const (
-	maxDiagnosisMessageBytes      = 8 * 1024
+	maxDiagnosisMessageBytes       = 8 * 1024
 	maxDiagnosisSegmentBudgetBytes = 24 * 1024
+	maxDiagnosisSegmentTurns       = 20
 )
 
 // SegmentRow represents a segment in the DAG
@@ -147,8 +151,14 @@ func GetSegmentMessages(
 	// Convert and truncate messages
 	result := make([]MessageRow, 0, len(messages))
 	totalBytes := 0
+	turnCount := 0
 
 	for _, msg := range messages {
+		// Check if adding this message would exceed the turn budget
+		if turnCount >= maxDiagnosisSegmentTurns {
+			break
+		}
+
 		content := ""
 		if msg.Content.Valid {
 			content = msg.Content.String
@@ -173,20 +183,47 @@ func GetSegmentMessages(
 			Truncated: truncated,
 		})
 		totalBytes += len(content)
+		turnCount++
 	}
 
 	return result, nil
 }
 
 // GetTaskContext returns task context (goal/gold) for a task, enforcing workspace scoping.
-// TODO: Implement this once we know where task goal/gold lives in the schema.
+// Goal is mapped from issue.description if present, otherwise issue.title.
+// GoldContext is mapped from issue.acceptance_criteria if present, otherwise empty string.
 func GetTaskContext(
 	ctx context.Context,
-	store interface{},
+	messageStore MessageStore,
 	workspaceID pgtype.UUID,
 	taskID string,
 ) (TaskContext, error) {
-	// For now, return empty context
-	// Once we find where goal/gold lives, we'll implement proper workspace scoping and retrieval
-	return TaskContext{}, nil
+	issue, err := messageStore.GetIssueForTask(ctx, taskID)
+	if err != nil {
+		return TaskContext{}, err
+	}
+
+	// Enforce workspace scoping
+	if issue.WorkspaceID != workspaceID {
+		return TaskContext{}, pgx.ErrNoRows
+	}
+
+	// Map fields to TaskContext
+	goal := ""
+	if issue.Description.Valid && issue.Description.String != "" {
+		goal = issue.Description.String
+	} else {
+		goal = issue.Title
+	}
+
+	goldContext := ""
+	if len(issue.AcceptanceCriteria) > 0 {
+		// acceptance_criteria is JSONB, convert to string
+		goldContext = string(issue.AcceptanceCriteria)
+	}
+
+	return TaskContext{
+		Goal:        goal,
+		GoldContext: goldContext,
+	}, nil
 }

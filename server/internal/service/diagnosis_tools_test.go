@@ -60,6 +60,11 @@ func (m *MockDiagnosisStores) MessagesForTaskInRange(ctx context.Context, taskID
 	return args.Get(0).([]db.TaskMessage), args.Error(1)
 }
 
+func (m *MockDiagnosisStores) GetIssueForTask(ctx context.Context, taskID string) (db.Issue, error) {
+	args := m.Called(ctx, taskID)
+	return args.Get(0).(db.Issue), args.Error(1)
+}
+
 func (m *MockDiagnosisStores) UpsertInteractionDAGSessionRun(ctx context.Context, arg db.UpsertInteractionDAGSessionRunParams) error {
 	args := m.Called(ctx, arg)
 	return args.Error(0)
@@ -228,12 +233,73 @@ func TestGetInteractionDAG(t *testing.T) {
 func TestGetTaskContext(t *testing.T) {
 	ctx := context.Background()
 	workspaceID := pgtype.UUID{Bytes: [16]byte{0x01}, Valid: true}
+	otherWorkspaceID := pgtype.UUID{Bytes: [16]byte{0xff}, Valid: true}
 	taskID := "task-1"
 
-	t.Run("returns task context", func(t *testing.T) {
-		result, err := GetTaskContext(ctx, nil, workspaceID, taskID)
+	t.Run("returns task context with description as goal and acceptance_criteria as gold", func(t *testing.T) {
+		mockStore := new(MockDiagnosisStores)
+
+		issue := db.Issue{
+			WorkspaceID:        workspaceID,
+			Title:              "Test Issue Title",
+			Description:        pgtype.Text{String: "Test Issue Description", Valid: true},
+			AcceptanceCriteria: []byte(`["criterion 1", "criterion 2"]`),
+		}
+
+		mockStore.On("GetIssueForTask", ctx, taskID).Return(issue, nil)
+
+		result, err := GetTaskContext(ctx, mockStore, workspaceID, taskID)
 		require.NoError(t, err)
-		// Currently returns empty, but that's expected until we know where goal/gold lives
+		assert.Equal(t, "Test Issue Description", result.Goal)
+		assert.Equal(t, `["criterion 1", "criterion 2"]`, result.GoldContext)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("returns task context with title as goal when description is empty", func(t *testing.T) {
+		mockStore := new(MockDiagnosisStores)
+
+		issue := db.Issue{
+			WorkspaceID:        workspaceID,
+			Title:              "Test Issue Title",
+			Description:        pgtype.Text{Valid: false},
+			AcceptanceCriteria: []byte{},
+		}
+
+		mockStore.On("GetIssueForTask", ctx, taskID).Return(issue, nil)
+
+		result, err := GetTaskContext(ctx, mockStore, workspaceID, taskID)
+		require.NoError(t, err)
+		assert.Equal(t, "Test Issue Title", result.Goal)
+		assert.Equal(t, "", result.GoldContext)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("returns pgx.ErrNoRows for cross-workspace access", func(t *testing.T) {
+		mockStore := new(MockDiagnosisStores)
+
+		issue := db.Issue{
+			WorkspaceID: workspaceID, // wrong workspace
+			Title:       "Test Issue",
+		}
+
+		mockStore.On("GetIssueForTask", ctx, taskID).Return(issue, nil)
+
+		result, err := GetTaskContext(ctx, mockStore, otherWorkspaceID, taskID)
+		assert.Error(t, err)
+		assert.Equal(t, pgx.ErrNoRows, err)
 		assert.Equal(t, TaskContext{}, result)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("returns error when task not found", func(t *testing.T) {
+		mockStore := new(MockDiagnosisStores)
+
+		mockStore.On("GetIssueForTask", ctx, taskID).Return(db.Issue{}, pgx.ErrNoRows)
+
+		result, err := GetTaskContext(ctx, mockStore, workspaceID, taskID)
+		assert.Error(t, err)
+		assert.Equal(t, pgx.ErrNoRows, err)
+		assert.Equal(t, TaskContext{}, result)
+		mockStore.AssertExpectations(t)
 	})
 }

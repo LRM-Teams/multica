@@ -586,6 +586,51 @@ func (q *Queries) GetIssue(ctx context.Context, id pgtype.UUID) (Issue, error) {
 	return i, err
 }
 
+const getIssueForTask = `-- name: GetIssueForTask :one
+SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.forked_from_issue_id, i.forked_at_seq, i.forked_at_task_id
+FROM issue i
+JOIN agent_task_queue atq ON atq.issue_id = i.id
+WHERE atq.id::text = $1::text
+`
+
+// GetIssueForTask returns the issue linked to a task (agent_task_queue.id).
+// Both sides are text so the caller passes the text task ID without UUID parsing,
+// matching GetMaxTaskMessageSeq and MessagesForTaskInRange.
+func (q *Queries) GetIssueForTask(ctx context.Context, dollar_1 string) (Issue, error) {
+	row := q.db.QueryRow(ctx, getIssueForTask, dollar_1)
+	var i Issue
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.CreatorType,
+		&i.CreatorID,
+		&i.ParentIssueID,
+		&i.AcceptanceCriteria,
+		&i.ContextRefs,
+		&i.Position,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Number,
+		&i.ProjectID,
+		&i.OriginType,
+		&i.OriginID,
+		&i.FirstExecutedAt,
+		&i.StartDate,
+		&i.Metadata,
+		&i.ForkedFromIssueID,
+		&i.ForkedAtSeq,
+		&i.ForkedAtTaskID,
+	)
+	return i, err
+}
+
 const getIssueByNumber = `-- name: GetIssueByNumber :one
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id FROM issue
 WHERE workspace_id = $1 AND number = $2

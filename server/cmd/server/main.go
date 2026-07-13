@@ -118,6 +118,22 @@ func envDuration(name string, def time.Duration) time.Duration {
 	return v
 }
 
+func envBoolDefault(name string, def bool) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	if raw == "" {
+		return def
+	}
+	switch raw {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		slog.Warn("invalid env var, using default", "name", name, "value", raw, "default", def)
+		return def
+	}
+}
+
 func main() {
 	logger.Init()
 
@@ -395,10 +411,14 @@ func main() {
 			schedulerRegistered = true
 		}
 	}
-	if err := schedulerMgr.Register(scheduler.AgentRadarScheduleJob(pool, h.TaskService)); err != nil {
-		slog.Warn("scheduler: failed to register agent radar job", "error", err)
+	if envBoolDefault("AGENT_RADAR_SCHEDULER_ENABLED", false) {
+		if err := schedulerMgr.Register(scheduler.AgentRadarScheduleJob(pool, h.TaskService)); err != nil {
+			slog.Warn("scheduler: failed to register agent radar job", "error", err)
+		} else {
+			schedulerRegistered = true
+		}
 	} else {
-		schedulerRegistered = true
+		slog.Info("scheduler: agent radar job disabled", "env", "AGENT_RADAR_SCHEDULER_ENABLED")
 	}
 	if err := schedulerMgr.Register(scheduler.AgentReminderFireJob(h, pool)); err != nil {
 		slog.Warn("scheduler: failed to register agent reminder job", "error", err)

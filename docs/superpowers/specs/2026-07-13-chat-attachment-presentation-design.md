@@ -121,8 +121,15 @@ See also `2026-07-13-message-attachment-zone-design.md`. Summary:
 
 | Client | Channel / DM composer tray | Notes |
 |--------|----------------------------|--------|
-| **Web** (`apps/web` + `@multica/views`) | **Yes — this work** | Responsive: same horizontal strip; narrow width → scroll-x (thumb-friendly gap already 8px). |
-| **Desktop** (`apps/desktop` + `@multica/views`) | **Yes — same package** | Shares views; no separate desktop tray. |
-| **Mobile** (`apps/mobile`) | **No channel/DM surface today** | Mobile has issue comment + agent **chat-session** composers only (`ChatComposer`, `InlineCommentComposer`). It does **not** mount `packages/views/channels` composers. Channel attachment presentation is **out of mobile scope until** mobile ships channel/DM UI; then it must reimplement tray with RN scroll horizontal, not import this DOM tray. |
+| **Web desktop width** | Yes | Compact strip; remove on image hover-reveal OK |
+| **Web mobile width** (`useIsMobile`, typically &lt;768) | **Yes — first-class** | Same one-row strip; `isMobile` → larger hit targets (~36–44px), **remove always visible** (no hover), `touch-pan-x` + momentum scroll |
+| **Desktop app** | Yes | Shares `@multica/views` |
+| **Expo native** | No channel/DM surface today | Separate later if product adds it |
 
-Web/desktop **narrow viewport** (phone browser, split pane) is covered by the same `overflow-x-auto` strip — that is the “mobile web” path, not Expo.
+### Web mobile hard rules (composer tray)
+
+1. Still **one horizontal row** + scroll — do not switch to a vertical stack on small screens.
+2. Touch targets for remove/retry ≥ ~36px (`size-9` buttons on mobile).
+3. **Never hide primary remove behind hover** on mobile.
+4. Horizontal pan must not fight vertical page scroll (`touch-pan-x`, overscroll contain).
+5. Safe-area padding stays on the Composer shell (`pb-[max(0.75rem,env(safe-area-inset-bottom))]`), not duplicated in the tray.

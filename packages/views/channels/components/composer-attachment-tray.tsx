@@ -10,6 +10,11 @@ export type ComposerAttachmentTrayProps = {
   pending: PendingAttachment[];
   onRemove: (localId: string) => void;
   onRetry: (localId: string) => void;
+  /**
+   * Web responsive “mobile” (useIsMobile / coarse pointer layout), not Expo.
+   * Enlarges touch targets and always shows remove (no hover-only chrome).
+   */
+  isMobile?: boolean;
   className?: string;
 };
 
@@ -21,17 +26,28 @@ function isImagePending(item: PendingAttachment): boolean {
  * Slack-style composer tray: a **single horizontal strip** of pending
  * thumbs/chips above the editor. Never stacks as a vertical list.
  *
+ * Mobile web: same one-row model + horizontal pan; larger hit targets; remove
+ * always visible (no hover-gated controls).
+ *
  * Spec: docs/superpowers/specs/2026-07-13-chat-attachment-presentation-design.md
  */
 export function ComposerAttachmentTray({
   pending,
   onRemove,
   onRetry,
+  isMobile = false,
   className,
 }: ComposerAttachmentTrayProps) {
   const { t } = useT("channels");
 
   if (pending.length === 0) return null;
+
+  // Image thumbs and file chip outer height stay aligned.
+  const thumb = isMobile ? "size-14" : "size-12";
+  const chipH = isMobile ? "h-14" : "h-12";
+  // ≥44px hit target on mobile web; desktop can stay compact.
+  const iconBtn = isMobile ? "size-9" : "size-6";
+  const iconGlyph = isMobile ? "size-3.5" : "size-2.5";
 
   return (
     // Native list semantics (prefer-tag-over-role). list-none keeps layout
@@ -41,12 +57,13 @@ export function ComposerAttachmentTray({
         // One row only + horizontal scroll. flex-wrap was wrapping full-width
         // chips into a vertical stack — that is explicitly forbidden here.
         "m-0 flex list-none flex-row flex-nowrap items-center gap-2 overflow-x-auto overflow-y-hidden overscroll-x-contain p-0 pb-0.5",
-        // Hide scrollbar chrome where supported; still scrollable.
-        "[scrollbar-width:thin]",
+        // Touch: allow horizontal pan without fighting vertical page scroll.
+        "touch-pan-x [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]",
         className,
       )}
       data-slot="composer-attachment-tray"
       data-testid="composer-attachment-tray"
+      data-mobile={isMobile ? "true" : undefined}
     >
       {pending.map((item) => {
         const removeLabel = t(($) => $.composer.tray_remove_aria, {
@@ -64,8 +81,9 @@ export function ComposerAttachmentTray({
             data-status={item.status}
             data-kind={showImage ? "image" : "file"}
             className={cn(
-              "group relative flex h-12 w-fit max-w-[10.5rem] shrink-0 list-none flex-row items-center gap-1.5 rounded-lg border border-border/50 bg-muted/35",
-              showImage ? "w-12 max-w-none p-0" : "min-w-0 px-2",
+              "group relative flex w-fit max-w-[11rem] shrink-0 list-none flex-row items-center gap-1.5 rounded-lg border border-border/50 bg-muted/35",
+              chipH,
+              showImage ? cn(thumb, "max-w-none p-0") : "min-w-0 px-2",
               item.status === "error" && "border-destructive/50 bg-destructive/5",
             )}
           >
@@ -75,7 +93,7 @@ export function ComposerAttachmentTray({
               <img
                 src={item.previewUrl}
                 alt={item.filename}
-                className="size-12 rounded-[7px] object-cover"
+                className={cn(thumb, "rounded-[7px] object-cover")}
                 draggable={false}
               />
             ) : (
@@ -136,11 +154,11 @@ export function ComposerAttachmentTray({
                   type="button"
                   variant="secondary"
                   size="icon"
-                  className="size-5 bg-background/95 shadow-sm"
+                  className={cn(iconBtn, "bg-background/95 shadow-sm")}
                   aria-label={retryLabel}
                   onClick={() => onRetry(item.localId)}
                 >
-                  <RotateCcw className="size-2.5" />
+                  <RotateCcw className={iconGlyph} />
                 </Button>
               ) : null}
               <Button
@@ -148,15 +166,20 @@ export function ComposerAttachmentTray({
                 variant="secondary"
                 size="icon"
                 className={cn(
-                  "size-5 shadow-sm",
+                  iconBtn,
+                  "shadow-sm",
                   showImage
-                    ? "bg-background/95 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                    ? // Desktop: reveal on hover. Mobile web: always visible
+                      // (no hover) so remove stays tappable.
+                      isMobile
+                      ? "bg-background/95 opacity-100"
+                      : "bg-background/95 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                     : "bg-transparent hover:bg-background/80",
                 )}
                 aria-label={removeLabel}
                 onClick={() => onRemove(item.localId)}
               >
-                <X className="size-2.5" />
+                <X className={iconGlyph} />
               </Button>
             </div>
           </li>

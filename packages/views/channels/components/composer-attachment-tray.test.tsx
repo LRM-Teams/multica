@@ -176,4 +176,30 @@ describe("ComposerAttachmentTray", () => {
       "image",
     );
   });
+
+  it("on mobile web keeps remove visible without hover (touch)", () => {
+    render(
+      <ComposerAttachmentTray
+        isMobile
+        pending={[
+          item({
+            localId: "img-m",
+            status: "ready",
+            filename: "phone.png",
+            attachmentId: "am",
+            previewUrl: "https://cdn.example/phone.png",
+          }),
+        ]}
+        onRemove={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    const tray = screen.getByTestId("composer-attachment-tray");
+    expect(tray).toHaveAttribute("data-mobile", "true");
+    const remove = screen.getByRole("button", { name: "Remove phone.png" });
+    // Must not rely on group-hover opacity-0 for the only remove control.
+    expect(remove.className).toMatch(/\bopacity-100\b/);
+    expect(remove.className).not.toMatch(/\bopacity-0\b/);
+  });
 });

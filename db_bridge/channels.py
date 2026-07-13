@@ -4,7 +4,7 @@ A *channel* is one bridged HTTP endpoint. Each channel maps a request path to a
 dedicated Supabase table and records which side hosts the stub (the caller's
 side) versus the executor (the callee's side, where the real service runs).
 
-Two groups:
+Three groups:
 
 * ``gateway``      -- le-agent calls the AReaL proxy gateway. Stub runs on the
                       le-agent host; executor runs on the AReaL host and
@@ -12,13 +12,17 @@ Two groups:
 * ``leagent_api``  -- AReaL calls the le-agent API. Stub runs on the AReaL
                       host; executor runs on the le-agent host and forwards to
                       the real le-agent API.
+* ``multica_api``  -- AReaL calls the multica API (env-dispatch / DAG fetch).
+                      Stub runs on the AReaL host; executor runs on the multica
+                      host and forwards to the real multica Go server.
 
 Per host:
 
 * ``leagent`` side -- stub serves ``gateway`` channels; executor runs
                       ``leagent_api`` channels.
-* ``areal`` side   -- stub serves ``leagent_api`` channels; executor runs
-                      ``gateway`` channels.
+* ``areal`` side   -- stub serves ``leagent_api`` + ``multica_api`` channels;
+                      executor runs ``gateway`` channels.
+* ``multica`` side -- executor runs ``multica_api`` channels (hosts no stub).
 """
 
 from __future__ import annotations
@@ -26,8 +30,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final, Literal
 
-Group = Literal["gateway", "leagent_api"]
-Side = Literal["leagent", "areal"]
+Group = Literal["gateway", "leagent_api", "multica_api"]
+Side = Literal["leagent", "areal", "multica"]
 Kind = Literal["json", "multipart"]
 
 
@@ -69,7 +73,11 @@ class Channel:
     @property
     def executor_side(self) -> Side:
         """Host whose executor worker forwards this channel to the real service."""
-        return "areal" if self.group == "gateway" else "leagent"
+        if self.group == "gateway":
+            return "areal"
+        if self.group == "multica_api":
+            return "multica"
+        return "leagent"
 
 
 # ---------------------------------------------------------------------------

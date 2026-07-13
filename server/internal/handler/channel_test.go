@@ -4070,8 +4070,8 @@ func TestChannelThreadReadModelExposesParticipantsAndPendingWake(t *testing.T) {
 		t.Fatalf("participants missing root user: %+v", gotRoot.ThreadParticipants)
 	}
 	agentParticipant, ok := participants["agent:"+agentID]
-	if !ok || !agentParticipant.Followed {
-		t.Fatalf("participants missing followed agent: %+v", gotRoot.ThreadParticipants)
+	if !ok || agentParticipant.Followed {
+		t.Fatalf("participants missing pierced non-following agent: %+v", gotRoot.ThreadParticipants)
 	}
 	if len(gotRoot.ThreadWakeAnnotations) != 1 {
 		t.Fatalf("wake annotations = %+v, want one pending agent", gotRoot.ThreadWakeAnnotations)
@@ -4409,7 +4409,7 @@ func TestChannelThreadReplyWithoutMentionCreatesAmbientInboxOnly(t *testing.T) {
 	}
 }
 
-func TestChannelThreadPlainReplyCreatesAmbientForChannelAgents(t *testing.T) {
+func TestChannelThreadPlainReplyWakesAgentFollower(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -4430,6 +4430,7 @@ func TestChannelThreadPlainReplyCreatesAmbientForChannelAgents(t *testing.T) {
 	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(participantID), "Thread Fullstack", "agent answer", "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("followup-agent-root"), 1); err != nil {
 		t.Fatalf("insert agent reply: %v", err)
 	}
+	testHandler.followChannelThreadAgent(ctx, parseUUID(channelID), parseUUID(root.ID), parseUUID(participantID))
 	followup, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "hi", "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("followup-agent-root"), 0)
 	if err != nil {
 		t.Fatalf("insert follow-up: %v", err)
@@ -4441,11 +4442,13 @@ func TestChannelThreadPlainReplyCreatesAmbientForChannelAgents(t *testing.T) {
 
 	testHandler.dispatchChannelThreadReplyMentions(ctx, ch, followup, parseUUID(testUserID))
 
-	assertChannelAgentInboxEventCounts(t, channelID, participantID, 1, 0)
+	assertChannelAgentInboxEventCounts(t, channelID, participantID, 0, 1)
+	assertChannelAgentWakeReason(t, channelID, participantID, followup.ID, "thread_reply")
+	assertChannelAgentWakeActivity(t, participantID, followup.ID, "thread_reply")
 	assertChannelAgentInboxEventCounts(t, channelID, bystanderID, 1, 0)
 }
 
-func TestChannelThreadPlainReplyAfterRootMentionCreatesAmbientOnly(t *testing.T) {
+func TestChannelThreadPlainReplyAfterRootMentionWithoutFollowCreatesAmbientOnly(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -4535,6 +4538,44 @@ func assertChannelAgentInboxEventCounts(t *testing.T, channelID, agentID string,
 	}
 	if ambientEvents != wantAmbient || wakeEvents != wantWake {
 		t.Fatalf("channel agent inbox events for %s = ambient:%d wake:%d, want %d/%d", agentID, ambientEvents, wakeEvents, wantAmbient, wantWake)
+	}
+}
+
+func assertChannelAgentWakeReason(t *testing.T, channelID, agentID, sourceMessageID, wantReason string) {
+	t.Helper()
+	ctx := context.Background()
+	var reason string
+	var requiresWake bool
+	var priority int32
+	if err := testPool.QueryRow(ctx, `
+		SELECT reason, requires_wake, priority
+		FROM agent_inbox_event
+		WHERE channel_id = $1 AND agent_id = $2 AND source_message_id = $3
+		ORDER BY created_at DESC
+		LIMIT 1`, channelID, agentID, sourceMessageID).Scan(&reason, &requiresWake, &priority); err != nil {
+		t.Fatalf("load wake inbox event: %v", err)
+	}
+	if reason != wantReason || !requiresWake || priority != 10 {
+		t.Fatalf("wake inbox event = reason:%q requires_wake:%v priority:%d, want %q/true/10", reason, requiresWake, priority, wantReason)
+	}
+}
+
+func assertChannelAgentWakeActivity(t *testing.T, agentID, sourceMessageID, wantReason string) {
+	t.Helper()
+	ctx := context.Background()
+	var eventKind, eventType, reasonCode string
+	if err := testPool.QueryRow(ctx, `
+		SELECT event_kind, event_type, reason_code
+		FROM agent_activity_event
+		WHERE agent_id = $1
+		  AND reason_code = $2
+		  AND details->>'trigger_message_id' = $3
+		ORDER BY created_at DESC
+		LIMIT 1`, agentID, wantReason, sourceMessageID).Scan(&eventKind, &eventType, &reasonCode); err != nil {
+		t.Fatalf("load wake activity event: %v", err)
+	}
+	if eventKind != activityKindWakeAttempt || eventType != "task_dispatched" || reasonCode != wantReason {
+		t.Fatalf("wake activity = kind:%q type:%q reason:%q, want wake_attempt/task_dispatched/%q", eventKind, eventType, reasonCode, wantReason)
 	}
 }
 
@@ -5098,8 +5139,8 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 		  AND wake_state = 'active'`, root.ID, agentID).Scan(&agentParticipants); err != nil {
 		t.Fatalf("count agent thread participant: %v", err)
 	}
-	if agentParticipants != 1 {
-		t.Fatalf("agent thread participant count=%d, want 1", agentParticipants)
+	if agentParticipants != 0 {
+		t.Fatalf("agent thread participant after mention count=%d, want 0", agentParticipants)
 	}
 
 	var sessionID string
@@ -5135,6 +5176,19 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 	}
 	if replyRoot != root.ID {
 		t.Fatalf("agent reply thread root = %q, want %s", replyRoot, root.ID)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM thread_participant
+		WHERE root_message_id = $1
+		  AND member_type = 'agent'
+		  AND member_id = $2
+		  AND followed_at IS NOT NULL
+		  AND wake_state = 'active'`, root.ID, agentID).Scan(&agentParticipants); err != nil {
+		t.Fatalf("count agent thread participant after post: %v", err)
+	}
+	if agentParticipants != 1 {
+		t.Fatalf("agent thread participant after post count=%d, want 1", agentParticipants)
 	}
 }
 

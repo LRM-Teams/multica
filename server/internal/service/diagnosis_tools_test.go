@@ -189,6 +189,35 @@ func TestGetSegmentMessages(t *testing.T) {
 		assert.Nil(t, result)
 		mockStore.AssertExpectations(t)
 	})
+
+	t.Run("caps at maxDiagnosisSegmentTurns", func(t *testing.T) {
+		mockStore := new(MockDiagnosisStores)
+
+		// Segment whose turn range exceeds the turn cap; each message is tiny
+		// so the byte budget never binds - the turn cap is the sole constraint.
+		cappedSegment := segment
+		cappedSegment.EndSeq = 30
+
+		manyMessages := make([]db.TaskMessage, 0, 30)
+		for i := 1; i <= 30; i++ {
+			manyMessages = append(manyMessages, db.TaskMessage{
+				Seq:     int32(i),
+				Content: pgtype.Text{String: "m", Valid: true},
+			})
+		}
+
+		mockStore.On("GetInteractionDAGSegmentByID", ctx, segmentID).Return(cappedSegment, nil)
+		mockStore.On("GetProjectInWorkspace", ctx, mock.Anything).Return(db.Project{ID: projectID, WorkspaceID: workspaceID}, nil)
+		mockStore.On("MessagesForTaskInRange", ctx, agentRunID, int32(1), int32(30)).Return(manyMessages, nil)
+
+		result, err := GetSegmentMessages(ctx, mockStore, mockStore, workspaceID, segmentID)
+		require.NoError(t, err)
+		assert.Len(t, result, maxDiagnosisSegmentTurns, "turn budget should cap returned messages at maxDiagnosisSegmentTurns")
+		for i, msg := range result {
+			assert.Equal(t, int32(i+1), msg.Seq, "first maxDiagnosisSegmentTurns turns returned in seq order")
+		}
+		mockStore.AssertExpectations(t)
+	})
 }
 
 func TestGetInteractionDAG(t *testing.T) {

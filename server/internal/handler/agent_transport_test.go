@@ -168,8 +168,12 @@ func TestAgentTransportSendMessageLinksOwnedAttachmentsOnly(t *testing.T) {
 
 	clientID := "transport-attachment-" + uuid.NewString()
 	resp := agentTransportSendForTest(t, taskID, agentID, map[string]any{
-		"content":           "here's the file",
-		"attachment_ids":    []string{ownedAttachmentID, foreignAttachmentID},
+		"content": "here's the file",
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "here's the file"},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: ownedAttachmentID},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: foreignAttachmentID},
+		},
 		"client_message_id": clientID,
 	})
 	if resp.Code != http.StatusCreated {
@@ -181,6 +185,9 @@ func TestAgentTransportSendMessageLinksOwnedAttachmentsOnly(t *testing.T) {
 	}
 	if len(body.Message.Attachments) != 1 || body.Message.Attachments[0].ID != ownedAttachmentID {
 		t.Fatalf("message attachments = %+v, want only owned attachment %s", body.Message.Attachments, ownedAttachmentID)
+	}
+	if len(body.Message.Parts) < 2 {
+		t.Fatalf("message parts = %+v, want text + attachment parts", body.Message.Parts)
 	}
 
 	var ownedChannelID, ownedMessageID string
@@ -210,7 +217,10 @@ func TestAgentTransportSendMessageAttachmentOnlyActivityText(t *testing.T) {
 	attachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "activity-report.pdf")
 
 	resp := agentTransportSendForTest(t, taskID, agentID, map[string]any{
-		"attachment_ids":    []string{attachmentID},
+		"parts": []protocol.MessagePart{{
+			Type:         protocol.MessagePartTypeAttachment,
+			AttachmentID: attachmentID,
+		}},
 		"client_message_id": "transport-attachment-only-" + uuid.NewString(),
 	})
 	if resp.Code != http.StatusCreated {
@@ -222,6 +232,9 @@ func TestAgentTransportSendMessageAttachmentOnlyActivityText(t *testing.T) {
 	}
 	if body.Message.Content != "" || len(body.Message.Attachments) != 1 || body.Message.Attachments[0].Filename != "activity-report.pdf" {
 		t.Fatalf("attachment-only message = %+v, want one linked activity-report.pdf attachment and empty content", body.Message)
+	}
+	if len(body.Message.Parts) != 1 || body.Message.Parts[0].Type != protocol.MessagePartTypeAttachment || body.Message.Parts[0].AttachmentID != attachmentID {
+		t.Fatalf("attachment-only parts = %+v, want one attachment part for %s", body.Message.Parts, attachmentID)
 	}
 	assertAgentMessageSentActivityText(t, body.Message.ID, "Sent attachment: activity-report.pdf")
 }

@@ -7,16 +7,21 @@ import (
 )
 
 const (
-	MessagePartTypeText    = "text"
-	MessagePartTypeSticker = "sticker"
+	MessagePartTypeText       = "text"
+	MessagePartTypeSticker    = "sticker"
+	MessagePartTypeAttachment = "attachment"
 )
 
 type MessagePart struct {
-	Type      string `json:"type"`
-	Text      string `json:"text,omitempty"`
-	PackID    string `json:"pack_id,omitempty"`
-	StickerID string `json:"sticker_id,omitempty"`
-	Alt       string `json:"alt,omitempty"`
+	Type         string `json:"type"`
+	Text         string `json:"text,omitempty"`
+	PackID       string `json:"pack_id,omitempty"`
+	StickerID    string `json:"sticker_id,omitempty"`
+	Alt          string `json:"alt,omitempty"`
+	AttachmentID string `json:"attachment_id,omitempty"`
+	Filename     string `json:"filename,omitempty"`
+	ContentType  string `json:"content_type,omitempty"`
+	SizeBytes    int64  `json:"size_bytes,omitempty"`
 }
 
 // Message is the envelope for all WebSocket messages.

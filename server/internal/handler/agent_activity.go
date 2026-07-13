@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,10 +21,11 @@ import (
 )
 
 const (
-	agentActivityDefaultLimit = 30
-	agentActivityMaxLimit     = 100
-	agentActivityStepLimit    = 50
-	agentActivityMaxStepLimit = 200
+	agentActivityDefaultLimit      = 30
+	agentActivityMaxLimit          = 100
+	agentActivityEventDefaultLimit = 50
+	agentActivityStepLimit         = 50
+	agentActivityMaxStepLimit      = 200
 
 	agentActivityVisibleSummary = "summary"
 	agentActivityVisibleDetail  = "detail"
@@ -47,6 +49,11 @@ type AgentActivityCursor struct {
 	CreatedAt string `json:"created_at"`
 	Kind      string `json:"kind"`
 	ID        string `json:"id"`
+}
+
+type AgentActivityEventCursor struct {
+	OccurredAt string `json:"occurred_at"`
+	ID         string `json:"id"`
 }
 
 type AgentActivityStepCursor struct {
@@ -106,21 +113,35 @@ type AgentActivityEventSummary struct {
 }
 
 type AgentActivityTimelineEvent struct {
-	ID         string                   `json:"id"`
-	AgentID    string                   `json:"agent_id"`
-	RuntimeID  *string                  `json:"runtime_id,omitempty"`
-	TaskID     *string                  `json:"task_id,omitempty"`
-	Kind       string                   `json:"kind"`
-	EventType  string                   `json:"event_type"`
-	OccurredAt string                   `json:"occurred_at"`
-	Visibility string                   `json:"visibility"`
-	Text       *string                  `json:"text,omitempty"`
-	Tool       *string                  `json:"tool,omitempty"`
-	ToolTarget *string                  `json:"tool_target,omitempty"`
-	Status     *string                  `json:"status,omitempty"`
-	ReasonCode string                   `json:"reason_code,omitempty"`
-	TargetRef  AgentActivityTargetRef   `json:"target_ref"`
-	SourceRefs []AgentActivitySourceRef `json:"source_refs,omitempty"`
+	ID           string                   `json:"id"`
+	AgentID      string                   `json:"agent_id"`
+	RuntimeID    *string                  `json:"runtime_id,omitempty"`
+	TaskID       *string                  `json:"task_id,omitempty"`
+	Kind         string                   `json:"-"`
+	EventType    string                   `json:"-"`
+	ActivityKind string                   `json:"activity_kind"`
+	DetailKind   string                   `json:"detail_kind"`
+	OccurredAt   string                   `json:"occurred_at"`
+	Visibility   string                   `json:"-"`
+	Text         *string                  `json:"text,omitempty"`
+	Tool         *string                  `json:"tool,omitempty"`
+	ToolTarget   *string                  `json:"tool_target,omitempty"`
+	Status       *string                  `json:"status,omitempty"`
+	ReasonCode   string                   `json:"reason_code,omitempty"`
+	Entries      []AgentActivityEntry     `json:"entries,omitempty"`
+	TargetRef    AgentActivityTargetRef   `json:"target_ref"`
+	SourceRefs   []AgentActivitySourceRef `json:"source_refs,omitempty"`
+}
+
+type AgentActivityEntry struct {
+	Kind        string  `json:"kind"`
+	Text        *string `json:"text,omitempty"`
+	Tool        *string `json:"tool,omitempty"`
+	ToolTarget  *string `json:"tool_target,omitempty"`
+	SummaryKind *string `json:"summary_kind,omitempty"`
+	Command     *string `json:"command,omitempty"`
+	Status      *string `json:"status,omitempty"`
+	ReasonCode  *string `json:"reason_code,omitempty"`
 }
 
 type AgentActivitySourceRef struct {
@@ -133,7 +154,7 @@ type AgentActivityEventsPageResponse struct {
 	Events     []AgentActivityTimelineEvent  `json:"events"`
 	Limit      int                           `json:"limit"`
 	HasMore    bool                          `json:"has_more"`
-	NextCursor *AgentActivityCursor          `json:"next_cursor,omitempty"`
+	NextCursor *string                       `json:"next_cursor,omitempty"`
 	Realtime   AgentActivityRealtimeContract `json:"realtime"`
 }
 
@@ -301,7 +322,7 @@ func (h *Handler) ListAgentActivityEvents(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	limit, ok := parseActivityLimit(w, r, agentActivityDefaultLimit, agentActivityMaxLimit)
+	limit, ok := parseActivityLimit(w, r, agentActivityEventDefaultLimit, agentActivityMaxLimit)
 	if !ok {
 		return
 	}
@@ -317,7 +338,7 @@ func (h *Handler) ListAgentActivityEvents(w http.ResponseWriter, r *http.Request
 	}
 
 	events := make([]AgentActivityTimelineEvent, 0, limit)
-	var next *AgentActivityCursor
+	var next *string
 	for _, row := range rows {
 		targetRef, visible, err := h.agentTimelineTargetVisibility(r.Context(), reqCtx.workspaceID, reqCtx.userID, row)
 		if err != nil {
@@ -327,9 +348,12 @@ func (h *Handler) ListAgentActivityEvents(w http.ResponseWriter, r *http.Request
 		if !visible {
 			continue
 		}
+		if !agentActivityTimelineRowIsNarrative(row) {
+			continue
+		}
 		if len(events) == limit {
 			last := events[len(events)-1]
-			next = &AgentActivityCursor{CreatedAt: last.OccurredAt, Kind: "event", ID: last.ID}
+			next = encodeAgentActivityEventCursor(AgentActivityEventCursor{OccurredAt: last.OccurredAt, ID: last.ID})
 			break
 		}
 		events = append(events, agentActivityTimelineEvent(row, targetRef))
@@ -554,25 +578,49 @@ func parseActivityCursor(w http.ResponseWriter, r *http.Request) (pgtype.Timesta
 }
 
 func parseActivityEventCursor(w http.ResponseWriter, r *http.Request) (pgtype.Timestamptz, pgtype.UUID, bool) {
-	rawAt := strings.TrimSpace(r.URL.Query().Get("before_created_at"))
-	rawID := strings.TrimSpace(r.URL.Query().Get("before_id"))
-	if rawAt == "" && rawID == "" {
+	rawCursor := strings.TrimSpace(r.URL.Query().Get("before"))
+	if rawCursor == "" {
 		return pgtype.Timestamptz{}, pgtype.UUID{}, true
 	}
-	if rawAt == "" || rawID == "" {
-		writeError(w, http.StatusBadRequest, "invalid cursor")
-		return pgtype.Timestamptz{}, pgtype.UUID{}, false
-	}
-	at, err := time.Parse(time.RFC3339Nano, rawAt)
+	cursor, err := decodeAgentActivityEventCursor(rawCursor)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid cursor")
 		return pgtype.Timestamptz{}, pgtype.UUID{}, false
 	}
-	id, ok := parseUUIDOrBadRequest(w, rawID, "before_id")
+	at, err := time.Parse(time.RFC3339Nano, cursor.OccurredAt)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid cursor")
+		return pgtype.Timestamptz{}, pgtype.UUID{}, false
+	}
+	id, ok := parseUUIDOrBadRequest(w, cursor.ID, "before")
 	if !ok {
 		return pgtype.Timestamptz{}, pgtype.UUID{}, false
 	}
 	return pgtype.Timestamptz{Time: at, Valid: true}, id, true
+}
+
+func encodeAgentActivityEventCursor(cursor AgentActivityEventCursor) *string {
+	raw, err := json.Marshal(cursor)
+	if err != nil {
+		return nil
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(raw)
+	return &encoded
+}
+
+func decodeAgentActivityEventCursor(raw string) (AgentActivityEventCursor, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return AgentActivityEventCursor{}, err
+	}
+	var cursor AgentActivityEventCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil {
+		return AgentActivityEventCursor{}, err
+	}
+	if strings.TrimSpace(cursor.OccurredAt) == "" || strings.TrimSpace(cursor.ID) == "" {
+		return AgentActivityEventCursor{}, errors.New("empty activity event cursor")
+	}
+	return cursor, nil
 }
 
 func parseActivityAfterSeq(w http.ResponseWriter, r *http.Request) (int32, bool) {
@@ -643,6 +691,24 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 		FROM agent_activity_event aae
 		WHERE aae.workspace_id = $1
 		  AND aae.agent_id = $2
+		  AND (
+		    aae.event_kind IN ('thinking', 'text', 'wake_attempt', 'error', 'blocked', 'compaction_started', 'compaction_finished')
+		    OR (aae.event_kind = 'tool_call' AND COALESCE(aae.details->>'tool', '') <> '')
+		    OR (
+		      aae.event_kind = 'custom'
+		      AND (
+		        aae.event_type LIKE '%subagent%'
+		        OR (
+		          aae.event_type IN ('radar_action_executed', 'radar_action_failed')
+		          AND COALESCE(aae.reason_code, '') <> 'radar_untrusted_target'
+		          AND NOT (
+		            aae.event_type = 'radar_action_executed'
+		            AND COALESCE(aae.reason_code, '') = 'no_action'
+		          )
+		        )
+		      )
+		    )
+		  )
 
 		UNION ALL
 
@@ -676,20 +742,8 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 				'task_id', tm.task_id,
 				'seq', tm.seq,
 				'tool', tm.tool,
-				'tool_target',
-					CASE
-						WHEN tm.type <> 'tool_use' THEN NULL
-						WHEN tm.input ? 'path' THEN regexp_replace(tm.input->>'path', '^.*/', '')
-						WHEN tm.input ? 'file_path' THEN regexp_replace(tm.input->>'file_path', '^.*/', '')
-						WHEN tm.input ? 'filepath' THEN regexp_replace(tm.input->>'filepath', '^.*/', '')
-						WHEN tm.input ? 'cmd' THEN regexp_replace(trim(both '"' from split_part(btrim(tm.input->>'cmd'), ' ', 1)), '^.*/', '')
-						WHEN tm.input ? 'command' THEN regexp_replace(trim(both '"' from split_part(btrim(tm.input->>'command'), ' ', 1)), '^.*/', '')
-						WHEN tm.input ? 'shell_command' THEN regexp_replace(trim(both '"' from split_part(btrim(tm.input->>'shell_command'), ' ', 1)), '^.*/', '')
-						WHEN tm.input ? 'query' THEN left(tm.input->>'query', 80)
-						WHEN tm.input ? 'pattern' THEN left(tm.input->>'pattern', 80)
-						WHEN tm.input ? 'url' THEN left(tm.input->>'url', 80)
-						ELSE NULL
-					END
+				'input', tm.input,
+				'tool_target', NULL
 			)) AS details,
 			tm.visibility,
 			atq.status AS status,
@@ -709,6 +763,7 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 		LEFT JOIN chat_session cs ON cs.id = atq.chat_session_id
 		WHERE atq.agent_id = $2
 		  AND (i.workspace_id = $1 OR cs.workspace_id = $1)
+		  AND tm.type IN ('thinking', 'text', 'error', 'tool_use')
 		)
 		SELECT *
 		FROM timeline
@@ -1531,7 +1586,15 @@ func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspac
 	}
 	if message.Tool.Valid && strings.TrimSpace(message.Tool.String) != "" {
 		rawTool := strings.TrimSpace(message.Tool.String)
-		canonicalTool, known := taskMessageCanonicalToolName(rawTool, jsonObject(message.Input))
+		input := jsonObject(message.Input)
+		canonicalTool, known := taskMessageCanonicalToolName(rawTool, input)
+		if cli, ok := resolveRaftCLIInvocation(canonicalTool, input); ok {
+			canonicalTool = cli.Tool
+			known = true
+			for key, value := range cli.Details {
+				details[key] = value
+			}
+		}
 		if known {
 			details["tool"] = canonicalTool
 		} else {
@@ -1614,25 +1677,45 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 	tool := stringPtrFromMap(details, "tool")
 	if tool != nil {
 		canonical := agentActivityCanonicalToolName(*tool)
+		if cli, ok := resolveRaftCLIInvocation(canonical, mapFromMap(details, "input")); ok {
+			canonical = cli.Tool
+			for key, value := range cli.Details {
+				details[key] = value
+			}
+		}
 		tool = &canonical
 	}
-	return AgentActivityTimelineEvent{
-		ID:         uuidToString(row.ID),
-		AgentID:    uuidToString(row.AgentID),
-		RuntimeID:  uuidToPtr(row.RuntimeID),
-		TaskID:     agentActivityTimelineTaskID(row),
-		Kind:       row.Kind,
-		EventType:  textOrDefault(row.EventType, row.Kind),
-		OccurredAt: timestampToString(row.CreatedAt),
-		Visibility: textOrDefault(row.Visibility, "user_facing"),
-		Text:       textToPtr(row.Message),
-		Tool:       tool,
-		ToolTarget: stringPtrFromMap(details, "tool_target"),
-		Status:     textToPtr(row.Status),
-		ReasonCode: textOrDefault(row.ReasonCode, ""),
-		TargetRef:  targetRef,
-		SourceRefs: agentActivitySourceRefs(row),
+	if command := redactedCommandFromInput(mapFromMap(details, "input")); command != "" && details["command"] == nil {
+		details["command"] = command
 	}
+	if tool != nil {
+		agentActivityApplyToolInputSummary(details, *tool, mapFromMap(details, "input"), true)
+	}
+	detailKind := agentActivityDetailKind(row.EventType)
+	return AgentActivityTimelineEvent{
+		ID:           uuidToString(row.ID),
+		AgentID:      uuidToString(row.AgentID),
+		RuntimeID:    uuidToPtr(row.RuntimeID),
+		TaskID:       agentActivityTimelineTaskID(row),
+		Kind:         row.Kind,
+		EventType:    detailKind,
+		ActivityKind: row.Kind,
+		DetailKind:   detailKind,
+		OccurredAt:   timestampToString(row.CreatedAt),
+		Visibility:   textOrDefault(row.Visibility, "user_facing"),
+		Text:         textToPtr(row.Message),
+		Tool:         tool,
+		ToolTarget:   stringPtrFromMap(details, "tool_target"),
+		Status:       textToPtr(row.Status),
+		ReasonCode:   textOrDefault(row.ReasonCode, ""),
+		Entries:      agentActivityTimelineEntries(row, details, tool),
+		TargetRef:    targetRef,
+		SourceRefs:   agentActivitySourceRefs(row),
+	}
+}
+
+func agentActivityDetailKind(eventType pgtype.Text) string {
+	return textOrDefault(eventType, "other")
 }
 
 func taskMessageActivityToolTarget(message db.TaskMessage) (string, string) {
@@ -1645,6 +1728,9 @@ func taskMessageActivityToolTarget(message db.TaskMessage) (string, string) {
 		rawTool = message.Tool.String
 	}
 	canonicalTool, known := taskMessageCanonicalToolName(rawTool, input)
+	if cli, ok := resolveRaftCLIInvocation(canonicalTool, input); ok {
+		return cli.ToolTarget, cli.SummaryKind
+	}
 	if !known {
 		canonicalTool = ""
 	}
@@ -1655,11 +1741,6 @@ func agentActivitySafeToolTarget(input map[string]any) (string, string) {
 	for _, key := range []string{"path", "file_path", "filepath"} {
 		if value := basenameFromMap(input, key); value != "" {
 			return value, "file_path"
-		}
-	}
-	for _, key := range []string{"cmd", "command", "shell_command"} {
-		if value := commandNameFromMap(input, key); value != "" {
-			return value, "command"
 		}
 	}
 	for _, key := range []string{"query", "pattern"} {
@@ -1673,15 +1754,350 @@ func agentActivitySafeToolTarget(input map[string]any) (string, string) {
 	return "", ""
 }
 
-func agentActivitySafeToolTargetForTool(canonicalTool string, input map[string]any) (string, string) {
-	if isFileActivityTool(canonicalTool) {
-		for _, key := range []string{"path", "file_path", "filepath"} {
-			if value := sourcePathFromMap(input, key); value != "" {
-				return value, "file_path"
-			}
+type agentActivityToolInputSummary struct {
+	ToolTarget  string
+	SummaryKind string
+	ClearTarget bool
+}
+
+func agentActivityApplyToolInputSummary(details map[string]any, canonicalTool string, input map[string]any, replaceTarget bool) {
+	summary := agentActivityToolInputSummaryForTool(canonicalTool, input)
+	if summary.ToolTarget != "" {
+		if replaceTarget || details["tool_target"] == nil {
+			details["tool_target"] = summary.ToolTarget
+			details["summary_kind"] = summary.SummaryKind
+		}
+		return
+	}
+	if replaceTarget && summary.ClearTarget {
+		delete(details, "tool_target")
+		delete(details, "summary_kind")
+	}
+}
+
+func agentActivityToolInputSummaryForTool(canonicalTool string, input map[string]any) agentActivityToolInputSummary {
+	if cli, ok := resolveRaftCLIInvocation(canonicalTool, input); ok {
+		return agentActivityToolInputSummary{
+			ToolTarget:  cli.ToolTarget,
+			SummaryKind: cli.SummaryKind,
 		}
 	}
-	return agentActivitySafeToolTarget(input)
+
+	tool := strings.ToLower(strings.TrimSpace(canonicalTool))
+	switch {
+	case tool == "bash":
+		summary := agentActivityToolInputSummary{
+			ToolTarget:  commandSummaryFromInput(input),
+			SummaryKind: "command",
+		}
+		if summary.ToolTarget == "" {
+			summary.SummaryKind = ""
+		}
+		return summary
+	case isFileActivityTool(tool):
+		path := activityPathFactFromInput(input)
+		return agentActivityToolInputSummary{
+			ToolTarget:  path,
+			SummaryKind: "file_path",
+			ClearTarget: path == "",
+		}
+	case tool == "glob":
+		summary := agentActivityToolInputSummary{
+			ClearTarget: true,
+		}
+		path := activityPathFactFromInput(input)
+		query := activityQueryFactFromInput(input)
+		pattern := activityPatternFactFromInput(input)
+		switch {
+		case pattern != "":
+			summary.ToolTarget = pattern
+			summary.SummaryKind = "pattern"
+		case query != "":
+			summary.ToolTarget = query
+			summary.SummaryKind = "query"
+		case activityPathIsDisplayableSearchTarget(path):
+			summary.ToolTarget = path
+			summary.SummaryKind = "file_path"
+		}
+		return summary
+	case tool == "grep":
+		summary := agentActivityToolInputSummary{
+			ClearTarget: true,
+		}
+		path := activityPathFactFromInput(input)
+		query := activityQueryFactFromInput(input)
+		pattern := activityPatternFactFromInput(input)
+		switch {
+		case query != "":
+			summary.ToolTarget = query
+			summary.SummaryKind = "query"
+		case pattern != "":
+			summary.ToolTarget = pattern
+			summary.SummaryKind = "pattern"
+		case activityPathIsDisplayableSearchTarget(path):
+			summary.ToolTarget = path
+			summary.SummaryKind = "file_path"
+		}
+		return summary
+	case tool == "web_search":
+		query := activityQueryFactFromInput(input)
+		return agentActivityToolInputSummary{
+			ToolTarget:  query,
+			SummaryKind: "query",
+			ClearTarget: query == "",
+		}
+	case tool == "web_fetch":
+		url := clippedStringFromMap(input, "url", 500)
+		return agentActivityToolInputSummary{
+			ToolTarget:  redact.Text(url),
+			SummaryKind: "url",
+			ClearTarget: strings.TrimSpace(url) == "",
+		}
+	}
+
+	return agentActivityToolInputSummary{ClearTarget: true}
+}
+
+func agentActivitySafeToolTargetForTool(canonicalTool string, input map[string]any) (string, string) {
+	summary := agentActivityToolInputSummaryForTool(canonicalTool, input)
+	if summary.ToolTarget == "" {
+		return "", ""
+	}
+	return summary.ToolTarget, summary.SummaryKind
+}
+
+type raftCLIInvocation struct {
+	Tool        string
+	ToolTarget  string
+	SummaryKind string
+	Details     map[string]any
+}
+
+func resolveRaftCLIInvocation(toolName string, input map[string]any) (raftCLIInvocation, bool) {
+	if agentActivityCanonicalToolName(toolName) != "bash" {
+		return raftCLIInvocation{}, false
+	}
+	rawCommand := commandFromInput(input)
+	command := redact.Text(rawCommand)
+	if command == "" {
+		return raftCLIInvocation{}, false
+	}
+	tokens := shellCommandTokens(rawCommand)
+	if len(tokens) == 0 {
+		return raftCLIInvocation{}, false
+	}
+	executableIndex := 0
+	for executableIndex < len(tokens) && isEnvAssignmentToken(tokens[executableIndex]) {
+		executableIndex++
+	}
+	if executableIndex >= len(tokens) {
+		return raftCLIInvocation{}, false
+	}
+	if isShellExecutableToken(tokens[executableIndex]) {
+		if inner := shellCCommand(tokens[executableIndex+1:]); inner != "" {
+			invocation, ok := resolveRaftCLIInvocation(toolName, map[string]any{"command": inner})
+			if ok {
+				invocation.Details["command"] = command
+			}
+			return invocation, ok
+		}
+	}
+	cliIndex := findRaftCLIExecutableIndex(tokens)
+	if cliIndex < 0 || cliIndex+2 >= len(tokens) {
+		return raftCLIInvocation{}, false
+	}
+	args := tokens[cliIndex+1:]
+	resource, action, rest := args[0], args[1], args[2:]
+	invocation := raftCLIInvocation{
+		SummaryKind: "message_target",
+		Details: map[string]any{
+			"command": command,
+		},
+	}
+	switch resource + " " + action {
+	case "message send":
+		invocation.Tool = "send_message"
+		invocation.ToolTarget = optionValue(rest, "--target")
+	case "message check":
+		invocation.Tool = "check_messages"
+		invocation.SummaryKind = "none"
+	case "message read":
+		invocation.Tool = "read_history"
+		invocation.ToolTarget = firstNonEmptyActivityString(optionValue(rest, "--channel"), optionValue(rest, "--target"))
+	case "message search":
+		invocation.Tool = "search_messages"
+		invocation.ToolTarget = optionValue(rest, "--query")
+		invocation.SummaryKind = "query"
+	case "server info":
+		invocation.Tool = "list_server"
+		invocation.SummaryKind = "none"
+	case "task list":
+		invocation.Tool = "list_tasks"
+		invocation.ToolTarget = firstNonEmptyActivityString(optionValue(rest, "--channel"), optionValue(rest, "--target"))
+	case "task claim":
+		invocation.Tool = "claim_tasks"
+		invocation.ToolTarget = firstNonEmptyActivityString(optionValue(rest, "--channel"), optionValue(rest, "--target"))
+	case "task update":
+		invocation.Tool = "update_task_status"
+		invocation.ToolTarget = firstNonEmptyActivityString(optionValue(rest, "--channel"), optionValue(rest, "--target"))
+	case "channel join":
+		invocation.Tool = "join_channel"
+		invocation.ToolTarget = optionValue(rest, "--target")
+	case "channel leave":
+		invocation.Tool = "leave_channel"
+		invocation.ToolTarget = optionValue(rest, "--target")
+	case "attachment upload":
+		invocation.Tool = "upload_file"
+		invocation.ToolTarget = optionValue(rest, "--path")
+		invocation.SummaryKind = "file_path"
+	case "attachment view":
+		invocation.Tool = "view_file"
+		invocation.SummaryKind = "none"
+	case "reminder schedule":
+		invocation.Tool = "schedule_reminder"
+		invocation.ToolTarget = optionValue(rest, "--title")
+	default:
+		return raftCLIInvocation{}, false
+	}
+	if invocation.ToolTarget != "" {
+		invocation.Details["tool_target"] = invocation.ToolTarget
+	}
+	if invocation.SummaryKind != "" {
+		invocation.Details["summary_kind"] = invocation.SummaryKind
+	}
+	return invocation, true
+}
+
+func redactedCommandFromInput(input map[string]any) string {
+	return redact.Text(commandFromInput(input))
+}
+
+func commandFromInput(input map[string]any) string {
+	for _, key := range []string{"command", "cmd", "shell_command"} {
+		if value := stringFromMap(input, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func commandSummaryFromInput(input map[string]any) string {
+	command := redactedCommandFromInput(input)
+	if command == "" {
+		return ""
+	}
+	return truncateForActivity(command, 100)
+}
+
+func shellCommandTokens(command string) []string {
+	var tokens []string
+	var current strings.Builder
+	var quote rune
+	escaped := false
+	flush := func() {
+		if current.Len() > 0 {
+			tokens = append(tokens, current.String())
+			current.Reset()
+		}
+	}
+	for _, r := range command {
+		if escaped {
+			current.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if r == '\\' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+				continue
+			}
+			current.WriteRune(r)
+			continue
+		}
+		if r == '\'' || r == '"' {
+			quote = r
+			continue
+		}
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			flush()
+			continue
+		}
+		current.WriteRune(r)
+	}
+	flush()
+	return tokens
+}
+
+func isEnvAssignmentToken(token string) bool {
+	eq := strings.Index(token, "=")
+	return eq > 0 && !strings.Contains(token[:eq], "/") && !strings.HasPrefix(token, "-")
+}
+
+func isShellExecutableToken(token string) bool {
+	base := basenameToken(token)
+	return base == "sh" || base == "bash" || base == "zsh" || base == "fish"
+}
+
+func shellCCommand(args []string) string {
+	for i, arg := range args {
+		if arg == "-c" || (strings.HasPrefix(arg, "-") && strings.Contains(arg, "c")) {
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+			return ""
+		}
+		if !strings.HasPrefix(arg, "-") {
+			return ""
+		}
+	}
+	return ""
+}
+
+func findRaftCLIExecutableIndex(tokens []string) int {
+	for i, token := range tokens {
+		switch basenameToken(token) {
+		case "raft", "slock", "multica":
+			return i
+		}
+	}
+	return -1
+}
+
+func basenameToken(token string) string {
+	token = strings.TrimSpace(strings.Trim(token, `"'`))
+	parts := strings.FieldsFunc(token, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	if len(parts) == 0 {
+		return strings.ToLower(token)
+	}
+	return strings.ToLower(parts[len(parts)-1])
+}
+
+func optionValue(args []string, flag string) string {
+	for i := len(args) - 1; i >= 0; i-- {
+		arg := args[i]
+		if strings.HasPrefix(arg, flag+"=") {
+			return strings.TrimSpace(arg[len(flag)+1:])
+		}
+		if arg == flag && i+1 < len(args) {
+			return strings.TrimSpace(args[i+1])
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyActivityString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func isFileActivityTool(tool string) bool {
@@ -1741,6 +2157,56 @@ func hasShellCommandInput(input map[string]any) bool {
 		}
 	}
 	return false
+}
+
+func agentActivityTimelineEntries(row agentActivityRawRow, details map[string]any, tool *string) []AgentActivityEntry {
+	entry := AgentActivityEntry{
+		Kind:        row.Kind,
+		Text:        textToPtr(row.Message),
+		Tool:        tool,
+		ToolTarget:  stringPtrFromMap(details, "tool_target"),
+		SummaryKind: stringPtrFromMap(details, "summary_kind"),
+		Command:     stringPtrFromMap(details, "command"),
+		Status:      textToPtr(row.Status),
+	}
+	if reason := textOrDefault(row.ReasonCode, ""); reason != "" {
+		entry.ReasonCode = &reason
+	}
+	if entry.Text == nil && entry.Tool == nil && entry.ToolTarget == nil && entry.Command == nil && entry.Status == nil && entry.ReasonCode == nil {
+		return nil
+	}
+	return []AgentActivityEntry{entry}
+}
+
+func agentActivityTimelineRowIsNarrative(row agentActivityRawRow) bool {
+	switch row.Kind {
+	case activityKindThinking,
+		activityKindText,
+		activityKindWakeAttempt,
+		activityKindError,
+		activityKindBlocked,
+		activityKindCompactionStarted,
+		activityKindCompactionFinished:
+		return true
+	case activityKindToolCall:
+		details := jsonObject(row.Details)
+		if cli, ok := resolveRaftCLIInvocation(agentActivityCanonicalToolName(stringFromMap(details, "tool")), mapFromMap(details, "input")); ok {
+			return strings.TrimSpace(cli.Tool) != ""
+		}
+		tool := stringFromMap(details, "tool")
+		if tool == "" {
+			return false
+		}
+		_, known := taskMessageCanonicalToolName(tool, mapFromMap(details, "input"))
+		return known
+	case activityKindCustom:
+		return customActivityEventIsNarrative(
+			textOrDefault(row.EventType, ""),
+			textOrDefault(row.ReasonCode, ""),
+		)
+	default:
+		return false
+	}
 }
 
 func taskMessageToolIsMapped(messageType, tool string, input map[string]any) bool {
@@ -1891,6 +2357,25 @@ func stringFromMap(obj map[string]any, key string) string {
 	}
 }
 
+func mapFromMap(obj map[string]any, key string) map[string]any {
+	value, ok := obj[key]
+	if !ok {
+		return map[string]any{}
+	}
+	switch v := value.(type) {
+	case map[string]any:
+		return v
+	case map[string]string:
+		out := make(map[string]any, len(v))
+		for k, item := range v {
+			out[k] = item
+		}
+		return out
+	default:
+		return map[string]any{}
+	}
+}
+
 func agentActivityRealtime(activityID string) AgentActivityRealtimeContract {
 	return AgentActivityRealtimeContract{
 		Scope:     "task",
@@ -1969,6 +2454,50 @@ func basenameFromMap(m map[string]any, key string) string {
 
 func sourcePathFromMap(m map[string]any, key string) string {
 	return stringFromMap(m, key)
+}
+
+func activityPathFactFromInput(input map[string]any) string {
+	for _, key := range []string{"path", "file_path", "filepath", "file", "filename", "absolute_path", "relative_path"} {
+		if value := sourcePathFromMap(input, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func activityQueryFactFromInput(input map[string]any) string {
+	for _, key := range []string{"query", "search", "search_query"} {
+		if value := clippedStringFromMap(input, key, 500); value != "" {
+			return redact.Text(value)
+		}
+	}
+	return ""
+}
+
+func activityPatternFactFromInput(input map[string]any) string {
+	for _, key := range []string{"pattern", "glob", "glob_pattern", "regex"} {
+		if value := clippedStringFromMap(input, key, 500); value != "" {
+			return redact.Text(value)
+		}
+	}
+	return ""
+}
+
+func activityScopeFactFromInput(input map[string]any) string {
+	for _, key := range []string{"scope", "cwd", "dir", "directory", "root", "base_path"} {
+		if value := sourcePathFromMap(input, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func activityPathIsDisplayableSearchTarget(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	return strings.ContainsAny(path, "*?[")
 }
 
 func commandNameFromMap(m map[string]any, key string) string {

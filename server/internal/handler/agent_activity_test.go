@@ -3,8 +3,10 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -269,7 +271,7 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO task_message (task_id, seq, type, tool, input, content, visibility)
 		VALUES ($1, 2, 'tool_use', 'exec_command',
-		        '{"cmd":"pnpm --filter @multica/web build --token sk-proj-secret"}',
+		        '{"cmd":"pnpm --filter @multica/web build --token sk-proj-abc123def456ghi789jkl012mno345"}',
 		        'tool input is not the public narrative', 'user_facing')
 		RETURNING id
 	`, taskID).Scan(&toolID); err != nil {
@@ -283,17 +285,20 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 	if strings.Contains(ownerEvents.raw, `"run_id"`) {
 		t.Fatalf("activity events must not expose run_id: %s", ownerEvents.raw)
 	}
-	for _, removedField := range []string{`"label"`, `"subtext"`, `"tone"`, `"reason_label"`} {
+	for _, removedField := range []string{`"label"`, `"subtext"`, `"tone"`, `"reason_label"`, `"path"`, `"query"`, `"pattern"`} {
 		if strings.Contains(ownerEvents.raw, removedField) {
 			t.Fatalf("activity events must not expose presentation field %s: %s", removedField, ownerEvents.raw)
 		}
 	}
 	thinking := requireActivityTimelineEvent(t, ownerEvents, thinkingID)
-	if thinking.Kind != activityKindThinking || thinking.EventType != "thinking" {
-		t.Fatalf("thinking event kind/type = %q/%q", thinking.Kind, thinking.EventType)
+	if thinking.ActivityKind != activityKindThinking || thinking.DetailKind != "thinking" {
+		t.Fatalf("thinking event activity/detail kind = %q/%q", thinking.ActivityKind, thinking.DetailKind)
 	}
 	if thinking.Text == nil || *thinking.Text != "thinking aggregate text" {
 		t.Fatalf("thinking text not surfaced as ordered aggregate text: %+v", thinking)
+	}
+	if len(thinking.Entries) != 1 || thinking.Entries[0].Kind != activityKindThinking || thinking.Entries[0].Text == nil || *thinking.Entries[0].Text != "thinking aggregate text" {
+		t.Fatalf("thinking entries missing raft-style text entry: %+v", thinking.Entries)
 	}
 	if thinking.TaskID != nil {
 		t.Fatalf("chat task must not expose issue task_id deep link: %+v", thinking.TaskID)
@@ -302,19 +307,29 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 		t.Fatalf("thinking source refs missing task message/seq: %+v", thinking.SourceRefs)
 	}
 	tool := requireActivityTimelineEvent(t, ownerEvents, toolID)
-	if tool.Kind != activityKindToolCall || tool.EventType != "tool_use" {
-		t.Fatalf("tool event kind/type = %q/%q", tool.Kind, tool.EventType)
+	if tool.ActivityKind != activityKindToolCall || tool.DetailKind != "tool_use" {
+		t.Fatalf("tool event activity/detail kind = %q/%q", tool.ActivityKind, tool.DetailKind)
 	}
 	if tool.Tool == nil || *tool.Tool != "bash" {
 		t.Fatalf("tool event canonical tool = %+v, want bash", tool.Tool)
 	}
-	if tool.ToolTarget == nil || *tool.ToolTarget != "pnpm" {
-		t.Fatalf("tool event tool_target = %+v, want safe command name", tool.ToolTarget)
+	if tool.ToolTarget == nil || !strings.HasPrefix(*tool.ToolTarget, "pnpm --filter @multica/web build") {
+		t.Fatalf("tool event tool_target = %+v, want redacted command summary", tool.ToolTarget)
 	}
 	if tool.Status == nil || *tool.Status != "running" {
 		t.Fatalf("tool event status = %+v, want running", tool.Status)
 	}
-	for _, leak := range []string{"pnpm --filter", "--token", "sk-proj-secret", "tool input is not the public narrative"} {
+	if len(tool.Entries) != 1 || tool.Entries[0].Tool == nil || *tool.Entries[0].Tool != "bash" || tool.Entries[0].Command == nil {
+		t.Fatalf("tool entries missing canonical tool + full redacted command: %+v", tool.Entries)
+	}
+	if !strings.Contains(*tool.Entries[0].Command, "pnpm --filter @multica/web build") {
+		t.Fatalf("tool full command missing from full activity entry: %+v", tool.Entries[0].Command)
+	}
+	if strings.Contains(ownerEvents.raw, `"activity_kind"`) == false || strings.Contains(ownerEvents.raw, `"detail_kind"`) == false {
+		t.Fatalf("activity events missing raft field names: %s", ownerEvents.raw)
+	}
+	assertActivityEventsOmitTopLevelLegacyFields(t, ownerEvents.raw)
+	for _, leak := range []string{"sk-proj-abc123", "tool input is not the public narrative"} {
 		if strings.Contains(ownerEvents.raw, leak) {
 			t.Fatalf("activity event leaked raw tool content %q: %s", leak, ownerEvents.raw)
 		}
@@ -326,6 +341,118 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 	}
 }
 
+func TestAgentActivityEvents_DefaultPageSkipsDiagnosticNoise(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createWorkspaceVisibleActivityAgent(t, "activity-events-noise-agent")
+	dmSessionID := createActivityChatSession(t, agentID, testUserID, "activity events noise dm")
+	var thinkingID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_activity_event (
+			workspace_id, agent_id, event_kind, event_type, severity,
+			target_kind, target_id, message, details, visibility, created_at
+		)
+		VALUES ($1, $2, 'thinking', 'thinking', 'info', 'dm', $3, 'old visible thinking', '{}'::jsonb, 'user_facing', now() - interval '10 minutes')
+		RETURNING id
+	`, testWorkspaceID, agentID, dmSessionID).Scan(&thinkingID); err != nil {
+		t.Fatalf("insert narrative thinking event: %v", err)
+	}
+	executedID, ok := insertAgentActivityEvent(
+		ctx, testPool, parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
+		activityKindCustom, "radar_action_executed", "info",
+		"agent", parseUUID(agentID), "", "", "Radar executed: create issue", nil,
+	)
+	if !ok {
+		t.Fatal("insert executed Radar activity event")
+	}
+	failedID, ok := insertAgentActivityEvent(
+		ctx, testPool, parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
+		activityKindCustom, "radar_action_failed", "warning",
+		"agent", parseUUID(agentID), "", "create_issue", "Radar failed: create issue", nil,
+	)
+	if !ok {
+		t.Fatal("insert failed Radar activity event")
+	}
+	noActionID, ok := insertAgentActivityEvent(
+		ctx, testPool, parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
+		activityKindCustom, "radar_action_executed", "info",
+		"agent", parseUUID(agentID), "", "no_action", "Radar executed: no_action", nil,
+	)
+	if !ok {
+		t.Fatal("insert no_action Radar activity event")
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_activity_event (
+			workspace_id, agent_id, event_kind, event_type, severity,
+			target_kind, target_id, message, details, visibility, created_at
+		)
+		SELECT $1, $2, 'transport', 'runtime_progress', 'info', 'dm', $3, 'transport noise ' || g, '{}'::jsonb, 'diagnostic_only', now() - (g || ' seconds')::interval
+		FROM generate_series(1, 80) AS g
+	`, testWorkspaceID, agentID, dmSessionID); err != nil {
+		t.Fatalf("insert diagnostic noise: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_activity_event WHERE agent_id = $1`, agentID) })
+
+	events := listAgentActivityEventsForUser(t, testUserID, agentID, "")
+	if events.resp.Limit != agentActivityEventDefaultLimit {
+		t.Fatalf("default events limit = %d, want %d", events.resp.Limit, agentActivityEventDefaultLimit)
+	}
+	requireActivityTimelineEvent(t, events, thinkingID)
+	requireActivityTimelineEvent(t, events, uuidToString(executedID))
+	requireActivityTimelineEvent(t, events, uuidToString(failedID))
+	if got := findActivityTimelineEvent(events, uuidToString(noActionID)); got != nil {
+		t.Fatalf("no_action Radar event leaked into user narrative: %+v", *got)
+	}
+	for _, event := range events.resp.Events {
+		if event.ActivityKind == activityKindTransport {
+			t.Fatalf("default events page included diagnostic transport row: %+v", event)
+		}
+	}
+}
+
+func TestAgentActivityEvents_CursorUsesOccurredAt(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createWorkspaceVisibleActivityAgent(t, "activity-events-cursor-agent")
+	dmSessionID := createActivityChatSession(t, agentID, testUserID, "activity events cursor dm")
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_activity_event (
+			workspace_id, agent_id, event_kind, event_type, severity,
+			target_kind, target_id, message, details, visibility, created_at
+		)
+		SELECT $1, $2, 'thinking', 'thinking', 'info', 'dm', $3, 'cursor event ' || g, '{}'::jsonb, 'user_facing', now() - (g || ' seconds')::interval
+		FROM generate_series(1, 2) AS g
+	`, testWorkspaceID, agentID, dmSessionID); err != nil {
+		t.Fatalf("insert cursor events: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_activity_event WHERE agent_id = $1`, agentID) })
+
+	events := listAgentActivityEventsForUser(t, testUserID, agentID, "?limit=1")
+	if len(events.resp.Events) != 1 || !events.resp.HasMore || events.resp.NextCursor == nil {
+		t.Fatalf("events page = %+v, want one row with next cursor", events.resp)
+	}
+	cursor, err := decodeAgentActivityEventCursor(*events.resp.NextCursor)
+	if err != nil {
+		t.Fatalf("decode next cursor: %v", err)
+	}
+	if cursor.OccurredAt == "" {
+		t.Fatalf("next cursor missing occurred_at: %+v", cursor)
+	}
+	if cursor.ID != events.resp.Events[0].ID {
+		t.Fatalf("next cursor must point at last returned event: cursor=%+v event=%+v", cursor, events.resp.Events[0])
+	}
+	nextPage := listAgentActivityEventsForUser(t, testUserID, agentID, fmt.Sprintf("?limit=1&before=%s", url.QueryEscape(*events.resp.NextCursor)))
+	if len(nextPage.resp.Events) != 1 || nextPage.resp.Events[0].ID == events.resp.Events[0].ID {
+		t.Fatalf("next page did not advance by occurred_at/id cursor: first=%+v next=%+v", events.resp.Events, nextPage.resp.Events)
+	}
+}
+
 func TestActivityVisibilityFor_SourceBackedLifecycle(t *testing.T) {
 	if got := activityVisibilityFor(activityKindCompactionStarted, "compaction_started", "info", ""); got != "user_facing" {
 		t.Fatalf("compaction_started visibility = %q, want user_facing", got)
@@ -333,8 +460,32 @@ func TestActivityVisibilityFor_SourceBackedLifecycle(t *testing.T) {
 	if got := activityVisibilityFor(activityKindCustom, "subagent_started", "info", "auto_retry"); got != "user_facing" {
 		t.Fatalf("subagent custom visibility = %q, want user_facing", got)
 	}
+	for _, eventType := range []string{"radar_action_executed", "radar_action_failed"} {
+		if got := activityVisibilityFor(activityKindCustom, eventType, "info", "create_issue"); got != "user_facing" {
+			t.Fatalf("%s visibility = %q, want user_facing", eventType, got)
+		}
+		row := agentActivityRawRow{
+			Kind:      activityKindCustom,
+			EventType: pgtype.Text{String: eventType, Valid: true},
+		}
+		if !agentActivityTimelineRowIsNarrative(row) {
+			t.Fatalf("%s must be included in the activity narrative", eventType)
+		}
+	}
+	if got := activityVisibilityFor(activityKindCustom, "radar_action_executed", "info", "no_action"); got != "diagnostic_only" {
+		t.Fatalf("no_action Radar visibility = %q, want diagnostic_only", got)
+	}
 	if got := activityVisibilityFor(activityKindTransport, "runtime_progress", "info", ""); got != "diagnostic_only" {
 		t.Fatalf("transport visibility = %q, want diagnostic_only", got)
+	}
+}
+
+func TestAgentActivityDetailKindDefaultsToOther(t *testing.T) {
+	if got := agentActivityDetailKind(pgtype.Text{}); got != "other" {
+		t.Fatalf("missing detail kind = %q, want other", got)
+	}
+	if got := agentActivityDetailKind(pgtype.Text{String: "tool_use", Valid: true}); got != "tool_use" {
+		t.Fatalf("detail kind = %q, want tool_use", got)
 	}
 }
 
@@ -388,6 +539,29 @@ func TestTaskMessageCanonicalToolName_UnknownToolStaysUnmapped(t *testing.T) {
 	}
 }
 
+func TestResolveRaftCLIInvocation_MapsMessageCommands(t *testing.T) {
+	invocation, ok := resolveRaftCLIInvocation("bash", map[string]any{
+		"command": `API_KEY=secret sh -c 'multica message send --target #multica:98d5197a --message-file /tmp/reply.md'`,
+	})
+	if !ok {
+		t.Fatalf("expected multica message send to resolve as raft cli invocation")
+	}
+	if invocation.Tool != "send_message" {
+		t.Fatalf("tool = %q, want send_message", invocation.Tool)
+	}
+	if invocation.ToolTarget != "#multica:98d5197a" || invocation.SummaryKind != "message_target" {
+		t.Fatalf("target/kind = %q/%q, want #multica:98d5197a/message_target", invocation.ToolTarget, invocation.SummaryKind)
+	}
+	if got := invocation.Details["command"]; got == "" {
+		t.Fatalf("full redacted command must be retained for full activity detail: %+v", invocation.Details)
+	}
+
+	check, ok := resolveRaftCLIInvocation("bash", map[string]any{"command": "raft message check"})
+	if !ok || check.Tool != "check_messages" || check.ToolTarget != "" || check.SummaryKind != "none" {
+		t.Fatalf("message check invocation = %+v ok=%v, want check_messages without target", check, ok)
+	}
+}
+
 func TestAgentActivitySafeToolTargetForTool_FileToolsUseSourceBackedPath(t *testing.T) {
 	tests := []struct {
 		name string
@@ -434,21 +608,65 @@ func TestAgentActivitySafeToolTargetForTool_NonFileToolsKeepSafeSummary(t *testi
 		"command": "cat /tmp/secret.txt",
 		"path":    "/Users/frank/Code/multica/private/secret.txt",
 	})
-	if shellTarget != "secret.txt" || shellKind != "file_path" {
-		t.Fatalf("shell target=(%q,%q), want existing safe basename summary", shellTarget, shellKind)
+	if shellTarget != "cat /tmp/secret.txt" || shellKind != "command" {
+		t.Fatalf("shell target=(%q,%q), want raft command summary", shellTarget, shellKind)
 	}
-	if strings.Contains(shellTarget, "/Users/frank/Code") || strings.Contains(shellTarget, "cat /tmp") {
+	if strings.Contains(shellTarget, "/Users/frank/Code") {
 		t.Fatalf("shell target leaked raw path/command: %q", shellTarget)
 	}
 
 	unknownTarget, unknownKind := agentActivitySafeToolTargetForTool("", map[string]any{
 		"path": "/Users/frank/Code/multica/private/future.txt",
 	})
-	if unknownTarget != "future.txt" || unknownKind != "file_path" {
-		t.Fatalf("unknown target=(%q,%q), want conservative basename summary", unknownTarget, unknownKind)
+	if unknownTarget != "" || unknownKind != "" {
+		t.Fatalf("unknown target=(%q,%q), want no invented target", unknownTarget, unknownKind)
 	}
-	if strings.Contains(unknownTarget, "/Users/frank/Code") {
-		t.Fatalf("unknown target leaked raw path: %q", unknownTarget)
+
+	argvTarget, argvKind := agentActivitySafeToolTargetForTool("", map[string]any{
+		"command": "multica repo checkout https://github.com/LRM-Teams/multica.git",
+	})
+	if argvTarget != "" || argvKind != "" {
+		t.Fatalf("unknown command target=(%q,%q), want no argv0-derived target", argvTarget, argvKind)
+	}
+}
+
+func TestAgentActivityToolInputSummaryForTool_UsesRaftLikeToolInputWithoutInventingTarget(t *testing.T) {
+	globSummary := agentActivityToolInputSummaryForTool("glob", map[string]any{
+		"path": "multica",
+	})
+	if globSummary.ToolTarget != "" || globSummary.SummaryKind != "" {
+		t.Fatalf("plain glob path target=(%q,%q), want no invented target", globSummary.ToolTarget, globSummary.SummaryKind)
+	}
+
+	patternSummary := agentActivityToolInputSummaryForTool("glob", map[string]any{
+		"pattern": "server/internal/**/*.go",
+		"cwd":     "/Users/frank/Code/multica",
+	})
+	if patternSummary.ToolTarget != "server/internal/**/*.go" || patternSummary.SummaryKind != "pattern" {
+		t.Fatalf("glob pattern summary = %+v, want pattern target", patternSummary)
+	}
+
+	grepSummary := agentActivityToolInputSummaryForTool("grep", map[string]any{
+		"query": "agentActivityToolInputSummary",
+		"path":  "server/internal/handler",
+	})
+	if grepSummary.ToolTarget != "agentActivityToolInputSummary" || grepSummary.SummaryKind != "query" {
+		t.Fatalf("grep query summary = %+v, want query target", grepSummary)
+	}
+
+	readSummary := agentActivityToolInputSummaryForTool("read_file", map[string]any{
+		"path": "/Users/frank/Code/multica/server/internal/handler/agent_activity.go",
+	})
+	if readSummary.ToolTarget != "/Users/frank/Code/multica/server/internal/handler/agent_activity.go" || readSummary.SummaryKind != "file_path" {
+		t.Fatalf("read_file summary = %+v, want full path target", readSummary)
+	}
+
+	bashSummary := agentActivityToolInputSummaryForTool("bash", map[string]any{
+		"command": "cat /tmp/secret.txt",
+		"path":    "/Users/frank/Code/multica/private/secret.txt",
+	})
+	if bashSummary.ToolTarget != "cat /tmp/secret.txt" || bashSummary.SummaryKind != "command" {
+		t.Fatalf("bash summary = %+v, want command target", bashSummary)
 	}
 }
 
@@ -649,11 +867,12 @@ func listAgentActivityForUser(t *testing.T, userID, agentID, query string) agent
 	if w.Code != http.StatusOK {
 		t.Fatalf("ListAgentActivity(%s): expected 200, got %d: %s", userID, w.Code, w.Body.String())
 	}
+	raw := w.Body.String()
 	var resp AgentActivityPageResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
 		t.Fatalf("decode activity response: %v", err)
 	}
-	return agentActivityListResult{resp: resp, raw: w.Body.String()}
+	return agentActivityListResult{resp: resp, raw: raw}
 }
 
 func listAgentActivityEventsForUser(t *testing.T, userID, agentID, query string) agentActivityEventsResult {
@@ -665,11 +884,29 @@ func listAgentActivityEventsForUser(t *testing.T, userID, agentID, query string)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ListAgentActivityEvents(%s): expected 200, got %d: %s", userID, w.Code, w.Body.String())
 	}
+	raw := w.Body.String()
 	var resp AgentActivityEventsPageResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
 		t.Fatalf("decode activity events response: %v", err)
 	}
-	return agentActivityEventsResult{resp: resp, raw: w.Body.String()}
+	return agentActivityEventsResult{resp: resp, raw: raw}
+}
+
+func assertActivityEventsOmitTopLevelLegacyFields(t *testing.T, raw string) {
+	t.Helper()
+	var body struct {
+		Events []map[string]any `json:"events"`
+	}
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatalf("decode activity events as map: %v", err)
+	}
+	for _, event := range body.Events {
+		for _, legacyField := range []string{"kind", "event_type", "visibility"} {
+			if _, ok := event[legacyField]; ok {
+				t.Fatalf("activity events must not serialize top-level legacy field %s: %s", legacyField, raw)
+			}
+		}
+	}
 }
 
 func requireActivityItem(t *testing.T, list agentActivityListResult, id string) AgentActivityItem {

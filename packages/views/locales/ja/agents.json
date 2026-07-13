@@ -355,6 +355,7 @@
       "labels": {
         "thinking": "思考中",
         "output": "出力",
+        "completed": "完了",
         "working": "実行中",
         "failed": "失敗",
         "waiting": "待機中",
@@ -373,6 +374,8 @@
         "compaction_finished": "圧縮完了",
         "subagent_activity": "サブエージェント活動"
       },
+      "copy_command": "コマンドをコピー",
+      "command_copied": "コピーしました",
       "view_diagnostics": "診断の詳細を表示",
       "hide_diagnostics": "診断の詳細を非表示",
       "section_now": "現在",
@@ -545,6 +548,13 @@
     "running_for": "進行中 · 経過 {{min}}min",
     "duration_min": "{{min}}min",
     "task_fallback": "タスク実行",
+    "radar_task": {
+      "queued": "能動探索 · キュー待ち",
+      "running": "能動探索 · 実行中",
+      "completed": "能動探索 · 完了",
+      "failed": "能動探索 · 失敗",
+      "cancelled": "能動探索 · キャンセル済み"
+    },
     "empty_select": "左のエージェントを選択すると詳細が表示されます",
     "delete_success": "エージェントを削除しました",
     "delete_failed": "エージェントの削除に失敗しました"

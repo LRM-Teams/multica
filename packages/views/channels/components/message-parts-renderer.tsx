@@ -91,10 +91,14 @@ function StickerPart({ part }: { part: Extract<MessagePart, { type: "sticker" }>
 }
 
 function createMessagePartKey(part: MessagePart, counts: Map<string, number>): string {
-  const base =
-    part.type === "text"
-      ? `text-${hashString(part.text)}`
-      : `sticker-${part.pack_id ?? "default"}-${part.sticker_id}-${hashString(part.alt ?? "")}`;
+  let base: string;
+  if (part.type === "text") {
+    base = `text-${hashString(part.text)}`;
+  } else if (part.type === "sticker") {
+    base = `sticker-${part.pack_id ?? "default"}-${part.sticker_id}-${hashString(part.alt ?? "")}`;
+  } else {
+    base = `attachment-${part.attachment_id}`;
+  }
   const count = (counts.get(base) ?? 0) + 1;
   counts.set(base, count);
   return count === 1 ? base : `${base}-${count}`;

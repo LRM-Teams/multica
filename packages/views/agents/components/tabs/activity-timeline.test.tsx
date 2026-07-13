@@ -19,6 +19,8 @@ vi.mock("../../../i18n", () => ({
             timeline_empty: "No activity yet",
             view_diagnostics: "View diagnostic details",
             hide_diagnostics: "Hide diagnostic details",
+            copy_command: "Copy command",
+            command_copied: "Copied",
             labels: {
               thinking: "Thinking",
               output: "Output",
@@ -50,19 +52,20 @@ const USER: ActivityEvent = {
   id: "u1",
   agent_id: "agent-1",
   occurred_at: "2026-07-06T09:36:05Z",
-  kind: "thinking",
-  event_type: "thinking",
-  visibility: "user_facing",
+  activity_kind: "thinking",
+  detail_kind: "thinking",
   text: "Built the project.",
   target_ref: { kind: "agent", id: "agent-1" },
 };
+// A raft diagnostic-kind event — the mainline/diagnostic split is now driven by
+// `activity_kind` (#389), not a `visibility` flag, so a diagnostic KIND is what
+// keeps a row out of the default timeline.
 const DIAG: ActivityEvent = {
   id: "d1",
   agent_id: "agent-1",
   occurred_at: "2026-07-06T09:36:10Z",
-  kind: "blocked",
-  event_type: "blocked",
-  visibility: "diagnostic_only",
+  activity_kind: "runtime_diagnostic",
+  detail_kind: "runtime_diagnostic",
   reason_code: "freshness_check",
   target_ref: { kind: "agent", id: "agent-1" },
 };
@@ -70,18 +73,16 @@ const WAKE: ActivityEvent = {
   id: "w1",
   agent_id: "agent-1",
   occurred_at: "2026-07-06T09:36:08Z",
-  kind: "wake_attempt",
-  event_type: "wake_attempt",
-  visibility: "user_facing",
+  activity_kind: "wake_attempt",
+  detail_kind: "wake_attempt",
   target_ref: { kind: "agent", id: "agent-1" },
 };
 const TOOL: ActivityEvent = {
   id: "tc1",
   agent_id: "agent-1",
   occurred_at: "2026-07-06T09:36:09Z",
-  kind: "tool_call",
-  event_type: "tool_use",
-  visibility: "user_facing",
+  activity_kind: "tool_call",
+  detail_kind: "tool_use",
   tool: "bash",
   tool_target: "bash",
   status: "running",
@@ -91,9 +92,8 @@ const EDIT: ActivityEvent = {
   id: "edit1",
   agent_id: "agent-1",
   occurred_at: "2026-07-06T09:36:10Z",
-  kind: "tool_call",
-  event_type: "tool_use",
-  visibility: "user_facing",
+  activity_kind: "tool_call",
+  detail_kind: "tool_use",
   tool: "edit_file",
   tool_target: "profile.go",
   status: "completed",
@@ -106,9 +106,8 @@ const WRITE_LONGPATH: ActivityEvent = {
   id: "wlp1",
   agent_id: "agent-1",
   occurred_at: "2026-07-06T09:36:10Z",
-  kind: "tool_call",
-  event_type: "tool_use",
-  visibility: "user_facing",
+  activity_kind: "tool_call",
+  detail_kind: "tool_use",
   tool: "write_file",
   tool_target: "/Users/frank/multica_workspaces/7373de75/workdir/pathcheck.txt",
   status: "completed",
@@ -118,9 +117,8 @@ const TEXT: ActivityEvent = {
   id: "txt1",
   agent_id: "agent-1",
   occurred_at: "2026-07-06T09:36:11Z",
-  kind: "text",
-  event_type: "text",
-  visibility: "user_facing",
+  activity_kind: "text",
+  detail_kind: "text",
   text: "Done.",
   target_ref: { kind: "agent", id: "agent-1" },
 };
@@ -128,25 +126,23 @@ const COMPACTION: ActivityEvent = {
   id: "cmp1",
   agent_id: "agent-1",
   occurred_at: "2026-07-06T09:36:12Z",
-  kind: "compaction_started",
-  event_type: "compaction_started",
-  visibility: "user_facing",
+  activity_kind: "compaction_started",
+  detail_kind: "compaction_started",
   target_ref: { kind: "agent", id: "agent-1" },
 };
 const TURN_END: ActivityEvent = {
   id: "done1",
   agent_id: "agent-1",
   occurred_at: "2026-07-06T09:36:13Z",
-  kind: "turn_end",
-  event_type: "task_completed",
-  visibility: "user_facing",
+  activity_kind: "turn_end",
+  detail_kind: "task_completed",
   target_ref: { kind: "agent", id: "agent-1" },
 };
 
 describe("ActivityTimeline", () => {
   beforeEach(() => cleanup());
 
-  it("renders user_facing events (projected label + subtext) and hides diagnostic_only by default", () => {
+  it("renders mainline events (projected label + subtext) and hides diagnostic kinds by default", () => {
     render(<ActivityTimeline events={[USER, DIAG]} />);
     expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.getByText("Built the project.")).toBeInTheDocument();
@@ -154,14 +150,14 @@ describe("ActivityTimeline", () => {
     expect(screen.queryByText("View diagnostic details")).toBeNull();
   });
 
-  it("compact mode: user_facing only, no diagnostics toggle", () => {
+  it("compact mode: mainline only, no diagnostics toggle", () => {
     render(<ActivityTimeline events={[USER, DIAG]} compact />);
     expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.queryByText("Waiting · freshness check")).toBeNull();
     expect(screen.queryByText("View diagnostic details")).toBeNull();
   });
 
-  it("shows the empty state when there are no user_facing events", () => {
+  it("shows the empty state when there are no mainline events", () => {
     render(<ActivityTimeline events={[DIAG]} />);
     expect(screen.getByText("No activity yet")).toBeInTheDocument();
   });
@@ -244,9 +240,8 @@ describe("ActivityTimeline", () => {
       id: `m${i}`,
       agent_id: "agent-1",
       occurred_at: `2026-07-06T09:3${i}:00Z`,
-      kind: "text",
-      event_type: "text",
-      visibility: "user_facing",
+      activity_kind: "text",
+      detail_kind: "text",
       text: `Reply ${i}`,
       target_ref: { kind: "agent", id: "agent-1" },
     }));
@@ -256,6 +251,48 @@ describe("ActivityTimeline", () => {
     // most recent rows kept (m6 present, oldest m0/m1 trimmed)
     expect(screen.getByText("Reply 6")).toBeInTheDocument();
     expect(screen.queryByText("Reply 0")).toBeNull();
+  });
+
+  it("renders a shell command as a plain clip + full command on hover/copy (not path-mangled) (#v0)", () => {
+    const CMD: ActivityEvent = {
+      id: "cmd1",
+      agent_id: "agent-1",
+      occurred_at: "2026-07-06T09:36:05Z",
+      activity_kind: "tool_call",
+      detail_kind: "tool_use",
+      tool: "bash",
+      tool_target: "cd /a/b && multica send…",
+      status: "completed",
+      entries: [{ kind: "tool_call", tool: "bash", command: 'cd /a/b && multica send --target "#c"' }],
+      target_ref: { kind: "agent", id: "agent-1" },
+    };
+    render(<ActivityTimeline events={[CMD]} />);
+    expect(screen.getByText("Running command")).toBeInTheDocument();
+    // The command clip is ONE plain node (never split into path head/tail — a
+    // command containing `/` must not get the path middle-ellipsis), with the
+    // full redacted command reachable on hover.
+    expect(screen.getByText("cd /a/b && multica send…")).toBeInTheDocument();
+    expect(screen.getByTitle('cd /a/b && multica send --target "#c"')).toBeInTheDocument();
+    // Copy affordance present on the full (non-compact) row.
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
+  });
+
+  it("compact mode drops the command copy affordance (title-only, non-interactive) (#v0)", () => {
+    const CMD: ActivityEvent = {
+      id: "cmd2",
+      agent_id: "agent-1",
+      occurred_at: "2026-07-06T09:36:05Z",
+      activity_kind: "tool_call",
+      detail_kind: "tool_use",
+      tool: "bash",
+      tool_target: "ls /a/b",
+      status: "completed",
+      entries: [{ kind: "tool_call", tool: "bash", command: "ls /a/b" }],
+      target_ref: { kind: "agent", id: "agent-1" },
+    };
+    render(<ActivityTimeline events={[CMD]} compact />);
+    expect(screen.getByText("ls /a/b")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });
 

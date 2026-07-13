@@ -798,6 +798,80 @@ func TestChannelAgentInboxDrainAckDirectedMention(t *testing.T) {
 	}
 }
 
+func TestChannelAgentInboxDrainDoesNotReplayFailedPromptBacklog(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentName := "Inbox Bounded Prompt Agent " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	runtimeID := handlerTestRuntimeID(t)
+	channelID := seedChannelForTest(t, "agent-inbox-bounded-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+
+	first, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") first prompt", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-bounded"), 0)
+	if err != nil {
+		t.Fatalf("insert first trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, first, parseUUID(testUserID))
+
+	var firstEventID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id FROM agent_inbox_event
+		WHERE source_message_id = $1 AND agent_id = $2
+		ORDER BY created_at DESC LIMIT 1`, first.ID, agentID).Scan(&firstEventID); err != nil {
+		t.Fatalf("load first inbox event: %v", err)
+	}
+	setAgentInboxTerminalOutcomeForTest(t, firstEventID, "failed", true)
+	const backlogMarker = "FAILED_PROMPT_BACKLOG_MARKER"
+	if _, err := testPool.Exec(ctx, `
+		UPDATE chat_message
+		SET content = $2
+		WHERE task_id = $1 AND role = 'user'`, firstEventID, strings.Repeat(backlogMarker, 12_000)); err != nil {
+		t.Fatalf("inflate failed prompt: %v", err)
+	}
+
+	second, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") current prompt only", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-bounded"), 0)
+	if err != nil {
+		t.Fatalf("insert second trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, second, parseUUID(testUserID))
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-bounded-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode drain response: %v", err)
+	}
+	if len(drainResp.Events) != 1 || drainResp.Events[0].Task == nil {
+		t.Fatalf("drain response missing runnable event: %s", drainRec.Body.String())
+	}
+	prompt := drainResp.Events[0].Task.ChatMessage
+	if strings.Contains(prompt, backlogMarker) {
+		t.Fatal("failed prompt backlog leaked into current inbox task")
+	}
+	if !strings.Contains(prompt, "current prompt only") {
+		t.Fatalf("current prompt missing from inbox task: %q", prompt)
+	}
+	if len(prompt) >= 128*1024 {
+		t.Fatalf("current inbox prompt is still large enough to hit Linux argv limits: %d bytes", len(prompt))
+	}
+}
+
 func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -997,11 +1071,11 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	if activity[1].kind != activityKindToolCall || activity[1].eventType != "tool_use" || activity[1].visibility != "user_facing" {
 		t.Fatalf("tool row = %+v, want user-facing tool_use", activity[1])
 	}
-	if activity[1].details["tool"] != "bash" || activity[1].details["raw_tool"] != "terminal" || activity[1].details["tool_target"] != "hello_world.txt" || activity[1].details["summary_kind"] != "file_path" {
-		t.Fatalf("tool details = %+v, want canonical bash/raw terminal/safe target hello_world.txt", activity[1].details)
+	if activity[1].details["tool"] != "bash" || activity[1].details["raw_tool"] != "terminal" || activity[1].details["tool_target"] != "cat secret" || activity[1].details["summary_kind"] != "command" || activity[1].details["command"] != "cat secret" {
+		t.Fatalf("tool details = %+v, want canonical bash/raw terminal/command summary", activity[1].details)
 	}
-	if strings.Contains(fmt.Sprint(activity[1].details), "cat secret") {
-		t.Fatalf("tool details leaked raw command: %+v", activity[1].details)
+	if strings.Contains(fmt.Sprint(activity[1].details), "/tmp/hello_world.txt") {
+		t.Fatalf("tool details leaked path-backed shell command target: %+v", activity[1].details)
 	}
 	if activity[2].kind != activityKindToolOutput || activity[2].visibility != "diagnostic_only" {
 		t.Fatalf("tool result row = %+v, want diagnostic tool_output", activity[2])
@@ -1015,8 +1089,8 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	if activity[5].kind != activityKindCustom || activity[5].eventType != "unmapped_tool_name" || activity[5].visibility != "diagnostic_only" || activity[5].reasonCode != "unmapped_tool_name" {
 		t.Fatalf("status-like missing command row = %+v, want diagnostic unmapped gap", activity[5])
 	}
-	if activity[5].details["unmapped_tool_name"] != "running" || activity[5].details["tool"] != nil || activity[5].details["tool_target"] != "status_only.txt" {
-		t.Fatalf("status-like missing command details = %+v, want unmapped running without user-facing tool", activity[5].details)
+	if activity[5].details["unmapped_tool_name"] != "running" || activity[5].details["tool"] != nil || activity[5].details["tool_target"] != nil {
+		t.Fatalf("status-like missing command details = %+v, want unmapped running without user-facing tool/target", activity[5].details)
 	}
 	if activity[5].details["inbox_event_id"] != got.ID || activity[5].details["delivery_id"] != got.DeliveryID || activity[5].details["source_message_id"] != trigger.ID || activity[5].details["seq"] == nil {
 		t.Fatalf("status-like missing command source details = %+v, want inbox/delivery/source/seq refs", activity[5].details)
@@ -1024,8 +1098,9 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	if activity[6].kind != activityKindToolCall || activity[6].eventType != "tool_use" || activity[6].visibility != "user_facing" {
 		t.Fatalf("write file row = %+v, want user-facing tool_use", activity[6])
 	}
-	if activity[6].details["tool"] != "write_file" || activity[6].details["tool_target"] != "/Users/frank/Code/multica/server/internal/handler/channel_test.go" || activity[6].details["summary_kind"] != "file_path" {
-		t.Fatalf("write file details = %+v, want full source-backed file path", activity[6].details)
+	writeTarget, _ := activity[6].details["tool_target"].(string)
+	if activity[6].details["tool"] != "write_file" || !strings.HasSuffix(writeTarget, "/Code/multica/server/internal/handler/channel_test.go") || activity[6].details["summary_kind"] != "file_path" {
+		t.Fatalf("write file details = %+v, want redacted source-backed file path", activity[6].details)
 	}
 }
 
@@ -2907,8 +2982,8 @@ func TestSendChannelMessageClientMessageIDDedupesAttachmentsAndParts(t *testing.
 		"parts": []protocol.MessagePart{
 			{Type: protocol.MessagePartTypeText, Text: content},
 			{Type: protocol.MessagePartTypeSticker, StickerID: "hi"},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: attachmentID},
 		},
-		"attachment_ids":    []string{attachmentID},
 		"client_message_id": clientID,
 	}
 	first := sendChannelMessageForTest(t, channelID, testUserID, body)
@@ -2926,8 +3001,14 @@ func TestSendChannelMessageClientMessageIDDedupesAttachmentsAndParts(t *testing.
 	if len(duplicate.Attachments) != 1 || duplicate.Attachments[0].ID != attachmentID {
 		t.Fatalf("duplicate attachments = %+v, want seeded attachment", duplicate.Attachments)
 	}
-	if len(duplicate.Parts) != 2 || duplicate.Parts[0].Type != protocol.MessagePartTypeText || duplicate.Parts[1].Type != protocol.MessagePartTypeSticker || duplicate.Parts[1].PackID != "builtin" || duplicate.Parts[1].StickerID != "hi" {
-		t.Fatalf("duplicate parts = %+v, want text plus normalized builtin sticker", duplicate.Parts)
+	if len(duplicate.Parts) != 3 ||
+		duplicate.Parts[0].Type != protocol.MessagePartTypeText ||
+		duplicate.Parts[1].Type != protocol.MessagePartTypeSticker ||
+		duplicate.Parts[1].PackID != "builtin" ||
+		duplicate.Parts[1].StickerID != "hi" ||
+		duplicate.Parts[2].Type != protocol.MessagePartTypeAttachment ||
+		duplicate.Parts[2].AttachmentID != attachmentID {
+		t.Fatalf("duplicate parts = %+v, want text + sticker + attachment", duplicate.Parts)
 	}
 
 	var bound int
@@ -3018,6 +3099,140 @@ func TestSendChannelMessageClientMessageIDConcurrentDuplicates(t *testing.T) {
 	}
 	if rows != 1 {
 		t.Fatalf("channel_message rows = %d, want 1", rows)
+	}
+}
+
+func TestSendChannelMessageAttachmentOnlyFromParts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "attachment-only-parts-"+uuid.NewString(), testUserID)
+	var attachmentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (workspace_id, channel_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+		VALUES ($1, $2, 'member', $3, 'photo.png', 's3://photo.png', 'image/png', 42)
+		RETURNING id`, testWorkspaceID, channelID, testUserID).Scan(&attachmentID); err != nil {
+		t.Fatalf("seed attachment: %v", err)
+	}
+
+	rec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content": "",
+		"parts": []protocol.MessagePart{{
+			Type:         protocol.MessagePartTypeAttachment,
+			AttachmentID: attachmentID,
+			Filename:     "photo.png",
+			ContentType:  "image/png",
+			SizeBytes:    42,
+		}},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("attachment-only send: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created message: %v", err)
+	}
+	if created.Content != "" {
+		t.Fatalf("content = %q, want empty (no markdown image URL)", created.Content)
+	}
+	if strings.Contains(created.Content, "![") || strings.Contains(created.Content, "s3://") {
+		t.Fatalf("content must not contain markdown/media URL, got %q", created.Content)
+	}
+	if len(created.Parts) != 1 || created.Parts[0].Type != protocol.MessagePartTypeAttachment || created.Parts[0].AttachmentID != attachmentID {
+		t.Fatalf("parts = %+v, want single attachment part", created.Parts)
+	}
+	if len(created.Attachments) != 1 || created.Attachments[0].ID != attachmentID {
+		t.Fatalf("attachments = %+v, want bound attachment %s", created.Attachments, attachmentID)
+	}
+
+	var boundMessageID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT channel_message_id::text
+		FROM attachment
+		WHERE id = $1`, attachmentID).Scan(&boundMessageID); err != nil {
+		t.Fatalf("load attachment binding: %v", err)
+	}
+	if boundMessageID != created.ID {
+		t.Fatalf("attachment bound to message %q, want %q", boundMessageID, created.ID)
+	}
+}
+
+func TestSendChannelMessageTextWithTwoAttachmentParts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "attachment-two-parts-"+uuid.NewString(), testUserID)
+	seedUnbound := func(filename string) string {
+		t.Helper()
+		var id string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO attachment (workspace_id, channel_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+			VALUES ($1, $2, 'member', $3, $4, $5, 'image/png', 10)
+			RETURNING id`, testWorkspaceID, channelID, testUserID, filename, "s3://"+filename).Scan(&id); err != nil {
+			t.Fatalf("seed attachment %s: %v", filename, err)
+		}
+		return id
+	}
+	firstID := seedUnbound("first.png")
+	secondID := seedUnbound("second.png")
+	content := "here are two files " + uuid.NewString()
+
+	rec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content": content,
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: content},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: firstID, Filename: "first.png"},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: secondID, Filename: "second.png"},
+		},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("text + attachments send: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created message: %v", err)
+	}
+	if created.Content != content {
+		t.Fatalf("content = %q, want %q", created.Content, content)
+	}
+	if len(created.Parts) != 3 ||
+		created.Parts[0].Type != protocol.MessagePartTypeText ||
+		created.Parts[1].Type != protocol.MessagePartTypeAttachment ||
+		created.Parts[1].AttachmentID != firstID ||
+		created.Parts[2].Type != protocol.MessagePartTypeAttachment ||
+		created.Parts[2].AttachmentID != secondID {
+		t.Fatalf("parts = %+v, want text then two attachment parts in order", created.Parts)
+	}
+	if len(created.Attachments) != 2 {
+		t.Fatalf("attachments = %+v, want 2 bound attachments", created.Attachments)
+	}
+	gotIDs := map[string]struct{}{}
+	for _, att := range created.Attachments {
+		gotIDs[att.ID] = struct{}{}
+	}
+	if _, ok := gotIDs[firstID]; !ok {
+		t.Fatalf("attachments missing first id %s: %+v", firstID, created.Attachments)
+	}
+	if _, ok := gotIDs[secondID]; !ok {
+		t.Fatalf("attachments missing second id %s: %+v", secondID, created.Attachments)
+	}
+
+	var bound int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM attachment
+		WHERE channel_message_id = $1 AND id = ANY($2::uuid[])`,
+		created.ID, []string{firstID, secondID}).Scan(&bound); err != nil {
+		t.Fatalf("count bound attachments: %v", err)
+	}
+	if bound != 2 {
+		t.Fatalf("bound attachment rows = %d, want 2", bound)
 	}
 }
 
@@ -3991,23 +4206,43 @@ func TestChannelActiveTasksSurfacesInboxTerminalOutcomes(t *testing.T) {
 
 	noReplyRoot := dispatchThreadMentionForTest(t, channelID, agentID, "active-terminal-no-reply-"+uuid.NewString())
 	noReplyEventID := latestChannelAgentInboxEventForRootForTest(t, noReplyRoot.ID, agentID)
-	noReplyDeliveryID := setAgentInboxTerminalOutcomeForTest(t, noReplyEventID, "no_reply", false)
 
 	req := withURLParam(newRequest(http.MethodGet, "/api/channels/"+channelID+"/active-tasks", nil), "channelId", channelID)
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
 	rec := httptest.NewRecorder()
 	testHandler.ListChannelActiveTasks(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("list active terminal tasks: status=%d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("list active inbox tasks: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	var resp ChannelActiveTasksResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode active inbox tasks: %v", err)
+	}
+	if len(resp.Tasks) != 1 {
+		t.Fatalf("active inbox tasks = %+v, want one queued inbox row", resp.Tasks)
+	}
+	got := resp.Tasks[0]
+	if got.AgentID != agentID || got.AgentName == "" || got.TaskID != noReplyEventID || got.Status != "queued" {
+		t.Fatalf("active inbox task identity = %+v, want agent/queued/inbox event id", got)
+	}
+	if got.Outcome != nil || got.InboxEventID == nil || *got.InboxEventID != noReplyEventID || got.SourceMessageID == nil || *got.SourceMessageID == noReplyRoot.ID {
+		t.Fatalf("active inbox metadata = %+v, want inbox/source ids without terminal outcome", got)
+	}
+
+	noReplyDeliveryID := setAgentInboxTerminalOutcomeForTest(t, noReplyEventID, "no_reply", false)
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelActiveTasks(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list active terminal tasks: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	resp = ChannelActiveTasksResponse{}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode active terminal tasks: %v", err)
 	}
 	if len(resp.Tasks) != 1 {
 		t.Fatalf("active terminal tasks = %+v, want one no_reply row", resp.Tasks)
 	}
-	got := resp.Tasks[0]
+	got = resp.Tasks[0]
 	if got.AgentID != agentID || got.AgentName == "" || got.TaskID != noReplyEventID || got.Status != "no_reply" {
 		t.Fatalf("active terminal task identity = %+v, want agent/no_reply/inbox event id", got)
 	}

@@ -221,13 +221,25 @@ function dedupFiles(files: FileList): File[] {
   });
 }
 
+/** Chat composers use "external" so paste/drop/paperclip never insert
+ *  image/fileCard into the Tiptap doc — files go to a React tray instead. */
+export type MediaMode = "inline" | "external";
+
+export interface FileUploadExtensionOptions {
+  mediaModeRef?: React.RefObject<MediaMode>;
+  onExternalFilesRef?: React.RefObject<((files: File[]) => void) | undefined>;
+}
+
 export function createFileUploadExtension(
   onUploadFileRef: React.RefObject<((file: File) => Promise<UploadResult | null>) | undefined>,
+  options?: FileUploadExtensionOptions,
 ) {
   return Extension.create({
     name: "fileUpload",
     addProseMirrorPlugins() {
       const { editor } = this;
+      const mediaModeRef = options?.mediaModeRef;
+      const onExternalFilesRef = options?.onExternalFilesRef;
 
       const handleFiles = async (files: FileList) => {
         const handler = onUploadFileRef.current;
@@ -238,6 +250,14 @@ export function createFileUploadExtension(
         return true;
       };
 
+      /** External (chat tray) path: hand files to React, never insert nodes. */
+      const handleExternal = (files: FileList): boolean => {
+        const unique = dedupFiles(files);
+        if (unique.length === 0) return false;
+        onExternalFilesRef?.current?.(unique);
+        return true;
+      };
+
       return [
         new Plugin({
           key: new PluginKey("fileUpload"),
@@ -245,6 +265,9 @@ export function createFileUploadExtension(
             handlePaste(_view, event) {
               const files = event.clipboardData?.files;
               if (!files?.length) return false;
+              if ((mediaModeRef?.current ?? "inline") === "external") {
+                return handleExternal(files);
+              }
               if (!onUploadFileRef.current) return false;
               handleFiles(files);
               return true;
@@ -253,6 +276,9 @@ export function createFileUploadExtension(
               const dragEvent = event as DragEvent;
               const files = dragEvent.dataTransfer?.files;
               if (!files?.length) return false;
+              if ((mediaModeRef?.current ?? "inline") === "external") {
+                return handleExternal(files);
+              }
               const handler = onUploadFileRef.current;
               if (!handler) return false;
               // Resolve drop position from mouse coordinates.

@@ -168,7 +168,14 @@
     "stop_failed": "停止 Agent 任务失败",
     "processing_single": "{{name}} 正在准备回复...",
     "processing_pair": "{{a}}、{{b}} 正在准备回复...",
-    "processing_overflow": "{{a}}、{{b}} 等 {{count}} 位正在准备回复..."
+    "processing_overflow": "{{a}}、{{b}} 等 {{count}} 位正在准备回复...",
+    "no_reply": "已收到 · 无需回复",
+    "failed": "回复失败",
+    "retry": "重试",
+    "retry_named": "重试 {{name}}",
+    "retry_aria": "重试 {{name}} 的回复",
+    "retry_success": "正在重试 {{name}}",
+    "retry_failed": "重试失败"
   },
   "composer": {
     "placeholder": "描述你需要什么帮助...  @ 智能体名称会触发它回复。",
@@ -179,7 +186,11 @@
     "issue_ref_aria": "引用 Issue",
     "project_label": "项目",
     "project_none": "无项目",
-    "project_tooltip": "设置该频道对应的项目"
+    "project_tooltip": "设置该频道对应的项目",
+    "tray_remove_aria": "移除 {{filename}}",
+    "tray_retry_aria": "重试上传 {{filename}}",
+    "tray_uploading": "上传中",
+    "tray_upload_failed": "上传失败"
   },
   "message": {
     "add_reaction": "添加表情回应",
@@ -192,6 +203,7 @@
     "sticker_loading": "正在加载表情包",
     "sticker_failed": "表情包加载失败",
     "sticker_unavailable": "表情包暂不可用",
+    "attachment_unavailable": "附件不可用",
     "agent_badge": "Agent",
     "radar_badge": "主动发现",
     "feishu_badge": "飞书",

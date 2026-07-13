@@ -27,6 +27,65 @@ function isImageAttachment(attachment: Attachment): boolean {
   return attachment.content_type?.startsWith("image/") ?? false;
 }
 
+function isImageContentType(contentType: string | undefined): boolean {
+  return contentType?.startsWith("image/") ?? false;
+}
+
+/**
+ * Build a quote/list summary for attachment-only (or attachment-heavy) messages.
+ * Prefers attachment *parts* order + hydration; falls back to `attachments[]`
+ * for historical rows that never got attachment parts.
+ */
+function attachmentQuoteSummary(
+  message: Pick<QuoteMessage, "parts" | "attachments">,
+  labels: {
+    attachment: string;
+    attachments: (count: number) => string;
+    image: string;
+    images: (count: number) => string;
+  },
+): string | null {
+  const byId = new Map((message.attachments ?? []).map((a) => [a.id, a]));
+  const attachmentParts = (message.parts ?? []).filter(
+    (part): part is Extract<NonNullable<QuoteMessage["parts"]>[number], { type: "attachment" }> =>
+      part.type === "attachment" && !!part.attachment_id,
+  );
+
+  type SummaryItem = {
+    isImage: boolean;
+    filename?: string;
+  };
+
+  let items: SummaryItem[] = [];
+  if (attachmentParts.length > 0) {
+    items = attachmentParts.map((part) => {
+      const record = byId.get(part.attachment_id);
+      return {
+        isImage: isImageContentType(record?.content_type ?? part.content_type),
+        // Only surface filename when hydrated (PRD: no leak on denied/missing).
+        filename: record?.filename,
+      };
+    });
+  } else if ((message.attachments?.length ?? 0) > 0) {
+    items = (message.attachments ?? []).map((attachment) => ({
+      isImage: isImageAttachment(attachment),
+      filename: attachment.filename,
+    }));
+  }
+
+  if (items.length === 0) return null;
+
+  if (items.length === 1) {
+    const [item] = items;
+    if (!item) return null;
+    const label = item.isImage ? labels.image : labels.attachment;
+    return item.filename ? `${label}: ${item.filename}` : label;
+  }
+
+  const allImages = items.every((item) => item.isImage);
+  return allImages ? labels.images(items.length) : labels.attachments(items.length);
+}
+
 function quoteSummary(
   message: Pick<QuoteMessage, "content" | "parts" | "attachments">,
   labels: {
@@ -44,20 +103,9 @@ function quoteSummary(
   );
   if (text) return text;
 
-  const attachments = message.attachments ?? [];
-  if (attachments.length === 1) {
-    const [attachment] = attachments;
-    if (attachment) {
-      const label = isImageAttachment(attachment) ? labels.image : labels.attachment;
-      return attachment.filename ? `${label}: ${attachment.filename}` : label;
-    }
-  }
-  if (attachments.length > 1) {
-    const allImages = attachments.every(isImageAttachment);
-    return allImages ? labels.images(attachments.length) : labels.attachments(attachments.length);
-  }
-
-  return labels.empty;
+  return (
+    attachmentQuoteSummary(message, labels) ?? labels.empty
+  );
 }
 
 function quoteTypeLabel(type: QuoteMessage["type"], labels: {

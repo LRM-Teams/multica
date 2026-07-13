@@ -22,6 +22,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  RotateCcw,
   Search,
   Share2,
   Smartphone,
@@ -69,7 +70,7 @@ import { useAuthStore } from "@multica/core/auth";
 import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
 import { api } from "@multica/core/api";
-import { useFileUpload, type UploadResult } from "@multica/core/hooks/use-file-upload";
+import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
@@ -159,6 +160,10 @@ import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
+import {
+  buildChatMessageParts,
+  useComposerPendingAttachments,
+} from "../hooks/use-composer-pending-attachments";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import { isChannelNameTakenError } from "../channel-create-error";
@@ -167,6 +172,7 @@ import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
+import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import {
@@ -372,12 +378,16 @@ export function ConversationActivityStrip({
   typingActors = EMPTY_TYPING_ACTORS,
   tasks = EMPTY_ACTIVE_TASKS,
   stoppingTaskId = null,
+  retryingTaskId = null,
   onStopTask,
+  onRetryTask,
 }: {
   typingActors?: TypingActor[];
   tasks?: ChannelActiveTask[];
   stoppingTaskId?: string | null;
+  retryingTaskId?: string | null;
   onStopTask?: (task: ChannelActiveTask) => void;
+  onRetryTask?: (task: ChannelActiveTask) => void;
 }) {
   const { t } = useT("channels");
   const typingNames = useMemo(
@@ -387,6 +397,9 @@ export function ConversationActivityStrip({
     }),
     [typingActors],
   );
+  // Split the poll result: active rows drive the "preparing…"/Stop UI; terminal
+  // rows (new-chain outcome, #388) drive the #277 no_reply/failed+Retry states.
+  // `replied` is never returned by the server (the real reply is the evidence).
   const stoppableTasks = useMemo(() => {
     const next: ChannelActiveTask[] = [];
     for (const task of tasks) {
@@ -395,6 +408,14 @@ export function ConversationActivityStrip({
     }
     return next;
   }, [tasks]);
+  const terminalTasks = useMemo(
+    () => tasks.filter((task) => task.outcome === "no_reply" || task.outcome === "failed"),
+    [tasks],
+  );
+  const retryableCount = useMemo(
+    () => terminalTasks.filter((task) => task.outcome === "failed" && task.retryable).length,
+    [terminalTasks],
+  );
   const agentNames = useMemo(() => {
     const seen = new Set<string>();
     const unique: string[] = [];
@@ -428,7 +449,7 @@ export function ConversationActivityStrip({
               count: agentNames.length,
             });
 
-  if (!typingLabel && !agentLabel) return null;
+  if (!typingLabel && !agentLabel && terminalTasks.length === 0) return null;
 
   return (
     <div
@@ -454,6 +475,46 @@ export function ConversationActivityStrip({
             <span className="truncate">{agentLabel}</span>
           </span>
         ) : null}
+        {(typingLabel || agentLabel) && terminalTasks.length > 0 ? (
+          <span className="shrink-0 text-muted-foreground/50" aria-hidden="true">
+            ·
+          </span>
+        ) : null}
+        {terminalTasks.map((task) => {
+          const key = task.inbox_event_id ?? task.task_id;
+          const failed = task.outcome === "failed";
+          const canRetry = failed && task.retryable === true && !!task.inbox_event_id;
+          return (
+            <span key={key} className="flex min-w-0 shrink-0 items-center gap-1.5">
+              <span
+                className={cn(
+                  "size-1.5 shrink-0 rounded-full",
+                  failed ? "bg-amber-500" : "bg-muted-foreground/40",
+                )}
+                aria-hidden="true"
+              />
+              <span className={cn("truncate", failed && "text-amber-600 dark:text-amber-500")}>
+                {failed ? t(($) => $.agent_status.failed) : t(($) => $.agent_status.no_reply)}
+              </span>
+              {canRetry && onRetryTask ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 gap-1 px-2 text-[11px] text-amber-600 hover:text-amber-700 dark:text-amber-500 dark:hover:text-amber-400"
+                  disabled={retryingTaskId === key}
+                  onClick={() => onRetryTask(task)}
+                  aria-label={t(($) => $.agent_status.retry_aria, { name: task.agent_name })}
+                >
+                  <RotateCcw className="size-2.5" />
+                  {retryableCount === 1
+                    ? t(($) => $.agent_status.retry)
+                    : t(($) => $.agent_status.retry_named, { name: task.agent_name })}
+                </Button>
+              ) : null}
+            </span>
+          );
+        })}
       </div>
       {onStopTask && stoppableTasks.length > 0 ? (
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto">
@@ -479,7 +540,7 @@ export function ConversationActivityStrip({
 }
 
 function isTerminalChannelActiveTask(task: ChannelActiveTask) {
-  return typeof (task as { outcome?: unknown }).outcome === "string";
+  return typeof task.outcome === "string";
 }
 
 function TypingDots() {
@@ -764,6 +825,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
   const [stoppingChannelTaskId, setStoppingChannelTaskId] = useState<string | null>(null);
+  const [retryingChannelTaskId, setRetryingChannelTaskId] = useState<string | null>(null);
   const setChannelProject = useSetChannelProject(wsId, active?.id ?? "");
   const createChannel = useCreateChannel();
   const deleteChannel = useDeleteChannel();
@@ -808,13 +870,27 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const removeMember = useRemoveChannelMember();
   const createOrFindDm = useCreateOrFindDM();
   const { uploadWithToast } = useFileUpload(api);
-  // Maps the URL the editor wrote into the markdown body → attachment row id,
-  // so on send we bind only attachments still referenced in the content.
-  // Mirrors the chat-input flow. Cleared after every successful send.
-  const uploadMapRef = useRef<Map<string, string>>(new Map());
-  const threadUploadMapRef = useRef<Map<string, string>>(new Map());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const threadFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const uploadForActiveChannel = useCallback(
+    async (file: File) => {
+      if (!active) return null;
+      return uploadWithToast(file, { channelId: active.id });
+    },
+    [active, uploadWithToast],
+  );
+
+  const channelPending = useComposerPendingAttachments({
+    upload: uploadForActiveChannel,
+    resetKey: active?.id ?? null,
+  });
+  const threadPending = useComposerPendingAttachments({
+    upload: uploadForActiveChannel,
+    resetKey: openThreadRoot?.id
+      ? `${active?.id ?? ""}:${openThreadRoot.id}`
+      : (active?.id ?? null),
+  });
 
   const memberIds = useMemo(
     () => new Set(channelMembers.filter((m) => m.member_type === "user").map((m) => m.member_id)),
@@ -1281,6 +1357,23 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     }
   }, [active?.id, qc, t, wsId]);
 
+  const handleRetryChannelTask = useCallback(async (task: ChannelActiveTask) => {
+    // Retry re-dispatches the failed reply via a fresh inbox event (#388/#277).
+    // Keyed by `inbox_event_id` (the new-chain id), not `task_id`.
+    if (!active?.id || !task.inbox_event_id) return;
+    const key = task.inbox_event_id;
+    setRetryingChannelTaskId(key);
+    try {
+      await api.retryChannelInboxEvent(active.id, key);
+      toast.success(t(($) => $.agent_status.retry_success, { name: task.agent_name }));
+      qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
+    } catch {
+      toast.error(t(($) => $.agent_status.retry_failed));
+    } finally {
+      setRetryingChannelTaskId((current) => (current === key ? null : current));
+    }
+  }, [active?.id, qc, t]);
+
   const handleToggleChannelPin = (channel: Channel) => {
     setChannelPin.mutate(
       { channelId: channel.id, pinned: !channel.pinned_at },
@@ -1361,63 +1454,27 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     setThreadDraftEmpty(!value.trim());
   };
 
-  // Upload a file against the active channel and remember its URL → id so the
-  // attachment binds to the message on send. The editor inserts the markdown
-  // link itself; we only track the mapping.
-  const handleUpload = useCallback(
-    async (file: File): Promise<UploadResult | null> => {
-      if (!active) return null;
-      const result = await uploadWithToast(file, { channelId: active.id });
-      if (result) {
-        uploadMapRef.current.set(result.markdownLink || result.link, result.id);
-      }
-      return result;
-    },
-    [active, uploadWithToast],
-  );
-
   const handlePickFiles = (files: FileList | null) => {
-    if (!files) return;
-    for (const file of Array.from(files)) {
-      editorRef.current?.uploadFile(file);
-    }
+    if (!files?.length) return;
+    channelPending.addFiles(Array.from(files));
   };
 
-  const handleThreadUpload = useCallback(
-    async (file: File): Promise<UploadResult | null> => {
-      if (!active) return null;
-      const result = await uploadWithToast(file, { channelId: active.id });
-      if (result) {
-        threadUploadMapRef.current.set(result.markdownLink || result.link, result.id);
-      }
-      return result;
-    },
-    [active, uploadWithToast],
-  );
-
   const handlePickThreadFiles = (files: FileList | null) => {
-    if (!files) return;
-    for (const file of Array.from(files)) {
-      threadEditorRef.current?.uploadFile(file);
-    }
+    if (!files?.length) return;
+    threadPending.addFiles(Array.from(files));
   };
 
   const handleSend = () => {
-    const content = editorRef.current?.getMarkdown()?.trim();
-    // Empty-content early-return runs BEFORE the in-flight guard: after a send
-    // succeeds, onSuccess clears the editor and onSettled releases the guard —
+    // Empty-payload early-return runs BEFORE the in-flight guard: after a send
+    // succeeds, onSuccess clears the editor/tray and onSettled releases the guard —
     // a still-held Enter in that gap grabs empty content and stops here.
-    if (!content || !active) return;
-    // Block while an upload is still in flight — otherwise the attachment id
-    // isn't in uploadMapRef yet and the file would only bind to the channel,
-    // not the message.
-    if (editorRef.current?.hasActiveUploads()) return;
-    // Only bind attachments still referenced in the body — edits that removed
-    // the markdown link also drop the binding.
-    const attachmentIds: string[] = [];
-    for (const [url, id] of uploadMapRef.current) {
-      if (content.includes(url)) attachmentIds.push(id);
-    }
+    if (!active) return;
+    // Block while tray uploads are in flight so we never send without ready ids.
+    if (channelPending.hasUploading) return;
+    const content = editorRef.current?.getMarkdown()?.trim() ?? "";
+    const parts = buildChatMessageParts(content, channelPending.readyAttachmentParts);
+    if (parts.length === 0) return;
+    const attachmentIds = channelPending.readyAttachmentParts.map((p) => p.attachment_id);
     // Send lock (N held/auto-repeat Enter → 1 request) + payload-bound
     // client_message_id + the 3-way outcome, all owned by useComposerSend.
     const dispatched = channelSend.send({
@@ -1425,14 +1482,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       buildVars: (clientMessageId) => ({
         channelId: active.id,
         content,
-        attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        parts,
         quoteMessageId: quoteTarget?.id ?? undefined,
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
       onCommitted: () => {
         editorRef.current?.clearContent();
-        uploadMapRef.current.clear();
+        channelPending.clear();
         setQuoteTarget(null);
         if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
       },
@@ -1448,13 +1505,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   };
 
   const handleThreadSend = () => {
-    const content = threadEditorRef.current?.getMarkdown()?.trim();
-    if (!content || !active || !threadRoot) return;
-    if (threadEditorRef.current?.hasActiveUploads()) return;
-    const attachmentIds: string[] = [];
-    for (const [url, id] of threadUploadMapRef.current) {
-      if (content.includes(url)) attachmentIds.push(id);
-    }
+    if (!active || !threadRoot) return;
+    if (threadPending.hasUploading) return;
+    const content = threadEditorRef.current?.getMarkdown()?.trim() ?? "";
+    const parts = buildChatMessageParts(content, threadPending.readyAttachmentParts);
+    if (parts.length === 0) return;
+    const attachmentIds = threadPending.readyAttachmentParts.map((p) => p.attachment_id);
     threadSend.send({
       payloadKey: composePayloadKey(
         content,
@@ -1465,14 +1521,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         channelId: active.id,
         messageId: threadRoot.id,
         content,
-        attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
+        parts,
         quoteMessageId: threadQuoteTarget?.id ?? undefined,
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
       onCommitted: () => {
         threadEditorRef.current?.clearContent();
-        threadUploadMapRef.current.clear();
+        threadPending.clear();
         setThreadQuoteTarget(null);
         setThreadDraftEmpty(true);
       },
@@ -2142,15 +2198,27 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             placeholder={t(($) => $.thread.composer_placeholder)}
             onUpdate={handleThreadEditorUpdate}
             onSubmit={handleThreadSend}
-            onUploadFile={handleThreadUpload}
+            mediaMode="external"
+            onExternalFiles={threadPending.addFiles}
             submitOnEnter
             showBubbleMenu={false}
             mentionAllowedActorIds={channelMemberIds}
           />
         }
         onSend={handleThreadSend}
-        sendDisabled={threadDraftEmpty}
+        sendDisabled={
+          (threadDraftEmpty && threadPending.readyAttachmentParts.length === 0) ||
+          threadPending.hasUploading
+        }
         sending={sendThreadMessage.isPending}
+        // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer tray slot; identity is not memo-sensitive
+        composerTray={
+          <ComposerAttachmentTray
+            pending={threadPending.pending}
+            onRemove={threadPending.remove}
+            onRetry={threadPending.retry}
+          />
+        }
         composerLeadingActions={
           <>
             <input
@@ -2185,7 +2253,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           <ConversationActivityStrip
             tasks={activeTasks}
             stoppingTaskId={stoppingChannelTaskId}
+            retryingTaskId={retryingChannelTaskId}
             onStopTask={handleStopChannelTask}
+            onRetryTask={handleRetryChannelTask}
           />
         }
       />
@@ -2484,12 +2554,17 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     typingActors={activeTypingActors}
                     tasks={activeTasks}
                     stoppingTaskId={stoppingChannelTaskId}
+                    retryingTaskId={retryingChannelTaskId}
                     onStopTask={handleStopChannelTask}
+                    onRetryTask={handleRetryChannelTask}
                   />
                   <Composer
                     surface="channel"
                     sendLabel={t(($) => $.composer.send)}
-                    sendDisabled={activeDraftEmpty}
+                    sendDisabled={
+                      (activeDraftEmpty && channelPending.readyAttachmentParts.length === 0) ||
+                      channelPending.hasUploading
+                    }
                     sending={sendMessage.isPending}
                     onSend={handleSend}
                     isMobile={isMobile}
@@ -2500,6 +2575,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                         cancelLabel={t(($) => $.quote.cancel)}
                       />
                     ) : undefined}
+                    // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer tray slot; identity is not memo-sensitive
+                    tray={
+                      <ComposerAttachmentTray
+                        pending={channelPending.pending}
+                        onRemove={channelPending.remove}
+                        onRetry={channelPending.retry}
+                      />
+                    }
                     editor={
                       <ContentEditor
                         key={active.id}
@@ -2509,7 +2592,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                         onUpdate={handleEditorUpdate}
                         debounceMs={0}
                         onSubmit={handleSend}
-                        onUploadFile={handleUpload}
+                        mediaMode="external"
+                        onExternalFiles={channelPending.addFiles}
                         submitOnEnter
                         showBubbleMenu={false}
                         enableIssueReferences

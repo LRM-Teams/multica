@@ -382,3 +382,70 @@ describe("ContentEditor — in-session attachment tracking (MUL-3192)", () => {
     expect(providerProps.attachments?.[0]?.id).toBe("dedup-1");
   });
 });
+
+describe("ContentEditor — mediaMode external (chat tray)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    editorState.isFocused = false;
+    editorState.isDestroyed = false;
+    editorState.markdown = "";
+    editorRef.current = null;
+    editorOptions.current = null;
+    onCreateFired.value = false;
+    providerProps.attachments = undefined;
+  });
+
+  it("routes imperative uploadFile to onExternalFiles and does not insert", async () => {
+    const onExternalFiles = vi.fn();
+    const onUploadFile = vi.fn(async () =>
+      asUploadResult(makeAttachment("should-not-upload")),
+    );
+
+    let imperativeRef: { uploadFile: (file: File) => void } | null = null;
+    render(
+      <ContentEditor
+        mediaMode="external"
+        onExternalFiles={onExternalFiles}
+        onUploadFile={onUploadFile}
+        ref={(r) => {
+          imperativeRef = r;
+        }}
+      />,
+    );
+
+    const file = new File(["payload"], "shot.png", { type: "image/png" });
+    await act(async () => {
+      imperativeRef?.uploadFile(file);
+    });
+
+    expect(onExternalFiles).toHaveBeenCalledTimes(1);
+    expect(onExternalFiles).toHaveBeenCalledWith([file]);
+    expect(uploadAndInsertFileMock).not.toHaveBeenCalled();
+    expect(onUploadFile).not.toHaveBeenCalled();
+  });
+
+  it("inline mediaMode (default) still calls uploadAndInsertFile from uploadFile", async () => {
+    const onUploadFile = vi.fn(async () =>
+      asUploadResult(makeAttachment("inline-1")),
+    );
+    uploadAndInsertFileMock.mockResolvedValue(undefined);
+
+    let imperativeRef: { uploadFile: (file: File) => void } | null = null;
+    render(
+      <ContentEditor
+        onUploadFile={onUploadFile}
+        ref={(r) => {
+          imperativeRef = r;
+        }}
+      />,
+    );
+
+    const file = new File(["payload"], "shot.png", { type: "image/png" });
+    await act(async () => {
+      imperativeRef?.uploadFile(file);
+    });
+
+    expect(uploadAndInsertFileMock).toHaveBeenCalledTimes(1);
+    expect(uploadAndInsertFileMock.mock.calls[0]?.[1]).toBe(file);
+  });
+});

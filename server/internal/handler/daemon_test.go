@@ -20,6 +20,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -2120,6 +2121,95 @@ func TestStartTask_AutopilotRunOnlyTask_ResolvesWorkspace(t *testing.T) {
 	}
 }
 
+func TestRadarTaskLifecycle_ResolvesWorkspaceFromLinkedRun(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID, runtimeID, daemonID := createRuntimeGuardAgent(t, ctx)
+	run, task, err := testHandler.TaskService.EnqueueAgentRadarRun(ctx, service.EnqueueAgentRadarRunParams{
+		WorkspaceID:    parseUUID(testWorkspaceID),
+		AgentID:        parseUUID(agentID),
+		TriggerKind:    "scheduled",
+		TriggerRef:     "daemon-lifecycle-regression",
+		CooldownKey:    "daemon-lifecycle-regression",
+		ContextSummary: "daemon lifecycle regression",
+		ScheduledFor:   time.Now(),
+		Prompt:         "inspect workspace",
+	})
+	if err != nil {
+		t.Fatalf("enqueue Radar task: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_radar_run WHERE id = $1`, run.ID)
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, task.ID)
+	})
+	borrower := task
+	borrower.ID = parseUUID(uuid.NewString())
+	if got := testHandler.TaskService.ResolveTaskWorkspaceID(ctx, borrower); got != "" {
+		t.Fatalf("Radar context borrowed by another task resolved workspace %q", got)
+	}
+
+	claimed := claimTaskForRuntimeGuard(t, runtimeID, daemonID)
+	taskID := uuidToString(task.ID)
+	if claimed.ID != taskID {
+		t.Fatalf("claimed task = %q, want Radar task %q", claimed.ID, taskID)
+	}
+
+	w := httptest.NewRecorder()
+	req := withURLParam(
+		newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/start", nil, uuid.NewString(), "cross-workspace-daemon"),
+		"taskId", taskID,
+	)
+	testHandler.StartTask(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("StartTask with cross-workspace token: expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = withURLParam(
+		newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/start", nil, testWorkspaceID, daemonID),
+		"taskId", taskID,
+	)
+	testHandler.StartTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("StartTask for Radar task: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var taskStatus, runStatus string
+	if err := testPool.QueryRow(ctx, `
+		SELECT task.status, radar.status
+		FROM agent_task_queue task
+		JOIN agent_radar_run radar ON radar.task_id = task.id
+		WHERE task.id = $1
+	`, task.ID).Scan(&taskStatus, &runStatus); err != nil {
+		t.Fatalf("read started Radar lifecycle: %v", err)
+	}
+	if taskStatus != "running" || runStatus != "running" {
+		t.Fatalf("started Radar lifecycle = task:%q run:%q, want running/running", taskStatus, runStatus)
+	}
+
+	w = httptest.NewRecorder()
+	req = withURLParam(
+		newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/fail", TaskFailRequest{
+			Error:         "Radar regression failure",
+			FailureReason: "agent_error",
+		}, testWorkspaceID, daemonID),
+		"taskId", taskID,
+	)
+	testHandler.FailTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("FailTask for Radar task: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_radar_run WHERE id = $1`, run.ID).Scan(&runStatus); err != nil {
+		t.Fatalf("read failed Radar run: %v", err)
+	}
+	if runStatus != "failed" {
+		t.Fatalf("Radar run after FailTask = %q, want failed", runStatus)
+	}
+}
+
 // ClaimTaskByRuntime must surface the issue's project github_repo resources
 // as resp.Repos and hide the workspace-bound repos. Without this the agent
 // would see two repo lists in the meta-skill and have no signal about which
@@ -3740,6 +3830,7 @@ func TestCompleteTask_AssignmentTriggered_DoesNotSuppressTrivialDoneOutput(t *te
 }
 
 type claimRuntimeGuardTask struct {
+	ID                       string   `json:"id"`
 	PriorSessionID           string   `json:"prior_session_id"`
 	PriorWorkDir             string   `json:"prior_work_dir"`
 	ChatMessage              string   `json:"chat_message"`

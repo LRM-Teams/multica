@@ -89,9 +89,21 @@ describe("ApiClient", () => {
 
     const client = new ApiClient("https://api.example.test");
 
-    await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-1");
-    await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-2", false);
-    await client.sendChannelThreadMessage("ch-1", "root-1", "hello", undefined, undefined, undefined, "client-3", true, "quote-1");
+    await client.sendChannelThreadMessage("ch-1", "root-1", {
+      content: "hello",
+      clientMessageId: "client-1",
+    });
+    await client.sendChannelThreadMessage("ch-1", "root-1", {
+      content: "hello",
+      clientMessageId: "client-2",
+      showInChannel: false,
+    });
+    await client.sendChannelThreadMessage("ch-1", "root-1", {
+      content: "hello",
+      clientMessageId: "client-3",
+      showInChannel: true,
+      quoteMessageId: "quote-1",
+    });
 
     const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
     expect(bodies[0]).not.toHaveProperty("show_in_channel");
@@ -115,8 +127,16 @@ describe("ApiClient", () => {
 
     const client = new ApiClient("https://api.example.test");
 
-    await client.sendChannelMessage("ch-1", "hello", undefined, undefined, undefined, "client-1", "quote-1");
-    await client.sendChannelThreadMessage("ch-1", "root-1", "reply", undefined, undefined, undefined, "client-2", undefined, "quote-2");
+    await client.sendChannelMessage("ch-1", {
+      content: "hello",
+      clientMessageId: "client-1",
+      quoteMessageId: "quote-1",
+    });
+    await client.sendChannelThreadMessage("ch-1", "root-1", {
+      content: "reply",
+      clientMessageId: "client-2",
+      quoteMessageId: "quote-2",
+    });
 
     const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
     expect(bodies[0]).toMatchObject({
@@ -131,6 +151,52 @@ describe("ApiClient", () => {
     });
     expect(bodies[0]).not.toHaveProperty("reply_to_message_id");
     expect(bodies[1]).not.toHaveProperty("reply_to_message_id");
+  });
+
+  it("sendChannelMessage serialises attachment parts and omits attachment_ids", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ id: "m-1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+    const parts = [
+      { type: "text" as const, text: "see files" },
+      {
+        type: "attachment" as const,
+        attachment_id: "att-1",
+        filename: "a.png",
+        content_type: "image/png",
+        size_bytes: 12,
+      },
+      { type: "attachment" as const, attachment_id: "att-2" },
+    ];
+
+    await client.sendChannelMessage("ch-1", {
+      content: "see files",
+      parts,
+      clientMessageId: "client-att-1",
+    });
+    await client.sendChannelThreadMessage("ch-1", "root-1", {
+      content: "",
+      parts: [{ type: "attachment", attachment_id: "att-only" }],
+    });
+
+    const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+    expect(bodies[0]).toEqual({
+      content: "see files",
+      parts,
+      client_message_id: "client-att-1",
+    });
+    expect(bodies[0]).not.toHaveProperty("attachment_ids");
+    expect(bodies[1]).toEqual({
+      content: "",
+      parts: [{ type: "attachment", attachment_id: "att-only" }],
+    });
+    expect(bodies[1]).not.toHaveProperty("attachment_ids");
   });
 
   it("uses the expected HTTP contract for autopilot endpoints", async () => {

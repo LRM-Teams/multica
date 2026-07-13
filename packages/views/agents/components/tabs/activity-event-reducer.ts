@@ -35,7 +35,14 @@ export function upsertActivityEvents(
   incoming: ActivityEvent | readonly ActivityEvent[],
 ): ActivityEvent[] {
   const incomingList = Array.isArray(incoming) ? incoming : [incoming];
-  if (incomingList.length === 0) return current.slice();
+  // Still normalize order on the empty-incoming path — this function's contract
+  // is "chronologically-ordered output", and `current` may arrive in the REST
+  // wire order (DESC). Returning it unsorted was the #500 regression: the hook
+  // computes `events = upsertActivityEvents(data, liveEvents)`, so before any
+  // live event arrives (`liveEvents === []`) the timeline rendered raw-DESC
+  // (newest on top), the compact card `slice(-5)` took the OLDEST five, and
+  // `projectLatestActivity` (last element) picked the OLDEST as "latest".
+  if (incomingList.length === 0) return current.slice().sort(compareEvents);
 
   const byId = new Map<string, ActivityEvent>();
   for (const event of current) byId.set(event.id, event);

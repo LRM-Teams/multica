@@ -29,7 +29,8 @@ pointer.
 | --- | --- |
 | Public `GET /api/stickers` (catalog) and `GET /api/stickers/{id}` (image) | `server/cmd/server/router.go`; `server/internal/handler/sticker.go` (`ListStickers`, `GetStickerAsset`) |
 | Unknown id 404s with no filesystem read (no path traversal) | `server/internal/stickers/stickers.go` (`Asset`) |
-| Agent transport send accepts structured `parts[]` including stickers | `server/internal/handler/agent_transport.go` (`AgentTransportSendMessage`), `server/cmd/multica/cmd_message.go` (`runAgentMessageSend`, `--sticker`) |
+| Agent transport send accepts structured `parts[]` including stickers and attachments | `server/internal/handler/agent_transport.go` (`AgentTransportSendMessage`), `server/cmd/multica/cmd_message.go` (`runAgentMessageSend`, `buildAgentSendParts`, `--sticker`, `--attachment-id`) |
+| CLI `--attachment-id` becomes `{type:attachment, attachment_id}` parts before POST; chat send does not use sidecar `attachment_ids` or markdown image embeds | `server/cmd/multica/cmd_message.go` (`buildAgentSendParts`, `runAgentMessageSend`); server binds from attachment parts only in `agent_transport.go` / `channel.go` (`attachmentIDsFromParts`) |
 | Formal P0 messages reference stickers through the `send` action body with structured `parts[]` and `sticker_id`; legacy `message_send` remains accepted at the server boundary | `server/pkg/protocol/messages.go` (`ChatOutputActionMessageSend`, `MessagePart`), `server/internal/messageparts/messageparts.go`, `server/internal/handler/daemon.go` (`normalizeTaskCompleteOutput`) |
 | Legacy markdown still contains token parsing until the FE renderer sweep removes it | `packages/views/common/markdown.tsx` (legacy sticker token handling) |
 

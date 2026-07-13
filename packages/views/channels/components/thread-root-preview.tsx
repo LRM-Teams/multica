@@ -8,11 +8,9 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { agentColor } from "../../common/agent-color";
 import { initialsOf } from "../../common/initials";
-import { AttachmentList } from "../../issues/components/comment-card";
 import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
-import { resolveMessageParts } from "./message-parts-preview";
 import { MessageBody } from "./message-body";
 
 export function ThreadRootPreview({
@@ -75,9 +73,6 @@ export function ThreadRootPreview({
       avatar
     );
   const nameNode = <span className="font-medium text-foreground">{displayName}</span>;
-  // Same resolution the body renderer uses, so the attachment list de-dupes
-  // against the exact content the compact body renders.
-  const effectiveParts = resolveMessageParts(message.content, message.parts);
 
   return (
     <div className="shrink-0 border-b border-border/40 bg-background px-5 py-3">
@@ -116,13 +111,6 @@ export function ThreadRootPreview({
               attachments={message.attachments}
               compact
             />
-            <div className="max-h-16 overflow-hidden opacity-80">
-              <AttachmentList
-                attachments={message.attachments}
-                content={effectiveParts ? "" : message.content}
-                className="mt-1.5"
-              />
-            </div>
           </div>
           {onViewParent && (
             <button

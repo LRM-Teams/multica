@@ -271,6 +271,16 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 		if msg.Type == "tool_use" {
 			rawTool := strings.TrimSpace(msg.Tool)
 			canonicalTool, known := taskMessageCanonicalToolName(rawTool, msg.Input)
+			if command := redactedCommandFromInput(msg.Input); command != "" {
+				details["command"] = command
+			}
+			if cli, ok := resolveRaftCLIInvocation(canonicalTool, msg.Input); ok {
+				canonicalTool = cli.Tool
+				known = true
+				for key, value := range cli.Details {
+					details[key] = value
+				}
+			}
 			if !known {
 				if rawTool != "" {
 					details["unmapped_tool_name"] = rawTool
@@ -292,10 +302,13 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 			if canonicalTool != rawTool {
 				details["raw_tool"] = rawTool
 			}
+			agentActivityApplyToolInputSummary(details, canonicalTool, msg.Input, false)
 		}
-		if target, summaryKind := agentInboxActivityToolTarget(msg); target != "" {
-			details["tool_target"] = target
-			details["summary_kind"] = summaryKind
+		if msg.Type == "tool_use" {
+			if target, summaryKind := agentInboxActivityToolTarget(msg); target != "" && details["tool_target"] == nil {
+				details["tool_target"] = target
+				details["summary_kind"] = summaryKind
+			}
 		}
 		h.recordAgentActivityEvent(r.Context(), h.DB,
 			event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
@@ -713,6 +726,13 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 		SeqTo:          event.SeqTo,
 		RequiresWake:   event.RequiresWake,
 	}
+	if !h.populateAgentInboxChatContext(ctx, event, &resp) {
+		slog.Warn("agent inbox claim: exact prompt missing",
+			"inbox_event_id", uuidToString(event.ID),
+			"chat_session_id", uuidToString(event.ChatSessionID),
+		)
+		return nil
+	}
 	if agent, err := h.Queries.GetAgent(ctx, event.AgentID); err == nil {
 		skills := h.TaskService.LoadAgentSkillsForInbox(ctx, event.AgentID, event.ID)
 		skills = append(skills, h.TaskService.BuiltinSkills()...)
@@ -778,7 +798,6 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			resp.AuthToken = tokenStr
 		}
 	}
-	h.populateAgentInboxChatContext(ctx, event, &resp)
 	if ws, err := h.Queries.GetWorkspace(ctx, event.WorkspaceID); err == nil && ws.Context.Valid {
 		resp.WorkspaceContext = ws.Context.String
 	}
@@ -1071,13 +1090,13 @@ func agentVisibleOutputActivityText(content string, parts []protocol.MessagePart
 	return "Sent a message"
 }
 
-func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.AgentInboxEvent, resp *AgentTaskResponse) {
+func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.AgentInboxEvent, resp *AgentTaskResponse) bool {
 	if !event.ChatSessionID.Valid {
-		return
+		return false
 	}
 	cs, err := h.Queries.GetChatSession(ctx, event.ChatSessionID)
 	if err != nil {
-		return
+		return false
 	}
 	resp.WorkspaceID = uuidToString(cs.WorkspaceID)
 	resp.ChatSessionID = uuidToString(cs.ID)
@@ -1114,13 +1133,18 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 			}
 		}
 	}
-	if cs.SessionID.Valid && cs.RuntimeID.Valid {
-		resp.PriorSessionID = cs.SessionID.String
+	runtimeMatches := func(runtimeID pgtype.UUID) bool {
+		return runtimeID.Valid && resp.RuntimeID != "" && uuidToString(runtimeID) == resp.RuntimeID
 	}
-	if cs.WorkDir.Valid {
-		resp.PriorWorkDir = cs.WorkDir.String
+	if runtimeMatches(cs.RuntimeID) {
+		if cs.SessionID.Valid {
+			resp.PriorSessionID = cs.SessionID.String
+		}
+		if cs.WorkDir.Valid {
+			resp.PriorWorkDir = cs.WorkDir.String
+		}
 	}
-	if prior, err := h.Queries.GetLastChatTaskSession(ctx, cs.ID); err == nil && prior.SessionID.Valid {
+	if prior, err := h.Queries.GetLastChatTaskSession(ctx, cs.ID); err == nil && prior.SessionID.Valid && runtimeMatches(prior.RuntimeID) {
 		if resp.PriorSessionID == "" {
 			resp.PriorSessionID = prior.SessionID.String
 		}
@@ -1128,13 +1152,40 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 			resp.PriorWorkDir = prior.WorkDir.String
 		}
 	}
+	seenAttachmentIDs := make(map[string]struct{}, len(resp.ChatMessageAttachments))
+	for _, attachment := range resp.ChatMessageAttachments {
+		seenAttachmentIDs[attachment.ID] = struct{}{}
+	}
+	appendAttachments := func(attachments []db.Attachment) {
+		for _, attachment := range attachments {
+			id := uuidToString(attachment.ID)
+			if _, exists := seenAttachmentIDs[id]; exists {
+				continue
+			}
+			seenAttachmentIDs[id] = struct{}{}
+			resp.ChatMessageAttachments = append(resp.ChatMessageAttachments, ChatAttachmentMeta{
+				ID:          id,
+				Filename:    attachment.Filename,
+				ContentType: attachment.ContentType,
+			})
+		}
+	}
 	if event.SourceMessageID.Valid {
 		h.populateAgentInboxInitiator(ctx, event.SourceMessageID, resp)
+		if atts, attErr := h.Queries.ListAttachmentsByChannelMessageIDs(ctx, db.ListAttachmentsByChannelMessageIDsParams{
+			Column1:     []pgtype.UUID{event.SourceMessageID},
+			WorkspaceID: cs.WorkspaceID,
+		}); attErr == nil {
+			appendAttachments(atts)
+		}
 	}
 	if msgs, err := h.Queries.ListChatMessages(ctx, cs.ID); err == nil && len(msgs) > 0 {
-		unanswered := trailingUserMessages(msgs)
-		parts := make([]string, 0, len(unanswered))
-		for _, m := range unanswered {
+		promptMessages := inboxPromptMessages(msgs, event.ID)
+		if len(promptMessages) == 0 {
+			return false
+		}
+		parts := make([]string, 0, len(promptMessages))
+		for _, m := range promptMessages {
 			if strings.TrimSpace(m.Content) != "" {
 				parts = append(parts, m.Content)
 			}
@@ -1142,13 +1193,7 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 				ChatMessageID: m.ID,
 				WorkspaceID:   cs.WorkspaceID,
 			}); attErr == nil && len(atts) > 0 {
-				for _, a := range atts {
-					resp.ChatMessageAttachments = append(resp.ChatMessageAttachments, ChatAttachmentMeta{
-						ID:          uuidToString(a.ID),
-						Filename:    a.Filename,
-						ContentType: a.ContentType,
-					})
-				}
+				appendAttachments(atts)
 			}
 		}
 		resp.ChatMessage = strings.Join(parts, "\n\n")
@@ -1164,7 +1209,9 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 				resp.ChatContextSummary = buildChatContextSummary(msgs, totalTokens, "", resp.WorkspaceID, uuidToString(event.AgentID), surface)
 			}
 		}
+		return true
 	}
+	return false
 }
 
 func (h *Handler) populateAgentInboxInitiator(ctx context.Context, sourceMessageID pgtype.UUID, resp *AgentTaskResponse) {

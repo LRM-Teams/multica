@@ -168,7 +168,14 @@
     "stop_failed": "Failed to stop agent task",
     "processing_single": "{{name}} is preparing a reply...",
     "processing_pair": "{{a}} and {{b}} are preparing replies...",
-    "processing_overflow": "{{a}}, {{b}} and {{count}} agents are preparing replies..."
+    "processing_overflow": "{{a}}, {{b}} and {{count}} agents are preparing replies...",
+    "no_reply": "Acknowledged · no reply needed",
+    "failed": "Couldn't reply",
+    "retry": "Retry",
+    "retry_named": "Retry {{name}}",
+    "retry_aria": "Retry {{name}}'s reply",
+    "retry_success": "Retrying {{name}}",
+    "retry_failed": "Couldn't retry"
   },
   "composer": {
     "placeholder": "Describe what you need…  @mention an agent to trigger its reply.",
@@ -179,7 +186,11 @@
     "issue_ref_aria": "Reference issue",
     "project_label": "Project",
     "project_none": "No project",
-    "project_tooltip": "Set the project this channel works in"
+    "project_tooltip": "Set the project this channel works in",
+    "tray_remove_aria": "Remove {{filename}}",
+    "tray_retry_aria": "Retry upload of {{filename}}",
+    "tray_uploading": "Uploading",
+    "tray_upload_failed": "Upload failed"
   },
   "message": {
     "add_reaction": "Add reaction",
@@ -192,6 +203,7 @@
     "sticker_loading": "Loading sticker",
     "sticker_failed": "Sticker failed to load",
     "sticker_unavailable": "Sticker unavailable",
+    "attachment_unavailable": "Attachment unavailable",
     "agent_badge": "Agent",
     "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",

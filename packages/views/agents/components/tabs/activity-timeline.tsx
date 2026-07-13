@@ -1,18 +1,20 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Check, Copy } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { copyText } from "@multica/ui/lib/clipboard";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import { useT } from "../../../i18n";
 import {
   type ActivityEvent,
-  type ActivityTone,
+  type ActivityDotTone,
   activityPresentation,
   formatActivityTime,
   isNarrativeActivityEvent,
 } from "./activity-event";
 
-const TONE_DOT: Record<ActivityTone, string> = {
+const TONE_DOT: Record<ActivityDotTone, string> = {
   neutral: "bg-muted-foreground/40",
   active: "bg-brand animate-pulse",
   waiting: "bg-warning",
@@ -44,6 +46,51 @@ function ToolTargetPath({ value }: { value: string }) {
   );
 }
 
+// A shell command's subtext (#v0 照实显示 · Frank "命令看不全"). The BE clip
+// (`tool_target`) renders as a plain single-line truncation — NEVER the path
+// treatment, which middle-ellipsises on the last `/` and mangles a command that
+// merely contains a slash. The full redacted command (`entries[].command`, via
+// `presentation.subtextFull`) is reachable on hover (`title`) and copyable. The
+// compact Profile Recent surface stays non-interactive (title only, no copy).
+function CommandSubtext({
+  inline,
+  full,
+  compact,
+}: {
+  inline: string;
+  full?: string;
+  compact: boolean;
+}) {
+  const { t } = useT("agents");
+  const [copied, setCopied] = useState(false);
+  const complete = full ?? inline;
+  const handleCopy = async () => {
+    if (await copyText(complete)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+  return (
+    <span className="group/cmd flex min-w-0 items-baseline gap-1.5">
+      <span title={complete} className="truncate font-mono text-xs text-muted-foreground">
+        {inline}
+      </span>
+      {!compact && (
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label={t(($) =>
+            copied ? $.tab_body.activity.command_copied : $.tab_body.activity.copy_command,
+          )}
+          className="shrink-0 text-muted-foreground/50 opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/cmd:opacity-100"
+        >
+          {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+        </button>
+      )}
+    </span>
+  );
+}
+
 function ActivityRow({
   event,
   time,
@@ -61,7 +108,7 @@ function ActivityRow({
   // in-progress signal, appended at render for an active tool action only —
   // never on settled rows or non-tool states (wake / compaction / reply).
   const label =
-    event.kind === "tool_call" && presentation.tone === "active" ? `${rawLabel}…` : rawLabel;
+    event.activity_kind === "tool_call" && presentation.tone === "active" ? `${rawLabel}…` : rawLabel;
   const subtext = presentation.subtextKey
     ? t(($) => $.tab_body.activity.subtexts[presentation.subtextKey!])
     : presentation.subtext;
@@ -74,15 +121,17 @@ function ActivityRow({
     !compact &&
     !!subtext &&
     !presentation.subtextKey &&
-    (event.kind === "thinking" || event.kind === "text");
-  // A tool row's subtext is a `tool_target`; for file tools that is a path
-  // (#484/#385) which needs the basename-preserving path treatment. Non-path
-  // subtexts stay a plain single-line truncate. Shared by the inline (Activity
-  // tab) and compact (Profile Recent) layouts below.
-  const subtextIsPath = event.kind === "tool_call" && !!subtext && subtext.includes("/");
+    (event.activity_kind === "thinking" || event.activity_kind === "text");
+  // Route the tool subtext by its kind (#v0 照实显示, `activity-event.ts`
+  // classifies): a file tool's target is a PATH (basename-preserving
+  // middle-ellipsis, #484/#385); a shell tool's target is a COMMAND (plain clip
+  // + full redacted command on hover/copy — never the path treatment, which
+  // mangled commands containing `/`); everything else is a plain truncate.
   const subtextNode = subtext ? (
-    subtextIsPath ? (
+    presentation.subtextKind === "path" ? (
       <ToolTargetPath value={subtext} />
+    ) : presentation.subtextKind === "command" ? (
+      <CommandSubtext inline={subtext} full={presentation.subtextFull} compact={compact} />
     ) : (
       <span className="truncate text-xs text-muted-foreground">{subtext}</span>
     )
@@ -91,7 +140,7 @@ function ActivityRow({
     <div
       className={cn("flex items-baseline gap-3", compact ? "py-0.5" : "py-1")}
       data-testid="activity-row"
-      data-visibility={event.visibility}
+      data-activity-kind={event.activity_kind}
     >
       <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70">
         {time}
@@ -133,9 +182,11 @@ const COMPACT_RECENT_LIMIT = 5;
 
 /**
  * Read-only agent-activity narrative timeline (#267). One time-ordered stream —
- * each row = `time · source dot · human label · optional subtext`. Shows only BE
- * `user_facing` narrative events; `diagnostic_only` and internal boundary events
- * stay out. Never renders raw command/output for tool rows.
+ * each row = `time · source dot · human label · optional subtext`. Shows only
+ * mainline narrative events (kept by `isNarrativeActivityEvent`, driven by raft
+ * `activity_kind` semantics #389); diagnostic kinds (transport / telemetry /
+ * internal_progress / runtime_diagnostic / …) stay out. Never renders raw
+ * command/output for tool rows.
  *
  * Rendered by the Activity tab (agent overview page + channel side panel) and,
  * in `compact` mode, the profile "Recent activity" hover surface (#383) — the

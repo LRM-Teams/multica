@@ -197,6 +197,9 @@ func FallbackContent(parts []protocol.MessagePart) string {
 				label = "[Sticker]"
 			}
 			values = append(values, label)
+		case protocol.MessagePartTypeAttachment:
+			// Attachment-only messages may have empty content. Do not invent
+			// markdown URLs or synthetic labels from attachment metadata.
 		}
 	}
 	return strings.TrimSpace(strings.Join(values, " "))
@@ -213,9 +216,17 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.PackID = ""
 		part.StickerID = ""
 		part.Alt = ""
+		part.AttachmentID = ""
+		part.Filename = ""
+		part.ContentType = ""
+		part.SizeBytes = 0
 		return part, nil
 	case protocol.MessagePartTypeSticker:
 		part.Text = ""
+		part.AttachmentID = ""
+		part.Filename = ""
+		part.ContentType = ""
+		part.SizeBytes = 0
 		part.PackID = strings.TrimSpace(part.PackID)
 		if part.PackID == "" {
 			part.PackID = BuiltinStickerPackID
@@ -233,6 +244,19 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		} else {
 			part.Alt = strings.TrimSpace(part.Alt)
 		}
+		return part, nil
+	case protocol.MessagePartTypeAttachment:
+		part.AttachmentID = strings.TrimSpace(part.AttachmentID)
+		if part.AttachmentID == "" {
+			return protocol.MessagePart{}, fmt.Errorf("attachment_id is required")
+		}
+		part.Text = ""
+		part.PackID = ""
+		part.StickerID = ""
+		part.Alt = ""
+		part.Filename = strings.TrimSpace(part.Filename)
+		part.ContentType = strings.TrimSpace(part.ContentType)
+		// SizeBytes is optional; keep as provided.
 		return part, nil
 	default:
 		return protocol.MessagePart{}, fmt.Errorf("unsupported type %q", part.Type)

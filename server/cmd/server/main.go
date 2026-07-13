@@ -395,7 +395,7 @@ func main() {
 			schedulerRegistered = true
 		}
 	}
-	if err := schedulerMgr.Register(scheduler.AgentRadarScheduleJob(pool)); err != nil {
+	if err := schedulerMgr.Register(scheduler.AgentRadarScheduleJob(pool, h.TaskService)); err != nil {
 		slog.Warn("scheduler: failed to register agent radar job", "error", err)
 	} else {
 		schedulerRegistered = true

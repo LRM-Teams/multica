@@ -32,11 +32,10 @@ type ChannelActiveTasksResponse struct {
 	Tasks []ChannelActiveTask `json:"tasks"`
 }
 
-// ListChannelActiveTasks returns the latest non-terminal task per agent in the
-// channel (queued / dispatched / running / waiting_local_directory) whose
-// runtime is still online. Channel agents run through per-agent chat sessions
-// (channel_agent_session), so we join the channel's sessions to their queued
-// tasks.
+// ListChannelActiveTasks returns the latest inbox read-model row per agent in
+// the channel. Chat/channel agent work now runs through agent_inbox_event, so
+// this endpoint must not use legacy agent_task_queue rows as the current-state
+// source for the conversation strip.
 func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -52,42 +51,20 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
-			WITH legacy_active AS (
-				SELECT DISTINCT ON (a.id)
-				       a.id AS agent_id,
-				       COALESCE(NULLIF(a.display_name, ''), a.name, '') AS agent_name,
-				       atq.id AS task_id,
-				       atq.status AS status,
-				       ''::text AS terminal_outcome,
-				       false AS retryable,
-				       NULL::uuid AS inbox_event_id,
-				       NULL::uuid AS delivery_id,
-				       NULL::uuid AS conversation_id,
-				       NULL::uuid AS channel_id,
-				       NULL::uuid AS chat_session_id,
-				       NULL::uuid AS thread_root_message_id,
-				       NULL::uuid AS source_message_id,
-				       NULL::timestamptz AS terminal_at,
-				       atq.created_at AS sort_at
-				FROM channel_agent_session cas
-				JOIN chat_session cs ON cs.id = cas.chat_session_id
-				JOIN agent_task_queue atq ON atq.chat_session_id = cs.id
-				JOIN agent_runtime ar ON ar.id = atq.runtime_id AND ar.status = 'online'
-				JOIN agent a ON a.id = cas.agent_id
-				WHERE cas.channel_id = $1
-				  AND atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-				ORDER BY a.id, atq.created_at DESC
-			),
-			latest_inbox AS (
+			WITH latest_inbox AS (
 				SELECT DISTINCT ON (e.agent_id)
 				       e.agent_id,
 				       COALESCE(NULLIF(a.display_name, ''), a.name, '') AS agent_name,
 				       e.id AS task_id,
-				       COALESCE(e.terminal_outcome, e.status) AS status,
+				       CASE
+				         WHEN e.terminal_outcome IS NOT NULL THEN e.terminal_outcome
+				         WHEN COALESCE(latest_delivery.status, '') IN ('leased', 'processing') OR e.status = 'draining' THEN 'running'
+				         ELSE 'queued'
+				       END AS status,
 				       COALESCE(e.terminal_outcome, '') AS terminal_outcome,
 				       e.retryable,
 				       e.id AS inbox_event_id,
-				       e.terminal_delivery_id AS delivery_id,
+				       COALESCE(e.terminal_delivery_id, latest_delivery.id) AS delivery_id,
 				       e.conversation_id,
 				       e.channel_id,
 				       e.chat_session_id,
@@ -98,9 +75,23 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 				FROM agent_inbox_event e
 				JOIN agent a ON a.id = e.agent_id
 				LEFT JOIN channel_message trigger ON trigger.id = e.source_message_id
+				LEFT JOIN LATERAL (
+					SELECT d.id, d.status
+					FROM agent_event_delivery d
+					WHERE d.inbox_event_id = e.id
+					ORDER BY d.created_at DESC, d.id DESC
+					LIMIT 1
+				) latest_delivery ON true
 				WHERE e.channel_id = $1
 				  AND e.requires_wake
+				  AND e.status <> 'suppressed'
 				ORDER BY e.agent_id, e.created_at DESC, e.id DESC
+			),
+			active_tasks AS (
+				SELECT *
+				FROM latest_inbox li
+				WHERE li.terminal_outcome = ''
+				  AND li.status IN ('queued', 'running')
 			),
 			terminal_tasks AS (
 				SELECT *
@@ -109,14 +100,11 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 				    li.terminal_outcome = 'failed'
 				    OR (li.terminal_outcome = 'no_reply' AND li.terminal_at > now() - interval '2 minutes')
 				  )
-				  AND NOT EXISTS (
-				    SELECT 1 FROM legacy_active la WHERE la.agent_id = li.agent_id
-				  )
 			)
 			SELECT agent_id, agent_name, task_id, status, terminal_outcome, retryable,
 			       inbox_event_id, delivery_id, conversation_id, channel_id, chat_session_id,
 			       thread_root_message_id, source_message_id, terminal_at
-			FROM legacy_active
+			FROM active_tasks
 			UNION ALL
 			SELECT agent_id, agent_name, task_id, status, terminal_outcome, retryable,
 			       inbox_event_id, delivery_id, conversation_id, channel_id, chat_session_id,
@@ -140,21 +128,21 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 			continue
 		}
 		task := ChannelActiveTask{
-			AgentID:   uuidToString(agentID),
-			AgentName: name,
-			TaskID:    uuidToString(taskID),
-			Status:    status,
+			AgentID:             uuidToString(agentID),
+			AgentName:           name,
+			TaskID:              uuidToString(taskID),
+			Status:              status,
+			InboxEventID:        uuidStringPtr(inboxEventID),
+			DeliveryID:          uuidStringPtr(deliveryID),
+			ConversationID:      uuidStringPtr(conversationID),
+			ChannelID:           uuidStringPtr(rowChannelID),
+			ChatSessionID:       uuidStringPtr(chatSessionID),
+			ThreadRootMessageID: uuidStringPtr(threadRootMessageID),
+			SourceMessageID:     uuidStringPtr(sourceMessageID),
 		}
 		if terminalOutcome != "" {
 			task.Outcome = stringPtr(terminalOutcome)
 			task.Retryable = boolPtr(retryable)
-			task.InboxEventID = uuidStringPtr(inboxEventID)
-			task.DeliveryID = uuidStringPtr(deliveryID)
-			task.ConversationID = uuidStringPtr(conversationID)
-			task.ChannelID = uuidStringPtr(rowChannelID)
-			task.ChatSessionID = uuidStringPtr(chatSessionID)
-			task.ThreadRootMessageID = uuidStringPtr(threadRootMessageID)
-			task.SourceMessageID = uuidStringPtr(sourceMessageID)
 			task.TerminalAt = timestampToPtr(terminalAt)
 		}
 		tasks = append(tasks, task)

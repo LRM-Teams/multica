@@ -168,7 +168,14 @@
     "stop_failed": "에이전트 작업을 중지하지 못했습니다",
     "processing_single": "{{name}}이(가) 답장을 준비 중...",
     "processing_pair": "{{a}}와(과) {{b}}이(가) 답장을 준비 중...",
-    "processing_overflow": "{{a}}, {{b}} 외 {{count}}명이 답장을 준비 중..."
+    "processing_overflow": "{{a}}, {{b}} 외 {{count}}명이 답장을 준비 중...",
+    "no_reply": "확인함 · 답장 불필요",
+    "failed": "답장 실패",
+    "retry": "다시 시도",
+    "retry_named": "{{name}} 다시 시도",
+    "retry_aria": "{{name}}의 답장 다시 시도",
+    "retry_success": "{{name}} 다시 시도 중",
+    "retry_failed": "다시 시도하지 못함"
   },
   "composer": {
     "placeholder": "필요한 내용을 입력하세요…  @에이전트이름 으로 답장을 요청하세요.",
@@ -179,7 +186,11 @@
     "issue_ref_aria": "이슈 참조",
     "project_label": "프로젝트",
     "project_none": "프로젝트 없음",
-    "project_tooltip": "이 채널이 작업할 프로젝트 설정"
+    "project_tooltip": "이 채널이 작업할 프로젝트 설정",
+    "tray_remove_aria": "{{filename}} 제거",
+    "tray_retry_aria": "{{filename}} 업로드 재시도",
+    "tray_uploading": "업로드 중",
+    "tray_upload_failed": "업로드 실패"
   },
   "message": {
     "add_reaction": "반응 추가",
@@ -192,6 +203,7 @@
     "sticker_loading": "스티커 로드 중",
     "sticker_failed": "스티커를 불러오지 못했습니다",
     "sticker_unavailable": "스티커를 사용할 수 없습니다",
+    "attachment_unavailable": "첨부 파일을 사용할 수 없습니다",
     "agent_badge": "Agent",
     "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",

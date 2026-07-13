@@ -140,7 +140,7 @@ const TURN_END: ActivityEvent = {
 describe("ActivityTimeline", () => {
   beforeEach(() => cleanup());
 
-  it("renders user_facing events (projected label + subtext) and hides diagnostic_only by default", () => {
+  it("renders mainline events (projected label + subtext) and hides diagnostic kinds by default", () => {
     render(<ActivityTimeline events={[USER, DIAG]} />);
     expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.getByText("Built the project.")).toBeInTheDocument();
@@ -148,14 +148,14 @@ describe("ActivityTimeline", () => {
     expect(screen.queryByText("View diagnostic details")).toBeNull();
   });
 
-  it("compact mode: user_facing only, no diagnostics toggle", () => {
+  it("compact mode: mainline only, no diagnostics toggle", () => {
     render(<ActivityTimeline events={[USER, DIAG]} compact />);
     expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.queryByText("Waiting · freshness check")).toBeNull();
     expect(screen.queryByText("View diagnostic details")).toBeNull();
   });
 
-  it("shows the empty state when there are no user_facing events", () => {
+  it("shows the empty state when there are no mainline events", () => {
     render(<ActivityTimeline events={[DIAG]} />);
     expect(screen.getByText("No activity yet")).toBeInTheDocument();
   });

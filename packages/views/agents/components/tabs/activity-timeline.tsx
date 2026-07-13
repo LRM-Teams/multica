@@ -6,13 +6,13 @@ import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import { useT } from "../../../i18n";
 import {
   type ActivityEvent,
-  type ActivityTone,
+  type ActivityDotTone,
   activityPresentation,
   formatActivityTime,
   isNarrativeActivityEvent,
 } from "./activity-event";
 
-const TONE_DOT: Record<ActivityTone, string> = {
+const TONE_DOT: Record<ActivityDotTone, string> = {
   neutral: "bg-muted-foreground/40",
   active: "bg-brand animate-pulse",
   waiting: "bg-warning",
@@ -133,9 +133,11 @@ const COMPACT_RECENT_LIMIT = 5;
 
 /**
  * Read-only agent-activity narrative timeline (#267). One time-ordered stream —
- * each row = `time · source dot · human label · optional subtext`. Shows only BE
- * `user_facing` narrative events; `diagnostic_only` and internal boundary events
- * stay out. Never renders raw command/output for tool rows.
+ * each row = `time · source dot · human label · optional subtext`. Shows only
+ * mainline narrative events (kept by `isNarrativeActivityEvent`, driven by raft
+ * `activity_kind` semantics #389); diagnostic kinds (transport / telemetry /
+ * internal_progress / runtime_diagnostic / …) stay out. Never renders raw
+ * command/output for tool rows.
  *
  * Rendered by the Activity tab (agent overview page + channel side panel) and,
  * in `compact` mode, the profile "Recent activity" hover surface (#383) — the

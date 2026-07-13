@@ -9,7 +9,7 @@ import { stripMentionMarkdown } from "../../../common/strip-mention-markdown";
 
 // Keep the palette intentionally quiet: only failures and waiting states get
 // color; the normal narrative stream stays neutral.
-export type ActivityTone = "neutral" | "active" | "waiting" | "failure";
+export type ActivityDotTone = "neutral" | "active" | "waiting" | "failure";
 
 // The FE Activity read-model IS the BE #302 timeline event
 // (`AgentActivityTimelineEvent`, packages/core/types/events.ts): id /
@@ -50,7 +50,7 @@ export interface ActivityPresentation {
   subtextKey?: ActivitySubtextKey;
   /** Dynamic subtext (tool target, reply text, reason) — rendered verbatim. */
   subtext?: string;
-  tone: ActivityTone;
+  tone: ActivityDotTone;
 }
 
 function reasonText(event: ActivityEvent): string {
@@ -119,7 +119,7 @@ function isActiveStatus(status: string | undefined): boolean {
   );
 }
 
-function statusTone(event: ActivityEvent): ActivityTone {
+function statusTone(event: ActivityEvent): ActivityDotTone {
   return isActiveStatus(event.status) ? "active" : "neutral";
 }
 

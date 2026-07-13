@@ -743,20 +743,7 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 				'seq', tm.seq,
 				'tool', tm.tool,
 				'input', tm.input,
-				'tool_target',
-					CASE
-						WHEN tm.type <> 'tool_use' THEN NULL
-						WHEN tm.input ? 'path' THEN regexp_replace(tm.input->>'path', '^.*/', '')
-						WHEN tm.input ? 'file_path' THEN regexp_replace(tm.input->>'file_path', '^.*/', '')
-						WHEN tm.input ? 'filepath' THEN regexp_replace(tm.input->>'filepath', '^.*/', '')
-						WHEN tm.input ? 'cmd' THEN regexp_replace(trim(both '"' from split_part(btrim(tm.input->>'cmd'), ' ', 1)), '^.*/', '')
-						WHEN tm.input ? 'command' THEN regexp_replace(trim(both '"' from split_part(btrim(tm.input->>'command'), ' ', 1)), '^.*/', '')
-						WHEN tm.input ? 'shell_command' THEN regexp_replace(trim(both '"' from split_part(btrim(tm.input->>'shell_command'), ' ', 1)), '^.*/', '')
-						WHEN tm.input ? 'query' THEN left(tm.input->>'query', 80)
-						WHEN tm.input ? 'pattern' THEN left(tm.input->>'pattern', 80)
-						WHEN tm.input ? 'url' THEN left(tm.input->>'url', 80)
-						ELSE NULL
-					END
+				'tool_target', NULL
 			)) AS details,
 			tm.visibility,
 			atq.status AS status,
@@ -1702,10 +1689,7 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		details["command"] = command
 	}
 	if tool != nil {
-		if target, summaryKind := agentActivitySafeToolTargetForTool(*tool, mapFromMap(details, "input")); target != "" {
-			details["tool_target"] = target
-			details["summary_kind"] = summaryKind
-		}
+		agentActivityApplyToolInputSummary(details, *tool, mapFromMap(details, "input"), true)
 	}
 	detailKind := agentActivityDetailKind(row.EventType)
 	return AgentActivityTimelineEvent{
@@ -1759,11 +1743,6 @@ func agentActivitySafeToolTarget(input map[string]any) (string, string) {
 			return value, "file_path"
 		}
 	}
-	for _, key := range []string{"cmd", "command", "shell_command"} {
-		if value := commandNameFromMap(input, key); value != "" {
-			return value, "command"
-		}
-	}
 	for _, key := range []string{"query", "pattern"} {
 		if value := clippedStringFromMap(input, key, 80); value != "" {
 			return value, key
@@ -1775,23 +1754,116 @@ func agentActivitySafeToolTarget(input map[string]any) (string, string) {
 	return "", ""
 }
 
-func agentActivitySafeToolTargetForTool(canonicalTool string, input map[string]any) (string, string) {
+type agentActivityToolInputSummary struct {
+	ToolTarget  string
+	SummaryKind string
+	ClearTarget bool
+}
+
+func agentActivityApplyToolInputSummary(details map[string]any, canonicalTool string, input map[string]any, replaceTarget bool) {
+	summary := agentActivityToolInputSummaryForTool(canonicalTool, input)
+	if summary.ToolTarget != "" {
+		if replaceTarget || details["tool_target"] == nil {
+			details["tool_target"] = summary.ToolTarget
+			details["summary_kind"] = summary.SummaryKind
+		}
+		return
+	}
+	if replaceTarget && summary.ClearTarget {
+		delete(details, "tool_target")
+		delete(details, "summary_kind")
+	}
+}
+
+func agentActivityToolInputSummaryForTool(canonicalTool string, input map[string]any) agentActivityToolInputSummary {
 	if cli, ok := resolveRaftCLIInvocation(canonicalTool, input); ok {
-		return cli.ToolTarget, cli.SummaryKind
-	}
-	if strings.TrimSpace(canonicalTool) == "bash" {
-		if value := commandSummaryFromInput(input); value != "" {
-			return value, "command"
+		return agentActivityToolInputSummary{
+			ToolTarget:  cli.ToolTarget,
+			SummaryKind: cli.SummaryKind,
 		}
 	}
-	if isFileActivityTool(canonicalTool) {
-		for _, key := range []string{"path", "file_path", "filepath"} {
-			if value := sourcePathFromMap(input, key); value != "" {
-				return value, "file_path"
-			}
+
+	tool := strings.ToLower(strings.TrimSpace(canonicalTool))
+	switch {
+	case tool == "bash":
+		summary := agentActivityToolInputSummary{
+			ToolTarget:  commandSummaryFromInput(input),
+			SummaryKind: "command",
+		}
+		if summary.ToolTarget == "" {
+			summary.SummaryKind = ""
+		}
+		return summary
+	case isFileActivityTool(tool):
+		path := activityPathFactFromInput(input)
+		return agentActivityToolInputSummary{
+			ToolTarget:  path,
+			SummaryKind: "file_path",
+			ClearTarget: path == "",
+		}
+	case tool == "glob":
+		summary := agentActivityToolInputSummary{
+			ClearTarget: true,
+		}
+		path := activityPathFactFromInput(input)
+		query := activityQueryFactFromInput(input)
+		pattern := activityPatternFactFromInput(input)
+		switch {
+		case pattern != "":
+			summary.ToolTarget = pattern
+			summary.SummaryKind = "pattern"
+		case query != "":
+			summary.ToolTarget = query
+			summary.SummaryKind = "query"
+		case activityPathIsDisplayableSearchTarget(path):
+			summary.ToolTarget = path
+			summary.SummaryKind = "file_path"
+		}
+		return summary
+	case tool == "grep":
+		summary := agentActivityToolInputSummary{
+			ClearTarget: true,
+		}
+		path := activityPathFactFromInput(input)
+		query := activityQueryFactFromInput(input)
+		pattern := activityPatternFactFromInput(input)
+		switch {
+		case query != "":
+			summary.ToolTarget = query
+			summary.SummaryKind = "query"
+		case pattern != "":
+			summary.ToolTarget = pattern
+			summary.SummaryKind = "pattern"
+		case activityPathIsDisplayableSearchTarget(path):
+			summary.ToolTarget = path
+			summary.SummaryKind = "file_path"
+		}
+		return summary
+	case tool == "web_search":
+		query := activityQueryFactFromInput(input)
+		return agentActivityToolInputSummary{
+			ToolTarget:  query,
+			SummaryKind: "query",
+			ClearTarget: query == "",
+		}
+	case tool == "web_fetch":
+		url := clippedStringFromMap(input, "url", 500)
+		return agentActivityToolInputSummary{
+			ToolTarget:  redact.Text(url),
+			SummaryKind: "url",
+			ClearTarget: strings.TrimSpace(url) == "",
 		}
 	}
-	return agentActivitySafeToolTarget(input)
+
+	return agentActivityToolInputSummary{ClearTarget: true}
+}
+
+func agentActivitySafeToolTargetForTool(canonicalTool string, input map[string]any) (string, string) {
+	summary := agentActivityToolInputSummaryForTool(canonicalTool, input)
+	if summary.ToolTarget == "" {
+		return "", ""
+	}
+	return summary.ToolTarget, summary.SummaryKind
 }
 
 type raftCLIInvocation struct {
@@ -2382,6 +2454,50 @@ func basenameFromMap(m map[string]any, key string) string {
 
 func sourcePathFromMap(m map[string]any, key string) string {
 	return stringFromMap(m, key)
+}
+
+func activityPathFactFromInput(input map[string]any) string {
+	for _, key := range []string{"path", "file_path", "filepath", "file", "filename", "absolute_path", "relative_path"} {
+		if value := sourcePathFromMap(input, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func activityQueryFactFromInput(input map[string]any) string {
+	for _, key := range []string{"query", "search", "search_query"} {
+		if value := clippedStringFromMap(input, key, 500); value != "" {
+			return redact.Text(value)
+		}
+	}
+	return ""
+}
+
+func activityPatternFactFromInput(input map[string]any) string {
+	for _, key := range []string{"pattern", "glob", "glob_pattern", "regex"} {
+		if value := clippedStringFromMap(input, key, 500); value != "" {
+			return redact.Text(value)
+		}
+	}
+	return ""
+}
+
+func activityScopeFactFromInput(input map[string]any) string {
+	for _, key := range []string{"scope", "cwd", "dir", "directory", "root", "base_path"} {
+		if value := sourcePathFromMap(input, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func activityPathIsDisplayableSearchTarget(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	return strings.ContainsAny(path, "*?[")
 }
 
 func commandNameFromMap(m map[string]any, key string) string {

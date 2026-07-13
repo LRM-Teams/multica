@@ -1089,8 +1089,8 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	if activity[5].kind != activityKindCustom || activity[5].eventType != "unmapped_tool_name" || activity[5].visibility != "diagnostic_only" || activity[5].reasonCode != "unmapped_tool_name" {
 		t.Fatalf("status-like missing command row = %+v, want diagnostic unmapped gap", activity[5])
 	}
-	if activity[5].details["unmapped_tool_name"] != "running" || activity[5].details["tool"] != nil || activity[5].details["tool_target"] != "status_only.txt" {
-		t.Fatalf("status-like missing command details = %+v, want unmapped running without user-facing tool", activity[5].details)
+	if activity[5].details["unmapped_tool_name"] != "running" || activity[5].details["tool"] != nil || activity[5].details["tool_target"] != nil {
+		t.Fatalf("status-like missing command details = %+v, want unmapped running without user-facing tool/target", activity[5].details)
 	}
 	if activity[5].details["inbox_event_id"] != got.ID || activity[5].details["delivery_id"] != got.DeliveryID || activity[5].details["source_message_id"] != trigger.ID || activity[5].details["seq"] == nil {
 		t.Fatalf("status-like missing command source details = %+v, want inbox/delivery/source/seq refs", activity[5].details)

@@ -285,7 +285,7 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 	if strings.Contains(ownerEvents.raw, `"run_id"`) {
 		t.Fatalf("activity events must not expose run_id: %s", ownerEvents.raw)
 	}
-	for _, removedField := range []string{`"label"`, `"subtext"`, `"tone"`, `"reason_label"`} {
+	for _, removedField := range []string{`"label"`, `"subtext"`, `"tone"`, `"reason_label"`, `"path"`, `"query"`, `"pattern"`} {
 		if strings.Contains(ownerEvents.raw, removedField) {
 			t.Fatalf("activity events must not expose presentation field %s: %s", removedField, ownerEvents.raw)
 		}
@@ -618,11 +618,55 @@ func TestAgentActivitySafeToolTargetForTool_NonFileToolsKeepSafeSummary(t *testi
 	unknownTarget, unknownKind := agentActivitySafeToolTargetForTool("", map[string]any{
 		"path": "/Users/frank/Code/multica/private/future.txt",
 	})
-	if unknownTarget != "future.txt" || unknownKind != "file_path" {
-		t.Fatalf("unknown target=(%q,%q), want conservative basename summary", unknownTarget, unknownKind)
+	if unknownTarget != "" || unknownKind != "" {
+		t.Fatalf("unknown target=(%q,%q), want no invented target", unknownTarget, unknownKind)
 	}
-	if strings.Contains(unknownTarget, "/Users/frank/Code") {
-		t.Fatalf("unknown target leaked raw path: %q", unknownTarget)
+
+	argvTarget, argvKind := agentActivitySafeToolTargetForTool("", map[string]any{
+		"command": "multica repo checkout https://github.com/LRM-Teams/multica.git",
+	})
+	if argvTarget != "" || argvKind != "" {
+		t.Fatalf("unknown command target=(%q,%q), want no argv0-derived target", argvTarget, argvKind)
+	}
+}
+
+func TestAgentActivityToolInputSummaryForTool_UsesRaftLikeToolInputWithoutInventingTarget(t *testing.T) {
+	globSummary := agentActivityToolInputSummaryForTool("glob", map[string]any{
+		"path": "multica",
+	})
+	if globSummary.ToolTarget != "" || globSummary.SummaryKind != "" {
+		t.Fatalf("plain glob path target=(%q,%q), want no invented target", globSummary.ToolTarget, globSummary.SummaryKind)
+	}
+
+	patternSummary := agentActivityToolInputSummaryForTool("glob", map[string]any{
+		"pattern": "server/internal/**/*.go",
+		"cwd":     "/Users/frank/Code/multica",
+	})
+	if patternSummary.ToolTarget != "server/internal/**/*.go" || patternSummary.SummaryKind != "pattern" {
+		t.Fatalf("glob pattern summary = %+v, want pattern target", patternSummary)
+	}
+
+	grepSummary := agentActivityToolInputSummaryForTool("grep", map[string]any{
+		"query": "agentActivityToolInputSummary",
+		"path":  "server/internal/handler",
+	})
+	if grepSummary.ToolTarget != "agentActivityToolInputSummary" || grepSummary.SummaryKind != "query" {
+		t.Fatalf("grep query summary = %+v, want query target", grepSummary)
+	}
+
+	readSummary := agentActivityToolInputSummaryForTool("read_file", map[string]any{
+		"path": "/Users/frank/Code/multica/server/internal/handler/agent_activity.go",
+	})
+	if readSummary.ToolTarget != "/Users/frank/Code/multica/server/internal/handler/agent_activity.go" || readSummary.SummaryKind != "file_path" {
+		t.Fatalf("read_file summary = %+v, want full path target", readSummary)
+	}
+
+	bashSummary := agentActivityToolInputSummaryForTool("bash", map[string]any{
+		"command": "cat /tmp/secret.txt",
+		"path":    "/Users/frank/Code/multica/private/secret.txt",
+	})
+	if bashSummary.ToolTarget != "cat /tmp/secret.txt" || bashSummary.SummaryKind != "command" {
+		t.Fatalf("bash summary = %+v, want command target", bashSummary)
 	}
 }
 

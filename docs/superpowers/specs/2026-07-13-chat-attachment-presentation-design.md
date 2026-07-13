@@ -116,3 +116,13 @@ See also `2026-07-13-message-attachment-zone-design.md`. Summary:
 3. Mix image + file → same strip, add order.
 4. Editor body stays text-only (no embedded file cards).
 5. Send still builds attachment parts only.
+
+## Platform scope
+
+| Client | Channel / DM composer tray | Notes |
+|--------|----------------------------|--------|
+| **Web** (`apps/web` + `@multica/views`) | **Yes — this work** | Responsive: same horizontal strip; narrow width → scroll-x (thumb-friendly gap already 8px). |
+| **Desktop** (`apps/desktop` + `@multica/views`) | **Yes — same package** | Shares views; no separate desktop tray. |
+| **Mobile** (`apps/mobile`) | **No channel/DM surface today** | Mobile has issue comment + agent **chat-session** composers only (`ChatComposer`, `InlineCommentComposer`). It does **not** mount `packages/views/channels` composers. Channel attachment presentation is **out of mobile scope until** mobile ships channel/DM UI; then it must reimplement tray with RN scroll horizontal, not import this DOM tray. |
+
+Web/desktop **narrow viewport** (phone browser, split pane) is covered by the same `overflow-x-auto` strip — that is the “mobile web” path, not Expo.

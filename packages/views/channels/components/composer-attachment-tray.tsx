@@ -34,12 +34,13 @@ export function ComposerAttachmentTray({
   if (pending.length === 0) return null;
 
   return (
-    <div
-      role="list"
+    // Native list semantics (prefer-tag-over-role). list-none keeps layout
+    // as a horizontal strip, not a document bullet list.
+    <ul
       className={cn(
         // One row only + horizontal scroll. flex-wrap was wrapping full-width
         // chips into a vertical stack — that is explicitly forbidden here.
-        "flex flex-row flex-nowrap items-center gap-2 overflow-x-auto overflow-y-hidden overscroll-x-contain pb-0.5",
+        "m-0 flex list-none flex-row flex-nowrap items-center gap-2 overflow-x-auto overflow-y-hidden overscroll-x-contain p-0 pb-0.5",
         // Hide scrollbar chrome where supported; still scrollable.
         "[scrollbar-width:thin]",
         className,
@@ -57,14 +58,13 @@ export function ComposerAttachmentTray({
         const showImage = isImagePending(item) && !!item.previewUrl;
 
         return (
-          <div
-            role="listitem"
+          <li
             key={item.localId}
             data-testid={`composer-tray-item-${item.localId}`}
             data-status={item.status}
             data-kind={showImage ? "image" : "file"}
             className={cn(
-              "group relative flex h-12 w-fit max-w-[10.5rem] shrink-0 flex-row items-center gap-1.5 rounded-lg border border-border/50 bg-muted/35",
+              "group relative flex h-12 w-fit max-w-[10.5rem] shrink-0 list-none flex-row items-center gap-1.5 rounded-lg border border-border/50 bg-muted/35",
               showImage ? "w-12 max-w-none p-0" : "min-w-0 px-2",
               item.status === "error" && "border-destructive/50 bg-destructive/5",
             )}
@@ -159,9 +159,9 @@ export function ComposerAttachmentTray({
                 <X className="size-2.5" />
               </Button>
             </div>
-          </div>
+          </li>
         );
       })}
-    </div>
+    </ul>
   );
 }

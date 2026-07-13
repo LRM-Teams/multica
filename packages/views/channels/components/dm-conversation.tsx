@@ -936,6 +936,7 @@ function DmChannelConversation({
               pending={threadPending.pending}
               onRemove={threadPending.remove}
               onRetry={threadPending.retry}
+              isMobile={isMobile}
             />
           }
           editor={
@@ -1121,6 +1122,7 @@ function DmChannelConversation({
             pending={dmPending.pending}
             onRemove={dmPending.remove}
             onRetry={dmPending.retry}
+            isMobile={isMobile}
           />
         }
         editor={

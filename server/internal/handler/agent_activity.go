@@ -1694,7 +1694,7 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 			details["summary_kind"] = summaryKind
 		}
 	}
-	detailKind := textOrDefault(row.EventType, row.Kind)
+	detailKind := agentActivityDetailKind(row.EventType)
 	return AgentActivityTimelineEvent{
 		ID:           uuidToString(row.ID),
 		AgentID:      uuidToString(row.AgentID),
@@ -1715,6 +1715,10 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		TargetRef:    targetRef,
 		SourceRefs:   agentActivitySourceRefs(row),
 	}
+}
+
+func agentActivityDetailKind(eventType pgtype.Text) string {
+	return textOrDefault(eventType, "other")
 }
 
 func taskMessageActivityToolTarget(message db.TaskMessage) (string, string) {

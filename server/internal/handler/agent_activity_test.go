@@ -436,6 +436,15 @@ func TestActivityVisibilityFor_SourceBackedLifecycle(t *testing.T) {
 	}
 }
 
+func TestAgentActivityDetailKindDefaultsToOther(t *testing.T) {
+	if got := agentActivityDetailKind(pgtype.Text{}); got != "other" {
+		t.Fatalf("missing detail kind = %q, want other", got)
+	}
+	if got := agentActivityDetailKind(pgtype.Text{String: "tool_use", Valid: true}); got != "tool_use" {
+		t.Fatalf("detail kind = %q, want tool_use", got)
+	}
+}
+
 func TestAgentActivityCanonicalToolName_UsesRaftAliases(t *testing.T) {
 	tests := map[string]string{
 		"Bash":                      "bash",

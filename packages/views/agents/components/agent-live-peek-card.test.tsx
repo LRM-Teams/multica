@@ -67,6 +67,9 @@ vi.mock("@tanstack/react-query", async () => {
   );
   return {
     ...actual,
+    // useAgentLiveStatus now sources the live stage from the Activity event
+    // stream (#414), which grabs the QueryClient for WS-reconnect invalidation.
+    useQueryClient: () => ({ invalidateQueries: () => {} }),
     useQuery: (opts: { queryKey: readonly unknown[]; enabled?: boolean }) => {
       const key = opts.queryKey;
       // Distinguish by the third segment which is the factory tag:
@@ -91,6 +94,13 @@ vi.mock("@tanstack/react-query", async () => {
     },
   };
 });
+
+// The Activity-event hook (via useAgentLiveStatus, #414) subscribes to WS; the
+// card's assertions don't exercise live updates, so no-op the realtime hooks.
+vi.mock("@multica/core/realtime", () => ({
+  useWSEvent: () => {},
+  useWSReconnect: () => {},
+}));
 
 vi.mock("@multica/core/agents", async () => {
   const actual =

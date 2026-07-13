@@ -135,11 +135,11 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	if text != "" {
 		body["content"] = content
 	}
-	if parts := buildAgentSendParts(stickerID, text); len(parts) > 0 {
+	// Chat attachments are structured parts only. --attachment-id is sugar that
+	// becomes {type:attachment, attachment_id} before POST; do not send a
+	// sidecar attachment_ids field (server binds from parts).
+	if parts := buildAgentSendParts(stickerID, text, attachmentIDs); len(parts) > 0 {
 		body["parts"] = parts
-	}
-	if len(attachmentIDs) > 0 {
-		body["attachment_ids"] = attachmentIDs
 	}
 	if cmd.Flags().Changed("show-in-channel") {
 		show, _ := cmd.Flags().GetBool("show-in-channel")
@@ -152,7 +152,10 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	return printAgentTransportOutput(cmd, out, "Message sent.")
 }
 
-func buildAgentSendParts(stickerID, text string) []protocol.MessagePart {
+// buildAgentSendParts assembles the structured chat message body for agent
+// transport send. Order: sticker (if any), text (if any), then attachment parts
+// in --attachment-id order. Attachments are never encoded as markdown embeds.
+func buildAgentSendParts(stickerID, text string, attachmentIDs []string) []protocol.MessagePart {
 	var parts []protocol.MessagePart
 	if stickerID != "" {
 		parts = append(parts, protocol.MessagePart{
@@ -164,6 +167,16 @@ func buildAgentSendParts(stickerID, text string) []protocol.MessagePart {
 		parts = append(parts, protocol.MessagePart{
 			Type: protocol.MessagePartTypeText,
 			Text: text,
+		})
+	}
+	for _, id := range attachmentIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		parts = append(parts, protocol.MessagePart{
+			Type:         protocol.MessagePartTypeAttachment,
+			AttachmentID: id,
 		})
 	}
 	return parts

@@ -3240,6 +3240,7 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 		return
 	}
 	typingActive = false
+	h.publishAgentInboxTaskLifecycle(protocol.EventTaskQueued, event, agent.RuntimeID, "queued")
 
 	// Record a wake-trigger activity event so the agent's Activity timeline
 	// shows why this session needs to drain.

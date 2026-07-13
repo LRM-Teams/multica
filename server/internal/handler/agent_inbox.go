@@ -63,6 +63,26 @@ type AgentInboxLeaseResponse struct {
 	RequiresWake   bool   `json:"requires_wake"`
 }
 
+func (h *Handler) publishAgentInboxTaskLifecycle(eventType string, event db.AgentInboxEvent, runtimeID pgtype.UUID, status string) {
+	if h == nil || h.Bus == nil || !event.RequiresWake {
+		return
+	}
+	payload := map[string]any{
+		"task_id":        uuidToString(event.ID),
+		"inbox_event_id": uuidToString(event.ID),
+		"agent_id":       uuidToString(event.AgentID),
+		"issue_id":       "",
+		"status":         status,
+	}
+	if runtimeID.Valid {
+		payload["runtime_id"] = uuidToString(runtimeID)
+	}
+	if event.ChatSessionID.Valid {
+		payload["chat_session_id"] = uuidToString(event.ChatSessionID)
+	}
+	h.publishTask(eventType, uuidToString(event.WorkspaceID), "system", "", uuidToString(event.ID), payload)
+}
+
 type AckAgentInboxEventRequest struct {
 	DeliveryID  string `json:"delivery_id"`
 	LeaseToken  string `json:"lease_token"`
@@ -127,6 +147,7 @@ func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Reques
 	}
 	pending, _ := h.Queries.CountPendingAgentInboxEventsForRuntime(r.Context(), runtime.ID)
 	respEvent := h.agentInboxEventResponse(r.Context(), runtime, event, delivery)
+	h.publishAgentInboxTaskLifecycle(protocol.EventTaskDispatch, event, runtime.ID, "running")
 	writeJSON(w, http.StatusOK, DrainAgentInboxResponse{
 		Events:      []AgentInboxEventResponse{respEvent},
 		LastSeenSeq: event.SeqTo,
@@ -417,6 +438,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		h.publishAgentInboxChatDone(event, *chatDonePayload)
 		h.recordAgentInboxVisibleOutputActivity(r.Context(), event, task.RuntimeID, *chatDonePayload)
 	}
+	h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, task.RuntimeID, "completed")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }
 
@@ -485,7 +507,9 @@ func (h *Handler) FailAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.recordAgentInboxFailureActivity(r.Context(), failedAgentInboxEvent(failed), deliveryID, errText, failureReason, reasonCode)
+	failedEvent := failedAgentInboxEvent(failed)
+	h.recordAgentInboxFailureActivity(r.Context(), failedEvent, deliveryID, errText, failureReason, reasonCode)
+	h.publishAgentInboxTaskLifecycle(protocol.EventTaskQueued, failedEvent, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID), "queued")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -636,6 +660,7 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox failure")
 		return
 	}
+	h.publishAgentInboxTaskLifecycle(protocol.EventTaskFailed, event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID), "failed")
 	h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID, errText, failureReason, reasonCode)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }
@@ -673,6 +698,9 @@ func (h *Handler) RetryChannelAgentInboxEvent(w http.ResponseWriter, r *http.Req
 		}
 		writeError(w, http.StatusInternalServerError, "failed to retry inbox event")
 		return
+	}
+	if retryEvent, err := h.Queries.GetAgentInboxEvent(r.Context(), retry.ID); err == nil {
+		h.publishAgentInboxTaskLifecycle(protocol.EventTaskQueued, retryEvent, h.runtimeIDForAgentInboxEvent(r.Context(), retryEvent), "queued")
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"ok":             true,
@@ -862,6 +890,24 @@ func (h *Handler) runtimeIDForAgentInboxDelivery(ctx context.Context, deliveryID
 		SELECT runtime_id
 		FROM agent_event_delivery
 		WHERE id = $1`, deliveryID).Scan(&runtimeID)
+	return runtimeID
+}
+
+func (h *Handler) runtimeIDForAgentInboxEvent(ctx context.Context, event db.AgentInboxEvent) pgtype.UUID {
+	var runtimeID pgtype.UUID
+	_ = h.DB.QueryRow(ctx, `
+		SELECT COALESCE(latest_delivery.runtime_id, s.runtime_id, a.runtime_id)
+		FROM agent_inbox_event e
+		JOIN agent a ON a.id = e.agent_id
+		LEFT JOIN agent_session s ON s.id = e.agent_session_id
+		LEFT JOIN LATERAL (
+			SELECT d.runtime_id
+			FROM agent_event_delivery d
+			WHERE d.inbox_event_id = e.id
+			ORDER BY d.created_at DESC, d.id DESC
+			LIMIT 1
+		) latest_delivery ON true
+		WHERE e.id = $1`, event.ID).Scan(&runtimeID)
 	return runtimeID
 }
 

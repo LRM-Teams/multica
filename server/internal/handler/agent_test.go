@@ -41,6 +41,8 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	agentA := createHandlerTestAgent(t, "snapshot-agent-a", []byte(`{}`))
 	agentB := createHandlerTestAgent(t, "snapshot-agent-b", []byte(`{}`))
 	agentC := createHandlerTestAgent(t, "snapshot-agent-c", []byte(`{}`))
+	agentD := createHandlerTestAgent(t, "snapshot-agent-inbox-queued", []byte(`{}`))
+	agentE := createHandlerTestAgent(t, "snapshot-agent-inbox-running", []byte(`{}`))
 
 	type taskFixture struct {
 		agentID     string
@@ -100,6 +102,44 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 		}
 	})
 
+	channelID := seedChannelForTest(t, "snapshot-inbox-"+uuid.NewString(), testUserID)
+	for _, agentID := range []string{agentD, agentE} {
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+			VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+			t.Fatalf("seed agent member %s: %v", agentID, err)
+		}
+	}
+	queuedRoot := dispatchThreadMentionForTest(t, channelID, agentD, "snapshot-inbox-queued-"+uuid.NewString())
+	queuedInboxEventID := latestChannelAgentInboxEventForRootForTest(t, queuedRoot.ID, agentD)
+	runningRoot := dispatchThreadMentionForTest(t, channelID, agentE, "snapshot-inbox-running-"+uuid.NewString())
+	runningInboxEventID := latestChannelAgentInboxEventForRootForTest(t, runningRoot.ID, agentE)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET status = 'draining',
+		    claimed_at = now(),
+		    updated_at = now()
+		WHERE id = $1`, runningInboxEventID); err != nil {
+		t.Fatalf("mark inbox event draining: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_event_delivery (
+			workspace_id,
+			agent_session_id,
+			inbox_event_id,
+			runtime_id,
+			status
+		)
+		SELECT workspace_id,
+		       agent_session_id,
+		       id,
+		       $2,
+		       'leased'
+		FROM agent_inbox_event
+		WHERE id = $1`, runningInboxEventID, handlerTestRuntimeID(t)); err != nil {
+		t.Fatalf("insert inbox delivery: %v", err)
+	}
+
 	w := httptest.NewRecorder()
 	req := newRequest(http.MethodGet, "/api/agent-task-snapshot", nil)
 	testHandler.ListWorkspaceAgentTaskSnapshot(w, req)
@@ -118,7 +158,9 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	counts := map[key]int{}
 	for _, task := range tasks {
 		if task.AgentID != agentA && task.AgentID != agentB && task.AgentID != agentC {
-			continue
+			if task.AgentID != agentD && task.AgentID != agentE {
+				continue
+			}
 		}
 		counts[key{task.AgentID, task.Status}]++
 	}
@@ -136,11 +178,34 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 		// cancellation — that's the whole point of excluding cancelled
 		// from the outcome half.
 		{agentC, "failed"}: 1,
+		// Agent D/E: active new-chain inbox events must contribute to the
+		// same snapshot that derives avatar/header presence. Otherwise active
+		// chat work falls through to the legacy "Idle" presence word.
+		{agentD, "queued"}:  1,
+		{agentE, "running"}: 1,
 	}
 	for k, expected := range wantCounts {
 		if got := counts[k]; got != expected {
 			t.Errorf("agent=%s status=%s: expected %d, got %d", k.agent, k.status, expected, got)
 		}
+	}
+	byID := map[string]AgentTaskResponse{}
+	for _, task := range tasks {
+		byID[task.ID] = task
+	}
+	queuedInboxTask, ok := byID[queuedInboxEventID]
+	if !ok {
+		t.Fatalf("queued inbox event %s missing from snapshot", queuedInboxEventID)
+	}
+	if queuedInboxTask.Kind != "chat" || queuedInboxTask.ChatSessionID == "" || queuedInboxTask.TriggerSummary == nil || strings.TrimSpace(*queuedInboxTask.TriggerSummary) == "" {
+		t.Fatalf("queued inbox task = %+v, want chat task with session and trigger summary", queuedInboxTask)
+	}
+	runningInboxTask, ok := byID[runningInboxEventID]
+	if !ok {
+		t.Fatalf("running inbox event %s missing from snapshot", runningInboxEventID)
+	}
+	if runningInboxTask.Status != "running" || runningInboxTask.StartedAt == nil {
+		t.Fatalf("running inbox task = %+v, want running with started_at", runningInboxTask)
 	}
 
 	// The OLD failed terminal on agent A must be excluded.

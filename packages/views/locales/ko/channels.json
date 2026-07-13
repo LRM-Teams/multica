@@ -186,7 +186,11 @@
     "issue_ref_aria": "이슈 참조",
     "project_label": "프로젝트",
     "project_none": "프로젝트 없음",
-    "project_tooltip": "이 채널이 작업할 프로젝트 설정"
+    "project_tooltip": "이 채널이 작업할 프로젝트 설정",
+    "tray_remove_aria": "{{filename}} 제거",
+    "tray_retry_aria": "{{filename}} 업로드 재시도",
+    "tray_uploading": "업로드 중",
+    "tray_upload_failed": "업로드 실패"
   },
   "message": {
     "add_reaction": "반응 추가",
@@ -199,6 +203,7 @@
     "sticker_loading": "스티커 로드 중",
     "sticker_failed": "스티커를 불러오지 못했습니다",
     "sticker_unavailable": "스티커를 사용할 수 없습니다",
+    "attachment_unavailable": "첨부 파일을 사용할 수 없습니다",
     "agent_badge": "Agent",
     "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",

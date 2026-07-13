@@ -271,6 +271,16 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 		if msg.Type == "tool_use" {
 			rawTool := strings.TrimSpace(msg.Tool)
 			canonicalTool, known := taskMessageCanonicalToolName(rawTool, msg.Input)
+			if command := redactedCommandFromInput(msg.Input); command != "" {
+				details["command"] = command
+			}
+			if cli, ok := resolveRaftCLIInvocation(canonicalTool, msg.Input); ok {
+				canonicalTool = cli.Tool
+				known = true
+				for key, value := range cli.Details {
+					details[key] = value
+				}
+			}
 			if !known {
 				if rawTool != "" {
 					details["unmapped_tool_name"] = rawTool
@@ -293,7 +303,7 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 				details["raw_tool"] = rawTool
 			}
 		}
-		if target, summaryKind := agentInboxActivityToolTarget(msg); target != "" {
+		if target, summaryKind := agentInboxActivityToolTarget(msg); target != "" && details["tool_target"] == nil {
 			details["tool_target"] = target
 			details["summary_kind"] = summaryKind
 		}

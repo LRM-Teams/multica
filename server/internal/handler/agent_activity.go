@@ -677,7 +677,7 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 			aae.message,
 			aae.details,
 			aae.visibility,
-			NULL::text AS status,
+			NULLIF(aae.details->>'status', '')::text AS status,
 			NULL::text AS trigger_summary,
 			NULL::jsonb AS result,
 			NULL::text AS failure_reason,
@@ -697,7 +697,8 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 		    OR (
 		      aae.event_kind = 'custom'
 		      AND (
-		        aae.event_type LIKE '%subagent%'
+		        aae.event_type = 'agent_status_changed'
+		        OR aae.event_type LIKE '%subagent%'
 		        OR (
 		          aae.event_type IN ('radar_action_executed', 'radar_action_failed')
 		          AND COALESCE(aae.reason_code, '') <> 'radar_untrusted_target'
@@ -808,7 +809,7 @@ func (h *Handler) hydrateAgentActivityTimelineEvent(ctx context.Context, workspa
 			aae.message,
 			aae.details,
 			aae.visibility,
-			NULL::text AS status,
+			NULLIF(aae.details->>'status', '')::text AS status,
 			NULL::text AS trigger_summary,
 			NULL::jsonb AS result,
 			NULL::text AS failure_reason,
@@ -936,7 +937,7 @@ const agentActivityListSQL = `
 			aae.message,
 			aae.details,
 			aae.visibility,
-			NULL::text AS status,
+			NULLIF(aae.details->>'status', '')::text AS status,
 			NULL::text AS trigger_summary,
 			NULL::jsonb AS result,
 			NULL::text AS failure_reason,
@@ -1033,7 +1034,7 @@ const agentActivityUnionSQL = `
 			aae.message,
 			aae.details,
 			aae.visibility,
-			NULL::text AS status,
+			NULLIF(aae.details->>'status', '')::text AS status,
 			NULL::text AS trigger_summary,
 			NULL::jsonb AS result,
 			NULL::text AS failure_reason,

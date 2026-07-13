@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
@@ -33,6 +34,8 @@ import (
 
 const chatResumeRecentMessageLimit = 10
 const daemonRegisterTokenTTL = 24 * time.Hour
+
+var errInvalidTaskMessageSince = errors.New("invalid since parameter")
 
 // ---------------------------------------------------------------------------
 // Daemon workspace ownership helpers
@@ -2951,6 +2954,43 @@ func taskMessageToPayload(m db.TaskMessage, taskID, issueID string) protocol.Tas
 	}
 }
 
+type inboxEventTaskMessageRow struct {
+	Seq        int32
+	Type       string
+	Tool       string
+	Content    string
+	Input      []byte
+	Output     string
+	Visibility string
+	CreatedAt  pgtype.Timestamptz
+}
+
+func inboxEventTaskMessageToPayload(row inboxEventTaskMessageRow, taskID string) protocol.TaskMessagePayload {
+	var input map[string]any
+	if len(row.Input) > 0 {
+		json.Unmarshal(row.Input, &input)
+	}
+	createdAt := ""
+	if row.CreatedAt.Valid {
+		createdAt = row.CreatedAt.Time.UTC().Format(time.RFC3339Nano)
+	}
+	visibility := strings.TrimSpace(row.Visibility)
+	if visibility == "" {
+		visibility = "user_facing"
+	}
+	return protocol.TaskMessagePayload{
+		TaskID:     taskID,
+		Seq:        int(row.Seq),
+		Type:       row.Type,
+		Tool:       row.Tool,
+		Content:    row.Content,
+		Input:      input,
+		Output:     row.Output,
+		Visibility: visibility,
+		CreatedAt:  createdAt,
+	}
+}
+
 func taskMessageVisibility(msgType string) string {
 	return taskMessageVisibilityForMessage(msgType, "", nil)
 }
@@ -3108,6 +3148,21 @@ func (h *Handler) ListTaskMessagesByUser(w http.ResponseWriter, r *http.Request)
 
 	task, err := h.Queries.GetAgentTask(r.Context(), taskUUID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			resp, found, inboxErr := h.listInboxEventTaskMessagesByUser(r.Context(), taskUUID, taskID, middleware.WorkspaceIDFromContext(r.Context()), r.URL.Query().Get("since"))
+			if inboxErr != nil {
+				if errors.Is(inboxErr, errInvalidTaskMessageSince) {
+					writeError(w, http.StatusBadRequest, "invalid since parameter")
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "failed to list task messages")
+				return
+			}
+			if found {
+				writeJSON(w, http.StatusOK, resp)
+				return
+			}
+		}
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
@@ -3149,6 +3204,123 @@ func (h *Handler) ListTaskMessagesByUser(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) listInboxEventTaskMessagesByUser(ctx context.Context, eventID pgtype.UUID, taskID, workspaceID, sinceStr string) ([]protocol.TaskMessagePayload, bool, error) {
+	if h == nil || h.DB == nil {
+		return nil, false, nil
+	}
+	if strings.TrimSpace(workspaceID) == "" {
+		return nil, false, nil
+	}
+	var sinceArg any
+	if sinceStr != "" {
+		sinceSeq, err := strconv.Atoi(sinceStr)
+		if err != nil {
+			return nil, false, errInvalidTaskMessageSince
+		}
+		sinceArg = sinceSeq
+	}
+
+	workspaceUUID := parseUUID(workspaceID)
+	var exists bool
+	if err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM agent_inbox_event
+			WHERE id = $1
+			  AND workspace_id = $2
+		)
+	`, eventID, workspaceUUID).Scan(&exists); err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
+	}
+
+	rows, err := h.DB.Query(ctx, `
+		WITH activity AS (
+			SELECT
+				aae.id,
+				aae.event_kind,
+				aae.message,
+				aae.details,
+				aae.visibility,
+				aae.created_at,
+				CASE
+					WHEN COALESCE(aae.details->>'seq', '') ~ '^[0-9]+$'
+						THEN (aae.details->>'seq')::int
+					ELSE NULL
+				END AS reported_seq
+			FROM agent_activity_event aae
+			WHERE aae.workspace_id = $2
+			  AND aae.details->>'inbox_event_id' = $1::text
+			  AND aae.event_kind IN ('thinking', 'text', 'tool_call', 'error')
+		),
+		numbered AS (
+			SELECT
+				COALESCE(
+					reported_seq,
+					ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC)::int
+				)::int AS seq,
+				event_kind,
+				message,
+				details,
+				visibility,
+				created_at,
+				id
+			FROM activity
+		)
+		SELECT
+			seq,
+			CASE
+				WHEN event_kind = 'tool_call' THEN 'tool_use'
+				WHEN event_kind = 'error' THEN 'error'
+				WHEN event_kind = 'thinking' THEN 'thinking'
+				ELSE 'text'
+			END AS type,
+			COALESCE(details->>'tool', '') AS tool,
+			CASE
+				WHEN event_kind IN ('thinking', 'text', 'error') THEN COALESCE(message, '')
+				ELSE ''
+			END AS content,
+			CASE
+				WHEN jsonb_typeof(details->'input') = 'object' THEN details->'input'
+				ELSE NULL
+			END AS input,
+			''::text AS output,
+			COALESCE(NULLIF(visibility, ''), 'user_facing') AS visibility,
+			created_at
+		FROM numbered
+		WHERE ($3::int IS NULL OR seq > $3::int)
+		ORDER BY seq ASC, created_at ASC, id ASC
+	`, eventID, workspaceUUID, sinceArg)
+	if err != nil {
+		return nil, true, err
+	}
+	defer rows.Close()
+
+	payloads := []protocol.TaskMessagePayload{}
+	for rows.Next() {
+		var row inboxEventTaskMessageRow
+		if err := rows.Scan(
+			&row.Seq,
+			&row.Type,
+			&row.Tool,
+			&row.Content,
+			&row.Input,
+			&row.Output,
+			&row.Visibility,
+			&row.CreatedAt,
+		); err != nil {
+			return nil, true, err
+		}
+		payloads = append(payloads, inboxEventTaskMessageToPayload(row, taskID))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, true, err
+	}
+	return payloads, true, nil
 }
 
 // GetIssueUsage returns aggregated token usage for all tasks belonging to an issue.

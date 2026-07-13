@@ -18,14 +18,14 @@ name: Deploy
 # One-time server + repo setup is documented in docs/deploy-s89.md.
 
 on:
-  # Deploy only when a PR is MERGED into `dev` (the team's integration branch).
-  # Direct pushes to dev do NOT deploy — the disciplined flow is
-  # feature branch → PR → merge to dev → deploy.
-  # Docs-only PRs (#354 bug) are excluded — they don't change any code, so
+  # Deploy only from the `dev` integration branch, after a PR has already been
+  # merged. PR events must not deploy to the shared s89 environment; they can
+  # build/test in CI, but s89 must always represent dev or an explicit manual
+  # dispatch from dev. Rollback dispatches must name an existing image tag.
+  # Docs-only changes (#354 bug) are excluded — they don't change any code, so
   # triggering a backend rebuild/restart would disconnect all WS connections
   # for zero benefit.
-  pull_request:
-    types: [closed]
+  push:
     branches: [dev]
     paths-ignore:
       - "docs/**"
@@ -47,10 +47,13 @@ jobs:
   build:
     # Only build/deploy from the team fork — never upstream or other forks.
     # On manual dispatch with an image_tag we skip building and redeploy that tag.
+    # Empty-tag manual builds must also target dev; s89 never builds a feature ref.
     if: >-
       github.repository_owner == 'LRM-Teams' &&
-      ((github.event_name == 'pull_request' && github.event.pull_request.merged == true) ||
-       (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag == ''))
+      ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/dev' &&
+        github.event.inputs.image_tag == ''))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -61,11 +64,8 @@ jobs:
       backend_image: ${{ steps.prep.outputs.backend_image }}
       web_image: ${{ steps.prep.outputs.web_image }}
     steps:
-      # On a merged PR, build the actual merge commit on `dev`; on manual
-      # dispatch, build whatever ref was dispatched.
+      # On dev push or manual dev dispatch, build the committed dev head.
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.ref }}
 
       # GHCR paths must be lowercase, but github.repository_owner preserves the
       # org's display case (e.g. "LRM-Teams"). Lowercase it here. The tag is the
@@ -133,12 +133,14 @@ jobs:
     # the backend on every deploy.
     environment: s89
     # Run after a successful build (push / dispatch-without-tag), OR straight
-    # away on a dispatch that names an existing tag to roll back to.
+    # away on a dev dispatch that names an existing tag to roll back to.
     if: >-
       always() &&
       github.repository_owner == 'LRM-Teams' &&
       (needs.build.result == 'success' ||
-       (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != ''))
+       (github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/dev' &&
+        github.event.inputs.image_tag != ''))
     runs-on: [self-hosted, s89]
     timeout-minutes: 15
     permissions:
@@ -159,7 +161,6 @@ jobs:
       # /data/multica/.env holds, so it can never drift.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.ref }}
           sparse-checkout: docker-compose.selfhost.yml
           sparse-checkout-cone-mode: false
 

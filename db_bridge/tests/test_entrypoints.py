@@ -9,7 +9,7 @@ import time
 import httpx
 import pytest
 
-from db_bridge.channels import CHANNELS_BY_NAME
+from db_bridge.channels import CHANNELS_BY_NAME, executor_channels, stub_channels
 from db_bridge.config import BridgeConfig
 from db_bridge.db import BridgeDB
 from db_bridge.entrypoints import _configure_logging, _parse_side
@@ -40,6 +40,16 @@ def _config(**overrides: str) -> BridgeConfig:
 def test_parse_side_valid():
     assert _parse_side(["--side", "leagent"], "p") == "leagent"
     assert _parse_side(["--side", "areal"], "p") == "areal"
+    assert _parse_side(["--side", "multica"], "p") == "multica"
+
+
+def test_multica_side_selects_multica_api_channels():
+    # --side multica drives the executor for the multica_api group (env-dispatch
+    # + DAG fetch). multica hosts no stub, so stub_channels("multica") is empty
+    # and the multica host runs an executor only.
+    executed = {c.name for c in executor_channels("multica")}
+    assert executed == {"env_dispatch", "env_dispatch_delete", "env_dispatch_dag"}
+    assert stub_channels("multica") == ()
 
 
 def test_parse_side_rejects_missing_or_invalid():

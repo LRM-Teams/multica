@@ -304,4 +304,42 @@ describe("Markdown", () => {
     expect(container.querySelector("code mark")).toBeNull();
     expect(container.querySelector("code")?.textContent).toBe("abc");
   });
+
+  describe("inline mode", () => {
+    it("formats inline emphasis (bold / italic / inline code)", () => {
+      const { container } = render(
+        <Markdown mode="inline">{"a **bold** _em_ and `code` here"}</Markdown>,
+      );
+
+      expect(container.querySelector("strong")?.textContent).toBe("bold");
+      expect(container.querySelector("em")?.textContent).toBe("em");
+      expect(container.querySelector("code")?.textContent).toBe("code");
+    });
+
+    it("degrades a truncated unclosed code fence to plain text, never a code block", () => {
+      // A cut Output summary: the ```json fence is never closed. Block chrome
+      // would swallow the tail into a broken code block (the v0 bug this mode
+      // prevents) — inline mode renders the content as flat text instead.
+      const { container } = render(
+        <Markdown mode="inline">{'Looking at it:\n\n```json\n{"summary":"No new'}</Markdown>,
+      );
+
+      expect(container.querySelector("pre")).toBeNull();
+      expect(container.textContent).toContain("Looking at it:");
+      expect(container.textContent).toContain('{"summary":"No new');
+    });
+
+    it("flattens block structure (headings, lists) to inline text", () => {
+      const { container } = render(
+        <Markdown mode="inline">{"# Heading\n\n- one\n- two"}</Markdown>,
+      );
+
+      expect(container.querySelector("h1")).toBeNull();
+      expect(container.querySelector("ul")).toBeNull();
+      expect(container.querySelector("li")).toBeNull();
+      expect(container.textContent).toContain("Heading");
+      expect(container.textContent).toContain("one");
+      expect(container.textContent).toContain("two");
+    });
+  });
 });

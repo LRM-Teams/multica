@@ -373,6 +373,7 @@
         "output": "Output",
         "completed": "Completed",
         "working": "Working",
+        "idle": "Idle",
         "failed": "Failed",
         "waiting": "Waiting",
         "running_command": "Running command",

@@ -28,6 +28,7 @@ export type ActivityLabelKey =
   | "output"
   | "completed"
   | "working"
+  | "idle"
   | "failed"
   | "waiting"
   | "running_command"
@@ -130,7 +131,16 @@ export function isNarrativeActivityEvent(event: ActivityEvent): boolean {
       // `unmapped_tool_name` gap event so the miss is fixed at the source.
       return isMappedTool(event);
     case "custom":
-      return event.detail_kind.includes("subagent") || isRadarActionEvent(event);
+      return (
+        // Agent status transitions (Working ↔ Idle) are mainline: raft shows
+        // status as presence (a projection of the latest activity kind), and the
+        // BE writes a row only on a REAL change (same-state writes de-duped at the
+        // source, #411/#525) — so every row here is a genuine transition worth
+        // surfacing. The FE adds NO collapse logic (raft doesn't collapse either).
+        event.detail_kind === "agent_status_changed" ||
+        event.detail_kind.includes("subagent") ||
+        isRadarActionEvent(event)
+      );
     default:
       return true;
   }
@@ -305,6 +315,16 @@ export function activityPresentation(event: ActivityEvent): ActivityPresentation
     case "blocked":
       return { labelKey: "waiting", subtext: reasonText(event) || narrativeText(event.text), tone: "waiting" };
     case "custom":
+      if (event.detail_kind === "agent_status_changed") {
+        // Agent presence transition (#411/#525). Raft's status palette: green =
+        // idle, yellow = working. We keep it type-based and static (Frank: no
+        // pulsing) — idle is a settled neutral row, working an active one. The
+        // label IS the state (no subtext). This row also feeds the header/hover
+        // latest-state via `projectLatestActivity`, so Idle correctly shows Idle.
+        return event.status === "idle"
+          ? { labelKey: "idle", tone: "neutral" }
+          : { labelKey: "working", tone: "active" };
+      }
       if (event.detail_kind === "radar_action_failed") {
         return {
           labelKey: "failed",

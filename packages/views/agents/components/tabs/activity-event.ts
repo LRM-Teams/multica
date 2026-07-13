@@ -26,6 +26,7 @@ export type ActivityEvent = AgentActivityTimelineEvent;
 export type ActivityLabelKey =
   | "thinking"
   | "output"
+  | "completed"
   | "working"
   | "failed"
   | "waiting"
@@ -74,6 +75,21 @@ function narrativeText(text: string | null | undefined): string | undefined {
 // NOT a `visibility` flag (that field was removed in the raft-alignment cutover).
 // The BE already prefilters the default page to mainline narrative; this predicate
 // is the FE-side guard that keeps the split identical (shared table, Iris keeper).
+function isRadarActionEvent(event: ActivityEvent): boolean {
+  if (event.reason_code?.trim() === "radar_untrusted_target") {
+    return false;
+  }
+  if (
+    event.detail_kind === "radar_action_executed" &&
+    event.reason_code?.trim() === "no_action"
+  ) {
+    return false;
+  }
+  return (
+    event.detail_kind === "radar_action_executed" || event.detail_kind === "radar_action_failed"
+  );
+}
+
 export function isNarrativeActivityEvent(event: ActivityEvent): boolean {
   switch (event.activity_kind) {
     case "tool_output":
@@ -92,7 +108,7 @@ export function isNarrativeActivityEvent(event: ActivityEvent): boolean {
       // `unmapped_tool_name` gap event so the miss is fixed at the source.
       return isMappedTool(event);
     case "custom":
-      return event.detail_kind.includes("subagent");
+      return event.detail_kind.includes("subagent") || isRadarActionEvent(event);
     default:
       return true;
   }
@@ -214,6 +230,16 @@ export function activityPresentation(event: ActivityEvent): ActivityPresentation
     case "blocked":
       return { labelKey: "waiting", subtext: reasonText(event) || narrativeText(event.text), tone: "waiting" };
     case "custom":
+      if (event.detail_kind === "radar_action_failed") {
+        return {
+          labelKey: "failed",
+          subtext: narrativeText(event.text) ?? reasonText(event),
+          tone: "failure",
+        };
+      }
+      if (event.detail_kind === "radar_action_executed") {
+        return { labelKey: "completed", subtext: narrativeText(event.text), tone: "neutral" };
+      }
       if (event.detail_kind.includes("subagent")) {
         // Prefer the daemon's own subagent detail text; fall back to a fixed label.
         return event.text

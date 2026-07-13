@@ -22,6 +22,11 @@ const (
 	agentRadarHourlyBudget = 6
 	agentRadarBatchLimit   = 200
 	agentRadarCooldownKey  = "periodic_project_radar"
+	// A claim should move dispatched -> running in seconds. One hour is an
+	// intentionally conservative absolute-age backstop for claims whose
+	// dispatched_at keeps being refreshed by claim recovery.
+	agentRadarStaleDispatchAge = time.Hour
+	agentRadarStaleRepairLimit = 200
 )
 
 type radarCandidate struct {
@@ -54,7 +59,11 @@ func makeAgentRadarScheduleHandler(pool *pgxpool.Pool, taskSvc *service.TaskServ
 		if pool == nil || taskSvc == nil {
 			return HandlerResult{Result: map[string]any{"skipped": true, "reason": "db_unavailable"}}, nil
 		}
-		repaired, err := reconcileTerminalRadarRuns(ctx, pool)
+		terminalRepaired, err := reconcileTerminalRadarRuns(ctx, pool)
+		if err != nil {
+			return HandlerResult{}, err
+		}
+		staleDispatchRepaired, err := repairStaleDispatchedRadarTasks(ctx, taskSvc)
 		if err != nil {
 			return HandlerResult{}, err
 		}
@@ -115,18 +124,41 @@ func makeAgentRadarScheduleHandler(pool *pgxpool.Pool, taskSvc *service.TaskServ
 		return HandlerResult{
 			RowsAffected: created,
 			Result: map[string]any{
-				"candidates":      len(candidates),
-				"created":         created,
-				"failed":          failed,
-				"repaired":        repaired,
-				"skipped_active":  skippedActive,
-				"skipped_offline": skippedNotReady,
-				"skipped_budget":  skippedBudget,
-				"hourly_budget":   agentRadarHourlyBudget,
-				"cooldown_key":    agentRadarCooldownKey,
+				"candidates":                len(candidates),
+				"created":                   created,
+				"failed":                    failed,
+				"repaired":                  terminalRepaired + staleDispatchRepaired,
+				"repaired_terminal":         terminalRepaired,
+				"repaired_stale_dispatched": staleDispatchRepaired,
+				"skipped_active":            skippedActive,
+				"skipped_offline":           skippedNotReady,
+				"skipped_budget":            skippedBudget,
+				"hourly_budget":             agentRadarHourlyBudget,
+				"cooldown_key":              agentRadarCooldownKey,
 			},
 		}, nil
 	}
+}
+
+func repairStaleDispatchedRadarTasks(ctx context.Context, taskSvc *service.TaskService) (int64, error) {
+	failedTasks, err := taskSvc.Queries.FailStaleDispatchedAgentRadarTasks(ctx, db.FailStaleDispatchedAgentRadarTasksParams{
+		StaleAgeSecs: agentRadarStaleDispatchAge.Seconds(),
+		MaxPerTick:   agentRadarStaleRepairLimit,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if len(failedTasks) == 0 {
+		return 0, nil
+	}
+
+	// This also terminalizes the linked Radar run and publishes the normal
+	// task failure/status events. The repair reason is deliberately not
+	// retryable by TaskService; the next scheduled Radar observation is the
+	// safe retry boundary.
+	taskSvc.HandleFailedTasks(ctx, failedTasks)
+	slog.Info("agent radar: repaired stale dispatched tasks", "count", len(failedTasks))
+	return int64(len(failedTasks)), nil
 }
 
 // reconcileTerminalRadarRuns closes the crash window between a task becoming

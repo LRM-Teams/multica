@@ -162,7 +162,7 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	}
 }
 
-func TestListAgentTasksUsesInboxEventsAndDowngradesLegacyRadar(t *testing.T) {
+func TestListAgentTasksUsesInboxEventsAndSeparatesCurrentFromLegacyRadar(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -191,7 +191,7 @@ func TestListAgentTasksUsesInboxEventsAndDowngradesLegacyRadar(t *testing.T) {
 		t.Fatalf("inbox event %s has no chat_session_id", inboxEventID)
 	}
 
-	var legacyChatTaskID, legacyRadarTaskID string
+	var legacyChatTaskID, legacyRadarTaskID, activeRadarTaskID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_task_queue (
 			agent_id, runtime_id, chat_session_id, status, priority,
@@ -213,8 +213,21 @@ func TestListAgentTasksUsesInboxEventsAndDowngradesLegacyRadar(t *testing.T) {
 		RETURNING id`, agentID, handlerTestRuntimeID(t)).Scan(&legacyRadarTaskID); err != nil {
 		t.Fatalf("insert legacy radar task: %v", err)
 	}
+	activeRadarRunID := uuid.NewString()
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, status, priority, context,
+			trigger_summary, created_at, dispatched_at
+		)
+		VALUES ($1, $2, 'dispatched', 0,
+		        jsonb_build_object('type', 'agent_radar', 'radar_run_id', $3::text),
+		        'current radar row should preserve its status',
+		        now() - interval '2 minutes', now() - interval '1 minute')
+		RETURNING id`, agentID, handlerTestRuntimeID(t), activeRadarRunID).Scan(&activeRadarTaskID); err != nil {
+		t.Fatalf("insert current radar task: %v", err)
+	}
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id IN ($1, $2)`, legacyChatTaskID, legacyRadarTaskID)
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id IN ($1, $2, $3)`, legacyChatTaskID, legacyRadarTaskID, activeRadarTaskID)
 	})
 
 	w := httptest.NewRecorder()
@@ -245,13 +258,20 @@ func TestListAgentTasksUsesInboxEventsAndDowngradesLegacyRadar(t *testing.T) {
 	if inboxTask.TriggerSummary == nil || strings.TrimSpace(*inboxTask.TriggerSummary) == "" || strings.Contains(*inboxTask.TriggerSummary, "legacy chat") {
 		t.Fatalf("inbox task trigger summary = %#v, want non-empty inbox summary", inboxTask.TriggerSummary)
 	}
-
-	radarTask, ok := byID[legacyRadarTaskID]
+	legacyRadarTask, ok := byID[legacyRadarTaskID]
 	if !ok {
 		t.Fatalf("missing legacy radar task %s in response: %+v", legacyRadarTaskID, tasks)
 	}
-	if radarTask.Status != "cancelled" || radarTask.CompletedAt == nil {
-		t.Fatalf("legacy radar task = %+v, want cancelled historical row", radarTask)
+	if legacyRadarTask.Status != "cancelled" || legacyRadarTask.CompletedAt == nil {
+		t.Fatalf("legacy radar task = %+v, want cancelled historical row", legacyRadarTask)
+	}
+
+	radarTask, ok := byID[activeRadarTaskID]
+	if !ok {
+		t.Fatalf("missing active radar task %s in response: %+v", activeRadarTaskID, tasks)
+	}
+	if radarTask.Status != "dispatched" || radarTask.CompletedAt != nil {
+		t.Fatalf("active radar task = %+v, want dispatched row without completed_at", radarTask)
 	}
 }
 

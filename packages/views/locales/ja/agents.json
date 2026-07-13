@@ -355,6 +355,7 @@
       "labels": {
         "thinking": "思考中",
         "output": "出力",
+        "completed": "完了",
         "working": "実行中",
         "failed": "失敗",
         "waiting": "待機中",

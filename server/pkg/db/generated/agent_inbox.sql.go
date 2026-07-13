@@ -608,7 +608,13 @@ WITH original AS (
 guarded AS (
   SELECT original.id, original.workspace_id, original.agent_session_id, original.conversation_id, original.channel_id, original.chat_session_id, original.agent_id, original.source_message_id, original.reason, original.requires_wake, original.status, original.priority, original.seq_from, original.seq_to, original.attempt, original.last_error, original.claimed_at, original.acked_at, original.created_at, original.updated_at, original.terminal_outcome, original.terminal_delivery_id, original.retryable, original.terminal_at
   FROM original
-  WHERE NOT EXISTS (
+  WHERE EXISTS (
+    SELECT 1
+    FROM chat_message prompt
+    WHERE prompt.task_id = original.id
+      AND prompt.role = 'user'
+  )
+    AND NOT EXISTS (
     SELECT 1
     FROM agent_inbox_event newer
     WHERE newer.workspace_id = original.workspace_id
@@ -631,39 +637,70 @@ refreshed_session AS (
   JOIN agent a ON a.id = guarded.agent_id
   WHERE s.id = guarded.agent_session_id
   RETURNING s.id
+),
+retried_event AS (
+  INSERT INTO agent_inbox_event (
+    workspace_id,
+    agent_session_id,
+    conversation_id,
+    channel_id,
+    chat_session_id,
+    agent_id,
+    source_message_id,
+    reason,
+    requires_wake,
+    status,
+    priority,
+    seq_from,
+    seq_to
+  )
+  SELECT
+    guarded.workspace_id,
+    refreshed_session.id,
+    guarded.conversation_id,
+    guarded.channel_id,
+    guarded.chat_session_id,
+    guarded.agent_id,
+    guarded.source_message_id,
+    guarded.reason,
+    true,
+    'pending',
+    guarded.priority,
+    guarded.seq_from,
+    guarded.seq_to
+  FROM guarded
+  JOIN refreshed_session ON refreshed_session.id = guarded.agent_session_id
+  RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at
+),
+copied_prompt AS (
+  INSERT INTO chat_message (
+    chat_session_id,
+    role,
+    content,
+    parts,
+    task_id,
+    thread_id,
+    channel_thread_root_message_id,
+    trigger_depth
+  )
+  SELECT
+    prompt.chat_session_id,
+    prompt.role,
+    prompt.content,
+    prompt.parts,
+    retried_event.id,
+    prompt.thread_id,
+    prompt.channel_thread_root_message_id,
+    prompt.trigger_depth
+  FROM chat_message prompt
+  JOIN original ON prompt.task_id = original.id
+  CROSS JOIN retried_event
+  WHERE prompt.role = 'user'
+  RETURNING id
 )
-INSERT INTO agent_inbox_event (
-  workspace_id,
-  agent_session_id,
-  conversation_id,
-  channel_id,
-  chat_session_id,
-  agent_id,
-  source_message_id,
-  reason,
-  requires_wake,
-  status,
-  priority,
-  seq_from,
-  seq_to
-)
-SELECT
-  guarded.workspace_id,
-  refreshed_session.id,
-  guarded.conversation_id,
-  guarded.channel_id,
-  guarded.chat_session_id,
-  guarded.agent_id,
-  guarded.source_message_id,
-  guarded.reason,
-  true,
-  'pending',
-  guarded.priority,
-  guarded.seq_from,
-  guarded.seq_to
-FROM guarded
-JOIN refreshed_session ON refreshed_session.id = guarded.agent_session_id
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at
+SELECT retried_event.id, retried_event.workspace_id, retried_event.agent_session_id, retried_event.conversation_id, retried_event.channel_id, retried_event.chat_session_id, retried_event.agent_id, retried_event.source_message_id, retried_event.reason, retried_event.requires_wake, retried_event.status, retried_event.priority, retried_event.seq_from, retried_event.seq_to, retried_event.attempt, retried_event.last_error, retried_event.claimed_at, retried_event.acked_at, retried_event.created_at, retried_event.updated_at, retried_event.terminal_outcome, retried_event.terminal_delivery_id, retried_event.retryable, retried_event.terminal_at
+FROM retried_event
+WHERE EXISTS (SELECT 1 FROM copied_prompt)
 `
 
 type RetryAgentInboxEventParams struct {
@@ -672,9 +709,36 @@ type RetryAgentInboxEventParams struct {
 	ChannelID   pgtype.UUID `json:"channel_id"`
 }
 
-func (q *Queries) RetryAgentInboxEvent(ctx context.Context, arg RetryAgentInboxEventParams) (AgentInboxEvent, error) {
+type RetryAgentInboxEventRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	AgentSessionID     pgtype.UUID        `json:"agent_session_id"`
+	ConversationID     pgtype.UUID        `json:"conversation_id"`
+	ChannelID          pgtype.UUID        `json:"channel_id"`
+	ChatSessionID      pgtype.UUID        `json:"chat_session_id"`
+	AgentID            pgtype.UUID        `json:"agent_id"`
+	SourceMessageID    pgtype.UUID        `json:"source_message_id"`
+	Reason             string             `json:"reason"`
+	RequiresWake       bool               `json:"requires_wake"`
+	Status             string             `json:"status"`
+	Priority           int32              `json:"priority"`
+	SeqFrom            int64              `json:"seq_from"`
+	SeqTo              int64              `json:"seq_to"`
+	Attempt            int32              `json:"attempt"`
+	LastError          pgtype.Text        `json:"last_error"`
+	ClaimedAt          pgtype.Timestamptz `json:"claimed_at"`
+	AckedAt            pgtype.Timestamptz `json:"acked_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	TerminalOutcome    pgtype.Text        `json:"terminal_outcome"`
+	TerminalDeliveryID pgtype.UUID        `json:"terminal_delivery_id"`
+	Retryable          bool               `json:"retryable"`
+	TerminalAt         pgtype.Timestamptz `json:"terminal_at"`
+}
+
+func (q *Queries) RetryAgentInboxEvent(ctx context.Context, arg RetryAgentInboxEventParams) (RetryAgentInboxEventRow, error) {
 	row := q.db.QueryRow(ctx, retryAgentInboxEvent, arg.ID, arg.WorkspaceID, arg.ChannelID)
-	var i AgentInboxEvent
+	var i RetryAgentInboxEventRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,

@@ -694,7 +694,20 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 		  AND (
 		    aae.event_kind IN ('thinking', 'text', 'wake_attempt', 'error', 'blocked', 'compaction_started', 'compaction_finished')
 		    OR (aae.event_kind = 'tool_call' AND COALESCE(aae.details->>'tool', '') <> '')
-		    OR (aae.event_kind = 'custom' AND aae.event_type LIKE '%subagent%')
+		    OR (
+		      aae.event_kind = 'custom'
+		      AND (
+		        aae.event_type LIKE '%subagent%'
+		        OR (
+		          aae.event_type IN ('radar_action_executed', 'radar_action_failed')
+		          AND COALESCE(aae.reason_code, '') <> 'radar_untrusted_target'
+		          AND NOT (
+		            aae.event_type = 'radar_action_executed'
+		            AND COALESCE(aae.reason_code, '') = 'no_action'
+		          )
+		        )
+		      )
+		    )
 		  )
 
 		UNION ALL
@@ -2115,7 +2128,10 @@ func agentActivityTimelineRowIsNarrative(row agentActivityRawRow) bool {
 		_, known := taskMessageCanonicalToolName(tool, mapFromMap(details, "input"))
 		return known
 	case activityKindCustom:
-		return strings.Contains(textOrDefault(row.EventType, ""), "subagent")
+		return customActivityEventIsNarrative(
+			textOrDefault(row.EventType, ""),
+			textOrDefault(row.ReasonCode, ""),
+		)
 	default:
 		return false
 	}

@@ -2602,7 +2602,8 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 
 // ResolveTaskWorkspaceID determines the workspace ID for a task.
 // For issue tasks, it comes from the issue. For chat tasks, from the chat session.
-// For autopilot tasks, from the autopilot via its run.
+// For autopilot tasks, from the autopilot via its run. For Radar tasks, from
+// the linked Radar run after verifying that the run points back to this task.
 // Returns "" when none of the links resolve — callers treat that as "not found".
 func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentTaskQueue) string {
 	if task.IssueID.Valid {
@@ -2622,6 +2623,14 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 			}
 		}
 	}
+	if radarContext, ok := parseAgentRadarContext(task); ok {
+		runID, err := util.ParseUUID(radarContext.RadarRunID)
+		if err == nil {
+			if run, err := s.Queries.GetAgentRadarRun(ctx, runID); err == nil && run.TaskID.Valid && run.TaskID == task.ID {
+				return util.UUIDToString(run.WorkspaceID)
+			}
+		}
+	}
 	// Quick-create tasks have no issue / chat / autopilot link — workspace
 	// lives in the context JSONB. Returning "" here is what blocked
 	// requireDaemonTaskAccess (404 on /start, /progress, /complete, /fail
@@ -2631,6 +2640,20 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 		return qc.WorkspaceID
 	}
 	return ""
+}
+
+func parseAgentRadarContext(task db.AgentTaskQueue) (AgentRadarContext, bool) {
+	if len(task.Context) == 0 {
+		return AgentRadarContext{}, false
+	}
+	var radarContext AgentRadarContext
+	if err := json.Unmarshal(task.Context, &radarContext); err != nil {
+		return AgentRadarContext{}, false
+	}
+	if radarContext.Type != AgentRadarContextType || strings.TrimSpace(radarContext.RadarRunID) == "" {
+		return AgentRadarContext{}, false
+	}
+	return radarContext, true
 }
 
 func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQueue, msg *db.ChatMessage, outputType, target string, options *protocol.ChatOutputOptions, content string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload, outputSuppressedReason string) {

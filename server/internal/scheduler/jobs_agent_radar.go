@@ -12,6 +12,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/radar"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const JobNameAgentRadarSchedule = "agent_radar_schedule"
@@ -134,8 +135,12 @@ func listRadarCandidates(ctx context.Context, pool *pgxpool.Pool) ([]radarCandid
 	rows, err := pool.Query(ctx, `
 		SELECT a.workspace_id, a.id, a.runtime_id, a.display_name
 		FROM agent a
+		JOIN agent_runtime ar ON ar.id = a.runtime_id
 		WHERE a.archived_at IS NULL
 		  AND a.runtime_id IS NOT NULL
+		  -- Stopgap: only enqueue radar work for daemons that explicitly advertise
+		  -- radar execution support. Current daemon registrations do not.
+		  AND COALESCE(ar.metadata->'capabilities', '[]'::jsonb) ? $2::text
 		  AND EXISTS (
 		    SELECT 1
 		    FROM channel_member cm
@@ -147,7 +152,7 @@ func listRadarCandidates(ctx context.Context, pool *pgxpool.Pool) ([]radarCandid
 		  )
 		ORDER BY a.created_at ASC
 		LIMIT $1
-	`, agentRadarBatchLimit)
+	`, agentRadarBatchLimit, protocol.DaemonCapabilityAgentRadar)
 	if err != nil {
 		return nil, err
 	}

@@ -32,10 +32,16 @@ func TestDaemonRegistrationCapabilities_GatesCredentialTransport(t *testing.T) {
 	if !containsString(legacy, protocol.DaemonCapabilityChannelOutputActions) || !containsString(legacy, protocol.DaemonCapabilityAgentCLITransport) {
 		t.Fatalf("legacy capabilities missing base entries: %#v", legacy)
 	}
+	if containsString(legacy, protocol.DaemonCapabilityAgentRadar) {
+		t.Fatalf("legacy capabilities must not include %q before radar runtime support is explicit: %#v", protocol.DaemonCapabilityAgentRadar, legacy)
+	}
 
 	capable := daemonRegistrationCapabilities(true)
 	if !containsString(capable, protocol.DaemonCapabilityAgentCredentialTransport) {
 		t.Fatalf("capable registration missing %q: %#v", protocol.DaemonCapabilityAgentCredentialTransport, capable)
+	}
+	if containsString(capable, protocol.DaemonCapabilityAgentRadar) {
+		t.Fatalf("capable registration must not include %q before radar runtime support is explicit: %#v", protocol.DaemonCapabilityAgentRadar, capable)
 	}
 }
 

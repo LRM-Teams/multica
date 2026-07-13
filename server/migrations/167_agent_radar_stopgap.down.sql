@@ -1,0 +1,2 @@
+-- Irreversible cleanup: 167_agent_radar_stopgap.up.sql terminalizes orphan
+-- Radar jobs that cannot safely resume without an explicit runtime capability.

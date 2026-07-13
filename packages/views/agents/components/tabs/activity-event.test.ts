@@ -28,6 +28,8 @@ describe("activityPresentation — tool normalization", () => {
     ["shell", "running_command"],
     ["write", "writing_file"], // OpenCode
     ["write_file", "writing_file"],
+    ["create", "writing_file"], // native file-create tool folded into write family (#413)
+    ["create_file", "writing_file"],
     ["patch_apply", "editing_file"], // Codex
     ["edit_file", "editing_file"],
     ["multi_edit", "editing_file"],
@@ -131,6 +133,16 @@ describe("isNarrativeActivityEvent — un-mapped tool filter (#384)", () => {
     expect(isNarrativeActivityEvent(toolEvent("bash"))).toBe(true);
     expect(isNarrativeActivityEvent(toolEvent("read_file"))).toBe(true);
     expect(isNarrativeActivityEvent(toolEvent("Read"))).toBe(true); // case-insensitive
+    // A native file-create tool must NOT be dropped (#413): the un-mapped path
+    // would vanish the row entirely, worse than the old "Running command create".
+    expect(isNarrativeActivityEvent(toolEvent("create"))).toBe(true);
+  });
+
+  it("renders a native `create` tool as Writing file with the source path (#413)", () => {
+    const p = activityPresentation({ ...toolEvent("create"), tool_target: "/w/hello_world_2.txt" });
+    expect(p.labelKey).toBe("writing_file");
+    expect(p.subtext).toBe("/w/hello_world_2.txt");
+    expect(p.subtextKind).toBe("path"); // basename-preserving path, NOT a command clip
   });
 
   it("drops an un-mapped tool_call from the narrative", () => {

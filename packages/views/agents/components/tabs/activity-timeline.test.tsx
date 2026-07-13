@@ -278,6 +278,40 @@ describe("ActivityTimeline", () => {
     expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
   });
 
+  it("renders a command as a full-width hanging block (label + command in one two-line node) with static dots (#404)", () => {
+    const CMD: ActivityEvent = {
+      id: "cmd3",
+      agent_id: "agent-1",
+      occurred_at: "2026-07-06T09:36:05Z",
+      activity_kind: "tool_call",
+      detail_kind: "tool_use",
+      tool: "bash",
+      status: "completed",
+      entries: [{ kind: "tool_call", tool: "bash", command: "cd /a/b && ls -la /some/long/path" }],
+      target_ref: { kind: "agent", id: "agent-1" },
+    };
+    // An actively-running non-command tool — its dot must NOT pulse either (#404).
+    const READ_RUNNING: ActivityEvent = {
+      id: "rd1",
+      agent_id: "agent-1",
+      occurred_at: "2026-07-06T09:36:06Z",
+      activity_kind: "tool_call",
+      detail_kind: "tool_use",
+      tool: "read_file",
+      tool_target: "app.ts",
+      status: "running",
+      target_ref: { kind: "agent", id: "agent-1" },
+    };
+    const { container } = render(<ActivityTimeline events={[CMD, READ_RUNNING]} />);
+    // Label + command live in ONE full-width, two-line-clamped block — the command
+    // is no longer squished into the narrow column right of the label (Frank's 空位).
+    const block = screen.getByText("cd /a/b && ls -la /some/long/path").closest("div");
+    expect(block?.className).toContain("line-clamp-2");
+    expect(block?.textContent).toContain("Running command");
+    // No dot pulses anywhere — all static (#404: live-ness comes from header/#521).
+    expect(container.querySelector(".animate-pulse")).toBeNull();
+  });
+
   it("compact mode drops the command copy affordance (title-only, non-interactive) (#v0)", () => {
     const CMD: ActivityEvent = {
       id: "cmd2",

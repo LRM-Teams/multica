@@ -997,11 +997,11 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	if activity[1].kind != activityKindToolCall || activity[1].eventType != "tool_use" || activity[1].visibility != "user_facing" {
 		t.Fatalf("tool row = %+v, want user-facing tool_use", activity[1])
 	}
-	if activity[1].details["tool"] != "bash" || activity[1].details["raw_tool"] != "terminal" || activity[1].details["tool_target"] != "hello_world.txt" || activity[1].details["summary_kind"] != "file_path" {
-		t.Fatalf("tool details = %+v, want canonical bash/raw terminal/safe target hello_world.txt", activity[1].details)
+	if activity[1].details["tool"] != "bash" || activity[1].details["raw_tool"] != "terminal" || activity[1].details["tool_target"] != "cat secret" || activity[1].details["summary_kind"] != "command" || activity[1].details["command"] != "cat secret" {
+		t.Fatalf("tool details = %+v, want canonical bash/raw terminal/command summary", activity[1].details)
 	}
-	if strings.Contains(fmt.Sprint(activity[1].details), "cat secret") {
-		t.Fatalf("tool details leaked raw command: %+v", activity[1].details)
+	if strings.Contains(fmt.Sprint(activity[1].details), "/tmp/hello_world.txt") {
+		t.Fatalf("tool details leaked path-backed shell command target: %+v", activity[1].details)
 	}
 	if activity[2].kind != activityKindToolOutput || activity[2].visibility != "diagnostic_only" {
 		t.Fatalf("tool result row = %+v, want diagnostic tool_output", activity[2])
@@ -1024,8 +1024,9 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	if activity[6].kind != activityKindToolCall || activity[6].eventType != "tool_use" || activity[6].visibility != "user_facing" {
 		t.Fatalf("write file row = %+v, want user-facing tool_use", activity[6])
 	}
-	if activity[6].details["tool"] != "write_file" || activity[6].details["tool_target"] != "/Users/frank/Code/multica/server/internal/handler/channel_test.go" || activity[6].details["summary_kind"] != "file_path" {
-		t.Fatalf("write file details = %+v, want full source-backed file path", activity[6].details)
+	writeTarget, _ := activity[6].details["tool_target"].(string)
+	if activity[6].details["tool"] != "write_file" || !strings.HasSuffix(writeTarget, "/Code/multica/server/internal/handler/channel_test.go") || activity[6].details["summary_kind"] != "file_path" {
+		t.Fatalf("write file details = %+v, want redacted source-backed file path", activity[6].details)
 	}
 }
 
@@ -3991,23 +3992,43 @@ func TestChannelActiveTasksSurfacesInboxTerminalOutcomes(t *testing.T) {
 
 	noReplyRoot := dispatchThreadMentionForTest(t, channelID, agentID, "active-terminal-no-reply-"+uuid.NewString())
 	noReplyEventID := latestChannelAgentInboxEventForRootForTest(t, noReplyRoot.ID, agentID)
-	noReplyDeliveryID := setAgentInboxTerminalOutcomeForTest(t, noReplyEventID, "no_reply", false)
 
 	req := withURLParam(newRequest(http.MethodGet, "/api/channels/"+channelID+"/active-tasks", nil), "channelId", channelID)
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
 	rec := httptest.NewRecorder()
 	testHandler.ListChannelActiveTasks(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("list active terminal tasks: status=%d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("list active inbox tasks: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	var resp ChannelActiveTasksResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode active inbox tasks: %v", err)
+	}
+	if len(resp.Tasks) != 1 {
+		t.Fatalf("active inbox tasks = %+v, want one queued inbox row", resp.Tasks)
+	}
+	got := resp.Tasks[0]
+	if got.AgentID != agentID || got.AgentName == "" || got.TaskID != noReplyEventID || got.Status != "queued" {
+		t.Fatalf("active inbox task identity = %+v, want agent/queued/inbox event id", got)
+	}
+	if got.Outcome != nil || got.InboxEventID == nil || *got.InboxEventID != noReplyEventID || got.SourceMessageID == nil || *got.SourceMessageID == noReplyRoot.ID {
+		t.Fatalf("active inbox metadata = %+v, want inbox/source ids without terminal outcome", got)
+	}
+
+	noReplyDeliveryID := setAgentInboxTerminalOutcomeForTest(t, noReplyEventID, "no_reply", false)
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelActiveTasks(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list active terminal tasks: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	resp = ChannelActiveTasksResponse{}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode active terminal tasks: %v", err)
 	}
 	if len(resp.Tasks) != 1 {
 		t.Fatalf("active terminal tasks = %+v, want one no_reply row", resp.Tasks)
 	}
-	got := resp.Tasks[0]
+	got = resp.Tasks[0]
 	if got.AgentID != agentID || got.AgentName == "" || got.TaskID != noReplyEventID || got.Status != "no_reply" {
 		t.Fatalf("active terminal task identity = %+v, want agent/no_reply/inbox event id", got)
 	}

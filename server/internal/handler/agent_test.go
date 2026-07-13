@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -158,6 +159,99 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 			t.Errorf("agent %s: cancelled rows must be excluded from snapshot; got %d",
 				agentID, counts[key{agentID, "cancelled"}])
 		}
+	}
+}
+
+func TestListAgentTasksUsesInboxEventsAndDowngradesLegacyRadar(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "agent-task-inbox-history-"+uuid.NewString()[:8], []byte(`{}`))
+	channelID := seedChannelForTest(t, "agent-task-inbox-history-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+
+	root := dispatchThreadMentionForTest(t, channelID, agentID, "agent-task-inbox-source-"+uuid.NewString())
+	inboxEventID := latestChannelAgentInboxEventForRootForTest(t, root.ID, agentID)
+	setAgentInboxTerminalOutcomeForTest(t, inboxEventID, "replied", false)
+
+	var chatSessionID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT COALESCE(chat_session_id::text, '')
+		FROM agent_inbox_event
+		WHERE id = $1`, inboxEventID).Scan(&chatSessionID); err != nil {
+		t.Fatalf("load inbox chat session: %v", err)
+	}
+	if chatSessionID == "" {
+		t.Fatalf("inbox event %s has no chat_session_id", inboxEventID)
+	}
+
+	var legacyChatTaskID, legacyRadarTaskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, chat_session_id, status, priority,
+			trigger_summary, created_at, started_at
+		)
+		VALUES ($1, $2, $3, 'running', 0, 'legacy chat row must be hidden',
+		        now() - interval '5 minutes', now() - interval '4 minutes')
+		RETURNING id`, agentID, handlerTestRuntimeID(t), chatSessionID).Scan(&legacyChatTaskID); err != nil {
+		t.Fatalf("insert legacy chat task: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, status, priority, context,
+			trigger_summary, created_at, dispatched_at
+		)
+		VALUES ($1, $2, 'dispatched', 0, '{"type":"agent_radar"}'::jsonb,
+		        'legacy radar row should read as historical',
+		        now() - interval '10 minutes', now() - interval '9 minutes')
+		RETURNING id`, agentID, handlerTestRuntimeID(t)).Scan(&legacyRadarTaskID); err != nil {
+		t.Fatalf("insert legacy radar task: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id IN ($1, $2)`, legacyChatTaskID, legacyRadarTaskID)
+	})
+
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest(http.MethodGet, "/api/agents/"+agentID+"/tasks", nil), "id", agentID)
+	testHandler.ListAgentTasks(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListAgentTasks: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var tasks []AgentTaskResponse
+	if err := json.NewDecoder(w.Body).Decode(&tasks); err != nil {
+		t.Fatalf("decode agent tasks: %v", err)
+	}
+	byID := map[string]AgentTaskResponse{}
+	for _, task := range tasks {
+		byID[task.ID] = task
+	}
+	if _, ok := byID[legacyChatTaskID]; ok {
+		t.Fatalf("legacy chat task %s leaked into agent task history: %+v", legacyChatTaskID, byID[legacyChatTaskID])
+	}
+	inboxTask, ok := byID[inboxEventID]
+	if !ok {
+		t.Fatalf("missing inbox event task %s in response: %+v", inboxEventID, tasks)
+	}
+	if inboxTask.Status != "completed" || inboxTask.Kind != "chat" || inboxTask.ChatSessionID != chatSessionID || inboxTask.CompletedAt == nil {
+		t.Fatalf("inbox task = %+v, want completed chat row with chat_session_id + completed_at", inboxTask)
+	}
+	if inboxTask.TriggerSummary == nil || strings.TrimSpace(*inboxTask.TriggerSummary) == "" || strings.Contains(*inboxTask.TriggerSummary, "legacy chat") {
+		t.Fatalf("inbox task trigger summary = %#v, want non-empty inbox summary", inboxTask.TriggerSummary)
+	}
+
+	radarTask, ok := byID[legacyRadarTaskID]
+	if !ok {
+		t.Fatalf("missing legacy radar task %s in response: %+v", legacyRadarTaskID, tasks)
+	}
+	if radarTask.Status != "cancelled" || radarTask.CompletedAt == nil {
+		t.Fatalf("legacy radar task = %+v, want cancelled historical row", radarTask)
 	}
 }
 

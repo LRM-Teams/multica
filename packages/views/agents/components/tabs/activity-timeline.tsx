@@ -1,7 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Check, Copy } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { copyText } from "@multica/ui/lib/clipboard";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import { useT } from "../../../i18n";
 import {
@@ -44,6 +46,51 @@ function ToolTargetPath({ value }: { value: string }) {
   );
 }
 
+// A shell command's subtext (#v0 照实显示 · Frank "命令看不全"). The BE clip
+// (`tool_target`) renders as a plain single-line truncation — NEVER the path
+// treatment, which middle-ellipsises on the last `/` and mangles a command that
+// merely contains a slash. The full redacted command (`entries[].command`, via
+// `presentation.subtextFull`) is reachable on hover (`title`) and copyable. The
+// compact Profile Recent surface stays non-interactive (title only, no copy).
+function CommandSubtext({
+  inline,
+  full,
+  compact,
+}: {
+  inline: string;
+  full?: string;
+  compact: boolean;
+}) {
+  const { t } = useT("agents");
+  const [copied, setCopied] = useState(false);
+  const complete = full ?? inline;
+  const handleCopy = async () => {
+    if (await copyText(complete)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+  return (
+    <span className="group/cmd flex min-w-0 items-baseline gap-1.5">
+      <span title={complete} className="truncate font-mono text-xs text-muted-foreground">
+        {inline}
+      </span>
+      {!compact && (
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label={t(($) =>
+            copied ? $.tab_body.activity.command_copied : $.tab_body.activity.copy_command,
+          )}
+          className="shrink-0 text-muted-foreground/50 opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/cmd:opacity-100"
+        >
+          {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+        </button>
+      )}
+    </span>
+  );
+}
+
 function ActivityRow({
   event,
   time,
@@ -75,14 +122,16 @@ function ActivityRow({
     !!subtext &&
     !presentation.subtextKey &&
     (event.activity_kind === "thinking" || event.activity_kind === "text");
-  // A tool row's subtext is a `tool_target`; for file tools that is a path
-  // (#484/#385) which needs the basename-preserving path treatment. Non-path
-  // subtexts stay a plain single-line truncate. Shared by the inline (Activity
-  // tab) and compact (Profile Recent) layouts below.
-  const subtextIsPath = event.activity_kind === "tool_call" && !!subtext && subtext.includes("/");
+  // Route the tool subtext by its kind (#v0 照实显示, `activity-event.ts`
+  // classifies): a file tool's target is a PATH (basename-preserving
+  // middle-ellipsis, #484/#385); a shell tool's target is a COMMAND (plain clip
+  // + full redacted command on hover/copy — never the path treatment, which
+  // mangled commands containing `/`); everything else is a plain truncate.
   const subtextNode = subtext ? (
-    subtextIsPath ? (
+    presentation.subtextKind === "path" ? (
       <ToolTargetPath value={subtext} />
+    ) : presentation.subtextKind === "command" ? (
+      <CommandSubtext inline={subtext} full={presentation.subtextFull} compact={compact} />
     ) : (
       <span className="truncate text-xs text-muted-foreground">{subtext}</span>
     )

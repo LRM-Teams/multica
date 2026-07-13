@@ -51,6 +51,20 @@ export interface ActivityPresentation {
   subtextKey?: ActivitySubtextKey;
   /** Dynamic subtext (tool target, reply text, reason) — rendered verbatim. */
   subtext?: string;
+  /**
+   * How to render `subtext` (#v0 照实显示): a file `path` gets the
+   * basename-preserving middle-ellipsis treatment; a shell `command` renders as
+   * a plain single-line clip with the full redacted command on hover/copy (never
+   * the path treatment — a command contains `/` but is NOT a path); everything
+   * else is plain `text`. Undefined for non-tool rows.
+   */
+  subtextKind?: "path" | "command" | "text";
+  /**
+   * Full untruncated value for the hover tooltip / copy affordance when the
+   * inline `subtext` is a clip — e.g. the full redacted command from
+   * `entries[].command` while `subtext` shows the BE's compact clip.
+   */
+  subtextFull?: string;
   tone: ActivityDotTone;
 }
 
@@ -195,13 +209,39 @@ function isMappedTool(event: ActivityEvent): boolean {
   return !!TOOL_SEMANTIC[normalizedTool(event)];
 }
 
+// The full redacted command lives in `entries[].command` (#389 two-tier: the
+// compact clip is `tool_target` inline, the full command is for hover/copy).
+// Pull the first entry that carries one.
+function fullCommand(event: ActivityEvent): string | undefined {
+  return event.entries?.find((e) => e.command?.trim())?.command?.trim() || undefined;
+}
+
 function toolPresentation(event: ActivityEvent): ActivityPresentation {
   const subtext = toolTarget(event);
   const semantic = TOOL_SEMANTIC[normalizedTool(event)];
   // Rendered tool rows are always mapped (see `isNarrativeActivityEvent`); the
   // "working" branch is an unreachable type guard, never a real fallback label.
   const labelKey = (semantic && TOOL_ACTION_KEY[semantic]) || "working";
-  return { labelKey, subtext, tone: statusTone(event) };
+  // Classify the subtext so the row renders it correctly (#v0 照实显示). A file
+  // tool's target is a PATH (basename-preserving middle-ellipsis). A shell
+  // tool's target is a COMMAND — render it as a plain single-line clip with the
+  // full redacted command on hover/copy; it must NOT get the path treatment,
+  // which middle-ellipsises on the last `/` and mangles a command that merely
+  // contains a slash (the #v0 "命令看不全/云里雾里" bug). Everything else is plain.
+  const isPathTool = semantic === "read" || semantic === "write" || semantic === "edit";
+  const isCommand = semantic === "command";
+  const subtextKind: ActivityPresentation["subtextKind"] = isPathTool
+    ? "path"
+    : isCommand
+      ? "command"
+      : "text";
+  return {
+    labelKey,
+    subtext,
+    subtextKind,
+    subtextFull: isCommand ? fullCommand(event) : undefined,
+    tone: statusTone(event),
+  };
 }
 
 export function activityPresentation(event: ActivityEvent): ActivityPresentation {

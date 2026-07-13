@@ -390,6 +390,8 @@
         "compaction_finished": "압축 완료",
         "subagent_activity": "서브에이전트 활동"
       },
+      "copy_command": "명령 복사",
+      "command_copied": "복사됨",
       "view_diagnostics": "진단 세부정보 보기",
       "hide_diagnostics": "진단 세부정보 숨기기",
       "section_now": "현재",

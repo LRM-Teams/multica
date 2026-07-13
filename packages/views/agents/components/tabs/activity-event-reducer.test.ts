@@ -51,6 +51,22 @@ describe("upsertActivityEvents", () => {
     upsertActivityEvents(current, evt("b", "2026-07-10T10:01:00Z"));
     expect(current).toHaveLength(1);
   });
+
+  it("normalizes order even when incoming is empty (the #500 empty-liveEvents regression)", () => {
+    // The hook computes `upsertActivityEvents(data, liveEvents)`; before any WS
+    // event lands `liveEvents === []`, and `data` is the REST page in wire order
+    // (DESC). The output MUST still be chronological ASC — otherwise the timeline
+    // renders newest-on-top, the compact card `slice(-5)` takes the OLDEST five,
+    // and `projectLatestActivity` (last element) reports the OLDEST as "latest".
+    const descFromRest = [
+      evt("c", "2026-07-10T10:02:00Z"),
+      evt("b", "2026-07-10T10:01:00Z"),
+      evt("a", "2026-07-10T10:00:00Z"),
+    ];
+    const result = upsertActivityEvents(descFromRest, []);
+    expect(result.map((e) => e.id)).toEqual(["a", "b", "c"]);
+    expect(projectLatestActivity(result)?.id).toBe("c");
+  });
 });
 
 describe("projectLatestActivity", () => {

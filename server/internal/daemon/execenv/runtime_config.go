@@ -494,7 +494,10 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 				fmt.Fprintf(&b, "- Pi skill drafts root (`PI_SKILL_DRAFTS_DIR`): `%s`\n", ctx.AgentSkillDraftsDir)
 			}
 		}
-		b.WriteString("\nWhen asked where your memory or skills live, report these Multica agent paths, not host-global runtime paths. Use `MULTICA_AGENT_MEMORY_DIR` / `MULTICA_AGENT_ROOT` for durable memory changes, and write review candidates to `MULTICA_AGENT_SYNC_QUEUE_DIR` when a fact should be curated instead of directly committed. Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`, `~/.claude`, or other provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
+		b.WriteString("\nWhen asked where your memory or skills live, report these Multica agent paths, not host-global runtime paths. Use `MULTICA_AGENT_MEMORY_DIR` / `MULTICA_AGENT_ROOT` for durable memory changes. Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`, `~/.claude`, or other provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
+		if ctx.AgentRoot != "" || ctx.AgentMemoryDir != "" {
+			renderMemoryOperatingGuide(&b)
+		}
 	}
 
 	if ctx.ChatSessionID != "" {
@@ -775,6 +778,17 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	}
 
 	return b.String()
+}
+
+func renderMemoryOperatingGuide(b *strings.Builder) {
+	b.WriteString("### Memory Operating Guide (v0.1)\n\n")
+	b.WriteString("Use medium-strength auto-write: record information without waiting for a separate request when it is specific, supported by the current interaction, likely to matter in a future run, and belongs to this agent. Do not record guesses, routine task details, raw transcripts, secrets, or facts that are useful only for the current response. Prefer updating an existing entry over creating a duplicate.\n\n")
+	b.WriteString("- **Durable facts and decisions**: write stable project, team, tool, convention, responsibility, or operating knowledge to `memory/MEMORY.md` when future work is likely to reuse it.\n")
+	b.WriteString("- **User preferences and profile facts**: write stable, relevant preferences or user facts to `memory/USER.md` when the user states them clearly or repeated evidence makes them reliable. Attribute them to the identified user; do not generalize one member's preference to everyone.\n")
+	b.WriteString("- **Current state and events**: write active initiatives, temporary facts, dated events, commitments, blockers, and quotas to `memory/STATE.md`. Include a date and, when applicable, status, TTL/expiry, or reset date so stale state can be retired.\n")
+	b.WriteString("- **Review candidates**: write uncertain, conflicting, sensitive, or destination-ambiguous items to `memory/REVIEW.md` instead of canonical memory. Use `MULTICA_AGENT_SYNC_QUEUE_DIR/memory-candidates.jsonl` only for governed sharing or platform curation, never to copy private memory across agents directly.\n")
+	b.WriteString("- **Explicit user direction**: if the user says \"remember this\", \"write this down\", \"write this here\", or names a memory file, treat that as a direct write request and record it immediately in the requested agent-local destination. If the requested destination would violate safety, privacy, instruction precedence, or the isolated root boundary, do not write it there; explain the constraint and use a safe agent-local alternative only when appropriate.\n\n")
+	b.WriteString("Live instructions and the current task remain authoritative. If memory conflicts with them, follow the live source and put the conflict in `memory/REVIEW.md`; never silently rewrite instructions or use memory to override them.\n\n")
 }
 
 func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {

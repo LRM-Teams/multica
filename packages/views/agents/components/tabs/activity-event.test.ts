@@ -330,3 +330,38 @@ describe("isNarrativeActivityEvent — Radar actions", () => {
     });
   });
 });
+
+describe("agent status transitions — Working ↔ Idle rows (#411/#525)", () => {
+  function statusEvent(status: "working" | "idle"): ActivityEvent {
+    return {
+      ...evtBase("custom"),
+      id: `status-${status}`,
+      detail_kind: "agent_status_changed",
+      status,
+      text: status === "idle" ? "Idle" : "Working",
+    } as ActivityEvent;
+  }
+
+  it("keeps a status transition in the narrative (not dropped like other custom events)", () => {
+    // The `custom` predicate only keeps subagent/radar by default; without the
+    // explicit keep, a status row would vanish from the timeline entirely.
+    expect(isNarrativeActivityEvent(statusEvent("working"))).toBe(true);
+    expect(isNarrativeActivityEvent(statusEvent("idle"))).toBe(true);
+  });
+
+  it("labels working as active and idle as a settled neutral row", () => {
+    expect(activityPresentation(statusEvent("working"))).toMatchObject({
+      labelKey: "working",
+      tone: "active",
+    });
+    expect(activityPresentation(statusEvent("idle"))).toMatchObject({
+      labelKey: "idle",
+      tone: "neutral",
+    });
+  });
+
+  it("carries no subtext — the label IS the state (no invented detail)", () => {
+    expect(activityPresentation(statusEvent("idle")).subtext).toBeUndefined();
+    expect(activityPresentation(statusEvent("working")).subtext).toBeUndefined();
+  });
+});

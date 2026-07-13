@@ -357,6 +357,7 @@
         "output": "出力",
         "completed": "完了",
         "working": "実行中",
+        "idle": "アイドル",
         "failed": "失敗",
         "waiting": "待機中",
         "running_command": "コマンド実行",

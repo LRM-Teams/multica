@@ -373,6 +373,7 @@
         "output": "출력",
         "completed": "완료",
         "working": "작업 중",
+        "idle": "유휴",
         "failed": "실패",
         "waiting": "대기 중",
         "running_command": "명령 실행",

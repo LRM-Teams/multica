@@ -2551,6 +2551,8 @@ func normalizeNoReplyRationaleCandidate(output string) string {
 	normalized := strings.ToLower(strings.TrimSpace(output))
 	normalized = strings.ReplaceAll(normalized, "—", "-")
 	normalized = strings.ReplaceAll(normalized, "–", "-")
+	normalized = strings.ReplaceAll(normalized, "’", "'")
+	normalized = strings.ReplaceAll(normalized, "‘", "'")
 	normalized = strings.Join(strings.Fields(normalized), " ")
 	normalized = strings.TrimSpace(normalized)
 	for strings.HasSuffix(normalized, ".") {

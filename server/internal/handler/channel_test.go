@@ -798,7 +798,7 @@ func TestChannelAgentInboxDrainAckDirectedMention(t *testing.T) {
 	}
 }
 
-func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
+func TestChannelAgentInboxCompleteDirectedMentionDoesNotBridgeFinalText(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -845,14 +845,16 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 		t.Fatalf("drained task = %+v, want inbox-backed chat task for event %s", got.Task, got.ID)
 	}
 
+	var donePayload *protocol.ChatDonePayload
 	testHandler.Bus.Subscribe(protocol.EventChatDone, func(e events.Event) {
 		payload, ok := e.Payload.(protocol.ChatDonePayload)
 		if ok && payload.TaskID == got.ID {
+			donePayload = &payload
 			testHandler.handleChannelChatDone(e)
 		}
 	})
 
-	const reply = "Plain final reply from inbox complete"
+	const reply = "Plain final reply from inbox complete must stay diagnostic"
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent_event_delivery
 		SET lease_expires_at = now() - interval '1 second'
@@ -872,7 +874,13 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	if completeRec.Code != http.StatusOK {
 		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
 	}
-	assertChannelMessageContentCount(t, channelID, reply, 1)
+	assertNoChannelMessageContent(t, channelID, reply)
+	if donePayload == nil {
+		t.Fatal("missing chat done payload")
+	}
+	if donePayload.Type != protocol.ChatOutputKindNoReply || donePayload.OutputSuppressedReason != "" {
+		t.Fatalf("chat done payload type/reason = %q/%q, want no_reply with no suppression reason", donePayload.Type, donePayload.OutputSuppressedReason)
+	}
 
 	var status, terminalOutcome, terminalDeliveryID string
 	var retryable bool
@@ -886,8 +894,98 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	if status != "acked" {
 		t.Fatalf("inbox event status = %q, want acked", status)
 	}
-	if terminalOutcome != "replied" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
-		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want replied/%s/non-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
+	if terminalOutcome != "no_reply" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
+		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want no_reply/%s/non-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
+	}
+}
+
+func TestChannelAgentInboxCredentialTransportDoesNotBridgeImplicitFinalText(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	seedHandlerTestRuntimeCapabilities(t, []string{protocol.DaemonCapabilityAgentCredentialTransport})
+	agentName := "Inbox Credential Transport Agent " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	runtimeID := handlerTestRuntimeID(t)
+	channelID := seedChannelForTest(t, "agent-inbox-credential-transport-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") ee", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-credential-transport"), 0)
+	if err != nil {
+		t.Fatalf("insert mention trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-credential-transport-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode drain response: %v", err)
+	}
+	if len(drainResp.Events) != 1 {
+		t.Fatalf("drain returned %d events, want 1: %s", len(drainResp.Events), drainRec.Body.String())
+	}
+	got := drainResp.Events[0]
+
+	var donePayload *protocol.ChatDonePayload
+	testHandler.Bus.Subscribe(protocol.EventChatDone, func(e events.Event) {
+		payload, ok := e.Payload.(protocol.ChatDonePayload)
+		if ok && payload.TaskID == got.ID {
+			donePayload = &payload
+			testHandler.handleChannelChatDone(e)
+		}
+	})
+
+	rawOutput := `Plain final text from a credential-transport inbox run must stay diagnostic unless sent through the agent transport.`
+	completeReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/complete", CompleteAgentInboxEventRequest{
+		DeliveryID: got.DeliveryID,
+		LeaseToken: got.LeaseToken,
+		TaskCompleteRequest: TaskCompleteRequest{
+			Output: rawOutput,
+		},
+	}, testWorkspaceID, "agent-inbox-credential-transport-daemon")
+	completeReq = withURLParam(completeReq, "eventId", got.ID)
+	completeRec := httptest.NewRecorder()
+	testHandler.CompleteAgentInboxEvent(completeRec, completeReq)
+	if completeRec.Code != http.StatusOK {
+		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
+	}
+	assertNoChannelMessageContent(t, channelID, rawOutput)
+	if donePayload == nil {
+		t.Fatal("missing chat done payload")
+	}
+	if donePayload.Type != protocol.ChatOutputKindNoReply || donePayload.OutputSuppressedReason != "" {
+		t.Fatalf("chat done payload type/reason = %q/%q, want no_reply with no suppression reason", donePayload.Type, donePayload.OutputSuppressedReason)
+	}
+
+	var status, terminalOutcome, terminalDeliveryID string
+	var retryable bool
+	var terminalAt pgtype.Timestamptz
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, COALESCE(terminal_outcome, ''), COALESCE(terminal_delivery_id::text, ''), retryable, terminal_at
+		FROM agent_inbox_event
+		WHERE id = $1`, got.ID).Scan(&status, &terminalOutcome, &terminalDeliveryID, &retryable, &terminalAt); err != nil {
+		t.Fatalf("load inbox event status: %v", err)
+	}
+	if status != "acked" {
+		t.Fatalf("inbox event status = %q, want acked", status)
+	}
+	if terminalOutcome != "no_reply" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
+		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want no_reply/%s/non-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
 	}
 }
 

@@ -336,6 +336,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	h.ignoreImplicitAgentInboxCompletionOutput(r.Context(), event, deliveryID, &req.TaskCompleteRequest)
 	if h.TxStarter == nil {
 		writeError(w, http.StatusInternalServerError, "transaction starter unavailable")
 		return
@@ -404,6 +405,36 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		h.recordAgentInboxVisibleOutputActivity(r.Context(), event, task.RuntimeID, *chatDonePayload)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
+}
+
+func (h *Handler) ignoreImplicitAgentInboxCompletionOutput(ctx context.Context, event db.AgentInboxEvent, deliveryID pgtype.UUID, req *TaskCompleteRequest) {
+	if h.inboxEventHasAgentTransportVisibleOutput(ctx, event.ID) {
+		return
+	}
+	outputType, err := protocol.NormalizeChatOutputType(req.Type, strings.TrimSpace(req.Output) != "" || len(req.Parts) > 0, req.Reaction != nil)
+	if err != nil || (outputType != protocol.ChatOutputKindMessage && outputType != protocol.ChatOutputKindReaction) {
+		return
+	}
+	if outputType == protocol.ChatOutputKindMessage && len(req.Parts) == 0 && outputClaimsFileDelivery(req.Output) {
+		runtimeID := h.runtimeIDForAgentInboxDelivery(ctx, deliveryID)
+		targetKind, targetID := agentInboxActivityTarget(event)
+		h.recordMissingArtifactActivity(ctx, event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{}, targetKind, targetID, "", map[string]any{
+			"inbox_event_id":    uuidToString(event.ID),
+			"source_message_id": uuidToString(event.SourceMessageID),
+		})
+	}
+	slog.Warn("agent inbox complete: ignoring implicit visible output from completion path",
+		"inbox_event_id", uuidToString(event.ID),
+		"delivery_id", uuidToString(deliveryID),
+		"agent_id", uuidToString(event.AgentID))
+	req.Action = protocol.ChatOutputActionNoReply
+	req.Type = protocol.ChatOutputKindNoReply
+	req.Output = ""
+	req.Parts = nil
+	req.Target = ""
+	req.Options = nil
+	req.Reaction = nil
+	req.OutputSuppressedReason = ""
 }
 
 func agentInboxCompletionTerminalOutcome(ctx context.Context, h *Handler, event db.AgentInboxEvent, req TaskCompleteRequest, payload *protocol.ChatDonePayload) string {

@@ -49,6 +49,8 @@ type InteractionDAGStore interface {
 	ListInteractionDAGEdgesForProject(ctx context.Context, projectID string) ([]db.InteractionDAGEdge, error)
 	ListInteractionDAGSessionRunsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGSessionRun, error)
 	ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGEnvSnapshot, error)
+	InsertInteractionDAGStepReward(ctx context.Context, arg db.InsertInteractionDAGStepRewardParams) error
+	ListInteractionDAGStepRewardsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGStepReward, error)
 }
 
 // MessageStore is the DB seam for accessing task messages.
@@ -270,6 +272,7 @@ type AssembledDag struct {
 	Segments          []AssembledSegment `json:"segments"`
 	Edges             []AssembledEdge    `json:"edges"`
 	SessionToAgentRun map[string]string  `json:"session_to_agent_run"`
+	StepRewards       []StepReward       `json:"step_rewards"`
 }
 
 // AssembledSegment mirrors areal's SegmentSpec: structure only - no judge
@@ -350,6 +353,10 @@ func (s *InteractionDAGService) AssembleAssembledDag(ctx context.Context, projec
 	if err != nil {
 		return AssembledDag{}, fmt.Errorf("interaction_dag: list env_snapshots for %s: %w", projectID, err)
 	}
+	stepRewards, err := s.store.ListInteractionDAGStepRewardsForProject(ctx, projectID)
+	if err != nil {
+		return AssembledDag{}, fmt.Errorf("interaction_dag: list step_rewards for %s: %w", projectID, err)
+	}
 
 	// Index env_snapshots by segment_id for an O(1) 1:1 join (the atomic CTE
 	// in CloseSegmentForEvent guarantees every segment has exactly one snapshot;
@@ -363,6 +370,7 @@ func (s *InteractionDAGService) AssembleAssembledDag(ctx context.Context, projec
 		Segments:          make([]AssembledSegment, 0, len(segs)),
 		Edges:             make([]AssembledEdge, 0, len(edges)),
 		SessionToAgentRun: make(map[string]string, len(runs)),
+		StepRewards:       make([]StepReward, 0, len(stepRewards)),
 	}
 	for _, sg := range segs {
 		// issue_id is a non-optional str in SegmentSpec; NULL -> "".
@@ -408,7 +416,41 @@ func (s *InteractionDAGService) AssembleAssembledDag(ctx context.Context, projec
 	for _, r := range runs {
 		out.SessionToAgentRun[r.SessionID] = r.AgentRunID
 	}
+	for _, sr := range stepRewards {
+		out.StepRewards = append(out.StepRewards, StepReward{
+			SegmentID: sr.SegmentID,
+			Seq:       int(sr.Seq),
+			Score:     int(sr.Score),
+			Rationale: sr.Rationale,
+		})
+	}
 	return out, nil
+}
+
+// RecordStepRewards upserts per-LLM-output (segment_id, seq) step rewards into
+// interaction_dag_step_reward. It is the write path for the diagnosis agent's
+// output. Re-recording a (segment_id, seq) key updates score/rationale (upsert),
+// not duplicates. A disabled service (or nil store) is a no-op. Scores are
+// already clamped to [0, scoreMax] by parseStepRewards; this method does not
+// fabricate or zero-fill - absent rewards are simply not written.
+func (s *InteractionDAGService) RecordStepRewards(ctx context.Context, projectID string, rewards []StepReward) error {
+	if !s.enabled || s.store == nil {
+		return nil
+	}
+	if projectID == "" {
+		return errors.New("interaction_dag: RecordStepRewards requires project_id")
+	}
+	for _, r := range rewards {
+		if err := s.store.InsertInteractionDAGStepReward(ctx, db.InsertInteractionDAGStepRewardParams{
+			SegmentID: r.SegmentID,
+			Seq:       int32(r.Seq),
+			Score:     int32(r.Score),
+			Rationale: r.Rationale,
+		}); err != nil {
+			return fmt.Errorf("interaction_dag: record step reward (%s,%d): %w", r.SegmentID, r.Seq, err)
+		}
+	}
+	return nil
 }
 
 // assembleEnvSnapshot reconstructs the env_snapshot dict from the three

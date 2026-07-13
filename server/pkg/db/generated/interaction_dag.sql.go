@@ -398,3 +398,72 @@ func (q *Queries) ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, 
 	}
 	return items, nil
 }
+
+// InteractionDAGStepReward is a per-LLM-output (segment_id, seq) reward emitted
+// by the diagnosis agent. Hand-written (sqlc generate is broken in this repo)
+// mirroring the interaction_dag_step_reward table (migration 161).
+type InteractionDAGStepReward struct {
+	SegmentID string             `json:"segment_id"`
+	Seq       int32              `json:"seq"`
+	Score     int32              `json:"score"`
+	Rationale string             `json:"rationale"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type InsertInteractionDAGStepRewardParams struct {
+	SegmentID string `json:"segment_id"`
+	Seq       int32  `json:"seq"`
+	Score     int32  `json:"score"`
+	Rationale string `json:"rationale"`
+}
+
+const insertInteractionDAGStepReward = `-- name: InsertInteractionDAGStepReward :exec
+INSERT INTO interaction_dag_step_reward (segment_id, seq, score, rationale)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (segment_id, seq) DO UPDATE SET score = EXCLUDED.score, rationale = EXCLUDED.rationale
+`
+
+// InsertInteractionDAGStepReward upserts a per-step reward keyed by
+// (segment_id, seq). Re-recording a key updates score/rationale, not duplicates.
+func (q *Queries) InsertInteractionDAGStepReward(ctx context.Context, arg InsertInteractionDAGStepRewardParams) error {
+	_, err := q.db.Exec(ctx, insertInteractionDAGStepReward, arg.SegmentID, arg.Seq, arg.Score, arg.Rationale)
+	return err
+}
+
+const listInteractionDAGStepRewardsForProject = `-- name: ListInteractionDAGStepRewardsForProject :many
+SELECT sr.segment_id, sr.seq, sr.score, sr.rationale, sr.created_at
+FROM interaction_dag_step_reward sr
+JOIN interaction_dag_segment s ON sr.segment_id = s.segment_id
+WHERE s.project_id = $1
+ORDER BY sr.segment_id, sr.seq
+`
+
+// ListInteractionDAGStepRewardsForProject returns all step rewards for segments
+// belonging to the project (the step_reward table has no project_id column, so
+// the filter joins through interaction_dag_segment). Read-only; used by
+// InteractionDAGService.AssembleAssembledDag.
+func (q *Queries) ListInteractionDAGStepRewardsForProject(ctx context.Context, projectID string) ([]InteractionDAGStepReward, error) {
+	rows, err := q.db.Query(ctx, listInteractionDAGStepRewardsForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDAGStepReward{}
+	for rows.Next() {
+		var i InteractionDAGStepReward
+		if err := rows.Scan(
+			&i.SegmentID,
+			&i.Seq,
+			&i.Score,
+			&i.Rationale,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

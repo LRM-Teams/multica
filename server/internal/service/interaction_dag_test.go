@@ -26,6 +26,7 @@ type fakeInteractionDAGStore struct {
 	segmentSnapshots []db.InsertInteractionDAGSegmentWithSnapshotParams
 	edges            []db.InsertInteractionDAGEdgeParams
 	taskMessages     map[string][]int32 // taskID -> list of seq numbers
+	stepRewards      []db.InteractionDAGStepReward
 
 	upsertErr                error
 	getSessionRunErr         error
@@ -37,6 +38,7 @@ func newFakeInteractionDAGStore() *fakeInteractionDAGStore {
 	return &fakeInteractionDAGStore{
 		sessionRuns:  map[string]db.InteractionDAGSessionRun{},
 		taskMessages: map[string][]int32{},
+		stepRewards:  []db.InteractionDAGStepReward{},
 	}
 }
 
@@ -265,7 +267,98 @@ func (f *fakeInteractionDAGStore) ListInteractionDAGEnvSnapshotsForProject(_ con
 	return out, nil
 }
 
+func (f *fakeInteractionDAGStore) InsertInteractionDAGStepReward(_ context.Context, arg db.InsertInteractionDAGStepRewardParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, sr := range f.stepRewards {
+		if sr.SegmentID == arg.SegmentID && sr.Seq == arg.Seq {
+			f.stepRewards[i] = db.InteractionDAGStepReward{SegmentID: arg.SegmentID, Seq: arg.Seq, Score: arg.Score, Rationale: arg.Rationale}
+			return nil
+		}
+	}
+	f.stepRewards = append(f.stepRewards, db.InteractionDAGStepReward{SegmentID: arg.SegmentID, Seq: arg.Seq, Score: arg.Score, Rationale: arg.Rationale})
+	return nil
+}
+
+func (f *fakeInteractionDAGStore) ListInteractionDAGStepRewardsForProject(_ context.Context, projectID string) ([]db.InteractionDAGStepReward, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	projSegs := map[string]bool{}
+	for _, s := range f.segmentSnapshots {
+		if s.ProjectID == projectID {
+			projSegs[s.SegmentID] = true
+		}
+	}
+	out := []db.InteractionDAGStepReward{}
+	for _, sr := range f.stepRewards {
+		if projSegs[sr.SegmentID] {
+			out = append(out, sr)
+		}
+	}
+	return out, nil
+}
+
 var _ InteractionDAGStore = (*fakeInteractionDAGStore)(nil)
+
+func TestRecordStepRewards(t *testing.T) {
+	store := newFakeInteractionDAGStore()
+	svc := NewInteractionDAGService(store, &fakeArealSegmentClient{}, true)
+
+	err := svc.RecordStepRewards(context.Background(), "proj-1", []StepReward{
+		{SegmentID: "seg-1", Seq: 1, Score: 8, Rationale: "good"},
+		{SegmentID: "seg-1", Seq: 2, Score: 3, Rationale: "weak"},
+	})
+	require.NoError(t, err)
+	require.Len(t, store.stepRewards, 2)
+
+	// Re-recording (segment_id, seq) upserts - updates, not duplicates.
+	err = svc.RecordStepRewards(context.Background(), "proj-1", []StepReward{
+		{SegmentID: "seg-1", Seq: 1, Score: 10, Rationale: "revised"},
+	})
+	require.NoError(t, err)
+	require.Len(t, store.stepRewards, 2, "upsert must not duplicate")
+	assert.Equal(t, int32(10), store.stepRewards[0].Score)
+	assert.Equal(t, "revised", store.stepRewards[0].Rationale)
+
+	// Disabled service is a no-op.
+	disabled := NewInteractionDAGService(newFakeInteractionDAGStore(), &fakeArealSegmentClient{}, false)
+	err = disabled.RecordStepRewards(context.Background(), "proj-1", []StepReward{{SegmentID: "seg-1", Seq: 1, Score: 5}})
+	require.NoError(t, err)
+}
+
+func TestAssembleAssembledDag_StepRewards(t *testing.T) {
+	store := newFakeInteractionDAGStore()
+	store.segmentSnapshots = append(store.segmentSnapshots, db.InsertInteractionDAGSegmentWithSnapshotParams{
+		SegmentID:  "seg-1",
+		ProjectID:  "proj-1",
+		AgentRunID: "run-1",
+		StartSeq:   1,
+		EndSeq:     2,
+	})
+	svc := NewInteractionDAGService(store, &fakeArealSegmentClient{}, true)
+	require.NoError(t, svc.RecordStepRewards(context.Background(), "proj-1", []StepReward{
+		{SegmentID: "seg-1", Seq: 1, Score: 8, Rationale: "good"},
+		{SegmentID: "seg-1", Seq: 2, Score: 3, Rationale: "weak"},
+	}))
+
+	dag, err := svc.AssembleAssembledDag(context.Background(), "proj-1")
+	require.NoError(t, err)
+	require.Len(t, dag.Segments, 1)
+	require.Len(t, dag.StepRewards, 2)
+	assert.Equal(t, "seg-1", dag.StepRewards[0].SegmentID)
+	assert.Equal(t, 1, dag.StepRewards[0].Seq)
+	assert.Equal(t, 8, dag.StepRewards[0].Score)
+
+	// Absent rewards -> empty slice (JSON []), not nil and not fabricated zeros.
+	store2 := newFakeInteractionDAGStore()
+	store2.segmentSnapshots = append(store2.segmentSnapshots, db.InsertInteractionDAGSegmentWithSnapshotParams{
+		SegmentID: "seg-2", ProjectID: "proj-2", AgentRunID: "run-2", StartSeq: 1, EndSeq: 1,
+	})
+	svc2 := NewInteractionDAGService(store2, &fakeArealSegmentClient{}, true)
+	dag2, err := svc2.AssembleAssembledDag(context.Background(), "proj-2")
+	require.NoError(t, err)
+	assert.Equal(t, []StepReward{}, dag2.StepRewards, "absent rewards -> empty slice, not nil")
+}
 
 // fakeArealSegmentClient is an in-memory ArealSegmentClient for unit tests.
 type fakeArealSegmentClient struct {

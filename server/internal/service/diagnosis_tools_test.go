@@ -85,6 +85,16 @@ func (m *MockDiagnosisStores) InsertInteractionDAGEdge(ctx context.Context, arg 
 	return args.Error(0)
 }
 
+func (m *MockDiagnosisStores) InsertInteractionDAGStepReward(ctx context.Context, arg db.InsertInteractionDAGStepRewardParams) error {
+	args := m.Called(ctx, arg)
+	return args.Error(0)
+}
+
+func (m *MockDiagnosisStores) ListInteractionDAGStepRewardsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGStepReward, error) {
+	args := m.Called(ctx, projectID)
+	return args.Get(0).([]db.InteractionDAGStepReward), args.Error(1)
+}
+
 func (m *MockDiagnosisStores) ListInteractionDAGSessionRunsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGSessionRun, error) {
 	args := m.Called(ctx, projectID)
 	return args.Get(0).([]db.InteractionDAGSessionRun), args.Error(1)

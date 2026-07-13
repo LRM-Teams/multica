@@ -27,6 +27,11 @@ type fakeInteractionDAGStore struct {
 	edges            []db.InsertInteractionDAGEdgeParams
 	taskMessages     map[string][]int32 // taskID -> list of seq numbers
 	stepRewards      []db.InteractionDAGStepReward
+	// order, when non-nil, records cross-helper call ordering by appending
+	// "RecordStepRewards" on each InsertInteractionDAGStepReward. nil-safe
+	// (the default) so existing tests are unaffected. Used by the Task 4
+	// diagnosis-before-close-hook ordering test.
+	order *[]string
 
 	upsertErr                error
 	getSessionRunErr         error
@@ -270,6 +275,9 @@ func (f *fakeInteractionDAGStore) ListInteractionDAGEnvSnapshotsForProject(_ con
 func (f *fakeInteractionDAGStore) InsertInteractionDAGStepReward(_ context.Context, arg db.InsertInteractionDAGStepRewardParams) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.order != nil {
+		*f.order = append(*f.order, "RecordStepRewards")
+	}
 	for i, sr := range f.stepRewards {
 		if sr.SegmentID == arg.SegmentID && sr.Seq == arg.Seq {
 			f.stepRewards[i] = db.InteractionDAGStepReward{SegmentID: arg.SegmentID, Seq: arg.Seq, Score: arg.Score, Rationale: arg.Rationale}

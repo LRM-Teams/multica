@@ -617,3 +617,190 @@ func TestTrainingCheckpointTriggerSkipsSweeperAutopilotAndSandboxLifecycleEvents
 		}
 	})
 }
+
+// fakeDiagnoser implements the Diagnoser seam for Task 4 trigger tests. It
+// records Diagnose calls + the projectID, returns configurable rewards/error,
+// and optionally appends "Diagnose" to a shared order slice (nil-safe) so the
+// diagnosis-before-close-hook ordering test can assert cross-helper sequencing.
+type fakeDiagnoser struct {
+	rewards       []StepReward
+	err           error
+	calls         int
+	lastProjectID string
+	order         *[]string
+}
+
+func (f *fakeDiagnoser) Diagnose(_ context.Context, projectID string) ([]StepReward, error) {
+	f.calls++
+	f.lastProjectID = projectID
+	if f.order != nil {
+		*f.order = append(*f.order, "Diagnose")
+	}
+	return f.rewards, f.err
+}
+
+// orderCloser is an arealSessionCloser that appends "SetReward"/"EndSession" to
+// a shared order slice, for the diagnosis-before-close-hook ordering test.
+type orderCloser struct {
+	order *[]string
+}
+
+func (o *orderCloser) SetReward(_ context.Context, _ string, _ float64) error {
+	*o.order = append(*o.order, "SetReward")
+	return nil
+}
+
+func (o *orderCloser) EndSession(_ context.Context, _ string) error {
+	*o.order = append(*o.order, "EndSession")
+	return nil
+}
+
+func diagnosisDeps(diag *fakeDiagnoser, store *fakeInteractionDAGStore, closer arealSessionCloser) *TrainingSessionDeps {
+	return &TrainingSessionDeps{
+		Lookup:        &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)},
+		DAG:           NewInteractionDAGService(store, &fakeArealSegmentClient{}, true),
+		Diagnosis:     diag,
+		Closer:        closer,
+		DefaultReward: 1.0,
+	}
+}
+
+func rootTrainingTask() db.AgentTaskQueue {
+	return db.AgentTaskQueue{
+		ID:      util.MustParseUUID(testTrainingTaskID),
+		AgentID: util.MustParseUUID(testTrainAgentID), // root: agent_id == train_agent_id
+		Status:  "completed",
+	}
+}
+
+// TestMaybeDiagnoseProject_RootTask_FiresAndRecords: root task + diagnosis on +
+// DAG enabled -> Diagnose(projectID) fires once and the returned step rewards
+// are recorded via DAG.RecordStepRewards.
+func TestMaybeDiagnoseProject_RootTask_FiresAndRecords(t *testing.T) {
+	store := newFakeInteractionDAGStore()
+	diag := &fakeDiagnoser{rewards: []StepReward{
+		{SegmentID: "seg-1", Seq: 1, Score: 8, Rationale: "good"},
+		{SegmentID: "seg-1", Seq: 2, Score: 3, Rationale: "weak"},
+	}}
+	deps := diagnosisDeps(diag, store, nil)
+	dispatch := trainingDispatchRow(testTrainAgentID)
+	projectID := util.MustParseUUID(testTrainingProjectID)
+
+	maybeDiagnoseProject(context.Background(), deps, rootTrainingTask(), projectID, dispatch)
+
+	if diag.calls != 1 {
+		t.Fatalf("Diagnose calls = %d, want 1", diag.calls)
+	}
+	if diag.lastProjectID != testTrainingProjectID {
+		t.Fatalf("Diagnose projectID = %q, want %q", diag.lastProjectID, testTrainingProjectID)
+	}
+	if len(store.stepRewards) != 2 {
+		t.Fatalf("recorded step rewards = %d, want 2", len(store.stepRewards))
+	}
+	if store.stepRewards[0].Score != 8 || store.stepRewards[1].Score != 3 {
+		t.Fatalf("recorded scores = %d,%d, want 8,3", store.stepRewards[0].Score, store.stepRewards[1].Score)
+	}
+}
+
+// TestMaybeDiagnoseProject_GatingOff: diagnosis must NOT fire when any gate is
+// off - diagnosis disabled (nil), DAG disabled, DAG nil, or a non-root task.
+func TestMaybeDiagnoseProject_GatingOff(t *testing.T) {
+	dispatch := trainingDispatchRow(testTrainAgentID)
+	projectID := util.MustParseUUID(testTrainingProjectID)
+	rootTask := rootTrainingTask()
+	nonRootTask := rootTask
+	nonRootTask.AgentID = util.MustParseUUID(testOtherAgentID) // squad member
+
+	t.Run("diagnosis_nil", func(t *testing.T) {
+		store := newFakeInteractionDAGStore()
+		diag := &fakeDiagnoser{}
+		deps := diagnosisDeps(diag, store, nil)
+		deps.Diagnosis = nil
+		maybeDiagnoseProject(context.Background(), deps, rootTask, projectID, dispatch)
+		assertNoDiagnosis(t, diag, store)
+	})
+	t.Run("dag_disabled", func(t *testing.T) {
+		store := newFakeInteractionDAGStore()
+		diag := &fakeDiagnoser{}
+		deps := diagnosisDeps(diag, store, nil)
+		deps.DAG = NewInteractionDAGService(store, &fakeArealSegmentClient{}, false) // INTERACTION_DAG_ENABLED off
+		maybeDiagnoseProject(context.Background(), deps, rootTask, projectID, dispatch)
+		assertNoDiagnosis(t, diag, store)
+	})
+	t.Run("dag_nil", func(t *testing.T) {
+		store := newFakeInteractionDAGStore()
+		diag := &fakeDiagnoser{}
+		deps := diagnosisDeps(diag, store, nil)
+		deps.DAG = nil
+		maybeDiagnoseProject(context.Background(), deps, rootTask, projectID, dispatch)
+		assertNoDiagnosis(t, diag, store)
+	})
+	t.Run("non_root_task", func(t *testing.T) {
+		store := newFakeInteractionDAGStore()
+		diag := &fakeDiagnoser{}
+		deps := diagnosisDeps(diag, store, nil)
+		maybeDiagnoseProject(context.Background(), deps, nonRootTask, projectID, dispatch)
+		assertNoDiagnosis(t, diag, store)
+	})
+}
+
+func assertNoDiagnosis(t *testing.T, diag *fakeDiagnoser, store *fakeInteractionDAGStore) {
+	t.Helper()
+	if diag.calls != 0 {
+		t.Fatalf("Diagnose should not fire when gated off, got %d calls", diag.calls)
+	}
+	if len(store.stepRewards) != 0 {
+		t.Fatalf("no step rewards should be recorded when gated off, got %d", len(store.stepRewards))
+	}
+}
+
+// TestMaybeDiagnoseProject_SoftFail: a Diagnose error (timeout/parse/empty) is
+// swallowed - no step rewards recorded, no panic. The close hook (verified
+// separately) still fires; the task is already terminal so diagnosis must never
+// block completion.
+func TestMaybeDiagnoseProject_SoftFail(t *testing.T) {
+	store := newFakeInteractionDAGStore()
+	diag := &fakeDiagnoser{err: fmt.Errorf("diagnosis agent timed out")}
+	deps := diagnosisDeps(diag, store, nil)
+	dispatch := trainingDispatchRow(testTrainAgentID)
+	projectID := util.MustParseUUID(testTrainingProjectID)
+
+	maybeDiagnoseProject(context.Background(), deps, rootTrainingTask(), projectID, dispatch)
+
+	if diag.calls != 1 {
+		t.Fatalf("Diagnose should still be called on soft-fail, got %d calls", diag.calls)
+	}
+	if len(store.stepRewards) != 0 {
+		t.Fatalf("no step rewards should be recorded on soft-fail, got %d", len(store.stepRewards))
+	}
+}
+
+// TestDiagnosisBeforeCloseHook_Ordering: at root terminal, Diagnose fires and
+// RecordStepRewards is called BEFORE the close hook's SetReward/EndSession.
+// Mirrors RouteTerminalTrainingTask's order (diagnosis then close hook); the
+// shared order slice proves the cross-helper sequencing.
+func TestDiagnosisBeforeCloseHook_Ordering(t *testing.T) {
+	var order []string
+	store := newFakeInteractionDAGStore()
+	store.order = &order
+	diag := &fakeDiagnoser{
+		rewards: []StepReward{{SegmentID: "seg-1", Seq: 1, Score: 7, Rationale: "ok"}},
+		order:   &order,
+	}
+	closer := &orderCloser{order: &order}
+	deps := diagnosisDeps(diag, store, closer)
+	dispatch := trainingDispatchRow(testTrainAgentID)
+	projectID := util.MustParseUUID(testTrainingProjectID)
+
+	task := rootTrainingTask()
+	task.Context = []byte(`{"areal_proxy":{"api_key":"pk-xyz","session_id":"sess-abc"}}`)
+
+	// Mirror RouteTerminalTrainingTask: diagnosis BEFORE the close hook.
+	maybeDiagnoseProject(context.Background(), deps, task, projectID, dispatch)
+	maybeCloseTrainingSession(context.Background(), deps, task, projectID)
+
+	want := []string{"Diagnose", "RecordStepRewards", "SetReward", "EndSession"}
+	if len(order) != len(want) || order[0] != want[0] || order[1] != want[1] || order[2] != want[2] || order[3] != want[3] {
+		t.Fatalf("call order = %v, want %v", order, want)
+	}
+}

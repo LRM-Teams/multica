@@ -178,6 +178,14 @@ const TOOL_SEMANTIC: Record<string, string> = {
   command: "command",
   write: "write",
   write_file: "write",
+  // A runtime's native file-create tool (raft folds `create`/`create_file` into
+  // the `write_file` family, #413). Without these aliases the slug is un-mapped →
+  // the row is dropped from the timeline (worse than the old "Running command
+  // create"): map to `write` so it shows "Writing file · <path>" whether the BE
+  // forwards `tool=write_file` or the raw `tool=create`.
+  create: "write",
+  create_file: "write",
+  createfile: "write",
   patch_apply: "edit",
   edit: "edit",
   edit_file: "edit",

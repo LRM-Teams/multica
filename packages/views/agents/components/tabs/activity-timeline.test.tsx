@@ -166,7 +166,8 @@ describe("ActivityTimeline", () => {
     // A diagnostic row's raw content is not exposed unless explicitly toggled;
     // and even then it's the BE-provided label, never a raw command string.
     render(<ActivityTimeline events={[TOOL, EDIT]} />);
-    expect(screen.getByText("Running command…")).toBeInTheDocument();
+    // Command rows are amber `running` tone (not `active`), so no trailing "…" (#404).
+    expect(screen.getByText("Running command")).toBeInTheDocument();
     expect(screen.getByText("Editing file")).toBeInTheDocument();
     expect(screen.getByText("profile.go")).toBeInTheDocument();
     expect(screen.queryByText(/\/bin\/|--target|raft message/)).toBeNull();

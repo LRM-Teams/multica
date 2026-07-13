@@ -17,6 +17,10 @@ import {
 const TONE_DOT: Record<ActivityDotTone, string> = {
   neutral: "bg-muted-foreground/40",
   active: "bg-brand animate-pulse",
+  // Command rows (any `Running command`) get raft's solid amber dot — type-based,
+  // NOT status-based: a settled/idle command still shows amber (raft parity,
+  // #404), so it never reads as a grey "idle" row. No pulse in v0.
+  running: "bg-[#F5B301]",
   waiting: "bg-warning",
   failure: "bg-destructive",
 };
@@ -71,8 +75,10 @@ function CommandSubtext({
     }
   };
   return (
-    <span className="group/cmd flex min-w-0 items-baseline gap-1.5">
-      <span title={complete} className="truncate font-mono text-xs text-muted-foreground">
+    <span className="group/cmd flex min-w-0 items-start gap-1.5">
+      {/* Wrap the command to up to TWO lines then ellipsis (raft parity, #404) —
+          not a single-line clip that hid most of it; full command on hover/copy. */}
+      <span title={complete} className="line-clamp-2 break-all font-mono text-xs text-muted-foreground">
         {inline}
       </span>
       {!compact && (
@@ -82,7 +88,7 @@ function CommandSubtext({
           aria-label={t(($) =>
             copied ? $.tab_body.activity.command_copied : $.tab_body.activity.copy_command,
           )}
-          className="shrink-0 text-muted-foreground/50 opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/cmd:opacity-100"
+          className="mt-0.5 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/cmd:opacity-100"
         >
           {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
         </button>

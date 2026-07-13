@@ -68,9 +68,14 @@ describe("activityPresentation — tool normalization", () => {
   // The trailing "…" active/settled treatment lives in the render layer
   // (ActivityTimeline strips it when tone !== "active"); here we lock the tone
   // that drives it.
-  it("tones a running tool active and a settled tool neutral", () => {
-    expect(activityPresentation(toolEvent("bash", "running")).tone).toBe("active");
-    expect(activityPresentation(toolEvent("bash", "completed")).tone).toBe("neutral");
+  it("tones a command amber `running` regardless of status; a non-command tool by status (#404)", () => {
+    // Command rows are amber `running` — type-based (raft parity), settled or not,
+    // so they never read as a grey idle row.
+    expect(activityPresentation(toolEvent("bash", "running")).tone).toBe("running");
+    expect(activityPresentation(toolEvent("bash", "completed")).tone).toBe("running");
+    // A non-command tool keeps the status-driven tone.
+    expect(activityPresentation(toolEvent("read_file", "running")).tone).toBe("active");
+    expect(activityPresentation(toolEvent("read_file", "completed")).tone).toBe("neutral");
   });
 });
 
@@ -143,7 +148,29 @@ describe("isNarrativeActivityEvent — un-mapped tool filter (#384)", () => {
       false,
     );
   });
+
+  it("drops a `message_sent` event from the mainline — the send already shows as its command row (#404)", () => {
+    // The sent content lives in chat + the `multica message send` CLI shows as a
+    // "Running command" row, so a `message_sent` (Output) row is a redundant
+    // duplicate. Field-driven on `detail_kind`, regardless of activity_kind.
+    expect(isNarrativeActivityEvent({ ...evtBase("text"), detail_kind: "message_sent" })).toBe(false);
+    expect(isNarrativeActivityEvent({ ...evtBase("custom"), detail_kind: "message_sent" })).toBe(false);
+    // A non-send text/Output (e.g. a radar decision) is NOT message_sent → stays.
+    expect(isNarrativeActivityEvent({ ...evtBase("text"), detail_kind: "text" })).toBe(true);
+  });
 });
+
+// Minimal narrative event of a given activity_kind (for the message_sent filter).
+function evtBase(activity_kind: ActivityEvent["activity_kind"]): ActivityEvent {
+  return {
+    id: "m1",
+    agent_id: "agent-1",
+    occurred_at: "2026-07-13T00:00:00Z",
+    activity_kind,
+    detail_kind: "text",
+    target_ref: { kind: "agent", id: "agent-1" },
+  } as ActivityEvent;
+}
 
 describe("activityPresentation — subtext kind classification (#v0 照实显示)", () => {
   // The row renders the subtext by `subtextKind`: a file path gets the
@@ -212,14 +239,26 @@ describe("activityPresentation — CLI commands show as Running command, no inve
     expect(p.subtextFull).toBe('multica message send --target "#multica"');
   });
 
-  it("clips a long command inline to ~100 chars while the full command stays for hover/copy", () => {
-    const long = `multica message send --target "#multica" --body ${"x".repeat(200)}`;
+  it("passes the full command inline — CSS line-clamp-2 does the 2-line truncation, no manual slice (#404)", () => {
+    const long = `multica message send --target "#multica" --body ${"x".repeat(200)}`; // ~240 < 500
     const p = activityPresentation({
       ...toolEvent("send_message"),
       entries: [{ kind: "tool_call", tool: "send_message", command: long }],
     });
-    expect(p.subtext).toBe(`${long.slice(0, 100)}…`);
+    expect(p.subtext).toBe(long); // full inline — no manual "…"; the row clamps to 2 lines in CSS
+    expect(p.subtext).not.toContain("…");
     expect(p.subtextFull).toBe(long);
+  });
+
+  it("caps a pathologically long command inline at 500 chars (DOM safety) while the full stays for copy (#404)", () => {
+    const huge = `bash -lc "${"y".repeat(800)}"`;
+    const p = activityPresentation({
+      ...toolEvent("bash"),
+      entries: [{ kind: "tool_call", tool: "bash", command: huge }],
+    });
+    expect(p.subtext).toBe(huge.slice(0, 500));
+    expect(p.subtext).not.toContain("…"); // ellipsis is CSS, never in the value
+    expect(p.subtextFull).toBe(huge);
   });
 
   it("a bash command carrying entries.command also renders via the same command path", () => {

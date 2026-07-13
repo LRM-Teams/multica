@@ -9,7 +9,7 @@ import { stripMentionMarkdown } from "../../../common/strip-mention-markdown";
 
 // Keep the palette intentionally quiet: only failures and waiting states get
 // color; the normal narrative stream stays neutral.
-export type ActivityDotTone = "neutral" | "active" | "waiting" | "failure";
+export type ActivityDotTone = "neutral" | "active" | "running" | "waiting" | "failure";
 
 // The FE Activity read-model IS the BE #302 timeline event
 // (`AgentActivityTimelineEvent`, packages/core/types/events.ts): id /
@@ -105,6 +105,14 @@ function isRadarActionEvent(event: ActivityEvent): boolean {
 }
 
 export function isNarrativeActivityEvent(event: ActivityEvent): boolean {
+  // A `message_sent` event is the RESULT of an agent sending a message: the sent
+  // content lives in the chat stream, and the `multica message send` CLI already
+  // shows as its own "Running command" row — so an "Output · <sent content>" row
+  // here is a redundant duplicate (Frank/#404, raft parity: a send produces no
+  // separate Output row). Keep it diagnostic. Field-driven (`detail_kind`), never
+  // string-sniffed. Non-send `text`/Output (e.g. a radar decision) is NOT
+  // `message_sent` and stays mainline (Frank: observability is fine).
+  if (event.detail_kind === "message_sent") return false;
   switch (event.activity_kind) {
     case "tool_output":
     case "transport":
@@ -220,9 +228,11 @@ function fullCommand(event: ActivityEvent): string | undefined {
   return event.entries?.find((e) => e.command?.trim())?.command?.trim() || undefined;
 }
 
-// Main-row clip length for a command (raft shows the command sliced ~100 chars;
-// the full redacted command stays on hover/copy).
-const COMMAND_INLINE_MAX = 100;
+// DOM-size safety bound for the inline command string. The VISUAL truncation is
+// CSS `line-clamp-2` (raft-parity two-line preview + trailing ellipsis, #404);
+// this cap just keeps a pathologically long command out of the DOM text node.
+// The full redacted command always stays reachable via hover/copy (`subtextFull`).
+const COMMAND_INLINE_CAP = 500;
 
 function toolPresentation(event: ActivityEvent): ActivityPresentation {
   // Frank's rule (#v0 「不发明新东西」): anything run as a CLI command — bash, and
@@ -230,18 +240,19 @@ function toolPresentation(event: ActivityEvent): ActivityPresentation {
   // (`send_message`, …) — is shown FAITHFULLY as "Running command · <command>",
   // never a product-invented label ("Sending message"). The redacted CLI lives in
   // `entries[].command`; its presence is the signal that this row is a command.
-  // Main row = the command clipped; full command + copy on hover (the shared
-  // command presentation). Native structured tools (read_file/glob/grep) carry no
-  // command and keep their real label + real object below.
+  // Main row = the command wrapped to two lines (CSS line-clamp), full command +
+  // copy on hover. The dot is raft's amber `running` tone — type-based, so a
+  // settled command still reads as a command, never a grey idle row (#404).
+  // Native structured tools (read_file/glob/grep) carry no command and keep their
+  // real label + real object below.
   const command = fullCommand(event);
   if (command) {
     return {
       labelKey: "running_command",
-      subtext:
-        command.length > COMMAND_INLINE_MAX ? `${command.slice(0, COMMAND_INLINE_MAX)}…` : command,
+      subtext: command.length > COMMAND_INLINE_CAP ? command.slice(0, COMMAND_INLINE_CAP) : command,
       subtextKind: "command",
       subtextFull: command,
-      tone: statusTone(event),
+      tone: "running",
     };
   }
 
@@ -263,7 +274,9 @@ function toolPresentation(event: ActivityEvent): ActivityPresentation {
     : isCommand
       ? "command"
       : "text";
-  return { labelKey, subtext, subtextKind, tone: statusTone(event) };
+  // A command row (even one whose full command didn't arrive) is amber `running`
+  // like every command (#404); other tools keep the status-driven tone.
+  return { labelKey, subtext, subtextKind, tone: isCommand ? "running" : statusTone(event) };
 }
 
 export function activityPresentation(event: ActivityEvent): ActivityPresentation {

@@ -731,6 +731,14 @@ func TestChannelAgentInboxDrainAckDirectedMention(t *testing.T) {
 	if !found {
 		t.Fatal("channel not found after seed")
 	}
+	var queuedLifecycleEvents []events.Event
+	var dispatchedLifecycleEvents []events.Event
+	testHandler.Bus.Subscribe(protocol.EventTaskQueued, func(e events.Event) {
+		queuedLifecycleEvents = append(queuedLifecycleEvents, e)
+	})
+	testHandler.Bus.Subscribe(protocol.EventTaskDispatch, func(e events.Event) {
+		dispatchedLifecycleEvents = append(dispatchedLifecycleEvents, e)
+	})
 
 	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "setup context before mention", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-drain"), 0); err != nil {
 		t.Fatalf("insert setup message: %v", err)
@@ -759,6 +767,28 @@ func TestChannelAgentInboxDrainAckDirectedMention(t *testing.T) {
 	if got.AgentID != agentID || got.Reason != "mention" || !got.RequiresWake || got.SeqTo != trigger.Seq {
 		t.Fatalf("drained event = %+v, want mention wake for agent %s seq %d", got, agentID, trigger.Seq)
 	}
+	assertAgentInboxTaskLifecycleEvent := func(eventType string, lifecycleEvents []events.Event, status string) {
+		t.Helper()
+		for _, event := range lifecycleEvents {
+			if event.TaskID != got.ID {
+				continue
+			}
+			if event.WorkspaceID != testWorkspaceID || event.ActorType != "system" {
+				t.Fatalf("%s lifecycle event = %+v, want workspace %s system actor", eventType, event, testWorkspaceID)
+			}
+			payload, ok := event.Payload.(map[string]any)
+			if !ok {
+				t.Fatalf("%s lifecycle payload type = %T, want map", eventType, event.Payload)
+			}
+			if payload["task_id"] != got.ID || payload["inbox_event_id"] != got.ID || payload["agent_id"] != agentID || payload["status"] != status || payload["chat_session_id"] != got.ChatSessionID {
+				t.Fatalf("%s lifecycle payload = %#v, want inbox event %s agent %s status %s chat %s", eventType, payload, got.ID, agentID, status, got.ChatSessionID)
+			}
+			return
+		}
+		t.Fatalf("missing %s lifecycle event for inbox event %s; got queued=%d dispatched=%d", eventType, got.ID, len(queuedLifecycleEvents), len(dispatchedLifecycleEvents))
+	}
+	assertAgentInboxTaskLifecycleEvent(protocol.EventTaskQueued, queuedLifecycleEvents, "queued")
+	assertAgentInboxTaskLifecycleEvent(protocol.EventTaskDispatch, dispatchedLifecycleEvents, "running")
 
 	partialAckReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/ack", AckAgentInboxEventRequest{
 		DeliveryID:  got.DeliveryID,

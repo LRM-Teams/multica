@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createSafeId } from "@multica/core/utils";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import type { MessagePart } from "@multica/core/types";
@@ -26,6 +26,11 @@ export type AttachmentMessagePart = Extract<MessagePart, { type: "attachment" }>
 export type UseComposerPendingAttachmentsOptions = {
   /** Upload one file; return null on soft failure (e.g. toast already shown). */
   upload: (file: File) => Promise<UploadResult | null>;
+  /**
+   * When this identity changes (channel id, thread root, …), pending tray
+   * state is cleared so files never leak across conversations.
+   */
+  resetKey?: string | null;
 };
 
 export type UseComposerPendingAttachmentsResult = {
@@ -211,6 +216,12 @@ export function useComposerPendingAttachments(
       return [];
     });
   }, []);
+
+  // Own the conversation-switch reset inside the hook so parents do not
+  // bounce clear() through effects (react-doctor no-pass-data-to-parent).
+  useEffect(() => {
+    clear();
+  }, [opts.resetKey, clear]);
 
   const hasUploading = useMemo(
     () => pending.some((item) => item.status === "uploading"),

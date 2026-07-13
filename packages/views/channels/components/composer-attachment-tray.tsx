@@ -61,6 +61,8 @@ export function ComposerAttachmentTray({
             )}
           >
             {showImage ? (
+              // Blob/remote tray preview only; shared package cannot use next/image.
+              // react-doctor-disable-next-line react-doctor/nextjs-no-img-element
               <img
                 src={item.previewUrl}
                 alt={item.filename}

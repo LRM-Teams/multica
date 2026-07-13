@@ -36,15 +36,17 @@ vi.mock("../../common/markdown", () => ({
 vi.mock("./message-parts-renderer", () => ({
   MessagePartsRenderer: ({ parts }: { parts: MessagePart[] }) => (
     <div data-testid="message-parts-body">
-      {parts.map((part, i) =>
+      {parts.map((part) =>
         part.type === "text" ? (
-          <span key={i} data-testid="body-text">
+          <span key={`text:${part.text}`} data-testid="body-text">
             {part.text}
           </span>
         ) : part.type === "sticker" ? (
-          <span key={i} data-testid="body-sticker">
+          <span key={`sticker:${part.sticker_id}`} data-testid="body-sticker">
             sticker
           </span>
+        ) : part.type === "attachment" ? (
+          <span key={`att:${part.attachment_id}`} data-testid="body-attachment" />
         ) : null,
       )}
     </div>

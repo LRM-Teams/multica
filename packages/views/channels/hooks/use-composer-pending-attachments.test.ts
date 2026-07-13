@@ -261,4 +261,22 @@ describe("useComposerPendingAttachments", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview");
     expect(result.current.pending[0]?.previewUrl).toBe("https://cdn.example/x");
   });
+
+  it("clears the tray when resetKey changes (conversation switch)", async () => {
+    const upload = vi.fn(() => new Promise<UploadResult | null>(() => {}));
+    const { result, rerender } = renderHook(
+      ({ resetKey }: { resetKey: string }) =>
+        useComposerPendingAttachments({ upload, resetKey }),
+      { initialProps: { resetKey: "channel-a" } },
+    );
+
+    act(() => {
+      result.current.addFiles([makeFile("a.png")]);
+    });
+    expect(result.current.pending).toHaveLength(1);
+
+    rerender({ resetKey: "channel-b" });
+    expect(result.current.pending).toEqual([]);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview");
+  });
 });

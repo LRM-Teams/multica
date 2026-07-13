@@ -883,21 +883,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
 
   const channelPending = useComposerPendingAttachments({
     upload: uploadForActiveChannel,
+    resetKey: active?.id ?? null,
   });
   const threadPending = useComposerPendingAttachments({
     upload: uploadForActiveChannel,
+    resetKey: openThreadRoot?.id
+      ? `${active?.id ?? ""}:${openThreadRoot.id}`
+      : (active?.id ?? null),
   });
-
-  // Drop tray state when the conversation (or thread root) changes so files
-  // never leak across channels.
-  useEffect(() => {
-    channelPending.clear();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- clear only on channel switch
-  }, [active?.id]);
-  useEffect(() => {
-    threadPending.clear();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- clear only on thread switch
-  }, [openThreadRoot?.id, active?.id]);
 
   const memberIds = useMemo(
     () => new Set(channelMembers.filter((m) => m.member_type === "user").map((m) => m.member_id)),
@@ -2218,6 +2211,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           threadPending.hasUploading
         }
         sending={sendThreadMessage.isPending}
+        // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer tray slot; identity is not memo-sensitive
         composerTray={
           <ComposerAttachmentTray
             pending={threadPending.pending}
@@ -2581,6 +2575,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                         cancelLabel={t(($) => $.quote.cancel)}
                       />
                     ) : undefined}
+                    // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer tray slot; identity is not memo-sensitive
                     tray={
                       <ComposerAttachmentTray
                         pending={channelPending.pending}

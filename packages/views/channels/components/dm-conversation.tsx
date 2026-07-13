@@ -518,17 +518,16 @@ function DmChannelConversation({
     async (file: File) => uploadWithToast(file, { channelId }),
     [channelId, uploadWithToast],
   );
-  const dmPending = useComposerPendingAttachments({ upload: uploadForDm });
-  const threadPending = useComposerPendingAttachments({ upload: uploadForDm });
-
-  useEffect(() => {
-    dmPending.clear();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- clear only on DM switch
-  }, [channelId]);
-  useEffect(() => {
-    threadPending.clear();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- clear only on thread switch
-  }, [openThreadRoot?.id, channelId]);
+  const dmPending = useComposerPendingAttachments({
+    upload: uploadForDm,
+    resetKey: channelId,
+  });
+  const threadPending = useComposerPendingAttachments({
+    upload: uploadForDm,
+    resetKey: openThreadRoot?.id
+      ? `${channelId}:${openThreadRoot.id}`
+      : channelId,
+  });
 
   const typingStartedRef = useRef(false);
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -931,6 +930,7 @@ function DmChannelConversation({
               cancelLabel={t(($) => $.quote.cancel)}
             />
           ) : undefined}
+          // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer tray slot; identity is not memo-sensitive
           tray={
             <ComposerAttachmentTray
               pending={threadPending.pending}
@@ -1115,6 +1115,7 @@ function DmChannelConversation({
             cancelLabel={t(($) => $.quote.cancel)}
           />
         ) : undefined}
+        // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer tray slot; identity is not memo-sensitive
         tray={
           <ComposerAttachmentTray
             pending={dmPending.pending}

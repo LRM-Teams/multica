@@ -4,27 +4,7 @@ import { useWorkspaceId } from "../hooks";
 import { channelKeys, invalidateChannelMessages, upsertChannelMessageInCache } from "./queries";
 import { dmKeys } from "../dm/queries";
 import type { DMItem } from "../dm/types";
-import { buildChannelMessageParts, type MessagePart } from "../types";
-
-/**
- * Resolve wire `parts` for channel/thread send.
- * Explicit `parts` win. Legacy `attachmentIds` (until composers send parts)
- * are converted to attachment parts — never sent as `attachment_ids`.
- */
-function resolveChannelSendParts(
-  parts?: MessagePart[],
-  attachmentIds?: readonly string[],
-): MessagePart[] | undefined {
-  if (parts && parts.length > 0) {
-    return parts;
-  }
-  if (attachmentIds && attachmentIds.length > 0) {
-    // Body text stays in `content`; only emit attachment parts for bind.
-    // Full text+attachment parts assembly lands with the tray composer.
-    return buildChannelMessageParts("", attachmentIds);
-  }
-  return undefined;
-}
+import type { MessagePart } from "../types";
 
 export function useCreateChannel() {
   const qc = useQueryClient();
@@ -91,7 +71,6 @@ export function useSendChannelMessage() {
     mutationFn: ({
       channelId,
       content,
-      attachmentIds,
       replyToMessageId,
       parts,
       clientMessageId,
@@ -99,16 +78,15 @@ export function useSendChannelMessage() {
     }: {
       channelId: string;
       content: string;
-      /** @deprecated Prefer `parts` with `{ type: "attachment", attachment_id }`. Converted to parts on the wire. */
-      attachmentIds?: string[];
       replyToMessageId?: string | null;
+      /** Structured parts; attachment bind uses `{ type: "attachment", attachment_id }`. */
       parts?: MessagePart[];
       clientMessageId?: string | null;
       quoteMessageId?: string | null;
     }) =>
       api.sendChannelMessage(channelId, {
         content,
-        parts: resolveChannelSendParts(parts, attachmentIds),
+        parts,
         replyToMessageId,
         clientMessageId,
         quoteMessageId,
@@ -182,7 +160,6 @@ export function useSendChannelThreadMessage() {
       channelId,
       messageId,
       content,
-      attachmentIds,
       replyToMessageId,
       parts,
       clientMessageId,
@@ -192,9 +169,8 @@ export function useSendChannelThreadMessage() {
       channelId: string;
       messageId: string;
       content: string;
-      /** @deprecated Prefer `parts` with `{ type: "attachment", attachment_id }`. Converted to parts on the wire. */
-      attachmentIds?: string[];
       replyToMessageId?: string | null;
+      /** Structured parts; attachment bind uses `{ type: "attachment", attachment_id }`. */
       parts?: MessagePart[];
       clientMessageId?: string | null;
       showInChannel?: boolean;
@@ -202,7 +178,7 @@ export function useSendChannelThreadMessage() {
     }) =>
       api.sendChannelThreadMessage(channelId, messageId, {
         content,
-        parts: resolveChannelSendParts(parts, attachmentIds),
+        parts,
         replyToMessageId,
         clientMessageId,
         showInChannel,

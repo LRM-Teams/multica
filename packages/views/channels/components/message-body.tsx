@@ -3,7 +3,8 @@
 import type { ChannelMessage } from "@multica/core/types";
 import { MemoizedMarkdown } from "../../common/markdown";
 import { MessagePartsRenderer } from "./message-parts-renderer";
-import { MessageAttachmentZone, collectAttachmentParts } from "./message-attachment-zone";
+import { MessageAttachmentZone } from "./message-attachment-zone";
+import { collectAttachmentParts } from "./message-attachment-zone-items";
 import {
   formatMessagePartsPreview,
   resolveMessageParts,

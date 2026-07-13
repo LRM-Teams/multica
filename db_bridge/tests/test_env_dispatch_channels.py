@@ -1,4 +1,4 @@
-"""env-dispatch leagent_api channel tests: POST /api/v1/env-dispatch and
+"""env-dispatch multica_api channel tests: POST /api/v1/env-dispatch and
 DELETE /api/v1/env-dispatch/{projectID}.
 
 Stub runs on the AReaL side; executor on the multica side (forwarding to the
@@ -42,7 +42,7 @@ async def areal_harness(handler, **cfg_overrides):
     db = BridgeDB(cfg, client=FakeSupabaseClient())
     ex = Executor(
         db,
-        "leagent",
+        "multica",
         config=cfg,
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
@@ -58,19 +58,21 @@ async def areal_harness(handler, **cfg_overrides):
         await run_task
 
 
-def test_channels_registered_in_leagent_api_group():
+def test_channels_registered_in_multica_api_group():
     disp = CHANNELS_BY_NAME["env_dispatch"]
     dele = CHANNELS_BY_NAME["env_dispatch_delete"]
-    assert disp.group == "leagent_api"
+    assert disp.group == "multica_api"
     assert disp.method == "POST"
     assert disp.path == "/api/v1/env-dispatch"
     assert disp.table == "rpc_env_dispatch"
     assert disp.stub_side == "areal"
-    assert disp.executor_side == "leagent"
+    assert disp.executor_side == "multica"
     assert disp.default_timeout_s == 600.0
     assert dele.method == "DELETE"
     assert dele.path == "/api/v1/env-dispatch/{projectID}"
     assert dele.table == "rpc_env_dispatch_delete"
+    assert dele.group == "multica_api"
+    assert dele.executor_side == "multica"
 
 
 def test_env_dispatch_post_relays_rollouts_and_auth():

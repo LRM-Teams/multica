@@ -34,3 +34,30 @@ def test_multica_api_channel_side_derivation():
     # env_dispatch still resolves (it moves to multica_api in a later task;
     # this guard keeps the lookup honest while the registry shape changes).
     assert "env_dispatch" in CHANNELS_BY_NAME
+
+
+def test_env_dispatch_channels_in_multica_api():
+    for name in ("env_dispatch", "env_dispatch_delete", "env_dispatch_dag"):
+        ch = CHANNELS_BY_NAME[name]
+        assert ch.group == "multica_api", name
+        assert ch.stub_side == "areal", name
+        assert ch.executor_side == "multica", name
+
+
+def test_rl_close_segment_in_gateway():
+    ch = CHANNELS_BY_NAME["rl_close_segment"]
+    assert ch.group == "gateway"
+    assert ch.method == "POST"
+    assert ch.path == "/rl/close_segment"
+    assert ch.stub_side == "leagent"
+    assert ch.executor_side == "areal"
+    assert ch.table == "rpc_rl_close_segment"
+
+
+def test_env_dispatch_dag_channel():
+    ch = CHANNELS_BY_NAME["env_dispatch_dag"]
+    assert ch.group == "multica_api"
+    assert ch.method == "GET"
+    assert ch.path == "/api/v1/env-dispatch/{projectID}/dag"
+    assert ch.table == "rpc_env_dispatch_dag"
+    assert ch.default_timeout_s == 30.0

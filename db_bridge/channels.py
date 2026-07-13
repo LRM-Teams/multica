@@ -122,6 +122,15 @@ CHANNELS: Final[tuple[Channel, ...]] = (
         default_timeout_s=180.0,
         default_concurrency=32,
     ),
+    Channel(
+        name="rl_close_segment",
+        group="gateway",
+        method="POST",
+        path="/rl/close_segment",
+        kind="json",
+        default_timeout_s=30.0,
+        default_concurrency=4,
+    ),
     # -- leagent_api group (AReaL -> le-agent API) -------------------------
     Channel(
         name="agent_start",
@@ -132,9 +141,10 @@ CHANNELS: Final[tuple[Channel, ...]] = (
         default_timeout_s=300.0,
         default_concurrency=8,
     ),
+    # -- multica_api group (AReaL -> multica API) --------------------------
     Channel(
         name="env_dispatch",
-        group="leagent_api",
+        group="multica_api",
         method="POST",
         path="/api/v1/env-dispatch",
         kind="json",
@@ -143,11 +153,20 @@ CHANNELS: Final[tuple[Channel, ...]] = (
     ),
     Channel(
         name="env_dispatch_delete",
-        group="leagent_api",
+        group="multica_api",
         method="DELETE",
         path="/api/v1/env-dispatch/{projectID}",
         kind="json",
         default_timeout_s=60.0,
+        default_concurrency=4,
+    ),
+    Channel(
+        name="env_dispatch_dag",
+        group="multica_api",
+        method="GET",
+        path="/api/v1/env-dispatch/{projectID}/dag",
+        kind="json",
+        default_timeout_s=30.0,
         default_concurrency=4,
     ),
 )

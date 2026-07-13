@@ -166,18 +166,31 @@ def test_stub_and_executor_sides_are_opposite():
         assert c.stub_side != c.executor_side
         if c.group == "gateway":
             assert c.stub_side == "leagent" and c.executor_side == "areal"
-        else:
+        elif c.group == "multica_api":
+            assert c.stub_side == "areal" and c.executor_side == "multica"
+        else:  # leagent_api
             assert c.stub_side == "areal" and c.executor_side == "leagent"
 
 
 def test_side_channel_partition_is_complete():
-    # Every channel is served as a stub on exactly one side and executed on the other.
+    # Every channel is stubbed on exactly one host and executed on exactly one
+    # (different) host. multica hosts no stub -- it only executes multica_api
+    # channels forwarded from the areal-side stub.
     leagent_stub = set(channels.stub_channels("leagent"))
     areal_stub = set(channels.stub_channels("areal"))
-    assert leagent_stub | areal_stub == set(channels.CHANNELS)
+    multica_stub = set(channels.stub_channels("multica"))
+    all_channels = set(channels.CHANNELS)
+    assert multica_stub == set()  # multica hosts no stub
+    assert leagent_stub | areal_stub == all_channels
     assert not (leagent_stub & areal_stub)
-    assert set(channels.executor_channels("leagent")) == areal_stub
+    # Stub/executor sides are complementary within each group:
+    # gateway -> stub leagent, executor areal.
     assert set(channels.executor_channels("areal")) == leagent_stub
+    # leagent_api + multica_api -> stub areal, executor leagent|multica.
+    leagent_exec = set(channels.executor_channels("leagent"))
+    multica_exec = set(channels.executor_channels("multica"))
+    assert not (leagent_exec & multica_exec)
+    assert leagent_exec | multica_exec == areal_stub
 
 
 # -- remote shell runner config --------------------------------------------

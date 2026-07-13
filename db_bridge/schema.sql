@@ -57,10 +57,12 @@ declare
         'rpc_rl_start_session',
         'rpc_rl_set_reward',
         'rpc_rl_end_session',
+        'rpc_rl_close_segment',
         'rpc_chat_completions',
         'rpc_agent_start',
         'rpc_env_dispatch',
-        'rpc_env_dispatch_delete'
+        'rpc_env_dispatch_delete',
+        'rpc_env_dispatch_dag'
     ];
 begin
     foreach tbl in array tables loop

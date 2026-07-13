@@ -4229,6 +4229,31 @@ func TestChannelActiveTasksSurfacesInboxTerminalOutcomes(t *testing.T) {
 		t.Fatalf("active inbox metadata = %+v, want inbox/source ids without terminal outcome", got)
 	}
 
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET status = 'acked', acked_at = now(), updated_at = now()
+		WHERE id = $1`, noReplyEventID); err != nil {
+		t.Fatalf("ack inbox event without terminal outcome: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelActiveTasks(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list active tasks after legacy ack: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	resp = ChannelActiveTasksResponse{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode active tasks after legacy ack: %v", err)
+	}
+	if len(resp.Tasks) != 0 {
+		t.Fatalf("active tasks after legacy ack = %+v, want no stale working row", resp.Tasks)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET status = 'pending', acked_at = NULL, updated_at = now()
+		WHERE id = $1`, noReplyEventID); err != nil {
+		t.Fatalf("restore pending inbox event: %v", err)
+	}
+
 	noReplyDeliveryID := setAgentInboxTerminalOutcomeForTest(t, noReplyEventID, "no_reply", false)
 	rec = httptest.NewRecorder()
 	testHandler.ListChannelActiveTasks(rec, req)

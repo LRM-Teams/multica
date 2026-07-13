@@ -56,6 +56,7 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 				       e.agent_id,
 				       COALESCE(NULLIF(a.display_name, ''), a.name, '') AS agent_name,
 				       e.id AS task_id,
+				       e.status AS inbox_status,
 				       CASE
 				         WHEN e.terminal_outcome IS NOT NULL THEN e.terminal_outcome
 				         WHEN COALESCE(latest_delivery.status, '') IN ('leased', 'processing') OR e.status = 'draining' THEN 'running'
@@ -91,6 +92,7 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 				SELECT *
 				FROM latest_inbox li
 				WHERE li.terminal_outcome = ''
+				  AND li.inbox_status IN ('pending', 'draining', 'failed')
 				  AND li.status IN ('queued', 'running')
 			),
 			terminal_tasks AS (

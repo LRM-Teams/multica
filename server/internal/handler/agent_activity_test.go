@@ -341,6 +341,66 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 	}
 }
 
+func TestAgentActivityEvents_FileToolUsesTopLevelPathFacts(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createWorkspaceVisibleActivityAgent(t, "activity-file-tool-agent")
+	const filePath = "/Users/frank/multica_workspaces/ws/.multica/agents/agent/hello_world_2.txt"
+	ctx := context.Background()
+
+	var eventID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_activity_event (
+			workspace_id, agent_id, event_kind, event_type, severity,
+			target_kind, target_id, message, details
+		)
+		VALUES (
+			$1, $2, 'tool_call', 'tool_use', 'info',
+			'agent', $2, '', $3::jsonb
+		)
+		RETURNING id
+	`, testWorkspaceID, agentID, fmt.Sprintf(`{
+		"tool": "write_file",
+		"command": "create",
+		"path": %q,
+		"tool_target": %q,
+		"summary_kind": "file_path"
+	}`, filePath, filePath)).Scan(&eventID); err != nil {
+		t.Fatalf("insert file tool activity event: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_activity_event WHERE id = $1`, eventID) })
+
+	events := listAgentActivityEventsForUser(t, testUserID, agentID, "")
+	event := requireActivityTimelineEvent(t, events, eventID)
+	if event.Tool == nil || *event.Tool != "write_file" {
+		t.Fatalf("file tool canonical tool = %+v, want write_file", event.Tool)
+	}
+	if event.ToolTarget == nil || *event.ToolTarget != filePath {
+		t.Fatalf("file tool target = %+v, want %q", event.ToolTarget, filePath)
+	}
+	if len(event.Entries) != 1 {
+		t.Fatalf("file tool entries = %+v, want one entry", event.Entries)
+	}
+	entry := event.Entries[0]
+	if entry.Tool == nil || *entry.Tool != "write_file" {
+		t.Fatalf("file tool entry tool = %+v, want write_file", entry.Tool)
+	}
+	if entry.ToolTarget == nil || *entry.ToolTarget != filePath {
+		t.Fatalf("file tool entry target = %+v, want %q", entry.ToolTarget, filePath)
+	}
+	if entry.SummaryKind == nil || *entry.SummaryKind != "file_path" {
+		t.Fatalf("file tool entry summary kind = %+v, want file_path", entry.SummaryKind)
+	}
+	if entry.Command != nil {
+		t.Fatalf("file tool entry command = %+v, want omitted native operation verb", entry.Command)
+	}
+	if strings.Contains(events.raw, `"command":"create"`) {
+		t.Fatalf("native file tool create verb must not be exposed as a command: %s", events.raw)
+	}
+}
+
 func TestAgentActivityEvents_DefaultPageSkipsDiagnosticNoise(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -498,6 +558,7 @@ func TestAgentActivityCanonicalToolName_UsesRaftAliases(t *testing.T) {
 		"ReadFile":                  "read_file",
 		"file_read":                 "read_file",
 		"Write":                     "write_file",
+		"create_file":               "write_file",
 		"StrReplaceFile":            "edit_file",
 		"mcp__chat__send_message":   "send_message",
 		"mcp_chat_search_messages":  "search_messages",

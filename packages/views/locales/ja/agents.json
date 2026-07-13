@@ -374,6 +374,8 @@
         "compaction_finished": "圧縮完了",
         "subagent_activity": "サブエージェント活動"
       },
+      "copy_command": "コマンドをコピー",
+      "command_copied": "コピーしました",
       "view_diagnostics": "診断の詳細を表示",
       "hide_diagnostics": "診断の詳細を非表示",
       "section_now": "現在",

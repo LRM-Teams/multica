@@ -19,6 +19,8 @@ vi.mock("../../../i18n", () => ({
             timeline_empty: "No activity yet",
             view_diagnostics: "View diagnostic details",
             hide_diagnostics: "Hide diagnostic details",
+            copy_command: "Copy command",
+            command_copied: "Copied",
             labels: {
               thinking: "Thinking",
               output: "Output",
@@ -249,6 +251,48 @@ describe("ActivityTimeline", () => {
     // most recent rows kept (m6 present, oldest m0/m1 trimmed)
     expect(screen.getByText("Reply 6")).toBeInTheDocument();
     expect(screen.queryByText("Reply 0")).toBeNull();
+  });
+
+  it("renders a shell command as a plain clip + full command on hover/copy (not path-mangled) (#v0)", () => {
+    const CMD: ActivityEvent = {
+      id: "cmd1",
+      agent_id: "agent-1",
+      occurred_at: "2026-07-06T09:36:05Z",
+      activity_kind: "tool_call",
+      detail_kind: "tool_use",
+      tool: "bash",
+      tool_target: "cd /a/b && multica send…",
+      status: "completed",
+      entries: [{ kind: "tool_call", tool: "bash", command: 'cd /a/b && multica send --target "#c"' }],
+      target_ref: { kind: "agent", id: "agent-1" },
+    };
+    render(<ActivityTimeline events={[CMD]} />);
+    expect(screen.getByText("Running command")).toBeInTheDocument();
+    // The command clip is ONE plain node (never split into path head/tail — a
+    // command containing `/` must not get the path middle-ellipsis), with the
+    // full redacted command reachable on hover.
+    expect(screen.getByText("cd /a/b && multica send…")).toBeInTheDocument();
+    expect(screen.getByTitle('cd /a/b && multica send --target "#c"')).toBeInTheDocument();
+    // Copy affordance present on the full (non-compact) row.
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
+  });
+
+  it("compact mode drops the command copy affordance (title-only, non-interactive) (#v0)", () => {
+    const CMD: ActivityEvent = {
+      id: "cmd2",
+      agent_id: "agent-1",
+      occurred_at: "2026-07-06T09:36:05Z",
+      activity_kind: "tool_call",
+      detail_kind: "tool_use",
+      tool: "bash",
+      tool_target: "ls /a/b",
+      status: "completed",
+      entries: [{ kind: "tool_call", tool: "bash", command: "ls /a/b" }],
+      target_ref: { kind: "agent", id: "agent-1" },
+    };
+    render(<ActivityTimeline events={[CMD]} compact />);
+    expect(screen.getByText("ls /a/b")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });
 

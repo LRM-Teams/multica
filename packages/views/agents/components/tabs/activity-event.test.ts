@@ -146,6 +146,51 @@ describe("isNarrativeActivityEvent — un-mapped tool filter (#384)", () => {
   });
 });
 
+describe("activityPresentation — subtext kind classification (#v0 照实显示)", () => {
+  // The row renders the subtext by `subtextKind`: a file path gets the
+  // basename-preserving middle-ellipsis; a shell command gets a plain clip +
+  // the full redacted command on hover/copy; a search pattern / anything else
+  // is plain text. This is the fix for the "命令看不全 / 云里雾里" bug where a
+  // bash command (which contains `/`) was wrongly middle-ellipsised as a path.
+  it("classifies a shell command as 'command' and exposes the full command from entries", () => {
+    const event: ActivityEvent = {
+      ...toolEvent("bash"),
+      tool_target: "cd /Users/x/workdir && multica message send…",
+      entries: [
+        { kind: "tool_call", tool: "bash", command: 'cd /Users/x/workdir && multica message send --target "#c"' },
+      ],
+    };
+    const p = activityPresentation(event);
+    expect(p.subtextKind).toBe("command");
+    expect(p.subtextFull).toBe('cd /Users/x/workdir && multica message send --target "#c"');
+  });
+
+  it("does NOT treat a command containing '/' as a path (the mangling bug)", () => {
+    const p = activityPresentation({ ...toolEvent("bash"), tool_target: "cd /a/b && ls" });
+    expect(p.subtextKind).toBe("command");
+    expect(p.subtextKind).not.toBe("path");
+  });
+
+  it("classifies a file tool's target as 'path' (keeps the basename-preserving treatment)", () => {
+    expect(activityPresentation({ ...toolEvent("read_file"), tool_target: "src/app.ts" }).subtextKind).toBe(
+      "path",
+    );
+    expect(activityPresentation({ ...toolEvent("write_file"), tool_target: "a/b.ts" }).subtextKind).toBe(
+      "path",
+    );
+  });
+
+  it("classifies a search pattern as plain 'text' (no path treatment, no command tooltip)", () => {
+    const p = activityPresentation({ ...toolEvent("glob"), tool_target: "**/*.ts" });
+    expect(p.subtextKind).toBe("text");
+    expect(p.subtextFull).toBeUndefined();
+  });
+
+  it("leaves subtextFull undefined for a command with no entries command", () => {
+    expect(activityPresentation({ ...toolEvent("bash"), tool_target: "ls" }).subtextFull).toBeUndefined();
+  });
+});
+
 describe("isNarrativeActivityEvent — Radar actions", () => {
   function radarEvent(
     eventType: "radar_action_executed" | "radar_action_failed",

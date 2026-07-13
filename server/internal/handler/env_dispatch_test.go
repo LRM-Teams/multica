@@ -421,6 +421,9 @@ func TestGetDag_DoneReturns200AssembledDag(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
+	// Stamp a distinctive diagnosis score max so the assertion confirms the
+	// /dag boundary serves it (not just the default).
+	t.Setenv("DIAGNOSIS_AGENT_SCORE_MAX", "20")
 	agentID := createHandlerTestAgent(t, "GetDagDoneAgent", []byte("[]"))
 	projectID, taskID := seedTrainingRollout(t, testWorkspaceID, agentID, "completed")
 	// Record the session -> agent_run mapping + a dense covering segment.
@@ -443,6 +446,11 @@ func TestGetDag_DoneReturns200AssembledDag(t *testing.T) {
 	}
 	if len(dag.SessionToAgentRun) != 1 || dag.SessionToAgentRun["dag-done-sess"] != taskID {
 		t.Fatalf("session_to_agent_run = %+v, want {dag-done-sess: %s}", dag.SessionToAgentRun, taskID)
+	}
+	// The /dag boundary stamps the diagnosis scoring scale so AReaL can
+	// normalize per-turn scores to [0, 1] without guessing Multica's max.
+	if dag.ScoreMax != 20 {
+		t.Fatalf("score_max = %d, want 20 (DIAGNOSIS_AGENT_SCORE_MAX)", dag.ScoreMax)
 	}
 }
 

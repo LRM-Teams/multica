@@ -283,6 +283,11 @@ func (h *Handler) GetDag(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "failed"})
 		return
 	}
+	// Stamp the diagnosis scoring scale so AReaL can normalize per-turn
+	// StepReward scores to [0, 1] without guessing Multica's configured max.
+	// AssembleAssembledDag leaves ScoreMax 0 (it is config metadata, not
+	// assembled data); the /dag boundary is the place that knows the config.
+	dag.ScoreMax = service.LoadTrainingConfig().DiagnosisAgentScoreMax
 	writeJSON(w, http.StatusOK, dag)
 }
 

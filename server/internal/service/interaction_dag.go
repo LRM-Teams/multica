@@ -220,18 +220,18 @@ func (s *InteractionDAGService) CloseSegmentForEvent(
 	}
 
 	if err := s.store.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
-		SegmentID:                 segmentID,
-		ProjectID:                 projectID,
-		AgentRunID:                run.AgentRunID,
-		IssueID:                   run.IssueID, // carry the looked-up issue_id (do not re-derive)
-		TrajectoryID:              int64(trajectoryID),
-		TensorRef:                 tensorRef,
-		ClosingEvent:              pgText(closingEvent),
-		StartSeq:                  startSeq,
-		EndSeq:                    endSeq,
-		SandboxIDs:                sandboxIDs,
-		IssueSnapshotID:           issueSnapshotID,
-		EnvState:                  envState,
+		SegmentID:       segmentID,
+		ProjectID:       projectID,
+		AgentRunID:      run.AgentRunID,
+		IssueID:         run.IssueID, // carry the looked-up issue_id (do not re-derive)
+		TrajectoryID:    int64(trajectoryID),
+		TensorRef:       tensorRef,
+		ClosingEvent:    pgText(closingEvent),
+		StartSeq:        startSeq,
+		EndSeq:          endSeq,
+		SandboxIDs:      sandboxIDs,
+		IssueSnapshotID: issueSnapshotID,
+		EnvState:        envState,
 	}); err != nil {
 		return "", fmt.Errorf("interaction_dag: insert segment+env_snapshot %s: %w", segmentID, err)
 	}
@@ -273,6 +273,14 @@ type AssembledDag struct {
 	Edges             []AssembledEdge    `json:"edges"`
 	SessionToAgentRun map[string]string  `json:"session_to_agent_run"`
 	StepRewards       []StepReward       `json:"step_rewards"`
+	// ScoreMax is the diagnosis agent's scoring scale (DIAGNOSIS_AGENT_SCORE_MAX,
+	// default 10) - the inclusive upper bound on each StepReward.Score. It is
+	// serving-boundary metadata, NOT assembled data: AssembleAssembledDag leaves
+	// it 0 and the /dag handler stamps it from the diagnosis config so AReaL can
+	// normalize per-turn scores to [0, 1] without guessing Multica's scale. 0
+	// means diagnosis scoring was not configured; AReaL treats 0 as "no
+	// normalization / sparse" (absence distinguishable, never a fabricated default).
+	ScoreMax int `json:"score_max"`
 }
 
 // AssembledSegment mirrors areal's SegmentSpec: structure only - no judge

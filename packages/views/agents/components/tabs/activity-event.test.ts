@@ -10,10 +10,9 @@ function toolEvent(tool: string, status = "running"): ActivityEvent {
   return {
     id: "t1",
     agent_id: "agent-1",
-    kind: "tool_call",
-    event_type: "tool_call",
+    activity_kind: "tool_call",
+    detail_kind: "tool_use",
     occurred_at: "2026-07-11T00:00:00Z",
-    visibility: "user_facing",
     tool,
     status,
     target_ref: { kind: "agent", id: "agent-1" },
@@ -82,14 +81,13 @@ describe("activityPresentation — mention markdown in narrative subtext (#387)"
   // normalizes `[@Name](mention://…)` to the display name and never leaks the
   // raw `mention://` URI (Frank's screenshot: the Output preview showed the raw
   // link).
-  function narrativeEvent(kind: ActivityEvent["kind"], text: string): ActivityEvent {
+  function narrativeEvent(activity_kind: ActivityEvent["activity_kind"], text: string): ActivityEvent {
     return {
       id: "n1",
       agent_id: "agent-1",
-      kind,
-      event_type: kind,
+      activity_kind,
+      detail_kind: activity_kind,
       occurred_at: "2026-07-11T00:00:00Z",
-      visibility: "user_facing",
       text,
       target_ref: { kind: "agent", id: "agent-1" },
     } as ActivityEvent;
@@ -138,9 +136,12 @@ describe("isNarrativeActivityEvent — un-mapped tool filter (#384)", () => {
     expect(isNarrativeActivityEvent(toolEvent(""))).toBe(false);
   });
 
-  it("still drops any tool_call that is not user_facing", () => {
-    expect(
-      isNarrativeActivityEvent({ ...toolEvent("bash"), visibility: "diagnostic_only" }),
-    ).toBe(false);
+  it("drops raft diagnostic kinds (internal_progress / runtime_diagnostic) from the mainline", () => {
+    expect(isNarrativeActivityEvent({ ...toolEvent("bash"), activity_kind: "internal_progress" })).toBe(
+      false,
+    );
+    expect(isNarrativeActivityEvent({ ...toolEvent("bash"), activity_kind: "runtime_diagnostic" })).toBe(
+      false,
+    );
   });
 });

@@ -223,6 +223,15 @@ func TestMaybeRetryFailedTask_ChildOpensFreshSessionBeforeNotify(t *testing.T) {
 	assert.Equal(t, env.parent.ID, child.ParentTaskID)
 }
 
+func TestMaybeRetryFailedTask_ProviderCapacityUsesAttemptBudget(t *testing.T) {
+	env := setupRetryTestDB(t, "agent_error.provider_capacity_or_rate_limit")
+
+	child, err := env.svc.MaybeRetryFailedTask(context.Background(), env.parent)
+	require.NoError(t, err)
+	require.NotNil(t, child, "transient provider capacity failure must spawn a retry")
+	assert.Equal(t, env.parent.Attempt+1, child.Attempt)
+}
+
 // TestMaybeRetryFailedTask_NonRetryableIsTerminal verifies that a non-retryable
 // failure reason is terminal: the parent's session is closed, no retry child is
 // created, and no fresh session is opened (no StartSession).

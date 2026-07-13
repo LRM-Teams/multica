@@ -31,10 +31,11 @@ type BusinessMetrics struct {
 	llmUnpricedTokens *prometheus.CounterVec
 	llmRequests       *prometheus.CounterVec
 
-	taskQueuedExpired           *prometheus.CounterVec
-	taskLeaseExpired            *prometheus.CounterVec
-	channelAmbientGateDecisions *prometheus.CounterVec
-	channelOutputSuppressed     *prometheus.CounterVec
+	taskQueuedExpired            *prometheus.CounterVec
+	taskQueuedExpiredDiagnostics *prometheus.CounterVec
+	taskLeaseExpired             *prometheus.CounterVec
+	channelAmbientGateDecisions  *prometheus.CounterVec
+	channelOutputSuppressed      *prometheus.CounterVec
 
 	activeMu    sync.Mutex
 	activeTasks map[string]activeTaskLabels
@@ -141,6 +142,12 @@ func NewBusinessMetrics() *BusinessMetrics {
 			Name:      "queued_expired_total",
 			Help:      "Total queued tasks expired by the scheduler.",
 		}, metricLabels("multica_task_queued_expired_total")),
+		taskQueuedExpiredDiagnostics: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "multica",
+			Subsystem: "task",
+			Name:      "queued_expired_diagnostics_total",
+			Help:      "Total queued tasks expired by runtime liveness and agent-capacity state at expiry.",
+		}, metricLabels("multica_task_queued_expired_diagnostics_total")),
 		taskLeaseExpired: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "multica",
 			Subsystem: "task",
@@ -183,6 +190,7 @@ func (m *BusinessMetrics) Collectors() []prometheus.Collector {
 		m.llmUnpricedTokens,
 		m.llmRequests,
 		m.taskQueuedExpired,
+		m.taskQueuedExpiredDiagnostics,
 		m.taskLeaseExpired,
 		m.channelAmbientGateDecisions,
 		m.channelOutputSuppressed,
@@ -269,11 +277,19 @@ func (m *BusinessMetrics) RecordTaskFailed(source, runtimeMode, failureReason st
 	).Inc()
 }
 
-func (m *BusinessMetrics) RecordTaskQueuedExpired(source, runtimeMode string) {
+func (m *BusinessMetrics) RecordTaskQueuedExpired(source, runtimeMode, runtimeStatus, agentCapacity string) {
 	if m == nil {
 		return
 	}
-	m.taskQueuedExpired.WithLabelValues(NormalizeTaskSource(source), NormalizeRuntimeMode(runtimeMode)).Inc()
+	source = NormalizeTaskSource(source)
+	runtimeMode = NormalizeRuntimeMode(runtimeMode)
+	m.taskQueuedExpired.WithLabelValues(source, runtimeMode).Inc()
+	m.taskQueuedExpiredDiagnostics.WithLabelValues(
+		source,
+		runtimeMode,
+		NormalizeRuntimeStatus(runtimeStatus),
+		NormalizeAgentCapacity(agentCapacity),
+	).Inc()
 }
 
 func (m *BusinessMetrics) RecordTaskLeaseExpired(source string) {

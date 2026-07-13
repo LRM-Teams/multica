@@ -254,14 +254,65 @@ func (s *TaskService) CaptureTaskUsage(ctx context.Context, task db.AgentTaskQue
 	s.Metrics.RecordLLMUsage(source, runtimeMode, provider, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens)
 }
 
+type queuedExpiryDiagnostic struct {
+	RuntimeStatus string
+	AgentCapacity string
+	QueueAge      time.Duration
+	Running       int64
+	MaxConcurrent int64
+}
+
 func (s *TaskService) CaptureQueuedExpiredTasks(ctx context.Context, tasks []db.AgentTaskQueue) {
-	if s.Metrics == nil {
-		return
-	}
 	for _, task := range tasks {
-		source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
-		s.Metrics.RecordTaskQueuedExpired(source, runtimeMode)
+		diagnostic := s.queuedExpiryDiagnostic(ctx, task)
+		slog.Info("task queue expiry diagnostic",
+			"task_id", util.UUIDToString(task.ID),
+			"agent_id", util.UUIDToString(task.AgentID),
+			"runtime_id", util.UUIDToString(task.RuntimeID),
+			"queue_age_seconds", diagnostic.QueueAge.Seconds(),
+			"runtime_status", diagnostic.RuntimeStatus,
+			"agent_capacity", diagnostic.AgentCapacity,
+			"running_tasks", diagnostic.Running,
+			"max_concurrent_tasks", diagnostic.MaxConcurrent,
+		)
+		if s.Metrics != nil {
+			source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
+			s.Metrics.RecordTaskQueuedExpired(source, runtimeMode, diagnostic.RuntimeStatus, diagnostic.AgentCapacity)
+		}
 	}
+}
+
+func (s *TaskService) queuedExpiryDiagnostic(ctx context.Context, task db.AgentTaskQueue) queuedExpiryDiagnostic {
+	diagnostic := queuedExpiryDiagnostic{
+		RuntimeStatus: "unknown",
+		AgentCapacity: "unknown",
+	}
+	if task.CreatedAt.Valid && task.CompletedAt.Valid {
+		diagnostic.QueueAge = task.CompletedAt.Time.Sub(task.CreatedAt.Time)
+	}
+	if task.RuntimeID.Valid {
+		if runtime, err := s.Queries.GetAgentRuntime(ctx, task.RuntimeID); err == nil {
+			diagnostic.RuntimeStatus = runtime.Status
+		} else if errors.Is(err, pgx.ErrNoRows) {
+			diagnostic.RuntimeStatus = "missing"
+		}
+	}
+	agent, err := s.Queries.GetAgent(ctx, task.AgentID)
+	if err != nil {
+		return diagnostic
+	}
+	diagnostic.MaxConcurrent = int64(agent.MaxConcurrentTasks)
+	running, err := s.Queries.CountRunningTasks(ctx, task.AgentID)
+	if err != nil {
+		return diagnostic
+	}
+	diagnostic.Running = running
+	if running >= diagnostic.MaxConcurrent {
+		diagnostic.AgentCapacity = "saturated"
+	} else {
+		diagnostic.AgentCapacity = "available"
+	}
+	return diagnostic
 }
 
 func (s *TaskService) CaptureLeaseExpiredTasks(ctx context.Context, tasks []db.AgentTaskQueue) {
@@ -341,7 +392,9 @@ func (s *TaskService) taskMetricsContext(ctx context.Context, task db.AgentTaskQ
 	case task.AutopilotRunID.Valid:
 		source = "autopilot"
 	default:
-		if _, ok := s.parseQuickCreateContext(task); ok {
+		if _, ok := parseAgentRadarContext(task); ok {
+			source = "agent_radar"
+		} else if _, ok := s.parseQuickCreateContext(task); ok {
 			source = "quick_create"
 		} else if tc.Source != "" {
 			source = tc.Source
@@ -1907,6 +1960,9 @@ var retryableReasons = map[string]bool{
 	"runtime_recovery":          true,
 	"timeout":                   true,
 	"codex_semantic_inactivity": true,
+	taskfailure.ReasonAgentProviderCapacityOrRateLimit.String(): true,
+	taskfailure.ReasonAgentProviderServerError.String():         true,
+	taskfailure.ReasonAgentProviderNetwork.String():             true,
 }
 
 func resumeUnsafeFailureReason(reason string) bool {
@@ -1922,14 +1978,14 @@ func resumeUnsafeFailureReason(reason string) bool {
 
 // MaybeRetryFailedTask spawns a fresh queued attempt for a recently-failed
 // task when the failure was infrastructure-shaped (daemon crash, runtime
-// went offline, dispatch/run timeout) and the task hasn't exhausted its
-// max_attempts budget. The child task inherits agent/runtime/issue/chat
+// went offline, dispatch/run timeout, or a transient provider failure) and
+// the task hasn't exhausted its max_attempts budget. The child task inherits agent/runtime/issue/chat
 // links and, for resume-safe failures, the parent's session_id/work_dir so
 // the agent can resume the conversation when the backend supports it. Returns
 // the new task, or nil when no retry was created.
 //
-// Autopilot tasks are NOT auto-retried here; the autopilot scheduler owns
-// its own re-run cadence and we don't want to double-fire it.
+// Autopilot and Radar tasks are NOT auto-retried here; their schedulers own
+// the next safe observation boundary and we don't want to double-fire them.
 func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentTaskQueue) (*db.AgentTaskQueue, error) {
 	if parent.Status != "failed" {
 		return nil, nil
@@ -1951,6 +2007,9 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 	}
 	if parent.AutopilotRunID.Valid {
 		// Autopilot has its own retry semantics; do not double-trigger.
+		return nil, nil
+	}
+	if _, radar := parseAgentRadarContext(parent); radar {
 		return nil, nil
 	}
 	if !parent.IssueID.Valid && !parent.ChatSessionID.Valid {

@@ -13,6 +13,8 @@ const (
 	labelProvider       = "provider"
 	labelTerminalStatus = "terminal_status"
 	labelFailureReason  = "failure_reason"
+	labelRuntimeStatus  = "runtime_status"
+	labelAgentCapacity  = "agent_capacity"
 	labelTokenType      = "token_type"
 	labelModel          = "model"
 	labelModelAlias     = "model_alias"
@@ -34,24 +36,25 @@ const (
 )
 
 var businessMetricLabels = map[string][]string{
-	"multica_agent_task_enqueued_total":            {labelSource, labelRuntimeMode},
-	"multica_agent_task_dispatched_total":          {labelSource, labelRuntimeMode},
-	"multica_agent_task_started_total":             {labelSource, labelRuntimeMode, labelProvider},
-	"multica_agent_task_terminal_total":            {labelSource, labelRuntimeMode, labelTerminalStatus},
-	"multica_agent_task_failed_total":              {labelSource, labelRuntimeMode, labelFailureReason},
-	"multica_agent_task_queue_wait_seconds":        {labelSource, labelRuntimeMode},
-	"multica_agent_task_run_seconds":               {labelSource, labelRuntimeMode, labelTerminalStatus},
-	"multica_agent_task_total_seconds":             {labelSource, labelRuntimeMode, labelTerminalStatus},
-	"multica_agent_task_in_progress":               {labelSource, labelRuntimeMode},
-	"multica_agent_task_iteration_count":           {labelSource, labelTerminalStatus},
-	"multica_llm_tokens_total":                     {labelProvider, labelModel, labelTokenType, labelRuntimeMode, labelSource},
-	"multica_llm_cost_usd_total":                   {labelProvider, labelModel, labelTokenType, labelRuntimeMode, labelSource},
-	"multica_llm_unpriced_tokens_total":            {labelProvider, labelModelAlias, labelTokenType},
-	"multica_llm_request_total":                    {labelProvider, labelModel, labelRuntimeMode},
-	"multica_task_queued_expired_total":            {labelSource, labelRuntimeMode},
-	"multica_task_lease_expired_total":             {labelSource},
-	"multica_channel_ambient_gate_decisions_total": {labelAction, labelReason},
-	"multica_channel_output_suppressed_total":      {labelReason},
+	"multica_agent_task_enqueued_total":             {labelSource, labelRuntimeMode},
+	"multica_agent_task_dispatched_total":           {labelSource, labelRuntimeMode},
+	"multica_agent_task_started_total":              {labelSource, labelRuntimeMode, labelProvider},
+	"multica_agent_task_terminal_total":             {labelSource, labelRuntimeMode, labelTerminalStatus},
+	"multica_agent_task_failed_total":               {labelSource, labelRuntimeMode, labelFailureReason},
+	"multica_agent_task_queue_wait_seconds":         {labelSource, labelRuntimeMode},
+	"multica_agent_task_run_seconds":                {labelSource, labelRuntimeMode, labelTerminalStatus},
+	"multica_agent_task_total_seconds":              {labelSource, labelRuntimeMode, labelTerminalStatus},
+	"multica_agent_task_in_progress":                {labelSource, labelRuntimeMode},
+	"multica_agent_task_iteration_count":            {labelSource, labelTerminalStatus},
+	"multica_llm_tokens_total":                      {labelProvider, labelModel, labelTokenType, labelRuntimeMode, labelSource},
+	"multica_llm_cost_usd_total":                    {labelProvider, labelModel, labelTokenType, labelRuntimeMode, labelSource},
+	"multica_llm_unpriced_tokens_total":             {labelProvider, labelModelAlias, labelTokenType},
+	"multica_llm_request_total":                     {labelProvider, labelModel, labelRuntimeMode},
+	"multica_task_queued_expired_total":             {labelSource, labelRuntimeMode},
+	"multica_task_queued_expired_diagnostics_total": {labelSource, labelRuntimeMode, labelRuntimeStatus, labelAgentCapacity},
+	"multica_task_lease_expired_total":              {labelSource},
+	"multica_channel_ambient_gate_decisions_total":  {labelAction, labelReason},
+	"multica_channel_output_suppressed_total":       {labelReason},
 
 	// PR3 funnel / community / commercial.
 	"multica_signup_total":                             {labelSignupSource},
@@ -104,6 +107,7 @@ var (
 		"autopilot":       "autopilot",
 		"autopilot_issue": "autopilot_issue",
 		"quick_create":    "quick_create",
+		"agent_radar":     "agent_radar",
 		"manual":          "manual",
 		"api":             "api",
 		"other":           "other",
@@ -112,6 +116,17 @@ var (
 		"local":   "local",
 		"cloud":   "cloud",
 		"unknown": "unknown",
+	}
+	knownRuntimeStatuses = map[string]string{
+		"online":  "online",
+		"offline": "offline",
+		"missing": "missing",
+		"unknown": "unknown",
+	}
+	knownAgentCapacities = map[string]string{
+		"available": "available",
+		"saturated": "saturated",
+		"unknown":   "unknown",
 	}
 	knownRuntimeProviders = map[string]string{
 		"antigravity":   "antigravity",
@@ -216,6 +231,22 @@ func NormalizeTaskSource(value string) string {
 func NormalizeRuntimeMode(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if normalized, ok := knownRuntimeModes[value]; ok {
+		return normalized
+	}
+	return "unknown"
+}
+
+func NormalizeRuntimeStatus(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if normalized, ok := knownRuntimeStatuses[value]; ok {
+		return normalized
+	}
+	return "unknown"
+}
+
+func NormalizeAgentCapacity(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if normalized, ok := knownAgentCapacities[value]; ok {
 		return normalized
 	}
 	return "unknown"

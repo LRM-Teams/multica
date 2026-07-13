@@ -65,6 +65,19 @@ func TestBusinessMetricsFailureReasonUsesCanonicalClassifier(t *testing.T) {
 	}
 }
 
+func TestBusinessMetricsQueuedExpiryDiagnostics(t *testing.T) {
+	m := NewBusinessMetrics()
+
+	m.RecordTaskQueuedExpired("agent_radar", "local", "online", "saturated")
+
+	if got := testutil.ToFloat64(m.taskQueuedExpired.WithLabelValues("agent_radar", "local")); got != 1 {
+		t.Fatalf("queued expiry counter = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.taskQueuedExpiredDiagnostics.WithLabelValues("agent_radar", "local", "online", "saturated")); got != 1 {
+		t.Fatalf("queued expiry diagnostic counter = %v, want 1", got)
+	}
+}
+
 func TestBusinessMetricsLLMPricingAndUnpricedTokens(t *testing.T) {
 	m := NewBusinessMetrics()
 
@@ -105,7 +118,7 @@ func TestBusinessMetricsRegistryExposesAllFamilies(t *testing.T) {
 	m.RecordTaskStarted("issue", "local", "codex")
 	m.RecordTaskTerminal("task-1", "issue", "local", "completed", 2, 3, 1)
 	m.RecordTaskFailed("issue", "local", taskfailure.ReasonTimeout.String())
-	m.RecordTaskQueuedExpired("issue", "local")
+	m.RecordTaskQueuedExpired("issue", "local", "offline", "available")
 	m.RecordTaskLeaseExpired("issue")
 	m.RecordChannelAmbientGateDecision("coalesced", "agent_active_ambient")
 	m.RecordChannelOutputSuppressed("legacy_protocol_output")

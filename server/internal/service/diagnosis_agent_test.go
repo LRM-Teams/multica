@@ -2,15 +2,33 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+
+	"github.com/multica-ai/multica/server/internal/util"
 	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
+	"github.com/multica-ai/multica/server/pkg/db/generated"
+)
+
+// Diagnosis test fixtures. segment_id / agent_run_id are strings (D8:
+// agent_run_id = task.ID); project/workspace are UUIDs.
+const (
+	diagProjectID   = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	diagWorkspaceID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	diagSegmentID   = "seg-diag-1"
+	diagAgentRunID  = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 )
 
 // fakeBackend is a minimal agentpkg.Backend for exercising DiagnosisAgentRunner
 // without spawning a real agent subprocess.
 type fakeBackend struct {
+	called    bool
 	gotPrompt string
 	gotOpts   agentpkg.ExecOptions
 	output    string
@@ -18,7 +36,10 @@ type fakeBackend struct {
 	execErr   error
 }
 
+func (f *fakeBackend) executed() bool { return f.called }
+
 func (f *fakeBackend) Execute(_ context.Context, prompt string, opts agentpkg.ExecOptions) (*agentpkg.Session, error) {
+	f.called = true
 	f.gotPrompt = prompt
 	f.gotOpts = opts
 	if f.execErr != nil {
@@ -102,48 +123,187 @@ func TestNewDiagnosisAgentRunner_InjectsBackend(t *testing.T) {
 	}
 }
 
-// TestDiagnose_ParsesStepRewards exercises the full Diagnose flow against a
-// fake backend: the runner wires in systemPrompt(), adds --no-tools for the pi
-// provider, and returns parsed StepRewards from the backend's JSON output.
-func TestDiagnose_ParsesStepRewards(t *testing.T) {
-	fb := &fakeBackend{
-		status: "completed",
-		output: `[{"segment_id":"seg-a","seq":1,"score":7,"rationale":"good"},{"segment_id":"seg-a","seq":2,"score":12,"rationale":"clamped"}]`,
+// newDiagnosisStores builds a MockDiagnosisStores (satisfying both DAGStore and
+// MessageStore) for one root segment "seg-diag-1" with two assistant messages
+// and a task issue. It is the happy-path fixture for the rich-prompt Diagnose
+// tests.
+func newDiagnosisStores(t *testing.T, projectID, workspaceID pgtype.UUID) *MockDiagnosisStores {
+	t.Helper()
+	m := new(MockDiagnosisStores)
+	seg := db.InteractionDAGSegment{
+		SegmentID:  diagSegmentID,
+		ProjectID:  projectID.String(),
+		AgentRunID: diagAgentRunID,
+		StartSeq:   1,
+		EndSeq:     2,
 	}
-	r, err := NewDiagnosisAgentRunner(DiagnosisAgentConfig{ScoreMax: 10, Backend: fb})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	msgs := []db.TaskMessage{
+		{Seq: 1, Type: "assistant", Content: pgtype.Text{String: "Let me plan the approach.", Valid: true}},
+		{Seq: 2, Type: "assistant", Content: pgtype.Text{String: "The answer is 42.", Valid: true}},
 	}
-	got, err := r.Diagnose(context.Background(), "proj-1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(got) != 2 || got[0].SegmentID != "seg-a" || got[0].Score != 7 || got[1].Score != 10 {
-		t.Fatalf("%+v", got)
-	}
-	if !strings.Contains(fb.gotOpts.SystemPrompt, "between 0 and 10 inclusive") {
-		t.Fatalf("system prompt missing range: %q", fb.gotOpts.SystemPrompt)
-	}
-	foundNoTools := false
-	for _, a := range fb.gotOpts.CustomArgs {
+	// GetInteractionDAG + GetSegmentMessages both workspace-gate via the same
+	// (projectID, workspaceID) params; one expectation covers both calls.
+	m.On("GetProjectInWorkspace", mock.Anything, mock.MatchedBy(func(a db.GetProjectInWorkspaceParams) bool {
+		return a.ID == projectID && a.WorkspaceID == workspaceID
+	})).Return(db.Project{ID: projectID, WorkspaceID: workspaceID}, nil)
+	m.On("ListInteractionDAGSegmentsForProject", mock.Anything, projectID.String()).Return([]db.InteractionDAGSegment{seg}, nil)
+	m.On("ListInteractionDAGEdgesForProject", mock.Anything, projectID.String()).Return([]db.InteractionDAGEdge{}, nil)
+	m.On("GetInteractionDAGSegmentByID", mock.Anything, diagSegmentID).Return(seg, nil)
+	m.On("MessagesForTaskInRange", mock.Anything, diagAgentRunID, int32(1), int32(2)).Return(msgs, nil)
+	// Root segment (no incoming edge) -> AgentRunID is the root task ID (D8).
+	m.On("GetIssueForTask", mock.Anything, diagAgentRunID).Return(db.Issue{
+		WorkspaceID:        workspaceID,
+		Title:              "Compute the answer",
+		Description:        pgtype.Text{String: "Goal: compute the ultimate answer.", Valid: true},
+		AcceptanceCriteria: []byte(`["equals 42"]`),
+	}, nil)
+	return m
+}
+
+func hasNoTools(opts agentpkg.ExecOptions) bool {
+	for _, a := range opts.CustomArgs {
 		if a == "--no-tools" {
-			foundNoTools = true
+			return true
 		}
 	}
-	if !foundNoTools {
-		t.Fatalf("expected --no-tools in custom args for pi provider, got %v", fb.gotOpts.CustomArgs)
+	return false
+}
+
+// TestDiagnose_PromptContainsDAGMessagesAndContext verifies the rich-prompt
+// flow: Diagnose fetches the interaction DAG + per-segment messages + root-task
+// context via the Task 2 Go helpers, embeds them in the prompt sent to the
+// backend, and returns parsed (clamped) step rewards.
+func TestDiagnose_PromptContainsDAGMessagesAndContext(t *testing.T) {
+	projectID := util.MustParseUUID(diagProjectID)
+	workspaceID := util.MustParseUUID(diagWorkspaceID)
+	stores := newDiagnosisStores(t, projectID, workspaceID)
+	fb := &fakeBackend{
+		status: "completed",
+		output: `[{"segment_id":"seg-diag-1","seq":1,"score":9,"rationale":"good plan"},{"segment_id":"seg-diag-1","seq":2,"score":12,"rationale":"clamped"}]`,
 	}
+	r, err := NewDiagnosisAgentRunner(DiagnosisAgentConfig{
+		ScoreMax:     10,
+		Backend:      fb,
+		DAGStore:     stores,
+		MessageStore: stores,
+	})
+	require.NoError(t, err)
+
+	got, err := r.Diagnose(context.Background(), diagProjectID, diagWorkspaceID)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, diagSegmentID, got[0].SegmentID)
+	assert.Equal(t, 9, got[0].Score)
+	assert.Equal(t, 10, got[1].Score, "score 12 must clamp to scoreMax 10")
+
+	// The prompt embeds the DAG, per-segment LLM messages, and task context.
+	assert.Contains(t, fb.gotPrompt, diagSegmentID)
+	assert.Contains(t, fb.gotPrompt, diagAgentRunID)
+	assert.Contains(t, fb.gotPrompt, "Let me plan the approach.")
+	assert.Contains(t, fb.gotPrompt, "The answer is 42.")
+	assert.Contains(t, fb.gotPrompt, "Goal: compute the ultimate answer.")
+	assert.Contains(t, fb.gotPrompt, "equals 42")
+
+	// System prompt + --no-tools wiring preserved.
+	assert.Contains(t, fb.gotOpts.SystemPrompt, "between 0 and 10 inclusive")
+	assert.True(t, hasNoTools(fb.gotOpts), "expected --no-tools for pi provider, got %v", fb.gotOpts.CustomArgs)
+	stores.AssertExpectations(t)
 }
 
 // TestDiagnose_PropagatesNonCompleted verifies a non-completed backend result
-// surfaces as an error rather than being parsed as success.
+// surfaces as an error even when the stores fetch succeeds.
 func TestDiagnose_PropagatesNonCompleted(t *testing.T) {
+	projectID := util.MustParseUUID(diagProjectID)
+	workspaceID := util.MustParseUUID(diagWorkspaceID)
+	stores := newDiagnosisStores(t, projectID, workspaceID)
 	fb := &fakeBackend{status: "failed", output: ""}
+	r, err := NewDiagnosisAgentRunner(DiagnosisAgentConfig{
+		ScoreMax: 10, Backend: fb, DAGStore: stores, MessageStore: stores,
+	})
+	require.NoError(t, err)
+	_, err = r.Diagnose(context.Background(), diagProjectID, diagWorkspaceID)
+	assert.Error(t, err)
+	stores.AssertExpectations(t)
+}
+
+// TestDiagnose_NoSegmentsErrors: an empty DAG (no segments) surfaces as an
+// error rather than fabricating an empty prompt - absence stays distinguishable.
+func TestDiagnose_NoSegmentsErrors(t *testing.T) {
+	projectID := util.MustParseUUID(diagProjectID)
+	workspaceID := util.MustParseUUID(diagWorkspaceID)
+	m := new(MockDiagnosisStores)
+	m.On("GetProjectInWorkspace", mock.Anything, mock.MatchedBy(func(a db.GetProjectInWorkspaceParams) bool {
+		return a.ID == projectID && a.WorkspaceID == workspaceID
+	})).Return(db.Project{ID: projectID, WorkspaceID: workspaceID}, nil)
+	m.On("ListInteractionDAGSegmentsForProject", mock.Anything, projectID.String()).Return([]db.InteractionDAGSegment{}, nil)
+	m.On("ListInteractionDAGEdgesForProject", mock.Anything, projectID.String()).Return([]db.InteractionDAGEdge{}, nil)
+
+	fb := &fakeBackend{}
+	r, err := NewDiagnosisAgentRunner(DiagnosisAgentConfig{ScoreMax: 10, Backend: fb, DAGStore: m, MessageStore: m})
+	require.NoError(t, err)
+	_, err = r.Diagnose(context.Background(), diagProjectID, diagWorkspaceID)
+	require.Error(t, err)
+	assert.False(t, fb.executed(), "backend must not run when there are no segments to score")
+	m.AssertExpectations(t)
+}
+
+// TestDiagnose_StoresNotConfiguredErrors: a runner constructed without stores
+// surfaces a clear error at Diagnose time (no nil-deref panic).
+func TestDiagnose_StoresNotConfiguredErrors(t *testing.T) {
+	fb := &fakeBackend{output: `[]`}
 	r, err := NewDiagnosisAgentRunner(DiagnosisAgentConfig{ScoreMax: 10, Backend: fb})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	require.NoError(t, err)
+	_, err = r.Diagnose(context.Background(), diagProjectID, diagWorkspaceID)
+	assert.Error(t, err)
+	assert.False(t, fb.executed(), "backend must not run when stores are not configured")
+}
+
+// TestDiagnose_InvalidUUIDErrors: a malformed project/workspace ID surfaces as
+// an error before any store call.
+func TestDiagnose_InvalidUUIDErrors(t *testing.T) {
+	m := new(MockDiagnosisStores)
+	fb := &fakeBackend{output: `[]`}
+	r, err := NewDiagnosisAgentRunner(DiagnosisAgentConfig{ScoreMax: 10, Backend: fb, DAGStore: m, MessageStore: m})
+	require.NoError(t, err)
+	_, err = r.Diagnose(context.Background(), "not-a-uuid", diagWorkspaceID)
+	assert.Error(t, err)
+	assert.False(t, fb.executed(), "backend must not run on a malformed project id")
+}
+
+// TestDiagnose_CapsSegmentCount: a DAG with more than maxDiagnosisSegments
+// segments is capped - only the first maxDiagnosisSegments are fetched for
+// messages and appear in the prompt, bounding prompt size.
+func TestDiagnose_CapsSegmentCount(t *testing.T) {
+	projectID := util.MustParseUUID(diagProjectID)
+	workspaceID := util.MustParseUUID(diagWorkspaceID)
+	m := new(MockDiagnosisStores)
+	n := maxDiagnosisSegments + 5
+	segs := make([]db.InteractionDAGSegment, 0, n)
+	for i := 0; i < n; i++ {
+		sid := fmt.Sprintf("segcap-%02d", i)
+		seg := db.InteractionDAGSegment{
+			SegmentID: sid, ProjectID: projectID.String(),
+			AgentRunID: diagAgentRunID, StartSeq: 1, EndSeq: 1,
+		}
+		segs = append(segs, seg)
+		if i < maxDiagnosisSegments {
+			m.On("GetInteractionDAGSegmentByID", mock.Anything, sid).Return(seg, nil)
+			m.On("MessagesForTaskInRange", mock.Anything, diagAgentRunID, int32(1), int32(1)).
+				Return([]db.TaskMessage{{Seq: 1, Type: "assistant", Content: pgtype.Text{String: "m", Valid: true}}}, nil)
+		}
 	}
-	if _, err := r.Diagnose(context.Background(), "proj-1"); err == nil {
-		t.Fatal("expected error for non-completed diagnosis, got nil")
-	}
+	m.On("GetProjectInWorkspace", mock.Anything, mock.Anything).Return(db.Project{ID: projectID, WorkspaceID: workspaceID}, nil)
+	m.On("ListInteractionDAGSegmentsForProject", mock.Anything, projectID.String()).Return(segs, nil)
+	m.On("ListInteractionDAGEdgesForProject", mock.Anything, projectID.String()).Return([]db.InteractionDAGEdge{}, nil)
+	m.On("GetIssueForTask", mock.Anything, diagAgentRunID).Return(db.Issue{WorkspaceID: workspaceID, Title: "t"}, nil)
+
+	fb := &fakeBackend{status: "completed", output: `[]`}
+	r, err := NewDiagnosisAgentRunner(DiagnosisAgentConfig{ScoreMax: 10, Backend: fb, DAGStore: m, MessageStore: m})
+	require.NoError(t, err)
+	_, err = r.Diagnose(context.Background(), diagProjectID, diagWorkspaceID)
+	require.NoError(t, err)
+
+	assert.Contains(t, fb.gotPrompt, fmt.Sprintf("segcap-%02d", maxDiagnosisSegments-1), "last kept segment must be in prompt")
+	assert.NotContains(t, fb.gotPrompt, fmt.Sprintf("segcap-%02d", maxDiagnosisSegments), "first dropped segment must not be in prompt")
+	m.AssertExpectations(t)
 }

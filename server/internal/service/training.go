@@ -87,7 +87,7 @@ type criticTaskCreator interface {
 // diagnosis agent views the WHOLE project segment DAG (all agents), distinct
 // from the per-agent scalar critic.
 type Diagnoser interface {
-	Diagnose(ctx context.Context, projectID string) ([]StepReward, error)
+	Diagnose(ctx context.Context, projectID, workspaceID string) ([]StepReward, error)
 }
 
 // Compile-check that the real runner satisfies the Diagnoser seam.
@@ -473,7 +473,7 @@ func maybeDiagnoseProject(ctx context.Context, deps *TrainingSessionDeps, task d
 		return
 	}
 	projectIDStr := util.UUIDToString(projectID)
-	rewards, err := deps.Diagnosis.Diagnose(ctx, projectIDStr)
+	rewards, err := deps.Diagnosis.Diagnose(ctx, projectIDStr, util.UUIDToString(dispatch.WorkspaceID))
 	if err != nil {
 		slog.Warn("diagnosis agent: soft-fail, no step rewards recorded",
 			"task_id", util.UUIDToString(task.ID),

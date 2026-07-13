@@ -17,11 +17,12 @@ import (
 )
 
 const (
-	testTrainingProjectID = "11111111-1111-1111-1111-111111111111"
-	testTrainAgentID      = "22222222-2222-2222-2222-222222222222"
-	testTrainingTaskID    = "33333333-3333-3333-3333-333333333333"
-	testOtherAgentID      = "44444444-4444-4444-4444-444444444444"
-	testProxyURL          = "http://db_bridge_stub:9100/v1"
+	testTrainingProjectID   = "11111111-1111-1111-1111-111111111111"
+	testTrainAgentID        = "22222222-2222-2222-2222-222222222222"
+	testTrainingTaskID      = "33333333-3333-3333-3333-333333333333"
+	testOtherAgentID        = "44444444-4444-4444-4444-444444444444"
+	testTrainingWorkspaceID = "55555555-5555-5555-5555-555555555555"
+	testProxyURL            = "http://db_bridge_stub:9100/v1"
 )
 
 type fakeDispatchLookup struct {
@@ -90,6 +91,7 @@ func (f *fakeRLClient) EndSession(_ context.Context, proxyKey string) error {
 func trainingDispatchRow(trainAgentID string) db.TrainingDispatch {
 	return db.TrainingDispatch{
 		ProjectID:     util.MustParseUUID(testTrainingProjectID),
+		WorkspaceID:   util.MustParseUUID(testTrainingWorkspaceID),
 		TrainAgentID:  util.MustParseUUID(trainAgentID),
 		DefaultReward: 1.0,
 	}
@@ -623,16 +625,18 @@ func TestTrainingCheckpointTriggerSkipsSweeperAutopilotAndSandboxLifecycleEvents
 // and optionally appends "Diagnose" to a shared order slice (nil-safe) so the
 // diagnosis-before-close-hook ordering test can assert cross-helper sequencing.
 type fakeDiagnoser struct {
-	rewards       []StepReward
-	err           error
-	calls         int
-	lastProjectID string
-	order         *[]string
+	rewards         []StepReward
+	err             error
+	calls           int
+	lastProjectID   string
+	lastWorkspaceID string
+	order           *[]string
 }
 
-func (f *fakeDiagnoser) Diagnose(_ context.Context, projectID string) ([]StepReward, error) {
+func (f *fakeDiagnoser) Diagnose(_ context.Context, projectID, workspaceID string) ([]StepReward, error) {
 	f.calls++
 	f.lastProjectID = projectID
+	f.lastWorkspaceID = workspaceID
 	if f.order != nil {
 		*f.order = append(*f.order, "Diagnose")
 	}
@@ -693,6 +697,9 @@ func TestMaybeDiagnoseProject_RootTask_FiresAndRecords(t *testing.T) {
 	}
 	if diag.lastProjectID != testTrainingProjectID {
 		t.Fatalf("Diagnose projectID = %q, want %q", diag.lastProjectID, testTrainingProjectID)
+	}
+	if diag.lastWorkspaceID != testTrainingWorkspaceID {
+		t.Fatalf("Diagnose workspaceID = %q, want %q", diag.lastWorkspaceID, testTrainingWorkspaceID)
 	}
 	if len(store.stepRewards) != 2 {
 		t.Fatalf("recorded step rewards = %d, want 2", len(store.stepRewards))

@@ -2982,8 +2982,8 @@ func TestSendChannelMessageClientMessageIDDedupesAttachmentsAndParts(t *testing.
 		"parts": []protocol.MessagePart{
 			{Type: protocol.MessagePartTypeText, Text: content},
 			{Type: protocol.MessagePartTypeSticker, StickerID: "hi"},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: attachmentID},
 		},
-		"attachment_ids":    []string{attachmentID},
 		"client_message_id": clientID,
 	}
 	first := sendChannelMessageForTest(t, channelID, testUserID, body)
@@ -3001,8 +3001,14 @@ func TestSendChannelMessageClientMessageIDDedupesAttachmentsAndParts(t *testing.
 	if len(duplicate.Attachments) != 1 || duplicate.Attachments[0].ID != attachmentID {
 		t.Fatalf("duplicate attachments = %+v, want seeded attachment", duplicate.Attachments)
 	}
-	if len(duplicate.Parts) != 2 || duplicate.Parts[0].Type != protocol.MessagePartTypeText || duplicate.Parts[1].Type != protocol.MessagePartTypeSticker || duplicate.Parts[1].PackID != "builtin" || duplicate.Parts[1].StickerID != "hi" {
-		t.Fatalf("duplicate parts = %+v, want text plus normalized builtin sticker", duplicate.Parts)
+	if len(duplicate.Parts) != 3 ||
+		duplicate.Parts[0].Type != protocol.MessagePartTypeText ||
+		duplicate.Parts[1].Type != protocol.MessagePartTypeSticker ||
+		duplicate.Parts[1].PackID != "builtin" ||
+		duplicate.Parts[1].StickerID != "hi" ||
+		duplicate.Parts[2].Type != protocol.MessagePartTypeAttachment ||
+		duplicate.Parts[2].AttachmentID != attachmentID {
+		t.Fatalf("duplicate parts = %+v, want text + sticker + attachment", duplicate.Parts)
 	}
 
 	var bound int
@@ -3093,6 +3099,140 @@ func TestSendChannelMessageClientMessageIDConcurrentDuplicates(t *testing.T) {
 	}
 	if rows != 1 {
 		t.Fatalf("channel_message rows = %d, want 1", rows)
+	}
+}
+
+func TestSendChannelMessageAttachmentOnlyFromParts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "attachment-only-parts-"+uuid.NewString(), testUserID)
+	var attachmentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (workspace_id, channel_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+		VALUES ($1, $2, 'member', $3, 'photo.png', 's3://photo.png', 'image/png', 42)
+		RETURNING id`, testWorkspaceID, channelID, testUserID).Scan(&attachmentID); err != nil {
+		t.Fatalf("seed attachment: %v", err)
+	}
+
+	rec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content": "",
+		"parts": []protocol.MessagePart{{
+			Type:         protocol.MessagePartTypeAttachment,
+			AttachmentID: attachmentID,
+			Filename:     "photo.png",
+			ContentType:  "image/png",
+			SizeBytes:    42,
+		}},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("attachment-only send: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created message: %v", err)
+	}
+	if created.Content != "" {
+		t.Fatalf("content = %q, want empty (no markdown image URL)", created.Content)
+	}
+	if strings.Contains(created.Content, "![") || strings.Contains(created.Content, "s3://") {
+		t.Fatalf("content must not contain markdown/media URL, got %q", created.Content)
+	}
+	if len(created.Parts) != 1 || created.Parts[0].Type != protocol.MessagePartTypeAttachment || created.Parts[0].AttachmentID != attachmentID {
+		t.Fatalf("parts = %+v, want single attachment part", created.Parts)
+	}
+	if len(created.Attachments) != 1 || created.Attachments[0].ID != attachmentID {
+		t.Fatalf("attachments = %+v, want bound attachment %s", created.Attachments, attachmentID)
+	}
+
+	var boundMessageID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT channel_message_id::text
+		FROM attachment
+		WHERE id = $1`, attachmentID).Scan(&boundMessageID); err != nil {
+		t.Fatalf("load attachment binding: %v", err)
+	}
+	if boundMessageID != created.ID {
+		t.Fatalf("attachment bound to message %q, want %q", boundMessageID, created.ID)
+	}
+}
+
+func TestSendChannelMessageTextWithTwoAttachmentParts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "attachment-two-parts-"+uuid.NewString(), testUserID)
+	seedUnbound := func(filename string) string {
+		t.Helper()
+		var id string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO attachment (workspace_id, channel_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+			VALUES ($1, $2, 'member', $3, $4, $5, 'image/png', 10)
+			RETURNING id`, testWorkspaceID, channelID, testUserID, filename, "s3://"+filename).Scan(&id); err != nil {
+			t.Fatalf("seed attachment %s: %v", filename, err)
+		}
+		return id
+	}
+	firstID := seedUnbound("first.png")
+	secondID := seedUnbound("second.png")
+	content := "here are two files " + uuid.NewString()
+
+	rec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content": content,
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: content},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: firstID, Filename: "first.png"},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: secondID, Filename: "second.png"},
+		},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("text + attachments send: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created message: %v", err)
+	}
+	if created.Content != content {
+		t.Fatalf("content = %q, want %q", created.Content, content)
+	}
+	if len(created.Parts) != 3 ||
+		created.Parts[0].Type != protocol.MessagePartTypeText ||
+		created.Parts[1].Type != protocol.MessagePartTypeAttachment ||
+		created.Parts[1].AttachmentID != firstID ||
+		created.Parts[2].Type != protocol.MessagePartTypeAttachment ||
+		created.Parts[2].AttachmentID != secondID {
+		t.Fatalf("parts = %+v, want text then two attachment parts in order", created.Parts)
+	}
+	if len(created.Attachments) != 2 {
+		t.Fatalf("attachments = %+v, want 2 bound attachments", created.Attachments)
+	}
+	gotIDs := map[string]struct{}{}
+	for _, att := range created.Attachments {
+		gotIDs[att.ID] = struct{}{}
+	}
+	if _, ok := gotIDs[firstID]; !ok {
+		t.Fatalf("attachments missing first id %s: %+v", firstID, created.Attachments)
+	}
+	if _, ok := gotIDs[secondID]; !ok {
+		t.Fatalf("attachments missing second id %s: %+v", secondID, created.Attachments)
+	}
+
+	var bound int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM attachment
+		WHERE channel_message_id = $1 AND id = ANY($2::uuid[])`,
+		created.ID, []string{firstID, secondID}).Scan(&bound); err != nil {
+		t.Fatalf("count bound attachments: %v", err)
+	}
+	if bound != 2 {
+		t.Fatalf("bound attachment rows = %d, want 2", bound)
 	}
 }
 

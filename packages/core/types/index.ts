@@ -121,6 +121,7 @@ export type { IssueSubscriber } from "./subscriber";
 export type * from "./events";
 export type * from "./api";
 export type { MessagePart } from "./message-part";
+export { buildChannelMessageParts } from "./message-part";
 export type { StickerAsset, StickerCatalogResponse, StickerPack } from "./sticker";
 export type { Attachment } from "./attachment";
 export { attachmentDownloadPath, attachmentIdFromDownloadURL, contentReferencesAttachment } from "./attachment-url";

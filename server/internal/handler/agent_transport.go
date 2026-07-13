@@ -26,7 +26,6 @@ type AgentTransportSendRequest struct {
 	Target          string                      `json:"target"`
 	Content         string                      `json:"content"`
 	Parts           []protocol.MessagePart      `json:"parts"`
-	AttachmentIDs   []string                    `json:"attachment_ids"`
 	Options         *protocol.ChatOutputOptions `json:"options,omitempty"`
 	ClientMessageID string                      `json:"client_message_id"`
 }
@@ -115,11 +114,14 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
 		return
 	}
-	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, req.AttachmentIDs, "attachment_ids")
+	// Bind from attachment parts only (same contract as channel/DM/thread user
+	// send). CLI --attachment-id sugar is converted to parts before POST; do not
+	// dual-merge a sidecar attachment_ids field.
+	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, attachmentIDsFromParts(parts), "attachment_id")
 	if !ok {
 		return
 	}
-	if strings.TrimSpace(content) == "" && len(parts) == 0 && len(attachmentIDs) == 0 {
+	if strings.TrimSpace(content) == "" && len(parts) == 0 {
 		writeError(w, http.StatusBadRequest, "content, sticker, or attachment is required")
 		return
 	}

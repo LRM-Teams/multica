@@ -43,9 +43,6 @@ vi.mock("../../common/markdown", () => ({
   ),
 }));
 
-vi.mock("../../issues/components/comment-card", () => ({
-  AttachmentList: () => null,
-}));
 
 // Agent avatars now overlay the shared presence dot (AgentStatusDot), which
 // reads presence via useAgentPresenceDetail and the current workspace via

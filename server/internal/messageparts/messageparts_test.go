@@ -42,6 +42,65 @@ func TestNormalizeRejectsUnknownSticker(t *testing.T) {
 	}
 }
 
+func TestNormalizeAttachmentPart(t *testing.T) {
+	id := "11111111-1111-1111-1111-111111111111"
+	content, parts, err := Normalize("", []protocol.MessagePart{{
+		Type:         protocol.MessagePartTypeAttachment,
+		AttachmentID: id,
+		Filename:     "shot.png",
+		Text:         "should-clear",
+		StickerID:    "should-clear",
+	}})
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if content != "" {
+		t.Fatalf("content = %q, want empty for attachment-only (no markdown URL)", content)
+	}
+	if len(parts) != 1 {
+		t.Fatalf("parts len = %d, want 1", len(parts))
+	}
+	p := parts[0]
+	if p.Type != protocol.MessagePartTypeAttachment || p.AttachmentID != id {
+		t.Fatalf("parts[0] = %+v, want attachment %s", p, id)
+	}
+	if p.Filename != "shot.png" {
+		t.Fatalf("filename = %q, want shot.png", p.Filename)
+	}
+	if p.Text != "" || p.StickerID != "" || p.PackID != "" || p.Alt != "" {
+		t.Fatalf("attachment part retained text/sticker fields: %+v", p)
+	}
+}
+
+func TestNormalizeAttachmentRequiresID(t *testing.T) {
+	_, _, err := Normalize("", []protocol.MessagePart{{Type: protocol.MessagePartTypeAttachment}})
+	if err == nil {
+		t.Fatal("expected error for missing attachment_id")
+	}
+}
+
+func TestNormalizeTextPlusAttachments(t *testing.T) {
+	a := "11111111-1111-1111-1111-111111111111"
+	b := "22222222-2222-2222-2222-222222222222"
+	content, parts, err := Normalize("", []protocol.MessagePart{
+		{Type: protocol.MessagePartTypeText, Text: "  check s146  "},
+		{Type: protocol.MessagePartTypeAttachment, AttachmentID: a},
+		{Type: protocol.MessagePartTypeAttachment, AttachmentID: b},
+	})
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if content != "check s146" {
+		t.Fatalf("content = %q, want text only", content)
+	}
+	if len(parts) != 3 {
+		t.Fatalf("parts len = %d, want 3", len(parts))
+	}
+	if parts[1].AttachmentID != a || parts[2].AttachmentID != b {
+		t.Fatalf("attachment order = %+v", parts)
+	}
+}
+
 func TestUnwrapStructuredMessageSendTextParts(t *testing.T) {
 	content, parts, unwrapped, err := UnwrapStructuredMessageSend(
 		`{"action":"message_send","output":"Hello","parts":[{"type":"text","text":"Hello"}]}`,

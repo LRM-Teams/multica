@@ -67,3 +67,7 @@ Use the printed id with `--sticker`.
   one sticker per message, and never as filler on top of real content.
 - **Don't** paste `:sticker:<id>:` tokens or JSON action envelopes as final output.
   Use `multica message send --sticker` instead.
+- **Don't** embed chat files as markdown images (`![](url)`). Upload with
+  `multica attachment upload`, then send with
+  `multica message send --attachment-id <id>` (optionally with `--message` /
+  `--sticker`). The CLI turns attachment ids into structured message parts.

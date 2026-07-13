@@ -129,6 +129,16 @@ interface ContentEditorProps {
    * available (NodeView buttons fall back to opening the raw URL).
    */
   attachments?: Attachment[];
+  /**
+   * How paste/drop/paperclip handle media files.
+   * - `"inline"` (default): upload and insert image/fileCard into the doc
+   *   (issue description, comments).
+   * - `"external"`: do not insert into the editor; call `onExternalFiles`
+   *   so the host (chat composer tray) owns the files.
+   */
+  mediaMode?: "inline" | "external";
+  /** Called with deduped files when `mediaMode === "external"`. */
+  onExternalFiles?: (files: File[]) => void;
 }
 
 interface ContentEditorRef {
@@ -174,6 +184,8 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       enableSlashCommands = false,
       slashCommandMode = "skill",
       attachments,
+      mediaMode = "inline",
+      onExternalFiles,
     },
     ref,
   ) {
@@ -184,6 +196,10 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     const onUploadFileRef = useRef<
       ((file: File) => Promise<UploadResult | null>) | undefined
     >(undefined);
+    const mediaModeRef = useRef<"inline" | "external">(mediaMode);
+    const onExternalFilesRef = useRef<((files: File[]) => void) | undefined>(
+      onExternalFiles,
+    );
     const mentionContextItemsRef = useRef<MentionItem[]>(mentionContextItems ?? []);
     const mentionAllowedActorIdsRef = useRef<ReadonlySet<string> | null>(mentionAllowedActorIds ?? null);
     const lastEmittedRef = useRef<string | null>(null);
@@ -254,6 +270,8 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     onSubmitRef.current = onSubmit;
     onBlurRef.current = onBlur;
     onUploadFileRef.current = wrappedOnUploadFile;
+    mediaModeRef.current = mediaMode;
+    onExternalFilesRef.current = onExternalFiles;
     mentionContextItemsRef.current = mentionContextItems ?? [];
     mentionAllowedActorIdsRef.current = mentionAllowedActorIds ?? null;
 
@@ -301,6 +319,8 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         queryClient,
         onSubmitRef,
         onUploadFileRef,
+        mediaModeRef,
+        onExternalFilesRef,
         submitOnEnter,
         disableMentions,
           mentionMode,
@@ -436,7 +456,14 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         editor?.commands.blur();
       },
       uploadFile: (file: File) => {
-        if (!editor || !onUploadFileRef.current) return;
+        if (!editor) return;
+        // Chat tray: paperclip / external callers hand files off without
+        // inserting image/fileCard into the Tiptap document.
+        if (mediaModeRef.current === "external") {
+          onExternalFilesRef.current?.([file]);
+          return;
+        }
+        if (!onUploadFileRef.current) return;
         const endPos = editor.state.doc.content.size;
         uploadAndInsertFile(editor, file, onUploadFileRef.current, endPos);
       },

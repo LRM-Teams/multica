@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chat attachments — Slack-style parts（硬切）</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --panel-2: #1e2330;
+      --border: #2a3142;
+      --text: #e8eaef;
+      --muted: #8b93a7;
+      --brand: #5b8cff;
+      --brand-dim: rgba(91, 140, 255, 0.15);
+      --ok: #3dd68c;
+      --bad: #ff6b7a;
+      --warn: #f0b429;
+      --img: #2d3548;
+      --radius: 12px;
+      --font: "SF Pro Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, rgba(91,140,255,.12), transparent 50%),
+        radial-gradient(900px 500px at 100% 0%, rgba(61,214,140,.06), transparent 45%),
+        var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    header.hero {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 40px 24px 16px;
+    }
+    header.hero h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin: 0 0 8px;
+    }
+    header.hero p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 62ch;
+    }
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+    .badge {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--muted);
+    }
+    .badge.hot {
+      color: #ffd0d5;
+      border-color: rgba(255,107,122,.4);
+      background: rgba(255,107,122,.12);
+    }
+    .badge.ok {
+      color: #b8f5d4;
+      border-color: rgba(61,214,140,.35);
+      background: rgba(61,214,140,.1);
+    }
+    .badge.blue {
+      color: #c9d9ff;
+      border-color: rgba(91,140,255,.4);
+      background: var(--brand-dim);
+    }
+
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 8px 24px 64px;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+    }
+
+    section.card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+    section.card > .hd {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    section.card > .hd h2 {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 650;
+    }
+    section.card > .hd span {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    section.card > .bd {
+      padding: 20px;
+    }
+
+    /* Compare grid */
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 860px) {
+      .compare { grid-template-columns: 1fr; }
+    }
+    .col-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .col-label .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+    }
+    .col-label.bad .dot { background: var(--bad); }
+    .col-label.ok .dot { background: var(--ok); }
+    .col-label.bad { color: var(--bad); }
+    .col-label.ok { color: var(--ok); }
+
+    /* Fake chat chrome */
+    .chat-frame {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      min-height: 280px;
+      display: flex;
+      flex-direction: column;
+    }
+    .chat-frame .messages {
+      flex: 1;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .msg {
+      max-width: 92%;
+      background: #252b3a;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+    }
+    .msg .who {
+      font-size: 12px;
+      font-weight: 650;
+      color: #b7c0d8;
+      margin-bottom: 6px;
+    }
+    .msg .body { font-size: 14px; color: var(--text); }
+    .msg .body .mention { color: var(--brand); font-weight: 600; }
+
+    /* Broken interleaved images (today) */
+    .pill-img {
+      display: block;
+      margin: 8px 0;
+      height: 44px;
+      width: min(100%, 200px);
+      border-radius: 999px;
+      background:
+        linear-gradient(90deg, #111 0%, #1a2030 40%, #0d1018 100%);
+      border: 1px solid #000;
+      position: relative;
+      overflow: hidden;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.04);
+    }
+    .pill-img::before {
+      content: "";
+      position: absolute;
+      inset: 8px 12px;
+      background:
+        repeating-linear-gradient(
+          0deg,
+          rgba(120, 255, 160, .35) 0 1px,
+          transparent 1px 5px
+        );
+      opacity: .55;
+      filter: blur(.2px);
+    }
+    .pill-img small {
+      position: absolute;
+      right: 10px;
+      bottom: 4px;
+      font-size: 9px;
+      color: #5a6478;
+      font-family: var(--mono);
+    }
+
+    /* Slack-like gallery */
+    .attach-zone {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .thumb {
+      width: 96px;
+      height: 72px;
+      border-radius: 8px;
+      background:
+        linear-gradient(145deg, #1a2233, #0e121c 55%),
+        repeating-linear-gradient(0deg, rgba(120,255,160,.4) 0 1px, transparent 1px 4px);
+      background-blend-mode: normal;
+      border: 1px solid var(--border);
+      position: relative;
+      overflow: hidden;
+    }
+    .thumb::after {
+      content: attr(data-label);
+      position: absolute;
+      left: 6px;
+      bottom: 4px;
+      font-size: 10px;
+      font-family: var(--mono);
+      color: #9aa6c0;
+      background: rgba(0,0,0,.45);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    .file-tile {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #1a1f2c;
+      min-width: 180px;
+      font-size: 12px;
+    }
+    .file-tile .ico {
+      width: 28px; height: 28px;
+      border-radius: 6px;
+      background: var(--brand-dim);
+      color: var(--brand);
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      font-size: 11px;
+    }
+    .file-tile .meta { color: var(--muted); font-size: 11px; }
+
+    /* Composer mock */
+    .composer {
+      border-top: 1px solid var(--border);
+      background: #151922;
+      padding: 10px 12px 12px;
+    }
+    .tray {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 8px;
+      margin-bottom: 8px;
+      border-radius: 10px;
+      border: 1px dashed rgba(91,140,255,.35);
+      background: rgba(91,140,255,.06);
+      min-height: 56px;
+      align-items: center;
+    }
+    .tray.empty {
+      border-color: var(--border);
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      justify-content: center;
+    }
+    .tray-item {
+      position: relative;
+      width: 72px;
+      height: 54px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--img);
+      overflow: hidden;
+    }
+    .tray-item .x {
+      position: absolute;
+      top: 3px; right: 3px;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: rgba(0,0,0,.7);
+      color: #fff;
+      font-size: 10px;
+      display: grid;
+      place-items: center;
+      cursor: default;
+    }
+    .tray-item.file {
+      width: auto;
+      min-width: 120px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      gap: 6px;
+      font-size: 11px;
+      background: #1a1f2c;
+    }
+    .editor-box {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel);
+      padding: 10px 12px;
+      min-height: 48px;
+      font-size: 14px;
+    }
+    .editor-box .ph { color: var(--muted); }
+    .actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 8px;
+    }
+    .actions .left {
+      display: flex;
+      gap: 4px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+    .btn-send {
+      background: var(--brand);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 7px 14px;
+      font-weight: 650;
+      font-size: 13px;
+    }
+
+    /* Flow diagram */
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+      align-items: stretch;
+    }
+    @media (max-width: 860px) {
+      .flow { grid-template-columns: 1fr; }
+    }
+    .step {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      position: relative;
+    }
+    .step n {
+      display: inline-grid;
+      place-items: center;
+      width: 22px; height: 22px;
+      border-radius: 6px;
+      background: var(--brand-dim);
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .step h3 {
+      margin: 0 0 4px;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .step p {
+      margin: 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .arrow {
+      display: none;
+    }
+
+    /* Payload */
+    pre.payload {
+      margin: 0;
+      padding: 14px 16px;
+      background: #0c0e14;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: auto;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.55;
+      color: #c5cce0;
+    }
+    pre.payload .k { color: #7aa2ff; }
+    pre.payload .s { color: #9fe7c0; }
+    pre.payload .c { color: #6b7388; }
+    pre.payload .x { color: var(--bad); text-decoration: line-through; opacity: .75; }
+
+    /* Decision table */
+    table.dec {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    table.dec th, table.dec td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    table.dec th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      background: var(--panel-2);
+    }
+    table.dec tr:last-child td { border-bottom: none; }
+    table.dec td:first-child { color: #b8c0d4; width: 28%; font-weight: 600; }
+
+    .note {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: rgba(240,180,41,.08);
+      border: 1px solid rgba(240,180,41,.25);
+      color: #e6d5a2;
+      font-size: 12px;
+    }
+
+    footer {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 0 24px 40px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    footer code {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: #aab4cc;
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <h1>Chat 附件：按 Slack 学的结构化 parts</h1>
+    <p>
+      长期硬切方案可视化。聊天（Channel / DM / Thread）里，文件不再夹在正文光标里，
+      而是托盘成组 → <code style="font-family:var(--mono);font-size:12px;color:#aab4cc">parts.attachment</code> → 气泡「正文 → 附件区」。
+    </p>
+    <div class="badges">
+      <span class="badge hot">只用最新路径 · 清掉旧实现</span>
+      <span class="badge ok">学 Slack</span>
+      <span class="badge blue">仅 Channel / DM / Thread</span>
+      <span class="badge">Issue 内联图不动</span>
+      <span class="badge">不兼容历史消息</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- 1. Before / After bubble -->
+    <section class="card">
+      <div class="hd">
+        <h2>1. 发出后长什么样</h2>
+        <span>同一句文案 + 两张终端截图</span>
+      </div>
+      <div class="bd compare">
+        <div>
+          <div class="col-label bad"><span class="dot"></span>现在（坏）</div>
+          <div class="chat-frame">
+            <div class="messages">
+              <div class="msg">
+                <div class="who">you</div>
+                <div class="body">
+                  <div class="pill-img"><small>img@cursor</small></div>
+                  去 s146 查一下 <span class="mention">@后端工程师</span> 为啥 agent 说看不到文件
+                  <div class="pill-img"><small>img@cursor</small></div>
+                </div>
+              </div>
+              <p style="margin:0;font-size:12px;color:var(--muted)">
+                图跟着光标走 → 文夹中间 · 预览压成黑胶囊 · 读 markdown 是否含 URL 才绑定
+              </p>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="col-label ok"><span class="dot"></span>目标（Slack 向）</div>
+          <div class="chat-frame">
+            <div class="messages">
+              <div class="msg">
+                <div class="who">you</div>
+                <div class="body">
+                  去 s146 查一下 <span class="mention">@后端工程师</span> 为啥 agent 说看不到文件
+                  <div class="attach-zone">
+                    <div class="thumb" data-label="A.png"></div>
+                    <div class="thumb" data-label="B.png"></div>
+                  </div>
+                </div>
+              </div>
+              <p style="margin:0;font-size:12px;color:var(--muted)">
+                永远「正文 → 附件区」· 多图成组 · 顺序 = 托盘顺序 = parts 顺序
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. Composer -->
+    <section class="card">
+      <div class="hd">
+        <h2>2. 输入时：托盘 vs 插光标</h2>
+        <span>Composer draft = text + pending[]</span>
+      </div>
+      <div class="bd compare">
+        <div>
+          <div class="col-label bad"><span class="dot"></span>现在</div>
+          <div class="chat-frame">
+            <div class="messages" style="min-height:40px"></div>
+            <div class="composer">
+              <div class="editor-box" style="min-height:110px">
+                <div class="pill-img" style="margin-top:0"><small>paste #1</small></div>
+                去 s146 查一下 <span class="mention" style="color:var(--brand)">@后端工程师</span> …
+                <div class="pill-img"><small>paste #2</small></div>
+              </div>
+              <div class="actions">
+                <div class="left">📎 &nbsp; #</div>
+                <button class="btn-send" type="button">Send</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="col-label ok"><span class="dot"></span>目标</div>
+          <div class="chat-frame">
+            <div class="messages" style="min-height:40px"></div>
+            <div class="composer">
+              <div class="tray" title="pending tray">
+                <div class="tray-item"><span class="x">×</span></div>
+                <div class="tray-item"><span class="x">×</span></div>
+                <div class="tray-item file"><span class="ico" style="font-size:10px;color:var(--brand)">PDF</span> notes.pdf <span class="x">×</span></div>
+              </div>
+              <div class="editor-box">
+                去 s146 查一下 <span class="mention" style="color:var(--brand)">@后端工程师</span> 为啥 agent 说看不到文件
+              </div>
+              <div class="actions">
+                <div class="left">📎 &nbsp; #</div>
+                <button class="btn-send" type="button">Send</button>
+              </div>
+            </div>
+          </div>
+          <p style="margin:10px 0 0;font-size:12px;color:var(--muted)">
+            粘贴 / 拖拽 / 回形针 → 只进 tray · ContentEditor <code style="font-family:var(--mono)">mediaMode: external</code> · 禁止 image 节点进正文
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. Flow -->
+    <section class="card">
+      <div class="hd">
+        <h2>3. 数据怎么走</h2>
+        <span>单一真相 · 代码里不再走 attachment_ids</span>
+      </div>
+      <div class="bd">
+        <div class="flow">
+          <div class="step">
+            <n>1</n>
+            <h3>Upload</h3>
+            <p>POST 文件 → 得到 <strong>attachment_id</strong></p>
+          </div>
+          <div class="step">
+            <n>2</n>
+            <h3>Tray</h3>
+            <p>有序 pending；ready 才可发</p>
+          </div>
+          <div class="step">
+            <n>3</n>
+            <h3>Send parts</h3>
+            <p>text + attachment parts，一次提交</p>
+          </div>
+          <div class="step">
+            <n>4</n>
+            <h3>Server</h3>
+            <p>normalize · 从 parts 派生绑定 · 落库</p>
+          </div>
+          <div class="step">
+            <n>5</n>
+            <h3>Bubble</h3>
+            <p>正文区 + 附件区 hydrate</p>
+          </div>
+        </div>
+        <div class="note">
+          旧的 <strong>attachment_ids</strong>：只是「把已上传文件绑到这条 message」的请求边车，
+          靠扫 markdown 是否还含 URL 拼出来。目标态：<strong>绑定只从</strong>
+          <code style="font-family:var(--mono)">parts[].attachment_id</code> 派生；
+          产品代码里删掉扫 URL / 发边车的路径。<strong>不必</strong>为了「拒绝」而专门 400——确保没有旧调用方即可。
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Payload -->
+    <section class="card">
+      <div class="hd">
+        <h2>4. 请求长什么样（只用最新）</h2>
+        <span>Channel / DM / Thread 同一契约</span>
+      </div>
+      <div class="bd compare">
+        <div>
+          <div class="col-label bad"><span class="dot"></span>旧路径（删掉实现）</div>
+          <pre class="payload"><span class="c">// 不再维护：扫 markdown + 边车</span>
+{
+  <span class="k">"content"</span>: <span class="s">"![a](url1)\ntext\n![b](url2)"</span>,
+  <span class="x">"attachment_ids"</span><span class="x">: ["…", "…"]</span>
+}</pre>
+        </div>
+        <div>
+          <div class="col-label ok"><span class="dot"></span>我们只实现这条</div>
+          <pre class="payload">{
+  <span class="k">"parts"</span>: [
+    { <span class="k">"type"</span>: <span class="s">"text"</span>, <span class="k">"text"</span>: <span class="s">"去 s146 查一下…"</span> },
+    { <span class="k">"type"</span>: <span class="s">"attachment"</span>, <span class="k">"attachment_id"</span>: <span class="s">"&lt;uuid-a&gt;"</span> },
+    { <span class="k">"type"</span>: <span class="s">"attachment"</span>, <span class="k">"attachment_id"</span>: <span class="s">"&lt;uuid-b&gt;"</span> }
+  ],
+  <span class="k">"client_message_id"</span>: <span class="s">"…"</span>
+}</pre>
+        </div>
+      </div>
+      <div class="bd" style="padding-top:0">
+        <p style="margin:0;font-size:13px;color:var(--muted)">
+          允许<strong>仅附件、无字</strong>（Slack 纯文件消息）。
+          绑定从 parts 派生；读路径 <code style="font-family:var(--mono)">parts</code> + hydrate <code style="font-family:var(--mono)">attachments[]</code>。
+          Human / Agent 同一 shape。无双写。验收 = 仓库里没有旧聊天写路径，不是「服务端 400 表演」。
+        </p>
+      </div>
+    </section>
+
+    <!-- 5. Decisions -->
+    <section class="card">
+      <div class="hd">
+        <h2>5. 已拍板</h2>
+        <span>来自 brainstorm · 2026-07-13</span>
+      </div>
+      <div class="bd" style="padding:0">
+        <table class="dec">
+          <thead>
+            <tr><th>项</th><th>决定</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>表面</td><td>仅 Channel / DM / Thread</td></tr>
+            <tr><td>模型</td><td><code style="font-family:var(--mono)">parts[]</code> 一等 <code style="font-family:var(--mono)">attachment</code></td></tr>
+            <tr><td>交互</td><td>Slack：托盘成组 · 气泡文→附</td></tr>
+            <tr><td>历史</td><td>不兼容、不回填</td></tr>
+            <tr><td>旧路径</td><td>删实现即可，<strong>不必</strong>专门 400 拒绝</td></tr>
+            <tr><td>Issue</td><td>描述/评论 markdown 内联图维持现状</td></tr>
+            <tr><td>Agent</td><td>upload → id → send parts；不教 markdown 嵌图</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 6. Acceptance -->
+    <section class="card">
+      <div class="hd">
+        <h2>6. 怎么算做完</h2>
+        <span>验收清单</span>
+      </div>
+      <div class="bd">
+        <ol style="margin:0;padding-left:1.2rem;font-size:14px;color:#d0d6e6">
+          <li style="margin-bottom:8px">粘图 A → 打字 → 粘图 B → <strong>托盘 A|B 在一起</strong>，字只在正文</li>
+          <li style="margin-bottom:8px">发出后气泡同样「文 → 成组图」</li>
+          <li style="margin-bottom:8px">Network 只有 attachment parts；绑定不靠 content 里的 URL</li>
+          <li style="margin-bottom:8px">聊天侧<strong>没有</strong>扫 URL 拼 <code style="font-family:var(--mono)">attachment_ids</code> / 光标插图的旧代码</li>
+          <li style="margin-bottom:8px">纯附件消息可发送</li>
+          <li>Issue 评论内联图仍可用</li>
+        </ol>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Spec 源文件：
+    <code>docs/superpowers/specs/2026-07-13-chat-attachment-parts-slack-design.md</code>
+    · 本页仅可视化，不替代 spec 条文。
+  </footer>
+</body>
+</html>

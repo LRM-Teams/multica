@@ -22,7 +22,6 @@ import {
 } from "@multica/ui/components/ui/context-menu";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
-import { AttachmentList } from "../../issues/components/comment-card";
 import { agentColor } from "../../common/agent-color";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { AgentPresenceOverlay } from "../../common/actor-avatar";
@@ -375,10 +374,9 @@ export function ChannelMessageBubble({
   const hasThreadActivity = threadReplyCount > 0 || threadUnreadCount > 0;
   const hasFeedback = (message.reactions?.length ?? 0) > 0 || hasThreadActivity;
   const quickReactionEmojis = ["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"];
-  // Resolved once here for copy + attachment de-dupe; `MessageBody` resolves the
-  // same way to render the body (see resolveMessageParts for the envelope-unwrap
-  // rationale). Non-null for real parts / historical envelopes, null for
-  // ordinary content.
+  // Resolved once here for copy; `MessageBody` resolves the same way to render
+  // the body (see resolveMessageParts for the envelope-unwrap rationale).
+  // Non-null for real parts / historical envelopes, null for ordinary content.
   const effectiveParts = resolveMessageParts(message.content, message.parts);
   const handleCopy = async () => {
     const copyPayload =
@@ -704,11 +702,6 @@ export function ChannelMessageBubble({
               parts={message.parts}
               attachments={message.attachments}
               highlightQuery={searchHighlighted ? searchQuery : undefined}
-            />
-            <AttachmentList
-              attachments={message.attachments}
-              content={effectiveParts ? "" : message.content}
-              className="mt-1.5"
             />
             {isContentCollapsed && (
               <div

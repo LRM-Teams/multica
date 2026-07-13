@@ -65,6 +65,8 @@ export interface ThreadPanelProps {
   sendDisabled: boolean;
   sending?: boolean;
   composerLeadingActions?: ReactNode;
+  /** Slack-style attachment tray above the editor (Composer `tray` slot). */
+  composerTray?: ReactNode;
   /** Read-only surface (archived channel) → banner instead of composer. */
   readOnly?: boolean;
   readOnlyContent?: ReactNode;
@@ -102,6 +104,7 @@ export function ThreadPanel({
   sendDisabled,
   sending,
   composerLeadingActions,
+  composerTray,
   readOnly = false,
   readOnlyContent,
   activitySlot,
@@ -224,6 +227,7 @@ export function ThreadPanel({
                 cancelLabel={t(($) => $.quote.cancel)}
               />
             ) : undefined}
+            tray={composerTray}
             leadingActions={composerActions}
           />
         </>

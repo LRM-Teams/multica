@@ -84,9 +84,6 @@ vi.mock("../../common/markdown", () => ({
   MemoizedMarkdown: ({ children }: { children: string }) => <span>{children}</span>,
 }));
 
-vi.mock("../../issues/components/comment-card", () => ({
-  AttachmentList: () => null,
-}));
 
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({

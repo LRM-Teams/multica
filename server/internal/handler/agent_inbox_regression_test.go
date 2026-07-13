@@ -343,8 +343,14 @@ func TestAgentInboxDrainIncludesSourceChannelMessageAttachment(t *testing.T) {
 	}
 
 	sendRec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
-		"content":        "[@" + agentName + "](mention://agent/" + agentID + ") inspect the attached brief",
-		"attachment_ids": []string{attachmentID},
+		"content": "[@" + agentName + "](mention://agent/" + agentID + ") inspect the attached brief",
+		"parts": []map[string]any{
+			{
+				"type": "text",
+				"text": "[@" + agentName + "](mention://agent/" + agentID + ") inspect the attached brief",
+			},
+			{"type": "attachment", "attachment_id": attachmentID},
+		},
 	})
 	if sendRec.Code != http.StatusCreated {
 		t.Fatalf("send attachment mention: status=%d body=%s", sendRec.Code, sendRec.Body.String())
@@ -397,8 +403,14 @@ func TestAgentInboxDrainDeduplicatesSourceAndPromptAttachment(t *testing.T) {
 	}
 
 	sendRec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
-		"content":        "[@" + agentName + "](mention://agent/" + agentID + ") inspect the dedupe file",
-		"attachment_ids": []string{attachmentID},
+		"content": "[@" + agentName + "](mention://agent/" + agentID + ") inspect the dedupe file",
+		"parts": []map[string]any{
+			{
+				"type": "text",
+				"text": "[@" + agentName + "](mention://agent/" + agentID + ") inspect the dedupe file",
+			},
+			{"type": "attachment", "attachment_id": attachmentID},
+		},
 	})
 	if sendRec.Code != http.StatusCreated {
 		t.Fatalf("send attachment mention: status=%d body=%s", sendRec.Code, sendRec.Body.String())

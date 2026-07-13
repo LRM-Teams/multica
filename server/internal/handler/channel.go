@@ -2026,7 +2026,7 @@ func (h *Handler) UpdateChannelMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
 		return
 	}
-	if content == "" {
+	if content == "" && !channelPartsAllowEmptyContent(parts) {
 		writeError(w, http.StatusBadRequest, "content is required")
 		return
 	}
@@ -2382,7 +2382,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
 		return
 	}
-	if content == "" {
+	if content == "" && !channelPartsAllowEmptyContent(parts) {
 		writeError(w, http.StatusBadRequest, "content is required")
 		return
 	}
@@ -2394,7 +2394,8 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, req.AttachmentIDs, "attachment_ids")
+	// Bind from attachment parts only (parts win; do not dual-merge attachment_ids).
+	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, attachmentIDsFromParts(parts), "attachment_id")
 	if !ok {
 		return
 	}
@@ -2919,7 +2920,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
 		return
 	}
-	if content == "" {
+	if content == "" && !channelPartsAllowEmptyContent(parts) {
 		writeError(w, http.StatusBadRequest, "content is required")
 		return
 	}
@@ -2931,10 +2932,10 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Pre-validate attachment ids early so invalid input returns 400 before
-	// any state mutation. The actual link runs after insert so we have a
-	// message_id to back-fill into the attachment rows.
-	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, req.AttachmentIDs, "attachment_ids")
+	// Bind from attachment parts only (parts win; do not dual-merge attachment_ids).
+	// Pre-validate ids early so invalid input returns 400 before any state mutation.
+	// The actual link runs after insert so we have a message_id to back-fill.
+	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, attachmentIDsFromParts(parts), "attachment_id")
 	if !ok {
 		return
 	}
@@ -4509,6 +4510,30 @@ func normalizeChannelClientMessageID(w http.ResponseWriter, raw *string) (*strin
 		return nil, false
 	}
 	return &value, true
+}
+
+// attachmentIDsFromParts collects attachment_id values from attachment parts
+// in order. This is the sole bind source for channel/DM/thread message sends.
+func attachmentIDsFromParts(parts []protocol.MessagePart) []string {
+	var ids []string
+	for _, p := range parts {
+		if p.Type == protocol.MessagePartTypeAttachment && p.AttachmentID != "" {
+			ids = append(ids, p.AttachmentID)
+		}
+	}
+	return ids
+}
+
+// channelPartsAllowEmptyContent reports whether empty body content is allowed
+// because parts already carry a sticker or attachment.
+func channelPartsAllowEmptyContent(parts []protocol.MessagePart) bool {
+	for _, p := range parts {
+		switch p.Type {
+		case protocol.MessagePartTypeSticker, protocol.MessagePartTypeAttachment:
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, in channelMessageInsertInput, attachmentIDs []pgtype.UUID) (channelMessageCreateResult, error) {

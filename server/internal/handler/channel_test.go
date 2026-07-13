@@ -798,6 +798,80 @@ func TestChannelAgentInboxDrainAckDirectedMention(t *testing.T) {
 	}
 }
 
+func TestChannelAgentInboxDrainDoesNotReplayFailedPromptBacklog(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentName := "Inbox Bounded Prompt Agent " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	runtimeID := handlerTestRuntimeID(t)
+	channelID := seedChannelForTest(t, "agent-inbox-bounded-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+
+	first, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") first prompt", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-bounded"), 0)
+	if err != nil {
+		t.Fatalf("insert first trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, first, parseUUID(testUserID))
+
+	var firstEventID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id FROM agent_inbox_event
+		WHERE source_message_id = $1 AND agent_id = $2
+		ORDER BY created_at DESC LIMIT 1`, first.ID, agentID).Scan(&firstEventID); err != nil {
+		t.Fatalf("load first inbox event: %v", err)
+	}
+	setAgentInboxTerminalOutcomeForTest(t, firstEventID, "failed", true)
+	const backlogMarker = "FAILED_PROMPT_BACKLOG_MARKER"
+	if _, err := testPool.Exec(ctx, `
+		UPDATE chat_message
+		SET content = $2
+		WHERE task_id = $1 AND role = 'user'`, firstEventID, strings.Repeat(backlogMarker, 12_000)); err != nil {
+		t.Fatalf("inflate failed prompt: %v", err)
+	}
+
+	second, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") current prompt only", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-bounded"), 0)
+	if err != nil {
+		t.Fatalf("insert second trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, second, parseUUID(testUserID))
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-bounded-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode drain response: %v", err)
+	}
+	if len(drainResp.Events) != 1 || drainResp.Events[0].Task == nil {
+		t.Fatalf("drain response missing runnable event: %s", drainRec.Body.String())
+	}
+	prompt := drainResp.Events[0].Task.ChatMessage
+	if strings.Contains(prompt, backlogMarker) {
+		t.Fatal("failed prompt backlog leaked into current inbox task")
+	}
+	if !strings.Contains(prompt, "current prompt only") {
+		t.Fatalf("current prompt missing from inbox task: %q", prompt)
+	}
+	if len(prompt) >= 128*1024 {
+		t.Fatalf("current inbox prompt is still large enough to hit Linux argv limits: %d bytes", len(prompt))
+	}
+}
+
 func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

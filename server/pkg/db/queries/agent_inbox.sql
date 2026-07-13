@@ -295,7 +295,13 @@ WITH original AS (
 guarded AS (
   SELECT original.*
   FROM original
-  WHERE NOT EXISTS (
+  WHERE EXISTS (
+    SELECT 1
+    FROM chat_message prompt
+    WHERE prompt.task_id = original.id
+      AND prompt.role = 'user'
+  )
+    AND NOT EXISTS (
     SELECT 1
     FROM agent_inbox_event newer
     WHERE newer.workspace_id = original.workspace_id
@@ -318,39 +324,70 @@ refreshed_session AS (
   JOIN agent a ON a.id = guarded.agent_id
   WHERE s.id = guarded.agent_session_id
   RETURNING s.id
+),
+retried_event AS (
+  INSERT INTO agent_inbox_event (
+    workspace_id,
+    agent_session_id,
+    conversation_id,
+    channel_id,
+    chat_session_id,
+    agent_id,
+    source_message_id,
+    reason,
+    requires_wake,
+    status,
+    priority,
+    seq_from,
+    seq_to
+  )
+  SELECT
+    guarded.workspace_id,
+    refreshed_session.id,
+    guarded.conversation_id,
+    guarded.channel_id,
+    guarded.chat_session_id,
+    guarded.agent_id,
+    guarded.source_message_id,
+    guarded.reason,
+    true,
+    'pending',
+    guarded.priority,
+    guarded.seq_from,
+    guarded.seq_to
+  FROM guarded
+  JOIN refreshed_session ON refreshed_session.id = guarded.agent_session_id
+  RETURNING *
+),
+copied_prompt AS (
+  INSERT INTO chat_message (
+    chat_session_id,
+    role,
+    content,
+    parts,
+    task_id,
+    thread_id,
+    channel_thread_root_message_id,
+    trigger_depth
+  )
+  SELECT
+    prompt.chat_session_id,
+    prompt.role,
+    prompt.content,
+    prompt.parts,
+    retried_event.id,
+    prompt.thread_id,
+    prompt.channel_thread_root_message_id,
+    prompt.trigger_depth
+  FROM chat_message prompt
+  JOIN original ON prompt.task_id = original.id
+  CROSS JOIN retried_event
+  WHERE prompt.role = 'user'
+  RETURNING id
 )
-INSERT INTO agent_inbox_event (
-  workspace_id,
-  agent_session_id,
-  conversation_id,
-  channel_id,
-  chat_session_id,
-  agent_id,
-  source_message_id,
-  reason,
-  requires_wake,
-  status,
-  priority,
-  seq_from,
-  seq_to
-)
-SELECT
-  guarded.workspace_id,
-  refreshed_session.id,
-  guarded.conversation_id,
-  guarded.channel_id,
-  guarded.chat_session_id,
-  guarded.agent_id,
-  guarded.source_message_id,
-  guarded.reason,
-  true,
-  'pending',
-  guarded.priority,
-  guarded.seq_from,
-  guarded.seq_to
-FROM guarded
-JOIN refreshed_session ON refreshed_session.id = guarded.agent_session_id
-RETURNING *;
+SELECT retried_event.*
+FROM retried_event
+WHERE EXISTS (SELECT 1 FROM copied_prompt);
 
 -- name: FailAgentInboxDelivery :one
 WITH active_delivery AS (

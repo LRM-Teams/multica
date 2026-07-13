@@ -360,6 +360,30 @@ func TestAgentActivityEvents_DefaultPageSkipsDiagnosticNoise(t *testing.T) {
 	`, testWorkspaceID, agentID, dmSessionID).Scan(&thinkingID); err != nil {
 		t.Fatalf("insert narrative thinking event: %v", err)
 	}
+	executedID, ok := insertAgentActivityEvent(
+		ctx, testPool, parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
+		activityKindCustom, "radar_action_executed", "info",
+		"agent", parseUUID(agentID), "", "", "Radar executed: create issue", nil,
+	)
+	if !ok {
+		t.Fatal("insert executed Radar activity event")
+	}
+	failedID, ok := insertAgentActivityEvent(
+		ctx, testPool, parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
+		activityKindCustom, "radar_action_failed", "warning",
+		"agent", parseUUID(agentID), "", "create_issue", "Radar failed: create issue", nil,
+	)
+	if !ok {
+		t.Fatal("insert failed Radar activity event")
+	}
+	noActionID, ok := insertAgentActivityEvent(
+		ctx, testPool, parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
+		activityKindCustom, "radar_action_executed", "info",
+		"agent", parseUUID(agentID), "", "no_action", "Radar executed: no_action", nil,
+	)
+	if !ok {
+		t.Fatal("insert no_action Radar activity event")
+	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_activity_event (
 			workspace_id, agent_id, event_kind, event_type, severity,
@@ -377,6 +401,11 @@ func TestAgentActivityEvents_DefaultPageSkipsDiagnosticNoise(t *testing.T) {
 		t.Fatalf("default events limit = %d, want %d", events.resp.Limit, agentActivityEventDefaultLimit)
 	}
 	requireActivityTimelineEvent(t, events, thinkingID)
+	requireActivityTimelineEvent(t, events, uuidToString(executedID))
+	requireActivityTimelineEvent(t, events, uuidToString(failedID))
+	if got := findActivityTimelineEvent(events, uuidToString(noActionID)); got != nil {
+		t.Fatalf("no_action Radar event leaked into user narrative: %+v", *got)
+	}
 	for _, event := range events.resp.Events {
 		if event.ActivityKind == activityKindTransport {
 			t.Fatalf("default events page included diagnostic transport row: %+v", event)
@@ -430,6 +459,21 @@ func TestActivityVisibilityFor_SourceBackedLifecycle(t *testing.T) {
 	}
 	if got := activityVisibilityFor(activityKindCustom, "subagent_started", "info", "auto_retry"); got != "user_facing" {
 		t.Fatalf("subagent custom visibility = %q, want user_facing", got)
+	}
+	for _, eventType := range []string{"radar_action_executed", "radar_action_failed"} {
+		if got := activityVisibilityFor(activityKindCustom, eventType, "info", "create_issue"); got != "user_facing" {
+			t.Fatalf("%s visibility = %q, want user_facing", eventType, got)
+		}
+		row := agentActivityRawRow{
+			Kind:      activityKindCustom,
+			EventType: pgtype.Text{String: eventType, Valid: true},
+		}
+		if !agentActivityTimelineRowIsNarrative(row) {
+			t.Fatalf("%s must be included in the activity narrative", eventType)
+		}
+	}
+	if got := activityVisibilityFor(activityKindCustom, "radar_action_executed", "info", "no_action"); got != "diagnostic_only" {
+		t.Fatalf("no_action Radar visibility = %q, want diagnostic_only", got)
 	}
 	if got := activityVisibilityFor(activityKindTransport, "runtime_progress", "info", ""); got != "diagnostic_only" {
 		t.Fatalf("transport visibility = %q, want diagnostic_only", got)

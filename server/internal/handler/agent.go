@@ -1585,6 +1585,9 @@ func legacyAgentTaskShouldReadAsHistorical(t db.AgentTaskQueue) bool {
 	if uuidToString(t.IssueID) != "" || uuidToString(t.ChatSessionID) != "" {
 		return false
 	}
+	if strings.TrimSpace(jsonStringField(t.Context, "radar_run_id")) != "" {
+		return false
+	}
 	return strings.EqualFold(jsonStringField(t.Context, "type"), "agent_radar")
 }
 

@@ -363,6 +363,7 @@
       "labels": {
         "thinking": "思考中",
         "output": "输出",
+        "completed": "已完成",
         "working": "工作中",
         "failed": "失败",
         "waiting": "等待中",

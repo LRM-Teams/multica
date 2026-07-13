@@ -2623,6 +2623,15 @@ func TestPrepareCodexHomeAddsAgentMemoryWritableRoot(t *testing.T) {
 		t.Fatalf("config.toml not created: %v", err)
 	}
 	s := string(data)
+	if runtime.GOOS == "darwin" && !codexDarwinNetworkAccessFixed("") {
+		// Prepare follows the host platform. Until Codex fixes workspace-write
+		// network access on macOS, danger-full-access is intentional and an
+		// extra writable root would be meaningless.
+		if !strings.Contains(s, `sandbox_mode = "danger-full-access"`) {
+			t.Fatalf("config.toml missing macOS sandbox fallback: %s", s)
+		}
+		return
+	}
 	if !strings.Contains(s, "sandbox_workspace_write.writable_roots") {
 		t.Fatalf("config.toml missing writable_roots: %s", s)
 	}

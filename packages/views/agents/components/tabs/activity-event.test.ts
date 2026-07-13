@@ -145,3 +145,49 @@ describe("isNarrativeActivityEvent — un-mapped tool filter (#384)", () => {
     );
   });
 });
+
+describe("isNarrativeActivityEvent — Radar actions", () => {
+  function radarEvent(
+    eventType: "radar_action_executed" | "radar_action_failed",
+    reasonCode = "create_issue",
+  ): ActivityEvent {
+    return {
+      id: eventType,
+      agent_id: "agent-1",
+      activity_kind: "custom",
+      detail_kind: eventType,
+      occurred_at: "2026-07-11T00:00:00Z",
+      text: eventType === "radar_action_failed" ? "Radar failed: create issue" : "Radar executed: create issue",
+      reason_code: reasonCode,
+      target_ref: { kind: "agent", id: "agent-1" },
+    };
+  }
+
+  it.each(["radar_action_executed", "radar_action_failed"] as const)(
+    "keeps %s in the narrative",
+    (eventType) => {
+      expect(isNarrativeActivityEvent(radarEvent(eventType))).toBe(true);
+    },
+  );
+
+  it("drops no_action from the narrative", () => {
+    expect(isNarrativeActivityEvent(radarEvent("radar_action_executed", "no_action"))).toBe(false);
+  });
+
+  it("drops an action whose execution target was not verified", () => {
+    expect(
+      isNarrativeActivityEvent(radarEvent("radar_action_failed", "radar_untrusted_target")),
+    ).toBe(false);
+  });
+
+  it("presents an executed action as settled and a failed action as a failure", () => {
+    expect(activityPresentation(radarEvent("radar_action_executed"))).toMatchObject({
+      labelKey: "completed",
+      tone: "neutral",
+    });
+    expect(activityPresentation(radarEvent("radar_action_failed"))).toMatchObject({
+      labelKey: "failed",
+      tone: "failure",
+    });
+  });
+});

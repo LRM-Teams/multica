@@ -1938,6 +1938,25 @@ func trailingUserMessages(msgs []db.ChatMessage) []db.ChatMessage {
 	return msgs[start:]
 }
 
+// inboxPromptMessages returns only the synthetic channel prompt written for
+// the inbox event currently being drained. Each channel prompt already
+// contains a bounded conversation excerpt; using any other unanswered prompt
+// can both repeat a large failed backlog and execute the wrong user request.
+// Retry creation copies the original prompt and binds the copy to the new event
+// ID, so a missing exact task_id link is invalid rather than a reason to guess.
+func inboxPromptMessages(msgs []db.ChatMessage, eventID pgtype.UUID) []db.ChatMessage {
+	if !eventID.Valid {
+		return nil
+	}
+	current := make([]db.ChatMessage, 0, 1)
+	for _, msg := range msgs {
+		if msg.Role == "user" && msg.TaskID.Valid && msg.TaskID == eventID {
+			current = append(current, msg)
+		}
+	}
+	return current
+}
+
 func hasPriorChatContext(msgs []db.ChatMessage, currentTaskID pgtype.UUID) bool {
 	if len(msgs) == 0 {
 		return false

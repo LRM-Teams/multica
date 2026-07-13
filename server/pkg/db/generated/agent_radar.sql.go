@@ -37,10 +37,25 @@ func (q *Queries) CancelAgentRadarRunByTaskID(ctx context.Context, arg CancelAge
 
 const countRecentAgentRadarRuns = `-- name: CountRecentAgentRadarRuns :one
 SELECT count(*)::bigint
-FROM agent_radar_run
-WHERE workspace_id = $1
-  AND agent_id = $2
-  AND created_at >= $3
+FROM agent_radar_run rr
+LEFT JOIN agent_task_queue atq ON atq.id = rr.task_id
+WHERE rr.workspace_id = $1
+  AND rr.agent_id = $2
+  AND rr.created_at >= $3
+  -- Migration 167 closed invalid pre-existing runs so the active-run unique
+  -- guard could be installed. Those rows never represented a new Radar
+  -- attempt and must not consume the retry-storm budget.
+  AND COALESCE(atq.failure_reason, '') NOT IN (
+      'radar_active_run_repair',
+      'radar_stale_dispatch_repair'
+  )
+  AND NOT (
+      rr.status = 'failed'
+      AND (
+          COALESCE(rr.error, '') LIKE 'migration:%'
+          OR COALESCE(rr.error, '') = 'radar_stale_dispatch_repair'
+      )
+  )
 `
 
 type CountRecentAgentRadarRunsParams struct {
@@ -209,6 +224,99 @@ func (q *Queries) FailAgentRadarRunByTaskID(ctx context.Context, arg FailAgentRa
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const failStaleDispatchedAgentRadarTasks = `-- name: FailStaleDispatchedAgentRadarTasks :many
+WITH victims AS MATERIALIZED (
+    SELECT rr.id AS radar_run_id, atq.id AS task_id
+    FROM agent_radar_run rr
+    JOIN agent_task_queue atq ON atq.id = rr.task_id
+    WHERE rr.status = 'queued'
+      AND rr.started_at IS NULL
+      AND rr.created_at < now() - make_interval(secs => $1::double precision)
+      AND atq.status = 'dispatched'
+      AND atq.started_at IS NULL
+      AND atq.created_at < now() - make_interval(secs => $1::double precision)
+      AND atq.agent_id = rr.agent_id
+      -- Runtime consolidation can reassign the task before deleting the old
+      -- runtime, which leaves rr.runtime_id stale or NULL. The task FK plus
+      -- the context backpointer are the durable pair identity.
+      AND atq.context->>'type' = 'agent_radar'
+      AND atq.context->>'radar_run_id' = rr.id::text
+    ORDER BY atq.created_at ASC, atq.id ASC
+    LIMIT $2::int
+    FOR UPDATE OF rr, atq SKIP LOCKED
+)
+UPDATE agent_task_queue atq
+SET
+    status = 'failed',
+    completed_at = now(),
+    error = 'Radar task remained dispatched without starting',
+    failure_reason = 'radar_stale_dispatch_repair'
+FROM victims v
+WHERE atq.id = v.task_id
+  AND atq.status = 'dispatched'
+  AND atq.started_at IS NULL
+  AND atq.created_at < now() - make_interval(secs => $1::double precision)
+RETURNING atq.id, atq.agent_id, atq.issue_id, atq.status, atq.priority, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.created_at, atq.context, atq.runtime_id, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.chat_session_id, atq.autopilot_run_id, atq.attempt, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id
+`
+
+type FailStaleDispatchedAgentRadarTasksParams struct {
+	StaleAgeSecs float64 `json:"stale_age_secs"`
+	MaxPerTick   int32   `json:"max_per_tick"`
+}
+
+// ReclaimAgentTask refreshes dispatched_at when it re-delivers a claim whose
+// start acknowledgement never arrived. Use the immutable creation age here
+// so repeated re-delivery cannot keep a Radar task active forever. The one-hour
+// threshold is deliberately much larger than the normal 90-second claim
+// recovery and five-minute dispatch timeout windows.
+func (q *Queries) FailStaleDispatchedAgentRadarTasks(ctx context.Context, arg FailStaleDispatchedAgentRadarTasksParams) ([]AgentTaskQueue, error) {
+	rows, err := q.db.Query(ctx, failStaleDispatchedAgentRadarTasks, arg.StaleAgeSecs, arg.MaxPerTick)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentTaskQueue{}
+	for rows.Next() {
+		var i AgentTaskQueue
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.IssueID,
+			&i.Status,
+			&i.Priority,
+			&i.DispatchedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.Result,
+			&i.Error,
+			&i.CreatedAt,
+			&i.Context,
+			&i.RuntimeID,
+			&i.SessionID,
+			&i.WorkDir,
+			&i.TriggerCommentID,
+			&i.ChatSessionID,
+			&i.AutopilotRunID,
+			&i.Attempt,
+			&i.MaxAttempts,
+			&i.ParentTaskID,
+			&i.FailureReason,
+			&i.TriggerSummary,
+			&i.ForceFreshSession,
+			&i.IsLeaderTask,
+			&i.WaitReason,
+			&i.InitiatorUserID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getAgentRadarRun = `-- name: GetAgentRadarRun :one

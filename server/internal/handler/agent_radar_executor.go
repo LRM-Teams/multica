@@ -23,6 +23,20 @@ type radarChannelPayload struct {
 	ThreadID            string `json:"thread_id"`
 }
 
+type radarActivityTarget struct {
+	Kind    string
+	ID      pgtype.UUID
+	Slug    string
+	Trusted bool
+}
+
+type radarChannelExecutionTarget struct {
+	ChannelID  pgtype.UUID
+	ThreadRoot pgtype.UUID
+	ThreadID   *string
+	Activity   radarActivityTarget
+}
+
 type radarIssuePayload struct {
 	Title        string `json:"title"`
 	Description  string `json:"description"`
@@ -88,7 +102,7 @@ func (h *Handler) executeAgentRadarAction(ctx context.Context, run db.AgentRadar
 		}
 		return err
 	}
-	result, execErr := h.executeApprovedRadarAction(ctx, run, agent, action)
+	result, activityTarget, execErr := h.executeApprovedRadarActionWithTarget(ctx, run, agent, action)
 	status := "executed"
 	errText := pgtype.Text{}
 	if execErr != nil {
@@ -103,79 +117,185 @@ func (h *Handler) executeAgentRadarAction(ctx context.Context, run db.AgentRadar
 		Result: resultJSON,
 		Error:  errText,
 	})
-	h.recordAgentActivityEvent(ctx, h.DB,
-		run.WorkspaceID, agent.ID, agent.RuntimeID, run.TaskID,
-		activityKindCustom, "radar_action_"+status, severityForRadarAction(status),
-		radarActivityTargetKind(action.TargetKind), targetID, "",
-		action.Type, radarActivityMessage(action, status),
-		map[string]any{
-			"radar_run_id": uuidToString(run.ID),
-			"dedupe_key":   action.DedupeKey,
-			"reason":       action.Reason,
-			"evidence":     action.Evidence,
-			"result":       result,
-		},
-	)
+	activityDetails := map[string]any{
+		"radar_run_id": uuidToString(run.ID),
+		"dedupe_key":   action.DedupeKey,
+		"reason":       action.Reason,
+		"evidence":     action.Evidence,
+		"result":       result,
+	}
+	if activityTarget.Trusted {
+		h.recordAgentActivityEvent(ctx, h.DB,
+			run.WorkspaceID, agent.ID, agent.RuntimeID, run.TaskID,
+			activityKindCustom, "radar_action_"+status, severityForRadarAction(status),
+			activityTarget.Kind, activityTarget.ID, activityTarget.Slug,
+			action.Type, radarActivityMessage(action, status), activityDetails,
+		)
+	} else {
+		// A model-provided target is only an assertion. Keep failures without a
+		// verified execution target as diagnostics and do not publish them to the
+		// workspace realtime stream, where the model-provided reason would leak.
+		insertAgentActivityEvent(ctx, h.DB,
+			run.WorkspaceID, agent.ID, agent.RuntimeID, run.TaskID,
+			activityKindCustom, "radar_action_"+status, severityForRadarAction(status),
+			"none", pgtype.UUID{}, "",
+			"radar_untrusted_target", "Radar "+status+": action target could not be verified",
+			map[string]any{
+				"radar_run_id": uuidToString(run.ID),
+				"dedupe_key":   action.DedupeKey,
+				"action_type":  action.Type,
+				"result":       result,
+			},
+		)
+	}
 	if updateErr != nil {
 		return updateErr
 	}
 	return execErr
 }
 
-func (h *Handler) executeApprovedRadarAction(ctx context.Context, run db.AgentRadarRun, agent db.Agent, action radar.RadarAction) (map[string]any, error) {
+func (h *Handler) executeApprovedRadarActionWithTarget(ctx context.Context, run db.AgentRadarRun, agent db.Agent, action radar.RadarAction) (map[string]any, radarActivityTarget, error) {
 	switch action.Type {
 	case radar.ActionNoAction:
-		return map[string]any{"status": "no_action"}, nil
+		return map[string]any{"status": "no_action"}, radarActivityTarget{Kind: "none", Trusted: true}, nil
 	case radar.ActionPostChannelMessage, radar.ActionMentionAgent:
-		return h.executeRadarChannelPost(ctx, run, agent, action)
+		return h.executeRadarChannelPostWithTarget(ctx, run, agent, action)
 	case radar.ActionReplyThread:
-		return h.executeRadarChannelPost(ctx, run, agent, action)
+		return h.executeRadarChannelPostWithTarget(ctx, run, agent, action)
 	case radar.ActionCreateIssue:
-		return h.executeRadarCreateIssue(ctx, run, agent, action)
+		result, err := h.executeRadarCreateIssue(ctx, run, agent, action)
+		if err != nil {
+			return result, radarActivityTarget{}, err
+		}
+		issueID, err := parseUUIDString(stringFromMap(result, "issue_id"))
+		if err != nil {
+			return result, radarActivityTarget{}, nil
+		}
+		return result, radarActivityTarget{Kind: "issue", ID: issueID, Trusted: true}, nil
 	case radar.ActionUpdateAgentPlan:
-		return h.executeRadarPlanUpdate(ctx, agent, action)
+		if !radarUUIDsMatch(run.WorkspaceID, agent.WorkspaceID) {
+			return nil, radarActivityTarget{}, errors.New("radar agent does not belong to the run workspace")
+		}
+		if !radarUUIDsMatch(run.AgentID, agent.ID) {
+			return nil, radarActivityTarget{}, errors.New("radar agent does not match the run")
+		}
+		result, err := h.executeRadarPlanUpdate(ctx, agent, action)
+		if err != nil {
+			return result, radarActivityTarget{}, err
+		}
+		return result, radarActivityTarget{Kind: "agent", ID: agent.ID, Trusted: true}, nil
 	default:
-		return map[string]any{"blocked": true}, fmt.Errorf("radar action %s is not executable yet", action.Type)
+		return map[string]any{"blocked": true}, radarActivityTarget{}, fmt.Errorf("radar action %s is not executable yet", action.Type)
 	}
 }
 
 func (h *Handler) executeRadarChannelPost(ctx context.Context, run db.AgentRadarRun, agent db.Agent, action radar.RadarAction) (map[string]any, error) {
+	result, _, err := h.executeRadarChannelPostWithTarget(ctx, run, agent, action)
+	return result, err
+}
+
+func (h *Handler) executeRadarChannelPostWithTarget(ctx context.Context, run db.AgentRadarRun, agent db.Agent, action radar.RadarAction) (map[string]any, radarActivityTarget, error) {
 	var payload radarChannelPayload
 	if err := json.Unmarshal(action.Payload, &payload); err != nil {
-		return nil, err
+		return nil, radarActivityTarget{}, err
 	}
 	if strings.TrimSpace(payload.ChannelID) == "" || strings.TrimSpace(payload.Content) == "" {
-		return nil, errors.New("channel_id and content are required")
+		return nil, radarActivityTarget{}, errors.New("channel_id and content are required")
 	}
-	channelID, err := parseUUIDString(payload.ChannelID)
+	target, err := h.resolveRadarChannelExecutionTarget(ctx, run, agent, action.Type, payload)
 	if err != nil {
-		return nil, err
-	}
-	var threadRoot pgtype.UUID
-	if payload.ThreadRootMessageID != "" {
-		threadRoot, err = parseUUIDString(payload.ThreadRootMessageID)
-		if err != nil {
-			return nil, err
-		}
+		return nil, radarActivityTarget{}, err
 	}
 	content := "主动发现：" + strings.TrimSpace(payload.Content)
-	var threadID *string
-	if strings.TrimSpace(payload.ThreadID) != "" {
-		threadID = &payload.ThreadID
-	}
-	msg, err := h.insertChannelMessage(ctx, channelID, run.WorkspaceID, "agent", agent.ID, agentDisplayName(agent), content, "multica", nil, pgtype.UUID{}, threadRoot, threadID, 0)
+	msg, err := h.insertChannelMessage(ctx, target.ChannelID, run.WorkspaceID, "agent", agent.ID, agentDisplayName(agent), content, "multica", nil, pgtype.UUID{}, target.ThreadRoot, target.ThreadID, 0)
 	if err != nil {
-		return nil, err
+		return nil, target.Activity, err
 	}
-	_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
-	h.clearDMHiddenForChannelMembers(ctx, uuidToString(run.WorkspaceID), channelID)
-	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, uuidToString(run.WorkspaceID), "agent", uuidToString(agent.ID), channelID, msg)
+	_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, target.ChannelID)
+	h.clearDMHiddenForChannelMembers(ctx, uuidToString(run.WorkspaceID), target.ChannelID)
+	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, uuidToString(run.WorkspaceID), "agent", uuidToString(agent.ID), target.ChannelID, msg)
 	if action.Type == radar.ActionMentionAgent {
-		if ch, found := h.getChannel(ctx, uuidToString(run.WorkspaceID), channelID); found {
+		if ch, found := h.getChannel(ctx, uuidToString(run.WorkspaceID), target.ChannelID); found {
 			h.dispatchChannelMentions(ctx, ch, msg, pgtype.UUID{})
 		}
 	}
-	return map[string]any{"channel_message_id": msg.ID}, nil
+	return map[string]any{"channel_message_id": msg.ID}, target.Activity, nil
+}
+
+func (h *Handler) resolveRadarChannelExecutionTarget(ctx context.Context, run db.AgentRadarRun, agent db.Agent, actionType string, payload radarChannelPayload) (radarChannelExecutionTarget, error) {
+	if !radarUUIDsMatch(run.WorkspaceID, agent.WorkspaceID) {
+		return radarChannelExecutionTarget{}, errors.New("radar agent does not belong to the run workspace")
+	}
+	if run.AgentID.Valid && !radarUUIDsMatch(run.AgentID, agent.ID) {
+		return radarChannelExecutionTarget{}, errors.New("radar agent does not match the run")
+	}
+
+	channelID, err := parseUUIDString(strings.TrimSpace(payload.ChannelID))
+	if err != nil {
+		return radarChannelExecutionTarget{}, errors.New("invalid channel_id")
+	}
+	channel, found := h.getChannel(ctx, uuidToString(run.WorkspaceID), channelID)
+	if !found {
+		return radarChannelExecutionTarget{}, errors.New("channel does not belong to the run workspace")
+	}
+	if channel.ArchivedAt != nil {
+		return radarChannelExecutionTarget{}, errors.New("channel is archived")
+	}
+	if !h.channelHasAgentMember(ctx, run.WorkspaceID, channelID, agent.ID) {
+		return radarChannelExecutionTarget{}, errors.New("radar agent is not a channel member")
+	}
+
+	target := radarChannelExecutionTarget{
+		ChannelID: channelID,
+		Activity: radarActivityTarget{
+			Kind:    "channel",
+			ID:      channelID,
+			Trusted: true,
+		},
+	}
+	if threadID := strings.TrimSpace(payload.ThreadID); threadID != "" {
+		target.ThreadID = &threadID
+	}
+
+	threadRootRaw := strings.TrimSpace(payload.ThreadRootMessageID)
+	if actionType == radar.ActionReplyThread && threadRootRaw == "" {
+		return radarChannelExecutionTarget{}, errors.New("thread_root_message_id is required for a thread reply")
+	}
+	if threadRootRaw == "" {
+		return target, nil
+	}
+	threadRoot, err := parseUUIDString(threadRootRaw)
+	if err != nil {
+		return radarChannelExecutionTarget{}, errors.New("invalid thread_root_message_id")
+	}
+	var rootExists bool
+	err = h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM channel_message
+			WHERE id = $1
+			  AND channel_id = $2
+			  AND workspace_id = $3
+			  AND thread_root_message_id IS NULL
+			  AND author_type <> 'system'
+			  AND deleted_at IS NULL
+		)
+	`, threadRoot, channelID, run.WorkspaceID).Scan(&rootExists)
+	if err != nil {
+		return radarChannelExecutionTarget{}, fmt.Errorf("verify thread root: %w", err)
+	}
+	if !rootExists {
+		return radarChannelExecutionTarget{}, errors.New("thread root does not belong to the target channel")
+	}
+
+	target.ThreadRoot = threadRoot
+	target.Activity = radarActivityTarget{
+		Kind:    "thread",
+		ID:      threadRoot,
+		Slug:    uuidToString(channelID),
+		Trusted: true,
+	}
+	return target, nil
 }
 
 func (h *Handler) executeRadarCreateIssue(ctx context.Context, run db.AgentRadarRun, agent db.Agent, action radar.RadarAction) (map[string]any, error) {
@@ -205,6 +325,9 @@ func (h *Handler) executeRadarCreateIssue(ctx context.Context, run db.AgentRadar
 			return nil, err
 		}
 		projectID = parsed
+	}
+	if err := h.validateRadarIssueCreateWorkspaceTargets(ctx, run, agent, assigneeType, assigneeID, projectID); err != nil {
+		return nil, err
 	}
 	result, err := h.IssueService.Create(ctx, service.IssueCreateParams{
 		WorkspaceID:    run.WorkspaceID,
@@ -275,6 +398,10 @@ func parseUUIDString(raw string) (pgtype.UUID, error) {
 	return pgtype.UUID{Bytes: parsed, Valid: true}, nil
 }
 
+func radarUUIDsMatch(left, right pgtype.UUID) bool {
+	return left.Valid && right.Valid && left.Bytes == right.Bytes
+}
+
 func severityForRadarAction(status string) string {
 	if status == "failed" {
 		return "warning"
@@ -294,13 +421,4 @@ func radarDefaultString(v, fallback string) string {
 		return fallback
 	}
 	return v
-}
-
-func radarActivityTargetKind(kind string) string {
-	switch kind {
-	case "issue", "dm", "channel", "thread", "agent", "none":
-		return kind
-	default:
-		return "none"
-	}
 }

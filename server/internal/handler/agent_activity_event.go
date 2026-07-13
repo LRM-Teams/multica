@@ -140,11 +140,29 @@ func activityVisibilityFor(eventKind, eventType, severity, reasonCode string) st
 		activityKindCustom:
 		visibility = "diagnostic_only"
 	}
-	if eventKind == activityKindCustom && strings.Contains(eventType, "subagent") {
+	if eventKind == activityKindCustom && customActivityEventIsNarrative(eventType, reasonCode) {
 		visibility = "user_facing"
 	}
 	if strings.Contains(reasonCode, "freshness") {
 		visibility = "diagnostic_only"
 	}
 	return visibility
+}
+
+func customActivityEventIsNarrative(eventType, reasonCode string) bool {
+	if reasonCode == "radar_untrusted_target" {
+		return false
+	}
+	if eventType == "radar_action_executed" && reasonCode == "no_action" {
+		return false
+	}
+	if strings.Contains(eventType, "subagent") {
+		return true
+	}
+	switch eventType {
+	case "radar_action_executed", "radar_action_failed":
+		return true
+	default:
+		return false
+	}
 }

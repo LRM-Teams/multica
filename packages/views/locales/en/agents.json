@@ -371,6 +371,7 @@
       "labels": {
         "thinking": "Thinking",
         "output": "Output",
+        "completed": "Completed",
         "working": "Working",
         "failed": "Failed",
         "waiting": "Waiting",

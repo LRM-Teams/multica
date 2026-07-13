@@ -163,3 +163,49 @@ func (q *Queries) ListTaskMessagesSince(ctx context.Context, arg ListTaskMessage
 	}
 	return items, nil
 }
+
+const messagesForTaskInRange = `-- name: MessagesForTaskInRange :many
+SELECT id, task_id, seq, type, tool, content, input, output, created_at, visibility FROM task_message
+WHERE task_id::text = $1::text AND seq BETWEEN $2 AND $3
+ORDER BY seq ASC
+`
+
+type MessagesForTaskInRangeParams struct {
+	TaskID   string
+	StartSeq int32
+	EndSeq   int32
+}
+
+// MessagesForTaskInRange returns task messages for a task within the given seq range (inclusive).
+// Both sides are text so the caller passes the text agent_run_id (= task.ID) without UUID parsing,
+// matching GetMaxTaskMessageSeq.
+func (q *Queries) MessagesForTaskInRange(ctx context.Context, taskID string, startSeq, endSeq int32) ([]TaskMessage, error) {
+	rows, err := q.db.Query(ctx, messagesForTaskInRange, taskID, startSeq, endSeq)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TaskMessage{}
+	for rows.Next() {
+		var i TaskMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.Seq,
+			&i.Type,
+			&i.Tool,
+			&i.Content,
+			&i.Input,
+			&i.Output,
+			&i.CreatedAt,
+			&i.Visibility,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

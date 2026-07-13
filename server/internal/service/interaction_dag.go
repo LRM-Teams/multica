@@ -39,6 +39,7 @@ type InteractionDAGStore interface {
 	InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg db.InsertInteractionDAGSegmentWithSnapshotParams) error
 	InsertInteractionDAGEdge(ctx context.Context, arg db.InsertInteractionDAGEdgeParams) error
 	GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID string) (db.InteractionDAGSegment, error)
+	GetInteractionDAGSegmentByID(ctx context.Context, segmentID string) (db.InteractionDAGSegment, error)
 	GetLastEndSeqForAgentRun(ctx context.Context, agentRunID string) (int32, error)
 	GetMaxTaskMessageSeq(ctx context.Context, taskIDText string) (int32, error)
 
@@ -48,6 +49,13 @@ type InteractionDAGStore interface {
 	ListInteractionDAGEdgesForProject(ctx context.Context, projectID string) ([]db.InteractionDAGEdge, error)
 	ListInteractionDAGSessionRunsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGSessionRun, error)
 	ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGEnvSnapshot, error)
+}
+
+// MessageStore is the DB seam for accessing task messages.
+// *db.Queries satisfies it; tests inject a fake.
+type MessageStore interface {
+	MessagesForTaskInRange(ctx context.Context, taskID string, startSeq, endSeq int32) ([]db.TaskMessage, error)
+	GetProjectInWorkspace(ctx context.Context, arg db.GetProjectInWorkspaceParams) (db.Project, error)
 }
 
 // Compile-time guarantee that *db.Queries satisfies InteractionDAGStore, so a

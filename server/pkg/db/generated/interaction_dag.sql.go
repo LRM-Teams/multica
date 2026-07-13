@@ -135,6 +135,33 @@ func (q *Queries) GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentR
 	return i, err
 }
 
+const getInteractionDAGSegmentByID = `-- name: GetInteractionDAGSegmentByID :one
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, created_at FROM interaction_dag_segment
+WHERE segment_id = $1
+`
+
+// GetInteractionDAGSegmentByID resolves a segment by its segment_id.
+// Returns pgx.ErrNoRows when no segment exists for the given ID.
+func (q *Queries) GetInteractionDAGSegmentByID(ctx context.Context, segmentID string) (InteractionDAGSegment, error) {
+	row := q.db.QueryRow(ctx, getInteractionDAGSegmentByID, segmentID)
+	var i InteractionDAGSegment
+	err := row.Scan(
+		&i.SegmentID,
+		&i.ProjectID,
+		&i.AgentRunID,
+		&i.IssueID,
+		&i.TaskID,
+		&i.TrajectoryID,
+		&i.TensorRef,
+		&i.ClosingEvent,
+		&i.ClosingEventTargetSegment,
+		&i.StartSeq,
+		&i.EndSeq,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const insertInteractionDAGSegmentWithSnapshot = `-- name: InsertInteractionDAGSegmentWithSnapshot :exec
 WITH seg AS (
   INSERT INTO interaction_dag_segment (segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq)

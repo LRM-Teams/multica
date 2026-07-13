@@ -151,6 +151,31 @@ func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByAgentRun(_ context.C
 	return db.InteractionDAGSegment{}, pgx.ErrNoRows
 }
 
+// GetInteractionDAGSegmentByID satisfies InteractionDAGStore. Returns the segment
+// with the given segment_id, or pgx.ErrNoRows if not found.
+func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByID(_ context.Context, segmentID string) (db.InteractionDAGSegment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, s := range f.segmentSnapshots {
+		if s.SegmentID == segmentID {
+			return db.InteractionDAGSegment{
+				SegmentID:                 s.SegmentID,
+				ProjectID:                 s.ProjectID,
+				AgentRunID:                s.AgentRunID,
+				IssueID:                   s.IssueID,
+				TaskID:                    s.TaskID,
+				TrajectoryID:              s.TrajectoryID,
+				TensorRef:                 s.TensorRef,
+				ClosingEvent:              s.ClosingEvent,
+				ClosingEventTargetSegment: s.ClosingEventTargetSegment,
+				StartSeq:                  s.StartSeq,
+				EndSeq:                    s.EndSeq,
+			}, nil
+		}
+	}
+	return db.InteractionDAGSegment{}, pgx.ErrNoRows
+}
+
 // ListInteractionDAGSegmentsForProject satisfies InteractionDAGStore (U8
 // assembly). Returns segments recorded for projectID, ordered by insertion
 // order (the fake appends; the real query orders by created_at). Converts the

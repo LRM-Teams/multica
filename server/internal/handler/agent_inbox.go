@@ -152,7 +152,6 @@ func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Reques
 	}
 	pending, _ := h.Queries.CountPendingAgentInboxEventsForRuntime(r.Context(), runtime.ID)
 	respEvent := h.agentInboxEventResponse(r.Context(), runtime, event, delivery)
-	h.recordAgentInboxStatusActivity(r.Context(), event, runtime.ID, delivery.ID, agentInboxStatusActivityWorking)
 	h.publishAgentInboxTaskLifecycle(protocol.EventTaskDispatch, event, runtime.ID, "running")
 	writeJSON(w, http.StatusOK, DrainAgentInboxResponse{
 		Events:      []AgentInboxEventResponse{respEvent},
@@ -942,7 +941,13 @@ func (h *Handler) recordAgentInboxStatusActivity(ctx context.Context, event db.A
 	if status == "" {
 		return
 	}
-	if h.agentInboxLatestStatusActivity(ctx, event.WorkspaceID, event.AgentID) == status {
+	// The wake/source event already marks the start of work in the Activity
+	// timeline (for example, "Working · Message received"). Do not add a
+	// second generic "Working" row for the same transition.
+	if status == agentInboxStatusActivityWorking {
+		return
+	}
+	if h.agentInboxStatusActivityExists(ctx, event.WorkspaceID, event.AgentID, event.ID, status) {
 		return
 	}
 	targetKind, targetID := agentInboxActivityTarget(event)
@@ -963,29 +968,28 @@ func (h *Handler) recordAgentInboxStatusActivity(ctx context.Context, event db.A
 	)
 }
 
-func (h *Handler) agentInboxLatestStatusActivity(ctx context.Context, workspaceID, agentID pgtype.UUID) string {
+func (h *Handler) agentInboxStatusActivityExists(ctx context.Context, workspaceID, agentID, inboxEventID pgtype.UUID, status string) bool {
 	if h == nil || h.DB == nil {
-		return ""
+		return false
 	}
-	var status string
+	var exists bool
 	err := h.DB.QueryRow(ctx, `
-		SELECT COALESCE(details->>'status', '')
-		FROM agent_activity_event
-		WHERE workspace_id = $1
-		  AND agent_id = $2
-		  AND event_kind = $3
-		  AND event_type = $4
-		  AND COALESCE(details->>'status', '') <> ''
-		ORDER BY created_at DESC, id DESC
-		LIMIT 1
-	`, workspaceID, agentID, activityKindCustom, agentInboxStatusChangedEventType).Scan(&status)
+		SELECT EXISTS (
+			SELECT 1
+			FROM agent_activity_event
+			WHERE workspace_id = $1
+			  AND agent_id = $2
+			  AND event_kind = $3
+			  AND event_type = $4
+			  AND details->>'inbox_event_id' = $5
+			  AND COALESCE(details->>'status', '') = $6
+		)
+	`, workspaceID, agentID, activityKindCustom, agentInboxStatusChangedEventType, uuidToString(inboxEventID), status).Scan(&exists)
 	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
-			slog.Warn("agent inbox status activity: latest status lookup failed", "agent_id", uuidToString(agentID), "error", err)
-		}
-		return ""
+		slog.Warn("agent inbox status activity: duplicate lookup failed", "agent_id", uuidToString(agentID), "inbox_event_id", uuidToString(inboxEventID), "status", status, "error", err)
+		return false
 	}
-	return strings.TrimSpace(status)
+	return exists
 }
 
 func agentInboxStatusActivityMessage(status string) string {

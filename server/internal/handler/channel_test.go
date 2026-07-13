@@ -816,19 +816,20 @@ func TestChannelAgentInboxDrainAckDirectedMention(t *testing.T) {
 	}
 	assertAgentInboxTaskLifecycleEvent(protocol.EventTaskQueued, queuedLifecycleEvents, "queued")
 	assertAgentInboxTaskLifecycleEvent(protocol.EventTaskDispatch, dispatchedLifecycleEvents, "running")
-	if statuses := inboxStatuses(); len(statuses) != 1 || statuses[0] != agentInboxStatusActivityWorking {
-		t.Fatalf("status activity after drain = %+v, want [working]", statuses)
-	}
-	testHandler.recordAgentInboxStatusActivity(ctx, db.AgentInboxEvent{
+	statusEvent := db.AgentInboxEvent{
 		ID:              parseUUID(got.ID),
 		WorkspaceID:     parseUUID(testWorkspaceID),
 		AgentID:         parseUUID(agentID),
 		ChannelID:       parseUUID(channelID),
 		SourceMessageID: parseUUID(trigger.ID),
 		RequiresWake:    true,
-	}, parseUUID(runtimeID), parseUUID(got.DeliveryID), agentInboxStatusActivityWorking)
-	if statuses := inboxStatuses(); len(statuses) != 1 || statuses[0] != agentInboxStatusActivityWorking {
-		t.Fatalf("duplicate working status activity = %+v, want one working row", statuses)
+	}
+	if statuses := inboxStatuses(); len(statuses) != 0 {
+		t.Fatalf("status activity after drain = %+v, want no generic working row", statuses)
+	}
+	testHandler.recordAgentInboxStatusActivity(ctx, statusEvent, parseUUID(runtimeID), parseUUID(got.DeliveryID), agentInboxStatusActivityWorking)
+	if statuses := inboxStatuses(); len(statuses) != 0 {
+		t.Fatalf("manual working status activity = %+v, want no generic working row", statuses)
 	}
 
 	partialAckReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/ack", AckAgentInboxEventRequest{
@@ -854,18 +855,11 @@ func TestChannelAgentInboxDrainAckDirectedMention(t *testing.T) {
 	if ackRec.Code != http.StatusOK {
 		t.Fatalf("ack inbox event: status=%d body=%s", ackRec.Code, ackRec.Body.String())
 	}
-	if statuses := inboxStatuses(); len(statuses) != 2 || statuses[0] != agentInboxStatusActivityWorking || statuses[1] != agentInboxStatusActivityIdle {
-		t.Fatalf("status activity after ack = %+v, want [working idle]", statuses)
+	if statuses := inboxStatuses(); len(statuses) != 1 || statuses[0] != agentInboxStatusActivityIdle {
+		t.Fatalf("status activity after ack = %+v, want [idle]", statuses)
 	}
-	testHandler.recordAgentInboxStatusActivity(ctx, db.AgentInboxEvent{
-		ID:              parseUUID(got.ID),
-		WorkspaceID:     parseUUID(testWorkspaceID),
-		AgentID:         parseUUID(agentID),
-		ChannelID:       parseUUID(channelID),
-		SourceMessageID: parseUUID(trigger.ID),
-		RequiresWake:    true,
-	}, parseUUID(runtimeID), parseUUID(got.DeliveryID), agentInboxStatusActivityIdle)
-	if statuses := inboxStatuses(); len(statuses) != 2 || statuses[0] != agentInboxStatusActivityWorking || statuses[1] != agentInboxStatusActivityIdle {
+	testHandler.recordAgentInboxStatusActivity(ctx, statusEvent, parseUUID(runtimeID), parseUUID(got.DeliveryID), agentInboxStatusActivityIdle)
+	if statuses := inboxStatuses(); len(statuses) != 1 || statuses[0] != agentInboxStatusActivityIdle {
 		t.Fatalf("duplicate idle status activity = %+v, want one idle transition", statuses)
 	}
 
@@ -1072,8 +1066,8 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	if err := statusRows.Err(); err != nil {
 		t.Fatalf("completion status activity rows: %v", err)
 	}
-	if len(statuses) != 2 || statuses[0] != agentInboxStatusActivityWorking || statuses[1] != agentInboxStatusActivityIdle {
-		t.Fatalf("completion status activity = %+v, want [working idle]", statuses)
+	if len(statuses) != 1 || statuses[0] != agentInboxStatusActivityIdle {
+		t.Fatalf("completion status activity = %+v, want [idle]", statuses)
 	}
 }
 

@@ -3,7 +3,7 @@
 - **Date:** 2026-07-13
 - **Status:** draft for review
 - **Product anchor:** Slack (text vs files separated; composer tray; message = body then attachment group)
-- **Cut policy:** **Hard cut. No transition period.** No dual-write, no silent rewrite of legacy write shapes, no historical backfill guarantee.
+- **Cut policy:** **Ship only the latest path.** No dual-write, no long-lived compatibility layer, no historical backfill guarantee. **Do not build protocol hostility** (no required 400 on leftover fields): delete old client/server write paths so nothing in-repo still *uses* them.
 - **Related:**
   - Product PRD §4.1 Attachment/Files — `docs/product-conversation-model-prd.md`
   - Schema target (`parts` sole truth) — `docs/superpowers/specs/2026-07-08-conversation-schema-target-design.md`
@@ -26,13 +26,14 @@ That is the opposite of Slack and of our own PRD (“composer → pending tray �
 1. **Structured message body:** chat attachments live only as `parts[]` entries of `type: "attachment"`.
 2. **Slack UX:** composer tray groups files; bubble is always **text block → attachment zone**.
 3. **Single write path:** human, agent, and API share the same send contract.
-4. **Hard cut:** ship FE + BE + CLI/skills together; reject old chat write shapes with 400.
+4. **Latest only:** FE + BE + CLI/skills all send/read the parts model; **remove** chat code that scans markdown for binds, inserts images at cursor, or sends `attachment_ids` as the attachment truth. No dual path left in the product.
 
 ## Non-goals
 
 - Issue description / issue comment markdown inline images (out of scope; keep current model).
 - Historical message bulk migration or guaranteed gallery for old `![]()` bodies.
-- Dual-write or “accept `attachment_ids` and rewrite to parts” compatibility.
+- Dual-write or a second supported write shape.
+- **Protocol-level rejection theater:** no requirement that the server 400 every obsolete field for its own sake — cleanliness is “no old callers / no old implementation,” not “punish stray JSON.”
 - `workspace_file_ref` (agent workspace browse) — separate contract.
 - Image crop/annotate tooling.
 - Full Slack unfurl / snippet engine.
@@ -44,7 +45,8 @@ That is the opposite of Slack and of our own PRD (“composer → pending tray �
 | Surfaces | Channel / DM / Thread only |
 | Canonical model | `parts[]` first-class `attachment` parts |
 | History | No compatibility / no backfill guarantee |
-| Transition | **None** |
+| Transition | **None** — only the new path ships |
+| Old write shapes | **Deleted from codebase**; not maintained; no 400 mandate |
 | Bubble layout | Fixed: body → attachment zone |
 | Product reference | Slack |
 
@@ -90,7 +92,7 @@ Historically, chat send accepted a **sidecar** `attachment_ids: string[]`: “bi
 - It solved **DB binding**, not **layout or message structure**.
 - Order/grouping still came from cursor-placed markdown.
 
-**This design removes `attachment_ids` from the chat send/edit write contract.** Binding is derived only from `parts` where `type === "attachment"`.
+**Chat product write path uses only attachment parts.** Binding is derived from `parts` where `type === "attachment"`. Clients and server chat handlers **stop producing/depending on** chat `attachment_ids` as attachment truth; remove those call sites.
 
 Issue/comment may still use `attachment_ids` until those surfaces are redesigned — **out of scope**.
 
@@ -268,14 +270,14 @@ message.attachments[]  → hydrate by attachment_id
 
 | Field | Rule |
 |-------|------|
-| `parts` | Canonical; at least one valid text / sticker / attachment |
-| `content` | **Not** a write source of truth for chat; do not accept markdown-embedded files as attachments. Prefer omit; if present for transitional clients that are **not** supported, either ignore when parts present or 400 — **must not** bind files from content |
-| `attachment_ids` | **Removed** from chat send/edit. If present → **400** |
+| `parts` | **Canonical write source**; at least one valid text / sticker / attachment |
+| `content` | Not attachment truth. Prefer omit on write; if present, never bind files from markdown URLs |
+| `attachment_ids` | **Not used by any shipped chat client.** Server chat path binds from attachment **parts** only. Prefer delete/stop reading the field in chat handlers when call sites are gone; no need to special-case 400 |
 
 **Server pipeline:**
 
 1. Normalize parts (including `attachment`).
-2. Collect attachment ids from parts → authorize → link to `channel_message_id`.
+2. Collect attachment ids from **parts** → authorize → link to `channel_message_id`.
 3. Persist `parts`; set `content`/`text` **derived** from text (+ sticker alt for preview), **without** attachment URLs.
 4. Allow attachment-only messages (fix current “content is required” for pure-file cases).
 5. Response: normalized `parts` + hydrated `attachments[]` in attachment-part order.
@@ -291,13 +293,15 @@ Same contract: `parts` only; re-bind from attachment parts.
 - Built-in skills / prompts: **delete** teaching that embeds files in markdown bodies for chat.
 - Ship skill + CLI + server in the same cut.
 
-### 4.4 Explicit rejections (no soft fallback)
+### 4.4 “No old path” (implementation cleanliness)
 
-| Client behavior | Server |
-|-----------------|--------|
-| `attachment_ids` without attachment parts | 400 |
-| Only markdown images in `content`, no attachment parts | No bind as attachments; not a supported product path (FE must not produce) |
-| Half-upgraded client | Breaks loudly — intentional hard cut |
+| Rule | Meaning |
+|------|---------|
+| One write implementation | Chat FE/CLI only assemble `parts`; no URL-scan → `attachment_ids` |
+| One bind implementation | Server links attachments from attachment parts only |
+| Delete dead code | Remove cursor-inline upload for chat surfaces, tray-less send, markdown-bind maps |
+| No dual-write | Do not also embed `![](url)` in text for the same files |
+| Stray fields | Not a product concern if nothing we ship sends them; no required 400 |
 
 ---
 
@@ -308,28 +312,28 @@ Not a task plan — orientation for `writing-plans`:
 | Area | Change |
 |------|--------|
 | `server/pkg/protocol` + `messageparts` | `attachment` part type + normalize + FallbackContent |
-| `server/internal/handler` channel send/edit | Derive binds from parts; drop chat `attachment_ids`; allow file-only |
-| `packages/core/types/message-part.ts` + API client | Types; send body `parts` only for chat |
+| `server/internal/handler` channel send/edit | Derive binds from parts; stop depending on chat `attachment_ids`; allow file-only |
+| `packages/core/types/message-part.ts` + API client | Types; chat send body uses `parts` |
 | `packages/views/editor` | `mediaMode: "external"` + `onExternalFiles` |
 | `packages/views/channels` composer | Tray state, fill `Composer.tray`, send assembly |
 | Message bubble / quote / preview | Body then attachment zone |
 | Agent CLI + `builtin_skills` | Parts-only send teaching |
-| Tests | Unit normalize; handler 400 cases; FE tray order; e2e paste two images + text |
+| Tests | Unit normalize; bind-from-parts; FE tray order; e2e paste two images + text; assert no chat URL-scan bind |
 
-**Suggested merge-ready order (all hard-cut; stackable PRs but no half-ship to prod):**
+**Suggested merge-ready order (latest-only; stackable PRs, delete old paths as you go):**
 
-1. BE: part type + bind from parts + reject `attachment_ids` + file-only send  
-2. FE: tray + external media mode + send parts  
+1. BE: part type + bind from parts + file-only send  
+2. FE: tray + external media mode + send parts; **remove** chat URL-scan / inline image insert  
 3. FE: bubble gallery + previews  
 4. Agent CLI/skills  
-5. Delete dead chat inline-upload paths / e2e updates  
+5. Sweep remaining dead chat attachment code / e2e updates  
 
 ## 6. Acceptance criteria
 
 1. Paste image A → type text → paste image B → **tray shows A|B together**; text only in editor; never A / text / B in the body stream.
 2. Send → bubble is text then grouped attachments in tray order.
 3. Network payload includes `parts` with `type: "attachment"`; binding does not depend on markdown URL presence.
-4. Chat send with `attachment_ids` and no attachment parts → **400**.
+4. **No shipped chat code** still builds `attachment_ids` from markdown URL scans or inserts images at the composer cursor.
 5. Attachment-only message succeeds.
 6. Agent send path documented and implemented as attachment parts, not markdown embeds.
 7. Issue comment/description inline images still work (unchanged).
@@ -338,7 +342,7 @@ Not a task plan — orientation for `writing-plans`:
 
 | Risk | Mitigation |
 |------|------------|
-| Desktop/web clients out of sync with server | Hard cut requires coordinated release; old clients get 400 on chat attach send |
+| Half-migrated tree (new UI + old bind path) | Same change set removes old path; review checklist = “grep for chat attachment_ids / uploadAndInsert in channel composer” |
 | Users expect old interleaved layout | Product: Slack-like is intentional |
 | Large tray of files | Cap + scroll (PRD tray behavior) |
 | `content is required` server checks | Explicitly allow empty content when attachment/sticker parts present |
@@ -354,7 +358,7 @@ Not a task plan — orientation for `writing-plans`:
 | Bind list | Client URL scan → `attachment_ids` | Server derives from parts |
 | Multi-image UI | Interleaved / tiny inline | Slack group gallery |
 | History | — | No migration promise |
-| Transition | — | **None** |
+| Transition | — | **Latest only; old paths deleted** |
 
 ## Appendix B — Open implementation choices (non-blocking for product)
 

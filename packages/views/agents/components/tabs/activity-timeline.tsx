@@ -61,7 +61,7 @@ function ActivityRow({
   // in-progress signal, appended at render for an active tool action only —
   // never on settled rows or non-tool states (wake / compaction / reply).
   const label =
-    event.kind === "tool_call" && presentation.tone === "active" ? `${rawLabel}…` : rawLabel;
+    event.activity_kind === "tool_call" && presentation.tone === "active" ? `${rawLabel}…` : rawLabel;
   const subtext = presentation.subtextKey
     ? t(($) => $.tab_body.activity.subtexts[presentation.subtextKey!])
     : presentation.subtext;
@@ -74,12 +74,12 @@ function ActivityRow({
     !compact &&
     !!subtext &&
     !presentation.subtextKey &&
-    (event.kind === "thinking" || event.kind === "text");
+    (event.activity_kind === "thinking" || event.activity_kind === "text");
   // A tool row's subtext is a `tool_target`; for file tools that is a path
   // (#484/#385) which needs the basename-preserving path treatment. Non-path
   // subtexts stay a plain single-line truncate. Shared by the inline (Activity
   // tab) and compact (Profile Recent) layouts below.
-  const subtextIsPath = event.kind === "tool_call" && !!subtext && subtext.includes("/");
+  const subtextIsPath = event.activity_kind === "tool_call" && !!subtext && subtext.includes("/");
   const subtextNode = subtext ? (
     subtextIsPath ? (
       <ToolTargetPath value={subtext} />
@@ -91,7 +91,7 @@ function ActivityRow({
     <div
       className={cn("flex items-baseline gap-3", compact ? "py-0.5" : "py-1")}
       data-testid="activity-row"
-      data-visibility={event.visibility}
+      data-activity-kind={event.activity_kind}
     >
       <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70">
         {time}

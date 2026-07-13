@@ -83,10 +83,9 @@ function makeEvent(index: number): ActivityEvent {
   return {
     id: `event-${index}`,
     agent_id: "agent-1",
-    kind: "text",
-    event_type: "text",
+    activity_kind: "text",
+    detail_kind: "text",
     occurred_at: `2026-06-30T12:0${index}:0${index}Z`,
-    visibility: "user_facing",
     text: `Activity ${index}`,
     target_ref: { kind: "agent", id: "agent-1" },
   };

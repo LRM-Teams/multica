@@ -120,4 +120,60 @@ describe("ComposerAttachmentTray", () => {
       "uploading",
     );
   });
+
+  it("is a single horizontal strip (no column stack, no wrap)", () => {
+    const pending: PendingAttachment[] = [
+      item({
+        localId: "f1",
+        status: "ready",
+        filename: "cleanup-grok-xy-bridge.sh",
+        contentType: "application/x-sh",
+        attachmentId: "a1",
+        previewUrl: undefined,
+      }),
+      item({
+        localId: "f2",
+        status: "ready",
+        filename: "cleanup-grok-xy-bridge-2.sh",
+        contentType: "text/x-shellscript",
+        attachmentId: "a2",
+        previewUrl: undefined,
+      }),
+      item({
+        localId: "img-1",
+        status: "ready",
+        filename: "shot.png",
+        contentType: "image/png",
+        attachmentId: "a3",
+        previewUrl: "https://cdn.example/shot.png",
+      }),
+    ];
+
+    render(
+      <ComposerAttachmentTray pending={pending} onRemove={vi.fn()} onRetry={vi.fn()} />,
+    );
+
+    const tray = screen.getByTestId("composer-attachment-tray");
+    expect(tray.className).toMatch(/\bflex-row\b/);
+    expect(tray.className).toMatch(/\bflex-nowrap\b/);
+    expect(tray.className).toMatch(/\boverflow-x-auto\b/);
+    // Must not use column layout or wrap (both produce vertical stacks).
+    expect(tray.className).not.toMatch(/\bflex-col\b/);
+    expect(tray.className).not.toMatch(/\bflex-wrap\b/);
+
+    for (const id of ["f1", "f2", "img-1"]) {
+      const el = screen.getByTestId(`composer-tray-item-${id}`);
+      expect(el.className).toMatch(/\bshrink-0\b/);
+      expect(el.className).not.toMatch(/\bw-full\b/);
+    }
+
+    expect(screen.getByTestId("composer-tray-item-f1")).toHaveAttribute(
+      "data-kind",
+      "file",
+    );
+    expect(screen.getByTestId("composer-tray-item-img-1")).toHaveAttribute(
+      "data-kind",
+      "image",
+    );
+  });
 });

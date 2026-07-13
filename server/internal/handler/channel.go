@@ -3182,16 +3182,16 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 //   - self-trigger skip: an agent's own message never re-triggers that same agent
 //     (otherwise a 1-on-1 agent DM would loop on the agent's own replies forever).
 func (h *Handler) dispatchChannelAgentReply(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
-	h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "")
+	_, _ = h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "")
 }
 
-func (h *Handler) dispatchChannelAgentReplyWithReason(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, reason string) {
+func (h *Handler) dispatchChannelAgentReplyWithReason(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, reason string) (db.AgentInboxEvent, error) {
 	if trigger.TriggerDepth >= channelRunTriggerLimit {
 		slog.Warn("channel agent reply: trigger limit reached", "channel", ch.ID, "thread_id", ptrString(trigger.ThreadID), "depth", trigger.TriggerDepth)
-		return
+		return db.AgentInboxEvent{}, errors.New("channel agent reply trigger limit reached")
 	}
 	if trigger.Type == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == uuidToString(agent.ID) {
-		return
+		return db.AgentInboxEvent{}, errors.New("agent cannot trigger itself")
 	}
 	rootID := h.channelThreadRootForTrigger(ch, trigger)
 	facilitatorState := h.loadChannelFacilitatorState(ctx, rootID, agent.ID, trigger)
@@ -3204,10 +3204,15 @@ func (h *Handler) dispatchChannelAgentReplyWithReason(ctx context.Context, ch Ch
 			reason = "dm"
 		}
 	}
-	h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger, facilitatorState), "channel agent reply", true, reason, 10)
+	return h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger, facilitatorState), "channel agent reply", true, reason, 10)
 }
 
-func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, logScope string, showTyping bool, reason string, priority int32) {
+type channelAgentPromptTxResult struct {
+	Event        db.AgentInboxEvent
+	AgentSession db.AgentSession
+}
+
+func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, logScope string, showTyping bool, reason string, priority int32) (db.AgentInboxEvent, error) {
 	typingActive := false
 	if showTyping {
 		h.publishChannelAgentTyping(ctx, ch, agent, true)
@@ -3220,30 +3225,45 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 	}()
 	if h.TxStarter == nil {
 		slog.Warn(logScope+": transaction starter missing", "channel", ch.ID, "agent", uuidToString(agent.ID))
-		return
+		return db.AgentInboxEvent{}, errors.New("channel transaction starter missing")
 	}
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		slog.Warn(logScope+": begin transaction failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
+		return db.AgentInboxEvent{}, fmt.Errorf("begin channel agent prompt transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	qtx := h.Queries.WithTx(tx)
+	txResult, err := h.enqueueChannelAgentPromptWithTx(ctx, qtx, tx, ch, agent, trigger, initiatorUserID, prompt, reason, priority)
+	if err != nil {
+		slog.Warn(logScope+": persist prompt and inbox event failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return db.AgentInboxEvent{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Warn(logScope+": commit failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "inbox_event", uuidToString(txResult.Event.ID), "error", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("commit channel agent prompt: %w", err)
+	}
+	typingActive = false
+	h.recordChannelAgentPromptWake(ctx, ch, agent, trigger, reason, txResult)
+	return txResult.Event, nil
+}
 
-	session, err := h.ensureChannelAgentSessionWithDB(ctx, qtx, tx, ch, agent.ID, initiatorUserID)
+// enqueueChannelAgentPromptWithTx writes the prompt and directed inbox event
+// using the caller's transaction. It deliberately emits no realtime or daemon
+// side effects; the caller must commit first and then call
+// recordChannelAgentPromptWake.
+func (h *Handler) enqueueChannelAgentPromptWithTx(ctx context.Context, qtx *db.Queries, exec db.DBTX, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, reason string, priority int32) (channelAgentPromptTxResult, error) {
+	session, err := h.ensureChannelAgentSessionWithDB(ctx, qtx, exec, ch, agent.ID, initiatorUserID)
 	if err != nil {
-		slog.Warn(logScope+": ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
+		return channelAgentPromptTxResult{}, fmt.Errorf("ensure channel agent session: %w", err)
 	}
-	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, ch.Kind, trigger)
+	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, exec, session.ID, prompt, ch.Kind, trigger)
 	if err != nil {
-		slog.Warn(logScope+": create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
+		return channelAgentPromptTxResult{}, fmt.Errorf("create channel agent prompt: %w", err)
 	}
-	conversationID, err := h.channelConversationIDWithDB(ctx, tx, parseUUID(ch.ID))
+	conversationID, err := h.channelConversationIDWithDB(ctx, exec, parseUUID(ch.ID))
 	if err != nil {
-		slog.Warn(logScope+": load conversation failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
+		return channelAgentPromptTxResult{}, fmt.Errorf("load channel conversation: %w", err)
 	}
 	agentSession, err := qtx.UpsertAgentSession(ctx, db.UpsertAgentSessionParams{
 		WorkspaceID:    parseUUID(ch.WorkspaceID),
@@ -3254,8 +3274,7 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 		ChatSessionID:  session.ID,
 	})
 	if err != nil {
-		slog.Warn(logScope+": upsert agent session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
+		return channelAgentPromptTxResult{}, fmt.Errorf("upsert channel agent session: %w", err)
 	}
 	seq := trigger.Seq
 	event, err := qtx.CreateAgentInboxEvent(ctx, db.CreateAgentInboxEventParams{
@@ -3273,20 +3292,16 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 		SourceMessageID: channelAmbientTriggerID(trigger),
 	})
 	if err != nil {
-		slog.Warn(logScope+": create inbox event failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
+		return channelAgentPromptTxResult{}, fmt.Errorf("create channel agent inbox event: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, event.ID, promptMsg.ID); err != nil {
-		slog.Warn(logScope+": tag prompt with inbox event failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "inbox_event", uuidToString(event.ID), "error", err)
-		return
+	if _, err := exec.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, event.ID, promptMsg.ID); err != nil {
+		return channelAgentPromptTxResult{}, fmt.Errorf("tag channel prompt with inbox event: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		slog.Warn(logScope+": commit failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "inbox_event", uuidToString(event.ID), "error", err)
-		return
-	}
-	typingActive = false
-	h.publishAgentInboxTaskLifecycle(protocol.EventTaskQueued, event, agent.RuntimeID, "queued")
+	return channelAgentPromptTxResult{Event: event, AgentSession: agentSession}, nil
+}
 
+func (h *Handler) recordChannelAgentPromptWake(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, reason string, result channelAgentPromptTxResult) {
+	h.publishAgentInboxTaskLifecycle(protocol.EventTaskQueued, result.Event, agent.RuntimeID, "queued")
 	// Record a wake-trigger activity event so the agent's Activity timeline
 	// shows why this session needs to drain.
 	h.recordAgentActivityEvent(ctx, h.DB,
@@ -3300,8 +3315,8 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 			"trigger_content":    truncateForActivity(trigger.Content, 100),
 			"thread_root":        trigger.ThreadRootMessageID,
 			"message_seq":        trigger.Seq,
-			"agent_session_id":   uuidToString(agentSession.ID),
-			"inbox_event_id":     uuidToString(event.ID),
+			"agent_session_id":   uuidToString(result.AgentSession.ID),
+			"inbox_event_id":     uuidToString(result.Event.ID),
 		},
 	)
 }
@@ -4189,12 +4204,31 @@ func (h *Handler) ensureChannelAgentSessionWithDB(ctx context.Context, q *db.Que
 	if err != nil {
 		return db.ChatSession{}, err
 	}
-	_, err = exec.Exec(ctx, `
+	tag, err := exec.Exec(ctx, `
 		INSERT INTO channel_agent_session (channel_id, agent_id, chat_session_id)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (channel_id, agent_id) DO NOTHING`, parseUUID(ch.ID), agentID, session.ID)
 	if err != nil {
 		return db.ChatSession{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		// A concurrent transaction won the unique (channel_id, agent_id)
+		// insert. Do not return the orphan session we just created: callers
+		// would attach prompts to a session that is not linked to the channel.
+		if err := q.DeleteChatSession(ctx, db.DeleteChatSessionParams{
+			ID:          session.ID,
+			WorkspaceID: parseUUID(ch.WorkspaceID),
+		}); err != nil {
+			return db.ChatSession{}, fmt.Errorf("delete losing channel session: %w", err)
+		}
+		if err := exec.QueryRow(ctx, `
+			SELECT chat_session_id
+			FROM channel_agent_session
+			WHERE channel_id = $1 AND agent_id = $2
+		`, parseUUID(ch.ID), agentID).Scan(&sessionID); err != nil {
+			return db.ChatSession{}, fmt.Errorf("load winning channel session: %w", err)
+		}
+		return q.GetChatSession(ctx, sessionID)
 	}
 	return session, nil
 }

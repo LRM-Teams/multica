@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -1357,6 +1358,273 @@ func insertHandlerTestTask(t *testing.T, agentID string) string {
 // Defence-in-depth: spot-check that the package compiles a small
 // fmt.Sprintf so accidental imports stay tidy.
 var _ = fmt.Sprintf
+
+func TestBindWorkspaceRadarSupervisorReplacesArchivedPriorAndCancelsOnlyItsRadar(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	q := db.New(testPool)
+	suffix := uuid.NewString()
+	workspace, err := q.CreateWorkspace(ctx, db.CreateWorkspaceParams{
+		Name: "radar-rebind-" + suffix, Slug: "radar-rebind-" + suffix, IssuePrefix: "RBD",
+	})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	var ownerID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ($1, $2)
+		RETURNING id
+	`, "rebind-owner-"+suffix, "rebind-"+suffix+"@example.test").Scan(&ownerID); err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspace.ID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, ownerID)
+	})
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')
+	`, workspace.ID, ownerID); err != nil {
+		t.Fatalf("create owner membership: %v", err)
+	}
+	var runtimeID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+		  workspace_id, daemon_id, name, runtime_mode, provider, status,
+		  device_info, metadata, visibility, last_seen_at
+		) VALUES ($1, $2, 'rebind-runtime', 'cloud', 'daytona', 'online',
+		  '', '{}'::jsonb, 'private', now())
+		RETURNING id
+	`, workspace.ID, "rebind-daemon-"+suffix).Scan(&runtimeID); err != nil {
+		t.Fatalf("create runtime: %v", err)
+	}
+	createAgent := func(name string) db.Agent {
+		t.Helper()
+		agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
+			WorkspaceID: workspace.ID, Name: name + "-" + suffix, DisplayName: "Wendy",
+			Description: "workspace supervisor", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
+			RuntimeID: runtimeID, Visibility: "private", MaxConcurrentTasks: 1, OwnerID: ownerID,
+			Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
+		})
+		if err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		return agent
+	}
+	oldSupervisor := createAgent("old-wendy")
+	newSupervisor := createAgent("new-wendy")
+	if cancelled, err := testHandler.bindWorkspaceRadarSupervisor(ctx, workspace.ID, oldSupervisor.ID); err != nil || len(cancelled) != 0 {
+		t.Fatalf("bind old supervisor = cancelled:%d err:%v", len(cancelled), err)
+	}
+	run, radarTask, err := testHandler.TaskService.EnqueueAgentRadarRun(ctx, service.EnqueueAgentRadarRunParams{
+		WorkspaceID: workspace.ID, AgentID: oldSupervisor.ID, TriggerKind: "scheduled",
+		TriggerRef: "rebind", CooldownKey: "workspace_supervisor_radar",
+		ContextSummary: "old supervisor", ScheduledFor: time.Now(), Prompt: "inspect workspace",
+	})
+	if err != nil {
+		t.Fatalf("enqueue old supervisor Radar: %v", err)
+	}
+	ordinaryTask, err := q.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
+		AgentID: oldSupervisor.ID, RuntimeID: runtimeID, Priority: 0,
+		Context: []byte(`{"type":"quick_create","prompt":"ordinary task"}`),
+	})
+	if err != nil {
+		t.Fatalf("create ordinary task: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent SET archived_at = now(), archived_by = $2 WHERE id = $1
+	`, oldSupervisor.ID, ownerID); err != nil {
+		t.Fatalf("archive prior supervisor: %v", err)
+	}
+	watermark := time.Now().Add(-2 * time.Hour).UTC()
+	nextDue := time.Now().Add(45 * time.Minute).UTC()
+	if _, err := testPool.Exec(ctx, `
+		UPDATE workspace_radar_state
+		SET last_success_at = $2, last_full_review_at = $2,
+		    last_applied_scheduled_for = $2, next_due_at = $3,
+		    change_version = 42, change_cursor_version = 37,
+		    static_scan_cursors = '{"issues":7,"channels":3}'::jsonb,
+		    static_cycle_seen = '{"issues":true}'::jsonb,
+		    consecutive_failures = 2
+		WHERE workspace_id = $1
+	`, workspace.ID, watermark, nextDue); err != nil {
+		t.Fatalf("seed prior workspace scan state: %v", err)
+	}
+
+	repairStarted := time.Now().UTC()
+	cancelled, err := testHandler.bindWorkspaceRadarSupervisor(ctx, workspace.ID, newSupervisor.ID)
+	if err != nil {
+		t.Fatalf("rebind supervisor: %v", err)
+	}
+	if len(cancelled) != 1 || uuidToString(cancelled[0].ID) != uuidToString(radarTask.ID) {
+		t.Fatalf("rebind cancelled tasks = %+v, want only Radar task %s", cancelled, uuidToString(radarTask.ID))
+	}
+	var boundAgentID pgtype.UUID
+	var storedSuccess, storedFullReview, storedApplied, storedNextDue time.Time
+	var storedFailures, storedChangeVersion, storedChangeCursorVersion int
+	var storedStaticScanCursors, storedStaticCycleSeen bool
+	if err := testPool.QueryRow(ctx, `
+		SELECT supervisor_agent_id, last_success_at, last_full_review_at,
+		       last_applied_scheduled_for, next_due_at, consecutive_failures,
+		       change_version, change_cursor_version,
+		       static_scan_cursors = '{"issues":7,"channels":3}'::jsonb,
+		       static_cycle_seen = '{"issues":true}'::jsonb
+		FROM workspace_radar_state WHERE workspace_id = $1
+	`, workspace.ID).Scan(
+		&boundAgentID, &storedSuccess, &storedFullReview, &storedApplied,
+		&storedNextDue, &storedFailures, &storedChangeVersion,
+		&storedChangeCursorVersion, &storedStaticScanCursors, &storedStaticCycleSeen,
+	); err != nil || uuidToString(boundAgentID) != uuidToString(newSupervisor.ID) {
+		t.Fatalf("bound supervisor = %s, %v; want %s", uuidToString(boundAgentID), err, uuidToString(newSupervisor.ID))
+	}
+	for name, got := range map[string]time.Time{
+		"last_success_at":            storedSuccess,
+		"last_full_review_at":        storedFullReview,
+		"last_applied_scheduled_for": storedApplied,
+	} {
+		if got.Sub(watermark) > time.Second || watermark.Sub(got) > time.Second {
+			t.Fatalf("rebound %s = %s, want preserved %s", name, got, watermark)
+		}
+	}
+	if storedChangeVersion != 42 || storedChangeCursorVersion != 37 ||
+		!storedStaticScanCursors || !storedStaticCycleSeen {
+		t.Fatalf("rebound scan state = version:%d cursor:%d static:%t cycle:%t; want preserved",
+			storedChangeVersion, storedChangeCursorVersion, storedStaticScanCursors, storedStaticCycleSeen)
+	}
+	if storedNextDue.Before(repairStarted.Add(-time.Second)) || storedNextDue.After(time.Now().Add(time.Second)) || storedFailures != 0 {
+		t.Fatalf("rebound workspace recovery = next:%s failures:%d; want immediate/0", storedNextDue, storedFailures)
+	}
+	storedRun, err := q.GetAgentRadarRun(ctx, run.ID)
+	if err != nil || storedRun.Status != "cancelled" {
+		t.Fatalf("old Radar run = %+v, %v; want cancelled", storedRun, err)
+	}
+	storedRadarTask, err := q.GetAgentTask(ctx, radarTask.ID)
+	if err != nil || storedRadarTask.Status != "cancelled" {
+		t.Fatalf("old Radar task = %+v, %v; want cancelled", storedRadarTask, err)
+	}
+	ordinaryTask, err = q.GetAgentTask(ctx, ordinaryTask.ID)
+	if err != nil || ordinaryTask.Status != "queued" {
+		t.Fatalf("ordinary task = %+v, %v; want queued", ordinaryTask, err)
+	}
+}
+
+func TestEnsureWindyPreservesAuthorizedSupervisorAcrossWorkspaceOwners(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	q := db.New(testPool)
+	suffix := uuid.NewString()
+	workspace, err := q.CreateWorkspace(ctx, db.CreateWorkspaceParams{
+		Name: "radar-stable-" + suffix, Slug: "radar-stable-" + suffix, IssuePrefix: "RST",
+	})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	ownerIDs := make([]pgtype.UUID, 2)
+	for i := range ownerIDs {
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO "user" (name, email)
+			VALUES ($1, $2)
+			RETURNING id
+		`, fmt.Sprintf("stable-owner-%d-%s", i, suffix), fmt.Sprintf("stable-owner-%d-%s@example.test", i, suffix)).Scan(&ownerIDs[i]); err != nil {
+			t.Fatalf("create owner %d: %v", i, err)
+		}
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')
+		`, workspace.ID, ownerIDs[i]); err != nil {
+			t.Fatalf("create owner %d membership: %v", i, err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspace.ID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = ANY($1::uuid[])`, ownerIDs)
+	})
+	var runtimeID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+		  workspace_id, daemon_id, name, runtime_mode, provider, status,
+		  device_info, metadata, visibility, last_seen_at
+		) VALUES ($1, $2, 'stable-runtime', 'cloud', 'daytona', 'online',
+		  '', '{}'::jsonb, 'private', now())
+		RETURNING id
+	`, workspace.ID, "stable-daemon-"+suffix).Scan(&runtimeID); err != nil {
+		t.Fatalf("create runtime: %v", err)
+	}
+	createWendy := func(index int) db.Agent {
+		t.Helper()
+		agent, err := q.CreateAgent(ctx, db.CreateAgentParams{
+			WorkspaceID: workspace.ID, Name: fmt.Sprintf("stable-wendy-%d-%s", index, suffix), DisplayName: "Wendy",
+			Description: "workspace supervisor", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
+			RuntimeID: runtimeID, Visibility: "private", MaxConcurrentTasks: 1, OwnerID: ownerIDs[index],
+			Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
+		})
+		if err != nil {
+			t.Fatalf("create Wendy %d: %v", index, err)
+		}
+		return agent
+	}
+	first := createWendy(0)
+	createWendy(1)
+	ensureForOwner := func(ownerID pgtype.UUID) {
+		t.Helper()
+		req := newRequestAs(uuidToString(ownerID), http.MethodPost, "/api/agents/windy?runtime_id="+uuidToString(runtimeID), nil)
+		req.Header.Set("X-Workspace-ID", uuidToString(workspace.ID))
+		response := httptest.NewRecorder()
+		testHandler.EnsureWindy(response, req)
+		if response.Code != http.StatusOK {
+			t.Fatalf("EnsureWindy owner %s status = %d: %s", uuidToString(ownerID), response.Code, response.Body.String())
+		}
+	}
+	ensureForOwner(ownerIDs[0])
+	run, task, err := testHandler.TaskService.EnqueueAgentRadarRun(ctx, service.EnqueueAgentRadarRunParams{
+		WorkspaceID: workspace.ID, AgentID: first.ID, TriggerKind: "scheduled",
+		TriggerRef: "stable-binding", CooldownKey: "workspace_supervisor_radar",
+		ContextSummary: "preserve current supervisor", ScheduledFor: time.Now(), Prompt: "inspect workspace",
+	})
+	if err != nil {
+		t.Fatalf("enqueue first owner Radar: %v", err)
+	}
+	watermark := time.Now().Add(-time.Hour).UTC()
+	nextDue := time.Now().Add(time.Hour).UTC()
+	if _, err := testPool.Exec(ctx, `
+		UPDATE workspace_radar_state
+		SET last_success_at = $2, last_full_review_at = $2,
+		    last_applied_scheduled_for = $2, next_due_at = $3,
+		    consecutive_failures = 3
+		WHERE workspace_id = $1
+	`, workspace.ID, watermark, nextDue); err != nil {
+		t.Fatalf("seed current supervisor state: %v", err)
+	}
+
+	ensureForOwner(ownerIDs[1])
+	var boundAgentID pgtype.UUID
+	var storedNextDue, storedWatermark time.Time
+	var failures int
+	if err := testPool.QueryRow(ctx, `
+		SELECT supervisor_agent_id, next_due_at, last_applied_scheduled_for, consecutive_failures
+		FROM workspace_radar_state WHERE workspace_id = $1
+	`, workspace.ID).Scan(&boundAgentID, &storedNextDue, &storedWatermark, &failures); err != nil {
+		t.Fatalf("load preserved supervisor state: %v", err)
+	}
+	if uuidToString(boundAgentID) != uuidToString(first.ID) {
+		t.Fatalf("bound supervisor = %s, want first owner Wendy %s", uuidToString(boundAgentID), uuidToString(first.ID))
+	}
+	if storedNextDue.Sub(nextDue) > time.Second || nextDue.Sub(storedNextDue) > time.Second ||
+		storedWatermark.Sub(watermark) > time.Second || watermark.Sub(storedWatermark) > time.Second || failures != 3 {
+		t.Fatalf("preserved state = next:%s watermark:%s failures:%d", storedNextDue, storedWatermark, failures)
+	}
+	storedRun, err := q.GetAgentRadarRun(ctx, run.ID)
+	if err != nil || storedRun.Status != "queued" {
+		t.Fatalf("first owner Radar run = %+v, %v; want queued", storedRun, err)
+	}
+	storedTask, err := q.GetAgentTask(ctx, task.ID)
+	if err != nil || storedTask.Status != "queued" {
+		t.Fatalf("first owner Radar task = %+v, %v; want queued", storedTask, err)
+	}
+}
 
 func TestEnsureWindyRestoresArchivedWendyInsteadOfCreatingDuplicate(t *testing.T) {
 	if testHandler == nil {

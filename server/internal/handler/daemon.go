@@ -2242,10 +2242,18 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, _ := json.Marshal(req)
-	task, err := h.TaskService.CompleteTask(r.Context(), parseUUID(taskID), result, req.SessionID, req.WorkDir)
+	completion, err := h.TaskService.CompleteDaemonTask(r.Context(), parseUUID(taskID), result, req.SessionID, req.WorkDir)
 	if err != nil {
 		slog.Warn("complete task failed", "task_id", taskID, "error", err)
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	task := &completion.Task
+	if !completion.CompletedNow {
+		// A retried or late completion has no authority to replay handler side
+		// effects. In particular, it must not execute a different Radar output
+		// after the task was cancelled, failed, or already completed.
+		writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 		return
 	}
 
@@ -2284,42 +2292,64 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	)
 	h.recordTaskVisibleOutputActivity(r.Context(), parseUUID(workspaceID), *task, req)
 
-	h.handleCompletedAgentRadarTask(r.Context(), *task, req.Output)
+	h.handleClaimedAgentRadarTask(r.Context(), *task, completion.RadarRun)
 
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
-func (h *Handler) handleCompletedAgentRadarTask(ctx context.Context, task db.AgentTaskQueue, output string) {
-	if len(task.Context) == 0 {
+func (h *Handler) handleClaimedAgentRadarTask(ctx context.Context, task db.AgentTaskQueue, run *db.AgentRadarRun) {
+	if run == nil {
 		return
+	}
+	if err := h.ReplayCompletedAgentRadarTask(ctx, task, *run); err != nil {
+		slog.Warn("agent radar action execution failed", "run_id", uuidToString(run.ID), "error", err)
+	}
+}
+
+// ReplayCompletedAgentRadarTask executes a claimed Radar run exclusively from
+// the durable task.Result payload. The scheduler calls this after leasing a
+// completed task whose original HTTP completion handler died before applying
+// its action plan; it never invokes the model again.
+func (h *Handler) ReplayCompletedAgentRadarTask(ctx context.Context, task db.AgentTaskQueue, run db.AgentRadarRun) error {
+	if run.Status != "executing" {
+		return fmt.Errorf("radar run is not executing: %s", run.Status)
+	}
+	if task.Status != "completed" || !radarUUIDsMatch(task.ID, run.TaskID) || !radarUUIDsMatch(task.AgentID, run.AgentID) {
+		return errors.New("completed radar task does not match the executing run")
 	}
 	var radarCtx service.AgentRadarContext
-	if json.Unmarshal(task.Context, &radarCtx) != nil || radarCtx.Type != service.AgentRadarContextType {
-		return
+	if err := json.Unmarshal(task.Context, &radarCtx); err != nil || radarCtx.Type != service.AgentRadarContextType || radarCtx.RadarRunID != uuidToString(run.ID) {
+		return errors.New("completed task has an invalid radar run context")
 	}
-	runID, ok := parseUUIDMaybe(radarCtx.RadarRunID)
-	if !ok {
-		return
-	}
-	run, err := h.Queries.GetAgentRadarRun(ctx, runID)
-	if err != nil {
-		return
+	var persisted TaskCompleteRequest
+	if err := json.Unmarshal(task.Result, &persisted); err != nil {
+		message := "parse persisted task result: " + err.Error()
+		h.failPersistedAgentRadarRun(ctx, run.ID, message)
+		return errors.New(message)
 	}
 	agent, err := h.Queries.GetAgent(ctx, task.AgentID)
 	if err != nil {
-		return
+		return fmt.Errorf("load radar agent: %w", err)
 	}
-	plan, err := radar.ParseActionPlan(output)
+	plan, err := radar.ParseActionPlan(persisted.Output)
 	if err != nil {
-		_, _ = h.Queries.UpdateAgentRadarRunStatus(ctx, db.UpdateAgentRadarRunStatusParams{
-			ID:     run.ID,
-			Status: "failed",
-			Error:  pgtype.Text{String: "parse action plan: " + err.Error(), Valid: true},
-		})
-		return
+		message := "parse action plan: " + err.Error()
+		h.failPersistedAgentRadarRun(ctx, run.ID, message)
+		return errors.New(message)
 	}
 	if err := h.ExecuteAgentRadarPlan(ctx, run, agent, plan); err != nil {
-		slog.Warn("agent radar action execution failed", "run_id", radarCtx.RadarRunID, "error", err)
+		return err
+	}
+	return nil
+}
+
+func (h *Handler) failPersistedAgentRadarRun(ctx context.Context, runID pgtype.UUID, message string) {
+	if _, updateErr := h.Queries.UpdateAgentRadarRunStatus(ctx, db.UpdateAgentRadarRunStatusParams{
+		ID:     runID,
+		Status: "failed",
+		Error:  pgtype.Text{String: message, Valid: true},
+	}); updateErr == nil {
+		_, _ = h.Queries.MarkWorkspaceRadarFailedByRunID(ctx, runID)
 	}
 }
 

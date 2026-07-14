@@ -384,7 +384,7 @@ var (
 	codebuddyHelpStore = map[string]codebuddyHelpEntry{}
 )
 
-const codebuddyHelpTTL = 60 * time.Second
+const codebuddyHelpTTL = 10 * time.Minute
 
 type codebuddyHelpEntry struct {
 	output    string

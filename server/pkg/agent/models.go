@@ -64,8 +64,8 @@ type ThinkingLevel struct {
 	Description string `json:"description,omitempty"`
 }
 
-// modelCache memoizes dynamic discovery calls so repeated UI loads
-// don't re-shell the agent CLI. Entries expire after cacheTTL.
+// modelCache memoizes dynamic discovery calls so repeated UI loads and chat
+// runs don't re-shell slow agent CLIs. Entries expire after modelCacheTTL.
 type modelCacheEntry struct {
 	models    []Model
 	expiresAt time.Time
@@ -76,7 +76,7 @@ var (
 	modelCache   = map[string]modelCacheEntry{}
 )
 
-const modelCacheTTL = 60 * time.Second
+const modelCacheTTL = 10 * time.Minute
 
 // ListModels returns the models supported by the given agent provider.
 // For providers with a known static catalog it returns the baked-in

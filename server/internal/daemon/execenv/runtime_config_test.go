@@ -293,7 +293,7 @@ func TestAssignmentTriggeredProtocolHonorsAgentIdentity(t *testing.T) {
 	}
 }
 
-func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
+func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
 		ChatSessionID: "chat-1",
@@ -315,23 +315,30 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 		"## Chat Mode",
 		"task-scoped Multica CLI transport",
 		"Context boundaries:",
-		"progressively load exact flags",
+		"Common chat command forms are listed here so you can use them directly",
+		"Do NOT run `multica message send --help`",
 		"Common capability index",
 		"Chat output: use `multica message send --target <target>`",
 		"explicit Raft-style target",
 		"#channel:<threadId>",
 		"dm:@handle:<threadId>",
+		"--message \"short text\"",
 		"--message-stdin",
-		"--sticker",
+		"--message-file <path>",
+		"--sticker <id>",
+		"Common sticker fast path",
+		"greeting `hi`",
+		"multica sticker search <query>",
+		"do not list the whole sticker catalog",
 		"Freshness holds:",
 		"Message held by freshness check",
 		"`heldMessages`",
 		"multica message send --send-draft --target <target>",
 		"normal `multica message send --target <target> ...` with revised content",
 		"overwrites the saved draft",
-		"multica message react",
-		"multica message read",
-		"multica message search",
+		"multica message react --message-id <id>",
+		"multica message read [--target ...] [--limit N] --output json",
+		"multica message search \"query\" [--target ...] --output json",
 		"Issues/comments: `multica issue list|get|search|comment ...`",
 		"issue list --mine --output json",
 		"must not self-approve `in_review -> done`",
@@ -352,6 +359,8 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 	}
 
 	for _, banned := range []string{
+		"progressively load exact flags",
+		"run the relevant help command before low-frequency or destructive operations",
 		"## Comment Formatting",
 		"## Issue Metadata",
 		"## Sub-issue Creation",

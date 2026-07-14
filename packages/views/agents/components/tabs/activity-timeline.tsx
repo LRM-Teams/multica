@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, Copy } from "lucide-react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
@@ -54,58 +54,6 @@ function ToolTargetPath({ value }: { value: string }) {
   );
 }
 
-// A command row (#404): the `Running command` label + the real command render as
-// ONE full-width hanging block. The label opens the first line; the command
-// follows and WRAPS to the full content-column width — its wrapped lines align to
-// the block's left edge (hanging), not squished into the narrow column right of
-// the label (which left a big empty gap, Frank's "空位"). Two lines then ellipsis
-// (raft parity); full redacted command on hover (`title`) + copy. The compact
-// Profile Recent surface stays non-interactive (title only, no copy).
-function CommandRow({
-  label,
-  inline,
-  full,
-  compact,
-}: {
-  label: string;
-  inline: string;
-  full?: string;
-  compact: boolean;
-}) {
-  const { t } = useT("agents");
-  const [copied, setCopied] = useState(false);
-  const complete = full ?? inline;
-  const handleCopy = async () => {
-    if (await copyText(complete)) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-  return (
-    <div className="group/cmd relative min-w-0 flex-1">
-      <div
-        title={complete}
-        className="line-clamp-2 break-all pr-5 text-sm leading-[1.45] text-foreground"
-      >
-        <span>{label} </span>
-        <span className="font-mono text-xs text-muted-foreground">{inline}</span>
-      </div>
-      {!compact && (
-        <button
-          type="button"
-          onClick={handleCopy}
-          aria-label={t(($) =>
-            copied ? $.tab_body.activity.command_copied : $.tab_body.activity.copy_command,
-          )}
-          className="absolute right-0 top-0 text-muted-foreground/50 opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/cmd:opacity-100"
-        >
-          {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-        </button>
-      )}
-    </div>
-  );
-}
-
 function ActivityRow({
   event,
   time,
@@ -116,7 +64,10 @@ function ActivityRow({
   compact?: boolean;
 }) {
   const { t } = useT("agents");
+  // Per-row expand — shared by thinking/text (§2.1) and command rows (entries[].command).
+  // Branches are mutually exclusive so one boolean is enough.
   const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
   const presentation = activityPresentation(event);
   const rawLabel = t(($) => $.tab_body.activity.labels[presentation.labelKey]);
   // Locale values are base form (no ellipsis). The trailing "…" is raft's
@@ -137,10 +88,24 @@ function ActivityRow({
     !!subtext &&
     !presentation.subtextKey &&
     (event.activity_kind === "thinking" || event.activity_kind === "text");
+
+  // Command rows: BE already redacts (`sk_agent_<redacted>`); FE shows
+  // `entries[].command` via presentation.subtextFull / subtext verbatim.
+  const isCommand = presentation.subtextKind === "command" && !!subtext;
+  const commandFull = presentation.subtextFull ?? subtext ?? "";
+  const canExpandCommand = isCommand && !compact;
+
+  const handleCopyCommand = async () => {
+    if (await copyText(commandFull)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
   // Route the non-command tool subtext by its kind (#v0 照实显示): a file tool's
   // target is a PATH (basename-preserving middle-ellipsis, #484/#385); everything
-  // else is a plain truncate. The COMMAND kind is handled by `CommandRow` in the
-  // render below (its own full-width hanging layout, #404).
+  // else is a plain truncate. COMMAND kind is handled inline below (ActivityRow
+  // expand state — no separate component).
   const subtextNode = subtext ? (
     presentation.subtextKind === "path" ? (
       <ToolTargetPath value={subtext} />
@@ -148,6 +113,11 @@ function ActivityRow({
       <span className="truncate text-xs text-muted-foreground">{subtext}</span>
     )
   ) : null;
+
+  const copyLabel = t(($) =>
+    copied ? $.tab_body.activity.command_copied : $.tab_body.activity.copy_command,
+  );
+
   return (
     <div
       className={cn("flex items-baseline gap-3", compact ? "py-0.5" : "py-1")}
@@ -178,14 +148,60 @@ function ActivityRow({
             </button>
           )}
         </div>
-      ) : presentation.subtextKind === "command" && subtext ? (
-        // Command: label + command as one full-width hanging block (#404).
-        <CommandRow
-          label={label}
-          inline={subtext}
-          full={presentation.subtextFull}
-          compact={compact}
-        />
+      ) : canExpandCommand ? (
+        // Command row: label + command as ONE full-width hanging block (#404).
+        // Collapsed = line-clamp-2 tail truncate. Click main row or caret →
+        // drop clamp, pre-wrap + break-all full command (entries[].command),
+        // caret flips; small 「复制」 when open. In-place text only — no card.
+        <div className="relative min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+            className="flex w-full items-start gap-1.5 text-left"
+          >
+            <span
+              className={cn(
+                "min-w-0 flex-1 text-sm leading-[1.45] text-foreground",
+                expanded ? "break-all whitespace-pre-wrap" : "line-clamp-2 break-all",
+              )}
+            >
+              <span>{label} </span>
+              <span className="font-mono text-xs text-muted-foreground">
+                {expanded ? commandFull : subtext}
+              </span>
+            </span>
+            {expanded ? (
+              <ChevronUp
+                className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/70"
+                aria-hidden
+              />
+            ) : (
+              <ChevronDown
+                className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/70"
+                aria-hidden
+              />
+            )}
+          </button>
+          {expanded && (
+            <button
+              type="button"
+              onClick={handleCopyCommand}
+              aria-label={copyLabel}
+              className="absolute right-5 top-0 text-[11px] leading-none text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {copyLabel}
+            </button>
+          )}
+        </div>
+      ) : isCommand && compact ? (
+        // Compact Profile Recent: clamp + no expand / copy (title-only).
+        <div className="min-w-0 flex-1">
+          <div className="line-clamp-2 break-all text-sm leading-[1.45] text-foreground">
+            <span>{label} </span>
+            <span className="font-mono text-xs text-muted-foreground">{subtext}</span>
+          </div>
+        </div>
       ) : (
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="shrink-0 text-sm text-foreground">{label}</span>

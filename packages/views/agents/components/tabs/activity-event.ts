@@ -255,7 +255,8 @@ function fullCommand(event: ActivityEvent): string | undefined {
 // DOM-size safety bound for the inline command string. The VISUAL truncation is
 // CSS `line-clamp-2` (raft-parity two-line preview + trailing ellipsis, #404);
 // this cap just keeps a pathologically long command out of the DOM text node.
-// The full redacted command always stays reachable via hover/copy (`subtextFull`).
+// The full redacted command always stays reachable via click-to-expand + copy
+// (`subtextFull` from `entries[].command`).
 const COMMAND_INLINE_CAP = 500;
 
 function toolPresentation(event: ActivityEvent): ActivityPresentation {
@@ -264,11 +265,11 @@ function toolPresentation(event: ActivityEvent): ActivityPresentation {
   // (`send_message`, …) — is shown FAITHFULLY as "Running command · <command>",
   // never a product-invented label ("Sending message"). The redacted CLI lives in
   // `entries[].command`; its presence is the signal that this row is a command.
-  // Main row = the command wrapped to two lines (CSS line-clamp), full command +
-  // copy on hover. The dot is raft's amber `running` tone — type-based, so a
-  // settled command still reads as a command, never a grey idle row (#404).
-  // Native structured tools (read_file/glob/grep) carry no command and keep their
-  // real label + real object below.
+  // Main row = the command wrapped to two lines (CSS line-clamp); click expands
+  // to pin the full redacted command + Copy. The dot is raft's amber `running`
+  // tone — type-based, so a settled command still reads as a command, never a
+  // grey idle row (#404). Native structured tools (read_file/glob/grep) carry
+  // no command and keep their real label + real object below.
   const command = fullCommand(event);
   if (command) {
     return {

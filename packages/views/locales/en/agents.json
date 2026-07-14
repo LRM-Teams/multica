@@ -391,7 +391,7 @@
         "compaction_finished": "Compaction finished",
         "subagent_activity": "Subagent activity"
       },
-      "copy_command": "Copy command",
+      "copy_command": "Copy",
       "command_copied": "Copied",
       "view_diagnostics": "View diagnostic details",
       "hide_diagnostics": "Hide diagnostic details",

@@ -19,7 +19,7 @@ vi.mock("../../../i18n", () => ({
             timeline_empty: "No activity yet",
             view_diagnostics: "View diagnostic details",
             hide_diagnostics: "Hide diagnostic details",
-            copy_command: "Copy command",
+            copy_command: "Copy",
             command_copied: "Copied",
             labels: {
               thinking: "Thinking",
@@ -254,7 +254,8 @@ describe("ActivityTimeline", () => {
     expect(screen.queryByText("Reply 0")).toBeNull();
   });
 
-  it("renders a shell command as a plain clip + full command on hover/copy (not path-mangled) (#v0)", () => {
+  it("renders a shell command as a full-width hanging block (not path-mangled) (#v0/#404)", () => {
+    const full = 'cd /a/b && multica send --target "#c"';
     const CMD: ActivityEvent = {
       id: "cmd1",
       agent_id: "agent-1",
@@ -264,30 +265,7 @@ describe("ActivityTimeline", () => {
       tool: "bash",
       tool_target: "cd /a/b && multica send…",
       status: "completed",
-      entries: [{ kind: "tool_call", tool: "bash", command: 'cd /a/b && multica send --target "#c"' }],
-      target_ref: { kind: "agent", id: "agent-1" },
-    };
-    render(<ActivityTimeline events={[CMD]} />);
-    expect(screen.getByText("Running command")).toBeInTheDocument();
-    // The command renders as ONE plain node (never split into path head/tail — a
-    // command containing `/` must not get the path middle-ellipsis), showing the
-    // real command from `entries[].command`, with the full command on hover.
-    expect(screen.getByText('cd /a/b && multica send --target "#c"')).toBeInTheDocument();
-    expect(screen.getByTitle('cd /a/b && multica send --target "#c"')).toBeInTheDocument();
-    // Copy affordance present on the full (non-compact) row.
-    expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
-  });
-
-  it("renders a command as a full-width hanging block (label + command in one two-line node) with static dots (#404)", () => {
-    const CMD: ActivityEvent = {
-      id: "cmd3",
-      agent_id: "agent-1",
-      occurred_at: "2026-07-06T09:36:05Z",
-      activity_kind: "tool_call",
-      detail_kind: "tool_use",
-      tool: "bash",
-      status: "completed",
-      entries: [{ kind: "tool_call", tool: "bash", command: "cd /a/b && ls -la /some/long/path" }],
+      entries: [{ kind: "tool_call", tool: "bash", command: full }],
       target_ref: { kind: "agent", id: "agent-1" },
     };
     // An actively-running non-command tool — its dot must NOT pulse either (#404).
@@ -303,16 +281,57 @@ describe("ActivityTimeline", () => {
       target_ref: { kind: "agent", id: "agent-1" },
     };
     const { container } = render(<ActivityTimeline events={[CMD, READ_RUNNING]} />);
-    // Label + command live in ONE full-width, two-line-clamped block — the command
-    // is no longer squished into the narrow column right of the label (Frank's 空位).
-    const block = screen.getByText("cd /a/b && ls -la /some/long/path").closest("div");
-    expect(block?.className).toContain("line-clamp-2");
-    expect(block?.textContent).toContain("Running command");
-    // No dot pulses anywhere — all static (#404: live-ness comes from header/#521).
+    expect(screen.getByText("Running command")).toBeInTheDocument();
+    // Command is one plain node (never path head/tail); full entries[].command.
+    expect(screen.getByText(full)).toBeInTheDocument();
+    // Collapsed: line-clamp-2 on the text span inside the expand control.
+    const toggle = screen.getByRole("button", { expanded: false });
+    const clamped = toggle.querySelector(".line-clamp-2");
+    expect(clamped).not.toBeNull();
+    expect(clamped?.textContent).toContain("Running command");
+    expect(clamped?.textContent).toContain(full);
+    // Copy is expanded-only — not present while collapsed.
+    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
+    // No dot pulses — all static (#404).
     expect(container.querySelector(".animate-pulse")).toBeNull();
   });
 
-  it("compact mode drops the command copy affordance (title-only, non-interactive) (#v0)", () => {
+  it("click expands a command row in place: drop clamp, full width, caret flips, Copy", () => {
+    const full =
+      'multica message send --message \'能看到，截图里是我的状态显示"Idle"\' --output text';
+    const CMD: ActivityEvent = {
+      id: "cmd-expand",
+      agent_id: "agent-1",
+      occurred_at: "2026-07-06T09:36:05Z",
+      activity_kind: "tool_call",
+      detail_kind: "tool_use",
+      tool: "bash",
+      status: "completed",
+      entries: [{ kind: "tool_call", tool: "bash", command: full }],
+      target_ref: { kind: "agent", id: "agent-1" },
+    };
+    render(<ActivityTimeline events={[CMD]} />);
+    const toggle = screen.getByRole("button", { expanded: false });
+    expect(toggle.querySelector(".line-clamp-2")).not.toBeNull();
+    fireEvent.click(toggle);
+
+    const open = screen.getByRole("button", { expanded: true });
+    const body = open.querySelector(".whitespace-pre-wrap.break-all");
+    expect(body).not.toBeNull();
+    expect(body?.className).not.toContain("line-clamp-2");
+    expect(body).toHaveTextContent(full);
+    // Expanded-only small 「Copy」control.
+    expect(screen.getByRole("button", { name: "Copy" })).toHaveTextContent("Copy");
+
+    // Collapse again.
+    fireEvent.click(open);
+    expect(
+      screen.getByRole("button", { expanded: false }).querySelector(".line-clamp-2"),
+    ).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
+  });
+
+  it("compact mode drops the command expand/copy affordance (title-only, non-interactive) (#v0)", () => {
     const CMD: ActivityEvent = {
       id: "cmd2",
       agent_id: "agent-1",

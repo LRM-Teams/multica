@@ -316,7 +316,7 @@ describe("ActivityTimeline", () => {
     fireEvent.click(toggle);
 
     const open = screen.getByRole("button", { expanded: true });
-    const body = open.querySelector(".whitespace-pre-wrap.break-all");
+    const body = open.querySelector(".whitespace-pre-wrap.break-words");
     expect(body).not.toBeNull();
     expect(body?.className).not.toContain("line-clamp-2");
     expect(body).toHaveTextContent(full);

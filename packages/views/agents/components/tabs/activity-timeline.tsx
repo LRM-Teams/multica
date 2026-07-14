@@ -151,8 +151,11 @@ function ActivityRow({
       ) : canExpandCommand ? (
         // Command row: label + command as ONE full-width hanging block (#404).
         // Collapsed = line-clamp-2 tail truncate. Click main row or caret →
-        // drop clamp, pre-wrap + break-all full command (entries[].command),
+        // drop clamp, pre-wrap + break-words full command (entries[].command),
         // caret flips; small 「复制」 when open. In-place text only — no card.
+        // `break-words` (not `break-all`): wrap on whitespace / word boundaries and
+        // only split a token that truly can't fit, so `git fetch` never reads as
+        // `git fetc\nh` (Frank: 展开态按空格断行 / 保留命令行结构, 不字符级硬折).
         <div className="relative min-w-0 flex-1">
           <button
             type="button"
@@ -163,7 +166,7 @@ function ActivityRow({
             <span
               className={cn(
                 "min-w-0 flex-1 text-sm leading-[1.45] text-foreground",
-                expanded ? "break-all whitespace-pre-wrap" : "line-clamp-2 break-all",
+                expanded ? "break-words whitespace-pre-wrap" : "line-clamp-2 break-words",
               )}
             >
               <span>{label} </span>
@@ -197,7 +200,7 @@ function ActivityRow({
       ) : isCommand && compact ? (
         // Compact Profile Recent: clamp + no expand / copy (title-only).
         <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 break-all text-sm leading-[1.45] text-foreground">
+          <div className="line-clamp-2 break-words text-sm leading-[1.45] text-foreground">
             <span>{label} </span>
             <span className="font-mono text-xs text-muted-foreground">{subtext}</span>
           </div>

@@ -2529,6 +2529,24 @@ func (h *Handler) setChannelThreadReadOrFollow(w http.ResponseWriter, r *http.Re
 	if _, ok := h.loadChannelThreadRoot(w, r.Context(), workspaceID, channelID, rootID); !ok {
 		return
 	}
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	if actorType == "agent" {
+		agentID := parseUUID(actorID)
+		if !h.requireChannelAgentMember(w, r.Context(), workspaceID, channelID, agentID) {
+			return
+		}
+		if followed {
+			h.followChannelThreadAgent(r.Context(), channelID, rootID, agentID)
+		} else {
+			if err := h.unfollowChannelThreadAgent(r.Context(), channelID, rootID, agentID); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to unfollow channel thread")
+				return
+			}
+			h.emitAgentThreadUnfollowedEvent(w, r.Context(), workspaceID, channelID, rootID, agentID)
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
 	if followed {
 		h.followChannelThreadUser(r.Context(), channelID, rootID, parseUUID(userID), markRead)
 	} else {
@@ -2549,8 +2567,8 @@ func (h *Handler) setChannelThreadReadOrFollow(w http.ResponseWriter, r *http.Re
 			return
 		}
 
-		// #329: emit a system message when a thread is unfollowed.
-		h.emitThreadUnfollowedEvent(w, r.Context(), workspaceID, channelID, rootID, userID)
+		// Human thread unfollow is currently a private UI state change. #329's
+		// system event is only for agent-initiated explicit unfollow.
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -2684,6 +2702,23 @@ func (h *Handler) ensureChannelThreadAgentWakeParticipant(ctx context.Context, c
 		channelID, rootID, agentID); err != nil {
 		slog.Warn("channel thread agent wake participant failed", "root", uuidToString(rootID), "agent", uuidToString(agentID), "error", err)
 	}
+}
+
+func (h *Handler) unfollowChannelThreadAgent(ctx context.Context, channelID, rootID, agentID pgtype.UUID) error {
+	_, err := h.DB.Exec(ctx, `
+		UPDATE thread_participant
+		SET followed_at = NULL, wake_state = 'no_wake', updated_at = now()
+		WHERE root_message_id = $1
+		  AND member_type = 'agent'
+		  AND member_id = $2
+		  AND EXISTS (
+		    SELECT 1 FROM channel_message
+		    WHERE id = $1 AND channel_id = $3
+		  )`, rootID, agentID, channelID)
+	if err != nil {
+		slog.Warn("channel thread agent unfollow failed", "root", uuidToString(rootID), "agent", uuidToString(agentID), "error", err)
+	}
+	return err
 }
 
 func (h *Handler) followChannelThreadMentionedUsers(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse) {
@@ -4792,6 +4827,18 @@ func (h *Handler) requireChannelUserMember(w http.ResponseWriter, ctx context.Co
 		return false
 	}
 	if !h.channelUserIsMember(ctx, workspaceID, channelID, userID) {
+		writeError(w, http.StatusForbidden, "not a channel member")
+		return false
+	}
+	return true
+}
+
+func (h *Handler) requireChannelAgentMember(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID, agentID pgtype.UUID) bool {
+	if !h.channelExists(ctx, workspaceID, channelID) {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return false
+	}
+	if !h.channelHasAgentMember(ctx, parseUUID(workspaceID), channelID, agentID) {
 		writeError(w, http.StatusForbidden, "not a channel member")
 		return false
 	}

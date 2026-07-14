@@ -15,7 +15,8 @@ CREATE TABLE work_node (
   last_wendy_nudge_at TIMESTAMPTZ,
   last_wendy_nudge_kind TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, id)
 );
 
 CREATE UNIQUE INDEX work_node_issue_uidx
@@ -25,14 +26,18 @@ CREATE UNIQUE INDEX work_node_issue_uidx
 CREATE TABLE work_edge (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
-  from_node_id UUID NOT NULL REFERENCES work_node(id) ON DELETE CASCADE,
-  to_node_id UUID NOT NULL REFERENCES work_node(id) ON DELETE CASCADE,
+  from_node_id UUID NOT NULL,
+  to_node_id UUID NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('waits_on', 'blocked_by', 'rework_of')),
   status TEXT NOT NULL CHECK (status IN ('open', 'resolved')),
   evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK (from_node_id <> to_node_id)
+  CHECK (from_node_id <> to_node_id),
+  FOREIGN KEY (workspace_id, from_node_id)
+    REFERENCES work_node(workspace_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (workspace_id, to_node_id)
+    REFERENCES work_node(workspace_id, id) ON DELETE CASCADE
 );
 
 CREATE UNIQUE INDEX work_edge_open_uidx
@@ -65,5 +70,5 @@ CREATE UNIQUE INDEX pending_handoff_active_dedupe_uidx
   WHERE status IN ('pending', 'claimed');
 
 CREATE INDEX pending_handoff_due_idx
-  ON pending_handoff (status, urgency, not_before)
+  ON pending_handoff (urgency, reason_code, not_before, created_at)
   WHERE status = 'pending';

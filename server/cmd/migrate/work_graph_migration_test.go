@@ -104,6 +104,30 @@ func TestWorkGraphMigrationUpSeedDown(t *testing.T) {
 	`, workspaceID, secondNodeID, firstNodeID); err != nil {
 		t.Fatalf("seed open waits_on edge: %v", err)
 	}
+	var otherWorkspaceID, otherIssueID, otherNodeID string
+	if err := conn.QueryRow(ctx, `INSERT INTO workspace DEFAULT VALUES RETURNING id`).Scan(&otherWorkspaceID); err != nil {
+		t.Fatalf("seed other workspace: %v", err)
+	}
+	if err := conn.QueryRow(ctx, `INSERT INTO issue (workspace_id) VALUES ($1) RETURNING id`, otherWorkspaceID).Scan(&otherIssueID); err != nil {
+		t.Fatalf("seed other issue: %v", err)
+	}
+	if err := conn.QueryRow(ctx, `
+		INSERT INTO work_node (workspace_id, kind, title, owner_type, status, linked_issue_id)
+		VALUES ($1, 'issue', 'Other issue', 'unassigned', 'active', $2)
+		RETURNING id
+	`, otherWorkspaceID, otherIssueID).Scan(&otherNodeID); err != nil {
+		t.Fatalf("seed other work node: %v", err)
+	}
+	_, err = conn.Exec(ctx, `
+		INSERT INTO work_edge (workspace_id, from_node_id, to_node_id, kind, status)
+		VALUES ($1, $2, $3, 'waits_on', 'open')
+	`, workspaceID, secondNodeID, otherNodeID)
+	if err == nil {
+		t.Fatal("cross-workspace work edge unexpectedly succeeded")
+	}
+	if pgErr, ok := err.(*pgconn.PgError); !ok || pgErr.Code != "23503" {
+		t.Fatalf("cross-workspace work edge error = %v, want foreign-key violation", err)
+	}
 
 	var handoffID string
 	if err := conn.QueryRow(ctx, `
@@ -117,13 +141,14 @@ func TestWorkGraphMigrationUpSeedDown(t *testing.T) {
 
 	rows, err := conn.Query(ctx, `
 		WITH due AS (
-			SELECT id
-			FROM pending_handoff
-			WHERE workspace_id = $1
-			  AND urgency = 'fast'
-			  AND status = 'pending'
-			  AND not_before <= now()
-			ORDER BY not_before, created_at
+			SELECT ph.id
+			FROM pending_handoff ph
+			WHERE ph.workspace_id = $1
+			  AND ph.urgency = 'fast'
+			  AND ph.reason_code = 'unlock'
+			  AND ph.status = 'pending'
+			  AND ph.not_before <= now()
+			ORDER BY ph.not_before, ph.created_at
 			LIMIT 10
 			FOR UPDATE SKIP LOCKED
 		)

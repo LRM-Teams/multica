@@ -266,6 +266,32 @@ func TestGetConfigExposesDevAgentProfileAccess(t *testing.T) {
 	}
 }
 
+func TestGetConfigExposesDevAgentProfileAccessFalse(t *testing.T) {
+	t.Setenv("APP_ENV", "")
+	t.Setenv("ANALYTICS_ENVIRONMENT", "")
+	t.Setenv("MULTICA_DEV_AGENT_PROFILE_ACCESS", "false")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+
+	testHandler.GetConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetConfig: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode config map: %v", err)
+	}
+	got, ok := raw["dev_agent_profile_access_enabled"]
+	if !ok {
+		t.Fatalf("dev_agent_profile_access_enabled: want explicit false, field omitted (body=%s)", w.Body.String())
+	}
+	if got != false {
+		t.Fatalf("dev_agent_profile_access_enabled: want false, got %#v", got)
+	}
+}
+
 func TestDevAgentProfileAccessRequiresExplicitDevEnv(t *testing.T) {
 	t.Setenv("APP_ENV", "")
 	t.Setenv("ANALYTICS_ENVIRONMENT", "")

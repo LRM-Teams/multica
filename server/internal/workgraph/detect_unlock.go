@@ -17,15 +17,22 @@ import (
 // DetectUnlockForNode enqueues an unlock handoff only after all of a waiter
 // node's prerequisites have resolved.
 func (s *Store) DetectUnlockForNode(ctx context.Context, waiterNodeID pgtype.UUID) error {
-	waiter, err := s.queries.GetWorkNodeByID(ctx, waiterNodeID)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("load waiter node: %w", err)
+		return fmt.Errorf("begin unlock detection transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	queries := s.queries.WithTx(tx)
+	waiter, err := loadWorkNodeForUpdate(ctx, tx, waiterNodeID)
+	if err != nil {
+		return fmt.Errorf("lock waiter node: %w", err)
 	}
 	if isTerminalNodeStatus(waiter.Status) {
 		return nil
 	}
 
-	unresolved, err := s.queries.CountOpenUnresolvedWaitsOn(ctx, db.CountOpenUnresolvedWaitsOnParams{
+	unresolved, err := queries.CountOpenUnresolvedWaitsOn(ctx, db.CountOpenUnresolvedWaitsOnParams{
 		WorkspaceID: waiter.WorkspaceID,
 		FromNodeID:  waiter.ID,
 	})
@@ -36,7 +43,7 @@ func (s *Store) DetectUnlockForNode(ctx context.Context, waiterNodeID pgtype.UUI
 		return nil
 	}
 
-	hasWaitsOn, err := s.queries.HasAnyWaitsOnEdge(ctx, db.HasAnyWaitsOnEdgeParams{
+	hasWaitsOn, err := queries.HasAnyWaitsOnEdge(ctx, db.HasAnyWaitsOnEdgeParams{
 		WorkspaceID: waiter.WorkspaceID,
 		FromNodeID:  waiter.ID,
 	})
@@ -54,7 +61,7 @@ func (s *Store) DetectUnlockForNode(ctx context.Context, waiterNodeID pgtype.UUI
 		)
 		return nil
 	}
-	isSupervisor, err := s.isWorkspaceSupervisor(ctx, waiter.WorkspaceID, waiter.OwnerID)
+	isSupervisor, err := isWorkspaceSupervisor(ctx, queries, waiter.WorkspaceID, waiter.OwnerID)
 	if err != nil {
 		return err
 	}
@@ -66,7 +73,7 @@ func (s *Store) DetectUnlockForNode(ctx context.Context, waiterNodeID pgtype.UUI
 		return nil
 	}
 
-	prerequisiteIDs, err := s.queries.ListResolvedWaitsOnPrerequisiteIDs(ctx, db.ListResolvedWaitsOnPrerequisiteIDsParams{
+	prerequisiteIDs, err := queries.ListResolvedWaitsOnPrerequisiteIDs(ctx, db.ListResolvedWaitsOnPrerequisiteIDsParams{
 		WorkspaceID: waiter.WorkspaceID,
 		FromNodeID:  waiter.ID,
 	})
@@ -84,7 +91,7 @@ func (s *Store) DetectUnlockForNode(ctx context.Context, waiterNodeID pgtype.UUI
 	relatedNodeIDs := make([]pgtype.UUID, 0, len(prerequisiteIDs)+1)
 	relatedNodeIDs = append(relatedNodeIDs, waiter.ID)
 	relatedNodeIDs = append(relatedNodeIDs, prerequisiteIDs...)
-	_, err = s.queries.InsertPendingHandoff(ctx, db.InsertPendingHandoffParams{
+	_, err = queries.InsertPendingHandoff(ctx, db.InsertPendingHandoffParams{
 		WorkspaceID:     waiter.WorkspaceID,
 		Urgency:         "fast",
 		ReasonCode:      "unlock",
@@ -102,11 +109,46 @@ func (s *Store) DetectUnlockForNode(ctx context.Context, waiterNodeID pgtype.UUI
 	if err != nil {
 		return fmt.Errorf("insert unlock handoff: %w", err)
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit unlock detection transaction: %w", err)
+	}
 	return nil
 }
 
-func (s *Store) isWorkspaceSupervisor(ctx context.Context, workspaceID, agentID pgtype.UUID) (bool, error) {
-	supervisorID, err := s.queries.GetWorkspaceSupervisorAgentID(ctx, workspaceID)
+func loadWorkNodeForUpdate(ctx context.Context, tx pgx.Tx, nodeID pgtype.UUID) (db.WorkNode, error) {
+	var node db.WorkNode
+	err := tx.QueryRow(ctx, `
+		SELECT id, workspace_id, kind, title, description, owner_type, owner_id,
+		       status, primary_channel_id, linked_issue_id, linked_task_id,
+		       last_progress_at, last_progress_summary, last_wendy_nudge_at,
+		       last_wendy_nudge_kind, created_at, updated_at
+		FROM work_node
+		WHERE id = $1
+		FOR UPDATE
+	`, nodeID).Scan(
+		&node.ID,
+		&node.WorkspaceID,
+		&node.Kind,
+		&node.Title,
+		&node.Description,
+		&node.OwnerType,
+		&node.OwnerID,
+		&node.Status,
+		&node.PrimaryChannelID,
+		&node.LinkedIssueID,
+		&node.LinkedTaskID,
+		&node.LastProgressAt,
+		&node.LastProgressSummary,
+		&node.LastWendyNudgeAt,
+		&node.LastWendyNudgeKind,
+		&node.CreatedAt,
+		&node.UpdatedAt,
+	)
+	return node, err
+}
+
+func isWorkspaceSupervisor(ctx context.Context, queries *db.Queries, workspaceID, agentID pgtype.UUID) (bool, error) {
+	supervisorID, err := queries.GetWorkspaceSupervisorAgentID(ctx, workspaceID)
 	switch {
 	case err == nil:
 		return supervisorID == agentID, nil
@@ -114,7 +156,7 @@ func (s *Store) isWorkspaceSupervisor(ctx context.Context, workspaceID, agentID 
 		return false, fmt.Errorf("load workspace supervisor: %w", err)
 	}
 
-	isNamedSupervisor, err := s.queries.IsWorkspaceWendyAgent(ctx, db.IsWorkspaceWendyAgentParams{
+	isNamedSupervisor, err := queries.IsWorkspaceWendyAgent(ctx, db.IsWorkspaceWendyAgentParams{
 		WorkspaceID: workspaceID,
 		ID:          agentID,
 	})

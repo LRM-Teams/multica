@@ -92,6 +92,53 @@ func TestDetectUnlockSkipsWendyOwner(t *testing.T) {
 	assertPendingUnlockCount(t, ctx, scenario.waiter.WorkspaceID, 0)
 }
 
+func TestDetectUnlockSkipsNodeWithoutWaitsOnEdges(t *testing.T) {
+	ctx := t.Context()
+	workspaceID := pgUUID(uuid.New())
+	agentID := pgUUID(uuid.New())
+	createWorkgraphWorkspace(t, ctx, workspaceID)
+	t.Cleanup(func() {
+		if _, err := testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID); err != nil {
+			t.Errorf("clean up workspace: %v", err)
+		}
+	})
+
+	issue := createWorkgraphIssue(t, ctx, workspaceID, agentID, 1, "Independent issue", "todo")
+	store := NewStore(testPool)
+	node, err := store.SyncIssueNode(ctx, issue)
+	if err != nil {
+		t.Fatalf("sync independent issue: %v", err)
+	}
+
+	if err := store.DetectUnlockForNode(ctx, node.ID); err != nil {
+		t.Fatalf("detect unlock: %v", err)
+	}
+	assertPendingUnlockCount(t, ctx, workspaceID, 0)
+}
+
+func TestDetectUnlockSkipsNonAgentOwner(t *testing.T) {
+	for _, ownerType := range []string{ownerTypeMember, ownerTypeUnassigned} {
+		t.Run(ownerType, func(t *testing.T) {
+			ctx := t.Context()
+			store, scenario := setupUnlockScenario(t, ctx)
+			resolveUnlockPrerequisites(t, ctx, store, scenario.prerequisites)
+			if _, err := testPool.Exec(ctx, `
+				UPDATE work_node
+				SET owner_type = $1,
+				    owner_id = CASE WHEN $1 = 'unassigned' THEN NULL ELSE owner_id END
+				WHERE id = $2
+			`, ownerType, scenario.waiter.ID); err != nil {
+				t.Fatalf("change waiter owner to %s: %v", ownerType, err)
+			}
+
+			if err := store.DetectUnlockForNode(ctx, scenario.waiter.ID); err != nil {
+				t.Fatalf("detect unlock: %v", err)
+			}
+			assertPendingUnlockCount(t, ctx, scenario.waiter.WorkspaceID, 0)
+		})
+	}
+}
+
 type unlockScenario struct {
 	waiter        db.WorkNode
 	prerequisites []db.Issue

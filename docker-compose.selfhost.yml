@@ -201,6 +201,41 @@ services:
       BRIDGE_MAX_BODY_BYTES: ${BRIDGE_MAX_BODY_BYTES:-67108864}
     restart: unless-stopped
 
+  # multica-side executor: drains the env_dispatch / env_dispatch_delete /
+  # env_dispatch_dag tables (enqueued by the AReaL-side stub when AReaL fetches
+  # GET /api/v1/env-dispatch/{projectID}/dag etc.) and forwards each request to
+  # the real multica Go server (the `backend` service), injecting
+  # BRIDGE_MULTICA_UPSTREAM_API_KEY as Bearer and stripping the caller's own
+  # Authorization. This is the areal -> multica half of the bridge (the DAG
+  # fetch path). Same profile + image as the other db-bridge services; runs
+  # run_executor --side multica - a DB-polling worker with NO HTTP listener, so
+  # no ports are published.
+  #
+  # BRIDGE_MULTICA_UPSTREAM_API_KEY MUST be a multica PAT (mul_) the Go server's
+  # auth middleware accepts; unset -> executor injects no Authorization ->
+  # env-dispatch returns 401. BRIDGE_USER_ID should match the AReaL-side stub's
+  # for per-user isolation; the claim SQL is `user_id = $1 OR $1 IS NULL`, so an
+  # unset (NULL) value claims ALL rows in these tables (functional for a
+  # single-user bridge), while a DIFFERENT non-NULL value leaves the stub's
+  # rows unclaimed (areal sees 202 until 504).
+  db-bridge-executor-multica:
+    profiles: ["db-bridge"]
+    image: ${MULTICA_DB_BRIDGE_IMAGE:-ghcr.io/lrm-teams/multica-db-bridge}:${MULTICA_IMAGE_TAG:-latest}
+    command: ["python", "-m", "db_bridge.run_executor", "--side", "multica"]
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      # The multica Go server (the `backend` service) over the compose network.
+      # Loopback 127.0.0.1:8080 would NOT reach it from a separate container.
+      BRIDGE_MULTICA_UPSTREAM_URL: ${BRIDGE_MULTICA_UPSTREAM_URL:-http://backend:8080}
+      # multica PAT (mul_) injected as Authorization: Bearer. Set in
+      # /data/multica/.env; unset -> no auth injected -> env-dispatch 401.
+      BRIDGE_MULTICA_UPSTREAM_API_KEY: ${BRIDGE_MULTICA_UPSTREAM_API_KEY:-}
+      BRIDGE_USER_ID: ${BRIDGE_USER_ID:-}
+      BRIDGE_POLL_INTERVAL: ${BRIDGE_POLL_INTERVAL:-1}
+      BRIDGE_MAX_BODY_BYTES: ${BRIDGE_MAX_BODY_BYTES:-67108864}
+    restart: unless-stopped
+
 volumes:
   pgdata:
   backend_uploads:

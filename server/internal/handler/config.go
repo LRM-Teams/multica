@@ -40,7 +40,7 @@ type AppConfig struct {
 	// DevAgentProfileAccessEnabled opens other agents' side-panel Activity
 	// and Files read surfaces in development environments only. Production
 	// keeps the owner-only profile gate by default.
-	DevAgentProfileAccessEnabled bool `json:"dev_agent_profile_access_enabled,omitempty"`
+	DevAgentProfileAccessEnabled bool `json:"dev_agent_profile_access_enabled"`
 }
 
 // GetConfig is mounted on the public (unauthenticated) route group because

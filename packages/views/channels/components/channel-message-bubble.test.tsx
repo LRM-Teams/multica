@@ -1115,9 +1115,13 @@ describe("ChannelMessageBubble", () => {
       />,
     );
 
-    expect(screen.getByTestId("system-message-row")).toHaveTextContent(
-      "Barry archived this channel.",
-    );
+    const systemRow = screen.getByTestId("system-message-row");
+    expect(systemRow).toHaveTextContent("Barry archived this channel.");
+    // The absolute local time is revealed on hover (Frank: "系统事件 hover 出时间") —
+    // rendered inline (not just the native title), so it's in the row's text too.
+    const fullTime = systemRow.getAttribute("title");
+    expect(fullTime).toBeTruthy();
+    expect(systemRow).toHaveTextContent(fullTime!);
     expect(screen.queryByTestId("message-bubble")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add reaction" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();

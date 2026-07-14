@@ -98,12 +98,11 @@ function ChannelSystemMessageRow({
       id={`message-${message.id}`}
       data-testid="system-message-row"
       data-message-kind="system"
-      // Time is intentionally NOT rendered inline (#369, Iris): Frank disliked a
-      // trailing timestamp pinned to the right, so the centered service row keeps
-      // no persistent stamp — the exact time stays available on hover via the
-      // native title. The final hover-reveal treatment (WeChat/Telegram-style) is
-      // pending Frank's sign-off; this interim keeps the time accessible without a
-      // visible tail.
+      // Time is NOT a persistent tail (#369, Iris §8: Frank disliked a trailing
+      // timestamp pinned right). Instead the absolute time is REVEALED on hover —
+      // the treatment Frank asked for ("系统事件 hover 出时间") — so the row stays
+      // clean at rest but a hover gives the full local date-time. The native
+      // `title` stays too (keyboard/a11y, and the hover reveal is aria-hidden).
       title={messageTime.full(message.created_at)}
       className={cn(
         // Lightweight CENTERED service notice (#369, Iris §8): a top-left row
@@ -111,12 +110,18 @@ function ChannelSystemMessageRow({
         // avatar column + loose body — centering separates it as a system event.
         // Quiet by design: small muted text, tight vertical rhythm so consecutive
         // add/remove rows read as one cluster, NO capsule / avatar / bubble.
-        "mx-auto flex max-w-[min(640px,100%)] flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5 px-2 py-0.5 text-center text-xs text-muted-foreground outline-none transition-colors duration-1000",
+        "group mx-auto flex max-w-[min(640px,100%)] flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5 px-2 py-0.5 text-center text-xs text-muted-foreground outline-none transition-colors duration-1000",
         highlighted && "rounded-md bg-primary/10 ring-1 ring-primary/25 duration-0",
       )}
     >
       <span className="min-w-0 break-words">
         {memberEvent ? <MemberSystemEventContent event={memberEvent} /> : systemText}
+      </span>
+      <span
+        aria-hidden
+        className="shrink-0 tabular-nums text-muted-foreground/50 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+      >
+        {messageTime.full(message.created_at)}
       </span>
     </div>
   );

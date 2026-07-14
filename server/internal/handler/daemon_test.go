@@ -20,6 +20,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -1195,6 +1196,100 @@ func TestListTaskMessagesByUser_InvalidTaskIDReturnsBadRequest(t *testing.T) {
 	}
 }
 
+func TestListTaskMessagesByUser_InboxEventProjectsActivityMessages(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "inbox-live-status-"+uuid.NewString(), []byte(`{}`))
+	runtimeID := handlerTestRuntimeID(t)
+
+	var eventID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (
+			workspace_id, agent_id, reason, requires_wake, status,
+			priority, seq_from, seq_to
+		)
+		VALUES ($1, $2, 'dm', true, 'draining', 100, 1, 3)
+		RETURNING id
+	`, testWorkspaceID, agentID).Scan(&eventID); err != nil {
+		t.Fatalf("insert inbox event: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_activity_event WHERE details->>'inbox_event_id' = $1`, eventID)
+	})
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_activity_event (
+			workspace_id, agent_id, runtime_id, event_kind, event_type,
+			severity, target_kind, message, details, visibility, created_at
+		)
+		VALUES
+			($1, $2, $3, 'thinking', 'thinking', 'info', 'dm', 'Planning',
+			 jsonb_build_object('inbox_event_id', $4::text, 'seq', 1),
+			 'user_facing', now() - interval '2 seconds'),
+			($1, $2, $3, 'tool_call', 'tool_use', 'info', 'dm', '',
+			 jsonb_build_object(
+				'inbox_event_id', $4::text,
+				'seq', 2,
+				'tool', 'bash',
+				'input', jsonb_build_object('cmd', 'raft message send --send-draft')
+			 ),
+			 'user_facing', now() - interval '1 second'),
+			($1, $2, $3, 'text', 'text', 'info', 'dm', 'Done',
+			 jsonb_build_object('inbox_event_id', $4::text, 'seq', 3),
+			 'user_facing', now())
+	`, testWorkspaceID, agentID, runtimeID, eventID); err != nil {
+		t.Fatalf("insert inbox activity rows: %v", err)
+	}
+
+	req := withURLParam(newRequest(http.MethodGet, "/api/tasks/"+eventID+"/messages", nil), "taskId", eventID)
+	req = req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, db.Member{Role: "owner"}))
+	w := httptest.NewRecorder()
+
+	testHandler.ListTaskMessagesByUser(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp []protocol.TaskMessagePayload
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp) != 3 {
+		t.Fatalf("expected 3 projected messages, got %d: %+v", len(resp), resp)
+	}
+	if resp[0].TaskID != eventID || resp[0].Seq != 1 || resp[0].Type != "thinking" || resp[0].Content != "Planning" {
+		t.Fatalf("unexpected first message: %+v", resp[0])
+	}
+	if resp[1].TaskID != eventID || resp[1].Seq != 2 || resp[1].Type != "tool_use" || resp[1].Tool != "bash" {
+		t.Fatalf("unexpected tool projection: %+v", resp[1])
+	}
+	if got := fmt.Sprint(resp[1].Input["cmd"]); got != "raft message send --send-draft" {
+		t.Fatalf("projected tool input cmd = %q", got)
+	}
+	if resp[2].Seq != 3 || resp[2].Type != "text" || resp[2].Content != "Done" {
+		t.Fatalf("unexpected text projection: %+v", resp[2])
+	}
+
+	req = withURLParam(newRequest(http.MethodGet, "/api/tasks/"+eventID+"/messages?since=1", nil), "taskId", eventID)
+	req = req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, db.Member{Role: "owner"}))
+	w = httptest.NewRecorder()
+	testHandler.ListTaskMessagesByUser(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for since query, got %d: %s", w.Code, w.Body.String())
+	}
+	resp = nil
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode since response: %v", err)
+	}
+	if len(resp) != 2 || resp[0].Seq != 2 || resp[1].Seq != 3 {
+		t.Fatalf("unexpected since projection: %+v", resp)
+	}
+}
+
 func TestTaskMessageToPayload_LeavesNarrativeProjectionToActivityUI(t *testing.T) {
 	payload := taskMessageToPayload(db.TaskMessage{
 		Seq:  1,
@@ -2117,6 +2212,95 @@ func TestStartTask_AutopilotRunOnlyTask_ResolvesWorkspace(t *testing.T) {
 	}
 	if status != "running" {
 		t.Fatalf("expected task status 'running' after StartTask, got %q", status)
+	}
+}
+
+func TestRadarTaskLifecycle_ResolvesWorkspaceFromLinkedRun(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID, runtimeID, daemonID := createRuntimeGuardAgent(t, ctx)
+	run, task, err := testHandler.TaskService.EnqueueAgentRadarRun(ctx, service.EnqueueAgentRadarRunParams{
+		WorkspaceID:    parseUUID(testWorkspaceID),
+		AgentID:        parseUUID(agentID),
+		TriggerKind:    "manual",
+		TriggerRef:     "daemon-lifecycle-regression",
+		CooldownKey:    "daemon-lifecycle-regression",
+		ContextSummary: "daemon lifecycle regression",
+		ScheduledFor:   time.Now(),
+		Prompt:         "inspect workspace",
+	})
+	if err != nil {
+		t.Fatalf("enqueue Radar task: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_radar_run WHERE id = $1`, run.ID)
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, task.ID)
+	})
+	borrower := task
+	borrower.ID = parseUUID(uuid.NewString())
+	if got := testHandler.TaskService.ResolveTaskWorkspaceID(ctx, borrower); got != "" {
+		t.Fatalf("Radar context borrowed by another task resolved workspace %q", got)
+	}
+
+	claimed := claimTaskForRuntimeGuard(t, runtimeID, daemonID)
+	taskID := uuidToString(task.ID)
+	if claimed.ID != taskID {
+		t.Fatalf("claimed task = %q, want Radar task %q", claimed.ID, taskID)
+	}
+
+	w := httptest.NewRecorder()
+	req := withURLParam(
+		newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/start", nil, uuid.NewString(), "cross-workspace-daemon"),
+		"taskId", taskID,
+	)
+	testHandler.StartTask(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("StartTask with cross-workspace token: expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = withURLParam(
+		newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/start", nil, testWorkspaceID, daemonID),
+		"taskId", taskID,
+	)
+	testHandler.StartTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("StartTask for Radar task: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var taskStatus, runStatus string
+	if err := testPool.QueryRow(ctx, `
+		SELECT task.status, radar.status
+		FROM agent_task_queue task
+		JOIN agent_radar_run radar ON radar.task_id = task.id
+		WHERE task.id = $1
+	`, task.ID).Scan(&taskStatus, &runStatus); err != nil {
+		t.Fatalf("read started Radar lifecycle: %v", err)
+	}
+	if taskStatus != "running" || runStatus != "running" {
+		t.Fatalf("started Radar lifecycle = task:%q run:%q, want running/running", taskStatus, runStatus)
+	}
+
+	w = httptest.NewRecorder()
+	req = withURLParam(
+		newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/fail", TaskFailRequest{
+			Error:         "Radar regression failure",
+			FailureReason: "agent_error",
+		}, testWorkspaceID, daemonID),
+		"taskId", taskID,
+	)
+	testHandler.FailTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("FailTask for Radar task: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_radar_run WHERE id = $1`, run.ID).Scan(&runStatus); err != nil {
+		t.Fatalf("read failed Radar run: %v", err)
+	}
+	if runStatus != "failed" {
+		t.Fatalf("Radar run after FailTask = %q, want failed", runStatus)
 	}
 }
 
@@ -3740,6 +3924,7 @@ func TestCompleteTask_AssignmentTriggered_DoesNotSuppressTrivialDoneOutput(t *te
 }
 
 type claimRuntimeGuardTask struct {
+	ID                       string   `json:"id"`
 	PriorSessionID           string   `json:"prior_session_id"`
 	PriorWorkDir             string   `json:"prior_work_dir"`
 	ChatMessage              string   `json:"chat_message"`

@@ -267,6 +267,9 @@ func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelRe
 		slog.Warn("channel bridge: insert targeted agent message failed", "channel_id", ch.ID, "agent_id", uuidToString(agentID), "error", err)
 		return ChannelMessageResponse{}, false
 	}
+	if threadRootMessageID.Valid {
+		h.followChannelThreadAgent(ctx, channelID, threadRootMessageID, agentID)
+	}
 	if mainTimelineVisible {
 		messages := []ChannelMessageResponse{msg}
 		h.attachChannelMessageThreadRootSummaries(ctx, ch.WorkspaceID, messages)

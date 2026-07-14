@@ -186,7 +186,11 @@
     "issue_ref_aria": "引用 Issue",
     "project_label": "项目",
     "project_none": "无项目",
-    "project_tooltip": "设置该频道对应的项目"
+    "project_tooltip": "设置该频道对应的项目",
+    "tray_remove_aria": "移除 {{filename}}",
+    "tray_retry_aria": "重试上传 {{filename}}",
+    "tray_uploading": "上传中",
+    "tray_upload_failed": "上传失败"
   },
   "message": {
     "add_reaction": "添加表情回应",
@@ -199,6 +203,7 @@
     "sticker_loading": "正在加载表情包",
     "sticker_failed": "表情包加载失败",
     "sticker_unavailable": "表情包暂不可用",
+    "attachment_unavailable": "附件不可用",
     "agent_badge": "Agent",
     "radar_badge": "主动发现",
     "feishu_badge": "飞书",

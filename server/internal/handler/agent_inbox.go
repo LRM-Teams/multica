@@ -24,7 +24,12 @@ import (
 	"github.com/multica-ai/multica/server/pkg/redact"
 )
 
-const agentInboxDrainMessageLimit = 50
+const (
+	agentInboxDrainMessageLimit      = 50
+	agentInboxStatusChangedEventType = "agent_status_changed"
+	agentInboxStatusActivityWorking  = "working"
+	agentInboxStatusActivityIdle     = "idle"
+)
 
 var claimedFileDeliveryRe = regexp.MustCompile(`(?i)\b[\w.-]+\.(txt|md|pdf|csv|xlsx|xls|docx|png|jpe?g|gif|zip|json|ya?ml|go|ts|tsx|js|py|html|css)\b`)
 
@@ -61,6 +66,26 @@ type AgentInboxLeaseResponse struct {
 	LeaseExpiresAt string `json:"lease_expires_at"`
 	SeqTo          int64  `json:"seq_to"`
 	RequiresWake   bool   `json:"requires_wake"`
+}
+
+func (h *Handler) publishAgentInboxTaskLifecycle(eventType string, event db.AgentInboxEvent, runtimeID pgtype.UUID, status string) {
+	if h == nil || h.Bus == nil || !event.RequiresWake {
+		return
+	}
+	payload := map[string]any{
+		"task_id":        uuidToString(event.ID),
+		"inbox_event_id": uuidToString(event.ID),
+		"agent_id":       uuidToString(event.AgentID),
+		"issue_id":       "",
+		"status":         status,
+	}
+	if runtimeID.Valid {
+		payload["runtime_id"] = uuidToString(runtimeID)
+	}
+	if event.ChatSessionID.Valid {
+		payload["chat_session_id"] = uuidToString(event.ChatSessionID)
+	}
+	h.publishTask(eventType, uuidToString(event.WorkspaceID), "system", "", uuidToString(event.ID), payload)
 }
 
 type AckAgentInboxEventRequest struct {
@@ -127,6 +152,7 @@ func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Reques
 	}
 	pending, _ := h.Queries.CountPendingAgentInboxEventsForRuntime(r.Context(), runtime.ID)
 	respEvent := h.agentInboxEventResponse(r.Context(), runtime, event, delivery)
+	h.publishAgentInboxTaskLifecycle(protocol.EventTaskDispatch, event, runtime.ID, "running")
 	writeJSON(w, http.StatusOK, DrainAgentInboxResponse{
 		Events:      []AgentInboxEventResponse{respEvent},
 		LastSeenSeq: event.SeqTo,
@@ -177,6 +203,7 @@ func (h *Handler) AckAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to ack inbox delivery")
 		return
 	}
+	h.recordAgentInboxStatusActivity(r.Context(), event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID), deliveryID, agentInboxStatusActivityIdle)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }
 
@@ -271,6 +298,16 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 		if msg.Type == "tool_use" {
 			rawTool := strings.TrimSpace(msg.Tool)
 			canonicalTool, known := taskMessageCanonicalToolName(rawTool, msg.Input)
+			if command := redactedCommandFromInput(msg.Input); command != "" {
+				details["command"] = command
+			}
+			if cli, ok := resolveRaftCLIInvocation(canonicalTool, msg.Input); ok {
+				canonicalTool = cli.Tool
+				known = true
+				for key, value := range cli.Details {
+					details[key] = value
+				}
+			}
 			if !known {
 				if rawTool != "" {
 					details["unmapped_tool_name"] = rawTool
@@ -292,10 +329,14 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 			if canonicalTool != rawTool {
 				details["raw_tool"] = rawTool
 			}
+			agentActivityApplyToolSourceFacts(details, rawTool, canonicalTool, msg.Input)
+			agentActivityApplyToolInputSummary(details, canonicalTool, msg.Input, false)
 		}
-		if target, summaryKind := agentInboxActivityToolTarget(msg); target != "" {
-			details["tool_target"] = target
-			details["summary_kind"] = summaryKind
+		if msg.Type == "tool_use" {
+			if target, summaryKind := agentInboxActivityToolTarget(msg); target != "" && details["tool_target"] == nil {
+				details["tool_target"] = target
+				details["summary_kind"] = summaryKind
+			}
 		}
 		h.recordAgentActivityEvent(r.Context(), h.DB,
 			event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
@@ -304,6 +345,9 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 			"", message,
 			details,
 		)
+		if payload, ok := agentInboxTaskMessagePayload(event, msg, kind, details); ok && h.Bus != nil {
+			h.publishTask(protocol.EventTaskMessage, uuidToString(event.WorkspaceID), "system", "", uuidToString(event.ID), payload)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -403,6 +447,8 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		h.publishAgentInboxChatDone(event, *chatDonePayload)
 		h.recordAgentInboxVisibleOutputActivity(r.Context(), event, task.RuntimeID, *chatDonePayload)
 	}
+	h.recordAgentInboxStatusActivity(r.Context(), event, task.RuntimeID, deliveryID, agentInboxStatusActivityIdle)
+	h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, task.RuntimeID, "completed")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }
 
@@ -471,7 +517,9 @@ func (h *Handler) FailAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.recordAgentInboxFailureActivity(r.Context(), failedAgentInboxEvent(failed), deliveryID, errText, failureReason, reasonCode)
+	failedEvent := failedAgentInboxEvent(failed)
+	h.recordAgentInboxFailureActivity(r.Context(), failedEvent, deliveryID, errText, failureReason, reasonCode)
+	h.publishAgentInboxTaskLifecycle(protocol.EventTaskQueued, failedEvent, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID), "queued")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -622,7 +670,10 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox failure")
 		return
 	}
+	runtimeID := h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID)
+	h.publishAgentInboxTaskLifecycle(protocol.EventTaskFailed, event, runtimeID, "failed")
 	h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID, errText, failureReason, reasonCode)
+	h.recordAgentInboxStatusActivity(r.Context(), event, runtimeID, deliveryID, agentInboxStatusActivityIdle)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }
 
@@ -659,6 +710,9 @@ func (h *Handler) RetryChannelAgentInboxEvent(w http.ResponseWriter, r *http.Req
 		}
 		writeError(w, http.StatusInternalServerError, "failed to retry inbox event")
 		return
+	}
+	if retryEvent, err := h.Queries.GetAgentInboxEvent(r.Context(), retry.ID); err == nil {
+		h.publishAgentInboxTaskLifecycle(protocol.EventTaskQueued, retryEvent, h.runtimeIDForAgentInboxEvent(r.Context(), retryEvent), "queued")
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"ok":             true,
@@ -712,6 +766,13 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 		LeaseExpiresAt: timestampToString(delivery.LeaseExpiresAt),
 		SeqTo:          event.SeqTo,
 		RequiresWake:   event.RequiresWake,
+	}
+	if !h.populateAgentInboxChatContext(ctx, event, &resp) {
+		slog.Warn("agent inbox claim: exact prompt missing",
+			"inbox_event_id", uuidToString(event.ID),
+			"chat_session_id", uuidToString(event.ChatSessionID),
+		)
+		return nil
 	}
 	if agent, err := h.Queries.GetAgent(ctx, event.AgentID); err == nil {
 		skills := h.TaskService.LoadAgentSkillsForInbox(ctx, event.AgentID, event.ID)
@@ -778,7 +839,6 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			resp.AuthToken = tokenStr
 		}
 	}
-	h.populateAgentInboxChatContext(ctx, event, &resp)
 	if ws, err := h.Queries.GetWorkspace(ctx, event.WorkspaceID); err == nil && ws.Context.Valid {
 		resp.WorkspaceContext = ws.Context.String
 	}
@@ -845,6 +905,24 @@ func (h *Handler) runtimeIDForAgentInboxDelivery(ctx context.Context, deliveryID
 	return runtimeID
 }
 
+func (h *Handler) runtimeIDForAgentInboxEvent(ctx context.Context, event db.AgentInboxEvent) pgtype.UUID {
+	var runtimeID pgtype.UUID
+	_ = h.DB.QueryRow(ctx, `
+		SELECT COALESCE(latest_delivery.runtime_id, s.runtime_id, a.runtime_id)
+		FROM agent_inbox_event e
+		JOIN agent a ON a.id = e.agent_id
+		LEFT JOIN agent_session s ON s.id = e.agent_session_id
+		LEFT JOIN LATERAL (
+			SELECT d.runtime_id
+			FROM agent_event_delivery d
+			WHERE d.inbox_event_id = e.id
+			ORDER BY d.created_at DESC, d.id DESC
+			LIMIT 1
+		) latest_delivery ON true
+		WHERE e.id = $1`, event.ID).Scan(&runtimeID)
+	return runtimeID
+}
+
 func agentInboxActivityTarget(event db.AgentInboxEvent) (string, pgtype.UUID) {
 	if event.ChannelID.Valid {
 		return "channel", event.ChannelID
@@ -853,6 +931,103 @@ func agentInboxActivityTarget(event db.AgentInboxEvent) (string, pgtype.UUID) {
 		return "dm", event.ChatSessionID
 	}
 	return "agent", event.AgentID
+}
+
+func (h *Handler) recordAgentInboxStatusActivity(ctx context.Context, event db.AgentInboxEvent, runtimeID, deliveryID pgtype.UUID, status string) {
+	if h == nil || h.DB == nil || !event.RequiresWake {
+		return
+	}
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return
+	}
+	// The wake/source event already marks the start of work in the Activity
+	// timeline (for example, "Working · Message received"). Do not add a
+	// second generic "Working" row for the same transition.
+	if status == agentInboxStatusActivityWorking {
+		return
+	}
+	if h.agentInboxStatusActivityExists(ctx, event.WorkspaceID, event.AgentID, event.ID, status) {
+		return
+	}
+	targetKind, targetID := agentInboxActivityTarget(event)
+	details := map[string]any{
+		"status":            status,
+		"inbox_event_id":    uuidToString(event.ID),
+		"source_message_id": uuidToString(event.SourceMessageID),
+	}
+	if deliveryID.Valid {
+		details["delivery_id"] = uuidToString(deliveryID)
+	}
+	h.recordAgentActivityEvent(ctx, h.DB,
+		event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
+		activityKindCustom, agentInboxStatusChangedEventType, "info",
+		targetKind, targetID, "",
+		"", agentInboxStatusActivityMessage(status),
+		details,
+	)
+}
+
+func (h *Handler) agentInboxStatusActivityExists(ctx context.Context, workspaceID, agentID, inboxEventID pgtype.UUID, status string) bool {
+	if h == nil || h.DB == nil {
+		return false
+	}
+	var exists bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM agent_activity_event
+			WHERE workspace_id = $1
+			  AND agent_id = $2
+			  AND event_kind = $3
+			  AND event_type = $4
+			  AND details->>'inbox_event_id' = $5
+			  AND COALESCE(details->>'status', '') = $6
+		)
+	`, workspaceID, agentID, activityKindCustom, agentInboxStatusChangedEventType, uuidToString(inboxEventID), status).Scan(&exists)
+	if err != nil {
+		slog.Warn("agent inbox status activity: duplicate lookup failed", "agent_id", uuidToString(agentID), "inbox_event_id", uuidToString(inboxEventID), "status", status, "error", err)
+		return false
+	}
+	return exists
+}
+
+func agentInboxStatusActivityMessage(status string) string {
+	switch status {
+	case agentInboxStatusActivityWorking:
+		return "Working"
+	case agentInboxStatusActivityIdle:
+		return "Idle"
+	default:
+		return strings.TrimSpace(status)
+	}
+}
+
+func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageRequest, kind string, details map[string]any) (protocol.TaskMessagePayload, bool) {
+	payload := protocol.TaskMessagePayload{
+		TaskID:     uuidToString(event.ID),
+		Seq:        msg.Seq,
+		Visibility: "user_facing",
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	switch kind {
+	case activityKindThinking:
+		payload.Type = "thinking"
+		payload.Content = agentInboxActivityMessageText(msg)
+	case activityKindToolCall:
+		payload.Type = "tool_use"
+		payload.Tool = stringFromMap(details, "tool")
+		if payload.Tool == "" {
+			return protocol.TaskMessagePayload{}, false
+		}
+		payload.Input = msg.Input
+	case activityKindError:
+		payload.Type = "error"
+		payload.Content = agentInboxActivityMessageText(msg)
+	default:
+		return protocol.TaskMessagePayload{}, false
+	}
+	return payload, true
 }
 
 func agentInboxActivityMessageKind(messageType string) (kind, eventType, severity string) {
@@ -1071,13 +1246,13 @@ func agentVisibleOutputActivityText(content string, parts []protocol.MessagePart
 	return "Sent a message"
 }
 
-func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.AgentInboxEvent, resp *AgentTaskResponse) {
+func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.AgentInboxEvent, resp *AgentTaskResponse) bool {
 	if !event.ChatSessionID.Valid {
-		return
+		return false
 	}
 	cs, err := h.Queries.GetChatSession(ctx, event.ChatSessionID)
 	if err != nil {
-		return
+		return false
 	}
 	resp.WorkspaceID = uuidToString(cs.WorkspaceID)
 	resp.ChatSessionID = uuidToString(cs.ID)
@@ -1114,13 +1289,18 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 			}
 		}
 	}
-	if cs.SessionID.Valid && cs.RuntimeID.Valid {
-		resp.PriorSessionID = cs.SessionID.String
+	runtimeMatches := func(runtimeID pgtype.UUID) bool {
+		return runtimeID.Valid && resp.RuntimeID != "" && uuidToString(runtimeID) == resp.RuntimeID
 	}
-	if cs.WorkDir.Valid {
-		resp.PriorWorkDir = cs.WorkDir.String
+	if runtimeMatches(cs.RuntimeID) {
+		if cs.SessionID.Valid {
+			resp.PriorSessionID = cs.SessionID.String
+		}
+		if cs.WorkDir.Valid {
+			resp.PriorWorkDir = cs.WorkDir.String
+		}
 	}
-	if prior, err := h.Queries.GetLastChatTaskSession(ctx, cs.ID); err == nil && prior.SessionID.Valid {
+	if prior, err := h.Queries.GetLastChatTaskSession(ctx, cs.ID); err == nil && prior.SessionID.Valid && runtimeMatches(prior.RuntimeID) {
 		if resp.PriorSessionID == "" {
 			resp.PriorSessionID = prior.SessionID.String
 		}
@@ -1128,13 +1308,40 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 			resp.PriorWorkDir = prior.WorkDir.String
 		}
 	}
+	seenAttachmentIDs := make(map[string]struct{}, len(resp.ChatMessageAttachments))
+	for _, attachment := range resp.ChatMessageAttachments {
+		seenAttachmentIDs[attachment.ID] = struct{}{}
+	}
+	appendAttachments := func(attachments []db.Attachment) {
+		for _, attachment := range attachments {
+			id := uuidToString(attachment.ID)
+			if _, exists := seenAttachmentIDs[id]; exists {
+				continue
+			}
+			seenAttachmentIDs[id] = struct{}{}
+			resp.ChatMessageAttachments = append(resp.ChatMessageAttachments, ChatAttachmentMeta{
+				ID:          id,
+				Filename:    attachment.Filename,
+				ContentType: attachment.ContentType,
+			})
+		}
+	}
 	if event.SourceMessageID.Valid {
 		h.populateAgentInboxInitiator(ctx, event.SourceMessageID, resp)
+		if atts, attErr := h.Queries.ListAttachmentsByChannelMessageIDs(ctx, db.ListAttachmentsByChannelMessageIDsParams{
+			Column1:     []pgtype.UUID{event.SourceMessageID},
+			WorkspaceID: cs.WorkspaceID,
+		}); attErr == nil {
+			appendAttachments(atts)
+		}
 	}
 	if msgs, err := h.Queries.ListChatMessages(ctx, cs.ID); err == nil && len(msgs) > 0 {
-		unanswered := trailingUserMessages(msgs)
-		parts := make([]string, 0, len(unanswered))
-		for _, m := range unanswered {
+		promptMessages := inboxPromptMessages(msgs, event.ID)
+		if len(promptMessages) == 0 {
+			return false
+		}
+		parts := make([]string, 0, len(promptMessages))
+		for _, m := range promptMessages {
 			if strings.TrimSpace(m.Content) != "" {
 				parts = append(parts, m.Content)
 			}
@@ -1142,13 +1349,7 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 				ChatMessageID: m.ID,
 				WorkspaceID:   cs.WorkspaceID,
 			}); attErr == nil && len(atts) > 0 {
-				for _, a := range atts {
-					resp.ChatMessageAttachments = append(resp.ChatMessageAttachments, ChatAttachmentMeta{
-						ID:          uuidToString(a.ID),
-						Filename:    a.Filename,
-						ContentType: a.ContentType,
-					})
-				}
+				appendAttachments(atts)
 			}
 		}
 		resp.ChatMessage = strings.Join(parts, "\n\n")
@@ -1164,7 +1365,9 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 				resp.ChatContextSummary = buildChatContextSummary(msgs, totalTokens, "", resp.WorkspaceID, uuidToString(event.AgentID), surface)
 			}
 		}
+		return true
 	}
+	return false
 }
 
 func (h *Handler) populateAgentInboxInitiator(ctx context.Context, sourceMessageID pgtype.UUID, resp *AgentTaskResponse) {

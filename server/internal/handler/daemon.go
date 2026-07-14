@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
@@ -33,6 +34,8 @@ import (
 
 const chatResumeRecentMessageLimit = 10
 const daemonRegisterTokenTTL = 24 * time.Hour
+
+var errInvalidTaskMessageSince = errors.New("invalid since parameter")
 
 // ---------------------------------------------------------------------------
 // Daemon workspace ownership helpers
@@ -1938,6 +1941,25 @@ func trailingUserMessages(msgs []db.ChatMessage) []db.ChatMessage {
 	return msgs[start:]
 }
 
+// inboxPromptMessages returns only the synthetic channel prompt written for
+// the inbox event currently being drained. Each channel prompt already
+// contains a bounded conversation excerpt; using any other unanswered prompt
+// can both repeat a large failed backlog and execute the wrong user request.
+// Retry creation copies the original prompt and binds the copy to the new event
+// ID, so a missing exact task_id link is invalid rather than a reason to guess.
+func inboxPromptMessages(msgs []db.ChatMessage, eventID pgtype.UUID) []db.ChatMessage {
+	if !eventID.Valid {
+		return nil
+	}
+	current := make([]db.ChatMessage, 0, 1)
+	for _, msg := range msgs {
+		if msg.Role == "user" && msg.TaskID.Valid && msg.TaskID == eventID {
+			current = append(current, msg)
+		}
+	}
+	return current
+}
+
 func hasPriorChatContext(msgs []db.ChatMessage, currentTaskID pgtype.UUID) bool {
 	if len(msgs) == 0 {
 		return false
@@ -2220,10 +2242,18 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, _ := json.Marshal(req)
-	task, err := h.TaskService.CompleteTask(r.Context(), parseUUID(taskID), result, req.SessionID, req.WorkDir)
+	completion, err := h.TaskService.CompleteDaemonTask(r.Context(), parseUUID(taskID), result, req.SessionID, req.WorkDir)
 	if err != nil {
 		slog.Warn("complete task failed", "task_id", taskID, "error", err)
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	task := &completion.Task
+	if !completion.CompletedNow {
+		// A retried or late completion has no authority to replay handler side
+		// effects. In particular, it must not execute a different Radar output
+		// after the task was cancelled, failed, or already completed.
+		writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 		return
 	}
 
@@ -2262,42 +2292,64 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	)
 	h.recordTaskVisibleOutputActivity(r.Context(), parseUUID(workspaceID), *task, req)
 
-	h.handleCompletedAgentRadarTask(r.Context(), *task, req.Output)
+	h.handleClaimedAgentRadarTask(r.Context(), *task, completion.RadarRun)
 
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
-func (h *Handler) handleCompletedAgentRadarTask(ctx context.Context, task db.AgentTaskQueue, output string) {
-	if len(task.Context) == 0 {
+func (h *Handler) handleClaimedAgentRadarTask(ctx context.Context, task db.AgentTaskQueue, run *db.AgentRadarRun) {
+	if run == nil {
 		return
+	}
+	if err := h.ReplayCompletedAgentRadarTask(ctx, task, *run); err != nil {
+		slog.Warn("agent radar action execution failed", "run_id", uuidToString(run.ID), "error", err)
+	}
+}
+
+// ReplayCompletedAgentRadarTask executes a claimed Radar run exclusively from
+// the durable task.Result payload. The scheduler calls this after leasing a
+// completed task whose original HTTP completion handler died before applying
+// its action plan; it never invokes the model again.
+func (h *Handler) ReplayCompletedAgentRadarTask(ctx context.Context, task db.AgentTaskQueue, run db.AgentRadarRun) error {
+	if run.Status != "executing" {
+		return fmt.Errorf("radar run is not executing: %s", run.Status)
+	}
+	if task.Status != "completed" || !radarUUIDsMatch(task.ID, run.TaskID) || !radarUUIDsMatch(task.AgentID, run.AgentID) {
+		return errors.New("completed radar task does not match the executing run")
 	}
 	var radarCtx service.AgentRadarContext
-	if json.Unmarshal(task.Context, &radarCtx) != nil || radarCtx.Type != service.AgentRadarContextType {
-		return
+	if err := json.Unmarshal(task.Context, &radarCtx); err != nil || radarCtx.Type != service.AgentRadarContextType || radarCtx.RadarRunID != uuidToString(run.ID) {
+		return errors.New("completed task has an invalid radar run context")
 	}
-	runID, ok := parseUUIDMaybe(radarCtx.RadarRunID)
-	if !ok {
-		return
-	}
-	run, err := h.Queries.GetAgentRadarRun(ctx, runID)
-	if err != nil {
-		return
+	var persisted TaskCompleteRequest
+	if err := json.Unmarshal(task.Result, &persisted); err != nil {
+		message := "parse persisted task result: " + err.Error()
+		h.failPersistedAgentRadarRun(ctx, run.ID, message)
+		return errors.New(message)
 	}
 	agent, err := h.Queries.GetAgent(ctx, task.AgentID)
 	if err != nil {
-		return
+		return fmt.Errorf("load radar agent: %w", err)
 	}
-	plan, err := radar.ParseActionPlan(output)
+	plan, err := radar.ParseActionPlan(persisted.Output)
 	if err != nil {
-		_, _ = h.Queries.UpdateAgentRadarRunStatus(ctx, db.UpdateAgentRadarRunStatusParams{
-			ID:     run.ID,
-			Status: "failed",
-			Error:  pgtype.Text{String: "parse action plan: " + err.Error(), Valid: true},
-		})
-		return
+		message := "parse action plan: " + err.Error()
+		h.failPersistedAgentRadarRun(ctx, run.ID, message)
+		return errors.New(message)
 	}
 	if err := h.ExecuteAgentRadarPlan(ctx, run, agent, plan); err != nil {
-		slog.Warn("agent radar action execution failed", "run_id", radarCtx.RadarRunID, "error", err)
+		return err
+	}
+	return nil
+}
+
+func (h *Handler) failPersistedAgentRadarRun(ctx context.Context, runID pgtype.UUID, message string) {
+	if _, updateErr := h.Queries.UpdateAgentRadarRunStatus(ctx, db.UpdateAgentRadarRunStatusParams{
+		ID:     runID,
+		Status: "failed",
+		Error:  pgtype.Text{String: message, Valid: true},
+	}); updateErr == nil {
+		_, _ = h.Queries.MarkWorkspaceRadarFailedByRunID(ctx, runID)
 	}
 }
 
@@ -2932,6 +2984,43 @@ func taskMessageToPayload(m db.TaskMessage, taskID, issueID string) protocol.Tas
 	}
 }
 
+type inboxEventTaskMessageRow struct {
+	Seq        int32
+	Type       string
+	Tool       string
+	Content    string
+	Input      []byte
+	Output     string
+	Visibility string
+	CreatedAt  pgtype.Timestamptz
+}
+
+func inboxEventTaskMessageToPayload(row inboxEventTaskMessageRow, taskID string) protocol.TaskMessagePayload {
+	var input map[string]any
+	if len(row.Input) > 0 {
+		json.Unmarshal(row.Input, &input)
+	}
+	createdAt := ""
+	if row.CreatedAt.Valid {
+		createdAt = row.CreatedAt.Time.UTC().Format(time.RFC3339Nano)
+	}
+	visibility := strings.TrimSpace(row.Visibility)
+	if visibility == "" {
+		visibility = "user_facing"
+	}
+	return protocol.TaskMessagePayload{
+		TaskID:     taskID,
+		Seq:        int(row.Seq),
+		Type:       row.Type,
+		Tool:       row.Tool,
+		Content:    row.Content,
+		Input:      input,
+		Output:     row.Output,
+		Visibility: visibility,
+		CreatedAt:  createdAt,
+	}
+}
+
 func taskMessageVisibility(msgType string) string {
 	return taskMessageVisibilityForMessage(msgType, "", nil)
 }
@@ -3089,6 +3178,21 @@ func (h *Handler) ListTaskMessagesByUser(w http.ResponseWriter, r *http.Request)
 
 	task, err := h.Queries.GetAgentTask(r.Context(), taskUUID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			resp, found, inboxErr := h.listInboxEventTaskMessagesByUser(r.Context(), taskUUID, taskID, middleware.WorkspaceIDFromContext(r.Context()), r.URL.Query().Get("since"))
+			if inboxErr != nil {
+				if errors.Is(inboxErr, errInvalidTaskMessageSince) {
+					writeError(w, http.StatusBadRequest, "invalid since parameter")
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "failed to list task messages")
+				return
+			}
+			if found {
+				writeJSON(w, http.StatusOK, resp)
+				return
+			}
+		}
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
@@ -3130,6 +3234,128 @@ func (h *Handler) ListTaskMessagesByUser(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) listInboxEventTaskMessagesByUser(ctx context.Context, eventID pgtype.UUID, taskID, workspaceID, sinceStr string) ([]protocol.TaskMessagePayload, bool, error) {
+	if h == nil || h.DB == nil {
+		return nil, false, nil
+	}
+	if strings.TrimSpace(workspaceID) == "" {
+		return nil, false, nil
+	}
+	workspaceUUID := parseUUID(workspaceID)
+	var exists bool
+	if err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM agent_inbox_event
+			WHERE id = $1
+			  AND workspace_id = $2
+		)
+	`, eventID, workspaceUUID).Scan(&exists); err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
+	}
+
+	payloads, err := h.projectInboxEventTaskMessages(ctx, eventID, taskID, workspaceUUID, sinceStr)
+	return payloads, true, err
+}
+
+func (h *Handler) projectInboxEventTaskMessages(ctx context.Context, eventID pgtype.UUID, taskID string, workspaceUUID pgtype.UUID, sinceStr string) ([]protocol.TaskMessagePayload, error) {
+	var sinceArg any
+	if sinceStr != "" {
+		sinceSeq, err := strconv.Atoi(sinceStr)
+		if err != nil {
+			return nil, errInvalidTaskMessageSince
+		}
+		sinceArg = sinceSeq
+	}
+
+	rows, err := h.DB.Query(ctx, `
+		WITH activity AS (
+			SELECT
+				aae.id,
+				aae.event_kind,
+				aae.message,
+				aae.details,
+				aae.visibility,
+				aae.created_at,
+				CASE
+					WHEN COALESCE(aae.details->>'seq', '') ~ '^[0-9]+$'
+						THEN (aae.details->>'seq')::int
+					ELSE NULL
+				END AS reported_seq
+			FROM agent_activity_event aae
+			WHERE aae.workspace_id = $2
+			  AND aae.details->>'inbox_event_id' = $1::text
+			  AND aae.event_kind IN ('thinking', 'text', 'tool_call', 'error')
+		),
+		numbered AS (
+			SELECT
+				COALESCE(
+					reported_seq,
+					ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC)::int
+				)::int AS seq,
+				event_kind,
+				message,
+				details,
+				visibility,
+				created_at,
+				id
+			FROM activity
+		)
+		SELECT
+			seq,
+			CASE
+				WHEN event_kind = 'tool_call' THEN 'tool_use'
+				WHEN event_kind = 'error' THEN 'error'
+				WHEN event_kind = 'thinking' THEN 'thinking'
+				ELSE 'text'
+			END AS type,
+			COALESCE(details->>'tool', '') AS tool,
+			CASE
+				WHEN event_kind IN ('thinking', 'text', 'error') THEN COALESCE(message, '')
+				ELSE ''
+			END AS content,
+			CASE
+				WHEN jsonb_typeof(details->'input') = 'object' THEN details->'input'
+				ELSE NULL
+			END AS input,
+			''::text AS output,
+			COALESCE(NULLIF(visibility, ''), 'user_facing') AS visibility,
+			created_at
+		FROM numbered
+		WHERE ($3::int IS NULL OR seq > $3::int)
+		ORDER BY seq ASC, created_at ASC, id ASC
+	`, eventID, workspaceUUID, sinceArg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	payloads := []protocol.TaskMessagePayload{}
+	for rows.Next() {
+		var row inboxEventTaskMessageRow
+		if err := rows.Scan(
+			&row.Seq,
+			&row.Type,
+			&row.Tool,
+			&row.Content,
+			&row.Input,
+			&row.Output,
+			&row.Visibility,
+			&row.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		payloads = append(payloads, inboxEventTaskMessageToPayload(row, taskID))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return payloads, nil
 }
 
 // GetIssueUsage returns aggregated token usage for all tasks belonging to an issue.

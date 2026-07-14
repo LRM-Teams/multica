@@ -1520,6 +1520,23 @@ export class ApiClient {
     return this.fetch(`/api/tasks/${taskId}/messages`);
   }
 
+  /**
+   * Chat execution transcript for a chat session's inbox-event round (#414).
+   * Replaces the `listTaskMessages` inbox-event-id compat: the session-scoped
+   * endpoint validates the event belongs to this session server-side (permission
+   * + bounded history), returning the same `TaskMessagePayload[]` shape so the
+   * timeline builder is unchanged. `eventId` is the pending inbox-event id (live)
+   * or the persisted assistant `message.task_id` (completed).
+   */
+  async listChatAgentInboxEventTimeline(
+    sessionId: string,
+    eventId: string,
+  ): Promise<TaskMessagePayload[]> {
+    return this.fetch(
+      `/api/chat/sessions/${sessionId}/agent-inbox-events/${eventId}/timeline`,
+    );
+  }
+
   async listTasksByIssue(issueId: string): Promise<AgentTask[]> {
     return this.fetch(`/api/issues/${issueId}/task-runs`);
   }
@@ -2283,35 +2300,34 @@ export class ApiClient {
 
   async sendChannelMessage(
     channelId: string,
-    content: string,
-    attachmentIds?: string[],
-    replyToMessageId?: string | null,
-    parts?: MessagePart[],
-    clientMessageId?: string | null,
-    quoteMessageId?: string | null,
+    input: {
+      content: string;
+      parts?: MessagePart[];
+      replyToMessageId?: string | null;
+      clientMessageId?: string | null;
+      quoteMessageId?: string | null;
+    },
   ): Promise<ChannelMessage> {
+    // Channel attachments bind from structured `parts` (type: "attachment").
+    // Do not send `attachment_ids` on this path — issue/comment keep that field.
     const body: {
       content: string;
-      attachment_ids?: string[];
       reply_to_message_id?: string;
       quote_message_id?: string;
       parts?: MessagePart[];
       client_message_id?: string;
-    } = { content };
-    if (attachmentIds && attachmentIds.length > 0) {
-      body.attachment_ids = attachmentIds;
+    } = { content: input.content };
+    if (input.replyToMessageId) {
+      body.reply_to_message_id = input.replyToMessageId;
     }
-    if (replyToMessageId) {
-      body.reply_to_message_id = replyToMessageId;
+    if (input.quoteMessageId) {
+      body.quote_message_id = input.quoteMessageId;
     }
-    if (quoteMessageId) {
-      body.quote_message_id = quoteMessageId;
+    if (input.parts && input.parts.length > 0) {
+      body.parts = input.parts;
     }
-    if (parts && parts.length > 0) {
-      body.parts = parts;
-    }
-    if (clientMessageId) {
-      body.client_message_id = clientMessageId;
+    if (input.clientMessageId) {
+      body.client_message_id = input.clientMessageId;
     }
     return this.fetch(`/api/channels/${channelId}/messages`, {
       method: "POST",
@@ -2357,39 +2373,37 @@ export class ApiClient {
   async sendChannelThreadMessage(
     channelId: string,
     messageId: string,
-    content: string,
-    attachmentIds?: string[],
-    replyToMessageId?: string | null,
-    parts?: MessagePart[],
-    clientMessageId?: string | null,
-    showInChannel?: boolean,
-    quoteMessageId?: string | null,
+    input: {
+      content: string;
+      parts?: MessagePart[];
+      replyToMessageId?: string | null;
+      clientMessageId?: string | null;
+      showInChannel?: boolean;
+      quoteMessageId?: string | null;
+    },
   ): Promise<ChannelMessage> {
+    // Same as sendChannelMessage: attachment truth is `parts`, not attachment_ids.
     const body: {
       content: string;
-      attachment_ids?: string[];
       reply_to_message_id?: string;
       quote_message_id?: string;
       parts?: MessagePart[];
       client_message_id?: string;
       show_in_channel?: boolean;
-    } = { content };
-    if (attachmentIds && attachmentIds.length > 0) {
-      body.attachment_ids = attachmentIds;
+    } = { content: input.content };
+    if (input.replyToMessageId) {
+      body.reply_to_message_id = input.replyToMessageId;
     }
-    if (replyToMessageId) {
-      body.reply_to_message_id = replyToMessageId;
+    if (input.quoteMessageId) {
+      body.quote_message_id = input.quoteMessageId;
     }
-    if (quoteMessageId) {
-      body.quote_message_id = quoteMessageId;
+    if (input.parts && input.parts.length > 0) {
+      body.parts = input.parts;
     }
-    if (parts && parts.length > 0) {
-      body.parts = parts;
+    if (input.clientMessageId) {
+      body.client_message_id = input.clientMessageId;
     }
-    if (clientMessageId) {
-      body.client_message_id = clientMessageId;
-    }
-    if (showInChannel === true) {
+    if (input.showInChannel === true) {
       body.show_in_channel = true;
     }
     return this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread`, {

@@ -8,4 +8,32 @@ export type MessagePart =
       pack_id?: string;
       sticker_id: string;
       alt?: string;
+    }
+  | {
+      type: "attachment";
+      attachment_id: string;
+      filename?: string;
+      content_type?: string;
+      size_bytes?: number;
     };
+
+/**
+ * Build structured channel message parts from plain text + attachment ids.
+ * Used by channel/thread send so the wire format uses `parts` (attachment
+ * truth) rather than a parallel `attachment_ids` field.
+ */
+export function buildChannelMessageParts(
+  text: string,
+  attachmentIds?: readonly string[],
+): MessagePart[] {
+  const parts: MessagePart[] = [];
+  const trimmed = text.trim();
+  if (trimmed) {
+    parts.push({ type: "text", text: trimmed });
+  }
+  for (const id of attachmentIds ?? []) {
+    if (!id) continue;
+    parts.push({ type: "attachment", attachment_id: id });
+  }
+  return parts;
+}

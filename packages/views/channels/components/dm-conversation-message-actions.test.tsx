@@ -163,7 +163,6 @@ vi.mock("../../editor/content-editor", () => ({
 vi.mock("../../common/markdown", () => ({
   MemoizedMarkdown: ({ children }: { children: string }) => <span>{children}</span>,
 }));
-vi.mock("../../issues/components/comment-card", () => ({ AttachmentList: () => null }));
 // Dm header chrome (peer avatar + profile trigger) reads the workspace-scoped
 // route via useWorkspacePaths; stub it to keep this test off route context.
 vi.mock("../../common/actor-avatar", () => ({

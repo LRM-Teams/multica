@@ -1,10 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RefObject } from "react";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import { ImageExtension } from "./index";
-import { uploadAndInsertFile } from "./file-upload";
+import {
+  createFileUploadExtension,
+  uploadAndInsertFile,
+  type MediaMode,
+} from "./file-upload";
+
+function refOf<T>(value: T): RefObject<T> {
+  return { current: value };
+}
 
 const BLOB_URL = "blob:test-image";
 const FINAL_URL = "https://cdn.example.com/photo.png";
@@ -222,5 +231,169 @@ describe("uploadAndInsertFile", () => {
     expect(editor.getMarkdown().trimEnd()).toBe(`![photo.png](${STABLE_URL})`);
     expect(editor.getMarkdown()).not.toContain("?exp=");
     expect(editor.getMarkdown()).not.toContain("?sig=");
+  });
+});
+
+function makeFileList(files: File[]): FileList {
+  const list = {
+    length: files.length,
+    item: (i: number) => files[i] ?? null,
+    *[Symbol.iterator]() {
+      yield* files;
+    },
+  } as FileList;
+  files.forEach((f, i) => {
+    Object.defineProperty(list, i, { value: f, enumerable: true });
+  });
+  return list;
+}
+
+function pasteFiles(editor: Editor, files: File[]): boolean {
+  const event = {
+    clipboardData: { files: makeFileList(files) },
+    preventDefault: () => {},
+  } as unknown as ClipboardEvent;
+  return (
+    editor.view.someProp("handlePaste", (handler) =>
+      handler(editor.view, event, editor.view.state.selection.content()),
+    ) === true
+  );
+}
+
+function dropFiles(editor: Editor, files: File[]): boolean {
+  const event = {
+    dataTransfer: { files: makeFileList(files) },
+    clientX: 0,
+    clientY: 0,
+    preventDefault: () => {},
+  } as unknown as DragEvent;
+  return (
+    editor.view.someProp("handleDrop", (handler) =>
+      handler(editor.view, event, editor.view.state.selection.content(), false),
+    ) === true
+  );
+}
+
+function makeUploadEditor(options: {
+  onUploadFileRef: RefObject<((file: File) => Promise<UploadResult | null>) | undefined>;
+  mediaModeRef?: RefObject<MediaMode>;
+  onExternalFilesRef?: RefObject<((files: File[]) => void) | undefined>;
+}) {
+  const element = document.createElement("div");
+  document.body.appendChild(element);
+  const editor = new Editor({
+    element,
+    extensions: [
+      StarterKit,
+      ImageExtension,
+      Markdown.configure({ indentation: { style: "space", size: 3 } }),
+      createFileUploadExtension(options.onUploadFileRef, {
+        mediaModeRef: options.mediaModeRef,
+        onExternalFilesRef: options.onExternalFilesRef,
+      }),
+    ],
+  });
+  editors.push(editor);
+  return editor;
+}
+
+describe("createFileUploadExtension — mediaMode external", () => {
+  it("paste image calls onExternalFiles and does not insert markdown image", () => {
+    const onExternalFiles = vi.fn();
+    const onUploadFile = vi.fn(async () =>
+      makeUpload({ id: "a1", link: FINAL_URL, filename: "photo.png" }),
+    );
+    const onUploadFileRef = refOf(onUploadFile as
+      | ((file: File) => Promise<UploadResult | null>)
+      | undefined);
+    const mediaModeRef = refOf<MediaMode>("external");
+    const onExternalFilesRef = refOf(onExternalFiles as
+      | ((files: File[]) => void)
+      | undefined);
+
+    const editor = makeUploadEditor({
+      onUploadFileRef,
+      mediaModeRef,
+      onExternalFilesRef,
+    });
+    const file = new File(["image"], "photo.png", { type: "image/png" });
+
+    const handled = pasteFiles(editor, [file]);
+
+    expect(handled).toBe(true);
+    expect(onExternalFiles).toHaveBeenCalledTimes(1);
+    expect(onExternalFiles).toHaveBeenCalledWith([file]);
+    expect(onUploadFile).not.toHaveBeenCalled();
+    expect(editor.getMarkdown()).not.toContain("![](");
+    expect(editor.getMarkdown()).not.toContain("![");
+    expect(firstImageAttrs(editor)).toBeNull();
+  });
+
+  it("drop image in external mode calls onExternalFiles without inserting", () => {
+    const onExternalFiles = vi.fn();
+    const onUploadFileRef = refOf(
+      vi.fn() as ((file: File) => Promise<UploadResult | null>) | undefined,
+    );
+    const mediaModeRef = refOf<MediaMode>("external");
+    const onExternalFilesRef = refOf(onExternalFiles as
+      | ((files: File[]) => void)
+      | undefined);
+
+    const editor = makeUploadEditor({
+      onUploadFileRef,
+      mediaModeRef,
+      onExternalFilesRef,
+    });
+    const file = new File(["image"], "drop.png", { type: "image/png" });
+
+    const handled = dropFiles(editor, [file]);
+
+    expect(handled).toBe(true);
+    expect(onExternalFiles).toHaveBeenCalledWith([file]);
+    expect(firstImageAttrs(editor)).toBeNull();
+  });
+
+  it("inline mode (default) still inserts an image on paste", async () => {
+    const onUploadFile = vi.fn(async () =>
+      makeUpload({ id: "a1", link: FINAL_URL, filename: "photo.png" }),
+    );
+    const onUploadFileRef = refOf(onUploadFile as
+      | ((file: File) => Promise<UploadResult | null>)
+      | undefined);
+    const mediaModeRef = refOf<MediaMode>("inline");
+
+    const editor = makeUploadEditor({ onUploadFileRef, mediaModeRef });
+    const file = new File(["image"], "photo.png", { type: "image/png" });
+
+    const handled = pasteFiles(editor, [file]);
+    expect(handled).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(onUploadFile).toHaveBeenCalledWith(file);
+      expect(editor.getMarkdown().trimEnd()).toBe(`![photo.png](${FINAL_URL})`);
+    });
+  });
+
+  it("dedupes duplicate files from the same paste before calling onExternalFiles", () => {
+    const onExternalFiles = vi.fn();
+    const onUploadFileRef = refOf(
+      undefined as ((file: File) => Promise<UploadResult | null>) | undefined,
+    );
+    const mediaModeRef = refOf<MediaMode>("external");
+    const onExternalFilesRef = refOf(onExternalFiles as
+      | ((files: File[]) => void)
+      | undefined);
+
+    const editor = makeUploadEditor({
+      onUploadFileRef,
+      mediaModeRef,
+      onExternalFilesRef,
+    });
+    const file = new File(["image"], "photo.png", { type: "image/png" });
+
+    pasteFiles(editor, [file, file]);
+
+    expect(onExternalFiles).toHaveBeenCalledTimes(1);
+    expect(onExternalFiles.mock.calls[0]?.[0]).toHaveLength(1);
   });
 });

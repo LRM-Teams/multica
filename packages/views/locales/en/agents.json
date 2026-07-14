@@ -371,7 +371,9 @@
       "labels": {
         "thinking": "Thinking",
         "output": "Output",
+        "completed": "Completed",
         "working": "Working",
+        "idle": "Idle",
         "failed": "Failed",
         "waiting": "Waiting",
         "running_command": "Running command",
@@ -389,6 +391,8 @@
         "compaction_finished": "Compaction finished",
         "subagent_activity": "Subagent activity"
       },
+      "copy_command": "Copy command",
+      "command_copied": "Copied",
       "view_diagnostics": "View diagnostic details",
       "hide_diagnostics": "Hide diagnostic details",
       "section_now": "Now",
@@ -557,6 +561,13 @@
     "running_for": "In progress · {{min}}min elapsed",
     "duration_min": "{{min}}min",
     "task_fallback": "Task run",
+    "radar_task": {
+      "queued": "Proactive scan · Queued",
+      "running": "Proactive scan · In progress",
+      "completed": "Proactive scan · Completed",
+      "failed": "Proactive scan · Failed",
+      "cancelled": "Proactive scan · Cancelled"
+    },
     "empty_select": "Select an agent on the left to see details",
     "delete_success": "Agent deleted",
     "delete_failed": "Failed to delete agent"

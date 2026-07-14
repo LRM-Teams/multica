@@ -71,7 +71,6 @@ export function useSendChannelMessage() {
     mutationFn: ({
       channelId,
       content,
-      attachmentIds,
       replyToMessageId,
       parts,
       clientMessageId,
@@ -79,12 +78,19 @@ export function useSendChannelMessage() {
     }: {
       channelId: string;
       content: string;
-      attachmentIds?: string[];
       replyToMessageId?: string | null;
+      /** Structured parts; attachment bind uses `{ type: "attachment", attachment_id }`. */
       parts?: MessagePart[];
       clientMessageId?: string | null;
       quoteMessageId?: string | null;
-    }) => api.sendChannelMessage(channelId, content, attachmentIds, replyToMessageId, parts, clientMessageId, quoteMessageId),
+    }) =>
+      api.sendChannelMessage(channelId, {
+        content,
+        parts,
+        replyToMessageId,
+        clientMessageId,
+        quoteMessageId,
+      }),
     onSuccess: (msg) => {
       upsertChannelMessageInCache(qc, msg);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
@@ -154,7 +160,6 @@ export function useSendChannelThreadMessage() {
       channelId,
       messageId,
       content,
-      attachmentIds,
       replyToMessageId,
       parts,
       clientMessageId,
@@ -164,13 +169,21 @@ export function useSendChannelThreadMessage() {
       channelId: string;
       messageId: string;
       content: string;
-      attachmentIds?: string[];
       replyToMessageId?: string | null;
+      /** Structured parts; attachment bind uses `{ type: "attachment", attachment_id }`. */
       parts?: MessagePart[];
       clientMessageId?: string | null;
       showInChannel?: boolean;
       quoteMessageId?: string | null;
-    }) => api.sendChannelThreadMessage(channelId, messageId, content, attachmentIds, replyToMessageId, parts, clientMessageId, showInChannel, quoteMessageId),
+    }) =>
+      api.sendChannelThreadMessage(channelId, messageId, {
+        content,
+        parts,
+        replyToMessageId,
+        clientMessageId,
+        showInChannel,
+        quoteMessageId,
+      }),
     onSuccess: (msg) => {
       const rootId = msg.thread_root_message_id;
       if (rootId) {

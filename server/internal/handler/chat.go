@@ -917,6 +917,57 @@ func (h *Handler) GetPendingChatTask(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) ListChatAgentInboxEventTimeline(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	sessionID := chi.URLParam(r, "sessionId")
+
+	session, ok := h.gateChatSessionForUser(w, r, userID, workspaceID, sessionID)
+	if !ok {
+		return
+	}
+
+	eventID := chi.URLParam(r, "eventId")
+	eventUUID, ok := parseUUIDOrBadRequest(w, eventID, "inbox_event_id")
+	if !ok {
+		return
+	}
+
+	var exists bool
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT EXISTS (
+			SELECT 1
+			FROM agent_inbox_event
+			WHERE id = $1
+			  AND workspace_id = $2
+			  AND chat_session_id = $3
+			  AND agent_id = $4
+		)
+	`, eventUUID, session.WorkspaceID, session.ID, session.AgentID).Scan(&exists); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve chat transcript")
+		return
+	}
+	if !exists {
+		writeError(w, http.StatusNotFound, "chat transcript not found")
+		return
+	}
+
+	resp, err := h.projectInboxEventTaskMessages(r.Context(), eventUUID, eventID, session.WorkspaceID, r.URL.Query().Get("since"))
+	if err != nil {
+		if errors.Is(err, errInvalidTaskMessageSince) {
+			writeError(w, http.StatusBadRequest, "invalid since parameter")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to list chat transcript")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // ---------------------------------------------------------------------------
 // Task cancellation (user-facing, with ownership check)
 // ---------------------------------------------------------------------------
@@ -962,6 +1013,9 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: wsUUID,
 	})
 	if err != nil {
+		if h.cancelAgentInboxEventByUser(w, r, wsUUID, taskUUID, userID, workspaceID) {
+			return
+		}
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
@@ -1027,6 +1081,153 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) cancelAgentInboxEventByUser(w http.ResponseWriter, r *http.Request, workspaceUUID, inboxEventID pgtype.UUID, userID, workspaceID string) bool {
+	ctx := r.Context()
+	var eventAgentID, channelID, chatSessionID pgtype.UUID
+	var eventStatus, terminalOutcome string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT e.agent_id,
+		       e.channel_id,
+		       e.chat_session_id,
+		       e.status,
+		       COALESCE(e.terminal_outcome, '')
+		FROM agent_inbox_event e
+		WHERE e.id = $1
+		  AND e.workspace_id = $2
+		  AND e.requires_wake`, inboxEventID, workspaceUUID).Scan(&eventAgentID, &channelID, &chatSessionID, &eventStatus, &terminalOutcome); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load agent inbox task")
+		return true
+	}
+
+	if channelID.Valid {
+		if !h.requireChannelUserMember(w, ctx, workspaceID, channelID, parseUUID(userID)) {
+			return true
+		}
+	} else if chatSessionID.Valid {
+		if sessionChannelID := h.channelIDForChatSession(ctx, chatSessionID); sessionChannelID != "" {
+			if !h.requireChannelUserMember(w, ctx, workspaceID, parseUUID(sessionChannelID), parseUUID(userID)) {
+				return true
+			}
+		} else {
+			cs, err := h.Queries.GetChatSessionInWorkspace(ctx, db.GetChatSessionInWorkspaceParams{
+				ID:          chatSessionID,
+				WorkspaceID: workspaceUUID,
+			})
+			if err != nil {
+				writeError(w, http.StatusNotFound, "task not found")
+				return true
+			}
+			if uuidToString(cs.CreatorID) != userID {
+				writeError(w, http.StatusForbidden, "not your task")
+				return true
+			}
+		}
+	} else {
+		agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+			ID:          eventAgentID,
+			WorkspaceID: workspaceUUID,
+		})
+		if err != nil {
+			writeError(w, http.StatusNotFound, "task not found")
+			return true
+		}
+		actorType, actorID := h.resolveActor(r, userID, workspaceID)
+		if !h.canAccessPrivateAgent(ctx, agent, actorType, actorID, workspaceID) {
+			writeError(w, http.StatusForbidden, "you do not have access to this agent")
+			return true
+		}
+	}
+
+	if terminalOutcome != "" || eventStatus == "acked" || eventStatus == "suppressed" {
+		writeError(w, http.StatusBadRequest, "task is not cancellable")
+		return true
+	}
+
+	var id, rowAgentID, runtimeID, rowChatSessionID pgtype.UUID
+	var priority int32
+	var createdAt, terminalAt pgtype.Timestamptz
+	if err := h.DB.QueryRow(ctx, `
+		WITH latest_delivery AS (
+			SELECT d.id, d.runtime_id
+			FROM agent_event_delivery d
+			WHERE d.inbox_event_id = $1
+			ORDER BY d.created_at DESC, d.id DESC
+			LIMIT 1
+		),
+		cancelled_delivery AS (
+			UPDATE agent_event_delivery d
+			SET status = 'failed',
+			    last_error = 'cancelled by user',
+			    updated_at = now()
+			WHERE d.inbox_event_id = $1
+			  AND d.status IN ('leased', 'processing')
+			RETURNING d.id, d.runtime_id
+		),
+		chosen_delivery AS (
+			SELECT id, runtime_id FROM cancelled_delivery
+			UNION ALL
+			SELECT id, runtime_id FROM latest_delivery
+			LIMIT 1
+		),
+		cancelled_event AS (
+			UPDATE agent_inbox_event e
+			SET status = 'suppressed',
+			    terminal_outcome = 'no_reply',
+			    terminal_delivery_id = (SELECT id FROM chosen_delivery LIMIT 1),
+			    retryable = false,
+			    terminal_at = now(),
+			    acked_at = now(),
+			    last_error = 'cancelled by user',
+			    updated_at = now()
+			WHERE e.id = $1
+			  AND e.workspace_id = $2
+			  AND e.requires_wake
+			  AND e.status IN ('pending', 'draining', 'failed')
+			  AND e.terminal_outcome IS NULL
+			RETURNING e.id, e.agent_id, e.agent_session_id, e.priority, e.created_at, e.terminal_at, e.chat_session_id
+		)
+		SELECT e.id,
+		       e.agent_id,
+		       COALESCE((SELECT runtime_id FROM chosen_delivery LIMIT 1), s.runtime_id),
+		       e.priority,
+		       e.created_at,
+		       e.terminal_at,
+		       e.chat_session_id
+		FROM cancelled_event e
+		LEFT JOIN agent_session s ON s.id = e.agent_session_id`, inboxEventID, workspaceUUID).Scan(&id, &rowAgentID, &runtimeID, &priority, &createdAt, &terminalAt, &rowChatSessionID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusBadRequest, "task is not cancellable")
+			return true
+		}
+		writeError(w, http.StatusInternalServerError, "failed to cancel agent inbox task")
+		return true
+	}
+
+	resp := CancelTaskByUserResponse{
+		AgentTaskResponse: AgentTaskResponse{
+			ID:            uuidToString(id),
+			AgentID:       uuidToString(rowAgentID),
+			RuntimeID:     uuidToString(runtimeID),
+			WorkspaceID:   workspaceID,
+			Status:        "cancelled",
+			Priority:      priority,
+			CompletedAt:   timestampToPtr(terminalAt),
+			Attempt:       1,
+			MaxAttempts:   1,
+			CreatedAt:     timestampToString(createdAt),
+			ChatSessionID: uuidToString(rowChatSessionID),
+			Kind:          "chat",
+		},
+	}
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	h.publishTask(protocol.EventTaskCancelled, workspaceID, actorType, actorID, uuidToString(id), resp.AgentTaskResponse)
+	writeJSON(w, http.StatusOK, resp)
+	return true
 }
 
 // ---------------------------------------------------------------------------

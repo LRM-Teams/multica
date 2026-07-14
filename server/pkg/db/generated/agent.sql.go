@@ -1750,6 +1750,7 @@ JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at > now() - INTERVAL '30 days'
+  AND COALESCE(atq.context->>'type', '') <> 'agent_radar'
 GROUP BY atq.agent_id, bucket
 ORDER BY atq.agent_id, bucket
 `
@@ -1808,6 +1809,7 @@ FROM agent_task_queue atq
 JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
   AND atq.created_at > now() - INTERVAL '30 days'
+  AND COALESCE(atq.context->>'type', '') <> 'agent_radar'
 GROUP BY atq.agent_id
 `
 
@@ -1907,6 +1909,49 @@ type LinkTaskToIssueParams struct {
 // "Creating issue" forever after completion.
 func (q *Queries) LinkTaskToIssue(ctx context.Context, arg LinkTaskToIssueParams) error {
 	_, err := q.db.Exec(ctx, linkTaskToIssue, arg.ID, arg.IssueID)
+	return err
+}
+
+const setAgentTaskMaxAttempts = `-- name: SetAgentTaskMaxAttempts :exec
+UPDATE agent_task_queue
+SET max_attempts = $2
+WHERE id = $1
+`
+
+type SetAgentTaskMaxAttemptsParams struct {
+	ID          pgtype.UUID `json:"id"`
+	MaxAttempts int32       `json:"max_attempts"`
+}
+
+func (q *Queries) SetAgentTaskMaxAttempts(ctx context.Context, arg SetAgentTaskMaxAttemptsParams) error {
+	_, err := q.db.Exec(ctx, setAgentTaskMaxAttempts, arg.ID, arg.MaxAttempts)
+	return err
+}
+
+const upsertAgentTaskProgressSnapshot = `-- name: UpsertAgentTaskProgressSnapshot :exec
+INSERT INTO agent_task_progress_snapshot (task_id, summary, step, total, updated_at)
+VALUES ($1, $2, $3, $4, now())
+ON CONFLICT (task_id) DO UPDATE
+SET summary = EXCLUDED.summary,
+    step = EXCLUDED.step,
+    total = EXCLUDED.total,
+    updated_at = now()
+`
+
+type UpsertAgentTaskProgressSnapshotParams struct {
+	TaskID  pgtype.UUID `json:"task_id"`
+	Summary string      `json:"summary"`
+	Step    int32       `json:"step"`
+	Total   int32       `json:"total"`
+}
+
+func (q *Queries) UpsertAgentTaskProgressSnapshot(ctx context.Context, arg UpsertAgentTaskProgressSnapshotParams) error {
+	_, err := q.db.Exec(ctx, upsertAgentTaskProgressSnapshot,
+		arg.TaskID,
+		arg.Summary,
+		arg.Step,
+		arg.Total,
+	)
 	return err
 }
 
@@ -2088,6 +2133,7 @@ const listAgentTasks = `-- name: ListAgentTasks :many
 SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id FROM agent_task_queue
 WHERE agent_id = $1
 ORDER BY created_at DESC
+LIMIT 50
 `
 
 func (q *Queries) ListAgentTasks(ctx context.Context, agentID pgtype.UUID) ([]AgentTaskQueue, error) {

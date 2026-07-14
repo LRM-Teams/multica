@@ -124,6 +124,13 @@ export interface EditorExtensionsOptions {
   onUploadFileRef?: RefObject<
     ((file: File) => Promise<UploadResult | null>) | undefined
   >;
+  /**
+   * Chat tray mode: when `"external"`, paste/drop never insert image/fileCard
+   * into the document — files are forwarded via `onExternalFilesRef`.
+   * Default `"inline"` keeps issue/comment upload-and-insert behavior.
+   */
+  mediaModeRef?: RefObject<"inline" | "external">;
+  onExternalFilesRef?: RefObject<((files: File[]) => void) | undefined>;
   /** When true, bare Enter also submits (chat-style). Default false. */
   submitOnEnter?: boolean;
   /**
@@ -241,6 +248,9 @@ export function createEditorExtensions(
       { submitOnEnter: options.submitOnEnter ?? false },
     ),
     createBlurShortcutExtension(),
-    createFileUploadExtension(options.onUploadFileRef!),
+    createFileUploadExtension(options.onUploadFileRef!, {
+      mediaModeRef: options.mediaModeRef,
+      onExternalFilesRef: options.onExternalFilesRef,
+    }),
   ];
 }

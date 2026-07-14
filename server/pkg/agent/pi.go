@@ -231,10 +231,12 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		cancel()
 		return nil, fmt.Errorf("pi stdout pipe: %w", err)
 	}
-	// Attach an explicit stdin pipe. On Windows we write the prompt through
-	// stdin to avoid CreateProcess command-line limits; elsewhere we still
-	// close the pipe immediately so Pi sees EOF instead of blocking under
-	// systemd waiting for stdin events (#2188).
+	// Attach an explicit stdin pipe and write the prompt through it on every
+	// platform. Linux also caps each argv entry (MAX_ARG_STRLEN, commonly
+	// 128 KiB), so a large but otherwise valid channel context can fail at
+	// fork/exec with E2BIG before Pi starts. Pi accepts piped stdin as the
+	// initial non-interactive prompt, keeping user content out of argv while
+	// still delivering a clean EOF under systemd (#2188).
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -248,16 +250,25 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		cancel()
 		return nil, fmt.Errorf("start pi: %w", err)
 	}
-	if stdinPrompt != "" {
-		go func() {
-			if _, err := io.WriteString(stdin, stdinPrompt); err != nil {
-				b.cfg.Logger.Warn("pi stdin prompt write failed", "error", err)
+	stdinWriteResult := make(chan error, 1)
+	go func() {
+		var writeErr error
+		if stdinPrompt != "" {
+			n, err := io.WriteString(stdin, stdinPrompt)
+			if err != nil {
+				writeErr = err
+			} else if n != len(stdinPrompt) {
+				writeErr = io.ErrShortWrite
 			}
-			_ = stdin.Close()
-		}()
-	} else {
-		_ = stdin.Close()
-	}
+		}
+		if err := stdin.Close(); writeErr == nil && err != nil {
+			writeErr = err
+		}
+		if writeErr != nil {
+			b.cfg.Logger.Warn("pi stdin prompt write failed", "error", writeErr)
+		}
+		stdinWriteResult <- writeErr
+	}()
 
 	b.cfg.Logger.Info("pi started", "pid", cmd.Process.Pid, "cwd", opts.Cwd, "model", opts.Model)
 
@@ -280,6 +291,16 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		finalStatus := "completed"
 		var finalError string
 		usage := make(map[string]TokenUsage)
+		sessionEstablished := false
+		stdinWriteChecked := false
+		var stdinWriteErr error
+		awaitStdinWrite := func() error {
+			if !stdinWriteChecked {
+				stdinWriteErr = <-stdinWriteResult
+				stdinWriteChecked = true
+			}
+			return stdinWriteErr
+		}
 
 		scanner := bufio.NewScanner(stdout)
 		// Pi message_update events can be large (they embed the full message
@@ -299,6 +320,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 
 			switch evt.Type {
 			case "agent_start":
+				sessionEstablished = true
 				trySend(msgCh, Message{Type: MessageStatus, Status: "running"})
 
 			case "message_end":
@@ -394,6 +416,12 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 				// genuinely finished turn (stopReason=stop) early-completes; any
 				// tool-use/unseen reason falls through and the loop continues.
 				if earlyCompleteEnabled && !earlyCompleted && finalStatus != "failed" && piStopReasonAllowsEarlyComplete(turnStopReason) {
+					if err := awaitStdinWrite(); err != nil {
+						finalStatus = "failed"
+						finalError = fmt.Sprintf("pi stdin prompt delivery failed: %v", err)
+						trySend(msgCh, Message{Type: MessageError, Content: finalError})
+						continue
+					}
 					if d := flushPiTextBuffer(&textBuffer); d != "" {
 						output.WriteString(d)
 						trySend(msgCh, Message{Type: MessageText, Content: d})
@@ -457,15 +485,28 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		} else if finalStatus == "failed" {
 			finalError = withAgentStderr(finalError, "pi", stderrBuf.Tail())
 		}
+		if err := awaitStdinWrite(); err != nil && finalStatus == "completed" {
+			finalStatus = "failed"
+			finalError = fmt.Sprintf("pi stdin prompt delivery failed: %v", err)
+		}
 
 		b.cfg.Logger.Info("pi finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())
+
+		reportedSessionID := sessionPath
+		if finalStatus == "failed" && !sessionEstablished {
+			// A resume failure before Pi announces agent_start means no usable
+			// session was established. Returning the requested path here makes
+			// the daemon believe resume succeeded and suppresses its one-shot
+			// fresh-session retry.
+			reportedSessionID = ""
+		}
 
 		resCh <- Result{
 			Status:     finalStatus,
 			Output:     output.String(),
 			Error:      finalError,
 			DurationMs: duration.Milliseconds(),
-			SessionID:  sessionPath,
+			SessionID:  reportedSessionID,
 			Usage:      usage,
 		}
 	}()
@@ -578,13 +619,10 @@ var piBlockedArgs = map[string]blockedArgMode{
 //	--model <id>                model identifier
 //	--append-system-prompt <s>  extra system instructions
 //
-// Custom args appended before the positional prompt. The prompt is a
-// positional argument and must be last.
+// Custom args are passed on argv; the user prompt is returned separately for
+// stdin so platform command-line limits never constrain prompt size.
 func buildPiArgsForExecution(prompt, sessionPath string, opts ExecOptions, logger *slog.Logger) ([]string, string) {
-	if piPromptViaStdin() {
-		return buildPiArgs("", sessionPath, opts, logger), prompt
-	}
-	return buildPiArgs(prompt, sessionPath, opts, logger), ""
+	return buildPiArgs("", sessionPath, opts, logger), prompt
 }
 
 func buildPiArgs(prompt, sessionPath string, opts ExecOptions, logger *slog.Logger) []string {

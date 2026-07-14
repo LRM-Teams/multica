@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -159,5 +160,31 @@ func TestTrailingUserMessages(t *testing.T) {
 				t.Fatalf("trailingUserMessages = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestInboxPromptMessagesPreferCurrentEvent(t *testing.T) {
+	currentEventID := pgtype.UUID{Bytes: uuid.MustParse("00000000-0000-0000-0000-000000000222"), Valid: true}
+	oldEventID := pgtype.UUID{Bytes: uuid.MustParse("00000000-0000-0000-0000-000000000111"), Valid: true}
+	msgs := []db.ChatMessage{
+		{Role: "user", Content: strings.Repeat("old synthetic channel prompt", 20_000), TaskID: oldEventID},
+		{Role: "user", Content: "current synthetic channel prompt", TaskID: currentEventID},
+	}
+
+	got := inboxPromptMessages(msgs, currentEventID)
+	if len(got) != 1 || got[0].Content != "current synthetic channel prompt" {
+		t.Fatalf("inboxPromptMessages = %#v, want only current event prompt", got)
+	}
+}
+
+func TestInboxPromptMessagesRejectsUnlinkedLatestPrompt(t *testing.T) {
+	msgs := []db.ChatMessage{
+		{Role: "user", Content: strings.Repeat("old failed prompt", 20_000)},
+		{Role: "user", Content: "unrelated latest prompt"},
+	}
+
+	got := inboxPromptMessages(msgs, pgtype.UUID{})
+	if len(got) != 0 {
+		t.Fatalf("inboxPromptMessages = %#v, want no guessed fallback", got)
 	}
 }

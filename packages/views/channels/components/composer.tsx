@@ -78,7 +78,9 @@ export function Composer({
       >
         {prefix}
         {tray ? (
-          <div className="min-w-0 px-2 pt-2" data-slot="composer-tray">
+          // min-w-0 is required so the horizontal tray strip can scroll inside
+          // the shell instead of expanding the composer or stacking chips.
+          <div className="min-w-0 overflow-hidden px-2 pt-2" data-slot="composer-tray">
             {tray}
           </div>
         ) : null}

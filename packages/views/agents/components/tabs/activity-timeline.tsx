@@ -1,20 +1,30 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Check, Copy } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { copyText } from "@multica/ui/lib/clipboard";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import { useT } from "../../../i18n";
 import {
   type ActivityEvent,
-  type ActivityTone,
+  type ActivityDotTone,
   activityPresentation,
   formatActivityTime,
   isNarrativeActivityEvent,
 } from "./activity-event";
 
-const TONE_DOT: Record<ActivityTone, string> = {
+// All dots are STATIC — no `animate-pulse` (#404 follow-up). A perpetually
+// pulsing dot made settled/historical rows look like they were still loading
+// live; real "is it live" now comes from the header/hover latest-state (#521),
+// not a blinking dot. Command rows use raft's solid amber; others by tone.
+const TONE_DOT: Record<ActivityDotTone, string> = {
   neutral: "bg-muted-foreground/40",
-  active: "bg-brand animate-pulse",
+  active: "bg-brand",
+  // Command rows (any `Running command`) get raft's solid amber dot — type-based,
+  // NOT status-based: a settled/idle command still shows amber (raft parity,
+  // #404), so it never reads as a grey "idle" row.
+  running: "bg-[#F5B301]",
   waiting: "bg-warning",
   failure: "bg-destructive",
 };
@@ -44,6 +54,58 @@ function ToolTargetPath({ value }: { value: string }) {
   );
 }
 
+// A command row (#404): the `Running command` label + the real command render as
+// ONE full-width hanging block. The label opens the first line; the command
+// follows and WRAPS to the full content-column width — its wrapped lines align to
+// the block's left edge (hanging), not squished into the narrow column right of
+// the label (which left a big empty gap, Frank's "空位"). Two lines then ellipsis
+// (raft parity); full redacted command on hover (`title`) + copy. The compact
+// Profile Recent surface stays non-interactive (title only, no copy).
+function CommandRow({
+  label,
+  inline,
+  full,
+  compact,
+}: {
+  label: string;
+  inline: string;
+  full?: string;
+  compact: boolean;
+}) {
+  const { t } = useT("agents");
+  const [copied, setCopied] = useState(false);
+  const complete = full ?? inline;
+  const handleCopy = async () => {
+    if (await copyText(complete)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+  return (
+    <div className="group/cmd relative min-w-0 flex-1">
+      <div
+        title={complete}
+        className="line-clamp-2 break-all pr-5 text-sm leading-[1.45] text-foreground"
+      >
+        <span>{label} </span>
+        <span className="font-mono text-xs text-muted-foreground">{inline}</span>
+      </div>
+      {!compact && (
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label={t(($) =>
+            copied ? $.tab_body.activity.command_copied : $.tab_body.activity.copy_command,
+          )}
+          className="absolute right-0 top-0 text-muted-foreground/50 opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/cmd:opacity-100"
+        >
+          {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function ActivityRow({
   event,
   time,
@@ -61,7 +123,7 @@ function ActivityRow({
   // in-progress signal, appended at render for an active tool action only —
   // never on settled rows or non-tool states (wake / compaction / reply).
   const label =
-    event.kind === "tool_call" && presentation.tone === "active" ? `${rawLabel}…` : rawLabel;
+    event.activity_kind === "tool_call" && presentation.tone === "active" ? `${rawLabel}…` : rawLabel;
   const subtext = presentation.subtextKey
     ? t(($) => $.tab_body.activity.subtexts[presentation.subtextKey!])
     : presentation.subtext;
@@ -74,14 +136,13 @@ function ActivityRow({
     !compact &&
     !!subtext &&
     !presentation.subtextKey &&
-    (event.kind === "thinking" || event.kind === "text");
-  // A tool row's subtext is a `tool_target`; for file tools that is a path
-  // (#484/#385) which needs the basename-preserving path treatment. Non-path
-  // subtexts stay a plain single-line truncate. Shared by the inline (Activity
-  // tab) and compact (Profile Recent) layouts below.
-  const subtextIsPath = event.kind === "tool_call" && !!subtext && subtext.includes("/");
+    (event.activity_kind === "thinking" || event.activity_kind === "text");
+  // Route the non-command tool subtext by its kind (#v0 照实显示): a file tool's
+  // target is a PATH (basename-preserving middle-ellipsis, #484/#385); everything
+  // else is a plain truncate. The COMMAND kind is handled by `CommandRow` in the
+  // render below (its own full-width hanging layout, #404).
   const subtextNode = subtext ? (
-    subtextIsPath ? (
+    presentation.subtextKind === "path" ? (
       <ToolTargetPath value={subtext} />
     ) : (
       <span className="truncate text-xs text-muted-foreground">{subtext}</span>
@@ -91,7 +152,7 @@ function ActivityRow({
     <div
       className={cn("flex items-baseline gap-3", compact ? "py-0.5" : "py-1")}
       data-testid="activity-row"
-      data-visibility={event.visibility}
+      data-activity-kind={event.activity_kind}
     >
       <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70">
         {time}
@@ -117,6 +178,14 @@ function ActivityRow({
             </button>
           )}
         </div>
+      ) : presentation.subtextKind === "command" && subtext ? (
+        // Command: label + command as one full-width hanging block (#404).
+        <CommandRow
+          label={label}
+          inline={subtext}
+          full={presentation.subtextFull}
+          compact={compact}
+        />
       ) : (
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="shrink-0 text-sm text-foreground">{label}</span>
@@ -133,9 +202,11 @@ const COMPACT_RECENT_LIMIT = 5;
 
 /**
  * Read-only agent-activity narrative timeline (#267). One time-ordered stream —
- * each row = `time · source dot · human label · optional subtext`. Shows only BE
- * `user_facing` narrative events; `diagnostic_only` and internal boundary events
- * stay out. Never renders raw command/output for tool rows.
+ * each row = `time · source dot · human label · optional subtext`. Shows only
+ * mainline narrative events (kept by `isNarrativeActivityEvent`, driven by raft
+ * `activity_kind` semantics #389); diagnostic kinds (transport / telemetry /
+ * internal_progress / runtime_diagnostic / …) stay out. Never renders raw
+ * command/output for tool rows.
  *
  * Rendered by the Activity tab (agent overview page + channel side panel) and,
  * in `compact` mode, the profile "Recent activity" hover surface (#383) — the

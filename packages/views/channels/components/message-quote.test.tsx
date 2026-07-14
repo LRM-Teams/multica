@@ -123,6 +123,84 @@ describe("ComposerQuotePreview", () => {
     expect(screen.getByText("Image: photo.png")).toBeInTheDocument();
   });
 
+  it("summarizes attachment parts with counts (not raw markdown images)", () => {
+    render(
+      <ComposerQuotePreview
+        quote={message({
+          content: "",
+          parts: [
+            { type: "attachment", attachment_id: "att-1" },
+            { type: "attachment", attachment_id: "att-2" },
+          ],
+          attachments: [
+            {
+              id: "att-1",
+              workspace_id: "w1",
+              issue_id: null,
+              comment_id: null,
+              chat_session_id: null,
+              chat_message_id: null,
+              uploader_type: "user",
+              uploader_id: "user-1",
+              filename: "a.png",
+              url: "/a.png",
+              download_url: "/a.png",
+              markdown_url: "/a.png",
+              content_type: "image/png",
+              size_bytes: 10,
+              created_at: "2026-07-09T00:00:00Z",
+            },
+            {
+              id: "att-2",
+              workspace_id: "w1",
+              issue_id: null,
+              comment_id: null,
+              chat_session_id: null,
+              chat_message_id: null,
+              uploader_type: "user",
+              uploader_id: "user-1",
+              filename: "b.png",
+              url: "/b.png",
+              download_url: "/b.png",
+              markdown_url: "/b.png",
+              content_type: "image/png",
+              size_bytes: 10,
+              created_at: "2026-07-09T00:00:00Z",
+            },
+          ],
+        })}
+        cancelLabel="Cancel quote"
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("2 images")).toBeInTheDocument();
+    expect(screen.queryByText(/!\[/)).not.toBeInTheDocument();
+  });
+
+  it("does not leak filename for missing attachment parts in quote summary", () => {
+    render(
+      <ComposerQuotePreview
+        quote={message({
+          content: "",
+          parts: [
+            {
+              type: "attachment",
+              attachment_id: "missing",
+              filename: "secret.pdf",
+            },
+          ],
+          attachments: [],
+        })}
+        cancelLabel="Cancel quote"
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Attachment")).toBeInTheDocument();
+    expect(screen.queryByText(/secret/)).not.toBeInTheDocument();
+  });
+
   it("calls onCancel from the cancel control", async () => {
     const onCancel = vi.fn();
     render(

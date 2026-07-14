@@ -105,6 +105,7 @@ function makeProfile(): MemberProfile {
     // stream, #383); kept only to satisfy the MemberProfile type until the BE
     // retires the server projection.
     recent_activity: [],
+    profile_access: "full",
   };
 }
 

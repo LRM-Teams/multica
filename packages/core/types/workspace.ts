@@ -112,6 +112,8 @@ export interface MemberProfile {
   status: string | null;
   /** Empty for user profiles in v1; max 5 safe items for agents. */
   recent_activity: MemberProfileActivityItem[];
+  /** full when live panels are allowed; identity_only exposes only basic identity fields. */
+  profile_access: "full" | "identity_only";
 }
 
 export interface Invitation {

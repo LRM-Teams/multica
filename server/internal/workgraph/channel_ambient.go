@@ -14,6 +14,22 @@ import (
 // message (human or non-Wendy agent) before reviewing. Tests may shorten it.
 var AmbientDebounce = 10 * time.Minute
 
+// AmbientMaxWait caps debounce starvation (#1): under continuous chatter the
+// per-message debounce would keep pushing review_not_before forward forever, so
+// the busiest channels — the ones most likely to need coordination — would never
+// be reviewed. A dirty channel is reviewed at most this long after its first
+// unreviewed message, regardless of ongoing chatter. Tests may shorten it.
+var AmbientMaxWait = 30 * time.Minute
+
+// AmbientClaimStaleAfter re-arms ambient rows stuck in claimed/running (e.g. the
+// radar run never completed because the daemon went away) so a review is not
+// lost forever. Tests may shorten it.
+var AmbientClaimStaleAfter = 15 * time.Minute
+
+// AmbientRetryBackoff delays re-claim after a failed ambient review so a broken
+// run does not hot-loop. Tests may shorten it.
+var AmbientRetryBackoff = time.Minute
+
 type ChannelAmbientWatch struct {
 	ChannelID             pgtype.UUID
 	WorkspaceID           pgtype.UUID
@@ -27,7 +43,10 @@ type ChannelAmbientWatch struct {
 }
 
 // TouchChannelAmbient marks a Wendy-watched group as dirty and pushes the
-// review deadline to now+debounce. Repeated human/agent chatter resets the timer.
+// review deadline to messageAt+debounce. Repeated human/agent chatter resets the
+// per-message debounce, but the deadline is capped at
+// first_dirty_message_at+AmbientMaxWait so a continuously busy channel is still
+// reviewed (#1 debounce starvation).
 func (s *Store) TouchChannelAmbient(ctx context.Context, workspaceID, channelID, wendyAgentID, messageID pgtype.UUID, messageAt time.Time) error {
 	if messageAt.IsZero() {
 		messageAt = time.Now()
@@ -37,8 +56,8 @@ func (s *Store) TouchChannelAmbient(ctx context.Context, workspaceID, channelID,
 		INSERT INTO wendy_channel_ambient (
 		  channel_id, workspace_id, wendy_agent_id,
 		  last_human_message_at, last_human_message_id,
-		  review_not_before, dirty, status
-		) VALUES ($1, $2, $3, $4, $5, $6, TRUE, 'idle')
+		  review_not_before, first_dirty_message_at, dirty, status
+		) VALUES ($1, $2, $3, $4, $5, $6, $4, TRUE, 'idle')
 		ON CONFLICT (channel_id) DO UPDATE SET
 		  wendy_agent_id = EXCLUDED.wendy_agent_id,
 		  last_human_message_at = GREATEST(wendy_channel_ambient.last_human_message_at, EXCLUDED.last_human_message_at),
@@ -47,7 +66,22 @@ func (s *Store) TouchChannelAmbient(ctx context.Context, workspaceID, channelID,
 		      THEN EXCLUDED.last_human_message_id
 		    ELSE wendy_channel_ambient.last_human_message_id
 		  END,
-		  review_not_before = GREATEST(wendy_channel_ambient.review_not_before, EXCLUDED.review_not_before),
+		  -- Anchor the current unreviewed streak: keep the earliest anchor while
+		  -- still dirty, restart it when the channel was clean.
+		  first_dirty_message_at = CASE
+		    WHEN wendy_channel_ambient.dirty
+		      THEN COALESCE(wendy_channel_ambient.first_dirty_message_at, EXCLUDED.first_dirty_message_at)
+		    ELSE EXCLUDED.first_dirty_message_at
+		  END,
+		  -- Debounce, but never later than the streak anchor + max staleness.
+		  review_not_before = LEAST(
+		    GREATEST(wendy_channel_ambient.review_not_before, EXCLUDED.review_not_before),
+		    (CASE
+		      WHEN wendy_channel_ambient.dirty
+		        THEN COALESCE(wendy_channel_ambient.first_dirty_message_at, EXCLUDED.first_dirty_message_at)
+		      ELSE EXCLUDED.first_dirty_message_at
+		    END) + make_interval(secs => $7)
+		  ),
 		  dirty = TRUE,
 		  status = CASE
 		    WHEN wendy_channel_ambient.status = 'running' THEN wendy_channel_ambient.status
@@ -62,7 +96,7 @@ func (s *Store) TouchChannelAmbient(ctx context.Context, workspaceID, channelID,
 		    ELSE NULL
 		  END,
 		  updated_at = now()
-	`, channelID, workspaceID, wendyAgentID, messageAt, nullableUUID(messageID), notBefore)
+	`, channelID, workspaceID, wendyAgentID, messageAt, nullableUUID(messageID), notBefore, AmbientMaxWait.Seconds())
 	if err != nil {
 		return fmt.Errorf("touch wendy channel ambient: %w", err)
 	}
@@ -199,4 +233,105 @@ func (s *Store) CancelChannelAmbientClaim(ctx context.Context, channelID, claimT
 		return fmt.Errorf("cancel wendy channel ambient (%s): %w", reason, err)
 	}
 	return nil
+}
+
+// MarkChannelAmbientRunning transitions a claimed row to running once the review
+// radar run has been enqueued. Unlike the old enqueue-time clear, it keeps dirty
+// set and records reviewing_message_at (the watermark this run covers) so the
+// review can be settled precisely on completion — and re-armed on failure (#2).
+func (s *Store) MarkChannelAmbientRunning(ctx context.Context, channelID, claimToken pgtype.UUID, reviewingAt time.Time, radarRunID pgtype.UUID) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE wendy_channel_ambient
+		SET status = 'running',
+		    active_radar_run_id = $4,
+		    reviewing_message_at = $3,
+		    updated_at = now()
+		WHERE channel_id = $1
+		  AND claim_token = $2
+		  AND status = 'claimed'
+	`, channelID, claimToken, reviewingAt, nullableUUID(radarRunID))
+	if err != nil {
+		return fmt.Errorf("mark wendy channel ambient running: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("ambient claim lost")
+	}
+	return nil
+}
+
+// ReconcileChannelAmbientRun settles a running ambient review when its radar run
+// reaches a terminal state (#2). On success it clears dirty up to the watermark
+// the run covered (keeping dirty if newer chatter arrived mid-review). On failure
+// it re-arms without advancing last_reviewed_message_at, with a short backoff so a
+// broken run does not hot-loop.
+func (s *Store) ReconcileChannelAmbientRun(ctx context.Context, radarRunID pgtype.UUID, success bool) error {
+	if !radarRunID.Valid {
+		return nil
+	}
+	var query string
+	var args []any
+	if success {
+		query = `
+			UPDATE wendy_channel_ambient
+			SET last_reviewed_message_at = GREATEST(
+			      COALESCE(last_reviewed_message_at, reviewing_message_at),
+			      reviewing_message_at
+			    ),
+			    dirty = (last_human_message_at > reviewing_message_at),
+			    first_dirty_message_at = CASE
+			      WHEN last_human_message_at > reviewing_message_at THEN reviewing_message_at
+			      ELSE NULL
+			    END,
+			    status = 'idle',
+			    claim_token = NULL,
+			    claimed_at = NULL,
+			    reviewing_message_at = NULL,
+			    active_radar_run_id = NULL,
+			    updated_at = now()
+			WHERE active_radar_run_id = $1
+			  AND status = 'running'`
+		args = []any{radarRunID}
+	} else {
+		query = `
+			UPDATE wendy_channel_ambient
+			SET status = 'idle',
+			    dirty = TRUE,
+			    claim_token = NULL,
+			    claimed_at = NULL,
+			    reviewing_message_at = NULL,
+			    active_radar_run_id = NULL,
+			    review_not_before = now() + make_interval(secs => $2),
+			    updated_at = now()
+			WHERE active_radar_run_id = $1
+			  AND status = 'running'`
+		args = []any{radarRunID, AmbientRetryBackoff.Seconds()}
+	}
+	if _, err := s.pool.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("reconcile wendy channel ambient run: %w", err)
+	}
+	return nil
+}
+
+// ReclaimStaleChannelAmbient re-arms rows stuck in claimed/running past the stale
+// window (e.g. the review run never completed because the daemon went away) so a
+// review is never lost forever (#2). last_reviewed_message_at is left untouched so
+// the row is only re-claimed when there is still unreviewed chatter.
+func (s *Store) ReclaimStaleChannelAmbient(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE wendy_channel_ambient
+		SET status = 'idle',
+		    dirty = TRUE,
+		    claim_token = NULL,
+		    claimed_at = NULL,
+		    reviewing_message_at = NULL,
+		    active_radar_run_id = NULL,
+		    updated_at = now()
+		WHERE status IN ('claimed', 'running')
+		  AND claimed_at IS NOT NULL
+		  AND claimed_at < now() - make_interval(secs => $1)
+	`, AmbientClaimStaleAfter.Seconds())
+	if err != nil {
+		return 0, fmt.Errorf("reclaim stale wendy channel ambient: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

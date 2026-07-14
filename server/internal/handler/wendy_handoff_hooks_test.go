@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/workgraph"
 )
 
@@ -301,16 +302,17 @@ func TestWendyAmbientDispatchEnqueuesEventRadarRun(t *testing.T) {
 		t.Fatalf("enqueued ambient reviews = %d, want 1", enqueued)
 	}
 
+	var runID pgtype.UUID
 	var triggerKind, cooldownKey, status string
 	err = testPool.QueryRow(context.Background(), `
-		SELECT trigger_kind, cooldown_key, status
+		SELECT id, trigger_kind, cooldown_key, status
 		FROM agent_radar_run
 		WHERE workspace_id = $1
 		  AND agent_id = $2
 		  AND cooldown_key = $3
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, testWorkspaceID, supervisor.ID, "wendy_ambient:"+channelID).Scan(&triggerKind, &cooldownKey, &status)
+	`, testWorkspaceID, supervisor.ID, "wendy_ambient:"+channelID).Scan(&runID, &triggerKind, &cooldownKey, &status)
 	if err != nil {
 		t.Fatalf("load ambient radar run: %v", err)
 	}
@@ -318,6 +320,8 @@ func TestWendyAmbientDispatchEnqueuesEventRadarRun(t *testing.T) {
 		t.Fatalf("ambient radar run trigger=%q status=%q, want event queued", triggerKind, status)
 	}
 
+	// #2: the review is in flight after enqueue — dirty stays set and the row is
+	// 'running' so it is not re-claimed and is not lost if the run fails.
 	var dirty bool
 	var ambientStatus string
 	if err := testPool.QueryRow(context.Background(), `
@@ -325,8 +329,21 @@ func TestWendyAmbientDispatchEnqueuesEventRadarRun(t *testing.T) {
 	`, channelID).Scan(&dirty, &ambientStatus); err != nil {
 		t.Fatalf("load ambient after dispatch: %v", err)
 	}
+	if !dirty || ambientStatus != "running" {
+		t.Fatalf("ambient after dispatch dirty=%v status=%q, want dirty running", dirty, ambientStatus)
+	}
+
+	// A successful run completion settles the review: dirty cleared, back to idle.
+	if err := testHandler.WorkGraph.ReconcileChannelAmbientRun(context.Background(), runID, true); err != nil {
+		t.Fatalf("reconcile ambient run: %v", err)
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT dirty, status FROM wendy_channel_ambient WHERE channel_id = $1
+	`, channelID).Scan(&dirty, &ambientStatus); err != nil {
+		t.Fatalf("load ambient after reconcile: %v", err)
+	}
 	if dirty || ambientStatus != "idle" {
-		t.Fatalf("ambient after dispatch dirty=%v status=%q, want clean idle", dirty, ambientStatus)
+		t.Fatalf("ambient after reconcile dirty=%v status=%q, want clean idle", dirty, ambientStatus)
 	}
 
 	var authorized bool

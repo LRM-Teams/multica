@@ -917,6 +917,57 @@ func (h *Handler) GetPendingChatTask(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) ListChatAgentInboxEventTimeline(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	sessionID := chi.URLParam(r, "sessionId")
+
+	session, ok := h.gateChatSessionForUser(w, r, userID, workspaceID, sessionID)
+	if !ok {
+		return
+	}
+
+	eventID := chi.URLParam(r, "eventId")
+	eventUUID, ok := parseUUIDOrBadRequest(w, eventID, "inbox_event_id")
+	if !ok {
+		return
+	}
+
+	var exists bool
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT EXISTS (
+			SELECT 1
+			FROM agent_inbox_event
+			WHERE id = $1
+			  AND workspace_id = $2
+			  AND chat_session_id = $3
+			  AND agent_id = $4
+		)
+	`, eventUUID, session.WorkspaceID, session.ID, session.AgentID).Scan(&exists); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve chat transcript")
+		return
+	}
+	if !exists {
+		writeError(w, http.StatusNotFound, "chat transcript not found")
+		return
+	}
+
+	resp, err := h.projectInboxEventTaskMessages(r.Context(), eventUUID, eventID, session.WorkspaceID, r.URL.Query().Get("since"))
+	if err != nil {
+		if errors.Is(err, errInvalidTaskMessageSince) {
+			writeError(w, http.StatusBadRequest, "invalid since parameter")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to list chat transcript")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // ---------------------------------------------------------------------------
 // Task cancellation (user-facing, with ownership check)
 // ---------------------------------------------------------------------------

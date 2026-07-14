@@ -3243,15 +3243,6 @@ func (h *Handler) listInboxEventTaskMessagesByUser(ctx context.Context, eventID 
 	if strings.TrimSpace(workspaceID) == "" {
 		return nil, false, nil
 	}
-	var sinceArg any
-	if sinceStr != "" {
-		sinceSeq, err := strconv.Atoi(sinceStr)
-		if err != nil {
-			return nil, false, errInvalidTaskMessageSince
-		}
-		sinceArg = sinceSeq
-	}
-
 	workspaceUUID := parseUUID(workspaceID)
 	var exists bool
 	if err := h.DB.QueryRow(ctx, `
@@ -3266,6 +3257,20 @@ func (h *Handler) listInboxEventTaskMessagesByUser(ctx context.Context, eventID 
 	}
 	if !exists {
 		return nil, false, nil
+	}
+
+	payloads, err := h.projectInboxEventTaskMessages(ctx, eventID, taskID, workspaceUUID, sinceStr)
+	return payloads, true, err
+}
+
+func (h *Handler) projectInboxEventTaskMessages(ctx context.Context, eventID pgtype.UUID, taskID string, workspaceUUID pgtype.UUID, sinceStr string) ([]protocol.TaskMessagePayload, error) {
+	var sinceArg any
+	if sinceStr != "" {
+		sinceSeq, err := strconv.Atoi(sinceStr)
+		if err != nil {
+			return nil, errInvalidTaskMessageSince
+		}
+		sinceArg = sinceSeq
 	}
 
 	rows, err := h.DB.Query(ctx, `
@@ -3326,7 +3331,7 @@ func (h *Handler) listInboxEventTaskMessagesByUser(ctx context.Context, eventID 
 		ORDER BY seq ASC, created_at ASC, id ASC
 	`, eventID, workspaceUUID, sinceArg)
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -3343,14 +3348,14 @@ func (h *Handler) listInboxEventTaskMessagesByUser(ctx context.Context, eventID 
 			&row.Visibility,
 			&row.CreatedAt,
 		); err != nil {
-			return nil, true, err
+			return nil, err
 		}
 		payloads = append(payloads, inboxEventTaskMessageToPayload(row, taskID))
 	}
 	if err := rows.Err(); err != nil {
-		return nil, true, err
+		return nil, err
 	}
-	return payloads, true, nil
+	return payloads, nil
 }
 
 // GetIssueUsage returns aggregated token usage for all tasks belonging to an issue.

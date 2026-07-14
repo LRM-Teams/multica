@@ -1,0 +1,81 @@
+package handler
+
+import (
+	"context"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/google/uuid"
+)
+
+func TestWendyHandoffHookUnlocksAfterProductionIssueUpdates(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	fixture := seedWendyHandoffHookFixture(t)
+	updateIssueStatusForWendyHook(t, fixture.issueA.ID.String(), "done")
+	fixture.setPrimaryChannel(t, fixture.issueC)
+	updateIssueStatusForWendyHook(t, fixture.issueB.ID.String(), "done")
+
+	assertWendyUnlockHandoffChannel(t, fixture.channelID)
+	fixture.makeUnlockDue(t)
+	if got := dispatchWendyUnlockHandoffsForTest(t); got != 1 {
+		t.Fatalf("dispatched handoffs = %d, want 1", got)
+	}
+	assertWendyUnlockMessageCount(t, fixture.channelID, fixture.wendyID, 1)
+	assertWendyUnlockMessageMentions(t, fixture.channelID, fixture.cID)
+}
+
+func seedWendyHandoffHookFixture(t *testing.T) wendyUnlockDispatchFixture {
+	t.Helper()
+	ctx := context.Background()
+	supervisor := createRadarSupervisorForExecutorTest(t)
+	target := createHandlerTestAgent(t, "Wendy Hook Target "+uuid.NewString(), nil)
+	channelID := seedChannelForTest(t, "wendy-hook-"+uuid.NewString(), testUserID)
+	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String(), target)
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO workspace_radar_state (workspace_id, supervisor_agent_id, enabled, next_due_at)
+		VALUES ($1, $2, true, now())
+		ON CONFLICT (workspace_id) DO UPDATE
+		SET supervisor_agent_id = EXCLUDED.supervisor_agent_id,
+		    enabled = true,
+		    updated_at = now()
+	`, testWorkspaceID, supervisor.ID); err != nil {
+		t.Fatalf("bind Wendy supervisor: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `
+			DELETE FROM workspace_radar_state
+			WHERE workspace_id = $1 AND supervisor_agent_id = $2
+		`, testWorkspaceID, supervisor.ID)
+	})
+
+	fixture := wendyUnlockDispatchFixture{
+		wendyID:   supervisor.ID.String(),
+		cID:       target,
+		channelID: channelID,
+	}
+	fixture.issueA = fixture.createIssue(t, "Hook prerequisite A", target)
+	fixture.issueB = fixture.createIssue(t, "Hook prerequisite B", target)
+	fixture.issueC = fixture.createIssue(t, "Hook waiting C", target)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO issue_dependency (issue_id, depends_on_issue_id, type)
+		VALUES ($1, $2, 'blocked_by'), ($1, $3, 'blocked_by')
+	`, fixture.issueC.ID, fixture.issueA.ID, fixture.issueB.ID); err != nil {
+		t.Fatalf("create C dependencies: %v", err)
+	}
+	return fixture
+}
+
+func updateIssueStatusForWendyHook(t *testing.T, issueID, status string) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req := newRequest("PUT", "/api/issues/"+issueID, map[string]any{"status": status})
+	req = withURLParam(req, "id", issueID)
+	testHandler.UpdateIssue(w, req)
+	if w.Code != 200 {
+		t.Fatalf("update issue status=%q: expected 200, got %d: %s", status, w.Code, w.Body.String())
+	}
+}

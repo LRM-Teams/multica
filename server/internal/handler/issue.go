@@ -2488,6 +2488,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// fails best-effort.
 	if statusChanged {
 		h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID)
+		h.syncWendyWorkGraphAfterIssueUpdate(r.Context(), issue)
 	}
 
 	writeJSON(w, http.StatusOK, resp)

@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/cloudruntime"
@@ -30,6 +31,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/storage"
 	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/internal/workgraph"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -127,6 +129,7 @@ type Handler struct {
 	CFSigner              *auth.CloudFrontSigner
 	Analytics             analytics.Client
 	WendyComposer         WendyComposer
+	WorkGraph             *workgraph.Store
 	// Metrics is the shared business-metrics collector built by main.go.
 	// May be nil in tests / self-hosted with the metrics listener disabled;
 	// every Record* method is nil-safe and obsmetrics.RecordEvent treats a
@@ -220,7 +223,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 			},
 		)
 	}
-	return &Handler{
+	h := &Handler{
 		Queries:               queries,
 		DB:                    executor,
 		TxStarter:             txStarter,
@@ -249,6 +252,11 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		}),
 		cfg: cfg,
 	}
+	if pool, ok := txStarter.(*pgxpool.Pool); ok {
+		h.WorkGraph = workgraph.NewStore(pool)
+		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess
+	}
+	return h
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

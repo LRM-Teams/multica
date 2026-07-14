@@ -16,6 +16,15 @@ import (
 func (s *Store) SyncIssueNode(ctx context.Context, issue db.Issue) (db.WorkNode, error) {
 	ownerType, ownerID := issueOwner(issue)
 	status := issueNodeStatus(issue.Status)
+	var primaryChannelID pgtype.UUID
+	if existing, err := s.queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{
+		WorkspaceID:   issue.WorkspaceID,
+		LinkedIssueID: issue.ID,
+	}); err == nil {
+		primaryChannelID = existing.PrimaryChannelID
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return db.WorkNode{}, fmt.Errorf("load existing issue work node: %w", err)
+	}
 
 	node, err := s.queries.UpsertIssueWorkNode(ctx, db.UpsertIssueWorkNodeParams{
 		WorkspaceID:      issue.WorkspaceID,
@@ -24,7 +33,7 @@ func (s *Store) SyncIssueNode(ctx context.Context, issue db.Issue) (db.WorkNode,
 		OwnerType:        ownerType,
 		OwnerID:          ownerID,
 		Status:           status,
-		PrimaryChannelID: pgtype.UUID{},
+		PrimaryChannelID: primaryChannelID,
 		IssueID:          issue.ID,
 	})
 	if err != nil {
@@ -201,6 +210,19 @@ func (s *Store) RecomputeIssueNodeStatus(ctx context.Context, nodeID pgtype.UUID
 		WHERE id = $2 AND workspace_id = $3
 	`, nextStatus, nodeID, workspaceID); err != nil {
 		return fmt.Errorf("update issue work node status: %w", err)
+	}
+	return nil
+}
+
+// TouchIssueProgress records successful agent-task progress on an issue node.
+// A missing node is tolerated because the subsequent issue sync creates it.
+func (s *Store) TouchIssueProgress(ctx context.Context, workspaceID, issueID pgtype.UUID) error {
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE work_node
+		SET last_progress_at = now(), updated_at = now()
+		WHERE workspace_id = $1 AND kind = 'issue' AND linked_issue_id = $2
+	`, workspaceID, issueID); err != nil {
+		return fmt.Errorf("touch issue work node progress: %w", err)
 	}
 	return nil
 }

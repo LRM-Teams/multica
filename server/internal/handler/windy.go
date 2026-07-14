@@ -600,8 +600,7 @@ func (h *Handler) ensureWindyDM(r *http.Request, workspaceID string, userID, win
 }
 
 func (h *Handler) GetAgentDraft(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireUserID(w, r)
-	if !ok {
+	if _, ok := requireUserID(w, r); !ok {
 		return
 	}
 	workspaceID := h.resolveWorkspaceID(r)
@@ -622,8 +621,8 @@ func (h *Handler) GetAgentDraft(w http.ResponseWriter, r *http.Request) {
 			can_execute_code, suggested_channels, recommended_tools, initial_notes,
 			initial_memory, status, used_agent_id, created_at, updated_at, used_at
 		FROM agent_creation_draft
-		WHERE id = $1 AND workspace_id = $2 AND target_user_id = $3`,
-		draftID, wsUUID, parseUUID(userID))
+		WHERE id = $1 AND workspace_id = $2`,
+		draftID, wsUUID)
 	draft, err := scanAgentDraft(row)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "agent draft not found")
@@ -678,8 +677,9 @@ func (h *Handler) CreateAgentDraft(w http.ResponseWriter, r *http.Request) {
 			createdBy = u
 		}
 	}
+	targetUserID := h.resolveAgentDraftTargetUserID(r, wsUUID, parseUUID(userID))
 
-	draft, err := h.insertAgentDraft(r, wsUUID, parseUUID(userID), createdBy, projectID, channelID, req)
+	draft, err := h.insertAgentDraft(r, wsUUID, targetUserID, createdBy, projectID, channelID, req)
 	if err != nil {
 		slog.Warn("create agent draft failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to create agent draft")
@@ -901,6 +901,88 @@ func parseAgentActorHeader(raw string) (pgtype.UUID, error) {
 	var out pgtype.UUID
 	err := out.Scan(strings.TrimSpace(raw))
 	return out, err
+}
+
+func (h *Handler) resolveAgentDraftTargetUserID(r *http.Request, workspaceID, fallbackUserID pgtype.UUID) pgtype.UUID {
+	if h == nil || h.DB == nil || !fallbackUserID.Valid {
+		return fallbackUserID
+	}
+	switch r.Header.Get("X-Actor-Source") {
+	case "task_token":
+		if target, ok := h.agentTaskInitiatorUserID(r, workspaceID); ok {
+			return target
+		}
+	case "agent_inbox_token", "agent_credential":
+		if target, ok := h.agentInboxInitiatorUserID(r, workspaceID); ok {
+			return target
+		}
+	}
+	return fallbackUserID
+}
+
+func (h *Handler) agentTaskInitiatorUserID(r *http.Request, workspaceID pgtype.UUID) (pgtype.UUID, bool) {
+	var empty pgtype.UUID
+	taskID, err := parseAgentActorHeader(r.Header.Get("X-Task-ID"))
+	if err != nil || !taskID.Valid || !workspaceID.Valid {
+		return empty, false
+	}
+	var target pgtype.UUID
+	err = h.DB.QueryRow(r.Context(), `
+		WITH task AS (
+			SELECT t.initiator_user_id, c.author_type AS comment_author_type, c.author_id AS comment_author_id
+			FROM agent_task_queue t
+			JOIN agent a ON a.id = t.agent_id AND a.workspace_id = $2
+			LEFT JOIN comment c ON c.id = t.trigger_comment_id AND c.workspace_id = $2
+			WHERE t.id = $1
+		)
+		SELECT candidate.user_id
+		FROM task
+		CROSS JOIN LATERAL (
+			SELECT CASE
+				WHEN task.initiator_user_id IS NOT NULL THEN task.initiator_user_id
+				WHEN task.comment_author_type = 'member' THEN task.comment_author_id
+				ELSE NULL
+			END AS user_id
+		) candidate
+		JOIN member m ON m.workspace_id = $2 AND m.user_id = candidate.user_id
+		WHERE candidate.user_id IS NOT NULL
+		LIMIT 1`, taskID, workspaceID).Scan(&target)
+	return target, err == nil && target.Valid
+}
+
+func (h *Handler) agentInboxInitiatorUserID(r *http.Request, workspaceID pgtype.UUID) (pgtype.UUID, bool) {
+	var empty pgtype.UUID
+	eventID, err := parseAgentActorHeader(r.Header.Get("X-Agent-Inbox-Event-ID"))
+	if err != nil || !eventID.Valid || !workspaceID.Valid {
+		return empty, false
+	}
+	agentID, err := parseAgentActorHeader(r.Header.Get("X-Agent-ID"))
+	if err != nil || !agentID.Valid {
+		return empty, false
+	}
+	var target pgtype.UUID
+	err = h.DB.QueryRow(r.Context(), `
+		WITH inbox AS (
+			SELECT msg.author_type AS message_author_type,
+				msg.author_id AS message_author_id,
+				session.creator_id AS session_creator_id
+			FROM agent_inbox_event e
+			LEFT JOIN channel_message msg ON msg.id = e.source_message_id AND msg.workspace_id = e.workspace_id
+			LEFT JOIN chat_session session ON session.id = e.chat_session_id
+			WHERE e.id = $1 AND e.workspace_id = $2 AND e.agent_id = $3
+		)
+		SELECT candidate.user_id
+		FROM inbox
+		CROSS JOIN LATERAL (
+			SELECT COALESCE(
+				CASE WHEN inbox.message_author_type = 'user' THEN inbox.message_author_id END,
+				inbox.session_creator_id
+			) AS user_id
+		) candidate
+		JOIN member m ON m.workspace_id = $2 AND m.user_id = candidate.user_id
+		WHERE candidate.user_id IS NOT NULL
+		LIMIT 1`, eventID, workspaceID, agentID).Scan(&target)
+	return target, err == nil && target.Valid
 }
 
 func (h *Handler) MarkAgentDraftUsed(r *http.Request, workspaceID, targetUserID string, draftID pgtype.UUID, usedAgentID pgtype.UUID) {

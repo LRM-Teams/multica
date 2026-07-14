@@ -433,6 +433,9 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	if profile.Role != "Agent" {
 		t.Fatalf("agent profile role = %q, want Agent", profile.Role)
 	}
+	if profile.ProfileAccess != "full" {
+		t.Fatalf("profile_access = %q, want full", profile.ProfileAccess)
+	}
 	items := profile.RecentActivity
 	if len(items) != 5 {
 		t.Fatalf("expected 5 activity items, got %d: %#v", len(items), items)
@@ -470,6 +473,70 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	}
 	if items[0].OccurredAt == "" || items[1].OccurredAt == "" {
 		t.Fatalf("expected occurred_at on every item: %#v", items)
+	}
+}
+
+func TestGetMemberProfile_PrivateAgentReturnsIdentityOnlyForPlainMember(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID, _, memberID := privateAgentTestFixture(t)
+	description := "Private agent identity that is already visible in a message."
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent
+		SET description = $2
+		WHERE id = $1
+	`, agentID, description); err != nil {
+		t.Fatalf("update private agent description: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, status, priority, trigger_summary,
+			created_at, started_at
+		)
+		VALUES ($1, $2, 'running', 0, 'protected work must not leak',
+		        now() - interval '30 seconds', now() - interval '10 seconds')
+	`, agentID, handlerTestRuntimeID(t)); err != nil {
+		t.Fatalf("insert protected task: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := withRouteParams(
+		newRequestAs(memberID, http.MethodGet, "/api/member-profiles/agent/"+agentID, nil),
+		"memberType", "agent",
+		"memberId", agentID,
+	)
+	testHandler.GetMemberProfile(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetMemberProfile: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var profile MemberProfileResponse
+	if err := json.NewDecoder(w.Body).Decode(&profile); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if profile.MemberType != "agent" || profile.MemberID != agentID {
+		t.Fatalf("profile identity = %#v, want agent %s", profile, agentID)
+	}
+	if profile.ProfileAccess != "identity_only" {
+		t.Fatalf("profile_access = %q, want identity_only", profile.ProfileAccess)
+	}
+	if profile.Status != nil {
+		t.Fatalf("identity-only profile status = %q, want nil", *profile.Status)
+	}
+	if len(profile.RecentActivity) != 0 {
+		t.Fatalf("identity-only profile leaked activity: %#v", profile.RecentActivity)
+	}
+	if profile.Description != description {
+		t.Fatalf("description = %q, want %q", profile.Description, description)
+	}
+	body := w.Body.String()
+	for _, leak := range []string{"protected work must not leak", `"status":"running"`} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("identity-only profile leaked %q: %s", leak, body)
+		}
 	}
 }
 

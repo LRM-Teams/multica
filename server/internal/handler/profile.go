@@ -21,6 +21,7 @@ type MemberProfileResponse struct {
 	Role           string                    `json:"role"`
 	Status         *string                   `json:"status"`
 	RecentActivity []AgentRecentActivityItem `json:"recent_activity"`
+	ProfileAccess  string                    `json:"profile_access"`
 }
 
 type AgentRecentActivityItem struct {
@@ -84,6 +85,7 @@ func (h *Handler) getUserMemberProfile(w http.ResponseWriter, r *http.Request, u
 		Role:           member.Role,
 		Status:         nil,
 		RecentActivity: []AgentRecentActivityItem{},
+		ProfileAccess:  "full",
 	})
 }
 
@@ -96,7 +98,18 @@ func (h *Handler) getAgentMemberProfile(w http.ResponseWriter, r *http.Request, 
 	workspaceID := uuidToString(agent.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
 	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
-		writeError(w, http.StatusForbidden, "you do not have access to this agent")
+		writeJSON(w, http.StatusOK, MemberProfileResponse{
+			MemberType:     "agent",
+			MemberID:       uuidToString(agent.ID),
+			Name:           agent.Name,
+			DisplayName:    agentDisplayName(agent),
+			AvatarURL:      textToPtr(agent.AvatarUrl),
+			Description:    agent.Description,
+			Role:           "Agent",
+			Status:         nil,
+			RecentActivity: []AgentRecentActivityItem{},
+			ProfileAccess:  "identity_only",
+		})
 		return
 	}
 
@@ -116,6 +129,7 @@ func (h *Handler) getAgentMemberProfile(w http.ResponseWriter, r *http.Request, 
 		Role:           "Agent",
 		Status:         &status,
 		RecentActivity: activity,
+		ProfileAccess:  "full",
 	})
 }
 

@@ -257,6 +257,79 @@ func TestWendyOwnGroupMessageDoesNotTouchAmbientWatch(t *testing.T) {
 	}
 }
 
+func TestWendyAmbientDispatchEnqueuesEventRadarRun(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	supervisor := createRadarSupervisorForExecutorTest(t)
+	channelID := seedChannelForTest(t, "wendy-ambient-dispatch-"+uuid.NewString(), testUserID)
+	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String())
+	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
+
+	prev := workgraph.AmbientDebounce
+	workgraph.AmbientDebounce = time.Second
+	t.Cleanup(func() { workgraph.AmbientDebounce = prev })
+
+	ch := ChannelResponse{
+		ID:          channelID,
+		WorkspaceID: testWorkspaceID,
+		Kind:        "group",
+		Name:        "ambient-dispatch",
+	}
+	testHandler.ingestWendyHumanGroupMessage(context.Background(), ch, ChannelMessageResponse{
+		Content:   "enough chatter to need a review",
+		CreatedAt: time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339Nano),
+	})
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE wendy_channel_ambient
+		SET review_not_before = now() - interval '1 minute',
+		    dirty = TRUE,
+		    status = 'idle',
+		    claim_token = NULL,
+		    claimed_at = NULL
+		WHERE channel_id = $1
+	`, channelID); err != nil {
+		t.Fatalf("make ambient due: %v", err)
+	}
+
+	enqueued, err := testHandler.DispatchDueWendyAmbientReviews(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("dispatch ambient: %v", err)
+	}
+	if enqueued != 1 {
+		t.Fatalf("enqueued ambient reviews = %d, want 1", enqueued)
+	}
+
+	var triggerKind, cooldownKey, status string
+	err = testPool.QueryRow(context.Background(), `
+		SELECT trigger_kind, cooldown_key, status
+		FROM agent_radar_run
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND cooldown_key = $3
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, testWorkspaceID, supervisor.ID, "wendy_ambient:"+channelID).Scan(&triggerKind, &cooldownKey, &status)
+	if err != nil {
+		t.Fatalf("load ambient radar run: %v", err)
+	}
+	if triggerKind != "event" || status != "queued" {
+		t.Fatalf("ambient radar run trigger=%q status=%q, want event queued", triggerKind, status)
+	}
+
+	var dirty bool
+	var ambientStatus string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT dirty, status FROM wendy_channel_ambient WHERE channel_id = $1
+	`, channelID).Scan(&dirty, &ambientStatus); err != nil {
+		t.Fatalf("load ambient after dispatch: %v", err)
+	}
+	if dirty || ambientStatus != "idle" {
+		t.Fatalf("ambient after dispatch dirty=%v status=%q, want clean idle", dirty, ambientStatus)
+	}
+}
+
 func TestWendyHandoffHookUnlocksAfterBatchIssueUpdate(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -45,6 +45,12 @@ func (h *Handler) syncWendyWorkGraphAfterIssueUpdate(ctx context.Context, issue 
 		if err := h.WorkGraph.DetectUnlockForNode(ctx, node.ID); err != nil {
 			slog.Warn("detect Wendy unlock failed", "issue_id", connected.ID.String(), "error", err)
 		}
+		if err := h.WorkGraph.DetectBlockRouteForNode(ctx, node.ID); err != nil {
+			slog.Warn("detect Wendy block route failed", "issue_id", connected.ID.String(), "error", err)
+		}
+	}
+	if err := h.WorkGraph.DetectStalledNodes(ctx, issue.WorkspaceID); err != nil {
+		slog.Warn("detect stalled Wendy work nodes failed", "workspace_id", issue.WorkspaceID.String(), "error", err)
 	}
 }
 

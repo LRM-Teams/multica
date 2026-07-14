@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -115,8 +114,8 @@ func TestAgentRadarScheduleCreatesAtMostTwoWorkspacesPerTick(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run workspace Radar scheduler: %v", err)
 	}
-	if result.RowsAffected != 2 || wake.calls != 2 {
-		t.Fatalf("created/wakes = %d/%d, want 2/2", result.RowsAffected, wake.calls)
+	if result.RowsAffected != 0 || wake.calls != 0 || result.Result["reason"] != "workgraph_handoffs" {
+		t.Fatalf("scheduled Radar result = rows:%d wakes:%d reason:%#v, want 0/0/workgraph_handoffs", result.RowsAffected, wake.calls, result.Result["reason"])
 	}
 
 	var runCount, fullReviewCount int
@@ -130,8 +129,8 @@ func TestAgentRadarScheduleCreatesAtMostTwoWorkspacesPerTick(t *testing.T) {
 	`, agents[0].workspaceID, agents[1].workspaceID, agents[2].workspaceID, agentRadarCooldownKey).Scan(&runCount, &fullReviewCount); err != nil {
 		t.Fatal(err)
 	}
-	if runCount != 2 || fullReviewCount != 2 {
-		t.Fatalf("workspace runs/full-review refs = %d/%d, want 2/2", runCount, fullReviewCount)
+	if runCount != 0 || fullReviewCount != 0 {
+		t.Fatalf("workspace runs/full-review refs = %d/%d, want 0/0 when workgraph owns supervision", runCount, fullReviewCount)
 	}
 }
 
@@ -1204,21 +1203,23 @@ func TestWorkspaceRadarChangeDetectionIgnoresSupervisorSelfUpdateAndSeesPeerRunt
 
 	wake := &radarWakeRecorder{}
 	taskSvc := service.NewTaskService(db.New(pool), pool, nil, events.New(), wake)
-	if _, err := makeAgentRadarScheduleHandler(pool, taskSvc)(t.Context(), HandlerInput{PlanTime: watermark.Add(6 * time.Minute)}); err != nil {
+	result, err := makeAgentRadarScheduleHandler(pool, taskSvc)(t.Context(), HandlerInput{PlanTime: watermark.Add(6 * time.Minute)})
+	if err != nil {
 		t.Fatalf("schedule runtime-change Radar: %v", err)
 	}
-	var triggerRef string
+	if result.Result["reason"] != "workgraph_handoffs" || wake.calls != 0 {
+		t.Fatalf("runtime-change scheduler result = %#v wakes=%d, want workgraph skip with no wake", result.Result, wake.calls)
+	}
+	var runCount int
 	if err := pool.QueryRow(t.Context(), `
-		SELECT trigger_ref
+		SELECT count(*)
 		FROM agent_radar_run
 		WHERE workspace_id = $1
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, agent.workspaceID).Scan(&triggerRef); err != nil {
+	`, agent.workspaceID).Scan(&runCount); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(triggerRef, "change:") {
-		t.Fatalf("runtime-change trigger_ref = %q, want change: prefix", triggerRef)
+	if runCount != 0 {
+		t.Fatalf("runtime-change scheduled %d Radar runs, want 0", runCount)
 	}
 }
 
@@ -1519,8 +1520,8 @@ func TestAgentRadarScheduleDefersWorkspaceUntilRollingBudgetRecovers(t *testing.
 			if err != nil {
 				t.Fatalf("run %s budget tick: %v", tt.name, err)
 			}
-			if result.RowsAffected != 0 || result.Result["skipped_budget"] != 1 {
-				t.Fatalf("%s budget result = rows:%d skipped:%#v, want 0/1", tt.name, result.RowsAffected, result.Result["skipped_budget"])
+			if result.RowsAffected != 0 || result.Result["reason"] != "workgraph_handoffs" {
+				t.Fatalf("%s budget result = rows:%d reason:%#v, want 0/workgraph_handoffs", tt.name, result.RowsAffected, result.Result["reason"])
 			}
 			var runCount int
 			if err := pool.QueryRow(t.Context(), `
@@ -1539,9 +1540,8 @@ func TestAgentRadarScheduleDefersWorkspaceUntilRollingBudgetRecovers(t *testing.
 			`, agent.workspaceID).Scan(&nextDue); err != nil {
 				t.Fatalf("load %s budget next due: %v", tt.name, err)
 			}
-			wantResume := tt.wantResume(attempts)
-			if nextDue.Sub(wantResume) > time.Second || wantResume.Sub(nextDue) > time.Second {
-				t.Fatalf("%s budget next_due_at = %s, want recovery %s", tt.name, nextDue, wantResume)
+			if !nextDue.Before(planTime) {
+				t.Fatalf("%s budget next_due_at = %s, want unchanged past due time after workgraph skip", tt.name, nextDue)
 			}
 		})
 	}

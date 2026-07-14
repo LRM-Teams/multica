@@ -7,10 +7,12 @@ const (
 	ownerTypeMember     = "member"
 	ownerTypeUnassigned = "unassigned"
 
-	workNodeStatusActive    = "active"
-	workNodeStatusWaiting   = "waiting"
-	workNodeStatusDone      = "done"
-	workNodeStatusCancelled = "cancelled"
+	workNodeStatusActive      = "active"
+	workNodeStatusWaiting     = "waiting"
+	workNodeStatusBlocked     = "blocked"
+	workNodeStatusNeedsRework = "needs_rework"
+	workNodeStatusDone        = "done"
+	workNodeStatusCancelled   = "cancelled"
 
 	issueDependencyBlockedBy = "blocked_by"
 	issueDependencyBlocks    = "blocks"

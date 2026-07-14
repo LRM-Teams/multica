@@ -86,6 +86,96 @@ func TestWendyUnlockThenDAfterCDone(t *testing.T) {
 	assertWendyUnlockWakeCount(t, fixture.channelID, fixture.dID, 1)
 }
 
+func TestWendyHumanReworkInterruptsActiveDownstream(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := seedWendyUnlockDispatchFixture(t)
+	fixture.createWaitingD(t)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE work_node
+		SET status = 'active'
+		WHERE workspace_id = $1 AND linked_issue_id IN ($2, $3)
+	`, testWorkspaceID, fixture.issueC.ID, fixture.issueD.ID); err != nil {
+		t.Fatalf("activate rework scenario nodes: %v", err)
+	}
+
+	previous := testHandler.WorkGraph
+	testHandler.WorkGraph = fixture.store
+	t.Cleanup(func() { testHandler.WorkGraph = previous })
+	testHandler.ingestWendyHumanGroupMessage(context.Background(), ChannelResponse{
+		ID: fixture.channelID, WorkspaceID: testWorkspaceID, Kind: "group",
+	}, ChannelMessageResponse{
+		ID:      "rework-" + uuid.NewString(),
+		Content: mentionMarkdown("agent", fixture.cID, "C") + " 这个不对，先修改返工",
+	})
+
+	var cStatus string
+	if err := testPool.QueryRow(context.Background(), `SELECT status FROM work_node WHERE linked_issue_id = $1`, fixture.issueC.ID).Scan(&cStatus); err != nil {
+		t.Fatal(err)
+	}
+	if cStatus != "needs_rework" {
+		t.Fatalf("C status = %q, want needs_rework", cStatus)
+	}
+	var interruptTarget, nudgeTarget string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT target_actor_id::text FROM pending_handoff
+		WHERE workspace_id = $1 AND reason_code = 'interrupt_stop' AND status = 'pending'
+	`, testWorkspaceID).Scan(&interruptTarget); err != nil {
+		t.Fatalf("load interrupt handoff: %v", err)
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT target_actor_id::text FROM pending_handoff
+		WHERE workspace_id = $1 AND reason_code = 'progress_nudge' AND status = 'pending'
+	`, testWorkspaceID).Scan(&nudgeTarget); err != nil {
+		t.Fatalf("load rework nudge: %v", err)
+	}
+	if interruptTarget != fixture.dID || nudgeTarget != fixture.cID {
+		t.Fatalf("rework targets interrupt/nudge = %s/%s, want D/C", interruptTarget, nudgeTarget)
+	}
+}
+
+func TestWendyDispatchMentionsMemberWithoutAgentWake(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := seedWendyUnlockDispatchFixture(t)
+	node := fixture.nodeForIssue(t, fixture.issueC)
+	var memberID string
+	if err := testPool.QueryRow(context.Background(), `SELECT id FROM member WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, testUserID).Scan(&memberID); err != nil {
+		t.Fatalf("load member target: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO pending_handoff (
+			workspace_id, urgency, reason_code, target_actor_type, target_actor_id,
+			related_node_ids, channel_id, issue_id, dedupe_key, not_before, status
+		) VALUES ($1, 'fast', 'progress_nudge', 'member', $2, ARRAY[$3]::uuid[], $4, $5, $6, now() - interval '1 second', 'pending')
+	`, testWorkspaceID, memberID, node.ID, fixture.channelID, fixture.issueC.ID, "member-dispatch:"+uuid.NewString()); err != nil {
+		t.Fatalf("insert member handoff: %v", err)
+	}
+	fixture.bindWendy(t)
+
+	if got := dispatchWendyUnlockHandoffsForTest(t); got != 1 {
+		t.Fatalf("dispatched member handoffs = %d, want 1", got)
+	}
+	var status string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT status FROM pending_handoff WHERE workspace_id = $1 AND target_actor_id = $2 ORDER BY created_at DESC LIMIT 1
+	`, testWorkspaceID, memberID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "done" {
+		t.Fatalf("member handoff status = %q, want done", status)
+	}
+	var wakeCount int
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM agent_inbox_event WHERE channel_id = $1`, fixture.channelID).Scan(&wakeCount); err != nil {
+		t.Fatal(err)
+	}
+	if wakeCount != 0 {
+		t.Fatalf("member handoff created %d agent wakes, want 0", wakeCount)
+	}
+}
+
 type wendyUnlockDispatchFixture struct {
 	wendyID   string
 	cID       string
@@ -272,6 +362,7 @@ func (f wendyUnlockDispatchFixture) setPrimaryChannel(t *testing.T, issue db.Iss
 
 func (f wendyUnlockDispatchFixture) makeUnlockDue(t *testing.T) {
 	t.Helper()
+	f.bindWendy(t)
 	if _, err := testPool.Exec(context.Background(), `
 		UPDATE pending_handoff
 		SET not_before = now() - interval '1 second'
@@ -282,6 +373,11 @@ func (f wendyUnlockDispatchFixture) makeUnlockDue(t *testing.T) {
 	`, testWorkspaceID); err != nil {
 		t.Fatalf("make unlock handoff due: %v", err)
 	}
+}
+
+func (f wendyUnlockDispatchFixture) bindWendy(t *testing.T) {
+	t.Helper()
+	bindWendySupervisorForHandoffTest(t, f.wendyID)
 }
 
 func dispatchWendyUnlockHandoffsForTest(t *testing.T) int {

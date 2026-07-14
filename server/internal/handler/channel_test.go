@@ -656,6 +656,42 @@ func TestChannelAmbientUnreadPromptKeepsLatestTriggerWhenCursorIsStale(t *testin
 	}
 }
 
+func TestChannelAmbientUnreadPromptIncludesSystemRows(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Ambient System Reader "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "ambient-system-read-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	agent, err := testHandler.Queries.GetAgent(ctx, parseUUID(agentID))
+	if err != nil {
+		t.Fatalf("load agent: %v", err)
+	}
+	systemNotice := "member event visible to runtime " + uuid.NewString()
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "system", pgtype.UUID{}, "system", systemNotice, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("insert system message: %v", err)
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "ordinary ambient after system row", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert ambient trigger: %v", err)
+	}
+
+	prompt := testHandler.buildChannelAmbientUnreadPromptWithDB(ctx, testHandler.DB, ch, agent, trigger, 0, trigger.Seq)
+	if !strings.Contains(prompt, systemNotice) || !strings.Contains(prompt, "system (system): "+systemNotice) {
+		t.Fatalf("ambient prompt omitted labeled system row:\n%s", prompt)
+	}
+}
+
 func TestChannelAmbientGateSerializesConcurrentSameAgentAmbient(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -5513,8 +5549,15 @@ func TestAddChannelMemberSystemEventIncludesAgentTargetRef(t *testing.T) {
 		t.Skip("database not available")
 	}
 
+	ctx := context.Background()
+	readerAgentID := createHandlerTestAgent(t, "channel_event_reader_"+strings.ReplaceAll(uuid.NewString(), "-", ""), nil)
 	agentID := createHandlerTestAgent(t, "channel_event_agent_"+strings.ReplaceAll(uuid.NewString(), "-", ""), nil)
 	channelID := seedChannelForTest(t, "member-add-agent-event-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, readerAgentID); err != nil {
+		t.Fatalf("seed reader agent member: %v", err)
+	}
 
 	req := newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/members", AddChannelMemberRequest{MemberType: "agent", MemberID: agentID})
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
@@ -5527,6 +5570,17 @@ func TestAddChannelMemberSystemEventIncludesAgentTargetRef(t *testing.T) {
 
 	event := latestChannelSystemEventForTest(t, channelID)
 	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, "human", agentID, "agent")
+
+	var inboxEvents int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_inbox_event
+		WHERE channel_id = $1`, channelID).Scan(&inboxEvents); err != nil {
+		t.Fatalf("count system-only inbox events: %v", err)
+	}
+	if inboxEvents != 0 {
+		t.Fatalf("system-only member event created agent inbox events = %d, want 0", inboxEvents)
+	}
 }
 
 func TestRemoveChannelMemberEmitsRemovedSystemEventForRemainingMembers(t *testing.T) {

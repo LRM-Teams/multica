@@ -99,6 +99,7 @@ describe("ApiClient schema fallback", () => {
         daemon_server_url: { wrong: "shape" },
         daemon_app_url: 123,
         workspace_creation_disabled: false,
+        dev_agent_profile_access_enabled: "yes",
       });
       const client = new ApiClient("https://api.example.test");
       const config = await client.getConfig();
@@ -106,6 +107,7 @@ describe("ApiClient schema fallback", () => {
       expect(config.allow_signup).toBe(true);
       expect(config.daemon_server_url).toBeUndefined();
       expect(config.daemon_app_url).toBeUndefined();
+      expect(config.dev_agent_profile_access_enabled).toBe(false);
     });
   });
 

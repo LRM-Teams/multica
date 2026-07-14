@@ -163,6 +163,100 @@ func TestWendyGroupMessageTouchesAmbientForPersonalWendyWithoutSupervisor(t *tes
 	}
 }
 
+func TestWendyAgentGroupMessageTouchesAmbientWatch(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	supervisor := createRadarSupervisorForExecutorTest(t)
+	worker := createHandlerTestAgent(t, "Ambient Worker "+uuid.NewString(), nil)
+	channelID := seedChannelForTest(t, "wendy-agent-ambient-"+uuid.NewString(), testUserID)
+	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String(), worker)
+	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
+
+	prev := workgraph.AmbientDebounce
+	workgraph.AmbientDebounce = time.Minute
+	t.Cleanup(func() { workgraph.AmbientDebounce = prev })
+
+	ch := ChannelResponse{
+		ID:          channelID,
+		WorkspaceID: testWorkspaceID,
+		Kind:        "group",
+		Name:        "agent-ambient",
+	}
+	testHandler.ingestWendyAgentGroupMessage(context.Background(), ch, ChannelMessageResponse{
+		Content: "我这边做完了，下一棒可以开始",
+	}, parseUUID(worker))
+
+	var dirty bool
+	var status string
+	err := testPool.QueryRow(context.Background(), `
+		SELECT dirty, status
+		FROM wendy_channel_ambient
+		WHERE channel_id = $1 AND wendy_agent_id = $2
+	`, channelID, supervisor.ID).Scan(&dirty, &status)
+	if err != nil {
+		t.Fatalf("load ambient watch after agent message: %v", err)
+	}
+	if !dirty || status != "idle" {
+		t.Fatalf("ambient watch dirty=%v status=%q, want dirty idle", dirty, status)
+	}
+}
+
+func TestWendyOwnGroupMessageDoesNotTouchAmbientWatch(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	supervisor := createRadarSupervisorForExecutorTest(t)
+	channelID := seedChannelForTest(t, "wendy-self-ambient-"+uuid.NewString(), testUserID)
+	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String())
+	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
+
+	prev := workgraph.AmbientDebounce
+	workgraph.AmbientDebounce = time.Minute
+	t.Cleanup(func() { workgraph.AmbientDebounce = prev })
+
+	ch := ChannelResponse{
+		ID:          channelID,
+		WorkspaceID: testWorkspaceID,
+		Kind:        "group",
+		Name:        "self-ambient",
+	}
+	testHandler.ingestWendyHumanGroupMessage(context.Background(), ch, ChannelMessageResponse{
+		Content: "先聊一句把 watch 建起来",
+	})
+
+	var beforeNotBefore time.Time
+	var beforeMessageAt time.Time
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT review_not_before, last_human_message_at
+		FROM wendy_channel_ambient
+		WHERE channel_id = $1
+	`, channelID).Scan(&beforeNotBefore, &beforeMessageAt); err != nil {
+		t.Fatalf("load ambient before Wendy reply: %v", err)
+	}
+
+	testHandler.ingestWendyAgentGroupMessage(context.Background(), ch, ChannelMessageResponse{
+		Content: "@someone 请继续下一棒",
+		CreatedAt: time.Now().Add(2 * time.Minute).UTC().Format(time.RFC3339Nano),
+	}, supervisor.ID)
+
+	var afterNotBefore time.Time
+	var afterMessageAt time.Time
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT review_not_before, last_human_message_at
+		FROM wendy_channel_ambient
+		WHERE channel_id = $1
+	`, channelID).Scan(&afterNotBefore, &afterMessageAt); err != nil {
+		t.Fatalf("load ambient after Wendy reply: %v", err)
+	}
+	if !afterNotBefore.Equal(beforeNotBefore) || !afterMessageAt.Equal(beforeMessageAt) {
+		t.Fatalf("Wendy self-message re-armed ambient: before=(%v,%v) after=(%v,%v)",
+			beforeNotBefore, beforeMessageAt, afterNotBefore, afterMessageAt)
+	}
+}
+
 func TestWendyHandoffHookUnlocksAfterBatchIssueUpdate(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

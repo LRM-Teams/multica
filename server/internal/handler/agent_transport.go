@@ -606,6 +606,7 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 		}
 		h.publishChannelToMembers(ctx, protocol.EventChannelMessage, target.channel.WorkspaceID, "agent", uuidToString(source.origin.agentID), input.ChannelID, msg)
 		if target.channel.Kind == "group" {
+			h.ingestWendyAgentGroupMessage(ctx, target.channel, msg, source.origin.agentID)
 			if target.threadRootMessageID.Valid {
 				h.dispatchChannelThreadReplyMentions(ctx, target.channel, msg, initiatorID)
 			} else {

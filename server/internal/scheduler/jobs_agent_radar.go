@@ -2,14 +2,12 @@ package scheduler
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/multica-ai/multica/server/internal/memorycuration"
 	"github.com/multica-ai/multica/server/internal/radar"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -120,108 +118,6 @@ func makeAgentRadarScheduleHandler(pool *pgxpool.Pool, taskSvc *service.TaskServ
 				"replay_failed":                replayFailed,
 				"repaired_terminal":            terminalRepaired,
 				"repaired_stale_dispatched":    staleDispatchRepaired,
-			},
-		}, nil
-		candidates, err := listRadarCandidates(ctx, pool)
-		if err != nil {
-			return HandlerResult{}, err
-		}
-		created := int64(0)
-		failed := 0
-		skippedActive := 0
-		skippedNotReady := 0
-		skippedBudget := 0
-		skippedUnchanged := 0
-		skippedTickLimit := 0
-		for _, candidate := range candidates {
-			budget, err := workspaceRadarBudget(ctx, pool, candidate.WorkspaceID, in.PlanTime)
-			if err != nil {
-				return HandlerResult{}, err
-			}
-			if budget.Limited {
-				if err := deferWorkspaceRadarForBudget(ctx, pool, candidate, budget.ResumeAt); err != nil {
-					return HandlerResult{}, err
-				}
-				skippedBudget++
-				continue
-			}
-			needsReview, fullReview, err := workspaceRadarNeedsReview(ctx, pool, candidate, in.PlanTime)
-			if err != nil {
-				failed++
-				slog.Warn("workspace radar: change detection failed", "workspace_id", uuidString(candidate.WorkspaceID), "error", err)
-				continue
-			}
-			if !needsReview {
-				if err := deferUnchangedWorkspaceRadar(ctx, pool, candidate, in.PlanTime); err != nil {
-					failed++
-					slog.Warn("workspace radar: defer unchanged workspace failed", "workspace_id", uuidString(candidate.WorkspaceID), "error", err)
-					continue
-				}
-				skippedUnchanged++
-				continue
-			}
-			if created >= agentRadarCreatesPerTick {
-				skippedTickLimit++
-				continue
-			}
-			radarCtx, err := radar.NewContextBuilder(pool, memorycuration.DefaultWorkspacesRoot()).BuildAt(ctx, uuidString(candidate.WorkspaceID), uuidString(candidate.AgentID), in.PlanTime)
-			if err != nil {
-				failed++
-				slog.Warn("workspace radar: context build failed", "workspace_id", uuidString(candidate.WorkspaceID), "agent_id", uuidString(candidate.AgentID), "error", err)
-				continue
-			}
-			triggerRefPrefix := "change"
-			if fullReview {
-				triggerRefPrefix = "full_review"
-			}
-			_, _, err = taskSvc.EnqueueAgentRadarRun(ctx, service.EnqueueAgentRadarRunParams{
-				WorkspaceID:    candidate.WorkspaceID,
-				AgentID:        candidate.AgentID,
-				TriggerKind:    "scheduled",
-				TriggerRef:     triggerRefPrefix + ":" + in.PlanTime.UTC().Format(time.RFC3339),
-				CooldownKey:    agentRadarCooldownKey,
-				ContextSummary: "Scheduled workspace supervision check by " + candidate.DisplayName,
-				ScheduledFor:   in.PlanTime,
-				Prompt:         radar.BuildPrompt(radarCtx),
-				Scan:           &radarCtx.Scan,
-			})
-			switch {
-			case errors.Is(err, service.ErrAgentRadarRunActive):
-				skippedActive++
-				continue
-			case errors.Is(err, service.ErrAgentRadarNotReady):
-				skippedNotReady++
-				continue
-			case err != nil:
-				failed++
-				slog.Warn("workspace radar: enqueue failed", "workspace_id", uuidString(candidate.WorkspaceID), "agent_id", uuidString(candidate.AgentID), "error", err)
-				continue
-			}
-			created++
-		}
-		return HandlerResult{
-			RowsAffected: created,
-			Result: map[string]any{
-				"candidates":                   len(candidates),
-				"created":                      created,
-				"failed":                       failed,
-				"repaired":                     unauthorizedRuns + repairedBindings + terminalRepaired + staleDispatchRepaired,
-				"repaired_unauthorized":        unauthorizedRuns,
-				"repaired_bindings":            repairedBindings,
-				"cancelled_unauthorized_tasks": len(unauthorizedTasks),
-				"replayed_completed":           replayedCompleted,
-				"replay_failed":                replayFailed,
-				"repaired_terminal":            terminalRepaired,
-				"repaired_stale_dispatched":    staleDispatchRepaired,
-				"skipped_active":               skippedActive,
-				"skipped_offline":              skippedNotReady,
-				"skipped_budget":               skippedBudget,
-				"skipped_unchanged":            skippedUnchanged,
-				"skipped_tick_limit":           skippedTickLimit,
-				"hourly_budget":                agentRadarHourlyBudget,
-				"daily_budget":                 agentRadarDailyBudget,
-				"create_limit_per_tick":        agentRadarCreatesPerTick,
-				"cooldown_key":                 agentRadarCooldownKey,
 			},
 		}, nil
 	}

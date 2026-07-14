@@ -83,6 +83,13 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   }),
 }));
 
+// The bubble reads the author avatar straight from the payload (#453/#574) via
+// resolvePublicFileUrl, which needs api.getBaseUrl(); stub it to pass the raw
+// value through so tests don't touch the api base-url machinery.
+vi.mock("@multica/core/workspace/avatar-url", () => ({
+  resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
+}));
+
 vi.mock("../../common/use-viewing-timezone", () => ({
   useViewingTimezone: () => "UTC",
 }));
@@ -279,6 +286,20 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByText("Agent")).toBeInTheDocument();
     expect(screen.getByText("Here is the data.")).toBeInTheDocument();
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
+  });
+
+  it("renders the author avatar straight from the message payload (#453), not a viewer-scoped lookup", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ author_avatar_url: "/uploads/agent-avatar.png" })}
+        currentUserId="user-1"
+      />,
+    );
+    // The avatar image comes from the payload's `author_avatar_url` (aggregated
+    // by the BE for every viewer, #574) — so a group member sees the author's
+    // real avatar instead of the default bot; no `getActorAvatarUrl` guess.
+    const img = screen.getByRole("img", { name: /Research Agent/i });
+    expect(img).toHaveAttribute("src", "/uploads/agent-avatar.png");
   });
 
   it("marks proactive radar messages with a Project Radar pill", () => {

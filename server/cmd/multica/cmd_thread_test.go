@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,24 +18,18 @@ func newThreadUnfollowTestCmd(target string) *cobra.Command {
 	return cmd
 }
 
-func TestRunThreadUnfollowUsesThreadFollowDeleteEndpoint(t *testing.T) {
+func TestRunThreadUnfollowPostsRawTargetToAgentTransport(t *testing.T) {
 	tests := []struct {
-		name        string
-		target      string
-		wantChannel string
-		wantMessage string
+		name   string
+		target string
 	}{
 		{
-			name:        "channel message target",
-			target:      "#channel-123:message-456",
-			wantChannel: "channel-123",
-			wantMessage: "message-456",
+			name:   "channel message target",
+			target: "#engineering:message-456",
 		},
 		{
-			name:        "workspace channel message target",
-			target:      "#workspace-123:channel-789:message-abc",
-			wantChannel: "channel-789",
-			wantMessage: "message-abc",
+			name:   "dm message target",
+			target: "dm:@alice:message-abc",
 		},
 	}
 
@@ -44,14 +38,21 @@ func TestRunThreadUnfollowUsesThreadFollowDeleteEndpoint(t *testing.T) {
 			var sawRequest bool
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				sawRequest = true
-				wantPath := fmt.Sprintf("/api/channels/%s/messages/%s/thread/follow", tt.wantChannel, tt.wantMessage)
-				if r.Method != http.MethodDelete {
-					t.Errorf("method = %s, want DELETE", r.Method)
+				if r.Method != http.MethodPost {
+					t.Errorf("method = %s, want POST", r.Method)
 				}
-				if r.URL.Path != wantPath {
-					t.Errorf("path = %s, want %s", r.URL.Path, wantPath)
+				if r.URL.Path != "/api/agent/threads/unfollow" {
+					t.Errorf("path = %s, want /api/agent/threads/unfollow", r.URL.Path)
 				}
-				w.WriteHeader(http.StatusNoContent)
+				var body map[string]string
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode body: %v", err)
+				}
+				if body["target"] != tt.target {
+					t.Errorf("body target = %q, want %q", body["target"], tt.target)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"ok":true}`))
 			}))
 			defer srv.Close()
 
@@ -71,7 +72,7 @@ func TestRunThreadUnfollowUsesThreadFollowDeleteEndpoint(t *testing.T) {
 }
 
 func TestRunThreadUnfollowRejectsInvalidTarget(t *testing.T) {
-	cmd := newThreadUnfollowTestCmd("#channel-only")
+	cmd := newThreadUnfollowTestCmd("")
 	if err := runThreadUnfollow(cmd, nil); err == nil {
 		t.Fatal("expected invalid target error")
 	}

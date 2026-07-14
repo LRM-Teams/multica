@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	agentTransportActionSend   = "message_send"
-	agentTransportActionReact  = "message_react"
-	agentTransportActionRead   = "message_read"
-	agentTransportActionSearch = "message_search"
+	agentTransportActionSend           = "message_send"
+	agentTransportActionReact          = "message_react"
+	agentTransportActionRead           = "message_read"
+	agentTransportActionSearch         = "message_search"
+	agentTransportActionThreadUnfollow = "thread_unfollow"
 )
 
 type AgentTransportSendRequest struct {
@@ -80,6 +81,18 @@ type AgentTransportSearchResponse struct {
 	Total       int                          `json:"total"`
 	Results     []ChannelMessageSearchResult `json:"results"`
 	TransportID string                       `json:"transport_id"`
+}
+
+type AgentTransportThreadUnfollowRequest struct {
+	Target string `json:"target"`
+}
+
+type AgentTransportThreadUnfollowResponse struct {
+	Action      string `json:"action"`
+	Target      string `json:"target"`
+	ChannelID   string `json:"channel_id"`
+	MessageID   string `json:"message_id"`
+	TransportID string `json:"transport_id"`
 }
 
 type agentTransportTarget struct {
@@ -343,6 +356,45 @@ func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Re
 		Query:       query,
 		Total:       total,
 		Results:     results,
+		TransportID: transportID,
+	})
+}
+
+func (h *Handler) AgentTransportUnfollowThread(w http.ResponseWriter, r *http.Request) {
+	source, ok := h.requireAgentTransportSource(w, r)
+	if !ok {
+		return
+	}
+	var req AgentTransportThreadUnfollowRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, nil, false)
+	if err != nil || !target.threadRootMessageID.Valid {
+		writeError(w, http.StatusBadRequest, "invalid target")
+		return
+	}
+	channelID := parseUUID(target.channel.ID)
+	if err := h.unfollowChannelThreadAgent(r.Context(), channelID, target.threadRootMessageID, source.origin.agentID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to unfollow thread")
+		return
+	}
+	transportID, err := h.recordAgentTransportAudit(r.Context(), source, agentTransportActionThreadUnfollow, target.raw, channelID, target.threadRootMessageID, "", map[string]any{
+		"channel_id": target.channel.ID,
+		"message_id": uuidToString(target.threadRootMessageID),
+	})
+	if err != nil {
+		slog.Warn("agent transport thread unfollow audit failed", "task_id", uuidToString(source.task.ID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to record thread unfollow")
+		return
+	}
+	h.emitAgentThreadUnfollowedEvent(w, r.Context(), target.channel.WorkspaceID, channelID, target.threadRootMessageID, source.origin.agentID)
+	writeJSON(w, http.StatusOK, AgentTransportThreadUnfollowResponse{
+		Action:      agentTransportActionThreadUnfollow,
+		Target:      target.raw,
+		ChannelID:   target.channel.ID,
+		MessageID:   uuidToString(target.threadRootMessageID),
 		TransportID: transportID,
 	})
 }

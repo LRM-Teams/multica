@@ -1341,7 +1341,7 @@ func TestTaskMessageRequestVisibility_UnmappedToolIsDiagnostic(t *testing.T) {
 	statusLikeShell := TaskMessageRequest{
 		Type:  "tool_use",
 		Tool:  "running",
-		Input: map[string]any{"command": "multica message send --message-file hello_world.txt"},
+		Input: map[string]any{"command": "multica message send --target #multica --message-file hello_world.txt"},
 	}
 	if got := taskMessageRequestVisibility(statusLikeShell); got != "user_facing" {
 		t.Fatalf("status-like shell visibility = %q, want user_facing", got)
@@ -3077,7 +3077,7 @@ func TestCompleteTask_GroupChannelCommandSendOutputIsSuppressed(t *testing.T) {
 
 	taskID, channelID := createChannelCompletionTask(t, "group")
 	const visibleReply = "Visible command reply"
-	rawOutput := `multica message send --message "` + visibleReply + `"`
+	rawOutput := `multica message send --target #multica --message "` + visibleReply + `"`
 
 	w := completeTaskForTest(t, taskID, map[string]any{
 		"type":   "message",

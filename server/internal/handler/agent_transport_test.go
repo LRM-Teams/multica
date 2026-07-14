@@ -21,10 +21,12 @@ func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.
 	ctx := context.Background()
 	taskID, channelID := createChannelCompletionTask(t, "group")
 	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
 	clientID := "transport-" + uuid.NewString()
 	content := "hello via transport " + uuid.NewString()
 
 	first := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
 		"content":           content,
 		"client_message_id": clientID,
 	})
@@ -44,6 +46,7 @@ func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.
 	assertAgentMessageSentActivityText(t, firstBody.Message.ID, content)
 
 	second := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
 		"content":           content,
 		"client_message_id": clientID,
 	})
@@ -91,9 +94,11 @@ func TestAgentTransportSendMessageStickerOnlyAndWithText(t *testing.T) {
 
 	taskID, channelID := createChannelCompletionTask(t, "group")
 	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
 
 	stickerOnlyID := "transport-sticker-" + uuid.NewString()
 	stickerOnly := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target": target,
 		"parts": []protocol.MessagePart{{
 			Type:      protocol.MessagePartTypeSticker,
 			StickerID: "hi",
@@ -118,6 +123,7 @@ func TestAgentTransportSendMessageStickerOnlyAndWithText(t *testing.T) {
 	explanation := "这个问题是因为 transport sticker test " + uuid.NewString()
 	combinedID := "transport-combined-" + uuid.NewString()
 	combined := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":  target,
 		"content": explanation,
 		"parts": []protocol.MessagePart{
 			{Type: protocol.MessagePartTypeSticker, StickerID: "got-it"},
@@ -161,6 +167,7 @@ func TestAgentTransportSendMessageLinksOwnedAttachmentsOnly(t *testing.T) {
 	ctx := context.Background()
 	taskID, channelID := createChannelCompletionTask(t, "group")
 	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
 
 	ownedAttachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "agent-file.png")
 	otherAgentID := uuid.NewString()
@@ -168,6 +175,7 @@ func TestAgentTransportSendMessageLinksOwnedAttachmentsOnly(t *testing.T) {
 
 	clientID := "transport-attachment-" + uuid.NewString()
 	resp := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":  target,
 		"content": "here's the file",
 		"parts": []protocol.MessagePart{
 			{Type: protocol.MessagePartTypeText, Text: "here's the file"},
@@ -212,11 +220,13 @@ func TestAgentTransportSendMessageAttachmentOnlyActivityText(t *testing.T) {
 		t.Skip("database not available")
 	}
 
-	taskID, _ := createChannelCompletionTask(t, "group")
+	taskID, channelID := createChannelCompletionTask(t, "group")
 	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
 	attachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "activity-report.pdf")
 
 	resp := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target": target,
 		"parts": []protocol.MessagePart{{
 			Type:         protocol.MessagePartTypeAttachment,
 			AttachmentID: attachmentID,
@@ -303,13 +313,14 @@ func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {
 	ctx := context.Background()
 	taskID, channelID := createChannelCompletionTask(t, "group")
 	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
 	needle := "needle transport search " + uuid.NewString()
 	seeded, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", needle, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
 	if err != nil {
 		t.Fatalf("seed channel message: %v", err)
 	}
 
-	readRec := agentTransportReadForTest(t, taskID, agentID, map[string]any{"limit": 5})
+	readRec := agentTransportReadForTest(t, taskID, agentID, map[string]any{"target": target, "limit": 5})
 	if readRec.Code != http.StatusOK {
 		t.Fatalf("transport read: status=%d body=%s", readRec.Code, readRec.Body.String())
 	}
@@ -322,8 +333,9 @@ func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {
 	}
 
 	searchRec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{
-		"query": "needle transport search",
-		"limit": 10,
+		"target": target,
+		"query":  "needle transport search",
+		"limit":  10,
 	})
 	if searchRec.Code != http.StatusOK {
 		t.Fatalf("transport search: status=%d body=%s", searchRec.Code, searchRec.Body.String())
@@ -338,6 +350,7 @@ func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {
 
 	reactClientID := "transport-react-" + uuid.NewString()
 	reactRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
 		"message_id":        seeded.ID,
 		"emoji":             "+1",
 		"client_message_id": reactClientID,
@@ -367,6 +380,113 @@ func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {
 	assertAgentTransportAuditCount(t, taskID, agentTransportActionRead, 1)
 	assertAgentTransportAuditCount(t, taskID, agentTransportActionSearch, 1)
 	assertAgentTransportAuditCount(t, taskID, agentTransportActionReact, 1)
+}
+
+func TestAgentTransportRequiresExplicitTarget(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	visible := "missing explicit target should not send " + uuid.NewString()
+
+	sendRec := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"content":           visible,
+		"client_message_id": "missing-target-" + uuid.NewString(),
+	})
+	if sendRec.Code != http.StatusBadRequest {
+		t.Fatalf("send without target: status=%d body=%s", sendRec.Code, sendRec.Body.String())
+	}
+	assertNoChannelMessageContent(t, channelID, visible)
+
+	readRec := agentTransportReadForTest(t, taskID, agentID, map[string]any{"limit": 5})
+	if readRec.Code != http.StatusBadRequest {
+		t.Fatalf("read without target: status=%d body=%s", readRec.Code, readRec.Body.String())
+	}
+
+	searchRec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{
+		"query": "needle",
+		"limit": 5,
+	})
+	if searchRec.Code != http.StatusBadRequest {
+		t.Fatalf("search without target: status=%d body=%s", searchRec.Code, searchRec.Body.String())
+	}
+
+	reactRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{
+		"message_id":        uuid.NewString(),
+		"emoji":             "+1",
+		"client_message_id": "missing-target-react-" + uuid.NewString(),
+	})
+	if reactRec.Code != http.StatusBadRequest {
+		t.Fatalf("react without target: status=%d body=%s", reactRec.Code, reactRec.Body.String())
+	}
+}
+
+func TestAgentTransportDMThreadTarget(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, _ := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	humanHandle := userHandleForTransportTest(t, testUserID)
+	dmChannel, ok := testHandler.ensureAgentHumanDMChannel(ctx, parseUUID(testWorkspaceID), parseUUID(agentID), parseUUID(testUserID))
+	if !ok {
+		t.Fatal("create agent-human DM channel")
+	}
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(dmChannel.ID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), humanHandle, "dm thread root "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert dm root: %v", err)
+	}
+
+	clientID := "dm-thread-" + uuid.NewString()
+	rec := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            "dm:@" + humanHandle + ":" + root.ID,
+		"content":           "dm thread reply " + uuid.NewString(),
+		"client_message_id": clientID,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send to dm thread target: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body AgentTransportSendResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode dm thread response: %v", err)
+	}
+	if body.Message.ChannelID != dmChannel.ID {
+		t.Fatalf("message channel_id=%s, want dm channel %s", body.Message.ChannelID, dmChannel.ID)
+	}
+	if body.Message.ThreadRootMessageID == nil || *body.Message.ThreadRootMessageID != root.ID {
+		t.Fatalf("message thread_root_message_id=%v, want %s", body.Message.ThreadRootMessageID, root.ID)
+	}
+}
+
+func TestAgentTransportRejectsNonRaftTargetForms(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	for _, target := range []string{
+		uuid.NewString(),
+		"#workspace:channel:" + uuid.NewString(),
+		"dm:@" + userHandleForTransportTest(t, testUserID) + ":thread:" + uuid.NewString(),
+	} {
+		t.Run(target, func(t *testing.T) {
+			content := "rejected non-raft target " + uuid.NewString()
+			rec := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+				"target":            target,
+				"content":           content,
+				"client_message_id": "bad-target-" + uuid.NewString(),
+			})
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("target %q: status=%d body=%s", target, rec.Code, rec.Body.String())
+			}
+			assertNoChannelMessageContent(t, channelID, content)
+		})
+	}
 }
 
 func TestAgentTransportDMHandleTargetRejectsMissingAndAmbiguousHandles(t *testing.T) {
@@ -626,6 +746,24 @@ func agentIDForTask(t *testing.T, taskID string) string {
 		t.Fatalf("load task agent_id: %v", err)
 	}
 	return agentID
+}
+
+func channelNameForTransportTest(t *testing.T, channelID string) string {
+	t.Helper()
+	var name string
+	if err := testPool.QueryRow(context.Background(), `SELECT name FROM channel WHERE id = $1`, channelID).Scan(&name); err != nil {
+		t.Fatalf("load channel name: %v", err)
+	}
+	return name
+}
+
+func userHandleForTransportTest(t *testing.T, userID string) string {
+	t.Helper()
+	var name string
+	if err := testPool.QueryRow(context.Background(), `SELECT name FROM "user" WHERE id = $1`, userID).Scan(&name); err != nil {
+		t.Fatalf("load user name: %v", err)
+	}
+	return name
 }
 
 func seedWorkspaceUserForTransportTargetTest(t *testing.T, name string) string {

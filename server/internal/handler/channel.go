@@ -3980,9 +3980,63 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	if strings.TrimSpace(trigger.ID) != "" {
 		fmt.Fprintf(&b, "Current message id: %s\n", trigger.ID)
 	}
+	if target := h.agentMessageTargetForPrompt(ctx, ch, trigger); target != "" {
+		fmt.Fprintf(&b, "Message target for chat transport: %s\n", target)
+	}
 	b.WriteString("Current message to respond to:\n")
 	fmt.Fprintf(&b, "%s (%s): %s", trigger.AuthorName, trigger.Type, trigger.Content)
 	return b.String()
+}
+
+func (h *Handler) agentMessageTargetForPrompt(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse) string {
+	kind := ch.Kind
+	if kind == "" {
+		kind = "group"
+	}
+	rootID := ""
+	if trigger.ThreadRootMessageID != nil {
+		rootID = strings.TrimSpace(*trigger.ThreadRootMessageID)
+	} else if shouldDefaultChannelAgentReplyToThread(kind, trigger) {
+		rootID = strings.TrimSpace(trigger.ID)
+	}
+	switch kind {
+	case "group":
+		if strings.TrimSpace(ch.Name) == "" {
+			return ""
+		}
+		target := "#" + strings.TrimSpace(ch.Name)
+		if rootID != "" {
+			target += ":" + rootID
+		}
+		return target
+	case "dm":
+		handle := h.dmUserHandleForAgentTarget(ctx, ch)
+		if handle == "" {
+			return ""
+		}
+		target := "dm:@" + handle
+		if rootID != "" {
+			target += ":" + rootID
+		}
+		return target
+	default:
+		return ""
+	}
+}
+
+func (h *Handler) dmUserHandleForAgentTarget(ctx context.Context, ch ChannelResponse) string {
+	var handle string
+	err := h.DB.QueryRow(ctx, `
+		SELECT u.name
+		FROM channel_member cm
+		JOIN "user" u ON u.id = cm.member_id
+		WHERE cm.channel_id = $1 AND cm.workspace_id = $2 AND cm.member_type = 'user'
+		ORDER BY cm.created_at ASC
+		LIMIT 1`, parseUUID(ch.ID), parseUUID(ch.WorkspaceID)).Scan(&handle)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(handle)
 }
 
 func (h *Handler) channelMessageByID(ctx context.Context, workspaceID, channelID, messageID string) (ChannelMessageResponse, bool) {

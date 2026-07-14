@@ -305,6 +305,61 @@ func TestAgentTransportSendThreadReplyIDFlattensToRoot(t *testing.T) {
 	}
 }
 
+func TestAgentTransportSendThreadReplyFollowsAgentForPlainFollowup(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	threadID := "transport-follow-" + uuid.NewString()
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "transport follow root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, &threadID, 0)
+	if err != nil {
+		t.Fatalf("insert root: %v", err)
+	}
+
+	target := "#" + channelNameForTransportTest(t, channelID) + ":" + root.ID
+	resp := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           "agent reply that should follow thread",
+		"client_message_id": "transport-follow-" + uuid.NewString(),
+	})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("transport thread send: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var followed bool
+	var wakeState string
+	if err := testPool.QueryRow(ctx, `
+		SELECT followed_at IS NOT NULL, wake_state
+		FROM thread_participant
+		WHERE root_message_id = $1
+		  AND member_type = 'agent'
+		  AND member_id = $2`, root.ID, agentID).Scan(&followed, &wakeState); err != nil {
+		t.Fatalf("load transport thread participant: %v", err)
+	}
+	if !followed || wakeState != "active" {
+		t.Fatalf("transport thread participant = followed:%v wake_state:%q, want true/active", followed, wakeState)
+	}
+
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages/"+root.ID+"/thread", map[string]string{"content": "plain human follow-up"})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParams(req, "channelId", channelID, "messageId", root.ID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessageThreadReply(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send human thread reply: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var followup ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &followup); err != nil {
+		t.Fatalf("decode human thread reply: %v", err)
+	}
+
+	assertChannelAgentInboxEventCounts(t, channelID, agentID, 0, 1)
+	assertChannelAgentWakeReason(t, channelID, agentID, followup.ID, "thread_reply")
+}
+
 func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

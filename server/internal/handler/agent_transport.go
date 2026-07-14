@@ -597,6 +597,9 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 		msg = messages[0]
 	}
 	if created {
+		if target.threadRootMessageID.Valid {
+			h.followChannelThreadAgent(ctx, input.ChannelID, target.threadRootMessageID, source.origin.agentID)
+		}
 		_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, input.ChannelID)
 		if target.channel.Kind == "dm" {
 			h.clearDMHiddenForChannelMembers(ctx, target.channel.WorkspaceID, input.ChannelID)

@@ -27,7 +27,7 @@ const (
 	legacyWindyAgentName           = "Windy"
 	legacyJoeAgentName             = "Joe"
 	windyAgentTemplate             = "windy_hr"
-	windyDescription               = "Personal HR for building and updating your Multica agent team."
+	windyDescription               = "Workspace supervisor and personal HR for coordinating Multica agents and teams."
 	windyMaxDraftNameLen           = 80
 	windyMaxDraftTextLen           = 20000
 	windyMaxDraftListSize          = 32
@@ -45,8 +45,10 @@ You are Wendy, the workspace supervisor and the user's personal HR and team-buil
 Core Goals
 
 - Supervise work handoffs across the workspace. The work graph automatically detects dependencies, blocks, rework, and stalled work, then posts visible handoffs to the responsible people or agents.
+- Monitor every group channel you are a member of. When humans talk there, the platform waits about 10 minutes after the latest message, then runs a scoped ambient review so you can visibly interject, @mention owners, or create issues if coordination is needed. If there is no new message since the last review, that channel is skipped to save tokens.
 - Do not do concrete implementation work yourself: identify the right owner, explain the next coordination step, and let that person or agent execute.
-- Users do not need to configure daily Radar rules or recurring supervisor prompts. Work-graph handoffs run automatically when there is a concrete coordination signal.
+- Users do not need to configure daily Radar rules, recurring supervisor prompts, or autopilot schedules for this monitoring. Work-graph handoffs and ambient group reviews run automatically in the background.
+- If asked whether you monitor a group: say yes for groups you have already joined; explain the 10-minute debounce; and if you are not a member yet, ask the user to add you to that group.
 - Help the user set up a practical agent team for real work.
 - Understand what the user wants to accomplish before explaining Multica concepts.
 - Recommend agents based on the user's actual goals, not from a fixed template.
@@ -113,6 +115,10 @@ Tone Principles
 Behavioral Invariant
 
 Success is not a long onboarding conversation. Success means the user gets a useful first team, a practical channel, and a clear next step toward real collaboration.`
+
+// windyInstructionsCapabilityMarker is used to detect stale Wendy personas that
+// predate work-graph + ambient monitoring and need a one-shot refresh.
+const windyInstructionsCapabilityMarker = "Monitor every group channel you are a member of"
 
 type WindyResponse struct {
 	Agent AgentResponse `json:"agent"`
@@ -534,12 +540,38 @@ func (h *Handler) restoreAndNormalizeWindyAgent(r *http.Request, agent db.Agent)
 		restored = true
 	}
 	if agentDisplayName(updated) != windyAgentName || updated.Visibility != "private" {
-		return h.normalizeWindyAgent(r, updated)
+		normalized, err := h.normalizeWindyAgent(r, updated)
+		if err != nil {
+			return db.Agent{}, err
+		}
+		updated = normalized
 	}
+	refreshed, err := h.refreshWindyInstructionsIfStale(r, updated)
+	if err != nil {
+		return db.Agent{}, err
+	}
+	updated = refreshed
 	if restored {
 		resp := agentToResponse(updated)
 		h.publish(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), "member", requestUserID(r), map[string]any{"agent": broadcastAgentResponse(resp)})
 	}
+	return updated, nil
+}
+
+func (h *Handler) refreshWindyInstructionsIfStale(r *http.Request, agent db.Agent) (db.Agent, error) {
+	if strings.Contains(agent.Instructions, windyInstructionsCapabilityMarker) {
+		return agent, nil
+	}
+	updated, err := h.Queries.UpdateAgent(r.Context(), db.UpdateAgentParams{
+		ID:           agent.ID,
+		Instructions: pgtype.Text{String: windyInstructions, Valid: true},
+		Description:  pgtype.Text{String: windyDescription, Valid: true},
+	})
+	if err != nil {
+		return db.Agent{}, err
+	}
+	resp := agentToResponse(updated)
+	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), "member", requestUserID(r), updated, map[string]any{"agent": broadcastAgentResponse(resp)})
 	return updated, nil
 }
 

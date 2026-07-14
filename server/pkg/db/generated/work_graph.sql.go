@@ -137,6 +137,97 @@ func (q *Queries) GetWorkNodeByIssue(ctx context.Context, arg GetWorkNodeByIssue
 	return i, err
 }
 
+const getWorkNodeByID = `-- name: GetWorkNodeByID :one
+SELECT id, workspace_id, kind, title, description, owner_type, owner_id, status, primary_channel_id, linked_issue_id, linked_task_id, last_progress_at, last_progress_summary, last_wendy_nudge_at, last_wendy_nudge_kind, created_at, updated_at
+FROM work_node
+WHERE id = $1
+`
+
+func (q *Queries) GetWorkNodeByID(ctx context.Context, id pgtype.UUID) (WorkNode, error) {
+	row := q.db.QueryRow(ctx, getWorkNodeByID, id)
+	var i WorkNode
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Kind,
+		&i.Title,
+		&i.Description,
+		&i.OwnerType,
+		&i.OwnerID,
+		&i.Status,
+		&i.PrimaryChannelID,
+		&i.LinkedIssueID,
+		&i.LinkedTaskID,
+		&i.LastProgressAt,
+		&i.LastProgressSummary,
+		&i.LastWendyNudgeAt,
+		&i.LastWendyNudgeKind,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getWorkspaceSupervisorAgentID = `-- name: GetWorkspaceSupervisorAgentID :one
+SELECT supervisor_agent_id
+FROM workspace_radar_state
+WHERE workspace_id = $1
+`
+
+func (q *Queries) GetWorkspaceSupervisorAgentID(ctx context.Context, workspaceID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceSupervisorAgentID, workspaceID)
+	var supervisorAgentID pgtype.UUID
+	err := row.Scan(&supervisorAgentID)
+	return supervisorAgentID, err
+}
+
+const hasAnyWaitsOnEdge = `-- name: HasAnyWaitsOnEdge :one
+SELECT EXISTS (
+    SELECT 1
+    FROM work_edge
+    WHERE workspace_id = $1
+      AND from_node_id = $2
+      AND kind = 'waits_on'
+)
+`
+
+type HasAnyWaitsOnEdgeParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	FromNodeID  pgtype.UUID `json:"from_node_id"`
+}
+
+func (q *Queries) HasAnyWaitsOnEdge(ctx context.Context, arg HasAnyWaitsOnEdgeParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasAnyWaitsOnEdge, arg.WorkspaceID, arg.FromNodeID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const isWorkspaceWendyAgent = `-- name: IsWorkspaceWendyAgent :one
+SELECT EXISTS (
+    SELECT 1
+    FROM agent
+    WHERE workspace_id = $1
+      AND id = $2
+      AND (
+          lower(name) IN ('wendy', 'windy', 'joe')
+          OR lower(COALESCE(display_name, '')) IN ('wendy', 'windy', 'joe')
+      )
+)
+`
+
+type IsWorkspaceWendyAgentParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) IsWorkspaceWendyAgent(ctx context.Context, arg IsWorkspaceWendyAgentParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isWorkspaceWendyAgent, arg.WorkspaceID, arg.ID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const insertPendingHandoff = `-- name: InsertPendingHandoff :one
 INSERT INTO pending_handoff (
     workspace_id,
@@ -215,6 +306,41 @@ func (q *Queries) InsertPendingHandoff(ctx context.Context, arg InsertPendingHan
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listResolvedWaitsOnPrerequisiteIDs = `-- name: ListResolvedWaitsOnPrerequisiteIDs :many
+SELECT to_node_id
+FROM work_edge
+WHERE workspace_id = $1
+  AND from_node_id = $2
+  AND kind = 'waits_on'
+  AND status = 'resolved'
+ORDER BY to_node_id ASC
+`
+
+type ListResolvedWaitsOnPrerequisiteIDsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	FromNodeID  pgtype.UUID `json:"from_node_id"`
+}
+
+func (q *Queries) ListResolvedWaitsOnPrerequisiteIDs(ctx context.Context, arg ListResolvedWaitsOnPrerequisiteIDsParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listResolvedWaitsOnPrerequisiteIDs, arg.WorkspaceID, arg.FromNodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var toNodeID pgtype.UUID
+		if err := rows.Scan(&toNodeID); err != nil {
+			return nil, err
+		}
+		items = append(items, toNodeID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listOpenWaitsOnFromNode = `-- name: ListOpenWaitsOnFromNode :many

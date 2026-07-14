@@ -39,6 +39,11 @@ WHERE workspace_id = $1
   AND kind = 'issue'
   AND linked_issue_id = $2;
 
+-- name: GetWorkNodeByID :one
+SELECT *
+FROM work_node
+WHERE id = $1;
+
 -- name: UpsertOpenWaitsOnEdge :one
 INSERT INTO work_edge (
     workspace_id,
@@ -91,6 +96,41 @@ WHERE edge.workspace_id = $1
   AND edge.kind = 'waits_on'
   AND edge.status = 'open'
   AND prerequisite.status NOT IN ('done', 'cancelled');
+
+-- name: HasAnyWaitsOnEdge :one
+SELECT EXISTS (
+    SELECT 1
+    FROM work_edge
+    WHERE workspace_id = $1
+      AND from_node_id = $2
+      AND kind = 'waits_on'
+);
+
+-- name: ListResolvedWaitsOnPrerequisiteIDs :many
+SELECT to_node_id
+FROM work_edge
+WHERE workspace_id = $1
+  AND from_node_id = $2
+  AND kind = 'waits_on'
+  AND status = 'resolved'
+ORDER BY to_node_id ASC;
+
+-- name: GetWorkspaceSupervisorAgentID :one
+SELECT supervisor_agent_id
+FROM workspace_radar_state
+WHERE workspace_id = $1;
+
+-- name: IsWorkspaceWendyAgent :one
+SELECT EXISTS (
+    SELECT 1
+    FROM agent
+    WHERE workspace_id = $1
+      AND id = $2
+      AND (
+          lower(name) IN ('wendy', 'windy', 'joe')
+          OR lower(COALESCE(display_name, '')) IN ('wendy', 'windy', 'joe')
+      )
+);
 
 -- name: InsertPendingHandoff :one
 INSERT INTO pending_handoff (

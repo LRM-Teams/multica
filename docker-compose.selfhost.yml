@@ -179,9 +179,10 @@ services:
   # BRIDGE_USER_ID MUST equal the AReaL-side executor's BRIDGE_USER_ID - the
   # rows this stub enqueues are claimed on the AReaL host under that user, so a
   # mismatch leaves them unclaimed (multica -> AReaL calls hang until 504). It
-  # is distinct from MULTICA_BRIDGE_USER_ID (the public LLM/shell user). The
-  # arealrl client sends no X-Bridge-User-Id header, so this MUST be a valid
-  # UUID or the stub rejects every request with 400.
+  # defaults to the same UUID as MULTICA_BRIDGE_USER_ID so all multica-side
+  # bridge traffic shares one isolation user; override in /data/multica/.env.
+  # The arealrl client sends no X-Bridge-User-Id header, so this MUST be a
+  # valid UUID or the stub rejects every request with 400.
   db-bridge-stub-multica:
     profiles: ["db-bridge"]
     image: ${MULTICA_DB_BRIDGE_IMAGE:-ghcr.io/lrm-teams/multica-db-bridge}:${MULTICA_IMAGE_TAG:-latest}
@@ -191,7 +192,7 @@ services:
     environment:
       SUPABASE_URL: ${SUPABASE_URL:-}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
-      BRIDGE_USER_ID: ${BRIDGE_USER_ID:-}
+      BRIDGE_USER_ID: ${BRIDGE_USER_ID:-c88b46a8-a8b5-4414-82fb-91398bd063b4}
       # Bind 0.0.0.0 in-container so the backend container can reach the stub
       # over the compose network (db-bridge-stub-multica:9100). The host port
       # still maps to 127.0.0.1 only - the stub is not exposed to the internet.
@@ -213,11 +214,11 @@ services:
   #
   # BRIDGE_MULTICA_UPSTREAM_API_KEY MUST be a multica PAT (mul_) the Go server's
   # auth middleware accepts; unset -> executor injects no Authorization ->
-  # env-dispatch returns 401. BRIDGE_USER_ID should match the AReaL-side stub's
-  # for per-user isolation; the claim SQL is `user_id = $1 OR $1 IS NULL`, so an
-  # unset (NULL) value claims ALL rows in these tables (functional for a
-  # single-user bridge), while a DIFFERENT non-NULL value leaves the stub's
-  # rows unclaimed (areal sees 202 until 504).
+  # env-dispatch returns 401. BRIDGE_USER_ID MUST match the AReaL-side stub's
+  # (it enqueues the DAG-fetch rows under that user); a DIFFERENT non-NULL value
+  # leaves them unclaimed (areal sees 202 until 504). Defaults to the same UUID
+  # as MULTICA_BRIDGE_USER_ID; the claim SQL is `user_id = $1 OR $1 IS NULL`, so
+  # an explicit empty value would claim ALL rows in these tables.
   db-bridge-executor-multica:
     profiles: ["db-bridge"]
     image: ${MULTICA_DB_BRIDGE_IMAGE:-ghcr.io/lrm-teams/multica-db-bridge}:${MULTICA_IMAGE_TAG:-latest}
@@ -231,7 +232,7 @@ services:
       # multica PAT (mul_) injected as Authorization: Bearer. Set in
       # /data/multica/.env; unset -> no auth injected -> env-dispatch 401.
       BRIDGE_MULTICA_UPSTREAM_API_KEY: ${BRIDGE_MULTICA_UPSTREAM_API_KEY:-}
-      BRIDGE_USER_ID: ${BRIDGE_USER_ID:-}
+      BRIDGE_USER_ID: ${BRIDGE_USER_ID:-c88b46a8-a8b5-4414-82fb-91398bd063b4}
       BRIDGE_POLL_INTERVAL: ${BRIDGE_POLL_INTERVAL:-1}
       BRIDGE_MAX_BODY_BYTES: ${BRIDGE_MAX_BODY_BYTES:-67108864}
     restart: unless-stopped

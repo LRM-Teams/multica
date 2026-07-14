@@ -360,6 +360,7 @@
     },
     "activity": {
       "timeline_empty": "暂无活动",
+      "jump_to_latest": "回到最新",
       "labels": {
         "thinking": "思考中",
         "output": "输出",

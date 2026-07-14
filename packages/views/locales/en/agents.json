@@ -368,6 +368,7 @@
     },
     "activity": {
       "timeline_empty": "No activity yet",
+      "jump_to_latest": "Jump to latest",
       "labels": {
         "thinking": "Thinking",
         "output": "Output",

@@ -328,6 +328,20 @@ func TestWendyAmbientDispatchEnqueuesEventRadarRun(t *testing.T) {
 	if dirty || ambientStatus != "idle" {
 		t.Fatalf("ambient after dispatch dirty=%v status=%q, want clean idle", dirty, ambientStatus)
 	}
+
+	var authorized bool
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT workspace_radar_task_is_authorized(rr.task_id)
+		FROM agent_radar_run rr
+		WHERE rr.cooldown_key = $1
+		ORDER BY rr.created_at DESC
+		LIMIT 1
+	`, "wendy_ambient:"+channelID).Scan(&authorized); err != nil {
+		t.Fatalf("check ambient claim auth: %v", err)
+	}
+	if !authorized {
+		t.Fatal("ambient radar task must be claim-authorized via workspace_radar_task_is_authorized")
+	}
 }
 
 func TestWendyHandoffHookUnlocksAfterBatchIssueUpdate(t *testing.T) {

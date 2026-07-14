@@ -151,19 +151,26 @@ function ActivityRow({
       ) : canExpandCommand ? (
         // Command row: label + command as ONE full-width hanging block (#404).
         // Collapsed = line-clamp-2 tail truncate. Click main row or caret →
-        // drop clamp, pre-wrap + break-all full command (entries[].command),
-        // caret flips; small 「复制」 when open. In-place text only — no card.
-        <div className="relative min-w-0 flex-1">
+        // drop clamp, pre-wrap + break-words full command (entries[].command),
+        // caret flips; controls are layered on top (see below), never inline.
+        // `break-words` (not `break-all`): wrap on whitespace / word boundaries and
+        // only split a token that truly can't fit, so `git fetch` never reads as
+        // `git fetc\nh` (Frank: 展开态按空格断行 / 保留命令行结构, 不字符级硬折).
+        // #2/#3 (Iris unified expand-state spec): the caret + Copy are layered on
+        // top (absolute) — NEVER in the text flow — so a control can't sit on the
+        // command text (Frank: Copy 压字 / `git fetc[Copy]h`). The whole row is one
+        // toggle; the caret is a fixed state indicator; Copy is a hover toolbar.
+        <div className="group/cmd relative min-w-0 flex-1">
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
             aria-expanded={expanded}
-            className="flex w-full items-start gap-1.5 text-left"
+            className="block w-full pr-6 text-left"
           >
             <span
               className={cn(
-                "min-w-0 flex-1 text-sm leading-[1.45] text-foreground",
-                expanded ? "break-all whitespace-pre-wrap" : "line-clamp-2 break-all",
+                "block min-w-0 text-sm leading-[1.45] text-foreground",
+                expanded ? "break-words whitespace-pre-wrap" : "line-clamp-2 break-words",
               )}
             >
               <span>{label} </span>
@@ -171,24 +178,25 @@ function ActivityRow({
                 {expanded ? commandFull : subtext}
               </span>
             </span>
-            {expanded ? (
-              <ChevronUp
-                className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/70"
-                aria-hidden
-              />
-            ) : (
-              <ChevronDown
-                className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/70"
-                aria-hidden
-              />
-            )}
           </button>
+          {/* Single caret fixed at the row's right end — state only, never drifts
+              with the command's length. `pointer-events-none` keeps the whole row
+              (caret cell included) one click target. */}
+          <span
+            className="pointer-events-none absolute right-0 top-1 text-muted-foreground/70"
+            aria-hidden
+          >
+            {expanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+          </span>
+          {/* Copy: hover toolbar layered at the block's top-right (own background),
+              left of the caret — never over the first line. Desktop reveals on
+              hover / focus; #415 keeps it always-shown on touch (no hover). */}
           {expanded && (
             <button
               type="button"
               onClick={handleCopyCommand}
               aria-label={copyLabel}
-              className="absolute right-5 top-0 text-[11px] leading-none text-muted-foreground transition-colors hover:text-foreground"
+              className="absolute right-6 top-0 rounded border bg-background px-1.5 py-0.5 text-[11px] leading-none text-muted-foreground opacity-0 shadow-sm transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/cmd:opacity-100"
             >
               {copyLabel}
             </button>
@@ -197,7 +205,7 @@ function ActivityRow({
       ) : isCommand && compact ? (
         // Compact Profile Recent: clamp + no expand / copy (title-only).
         <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 break-all text-sm leading-[1.45] text-foreground">
+          <div className="line-clamp-2 break-words text-sm leading-[1.45] text-foreground">
             <span>{label} </span>
             <span className="font-mono text-xs text-muted-foreground">{subtext}</span>
           </div>

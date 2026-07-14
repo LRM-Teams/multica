@@ -1233,3 +1233,54 @@ type WorkspaceInvitation struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
 }
+
+type WorkNode struct {
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	Kind                string             `json:"kind"`
+	Title               string             `json:"title"`
+	Description         string             `json:"description"`
+	OwnerType           string             `json:"owner_type"`
+	OwnerID             pgtype.UUID        `json:"owner_id"`
+	Status              string             `json:"status"`
+	PrimaryChannelID    pgtype.UUID        `json:"primary_channel_id"`
+	LinkedIssueID       pgtype.UUID        `json:"linked_issue_id"`
+	LinkedTaskID        pgtype.UUID        `json:"linked_task_id"`
+	LastProgressAt      pgtype.Timestamptz `json:"last_progress_at"`
+	LastProgressSummary string             `json:"last_progress_summary"`
+	LastWendyNudgeAt    pgtype.Timestamptz `json:"last_wendy_nudge_at"`
+	LastWendyNudgeKind  string             `json:"last_wendy_nudge_kind"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WorkEdge struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	FromNodeID  pgtype.UUID        `json:"from_node_id"`
+	ToNodeID    pgtype.UUID        `json:"to_node_id"`
+	Kind        string             `json:"kind"`
+	Status      string             `json:"status"`
+	Evidence    []byte             `json:"evidence"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PendingHandoff struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	Urgency         string             `json:"urgency"`
+	ReasonCode      string             `json:"reason_code"`
+	TargetActorType string             `json:"target_actor_type"`
+	TargetActorID   pgtype.UUID        `json:"target_actor_id"`
+	RelatedNodeIds  []pgtype.UUID      `json:"related_node_ids"`
+	ChannelID       pgtype.UUID        `json:"channel_id"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	DedupeKey       string             `json:"dedupe_key"`
+	NotBefore       pgtype.Timestamptz `json:"not_before"`
+	Status          string             `json:"status"`
+	ClaimToken      pgtype.UUID        `json:"claim_token"`
+	ClaimedAt       pgtype.Timestamptz `json:"claimed_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}

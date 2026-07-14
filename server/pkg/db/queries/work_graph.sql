@@ -125,13 +125,13 @@ RETURNING *;
 
 -- name: ClaimDuePendingHandoffs :many
 WITH due AS (
-    SELECT id
-    FROM pending_handoff
-    WHERE status = 'pending'
-      AND urgency = sqlc.arg('urgency')
-      AND reason_code = sqlc.arg('reason_code')
-      AND not_before <= now()
-    ORDER BY not_before ASC, created_at ASC
+    SELECT ph.id
+    FROM pending_handoff ph
+    WHERE ph.status = 'pending'
+      AND ph.urgency = sqlc.arg('urgency')
+      AND ph.reason_code = sqlc.arg('reason_code')
+      AND ph.not_before <= now()
+    ORDER BY ph.not_before ASC, ph.created_at ASC
     LIMIT 10
     FOR UPDATE SKIP LOCKED
 )

@@ -111,6 +111,12 @@ services:
       MULTICA_LARK_SECRET_KEY: ${MULTICA_LARK_SECRET_KEY:-}
       MULTICA_LARK_HTTP_BASE_URL: ${MULTICA_LARK_HTTP_BASE_URL:-}
       MULTICA_LARK_CALLBACK_BASE_URL: ${MULTICA_LARK_CALLBACK_BASE_URL:-}
+      # Point multica's arealrl client (server/internal/arealrl/client.go) at
+      # the multica-side gateway stub (db-bridge-stub-multica), which serves
+      # /rl/* and /chat/completions and relays them through the shared Supabase
+      # DB to the AReaL gateway. Only read by RL training/interaction flows;
+      # override in /data/multica/.env if the stub runs elsewhere.
+      AREAL_BRIDGE_STUB_URL: ${AREAL_BRIDGE_STUB_URL:-http://db-bridge-stub-multica:${BRIDGE_GATEWAY_STUB_PORT:-9100}}
     restart: unless-stopped
 
   frontend:
@@ -156,6 +162,41 @@ services:
       # Poll the shared DB every 1s for the LLM response (upstream default
       # 0.075s is too aggressive against a REMOTE Supabase; LLM latency
       # dominates, so 1s cuts DB load ~13x with negligible added latency).
+      BRIDGE_POLL_INTERVAL: ${BRIDGE_POLL_INTERVAL:-1}
+      BRIDGE_MAX_BODY_BYTES: ${BRIDGE_MAX_BODY_BYTES:-67108864}
+    restart: unless-stopped
+
+  # multica-side gateway stub: serves /rl/start_session, /rl/set_reward,
+  # /rl/end_session, /rl/close_segment, and /chat/completions on loopback for
+  # multica's OWN arealrl client (the multica -> AReaL RL direction). The
+  # backend is pointed at this stub via AREAL_BRIDGE_STUB_URL (see backend env
+  # above); the stub enqueues each call into rpc_rl_* / rpc_chat_completions,
+  # and the AReaL-side executor (--side areal) drains them and forwards to the
+  # real AReaL gateway. Same profile + image as the public db-bridge server
+  # above; the Dockerfile's default CMD already runs run_stub --side leagent,
+  # restated explicitly here.
+  #
+  # BRIDGE_USER_ID MUST equal the AReaL-side executor's BRIDGE_USER_ID - the
+  # rows this stub enqueues are claimed on the AReaL host under that user, so a
+  # mismatch leaves them unclaimed (multica -> AReaL calls hang until 504). It
+  # is distinct from MULTICA_BRIDGE_USER_ID (the public LLM/shell user). The
+  # arealrl client sends no X-Bridge-User-Id header, so this MUST be a valid
+  # UUID or the stub rejects every request with 400.
+  db-bridge-stub-multica:
+    profiles: ["db-bridge"]
+    image: ${MULTICA_DB_BRIDGE_IMAGE:-ghcr.io/lrm-teams/multica-db-bridge}:${MULTICA_IMAGE_TAG:-latest}
+    command: ["python", "-m", "db_bridge.run_stub", "--side", "leagent"]
+    ports:
+      - "127.0.0.1:${BRIDGE_GATEWAY_STUB_PORT:-9100}:${BRIDGE_GATEWAY_STUB_PORT:-9100}"
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      BRIDGE_USER_ID: ${BRIDGE_USER_ID:-}
+      # Bind 0.0.0.0 in-container so the backend container can reach the stub
+      # over the compose network (db-bridge-stub-multica:9100). The host port
+      # still maps to 127.0.0.1 only - the stub is not exposed to the internet.
+      BRIDGE_STUB_HOST: ${BRIDGE_STUB_HOST:-0.0.0.0}
+      BRIDGE_GATEWAY_STUB_PORT: ${BRIDGE_GATEWAY_STUB_PORT:-9100}
       BRIDGE_POLL_INTERVAL: ${BRIDGE_POLL_INTERVAL:-1}
       BRIDGE_MAX_BODY_BYTES: ${BRIDGE_MAX_BODY_BYTES:-67108864}
     restart: unless-stopped

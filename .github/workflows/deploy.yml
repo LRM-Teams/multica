@@ -231,6 +231,14 @@ jobs:
           # and leave any existing db-bridge container running.
           if compose pull db-bridge; then
             compose up -d db-bridge
+            # Gateway stub for multica -> AReaL RL calls (start_session /
+            # set_reward / close_segment / chat_completions). Same image as
+            # db-bridge, different CMD (run_stub --side leagent); the pull
+            # above already fetched the image, so this only needs to start it.
+            # Best-effort: a stub failure must not roll back the backend/
+            # frontend that already succeeded - warn and leave any existing
+            # stub container running.
+            compose up -d db-bridge-stub-multica || echo "::warning::db-bridge-stub-multica failed to start; multica -> AReaL RL calls will fail until it runs."
           else
             echo "::warning::db-bridge image not found at tag ${MULTICA_IMAGE_TAG}; skipping db-bridge roll (existing container, if any, keeps running). Use a tag built with the db-bridge CD change for a full db-bridge rollback."
           fi
@@ -279,3 +287,28 @@ jobs:
           done
           echo "::warning::db-bridge did not pass /healthz within 60s - investigate the bridge container."
           docker logs --tail 80 multica-db-bridge-1 || true
+
+      - name: Health check (db-bridge-stub-multica /healthz)
+        # The multica-side gateway stub (multica -> AReaL RL direction). Same
+        # warning-not-error treatment as the db-bridge server above: it is an
+        # auxiliary bridge service, and a stub health failure must not mark the
+        # backend/frontend roll red. Skipped when no stub container is running.
+        if: always()
+        run: |
+          set -uo pipefail
+          if ! docker ps --format '{{.Names}}' | grep -q '^multica-db-bridge-stub-multica-1$'; then
+            echo "db-bridge-stub-multica container not running - skipping /healthz check."
+            exit 0
+          fi
+          set -a; . "${DEPLOY_DIR}/.env" 2>/dev/null || true; set +a
+          port="${BRIDGE_GATEWAY_STUB_PORT:-9100}"
+          for i in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
+              echo "db-bridge-stub-multica healthy after $((i * 2))s."
+              exit 0
+            fi
+            echo "waiting for db-bridge-stub-multica readiness... ($i/30)"
+            sleep 2
+          done
+          echo "::warning::db-bridge-stub-multica did not pass /healthz within 60s - investigate the stub container."
+          docker logs --tail 80 multica-db-bridge-stub-multica-1 || true

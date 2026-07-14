@@ -17,7 +17,7 @@ def test_minimal_from_env_applies_defaults():
     cfg = BridgeConfig.from_env(_MINIMAL)
     assert cfg.supabase_url == "https://example.supabase.co"
     assert cfg.supabase_key == "service-key"
-    assert cfg.poll_interval_s == pytest.approx(0.075)
+    assert cfg.poll_interval_s == pytest.approx(1.0)
     assert cfg.stale_seconds == 300
     assert cfg.stub_host == "127.0.0.1"
     assert cfg.gateway_stub_port == 9100

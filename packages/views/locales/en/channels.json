@@ -169,6 +169,7 @@
     "processing_single": "{{name}} is preparing a reply...",
     "processing_pair": "{{a}} and {{b}} are preparing replies...",
     "processing_overflow": "{{a}}, {{b}} and {{count}} agents are preparing replies...",
+    "processing_count": "{{count}} agents are preparing replies...",
     "no_reply": "Acknowledged · no reply needed",
     "failed": "Couldn't reply",
     "retry": "Retry",

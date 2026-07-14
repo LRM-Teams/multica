@@ -42,6 +42,7 @@ type AgentResponse struct {
 	Instructions  string          `json:"instructions"`
 	AvatarURL     *string         `json:"avatar_url"`
 	RuntimeMode   string          `json:"runtime_mode"`
+	RuntimeName   string          `json:"runtime_name"`
 	RuntimeConfig any             `json:"runtime_config"`
 	CustomArgs    []string        `json:"custom_args"`
 	McpConfig     json.RawMessage `json:"mcp_config"`
@@ -119,6 +120,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		Instructions:       a.Instructions,
 		AvatarURL:          textToPtr(a.AvatarUrl),
 		RuntimeMode:        a.RuntimeMode,
+		RuntimeName:        defaultAgentRuntimeName(a.RuntimeMode),
 		RuntimeConfig:      rc,
 		CustomArgs:         customArgs,
 		McpConfig:          mcpConfig,
@@ -135,6 +137,71 @@ func agentToResponse(a db.Agent) AgentResponse {
 		UpdatedAt:          timestampToString(a.UpdatedAt),
 		ArchivedAt:         timestampToPtr(a.ArchivedAt),
 		ArchivedBy:         uuidToPtr(a.ArchivedBy),
+	}
+}
+
+func defaultAgentRuntimeName(runtimeMode string) string {
+	if runtimeMode == "cloud" {
+		return "Cloud"
+	}
+	return ""
+}
+
+func (h *Handler) attachAgentRuntimeName(ctx context.Context, resp *AgentResponse) {
+	resps := []AgentResponse{*resp}
+	h.attachAgentRuntimeNames(ctx, resps)
+	*resp = resps[0]
+}
+
+func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResponse) {
+	if len(resps) == 0 {
+		return
+	}
+	runtimeIDs := make([]pgtype.UUID, 0, len(resps))
+	byRuntimeID := map[string][]int{}
+	for i := range resps {
+		if strings.TrimSpace(resps[i].RuntimeName) == "" {
+			resps[i].RuntimeName = defaultAgentRuntimeName(resps[i].RuntimeMode)
+		}
+		if strings.TrimSpace(resps[i].RuntimeID) == "" {
+			continue
+		}
+		runtimeID := parseUUID(resps[i].RuntimeID)
+		if !runtimeID.Valid {
+			continue
+		}
+		key := uuidToString(runtimeID)
+		if _, ok := byRuntimeID[key]; !ok {
+			runtimeIDs = append(runtimeIDs, runtimeID)
+		}
+		byRuntimeID[key] = append(byRuntimeID[key], i)
+	}
+	if len(runtimeIDs) == 0 {
+		return
+	}
+
+	rows, err := h.DB.Query(ctx, `
+		SELECT id, COALESCE(NULLIF(name, ''), CASE WHEN runtime_mode = 'cloud' THEN 'Cloud' ELSE '' END)
+		FROM agent_runtime
+		WHERE id = ANY($1::uuid[])`, runtimeIDs)
+	if err != nil {
+		slog.Warn("failed to load agent runtime names", "error", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id pgtype.UUID
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			slog.Warn("failed to scan agent runtime name", "error", err)
+			continue
+		}
+		for _, idx := range byRuntimeID[uuidToString(id)] {
+			resps[idx].RuntimeName = name
+		}
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("failed to iterate agent runtime names", "error", err)
 	}
 }
 
@@ -609,6 +676,7 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		visible = append(visible, resp)
 	}
+	h.attachAgentRuntimeNames(r.Context(), visible)
 
 	writeJSON(w, http.StatusOK, visible)
 }
@@ -638,6 +706,7 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
 	}
+	h.attachAgentRuntimeName(r.Context(), &resp)
 
 	// mcp_config redaction (custom_env was removed from this response shape
 	// in MUL-2600; secrets are now fetched via GET /api/agents/{id}/env).
@@ -857,6 +926,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := agentToResponse(created)
+	h.attachAgentRuntimeName(r.Context(), &resp)
 	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
 	h.publishAgentVisibilityEvent(protocol.EventAgentCreated, workspaceID, actorType, actorID, created, map[string]any{"agent": broadcastAgentResponse(resp)})
 
@@ -1245,6 +1315,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
 	}
+	h.attachAgentRuntimeName(r.Context(), &resp)
 	if agentUpdateAffectsEvolutionMatching(req) {
 		h.refreshAgentSkillSuggestions(r.Context(), updated)
 	}
@@ -1338,6 +1409,7 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
 	}
+	h.attachAgentRuntimeName(r.Context(), &resp)
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentArchived, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 	redactAgentResponseForActor(&resp, actorType)
@@ -1373,6 +1445,7 @@ func (h *Handler) RestoreAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
 	}
+	h.attachAgentRuntimeName(r.Context(), &resp)
 	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentRestored, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})

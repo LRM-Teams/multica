@@ -22,7 +22,9 @@ func newMessageSendCmd() *cobra.Command {
 			"dm:@handle, or dm:@handle:<threadId>. Use --sticker for a sticker-only " +
 			"reply, or combine --sticker with --message for an acknowledgement sticker " +
 			"followed by explanatory text in one message. Attach files with " +
-			"--attachment-id from `multica attachment upload` (repeatable).",
+			"--attachment-id from `multica attachment upload` (repeatable). If the " +
+			"server holds a send because newer messages arrived, review the bounded " +
+			"context and use --send-draft to send the saved draft unchanged.",
 		RunE: runAgentMessageSend,
 	}
 	cmd.Flags().String("target", "", messageTargetFlagUsage())
@@ -32,8 +34,11 @@ func newMessageSendCmd() *cobra.Command {
 	cmd.Flags().String("sticker", "", "Builtin sticker id (see `multica sticker list`); sticker-only when --message is omitted")
 	cmd.Flags().StringSlice("attachment-id", nil, "Attachment id to link (repeatable). Get one from `multica attachment upload`")
 	cmd.Flags().String("client-message-id", "", "Idempotency key; generated automatically when omitted")
+	cmd.Flags().Bool("send-draft", false, "Send the current server-saved draft for --target unchanged")
 	cmd.Flags().Bool("show-in-channel", false, "For thread targets, also show the reply on the parent channel timeline")
+	cmd.Flags().Int64("seen-up-to-seq", 0, "Last channel message sequence the agent reviewed before composing")
 	cmd.Flags().String("output", "json", "Output format: json or text")
+	_ = cmd.Flags().MarkHidden("seen-up-to-seq")
 	return cmd
 }
 
@@ -128,6 +133,28 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	sendDraft, _ := cmd.Flags().GetBool("send-draft")
+	if sendDraft {
+		if cmd.Flags().Changed("message") || cmd.Flags().Changed("message-stdin") || cmd.Flags().Changed("message-file") ||
+			cmd.Flags().Changed("sticker") || cmd.Flags().Changed("attachment-id") || cmd.Flags().Changed("client-message-id") ||
+			cmd.Flags().Changed("show-in-channel") || cmd.Flags().Changed("seen-up-to-seq") {
+			return fmt.Errorf("--send-draft cannot be combined with message, sticker, attachment, client-message-id, or show-in-channel options")
+		}
+		client, err := newAPIClient(cmd)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
+		defer cancel()
+		var out map[string]any
+		if err := client.PostJSON(ctx, "/api/agent/messages/send", map[string]any{
+			"target":     target,
+			"send_draft": true,
+		}, &out); err != nil {
+			return fmt.Errorf("send saved draft: %w", err)
+		}
+		return printAgentTransportOutput(cmd, out, "Draft sent.")
+	}
 	content, contentOK, err := resolveTextFlag(cmd, "message")
 	if err != nil {
 		return err
@@ -155,6 +182,9 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		"target":            target,
 		"client_message_id": clientMessageIDFlag(cmd),
 	}
+	if seenUpToSeq := seenUpToSeqForMessageSend(cmd, client); seenUpToSeq > 0 {
+		body["seen_up_to_seq"] = seenUpToSeq
+	}
 	if text != "" {
 		body["content"] = content
 	}
@@ -172,7 +202,21 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	if err := client.PostJSON(ctx, "/api/agent/messages/send", body, &out); err != nil {
 		return fmt.Errorf("send message: %w", err)
 	}
-	return printAgentTransportOutput(cmd, out, "Message sent.")
+	return printAgentTransportOutput(cmd, out, agentMessageSendTextFallback(out))
+}
+
+func seenUpToSeqForMessageSend(cmd *cobra.Command, client *cli.APIClient) int64 {
+	if seq, _ := cmd.Flags().GetInt64("seen-up-to-seq"); seq > 0 {
+		return seq
+	}
+	return client.AgentInboxSeqTo
+}
+
+func agentMessageSendTextFallback(out map[string]any) string {
+	if strings.EqualFold(fmt.Sprint(out["state"]), "held") || strings.EqualFold(fmt.Sprint(out["outcome"]), "held") {
+		return "Message held by freshness check. Review heldMessages, then rerun with --send-draft to send the saved draft unchanged."
+	}
+	return "Message sent."
 }
 
 // buildAgentSendParts assembles the structured chat message body for agent

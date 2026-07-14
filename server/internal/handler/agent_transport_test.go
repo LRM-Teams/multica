@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -85,6 +86,117 @@ func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.
 	}
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonToolTransportOutput)
 	assertNoChannelMessageContent(t, channelID, finalText)
+}
+
+func TestAgentTransportSendFreshnessHoldSavesDraftAndDoesNotWriteMessage(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	seen, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "seen before compose "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed seen message: %v", err)
+	}
+	newerText := "newer during compose " + uuid.NewString()
+	newer, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", newerText, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed newer message: %v", err)
+	}
+
+	draftContent := "held draft " + uuid.NewString()
+	clientID := "transport-held-" + uuid.NewString()
+	heldRec := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           draftContent,
+		"client_message_id": clientID,
+		"seen_up_to_seq":    seen.Seq,
+	})
+	if heldRec.Code != http.StatusOK {
+		t.Fatalf("freshness hold send: status=%d body=%s", heldRec.Code, heldRec.Body.String())
+	}
+	var held AgentTransportSendHeldResponse
+	if err := json.Unmarshal(heldRec.Body.Bytes(), &held); err != nil {
+		t.Fatalf("decode held response: %v", err)
+	}
+	if held.State != "held" || held.Outcome != "held" || held.Subtype != "freshness" || held.Reason != "newer_messages_available" {
+		t.Fatalf("held envelope mismatch: %+v", held)
+	}
+	if held.SeenUpToSeq != seen.Seq || held.LatestSeq != newer.Seq || held.NewMessageCount != 1 || len(held.HeldMessages) != 1 || held.HeldMessages[0].ID != newer.ID {
+		t.Fatalf("held context mismatch: seen=%d newer=%s body=%+v", seen.Seq, newer.ID, held)
+	}
+	assertNoChannelMessageContent(t, channelID, draftContent)
+	assertAgentTransportDraftContent(t, agentID, target, draftContent)
+	assertAgentTransportFreshnessHoldActivity(t, taskID, target, 1)
+	assertAgentTransportVisibleOutputAuditCount(t, taskID, 0)
+
+	revised := "revised held draft " + uuid.NewString()
+	secondHeld := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           revised,
+		"client_message_id": "transport-held-" + uuid.NewString(),
+		"seen_up_to_seq":    seen.Seq,
+	})
+	if secondHeld.Code != http.StatusOK {
+		t.Fatalf("second freshness hold send: status=%d body=%s", secondHeld.Code, secondHeld.Body.String())
+	}
+	var secondBody AgentTransportSendHeldResponse
+	if err := json.Unmarshal(secondHeld.Body.Bytes(), &secondBody); err != nil {
+		t.Fatalf("decode second held response: %v", err)
+	}
+	if len(secondBody.HeldMessages) != 0 || secondBody.OmittedMessageCount != 1 {
+		t.Fatalf("second hold should omit previously reviewed blockers: %+v", secondBody)
+	}
+	assertAgentTransportDraftContent(t, agentID, target, revised)
+}
+
+func TestAgentTransportSendDraftSendsSavedDraftAndClearsDraft(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	seen, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "draft send seen "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed seen message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "draft send newer "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed newer message: %v", err)
+	}
+	content := "saved draft content " + uuid.NewString()
+	clientID := "transport-draft-" + uuid.NewString()
+	held := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           content,
+		"client_message_id": clientID,
+		"seen_up_to_seq":    seen.Seq,
+	})
+	if held.Code != http.StatusOK {
+		t.Fatalf("freshness hold send: status=%d body=%s", held.Code, held.Body.String())
+	}
+
+	sent := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":     target,
+		"send_draft": true,
+	})
+	if sent.Code != http.StatusCreated {
+		t.Fatalf("send saved draft: status=%d body=%s", sent.Code, sent.Body.String())
+	}
+	var body AgentTransportSendResponse
+	if err := json.Unmarshal(sent.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode draft send: %v", err)
+	}
+	if body.Message.Content != content || body.Message.ClientMessageID == nil || *body.Message.ClientMessageID != clientID {
+		t.Fatalf("draft send message mismatch: %+v", body.Message)
+	}
+	assertAgentTransportDraftMissing(t, agentID, target)
+	assertAgentTransportVisibleOutputAuditCount(t, taskID, 1)
 }
 
 func TestAgentTransportSendMessageStickerOnlyAndWithText(t *testing.T) {
@@ -985,6 +1097,79 @@ func assertAgentTransportAuditCount(t *testing.T, taskID, action string, want in
 	}
 	if got != want {
 		t.Fatalf("transport audit %s count=%d, want %d", action, got, want)
+	}
+}
+
+func assertAgentTransportVisibleOutputAuditCount(t *testing.T, taskID string, want int) {
+	t.Helper()
+	var got int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM agent_task_transport_audit
+		WHERE task_id = $1 AND action IN ('message_send', 'message_react') AND channel_message_id IS NOT NULL`, taskID).Scan(&got); err != nil {
+		t.Fatalf("count visible transport audit: %v", err)
+	}
+	if got != want {
+		t.Fatalf("visible transport audit count=%d, want %d", got, want)
+	}
+}
+
+func assertAgentTransportDraftContent(t *testing.T, agentID, target, want string) {
+	t.Helper()
+	var got string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT content
+		FROM agent_transport_draft
+		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3`,
+		testWorkspaceID, agentID, target).Scan(&got); err != nil {
+		t.Fatalf("load transport draft: %v", err)
+	}
+	if got != want {
+		t.Fatalf("draft content = %q, want %q", got, want)
+	}
+}
+
+func assertAgentTransportDraftMissing(t *testing.T, agentID, target string) {
+	t.Helper()
+	var exists bool
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT EXISTS (
+			SELECT 1
+			FROM agent_transport_draft
+			WHERE workspace_id = $1 AND agent_id = $2 AND target = $3
+		)`, testWorkspaceID, agentID, target).Scan(&exists); err != nil {
+		t.Fatalf("check transport draft: %v", err)
+	}
+	if exists {
+		t.Fatalf("transport draft still exists for agent=%s target=%s", agentID, target)
+	}
+}
+
+func assertAgentTransportFreshnessHoldActivity(t *testing.T, taskID, target string, newMessages int) {
+	t.Helper()
+	var statusCount, detailCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM agent_activity_event
+		WHERE task_id = $1
+		  AND event_type = 'send_freshness_hold'
+		  AND message = 'Send held by freshness check'
+		  AND target_slug = $2
+		  AND details->>'new_message_count' = $3`, taskID, target, fmt.Sprint(newMessages)).Scan(&statusCount); err != nil {
+		t.Fatalf("count freshness hold status activity: %v", err)
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM agent_activity_event
+		WHERE task_id = $1
+		  AND event_type = 'send_freshness_hold_detail'
+		  AND target_slug = $2
+		  AND message LIKE 'target: % / new messages: % newer / decision: local hold; review the newer context before retrying'`,
+		taskID, target).Scan(&detailCount); err != nil {
+		t.Fatalf("count freshness hold detail activity: %v", err)
+	}
+	if statusCount != 1 || detailCount != 1 {
+		t.Fatalf("freshness hold activity status=%d detail=%d, want 1/1", statusCount, detailCount)
 	}
 }
 

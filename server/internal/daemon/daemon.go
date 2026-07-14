@@ -3330,6 +3330,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentEnv["MULTICA_AGENT_INBOX_EVENT_ID"] = task.InboxEvent.ID
 		agentEnv["MULTICA_AGENT_INBOX_DELIVERY_ID"] = task.InboxEvent.DeliveryID
 		agentEnv["MULTICA_AGENT_INBOX_LEASE_TOKEN"] = task.InboxEvent.LeaseToken
+		if task.InboxEvent.SeqTo > 0 {
+			agentEnv["MULTICA_AGENT_INBOX_SEQ_TO"] = strconv.FormatInt(task.InboxEvent.SeqTo, 10)
+		}
 	}
 	if task.InitiatorType == "member" {
 		agentEnv["MULTICA_MEMBER_ID"] = task.InitiatorID

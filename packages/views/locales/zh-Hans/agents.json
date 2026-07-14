@@ -487,6 +487,8 @@
     "close_aria": "关闭 agent 面板",
     "no_description": "暂无简介",
     "model_label": "模型",
+    "runtime_label": "运行时",
+    "runtime_cloud": "云端",
     "reasoning_label": "推理强度",
     "created_label": "创建时间",
     "owner_label": "所有者",

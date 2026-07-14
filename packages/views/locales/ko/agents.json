@@ -497,6 +497,8 @@
     "close_aria": "에이전트 패널 닫기",
     "no_description": "아직 소개가 없습니다",
     "model_label": "모델",
+    "runtime_label": "런타임",
+    "runtime_cloud": "클라우드",
     "reasoning_label": "추론",
     "created_label": "생성일",
     "owner_label": "소유자",

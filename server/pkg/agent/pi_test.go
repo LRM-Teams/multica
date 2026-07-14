@@ -95,6 +95,9 @@ func TestPiExecuteAttachesStdinPipe(t *testing.T) {
 		"kind=$(stat -c '%F' -L /proc/self/fd/0 2>/dev/null || echo unknown)\n" +
 		"case \"$kind\" in\n" +
 		"  fifo|*pipe*)\n" +
+		// Consume the prompt before emitting events, matching Pi's stdin contract
+		// and avoiding a scheduler-dependent broken pipe in this test double.
+		"    cat >/dev/null\n" +
 		"    printf '%s\\n' '{\"type\":\"agent_start\"}'\n" +
 		"    printf '%s\\n' '{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"model\":\"test\",\"usage\":{\"input\":1,\"output\":1,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":2}}}'\n" +
 		"    exit 0\n" +

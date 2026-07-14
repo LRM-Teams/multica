@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -3599,6 +3601,10 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 			mentionedAgents[mention.ID] = struct{}{}
 		}
 	}
+	// Canonical mention links are already resolved by immutable IDs above. Remove
+	// them before evaluating legacy bare @handle syntax so a visible label such
+	// as "@Wendy" cannot wake another agent with the same display name.
+	bareContent := util.MentionRe.ReplaceAllString(content, " ")
 	rows, err := h.DB.Query(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
@@ -3617,7 +3623,7 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 			continue
 		}
 		_, mentionedByID := mentionedAgents[uuidToString(a.ID)]
-		if mentionedByID || contentMentionsAgent(content, a.Name) || contentMentionsAgent(content, a.DisplayName) {
+		if mentionedByID || contentMentionsAgent(bareContent, a.Name) {
 			out = append(out, a)
 		}
 	}
@@ -3659,12 +3665,47 @@ func (h *Handler) channelThreadAgentsFromQuery(ctx context.Context, query string
 	return out
 }
 
-func contentMentionsAgent(content, name string) bool {
-	needle := "@" + strings.ToLower(strings.TrimSpace(name))
-	if needle == "@" {
+// contentMentionsAgent recognizes a legacy bare @handle. Handles are stable
+// and unique; display names intentionally are not valid bare routing keys.
+func contentMentionsAgent(content, handle string) bool {
+	handle = strings.ToLower(strings.TrimSpace(handle))
+	if handle == "" {
 		return false
 	}
-	return strings.Contains(strings.ToLower(content), needle)
+	needle := "@" + handle
+	lowerContent := strings.ToLower(content)
+	for start := 0; ; {
+		match := strings.Index(lowerContent[start:], needle)
+		if match < 0 {
+			return false
+		}
+		match += start
+		end := match + len(needle)
+		if mentionHandleBoundaryBefore(lowerContent, match) && mentionHandleBoundaryAfter(lowerContent, end) {
+			return true
+		}
+		start = end
+	}
+}
+
+func mentionHandleBoundaryBefore(content string, index int) bool {
+	if index == 0 {
+		return true
+	}
+	previous, _ := utf8.DecodeLastRuneInString(content[:index])
+	return !isMentionHandleRune(previous)
+}
+
+func mentionHandleBoundaryAfter(content string, index int) bool {
+	if index >= len(content) {
+		return true
+	}
+	next, _ := utf8.DecodeRuneInString(content[index:])
+	return !isMentionHandleRune(next)
+}
+
+func isMentionHandleRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_' || r == '-'
 }
 
 type channelFacilitatorState struct {
@@ -3973,7 +4014,8 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 				mentionType = "member"
 			}
 			displayName := firstNonEmpty(member.DisplayName, member.Name)
-			fmt.Fprintf(&b, "- %s (%s, @%s): [@%s](mention://%s/%s)\n", displayName, member.MemberType, member.Name, displayName, mentionType, member.MemberID)
+			handle := firstNonEmpty(member.Name, displayName)
+			fmt.Fprintf(&b, "- %s (%s, @%s): [@%s](mention://%s/%s)\n", displayName, member.MemberType, handle, handle, mentionType, member.MemberID)
 		}
 		b.WriteString("\n")
 	}

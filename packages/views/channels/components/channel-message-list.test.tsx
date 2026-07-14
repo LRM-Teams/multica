@@ -92,6 +92,13 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   }),
 }));
 
+// The bubble reads the author avatar from the payload (#453/#574) via
+// resolvePublicFileUrl, which needs api.getBaseUrl(); pass the raw value
+// through so this viewport test doesn't touch the api base-url machinery.
+vi.mock("@multica/core/workspace/avatar-url", () => ({
+  resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
+}));
+
 // ChannelMessageBubble overlays the shared presence dot (AgentStatusDot) on
 // agent avatars, which reads presence via useAgentPresenceDetail and the
 // current workspace via useCurrentWorkspace. Stub both so this viewport test

@@ -367,6 +367,7 @@ func TestPiExecuteToolUseTurnDoesNotEarlyComplete(t *testing.T) {
 	// Turn 1 ends with a tool call (toolUse) — the model has not answered yet.
 	// Turn 2 streams the real answer and ends terminally (stopReason=stop).
 	script := "#!/bin/sh\n" +
+		"cat >/dev/null\n" +
 		"printf '%s\\n' '{\"type\":\"agent_start\"}'\n" +
 		"printf '%s\\n' '{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"model\":\"test\",\"stopReason\":\"toolUse\",\"usage\":{\"input\":1,\"output\":1,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":2}}}'\n" +
 		"printf '%s\\n' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"final answer\"}}'\n" +

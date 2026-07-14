@@ -166,7 +166,8 @@ describe("ActivityTimeline", () => {
     // A diagnostic row's raw content is not exposed unless explicitly toggled;
     // and even then it's the BE-provided label, never a raw command string.
     render(<ActivityTimeline events={[TOOL, EDIT]} />);
-    expect(screen.getByText("Running command…")).toBeInTheDocument();
+    // Command rows are amber `running` tone (not `active`), so no trailing "…" (#404).
+    expect(screen.getByText("Running command")).toBeInTheDocument();
     expect(screen.getByText("Editing file")).toBeInTheDocument();
     expect(screen.getByText("profile.go")).toBeInTheDocument();
     expect(screen.queryByText(/\/bin\/|--target|raft message/)).toBeNull();
@@ -268,13 +269,47 @@ describe("ActivityTimeline", () => {
     };
     render(<ActivityTimeline events={[CMD]} />);
     expect(screen.getByText("Running command")).toBeInTheDocument();
-    // The command clip is ONE plain node (never split into path head/tail — a
-    // command containing `/` must not get the path middle-ellipsis), with the
-    // full redacted command reachable on hover.
-    expect(screen.getByText("cd /a/b && multica send…")).toBeInTheDocument();
+    // The command renders as ONE plain node (never split into path head/tail — a
+    // command containing `/` must not get the path middle-ellipsis), showing the
+    // real command from `entries[].command`, with the full command on hover.
+    expect(screen.getByText('cd /a/b && multica send --target "#c"')).toBeInTheDocument();
     expect(screen.getByTitle('cd /a/b && multica send --target "#c"')).toBeInTheDocument();
     // Copy affordance present on the full (non-compact) row.
     expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
+  });
+
+  it("renders a command as a full-width hanging block (label + command in one two-line node) with static dots (#404)", () => {
+    const CMD: ActivityEvent = {
+      id: "cmd3",
+      agent_id: "agent-1",
+      occurred_at: "2026-07-06T09:36:05Z",
+      activity_kind: "tool_call",
+      detail_kind: "tool_use",
+      tool: "bash",
+      status: "completed",
+      entries: [{ kind: "tool_call", tool: "bash", command: "cd /a/b && ls -la /some/long/path" }],
+      target_ref: { kind: "agent", id: "agent-1" },
+    };
+    // An actively-running non-command tool — its dot must NOT pulse either (#404).
+    const READ_RUNNING: ActivityEvent = {
+      id: "rd1",
+      agent_id: "agent-1",
+      occurred_at: "2026-07-06T09:36:06Z",
+      activity_kind: "tool_call",
+      detail_kind: "tool_use",
+      tool: "read_file",
+      tool_target: "app.ts",
+      status: "running",
+      target_ref: { kind: "agent", id: "agent-1" },
+    };
+    const { container } = render(<ActivityTimeline events={[CMD, READ_RUNNING]} />);
+    // Label + command live in ONE full-width, two-line-clamped block — the command
+    // is no longer squished into the narrow column right of the label (Frank's 空位).
+    const block = screen.getByText("cd /a/b && ls -la /some/long/path").closest("div");
+    expect(block?.className).toContain("line-clamp-2");
+    expect(block?.textContent).toContain("Running command");
+    // No dot pulses anywhere — all static (#404: live-ness comes from header/#521).
+    expect(container.querySelector(".animate-pulse")).toBeNull();
   });
 
   it("compact mode drops the command copy affordance (title-only, non-interactive) (#v0)", () => {

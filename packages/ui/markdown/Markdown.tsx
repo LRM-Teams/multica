@@ -30,8 +30,15 @@ type AppLinkRenderer = React.ComponentType<{ href: string; children: React.React
  *
  * - 'full': Rich rendering with beautiful tables, styled code blocks, proper typography
  *   Best for: Documentation, long-form content, when presentation matters
+ *
+ * - 'inline': ONLY inline emphasis (bold / italic / strikethrough / inline code /
+ *   links) is formatted; every block-level construct (paragraphs, code fences,
+ *   tables, lists, headings, quotes) is flattened to plain inline text.
+ *   Best for: One-line previews of possibly-TRUNCATED text (e.g. the Activity
+ *   Output summary) where a half-written block — an unclosed ``` fence, a cut
+ *   table — must not render as broken block chrome and swallow the rest.
  */
-export type RenderMode = 'terminal' | 'minimal' | 'full'
+export type RenderMode = 'terminal' | 'minimal' | 'full' | 'inline'
 
 export interface MarkdownProps {
   children: string
@@ -382,6 +389,62 @@ function createComponents(
           {highlight(children)}
         </a>
       )
+    }
+  }
+
+  // Inline mode: only inline emphasis is formatted; block nodes flatten to text.
+  // The source may be a truncated fragment, so a block renderer (styled code
+  // block / table) is never used — a cut ``` fence would otherwise swallow the
+  // tail into broken chrome. Block nodes emit their text children inline instead.
+  if (mode === 'inline') {
+    // Trailing space preserves the word break at a former block boundary so
+    // "a\n\nb" reads as "a b" once flattened, not "ab".
+    const inlineBlock = ({ children }: { children?: React.ReactNode }) => (
+      <span>{highlight(children)} </span>
+    )
+    return {
+      ...baseComponents,
+      // No images in a one-line text preview — fall back to alt text if present.
+      img: ({ alt }) => (alt ? <span>{alt}</span> : null),
+      // Inline code keeps its chrome; a fenced/multi-line block (incl. an unclosed
+      // truncated fence) degrades to plain monospace text, never a CodeBlock.
+      code: ({ className, children, ...props }) => {
+        const match = /language-(\w+)/.exec(className || '')
+        const isBlock =
+          'node' in props && props.node?.position?.start.line !== props.node?.position?.end.line
+        if (match || isBlock) {
+          return (
+            <span className={cn('font-mono', CODE_LIGATURE_CLASS)}>
+              {String(children).replace(/\n$/, '')}
+            </span>
+          )
+        }
+        return <InlineCode>{children}</InlineCode>
+      },
+      pre: ({ children }) => <>{children}</>,
+      p: inlineBlock,
+      h1: inlineBlock,
+      h2: inlineBlock,
+      h3: inlineBlock,
+      h4: inlineBlock,
+      h5: inlineBlock,
+      h6: inlineBlock,
+      ul: inlineBlock,
+      ol: inlineBlock,
+      li: inlineBlock,
+      blockquote: inlineBlock,
+      table: inlineBlock,
+      thead: inlineBlock,
+      tbody: inlineBlock,
+      tr: inlineBlock,
+      th: inlineBlock,
+      td: inlineBlock,
+      hr: () => <span> </span>,
+      strong: ({ children }) => <strong className="font-semibold">{highlight(children)}</strong>,
+      em: ({ children }) => <em className="italic">{highlight(children)}</em>,
+      del: ({ children }) => (
+        <del className="line-through text-muted-foreground">{highlight(children)}</del>
+      ),
     }
   }
 

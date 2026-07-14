@@ -28,6 +28,8 @@ describe("activityPresentation — tool normalization", () => {
     ["shell", "running_command"],
     ["write", "writing_file"], // OpenCode
     ["write_file", "writing_file"],
+    ["create", "writing_file"], // native file-create tool folded into write family (#413)
+    ["create_file", "writing_file"],
     ["patch_apply", "editing_file"], // Codex
     ["edit_file", "editing_file"],
     ["multi_edit", "editing_file"],
@@ -38,7 +40,6 @@ describe("activityPresentation — tool normalization", () => {
     ["grep", "searching_code"],
     ["rg", "searching_code"],
     ["web_search", "searching_web"],
-    ["send_message", "sending_message"],
   ];
 
   it.each(cases)("normalizes provider slug %s to labelKey %s", (tool, labelKey) => {
@@ -69,9 +70,14 @@ describe("activityPresentation — tool normalization", () => {
   // The trailing "…" active/settled treatment lives in the render layer
   // (ActivityTimeline strips it when tone !== "active"); here we lock the tone
   // that drives it.
-  it("tones a running tool active and a settled tool neutral", () => {
-    expect(activityPresentation(toolEvent("bash", "running")).tone).toBe("active");
-    expect(activityPresentation(toolEvent("bash", "completed")).tone).toBe("neutral");
+  it("tones a command amber `running` regardless of status; a non-command tool by status (#404)", () => {
+    // Command rows are amber `running` — type-based (raft parity), settled or not,
+    // so they never read as a grey idle row.
+    expect(activityPresentation(toolEvent("bash", "running")).tone).toBe("running");
+    expect(activityPresentation(toolEvent("bash", "completed")).tone).toBe("running");
+    // A non-command tool keeps the status-driven tone.
+    expect(activityPresentation(toolEvent("read_file", "running")).tone).toBe("active");
+    expect(activityPresentation(toolEvent("read_file", "completed")).tone).toBe("neutral");
   });
 });
 
@@ -127,6 +133,16 @@ describe("isNarrativeActivityEvent — un-mapped tool filter (#384)", () => {
     expect(isNarrativeActivityEvent(toolEvent("bash"))).toBe(true);
     expect(isNarrativeActivityEvent(toolEvent("read_file"))).toBe(true);
     expect(isNarrativeActivityEvent(toolEvent("Read"))).toBe(true); // case-insensitive
+    // A native file-create tool must NOT be dropped (#413): the un-mapped path
+    // would vanish the row entirely, worse than the old "Running command create".
+    expect(isNarrativeActivityEvent(toolEvent("create"))).toBe(true);
+  });
+
+  it("renders a native `create` tool as Writing file with the source path (#413)", () => {
+    const p = activityPresentation({ ...toolEvent("create"), tool_target: "/w/hello_world_2.txt" });
+    expect(p.labelKey).toBe("writing_file");
+    expect(p.subtext).toBe("/w/hello_world_2.txt");
+    expect(p.subtextKind).toBe("path"); // basename-preserving path, NOT a command clip
   });
 
   it("drops an un-mapped tool_call from the narrative", () => {
@@ -144,7 +160,29 @@ describe("isNarrativeActivityEvent — un-mapped tool filter (#384)", () => {
       false,
     );
   });
+
+  it("drops a `message_sent` event from the mainline — the send already shows as its command row (#404)", () => {
+    // The sent content lives in chat + the `multica message send` CLI shows as a
+    // "Running command" row, so a `message_sent` (Output) row is a redundant
+    // duplicate. Field-driven on `detail_kind`, regardless of activity_kind.
+    expect(isNarrativeActivityEvent({ ...evtBase("text"), detail_kind: "message_sent" })).toBe(false);
+    expect(isNarrativeActivityEvent({ ...evtBase("custom"), detail_kind: "message_sent" })).toBe(false);
+    // A non-send text/Output (e.g. a radar decision) is NOT message_sent → stays.
+    expect(isNarrativeActivityEvent({ ...evtBase("text"), detail_kind: "text" })).toBe(true);
+  });
 });
+
+// Minimal narrative event of a given activity_kind (for the message_sent filter).
+function evtBase(activity_kind: ActivityEvent["activity_kind"]): ActivityEvent {
+  return {
+    id: "m1",
+    agent_id: "agent-1",
+    occurred_at: "2026-07-13T00:00:00Z",
+    activity_kind,
+    detail_kind: "text",
+    target_ref: { kind: "agent", id: "agent-1" },
+  } as ActivityEvent;
+}
 
 describe("activityPresentation — subtext kind classification (#v0 照实显示)", () => {
   // The row renders the subtext by `subtextKind`: a file path gets the
@@ -191,6 +229,62 @@ describe("activityPresentation — subtext kind classification (#v0 照实显示
   });
 });
 
+describe("activityPresentation — CLI commands show as Running command, no invented label (#v0 ⑤)", () => {
+  // Frank's rule: anything run as a CLI command (bash, and any multica subcommand
+  // the daemon canonicalized to a semantic tool like `send_message`) is shown
+  // FAITHFULLY as "Running command · <command>", never a product-invented label
+  // ("Sending message"). The signal is `entries[].command` (the redacted CLI).
+  it("renders a `send_message` (the `multica message send` CLI) as Running command with the real command", () => {
+    const event: ActivityEvent = {
+      ...toolEvent("send_message"),
+      // #503: raft-CLI parse puts the message target in tool_target; the real
+      // command is in entries[].command.
+      tool_target: "#multica",
+      entries: [
+        { kind: "tool_call", tool: "send_message", command: 'multica message send --target "#multica"' },
+      ],
+    };
+    const p = activityPresentation(event);
+    expect(p.labelKey).toBe("running_command"); // NOT "sending_message"
+    expect(p.subtextKind).toBe("command");
+    expect(p.subtext).toBe('multica message send --target "#multica"'); // real command inline, not "#multica"
+    expect(p.subtextFull).toBe('multica message send --target "#multica"');
+  });
+
+  it("passes the full command inline — CSS line-clamp-2 does the 2-line truncation, no manual slice (#404)", () => {
+    const long = `multica message send --target "#multica" --body ${"x".repeat(200)}`; // ~240 < 500
+    const p = activityPresentation({
+      ...toolEvent("send_message"),
+      entries: [{ kind: "tool_call", tool: "send_message", command: long }],
+    });
+    expect(p.subtext).toBe(long); // full inline — no manual "…"; the row clamps to 2 lines in CSS
+    expect(p.subtext).not.toContain("…");
+    expect(p.subtextFull).toBe(long);
+  });
+
+  it("caps a pathologically long command inline at 500 chars (DOM safety) while the full stays for copy (#404)", () => {
+    const huge = `bash -lc "${"y".repeat(800)}"`;
+    const p = activityPresentation({
+      ...toolEvent("bash"),
+      entries: [{ kind: "tool_call", tool: "bash", command: huge }],
+    });
+    expect(p.subtext).toBe(huge.slice(0, 500));
+    expect(p.subtext).not.toContain("…"); // ellipsis is CSS, never in the value
+    expect(p.subtextFull).toBe(huge);
+  });
+
+  it("a bash command carrying entries.command also renders via the same command path", () => {
+    const p = activityPresentation({
+      ...toolEvent("bash"),
+      tool_target: "cd /w && ls…",
+      entries: [{ kind: "tool_call", tool: "bash", command: "cd /w && ls -la" }],
+    });
+    expect(p.labelKey).toBe("running_command");
+    expect(p.subtext).toBe("cd /w && ls -la");
+    expect(p.subtextKind).toBe("command");
+  });
+});
+
 describe("isNarrativeActivityEvent — Radar actions", () => {
   function radarEvent(
     eventType: "radar_action_executed" | "radar_action_failed",
@@ -234,5 +328,42 @@ describe("isNarrativeActivityEvent — Radar actions", () => {
       labelKey: "failed",
       tone: "failure",
     });
+  });
+});
+
+describe("agent status transitions — Working ↔ Idle rows (#411/#525)", () => {
+  function statusEvent(status: "working" | "idle"): ActivityEvent {
+    return {
+      ...evtBase("custom"),
+      id: `status-${status}`,
+      detail_kind: "agent_status_changed",
+      status,
+      text: status === "idle" ? "Idle" : "Working",
+    } as ActivityEvent;
+  }
+
+  it("keeps IDLE in the timeline but drops the redundant WORKING status row", () => {
+    // "Idle" (end-of-round) is independent info worth a row; a bare "Working"
+    // duplicates the wake / actual-work rows that already show the agent working
+    // (Frank: "为什么突然多了一个working"). The working EVENT still exists for the
+    // header latest-state — it just gets no timeline row.
+    expect(isNarrativeActivityEvent(statusEvent("idle"))).toBe(true);
+    expect(isNarrativeActivityEvent(statusEvent("working"))).toBe(false);
+  });
+
+  it("labels working as active and idle as a settled neutral row", () => {
+    expect(activityPresentation(statusEvent("working"))).toMatchObject({
+      labelKey: "working",
+      tone: "active",
+    });
+    expect(activityPresentation(statusEvent("idle"))).toMatchObject({
+      labelKey: "idle",
+      tone: "neutral",
+    });
+  });
+
+  it("carries no subtext — the label IS the state (no invented detail)", () => {
+    expect(activityPresentation(statusEvent("idle")).subtext).toBeUndefined();
+    expect(activityPresentation(statusEvent("working")).subtext).toBeUndefined();
   });
 });

@@ -165,6 +165,22 @@ UPDATE agent_task_queue
 SET issue_id = $2
 WHERE id = $1 AND issue_id IS NULL;
 
+-- name: SetAgentTaskMaxAttempts :exec
+-- Radar owns provider backoff at the workspace scheduler, so its queue row
+-- must never also create an automatic retry attempt.
+UPDATE agent_task_queue
+SET max_attempts = $2
+WHERE id = $1;
+
+-- name: UpsertAgentTaskProgressSnapshot :exec
+INSERT INTO agent_task_progress_snapshot (task_id, summary, step, total, updated_at)
+VALUES ($1, $2, $3, $4, now())
+ON CONFLICT (task_id) DO UPDATE
+SET summary = EXCLUDED.summary,
+    step = EXCLUDED.step,
+    total = EXCLUDED.total,
+    updated_at = now();
+
 -- name: CreateRetryTask :one
 -- Clones a parent task into a fresh queued attempt. Carries forward the
 -- agent's resume context (session_id/work_dir) so the child can continue
@@ -296,6 +312,10 @@ SET status = 'dispatched', dispatched_at = now()
 WHERE id = (
     SELECT atq.id FROM agent_task_queue atq
     WHERE atq.agent_id = $1 AND atq.status = 'queued' AND atq.chat_session_id IS NULL
+      AND (
+        atq.context->>'type' IS DISTINCT FROM 'agent_radar'
+        OR workspace_radar_task_is_authorized(atq.id)
+      )
       AND NOT EXISTS (
           SELECT 1 FROM agent_task_queue active
           WHERE active.agent_id = atq.agent_id
@@ -355,6 +375,10 @@ WHERE id = (
       AND atq.status = 'dispatched'
       AND atq.started_at IS NULL
       AND atq.dispatched_at < now() - make_interval(secs => @claim_recovery_secs::double precision)
+      AND (
+        atq.context->>'type' IS DISTINCT FROM 'agent_radar'
+        OR workspace_radar_task_is_authorized(atq.id)
+      )
     ORDER BY atq.priority DESC, atq.dispatched_at ASC
     LIMIT 1
     FOR UPDATE SKIP LOCKED
@@ -368,10 +392,15 @@ RETURNING *;
 -- the lock was acquired the daemon flips here). wait_reason is cleared on
 -- the transition so a future read can't conflate "currently waiting" with
 -- "previously waited".
-UPDATE agent_task_queue
+UPDATE agent_task_queue AS atq
 SET status = 'running', started_at = now(), wait_reason = NULL
-WHERE id = $1 AND status IN ('dispatched', 'waiting_local_directory')
-RETURNING *;
+WHERE atq.id = $1
+  AND atq.status IN ('dispatched', 'waiting_local_directory')
+  AND (
+    atq.context->>'type' IS DISTINCT FROM 'agent_radar'
+    OR workspace_radar_task_is_authorized(atq.id)
+  )
+RETURNING atq.*;
 
 -- name: MarkAgentTaskWaitingLocalDirectory :one
 -- Transitions a freshly-dispatched task into 'waiting_local_directory' while
@@ -657,7 +686,12 @@ ORDER BY priority DESC, created_at ASC;
 -- runtime is busy on a long-running task. Backed by the partial index
 -- idx_agent_task_queue_claim_candidates so the warm path is cheap.
 SELECT * FROM agent_task_queue
-WHERE runtime_id = $1 AND status = 'queued'
+WHERE runtime_id = $1
+  AND status = 'queued'
+  AND (
+    context->>'type' IS DISTINCT FROM 'agent_radar'
+    OR workspace_radar_task_is_authorized(agent_task_queue.id)
+  )
 ORDER BY priority DESC, created_at ASC;
 
 -- name: ListActiveTasksByIssue :many

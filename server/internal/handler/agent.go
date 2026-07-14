@@ -42,6 +42,7 @@ type AgentResponse struct {
 	Instructions  string          `json:"instructions"`
 	AvatarURL     *string         `json:"avatar_url"`
 	RuntimeMode   string          `json:"runtime_mode"`
+	RuntimeName   string          `json:"runtime_name"`
 	RuntimeConfig any             `json:"runtime_config"`
 	CustomArgs    []string        `json:"custom_args"`
 	McpConfig     json.RawMessage `json:"mcp_config"`
@@ -119,6 +120,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		Instructions:       a.Instructions,
 		AvatarURL:          textToPtr(a.AvatarUrl),
 		RuntimeMode:        a.RuntimeMode,
+		RuntimeName:        defaultAgentRuntimeName(a.RuntimeMode),
 		RuntimeConfig:      rc,
 		CustomArgs:         customArgs,
 		McpConfig:          mcpConfig,
@@ -135,6 +137,71 @@ func agentToResponse(a db.Agent) AgentResponse {
 		UpdatedAt:          timestampToString(a.UpdatedAt),
 		ArchivedAt:         timestampToPtr(a.ArchivedAt),
 		ArchivedBy:         uuidToPtr(a.ArchivedBy),
+	}
+}
+
+func defaultAgentRuntimeName(runtimeMode string) string {
+	if runtimeMode == "cloud" {
+		return "Cloud"
+	}
+	return ""
+}
+
+func (h *Handler) attachAgentRuntimeName(ctx context.Context, resp *AgentResponse) {
+	resps := []AgentResponse{*resp}
+	h.attachAgentRuntimeNames(ctx, resps)
+	*resp = resps[0]
+}
+
+func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResponse) {
+	if len(resps) == 0 {
+		return
+	}
+	runtimeIDs := make([]pgtype.UUID, 0, len(resps))
+	byRuntimeID := map[string][]int{}
+	for i := range resps {
+		if strings.TrimSpace(resps[i].RuntimeName) == "" {
+			resps[i].RuntimeName = defaultAgentRuntimeName(resps[i].RuntimeMode)
+		}
+		if strings.TrimSpace(resps[i].RuntimeID) == "" {
+			continue
+		}
+		runtimeID := parseUUID(resps[i].RuntimeID)
+		if !runtimeID.Valid {
+			continue
+		}
+		key := uuidToString(runtimeID)
+		if _, ok := byRuntimeID[key]; !ok {
+			runtimeIDs = append(runtimeIDs, runtimeID)
+		}
+		byRuntimeID[key] = append(byRuntimeID[key], i)
+	}
+	if len(runtimeIDs) == 0 {
+		return
+	}
+
+	rows, err := h.DB.Query(ctx, `
+		SELECT id, COALESCE(NULLIF(name, ''), CASE WHEN runtime_mode = 'cloud' THEN 'Cloud' ELSE '' END)
+		FROM agent_runtime
+		WHERE id = ANY($1::uuid[])`, runtimeIDs)
+	if err != nil {
+		slog.Warn("failed to load agent runtime names", "error", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id pgtype.UUID
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			slog.Warn("failed to scan agent runtime name", "error", err)
+			continue
+		}
+		for _, idx := range byRuntimeID[uuidToString(id)] {
+			resps[idx].RuntimeName = name
+		}
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("failed to iterate agent runtime names", "error", err)
 	}
 }
 
@@ -609,6 +676,7 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		visible = append(visible, resp)
 	}
+	h.attachAgentRuntimeNames(r.Context(), visible)
 
 	writeJSON(w, http.StatusOK, visible)
 }
@@ -638,6 +706,7 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
 	}
+	h.attachAgentRuntimeName(r.Context(), &resp)
 
 	// mcp_config redaction (custom_env was removed from this response shape
 	// in MUL-2600; secrets are now fetched via GET /api/agents/{id}/env).
@@ -857,6 +926,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := agentToResponse(created)
+	h.attachAgentRuntimeName(r.Context(), &resp)
 	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
 	h.publishAgentVisibilityEvent(protocol.EventAgentCreated, workspaceID, actorType, actorID, created, map[string]any{"agent": broadcastAgentResponse(resp)})
 
@@ -1245,6 +1315,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
 	}
+	h.attachAgentRuntimeName(r.Context(), &resp)
 	if agentUpdateAffectsEvolutionMatching(req) {
 		h.refreshAgentSkillSuggestions(r.Context(), updated)
 	}
@@ -1338,6 +1409,7 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
 	}
+	h.attachAgentRuntimeName(r.Context(), &resp)
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentArchived, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 	redactAgentResponseForActor(&resp, actorType)
@@ -1373,6 +1445,7 @@ func (h *Handler) RestoreAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
 	}
+	h.attachAgentRuntimeName(r.Context(), &resp)
 	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentRestored, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
@@ -1733,14 +1806,16 @@ func (h *Handler) GetWorkspaceAgentActivity30d(w http.ResponseWriter, r *http.Re
 }
 
 // ListWorkspaceAgentTaskSnapshot returns the task data the front-end needs to
-// derive each agent's presence: every active task (queued/dispatched/running)
-// plus each agent's most recent OUTCOME task (completed/failed only). Cancelled
-// tasks are excluded from the outcome half by design — cancel is a procedural
-// signal ("attempt aborted"), not an outcome, so it must not mask a prior
-// failure. The front-end picks "active wins, else latest outcome"; a failed
-// outcome stays sticky until the user starts a new task or one succeeds.
-// Per-agent filtering happens in the front-end against this workspace-wide
-// snapshot.
+// derive each agent's presence: every active task plus each agent's most recent
+// OUTCOME task (completed/failed only). Legacy issue/autopilot/quick-create
+// tasks still come from agent_task_queue; chat/channel work now runs through
+// agent_inbox_event, so active inbox rows are folded into the same workspace
+// snapshot. Cancelled tasks are excluded from the outcome half by design —
+// cancel is a procedural signal ("attempt aborted"), not an outcome, so it must
+// not mask a prior failure. The front-end picks "active wins, else latest
+// outcome"; a failed outcome stays sticky until the user starts a new task or
+// one succeeds. Per-agent filtering happens in the front-end against this
+// workspace-wide snapshot.
 func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	member, ok := h.workspaceMember(w, r, workspaceID)
@@ -1761,15 +1836,98 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 		return
 	}
 
-	resp := make([]AgentTaskResponse, 0, len(tasks))
+	inboxTasks, err := h.listWorkspaceActiveAgentInboxTaskResponses(r.Context(), parseUUID(workspaceID), workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list agent inbox task snapshot")
+		return
+	}
+
+	resp := make([]AgentTaskResponse, 0, len(tasks)+len(inboxTasks))
 	for _, t := range tasks {
 		if _, ok := allowed[uuidToString(t.AgentID)]; !ok {
 			continue
 		}
 		resp = append(resp, taskToResponse(t, workspaceID))
 	}
+	for _, item := range inboxTasks {
+		if _, ok := allowed[item.Task.AgentID]; !ok {
+			continue
+		}
+		resp = append(resp, item.Task)
+	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) listWorkspaceActiveAgentInboxTaskResponses(ctx context.Context, workspaceUUID pgtype.UUID, workspaceID string) ([]agentTaskSortItem, error) {
+	rows, err := h.DB.Query(ctx, `
+		SELECT e.id,
+		       e.agent_id,
+		       COALESCE(latest_delivery.runtime_id, s.runtime_id) AS runtime_id,
+		       e.status,
+		       e.priority,
+		       e.last_error,
+		       e.claimed_at,
+		       e.created_at,
+		       e.chat_session_id,
+		       e.reason,
+		       COALESCE(cm.content, '') AS source_content,
+		       COALESCE(latest_delivery.status, '') AS delivery_status,
+		       latest_delivery.leased_at
+		FROM agent_inbox_event e
+		LEFT JOIN agent_session s ON s.id = e.agent_session_id
+		LEFT JOIN channel_message cm ON cm.id = e.source_message_id
+		LEFT JOIN LATERAL (
+			SELECT d.id, d.runtime_id, d.status, d.leased_at
+			FROM agent_event_delivery d
+			WHERE d.inbox_event_id = e.id
+			ORDER BY d.created_at DESC, d.id DESC
+			LIMIT 1
+		) latest_delivery ON true
+		WHERE e.workspace_id = $1
+		  AND e.requires_wake
+		  AND e.terminal_outcome IS NULL
+		  AND e.status IN ('pending', 'draining', 'failed')
+		ORDER BY e.created_at DESC, e.id DESC`, workspaceUUID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []agentTaskSortItem
+	for rows.Next() {
+		var id, rowAgentID, runtimeID, chatSessionID pgtype.UUID
+		var status, reason, sourceContent, deliveryStatus string
+		var priority int32
+		var lastError pgtype.Text
+		var claimedAt, createdAt, leasedAt pgtype.Timestamptz
+		if err := rows.Scan(&id, &rowAgentID, &runtimeID, &status, &priority, &lastError, &claimedAt, &createdAt, &chatSessionID, &reason, &sourceContent, &deliveryStatus, &leasedAt); err != nil {
+			return nil, err
+		}
+		resp := AgentTaskResponse{
+			ID:            uuidToString(id),
+			AgentID:       uuidToString(rowAgentID),
+			RuntimeID:     uuidToString(runtimeID),
+			WorkspaceID:   workspaceID,
+			Status:        inboxEventTaskStatus(status, "", deliveryStatus),
+			Priority:      priority,
+			StartedAt:     timestampToPtr(firstValidTimestamp(claimedAt, leasedAt)),
+			Error:         textToPtr(lastError),
+			Attempt:       1,
+			MaxAttempts:   1,
+			CreatedAt:     timestampToString(createdAt),
+			ChatSessionID: uuidToString(chatSessionID),
+			Kind:          "chat",
+		}
+		if summary := inboxEventTaskSummary(reason, sourceContent); summary != "" {
+			resp.TriggerSummary = &summary
+		}
+		items = append(items, agentTaskSortItem{Task: resp, SortAt: timestampToTime(createdAt)})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 // AgentTaskFeedItem is one terminal task in the workspace activity feed,

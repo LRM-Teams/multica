@@ -160,7 +160,7 @@ func customActivityEventIsNarrative(eventType, reasonCode string) bool {
 		return true
 	}
 	switch eventType {
-	case "radar_action_executed", "radar_action_failed":
+	case agentInboxStatusChangedEventType, "radar_action_executed", "radar_action_failed":
 		return true
 	default:
 		return false

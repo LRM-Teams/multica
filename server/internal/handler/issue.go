@@ -2197,6 +2197,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	issue := res.Issue
 	slog.Info("issue created", append(logger.RequestAttrs(r), "issue_id", uuidToString(issue.ID), "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)...)
+	h.syncWendyWorkGraphAfterIssueCreate(r.Context(), issue)
 
 	resp := issueToResponse(issue, prefix)
 	resp.Attachments = buildAttachmentResponses(res.Attachments)
@@ -2488,7 +2489,12 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// fails best-effort.
 	if statusChanged {
 		h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID)
+	}
+	if statusChanged || assigneeChanged {
 		h.syncWendyWorkGraphAfterIssueUpdate(r.Context(), issue)
+	}
+	if assigneeChanged {
+		h.detectWendyStartWorkForIssue(r.Context(), issue)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -2970,7 +2976,12 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		// (MUL-2538). Best-effort; failure does not abort the batch.
 		if statusChanged {
 			h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID)
+		}
+		if statusChanged || assigneeChanged {
 			h.syncWendyWorkGraphAfterIssueUpdate(r.Context(), issue)
+		}
+		if assigneeChanged {
+			h.detectWendyStartWorkForIssue(r.Context(), issue)
 		}
 
 		updated++

@@ -3077,6 +3077,7 @@ func (h *Handler) ingestWendyHumanGroupMessage(ctx context.Context, ch ChannelRe
 	if h.WorkGraph == nil || ch.Kind != "group" {
 		return
 	}
+	h.touchWendyChannelAmbient(ctx, ch, msg)
 	mentions := util.ParseMentions(msg.Content)
 	agentIDs := make([]pgtype.UUID, 0, len(mentions))
 	for _, mention := range mentions {

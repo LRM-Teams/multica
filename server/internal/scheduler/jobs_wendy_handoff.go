@@ -38,9 +38,22 @@ func WendyHandoffDispatchJob(h *handler.Handler, pool *pgxpool.Pool) JobSpec {
 			if err != nil {
 				return HandlerResult{}, err
 			}
+			ambient, ambientErr := h.DispatchDueWendyAmbientReviews(ctx, wendyHandoffDispatchLimit)
+			if ambientErr != nil {
+				return HandlerResult{
+					RowsAffected: int64(dispatched),
+					Result: map[string]any{
+						"dispatched": dispatched,
+						"ambient":    ambient,
+					},
+				}, ambientErr
+			}
 			return HandlerResult{
-				RowsAffected: int64(dispatched),
-				Result:       map[string]any{"dispatched": dispatched},
+				RowsAffected: int64(dispatched + ambient),
+				Result: map[string]any{
+					"dispatched": dispatched,
+					"ambient":    ambient,
+				},
 			}, nil
 		},
 	}

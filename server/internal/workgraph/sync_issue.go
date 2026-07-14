@@ -64,10 +64,6 @@ func (s *Store) SyncDependenciesForIssue(ctx context.Context, workspaceID, issue
 		return fmt.Errorf("list issue dependencies: %w", err)
 	}
 
-	type waiterDependencies struct {
-		node            db.WorkNode
-		prerequisiteIDs map[string]struct{}
-	}
 	waiters := make(map[string]*waiterDependencies)
 	addWaiter := func(node db.WorkNode) *waiterDependencies {
 		key := node.ID.String()
@@ -97,53 +93,29 @@ func (s *Store) SyncDependenciesForIssue(ctx context.Context, workspaceID, issue
 		if !ok {
 			continue
 		}
+		if err := s.upsertWaitsOnDependency(ctx, workspaceID, waiterIssueID, prerequisiteIssueID, dependency, addWaiter); err != nil {
+			return err
+		}
+	}
 
-		waiter, err := s.queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{
-			WorkspaceID:   workspaceID,
-			LinkedIssueID: waiterIssueID,
-		})
-		if errors.Is(err, pgx.ErrNoRows) {
+	// Syncing a prerequisite only sees edges that mention that issue. Expand
+	// each discovered waiter to its full dependency set so DetectUnlock never
+	// treats a partial graph as fully unlocked.
+	for _, waiter := range mapsValues(waiters) {
+		if !waiter.node.LinkedIssueID.Valid || waiter.node.LinkedIssueID == issueID {
 			continue
 		}
+		fullDeps, err := s.queries.ListIssueDependenciesByIssue(ctx, waiter.node.LinkedIssueID)
 		if err != nil {
-			return fmt.Errorf("load waiter work node: %w", err)
+			return fmt.Errorf("list waiter issue dependencies: %w", err)
 		}
-		prerequisite, err := s.queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{
-			WorkspaceID:   workspaceID,
-			LinkedIssueID: prerequisiteIssueID,
-		})
-		if errors.Is(err, pgx.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("load prerequisite work node: %w", err)
-		}
-		waiterDependencies := addWaiter(waiter)
-		waiterDependencies.prerequisiteIDs[prerequisite.ID.String()] = struct{}{}
-
-		evidence, err := json.Marshal(map[string]string{
-			"issue_dependency_id": dependency.ID.String(),
-			"type":                dependency.Type,
-		})
-		if err != nil {
-			return fmt.Errorf("encode dependency evidence: %w", err)
-		}
-		if _, err := s.queries.UpsertOpenWaitsOnEdge(ctx, db.UpsertOpenWaitsOnEdgeParams{
-			WorkspaceID: workspaceID,
-			FromNodeID:  waiter.ID,
-			ToNodeID:    prerequisite.ID,
-			Evidence:    evidence,
-		}); err != nil {
-			return fmt.Errorf("upsert waits_on edge: %w", err)
-		}
-
-		if isTerminalNodeStatus(prerequisite.Status) {
-			if _, err := s.queries.ResolveWaitsOnEdge(ctx, db.ResolveWaitsOnEdgeParams{
-				WorkspaceID: workspaceID,
-				FromNodeID:  waiter.ID,
-				ToNodeID:    prerequisite.ID,
-			}); err != nil {
-				return fmt.Errorf("resolve terminal prerequisite edge: %w", err)
+		for _, dependency := range fullDeps {
+			waiterIssueID, prerequisiteIssueID, ok := waitsOnIssues(dependency)
+			if !ok || waiterIssueID != waiter.node.LinkedIssueID {
+				continue
+			}
+			if err := s.upsertWaitsOnDependency(ctx, workspaceID, waiterIssueID, prerequisiteIssueID, dependency, addWaiter); err != nil {
+				return err
 			}
 		}
 	}
@@ -173,6 +145,117 @@ func (s *Store) SyncDependenciesForIssue(ctx context.Context, workspaceID, issue
 		}
 	}
 	return nil
+}
+
+func mapsValues[K comparable, V any](m map[K]V) []V {
+	out := make([]V, 0, len(m))
+	for _, v := range m {
+		out = append(out, v)
+	}
+	return out
+}
+
+func (s *Store) upsertWaitsOnDependency(
+	ctx context.Context,
+	workspaceID, waiterIssueID, prerequisiteIssueID pgtype.UUID,
+	dependency db.IssueDependency,
+	addWaiter func(db.WorkNode) *waiterDependencies,
+) error {
+	waiter, err := s.queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{
+		WorkspaceID:   workspaceID,
+		LinkedIssueID: waiterIssueID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load waiter work node: %w", err)
+	}
+	prerequisite, err := s.queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{
+		WorkspaceID:   workspaceID,
+		LinkedIssueID: prerequisiteIssueID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load prerequisite work node: %w", err)
+	}
+	waiterDependencies := addWaiter(waiter)
+	waiterDependencies.prerequisiteIDs[prerequisite.ID.String()] = struct{}{}
+
+	var existingID pgtype.UUID
+	var existingStatus string
+	err = s.pool.QueryRow(ctx, `
+		SELECT id, status
+		FROM work_edge
+		WHERE workspace_id = $1
+		  AND from_node_id = $2
+		  AND to_node_id = $3
+		  AND kind = 'waits_on'
+		ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, created_at DESC
+		LIMIT 1
+	`, workspaceID, waiter.ID, prerequisite.ID).Scan(&existingID, &existingStatus)
+	if err == nil {
+		if existingStatus == "resolved" && isTerminalNodeStatus(prerequisite.Status) {
+			return nil
+		}
+		if existingStatus == "resolved" && !isTerminalNodeStatus(prerequisite.Status) {
+			if _, err := s.pool.Exec(ctx, `
+				UPDATE work_edge
+				SET status = 'open', evidence = $2, updated_at = now()
+				WHERE id = $1
+			`, existingID, mustJSONDependencyEvidence(dependency)); err != nil {
+				return fmt.Errorf("reopen waits_on edge: %w", err)
+			}
+			return nil
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("load existing waits_on edge: %w", err)
+	}
+
+	evidence, err := json.Marshal(map[string]string{
+		"issue_dependency_id": dependency.ID.String(),
+		"type":                dependency.Type,
+	})
+	if err != nil {
+		return fmt.Errorf("encode dependency evidence: %w", err)
+	}
+	if _, err := s.queries.UpsertOpenWaitsOnEdge(ctx, db.UpsertOpenWaitsOnEdgeParams{
+		WorkspaceID: workspaceID,
+		FromNodeID:  waiter.ID,
+		ToNodeID:    prerequisite.ID,
+		Evidence:    evidence,
+	}); err != nil {
+		return fmt.Errorf("upsert waits_on edge: %w", err)
+	}
+
+	if isTerminalNodeStatus(prerequisite.Status) {
+		if _, err := s.queries.ResolveWaitsOnEdge(ctx, db.ResolveWaitsOnEdgeParams{
+			WorkspaceID: workspaceID,
+			FromNodeID:  waiter.ID,
+			ToNodeID:    prerequisite.ID,
+		}); err != nil {
+			return fmt.Errorf("resolve terminal prerequisite edge: %w", err)
+		}
+	}
+	return nil
+}
+
+type waiterDependencies struct {
+	node            db.WorkNode
+	prerequisiteIDs map[string]struct{}
+}
+
+func mustJSONDependencyEvidence(dependency db.IssueDependency) []byte {
+	evidence, err := json.Marshal(map[string]string{
+		"issue_dependency_id": dependency.ID.String(),
+		"type":                dependency.Type,
+	})
+	if err != nil {
+		return []byte(`{}`)
+	}
+	return evidence
 }
 
 // RecomputeIssueNodeStatus applies the dependency-derived status for a

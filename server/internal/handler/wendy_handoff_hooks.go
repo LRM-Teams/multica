@@ -10,6 +10,13 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
+// syncWendyWorkGraphAfterIssueCreate syncs a newly created issue and, when
+// possible, asks Wendy to visibly kick off the assignee.
+func (h *Handler) syncWendyWorkGraphAfterIssueCreate(ctx context.Context, issue db.Issue) {
+	h.syncWendyWorkGraphAfterIssueUpdate(ctx, issue)
+	h.detectWendyStartWorkForIssue(ctx, issue)
+}
+
 // syncWendyWorkGraphAfterIssueUpdate updates the graph after an issue mutation
 // has committed. Graph failures are intentionally best-effort: the issue
 // update is already durable and must not be reported as failed.
@@ -42,6 +49,15 @@ func (h *Handler) syncWendyWorkGraphAfterIssueUpdate(ctx context.Context, issue 
 			slog.Warn("load Wendy work node failed", "issue_id", connected.ID.String(), "error", err)
 			continue
 		}
+		h.ensureWendyWorkNodeChannel(ctx, connected, node)
+		node, err = h.Queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{
+			WorkspaceID:   issue.WorkspaceID,
+			LinkedIssueID: connected.ID,
+		})
+		if err != nil {
+			slog.Warn("reload Wendy work node failed", "issue_id", connected.ID.String(), "error", err)
+			continue
+		}
 		if err := h.WorkGraph.DetectUnlockForNode(ctx, node.ID); err != nil {
 			slog.Warn("detect Wendy unlock failed", "issue_id", connected.ID.String(), "error", err)
 		}
@@ -51,6 +67,55 @@ func (h *Handler) syncWendyWorkGraphAfterIssueUpdate(ctx context.Context, issue 
 	}
 	if err := h.WorkGraph.DetectStalledNodes(ctx, issue.WorkspaceID); err != nil {
 		slog.Warn("detect stalled Wendy work nodes failed", "workspace_id", issue.WorkspaceID.String(), "error", err)
+	}
+}
+
+func (h *Handler) detectWendyStartWorkForIssue(ctx context.Context, issue db.Issue) {
+	if h.WorkGraph == nil {
+		return
+	}
+	node, err := h.Queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{
+		WorkspaceID:   issue.WorkspaceID,
+		LinkedIssueID: issue.ID,
+	})
+	if err != nil {
+		slog.Warn("load Wendy work node for start work failed", "issue_id", issue.ID.String(), "error", err)
+		return
+	}
+	h.ensureWendyWorkNodeChannel(ctx, issue, node)
+	node, err = h.Queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{
+		WorkspaceID:   issue.WorkspaceID,
+		LinkedIssueID: issue.ID,
+	})
+	if err != nil {
+		slog.Warn("reload Wendy work node for start work failed", "issue_id", issue.ID.String(), "error", err)
+		return
+	}
+	if err := h.WorkGraph.DetectStartWorkForNode(ctx, node.ID); err != nil {
+		slog.Warn("detect Wendy start work failed", "issue_id", issue.ID.String(), "error", err)
+	}
+}
+
+func (h *Handler) ensureWendyWorkNodeChannel(ctx context.Context, issue db.Issue, node db.WorkNode) {
+	if h.WorkGraph == nil || node.PrimaryChannelID.Valid {
+		return
+	}
+	if node.OwnerType != "agent" && node.OwnerType != "member" {
+		return
+	}
+	if !node.OwnerID.Valid {
+		return
+	}
+	supervisorID, err := h.Queries.GetWorkspaceSupervisorAgentID(ctx, issue.WorkspaceID)
+	if err != nil {
+		return
+	}
+	channelID, err := h.WorkGraph.ResolveSharedGroupChannel(ctx, issue.WorkspaceID, supervisorID, node.OwnerType, node.OwnerID)
+	if err != nil || !channelID.Valid {
+		return
+	}
+	if err := h.WorkGraph.SetPrimaryChannel(ctx, node.ID, channelID); err != nil {
+		slog.Warn("set Wendy work node primary channel failed", "issue_id", issue.ID.String(), "error", err)
 	}
 }
 
@@ -70,26 +135,32 @@ func (h *Handler) syncWendyWorkGraphAfterTaskSuccess(ctx context.Context, task d
 }
 
 func (h *Handler) wendyGraphConnectedIssues(ctx context.Context, issue db.Issue) ([]db.Issue, error) {
-	dependencies, err := h.Queries.ListIssueDependenciesByIssue(ctx, issue.ID)
-	if err != nil {
-		return nil, err
-	}
 	issues := []db.Issue{issue}
 	seen := map[string]struct{}{issue.ID.String(): {}}
-	for _, dependency := range dependencies {
-		for _, issueID := range []pgtype.UUID{dependency.IssueID, dependency.DependsOnIssueID} {
-			if _, ok := seen[issueID.String()]; ok {
-				continue
+	queue := []pgtype.UUID{issue.ID}
+	for len(queue) > 0 {
+		currentID := queue[0]
+		queue = queue[1:]
+		dependencies, err := h.Queries.ListIssueDependenciesByIssue(ctx, currentID)
+		if err != nil {
+			return nil, err
+		}
+		for _, dependency := range dependencies {
+			for _, issueID := range []pgtype.UUID{dependency.IssueID, dependency.DependsOnIssueID} {
+				if _, ok := seen[issueID.String()]; ok {
+					continue
+				}
+				connected, err := h.Queries.GetIssue(ctx, issueID)
+				if errors.Is(err, pgx.ErrNoRows) {
+					continue
+				}
+				if err != nil {
+					return nil, err
+				}
+				seen[issueID.String()] = struct{}{}
+				issues = append(issues, connected)
+				queue = append(queue, issueID)
 			}
-			connected, err := h.Queries.GetIssue(ctx, issueID)
-			if errors.Is(err, pgx.ErrNoRows) {
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-			seen[issueID.String()] = struct{}{}
-			issues = append(issues, connected)
 		}
 	}
 	return issues, nil

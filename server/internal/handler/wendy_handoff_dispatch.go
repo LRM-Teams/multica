@@ -203,7 +203,7 @@ func (h *Handler) lockWendyUnlockChannelMember(ctx context.Context, exec db.DBTX
 
 func isWendyHandoffReason(reason string) bool {
 	switch reason {
-	case "unlock", "block_route", "interrupt_stop", "stalled_ask_why", "progress_nudge":
+	case "unlock", "block_route", "interrupt_stop", "stalled_ask_why", "progress_nudge", "start_work":
 		return true
 	default:
 		return false
@@ -220,6 +220,8 @@ func composeWendyAgentHandoff(ctx context.Context, composer WendyComposer, reaso
 func templateWendyHandoff(reason, actorType, actorID, actorName, title string) string {
 	mention := mentionMarkdown(actorType, actorID, actorName)
 	switch reason {
+	case "start_work":
+		return fmt.Sprintf("%s 新事项已就绪，请开始处理：%s", mention, title)
 	case "block_route":
 		return fmt.Sprintf("%s 请优先排查并解除阻塞：%s", mention, title)
 	case "interrupt_stop":

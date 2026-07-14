@@ -425,7 +425,7 @@ func (q *Queries) ListOpenWaitsOnFromNode(ctx context.Context, arg ListOpenWaits
 }
 
 const listResolvedWaitsOnPrerequisiteIDs = `-- name: ListResolvedWaitsOnPrerequisiteIDs :many
-SELECT to_node_id
+SELECT DISTINCT to_node_id
 FROM work_edge
 WHERE workspace_id = $1
   AND from_node_id = $2

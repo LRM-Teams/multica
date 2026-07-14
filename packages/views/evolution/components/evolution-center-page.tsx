@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   ArrowUpRight,
@@ -182,14 +182,20 @@ const COPY = {
   allMyAgents: "All my agents",
   selectedAgents: "Selected agents",
   mode: "Promotion mode",
+  observeOnly: "Observe only",
+  manualReview: "Manual review",
+  autoSafe: "Auto-safe",
+  fullAuto: "Full auto",
   schedule: "Daily start",
   timezone: "Timezone",
   automatic: "Automatic curation",
+  catchUp: "Catch up missed schedules",
   saveProfile: "Save profile",
   profileSaved: "Curator profile saved",
   configureProfile: "Select a Pi runtime and curator agent first.",
   manualRun: "Manual run",
   manualRunHint: "Queue the selected stage on your configured runtime. Dry runs keep memory files unchanged.",
+  allStages: "All stages",
   stage: "Stage",
   dryRun: "Dry run",
   queueRun: "Queue run",
@@ -216,11 +222,17 @@ const EMPTY_RUNTIME: DashboardAgentRunTime[] = [];
 const EMPTY_USAGE_BY_AGENT: DashboardUsageByAgent[] = [];
 const EMPTY_SUBMISSIONS: EvolutionReviewSubmission[] = [];
 const EMPTY_UNIT_METRICS: EvolutionUnitMetric[] = [];
+const MEMORY_CURATION_STAGE_LABELS = {
+  l1: "L1",
+  l2: "L2",
+  l3: "L3",
+  l4: "L4",
+} as const;
 const MEMORY_CURATION_STAGES = [
-  ["l1_daily", "L1", "01:00", "Evidence intake", COPY.dbEvidence],
-  ["l2_review", "L2", "02:00", "Candidate extraction", COPY.semanticDedupe],
-  ["l3_promote", "L3", "03:00", "Local + shared promotion", COPY.sharedPromotion],
-  ["l4_curator", "L4", "04:00", "Curator maintenance", COPY.curated],
+  ["l1_daily", MEMORY_CURATION_STAGE_LABELS.l1, "01:00", "Evidence intake", COPY.dbEvidence],
+  ["l2_review", MEMORY_CURATION_STAGE_LABELS.l2, "02:00", "Candidate extraction", COPY.semanticDedupe],
+  ["l3_promote", MEMORY_CURATION_STAGE_LABELS.l3, "03:00", "Local + shared promotion", COPY.sharedPromotion],
+  ["l4_curator", MEMORY_CURATION_STAGE_LABELS.l4, "04:00", "Curator maintenance", COPY.curated],
 ] as const;
 
 type AgentEvolutionRow = {
@@ -375,19 +387,18 @@ function buildAgentRows(
 export function EvolutionCenterPage() {
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
-  const queryClient = useQueryClient();
   const { userId } = useCurrentMember(wsId);
   const [learningFilter, setLearningFilter] = useState<"all" | "memory" | "skill">("all");
 
-  const agentsQuery = useQuery(agentListOptions(wsId));
-  const runtimesQuery = useQuery(runtimeListOptions(wsId));
-  const profileQuery = useQuery(memoryCuratorProfileOptions(wsId));
-  const usageQuery = useQuery(dashboardUsageByAgentOptions(wsId, DAYS, null, VIEW_TZ));
-  const runtimeQuery = useQuery(dashboardAgentRunTimeOptions(wsId, DAYS, null, VIEW_TZ));
-  const needsReviewQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "needs_review"));
-  const candidateQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "candidate"));
-  const promotedQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "promoted"));
-  const rejectedQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "rejected"));
+  const { data: agentsData, isLoading: agentsLoading } = useQuery(agentListOptions(wsId));
+  const { data: runtimesData } = useQuery(runtimeListOptions(wsId));
+  const { data: profileData } = useQuery(memoryCuratorProfileOptions(wsId));
+  const { data: usageData, isLoading: usageLoading } = useQuery(dashboardUsageByAgentOptions(wsId, DAYS, null, VIEW_TZ));
+  const { data: runtimeData, isLoading: runtimeLoading } = useQuery(dashboardAgentRunTimeOptions(wsId, DAYS, null, VIEW_TZ));
+  const { data: needsReviewData } = useQuery(evolutionReviewSubmissionListOptions(wsId, "needs_review"));
+  const { data: candidateData } = useQuery(evolutionReviewSubmissionListOptions(wsId, "candidate"));
+  const { data: promotedData } = useQuery(evolutionReviewSubmissionListOptions(wsId, "promoted"));
+  const { data: rejectedData } = useQuery(evolutionReviewSubmissionListOptions(wsId, "rejected"));
   const { data: metricsData } = useQuery(evolutionMetricsOptions(wsId));
   const {
     data: curationStatus,
@@ -395,14 +406,14 @@ export function EvolutionCenterPage() {
     isError: curationStatusUnavailable,
   } = useQuery(workspaceMemoryCurationStatusOptions(wsId));
 
-  const agents = agentsQuery.data ?? EMPTY_AGENTS;
-  const runtimes = runtimesQuery.data ?? [];
-  const usageRows = usageQuery.data ?? EMPTY_USAGE_BY_AGENT;
-  const runtimeRows = runtimeQuery.data ?? EMPTY_RUNTIME;
-  const needsReviewSubmissions = needsReviewQuery.data ?? EMPTY_SUBMISSIONS;
-  const candidateSubmissions = candidateQuery.data ?? EMPTY_SUBMISSIONS;
-  const promotedSubmissions = promotedQuery.data ?? EMPTY_SUBMISSIONS;
-  const rejectedSubmissions = rejectedQuery.data ?? EMPTY_SUBMISSIONS;
+  const agents = agentsData ?? EMPTY_AGENTS;
+  const runtimes = runtimesData ?? [];
+  const usageRows = usageData ?? EMPTY_USAGE_BY_AGENT;
+  const runtimeRows = runtimeData ?? EMPTY_RUNTIME;
+  const needsReviewSubmissions = needsReviewData ?? EMPTY_SUBMISSIONS;
+  const candidateSubmissions = candidateData ?? EMPTY_SUBMISSIONS;
+  const promotedSubmissions = promotedData ?? EMPTY_SUBMISSIONS;
+  const rejectedSubmissions = rejectedData ?? EMPTY_SUBMISSIONS;
   const unitMetrics = metricsData?.unit_metrics ?? EMPTY_UNIT_METRICS;
   const submissionsByStatus = useMemo(
     () => ({
@@ -451,7 +462,7 @@ export function EvolutionCenterPage() {
     return true;
   });
 
-  const loading = agentsQuery.isLoading || usageQuery.isLoading || runtimeQuery.isLoading;
+  const loading = agentsLoading || usageLoading || runtimeLoading;
   const topAgents = rows.slice(0, 5);
   const coachingRows = [...rows]
     .filter((row) => row.taskCount > 0 || row.failedCount > 0)
@@ -560,15 +571,12 @@ export function EvolutionCenterPage() {
             <TabsContent value="memory" className="grid gap-4 xl:grid-cols-[.9fr_1.1fr]">
               <div className="grid gap-4">
                 <CuratorProfileCard
+                  key={`${profileData?.id ?? "new"}-${profileData?.config_version ?? 0}`}
                   wsId={wsId}
                   userId={userId}
-                  profile={profileQuery.data}
+                  profile={profileData}
                   agents={agents}
                   runtimes={runtimes}
-                  onChanged={async () => {
-                    await queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCuratorProfile(wsId) });
-                    await queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCurationStatus(wsId) });
-                  }}
                 />
                 <MemoryCurationCard
                   submissions={submissions}
@@ -870,19 +878,17 @@ function CuratorProfileCard({
   profile,
   agents,
   runtimes,
-  onChanged,
 }: {
   wsId: string;
   userId: string | null;
   profile: MemoryCuratorProfile | undefined;
   agents: Agent[];
   runtimes: AgentRuntime[];
-  onChanged: () => Promise<void>;
 }) {
+  const queryClient = useQueryClient();
   const [draft, setDraft] = useState<CuratorProfileDraft>(() => draftFromProfile(profile));
   const [runStage, setRunStage] = useState<"l1" | "l2" | "l3" | "l4" | "all">("all");
   const [dryRun, setDryRun] = useState(false);
-  useEffect(() => setDraft(draftFromProfile(profile)), [profile]);
 
   const availableRuntimes = runtimes.filter(
     (runtime) => runtime.owner_id === userId || runtime.visibility === "public",
@@ -909,7 +915,10 @@ function CuratorProfileCard({
     }),
     onSuccess: async () => {
       toast.success(COPY.profileSaved);
-      await onChanged();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCuratorProfile(wsId) }),
+        queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCurationStatus(wsId) }),
+      ]);
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : COPY.configureProfile),
   });
@@ -922,7 +931,10 @@ function CuratorProfileCard({
     }),
     onSuccess: async () => {
       toast.success(COPY.runQueued);
-      await onChanged();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCuratorProfile(wsId) }),
+        queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCurationStatus(wsId) }),
+      ]);
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : COPY.configureProfile),
   });
@@ -969,7 +981,7 @@ function CuratorProfileCard({
             <Select value={draft.mode} onValueChange={(value) => value && setDraft((current) => ({ ...current, mode: value as MemoryCuratorMode }))}>
               <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="observe">Observe only</SelectItem><SelectItem value="review">Manual review</SelectItem><SelectItem value="auto_safe">Auto-safe</SelectItem><SelectItem value="auto">Full auto</SelectItem>
+                <SelectItem value="observe">{COPY.observeOnly}</SelectItem><SelectItem value="review">{COPY.manualReview}</SelectItem><SelectItem value="auto_safe">{COPY.autoSafe}</SelectItem><SelectItem value="auto">{COPY.fullAuto}</SelectItem>
               </SelectContent>
             </Select>
           </Field>
@@ -995,14 +1007,14 @@ function CuratorProfileCard({
           </div>
         )}
         <div className="flex flex-wrap items-center gap-4">
-          <label className="flex items-center gap-2 text-xs"><Checkbox checked={draft.catchUpEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, catchUpEnabled: checked === true }))} />Catch up missed schedules</label>
+          <Label htmlFor="curator-catch-up" className="flex items-center gap-2 text-xs"><Checkbox id="curator-catch-up" checked={draft.catchUpEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, catchUpEnabled: checked === true }))} />{COPY.catchUp}</Label>
           <Button onClick={() => save.mutate()} disabled={save.isPending || !draft.runtimeId || !draft.curatorAgentId || !draftTargetsValid} className="gap-2"><Save className="h-4 w-4" />{COPY.saveProfile}</Button>
         </div>
         <div className="rounded-2xl border bg-muted/20 p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div><div className="text-sm font-medium">{COPY.manualRun}</div><p className="mt-1 text-xs text-muted-foreground">{COPY.manualRunHint}</p></div>
             <div className="flex flex-wrap items-center gap-2">
-              <Select value={runStage} onValueChange={(value) => value && setRunStage(value as typeof runStage)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All stages</SelectItem><SelectItem value="l1">L1</SelectItem><SelectItem value="l2">L2</SelectItem><SelectItem value="l3">L3</SelectItem><SelectItem value="l4">L4</SelectItem></SelectContent></Select>
+              <Select value={runStage} onValueChange={(value) => value && setRunStage(value as typeof runStage)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{COPY.allStages}</SelectItem><SelectItem value="l1">{MEMORY_CURATION_STAGE_LABELS.l1}</SelectItem><SelectItem value="l2">{MEMORY_CURATION_STAGE_LABELS.l2}</SelectItem><SelectItem value="l3">{MEMORY_CURATION_STAGE_LABELS.l3}</SelectItem><SelectItem value="l4">{MEMORY_CURATION_STAGE_LABELS.l4}</SelectItem></SelectContent></Select>
               <label className="flex items-center gap-2 text-xs"><Checkbox checked={dryRun} onCheckedChange={(checked) => setDryRun(checked === true)} />{COPY.dryRun}</label>
               <Button variant="outline" onClick={() => run.mutate()} disabled={!configured || !configuredTargetsValid || run.isPending || save.isPending} className="gap-2"><Play className="h-4 w-4" />{COPY.queueRun}</Button>
             </div>
@@ -1014,7 +1026,7 @@ function CuratorProfileCard({
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
-  return <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">{label}</Label>{children}</div>;
+  return <div className="space-y-1.5"><div className="text-xs text-muted-foreground">{label}</div>{children}</div>;
 }
 
 function MemoryCurationCard({

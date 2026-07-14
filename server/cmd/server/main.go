@@ -420,6 +420,11 @@ func main() {
 	} else {
 		slog.Info("scheduler: agent radar job disabled", "env", "AGENT_RADAR_SCHEDULER_ENABLED")
 	}
+	if err := schedulerMgr.Register(scheduler.WendyHandoffDispatchJob(h, pool)); err != nil {
+		slog.Warn("scheduler: failed to register Wendy handoff dispatch job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
 	if err := schedulerMgr.Register(scheduler.AgentReminderFireJob(h, pool)); err != nil {
 		slog.Warn("scheduler: failed to register agent reminder job", "error", err)
 	} else {

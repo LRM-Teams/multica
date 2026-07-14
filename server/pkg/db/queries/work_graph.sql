@@ -172,7 +172,7 @@ WITH due AS (
       AND ph.reason_code = sqlc.arg('reason_code')
       AND ph.not_before <= now()
     ORDER BY ph.not_before ASC, ph.created_at ASC
-    LIMIT 10
+    LIMIT sqlc.arg('limit')
     FOR UPDATE SKIP LOCKED
 )
 UPDATE pending_handoff handoff
@@ -200,6 +200,18 @@ SET status = 'cancelled',
 WHERE id = sqlc.arg('id')
   AND status IN ('pending', 'claimed')
   AND (status = 'pending' OR claim_token = sqlc.narg('claim_token'))
+RETURNING *;
+
+-- name: ReturnClaimedPendingHandoffForRetry :one
+UPDATE pending_handoff
+SET status = 'pending',
+    claim_token = NULL,
+    claimed_at = NULL,
+    not_before = now() + interval '1 minute',
+    updated_at = now()
+WHERE id = sqlc.arg('id')
+  AND status = 'claimed'
+  AND claim_token = sqlc.arg('claim_token')
 RETURNING *;
 
 -- name: TouchWorkNodeWendyNudge :one

@@ -6,7 +6,6 @@ import {
   agentTaskSnapshotOptions,
   useAgentPresenceDetail,
 } from "@multica/core/agents";
-import type { TaskMessagePayload } from "@multica/core/types";
 import { useT } from "../i18n/use-t";
 import {
   pickPrimaryActiveTask,
@@ -14,56 +13,24 @@ import {
   type AgentLiveStatusView,
 } from "./resolve-agent-live-status";
 import { useAgentActivityEvents } from "./components/tabs/use-agent-activity-events";
-import type { ActivityEvent } from "./components/tabs/activity-event";
+
+// The header projects the latest WORK row of the current round — thinking / text
+// / tool_call — so it reads the actual action (Running command · / Writing file /
+// Thinking), never a generic "Working" status row. Status rows (agent_status_
+// changed) and diagnostics are skipped here; the active-vs-idle gate is the
+// snapshot's active task, not these events.
+const HEADER_STAGE_KINDS = new Set(["thinking", "text", "tool_call"]);
 
 /**
- * Project the agent's Activity event stream (#302 one-read-model) into the
- * TaskMessagePayload shape the shared stage picker (`pickStageKeys`) reads. Only
- * the working kinds carry a stage word: thinking / text / tool_call — the latest
- * of these decides the name-row label; everything else (status rows, errors,
- * output-results) is ignored by the picker. `pickStageKeys` only reads `.type`
- * and `.tool`, so those are the only fields we fill.
- *
- * This replaces the old per-round fetch of `/api/tasks/{id}/messages`, which
- * projected these SAME Activity events server-side behind an inbox-event-id
- * compat (#525). The projection now lives on the FE, so the old task endpoint no
- * longer has to masquerade inbox ids as task ids (#414 — Frank: the temp bridge
- * doesn't become a long-term contract).
- */
-export function activityEventsToTaskMessages(
-  events: readonly ActivityEvent[],
-): TaskMessagePayload[] {
-  const out: TaskMessagePayload[] = [];
-  for (const e of events) {
-    const type =
-      e.activity_kind === "thinking"
-        ? "thinking"
-        : e.activity_kind === "text"
-          ? "text"
-          : e.activity_kind === "tool_call"
-            ? "tool_use"
-            : null;
-    if (!type) continue;
-    out.push({
-      task_id: "",
-      issue_id: "",
-      seq: out.length,
-      type,
-      tool: type === "tool_use" ? e.tool : undefined,
-      created_at: e.occurred_at,
-    });
-  }
-  return out;
-}
-
-/**
- * Live name-row status for an agent: stage-detail when a task is active
- * (Thinking / Running command… / …), presence word when idle. The active-task
- * gate still comes from the workspace snapshot; the stage-detail now comes from
- * the Activity event stream (#414), scoped to the CURRENT round so a freshly
- * queued task — nothing streamed yet — still reads "Queued", not a stale
- * "running" from history. WS `agent_activity:event` keeps it live in lockstep
- * with the Activity tab (same shared cache).
+ * Live name-row status for an agent. While a task is active the header projects
+ * the SAME latest Activity row the timeline shows — word AND type-based dot
+ * colour (Parker: header = Activity latest-row projection, no separate stage
+ * vocabulary) — and the coarse presence word (Idle / Offline / …) when nothing is
+ * on the plate. The active-task gate comes from the workspace snapshot; the
+ * projected row comes from the Activity event stream (#302 one-read-model, #414 —
+ * off the old task-message bridge), scoped to the CURRENT round so a freshly
+ * queued task (nothing streamed yet) still reads "Queued", not a stale row. WS
+ * `agent_activity:event` keeps it live in lockstep with the Activity tab.
  */
 export function useAgentLiveStatus(
   wsId: string | undefined,
@@ -83,28 +50,28 @@ export function useAgentLiveStatus(
   // Only pull the Activity stream when a task is actually active — passing "" to
   // the hook (which gates on `enabled: !!agentId`) keeps idle agents in a list
   // from each fetching a full event stream for what is just a presence word.
-  // This mirrors the old query's `enabled: !!activeTask?.id`.
   const { events } = useAgentActivityEvents(activeTask ? (agentId ?? "") : "");
   const roundStart = activeTask?.started_at ?? activeTask?.dispatched_at ?? null;
-  const taskMessages = useMemo(
-    () =>
-      roundStart
-        ? activityEventsToTaskMessages(
-            events.filter((e) => e.occurred_at >= roundStart),
-          )
-        : [],
-    [events, roundStart],
-  );
+  const latestActivity = useMemo(() => {
+    if (!roundStart) return null;
+    let latest = null;
+    for (const e of events) {
+      if (e.occurred_at >= roundStart && HEADER_STAGE_KINDS.has(e.activity_kind)) {
+        latest = e; // events are chronologically ordered; last match wins
+      }
+    }
+    return latest;
+  }, [events, roundStart]);
 
   return useMemo(
     () =>
       resolveAgentLiveStatus({
         presence,
         activeTask,
-        taskMessages,
+        latestActivity,
         tAgents,
         tChat,
       }),
-    [presence, activeTask, taskMessages, tAgents, tChat],
+    [presence, activeTask, latestActivity, tAgents, tChat],
   );
 }

@@ -603,7 +603,7 @@ func TestAgentActivityCanonicalToolName_UsesRaftAliases(t *testing.T) {
 
 func TestTaskMessageCanonicalToolName_StatusLikeCommandIsBash(t *testing.T) {
 	canonical, known := taskMessageCanonicalToolName("running", map[string]any{
-		"command": "multica message send --message-file hello_world.txt",
+		"command": "multica message send --target #multica --message-file hello_world.txt",
 	})
 	if !known {
 		t.Fatalf("running command tool should be classified as a known shell command")

@@ -523,36 +523,10 @@ func (h *Handler) requireAgentCredentialTransportInboxEvent(w http.ResponseWrite
 	return task, origin, event.ID, true
 }
 
-func (h *Handler) resolveAgentTransportTarget(ctx context.Context, task db.AgentTaskQueue, origin chatOutputOrigin, rawTarget string, options *protocol.ChatOutputOptions, createDM bool) (agentTransportTarget, error) {
+func (h *Handler) resolveAgentTransportTarget(ctx context.Context, _ db.AgentTaskQueue, origin chatOutputOrigin, rawTarget string, options *protocol.ChatOutputOptions, createDM bool) (agentTransportTarget, error) {
 	rawTarget = strings.TrimSpace(rawTarget)
 	if rawTarget == "" {
-		if chatOutputOptionsPresent(options) {
-			return agentTransportTarget{}, errChatOutputInvalidTarget
-		}
-		ch, found := h.getChannel(ctx, uuidToString(origin.workspaceID), origin.channelID)
-		if !found || ch.ArchivedAt != nil {
-			return agentTransportTarget{}, errChatOutputInvalidTarget
-		}
-		out := agentTransportTarget{kind: chatOutputTargetChannel, channel: ch, raw: ""}
-		if task.ChatSessionID.Valid {
-			threadID, threadRootMessageID, depth := h.channelThreadForChatTask(ctx, task.ChatSessionID, task.ID)
-			if threadRootMessageID.Valid {
-				root, err := h.loadChannelThreadRootForOutputTarget(ctx, origin.workspaceID, origin.channelID, threadRootMessageID)
-				if err != nil {
-					return agentTransportTarget{}, errChatOutputInvalidTarget
-				}
-				if threadID == nil || strings.TrimSpace(*threadID) == "" {
-					fresh := uuid.NewString()
-					threadID = &fresh
-				}
-				out.kind = chatOutputTargetThread
-				out.threadRoot = root
-				out.threadRootMessageID = threadRootMessageID
-				out.threadID = threadID
-				out.triggerDepth = depth + 1
-			}
-		}
-		return out, nil
+		return agentTransportTarget{}, errChatOutputInvalidTarget
 	}
 	resolved, err := h.resolveChatOutputTarget(ctx, origin, rawTarget, options)
 	if err != nil {

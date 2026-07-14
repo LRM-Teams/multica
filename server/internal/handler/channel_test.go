@@ -1411,6 +1411,7 @@ func TestChannelAgentInboxTransportCanSendStickerAndSuppressesFinalOutput(t *tes
 
 	clientID := "inbox-sticker-" + uuid.NewString()
 	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
+		"target": "#" + channelNameForTransportTest(t, channelID),
 		"parts": []protocol.MessagePart{{
 			Type:      protocol.MessagePartTypeSticker,
 			StickerID: "huaji",
@@ -1522,6 +1523,7 @@ func TestChannelAgentInboxTransportBearerTokenThroughMiddleware(t *testing.T) {
 
 	clientID := "inbox-bearer-" + uuid.NewString()
 	body := map[string]any{
+		"target": "#" + channelNameForTransportTest(t, channelID),
 		"parts": []protocol.MessagePart{{
 			Type:      protocol.MessagePartTypeSticker,
 			StickerID: "huaji",
@@ -4077,6 +4079,105 @@ func TestChannelThreadReplyMetadataReadAndMainTimelineFiltering(t *testing.T) {
 	ch := listedChannelForTest(t, channelID)
 	if ch == nil || ch.RealUnreadCount != 0 {
 		t.Fatalf("thread read leaked into channel unread: %+v", ch)
+	}
+}
+
+func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentName := "Thread Unfollow Bot " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	channelID := seedChannelForTest(t, "thread-unfollow-agent-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent channel member: %v", err)
+	}
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root topic", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("thread-unfollow-root-"+uuid.NewString()), 0)
+	if err != nil {
+		t.Fatalf("insert root: %v", err)
+	}
+	testHandler.followChannelThreadUser(ctx, parseUUID(channelID), parseUUID(root.ID), parseUUID(testUserID), false)
+	testHandler.followChannelThreadAgent(ctx, parseUUID(channelID), parseUUID(root.ID), parseUUID(agentID))
+
+	req := newRequestAs(testUserID, http.MethodDelete, "/api/channels/"+channelID+"/messages/"+root.ID+"/thread/follow", nil)
+	req.Header.Set("X-Actor-Source", "agent_credential")
+	req.Header.Set("X-Agent-ID", agentID)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParams(req, "channelId", channelID, "messageId", root.ID)
+	rec := httptest.NewRecorder()
+	testHandler.UnfollowChannelThread(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("agent unfollow thread: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var agentFollowedAt pgtype.Timestamptz
+	var agentWakeState string
+	if err := testPool.QueryRow(ctx, `
+		SELECT followed_at, wake_state
+		FROM thread_participant
+		WHERE root_message_id = $1 AND member_type = 'agent' AND member_id = $2`,
+		root.ID, agentID).Scan(&agentFollowedAt, &agentWakeState); err != nil {
+		t.Fatalf("load agent thread participant: %v", err)
+	}
+	if agentFollowedAt.Valid {
+		t.Fatalf("agent followed_at still set after unfollow: %+v", agentFollowedAt)
+	}
+	if agentWakeState != "no_wake" {
+		t.Fatalf("agent wake_state=%q, want no_wake", agentWakeState)
+	}
+
+	var userFollowedAt pgtype.Timestamptz
+	if err := testPool.QueryRow(ctx, `
+		SELECT followed_at
+		FROM channel_thread_state
+		WHERE root_message_id = $1 AND user_id = $2`,
+		root.ID, testUserID).Scan(&userFollowedAt); err != nil {
+		t.Fatalf("load user thread state: %v", err)
+	}
+	if !userFollowedAt.Valid {
+		t.Fatal("owner user followed_at was cleared by agent unfollow")
+	}
+
+	var content string
+	var rawParts []byte
+	if err := testPool.QueryRow(ctx, `
+		SELECT content, parts
+		FROM channel_message
+		WHERE channel_id = $1 AND thread_root_message_id = $2 AND author_type = 'system'
+		ORDER BY seq DESC
+		LIMIT 1`, channelID, root.ID).Scan(&content, &rawParts); err != nil {
+		t.Fatalf("load thread unfollow system message: %v", err)
+	}
+	wantMention := fmt.Sprintf("](mention://agent/%s)", agentID)
+	if !strings.Contains(content, wantMention) {
+		t.Fatalf("system content = %q, want linked agent mention containing %q", content, wantMention)
+	}
+	if strings.Contains(content, "@Frank") || strings.Contains(content, "@Tester") {
+		t.Fatalf("system content attributed to human/plain @ text: %q", content)
+	}
+	var parts []protocol.MessagePart
+	if err := json.Unmarshal(rawParts, &parts); err != nil {
+		t.Fatalf("decode system parts: %v", err)
+	}
+	if len(parts) != 1 || strings.TrimSpace(parts[0].Text) == "" {
+		t.Fatalf("system parts = %+v, want one structured part", parts)
+	}
+	var event threadUnfollowedSystemEventPart
+	if err := json.Unmarshal([]byte(parts[0].Text), &event); err != nil {
+		t.Fatalf("decode thread unfollow event part %q: %v", parts[0].Text, err)
+	}
+	if event.Event != "thread_unfollowed" {
+		t.Fatalf("event = %q, want thread_unfollowed", event.Event)
+	}
+	if event.Params.AgentID != agentID || event.Params.ActorID != agentID || event.Params.ActorType != "agent" {
+		t.Fatalf("event params = %+v, want agent actor %s", event.Params, agentID)
+	}
+	if event.Params.AgentName != agentName || event.Params.ActorDisplayName != agentName || event.Params.ActorName != agentName {
+		t.Fatalf("event agent names = %+v, want %q", event.Params, agentName)
 	}
 }
 

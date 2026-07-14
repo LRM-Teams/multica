@@ -317,7 +317,10 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 		"Context boundaries:",
 		"progressively load exact flags",
 		"Common capability index",
-		"Chat output: use `multica message send`",
+		"Chat output: use `multica message send --target <target>`",
+		"explicit Raft-style target",
+		"#channel:<threadId>",
+		"dm:@handle:<threadId>",
 		"--message-stdin",
 		"--sticker",
 		"multica message react",
@@ -353,6 +356,8 @@ func TestChatRuntimeBriefIsLeanButKeepsCapabilityDiscovery(t *testing.T) {
 		"Final results MUST be delivered",
 		"For issue comments, always use `--content-stdin` with a HEREDOC",
 		"Post your final results as a comment",
+		"omit `--target`",
+		"omit --target",
 	} {
 		if strings.Contains(out, banned) {
 			t.Errorf("chat brief should not contain issue-task contract text %q\n---\n%s", banned, out)

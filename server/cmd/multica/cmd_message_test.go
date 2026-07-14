@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -64,6 +65,7 @@ func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
 	t.Setenv("MULTICA_TOKEN", "test-token")
 
 	cmd := newMessageSendCmd()
+	_ = cmd.Flags().Set("target", "#multica")
 	_ = cmd.Flags().Set("message", "here's the file")
 	_ = cmd.Flags().Set("attachment-id", "att-a")
 	_ = cmd.Flags().Set("attachment-id", "att-b")
@@ -74,6 +76,9 @@ func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
 
 	if _, has := body["attachment_ids"]; has {
 		t.Fatalf("body still has attachment_ids = %#v; chat send must use parts only", body["attachment_ids"])
+	}
+	if body["target"] != "#multica" {
+		t.Fatalf("target = %#v, want #multica", body["target"])
 	}
 	if body["content"] != "here's the file" {
 		t.Fatalf("content = %#v, want message text", body["content"])
@@ -88,6 +93,52 @@ func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
 	assertPartMap(t, rawParts[0], map[string]any{"type": "text", "text": "here's the file"})
 	assertPartMap(t, rawParts[1], map[string]any{"type": "attachment", "attachment_id": "att-a"})
 	assertPartMap(t, rawParts[2], map[string]any{"type": "attachment", "attachment_id": "att-b"})
+}
+
+func TestRunAgentMessageCommandsRequireTarget(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "send",
+			run: func() error {
+				cmd := newMessageSendCmd()
+				_ = cmd.Flags().Set("message", "hello")
+				return runAgentMessageSend(cmd, nil)
+			},
+		},
+		{
+			name: "react",
+			run: func() error {
+				cmd := newMessageReactCmd()
+				_ = cmd.Flags().Set("emoji", "+1")
+				return runAgentMessageReact(cmd, nil)
+			},
+		},
+		{
+			name: "read",
+			run: func() error {
+				cmd := newMessageReadCmd()
+				return runAgentMessageRead(cmd, nil)
+			},
+		},
+		{
+			name: "search",
+			run: func() error {
+				cmd := newMessageSearchCmd()
+				return runAgentMessageSearch(cmd, []string{"needle"})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if err == nil || !strings.Contains(err.Error(), "target is required") {
+				t.Fatalf("error = %v, want target is required", err)
+			}
+		})
+	}
 }
 
 func assertPartMap(t *testing.T, got any, want map[string]any) {

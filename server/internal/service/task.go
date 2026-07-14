@@ -47,6 +47,9 @@ type TaskService struct {
 	// and child task so the caller can record activity events. Failures in
 	// the callback are logged but never block task processing.
 	OnChildTaskCreated func(ctx context.Context, parent, child db.AgentTaskQueue)
+	// OnTaskCompleted is an optional best-effort callback fired only after a
+	// task completion transaction commits successfully.
+	OnTaskCompleted func(ctx context.Context, task db.AgentTaskQueue)
 
 	// Training, when non-nil, enables the RL session-open hook at task
 	// creation (see maybeOpenTrainingSession). Nil = training not configured
@@ -1813,6 +1816,9 @@ func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, resu
 	slog.Info("task completed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
 	s.recordEvolutionSkillOutcome(ctx, task.ID, "success", "success")
 	s.captureTaskCompleted(ctx, task)
+	if s.OnTaskCompleted != nil {
+		s.OnTaskCompleted(ctx, task)
+	}
 	// Completion/leaf event seam (D11): close this task's segment before
 	// RouteTerminalTrainingTask ends the RL session (CloseSegmentForEvent exports
 	// the just-closed trajectory over the live session). One-segment-per-task;

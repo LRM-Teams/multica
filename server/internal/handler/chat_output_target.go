@@ -72,9 +72,25 @@ func (h *Handler) resolveChatOutputTarget(ctx context.Context, origin chatOutput
 		if chatOutputOptionsPresent(options) {
 			return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
 		}
-		recipientID, err := h.resolveHumanDMOutputTarget(ctx, origin, strings.TrimPrefix(target, "dm:@"))
+		handle, rawMessageID, hasMessageID := splitDMOutputTarget(strings.TrimPrefix(target, "dm:@"))
+		recipientID, err := h.resolveHumanDMOutputTarget(ctx, origin, handle)
 		if err != nil {
 			return resolvedChatOutputTarget{}, err
+		}
+		if hasMessageID {
+			ch, ok := h.agentHumanDMChannel(ctx, origin.workspaceID, origin.agentID, recipientID, false)
+			if !ok {
+				return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
+			}
+			rootID, err := util.ParseUUID(strings.TrimSpace(rawMessageID))
+			if err != nil {
+				return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
+			}
+			root, err := h.loadChannelThreadRootForOutputTarget(ctx, origin.workspaceID, parseUUID(ch.ID), rootID)
+			if err != nil {
+				return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
+			}
+			return resolvedChatOutputTarget{kind: chatOutputTargetThread, channel: ch, threadRoot: root}, nil
 		}
 		return resolvedChatOutputTarget{kind: chatOutputTargetDM, recipientID: recipientID}, nil
 	}
@@ -82,6 +98,21 @@ func (h *Handler) resolveChatOutputTarget(ctx context.Context, origin chatOutput
 		return h.resolveChannelOutputTarget(ctx, origin, strings.TrimPrefix(target, "#"), options)
 	}
 	return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
+}
+
+func splitDMOutputTarget(raw string) (handle, rawMessageID string, hasMessageID bool) {
+	handle = strings.TrimSpace(raw)
+	rawMessageID = ""
+	hasMessageID = false
+	if before, after, ok := strings.Cut(handle, ":"); ok {
+		if strings.Contains(after, ":") {
+			return "", "", true
+		}
+		handle = strings.TrimSpace(before)
+		rawMessageID = strings.TrimSpace(after)
+		hasMessageID = true
+	}
+	return handle, rawMessageID, hasMessageID
 }
 
 func chatOutputOptionsPresent(options *protocol.ChatOutputOptions) bool {
@@ -135,6 +166,9 @@ func (h *Handler) resolveHumanDMOutputTarget(ctx context.Context, origin chatOut
 
 func (h *Handler) resolveChannelOutputTarget(ctx context.Context, origin chatOutputOrigin, raw string, options *protocol.ChatOutputOptions) (resolvedChatOutputTarget, error) {
 	channelName, rawMessageID, hasMessageID := strings.Cut(raw, ":")
+	if strings.Contains(rawMessageID, ":") {
+		return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
+	}
 	channelName = strings.TrimSpace(channelName)
 	if channelName == "" {
 		return resolvedChatOutputTarget{}, errChatOutputInvalidTarget

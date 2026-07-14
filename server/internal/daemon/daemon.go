@@ -31,9 +31,11 @@ import (
 var ErrRepoNotConfigured = errors.New("repo is not configured for this workspace")
 
 const (
-	taskSlotWaitTimeout      = 2 * time.Second
-	taskSlotCapacityBackoff  = 5 * time.Second
-	taskMessageFlushInterval = 200 * time.Millisecond
+	taskSlotWaitTimeout                 = 2 * time.Second
+	taskSlotCapacityBackoff             = 5 * time.Second
+	taskMessageFlushInterval            = 200 * time.Millisecond
+	taskMessageTrajectoryCoalesceWindow = 350 * time.Millisecond
+	taskMessageTrajectoryMaxChars       = 2000
 )
 
 // taskRunner executes a single agent task and returns the result.
@@ -3843,31 +3845,21 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 	go func() {
 		var seq atomic.Int32
 		var mu sync.Mutex
-		var pendingText strings.Builder
-		var pendingThinking strings.Builder
+		var trajectory taskMessageTrajectoryBuffer
 		var batch []TaskMessageData
 		callIDToTool := map[string]string{}
 
-		flush := func() {
+		emitTrajectory := func(kind, content string) {
+			s := seq.Add(1)
+			batch = append(batch, TaskMessageData{
+				Seq:     int(s),
+				Type:    kind,
+				Content: content,
+			})
+		}
+		flush := func(force bool) {
 			mu.Lock()
-			if pendingThinking.Len() > 0 {
-				s := seq.Add(1)
-				batch = append(batch, TaskMessageData{
-					Seq:     int(s),
-					Type:    "thinking",
-					Content: pendingThinking.String(),
-				})
-				pendingThinking.Reset()
-			}
-			if pendingText.Len() > 0 {
-				s := seq.Add(1)
-				batch = append(batch, TaskMessageData{
-					Seq:     int(s),
-					Type:    "text",
-					Content: pendingText.String(),
-				})
-				pendingText.Reset()
-			}
+			trajectory.flush(time.Now(), force, emitTrajectory)
 			toSend := batch
 			batch = nil
 			mu.Unlock()
@@ -3897,7 +3889,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 			for {
 				select {
 				case <-ticker.C:
-					flush()
+					flush(false)
 				case <-done:
 					return
 				}
@@ -3943,8 +3935,9 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						callIDToTool[msg.CallID] = msg.Tool
 						mu.Unlock()
 					}
-					s := seq.Add(1)
 					mu.Lock()
+					trajectory.flush(time.Now(), true, emitTrajectory)
+					s := seq.Add(1)
 					batch = append(batch, TaskMessageData{
 						Seq:   int(s),
 						Type:  "tool_use",
@@ -3967,7 +3960,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 							break
 						}
 					}
-					s := seq.Add(1)
 					output := msg.Output
 					if len(output) > 8192 {
 						output = output[:8192]
@@ -3978,8 +3970,10 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						toolName = callIDToTool[msg.CallID]
 						mu.Unlock()
 					}
-					taskLog.Info("tool_result observed", "seq", s, "tool", toolName, "call_id", msg.CallID)
 					mu.Lock()
+					trajectory.flush(time.Now(), true, emitTrajectory)
+					s := seq.Add(1)
+					taskLog.Info("tool_result observed", "seq", s, "tool", toolName, "call_id", msg.CallID)
 					batch = append(batch, TaskMessageData{
 						Seq:    int(s),
 						Type:   "tool_result",
@@ -3990,20 +3984,21 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 				case agent.MessageThinking:
 					if msg.Content != "" {
 						mu.Lock()
-						pendingThinking.WriteString(msg.Content)
+						trajectory.append("thinking", msg.Content, time.Now(), emitTrajectory)
 						mu.Unlock()
 					}
 				case agent.MessageText:
 					if msg.Content != "" {
 						taskLog.Debug("agent", "text", truncateLog(msg.Content, 200))
 						mu.Lock()
-						pendingText.WriteString(msg.Content)
+						trajectory.append("text", msg.Content, time.Now(), emitTrajectory)
 						mu.Unlock()
 					}
 				case agent.MessageError:
 					taskLog.Error("agent error", "content", msg.Content)
-					s := seq.Add(1)
 					mu.Lock()
+					trajectory.flush(time.Now(), true, emitTrajectory)
+					s := seq.Add(1)
 					batch = append(batch, TaskMessageData{
 						Seq:     int(s),
 						Type:    "error",
@@ -4013,8 +4008,9 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 				case agent.MessageLog:
 					if msg.Content != "" {
 						taskLog.Debug("agent log", "level", msg.Level, "content", truncateLog(msg.Content, 200))
-						s := seq.Add(1)
 						mu.Lock()
+						trajectory.flush(time.Now(), true, emitTrajectory)
+						s := seq.Add(1)
 						batch = append(batch, TaskMessageData{
 							Seq:     int(s),
 							Type:    "log",
@@ -4029,7 +4025,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 		}
 	drainDone:
 		close(done)
-		flush()
+		flush(true)
 	}()
 
 	select {

@@ -827,7 +827,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("- Issue metadata: `multica issue metadata list|set|delete ...` only when explicitly working on an issue and a durable high-signal fact is worth pinning; load subcommand help for exact flags.\n")
 	b.WriteString("- Projects/repos: inspect project resources and use `multica repo checkout <url> [--ref <branch-or-sha>]` only when code access is relevant.\n")
 	b.WriteString("- Attachments: `multica attachment view <id> --output <path>` for downloads; `multica attachment upload --path <file>` then pass `--attachment-id` when sending or creating.\n")
-	b.WriteString("- Workspace/channel/squad: list or inspect only when the request needs those resources; use `channel mute|unmute` or `thread unfollow` only for explicit attention-management needs.\n\n")
+	b.WriteString("- Workspace/channel/squad: list or inspect only when the request needs those resources; use `channel mute|unmute` or `thread unfollow --target \"#channel:<threadId>\"` / `thread unfollow --target \"dm:@handle:<threadId>\"` only for explicit attention-management needs.\n\n")
 	b.WriteString("Do not run issue commands just because you are in chat. Use them only when the user asks about an issue/task/project/repo or the answer needs that platform data.\n\n")
 
 	renderRepositoryContext(b, ctx)

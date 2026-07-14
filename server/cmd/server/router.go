@@ -1113,6 +1113,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/agent/messages/react", h.AgentTransportReactMessage)
 			r.Post("/api/agent/messages/read", h.AgentTransportReadMessages)
 			r.Post("/api/agent/messages/search", h.AgentTransportSearchMessages)
+			r.Post("/api/agent/threads/unfollow", h.AgentTransportUnfollowThread)
 			r.Post("/api/agent/reminders/schedule", h.AgentTransportScheduleReminder)
 			r.Post("/api/agent/reminders/list", h.AgentTransportListReminders)
 			r.Post("/api/agent/reminders/snooze", h.AgentTransportSnoozeReminder)

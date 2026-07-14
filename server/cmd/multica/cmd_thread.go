@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -27,23 +26,20 @@ var threadUnfollowCmd = &cobra.Command{
 		"arrive. If the agent posts in this thread again, it will " +
 		"automatically re-follow.\n\n" +
 		"Use --target to specify the thread as #channel-name:message-id " +
-		"or #workspace-id:channel-id:message-id.",
+		"or dm:@handle:message-id.",
 	RunE: runThreadUnfollow,
 }
 
 func init() {
 	threadCmd.AddCommand(threadUnfollowCmd)
-	threadUnfollowCmd.Flags().String("target", "", "Thread to unfollow (#channel-name:message-id)")
+	threadUnfollowCmd.Flags().String("target", "", "Thread to unfollow (#channel-name:message-id or dm:@handle:message-id)")
 	_ = threadUnfollowCmd.MarkFlagRequired("target")
 }
 
 func runThreadUnfollow(cmd *cobra.Command, _ []string) error {
 	target, _ := cmd.Flags().GetString("target")
-	// Parse target: #channel:message-id or #workspace:channel:message-id
-	target = strings.TrimPrefix(target, "#")
-	parts := strings.SplitN(target, ":", 3)
-	if len(parts) < 2 {
-		return fmt.Errorf("invalid target format: use #channel-name:message-id or #workspace-id:channel-id:message-id")
+	if target == "" {
+		return fmt.Errorf("invalid target format: use #channel-name:message-id or dm:@handle:message-id")
 	}
 
 	client, err := newAPIClient(cmd)
@@ -54,15 +50,8 @@ func runThreadUnfollow(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
-	channelID := parts[0]
-	if len(parts) == 3 {
-		channelID = parts[1]
-	}
-
-	messageID := parts[len(parts)-1]
-	path := fmt.Sprintf("/api/channels/%s/messages/%s/thread/follow", channelID, messageID)
-
-	if err := client.DeleteJSON(ctx, path); err != nil {
+	var resp map[string]any
+	if err := client.PostJSON(ctx, "/api/agent/threads/unfollow", map[string]string{"target": target}, &resp); err != nil {
 		return fmt.Errorf("unfollow thread: %w", err)
 	}
 

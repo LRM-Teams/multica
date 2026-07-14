@@ -525,6 +525,72 @@ func TestAgentTransportDMThreadTarget(t *testing.T) {
 	}
 }
 
+func TestAgentTransportUnfollowDMThreadTarget(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, _ := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	humanHandle := userHandleForTransportTest(t, testUserID)
+	dmChannel, ok := testHandler.ensureAgentHumanDMChannel(ctx, parseUUID(testWorkspaceID), parseUUID(agentID), parseUUID(testUserID))
+	if !ok {
+		t.Fatal("create agent-human DM channel")
+	}
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(dmChannel.ID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), humanHandle, "dm unfollow root "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert dm root: %v", err)
+	}
+	testHandler.followChannelThreadAgent(ctx, parseUUID(dmChannel.ID), parseUUID(root.ID), parseUUID(agentID))
+
+	rec := agentTransportUnfollowThreadForTest(t, taskID, agentID, map[string]any{
+		"target": "dm:@" + humanHandle + ":" + root.ID,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unfollow dm thread target: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body AgentTransportThreadUnfollowResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode unfollow response: %v", err)
+	}
+	if body.Action != agentTransportActionThreadUnfollow || body.ChannelID != dmChannel.ID || body.MessageID != root.ID {
+		t.Fatalf("unfollow response = %+v, want dm channel %s root %s", body, dmChannel.ID, root.ID)
+	}
+
+	var followedAt pgtype.Timestamptz
+	var wakeState string
+	if err := testPool.QueryRow(ctx, `
+		SELECT followed_at, wake_state
+		FROM thread_participant
+		WHERE root_message_id = $1 AND member_type = 'agent' AND member_id = $2`,
+		root.ID, agentID).Scan(&followedAt, &wakeState); err != nil {
+		t.Fatalf("load agent thread participant: %v", err)
+	}
+	if followedAt.Valid {
+		t.Fatalf("agent followed_at still set after unfollow: %+v", followedAt)
+	}
+	if wakeState != "no_wake" {
+		t.Fatalf("agent wake_state=%q, want no_wake", wakeState)
+	}
+
+	var eventRows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND thread_root_message_id = $2
+		  AND author_type = 'system'
+		  AND content LIKE '%unfollowed this thread%'`,
+		dmChannel.ID, root.ID).Scan(&eventRows); err != nil {
+		t.Fatalf("count thread unfollow system event: %v", err)
+	}
+	if eventRows != 1 {
+		t.Fatalf("thread unfollow system event rows = %d, want 1", eventRows)
+	}
+	assertAgentTransportAuditCount(t, taskID, agentTransportActionThreadUnfollow, 1)
+}
+
 func TestAgentTransportRejectsNonRaftTargetForms(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -825,6 +891,14 @@ func agentTransportSearchForTest(t *testing.T, taskID, agentID string, body map[
 	req := agentTransportRequest(t, http.MethodPost, "/api/agent/messages/search", taskID, agentID, body)
 	rec := httptest.NewRecorder()
 	testHandler.AgentTransportSearchMessages(rec, req)
+	return rec
+}
+
+func agentTransportUnfollowThreadForTest(t *testing.T, taskID, agentID string, body map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	req := agentTransportRequest(t, http.MethodPost, "/api/agent/threads/unfollow", taskID, agentID, body)
+	rec := httptest.NewRecorder()
+	testHandler.AgentTransportUnfollowThread(rec, req)
 	return rec
 }
 

@@ -10,11 +10,16 @@ const (
 	MessagePartTypeText       = "text"
 	MessagePartTypeSticker    = "sticker"
 	MessagePartTypeAttachment = "attachment"
+	MessagePartTypeReference  = "reference"
 )
 
 type MessagePart struct {
 	Type         string `json:"type"`
 	Text         string `json:"text,omitempty"`
+	RefType      string `json:"ref_type,omitempty"`
+	RefSubType   string `json:"ref_subtype,omitempty"`
+	RefID        string `json:"ref_id,omitempty"`
+	Label        string `json:"label,omitempty"`
 	PackID       string `json:"pack_id,omitempty"`
 	StickerID    string `json:"sticker_id,omitempty"`
 	Alt          string `json:"alt,omitempty"`

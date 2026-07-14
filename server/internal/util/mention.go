@@ -1,6 +1,10 @@
 package util
 
-import "regexp"
+import (
+	"regexp"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
+)
 
 // Mention represents a parsed @mention from markdown content.
 type Mention struct {
@@ -34,6 +38,38 @@ func ParseMentions(content string) []Mention {
 		result = append(result, Mention{Type: m[2], ID: m[3]})
 	}
 	return result
+}
+
+// ParseMentionsFromContentAndParts extracts deduplicated mentions from legacy
+// markdown content and from structured reference message parts.
+func ParseMentionsFromContentAndParts(content string, parts []protocol.MessagePart) []Mention {
+	seen := make(map[string]bool)
+	var result []Mention
+	for _, mention := range ParseMentions(content) {
+		result = appendMention(result, seen, mention)
+	}
+	for _, part := range parts {
+		if part.Type != protocol.MessagePartTypeReference {
+			continue
+		}
+		if part.RefType != "mention" {
+			continue
+		}
+		if part.RefSubType == "" || part.RefID == "" {
+			continue
+		}
+		result = appendMention(result, seen, Mention{Type: part.RefSubType, ID: part.RefID})
+	}
+	return result
+}
+
+func appendMention(result []Mention, seen map[string]bool, mention Mention) []Mention {
+	key := mention.Type + ":" + mention.ID
+	if seen[key] {
+		return result
+	}
+	seen[key] = true
+	return append(result, mention)
 }
 
 // HasMentionAll returns true if any mention in the slice is an @all mention.

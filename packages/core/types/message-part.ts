@@ -15,6 +15,20 @@ export type MessagePart =
       filename?: string;
       content_type?: string;
       size_bytes?: number;
+    }
+  | {
+      type: "reference";
+      ref_type: "mention";
+      ref_subtype: "member" | "agent" | "squad" | "all";
+      ref_id: string;
+      label?: string;
+    }
+  | {
+      type: "reference";
+      ref_type: "issue-ref";
+      ref_subtype?: "issue";
+      ref_id: string;
+      label?: string;
     };
 
 /**

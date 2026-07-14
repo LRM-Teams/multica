@@ -2417,6 +2417,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
 		return
 	}
+	parts = h.enrichChannelMessageMentionParts(r.Context(), ch, content, parts)
 	showInChannel := false
 	if req.ShowInChannel != nil {
 		showInChannel = *req.ShowInChannel
@@ -2732,7 +2733,7 @@ func (h *Handler) followChannelThreadMentionedUsers(ctx context.Context, ch Chan
 	if msg.ThreadRootMessageID == nil {
 		return
 	}
-	mentions := util.ParseMentions(msg.Content)
+	mentions := util.ParseMentionsFromContentAndParts(msg.Content, msg.Parts)
 	if len(mentions) == 0 {
 		return
 	}
@@ -3016,6 +3017,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
 		return
 	}
+	parts = h.enrichChannelMessageMentionParts(r.Context(), ch, content, parts)
 	replyToMessageID, ok := h.validateChannelReplyTarget(w, r.Context(), workspaceID, channelID, req.ReplyToMessageID)
 	if !ok {
 		return
@@ -3078,7 +3080,7 @@ func (h *Handler) ingestWendyHumanGroupMessage(ctx context.Context, ch ChannelRe
 		return
 	}
 	h.touchWendyChannelAmbient(ctx, ch, msg)
-	mentions := util.ParseMentions(msg.Content)
+	mentions := util.ParseMentionsFromContentAndParts(msg.Content, msg.Parts)
 	agentIDs := make([]pgtype.UUID, 0, len(mentions))
 	for _, mention := range mentions {
 		if mention.Type == "agent" {
@@ -3229,7 +3231,7 @@ func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch Channel
 	// Notify mentioned humans regardless of the agent trigger limit — surfacing a
 	// mention to a person never feeds the automatic agent-reply loop.
 	h.notifyChannelMemberMentions(ctx, ch, trigger)
-	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content)
+	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content, trigger.Parts)
 	if len(mentionedAgents) > 0 {
 		for _, agent := range mentionedAgents {
 			if len(mentionedAgents) == 1 {
@@ -3248,7 +3250,7 @@ func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelRespons
 
 func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
 	h.notifyChannelMemberMentions(ctx, ch, trigger)
-	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content)
+	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content, trigger.Parts)
 	if len(mentionedAgents) > 0 {
 		for _, agent := range mentionedAgents {
 			if len(mentionedAgents) == 1 {
@@ -3630,7 +3632,7 @@ func buildChannelWelcomePrompt(channelName, joinedName string) string {
 // list with a deep link back to the message. The message author is never
 // notified about their own mention.
 func (h *Handler) notifyChannelMemberMentions(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse) {
-	mentions := util.ParseMentions(msg.Content)
+	mentions := util.ParseMentionsFromContentAndParts(msg.Content, msg.Parts)
 	if len(mentions) == 0 {
 		return
 	}
@@ -3791,8 +3793,12 @@ func (h *Handler) publishChannelAgentTyping(ctx context.Context, ch ChannelRespo
 	})
 }
 
-func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, channelID, content string) []db.Agent {
-	mentions := util.ParseMentions(content)
+func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, channelID, content string, parts ...[]protocol.MessagePart) []db.Agent {
+	var messageParts []protocol.MessagePart
+	if len(parts) > 0 {
+		messageParts = parts[0]
+	}
+	mentions := util.ParseMentionsFromContentAndParts(content, messageParts)
 	mentionedAgents := map[string]struct{}{}
 	for _, mention := range mentions {
 		if mention.Type == "agent" {

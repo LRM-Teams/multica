@@ -121,11 +121,22 @@ func (h *Handler) dispatchClaimedWendyUnlockHandoff(ctx context.Context, handoff
 	if err != nil {
 		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, fmt.Errorf("begin Wendy unlock transaction: %w", err))
 	}
-	defer tx.Rollback(ctx)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
 	qtx := h.Queries.WithTx(tx)
+	retryAfterRollback := func(cause error) (bool, error) {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			cause = fmt.Errorf("%w; rollback Wendy unlock transaction: %v", cause, rollbackErr)
+		}
+		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, cause)
+	}
 
 	if err := h.lockWendyUnlockChannelMember(ctx, tx, handoff.WorkspaceID, handoff.ChannelID, supervisor.ID); err != nil {
-		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, err)
+		return retryAfterRollback(err)
 	}
 	directive := radarAgentMentionDirective{
 		TargetAgent: target,
@@ -138,24 +149,25 @@ func (h *Handler) dispatchClaimedWendyUnlockHandoff(ctx context.Context, handoff
 	}
 	execution, err := h.executePreparedRadarAgentMentionInTx(ctx, qtx, tx, run, supervisor, directive)
 	if err != nil {
-		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, err)
+		return retryAfterRollback(err)
 	}
 	if _, err := qtx.MarkPendingHandoffDone(ctx, db.MarkPendingHandoffDoneParams{
 		ID:         handoff.ID,
 		ClaimToken: claimToken,
 	}); err != nil {
-		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, fmt.Errorf("mark Wendy unlock handoff done: %w", err))
+		return retryAfterRollback(fmt.Errorf("mark Wendy unlock handoff done: %w", err))
 	}
 	if _, err := qtx.TouchWorkNodeWendyNudge(ctx, db.TouchWorkNodeWendyNudgeParams{
 		ID:          node.ID,
 		WorkspaceID: handoff.WorkspaceID,
 		NudgeKind:   wendyUnlockNudgeKind,
 	}); err != nil {
-		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, fmt.Errorf("touch Wendy unlock work node: %w", err))
+		return retryAfterRollback(fmt.Errorf("touch Wendy unlock work node: %w", err))
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, fmt.Errorf("commit Wendy unlock: %w", err))
+		return retryAfterRollback(fmt.Errorf("commit Wendy unlock: %w", err))
 	}
+	committed = true
 	if execution.AfterCommit != nil {
 		execution.AfterCommit()
 	}

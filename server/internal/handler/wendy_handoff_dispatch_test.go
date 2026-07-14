@@ -5,7 +5,10 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/internal/workgraph"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func TestWendyUnlockSilentParallelWait(t *testing.T) {
@@ -14,6 +17,7 @@ func TestWendyUnlockSilentParallelWait(t *testing.T) {
 	}
 
 	fixture := seedWendyUnlockDispatchFixture(t)
+	fixture.detectUnlock(t, fixture.issueC)
 	if got := dispatchWendyUnlockHandoffsForTest(t); got != 0 {
 		t.Fatalf("dispatched handoffs = %d, want 0", got)
 	}
@@ -26,6 +30,8 @@ func TestWendyUnlockSilentPartialDone(t *testing.T) {
 	}
 
 	fixture := seedWendyUnlockDispatchFixture(t)
+	fixture.markDone(t, fixture.issueA)
+	fixture.detectUnlock(t, fixture.issueC)
 	if got := dispatchWendyUnlockHandoffsForTest(t); got != 0 {
 		t.Fatalf("dispatched handoffs = %d, want 0", got)
 	}
@@ -38,7 +44,11 @@ func TestWendyUnlockMentionsCWhenReady(t *testing.T) {
 	}
 
 	fixture := seedWendyUnlockDispatchFixture(t)
-	waiterNodeID := insertWendyUnlockHandoffForTest(t, fixture, fixture.cID, "Waiting issue C")
+	fixture.markDone(t, fixture.issueA)
+	fixture.markDone(t, fixture.issueB)
+	fixture.detectUnlock(t, fixture.issueC)
+	assertWendyUnlockHandoffChannel(t, fixture.channelID)
+	fixture.makeUnlockDue(t)
 
 	if got := dispatchWendyUnlockHandoffsForTest(t); got != 1 {
 		t.Fatalf("dispatched handoffs = %d, want 1", got)
@@ -46,7 +56,7 @@ func TestWendyUnlockMentionsCWhenReady(t *testing.T) {
 	assertWendyUnlockMessageCount(t, fixture.channelID, fixture.wendyID, 1)
 	assertWendyUnlockMessageMentions(t, fixture.channelID, fixture.cID)
 	assertWendyUnlockWakeCount(t, fixture.channelID, fixture.cID, 1)
-	assertWendyUnlockNudge(t, waiterNodeID)
+	assertWendyUnlockNudge(t, fixture.nodeForIssue(t, fixture.issueC).ID.String())
 }
 
 func TestWendyUnlockThenDAfterCDone(t *testing.T) {
@@ -55,12 +65,19 @@ func TestWendyUnlockThenDAfterCDone(t *testing.T) {
 	}
 
 	fixture := seedWendyUnlockDispatchFixture(t)
-	insertWendyUnlockHandoffForTest(t, fixture, fixture.cID, "Waiting issue C")
+	fixture.markDone(t, fixture.issueA)
+	fixture.markDone(t, fixture.issueB)
+	fixture.detectUnlock(t, fixture.issueC)
+	assertWendyUnlockHandoffChannel(t, fixture.channelID)
+	fixture.makeUnlockDue(t)
 	if got := dispatchWendyUnlockHandoffsForTest(t); got != 1 {
 		t.Fatalf("first dispatched handoffs = %d, want 1", got)
 	}
 
-	insertWendyUnlockHandoffForTest(t, fixture, fixture.dID, "Waiting issue D")
+	fixture.markDone(t, fixture.issueC)
+	fixture.createWaitingD(t)
+	fixture.detectUnlock(t, fixture.issueD)
+	fixture.makeUnlockDue(t)
 	if got := dispatchWendyUnlockHandoffsForTest(t); got != 1 {
 		t.Fatalf("second dispatched handoffs = %d, want 1", got)
 	}
@@ -74,6 +91,11 @@ type wendyUnlockDispatchFixture struct {
 	cID       string
 	dID       string
 	channelID string
+	store     *workgraph.Store
+	issueA    db.Issue
+	issueB    db.Issue
+	issueC    db.Issue
+	issueD    db.Issue
 }
 
 func seedWendyUnlockDispatchFixture(t *testing.T) wendyUnlockDispatchFixture {
@@ -102,40 +124,145 @@ func seedWendyUnlockDispatchFixture(t *testing.T) wendyUnlockDispatchFixture {
 		`, testWorkspaceID, supervisor.ID)
 	})
 
-	return wendyUnlockDispatchFixture{
+	fixture := wendyUnlockDispatchFixture{
 		wendyID:   supervisor.ID.String(),
 		cID:       targetC,
 		dID:       targetD,
 		channelID: channelID,
+		store:     workgraph.NewStore(testPool),
+	}
+	fixture.issueA = fixture.createIssue(t, "Prerequisite A", targetC)
+	fixture.issueB = fixture.createIssue(t, "Prerequisite B", targetC)
+	fixture.issueC = fixture.createIssue(t, "Waiting issue C", targetC)
+	fixture.syncIssue(t, fixture.issueA)
+	fixture.syncIssue(t, fixture.issueB)
+	fixture.syncIssue(t, fixture.issueC)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO issue_dependency (issue_id, depends_on_issue_id, type)
+		VALUES ($1, $2, 'blocked_by'), ($1, $3, 'blocked_by')
+	`, fixture.issueC.ID, fixture.issueA.ID, fixture.issueB.ID); err != nil {
+		t.Fatalf("create C dependencies: %v", err)
+	}
+	if err := fixture.store.SyncDependenciesForIssue(ctx, fixture.issueC.WorkspaceID, fixture.issueC.ID); err != nil {
+		t.Fatalf("sync C dependencies: %v", err)
+	}
+	fixture.setPrimaryChannel(t, fixture.issueC)
+	return fixture
+}
+
+func (f *wendyUnlockDispatchFixture) createWaitingD(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	f.issueD = f.createIssue(t, "Waiting issue D", f.dID)
+	f.syncIssue(t, f.issueD)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO issue_dependency (issue_id, depends_on_issue_id, type)
+		VALUES ($1, $2, 'blocked_by')
+	`, f.issueD.ID, f.issueC.ID); err != nil {
+		t.Fatalf("create D dependency: %v", err)
+	}
+	if err := f.store.SyncDependenciesForIssue(ctx, f.issueD.WorkspaceID, f.issueD.ID); err != nil {
+		t.Fatalf("sync D dependencies: %v", err)
+	}
+	f.setPrimaryChannel(t, f.issueD)
+}
+
+func (f wendyUnlockDispatchFixture) createIssue(t *testing.T, title, agentID string) db.Issue {
+	t.Helper()
+	ctx := context.Background()
+	issue := db.Issue{
+		ID:           pgUUIDForWendyTest(uuid.New()),
+		WorkspaceID:  parseUUID(testWorkspaceID),
+		Title:        title,
+		Description:  pgTextForWendyTest(title + " description"),
+		Status:       "todo",
+		AssigneeType: pgTextForWendyTest("agent"),
+		AssigneeID:   parseUUID(agentID),
+	}
+	var number int
+	if err := testPool.QueryRow(ctx, `SELECT COALESCE(max(number), 0) + 1 FROM issue WHERE workspace_id = $1`, testWorkspaceID).Scan(&number); err != nil {
+		t.Fatalf("allocate issue number: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO issue (
+			id, workspace_id, number, title, description, status, priority,
+			assignee_type, assignee_id, creator_type, creator_id, position
+		) VALUES ($1, $2, $3, $4, $5, $6, 'none', 'agent', $7, 'agent', $7, 0)
+	`, issue.ID, issue.WorkspaceID, number, issue.Title, issue.Description, issue.Status, issue.AssigneeID); err != nil {
+		t.Fatalf("create %q: %v", title, err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issue.ID)
+	})
+	return issue
+}
+
+func pgUUIDForWendyTest(id uuid.UUID) pgtype.UUID {
+	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
+func pgTextForWendyTest(value string) pgtype.Text {
+	return pgtype.Text{String: value, Valid: true}
+}
+
+func (f wendyUnlockDispatchFixture) syncIssue(t *testing.T, issue db.Issue) {
+	t.Helper()
+	if _, err := f.store.SyncIssueNode(context.Background(), issue); err != nil {
+		t.Fatalf("sync issue %q: %v", issue.Title, err)
 	}
 }
 
-func insertWendyUnlockHandoffForTest(t *testing.T, fixture wendyUnlockDispatchFixture, targetID, title string) string {
+func (f wendyUnlockDispatchFixture) markDone(t *testing.T, issue db.Issue) {
 	t.Helper()
-	ctx := context.Background()
-	var nodeID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO work_node (
-			workspace_id, kind, title, owner_type, owner_id, status, primary_channel_id
-		)
-		VALUES ($1, 'issue', $2, 'agent', $3, 'active', $4)
-		RETURNING id
-	`, testWorkspaceID, title, targetID, fixture.channelID).Scan(&nodeID); err != nil {
-		t.Fatalf("create waiting work node: %v", err)
+	if _, err := testPool.Exec(context.Background(), `UPDATE issue SET status = 'done' WHERE id = $1`, issue.ID); err != nil {
+		t.Fatalf("mark issue %q done: %v", issue.Title, err)
 	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM work_node WHERE id = $1`, nodeID)
+	issue.Status = "done"
+	f.syncIssue(t, issue)
+}
+
+func (f wendyUnlockDispatchFixture) detectUnlock(t *testing.T, issue db.Issue) {
+	t.Helper()
+	if err := f.store.DetectUnlockForNode(context.Background(), f.nodeForIssue(t, issue).ID); err != nil {
+		t.Fatalf("detect unlock for %q: %v", issue.Title, err)
+	}
+}
+
+func (f wendyUnlockDispatchFixture) nodeForIssue(t *testing.T, issue db.Issue) db.WorkNode {
+	t.Helper()
+	node, err := testHandler.Queries.GetWorkNodeByIssue(context.Background(), db.GetWorkNodeByIssueParams{
+		WorkspaceID:   issue.WorkspaceID,
+		LinkedIssueID: issue.ID,
 	})
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO pending_handoff (
-			workspace_id, urgency, reason_code, target_actor_type, target_actor_id,
-			related_node_ids, channel_id, dedupe_key, not_before, status
-		)
-		VALUES ($1, 'fast', 'unlock', 'agent', $2, ARRAY[$3]::uuid[], $4, $5, now(), 'pending')
-	`, testWorkspaceID, targetID, nodeID, fixture.channelID, "unlock-test:"+uuid.NewString()); err != nil {
-		t.Fatalf("insert pending unlock handoff: %v", err)
+	if err != nil {
+		t.Fatalf("load work node for %q: %v", issue.Title, err)
 	}
-	return nodeID
+	return node
+}
+
+func (f wendyUnlockDispatchFixture) setPrimaryChannel(t *testing.T, issue db.Issue) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE work_node
+		SET primary_channel_id = $1
+		WHERE workspace_id = $2 AND linked_issue_id = $3
+	`, f.channelID, issue.WorkspaceID, issue.ID); err != nil {
+		t.Fatalf("set primary channel for %q: %v", issue.Title, err)
+	}
+}
+
+func (f wendyUnlockDispatchFixture) makeUnlockDue(t *testing.T) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE pending_handoff
+		SET not_before = now() - interval '1 second'
+		WHERE workspace_id = $1
+		  AND urgency = 'fast'
+		  AND reason_code = 'unlock'
+		  AND status = 'pending'
+	`, testWorkspaceID); err != nil {
+		t.Fatalf("make unlock handoff due: %v", err)
+	}
 }
 
 func dispatchWendyUnlockHandoffsForTest(t *testing.T) int {
@@ -207,5 +334,29 @@ func assertWendyUnlockNudge(t *testing.T, nodeID string) {
 	}
 	if nudgeKind != "unlock" {
 		t.Fatalf("Wendy nudge kind = %q, want unlock", nudgeKind)
+	}
+}
+
+func assertWendyUnlockHandoffChannel(t *testing.T, wantChannelID string) {
+	t.Helper()
+	var channelID, targetID pgtype.UUID
+	var relatedNodeIDs []pgtype.UUID
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT channel_id, target_actor_id, related_node_ids
+		FROM pending_handoff
+		WHERE workspace_id = $1
+		  AND status = 'pending'
+		  AND urgency = 'fast'
+		  AND reason_code = 'unlock'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, testWorkspaceID).Scan(&channelID, &targetID, &relatedNodeIDs); err != nil {
+		t.Fatalf("load pending unlock handoff channel: %v", err)
+	}
+	if channelID.String() != wantChannelID {
+		t.Fatalf("pending unlock channel = %s, want %s", channelID.String(), wantChannelID)
+	}
+	if !channelID.Valid || !targetID.Valid || len(relatedNodeIDs) == 0 {
+		t.Fatalf("pending unlock target/channel/related = %+v/%+v/%d, want valid values", targetID, channelID, len(relatedNodeIDs))
 	}
 }

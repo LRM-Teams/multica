@@ -27,6 +27,19 @@ func TestWendyHandoffHookUnlocksAfterProductionIssueUpdates(t *testing.T) {
 	assertWendyUnlockMessageMentions(t, fixture.channelID, fixture.cID)
 }
 
+func TestWendyHandoffHookUnlocksAfterBatchIssueUpdate(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	fixture := seedWendyHandoffHookFixture(t)
+	updateIssueStatusForWendyHook(t, fixture.issueA.ID.String(), "done")
+	fixture.setPrimaryChannel(t, fixture.issueC)
+	batchUpdateIssueStatusForWendyHook(t, fixture.issueB.ID.String(), "done")
+
+	assertWendyUnlockHandoffChannel(t, fixture.channelID)
+}
+
 func seedWendyHandoffHookFixture(t *testing.T) wendyUnlockDispatchFixture {
 	t.Helper()
 	ctx := context.Background()
@@ -77,5 +90,18 @@ func updateIssueStatusForWendyHook(t *testing.T, issueID, status string) {
 	testHandler.UpdateIssue(w, req)
 	if w.Code != 200 {
 		t.Fatalf("update issue status=%q: expected 200, got %d: %s", status, w.Code, w.Body.String())
+	}
+}
+
+func batchUpdateIssueStatusForWendyHook(t *testing.T, issueID, status string) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues/batch-update", map[string]any{
+		"issue_ids": []string{issueID},
+		"updates":   map[string]any{"status": status},
+	})
+	testHandler.BatchUpdateIssues(w, req)
+	if w.Code != 200 {
+		t.Fatalf("batch update issue status=%q: expected 200, got %d: %s", status, w.Code, w.Body.String())
 	}
 }

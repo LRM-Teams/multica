@@ -2970,6 +2970,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		// (MUL-2538). Best-effort; failure does not abort the batch.
 		if statusChanged {
 			h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID)
+			h.syncWendyWorkGraphAfterIssueUpdate(r.Context(), issue)
 		}
 
 		updated++

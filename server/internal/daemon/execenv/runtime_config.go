@@ -819,7 +819,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("Use `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help` to progressively load exact flags. Prefer `--output json` when reading data.\n\n")
 	b.WriteString("Common capability index — run the relevant help command before low-frequency or destructive operations:\n")
 	if !ctx.ChatCLITransportUnavailable {
-		b.WriteString("- Chat output: use `multica message send`; prefer `--message-stdin` with a single-quote heredoc or `--message-file` for agent-authored text, `--sticker` for sticker replies, and omit `--target` for the current surface. After a successful send, do not duplicate the reply in final output.\n")
+		b.WriteString("- Chat output: use `multica message send --target <target>` with an explicit Raft-style target (`#channel`, `#channel:<threadId>`, `dm:@handle`, or `dm:@handle:<threadId>`). Prefer `--message-stdin` with a single-quote heredoc or `--message-file` for agent-authored text, and use `--sticker` for sticker replies. After a successful send, do not duplicate the reply in final output.\n")
 		b.WriteString("- Chat reactions/history: `multica message react`, `multica message read`, and `multica message search` are available when a reaction or more bounded chat context is needed.\n")
 		b.WriteString("- Reminders: schedule a durable future self-wake with `multica reminder schedule --title \"...\" --delay-seconds N [--message-id <id>]` when follow-up depends on future state. Use `reminder list|snooze|update|cancel` to manage reminders; prefer this over sleep or runtime cron.\n")
 	}

@@ -129,6 +129,57 @@ func TestSyncIssueNodesAndWaitsOnEdges(t *testing.T) {
 	assertNodeStatus(t, ctx, workspaceID, issueC.ID, "active")
 }
 
+func TestSyncDependenciesForIssueResolvesStaleWaitsOnEdges(t *testing.T) {
+	ctx := t.Context()
+	workspaceID := pgUUID(uuid.New())
+	agentID := pgUUID(uuid.New())
+	createWorkgraphWorkspace(t, ctx, workspaceID)
+	t.Cleanup(func() {
+		if _, err := testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID); err != nil {
+			t.Errorf("clean up workspace: %v", err)
+		}
+	})
+
+	issueA := createWorkgraphIssue(t, ctx, workspaceID, agentID, 1, "Prerequisite A", "todo")
+	issueC := createWorkgraphIssue(t, ctx, workspaceID, agentID, 2, "Blocked issue C", "todo")
+	insertWorkgraphDependency(t, ctx, issueC.ID, issueA.ID, "blocked_by")
+
+	store := NewStore(testPool)
+	if _, err := store.SyncIssueNode(ctx, issueA); err != nil {
+		t.Fatalf("sync issue A: %v", err)
+	}
+	nodeC, err := store.SyncIssueNode(ctx, issueC)
+	if err != nil {
+		t.Fatalf("sync issue C: %v", err)
+	}
+	if err := store.SyncDependenciesForIssue(ctx, workspaceID, issueC.ID); err != nil {
+		t.Fatalf("sync initial dependency: %v", err)
+	}
+	assertNodeStatus(t, ctx, workspaceID, issueC.ID, "waiting")
+
+	if _, err := testPool.Exec(ctx, `
+		DELETE FROM issue_dependency
+		WHERE issue_id = $1 AND depends_on_issue_id = $2
+	`, issueC.ID, issueA.ID); err != nil {
+		t.Fatalf("delete dependency: %v", err)
+	}
+	if err := store.SyncDependenciesForIssue(ctx, workspaceID, issueC.ID); err != nil {
+		t.Fatalf("sync removed dependency: %v", err)
+	}
+
+	openEdges, err := db.New(testPool).ListOpenWaitsOnFromNode(ctx, db.ListOpenWaitsOnFromNodeParams{
+		WorkspaceID: workspaceID,
+		FromNodeID:  nodeC.ID,
+	})
+	if err != nil {
+		t.Fatalf("list open waits: %v", err)
+	}
+	if len(openEdges) != 0 {
+		t.Fatalf("open waits after removing dependency = %d, want 0", len(openEdges))
+	}
+	assertNodeStatus(t, ctx, workspaceID, issueC.ID, "active")
+}
+
 func createWorkgraphWorkspace(t *testing.T, ctx context.Context, id pgtype.UUID) {
 	t.Helper()
 	if _, err := testPool.Exec(ctx, `

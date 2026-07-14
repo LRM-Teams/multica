@@ -55,6 +55,34 @@ func (s *Store) SyncDependenciesForIssue(ctx context.Context, workspaceID, issue
 		return fmt.Errorf("list issue dependencies: %w", err)
 	}
 
+	type waiterDependencies struct {
+		node            db.WorkNode
+		prerequisiteIDs map[string]struct{}
+	}
+	waiters := make(map[string]*waiterDependencies)
+	addWaiter := func(node db.WorkNode) *waiterDependencies {
+		key := node.ID.String()
+		if waiter, ok := waiters[key]; ok {
+			return waiter
+		}
+		waiter := &waiterDependencies{
+			node:            node,
+			prerequisiteIDs: make(map[string]struct{}),
+		}
+		waiters[key] = waiter
+		return waiter
+	}
+
+	issueNode, err := s.queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{
+		WorkspaceID:   workspaceID,
+		LinkedIssueID: issueID,
+	})
+	if err == nil {
+		addWaiter(issueNode)
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("load issue work node: %w", err)
+	}
+
 	for _, dependency := range dependencies {
 		waiterIssueID, prerequisiteIssueID, ok := waitsOnIssues(dependency)
 		if !ok {
@@ -81,6 +109,8 @@ func (s *Store) SyncDependenciesForIssue(ctx context.Context, workspaceID, issue
 		if err != nil {
 			return fmt.Errorf("load prerequisite work node: %w", err)
 		}
+		waiterDependencies := addWaiter(waiter)
+		waiterDependencies.prerequisiteIDs[prerequisite.ID.String()] = struct{}{}
 
 		evidence, err := json.Marshal(map[string]string{
 			"issue_dependency_id": dependency.ID.String(),
@@ -107,7 +137,29 @@ func (s *Store) SyncDependenciesForIssue(ctx context.Context, workspaceID, issue
 				return fmt.Errorf("resolve terminal prerequisite edge: %w", err)
 			}
 		}
-		if err := s.RecomputeIssueNodeStatus(ctx, waiter.ID); err != nil {
+	}
+
+	for _, waiter := range waiters {
+		openEdges, err := s.queries.ListOpenWaitsOnFromNode(ctx, db.ListOpenWaitsOnFromNodeParams{
+			WorkspaceID: workspaceID,
+			FromNodeID:  waiter.node.ID,
+		})
+		if err != nil {
+			return fmt.Errorf("list open waits_on edges: %w", err)
+		}
+		for _, edge := range openEdges {
+			if _, ok := waiter.prerequisiteIDs[edge.ToNodeID.String()]; ok {
+				continue
+			}
+			if _, err := s.queries.ResolveWaitsOnEdge(ctx, db.ResolveWaitsOnEdgeParams{
+				WorkspaceID: workspaceID,
+				FromNodeID:  waiter.node.ID,
+				ToNodeID:    edge.ToNodeID,
+			}); err != nil {
+				return fmt.Errorf("resolve stale waits_on edge: %w", err)
+			}
+		}
+		if err := s.RecomputeIssueNodeStatus(ctx, waiter.node.ID); err != nil {
 			return err
 		}
 	}

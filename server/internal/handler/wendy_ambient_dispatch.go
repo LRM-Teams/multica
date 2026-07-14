@@ -210,11 +210,8 @@ func (h *Handler) touchWendyChannelAmbient(ctx context.Context, ch ChannelRespon
 	if h.WorkGraph == nil || ch.Kind != "group" {
 		return
 	}
-	supervisorID, err := h.Queries.GetWorkspaceSupervisorAgentID(ctx, parseUUID(ch.WorkspaceID))
-	if err != nil {
-		return
-	}
-	if !h.channelHasAgentMember(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID), supervisorID) {
+	wendyID, ok := h.resolveWendyAmbientAgentForChannel(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID))
+	if !ok {
 		return
 	}
 	messageAt := time.Now()
@@ -231,7 +228,46 @@ func (h *Handler) touchWendyChannelAmbient(ctx context.Context, ch ChannelRespon
 			messageID = parsed
 		}
 	}
-	if err := h.WorkGraph.TouchChannelAmbient(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID), supervisorID, messageID, messageAt); err != nil {
+	if err := h.WorkGraph.TouchChannelAmbient(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID), wendyID, messageID, messageAt); err != nil {
 		slog.Warn("touch Wendy channel ambient failed", "channel_id", ch.ID, "message_id", msg.ID, "error", err)
 	}
+}
+
+// resolveWendyAmbientAgentForChannel picks which Wendy watches this group.
+// Prefer the workspace supervisor when she is a member; otherwise fall back to
+// any named Wendy already in the channel (personal Wendy clones in multi-owner
+// workspaces).
+func (h *Handler) resolveWendyAmbientAgentForChannel(ctx context.Context, workspaceID, channelID pgtype.UUID) (pgtype.UUID, bool) {
+	if supervisorID, err := h.Queries.GetWorkspaceSupervisorAgentID(ctx, workspaceID); err == nil {
+		if h.channelHasAgentMember(ctx, workspaceID, channelID, supervisorID) {
+			return supervisorID, true
+		}
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT a.id, COALESCE(NULLIF(a.display_name, ''), a.name) AS display_name
+		FROM channel_member cm
+		JOIN agent a
+		  ON a.id = cm.member_id
+		 AND a.workspace_id = cm.workspace_id
+		WHERE cm.workspace_id = $1
+		  AND cm.channel_id = $2
+		  AND cm.member_type = 'agent'
+		  AND a.archived_at IS NULL
+		ORDER BY a.created_at ASC
+	`, workspaceID, channelID)
+	if err != nil {
+		return pgtype.UUID{}, false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var agentID pgtype.UUID
+		var displayName string
+		if err := rows.Scan(&agentID, &displayName); err != nil {
+			return pgtype.UUID{}, false
+		}
+		if isWindyAgentName(displayName) {
+			return agentID, true
+		}
+	}
+	return pgtype.UUID{}, false
 }

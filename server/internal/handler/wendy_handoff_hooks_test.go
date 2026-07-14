@@ -118,6 +118,51 @@ func TestWendyGroupMessageTouchesAmbientWatch(t *testing.T) {
 	}
 }
 
+func TestWendyGroupMessageTouchesAmbientForPersonalWendyWithoutSupervisor(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	personalWendy := createHandlerTestAgent(t, "Wendy", nil)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent SET display_name = 'Wendy' WHERE id = $1
+	`, personalWendy); err != nil {
+		t.Fatalf("set Wendy display name: %v", err)
+	}
+	channelID := seedChannelForTest(t, "wendy-personal-ambient-"+uuid.NewString(), testUserID)
+	addRadarAgentMembersForExecutorTest(t, channelID, personalWendy)
+
+	// Ensure workspace supervisor is someone else not in this channel.
+	otherSupervisor := createRadarSupervisorForExecutorTest(t)
+	bindWendySupervisorForHandoffTest(t, otherSupervisor.ID.String())
+
+	prev := workgraph.AmbientDebounce
+	workgraph.AmbientDebounce = time.Minute
+	t.Cleanup(func() { workgraph.AmbientDebounce = prev })
+
+	testHandler.ingestWendyHumanGroupMessage(context.Background(), ChannelResponse{
+		ID:          channelID,
+		WorkspaceID: testWorkspaceID,
+		Kind:        "group",
+		Name:        "personal-ambient",
+	}, ChannelMessageResponse{
+		Content: "群里随便聊两句",
+	})
+
+	var wendyAgentID string
+	err := testPool.QueryRow(context.Background(), `
+		SELECT wendy_agent_id::text
+		FROM wendy_channel_ambient
+		WHERE channel_id = $1 AND dirty = TRUE
+	`, channelID).Scan(&wendyAgentID)
+	if err != nil {
+		t.Fatalf("load personal Wendy ambient watch: %v", err)
+	}
+	if wendyAgentID != personalWendy {
+		t.Fatalf("ambient wendy_agent_id = %s, want personal Wendy %s", wendyAgentID, personalWendy)
+	}
+}
+
 func TestWendyHandoffHookUnlocksAfterBatchIssueUpdate(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

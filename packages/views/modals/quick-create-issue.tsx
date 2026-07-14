@@ -8,6 +8,10 @@ import { DialogTitle } from "@multica/ui/components/ui/dialog";
 import { Button } from "@multica/ui/components/ui/button";
 import { Switch } from "@multica/ui/components/ui/switch";
 import { api, ApiError } from "@multica/core/api";
+import {
+  matchesActorIdentitySearch,
+  resolveActorDisplayName,
+} from "@multica/core/identity";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
@@ -28,6 +32,7 @@ import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { formatShortcut, modKey, enterKey } from "@multica/core/platform";
 import { contentReferencesAttachment, type Agent, type Attachment, type Squad } from "@multica/core/types";
 import { ActorAvatar } from "../common/actor-avatar";
+import { ActorPickerItem } from "../common/actor-picker-item";
 import { PillButton } from "../common/pill-button";
 import { ProjectPicker } from "../projects/components/project-picker";
 import { canAssignAgent } from "../issues/components/pickers/assignee-picker";
@@ -630,7 +635,14 @@ function ActorPicker({
   const query = filter.trim().toLowerCase();
 
   const filteredAgents = useMemo(
-    () => visibleAgents.filter((a) => a.name.toLowerCase().includes(query) || matchesPinyin(a.name, query)),
+    () =>
+      visibleAgents.filter((a) =>
+        // Match on the display name (what the row shows) AND the @handle, so
+        // searching "Wendy" finds an agent whose routing handle is agent_f0…
+        matchesActorIdentitySearch(resolveActorDisplayName(a, a.name), a.name, query, {
+          extendedMatch: matchesPinyin,
+        }),
+      ),
     [visibleAgents, query],
   );
   const filteredSquads = useMemo(
@@ -638,7 +650,11 @@ function ActorPicker({
     [visibleSquads, query],
   );
 
-  const displayLabel = selectedSquad?.name ?? selectedAgent?.name;
+  const displayLabel =
+    selectedSquad?.name ??
+    (selectedAgent
+      ? resolveActorDisplayName(selectedAgent, selectedAgent.name)
+      : undefined);
   const displayActor: ActorSelection | null = selectedSquad
     ? { type: "squad", id: selectedSquad.id }
     : selectedAgent
@@ -688,17 +704,21 @@ function ActorPicker({
           {filteredAgents.length > 0 && (
             <PickerSection label={t(($) => $.create_issue.agent.agents_group)}>
               {filteredAgents.map((a) => (
-                <PickerItem
+                // Reuse the shared identity picker row (display name primary,
+                // @handle weak secondary) — same primitive the assignee picker
+                // uses. Was rendering the raw routing handle `agent_f0…`.
+                <ActorPickerItem
                   key={a.id}
+                  actorType="agent"
+                  actorId={a.id}
+                  identity={a}
+                  fallback={a.id}
                   selected={actor?.type === "agent" && actor.id === a.id}
                   onClick={() => {
                     onPick({ type: "agent", id: a.id });
                     setOpen(false);
                   }}
-                >
-                  <ActorAvatar actorType="agent" actorId={a.id} size={18} />
-                  <span className="truncate">{a.name}</span>
-                </PickerItem>
+                />
               ))}
             </PickerSection>
           )}

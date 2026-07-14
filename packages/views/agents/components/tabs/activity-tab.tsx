@@ -12,6 +12,43 @@ interface ActivityTabProps {
 }
 
 /**
+ * Zero-height anchor at the end of the stream. Reports (via `onReachedChange`)
+ * whether it is on screen — i.e. whether the reader is at the latest row — using
+ * an IntersectionObserver against the panel/page scroll wrapper. Kept as its own
+ * component (like `InfiniteScrollSentinel`) so the observer subscription lives in
+ * a mount effect that only calls a ref'd callback, never `setState` — the follow
+ * state it drives stays out of a mount effect on the parent.
+ */
+function StreamBottomAnchor({
+  anchorRef,
+  onReachedChange,
+}: {
+  anchorRef: React.RefObject<HTMLDivElement | null>;
+  onReachedChange: (reached: boolean) => void;
+}) {
+  const onReachedChangeRef = useRef(onReachedChange);
+  onReachedChangeRef.current = onReachedChange;
+
+  useEffect(() => {
+    const node = anchorRef.current;
+    if (!node) return;
+    // A small bottom rootMargin: any sliver of the anchor on screen counts as
+    // "at the latest".
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (entry) onReachedChangeRef.current(entry.isIntersecting);
+      },
+      { rootMargin: "0px 0px 40px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [anchorRef]);
+
+  return <div ref={anchorRef} aria-hidden className="h-px w-full" />;
+}
+
+/**
  * Agent Activity tab (#351) — a single, raft-aligned, time-ordered event
  * stream: `time · status dot · human label · optional detail`, newest work
  * flowing down the column. It replaces the old Now / Last-30-days / Recent-work
@@ -59,24 +96,6 @@ export function ActivityTab({ agent }: ActivityTabProps) {
     setShowJump(false);
   }
 
-  // Follow the bottom: watch the sentinel's visibility. Any sliver on screen
-  // (small bottom rootMargin) counts as "at the latest".
-  useEffect(() => {
-    const el = bottomRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        if (!entry) return;
-        atBottomRef.current = entry.isIntersecting;
-        setShowJump(!entry.isIntersecting);
-      },
-      { rootMargin: "0px 0px 40px 0px" },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
   // Land on the newest row when the first page arrives; afterwards append-follow
   // only while the reader is already at the bottom (so scrolling up to read
   // history is never yanked back down).
@@ -90,14 +109,18 @@ export function ActivityTab({ agent }: ActivityTabProps) {
     }
   }, [events.length]);
 
+  const handleReachedChange = (reached: boolean) => {
+    atBottomRef.current = reached;
+    setShowJump(!reached);
+  };
+
   const jumpToLatest = () =>
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
 
   return (
     <div className="p-6">
       <ActivityTimeline events={events} />
-      {/* Zero-height scroll anchor at the end of the stream. */}
-      <div ref={bottomRef} aria-hidden className="h-px w-full" />
+      <StreamBottomAnchor anchorRef={bottomRef} onReachedChange={handleReachedChange} />
       {showJump && (
         <div className="pointer-events-none sticky bottom-4 flex justify-center">
           <button

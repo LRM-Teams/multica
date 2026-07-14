@@ -267,6 +267,8 @@ export interface Agent {
   instructions: string;
   avatar_url: string | null;
   runtime_mode: AgentRuntimeMode;
+  /** Display name for the bound runtime, denormalized by the API. */
+  runtime_name?: string | null;
   runtime_config: Record<string, unknown>;
   custom_args: string[];
   /**

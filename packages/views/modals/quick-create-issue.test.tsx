@@ -41,6 +41,23 @@ const mockSquadsData = vi.hoisted(
   () => ({ list: [] as Array<{ id: string; name: string; leader_id: string; archived_at: string | null }> }),
 );
 
+// Agents are mutable per-test so a case can hand an agent whose display_name
+// differs from its routing handle (the #433 bug: the picker rendered the raw
+// `agent_f0…` handle instead of the display name).
+const mockAgentsData = vi.hoisted(
+  () => ({
+    list: [
+      { id: "agent-1", name: "Bohan", archived_at: null, runtime_id: "runtime-1" },
+    ] as Array<{
+      id: string;
+      name: string;
+      display_name?: string;
+      archived_at: string | null;
+      runtime_id: string;
+    }>,
+  }),
+);
+
 vi.mock("@tanstack/react-query", () => ({
   useQuery: ({ queryKey }: { queryKey: string[] }) => {
     // Workspace-scoped query keys carry the wsId as `queryKey[1]`; the
@@ -52,9 +69,7 @@ vi.mock("@tanstack/react-query", () => ({
       case "members":
         return { data: [{ user_id: "user-1", role: "admin" }] };
       case "agents":
-        return {
-          data: [{ id: "agent-1", name: "Bohan", archived_at: null, runtime_id: "runtime-1" }],
-        };
+        return { data: mockAgentsData.list };
       case "runtimes":
         return { data: [{ id: "runtime-1", metadata: { cli_version: "1.2.3" } }] };
       case "projects":
@@ -295,6 +310,9 @@ describe("AgentCreatePanel", () => {
     mockProjectsQuery.data = [];
     mockProjectsQuery.isSuccess = true;
     mockSquadsData.list = [];
+    mockAgentsData.list = [
+      { id: "agent-1", name: "Bohan", archived_at: null, runtime_id: "runtime-1" },
+    ];
     mockQuickCreateIssue.mockResolvedValue(undefined);
     mockUploadWithToast.mockResolvedValue({
       id: "019ec09d-6222-722b-bdfa-427b105d80be",
@@ -479,6 +497,32 @@ describe("AgentCreatePanel", () => {
     renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
 
     expect(screen.queryByRole("button", { name: /Orphan Squad/ })).toBeNull();
+  });
+
+  // #433: the agent picker rendered the raw routing handle (agent_f0…) instead
+  // of the human display name. It now reuses the shared identity row, so the
+  // display name is primary and search matches on it.
+  it("shows the agent display name in the picker, not the raw routing handle", async () => {
+    mockAgentsData.list = [
+      {
+        id: "agent-9",
+        name: "agent_f049f0f2",
+        display_name: "Wendy",
+        archived_at: null,
+        runtime_id: "runtime-1",
+      },
+    ];
+
+    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
+
+    // The human display name is rendered — before #433 only the raw handle showed.
+    expect(screen.getAllByText("Wendy").length).toBeGreaterThan(0);
+
+    // Search matches on the display name too, not only the handle.
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("actor-search"), "wendy");
+    expect(screen.getAllByText("Wendy").length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("picker-empty")).toBeNull();
   });
 
   // If the user's persisted `lastProjectId` points at a project that has

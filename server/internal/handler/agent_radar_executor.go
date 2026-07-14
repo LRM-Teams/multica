@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -127,6 +128,14 @@ func (h *Handler) ExecuteAgentRadarPlan(ctx context.Context, run db.AgentRadarRu
 		_, err = h.Queries.MarkWorkspaceRadarSucceeded(ctx, run.ID)
 	} else {
 		_, err = h.Queries.MarkWorkspaceRadarFailedByRunID(ctx, run.ID)
+	}
+	// Settle the ambient watch (#2): clear dirty precisely on success, re-arm on
+	// failure. Never lose a review because the run failed after enqueue.
+	if h.WorkGraph != nil && strings.HasPrefix(run.CooldownKey, "wendy_ambient:") {
+		reviewSucceeded := status == "succeeded" || status == "no_action"
+		if rerr := h.WorkGraph.ReconcileChannelAmbientRun(ctx, run.ID, reviewSucceeded); rerr != nil {
+			slog.Warn("reconcile wendy ambient run failed", "run_id", uuidToString(run.ID), "status", status, "error", rerr)
+		}
 	}
 	return err
 }

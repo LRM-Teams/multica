@@ -25,6 +25,13 @@ func (h *Handler) DispatchDueWendyAmbientReviews(ctx context.Context, limit int3
 	if limit > wendyAmbientDispatchLimit {
 		limit = wendyAmbientDispatchLimit
 	}
+	// Re-arm reviews whose run never completed (daemon gone, crash) so a review
+	// is not lost forever (#2).
+	if reclaimed, err := h.WorkGraph.ReclaimStaleChannelAmbient(ctx); err != nil {
+		slog.Warn("Wendy ambient stale reclaim failed", "error", err)
+	} else if reclaimed > 0 {
+		slog.Info("Wendy ambient reclaimed stale reviews", "count", reclaimed)
+	}
 	watches, claimToken, err := h.WorkGraph.ClaimDueChannelAmbient(ctx, limit)
 	if err != nil {
 		return 0, err
@@ -85,7 +92,7 @@ func (h *Handler) dispatchClaimedWendyAmbient(ctx context.Context, watch workgra
 		}
 		return false, err
 	}
-	if err := h.WorkGraph.MarkChannelAmbientReviewed(ctx, watch.ChannelID, claimToken, watch.LastHumanMessageAt, run.ID); err != nil {
+	if err := h.WorkGraph.MarkChannelAmbientRunning(ctx, watch.ChannelID, claimToken, watch.LastHumanMessageAt, run.ID); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -155,6 +162,55 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 	agentRows.Close()
 	if err := agentRows.Err(); err != nil {
 		return "", err
+	}
+
+	b.WriteString("\n## Open Workspace Issues\n\n")
+	// #4: issue-backed work_nodes carry no primary_channel_id, so the
+	// channel-scoped section above never surfaces them. Give the review the
+	// workspace's open issues (with assignee) so it can spot missing tracking,
+	// stalled owners, or who should start/stop — instead of judging on chat text
+	// alone. Best-effort: a transient error must not sink the whole review.
+	issueRows, err := h.DB.Query(ctx, `
+		SELECT i.number, i.title, i.status, COALESCE(i.assignee_type, '') AS assignee_type, i.assignee_id,
+		       COALESCE(a.name, '') AS agent_name
+		FROM issue i
+		LEFT JOIN agent a
+		  ON a.id = i.assignee_id
+		 AND i.assignee_type = 'agent'
+		WHERE i.workspace_id = $1
+		  AND i.status NOT IN ('done', 'cancelled', 'closed')
+		ORDER BY i.updated_at DESC
+		LIMIT 30
+	`, watch.WorkspaceID)
+	if err != nil {
+		b.WriteString("- (issues unavailable)\n")
+		slog.Warn("ambient markdown: list open issues failed", "workspace_id", uuidToString(watch.WorkspaceID), "error", err)
+	} else {
+		issueCount := 0
+		for issueRows.Next() {
+			var number int64
+			var assigneeID pgtype.UUID
+			var title, status, assigneeType, agentName string
+			if err := issueRows.Scan(&number, &title, &status, &assigneeType, &assigneeID, &agentName); err != nil {
+				issueRows.Close()
+				return "", err
+			}
+			assignee := "unassigned"
+			if assigneeType == "agent" && agentName != "" {
+				assignee = "agent:" + agentName
+			} else if assigneeType != "" && assigneeID.Valid {
+				assignee = assigneeType + ":" + uuidToString(assigneeID)
+			}
+			fmt.Fprintf(&b, "- issue #%d title=%q status=%s assignee=%s\n", number, trimAmbientContent(title), status, assignee)
+			issueCount++
+		}
+		issueRows.Close()
+		if err := issueRows.Err(); err != nil {
+			return "", err
+		}
+		if issueCount == 0 {
+			b.WriteString("- (none)\n")
+		}
 	}
 
 	b.WriteString("\n## Recent Group Messages\n\n")
@@ -234,9 +290,14 @@ func (h *Handler) touchWendyChannelAmbient(ctx context.Context, ch ChannelRespon
 }
 
 // resolveWendyAmbientAgentForChannel picks which Wendy watches this group.
-// Prefer the workspace supervisor when she is a member; otherwise fall back to
-// any named Wendy already in the channel (personal Wendy clones in multi-owner
-// workspaces).
+// Prefer the workspace supervisor (the canonical signal from
+// workspace_radar_state) when she is a member; otherwise fall back to a named
+// Wendy already in the channel (personal Wendy clones in multi-owner
+// workspaces). The fallback is deterministic — prefer a runtime-ready,
+// non-archived agent with a stable (created_at, id) tie-break — so a channel
+// with several clones always resolves to the same watcher instead of racing on
+// insert order. Name matching remains a transitional signal until a managed
+// group-manager agent role lands.
 func (h *Handler) resolveWendyAmbientAgentForChannel(ctx context.Context, workspaceID, channelID pgtype.UUID) (pgtype.UUID, bool) {
 	if supervisorID, err := h.Queries.GetWorkspaceSupervisorAgentID(ctx, workspaceID); err == nil {
 		if h.channelHasAgentMember(ctx, workspaceID, channelID, supervisorID) {
@@ -253,7 +314,7 @@ func (h *Handler) resolveWendyAmbientAgentForChannel(ctx context.Context, worksp
 		  AND cm.channel_id = $2
 		  AND cm.member_type = 'agent'
 		  AND a.archived_at IS NULL
-		ORDER BY a.created_at ASC
+		ORDER BY (a.runtime_id IS NOT NULL) DESC, a.created_at ASC, a.id ASC
 	`, workspaceID, channelID)
 	if err != nil {
 		return pgtype.UUID{}, false

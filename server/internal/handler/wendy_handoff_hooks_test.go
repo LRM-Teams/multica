@@ -48,22 +48,7 @@ func seedWendyHandoffHookFixture(t *testing.T) wendyUnlockDispatchFixture {
 	channelID := seedChannelForTest(t, "wendy-hook-"+uuid.NewString(), testUserID)
 	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String(), target)
 
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO workspace_radar_state (workspace_id, supervisor_agent_id, enabled, next_due_at)
-		VALUES ($1, $2, true, now())
-		ON CONFLICT (workspace_id) DO UPDATE
-		SET supervisor_agent_id = EXCLUDED.supervisor_agent_id,
-		    enabled = true,
-		    updated_at = now()
-	`, testWorkspaceID, supervisor.ID); err != nil {
-		t.Fatalf("bind Wendy supervisor: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `
-			DELETE FROM workspace_radar_state
-			WHERE workspace_id = $1 AND supervisor_agent_id = $2
-		`, testWorkspaceID, supervisor.ID)
-	})
+	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
 
 	fixture := wendyUnlockDispatchFixture{
 		wendyID:   supervisor.ID.String(),

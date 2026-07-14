@@ -45,6 +45,33 @@ const (
 	agentActivityTriggerUnknown      = "unknown"
 )
 
+var agentActivityTimelinePublicDetailKeys = map[string][]string{
+	"send_freshness_hold": {
+		"target",
+		"new_message_count",
+		"shown_message_count",
+		"omitted_message_count",
+		"seen_up_to_seq",
+		"latest_seq",
+		"producer_fact_id",
+		"transport_id",
+		"decision",
+		"reason",
+	},
+	"send_freshness_hold_detail": {
+		"target",
+		"new_message_count",
+		"shown_message_count",
+		"omitted_message_count",
+		"seen_up_to_seq",
+		"latest_seq",
+		"producer_fact_id",
+		"transport_id",
+		"decision",
+		"reason",
+	},
+}
+
 type AgentActivityCursor struct {
 	CreatedAt string `json:"created_at"`
 	Kind      string `json:"kind"`
@@ -128,6 +155,7 @@ type AgentActivityTimelineEvent struct {
 	ToolTarget   *string                  `json:"tool_target,omitempty"`
 	Status       *string                  `json:"status,omitempty"`
 	ReasonCode   string                   `json:"reason_code,omitempty"`
+	Details      map[string]any           `json:"details,omitempty"`
 	Entries      []AgentActivityEntry     `json:"entries,omitempty"`
 	TargetRef    AgentActivityTargetRef   `json:"target_ref"`
 	SourceRefs   []AgentActivitySourceRef `json:"source_refs,omitempty"`
@@ -1716,9 +1744,50 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		ToolTarget:   stringPtrFromMap(details, "tool_target"),
 		Status:       textToPtr(row.Status),
 		ReasonCode:   textOrDefault(row.ReasonCode, ""),
+		Details:      agentActivityTimelinePublicDetails(detailKind, details),
 		Entries:      agentActivityTimelineEntries(row, details, tool),
 		TargetRef:    targetRef,
 		SourceRefs:   agentActivitySourceRefs(row),
+	}
+}
+
+func agentActivityTimelinePublicDetails(detailKind string, details map[string]any) map[string]any {
+	if len(details) == 0 {
+		return nil
+	}
+	keys, ok := agentActivityTimelinePublicDetailKeys[detailKind]
+	if !ok {
+		return nil
+	}
+	out := make(map[string]any, len(keys))
+	for _, key := range keys {
+		value, ok := details[key]
+		if !ok {
+			continue
+		}
+		if safe, ok := agentActivityTimelinePublicDetailValue(value); ok {
+			out[key] = safe
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func agentActivityTimelinePublicDetailValue(value any) (any, bool) {
+	switch v := value.(type) {
+	case nil:
+		return nil, false
+	case string:
+		if v == "" {
+			return "", true
+		}
+		return redact.Text(v), true
+	case bool, float64, int, int64, int32, json.Number:
+		return v, true
+	default:
+		return nil, false
 	}
 }
 

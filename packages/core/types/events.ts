@@ -308,6 +308,7 @@ export interface AgentActivityTimelineEvent {
   tool_target?: string;
   status?: string;
   reason_code?: string;
+  details?: Record<string, unknown>;
   entries?: AgentActivityEntry[];
   target_ref: AgentActivityTargetRef;
   source_refs?: AgentActivitySourceRef[];

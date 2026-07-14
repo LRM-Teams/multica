@@ -522,17 +522,17 @@ func TestChannelRementionFollowupDoesNotCancelRunningTask(t *testing.T) {
 	}
 }
 
-func TestChannelAmbientGateBoundsRepeatedAmbientFanout(t *testing.T) {
+func TestChannelMessageWakeBoundsRepeatedOrdinaryFanout(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
 	withChannelAmbientGateTestConfig(t)
-	channelID := seedChannelForTest(t, "ambient-gate-bounds-"+uuid.NewString(), testUserID)
+	channelID := seedChannelForTest(t, "ordinary-wake-bounds-"+uuid.NewString(), testUserID)
 	agentIDs := make([]string, 0, 16)
 	for i := 0; i < 16; i++ {
-		agentID := createHandlerTestAgent(t, fmt.Sprintf("Ambient Gate Agent %02d %s", i, uuid.NewString()[:8]), nil)
+		agentID := createHandlerTestAgent(t, fmt.Sprintf("Ordinary Wake Agent %02d %s", i, uuid.NewString()[:8]), nil)
 		agentIDs = append(agentIDs, agentID)
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -546,9 +546,9 @@ func TestChannelAmbientGateBoundsRepeatedAmbientFanout(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", fmt.Sprintf("ordinary ambient update %d", i), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ambient-gate-bounds"), 0)
+		trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", fmt.Sprintf("ordinary channel update %d", i), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ordinary-wake-bounds"), 0)
 		if err != nil {
-			t.Fatalf("insert ambient trigger %d: %v", i, err)
+			t.Fatalf("insert ordinary trigger %d: %v", i, err)
 		}
 		testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
 	}
@@ -569,11 +569,25 @@ func TestChannelAmbientGateBoundsRepeatedAmbientFanout(t *testing.T) {
 		       COALESCE(min(seq_to), 0),
 		       COALESCE(max(seq_to), 0)
 		FROM agent_inbox_event
-		WHERE channel_id = $1 AND reason = 'ambient'`, channelID).Scan(&events, &sessions, &wakeEvents, &minSeq, &maxSeq); err != nil {
-		t.Fatalf("count ambient inbox events: %v", err)
+		WHERE channel_id = $1 AND reason = 'channel_message'`, channelID).Scan(&events, &sessions, &wakeEvents, &minSeq, &maxSeq); err != nil {
+		t.Fatalf("count channel message wake events: %v", err)
 	}
-	if events != len(agentIDs) || sessions != len(agentIDs) || wakeEvents != 0 || minSeq != lastSeq || maxSeq != lastSeq {
-		t.Fatalf("ambient inbox events=%d sessions=%d wake=%d min=%d max=%d, want events/sessions=%d wake=0 seq=%d", events, sessions, wakeEvents, minSeq, maxSeq, len(agentIDs), lastSeq)
+	if events != len(agentIDs) || sessions != len(agentIDs) || wakeEvents != len(agentIDs) || minSeq != lastSeq || maxSeq != lastSeq {
+		t.Fatalf("channel message wake events=%d sessions=%d wake=%d min=%d max=%d, want events/sessions/wake=%d seq=%d", events, sessions, wakeEvents, minSeq, maxSeq, len(agentIDs), lastSeq)
+	}
+	var prompt string
+	if err := testPool.QueryRow(ctx, `
+		SELECT cm.content
+		FROM chat_message cm
+		JOIN agent_inbox_event e ON e.id = cm.task_id
+		WHERE e.channel_id = $1 AND e.agent_id = $2 AND e.reason = 'channel_message'
+		  AND cm.role = 'user'
+		ORDER BY cm.created_at DESC
+		LIMIT 1`, channelID, agentIDs[0]).Scan(&prompt); err != nil {
+		t.Fatalf("load coalesced wake prompt: %v", err)
+	}
+	if !strings.Contains(prompt, "ordinary channel update 2") || !strings.Contains(prompt, fmt.Sprintf("seq <= %d", lastSeq)) {
+		t.Fatalf("coalesced wake prompt did not refresh to latest unread range: %q", prompt)
 	}
 }
 
@@ -609,7 +623,8 @@ func TestChannelAmbientDispatchNotSkippedForAtMention(t *testing.T) {
 	}
 	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
 
-	assertChannelAgentInboxEventCounts(t, channelID, agentID, 1, 0)
+	assertChannelAgentInboxEventCounts(t, channelID, agentID, 0, 1)
+	assertChannelAgentWakeReasonPriority(t, channelID, agentID, trigger.ID, channelMessageWakeReason, channelMessageWakePriority)
 }
 
 func TestChannelAmbientUnreadPromptKeepsLatestTriggerWhenCursorIsStale(t *testing.T) {
@@ -692,15 +707,15 @@ func TestChannelAmbientUnreadPromptIncludesSystemRows(t *testing.T) {
 	}
 }
 
-func TestChannelAmbientGateSerializesConcurrentSameAgentAmbient(t *testing.T) {
+func TestChannelMessageWakeSerializesConcurrentSameAgentOrdinaryMessages(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
 	withChannelAmbientGateTestConfig(t)
-	agentID := createHandlerTestAgent(t, "Ambient Concurrent Gate "+uuid.NewString()[:8], nil)
-	channelID := seedChannelForTest(t, "ambient-concurrent-gate-"+uuid.NewString(), testUserID)
+	agentID := createHandlerTestAgent(t, "Ordinary Wake Concurrent "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "ordinary-wake-concurrent-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
@@ -720,9 +735,9 @@ func TestChannelAmbientGateSerializesConcurrentSameAgentAmbient(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", fmt.Sprintf("ordinary concurrent ambient update %d", i), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ambient-concurrent-gate"), 0)
+			trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", fmt.Sprintf("ordinary concurrent wake update %d", i), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("ordinary-wake-concurrent"), 0)
 			if err != nil {
-				t.Errorf("insert ambient trigger %d: %v", i, err)
+				t.Errorf("insert ordinary trigger %d: %v", i, err)
 				return
 			}
 			testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
@@ -738,13 +753,13 @@ func TestChannelAmbientGateSerializesConcurrentSameAgentAmbient(t *testing.T) {
 		FROM conversation c
 		LEFT JOIN agent_inbox_event e ON e.conversation_id = c.id
 		 AND e.agent_id = $2
-		 AND e.reason = 'ambient'
+		 AND e.reason = 'channel_message'
 		WHERE c.channel_id = $1
 		GROUP BY c.last_seq`, channelID, agentID).Scan(&lastSeq, &inboxSeq, &events); err != nil {
-		t.Fatalf("load coalesced ambient inbox event: %v", err)
+		t.Fatalf("load coalesced channel message wake event: %v", err)
 	}
 	if events != 1 || inboxSeq != lastSeq {
-		t.Fatalf("ambient inbox events=%d seq=%d, want one coalesced event at last_seq=%d", events, inboxSeq, lastSeq)
+		t.Fatalf("channel message wake events=%d seq=%d, want one coalesced event at last_seq=%d", events, inboxSeq, lastSeq)
 	}
 }
 
@@ -1700,7 +1715,7 @@ func TestChannelAgentInboxDrainAckAmbientAdvancesSessionCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert first ambient message: %v", err)
 	}
-	testHandler.dispatchChannelMessageToAgents(ctx, ch, first, parseUUID(testUserID))
+	testHandler.dispatchChannelAmbientDelivery(ctx, ch, first)
 
 	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-ambient-daemon")
 	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
@@ -1740,7 +1755,7 @@ func TestChannelAgentInboxDrainAckAmbientAdvancesSessionCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert second ambient message: %v", err)
 	}
-	testHandler.dispatchChannelMessageToAgents(ctx, ch, second, parseUUID(testUserID))
+	testHandler.dispatchChannelAmbientDelivery(ctx, ch, second)
 
 	drainReq = newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-ambient-daemon")
 	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
@@ -2167,7 +2182,7 @@ func TestChannelAmbientGateFailsClosedOnStatsError(t *testing.T) {
 	}
 }
 
-func TestChannelAmbientGateRecordsObviousNoiseAsAmbientInboxOnly(t *testing.T) {
+func TestChannelMessageWakeDoesNotSkipObviousNoise(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2206,9 +2221,10 @@ func TestChannelAmbientGateRecordsObviousNoiseAsAmbientInboxOnly(t *testing.T) {
 		t.Fatalf("count inbox events: %v", err)
 	}
 	if sessions != 1 || events != 1 {
-		t.Fatalf("noise ambient created %d sessions and %d inbox events, want one ambient-only delivery", sessions, events)
+		t.Fatalf("noise ordinary message created %d sessions and %d inbox events, want one runnable wake", sessions, events)
 	}
-	assertChannelAgentInboxEventCounts(t, channelID, agentID, 1, 0)
+	assertChannelAgentInboxEventCounts(t, channelID, agentID, 0, 1)
+	assertChannelAgentWakeReasonPriority(t, channelID, agentID, trigger.ID, channelMessageWakeReason, channelMessageWakePriority)
 }
 
 func TestChannelAmbientGateDoesNotBlockDirectMention(t *testing.T) {
@@ -2242,7 +2258,44 @@ func TestChannelAmbientGateDoesNotBlockDirectMention(t *testing.T) {
 	}
 	testHandler.dispatchChannelMessageToAgents(ctx, ch, direct, parseUUID(testUserID))
 
-	assertChannelAgentInboxEventCounts(t, channelID, agentID, 1, 1)
+	assertChannelAgentInboxEventCounts(t, channelID, agentID, 0, 2)
+	assertChannelAgentWakeReason(t, channelID, agentID, direct.ID, "mention")
+}
+
+func TestChannelMessageWakeSkipsMutedAgentButMentionPierces(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentName := "Muted Direct Agent " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	channelID := seedChannelForTest(t, "muted-direct-agent-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, muted_at)
+		VALUES ($1, $2, 'agent', $3, now())`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed muted agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+
+	ordinary, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "ordinary message while muted", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert ordinary trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, ordinary, parseUUID(testUserID))
+
+	directContent := fmt.Sprintf("[@%s](mention://agent/%s) please answer even while muted", agentName, agentID)
+	direct, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", directContent, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert direct trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, direct, parseUUID(testUserID))
+
+	assertChannelAgentInboxEventCounts(t, channelID, agentID, 0, 1)
+	assertChannelAgentWakeReason(t, channelID, agentID, direct.ID, "mention")
 }
 
 func TestChannelAmbientGreetingPromptUsesReactionOnlyForSingleAgentChannel(t *testing.T) {
@@ -4708,6 +4761,43 @@ func TestChannelThreadPlainReplyWakesAgentFollower(t *testing.T) {
 	assertChannelAgentInboxEventCounts(t, channelID, bystanderID, 1, 0)
 }
 
+func TestChannelThreadPlainReplyWakesAgentRootAuthor(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	rootAgentID := createHandlerTestAgent(t, "Thread Root Author "+uuid.NewString()[:8], nil)
+	bystanderID := createHandlerTestAgent(t, "Thread Root Bystander "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "thread-root-agent-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)`, channelID, testWorkspaceID, rootAgentID, bystanderID); err != nil {
+		t.Fatalf("seed agent members: %v", err)
+	}
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(rootAgentID), "Thread Root Author", "agent root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("agent-root-thread"), 1)
+	if err != nil {
+		t.Fatalf("insert agent root: %v", err)
+	}
+
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages/"+root.ID+"/thread", map[string]string{"content": "following up without mention"})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParams(req, "channelId", channelID, "messageId", root.ID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessageThreadReply(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send thread reply: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var followup ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &followup); err != nil {
+		t.Fatalf("decode thread reply: %v", err)
+	}
+
+	assertChannelAgentInboxEventCounts(t, channelID, rootAgentID, 0, 1)
+	assertChannelAgentWakeReason(t, channelID, rootAgentID, followup.ID, "thread_reply")
+	assertChannelAgentInboxEventCounts(t, channelID, bystanderID, 1, 0)
+}
+
 func TestChannelThreadPlainReplyAfterRootMentionWithoutFollowCreatesAmbientOnly(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -4782,7 +4872,8 @@ func TestChannelAmbientGateDoesNotBlockThreadDirectedContinuation(t *testing.T) 
 	}
 	testHandler.dispatchChannelThreadReplyMentions(ctx, ch, followup, parseUUID(testUserID))
 
-	assertChannelAgentInboxEventCounts(t, channelID, participantID, 1, 1)
+	assertChannelAgentInboxEventCounts(t, channelID, participantID, 0, 2)
+	assertChannelAgentWakeReason(t, channelID, participantID, followup.ID, "mention")
 }
 
 func assertChannelAgentInboxEventCounts(t *testing.T, channelID, agentID string, wantAmbient, wantWake int) {
@@ -4803,6 +4894,11 @@ func assertChannelAgentInboxEventCounts(t *testing.T, channelID, agentID string,
 
 func assertChannelAgentWakeReason(t *testing.T, channelID, agentID, sourceMessageID, wantReason string) {
 	t.Helper()
+	assertChannelAgentWakeReasonPriority(t, channelID, agentID, sourceMessageID, wantReason, 10)
+}
+
+func assertChannelAgentWakeReasonPriority(t *testing.T, channelID, agentID, sourceMessageID, wantReason string, wantPriority int32) {
+	t.Helper()
 	ctx := context.Background()
 	var reason string
 	var requiresWake bool
@@ -4815,8 +4911,8 @@ func assertChannelAgentWakeReason(t *testing.T, channelID, agentID, sourceMessag
 		LIMIT 1`, channelID, agentID, sourceMessageID).Scan(&reason, &requiresWake, &priority); err != nil {
 		t.Fatalf("load wake inbox event: %v", err)
 	}
-	if reason != wantReason || !requiresWake || priority != 10 {
-		t.Fatalf("wake inbox event = reason:%q requires_wake:%v priority:%d, want %q/true/10", reason, requiresWake, priority, wantReason)
+	if reason != wantReason || !requiresWake || priority != wantPriority {
+		t.Fatalf("wake inbox event = reason:%q requires_wake:%v priority:%d, want %q/true/%d", reason, requiresWake, priority, wantReason, wantPriority)
 	}
 }
 

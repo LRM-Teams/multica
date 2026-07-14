@@ -13,22 +13,18 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-const wendyUnlockNudgeKind = "unlock"
-
 func (h *Handler) DispatchDueWendyHandoffs(ctx context.Context, limit int32) (int, error) {
 	if limit <= 0 {
 		return 0, nil
 	}
 
 	claimToken := pgtype.UUID{Bytes: uuid.New(), Valid: true}
-	handoffs, err := h.Queries.ClaimDuePendingHandoffs(ctx, db.ClaimDuePendingHandoffsParams{
+	handoffs, err := h.Queries.ClaimDueWendyHandoffs(ctx, db.ClaimDueWendyHandoffsParams{
 		ClaimToken: claimToken,
-		Urgency:    "fast",
-		ReasonCode: "unlock",
 		Limit:      limit,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("claim due Wendy unlock handoffs: %w", err)
+		return 0, fmt.Errorf("claim due Wendy handoffs: %w", err)
 	}
 
 	dispatched := 0
@@ -39,7 +35,7 @@ func (h *Handler) DispatchDueWendyHandoffs(ctx context.Context, limit int32) (in
 			if firstErr == nil {
 				firstErr = err
 			}
-			slog.Warn("Wendy unlock handoff dispatch failed", "handoff_id", uuidToString(handoff.ID), "error", err)
+			slog.Warn("Wendy handoff dispatch failed", "handoff_id", uuidToString(handoff.ID), "reason_code", handoff.ReasonCode, "error", err)
 			continue
 		}
 		if ok {
@@ -50,8 +46,8 @@ func (h *Handler) DispatchDueWendyHandoffs(ctx context.Context, limit int32) (in
 }
 
 func (h *Handler) dispatchClaimedWendyUnlockHandoff(ctx context.Context, handoff db.PendingHandoff, claimToken pgtype.UUID) (bool, error) {
-	if handoff.TargetActorType != "agent" || !handoff.TargetActorID.Valid || !handoff.ChannelID.Valid || len(handoff.RelatedNodeIds) == 0 {
-		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "handoff is missing an agent target, channel, or work node")
+	if !isWendyHandoffReason(handoff.ReasonCode) || !handoff.TargetActorID.Valid || !handoff.ChannelID.Valid || len(handoff.RelatedNodeIds) == 0 {
+		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "handoff is missing a valid target, channel, or work node")
 	}
 
 	supervisorID, err := h.Queries.GetWorkspaceSupervisorAgentID(ctx, handoff.WorkspaceID)
@@ -73,6 +69,12 @@ func (h *Handler) dispatchClaimedWendyUnlockHandoff(ctx context.Context, handoff
 	if err := h.validateScheduledRadarSupervisor(ctx, run, supervisor); err != nil {
 		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "workspace Wendy supervisor binding is invalid")
 	}
+	if handoff.TargetActorType == "member" {
+		return h.dispatchClaimedWendyMemberHandoff(ctx, handoff, claimToken, supervisor)
+	}
+	if handoff.TargetActorType != "agent" {
+		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "handoff target type is unsupported")
+	}
 
 	target, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
 		ID:          handoff.TargetActorID,
@@ -86,7 +88,11 @@ func (h *Handler) dispatchClaimedWendyUnlockHandoff(ctx context.Context, handoff
 		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "Wendy or unlock target is not a channel member")
 	}
 
-	node, err := h.Queries.GetWorkNodeByID(ctx, handoff.RelatedNodeIds[0])
+	targetNodeID := handoff.RelatedNodeIds[0]
+	if handoff.ReasonCode == "block_route" && len(handoff.RelatedNodeIds) > 1 {
+		targetNodeID = handoff.RelatedNodeIds[1]
+	}
+	node, err := h.Queries.GetWorkNodeByID(ctx, targetNodeID)
 	if err != nil || !radarUUIDsMatch(node.WorkspaceID, handoff.WorkspaceID) {
 		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "unlock work node is unavailable")
 	}
@@ -102,16 +108,12 @@ func (h *Handler) dispatchClaimedWendyUnlockHandoff(ctx context.Context, handoff
 	if composer == nil {
 		composer = templateWendyComposer{}
 	}
-	content, err := composer.ComposeUnlock(ctx, UnlockComposeInput{
-		TargetAgentID:   uuidToString(target.ID),
-		TargetAgentName: agentDisplayName(target),
-		IssueTitle:      node.Title,
-	})
+	content, err := composeWendyAgentHandoff(ctx, composer, handoff.ReasonCode, target, node)
 	if err != nil {
 		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, fmt.Errorf("compose Wendy unlock: %w", err))
 	}
-	if err := validateWendyUnlockContent(content, uuidToString(target.ID)); err != nil {
-		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, fmt.Errorf("validate Wendy unlock content: %w", err))
+	if err := validateWendyHandoffContent(content, "agent", uuidToString(target.ID)); err != nil {
+		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, fmt.Errorf("validate Wendy handoff content: %w", err))
 	}
 
 	if h.TxStarter == nil {
@@ -160,7 +162,7 @@ func (h *Handler) dispatchClaimedWendyUnlockHandoff(ctx context.Context, handoff
 	if _, err := qtx.TouchWorkNodeWendyNudge(ctx, db.TouchWorkNodeWendyNudgeParams{
 		ID:          node.ID,
 		WorkspaceID: handoff.WorkspaceID,
-		NudgeKind:   wendyUnlockNudgeKind,
+		NudgeKind:   handoff.ReasonCode,
 	}); err != nil {
 		return retryAfterRollback(fmt.Errorf("touch Wendy unlock work node: %w", err))
 	}
@@ -199,6 +201,73 @@ func (h *Handler) lockWendyUnlockChannelMember(ctx context.Context, exec db.DBTX
 	return nil
 }
 
+func isWendyHandoffReason(reason string) bool {
+	switch reason {
+	case "unlock", "block_route", "interrupt_stop", "stalled_ask_why", "progress_nudge":
+		return true
+	default:
+		return false
+	}
+}
+
+func composeWendyAgentHandoff(ctx context.Context, composer WendyComposer, reason string, target db.Agent, node db.WorkNode) (string, error) {
+	if reason == "unlock" {
+		return composer.ComposeUnlock(ctx, UnlockComposeInput{TargetAgentID: uuidToString(target.ID), TargetAgentName: agentDisplayName(target), IssueTitle: node.Title})
+	}
+	return templateWendyHandoff(reason, "agent", uuidToString(target.ID), agentDisplayName(target), node.Title), nil
+}
+
+func templateWendyHandoff(reason, actorType, actorID, actorName, title string) string {
+	mention := mentionMarkdown(actorType, actorID, actorName)
+	switch reason {
+	case "block_route":
+		return fmt.Sprintf("%s 请优先排查并解除阻塞：%s", mention, title)
+	case "interrupt_stop":
+		return fmt.Sprintf("%s 请先停止当前工作并等待前置返工完成：%s", mention, title)
+	case "stalled_ask_why":
+		return fmt.Sprintf("%s %s 似乎卡住了，能说明当前阻碍吗？", mention, title)
+	default:
+		return fmt.Sprintf("%s 请跟进并推进：%s", mention, title)
+	}
+}
+
+func (h *Handler) dispatchClaimedWendyMemberHandoff(ctx context.Context, handoff db.PendingHandoff, claimToken pgtype.UUID, supervisor db.Agent) (bool, error) {
+	if !h.channelHasAgentMember(ctx, handoff.WorkspaceID, handoff.ChannelID, supervisor.ID) || !h.channelHasMember(ctx, handoff.WorkspaceID, handoff.ChannelID, handoff.TargetActorID) {
+		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "Wendy or member target is not a channel member")
+	}
+	var name string
+	if err := h.DB.QueryRow(ctx, `SELECT COALESCE(NULLIF(u.display_name, ''), NULLIF(u.name, ''), '成员') FROM member m JOIN "user" u ON u.id = m.user_id WHERE m.id = $1 AND m.workspace_id = $2`, handoff.TargetActorID, handoff.WorkspaceID).Scan(&name); err != nil {
+		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "member target is unavailable")
+	}
+	node, err := h.Queries.GetWorkNodeByID(ctx, handoff.RelatedNodeIds[0])
+	if err != nil || !radarUUIDsMatch(node.WorkspaceID, handoff.WorkspaceID) {
+		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "member work node is unavailable")
+	}
+	content := templateWendyHandoff(handoff.ReasonCode, "member", uuidToString(handoff.TargetActorID), name, node.Title)
+	if err := validateWendyHandoffContent(content, "member", uuidToString(handoff.TargetActorID)); err != nil {
+		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, err)
+	}
+	if _, err := h.insertChannelMessage(ctx, handoff.ChannelID, handoff.WorkspaceID, "agent", supervisor.ID, agentDisplayName(supervisor), content, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, err)
+	}
+	if _, err := h.Queries.MarkPendingHandoffDone(ctx, db.MarkPendingHandoffDoneParams{ID: handoff.ID, ClaimToken: claimToken}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (h *Handler) channelHasMember(ctx context.Context, workspaceID, channelID, memberID pgtype.UUID) bool {
+	var exists bool
+	return h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM channel_member cm
+			JOIN member m ON m.user_id = cm.member_id AND m.workspace_id = cm.workspace_id
+			WHERE cm.workspace_id = $1 AND cm.channel_id = $2
+			  AND cm.member_type = 'user' AND m.id = $3
+		)`, workspaceID, channelID, memberID).Scan(&exists) == nil && exists
+}
+
 func (h *Handler) cancelWendyUnlockHandoff(ctx context.Context, handoff db.PendingHandoff, claimToken pgtype.UUID, reason string) error {
 	if _, err := h.Queries.MarkPendingHandoffCancelled(ctx, db.MarkPendingHandoffCancelledParams{
 		ID:         handoff.ID,
@@ -221,9 +290,13 @@ func (h *Handler) retryWendyUnlockHandoff(ctx context.Context, handoff db.Pendin
 }
 
 func validateWendyUnlockContent(content, targetAgentID string) error {
+	return validateWendyHandoffContent(content, "agent", targetAgentID)
+}
+
+func validateWendyHandoffContent(content, targetType, targetID string) error {
 	mentions := util.ParseMentions(content)
-	if len(mentions) != 1 || mentions[0].Type != "agent" || mentions[0].ID != targetAgentID {
-		return errors.New("unlock content must contain only the target agent mention")
+	if len(mentions) != 1 || mentions[0].Type != targetType || mentions[0].ID != targetID {
+		return errors.New("handoff content must contain only the target mention")
 	}
 	return nil
 }

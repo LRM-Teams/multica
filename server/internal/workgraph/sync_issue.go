@@ -279,6 +279,10 @@ func issueNodeStatus(issueStatus string) string {
 		return workNodeStatusDone
 	case workNodeStatusCancelled:
 		return workNodeStatusCancelled
+	case workNodeStatusBlocked:
+		return workNodeStatusBlocked
+	case workNodeStatusNeedsRework:
+		return workNodeStatusNeedsRework
 	default:
 		return workNodeStatusActive
 	}

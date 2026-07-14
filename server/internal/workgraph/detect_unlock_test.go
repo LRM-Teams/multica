@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -136,6 +137,89 @@ func TestDetectUnlockSkipsNonAgentOwner(t *testing.T) {
 			}
 			assertPendingUnlockCount(t, ctx, scenario.waiter.WorkspaceID, 0)
 		})
+	}
+}
+
+func TestDetectBlockRouteTargetsResolvedPrerequisiteOwners(t *testing.T) {
+	ctx := t.Context()
+	store, scenario := setupUnlockScenario(t, ctx)
+	resolveUnlockPrerequisites(t, ctx, store, scenario.prerequisites)
+
+	ownerA, ownerB, ownerC, ownerD := pgUUID(uuid.New()), pgUUID(uuid.New()), pgUUID(uuid.New()), pgUUID(uuid.New())
+	prerequisiteA, err := store.queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{WorkspaceID: scenario.waiter.WorkspaceID, LinkedIssueID: scenario.prerequisites[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prerequisiteB, err := store.queries.GetWorkNodeByIssue(ctx, db.GetWorkNodeByIssueParams{WorkspaceID: scenario.waiter.WorkspaceID, LinkedIssueID: scenario.prerequisites[1].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE work_node
+		SET owner_id = CASE id
+			WHEN $1 THEN $2
+			WHEN $3 THEN $4
+			WHEN $5 THEN $6
+			ELSE owner_id
+		END,
+		status = CASE WHEN id = $5 THEN 'blocked' ELSE status END
+		WHERE id IN ($1, $3, $5)
+	`, prerequisiteA.ID, ownerA, prerequisiteB.ID, ownerB, scenario.waiter.ID, ownerC); err != nil {
+		t.Fatalf("assign block-route owners: %v", err)
+	}
+
+	if err := store.DetectBlockRouteForNode(ctx, scenario.waiter.ID); err != nil {
+		t.Fatalf("detect block route: %v", err)
+	}
+	rows, err := testPool.Query(ctx, `
+		SELECT target_actor_id FROM pending_handoff
+		WHERE workspace_id = $1 AND reason_code = 'block_route' AND status = 'pending'
+	`, scenario.waiter.WorkspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	targets := map[string]bool{}
+	for rows.Next() {
+		var target pgtype.UUID
+		if err := rows.Scan(&target); err != nil {
+			t.Fatal(err)
+		}
+		targets[target.String()] = true
+	}
+	if !targets[ownerA.String()] || !targets[ownerB.String()] {
+		t.Fatalf("block-route targets = %v, want A and B owners", targets)
+	}
+	if targets[ownerC.String()] || targets[ownerD.String()] {
+		t.Fatalf("block-route must not target C or D owners: %v", targets)
+	}
+}
+
+func TestSlowHandoffIsNotClaimedBeforeNotBefore(t *testing.T) {
+	ctx := t.Context()
+	store, scenario := setupUnlockScenario(t, ctx)
+	_, err := store.queries.InsertPendingHandoff(ctx, db.InsertPendingHandoffParams{
+		WorkspaceID:     scenario.waiter.WorkspaceID,
+		Urgency:         "slow",
+		ReasonCode:      "stalled_ask_why",
+		TargetActorType: ownerTypeAgent,
+		TargetActorID:   scenario.waiter.OwnerID,
+		RelatedNodeIds:  []pgtype.UUID{scenario.waiter.ID},
+		DedupeKey:       "future-slow:" + scenario.waiter.ID.String(),
+		NotBefore:       pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("insert future slow handoff: %v", err)
+	}
+	claimed, err := store.queries.ClaimDueWendyHandoffs(ctx, db.ClaimDueWendyHandoffsParams{
+		ClaimToken: pgUUID(uuid.New()),
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("claim due handoffs: %v", err)
+	}
+	if len(claimed) != 0 {
+		t.Fatalf("claimed %d future slow handoffs, want 0", len(claimed))
 	}
 }
 

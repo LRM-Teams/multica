@@ -184,6 +184,25 @@ FROM due
 WHERE handoff.id = due.id
 RETURNING handoff.*;
 
+-- name: ClaimDueWendyHandoffs :many
+WITH due AS (
+    SELECT ph.id
+    FROM pending_handoff ph
+    WHERE ph.status = 'pending'
+      AND ph.not_before <= now()
+    ORDER BY CASE ph.urgency WHEN 'fast' THEN 0 ELSE 1 END, ph.not_before ASC, ph.created_at ASC
+    LIMIT sqlc.arg('limit')
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE pending_handoff handoff
+SET status = 'claimed',
+    claim_token = sqlc.arg('claim_token'),
+    claimed_at = now(),
+    updated_at = now()
+FROM due
+WHERE handoff.id = due.id
+RETURNING handoff.*;
+
 -- name: MarkPendingHandoffDone :one
 UPDATE pending_handoff
 SET status = 'done',

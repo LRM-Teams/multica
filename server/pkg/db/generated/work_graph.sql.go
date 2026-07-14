@@ -82,6 +82,71 @@ func (q *Queries) ClaimDuePendingHandoffs(ctx context.Context, arg ClaimDuePendi
 	return items, nil
 }
 
+const claimDueWendyHandoffs = `-- name: ClaimDueWendyHandoffs :many
+WITH due AS (
+    SELECT ph.id
+    FROM pending_handoff ph
+    WHERE ph.status = 'pending'
+      AND ph.not_before <= now()
+    ORDER BY
+      CASE ph.urgency WHEN 'fast' THEN 0 ELSE 1 END,
+      ph.not_before ASC,
+      ph.created_at ASC
+    LIMIT $2
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE pending_handoff handoff
+SET status = 'claimed',
+    claim_token = $1,
+    claimed_at = now(),
+    updated_at = now()
+FROM due
+WHERE handoff.id = due.id
+RETURNING handoff.id, handoff.workspace_id, handoff.urgency, handoff.reason_code, handoff.target_actor_type, handoff.target_actor_id, handoff.related_node_ids, handoff.channel_id, handoff.issue_id, handoff.dedupe_key, handoff.not_before, handoff.status, handoff.claim_token, handoff.claimed_at, handoff.created_at, handoff.updated_at
+`
+
+type ClaimDueWendyHandoffsParams struct {
+	ClaimToken pgtype.UUID `json:"claim_token"`
+	Limit      int32       `json:"limit"`
+}
+
+func (q *Queries) ClaimDueWendyHandoffs(ctx context.Context, arg ClaimDueWendyHandoffsParams) ([]PendingHandoff, error) {
+	rows, err := q.db.Query(ctx, claimDueWendyHandoffs, arg.ClaimToken, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PendingHandoff{}
+	for rows.Next() {
+		var i PendingHandoff
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Urgency,
+			&i.ReasonCode,
+			&i.TargetActorType,
+			&i.TargetActorID,
+			&i.RelatedNodeIds,
+			&i.ChannelID,
+			&i.IssueID,
+			&i.DedupeKey,
+			&i.NotBefore,
+			&i.Status,
+			&i.ClaimToken,
+			&i.ClaimedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countOpenUnresolvedWaitsOn = `-- name: CountOpenUnresolvedWaitsOn :one
 SELECT count(*)
 FROM work_edge edge

@@ -684,24 +684,23 @@ func (h *Handler) prepareRadarAgentMention(ctx context.Context, run db.AgentRada
 	if !found {
 		return radarAgentMentionDirective{}, errors.New("channel does not belong to the run workspace")
 	}
-	content := formatRadarDirectiveMention(agentDisplayName(targetAgent), "agent", uuidToString(targetAgent.ID)) + " " + strings.TrimSpace(payload.Content)
+	content := formatRadarDirectiveMention(targetAgent.Name, "agent", uuidToString(targetAgent.ID)) + " " + strings.TrimSpace(payload.Content)
 	return radarAgentMentionDirective{TargetAgent: targetAgent, Target: target, Channel: ch, Content: content}, nil
 }
 
-func formatRadarDirectiveMention(label, mentionType, id string) string {
-	// formatMention assumes a trusted label. Agent display names are mutable
-	// workspace data, so neutralise Markdown delimiters before constructing the
-	// canonical link; otherwise a crafted name can close the first link and add
-	// a second mention that the dispatcher will parse.
+func formatRadarDirectiveMention(handle, mentionType, id string) string {
+	// Stable handles are unique, but still neutralise Markdown delimiters before
+	// constructing the canonical link so malformed legacy data cannot smuggle a
+	// second mention that the dispatcher will parse.
 	replacer := strings.NewReplacer(
 		"[", "［", "]", "］", "(", "（", ")", "）",
 		"\r", " ", "\n", " ", "\t", " ",
 	)
-	safeLabel := strings.Join(strings.Fields(replacer.Replace(strings.TrimSpace(label))), " ")
-	if safeLabel == "" {
-		safeLabel = "Agent"
+	safeHandle := strings.Join(strings.Fields(replacer.Replace(strings.TrimSpace(handle))), " ")
+	if safeHandle == "" {
+		safeHandle = "agent"
 	}
-	return "[@" + safeLabel + "](mention://" + mentionType + "/" + id + ")"
+	return "[@" + safeHandle + "](mention://" + mentionType + "/" + id + ")"
 }
 
 func (h *Handler) executeRadarAgentMentionAtomic(ctx context.Context, run db.AgentRadarRun, supervisor db.Agent, directive radarAgentMentionDirective) (map[string]any, radarActivityTarget, error) {
@@ -1027,7 +1026,7 @@ func (h *Handler) prepareRadarIssueDirective(ctx context.Context, run db.AgentRa
 	if issue.Status == "done" || issue.Status == "cancelled" {
 		return radarIssueDirective{}, errors.New("cannot direct work on a terminal issue")
 	}
-	content := formatRadarDirectiveMention(agentDisplayName(targetAgent), "agent", uuidToString(targetAgent.ID)) + " " + strings.TrimSpace(payload.Content)
+	content := formatRadarDirectiveMention(targetAgent.Name, "agent", uuidToString(targetAgent.ID)) + " " + strings.TrimSpace(payload.Content)
 	return radarIssueDirective{TargetAgent: targetAgent, Issue: issue, Content: content}, nil
 }
 
